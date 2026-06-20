@@ -10,7 +10,11 @@
 //! (bypass/lazy, reset, restart, vertically-causal, segmentation) modulate
 //! termination and context reset.
 
-use crate::tier1::mq::MqDecoder;
+use crate::tier1::mq::{Context, MqDecoder};
+
+#[cfg(test)]
+#[path = "golden_vectors.rs"]
+mod golden_vectors;
 
 /// MQ context indices, laid out as ISO/IEC 15444-1 Table D-7 allocates them and
 /// OpenJPEG's `T1_CTXNO_*` constants order them. A code-block's decoder owns one
@@ -120,6 +124,20 @@ impl BlockState {
     pub fn set_visited(&mut self, x: u32, y: u32, value: bool) {
         let i = self.idx(x, y);
         self.visited[i] = value;
+    }
+
+    /// Set bit-plane `bpno` of the coefficient magnitude at `(x, y)`. Used as a
+    /// coefficient becomes significant and on each magnitude-refinement bit.
+    fn set_magnitude_bit(&mut self, x: u32, y: u32, bpno: u32) {
+        let i = self.idx(x, y);
+        self.coeffs[i] |= 1 << bpno;
+    }
+
+    /// Clear every per-sample `visited` flag. The flag marks samples coded in
+    /// the current bit-plane's significance-propagation pass; it is local to one
+    /// plane, so the cleanup pass clears it before the next plane begins.
+    fn clear_visited(&mut self) {
+        self.visited.iter_mut().for_each(|v| *v = false);
     }
 
     pub fn is_negative(&self, x: u32, y: u32) -> bool {
@@ -235,23 +253,264 @@ fn zc_label_hh(hv: u8, d: u8) -> u8 {
     }
 }
 
+/// Initial MQ states for a fresh code-block (ISO Table D-7 / Annex D.3): the
+/// uniform context starts at state 46, the run-length context at 3, and the
+/// all-insignificant zero-coding context at 4; every other context at 0. Using
+/// the default zero state for these three would desynchronize the decoder.
+fn init_contexts() -> [Context; NUM_CONTEXTS] {
+    let mut cx = [Context::default(); NUM_CONTEXTS];
+    cx[CTX_ZC as usize].index = 4;
+    cx[CTX_RUN as usize].index = 3;
+    cx[CTX_UNI as usize].index = 46;
+    cx
+}
+
+/// Decode the sign of a coefficient that has just become significant (D.3.4):
+/// the MQ decision under the neighbour-sign context is XORed with the context's
+/// predicted sign. Records the sign in `state` (`true` = negative).
+fn decode_sign(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Context], x: u32, y: u32) {
+    let (ctx, xor) = state.sc_context(x, y);
+    let bit = mq.decode(&mut cx[ctx as usize]);
+    state.set_negative(x, y, bit ^ xor == 1);
+}
+
+/// Iterate a code-block in EBCOT scan order: stripes of four rows top to bottom,
+/// each stripe scanned column by column. The bottom stripe may be shorter.
+fn stripes(width: u32, height: u32) -> impl Iterator<Item = (u32, u32)> {
+    (0..height)
+        .step_by(4)
+        .flat_map(move |y0| (0..width).map(move |x| (x, y0)))
+}
+
+/// Significance-propagation pass (D.3.1): visit each still-insignificant sample
+/// that has at least one significant neighbour, zero-code it, and on a 1 decode
+/// its sign. `bpno` is the current bit-plane; `1 << bpno` is its weight.
+fn sig_prop_pass(
+    mq: &mut MqDecoder<'_>,
+    state: &mut BlockState,
+    cx: &mut [Context],
+    orient: Orientation,
+    bpno: u32,
+) {
+    let (w, h) = (state.width, state.height);
+    for (x, y0) in stripes(w, h) {
+        for y in y0..(y0 + 4).min(h) {
+            if state.is_significant(x, y) {
+                continue;
+            }
+            let ctx = state.zc_context(x, y, orient);
+            if ctx == CTX_ZC {
+                continue; // no significant neighbour: deferred to cleanup
+            }
+            if mq.decode(&mut cx[ctx as usize]) == 1 {
+                state.set_magnitude_bit(x, y, bpno);
+                state.set_significant(x, y);
+                decode_sign(mq, state, cx, x, y);
+            }
+            state.set_visited(x, y, true);
+        }
+    }
+}
+
+/// Magnitude-refinement pass (D.3.2): refine every sample that was already
+/// significant before this plane (so not coded in this plane's significance
+/// pass) by decoding one more magnitude bit under the refinement context.
+fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Context], bpno: u32) {
+    let (w, h) = (state.width, state.height);
+    for (x, y0) in stripes(w, h) {
+        for y in y0..(y0 + 4).min(h) {
+            if !state.is_significant(x, y) || state.is_visited(x, y) {
+                continue;
+            }
+            let ctx = state.mr_context(x, y);
+            if mq.decode(&mut cx[ctx as usize]) == 1 {
+                state.set_magnitude_bit(x, y, bpno);
+            }
+            state.set_refined(x, y);
+        }
+    }
+}
+
+/// Cleanup pass (D.3.3): code every sample not yet handled this plane. A full
+/// column of four insignificant samples with no significant neighbours is
+/// aggregated through the run-length context — a 0 leaves all four
+/// insignificant, a 1 reads the first significant sample's position as two
+/// uniform bits — after which the column finishes with ordinary zero coding.
+fn cleanup_pass(
+    mq: &mut MqDecoder<'_>,
+    state: &mut BlockState,
+    cx: &mut [Context],
+    orient: Orientation,
+    bpno: u32,
+) {
+    let (w, h) = (state.width, state.height);
+    for (x, y0) in stripes(w, h) {
+        let rows = (y0 + 4).min(h) - y0;
+        let mut first = 0;
+        if rows == 4 {
+            let aggregate = (0..4).all(|dy| {
+                let y = y0 + dy;
+                !state.is_significant(x, y)
+                    && !state.is_visited(x, y)
+                    && state.zc_context(x, y, orient) == CTX_ZC
+            });
+            if aggregate {
+                if mq.decode(&mut cx[CTX_RUN as usize]) == 0 {
+                    continue; // run of four insignificant samples
+                }
+                let hi = mq.decode(&mut cx[CTX_UNI as usize]);
+                let lo = mq.decode(&mut cx[CTX_UNI as usize]);
+                let run = (hi << 1) | lo; // position of the first significant
+                let y = y0 + run as u32;
+                state.set_magnitude_bit(x, y, bpno);
+                state.set_significant(x, y);
+                decode_sign(mq, state, cx, x, y);
+                first = run as u32 + 1;
+            }
+        }
+        for dy in first..rows {
+            let y = y0 + dy;
+            if state.is_significant(x, y) || state.is_visited(x, y) {
+                continue;
+            }
+            let ctx = state.zc_context(x, y, orient);
+            if mq.decode(&mut cx[ctx as usize]) == 1 {
+                state.set_magnitude_bit(x, y, bpno);
+                state.set_significant(x, y);
+                decode_sign(mq, state, cx, x, y);
+            }
+        }
+    }
+    state.clear_visited();
+}
+
 /// Decode one code-block: run the bit-plane passes over `mq` into `state`.
 ///
-/// `num_passes` and `zero_bit_planes` come from the Tier-2 packet headers;
-/// `style` is the COD/COC code-block style flags.
+/// `num_passes` and `zero_bit_planes` come from the Tier-2 packet headers,
+/// `orient` is the subband's orientation (it selects the zero-coding table), and
+/// `style` is the COD/COC code-block style flags. On return `state.coeffs` holds
+/// the signed quantized coefficients.
+///
+/// Phase 1 handles only the default code-block style and the single-layer subset
+/// where the one quality layer carries every coding pass. Under that subset
+/// `num_passes == 3·numbps − 2`, so the magnitude bit-plane count `numbps`, and
+/// thus the top plane's weight `2^(numbps−1)`, follow from `num_passes` alone;
+/// `zero_bit_planes` is the count of skipped most-significant planes and is not
+/// needed to reconstruct the magnitudes. Multi-layer truncation and the
+/// non-default styles (bypass/reset/restart/vertically-causal/segmentation) are
+/// Phase 2.
 pub fn decode_block(
     mq: &mut MqDecoder<'_>,
     state: &mut BlockState,
+    orient: Orientation,
     num_passes: u32,
     zero_bit_planes: u32,
     style: u8,
 ) {
-    todo!("MSB→LSB bit-planes: significance-propagation, magnitude-refinement, cleanup")
+    let _ = (zero_bit_planes, style);
+    if num_passes == 0 {
+        return;
+    }
+
+    let mut cx = init_contexts();
+    // Single-layer subset: num_passes == 3·numbps − 2 (the top plane is one
+    // cleanup pass, every plane below it three passes).
+    let numbps = num_passes.div_ceil(3); // == (num_passes + 2) / 3 here
+    let mut bpno = numbps - 1;
+    let mut left = num_passes;
+
+    // The most significant plane runs the cleanup pass only (D.4).
+    cleanup_pass(mq, state, &mut cx, orient, bpno);
+    left -= 1;
+
+    while left > 0 && bpno > 0 {
+        bpno -= 1;
+        sig_prop_pass(mq, state, &mut cx, orient, bpno);
+        left -= 1;
+        if left == 0 {
+            break;
+        }
+        mag_ref_pass(mq, state, &mut cx, bpno);
+        left -= 1;
+        if left == 0 {
+            break;
+        }
+        cleanup_pass(mq, state, &mut cx, orient, bpno);
+        left -= 1;
+    }
+
+    // Apply the decoded signs to the accumulated magnitudes.
+    for y in 0..state.height {
+        for x in 0..state.width {
+            if state.is_negative(x, y) {
+                let i = state.idx(x, y);
+                state.coeffs[i] = -state.coeffs[i];
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::golden_vectors::GOLDEN_BLOCKS;
     use super::*;
+    use crate::tier1::mq::MqDecoder;
+
+    /// Decode one golden block from its committed segment into a fresh state.
+    fn decode_golden(g: &super::golden_vectors::GoldenBlock) -> Vec<i32> {
+        let mut mq = MqDecoder::new(g.segment);
+        let mut state = BlockState::new(g.width, g.height);
+        decode_block(
+            &mut mq,
+            &mut state,
+            Orientation::Ll,
+            g.num_passes,
+            g.zero_bit_planes,
+            0,
+        );
+        state.coeffs
+    }
+
+    /// Each committed code-block segment decodes bit-exactly to its oracle
+    /// coefficient grid (decoded sample − DC shift, from `opj_decompress`). The
+    /// three blocks carry different pass counts (19, 16, 10), so a bit-exact
+    /// match also proves the bit-plane loop runs *exactly* `num_passes` passes:
+    /// stopping early or late would scale or corrupt the magnitudes.
+    #[test]
+    fn golden_blocks_decode_to_expected_coefficients() {
+        for g in GOLDEN_BLOCKS {
+            assert_eq!(decode_golden(g), g.coeffs, "block {}", g.name);
+        }
+    }
+
+    /// A code-block with no coding passes contributes nothing.
+    #[test]
+    fn zero_passes_yields_all_zero_coefficients() {
+        let mut mq = MqDecoder::new(GOLDEN_BLOCKS[0].segment);
+        let mut state = BlockState::new(4, 4);
+        decode_block(&mut mq, &mut state, Orientation::Ll, 0, 0, 0);
+        assert!(state.coeffs.iter().all(|&c| c == 0));
+    }
+
+    /// Signs are recovered, not just magnitudes: the sparse block has both
+    /// positive and negative significant coefficients among its zeros.
+    #[test]
+    fn golden_block_recovers_signs() {
+        let sparse = GOLDEN_BLOCKS
+            .iter()
+            .find(|g| g.name == "sparse_8x8")
+            .unwrap();
+        let out = decode_golden(sparse);
+        assert!(
+            out.iter().any(|&c| c > 0),
+            "expected a positive coefficient"
+        );
+        assert!(
+            out.iter().any(|&c| c < 0),
+            "expected a negative coefficient"
+        );
+        assert_eq!(out, sparse.coeffs);
+    }
 
     /// Build a block and mark the listed `(x, y)` offsets significant, optionally
     /// negative. Centre tests on `(2, 2)` of a 5×5 block so all eight neighbours

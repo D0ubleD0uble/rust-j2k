@@ -43,7 +43,14 @@ debuggable:
 - **MQ decoder** — assert the decoded decisions for the standard's worked
   example byte sequences.
 - **Tier-1 passes** — feed known code-block byte segments, assert the recovered
-  coefficient planes.
+  coefficient planes. The vectors are sliced from reversible (5/3),
+  single-resolution OpenJPEG codestreams, where the coefficients are just the
+  DC-level-shifted samples, so `opj_decompress` gives a bit-exact, decoder-
+  independent oracle. Block decoding has no 5/3-vs-9/7 branch, so reversible
+  vectors fully exercise it; a 0-level 9/7 codestream is lossy, so its samples
+  are not a trustworthy coefficient oracle, and the 9/7 quantization/DWT path is
+  graded instead by the end-to-end lossy fixture. Regenerate with
+  [`scripts/gen-tier1-vectors.py`](../scripts/gen-tier1-vectors.py).
 - **Tag-tree / packet parse** — assert inclusion, zero-bitplane, and length
   decode for hand-built packet headers.
 - **Inverse DWT** — assert 5/3 integer lifting is bit-exact on known signals,
