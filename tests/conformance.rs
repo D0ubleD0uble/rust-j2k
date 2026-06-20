@@ -21,6 +21,6 @@
 fn decodes_corpus_against_oracle() {
     // for each fixture:
     //   let bytes = std::fs::read(path).unwrap();
-    //   let img = jp2k_decoder::decode(&bytes).expect("decode");
+    //   let img = rust_j2k::decode(&bytes).expect("decode");
     //   assert_image_matches_oracle(&img, &oracle, tolerance);
 }

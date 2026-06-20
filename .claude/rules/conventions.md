@@ -35,11 +35,17 @@ While the decoder is a skeleton, `src/lib.rs` carries a crate-level
 - Keep the test suite dependency-free at runtime: commit fixtures and their
   oracle snapshots, and record each fixture's provenance so the corpus is
   reproducible. The reference decoder is only needed to (re)generate oracles.
+- As general Part 1 features land, add the ISO/IEC 15444-4 conformance suite as
+  the authoritative bar (compliance-class error bounds). Full strategy in
+  `docs/correctness.md`.
 
 ## Stay pure-Rust
 - The reason this crate exists is to avoid a C JPEG 2000 dependency. Do not add
-  a native/C-binding dependency. Decode-only, no `unsafe` unless a measured hot
-  path needs it and it is justified and tested.
+  a native/C-binding dependency, ever. No `unsafe` unless a measured hot path
+  needs it and it is justified and tested.
+- Decode-first: the near-term phases are decode-only. An encoder is a later
+  roadmap phase (Phase 5), so "decode" is the current focus, not a permanent
+  ceiling. The long-run target is OpenJPEG-level coverage — see `docs/`.
 
 ## Parallel subagents
 - When delegating to parallel subagents, use harness-owned worktrees (the Agent
