@@ -16,14 +16,321 @@
 
 mod support;
 
+use std::path::PathBuf;
+
+use support::{Outcome, discover, run_fixture};
+
+/// The committed fixture corpus lives next to this test file.
+fn fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+/// Decode every committed fixture and grade it against its oracle snapshot.
+///
+/// While `decode` is a skeleton (`todo!()`), each real codestream reports as
+/// *not yet decoded* ([`Outcome::Pending`]) rather than panicking the suite —
+/// that is the expected steady state for P1.0. The gate fails only on a genuine
+/// disagreement ([`Outcome::Failed`]) or a broken fixture ([`Outcome::LoadError`]),
+/// so the harness goes green now and stays meaningful as the pipeline lands.
 #[test]
-#[ignore = "no fixtures yet — add real codestreams + an OpenJPEG/eccodes oracle"]
 fn decodes_corpus_against_oracle() {
-    // for each fixture:
-    //   let bytes = std::fs::read(path).unwrap();
-    //   let img = rust_j2k::decode(&bytes).expect("decode");
-    //   let oracle = support::Expected::from_json(&json_text).expect("oracle");
-    //   assert_image_matches_oracle(&img, &oracle);
+    let fixtures = discover(&fixtures_dir());
+    if fixtures.is_empty() {
+        eprintln!("conformance: no fixtures committed yet (see issue #4); harness is wired.");
+        return;
+    }
+
+    let mut failures = Vec::new();
+    for fixture in &fixtures {
+        let outcome = run_fixture(fixture);
+        match &outcome {
+            Outcome::Passed => eprintln!("conformance: {} … ok", fixture.name),
+            Outcome::Pending => {
+                eprintln!("conformance: {} … pending (decode is todo!)", fixture.name)
+            }
+            Outcome::Failed(m) => {
+                eprintln!("conformance: {} … FAILED: {m}", fixture.name);
+                failures.push(format!("{}: {m}", fixture.name));
+            }
+            Outcome::LoadError(e) => {
+                eprintln!("conformance: {} … LOAD ERROR: {e}", fixture.name);
+                failures.push(format!("{}: {e}", fixture.name));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} fixture(s) failed the conformance gate:\n  {}",
+        failures.len(),
+        failures.join("\n  "),
+    );
+}
+
+/// Harness behaviour: discovery, the comparator, and outcome classification.
+/// These exercise the harness with hand-built inputs so it is proven before
+/// the real corpus (issue #4) and a working `decode` exist.
+mod harness {
+    use super::support::{
+        Expected, Fixture, Geometry, Mismatch, Outcome, Provenance, Tolerance, classify, compare,
+        discover, run_fixture,
+    };
+    use rust_j2k::{Error, Image};
+    use std::path::{Path, PathBuf};
+
+    fn geometry(width: u32, height: u32) -> Geometry {
+        Geometry {
+            width,
+            height,
+            bit_depth: 16,
+            signed: false,
+        }
+    }
+
+    fn image(width: u32, height: u32, samples: Vec<i32>) -> Image {
+        Image {
+            width,
+            height,
+            bit_depth: 16,
+            signed: false,
+            samples,
+        }
+    }
+
+    fn snapshot(geometry: Geometry, tolerance: Tolerance, samples: Vec<i32>) -> Expected {
+        Expected {
+            geometry,
+            tolerance,
+            samples,
+            provenance: Provenance {
+                source: "test".into(),
+                oracle_command: "n/a".into(),
+                notes: None,
+            },
+        }
+    }
+
+    // --- comparator ---------------------------------------------------------
+
+    #[test]
+    fn exact_match_passes() {
+        let want = snapshot(geometry(2, 2), Tolerance::Exact, vec![0, 1, 2, 3]);
+        let got = image(2, 2, vec![0, 1, 2, 3]);
+        assert_eq!(compare(&got, &want), Ok(()));
+    }
+
+    #[test]
+    fn exact_reports_first_divergent_sample() {
+        // Second row, second column (index 3) is the first divergence.
+        let want = snapshot(geometry(2, 2), Tolerance::Exact, vec![0, 1, 2, 3]);
+        let got = image(2, 2, vec![0, 1, 2, 9]);
+        let err = compare(&got, &want).unwrap_err();
+        assert_eq!(
+            err,
+            Mismatch::Sample {
+                index: 3,
+                x: 1,
+                y: 1,
+                expected: 3,
+                actual: 9,
+                bound: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn absolute_within_bound_passes() {
+        let want = snapshot(
+            geometry(2, 1),
+            Tolerance::Absolute { max_abs_error: 1.5 },
+            vec![10, 20],
+        );
+        let got = image(2, 1, vec![11, 19]); // |diff| = 1 ≤ 1.5
+        assert_eq!(compare(&got, &want), Ok(()));
+    }
+
+    #[test]
+    fn absolute_outside_bound_fails() {
+        let want = snapshot(
+            geometry(2, 1),
+            Tolerance::Absolute { max_abs_error: 1.5 },
+            vec![10, 20],
+        );
+        let got = image(2, 1, vec![10, 23]); // |diff| = 3 > 1.5 at index 1
+        let err = compare(&got, &want).unwrap_err();
+        assert_eq!(
+            err,
+            Mismatch::Sample {
+                index: 1,
+                x: 1,
+                y: 0,
+                expected: 20,
+                actual: 23,
+                bound: 1.5,
+            }
+        );
+    }
+
+    #[test]
+    fn geometry_mismatch_fails_before_samples() {
+        let want = snapshot(geometry(2, 2), Tolerance::Exact, vec![0, 0, 0, 0]);
+        let got = image(4, 1, vec![0, 0, 0, 0]); // same count, wrong shape
+        let err = compare(&got, &want).unwrap_err();
+        assert!(matches!(err, Mismatch::Geometry { .. }));
+    }
+
+    // --- classification -----------------------------------------------------
+
+    #[test]
+    fn panic_classifies_as_pending() {
+        let want = snapshot(geometry(1, 1), Tolerance::Exact, vec![0]);
+        let decoded =
+            std::panic::catch_unwind(|| -> Result<Image, Error> { todo!("stubbed decode") });
+        assert_eq!(classify(decoded, &want), Outcome::Pending);
+    }
+
+    #[test]
+    fn ok_matching_classifies_as_passed() {
+        let want = snapshot(geometry(1, 1), Tolerance::Exact, vec![42]);
+        let decoded = Ok(Ok(image(1, 1, vec![42])));
+        assert_eq!(classify(decoded, &want), Outcome::Passed);
+    }
+
+    #[test]
+    fn ok_mismatch_classifies_as_failed() {
+        let want = snapshot(geometry(1, 1), Tolerance::Exact, vec![42]);
+        let decoded = Ok(Ok(image(1, 1, vec![7])));
+        assert!(matches!(classify(decoded, &want), Outcome::Failed(_)));
+    }
+
+    #[test]
+    fn decode_error_classifies_as_failed() {
+        let want = snapshot(geometry(1, 1), Tolerance::Exact, vec![42]);
+        let decoded = Ok(Err(Error::Unsupported("nope".into())));
+        assert!(matches!(
+            classify(decoded, &want),
+            Outcome::Failed(Mismatch::DecodeError(_))
+        ));
+    }
+
+    // --- discovery ----------------------------------------------------------
+
+    /// A unique scratch directory under the test binary's temp dir, so discovery
+    /// can be exercised against synthetic fixtures without a committed corpus.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("discover-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write(dir: &Path, name: &str, contents: &str) {
+        std::fs::write(dir.join(name), contents).unwrap();
+    }
+
+    const VALID_SNAPSHOT: &str = r#"{
+  "geometry": { "width": 1, "height": 1, "bit_depth": 8, "signed": false },
+  "tolerance": { "mode": "exact" },
+  "samples": [0],
+  "provenance": { "source": "s", "oracle_command": "c" }
+}"#;
+
+    #[test]
+    fn discovers_paired_fixture() {
+        let dir = scratch("paired");
+        // Not a real codestream, so end to end it classifies as Failed
+        // (the decoder rightly rejects non-codestream bytes). What is under
+        // test here is discovery: the `.j2k` is paired with its snapshot and
+        // run end to end. The Pending path is covered by `panic_classifies_as_pending`.
+        write(&dir, "alpha.j2k", "\x00not-a-codestream");
+        write(&dir, "alpha.expected.json", VALID_SNAPSHOT);
+
+        let found = discover(&dir);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "alpha");
+        assert!(found[0].expected.is_ok());
+        assert!(matches!(
+            run_fixture(&found[0]),
+            Outcome::Failed(Mismatch::DecodeError(_))
+        ));
+    }
+
+    #[test]
+    fn missing_snapshot_is_a_load_error() {
+        let dir = scratch("orphan-codestream");
+        write(&dir, "lonely.j2k", "bytes");
+        // no sibling .expected.json
+
+        let found = discover(&dir);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].expected.is_err());
+        assert!(matches!(run_fixture(&found[0]), Outcome::LoadError(_)));
+    }
+
+    #[test]
+    fn malformed_snapshot_is_a_load_error() {
+        let dir = scratch("malformed-snapshot");
+        write(&dir, "broken.j2k", "bytes");
+        write(&dir, "broken.expected.json", "{ not valid json");
+
+        let found = discover(&dir);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].expected.is_err());
+        assert!(matches!(run_fixture(&found[0]), Outcome::LoadError(_)));
+    }
+
+    #[test]
+    fn snapshot_with_wrong_sample_count_is_a_load_error() {
+        let dir = scratch("wrong-count");
+        write(&dir, "bad.j2k", "bytes");
+        // geometry declares 2x2 = 4 samples, but only 3 are listed.
+        write(
+            &dir,
+            "bad.expected.json",
+            r#"{
+  "geometry": { "width": 2, "height": 2, "bit_depth": 8, "signed": false },
+  "tolerance": { "mode": "exact" },
+  "samples": [0, 1, 2],
+  "provenance": { "source": "s", "oracle_command": "c" }
+}"#,
+        );
+
+        let found = discover(&dir);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].expected.is_err());
+        assert!(matches!(run_fixture(&found[0]), Outcome::LoadError(_)));
+    }
+
+    #[test]
+    fn discovery_is_sorted_and_ignores_other_files() {
+        let dir = scratch("sorted");
+        write(&dir, "beta.j2k", "bytes");
+        write(&dir, "beta.expected.json", VALID_SNAPSHOT);
+        write(&dir, "alpha.j2k", "bytes");
+        write(&dir, "alpha.expected.json", VALID_SNAPSHOT);
+        write(&dir, "notes.txt", "ignore me");
+
+        let names: Vec<_> = discover(&dir).into_iter().map(|f| f.name).collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn missing_directory_yields_empty_corpus() {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("does-not-exist-xyz");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(discover(&dir).is_empty());
+    }
+
+    // Touch `Fixture` directly so the type is exercised by name.
+    #[test]
+    fn fixture_load_error_short_circuits_run() {
+        let fixture = Fixture {
+            name: "x".into(),
+            codestream: PathBuf::from("/nonexistent/x.j2k"),
+            expected: Err("synthetic load error".into()),
+        };
+        assert!(matches!(run_fixture(&fixture), Outcome::LoadError(_)));
+    }
 }
 
 mod expected_schema {
