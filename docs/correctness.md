@@ -29,8 +29,8 @@ From strongest to most convenient:
 - **Reversible path (5/3, lossless):** bit-exact sample equality. Any
   difference is a bug.
 - **Irreversible path (9/7, lossy):** within a stated absolute tolerance per
-  fixture, and — once we test against Part 4 — within the compliance-class
-  per-pixel and MSE bounds. Floating-point lifting means our result and
+  fixture, and within the compliance-class per-pixel and MSE bounds once we test
+  against Part 4. Floating-point lifting means our result and
   OpenJPEG's will differ in the low bits; the tolerance is what makes the test
   meaningful rather than flaky.
 

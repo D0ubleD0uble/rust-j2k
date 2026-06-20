@@ -7,14 +7,14 @@ module owns; these docs cover the project as a whole.
 ## What this project is
 
 A pure-Rust JPEG 2000 codec aiming, over time, at the same coverage as
-[OpenJPEG](https://www.openjpeg.org/) — the ISO/IEC reference implementation —
+[OpenJPEG](https://www.openjpeg.org/) (the ISO/IEC reference implementation),
 but with no C dependency, no `unsafe` outside justified hot paths, and clean
 cross-compilation to every target.
 
 We build it **GRIB2-decode-first**. The first deliverable is the exact slice of
 the standard that GRIB2 template 5.40 (`grid_jpeg`) needs, because that path
 unblocks a real downstream consumer (the fieldglass GRIB2 reader) and forces the
-hardest core — the EBCOT block coder and the wavelet transform — to be correct
+hardest core (the EBCOT block coder and the wavelet transform) to be correct
 before any breadth work begins. Everything after that widens the same engine
 outward toward full Part 1, the JP2 file format, HTJ2K, an encoder, and the
 later parts of the standard.
@@ -31,6 +31,8 @@ and stale.
   needs it, and which project phase delivers it.
 - [roadmap.md](roadmap.md) — the phased plan, from the current skeleton through
   the GRIB2 decode MVP to full-codec parity, with the gate for each phase.
+- [roadmap-phase1.md](roadmap-phase1.md) — the GRIB2 decode MVP broken into
+  ordered milestones, each tied to its module, its oracle, and what it unblocks.
 - [correctness.md](correctness.md) — how we know a stage is right: the oracle
   cross-check, the ISO 15444-4 conformance suite, per-stage golden vectors,
   fuzzing, and round-trip testing once the encoder lands.

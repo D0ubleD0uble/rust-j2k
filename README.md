@@ -1,8 +1,8 @@
 # rust-j2k
 
 A pure-Rust JPEG 2000 codec, built **GRIB2-decode-first** and aimed, over time,
-at the same coverage as [OpenJPEG](https://www.openjpeg.org/) — the ISO/IEC
-reference implementation — with no C dependency, so it cross-compiles cleanly to
+at the same coverage as [OpenJPEG](https://www.openjpeg.org/) (the ISO/IEC
+reference implementation), with no C dependency, so it cross-compiles cleanly to
 every target. As of 2026 there is no production-grade pure-Rust JPEG 2000 codec;
 this fills that gap.
 

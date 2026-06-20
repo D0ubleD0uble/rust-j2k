@@ -25,8 +25,9 @@ comes off as stages land.
 within tolerance for 9/7. This unblocks the fieldglass GRIB2 reader.
 
 Scope is the single-component integer subset (see [scope.md](scope.md), the ✓
-rows). Suggested build order — each step is testable against an oracle before
-the next:
+rows). The detailed milestone-by-milestone plan for this phase, with the oracle
+that gates each step, is in [roadmap-phase1.md](roadmap-phase1.md); the build
+order in brief, each step testable against an oracle before the next:
 
 1. **Codestream parse** — SOC/SIZ/COD/QCD/SOT/SOD/EOC, COM skip. Reject
    out-of-subset features cleanly with `Error::Unsupported`.
