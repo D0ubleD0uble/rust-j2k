@@ -8,6 +8,7 @@
 //! hands Tier-1 the coded byte segments per code-block — it does **not** run
 //! the arithmetic decoder.
 
+pub mod bio;
 pub mod tagtree;
 
 use crate::Result;
