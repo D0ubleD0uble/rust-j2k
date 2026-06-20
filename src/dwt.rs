@@ -19,13 +19,21 @@
 //! the implicit deinterleave). On return the slice holds the reconstructed
 //! samples. They assume even parity — index 0 is a low-pass sample — which is
 //! the only case Phase 1 needs: a single tile at the origin with no precincts.
-//! Driving these over the 2-D subband layout for the declared decomposition
-//! depth, including the per-subband coordinate parity, is the next milestone
-//! (P1.6 wiring in [`inverse`]).
+//!
+//! ## The 2-D driver
+//!
+//! [`inverse`] drives those kernels over the subband layout in [`SubbandCoeffs`].
+//! Per resolution level (coarsest first) it scatters the four subbands back into
+//! one interleaved grid by the ISO `(xob, yob)` parity — LL to even row / even
+//! column, HL to even row / odd column, LH to odd row / even column, HH to odd
+//! row / odd column — then runs the 1-D synthesis down every column and across
+//! every row. The merged grid is the next finer level's LL; after the last level
+//! it is the full-resolution raster (pre level-shift).
 
 use crate::Result;
 use crate::codestream::MainHeader;
-use crate::tier1::SubbandCoeffs;
+use crate::codestream::markers::Transform;
+use crate::tier1::{Band, Bands, DetailBands, SubbandCoeffs};
 
 /// 9/7 lifting coefficients (ISO/IEC 15444-1 Table F.4): the two predict
 /// (`ALPHA`, `GAMMA`) and two update (`BETA`, `DELTA`) factors.
@@ -41,9 +49,111 @@ const K: f32 = 1.230_174_1;
 
 /// Inverse-transform all resolution levels into the final raster of samples
 /// (pre level-shift), driven by the COD transform choice and decomposition
-/// level count.
+/// level count. Output is row-major, `width * height` of the full resolution.
+///
+/// The [`SubbandCoeffs`] arm fixes the arithmetic: reversible 5/3 reconstructs
+/// in exact integers, irreversible 9/7 in `f32` then rounds to the nearest
+/// integer. Both must agree with the COD transform (checked in debug builds).
 pub fn inverse(header: &MainHeader, coeffs: SubbandCoeffs) -> Result<Vec<i32>> {
-    todo!("per level: 2-D inverse via 1-D lifting on rows then columns, LL up to full res")
+    match coeffs {
+        SubbandCoeffs::Reversible(bands) => {
+            debug_assert_eq!(header.cod.transform, Transform::Reversible53);
+            debug_assert_eq!(bands.levels.len(), header.cod.decomposition_levels as usize);
+            Ok(reconstruct(bands, inverse_5_3).data)
+        }
+        SubbandCoeffs::Irreversible(bands) => {
+            debug_assert_eq!(header.cod.transform, Transform::Irreversible97);
+            debug_assert_eq!(bands.levels.len(), header.cod.decomposition_levels as usize);
+            let raster = reconstruct(bands, inverse_9_7);
+            Ok(raster.data.into_iter().map(|v| v.round() as i32).collect())
+        }
+    }
+}
+
+/// Merge the subband pyramid into the full-resolution band, coarsest level
+/// first. Each level combines the running LL with its three detail bands via
+/// `kernel` (the 1-D synthesis for the chosen filter) and becomes the next
+/// level's LL.
+fn reconstruct<T, F>(bands: Bands<T>, kernel: F) -> Band<T>
+where
+    T: Copy + Default,
+    F: Fn(&mut [T]),
+{
+    let mut ll = bands.ll;
+    for detail in &bands.levels {
+        ll = merge_level(&ll, detail, &kernel);
+    }
+    ll
+}
+
+/// One resolution level: scatter `ll` and the three detail bands into an
+/// interleaved grid by their `(xob, yob)` parity, then run the 1-D inverse down
+/// each column and across each row. Returns the reconstructed (next finer) LL.
+fn merge_level<T, F>(ll: &Band<T>, detail: &DetailBands<T>, kernel: &F) -> Band<T>
+where
+    T: Copy + Default,
+    F: Fn(&mut [T]),
+{
+    let (hl, lh, hh) = (&detail.hl, &detail.lh, &detail.hh);
+    // Phase 1 decodes a single tile at the canvas origin: even parity, so the
+    // low-pass bands land on the even rows/columns of the interleaved grid.
+    debug_assert!(ll.origin.0 % 2 == 0 && ll.origin.1 % 2 == 0);
+    // The four bands tile the resolution: LL/LH share the low-pass column count,
+    // HL/HH the high-pass count; LL/HL share the low-pass row count, LH/HH the
+    // high-pass count.
+    debug_assert_eq!(hl.height, ll.height);
+    debug_assert_eq!(lh.width, ll.width);
+    debug_assert_eq!(hh.width, hl.width);
+    debug_assert_eq!(hh.height, lh.height);
+
+    let width = ll.width + hl.width;
+    let height = ll.height + lh.height;
+    let mut grid = vec![T::default(); width * height];
+    scatter(&mut grid, width, ll, 0, 0); // LL: even row, even column
+    scatter(&mut grid, width, hl, 1, 0); // HL: even row, odd column
+    scatter(&mut grid, width, lh, 0, 1); // LH: odd row, even column
+    scatter(&mut grid, width, hh, 1, 1); // HH: odd row, odd column
+
+    // Synthesis is separable. Undo the columns first, then the rows — the
+    // reverse of a forward pass that filtered rows then columns.
+    let mut column = vec![T::default(); height];
+    for x in 0..width {
+        for (y, slot) in column.iter_mut().enumerate() {
+            *slot = grid[y * width + x];
+        }
+        kernel(&mut column);
+        for (y, &value) in column.iter().enumerate() {
+            grid[y * width + x] = value;
+        }
+    }
+    for row in grid.chunks_exact_mut(width) {
+        kernel(row);
+    }
+
+    Band {
+        origin: ll.origin,
+        width,
+        height,
+        data: grid,
+    }
+}
+
+/// Place every sample of `band` into `grid` (row-major, `grid_width` wide) at
+/// the interleaved position `(2*by + row_off, 2*bx + col_off)`.
+fn scatter<T: Copy>(
+    grid: &mut [T],
+    grid_width: usize,
+    band: &Band<T>,
+    col_off: usize,
+    row_off: usize,
+) {
+    for by in 0..band.height {
+        for bx in 0..band.width {
+            let x = 2 * bx + col_off;
+            let y = 2 * by + row_off;
+            grid[y * grid_width + x] = band.data[by * band.width + bx];
+        }
+    }
 }
 
 /// Whole-sample symmetric (mirror) extension (ISO/IEC 15444-1 F.3.6): map any
@@ -281,5 +391,185 @@ mod tests {
         let mut one_f = [42.0f32];
         inverse_9_7(&mut one_f);
         assert_eq!(one_f, [42.0]);
+    }
+
+    // ---- 2-D multi-level driver ----------------------------------------------
+    //
+    // Same philosophy as the 1-D round-trips above: an independent forward 2-D
+    // transform (rows then columns, then deinterleave into the four subbands)
+    // builds the coefficient pyramid that `inverse` must take back to the image.
+
+    use super::inverse;
+    use crate::codestream::MainHeader;
+    use crate::codestream::markers::{
+        Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
+    };
+    use crate::tier1::{Band, Bands, DetailBands, SubbandCoeffs};
+
+    /// A minimal single-component main header. The inverse reads only the
+    /// transform choice and the decomposition-level count from it (both checked
+    /// against the pyramid in debug builds); the rest is filler.
+    fn header(transform: Transform, levels: u8, w: u32, h: u32) -> MainHeader {
+        MainHeader {
+            siz: Siz {
+                x_size: w,
+                y_size: h,
+                x_offset: 0,
+                y_offset: 0,
+                tile_width: w,
+                tile_height: h,
+                tile_x_offset: 0,
+                tile_y_offset: 0,
+                components: vec![SizComponent {
+                    bit_depth: 16,
+                    signed: false,
+                    x_sampling: 1,
+                    y_sampling: 1,
+                }],
+            },
+            cod: Cod {
+                progression: Progression::Lrcp,
+                layers: 1,
+                decomposition_levels: levels,
+                code_block_width: 4,
+                code_block_height: 4,
+                code_block_style: 0,
+                transform,
+                precinct_sizes: Vec::new(),
+            },
+            qcd: Qcd {
+                style: QuantStyle::None,
+                guard_bits: 2,
+                steps: Vec::new(),
+            },
+        }
+    }
+
+    /// Forward 1-D kernel across every row then down every column, in place —
+    /// the analysis counterpart of [`super::merge_level`]'s columns-then-rows
+    /// synthesis.
+    fn forward_2d<T: Copy + Default, F: Fn(&mut [T])>(grid: &mut [T], w: usize, h: usize, fwd: &F) {
+        for row in grid.chunks_exact_mut(w) {
+            fwd(row);
+        }
+        let mut col = vec![T::default(); h];
+        for x in 0..w {
+            for (y, slot) in col.iter_mut().enumerate() {
+                *slot = grid[y * w + x];
+            }
+            fwd(&mut col);
+            for (y, &v) in col.iter().enumerate() {
+                grid[y * w + x] = v;
+            }
+        }
+    }
+
+    /// Deinterleave one `(col_off, row_off)` parity quadrant of a transformed
+    /// grid into a subband.
+    fn gather<T: Copy + Default>(
+        grid: &[T],
+        w: usize,
+        h: usize,
+        col_off: usize,
+        row_off: usize,
+    ) -> Band<T> {
+        let bw = (w - col_off).div_ceil(2);
+        let bh = (h - row_off).div_ceil(2);
+        let mut data = vec![T::default(); bw * bh];
+        for by in 0..bh {
+            for bx in 0..bw {
+                data[by * bw + bx] = grid[(2 * by + row_off) * w + (2 * bx + col_off)];
+            }
+        }
+        Band {
+            origin: (0, 0),
+            width: bw,
+            height: bh,
+            data,
+        }
+    }
+
+    /// Build the coefficient pyramid for `levels` decompositions: forward-
+    /// transform, split off the three detail bands, recurse on the LL. Stores
+    /// the detail levels coarsest-first, the order [`inverse`] consumes.
+    fn forward_bands<T: Copy + Default, F: Fn(&mut [T])>(
+        image: &[T],
+        w: usize,
+        h: usize,
+        levels: usize,
+        fwd: &F,
+    ) -> Bands<T> {
+        let mut data = image.to_vec();
+        let (mut cw, mut ch) = (w, h);
+        let mut details = Vec::new();
+        for _ in 0..levels {
+            forward_2d(&mut data, cw, ch, fwd);
+            let ll = gather(&data, cw, ch, 0, 0);
+            let hl = gather(&data, cw, ch, 1, 0);
+            let lh = gather(&data, cw, ch, 0, 1);
+            let hh = gather(&data, cw, ch, 1, 1);
+            details.push(DetailBands { hl, lh, hh });
+            cw = ll.width;
+            ch = ll.height;
+            data = ll.data;
+        }
+        details.reverse();
+        Bands {
+            ll: Band {
+                origin: (0, 0),
+                width: cw,
+                height: ch,
+                data,
+            },
+            levels: details,
+        }
+    }
+
+    /// A small deterministic, non-separable image of the given dimensions.
+    fn ramp(w: usize, h: usize) -> Vec<i32> {
+        (0..w * h).map(|i| (i as i32 * 7 % 23) - 11).collect()
+    }
+
+    /// (width, height, levels): odd and even extents, 0..=3 levels, and the
+    /// degenerate single-row / single-column shapes.
+    const CASES: [(usize, usize, usize); 10] = [
+        (1, 1, 0),
+        (6, 4, 0),
+        (4, 4, 1),
+        (5, 3, 1),
+        (9, 1, 1),
+        (4, 4, 2),
+        (7, 5, 2),
+        (3, 9, 2),
+        (8, 8, 3),
+        (1, 8, 3),
+    ];
+
+    /// 5/3 is the lossless path: the full pyramid must reconstruct bit-exactly,
+    /// including the zero-level (identity) and single-axis cases.
+    #[test]
+    fn reconstruct_5_3_bit_exact() {
+        for (w, h, levels) in CASES {
+            let image = ramp(w, h);
+            let bands = forward_bands(&image, w, h, levels, &forward_5_3);
+            let hdr = header(Transform::Reversible53, levels as u8, w as u32, h as u32);
+            let out = inverse(&hdr, SubbandCoeffs::Reversible(bands)).unwrap();
+            assert_eq!(out, image, "5/3 mismatch for {w}x{h}, {levels} levels");
+        }
+    }
+
+    /// 9/7 is float, but rounding an integer-valued image through the round-trip
+    /// recovers it exactly (the per-sample error stays far below 0.5), which also
+    /// exercises the final round-to-`i32`.
+    #[test]
+    fn reconstruct_9_7_within_tolerance() {
+        for (w, h, levels) in CASES {
+            let image = ramp(w, h);
+            let as_f32: Vec<f32> = image.iter().map(|&v| v as f32).collect();
+            let bands = forward_bands(&as_f32, w, h, levels, &forward_9_7);
+            let hdr = header(Transform::Irreversible97, levels as u8, w as u32, h as u32);
+            let out = inverse(&hdr, SubbandCoeffs::Irreversible(bands)).unwrap();
+            assert_eq!(out, image, "9/7 mismatch for {w}x{h}, {levels} levels");
+        }
     }
 }
