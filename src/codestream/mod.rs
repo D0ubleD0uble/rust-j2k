@@ -44,10 +44,154 @@ pub struct Codestream<'a> {
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
 pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
-    let (_header, _sot_offset) = parse_main_header(bytes)?;
-    // The main header is the issue-#5 deliverable. Walking the tile-parts from
-    // `_sot_offset` into `Codestream::tile_parts` lands in issue #6.
-    todo!("walk tile-parts from the first SOT (issue #6)")
+    let (header, sot_offset) = parse_main_header(bytes)?;
+    let tile_parts = walk_tile_parts(bytes, sot_offset)?;
+    Ok(Codestream { header, tile_parts })
+}
+
+/// Walk the tile-parts from the first `SOT` to the closing `EOC` (A.4.2, A.4.4).
+///
+/// The GRIB2 subset is exactly one tile carried in one tile-part, so this reads
+/// a single `SOT … SOD … packet-data` run and requires `EOC` to follow it.
+/// Multiple tiles or tile-parts reject with [`Error::Unsupported`]; a `Psot`
+/// overrun, a truncated `SOT`, or a missing `EOC` reject with
+/// [`Error::Codestream`].
+fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>> {
+    let mut cur = Cursor::at(bytes, sot_offset);
+
+    // `parse_main_header` stopped on this SOT, so it is present; re-read it here
+    // so this function owns the whole tile-part structure.
+    if cur.u16()? != marker::SOT {
+        return Err(Error::Codestream(
+            "tile-part does not start with SOT".into(),
+        ));
+    }
+    let sot = decode_sot(segment(&mut cur)?)?;
+
+    // Single tile, single tile-part. Isot is the tile index, TPsot the part
+    // index within the tile, TNsot the part count (0 = "not stated").
+    if sot.tile_index != 0 {
+        return Err(Error::Unsupported(format!(
+            "tile index {}; the subset is a single tile",
+            sot.tile_index
+        )));
+    }
+    if sot.tile_part_index != 0 || sot.num_tile_parts > 1 {
+        return Err(Error::Unsupported(
+            "multiple tile-parts; the subset is a single tile-part".into(),
+        ));
+    }
+
+    // Tile-part header: only SOD (and a skippable COM) belong here in the
+    // subset; tile-level coding/quant overrides are a later phase.
+    loop {
+        let m = cur.u16()?;
+        match m {
+            marker::SOD => break,
+            marker::COM => {
+                segment(&mut cur)?;
+            }
+            marker::COD
+            | marker::COC
+            | marker::QCD
+            | marker::QCC
+            | marker::RGN
+            | marker::POC
+            | marker::TLM
+            | marker::PLT
+            | marker::SOP
+            | marker::EPH => {
+                return Err(Error::Unsupported(format!(
+                    "tile-part header marker {m:#06X} is outside the Phase 1 subset"
+                )));
+            }
+            other => {
+                return Err(Error::Codestream(format!(
+                    "unexpected marker {other:#06X} in tile-part header"
+                )));
+            }
+        }
+    }
+    let data_start = cur.pos;
+
+    // Psot counts from the SOT marker's first byte to the end of the tile-part.
+    // Psot == 0 marks the last tile-part: it runs to the closing EOC (A.4.2).
+    let data_end = if sot.psot == 0 {
+        bytes
+            .len()
+            .checked_sub(2)
+            .filter(|&end| end >= data_start && read_u16(bytes, end) == Some(marker::EOC))
+            .ok_or_else(|| Error::Codestream("Psot=0 tile-part is not terminated by EOC".into()))?
+    } else {
+        let end = sot_offset
+            .checked_add(sot.psot as usize)
+            .filter(|&end| end <= bytes.len())
+            .ok_or_else(|| Error::Codestream("Psot overruns the codestream".into()))?;
+        if end < data_start {
+            return Err(Error::Codestream(
+                "Psot is shorter than the tile-part header".into(),
+            ));
+        }
+        end
+    };
+
+    let data = &bytes[data_start..data_end];
+
+    // A single tile-part must be followed by EOC. A second SOT means more than
+    // one tile-part, which the subset does not decode.
+    match read_u16(bytes, data_end) {
+        Some(marker::EOC) => {}
+        Some(marker::SOT) => {
+            return Err(Error::Unsupported(
+                "multiple tile-parts; the subset is a single tile-part".into(),
+            ));
+        }
+        Some(other) => {
+            return Err(Error::Codestream(format!(
+                "expected EOC after the tile-part, found {other:#06X}"
+            )));
+        }
+        None => return Err(Error::Codestream("missing EOC after the tile-part".into())),
+    }
+
+    Ok(vec![TilePart {
+        tile_index: sot.tile_index,
+        data,
+    }])
+}
+
+/// SOT fields (A.4.2): the tile index, tile-part length, part index, and part
+/// count. The packet-data extent is derived from `psot` by the caller.
+struct Sot {
+    tile_index: u16,
+    psot: u32,
+    tile_part_index: u8,
+    num_tile_parts: u8,
+}
+
+/// Decode the SOT marker segment body (everything after `Lsot`): Isot, Psot,
+/// TPsot, TNsot. `expect_consumed` enforces the fixed `Lsot == 10` layout.
+fn decode_sot(mut b: Cursor<'_>) -> Result<Sot> {
+    let tile_index = b.u16()?;
+    let psot = b.u32()?;
+    let tile_part_index = b.u8()?;
+    let num_tile_parts = b.u8()?;
+    b.expect_consumed("SOT")?;
+    Ok(Sot {
+        tile_index,
+        psot,
+        tile_part_index,
+        num_tile_parts,
+    })
+}
+
+/// Read a big-endian `u16` marker at `pos`, or `None` if it would run past the
+/// end. Used to peek the marker that follows a tile-part without disturbing the
+/// segment cursor.
+fn read_u16(bytes: &[u8], pos: usize) -> Option<u16> {
+    let hi = *bytes.get(pos)?;
+    let lo = *bytes.get(pos + 1)?;
+    Some(u16::from_be_bytes([hi, lo]))
 }
 
 /// Parse the main header up to (but not into) the first `SOT`.
@@ -327,6 +471,12 @@ struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     fn new(buf: &'a [u8]) -> Self {
         Self { buf, pos: 0 }
+    }
+
+    /// A cursor over `buf` starting at an absolute offset, for resuming a walk
+    /// (e.g. tile-parts) from a position the main-header pass returned.
+    fn at(buf: &'a [u8], pos: usize) -> Self {
+        Self { buf, pos }
     }
 
     fn remaining(&self) -> usize {
