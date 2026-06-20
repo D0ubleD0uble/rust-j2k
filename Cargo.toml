@@ -1,0 +1,17 @@
+[package]
+name        = "jp2k-decoder"
+version     = "0.0.0"
+edition     = "2024"
+license     = "MIT OR Apache-2.0"
+description = "Pure-Rust JPEG 2000 (ISO/IEC 15444-1) codestream decoder, scoped to the single-component integer grids GRIB2 template 5.40 uses."
+authors     = ["D0ubleD0uble <15200182+D0ubleD0uble@users.noreply.github.com>"]
+repository  = "https://github.com/D0ubleD0uble/jp2k-decoder"
+readme      = "README.md"
+keywords    = ["jpeg2000", "j2k", "decoder", "grib2"]
+categories  = ["multimedia::images", "encoding"]
+
+# Decode-only and self-contained on purpose: no third-party codec dependency, so
+# the crate stays pure-Rust and cross-compiles to every target with no C toolchain.
+[dependencies]
+
+[dev-dependencies]
