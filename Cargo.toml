@@ -15,3 +15,8 @@ categories  = ["multimedia::images", "encoding"]
 [dependencies]
 
 [dev-dependencies]
+# Test-only: deserialize the committed `<name>.expected.json` oracle snapshots
+# the conformance harness compares against. Pure-Rust, so the no-C-dependency
+# rule still holds; these never ship in the library.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
