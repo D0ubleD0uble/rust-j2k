@@ -1,17 +1,19 @@
-//! Pure-Rust JPEG 2000 decoder, scoped to the GRIB2 §5.40 (`grid_jpeg`) subset.
+//! Pure-Rust JPEG 2000 codec, built GRIB2-decode-first toward OpenJPEG-level
+//! coverage. No C dependency, so it cross-compiles cleanly to every target.
 //!
-//! JPEG 2000 (ISO/IEC 15444-1) is a large standard; this crate deliberately
-//! decodes only the slice that GRIB2 uses, which keeps it tractable and
-//! C-dependency-free:
+//! JPEG 2000 (ISO/IEC 15444-1 and later parts) is a large standard. The first
+//! deliverable decodes the slice GRIB2 §5.40 (`grid_jpeg`) needs, which keeps
+//! the initial surface tractable while exercising the whole pipeline:
 //!
-//! - the **raw codestream** (Annex A), not the JP2 file format (no boxes);
+//! - the **raw codestream** (Annex A), not yet the JP2 file format (no boxes);
 //! - a **single component** (one scalar grid), so no multi-component or color
-//!   transform (MCT);
+//!   transform (MCT) yet;
 //! - **integer** samples, signed or unsigned, up to 32 bits;
 //! - **both** the reversible 5/3 (lossless) and irreversible 9/7 (lossy)
 //!   wavelet paths — operational GRIB2 (e.g. HRRR) uses lossy.
 //!
-//! Encoding, JP2 boxes, and multi-component imagery are out of scope.
+//! Multi-component/color, JP2 boxes, HTJ2K, and an encoder are later-phase
+//! work, not permanent non-goals. See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
 //!

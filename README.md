@@ -1,20 +1,29 @@
-# jp2k-decoder
+# rust-j2k
 
-A pure-Rust JPEG 2000 decoder, scoped to the slice of the standard that GRIB2
-uses. No C dependency, so it cross-compiles cleanly to every target.
+A pure-Rust JPEG 2000 codec, built **GRIB2-decode-first** and aimed, over time,
+at the same coverage as [OpenJPEG](https://www.openjpeg.org/) (the ISO/IEC
+reference implementation), with no C dependency, so it cross-compiles cleanly to
+every target. As of 2026 there is no production-grade pure-Rust JPEG 2000 codec;
+this fills that gap.
 
 ## Scope
 
-JPEG 2000 (ISO/IEC 15444-1) is a large standard. This crate decodes only what
-GRIB2 template 5.40 (`grid_jpeg`) needs, which keeps it small and self-contained:
+The long-run target is OpenJPEG-level coverage (Part 1, the JP2 file format,
+HTJ2K, an encoder, and the later parts). We get there by delivering the GRIB2
+decode path first, then widening the same engine outward — see
+[docs/roadmap.md](docs/roadmap.md) and [docs/scope.md](docs/scope.md).
 
-- the raw **codestream** (Annex A), not the JP2 file format (no boxes);
-- a **single component** (one scalar grid), so no color transform;
+The first deliverable decodes exactly what GRIB2 template 5.40 (`grid_jpeg`)
+needs, a strict subset of the Part 1 decoder:
+
+- the raw **codestream** (Annex A), not yet the JP2 file format (no boxes);
+- a **single component** (one scalar grid), so no color transform yet;
 - **integer** samples, signed or unsigned, up to 32 bits;
 - both the reversible **5/3** (lossless) and irreversible **9/7** (lossy)
   wavelets, because operational GRIB2 such as HRRR uses lossy.
 
-Non-goals: encoding, JP2 boxes, and multi-component or color imagery.
+Everything beyond that subset (multi-component and color, JP2 boxes, HTJ2K,
+encoding) is later-phase work, not a permanent non-goal.
 
 ## Pipeline
 
@@ -26,15 +35,16 @@ bytes -> codestream -> tier-2 -> tier-1 -> dequant -> inverse DWT -> Image
 Each stage is a module under `src/`. The public surface is one function:
 
 ```rust
-let image = jp2k_decoder::decode(&codestream_bytes)?;
+let image = rust_j2k::decode(&codestream_bytes)?;
 ```
 
 ## Status
 
-Skeleton. Every stage compiles and is stubbed with `todo!()`; each module's
-docs cite the ISO section it owns. Build order that keeps tests meaningful:
-codestream parsing, then the MQ decoder, EBCOT passes, Tier-2 packets, the
-inverse DWT, and dequantization last.
+Skeleton (Phase 0). Every stage compiles and is stubbed with `todo!()`; each
+module's docs cite the ISO section it owns. Phase 1 fills in the GRIB2 decode
+path in an order that keeps tests meaningful: codestream parsing, then the MQ
+decoder, EBCOT passes, Tier-2 packets, the inverse DWT, and dequantization last.
+The phased plan is in [docs/roadmap.md](docs/roadmap.md).
 
 ## Correctness
 

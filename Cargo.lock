@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "jp2k-decoder"
+name = "rust-j2k"
 version = "0.0.0"
