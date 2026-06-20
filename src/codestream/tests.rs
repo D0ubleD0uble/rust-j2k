@@ -383,3 +383,217 @@ fn unknown_marker_is_codestream() {
     bytes.extend_from_slice(&be16(0xFF01)); // not a marker we know
     assert!(matches!(err(&bytes), Error::Codestream(_)));
 }
+
+// --- tile-part walk (issue #6) -------------------------------------------
+//
+// As with the main header, each stream is assembled from the Annex A field
+// layout so the expectation is checked against the spec, not the parser. The
+// `opj_dump` cross-check on real seed codestreams lands with the fixture
+// corpus (#4); these synthetic cases pin the offset/length and reject logic.
+
+/// SOT segment: `marker + Lsot(=10) + Isot + Psot + TPsot + TNsot`.
+fn sot_seg(isot: u16, psot: u32, tpsot: u8, tnsot: u8) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&be16(isot));
+    body.extend_from_slice(&psot.to_be_bytes());
+    body.push(tpsot);
+    body.push(tnsot);
+    seg(marker::SOT, &body)
+}
+
+/// A complete, in-subset main header: SIZ + reversible COD + no-quant QCD.
+fn default_header() -> Vec<Vec<u8>> {
+    vec![
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]
+}
+
+/// SOC + `header` + `sot` + SOD + `data`, optionally closed by EOC.
+fn assemble(header: &[Vec<u8>], sot: &[u8], data: &[u8], eoc: bool) -> Vec<u8> {
+    let mut s = be16(marker::SOC).to_vec();
+    for part in header {
+        s.extend_from_slice(part);
+    }
+    s.extend_from_slice(sot);
+    s.extend_from_slice(&be16(marker::SOD));
+    s.extend_from_slice(data);
+    if eoc {
+        s.extend_from_slice(&be16(marker::EOC));
+    }
+    s
+}
+
+/// `Psot` spanning one tile-part: the 12-byte SOT segment, the 2-byte SOD
+/// marker, plus the packet data.
+fn psot_for(data: &[u8]) -> u32 {
+    (12 + 2 + data.len()) as u32
+}
+
+fn perr(bytes: &[u8]) -> Error {
+    parse(bytes).expect_err("should reject")
+}
+
+#[test]
+fn valid_single_tile_part_parses() {
+    let data = [0xDE, 0xAD, 0xBE, 0xEF];
+    let sot = sot_seg(0, psot_for(&data), 0, 1);
+    let bytes = assemble(&default_header(), &sot, &data, true);
+
+    let cs = parse(&bytes).expect("parse");
+    assert_eq!(cs.tile_parts.len(), 1);
+    assert_eq!(cs.tile_parts[0].tile_index, 0);
+    assert_eq!(cs.tile_parts[0].data, &data);
+    assert_eq!(cs.header.cod.transform, Transform::Reversible53);
+}
+
+#[test]
+fn psot_zero_runs_to_eoc() {
+    let data = [1, 2, 3, 4, 5];
+    let sot = sot_seg(0, 0, 0, 1); // last tile-part: extends to EOC
+    let bytes = assemble(&default_header(), &sot, &data, true);
+
+    let cs = parse(&bytes).expect("parse");
+    assert_eq!(cs.tile_parts[0].data, &data);
+}
+
+#[test]
+fn empty_tile_part_data_parses() {
+    let sot = sot_seg(0, psot_for(&[]), 0, 1);
+    let bytes = assemble(&default_header(), &sot, &[], true);
+
+    let cs = parse(&bytes).expect("parse");
+    assert!(cs.tile_parts[0].data.is_empty());
+}
+
+#[test]
+fn tile_part_header_comment_is_skipped() {
+    let data = [9, 9];
+    let com = seg(marker::COM, &[0, 1, b'x']);
+    let psot = (12 + com.len() + 2 + data.len()) as u32;
+
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&com);
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&data);
+    bytes.extend_from_slice(&be16(marker::EOC));
+
+    let cs = parse(&bytes).expect("parse");
+    assert_eq!(cs.tile_parts[0].data, &data);
+}
+
+#[test]
+fn nonzero_tile_index_is_unsupported() {
+    let sot = sot_seg(1, 0, 0, 1); // Isot != 0
+    let bytes = assemble(&default_header(), &sot, &[1, 2], true);
+    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn multiple_tile_parts_count_is_unsupported() {
+    let data = [1, 2];
+    let sot = sot_seg(0, psot_for(&data), 0, 2); // TNsot = 2
+    let bytes = assemble(&default_header(), &sot, &data, true);
+    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn nonzero_tile_part_index_is_unsupported() {
+    let sot = sot_seg(0, 0, 1, 1); // TPsot = 1
+    let bytes = assemble(&default_header(), &sot, &[1, 2], true);
+    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn second_tile_part_is_unsupported() {
+    // First part states TNsot=0 ("not stated") so it passes the field checks;
+    // a second SOT where EOC was expected is what trips the reject.
+    let data = [7, 7, 7];
+    let first = sot_seg(0, psot_for(&data), 0, 0);
+
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&first);
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&data);
+    bytes.extend_from_slice(&sot_seg(0, 0, 1, 2)); // a second tile-part
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&[8, 8]);
+    bytes.extend_from_slice(&be16(marker::EOC));
+
+    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn out_of_subset_tile_header_marker_is_unsupported() {
+    // A QCC override in the tile-part header is a later phase.
+    let data = [1, 2];
+    let qcc = seg(marker::QCC, &[0, 0, 0]);
+    let psot = (12 + qcc.len() + 2 + data.len()) as u32;
+
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&qcc);
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&data);
+    bytes.extend_from_slice(&be16(marker::EOC));
+
+    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn unexpected_tile_header_marker_is_codestream() {
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, 0, 0, 1));
+    bytes.extend_from_slice(&be16(0xFF30)); // reserved, not valid in a header
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+#[test]
+fn psot_overrun_is_codestream() {
+    let data = [1, 2];
+    let sot = sot_seg(0, 9999, 0, 1); // Psot far past the buffer
+    let bytes = assemble(&default_header(), &sot, &data, true);
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+#[test]
+fn missing_eoc_is_codestream() {
+    let data = [1, 2];
+    let sot = sot_seg(0, psot_for(&data), 0, 1);
+    let bytes = assemble(&default_header(), &sot, &data, false); // no EOC
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+#[test]
+fn psot_zero_without_eoc_is_codestream() {
+    let data = [1, 2, 3];
+    let sot = sot_seg(0, 0, 0, 1);
+    let bytes = assemble(&default_header(), &sot, &data, false);
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+#[test]
+fn truncated_sot_is_codestream() {
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&be16(marker::SOT));
+    bytes.extend_from_slice(&be16(10)); // Lsot promises 8 body bytes
+    bytes.extend_from_slice(&[0, 0]); // only 2 are present
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
