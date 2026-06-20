@@ -54,6 +54,25 @@ files). Bit-exact for the reversible path, within a stated tolerance for lossy.
 Seed the corpus from the GRIB2 §5.40 fixture in the fieldglass repo, plus HRRR
 and MRMS samples.
 
+## Development environment
+
+`cargo test` is self-contained: it grades a decode against the committed
+`expected.json` snapshots and needs **no** external tools. CI runs the same way.
+
+A reference toolchain is only needed to *(re)generate* those snapshots and to run
+the extra gates — OpenJPEG and eccodes (oracles), `cargo-deny` (license/advisory
+gate), and `cargo-fuzz` (robustness). Install it in one step and regenerate an
+oracle with:
+
+```sh
+scripts/install-oracle-tools.sh                 # Debian/Ubuntu; prints brew steps on macOS
+scripts/gen-oracle.sh tests/fixtures/sample.j2k # writes sample.expected.json
+```
+
+These tools are for oracle generation only; the test suite and CI never use them.
+Versions, the macOS path, and the GRIB2 sample-mapping note are in
+[docs/development.md](docs/development.md).
+
 ## Why this exists
 
 It is the decoder the fieldglass GRIB2 reader needs for template 5.40, kept in
