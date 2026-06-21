@@ -1,0 +1,77 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g.:
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The publish job runs only after the gates pass AND a reviewer approves the
+# `crates-io` environment, so a tag push alone never publishes unattended.
+#
+# FIRST RELEASE BOOTSTRAP: crates.io has no "pending" trusted publisher, so the
+# very first `cargo publish` of this crate must be done manually with an API
+# token (see RELEASING.md). Only after that can you register the trusted
+# publisher on crates.io and let this workflow publish v0.2.0 onward.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Re-run the full gate on the exact tagged commit before anything is published.
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+      - run: cargo test --doc
+      - name: Check the tag matches the crate version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[0].version')"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $crate"
+            exit 1
+          fi
+
+  publish:
+    name: publish to crates.io
+    needs: verify
+    runs-on: ubuntu-latest
+    # Gate behind a protected environment: add required reviewers in
+    # Settings > Environments > crates-io so a human approves each publish.
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/rust-j2k
+    permissions:
+      contents: write # create the GitHub Release
+      id-token: write # OIDC exchange for crates.io trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Trusted publishing: mint a short-lived crates.io token via OIDC, no
+      # long-lived CARGO_REGISTRY_TOKEN secret. Configure the trusted publisher
+      # on crates.io (repo + this workflow + the crates-io environment) first.
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md)."

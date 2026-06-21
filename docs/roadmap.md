@@ -1,6 +1,6 @@
 # Roadmap
 
-Phased from the current skeleton to full-codec parity with OpenJPEG. The
+Phased from the initial skeleton to full-codec parity with OpenJPEG. The
 ordering rule: **deliver the GRIB2 decode path first**, because it is a hard,
 end-to-end vertical slice with a waiting consumer, then widen the same engine
 outward. Each phase states its goal, the work it contains, and the **gate** that
@@ -19,7 +19,7 @@ owns. The module layout is the pipeline: `codestream → tier2 → tier1 → qua
 dwt → image`. Crate-level `allow(dead_code, unused_variables)` is in place and
 comes off as stages land.
 
-## Phase 1 — GRIB2 decode MVP *(current priority)*
+## Phase 1 — GRIB2 decode MVP *(done — shipped in v0.1.0)*
 
 **Goal:** decode the exact codestream GRIB2 §5.40 produces, bit-exact for 5/3,
 within tolerance for 9/7. This unblocks the fieldglass GRIB2 reader.
@@ -46,7 +46,10 @@ order in brief, each step testable against an oracle before the next:
 5/3 codestream, and a 9/7 re-encode) and matches the eccodes/OpenJPEG oracle —
 bit-exact lossless, within tolerance lossy. Crate-level dead-code `allow` removed; clippy `-D warnings` clean.
 
-## Phase 2 — general Part 1 decoder
+**Status:** met. The gate passes for all four corpus fixtures, and the
+crate-level dead-code `allow` is gone. Released as v0.1.0.
+
+## Phase 2 — general Part 1 decoder *(next)*
 
 **Goal:** decode any conformant Part 1 *codestream*, not just the GRIB2 subset.
 

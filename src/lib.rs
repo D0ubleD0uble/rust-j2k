@@ -27,9 +27,12 @@
 //!
 //! # Status
 //!
-//! Skeleton. Every stage compiles but is `todo!()`; see each module's docs for
-//! the ISO §reference and what it owns. Correctness is defined by the
-//! conformance harness in `tests/` (cross-check against OpenJPEG / eccodes).
+//! Phase 1 complete: the GRIB2 §5.40 decode path is implemented end to end and
+//! passes the conformance gate (bit-exact 5/3, within tolerance 9/7). See each
+//! module's docs for the ISO §reference and what it owns. Correctness is defined
+//! by the conformance harness in `tests/` (cross-check against OpenJPEG /
+//! eccodes), not by self-consistency. Later phases widen this same engine toward
+//! general Part 1; see `docs/roadmap.md` and `docs/scope.md`.
 
 pub mod codestream;
 pub mod dwt;
