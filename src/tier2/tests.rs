@@ -152,6 +152,25 @@ fn geometry_multi_block_grid() {
     assert_eq!(last, (96, 96, 4, 4));
 }
 
+/// The maximum decomposition depth builds without overflowing the grid shifts
+/// and yields one resolution per level plus the base.
+#[test]
+fn geometry_max_decomposition_levels() {
+    let geoms = resolution_geoms(&header(2, 2, 32, 6)).unwrap();
+    assert_eq!(geoms.len(), 33);
+    // The coarsest LL collapses to a single sample; nothing panics on the way.
+    assert_eq!((geoms[0][0].width, geoms[0][0].height), (1, 1));
+}
+
+/// A code-block size past the standard's 2^10 / xcb+ycb≤12 limit is rejected,
+/// not silently clamped (which would also keep the grid shifts well-defined).
+#[test]
+fn geometry_rejects_oversized_code_block() {
+    // code_block_width field 9 → exponent 11 (> 10).
+    let err = resolution_geoms(&header(64, 64, 1, 13));
+    assert!(matches!(err, Err(crate::Error::Marker(_))));
+}
+
 // ---- Number-of-passes prefix code (ISO Table B.4) ----
 
 #[test]
@@ -360,4 +379,30 @@ fn seed_codestream_parses() {
         .flat_map(|s| &s.blocks)
         .any(|b| b.num_passes > 0 && !b.segment.is_empty());
     assert!(included, "expected some included code-block");
+}
+
+/// Garbage tile-part data must resolve to an `Ok`/`Err` result, never a panic —
+/// every shift, slice, and loop is bounded. (Full fuzzing is issue #18.)
+#[test]
+fn malformed_tile_data_never_panics() {
+    use crate::codestream::{Codestream, TilePart};
+
+    let cases: [Vec<u8>; 5] = [
+        Vec::new(),
+        vec![0xFF; 64],
+        vec![0x00; 64],
+        (0..=255u8).cycle().take(300).collect(),
+        vec![0x80, 0x01, 0xFF, 0xFE, 0x00, 0x7F],
+    ];
+    for data in &cases {
+        let cs = Codestream {
+            header: header(32, 32, 3, 6),
+            tile_parts: vec![TilePart {
+                tile_index: 0,
+                data,
+            }],
+        };
+        // The result is allowed to be either Ok or Err; only a panic would fail.
+        let _ = decode_packets(&cs);
+    }
 }

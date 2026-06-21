@@ -177,4 +177,19 @@ mod tests {
         b.align();
         assert_eq!(b.bytes_consumed(), 1);
     }
+
+    /// The stuffing test is on the *most recently loaded* byte, not the last
+    /// whole byte: a header ending part-way through a `0xFF` byte must still skip
+    /// the following stuffed byte (matching OpenJPEG `opj_bio_inalign`).
+    #[test]
+    fn align_skips_stuffed_byte_when_ending_mid_ff() {
+        let mut b = BitReader::new(&[0x2F, 0xFF, 0x00, 0xBB]);
+        assert_eq!(b.read(8), 0x2F);
+        // Read only four bits of the 0xFF byte, ending mid-byte on it.
+        assert_eq!(b.read(4), 0xF);
+        b.align();
+        // The 0xFF byte (index 1) forces the next byte (the 0x00 stuff byte) to
+        // be skipped, so the body starts at index 3.
+        assert_eq!(b.bytes_consumed(), 3);
+    }
 }

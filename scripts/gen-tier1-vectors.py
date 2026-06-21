@@ -166,6 +166,10 @@ def extract_segment(j2k: bytes) -> tuple[int, int, bytes]:
     seg_len = bio.read(length_bits)
 
     # The code-block data is byte-aligned right after the header (no EPH here).
+    # NOTE: this drops the partial byte but does not skip the stuffed byte that
+    # follows a header ending in 0xFF (the decoder's BitReader.align does). The
+    # single-block vectors here never end on 0xFF, so the self-check below holds;
+    # the Rust Tier-2 parser handles the general case.
     if bio.ct != 0:
         bio.ct = 0
         bio.bp += 0  # the partial byte is consumed; next read starts at bp

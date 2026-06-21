@@ -136,6 +136,7 @@ struct BandGeom {
 /// zero, so the subband formula's negative numerators need this floor-based
 /// form).
 fn ceil_div(a: i64, b: i64) -> i64 {
+    debug_assert!(b > 0, "ceil_div needs a positive divisor");
     let q = a.div_euclid(b);
     if a.rem_euclid(b) != 0 { q + 1 } else { q }
 }
@@ -156,16 +157,17 @@ fn resolution_geoms(header: &MainHeader) -> Result<Vec<Vec<BandGeom>>> {
     }
 
     // Tile-component bounds: the single tile clipped to the image, divided by
-    // the component sub-sampling (Annex B.3). The Phase 1 subset uses zero
-    // offsets and unit sub-sampling, but the general form costs nothing.
+    // the component sub-sampling (Annex B.3, Eq. B-7/B-12). The Phase 1 subset
+    // uses zero offsets and unit sub-sampling, but the general form costs
+    // nothing — provided the tile origin is clamped up to the image offset.
     let comp = siz
         .components
         .first()
         .ok_or_else(|| Error::Codestream("SIZ declares no components".into()))?;
     let xr = (comp.x_sampling.max(1)) as i64;
     let yr = (comp.y_sampling.max(1)) as i64;
-    let tx0 = siz.tile_x_offset as i64;
-    let ty0 = siz.tile_y_offset as i64;
+    let tx0 = (siz.tile_x_offset as i64).max(siz.x_offset as i64);
+    let ty0 = (siz.tile_y_offset as i64).max(siz.y_offset as i64);
     let tx1 = (siz.tile_x_offset as i64 + siz.tile_width as i64).min(siz.x_size as i64);
     let ty1 = (siz.tile_y_offset as i64 + siz.tile_height as i64).min(siz.y_size as i64);
     if tx1 <= tx0 || ty1 <= ty0 {
@@ -174,12 +176,21 @@ fn resolution_geoms(header: &MainHeader) -> Result<Vec<Vec<BandGeom>>> {
     let (tcx0, tcx1) = (ceil_div(tx0, xr), ceil_div(tx1, xr));
     let (tcy0, tcy1) = (ceil_div(ty0, yr), ceil_div(ty1, yr));
 
-    // Code-block exponents (COD stores `log2(size) - 2`). With maximal precincts
-    // (PPx = PPy = 15), the precinct never shrinks the block at level 0 and caps
-    // it one below the precinct at finer levels (ISO B.6); for the subset's
-    // 2^6 blocks neither cap bites.
+    // Code-block exponents (COD stores `log2(size) - 2`). The standard bounds
+    // each at 2^10 and their sum at 2^12 (ISO Table A-18); reject anything
+    // larger so the grid shifts below stay well-defined and a malformed COD is
+    // a typed error, not a silently clamped mis-decode.
     let xcb = cod.code_block_width as u32 + 2;
     let ycb = cod.code_block_height as u32 + 2;
+    if xcb > 10 || ycb > 10 || xcb + ycb > 12 {
+        return Err(Error::Marker(format!(
+            "code-block size 2^{xcb}×2^{ycb} exceeds the 2^10 / xcb+ycb≤12 limit"
+        )));
+    }
+
+    // With maximal precincts (PPx = PPy = 15), the precinct never shrinks the
+    // block at level 0 and caps it one below the precinct at finer levels
+    // (ISO B.6); for the subset's 2^6 blocks neither cap bites.
 
     let mut levels = Vec::with_capacity((nl + 1) as usize);
     for r in 0..=nl {
@@ -284,13 +295,16 @@ fn grid_span(lo: i64, hi: i64, cell: i64) -> (usize, i64) {
     ((last - first) as usize, first)
 }
 
-/// Largest threshold the zero-bitplane tag tree is read against before a
-/// malformed packet is rejected — past any real bit-plane count (depth + guard
-/// bits stay well under this).
-const ZBP_MAX: u32 = 64;
+/// Ceiling on the zero-bitplane count: a single read above this resolves any
+/// real value (the count is bounded by the magnitude bit-planes — at most the
+/// sample depth plus guard bits, well under 64 for the ≤32-bit subset), while
+/// rejecting a malformed run of zero bits rather than looping on it.
+const ZBP_LIMIT: u32 = 64;
 
 /// Upper bound on the Lblock length-indicator before a malformed packet is
-/// rejected; keeps the subsequent length read within a `u32`.
+/// rejected. The length field is `Lblock + floor(log2(num_passes))` bits and
+/// `num_passes ≤ 164` (so `floor(log2) ≤ 7`); capping Lblock at 24 keeps that
+/// read at most 31 bits, inside the `u32` [`BitReader::read`] accepts.
 const LBLOCK_MAX: u32 = 24;
 
 /// Per-block metadata read from a packet header, before body bytes are sliced.
@@ -329,8 +343,16 @@ fn parse_packet<'a>(
     for (band, band_meta) in bands.iter().zip(&metas) {
         let mut blocks = Vec::with_capacity(band.blocks.len());
         for (&(x, y, width, height), meta) in band.blocks.iter().zip(band_meta) {
+            // An included block (passes > 0) must carry coded bytes; a zero
+            // length there is malformed and would hand Tier-1 an empty MQ
+            // stream, so reject it here where the context is known.
+            if meta.num_passes > 0 && meta.seg_len == 0 {
+                return Err(Error::Codestream(
+                    "included code-block has coding passes but zero length".into(),
+                ));
+            }
             let segment = if meta.seg_len == 0 {
-                &data[0..0]
+                &[][..]
             } else {
                 let end = body
                     .checked_add(meta.seg_len)
@@ -398,17 +420,15 @@ fn parse_band_header(band: &BandGeom, bio: &mut BitReader) -> Result<Vec<BlockMe
             continue;
         }
 
-        // Zero bit-planes: the tag tree resolves against a rising threshold.
-        let mut zbp = None;
-        for threshold in 1..=ZBP_MAX {
-            if let Some(v) = zero_bits.read(bx, by, threshold, bio) {
-                zbp = Some(v);
-                break;
-            }
-        }
-        let zero_bit_planes =
-            zbp.ok_or_else(|| Error::Codestream("zero-bitplane tag tree did not resolve".into()))?;
+        // Zero bit-planes: unlike inclusion (read once per layer at a rising
+        // threshold), the zero-bitplane tree is resolved in full the first time
+        // a block is included, so a single read at the ceiling resolves it.
+        let zero_bit_planes = zero_bits
+            .read(bx, by, ZBP_LIMIT, bio)
+            .ok_or_else(|| Error::Codestream("zero-bitplane count exceeds the limit".into()))?;
 
+        // `read_num_passes` always returns ≥ 1, so the `ilog2` below never hits
+        // the zero case.
         let num_passes = read_num_passes(bio);
 
         // Lblock grows by a unary run of 1s; the length field is then
