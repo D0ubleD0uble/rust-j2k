@@ -1,0 +1,35 @@
+# Dependabot config — automatic dependency update PRs.
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Grouping collapses weekly minor/patch bumps into a few PRs (prod vs dev)
+# instead of one per dependency, cutting rebase churn. Major bumps are left out
+# of the groups so they arrive as individual PRs for deliberate review.
+version: 2
+
+updates:
+  # Rust crate (dev-dependencies only at the moment; the library has none).
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, rust]
+    groups:
+      cargo-prod:
+        dependency-type: production
+        update-types: [minor, patch]
+      cargo-dev:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  # GitHub Actions used by the workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, github-actions]
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

@@ -1,0 +1,43 @@
+name: Dependabot auto-merge
+
+# Enable auto-merge for low-risk Dependabot updates so they land without manual
+# babysitting once CI is green. Branch protection still gates the actual merge
+# on the required checks, and Dependabot keeps the branch rebased while it waits.
+# Higher-risk bumps stay manual (see the gate below).
+#
+# Runs on pull_request_target so the GITHUB_TOKEN has write scope (Dependabot
+# PRs otherwise get a read-only token). This is safe because the job never
+# checks out or executes the PR's code — it only reads trusted metadata and
+# calls the GitHub API. The branch protection here requires zero approvals, so
+# we only enable auto-merge; no review-approval step is needed.
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge for low-risk updates
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+
+      # Auto-merge only:
+      #   - any patch bump (dev or prod), or
+      #   - any dev-dependency bump up to and including minor.
+      # Major bumps and production minor bumps stay manual. For grouped PRs the
+      # update-type/dependency-type reflects the highest-risk member, so the
+      # gate stays conservative.
+      - name: Enable auto-merge
+        if: >
+          steps.meta.outputs.update-type != 'version-update:semver-major' &&
+          (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+           steps.meta.outputs.dependency-type == 'direct:development')
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,94 @@
+# pre-commit framework config — fast checks on `git commit`, slower ones on
+# `git push`. Install once per clone:
+#
+#     pre-commit install --hook-type pre-commit --hook-type pre-push
+#
+# The local hooks reuse your installed cargo; the pinned hooks below are fetched
+# and run in isolated environments, so no manual install is needed for those.
+
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # ─── Workspace tooling — reuses the user's installed cargo
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        language: system
+        types: [rust]
+        entry: cargo fmt --all -- --check
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        entry: cargo clippy --all-targets -- -D warnings
+        pass_filenames: false
+
+      # ── Pre-push (slower) hooks
+      - id: cargo-test
+        name: cargo test
+        stages: [pre-push]
+        language: system
+        entry: cargo test
+        pass_filenames: false
+
+      - id: cargo-deny
+        name: cargo deny check
+        stages: [pre-push]
+        language: system
+        # `--locked` keeps cargo-deny from refreshing the registry index or
+        # rewriting Cargo.lock under the hood, which the pre-commit framework
+        # would otherwise read as "files modified by this hook" and fail.
+        entry: cargo deny --locked check
+        pass_filenames: false
+
+  # ─── Auto-fetched pinned binaries — no manual install required
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-added-large-files
+        args: [--maxkb=2048]                  # block accidentally-staged big binaries
+
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # Semgrep auto-installs into an isolated python env — no manual install.
+  - repo: https://github.com/semgrep/semgrep
+    rev: v1.162.0
+    hooks:
+      - id: semgrep
+        stages: [pre-push]
+        pass_filenames: false
+        args:
+          - scan
+          - --quiet
+          - --severity=ERROR
+          - --error
+          - --config=p/default
+          - --config=p/security-audit
+          - --config=p/rust
+          - --config=p/secrets
+          - --config=p/github-actions

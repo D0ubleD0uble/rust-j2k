@@ -1,0 +1,40 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Mon 06:30 UTC.
+    - cron: '30 6 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze (rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # CodeQL on private repos requires GitHub Advanced Security. Skip until the
+    # repo is public; the workflow flips itself on automatically when visibility
+    # changes.
+    if: github.event.repository.visibility == 'public'
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+          # CodeQL's Rust extractor uses cargo metadata directly and only
+          # supports build-mode: none.
+          build-mode: none
+          queries: security-extended
+
+      - name: Perform analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
