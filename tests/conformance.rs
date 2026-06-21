@@ -10,9 +10,10 @@
 //! Drop fixtures under `tests/fixtures/<name>.j2k` with a sibling
 //! `<name>.expected.json` oracle (samples + geometry + tolerance), and record
 //! each fixture's provenance (source file, how the oracle was generated) so the
-//! corpus stays reproducible. Seed it from the GRIB2 §5.40 fixture already in
-//! the fieldglass repo (`jpeg2000_regular_latlon.grib2`) plus HRRR (lossy) and
-//! MRMS samples. The `<name>.expected.json` schema lives in [`support`].
+//! corpus stays reproducible. Seed it from the GRIB2 §5.40 fixtures in the
+//! fieldglass repo, plus a 9/7 re-encode for the irreversible path (no GRIB2
+//! producer ships lossy 9/7). The `<name>.expected.json` schema lives in
+//! [`support`].
 
 mod support;
 

@@ -6,8 +6,7 @@
     "signed": false
   },
   "tolerance": {
-    "mode": "absolute",
-    "max_abs_error": 2.0
+    "mode": "exact"
   },
   "samples": [
     7936,
@@ -510,6 +509,6 @@
   "provenance": {
     "source": "eccodes grid_jpeg lossy (typeOfCompressionUsed=1, ratio 20) repack of ECMWF regular_latlon_surface.grib2",
     "oracle_command": "opj_decompress -i tests/fixtures/regular_latlon_lossy.j2k -o oracle.pgx",
-    "notes": "9/7 irreversible path; bound is our-vs-OpenJPEG reconstruction tolerance, not the lossy compression error"
+    "notes": "5/3 reversible (qmfbid=1) made lossy by rate truncation: eccodes' grid_jpeg encoder always uses the reversible 5/3 transform, never 9/7. The inverse is exact integer lifting, so our decode agrees with OpenJPEG bit-exactly."
   }
 }
