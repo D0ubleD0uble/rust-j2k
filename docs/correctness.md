@@ -73,8 +73,10 @@ Layout: a fixture `tests/fixtures/<name>.j2k` with a sibling
 
 Seed it from:
 
-- the GRIB2 §5.40 fixture already in the fieldglass repo
-  (`jpeg2000_regular_latlon.grib2`), plus HRRR (lossy 9/7) and MRMS samples;
+- the GRIB2 §5.40 fixtures already in the fieldglass repo (e.g.
+  `jpeg2000_regular_latlon.grib2`), plus a 9/7 re-encode for the irreversible
+  path — no GRIB2 producer ships lossy 9/7 (HRRR/NDFD are complex-packed, ECMWF
+  is CCSDS), so OpenJPEG's irreversible mode re-encodes a real grid;
 - the ISO/IEC 15444-4 conformance codestreams, as Phase 2 brings general Part 1
   features online;
 - real `.jp2` files for Phase 3, HTJ2K codestreams for Phase 4.

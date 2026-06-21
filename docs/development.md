@@ -125,8 +125,9 @@ scripts/gen-oracle.sh tests/fixtures/sample.j2k \
     --source "fieldglass/jpeg2000_regular_latlon.grib2"
 
 # irreversible (9/7, lossy): an absolute per-sample bound
-scripts/gen-oracle.sh tests/fixtures/hrrr.j2k \
-    --tolerance 2.0 --source "hrrr/sample.grib2" --notes "9/7 lossy path"
+scripts/gen-oracle.sh tests/fixtures/eta_lambert_irreversible.j2k \
+    --tolerance 2.0 --source "9/7 re-encode of eta_lambert_lossless.j2k (opj_compress -I)" \
+    --notes "9/7 lossy path"
 ```
 
 For a GRIB2-sourced fixture, extract the §5.40 codestream first and pass that

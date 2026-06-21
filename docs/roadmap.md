@@ -41,10 +41,10 @@ order in brief, each step testable against an oracle before the next:
 6. **Dequant + level shift + assemble** — reversible identity / irreversible
    scalar step, DC shift, clamp, package into `Image`.
 
-**Gate:** the conformance harness decodes the GRIB2 corpus (the fieldglass
-`jpeg2000_regular_latlon.grib2` fixture plus HRRR lossy and MRMS samples) and
-matches the eccodes/OpenJPEG oracle — bit-exact lossless, within tolerance
-lossy. Crate-level dead-code `allow` removed; clippy `-D warnings` clean.
+**Gate:** the conformance harness decodes the corpus (the fieldglass
+`jpeg2000_regular_latlon.grib2` fixture, a second 5/3 geometry, a rate-truncated
+5/3 codestream, and a 9/7 re-encode) and matches the eccodes/OpenJPEG oracle —
+bit-exact lossless, within tolerance lossy. Crate-level dead-code `allow` removed; clippy `-D warnings` clean.
 
 ## Phase 2 — general Part 1 decoder
 

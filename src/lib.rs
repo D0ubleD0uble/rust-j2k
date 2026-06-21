@@ -10,7 +10,8 @@
 //!   transform (MCT) yet;
 //! - **integer** samples, signed or unsigned, up to 32 bits;
 //! - **both** the reversible 5/3 (lossless) and irreversible 9/7 (lossy)
-//!   wavelet paths — operational GRIB2 (e.g. HRRR) uses lossy.
+//!   wavelet paths (the 9/7 path is graded by re-encoding a real grid with
+//!   OpenJPEG, since no operational GRIB2 producer ships lossy 9/7).
 //!
 //! Multi-component/color, JP2 boxes, HTJ2K, and an encoder are later-phase
 //! work, not permanent non-goals. See `docs/roadmap.md` and `docs/scope.md`.

@@ -9,27 +9,39 @@ offline without the reference decoder installed.
 
 ## The corpus
 
-Every fixture is a GRIB2 §5.40 (`grid_jpeg`) codestream, the exact subset Phase 1
-decodes: one component, one tile, one quality layer, LRCP, no precincts. Each is
-within ISO/IEC 15444 Part 1 and squarely inside the Phase 1 scope.
+Every fixture is the exact subset Phase 1 decodes: one component, one tile, one
+quality layer, LRCP, no precincts. Each is within ISO/IEC 15444 Part 1 and
+squarely inside the Phase 1 scope. The first three are GRIB2 §5.40 (`grid_jpeg`)
+codestreams; the 9/7 one is an OpenJPEG re-encode of a GRIB2 grid (see the note
+below the table).
 
 | Fixture | Grid | Depth | Wavelet | Tolerance |
 | ------- | ---- | ----- | ------- | --------- |
-| `jpeg2000_regular_latlon` | 16×31 | 16-bit unsigned | 5/3 reversible | `exact` |
-| `eta_lambert_lossless`    | 93×65 | 13-bit unsigned | 5/3 reversible | `exact` |
-| `regular_latlon_lossy`    | 16×31 | 16-bit unsigned | 9/7 irreversible | `absolute`, 2.0 |
+| `jpeg2000_regular_latlon`  | 16×31 | 16-bit unsigned | 5/3 reversible | `exact` |
+| `eta_lambert_lossless`     | 93×65 | 13-bit unsigned | 5/3 reversible | `exact` |
+| `regular_latlon_lossy`     | 16×31 | 16-bit unsigned | 5/3 reversible (rate-truncated) | `exact` |
+| `eta_lambert_irreversible` | 93×65 | 13-bit unsigned | 9/7 irreversible | `absolute`, 2.0 |
 
-The two reversible fixtures gate bit-exact; the irreversible one gates within a
-per-sample absolute bound. That bound is how far our 9/7 reconstruction may drift
-from OpenJPEG's (both decode the same lossy codestream — the lossy compression
-error is already baked into the committed samples), not a compression budget.
+The three 5/3 fixtures gate bit-exact: 5/3 is exact integer lifting, so any
+difference from OpenJPEG is a bug. That includes `regular_latlon_lossy`, whose
+codestream is lossy by rate truncation (fewer bit-planes) but whose decode is
+still deterministic integer math. Only `eta_lambert_irreversible` uses the 9/7
+float lifting, so it gates within a per-sample absolute bound: how far our 9/7
+reconstruction may drift from OpenJPEG's, both decoding the same codestream, not
+a compression budget. Measured drift is ≤ 1; the 2.0 bound leaves headroom.
+
+No operational producer ships lossy 9/7 JPEG 2000 in GRIB2. HRRR and NDFD are
+complex-packed, ECMWF is CCSDS, and eccodes' `grid_jpeg` encoder always uses the
+reversible 5/3 transform regardless of `typeOfCompressionUsed`. So the only way
+to exercise the irreversible path against the oracle is to re-encode a real grid
+with OpenJPEG's irreversible (`-I`) mode; `eta_lambert_irreversible` is that
+re-encode.
 
 ### Provenance and license
 
-All three derive from small public GRIB2 fixtures already vendored in the sibling
-`fieldglass` repo, repacked to `grid_jpeg` with eccodes — the same method that
-produced `fieldglass`'s own `jpeg2000_regular_latlon.grib2`. This keeps the corpus
-tiny and regenerable offline, with no network fetch and no large operational grids.
+All four derive from small public GRIB2 fixtures already vendored in the sibling
+`fieldglass` repo. This keeps the corpus tiny and regenerable offline, with no
+network fetch and no large operational grids.
 
 - `jpeg2000_regular_latlon` — the codestream from `fieldglass`'s
   `jpeg2000_regular_latlon.grib2`, itself an eccodes `grid_jpeg` repack of ECMWF's
@@ -39,7 +51,12 @@ tiny and regenerable offline, with no network fetch and no large operational gri
   `eta_lambert_msg0.grib2` (first message of NOAA Eta output via the pygrib sample
   corpus). NOAA model output is U.S. government work in the public domain.
 - `regular_latlon_lossy` — eccodes lossy (`typeOfCompressionUsed=1`) `grid_jpeg`
-  repack of ECMWF's `regular_latlon_surface.grib2`. Apache-2.0.
+  repack of ECMWF's `regular_latlon_surface.grib2`. Still a 5/3 codestream: that
+  eccodes option truncates the bit-stream, it does not switch to the 9/7
+  transform. Apache-2.0.
+- `eta_lambert_irreversible` — the samples of `eta_lambert_lossless` re-encoded
+  with OpenJPEG's irreversible 9/7 transform (`opj_compress -I`). Same NOAA Eta
+  grid, public domain; only the codestream's wavelet differs.
 
 All sources are Apache-2.0 or public domain, compatible with this repo.
 
@@ -64,14 +81,24 @@ scripts/extract-grib2-codestream.py /tmp/eta.grib2 -o tests/fixtures/eta_lambert
 scripts/gen-oracle.sh tests/fixtures/eta_lambert_lossless.j2k \
     --source "eccodes grid_jpeg repack of fieldglass eta_lambert_msg0.grib2 (NOAA Eta, Lambert 93x65)"
 
-# 3. lossy 9/7: repack with typeOfCompressionUsed=1.
+# 3. lossy 5/3: repack with typeOfCompressionUsed=1. This truncates the
+#    bit-stream (lossy codestream) but stays on the reversible 5/3 transform,
+#    so the decode is still bit-exact against the oracle.
 grib_set -r -s packingType=grid_jpeg,typeOfCompressionUsed=1,targetCompressionRatio=20 \
     "$FG/regular_latlon_surface.grib2" /tmp/lossy.grib2
 scripts/extract-grib2-codestream.py /tmp/lossy.grib2 -o tests/fixtures/regular_latlon_lossy.j2k
 scripts/gen-oracle.sh tests/fixtures/regular_latlon_lossy.j2k \
-    --tolerance 2.0 \
     --source "eccodes grid_jpeg lossy (typeOfCompressionUsed=1, ratio 20) repack of ECMWF regular_latlon_surface.grib2" \
-    --notes "9/7 irreversible path; bound is our-vs-OpenJPEG reconstruction tolerance, not the lossy compression error"
+    --notes "5/3 reversible (qmfbid=1) made lossy by rate truncation: eccodes' grid_jpeg encoder always uses the reversible 5/3 transform, never 9/7. The inverse is exact integer lifting, so our decode agrees with OpenJPEG bit-exactly."
+
+# 4. irreversible 9/7: no GRIB2 producer ships lossy 9/7, so re-encode the Eta
+#    grid's samples (from step 2) with OpenJPEG's irreversible transform.
+opj_decompress -i tests/fixtures/eta_lambert_lossless.j2k -o /tmp/eta.pgx
+opj_compress -i /tmp/eta_0.pgx -o tests/fixtures/eta_lambert_irreversible.j2k -I
+scripts/gen-oracle.sh tests/fixtures/eta_lambert_irreversible.j2k \
+    --tolerance 2.0 \
+    --source "9/7 irreversible re-encode of the committed eta_lambert_lossless.j2k (NOAA Eta, Lambert 93x65, 13-bit) via opj_compress -I" \
+    --notes "Synthetic 9/7: no operational producer ships lossy 9/7 JPEG2000 (HRRR/NDFD are complex-packed, ECMWF is CCSDS), so the irreversible codestream is produced by OpenJPEG from a real grid. Bound is our-vs-OpenJPEG reconstruction tolerance, not the lossy compression error."
 ```
 
 Each `gen-oracle.sh` run records the exact `opj_decompress` command it ran into the

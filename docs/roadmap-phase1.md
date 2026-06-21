@@ -20,8 +20,10 @@ plain end of Part 1:
 - one component (a single grayscale grid), so no multi-component or color transform;
 - integer samples, signed or unsigned, up to 32 bits (the SIZ depth);
 - one tile, one quality layer, LRCP progression, no precinct subdivision, no ROI;
-- either wavelet, 5/3 reversible (lossless) or 9/7 irreversible (lossy);
-  operational producers such as HRRR use the lossy 9/7 path.
+- either wavelet, 5/3 reversible (lossless) or 9/7 irreversible (lossy). No
+  operational GRIB2 producer ships lossy 9/7 (HRRR and NDFD are complex-packed,
+  ECMWF is CCSDS, and eccodes' `grid_jpeg` encoder always uses 5/3), so the 9/7
+  path is graded by re-encoding a real grid with OpenJPEG's irreversible mode.
 
 Anything outside that subset is rejected, not half-decoded: parsing returns
 `Error::Unsupported` the moment it sees a feature a later phase owns (COC/QCC,
@@ -63,7 +65,8 @@ compares, bit-exact for reversible and within tolerance for irreversible.
 **Work:** the fixture loader and comparator; the `expected.json` schema; one
 recorded command per fixture for regenerating its oracle with `opj_decompress`
 or eccodes. Seed the corpus with the fieldglass `jpeg2000_regular_latlon.grib2`
-fixture plus one HRRR (lossy 9/7) and one MRMS sample.
+fixture plus a second 5/3 geometry, a rate-truncated 5/3 codestream, and a 9/7
+re-encode for the irreversible path.
 
 **Done:** the harness runs and reports every seed fixture as *not yet decoded*
 (expected, since `decode` is still `todo!()`). Provenance for each fixture is
@@ -187,9 +190,10 @@ track is complete.
 clippy's `-D warnings` does real work; fix whatever the seam reveals.
 
 **Gate (this is the Phase 1 exit):** `tests/conformance.rs` decodes the full
-GRIB2 corpus (the fieldglass `jpeg2000_regular_latlon.grib2` fixture plus HRRR
-lossy and MRMS) and matches the eccodes/OpenJPEG oracle, bit-exact for 5/3 and
-within tolerance for 9/7. All quality gates green: `cargo fmt --all -- --check`,
+corpus (the fieldglass `jpeg2000_regular_latlon.grib2` fixture, a second 5/3
+geometry, a rate-truncated 5/3 codestream, and a 9/7 re-encode) and matches the
+eccodes/OpenJPEG oracle, bit-exact for 5/3 and within tolerance for 9/7. All
+quality gates green: `cargo fmt --all -- --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo deny check`.
 A `cargo fuzz` target over `decode` runs clean (no panics, no unbounded
 allocation), so malformed GRIB2-sourced input is a typed `Error`, never a crash.

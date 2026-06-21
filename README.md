@@ -20,7 +20,8 @@ needs, a strict subset of the Part 1 decoder:
 - a **single component** (one scalar grid), so no color transform yet;
 - **integer** samples, signed or unsigned, up to 32 bits;
 - both the reversible **5/3** (lossless) and irreversible **9/7** (lossy)
-  wavelets, because operational GRIB2 such as HRRR uses lossy.
+  wavelets (the 9/7 path is graded by re-encoding a real grid with OpenJPEG,
+  since no operational GRIB2 producer ships lossy 9/7).
 
 Everything beyond that subset (multi-component and color, JP2 boxes, HTJ2K,
 encoding) is later-phase work, not a permanent non-goal.
@@ -51,8 +52,8 @@ The phased plan is in [docs/roadmap.md](docs/roadmap.md).
 `tests/conformance.rs` is the bar: decode a corpus of real codestreams and
 compare against a trusted decoder (OpenJPEG, or eccodes for the GRIB2-sourced
 files). Bit-exact for the reversible path, within a stated tolerance for lossy.
-Seed the corpus from the GRIB2 §5.40 fixture in the fieldglass repo, plus HRRR
-and MRMS samples.
+Seed the corpus from the GRIB2 §5.40 fixtures in the fieldglass repo, plus a
+9/7 re-encode for the irreversible path.
 
 ## Development environment
 

@@ -15,8 +15,10 @@ data section. That codestream is deliberately plain:
 
 - one component (a single scalar grid), so no multi-component or color transform;
 - integer samples, signed or unsigned, up to 32 bits;
-- either wavelet — 5/3 reversible (lossless) or 9/7 irreversible (lossy);
-  operational producers such as HRRR use the lossy 9/7 path;
+- either wavelet — 5/3 reversible (lossless) or 9/7 irreversible (lossy). No
+  operational GRIB2 producer ships lossy 9/7 (HRRR and NDFD are complex-packed,
+  ECMWF is CCSDS), so the 9/7 path is graded by re-encoding a real grid with
+  OpenJPEG's irreversible mode;
 - typically a single tile, a single quality layer, LRCP progression, and no
   JP2 box wrapper, no region of interest, no precinct subdivision.
 
