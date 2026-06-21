@@ -96,28 +96,20 @@ fn scale_irreversible(header: &MainHeader, bands: &mut Bands<f32>) -> Result<()>
 /// drops the exponent by one per resolution level finer (E-5, OpenJPEG's
 /// `ε_b = max(ε_0 − ⌊(b−1)/3⌋, 0)`), keeping the single mantissa.
 fn step_params(qcd: &Qcd, band: usize) -> Result<(u8, u16)> {
-    match qcd.style {
-        QuantStyle::ScalarExpounded => qcd.steps.get(band).copied().ok_or_else(|| {
-            Error::Inconsistent(format!(
-                "QCD carries {} step sizes but subband {band} needs one",
-                qcd.steps.len()
-            ))
-        }),
-        QuantStyle::ScalarDerived => {
-            let (exp0, mant0) = *qcd
-                .steps
-                .first()
-                .ok_or_else(|| Error::Inconsistent("derived QCD carries no step size".into()))?;
-            // Subband 0 (LL) keeps ε₀; band b≥1 sits at level ⌊(b−1)/3⌋. The
-            // saturating subtraction also makes the b=0 case fall out to level 0.
-            let level = band.saturating_sub(1) / 3;
-            let drop = u8::try_from(level).unwrap_or(u8::MAX);
-            Ok((exp0.saturating_sub(drop), mant0))
-        }
-        QuantStyle::None => Err(Error::Inconsistent(
+    if qcd.style == QuantStyle::None {
+        return Err(Error::Inconsistent(
             "irreversible transform needs scalar quantization, found QuantStyle::None".into(),
-        )),
+        ));
     }
+    // The per-subband exponent/mantissa mapping (expounded lookup or derived
+    // per-level drop) is shared with Tier-1's bit-plane count so the two stay
+    // numerically identical.
+    qcd.subband_step(band).ok_or_else(|| {
+        Error::Inconsistent(format!(
+            "QCD carries {} step sizes but subband {band} needs one",
+            qcd.steps.len()
+        ))
+    })
 }
 
 /// Reconstruct one subband's coefficients in place: `sign(q) · (|q| + ½) · Δ`,

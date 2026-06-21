@@ -30,9 +30,6 @@
 //! the ISO §reference and what it owns. Correctness is defined by the
 //! conformance harness in `tests/` (cross-check against OpenJPEG / eccodes).
 
-// TODO(skeleton): remove once the stages are implemented and surfaces settle.
-#![allow(dead_code, unused_variables)]
-
 pub mod codestream;
 pub mod dwt;
 pub mod error;

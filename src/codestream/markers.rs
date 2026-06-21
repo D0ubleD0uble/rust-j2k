@@ -101,3 +101,26 @@ pub struct Qcd {
     /// (exponent, mantissa) per subband; mantissa is 0 for the reversible style.
     pub steps: Vec<(u8, u16)>,
 }
+
+impl Qcd {
+    /// The `(exponent, mantissa)` quantization pair for subband index `band`
+    /// (0 = LL, then `HL, LH, HH` per resolution level coarsest-first), or
+    /// `None` if the QCD does not carry it. Reversible (`None` style) and
+    /// expounded QCDs store one pair per subband; the derived style stores only
+    /// subband 0 and drops the exponent by one per resolution level finer
+    /// (E-5: `ε_b = max(ε_0 − ⌊(b−1)/3⌋, 0)`), keeping the single mantissa.
+    ///
+    /// Both the Tier-1 bit-plane count (`Mb`) and the dequant step read this, so
+    /// the per-band mapping lives here once rather than in two places that must
+    /// stay numerically identical.
+    pub fn subband_step(&self, band: usize) -> Option<(u8, u16)> {
+        match self.style {
+            QuantStyle::None | QuantStyle::ScalarExpounded => self.steps.get(band).copied(),
+            QuantStyle::ScalarDerived => {
+                let (exp0, mant0) = *self.steps.first()?;
+                let drop = u8::try_from(band.saturating_sub(1) / 3).unwrap_or(u8::MAX);
+                Some((exp0.saturating_sub(drop), mant0))
+            }
+        }
+    }
+}
