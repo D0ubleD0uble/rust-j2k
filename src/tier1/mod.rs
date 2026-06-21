@@ -65,6 +65,6 @@ pub enum SubbandCoeffs {
 
 /// Decode every code-block's MQ/EBCOT stream into quantized subband
 /// coefficients, assembling code-blocks back into their subbands.
-pub fn decode_code_blocks(header: &MainHeader, coded: &CodedData) -> Result<SubbandCoeffs> {
+pub fn decode_code_blocks(header: &MainHeader, coded: &CodedData<'_>) -> Result<SubbandCoeffs> {
     todo!("per code-block: run passes::decode_block, place coefficients into subbands")
 }

@@ -64,6 +64,25 @@ impl<'a> BitReader<'a> {
         }
         v
     }
+
+    /// Byte-align at the end of a packet header (Annex B.10.1, OpenJPEG
+    /// `opj_bio_inalign`): drop any partially-read byte, and if the last whole
+    /// byte was `0xFF` consume the following stuffed byte too (its bits are not
+    /// header content). After this, [`bytes_consumed`](Self::bytes_consumed)
+    /// reports where the packet body begins.
+    pub fn align(&mut self) {
+        if self.buf & 0xFF == 0xFF {
+            self.bytein();
+        }
+        self.ct = 0;
+    }
+
+    /// Whole bytes consumed from `data` so far. Meaningful at a byte boundary —
+    /// before the first read, or after [`align`](Self::align). A partially-read
+    /// byte (`ct > 0`) counts as not yet consumed.
+    pub fn bytes_consumed(&self) -> usize {
+        if self.ct == 0 { self.pos } else { self.pos - 1 }
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +143,53 @@ mod tests {
         for _ in 0..16 {
             let _ = b.read_bit();
         }
+    }
+
+    /// Aligning after a partial byte discards the remaining bits and counts the
+    /// byte as consumed; the next byte is where a packet body would start.
+    #[test]
+    fn align_rounds_up_partial_byte() {
+        let mut b = BitReader::new(&[0b1011_0000, 0xAB]);
+        assert_eq!(b.read(4), 0b1011);
+        b.align();
+        assert_eq!(b.bytes_consumed(), 1);
+    }
+
+    /// A header byte of `0xFF` stuffs the next byte: aligning must skip that
+    /// whole stuffed byte (Annex B.10.1), so the body begins one byte later.
+    #[test]
+    fn align_skips_stuffed_byte_after_ff() {
+        let mut b = BitReader::new(&[0xFF, 0x80, 0xAB]);
+        for _ in 0..8 {
+            assert_eq!(b.read_bit(), 1);
+        }
+        b.align();
+        // 0xFF consumed, then the stuffed 0x80 skipped: body starts at index 2.
+        assert_eq!(b.bytes_consumed(), 2);
+    }
+
+    /// Aligning when already on a byte boundary (and not after `0xFF`) consumes
+    /// nothing further.
+    #[test]
+    fn align_on_boundary_is_noop() {
+        let mut b = BitReader::new(&[0x3C, 0xAB]);
+        assert_eq!(b.read(8), 0x3C);
+        b.align();
+        assert_eq!(b.bytes_consumed(), 1);
+    }
+
+    /// The stuffing test is on the *most recently loaded* byte, not the last
+    /// whole byte: a header ending part-way through a `0xFF` byte must still skip
+    /// the following stuffed byte (matching OpenJPEG `opj_bio_inalign`).
+    #[test]
+    fn align_skips_stuffed_byte_when_ending_mid_ff() {
+        let mut b = BitReader::new(&[0x2F, 0xFF, 0x00, 0xBB]);
+        assert_eq!(b.read(8), 0x2F);
+        // Read only four bits of the 0xFF byte, ending mid-byte on it.
+        assert_eq!(b.read(4), 0xF);
+        b.align();
+        // The 0xFF byte (index 1) forces the next byte (the 0x00 stuff byte) to
+        // be skipped, so the body starts at index 3.
+        assert_eq!(b.bytes_consumed(), 3);
     }
 }
