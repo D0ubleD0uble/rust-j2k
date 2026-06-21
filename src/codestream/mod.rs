@@ -275,6 +275,56 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     Ok((MainHeader { siz, cod, qcd }, sot_offset))
 }
 
+/// Upper bound on the declared image area (`Xsiz * Ysiz`), a robustness guard
+/// against a malformed SIZ steering the per-subband and DWT buffers into an
+/// overflowing or out-of-memory allocation. Sized for Phase 1 GRIB2 grids: 2^26
+/// samples is 256 MiB as `i32`, well above operational grids (HRRR ~1.9M, MRMS
+/// ~24.5M) and below anything that threatens the decode. Not a format limit —
+/// raise it as later phases take larger imagery.
+const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
+
+/// Enforce the Phase 1 geometry subset on the SIZ fields: a single tile at the
+/// canvas origin, bounded in area. The general canvas (nonzero image/tile
+/// offsets, a multi-tile grid) is valid JPEG 2000 but Phase 2+ work, so reject
+/// it cleanly here rather than let an out-of-subset origin reach the DWT (whose
+/// interleaving assumes even, canvas-anchored subband origins) or an unbounded
+/// area reach the buffer allocations.
+fn validate_geometry(siz: &Siz) -> Result<()> {
+    if siz.x_size == 0 || siz.y_size == 0 {
+        return Err(Error::Marker("SIZ declares a zero-size image".into()));
+    }
+    if siz.x_offset != 0 || siz.y_offset != 0 {
+        return Err(Error::Unsupported(format!(
+            "image offset ({}, {}); the Phase 1 subset is canvas-origin only",
+            siz.x_offset, siz.y_offset
+        )));
+    }
+    if siz.tile_x_offset != 0 || siz.tile_y_offset != 0 {
+        return Err(Error::Unsupported(format!(
+            "tile offset ({}, {}); the Phase 1 subset is canvas-origin only",
+            siz.tile_x_offset, siz.tile_y_offset
+        )));
+    }
+    if siz.tile_width == 0 || siz.tile_height == 0 {
+        return Err(Error::Marker("SIZ declares a zero-size tile".into()));
+    }
+    // A single tile must span the whole image; a smaller tile means a multi-tile
+    // grid, which is Phase 2.
+    if (siz.tile_width as u64) < siz.x_size as u64 || (siz.tile_height as u64) < siz.y_size as u64 {
+        return Err(Error::Unsupported(
+            "tile smaller than the image (multi-tile grid); the Phase 1 subset is single-tile"
+                .into(),
+        ));
+    }
+    if siz.x_size as u64 * siz.y_size as u64 > MAX_IMAGE_SAMPLES {
+        return Err(Error::Unsupported(format!(
+            "image area {}×{} exceeds the Phase 1 decode guard of {MAX_IMAGE_SAMPLES} samples",
+            siz.x_size, siz.y_size
+        )));
+    }
+    Ok(())
+}
+
 /// Decode SIZ — image and tile geometry plus the per-component depth/sign
 /// (A.5.1). Enforces the single-component subset.
 fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
@@ -312,7 +362,7 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
     }
     b.expect_consumed("SIZ")?;
 
-    Ok(Siz {
+    let siz = Siz {
         x_size,
         y_size,
         x_offset,
@@ -322,7 +372,9 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
         tile_x_offset,
         tile_y_offset,
         components,
-    })
+    };
+    validate_geometry(&siz)?;
+    Ok(siz)
 }
 
 /// Decode COD — default coding style (A.6.1): transform, decomposition depth,

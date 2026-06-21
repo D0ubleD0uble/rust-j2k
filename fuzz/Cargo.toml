@@ -1,0 +1,31 @@
+# Fuzzing harness for the decoder (issue #18). Kept in its own detached
+# workspace (the empty `[workspace]` table below) so it never enters the
+# library's dependency graph: `cargo build`, `cargo test`, `cargo clippy
+# --all-targets`, and `cargo deny check` at the repo root do not see
+# `libfuzzer-sys`, and the no-C-dependency / cross-compile guarantee for
+# `rust-j2k` itself is preserved. This crate only builds under
+# `cargo +nightly fuzz`.
+[package]
+name = "rust-j2k-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.rust-j2k]
+path = ".."
+
+# One binary per target. `decode` drives the public entry point.
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
