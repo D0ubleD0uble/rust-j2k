@@ -1,0 +1,45 @@
+name: Semgrep
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly Mon 06:00 UTC — catches new rules added to the rule packs.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+  security-events: write   # to upload SARIF to the Security tab
+  pull-requests: read
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    # SARIF upload to GitHub Code Scanning needs either a public repo or GitHub
+    # Advanced Security. Skip until the repo is public.
+    if: github.event.repository.visibility == 'public'
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        # No --error: surface findings in the Security tab without breaking the
+        # build until they're triaged. Flip on --error once findings are at zero.
+        run: |
+          semgrep scan \
+            --sarif --output=semgrep.sarif \
+            --config p/default \
+            --config p/security-audit \
+            --config p/rust \
+            --config p/secrets \
+            --config p/github-actions
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep

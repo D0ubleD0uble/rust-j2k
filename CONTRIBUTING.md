@@ -27,6 +27,15 @@ against committed `expected.json` snapshots. External reference tools are only
 needed to *regenerate* those snapshots; see
 [docs/development.md](docs/development.md).
 
+Optional but recommended: install the [pre-commit](https://pre-commit.com)
+hooks so the gates run automatically — fmt/clippy on commit, test/deny and
+security scans on push:
+
+```sh
+pip install pre-commit
+pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
 ## Quality gates
 
 All of these must pass before a PR is ready (CI enforces the same set):
@@ -57,3 +66,8 @@ run it locally: `cargo +nightly fuzz run decode`.
 
 Maintainers: the release process (tagging, the gated crates.io publish) is in
 [RELEASING.md](RELEASING.md).
+
+## Code of Conduct
+
+By participating, you agree to abide by our
+[Code of Conduct](CODE_OF_CONDUCT.md).

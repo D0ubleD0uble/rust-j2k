@@ -1,0 +1,41 @@
+# Codecov configuration. See https://docs.codecov.com/docs/codecov-yaml for the
+# full schema.
+
+coverage:
+  range: 60..90
+  round: down
+  precision: 1
+
+  status:
+    # Project-wide coverage. `auto` compares against the previous commit on the
+    # same branch; the threshold allows small dips without failing the check.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        if_ci_failed: error
+    # Patch coverage — the diff in this PR.
+    patch:
+      default:
+        target: 70%
+        threshold: 5%
+        if_ci_failed: error
+
+comment:
+  layout: "diff, flags, files"
+  behavior: default
+  require_changes: false
+
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: rust
+      paths:
+        - src/
+
+# Integration-test files exist to exercise library code; counting their own
+# lines as "uncovered" would dilute the real signal.
+ignore:
+  - "tests/**"
+  - "fuzz/**"

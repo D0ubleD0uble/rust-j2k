@@ -34,7 +34,7 @@ path, end to end, gated against the OpenJPEG/eccodes oracle.
 - Minimum supported Rust version of 1.87, declared via `rust-version` and
   verified in CI.
 - Project documentation: README install/usage/supported-subset sections,
-  `CONTRIBUTING.md`, and `SECURITY.md`.
+  `CONTRIBUTING.md`, `SECURITY.md`, and `CODE_OF_CONDUCT.md`.
 
 ### Scope
 

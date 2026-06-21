@@ -1,6 +1,7 @@
 # rust-j2k
 
 [![CI](https://github.com/D0ubleD0uble/rust-j2k/actions/workflows/ci.yml/badge.svg)](https://github.com/D0ubleD0uble/rust-j2k/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/D0ubleD0uble/rust-j2k/branch/main/graph/badge.svg)](https://codecov.io/gh/D0ubleD0uble/rust-j2k)
 [![crates.io](https://img.shields.io/crates/v/rust-j2k.svg)](https://crates.io/crates/rust-j2k)
 [![docs.rs](https://img.shields.io/docsrs/rust-j2k)](https://docs.rs/rust-j2k)
 ![MSRV](https://img.shields.io/badge/rustc-1.87+-blue.svg)
