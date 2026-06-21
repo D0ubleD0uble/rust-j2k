@@ -52,6 +52,17 @@ jobs:
       - name: Doc tests
         run: cargo test --doc
 
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Must match rust-version in Cargo.toml. The pin is only a claim until this
+      # job proves the crate still builds on it, so bump both together.
+      - uses: dtolnay/rust-toolchain@1.87
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest

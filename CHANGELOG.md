@@ -31,6 +31,8 @@ path, end to end, gated against the OpenJPEG/eccodes oracle.
   `expected.json` oracle snapshots: bit-exact for 5/3, within a stated tolerance
   for 9/7. Runs with no external tools.
 - `cargo-fuzz` target over `decode` for robustness against malformed input.
+- Minimum supported Rust version of 1.87, declared via `rust-version` and
+  verified in CI.
 
 ### Scope
 
