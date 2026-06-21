@@ -251,6 +251,74 @@ fn zero_components_is_marker() {
     assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
+/// SIZ body with explicit geometry and one valid unsigned 15-bit component, so
+/// the geometry-subset rejects (validated before the component list) can be
+/// exercised one field at a time.
+#[allow(clippy::too_many_arguments)]
+fn siz_geom(x: u32, y: u32, xo: u32, yo: u32, xt: u32, yt: u32, xto: u32, yto: u32) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&be16(0)); // Rsiz
+    for v in [x, y, xo, yo, xt, yt, xto, yto] {
+        b.extend_from_slice(&v.to_be_bytes());
+    }
+    b.extend_from_slice(&be16(1)); // Csiz
+    b.extend_from_slice(&[15, 1, 1]); // one unsigned 16-bit component
+    b
+}
+
+#[test]
+fn zero_size_image_is_marker() {
+    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(0, 256, 0, 0, 512, 256, 0, 0))]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn nonzero_image_offset_is_unsupported() {
+    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(512, 256, 1, 0, 512, 256, 0, 0))]);
+    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn nonzero_tile_offset_is_unsupported() {
+    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 512, 256, 1, 0))]);
+    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn zero_size_tile_is_marker() {
+    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 0, 256, 0, 0))]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn tile_smaller_than_image_is_unsupported() {
+    // A 512×256 image carved into 256-wide tiles is a multi-tile grid (Phase 2).
+    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 256, 256, 0, 0))]);
+    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn oversize_image_area_is_unsupported() {
+    // 16384×16384 = 2^28 samples, past the 2^26 decode guard.
+    let n = 16384;
+    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(n, n, 0, 0, n, n, 0, 0))]);
+    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn tile_larger_than_image_is_accepted() {
+    // A tile larger than the image (XTsiz > Xsiz) is legal — the tile clips to
+    // the image and the grid is still single-tile — so it must parse, pinning
+    // the `<` boundary in the multi-tile check against a future `!=` tightening.
+    let exps = [8u8; 16];
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 1024, 512, 0, 0)),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &exps)),
+    ]);
+    assert!(parse_main_header(&bytes).is_ok());
+}
+
 #[test]
 fn non_lrcp_progression_is_unsupported() {
     let bytes = codestream(&[

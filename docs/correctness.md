@@ -84,9 +84,14 @@ Seed it from:
 A decoder parses bytes it did not produce, so malformed input is a first-class
 case, not an edge case:
 
-- **Fuzzing** — `cargo fuzz` (libFuzzer) over the public `decode` entry point.
+- **Fuzzing** — `cargo fuzz` (libFuzzer) over the public `decode` entry point,
+  in the detached [`fuzz/`](../fuzz/) workspace (run it per [`fuzz/README.md`](../fuzz/README.md)).
   The bar: no panics, no unbounded allocation, no infinite loops; every rejected
-  input returns a typed `Error`, never crashes.
+  input returns a typed `Error`, never crashes. A malformed SIZ cannot steer the
+  buffers into an overflowing or out-of-memory allocation: the declared image
+  area is bounded at parse time, and the Phase 1 geometry subset (single
+  canvas-origin tile) is enforced before any out-of-subset origin reaches the
+  DWT.
 - **Typed failures** — the flat `Error` enum names the stage that failed, so a
   malformed header, an out-of-scope feature, and a Tier-1 decode fault are
   distinguishable by a caller. No `unwrap`/`panic` on the decode path.
