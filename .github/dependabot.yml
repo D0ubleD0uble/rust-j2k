@@ -33,3 +33,9 @@ updates:
       github-actions:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # dtolnay/rust-toolchain is referenced by its Rust-version tag (the msrv
+      # job pins @1.87, matching rust-version in Cargo.toml). Dependabot reads
+      # that tag as an action version and would "bump" it, silently changing
+      # what the MSRV check tests. Bump it manually in lockstep with the MSRV.
+      - dependency-name: "dtolnay/rust-toolchain"
