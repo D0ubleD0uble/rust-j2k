@@ -97,7 +97,7 @@ where
     let (hl, lh, hh) = (&detail.hl, &detail.lh, &detail.hh);
     // Phase 1 decodes a single tile at the canvas origin: even parity, so the
     // low-pass bands land on the even rows/columns of the interleaved grid.
-    debug_assert!(ll.origin.0 % 2 == 0 && ll.origin.1 % 2 == 0);
+    debug_assert!(ll.origin.0.is_multiple_of(2) && ll.origin.1.is_multiple_of(2));
     // The four bands tile the resolution: LL/LH share the low-pass column count,
     // HL/HH the high-pass count; LL/HL share the low-pass row count, LH/HH the
     // high-pass count.
@@ -342,7 +342,7 @@ mod tests {
         for &len in &lengths {
             // A deterministic mix of a ramp and an alternating component.
             let original: Vec<f32> = (0..len)
-                .map(|i| i as f32 * 1.5 - if i % 2 == 0 { 3.0 } else { -2.0 })
+                .map(|i| i as f32 * 1.5 - if i.is_multiple_of(2) { 3.0 } else { -2.0 })
                 .collect();
             let mut a = original.clone();
             forward_9_7(&mut a);

@@ -477,7 +477,7 @@ fn decode_qcd(mut b: Cursor<'_>) -> Result<Qcd> {
         // Scalar: 16-bit per entry, high 5 bits exponent, low 11 bits mantissa.
         // Derived signals one entry (LL); expounded one per subband.
         QuantStyle::ScalarDerived | QuantStyle::ScalarExpounded => {
-            if b.remaining() == 0 || b.remaining() % 2 != 0 {
+            if b.remaining() == 0 || !b.remaining().is_multiple_of(2) {
                 return Err(Error::Codestream("QCD step table is truncated".into()));
             }
             if style == QuantStyle::ScalarDerived && b.remaining() != 2 {
