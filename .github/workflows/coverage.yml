@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: read
-  # Required so codecov-action can mint an OIDC token for tokenless upload.
-  id-token: write
 
 jobs:
   rust-coverage:
@@ -39,9 +37,8 @@ jobs:
         with:
           files: lcov.info
           flags: rust
-          # OIDC is issued for trusted runs (push, same-repo PRs); forked PRs
-          # fall back to Codecov's tokenless heuristic, which can refuse the
-          # upload. Keep fail_ci_if_error off so a forked-PR coverage failure
-          # doesn't block contributors.
-          use_oidc: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # The token is available on push and same-repo PRs; forked PRs can't
+          # read repo secrets, so their upload is skipped. Keep fail_ci_if_error
+          # off so that skip doesn't block contributors.
           fail_ci_if_error: false
