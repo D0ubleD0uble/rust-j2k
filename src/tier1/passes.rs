@@ -34,6 +34,14 @@ pub const CTX_UNI: u8 = 18;
 /// Number of MQ contexts a code-block tracks (ISO Table D-7).
 pub const NUM_CONTEXTS: usize = 19;
 
+/// Largest coded bit-plane the double-scale reconstruction can hold: decoding
+/// carries each magnitude at twice its weight (the mid-point half), so the top
+/// plane's `1 << top` and the accumulated value must stay inside `i32`. At
+/// `top == 30` the maximum magnitude `2^31 − 1` just fits; `top == 31` overflows
+/// (this mirrors OpenJPEG rejecting `bpno_plus_one >= 31`). Callers reject any
+/// subband whose `Mb − zero_bit_planes` exceeds this.
+pub const MAX_BIT_PLANES: u32 = 30;
+
 /// Subband orientation, which selects the zero-coding context table (D.3.1).
 /// Per Table D-1, `LL` and `LH` share one table, `HL` swaps the horizontal and
 /// vertical neighbour roles, and `HH` keys off the diagonal count instead.
@@ -126,11 +134,25 @@ impl BlockState {
         self.visited[i] = value;
     }
 
-    /// Set bit-plane `bpno` of the coefficient magnitude at `(x, y)`. Used as a
-    /// coefficient becomes significant and on each magnitude-refinement bit.
-    fn set_magnitude_bit(&mut self, x: u32, y: u32, bpno: u32) {
+    /// Set a coefficient's magnitude when it first becomes significant at plane
+    /// `bpno`, to the mid-point reconstruction value `2^bpno + 2^(bpno−1)`
+    /// (ISO E.1.1.2 / OpenJPEG `oneplushalf`): the significant bit plus half the
+    /// next plane's weight, placing it at the centre of its interval.
+    fn set_significant_magnitude(&mut self, x: u32, y: u32, bpno: u32) {
+        let one = 1i32 << bpno;
         let i = self.idx(x, y);
-        self.coeffs[i] |= 1 << bpno;
+        self.coeffs[i] = one | (one >> 1);
+    }
+
+    /// Refine a significant coefficient's magnitude at plane `bpno`: a `1` bit
+    /// pushes it up by half the plane weight, a `0` bit down (OpenJPEG `poshalf`,
+    /// the running mid-point update). Decoding runs at double scale and stops at
+    /// `bpno == 1`, so `poshalf` is always ≥ 1; the carried half is dropped by
+    /// the final halving in [`decode_block`].
+    fn refine_magnitude(&mut self, x: u32, y: u32, bpno: u32, bit: u8) {
+        let poshalf = (1i32 << bpno) >> 1;
+        let i = self.idx(x, y);
+        self.coeffs[i] += if bit == 1 { poshalf } else { -poshalf };
     }
 
     /// Clear every per-sample `visited` flag. The flag marks samples coded in
@@ -303,7 +325,7 @@ fn sig_prop_pass(
                 continue; // no significant neighbour: deferred to cleanup
             }
             if mq.decode(&mut cx[ctx as usize]) == 1 {
-                state.set_magnitude_bit(x, y, bpno);
+                state.set_significant_magnitude(x, y, bpno);
                 state.set_significant(x, y);
                 decode_sign(mq, state, cx, x, y);
             }
@@ -323,9 +345,8 @@ fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Contex
                 continue;
             }
             let ctx = state.mr_context(x, y);
-            if mq.decode(&mut cx[ctx as usize]) == 1 {
-                state.set_magnitude_bit(x, y, bpno);
-            }
+            let bit = mq.decode(&mut cx[ctx as usize]);
+            state.refine_magnitude(x, y, bpno, bit);
             state.set_refined(x, y);
         }
     }
@@ -362,7 +383,7 @@ fn cleanup_pass(
                 let lo = mq.decode(&mut cx[CTX_UNI as usize]);
                 let run = (hi << 1) | lo; // position of the first significant
                 let y = y0 + run as u32;
-                state.set_magnitude_bit(x, y, bpno);
+                state.set_significant_magnitude(x, y, bpno);
                 state.set_significant(x, y);
                 decode_sign(mq, state, cx, x, y);
                 first = run as u32 + 1;
@@ -375,7 +396,7 @@ fn cleanup_pass(
             }
             let ctx = state.zc_context(x, y, orient);
             if mq.decode(&mut cx[ctx as usize]) == 1 {
-                state.set_magnitude_bit(x, y, bpno);
+                state.set_significant_magnitude(x, y, bpno);
                 state.set_significant(x, y);
                 decode_sign(mq, state, cx, x, y);
             }
@@ -386,44 +407,61 @@ fn cleanup_pass(
 
 /// Decode one code-block: run the bit-plane passes over `mq` into `state`.
 ///
-/// `num_passes` and `zero_bit_planes` come from the Tier-2 packet headers,
-/// `orient` is the subband's orientation (it selects the zero-coding table), and
-/// `style` is the COD/COC code-block style flags. On return `state.coeffs` holds
-/// the signed quantized coefficients.
+/// `numbps` is the subband's magnitude bit-plane count `Mb` (guard bits +
+/// quantization exponent − 1); `num_passes` and `zero_bit_planes` come from the
+/// Tier-2 packet headers; `orient` is the subband's orientation (it selects the
+/// zero-coding table); and `style` is the COD/COC code-block style flags. On
+/// return `state.coeffs` holds the signed quantized coefficients at their true
+/// bit weights.
 ///
-/// Phase 1 handles only the default code-block style and the single-layer subset
-/// where the one quality layer carries every coding pass. Under that subset
-/// `num_passes == 3·numbps − 2`, so the magnitude bit-plane count `numbps`, and
-/// thus the top plane's weight `2^(numbps−1)`, follow from `num_passes` alone;
-/// `zero_bit_planes` is the count of skipped most-significant planes and is not
-/// needed to reconstruct the magnitudes. Multi-layer truncation and the
-/// non-default styles (bypass/reset/restart/vertically-causal/segmentation) are
-/// Phase 2.
+/// Following OpenJPEG, decoding runs at double scale: it begins at the most
+/// significant coded plane `Mb − zero_bit_planes` with a cleanup pass and walks
+/// down three passes per plane to plane 1 (never plane 0), carrying each
+/// magnitude in mid-point form, then halves toward zero. A stream that stops
+/// early (the lossy/rate-truncated case) simply leaves the un-coded low planes
+/// zero. Phase 1 still handles only the default code-block style and a single
+/// quality layer; the non-default styles
+/// (bypass/reset/restart/vertically-causal/segmentation) and multi-layer
+/// progression are Phase 2.
 pub fn decode_block(
     mq: &mut MqDecoder<'_>,
     state: &mut BlockState,
     orient: Orientation,
+    numbps: u32,
     num_passes: u32,
     zero_bit_planes: u32,
     style: u8,
 ) {
-    let _ = (zero_bit_planes, style);
+    let _ = style;
     if num_passes == 0 {
         return;
     }
 
+    // Decode at twice the final scale, matching OpenJPEG: the most significant
+    // coded plane is `cblk.numbps = Mb − zero_bit_planes` (`numbps = Mb`, the
+    // subband's guard + exponent − 1), and decoding walks down to plane 1, never
+    // plane 0. Carrying the extra low bit lets the mid-point reconstruction stay
+    // integral (the half is ≥ 1 at every coded plane); the final halving below
+    // drops it. A truncated (lossy) stream simply stops higher, leaving the
+    // un-coded low planes zero. For a fully coded block
+    // `Mb − zero_bit_planes == num_passes.div_ceil(3)`.
+    let top = numbps.saturating_sub(zero_bit_planes);
+    if top < 1 {
+        return; // no coded magnitude planes: the block stays zero
+    }
+    // Callers reject anything past this (see `decode_code_blocks`); the double
+    // scale means `1 << top` must stay inside `i32`.
+    debug_assert!(top <= MAX_BIT_PLANES, "bit-plane count {top} overflows i32");
+
     let mut cx = init_contexts();
-    // Single-layer subset: num_passes == 3·numbps − 2 (the top plane is one
-    // cleanup pass, every plane below it three passes).
-    let numbps = num_passes.div_ceil(3); // == (num_passes + 2) / 3 here
-    let mut bpno = numbps - 1;
+    let mut bpno = top;
     let mut left = num_passes;
 
     // The most significant plane runs the cleanup pass only (D.4).
     cleanup_pass(mq, state, &mut cx, orient, bpno);
     left -= 1;
 
-    while left > 0 && bpno > 0 {
+    while left > 0 && bpno > 1 {
         bpno -= 1;
         sig_prop_pass(mq, state, &mut cx, orient, bpno);
         left -= 1;
@@ -439,13 +477,16 @@ pub fn decode_block(
         left -= 1;
     }
 
-    // Apply the decoded signs to the accumulated magnitudes.
+    // The passes carried each magnitude in the mid-point reconstruction form at
+    // double scale (ISO E.1.1.2, r = ½): becoming significant set
+    // `2^bpno + 2^(bpno−1)` and each refinement nudged it by ±2^(bpno−1). Halve
+    // toward zero to drop the carried low bit, then apply the decoded signs
+    // (OpenJPEG's reversible `tmp / 2`).
     for y in 0..state.height {
         for x in 0..state.width {
-            if state.is_negative(x, y) {
-                let i = state.idx(x, y);
-                state.coeffs[i] = -state.coeffs[i];
-            }
+            let i = state.idx(x, y);
+            let mag = state.coeffs[i] / 2;
+            state.coeffs[i] = if state.is_negative(x, y) { -mag } else { mag };
         }
     }
 }
@@ -460,10 +501,14 @@ mod tests {
     fn decode_golden(g: &super::golden_vectors::GoldenBlock) -> Vec<i32> {
         let mut mq = MqDecoder::new(g.segment);
         let mut state = BlockState::new(g.width, g.height);
+        // The golden vectors are fully coded (lossless, every plane to plane 0),
+        // so Mb = decoded-plane count + skipped MSB planes.
+        let numbps = g.num_passes.div_ceil(3) + g.zero_bit_planes;
         decode_block(
             &mut mq,
             &mut state,
             Orientation::Ll,
+            numbps,
             g.num_passes,
             g.zero_bit_planes,
             0,
@@ -488,7 +533,7 @@ mod tests {
     fn zero_passes_yields_all_zero_coefficients() {
         let mut mq = MqDecoder::new(GOLDEN_BLOCKS[0].segment);
         let mut state = BlockState::new(4, 4);
-        decode_block(&mut mq, &mut state, Orientation::Ll, 0, 0, 0);
+        decode_block(&mut mq, &mut state, Orientation::Ll, 8, 0, 0, 0);
         assert!(state.coeffs.iter().all(|&c| c == 0));
     }
 

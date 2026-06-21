@@ -114,8 +114,12 @@ where
     scatter(&mut grid, width, lh, 0, 1); // LH: odd row, even column
     scatter(&mut grid, width, hh, 1, 1); // HH: odd row, odd column
 
-    // Synthesis is separable. Undo the columns first, then the rows — the
-    // reverse of a forward pass that filtered rows then columns.
+    // Synthesis is separable, but the 5/3 integer lifting rounds, so the two
+    // passes do not commute: match OpenJPEG's order — horizontal (rows) first,
+    // then vertical (columns) — so the reversible path is bit-exact.
+    for row in grid.chunks_exact_mut(width) {
+        kernel(row);
+    }
     let mut column = vec![T::default(); height];
     for x in 0..width {
         for (y, slot) in column.iter_mut().enumerate() {
@@ -125,9 +129,6 @@ where
         for (y, &value) in column.iter().enumerate() {
             grid[y * width + x] = value;
         }
-    }
-    for row in grid.chunks_exact_mut(width) {
-        kernel(row);
     }
 
     Band {
@@ -445,13 +446,10 @@ mod tests {
         }
     }
 
-    /// Forward 1-D kernel across every row then down every column, in place —
-    /// the analysis counterpart of [`super::merge_level`]'s columns-then-rows
-    /// synthesis.
+    /// Forward 1-D kernel down every column then across every row, in place —
+    /// the analysis counterpart of [`super::merge_level`]'s rows-then-columns
+    /// synthesis (the passes must run in the reverse order to round-trip).
     fn forward_2d<T: Copy + Default, F: Fn(&mut [T])>(grid: &mut [T], w: usize, h: usize, fwd: &F) {
-        for row in grid.chunks_exact_mut(w) {
-            fwd(row);
-        }
         let mut col = vec![T::default(); h];
         for x in 0..w {
             for (y, slot) in col.iter_mut().enumerate() {
@@ -461,6 +459,9 @@ mod tests {
             for (y, &v) in col.iter().enumerate() {
                 grid[y * w + x] = v;
             }
+        }
+        for row in grid.chunks_exact_mut(w) {
+            fwd(row);
         }
     }
 
