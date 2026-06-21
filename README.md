@@ -41,11 +41,16 @@ let image = rust_j2k::decode(&codestream_bytes)?;
 
 ## Status
 
-Skeleton (Phase 0). Every stage compiles and is stubbed with `todo!()`; each
-module's docs cite the ISO section it owns. Phase 1 fills in the GRIB2 decode
-path in an order that keeps tests meaningful: codestream parsing, then the MQ
-decoder, EBCOT passes, Tier-2 packets, the inverse DWT, and dequantization last.
-The phased plan is in [docs/roadmap.md](docs/roadmap.md).
+Phase 1 complete (v0.1.0). The GRIB2 §5.40 decode path is implemented end to end
+— codestream parsing, the MQ decoder, EBCOT passes, Tier-2 packets, the inverse
+DWT (5/3 and 9/7), dequantization, and image assembly — and passes the
+conformance gate against the OpenJPEG/eccodes oracle: bit-exact for the
+reversible 5/3 path, within tolerance for the irreversible 9/7 path. Each
+module's docs cite the ISO section it owns.
+
+Later phases widen this same engine toward general Part 1 decode, the JP2 file
+format, HTJ2K, and an encoder. The phased plan is in
+[docs/roadmap.md](docs/roadmap.md).
 
 ## Correctness
 

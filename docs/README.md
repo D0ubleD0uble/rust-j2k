@@ -29,8 +29,9 @@ and stale.
 - [scope.md](scope.md) — the full feature inventory. Every JPEG 2000 capability
   OpenJPEG implements, which part of the standard it belongs to, whether GRIB2
   needs it, and which project phase delivers it.
-- [roadmap.md](roadmap.md) — the phased plan, from the current skeleton through
-  the GRIB2 decode MVP to full-codec parity, with the gate for each phase.
+- [roadmap.md](roadmap.md) — the phased plan, from the initial skeleton through
+  the GRIB2 decode MVP (Phase 1, shipped in v0.1.0) to full-codec parity, with
+  the gate for each phase.
 - [roadmap-phase1.md](roadmap-phase1.md) — the GRIB2 decode MVP broken into
   ordered milestones, each tied to its module, its oracle, and what it unblocks.
 - [correctness.md](correctness.md) — how we know a stage is right: the oracle

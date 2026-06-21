@@ -1,5 +1,10 @@
 # Phase 1 roadmap — GRIB2 decode MVP
 
+> **Status: complete.** All milestones below are done and the phase gate passes;
+> Phase 1 shipped in v0.1.0. This file is kept as the build-order record — each
+> milestone's "Done" line describes the exit state it was written against, not
+> the current state of the crate.
+
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file zooms
 into Phase 1 alone. It breaks the single line item "GRIB2 decode MVP" into
 ordered milestones, each tied to the module it fills in, the oracle or golden
