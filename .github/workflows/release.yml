@@ -1,10 +1,15 @@
 name: Release
 
 # Cut a release by pushing a version tag, e.g.:
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git tag v0.2.0 && git push origin v0.2.0
 #
 # The publish job runs only after the gates pass AND a reviewer approves the
 # `crates-io` environment, so a tag push alone never publishes unattended.
+#
+# FIRST RELEASE BOOTSTRAP: crates.io has no "pending" trusted publisher, so the
+# very first `cargo publish` of this crate must be done manually with an API
+# token (see RELEASING.md). Only after that can you register the trusted
+# publisher on crates.io and let this workflow publish v0.2.0 onward.
 on:
   push:
     tags: ["v*"]
