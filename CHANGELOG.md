@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-21
+
 ### Changed
 
 - Reduced the public API to its intended surface: `decode`, `Image`, `Error`,
@@ -60,5 +62,6 @@ wrapper, and no multi-component or color transform. Anything outside the subset
 is rejected cleanly rather than half-decoded. Wider Part 1 coverage, the JP2 file
 format, HTJ2K, and an encoder are later-phase work; see `docs/roadmap.md`.
 
-[Unreleased]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/D0ubleD0uble/rust-j2k/releases/tag/v0.1.0
