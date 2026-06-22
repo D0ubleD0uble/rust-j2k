@@ -8,7 +8,7 @@
 //! hands Tier-1 the coded byte segments per code-block — it does **not** run
 //! the arithmetic decoder.
 //!
-//! The Phase 1 subset is one tile, one component, one quality layer, LRCP, and
+//! The decoded subset is one tile, one component, one quality layer, LRCP, and
 //! maximal precincts (one precinct per resolution). That collapses the packet
 //! stream to exactly one packet per resolution level, coarsest first, so the
 //! whole tile-part is `header₀ body₀ header₁ body₁ …` with no precinct or layer
@@ -157,7 +157,7 @@ fn resolution_geoms(header: &MainHeader) -> Result<Vec<Vec<BandGeom>>> {
     }
 
     // Tile-component bounds: the single tile clipped to the image, divided by
-    // the component sub-sampling (Annex B.3, Eq. B-7/B-12). The Phase 1 subset
+    // the component sub-sampling (Annex B.3, Eq. B-7/B-12). The decoded subset
     // uses zero offsets and unit sub-sampling, but the general form costs
     // nothing — provided the tile origin is clamped up to the image offset.
     let comp = siz

@@ -19,7 +19,7 @@
 //! HH 2). Guard bits do not enter the step; they size the magnitude bit-planes,
 //! which Tier-1/Tier-2 already consumed. A decoded index `q` reconstructs to the
 //! interval mid-point (E.1.1.2, parameter r = ½): `sign(q) · (|q| + ½) · Δ_b`,
-//! with zero mapping to zero. Single-layer Phase 1 decodes every bit-plane, so
+//! with zero mapping to zero. The single-layer decode covers every bit-plane, so
 //! the bias is exactly one half-step.
 
 use crate::Result;

@@ -419,10 +419,10 @@ fn cleanup_pass(
 /// down three passes per plane to plane 1 (never plane 0), carrying each
 /// magnitude in mid-point form, then halves toward zero. A stream that stops
 /// early (the lossy/rate-truncated case) simply leaves the un-coded low planes
-/// zero. Phase 1 still handles only the default code-block style and a single
-/// quality layer; the non-default styles
+/// zero. The decoder currently handles only the default code-block style and a
+/// single quality layer; the non-default styles
 /// (bypass/reset/restart/vertically-causal/segmentation) and multi-layer
-/// progression are Phase 2.
+/// progression are not yet decoded.
 pub fn decode_block(
     mq: &mut MqDecoder<'_>,
     state: &mut BlockState,

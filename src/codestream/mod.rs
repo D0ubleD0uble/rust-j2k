@@ -83,7 +83,7 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
     }
 
     // Tile-part header: only SOD (and a skippable COM) belong here in the
-    // subset; tile-level coding/quant overrides are a later phase.
+    // subset; tile-level coding/quant overrides are not yet decoded.
     loop {
         let m = cur.u16()?;
         match m {
@@ -102,7 +102,7 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
             | marker::SOP
             | marker::EPH => {
                 return Err(Error::Unsupported(format!(
-                    "tile-part header marker {m:#06X} is outside the Phase 1 subset"
+                    "tile-part header marker {m:#06X} is outside the decoded subset"
                 )));
             }
             other => {
@@ -241,7 +241,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
                 segment(&mut cur)?;
             }
 
-            // Valid markers a later phase owns — reject cleanly, do not half-parse.
+            // Valid markers the decoded subset does not yet cover — reject
+            // cleanly, do not half-parse.
             marker::COC
             | marker::QCC
             | marker::RGN
@@ -251,7 +252,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             | marker::SOP
             | marker::EPH => {
                 return Err(Error::Unsupported(format!(
-                    "marker {m:#06X} is outside the Phase 1 subset"
+                    "marker {m:#06X} is outside the decoded subset"
                 )));
             }
 
@@ -277,15 +278,15 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
 
 /// Upper bound on the declared image area (`Xsiz * Ysiz`), a robustness guard
 /// against a malformed SIZ steering the per-subband and DWT buffers into an
-/// overflowing or out-of-memory allocation. Sized for Phase 1 GRIB2 grids: 2^26
-/// samples is 256 MiB as `i32`, well above operational grids (HRRR ~1.9M, MRMS
-/// ~24.5M) and below anything that threatens the decode. Not a format limit —
-/// raise it as later phases take larger imagery.
+/// overflowing or out-of-memory allocation. Sized for the GRIB2 grids decoded
+/// today: 2^26 samples is 256 MiB as `i32`, well above operational grids (HRRR
+/// ~1.9M, MRMS ~24.5M) and below anything that threatens the decode. Not a
+/// format limit — raise it as larger imagery comes into scope.
 const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
 
-/// Enforce the Phase 1 geometry subset on the SIZ fields: a single tile at the
+/// Enforce the decoded geometry subset on the SIZ fields: a single tile at the
 /// canvas origin, bounded in area. The general canvas (nonzero image/tile
-/// offsets, a multi-tile grid) is valid JPEG 2000 but Phase 2+ work, so reject
+/// offsets, a multi-tile grid) is valid JPEG 2000 but not yet decoded, so reject
 /// it cleanly here rather than let an out-of-subset origin reach the DWT (whose
 /// interleaving assumes even, canvas-anchored subband origins) or an unbounded
 /// area reach the buffer allocations.
@@ -295,13 +296,13 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
     }
     if siz.x_offset != 0 || siz.y_offset != 0 {
         return Err(Error::Unsupported(format!(
-            "image offset ({}, {}); the Phase 1 subset is canvas-origin only",
+            "image offset ({}, {}); the decoded subset is canvas-origin only",
             siz.x_offset, siz.y_offset
         )));
     }
     if siz.tile_x_offset != 0 || siz.tile_y_offset != 0 {
         return Err(Error::Unsupported(format!(
-            "tile offset ({}, {}); the Phase 1 subset is canvas-origin only",
+            "tile offset ({}, {}); the decoded subset is canvas-origin only",
             siz.tile_x_offset, siz.tile_y_offset
         )));
     }
@@ -309,16 +310,16 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
         return Err(Error::Marker("SIZ declares a zero-size tile".into()));
     }
     // A single tile must span the whole image; a smaller tile means a multi-tile
-    // grid, which is Phase 2.
+    // grid, which is not yet decoded.
     if (siz.tile_width as u64) < siz.x_size as u64 || (siz.tile_height as u64) < siz.y_size as u64 {
         return Err(Error::Unsupported(
-            "tile smaller than the image (multi-tile grid); the Phase 1 subset is single-tile"
+            "tile smaller than the image (multi-tile grid); the decoded subset is single-tile"
                 .into(),
         ));
     }
     if siz.x_size as u64 * siz.y_size as u64 > MAX_IMAGE_SAMPLES {
         return Err(Error::Unsupported(format!(
-            "image area {}×{} exceeds the Phase 1 decode guard of {MAX_IMAGE_SAMPLES} samples",
+            "image area {}×{} exceeds the decode guard of {MAX_IMAGE_SAMPLES} samples",
             siz.x_size, siz.y_size
         )));
     }
@@ -344,7 +345,7 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
     }
     if csiz != 1 {
         return Err(Error::Unsupported(format!(
-            "{csiz} components; the Phase 1 subset is single-component"
+            "{csiz} components; the decoded subset is single-component"
         )));
     }
 
@@ -390,7 +391,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     }
     if scod & 0x06 != 0 {
         return Err(Error::Unsupported(
-            "SOP/EPH error-resilience markers are out of the Phase 1 subset".into(),
+            "SOP/EPH error-resilience markers are outside the decoded subset".into(),
         ));
     }
 
