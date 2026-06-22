@@ -53,6 +53,9 @@ crate-level dead-code `allow` is gone. Released as v0.1.0.
 
 **Goal:** decode any conformant Part 1 *codestream*, not just the GRIB2 subset.
 
+The milestone-by-milestone build order, each step with the conformance oracle
+that gates it, is in [roadmap-phase2.md](roadmap-phase2.md); in brief:
+
 - Multiple tiles and tile-parts; multiple components with subsampling.
 - Multiple component transform: RCT and ICT (color reconstruction).
 - All five progression orders plus POC; multiple quality layers; precincts.

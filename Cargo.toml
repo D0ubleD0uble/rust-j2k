@@ -11,6 +11,12 @@ readme       = "README.md"
 keywords     = ["jpeg2000", "j2k", "codec", "grib2"]
 categories   = ["multimedia::images", "encoding"]
 
+# docs.rs builds: enable the `docsrs` cfg so `#[doc(cfg(...))]` annotations render
+# once features land, and build all features so nothing is hidden.
+[package.metadata.docs.rs]
+all-features   = true
+rustdoc-args   = ["--cfg", "docsrs"]
+
 # Decode-only and self-contained on purpose: no third-party codec dependency, so
 # the crate stays pure-Rust and cross-compiles to every target with no C toolchain.
 [dependencies]

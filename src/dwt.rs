@@ -18,7 +18,8 @@
 //! coefficients at the odd indices (the array the standard calls `a(i)` after
 //! the implicit deinterleave). On return the slice holds the reconstructed
 //! samples. They assume even parity — index 0 is a low-pass sample — which is
-//! the only case Phase 1 needs: a single tile at the origin with no precincts.
+//! the only case the decoded subset needs: a single tile at the origin with no
+//! precincts.
 //!
 //! ## The 2-D driver
 //!
@@ -95,7 +96,7 @@ where
     F: Fn(&mut [T]),
 {
     let (hl, lh, hh) = (&detail.hl, &detail.lh, &detail.hh);
-    // Phase 1 decodes a single tile at the canvas origin: even parity, so the
+    // The decoder handles a single tile at the canvas origin: even parity, so the
     // low-pass bands land on the even rows/columns of the interleaved grid.
     debug_assert!(ll.origin.0.is_multiple_of(2) && ll.origin.1.is_multiple_of(2));
     // The four bands tile the resolution: LL/LH share the low-pass column count,

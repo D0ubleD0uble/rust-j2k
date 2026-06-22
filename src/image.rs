@@ -8,7 +8,9 @@ use crate::{Error, Result};
 /// entries, each already DC-level-shifted and clamped to the declared depth.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
+    /// Image width in samples.
     pub width: u32,
+    /// Image height in samples.
     pub height: u32,
     /// Bits per sample as declared in SIZ (1..=32 for the GRIB2 subset).
     pub bit_depth: u8,

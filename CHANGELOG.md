@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Reduced the public API to its intended surface: `decode`, `Image`, `Error`,
+  and `Result`. The pipeline modules (`codestream`, `tier1`, `tier2`, `dwt`,
+  `quant`) are now crate-internal. Nothing outside the crate referenced them;
+  this keeps the documented surface to what a caller can use and lets the stages
+  evolve without churning the committed API. Breaking for anyone who imported a
+  pipeline module directly.
+- Error messages and rustdoc describe the supported subset directly instead of
+  internal roadmap phase numbers.
+
+### Added
+
+- `#![warn(missing_docs)]` to keep the public surface documented, a tested
+  crate-level usage example, and `[package.metadata.docs.rs]` configuration.
+
 ## [0.1.0] - 2026-06-21
 
 First release. Implements Phase 1: the GRIB2 template 5.40 (`grid_jpeg`) decode

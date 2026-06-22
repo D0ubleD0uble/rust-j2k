@@ -25,22 +25,46 @@
 //!
 //! Each stage is a module below. [`decode`] wires them together.
 //!
+//! # Example
+//!
+//! The entire public surface is [`decode`]: codestream bytes in, an [`Image`]
+//! out. Malformed input never panics; it comes back as a typed [`Error`].
+//!
+//! ```
+//! use rust_j2k::{decode, Error};
+//!
+//! // In real use these are the bytes of a `.j2k` codestream, or the GRIB2 §7
+//! // data section of a `grid_jpeg` message. Invalid input is rejected cleanly:
+//! match decode(b"not a codestream") {
+//!     Ok(image) => println!("decoded {}x{}", image.width, image.height),
+//!     Err(Error::Unsupported(what)) => println!("outside the decoded subset: {what}"),
+//!     Err(e) => println!("decode failed: {e}"),
+//! }
+//! ```
+//!
 //! # Status
 //!
-//! Phase 1 complete: the GRIB2 §5.40 decode path is implemented end to end and
-//! passes the conformance gate (bit-exact 5/3, within tolerance 9/7). See each
-//! module's docs for the ISO §reference and what it owns. Correctness is defined
-//! by the conformance harness in `tests/` (cross-check against OpenJPEG /
-//! eccodes), not by self-consistency. Later phases widen this same engine toward
-//! general Part 1; see `docs/roadmap.md` and `docs/scope.md`.
+//! The GRIB2 §5.40 decode path described above is implemented end to end and
+//! passes the conformance gate (bit-exact 5/3, within tolerance 9/7). Anything
+//! outside that subset is rejected with [`Error::Unsupported`], never
+//! half-decoded. See each module's docs for the ISO §reference and what it owns.
+//! Correctness is defined by the conformance harness in `tests/` (cross-check
+//! against OpenJPEG / eccodes), not by self-consistency. The plan for widening
+//! this same engine toward general Part 1 is in `docs/roadmap.md`; the feature
+//! map is in `docs/scope.md`.
+#![warn(missing_docs)]
 
-pub mod codestream;
-pub mod dwt;
-pub mod error;
-pub mod image;
-pub mod quant;
-pub mod tier1;
-pub mod tier2;
+// The pipeline modules are crate-internal: the public API is `decode`, `Image`,
+// `Error`, and `Result`. Keeping the stages private lets each one evolve freely
+// (the roadmap widens all of them) without churning the crate's committed
+// surface, and keeps the docs.rs page to what a caller can actually use.
+pub(crate) mod codestream;
+pub(crate) mod dwt;
+pub(crate) mod error;
+pub(crate) mod image;
+pub(crate) mod quant;
+pub(crate) mod tier1;
+pub(crate) mod tier2;
 
 pub use error::{Error, Result};
 pub use image::Image;

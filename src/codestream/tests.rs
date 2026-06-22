@@ -292,7 +292,7 @@ fn zero_size_tile_is_marker() {
 
 #[test]
 fn tile_smaller_than_image_is_unsupported() {
-    // A 512×256 image carved into 256-wide tiles is a multi-tile grid (Phase 2).
+    // A 512×256 image carved into 256-wide tiles is a multi-tile grid (not yet decoded).
     let bytes = codestream(&[seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 256, 256, 0, 0))]);
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
 }

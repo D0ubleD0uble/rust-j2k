@@ -34,6 +34,8 @@ and stale.
   the gate for each phase.
 - [roadmap-phase1.md](roadmap-phase1.md) — the GRIB2 decode MVP broken into
   ordered milestones, each tied to its module, its oracle, and what it unblocks.
+- [roadmap-phase2.md](roadmap-phase2.md) — the general Part 1 decoder broken into
+  ordered milestones, gated on the ISO/IEC 15444-4 conformance suite.
 - [correctness.md](correctness.md) — how we know a stage is right: the oracle
   cross-check, the ISO 15444-4 conformance suite, per-stage golden vectors,
   fuzzing, and round-trip testing once the encoder lands.

@@ -22,10 +22,11 @@ use crate::{Error, Result};
 /// `data[y * width + x]`.
 ///
 /// `origin` is the `(x, y)` tile-component coordinate of the top-left sample.
-/// Phase 1 decodes a single tile at the canvas origin with no precincts, so the
-/// origins are even and the inverse DWT assumes even parity (index 0 of every
-/// interleaved row/column is a low-pass sample — see [`crate::dwt`]). The field
-/// is carried so the odd-parity placement Phase 2 needs has somewhere to live.
+/// The decoder currently handles a single tile at the canvas origin with no
+/// precincts, so the origins are even and the inverse DWT assumes even parity
+/// (index 0 of every interleaved row/column is a low-pass sample — see
+/// [`crate::dwt`]). The field is carried so the odd-parity placement that
+/// multi-tile and precinct support will need has somewhere to live.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Band<T> {
     pub origin: (u32, u32),
