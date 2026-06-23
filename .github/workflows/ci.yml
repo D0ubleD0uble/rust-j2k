@@ -72,6 +72,23 @@ jobs:
         with:
           command: check
 
+  package-hygiene:
+    name: package hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # The ISO/IEC 15444-4 conformance corpus is committed for tests but carries
+      # a conformance-only license, so it must never ship in the packaged crate
+      # (see tests/fixtures/conformance/COPYRIGHT and the `exclude` in Cargo.toml).
+      # Guard that invariant against an accidental include/exclude regression.
+      - name: Conformance corpus stays out of the package
+        run: |
+          if cargo package --list --allow-dirty | grep -q 'tests/fixtures/conformance/'; then
+            echo "::error::conformance corpus is in the packaged crate; it is license-restricted and must stay excluded"
+            exit 1
+          fi
+
   fuzz-smoke:
     name: fuzz smoke
     runs-on: ubuntu-latest

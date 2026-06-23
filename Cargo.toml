@@ -11,6 +11,12 @@ readme       = "README.md"
 keywords     = ["jpeg2000", "j2k", "codec", "grib2"]
 categories   = ["multimedia::images", "encoding"]
 
+# The ISO/IEC 15444-4 conformance corpus is vendored for the test suite but
+# carries a narrow conformance-only license (see
+# tests/fixtures/conformance/COPYRIGHT), so it must not ship in the packaged
+# crate under the crate's own MIT OR Apache-2.0 terms. Keep it in-repo only.
+exclude = ["tests/fixtures/conformance/"]
+
 # docs.rs builds: enable the `docsrs` cfg so `#[doc(cfg(...))]` annotations render
 # once features land, and build all features so nothing is hidden.
 [package.metadata.docs.rs]
