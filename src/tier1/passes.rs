@@ -444,6 +444,15 @@ fn read_segmentation_symbol(mq: &mut MqDecoder<'_>, cx: &mut [Context]) -> Resul
     Ok(())
 }
 
+/// The per-component parameters a code-block decode needs beyond its own
+/// subband: the code-block style flags (`SPcod`/`SPcoc`) and the
+/// region-of-interest maxshift (`SPrgn`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlockParams {
+    pub style: u8,
+    pub roi_shift: u8,
+}
+
 /// Which of the three coding passes runs next within a bit-plane (ISO D.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PassType {
@@ -490,8 +499,9 @@ pub fn decode_block(
     numbps: u32,
     num_passes: u32,
     zero_bit_planes: u32,
-    style: u8,
+    params: BlockParams,
 ) -> Result<()> {
+    let BlockParams { style, roi_shift } = params;
     use crate::codestream::markers::code_block_style::{PTERM, SEGSYM, TERMALL};
     debug_assert_eq!(
         style & !(TERMALL | PTERM | SEGSYM),
@@ -510,7 +520,19 @@ pub fn decode_block(
     // drops it. A truncated (lossy) stream simply stops higher, leaving the
     // un-coded low planes zero. For a fully coded block
     // `Mb − zero_bit_planes == num_passes.div_ceil(3)`.
-    let top = numbps.saturating_sub(zero_bit_planes);
+    // Maxshift starts the block `roi_shift` planes higher, so that every
+    // region-of-interest coefficient outranks every background one. OpenJPEG's
+    // `bpno_plus_one = roishift + cblk->numbps`.
+    //
+    // `decode_code_blocks` rejects a block whose `top` passes `MAX_BIT_PLANES`,
+    // which bounds `roi_shift` too. Re-check it rather than lean on the caller:
+    // `1 << roi_shift` below would otherwise overflow on a hostile `SPrgn`.
+    if u32::from(roi_shift) > MAX_BIT_PLANES {
+        return Err(Error::Unsupported(format!(
+            "region-of-interest maxshift {roi_shift}, over the {MAX_BIT_PLANES}-plane limit"
+        )));
+    }
+    let top = numbps.saturating_sub(zero_bit_planes) + u32::from(roi_shift);
     if top < 1 {
         return Ok(()); // no coded magnitude planes: the block stays zero
     }
@@ -560,22 +582,37 @@ pub fn decode_block(
         // nothing and localises the damage.
         if style & PTERM != 0 && !mq.ends_predictably() {
             return Err(Error::Codestream(format!(
-                "code-block style declares predictable termination, but a codeword segment                  leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
+                "code-block style declares predictable termination, but a codeword segment \
+                 leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
                 mq.unconsumed(),
                 bytes.len(),
             )));
         }
     }
 
+    // Undo the maxshift (Annex H.2), then drop the carried low bit.
+    //
     // The passes carried each magnitude in the mid-point reconstruction form at
     // double scale (ISO E.1.1.2, r = ½): becoming significant set
     // `2^bpno + 2^(bpno−1)` and each refinement nudged it by ±2^(bpno−1). Halve
-    // toward zero to drop the carried low bit, then apply the decoded signs
-    // (OpenJPEG's reversible `tmp / 2`).
+    // toward zero to drop it, then apply the decoded signs (OpenJPEG's `tmp / 2`).
+    //
+    // The maxshift is undone first, as `opj_t1_clbl_decode_processor` does it:
+    // its threshold is stated in the coefficients' own scale, and halving first
+    // would drop a region coefficient below it.
+    let threshold = 1i32 << roi_shift;
     for y in 0..state.height {
         for x in 0..state.width {
             let i = state.idx(x, y);
-            let mag = state.coeffs[i] / 2;
+            let mut mag = state.coeffs[i];
+            // A magnitude at or above the threshold was lifted by the encoder,
+            // so it belongs to the region; everything below it is background and
+            // is already on the common scale. Nothing else identifies the
+            // region — the shift is the label.
+            if roi_shift > 0 && mag >= threshold {
+                mag >>= roi_shift;
+            }
+            let mag = mag / 2;
             state.coeffs[i] = if state.is_negative(x, y) { -mag } else { mag };
         }
     }
@@ -601,7 +638,7 @@ mod tests {
             numbps,
             g.num_passes,
             g.zero_bit_planes,
-            0,
+            BlockParams::default(),
         )
         .expect("the default style decodes without a style check");
         state.coeffs
@@ -623,8 +660,16 @@ mod tests {
     #[test]
     fn zero_passes_yields_all_zero_coefficients() {
         let mut state = BlockState::new(4, 4);
-        decode_block(&[(vec![0x80], 0)], &mut state, Orientation::Ll, 8, 0, 0, 0)
-            .expect("zero passes decode to nothing");
+        decode_block(
+            &[(vec![0x80], 0)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            0,
+            0,
+            BlockParams::default(),
+        )
+        .expect("zero passes decode to nothing");
         assert!(state.coeffs.iter().all(|&c| c == 0));
     }
 
@@ -645,14 +690,25 @@ mod tests {
             8,
             1,
             0,
-            PTERM,
+            BlockParams {
+                style: PTERM,
+                roi_shift: 0,
+            },
         )
         .expect_err("eight bytes for one cleanup pass leaves more than two unconsumed");
         assert!(matches!(err, Error::Codestream(_)), "{err:?}");
 
         let mut state = BlockState::new(4, 4);
-        decode_block(&[(padded, 1)], &mut state, Orientation::Ll, 8, 1, 0, 0)
-            .expect("the same segment is fine without the flag");
+        decode_block(
+            &[(padded, 1)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            1,
+            0,
+            BlockParams::default(),
+        )
+        .expect("the same segment is fine without the flag");
     }
 
     /// A segment cut short because the bit-planes ran out is not a terminated
@@ -670,7 +726,10 @@ mod tests {
             8,
             4,
             7,
-            PTERM,
+            BlockParams {
+                style: PTERM,
+                roi_shift: 0,
+            },
         )
         .expect("a segment the decoder stops early in is not checked");
     }
@@ -691,7 +750,10 @@ mod tests {
             8,
             1,
             0,
-            SEGSYM,
+            BlockParams {
+                style: SEGSYM,
+                roi_shift: 0,
+            },
         )
         .expect_err("the trailing symbol is not 1010");
         let Error::Codestream(message) = &err else {
@@ -715,7 +777,10 @@ mod tests {
             8,
             2,
             0,
-            crate::codestream::markers::code_block_style::TERMALL,
+            BlockParams {
+                style: crate::codestream::markers::code_block_style::TERMALL,
+                roi_shift: 0,
+            },
         )
         .expect("an empty segment decodes as 0xFF padding");
     }

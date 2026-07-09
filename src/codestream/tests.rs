@@ -519,7 +519,7 @@ fn out_of_subset_marker_is_unsupported() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::RGN, &[0, 0, 0]), // region of interest
+        seg(marker::POC, &[0, 0, 0]), // progression order change
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
@@ -1035,7 +1035,6 @@ fn header_altering_markers_are_rejected_not_skipped() {
     // is named and rejected rather than passed over.
     for code in [
         marker::CAP,
-        marker::RGN,
         marker::POC,
         marker::TLM,
         marker::PLM,
@@ -1476,7 +1475,6 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
 
     // Every main-header marker the subset does not decode.
     for (name, code) in [
-        ("RGN", marker::RGN),
         ("POC", marker::POC),
         ("TLM", marker::TLM),
         ("PLM", marker::PLM),
@@ -1824,4 +1822,120 @@ fn a_malformed_qcc_names_qcc_and_not_qcd() {
     };
     assert!(message.contains("QCC"), "{message}");
     assert!(!message.contains("QCD"), "{message}");
+}
+
+// --- RGN: region of interest, maxshift (issue #77) --------------------------
+
+fn rgn_body(index_bytes: &[u8], srgn: u8, shift: u8) -> Vec<u8> {
+    let mut b = index_bytes.to_vec();
+    b.extend_from_slice(&[srgn, shift]);
+    b
+}
+
+/// An RGN names one component and lifts its region above the background by
+/// `SPrgn` bit-planes. Components it does not name keep a shift of zero.
+#[test]
+fn rgn_sets_the_maxshift_of_one_component() {
+    let header = parsed(&[
+        seg(marker::SIZ, &siz_body(3, &[(15, 1, 1); 3])),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::RGN, &rgn_body(&[1], 0, 9)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert_eq!(header.components[0].roi_shift, 0);
+    assert_eq!(header.components[1].roi_shift, 9);
+    assert_eq!(header.components[2].roi_shift, 0);
+}
+
+/// `Crgn` has the same width rule as `Ccoc` and `Cqcc`: one byte below 257
+/// components, two from 257 up.
+#[test]
+fn rgn_component_index_is_two_bytes_from_257_components() {
+    let header = parsed(&[
+        seg(marker::SIZ, &siz_body(257, &vec![(15u8, 1u8, 1u8); 257])),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::RGN, &rgn_body(&[0x01, 0x00], 0, 4)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert_eq!(header.components[256].roi_shift, 4);
+    assert_eq!(header.components[0].roi_shift, 0);
+}
+
+/// `Srgn = 0` (implicit — the maxshift of Annex H) is the only style Part 1
+/// defines. OpenJPEG reads the byte and never looks at it, so a Part 2 style
+/// decodes there as though it were maxshift; reject it instead.
+#[test]
+fn a_non_maxshift_roi_style_is_unsupported() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::RGN, &rgn_body(&[0], 1, 9)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn an_rgn_past_the_component_count_is_a_marker_error() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::RGN, &rgn_body(&[3], 0, 9)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn a_second_rgn_for_one_component_is_a_codestream_error() {
+    let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 9));
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        rgn.clone(),
+        rgn,
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+/// A short or long RGN segment is malformed: `Lrgn` is exactly `2 + Crgn`.
+#[test]
+fn a_wrong_length_rgn_is_rejected() {
+    for body in [vec![0u8, 0], vec![0u8, 0, 9, 9]] {
+        let bytes = codestream(&[
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_default(1)),
+            seg(marker::RGN, &body),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ]);
+        assert!(
+            matches!(err(&bytes), Error::Codestream(_)),
+            "{body:?} should reject"
+        );
+    }
+}
+
+/// The main header decodes RGN, the tile-part header does not. A tile-part RGN
+/// *replaces* the main header's for that tile, so honouring only the main-header
+/// one would decode a different image rather than a slightly worse one. `p0_06`
+/// is exactly that codestream: maxshift 11 in the main header, 9 in the
+/// tile-part header.
+#[test]
+fn a_tile_part_rgn_is_unsupported_rather_than_ignored() {
+    let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 9));
+    let data = [1u8, 2];
+    let psot = (12 + rgn.len() + 2 + data.len()) as u32;
+
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&rgn);
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&data);
+    bytes.extend_from_slice(&be16(marker::EOC));
+
+    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
 }

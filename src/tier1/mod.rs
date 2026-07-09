@@ -12,7 +12,7 @@ pub mod passes;
 
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
-use crate::tier1::passes::{BlockState, MAX_BIT_PLANES, Orientation, decode_block};
+use crate::tier1::passes::{BlockParams, BlockState, MAX_BIT_PLANES, Orientation, decode_block};
 use crate::tier2::{BandKind, CodeBlock, CodedData, ComponentCoded, Resolution, Subband};
 use crate::{Error, Result};
 
@@ -137,7 +137,10 @@ where
     T: Copy + Default,
     F: Fn(i32) -> T + Copy,
 {
-    let style = header.components[comp].coding.code_block_style;
+    let params = BlockParams {
+        style: header.components[comp].coding.code_block_style,
+        roi_shift: header.components[comp].roi_shift,
+    };
     let mut resolutions = coded.resolutions.iter();
     let coarsest = resolutions
         .next()
@@ -146,7 +149,7 @@ where
     let ll = decode_subband(
         subband_of(coarsest, BandKind::Ll)?,
         numbps(header, comp, 0)?,
-        style,
+        params,
         convert,
     )?;
 
@@ -157,19 +160,19 @@ where
             hl: decode_subband(
                 subband_of(resolution, BandKind::Hl)?,
                 numbps(header, comp, base)?,
-                style,
+                params,
                 convert,
             )?,
             lh: decode_subband(
                 subband_of(resolution, BandKind::Lh)?,
                 numbps(header, comp, base + 1)?,
-                style,
+                params,
                 convert,
             )?,
             hh: decode_subband(
                 subband_of(resolution, BandKind::Hh)?,
                 numbps(header, comp, base + 2)?,
-                style,
+                params,
                 convert,
             )?,
         });
@@ -219,7 +222,12 @@ fn subband_of<'a, 'b>(res: &'a Resolution<'b>, kind: BandKind) -> Result<&'a Sub
 /// Decode one subband's code-blocks into a row-major coefficient [`Band`].
 /// `numbps` is the band's magnitude bit-plane count `Mb`. Absent blocks (no
 /// coding passes) are left at the band's zero fill.
-fn decode_subband<T, F>(sb: &Subband<'_>, numbps: u32, style: u8, convert: F) -> Result<Band<T>>
+fn decode_subband<T, F>(
+    sb: &Subband<'_>,
+    numbps: u32,
+    params: BlockParams,
+    convert: F,
+) -> Result<Band<T>>
 where
     T: Copy + Default,
     F: Fn(i32) -> T,
@@ -237,10 +245,15 @@ where
         if block.num_passes == 0 {
             continue;
         }
-        // The double-scale reconstruction shifts `1 << (Mb − zero_bit_planes)`;
-        // reject high-dynamic-range subbands that would overflow `i32` rather
-        // than panic, matching OpenJPEG's `bpno_plus_one >= 31` guard.
-        let top = numbps.saturating_sub(block.zero_bit_planes);
+        // Maxshift lifts every region-of-interest coefficient above every
+        // background one, so the block starts `roi_shift` planes higher: this is
+        // OpenJPEG's `bpno_plus_one = roishift + cblk->numbps`.
+        //
+        // The double-scale reconstruction shifts `1 << top`, so reject
+        // high-dynamic-range subbands that would overflow `i32` rather than
+        // panic — the same rejection OpenJPEG makes with `bpno_plus_one >= 31`,
+        // and the reason its `roishift >= 31` branch is unreachable on decode.
+        let top = numbps.saturating_sub(block.zero_bit_planes) + u32::from(params.roi_shift);
         if top > MAX_BIT_PLANES {
             return Err(Error::Unsupported(format!(
                 "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
@@ -262,7 +275,7 @@ where
             numbps,
             block.num_passes,
             block.zero_bit_planes,
-            style,
+            params,
         )?;
         place_block(&mut data, sb.width, block, &state, &convert);
     }
@@ -331,16 +344,39 @@ mod tests {
     #[test]
     fn excessive_bit_planes_rejected() {
         let sb = one_block_subband(1, 0);
-        let err =
-            decode_subband::<i32, _>(&sb, MAX_BIT_PLANES + 1, 0, |q| q).expect_err("must reject");
+        let err = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES + 1, default_params(), |q| q)
+            .expect_err("must reject");
         assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
+    }
+
+    /// A maxshift pushes the same subband over the limit even when its own
+    /// bit-plane count is in range: the region-of-interest coefficients sit
+    /// `roi_shift` planes above the background ones.
+    #[test]
+    fn a_maxshift_that_overflows_the_bit_planes_is_rejected() {
+        let sb = one_block_subband(1, 0);
+        let params = BlockParams {
+            style: 0,
+            roi_shift: 1,
+        };
+        let err = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, params, |q| q)
+            .expect_err("MAX_BIT_PLANES + 1 planes");
+        assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
+
+        // One less, and the same block decodes.
+        decode_subband::<i32, _>(&sb, MAX_BIT_PLANES - 1, params, |q| q).expect("in range");
     }
 
     /// The largest in-range bit-plane count decodes without error or overflow.
     #[test]
     fn max_bit_planes_accepted() {
         let sb = one_block_subband(1, 0);
-        let band = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, 0, |q| q).expect("in range");
+        let band = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, default_params(), |q| q)
+            .expect("in range");
         assert_eq!(band.data.len(), 1);
+    }
+
+    fn default_params() -> BlockParams {
+        BlockParams::default()
     }
 }

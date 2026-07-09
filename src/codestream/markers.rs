@@ -233,6 +233,15 @@ pub struct Coding {
 pub struct ComponentParams {
     pub coding: Coding,
     pub quant: Qcd,
+    /// `SPrgn`: the maxshift a region-of-interest coding applied to this
+    /// component (A.6.3, Annex H). Zero when no `RGN` names the component,
+    /// which is the ordinary case.
+    ///
+    /// Under maxshift the encoder lifted every coefficient of the region above
+    /// every background coefficient by shifting it left this far. Nothing in the
+    /// codestream says where the region *is*: the shift itself is the label, and
+    /// undoing it is what separates the two sets again.
+    pub roi_shift: u8,
 }
 
 /// COD — coding style default (ISO A.6.1): the parameters Tier-2 and the DWT
