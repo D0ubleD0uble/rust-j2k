@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking.** `Image` now carries the image area on the reference grid
+  (`width`, `height`) and a `components` vector, instead of describing a single
+  component inline. The per-component fields moved to the new `Component` type,
+  which also records the `x_sampling`/`y_sampling` sub-sampling factors, and
+  `Image::sample` moved to `Component::sample`. Reach a component with
+  `image.component(0)`. Decoding stays single-component, so `components` holds
+  one entry; a codestream declaring more is still rejected as `Unsupported`.
+  This settles the output shape before multi-component decoding is threaded
+  through the pipeline.
+
+### Added
+
+- A grading harness over the vendored ISO/IEC 15444-4 conformance corpus
+  (`tests/conformance_part4.rs`). It decodes all 23 entries and grades each
+  graded component against its class-1 reference by peak absolute error and
+  mean-squared error, reading the `.pgx` reference images directly. Entries
+  using features the decoder does not implement yet report as *not yet
+  decoded*; `p0_09` decodes and matches its reference exactly.
+
 ## [0.2.0] - 2026-06-21
 
 ### Changed
