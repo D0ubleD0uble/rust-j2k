@@ -4,6 +4,7 @@
 //! signedness, sub-sampling).
 
 use crate::codestream::MainHeader;
+use crate::codestream::markers::Siz;
 use crate::{Error, Result};
 
 /// A decoded image: the image area on the reference grid, plus its components.
@@ -88,37 +89,64 @@ impl Component {
 /// components are left as-is. Samples are then clamped to the declared depth
 /// and sign before being packed row-major into a [`Component`].
 ///
-/// `samples` carries the one component the decoder currently reconstructs;
-/// codestreams declaring `Csiz > 1` are rejected earlier as
-/// [`Error::Unsupported`], so exactly one component is assembled here.
-pub(crate) fn assemble(header: &MainHeader, samples: Vec<i32>) -> Result<Image> {
+/// `samples` carries one reconstructed sample vector per SIZ component, in SIZ
+/// order. Each is level-shifted and clamped on its own component's depth and
+/// sign, then packed with that component's geometry.
+pub(crate) fn assemble(header: &MainHeader, samples: Vec<Vec<i32>>) -> Result<Image> {
     let siz = &header.siz;
+    if samples.len() != siz.components.len() {
+        return Err(Error::Inconsistent(format!(
+            "decoded {} components but SIZ declares {}",
+            samples.len(),
+            siz.components.len(),
+        )));
+    }
+    if samples.is_empty() {
+        return Err(Error::Inconsistent("SIZ declares no components".into()));
+    }
+
+    let components = samples
+        .into_iter()
+        .enumerate()
+        .map(|(index, component_samples)| assemble_component(siz, index, component_samples))
+        .collect::<Result<Vec<_>>>()?;
+
+    let (image_width, image_height) = siz.image_extent();
+    Ok(Image {
+        width: image_width,
+        height: image_height,
+        components,
+    })
+}
+
+/// Level-shift, clamp, and package one component's reconstructed samples.
+fn assemble_component(siz: &Siz, index: usize, samples: Vec<i32>) -> Result<Component> {
     let comp = siz
         .components
-        .first()
-        .ok_or_else(|| Error::Inconsistent("SIZ declares no components".into()))?;
+        .get(index)
+        .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
 
     let depth = comp.bit_depth;
     if !(1..=32).contains(&depth) {
         return Err(Error::Marker(format!(
-            "component bit depth {depth} outside the supported range 1..=32"
+            "component {index} bit depth {depth} outside the supported range 1..=32"
         )));
     }
     if comp.x_sampling == 0 || comp.y_sampling == 0 {
-        return Err(Error::Marker(
-            "component sub-sampling factor is zero".into(),
-        ));
+        return Err(Error::Marker(format!(
+            "component {index} sub-sampling factor is zero"
+        )));
     }
 
     // Safe now that the zero-factor case above is excluded.
     let (width, height) = siz
-        .component_extent(0)
-        .ok_or_else(|| Error::Inconsistent("SIZ declares no components".into()))?;
+        .component_extent(index)
+        .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
 
     let expected = (width as usize) * (height as usize);
     if samples.len() != expected {
         return Err(Error::Inconsistent(format!(
-            "decoded {} samples but SIZ geometry is {width}x{height} = {expected}",
+            "component {index} decoded {} samples but its geometry is {width}x{height} = {expected}",
             samples.len()
         )));
     }
@@ -137,7 +165,7 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<i32>) -> Result<Image> 
     // so the per-sample cast below is always exact.
     if hi > i32::MAX as i64 || lo < i32::MIN as i64 {
         return Err(Error::Unsupported(format!(
-            "component depth {depth} ({}) exceeds the i32 sample container",
+            "component {index} depth {depth} ({}) exceeds the i32 sample container",
             if comp.signed { "signed" } else { "unsigned" }
         )));
     }
@@ -147,19 +175,14 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<i32>) -> Result<Image> 
         .map(|v| (v as i64 + shift).clamp(lo, hi) as i32)
         .collect();
 
-    let (image_width, image_height) = siz.image_extent();
-    Ok(Image {
-        width: image_width,
-        height: image_height,
-        components: vec![Component {
-            width,
-            height,
-            bit_depth: depth,
-            signed: comp.signed,
-            x_sampling: comp.x_sampling,
-            y_sampling: comp.y_sampling,
-            samples: shifted,
-        }],
+    Ok(Component {
+        width,
+        height,
+        bit_depth: depth,
+        signed: comp.signed,
+        x_sampling: comp.x_sampling,
+        y_sampling: comp.y_sampling,
+        samples: shifted,
     })
 }
 
@@ -209,6 +232,12 @@ mod tests {
         }
     }
 
+    /// Assemble a single-component image: most of these tests predate the
+    /// component axis and care only about level shift, clamping, and geometry.
+    fn assemble1(header: &MainHeader, samples: Vec<i32>) -> Result<Image> {
+        assemble(header, vec![samples])
+    }
+
     /// The single component `assemble` produces, for tests that only care about
     /// the samples and not the enclosing image area.
     fn only(img: &Image) -> &Component {
@@ -220,12 +249,12 @@ mod tests {
     fn unsigned_adds_level_shift_and_clamps() {
         // 8-bit unsigned: shift = 128, clamp to [0, 255].
         let h = header(2, 2, 8, false);
-        let img = assemble(&h, vec![0, -128, 127, 200]).unwrap();
+        let img = assemble1(&h, vec![0, -128, 127, 200]).unwrap();
         // 0 -> 128 (mid), -128 -> 0 (low edge), 127 -> 255 (high edge),
         // 200 -> 328 clamps to 255.
         assert_eq!(only(&img).samples, vec![128, 0, 255, 255]);
         // And the low edge under-shoot also clamps.
-        let img = assemble(&header(1, 1, 8, false), vec![-200]).unwrap();
+        let img = assemble1(&header(1, 1, 8, false), vec![-200]).unwrap();
         assert_eq!(only(&img).samples, vec![0]);
     }
 
@@ -233,17 +262,17 @@ mod tests {
     fn signed_is_unshifted_and_clamps() {
         // 8-bit signed: no shift, clamp to [-128, 127].
         let h = header(2, 2, 8, true);
-        let img = assemble(&h, vec![0, 50, 200, -200]).unwrap();
+        let img = assemble1(&h, vec![0, 50, 200, -200]).unwrap();
         assert_eq!(only(&img).samples, vec![0, 50, 127, -128]);
     }
 
     #[test]
     fn wider_depths_round_trip_edges() {
         // 12-bit unsigned: shift = 2048, clamp to [0, 4095].
-        let img = assemble(&header(1, 4, 12, false), vec![-2048, 0, 2047, 9999]).unwrap();
+        let img = assemble1(&header(1, 4, 12, false), vec![-2048, 0, 2047, 9999]).unwrap();
         assert_eq!(only(&img).samples, vec![0, 2048, 4095, 4095]);
         // 16-bit signed: clamp to [-32768, 32767], no shift.
-        let img = assemble(&header(1, 3, 16, true), vec![-40000, 12345, 40000]).unwrap();
+        let img = assemble1(&header(1, 3, 16, true), vec![-40000, 12345, 40000]).unwrap();
         assert_eq!(only(&img).samples, vec![-32768, 12345, 32767]);
     }
 
@@ -253,7 +282,7 @@ mod tests {
         h.siz.x_offset = 2;
         h.siz.y_offset = 1;
         // width = 6 - 2 = 4, height = 5 - 1 = 4.
-        let img = assemble(&h, vec![0; 16]).unwrap();
+        let img = assemble1(&h, vec![0; 16]).unwrap();
         assert_eq!((img.width, img.height), (4, 4));
         let c = only(&img);
         assert_eq!((c.width, c.height), (4, 4));
@@ -268,7 +297,7 @@ mod tests {
         let mut h = header(8, 8, 8, false);
         h.siz.components[0].x_sampling = 2;
         h.siz.components[0].y_sampling = 2;
-        let img = assemble(&h, vec![0; 16]).unwrap();
+        let img = assemble1(&h, vec![0; 16]).unwrap();
         // The image area stays on the reference grid ...
         assert_eq!((img.width, img.height), (8, 8));
         // ... while the component carries ceil(8/2) - ceil(0/2) = 4 per axis.
@@ -280,7 +309,7 @@ mod tests {
     #[test]
     fn sample_count_mismatch_is_inconsistent() {
         let h = header(4, 4, 8, false); // expects 16 samples
-        let err = assemble(&h, vec![0; 15]).unwrap_err();
+        let err = assemble1(&h, vec![0; 15]).unwrap_err();
         assert!(matches!(err, Error::Inconsistent(_)), "got {err:?}");
     }
 
@@ -288,16 +317,16 @@ mod tests {
     fn depth_beyond_i32_container_is_unsupported() {
         // Unsigned 32-bit's upper bound (2^32 - 1) cannot fit in i32.
         let h = header(1, 1, 32, false);
-        let err = assemble(&h, vec![0]).unwrap_err();
+        let err = assemble1(&h, vec![0]).unwrap_err();
         assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
         // Signed 32-bit fits exactly and is accepted.
-        let img = assemble(&header(1, 1, 32, true), vec![i32::MIN]).unwrap();
+        let img = assemble1(&header(1, 1, 32, true), vec![i32::MIN]).unwrap();
         assert_eq!(only(&img).samples, vec![i32::MIN]);
     }
 
     #[test]
     fn bad_depth_is_rejected() {
         let h = header(1, 1, 0, false);
-        assert!(matches!(assemble(&h, vec![0]), Err(Error::Marker(_))));
+        assert!(matches!(assemble1(&h, vec![0]), Err(Error::Marker(_))));
     }
 }

@@ -73,8 +73,8 @@ fn decodes_corpus_against_oracle() {
 /// the real corpus (issue #4) and a working `decode` exist.
 mod harness {
     use super::support::{
-        Expected, Fixture, Geometry, Mismatch, Outcome, Provenance, Tolerance, classify, compare,
-        discover, run_fixture,
+        ComponentSnapshot, Expected, Fixture, Geometry, ImageGeometry, Mismatch, Outcome,
+        Provenance, Tolerance, classify, compare, discover, run_fixture,
     };
     use rust_j2k::{Component, Error, Image};
     use std::path::{Path, PathBuf};
@@ -106,11 +106,23 @@ mod harness {
         }
     }
 
+    /// A single-component snapshot at unit sub-sampling, matching [`image`].
     fn snapshot(geometry: Geometry, tolerance: Tolerance, samples: Vec<i32>) -> Expected {
         Expected {
-            geometry,
+            image: ImageGeometry {
+                width: geometry.width,
+                height: geometry.height,
+            },
             tolerance,
-            samples,
+            components: vec![ComponentSnapshot {
+                width: geometry.width,
+                height: geometry.height,
+                bit_depth: geometry.bit_depth,
+                signed: geometry.signed,
+                x_sampling: 1,
+                y_sampling: 1,
+                samples,
+            }],
             provenance: Provenance {
                 source: "test".into(),
                 oracle_command: "n/a".into(),
@@ -137,6 +149,7 @@ mod harness {
         assert_eq!(
             err,
             Mismatch::Sample {
+                component: 0,
                 index: 3,
                 x: 1,
                 y: 1,
@@ -170,6 +183,7 @@ mod harness {
         assert_eq!(
             err,
             Mismatch::Sample {
+                component: 0,
                 index: 1,
                 x: 1,
                 y: 0,
@@ -181,11 +195,34 @@ mod harness {
     }
 
     #[test]
-    fn geometry_mismatch_fails_before_samples() {
+    fn component_geometry_mismatch_fails_before_samples() {
+        // Same image area and sample count; the component's declared depth is
+        // what disagrees, so the samples are never reached.
+        let mut want = snapshot(geometry(2, 2), Tolerance::Exact, vec![0, 0, 0, 0]);
+        want.components[0].bit_depth = 8; // `image` decodes at depth 16
+        let got = image(2, 2, vec![0, 0, 0, 0]);
+        let err = compare(&got, &want).unwrap_err();
+        assert!(
+            matches!(err, Mismatch::Geometry { component: 0, .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn image_area_mismatch_is_reported_before_any_component() {
         let want = snapshot(geometry(2, 2), Tolerance::Exact, vec![0, 0, 0, 0]);
         let got = image(4, 1, vec![0, 0, 0, 0]); // same count, wrong shape
         let err = compare(&got, &want).unwrap_err();
-        assert!(matches!(err, Mismatch::Geometry { .. }));
+        assert!(matches!(err, Mismatch::DecodeError(_)), "{err}");
+    }
+
+    #[test]
+    fn component_count_mismatch_is_reported() {
+        let mut want = snapshot(geometry(2, 2), Tolerance::Exact, vec![0, 0, 0, 0]);
+        want.components.push(want.components[0].clone());
+        let got = image(2, 2, vec![0, 0, 0, 0]);
+        let err = compare(&got, &want).unwrap_err();
+        assert!(matches!(err, Mismatch::DecodeError(_)), "{err}");
     }
 
     // --- classification -----------------------------------------------------
@@ -238,9 +275,12 @@ mod harness {
     }
 
     const VALID_SNAPSHOT: &str = r#"{
-  "geometry": { "width": 1, "height": 1, "bit_depth": 8, "signed": false },
+  "image": { "width": 1, "height": 1 },
   "tolerance": { "mode": "exact" },
-  "samples": [0],
+  "components": [
+    { "width": 1, "height": 1, "bit_depth": 8, "signed": false,
+      "x_sampling": 1, "y_sampling": 1, "samples": [0] }
+  ],
   "provenance": { "source": "s", "oracle_command": "c" }
 }"#;
 
@@ -345,24 +385,30 @@ mod harness {
 mod expected_schema {
     use super::support::{Expected, Geometry, Provenance, Tolerance};
 
-    /// A reversible (lossless) snapshot: 2x2 grid, exact agreement required.
+    /// A reversible (lossless) snapshot: one 2x2 component, exact agreement.
     /// Kept in sync with the documented example in `tests/fixtures/README.md`.
     const EXACT_JSON: &str = r#"{
-  "geometry": { "width": 2, "height": 2, "bit_depth": 16, "signed": false },
+  "image": { "width": 2, "height": 2 },
   "tolerance": { "mode": "exact" },
-  "samples": [0, 1, 2, 3],
+  "components": [
+    { "width": 2, "height": 2, "bit_depth": 16, "signed": false,
+      "x_sampling": 1, "y_sampling": 1, "samples": [0, 1, 2, 3] }
+  ],
   "provenance": {
     "source": "fieldglass/jpeg2000_regular_latlon.grib2",
     "oracle_command": "opj_decompress -i sample.j2k -o sample.pgx"
   }
 }"#;
 
-    /// An irreversible (lossy) snapshot: same grid, bounded absolute error, and
-    /// an optional provenance note.
+    /// An irreversible (lossy) snapshot: bounded absolute error, plus an
+    /// optional provenance note.
     const ABSOLUTE_JSON: &str = r#"{
-  "geometry": { "width": 2, "height": 1, "bit_depth": 12, "signed": true },
+  "image": { "width": 2, "height": 1 },
   "tolerance": { "mode": "absolute", "max_abs_error": 1.5 },
-  "samples": [-2, 7],
+  "components": [
+    { "width": 2, "height": 1, "bit_depth": 12, "signed": true,
+      "x_sampling": 1, "y_sampling": 1, "samples": [-2, 7] }
+  ],
   "provenance": {
     "source": "hrrr/sample.grib2",
     "oracle_command": "grib_to_jpeg ...",
@@ -370,12 +416,30 @@ mod expected_schema {
   }
 }"#;
 
+    /// A sub-sampled two-component snapshot: the components sit on smaller grids
+    /// than the reference-grid image area.
+    const SUBSAMPLED_JSON: &str = r#"{
+  "image": { "width": 3, "height": 3 },
+  "tolerance": { "mode": "exact" },
+  "components": [
+    { "width": 3, "height": 3, "bit_depth": 8, "signed": false,
+      "x_sampling": 1, "y_sampling": 1, "samples": [1,2,3,4,5,6,7,8,9] },
+    { "width": 2, "height": 2, "bit_depth": 8, "signed": false,
+      "x_sampling": 2, "y_sampling": 2, "samples": [1,2,3,4] }
+  ],
+  "provenance": { "source": "s", "oracle_command": "c" }
+}"#;
+
     #[test]
     fn parses_exact_reversible_snapshot() {
         let expected = Expected::from_json(EXACT_JSON).expect("parse exact snapshot");
 
+        assert_eq!(expected.image.width, 2);
+        assert_eq!(expected.image.height, 2);
+        assert_eq!(expected.components.len(), 1);
+        let component = &expected.components[0];
         assert_eq!(
-            expected.geometry,
+            component.geometry(),
             Geometry {
                 width: 2,
                 height: 2,
@@ -384,8 +448,8 @@ mod expected_schema {
             }
         );
         assert_eq!(expected.tolerance, Tolerance::Exact);
-        assert_eq!(expected.samples, vec![0, 1, 2, 3]);
-        assert_eq!(expected.samples.len(), expected.geometry.sample_count());
+        assert_eq!(component.samples, vec![0, 1, 2, 3]);
+        assert_eq!(component.samples.len(), component.geometry().sample_count());
         assert_eq!(expected.provenance.notes, None);
     }
 
@@ -397,10 +461,29 @@ mod expected_schema {
             expected.tolerance,
             Tolerance::Absolute { max_abs_error: 1.5 }
         );
-        assert_eq!(expected.samples, vec![-2, 7]);
-        assert_eq!(expected.samples.len(), expected.geometry.sample_count());
+        let component = &expected.components[0];
+        assert_eq!(component.samples, vec![-2, 7]);
+        assert_eq!(component.samples.len(), component.geometry().sample_count());
         assert_eq!(expected.provenance.source, "hrrr/sample.grib2");
         assert_eq!(expected.provenance.notes.as_deref(), Some("9/7 lossy path"));
+    }
+
+    /// A sub-sampled component sits on a smaller grid than the image area, and
+    /// the snapshot records both.
+    #[test]
+    fn parses_subsampled_multi_component_snapshot() {
+        let expected = Expected::from_json(SUBSAMPLED_JSON).expect("parse subsampled snapshot");
+        assert_eq!((expected.image.width, expected.image.height), (3, 3));
+        assert_eq!(expected.components.len(), 2);
+
+        let luma = &expected.components[0];
+        assert_eq!((luma.width, luma.height), (3, 3));
+        assert_eq!((luma.x_sampling, luma.y_sampling), (1, 1));
+
+        let chroma = &expected.components[1];
+        assert_eq!((chroma.width, chroma.height), (2, 2));
+        assert_eq!((chroma.x_sampling, chroma.y_sampling), (2, 2));
+        assert_eq!(chroma.samples.len(), chroma.geometry().sample_count());
     }
 
     #[test]
@@ -416,9 +499,12 @@ mod expected_schema {
     #[test]
     fn omitted_optional_note_defaults_to_none() {
         let json = r#"{
-  "geometry": { "width": 1, "height": 1, "bit_depth": 8, "signed": false },
+  "image": { "width": 1, "height": 1 },
   "tolerance": { "mode": "exact" },
-  "samples": [42],
+  "components": [
+    { "width": 1, "height": 1, "bit_depth": 8, "signed": false,
+      "x_sampling": 1, "y_sampling": 1, "samples": [42] }
+  ],
   "provenance": { "source": "s", "oracle_command": "c" }
 }"#;
         let expected = Expected::from_json(json).expect("parse without notes");

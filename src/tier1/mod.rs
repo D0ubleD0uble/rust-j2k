@@ -14,7 +14,7 @@ use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
 use crate::tier1::mq::MqDecoder;
 use crate::tier1::passes::{BlockState, MAX_BIT_PLANES, Orientation, decode_block};
-use crate::tier2::{BandKind, CodeBlock, CodedData, Resolution, Subband};
+use crate::tier2::{BandKind, CodeBlock, CodedData, ComponentCoded, Resolution, Subband};
 use crate::{Error, Result};
 
 /// One subband (or the coarsest LL): a row-major coefficient grid plus its
@@ -74,20 +74,35 @@ pub enum SubbandCoeffs {
 /// quantized indices — so the COD transform only fixes how those indices are
 /// carried onward: the 5/3 reversible path keeps them as `i32` (the inverse is
 /// exact), while the 9/7 irreversible path widens them to `f32` for [`dequant`]
-/// to scale by the subband step. [`Bands`] mirrors [`CodedData`]: the coarsest
-/// resolution's lone `NLLL` band becomes `ll`, and each finer resolution's
-/// `HL/LH/HH` triple becomes one `levels` entry, coarsest first.
+/// to scale by the subband step. [`Bands`] mirrors one component of
+/// [`CodedData`]: the coarsest resolution's lone `NLLL` band becomes `ll`, and
+/// each finer resolution's `HL/LH/HH` triple becomes one `levels` entry,
+/// coarsest first.
+///
+/// Returns one [`SubbandCoeffs`] per component, in SIZ order. Components are
+/// independent here: no inter-component transform is applied.
 ///
 /// [`dequant`]: crate::quant::dequantize
-pub fn decode_code_blocks(header: &MainHeader, coded: &CodedData<'_>) -> Result<SubbandCoeffs> {
-    match header.cod.transform {
-        Transform::Reversible53 => Ok(SubbandCoeffs::Reversible(assemble(header, coded, |q| q)?)),
-        Transform::Irreversible97 => {
-            Ok(SubbandCoeffs::Irreversible(assemble(header, coded, |q| {
-                q as f32
-            })?))
-        }
-    }
+pub fn decode_code_blocks(
+    header: &MainHeader,
+    coded: &CodedData<'_>,
+) -> Result<Vec<SubbandCoeffs>> {
+    coded
+        .components
+        .iter()
+        .map(|component| match header.cod.transform {
+            Transform::Reversible53 => Ok(SubbandCoeffs::Reversible(assemble(
+                header,
+                component,
+                |q| q,
+            )?)),
+            Transform::Irreversible97 => Ok(SubbandCoeffs::Irreversible(assemble(
+                header,
+                component,
+                |q| q as f32,
+            )?)),
+        })
+        .collect()
 }
 
 /// Decode every subband into a [`Bands`] pyramid, converting each quantized
@@ -98,7 +113,7 @@ pub fn decode_code_blocks(header: &MainHeader, coded: &CodedData<'_>) -> Result<
 /// coarsest-first — which sets each band's magnitude bit-plane count `Mb`
 /// (guard bits + quantization exponent − 1) that Tier-1 needs to place bits at
 /// their true weights.
-fn assemble<T, F>(header: &MainHeader, coded: &CodedData<'_>, convert: F) -> Result<Bands<T>>
+fn assemble<T, F>(header: &MainHeader, coded: &ComponentCoded<'_>, convert: F) -> Result<Bands<T>>
 where
     T: Copy + Default,
     F: Fn(i32) -> T + Copy,
@@ -144,9 +159,17 @@ where
     Ok(Bands { ll, levels })
 }
 
-/// The magnitude bit-plane count `Mb` for subband index `band` (ISO E.1):
+/// The magnitude bit-plane count `Mb` for subband index `band` (ISO E-2):
 /// `guard_bits + ε_b − 1`, where the exponent `ε_b` comes from the shared
 /// [`Qcd::subband_step`] mapping (so it always matches the dequant step).
+///
+/// Deliberately not per-component. `Mb` depends only on the quantization
+/// parameters, never on the component's bit depth `R_I` — the depth enters the
+/// *step size* (E-3), which is why [`crate::quant::dequantize`] takes a
+/// component index and this does not. A reversible encoder bakes the depth into
+/// the exponent it writes to QCD, so a decoder that read it back and added `R_I`
+/// again would double-count. Components that need different exponents carry a
+/// QCC, which is not decoded yet.
 fn numbps(header: &MainHeader, band: usize) -> Result<u32> {
     let qcd = &header.qcd;
     let (exp, _) = qcd.subband_step(band).ok_or_else(|| {

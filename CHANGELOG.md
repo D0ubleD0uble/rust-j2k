@@ -26,10 +26,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   component inline. The per-component fields moved to the new `Component` type,
   which also records the `x_sampling`/`y_sampling` sub-sampling factors, and
   `Image::sample` moved to `Component::sample`. Reach a component with
-  `image.component(0)`. Decoding stays single-component, so `components` holds
-  one entry; a codestream declaring more is still rejected as `Unsupported`.
-  This settles the output shape before multi-component decoding is threaded
-  through the pipeline.
+  `image.component(0)`. This settles the output shape that multi-component
+  decoding threads the pipeline toward.
 
 - The main header is now walked before it is judged. Marker segments are located
   first, then interpreted, so a codestream carrying a feature outside the decoded
@@ -45,6 +43,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Multi-component decoding. Every component a codestream declares reconstructs
+  onto its own sample grid, honoring its bit depth, sign, and `XRsiz`/`YRsiz`
+  sub-sampling. The component axis runs through Tier-2 packet enumeration
+  (LRCP's resolution-major, component-minor order), Tier-1, dequantization, and
+  the inverse DWT. Components are independent: the inter-component transform
+  (RCT/ICT) is still rejected as `Unsupported`.
+- Two synthetic multi-component fixtures, generated and graded against OpenJPEG
+  by `scripts/gen-multicomponent-fixtures.py`. The ISO/IEC 15444-4 corpus cannot
+  grade multi-component decoding on its own: every one of its multi-component
+  entries also needs a feature that is not decoded yet.
 - A grading harness over the vendored ISO/IEC 15444-4 conformance corpus
   (`tests/conformance_part4.rs`). It decodes all 23 entries and grades each
   graded component against its class-1 reference by peak absolute error and
@@ -56,8 +64,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   validates them: a zero or oversized component count, a zero sub-sampling
   factor, a bit depth above 38, and a component-record count that disagrees with
   `Csiz` are all typed errors. `Siz::component_extent` derives a component's own
-  sample-grid dimensions from the reference-grid equations. Reconstructing more
-  than one component is still `Unsupported`.
+  sample-grid dimensions from the reference-grid equations.
 
 ## [0.2.0] - 2026-06-21
 

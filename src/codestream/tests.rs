@@ -241,10 +241,21 @@ fn trailing_bytes_in_siz_is_codestream() {
 }
 
 #[test]
-fn multiple_components_is_unsupported() {
-    let body = siz_body(3, &[(15, 1, 1), (15, 1, 1), (15, 1, 1)]);
-    let bytes = codestream(&[seg(marker::SIZ, &body)]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+fn multiple_components_parse() {
+    let bytes = codestream(&[
+        seg(
+            marker::SIZ,
+            &siz_body(3, &[(15, 1, 1), (7, 2, 2), (7, 2, 2)]),
+        ),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let (header, _) = parse_main_header(&bytes).expect("multi-component header parses");
+    assert_eq!(header.siz.components.len(), 3);
+    // Each component keeps its own depth and sub-sampling.
+    assert_eq!(header.siz.component_extent(0), Some((512, 256)));
+    assert_eq!(header.siz.component_extent(1), Some((256, 128)));
+    assert_eq!(header.siz.components[1].bit_depth, 8);
 }
 
 #[test]
@@ -793,20 +804,41 @@ fn bit_depth_above_38_is_marker() {
     assert!(siz_of(1, &[(0x80 | 37, 1, 1)]).components[0].signed);
 }
 
+/// A 4096x4096 SIZ carrying `count` unit-sampled 8-bit components. One such
+/// component sits inside the decode guard; enough of them do not.
+fn many_component_siz(count: u16) -> Vec<u8> {
+    let mut body = siz_geom(4096, 4096, 0, 0, 4096, 4096, 0, 0);
+    body.truncate(body.len() - 5); // drop the Csiz and its one component record
+    body.extend_from_slice(&be16(count));
+    for _ in 0..count {
+        body.extend_from_slice(&[7, 1, 1]);
+    }
+    body
+}
+
 #[test]
-fn multi_component_codestream_reports_the_component_count() {
-    // SIZ itself accepts it; the subset check rejects it afterwards, naming the
-    // component count rather than whatever COD trips on first.
+fn many_components_exceed_the_sample_budget() {
+    // Each component is reconstructed into its own buffer, so the guard bounds
+    // the *sum* of the component areas. A 4096x4096 image is well inside the
+    // single-component guard; a hundred of its components are not.
     let bytes = codestream(&[
-        seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+        seg(marker::SIZ, &many_component_siz(100)),
         seg(marker::COD, &cod_default(1)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     let e = err(&bytes);
     assert!(
-        matches!(&e, Error::Unsupported(m) if m.contains("3 components")),
+        matches!(&e, Error::Unsupported(m) if m.contains("decode guard")),
         "got {e:?}"
     );
+
+    // One component of the same image stays inside the guard.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz_geom(4096, 4096, 0, 0, 4096, 4096, 0, 0)),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(parse_main_header(&bytes).is_ok());
 }
 
 // --- main-header marker walk (issue #56) ----------------------------------
@@ -1167,12 +1199,17 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with(&seg(0xFF78, &[0, 0]))),
             Variant::Unsupported,
         ),
+        // Multiple components are decoded, so they left this table. What
+        // replaces them is the allocation guard: every component reconstructs
+        // into its own buffer, so a large image with many components must be
+        // refused rather than attempted.
         (
-            "multiple components",
-            err(&codestream(&[seg(
-                marker::SIZ,
-                &siz_body(3, &[(7, 1, 1); 3]),
-            )])),
+            "components over the sample budget",
+            err(&codestream(&[
+                seg(marker::SIZ, &many_component_siz(100)),
+                seg(marker::COD, &cod_default(1)),
+                seg(marker::QCD, &qcd_none(2, &[8; 16])),
+            ])),
             Variant::Unsupported,
         ),
         (

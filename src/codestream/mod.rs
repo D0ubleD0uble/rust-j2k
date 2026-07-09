@@ -331,12 +331,11 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let siz = decode_siz(Cursor::new(first.body))?;
 
     // Judge the image before its coding parameters, so a codestream outside the
-    // subset reports the *image* feature that blocks it (a component count, an
-    // origin, a tile grid) rather than whichever coding-style bit COD happens to
-    // trip on first. Both are `Unsupported`; this is about which reason is
-    // useful to read.
-    check_subset(&siz)?;
+    // subset reports the *image* feature that blocks it (an origin, a tile grid)
+    // rather than whichever coding-style bit COD happens to trip on first. Both
+    // are `Unsupported`; this is about which reason is useful to read.
     validate_geometry(&siz)?;
+    check_sample_budget(&siz)?;
 
     let mut cod = None;
     let mut qcd = None;
@@ -421,19 +420,24 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
 /// format limit — raise it as larger imagery comes into scope.
 const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
 
-/// Enforce the decoded feature subset that SIZ alone determines.
+/// Bound the samples a codestream can ask the decoder to allocate.
 ///
-/// SIZ now parses every component it declares (issue #56), because the geometry
-/// is needed before the decoder can say anything useful about a codestream.
-/// Reconstructing more than one component is separate work (issue #57), so a
-/// multi-component codestream parses and is then rejected here — not
-/// half-decoded.
-fn check_subset(siz: &Siz) -> Result<()> {
-    if siz.components.len() != 1 {
-        return Err(Error::Unsupported(format!(
-            "{} components; the decoded subset is single-component",
-            siz.components.len()
-        )));
+/// Every component is reconstructed into its own buffer, so the cost is the
+/// *sum* of the component areas, not the image area. `Csiz` reaches 16384, so a
+/// large image declared with many components would otherwise multiply the
+/// allocation far past any single-component guard.
+fn check_sample_budget(siz: &Siz) -> Result<()> {
+    let mut total: u64 = 0;
+    for index in 0..siz.components.len() {
+        let (width, height) = siz
+            .component_extent(index)
+            .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
+        total += u64::from(width) * u64::from(height);
+        if total > MAX_IMAGE_SAMPLES {
+            return Err(Error::Unsupported(format!(
+                "components total over {MAX_IMAGE_SAMPLES} samples, above the decode guard"
+            )));
+        }
     }
     Ok(())
 }
@@ -602,7 +606,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     let mct = b.u8()?;
     if mct != 0 {
         return Err(Error::Unsupported(
-            "multiple-component transform is out of the single-component subset".into(),
+            "multiple-component transform (RCT/ICT); components decode independently".into(),
         ));
     }
 

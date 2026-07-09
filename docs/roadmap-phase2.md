@@ -122,9 +122,13 @@ Components stay independent at this milestone (no inter-component transform yet)
 raw per-component output for the reconstruction, plus the matching Part 4
 multi-component codestreams.
 
-**Done:** multi-component, subsampled codestreams decode per component within
-their compliance class. Unblocks COC/QCC, MCT, and the progression orders that
-iterate over components.
+**Done** (landed): every declared component reconstructs on its own grid, with
+its own depth, sign, and sub-sampling. Graded against synthetic OpenJPEG-encoded
+fixtures, bit-exact: the Part 4 corpus cannot grade this milestone on its own,
+because every one of its multi-component entries also needs a progression, a
+layer count, a tile grid, an image origin, or the colour transform that is not
+decoded yet. `p0_14` is closest and still needs RCT. Unblocks COC/QCC, MCT, and
+the progression orders that iterate over components.
 
 ### P2.2 — Per-component coding/quant overrides (COC/QCC) (`src/codestream/`)
 

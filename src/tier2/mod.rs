@@ -78,17 +78,29 @@ pub struct Resolution<'a> {
     pub subbands: Vec<Subband<'a>>,
 }
 
-/// The coded byte segments for every code-block in every subband, grouped by
-/// resolution (coarsest first, index 0 the `NLLL` band) so Tier-1 can decode
-/// each block independently and the assembly stage can place it back.
+/// One component's coded data, grouped by resolution (coarsest first, index 0
+/// the `NLLL` band) so Tier-1 can decode each block independently and the
+/// assembly stage can place it back.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CodedData<'a> {
+pub struct ComponentCoded<'a> {
     pub resolutions: Vec<Resolution<'a>>,
 }
 
+/// The coded byte segments for every code-block of every component, in SIZ
+/// component order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodedData<'a> {
+    pub components: Vec<ComponentCoded<'a>>,
+}
+
 /// Parse all packets in the codestream's single tile-part into per-code-block
-/// coded segments, following the LRCP order over the one tile / component /
-/// layer with maximal precincts: one packet per resolution, coarsest first.
+/// coded segments.
+///
+/// LRCP orders packets layer, then resolution, then component, then precinct
+/// (ISO B.12.1.1). With one layer and maximal precincts that reduces to a
+/// resolution-major sweep with the components nested inside it: `r0c0, r0c1, …,
+/// r1c0, r1c1, …`. Each component carries its own tile-component geometry, so a
+/// sub-sampled component's subbands are smaller at the same resolution.
 pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
     let tile = cs
         .tile_parts
@@ -96,13 +108,37 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
         .ok_or_else(|| Error::Codestream("codestream carries no tile-part".into()))?;
     let data = tile.data;
 
-    let geoms = resolution_geoms(&cs.header)?;
+    let component_count = cs.header.siz.components.len();
+    let geoms = (0..component_count)
+        .map(|c| resolution_geoms(&cs.header, c))
+        .collect::<Result<Vec<_>>>()?;
+    // COD is a main-header default, so every component decomposes to the same
+    // number of resolutions (per-component overrides are COC, not yet decoded).
+    // The packet loop below indexes `geoms[c][r]`, so state that rather than
+    // trust it: once COC lands, a component with its own decomposition depth
+    // must skip the resolutions it does not have, not index past its list.
+    let resolution_count = geoms.first().map_or(0, Vec::len);
+    if geoms.iter().any(|g| g.len() != resolution_count) {
+        return Err(Error::Inconsistent(
+            "components disagree on their resolution count".into(),
+        ));
+    }
+
     let mut cursor = 0usize;
-    let mut resolutions = Vec::with_capacity(geoms.len());
-    for bands in &geoms {
-        let (subbands, next) = parse_packet(data, cursor, bands)?;
-        cursor = next;
-        resolutions.push(Resolution { subbands });
+    let mut components: Vec<ComponentCoded<'a>> = (0..component_count)
+        .map(|_| ComponentCoded {
+            resolutions: Vec::with_capacity(resolution_count),
+        })
+        .collect();
+
+    // `geoms` is component-major but the packets arrive resolution-major, so walk
+    // the resolution axis on the outside and the components within it.
+    for resolution in 0..resolution_count {
+        for (component, component_geoms) in components.iter_mut().zip(&geoms) {
+            let (subbands, next) = parse_packet(data, cursor, &component_geoms[resolution])?;
+            cursor = next;
+            component.resolutions.push(Resolution { subbands });
+        }
     }
 
     // Single-layer LRCP with maximal precincts packs the tile-part with no
@@ -115,7 +151,7 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
         )));
     }
 
-    Ok(CodedData { resolutions })
+    Ok(CodedData { components })
 }
 
 /// Geometry of one subband before its segments are parsed: orientation, origin,
@@ -141,11 +177,14 @@ fn ceil_div(a: i64, b: i64) -> i64 {
     if a.rem_euclid(b) != 0 { q + 1 } else { q }
 }
 
-/// Compute the resolution → subband → code-block geometry for the single
-/// tile-component, coarsest resolution first (ISO B.5–B.7, Eq. B-15). Maximal
-/// precincts mean one precinct per resolution, so the code-block grid tiles each
-/// whole subband.
-fn resolution_geoms(header: &MainHeader) -> Result<Vec<Vec<BandGeom>>> {
+/// Compute the resolution → subband → code-block geometry for tile-component
+/// `comp`, coarsest resolution first (ISO B.5–B.7, Eq. B-15). Maximal precincts
+/// mean one precinct per resolution, so the code-block grid tiles each whole
+/// subband.
+///
+/// The tile-component bounds divide by *this component's* sub-sampling, so two
+/// components of the same image can yield different subband sizes.
+fn resolution_geoms(header: &MainHeader, comp: usize) -> Result<Vec<Vec<BandGeom>>> {
     let siz = &header.siz;
     let cod = &header.cod;
 
@@ -160,12 +199,12 @@ fn resolution_geoms(header: &MainHeader) -> Result<Vec<Vec<BandGeom>>> {
     // the component sub-sampling (Annex B.3, Eq. B-7/B-12). The decoded subset
     // uses zero offsets and unit sub-sampling, but the general form costs
     // nothing — provided the tile origin is clamped up to the image offset.
-    let comp = siz
+    let component = siz
         .components
-        .first()
-        .ok_or_else(|| Error::Codestream("SIZ declares no components".into()))?;
-    let xr = (comp.x_sampling.max(1)) as i64;
-    let yr = (comp.y_sampling.max(1)) as i64;
+        .get(comp)
+        .ok_or_else(|| Error::Codestream(format!("SIZ declares no component {comp}")))?;
+    let xr = (component.x_sampling.max(1)) as i64;
+    let yr = (component.y_sampling.max(1)) as i64;
     let tx0 = (siz.tile_x_offset as i64).max(siz.x_offset as i64);
     let ty0 = (siz.tile_y_offset as i64).max(siz.y_offset as i64);
     let tx1 = (siz.tile_x_offset as i64 + siz.tile_width as i64).min(siz.x_size as i64);

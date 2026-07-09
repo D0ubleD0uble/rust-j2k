@@ -113,7 +113,7 @@ fn single_block_band(kind: BandKind, width: usize, height: usize) -> BandGeom {
 /// subband dimensions follow the standard's half-resolution split.
 #[test]
 fn geometry_single_block_per_subband() {
-    let geoms = resolution_geoms(&header(100, 100, 2, 6)).unwrap();
+    let geoms = resolution_geoms(&header(100, 100, 2, 6), 0).unwrap();
     assert_eq!(geoms.len(), 3); // NL = 2 → resolutions 0,1,2
 
     // Resolution 0: the NLLL band at level 2, ceil(100/4) = 25 square.
@@ -140,7 +140,7 @@ fn geometry_single_block_per_subband() {
 #[test]
 fn geometry_multi_block_grid() {
     // 200×200, one level, 2^5 = 32 blocks. LL is ceil(200/2) = 100 square.
-    let geoms = resolution_geoms(&header(200, 200, 1, 5)).unwrap();
+    let geoms = resolution_geoms(&header(200, 200, 1, 5), 0).unwrap();
     let ll = &geoms[0][0];
     assert_eq!((ll.width, ll.height), (100, 100));
     // ceil(100/32) = 4 blocks each way.
@@ -156,7 +156,7 @@ fn geometry_multi_block_grid() {
 /// and yields one resolution per level plus the base.
 #[test]
 fn geometry_max_decomposition_levels() {
-    let geoms = resolution_geoms(&header(2, 2, 32, 6)).unwrap();
+    let geoms = resolution_geoms(&header(2, 2, 32, 6), 0).unwrap();
     assert_eq!(geoms.len(), 33);
     // The coarsest LL collapses to a single sample; nothing panics on the way.
     assert_eq!((geoms[0][0].width, geoms[0][0].height), (1, 1));
@@ -167,7 +167,7 @@ fn geometry_max_decomposition_levels() {
 #[test]
 fn geometry_rejects_oversized_code_block() {
     // code_block_width field 9 → exponent 11 (> 10).
-    let err = resolution_geoms(&header(64, 64, 1, 13));
+    let err = resolution_geoms(&header(64, 64, 1, 13), 0);
     assert!(matches!(err, Err(crate::Error::Marker(_))));
 }
 
@@ -356,14 +356,17 @@ fn seed_codestream_parses() {
 
     // opj_dump reports numresolutions = 5 (NL = 4): one LL packet + four detail
     // levels.
-    assert_eq!(coded.resolutions.len(), 5);
-    assert_eq!(coded.resolutions[0].subbands.len(), 1);
-    assert_eq!(coded.resolutions[0].subbands[0].kind, BandKind::Ll);
-    for res in &coded.resolutions[1..] {
+    assert_eq!(coded.components[0].resolutions.len(), 5);
+    assert_eq!(coded.components[0].resolutions[0].subbands.len(), 1);
+    assert_eq!(
+        coded.components[0].resolutions[0].subbands[0].kind,
+        BandKind::Ll
+    );
+    for res in &coded.components[0].resolutions[1..] {
         assert_eq!(res.subbands.len(), 3);
     }
 
-    let total_blocks: usize = coded
+    let total_blocks: usize = coded.components[0]
         .resolutions
         .iter()
         .flat_map(|r| &r.subbands)
@@ -372,7 +375,7 @@ fn seed_codestream_parses() {
     assert_eq!(total_blocks, 13); // 1 + 4×3, one block per subband at this size
 
     // At least one block actually carries coded data.
-    let included = coded
+    let included = coded.components[0]
         .resolutions
         .iter()
         .flat_map(|r| &r.subbands)
@@ -405,4 +408,63 @@ fn malformed_tile_data_never_panics() {
         // The result is allowed to be either Ok or Err; only a panic would fail.
         let _ = decode_packets(&cs);
     }
+}
+
+// ---- Per-component geometry (issue #57) ----
+
+/// Each component's subbands derive from *its own* sub-sampling, so components
+/// of one image can have different band sizes at the same resolution.
+///
+/// Mixed per-component sub-sampling has no end-to-end oracle yet: OpenJPEG's raw
+/// encoder cannot produce one (see `scripts/gen-multicomponent-fixtures.py`) and
+/// every conformance entry that carries it also needs a progression or layer
+/// feature that is not decoded. So it is pinned here, at the geometry, where a
+/// decoder that reused component 0's factors for every component would show up.
+#[test]
+fn resolution_geoms_honour_each_components_sub_sampling() {
+    let mut h = header(64, 64, 1, 6);
+    h.siz.components = vec![
+        SizComponent {
+            bit_depth: 8,
+            signed: false,
+            x_sampling: 1,
+            y_sampling: 1,
+        },
+        SizComponent {
+            bit_depth: 8,
+            signed: false,
+            x_sampling: 2,
+            y_sampling: 1,
+        },
+        SizComponent {
+            bit_depth: 8,
+            signed: false,
+            x_sampling: 1,
+            y_sampling: 2,
+        },
+        SizComponent {
+            bit_depth: 8,
+            signed: false,
+            x_sampling: 2,
+            y_sampling: 2,
+        },
+    ];
+
+    // One decomposition level, so resolution 0 is the LL at half the
+    // tile-component extent in each axis.
+    let expected_ll = [(32, 32), (16, 32), (32, 16), (16, 16)];
+    for (component, (want_width, want_height)) in expected_ll.into_iter().enumerate() {
+        let geoms = resolution_geoms(&h, component).unwrap();
+        let ll = &geoms[0][0];
+        assert_eq!(ll.kind, BandKind::Ll);
+        assert_eq!(
+            (ll.width, ll.height),
+            (want_width, want_height),
+            "component {component} LL band",
+        );
+    }
+
+    // A component index past the SIZ list is an internal inconsistency, not a
+    // silent fall back to component 0.
+    assert!(resolution_geoms(&h, 4).is_err());
 }
