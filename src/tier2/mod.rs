@@ -61,10 +61,29 @@ pub struct CodeBlock<'a> {
     /// Coding passes accumulated over every layer that contributed.
     pub num_passes: u32,
     pub zero_bit_planes: u32,
-    /// This block's byte contributions, one per layer that included it, in
-    /// layer order. With no per-pass termination the MQ codeword runs
-    /// continuously across them, so Tier-1 decodes their concatenation.
-    pub segments: Vec<&'a [u8]>,
+    /// The block's codeword segments, in order. Tier-1 restarts the MQ decoder
+    /// at each one and carries its bit-plane state across them.
+    pub segments: Vec<CodedSegment<'a>>,
+}
+
+/// One codeword segment: the coding passes it carries and the bytes coding
+/// them, which a multi-layer codestream may deliver in several chunks.
+///
+/// Without per-pass termination a block has exactly one segment, and the MQ
+/// codeword runs continuously across every layer that contributed to it. Under
+/// `restart` (`termall`) each coding pass is terminated separately, so each is
+/// its own segment and Tier-1 must re-initialise the MQ decoder for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodedSegment<'a> {
+    pub passes: u32,
+    pub chunks: Vec<&'a [u8]>,
+}
+
+impl CodedSegment<'_> {
+    /// The segment's bytes, concatenated across the layers that carried them.
+    pub fn bytes(&self) -> Vec<u8> {
+        self.chunks.concat()
+    }
 }
 
 /// One subband: its orientation, tile-component origin, sample geometry, and the
@@ -166,6 +185,7 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
                 layer,
                 packet_index,
                 delimiters,
+                cs.header.cod.code_block_style,
                 &geoms[component][resolution],
                 &mut states[component][resolution],
             )?;
@@ -473,6 +493,21 @@ const ZBP_LIMIT: u32 = 64;
 /// read at most 31 bits, inside the `u32` [`BitReader::read`] accepts.
 const LBLOCK_MAX: u32 = 24;
 
+/// How many coding passes one codeword segment may hold, given the code-block
+/// style (`opj_t2_init_seg`).
+///
+/// `termall` terminates the MQ coder after every pass, so each pass is its own
+/// segment. Otherwise a segment takes up to 109 passes — `3 * Mb - 2` with `Mb`
+/// capped at 37 — which a code-block can never exceed, so the default never
+/// splits.
+fn segment_max_passes(style: u8) -> u32 {
+    if style & crate::codestream::markers::code_block_style::TERMALL != 0 {
+        1
+    } else {
+        109
+    }
+}
+
 /// Which packet delimiters `COD` signals (`Scod` bits 1 and 2).
 #[derive(Debug, Clone, Copy)]
 struct Delimiters {
@@ -543,8 +578,19 @@ struct BlockState<'a> {
     zero_bit_planes: u32,
     /// Coding passes summed over every contributing layer.
     num_passes: u32,
-    /// Byte contributions in layer order.
-    segments: Vec<&'a [u8]>,
+    /// Codeword segments in order; the last one may still take passes.
+    segments: Vec<SegmentState<'a>>,
+}
+
+/// A codeword segment while it is being filled from successive layers.
+struct SegmentState<'a> {
+    passes: u32,
+    /// How many passes this segment may hold before the next one starts:
+    /// 1 under `termall`, otherwise 109 — the most a code-block can carry
+    /// (`3 * Mb - 2` with `Mb <= 37`), so the default never splits.
+    /// OpenJPEG's `opj_t2_init_seg` sets exactly these.
+    max_passes: u32,
+    chunks: Vec<&'a [u8]>,
 }
 
 impl BlockState<'_> {
@@ -578,11 +624,12 @@ impl BandState<'_> {
     }
 }
 
-/// What one code-block contributes to *this* packet: its coding passes and the
-/// length of the byte range that follows the header.
+/// What one codeword segment takes from *this* packet: the length of the byte
+/// range that follows the header, and where to file it.
 struct Contribution {
     band: usize,
     block: usize,
+    segment: usize,
     seg_len: usize,
 }
 
@@ -592,12 +639,14 @@ struct Contribution {
 /// Folds the packet's contributions into `states` and returns the byte offset
 /// where the next packet begins. The subbands are built once every layer has
 /// been read; see [`build_subbands`].
+#[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
     data: &'a [u8],
     start: usize,
     layer: u32,
     packet_index: u32,
     delimiters: Delimiters,
+    style: u8,
     bands: &[BandGeom],
     states: &mut [BandState<'a>],
 ) -> Result<usize> {
@@ -631,7 +680,15 @@ fn parse_packet<'a>(
     let mut contributions: Vec<Contribution> = Vec::new();
     if present {
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
-            parse_band_header(band_index, band, state, layer, &mut bio, &mut contributions)?;
+            parse_band_header(
+                band_index,
+                band,
+                state,
+                layer,
+                style,
+                &mut bio,
+                &mut contributions,
+            )?;
         }
     }
 
@@ -655,8 +712,8 @@ fn parse_packet<'a>(
             .ok_or_else(|| {
                 Error::Codestream("packet body segment overruns the tile-part".into())
             })?;
-        states[contribution.band].blocks[contribution.block]
-            .segments
+        states[contribution.band].blocks[contribution.block].segments[contribution.segment]
+            .chunks
             .push(&data[body..end]);
         body = end;
     }
@@ -668,11 +725,13 @@ fn parse_packet<'a>(
 /// (ISO B.10): per block its inclusion, and for a contributing block the
 /// zero-bitplane count (first inclusion only), coding-pass count, and the
 /// length of its byte contribution.
+#[allow(clippy::too_many_arguments)]
 fn parse_band_header(
     band_index: usize,
     band: &BandGeom,
     state: &mut BandState<'_>,
     layer: u32,
+    style: u8,
     bio: &mut BitReader,
     contributions: &mut Vec<Contribution>,
 ) -> Result<()> {
@@ -734,23 +793,53 @@ fn parse_band_header(
                 return Err(Error::Codestream("Lblock indicator runs too long".into()));
             }
         }
-        let length_bits = block.lblock + num_passes.ilog2();
-        let seg_len = bio.read(length_bits) as usize;
-
-        // A layer may add coding passes and no bytes. The MQ codeword is
-        // continuous across layers, so the encoder's rate split can put a
-        // block's passes in one layer and the bytes that carry them in the
-        // next; OpenJPEG reads such a length without complaint. What must not
-        // happen is a block ending up with passes and no bytes at all, which
-        // would hand Tier-1 an empty MQ stream — `build_subbands` checks that,
-        // once every layer has been read.
+        // The passes are handed to codeword segments in turn, each with its own
+        // length field. Without termination one segment swallows them all;
+        // under `restart` each pass terminates, so each gets a segment and a
+        // length of its own. OpenJPEG spells this `do { ... } while (n > 0)`.
         block.num_passes += num_passes;
-        if seg_len > 0 {
-            contributions.push(Contribution {
-                band: band_index,
-                block: block_index,
-                seg_len,
-            });
+        let mut remaining = num_passes;
+        loop {
+            if block
+                .segments
+                .last()
+                .is_none_or(|s| s.passes >= s.max_passes)
+            {
+                block.segments.push(SegmentState {
+                    passes: 0,
+                    max_passes: segment_max_passes(style),
+                    chunks: Vec::new(),
+                });
+            }
+            let segment_index = block.segments.len() - 1;
+            let segment = &mut block.segments[segment_index];
+            let new_passes = remaining.min(segment.max_passes - segment.passes);
+
+            // The length field's width uses *this* segment's new passes.
+            let length_bits = block.lblock + new_passes.ilog2();
+            let seg_len = bio.read(length_bits) as usize;
+
+            // A layer may add coding passes and no bytes. The MQ codeword is
+            // continuous within a segment, so the encoder's rate split can put
+            // passes in one layer and the bytes carrying them in the next;
+            // OpenJPEG reads such a length without complaint. What must not
+            // happen is a block ending up with passes and no bytes at all,
+            // which `build_subbands` checks once every layer has been read.
+            let segment = &mut block.segments[segment_index];
+            segment.passes += new_passes;
+            if seg_len > 0 {
+                contributions.push(Contribution {
+                    band: band_index,
+                    block: block_index,
+                    segment: segment_index,
+                    seg_len,
+                });
+            }
+
+            remaining -= new_passes;
+            if remaining == 0 {
+                break;
+            }
         }
     }
     Ok(())
@@ -764,7 +853,7 @@ fn parse_band_header(
 fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Result<Vec<Subband<'a>>> {
     for state in &states {
         for block in &state.blocks {
-            if block.num_passes > 0 && block.segments.is_empty() {
+            if block.num_passes > 0 && block.segments.iter().all(|s| s.chunks.is_empty()) {
                 return Err(Error::Codestream(
                     "included code-block has coding passes but no coded bytes".into(),
                 ));
@@ -793,7 +882,14 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Result<
                     height,
                     num_passes: block.num_passes,
                     zero_bit_planes: block.zero_bit_planes,
-                    segments: block.segments,
+                    segments: block
+                        .segments
+                        .into_iter()
+                        .map(|s| CodedSegment {
+                            passes: s.passes,
+                            chunks: s.chunks,
+                        })
+                        .collect(),
                 })
                 .collect(),
         })

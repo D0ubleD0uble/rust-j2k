@@ -632,11 +632,13 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     let code_block_style = b.u8()?;
     // Each style flag changes how Tier-1 reads a code-block's coded segments.
     // Ignoring one does not decode a slightly different image, it decodes the
-    // wrong one, so reject rather than half-decode until each lands.
-    if code_block_style != 0 {
+    // wrong one, so reject rather than half-decode until each lands. `restart`
+    // (termination on each coding pass) is decoded; the rest are not.
+    let undecoded = code_block_style & !markers::code_block_style::TERMALL;
+    if undecoded != 0 {
         return Err(Error::Unsupported(format!(
-            "code-block style ({}); the subset uses the default style",
-            markers::code_block_style::describe(code_block_style),
+            "code-block style ({}); the subset decodes only the default style and restart",
+            markers::code_block_style::describe(undecoded),
         )));
     }
     let transform = match b.u8()? {

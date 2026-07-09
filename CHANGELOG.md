@@ -43,6 +43,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The `restart` code-block style (termination on each coding pass, Annex D).
+  Each coding pass is a terminated codeword segment: Tier-2 reads a length field
+  per pass rather than one per contribution, and Tier-1 re-initialises the MQ
+  decoder at each segment while carrying the context states, the significance
+  map, and the bit-plane counter across. Conformance codestream `p0_12` now
+  decodes bit-exact. The other style flags are still rejected, and a style byte
+  that mixes `restart` with them names only the parts that block it.
 - The packet delimiters SOP and EPH (Annex A.8). `COD`'s `Scod` bits 1 and 2 are
   honoured independently. SOP *may* precede each packet even when signalled, so
   its absence is tolerated; its `Lsop` and `Nsop` are validated, which is

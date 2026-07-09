@@ -7,6 +7,17 @@
 
 use super::*;
 
+/// Every byte of a code-block, across all its codeword segments.
+fn all_bytes(block: &CodeBlock<'_>) -> Vec<u8> {
+    block.segments.iter().flat_map(|s| s.bytes()).collect()
+}
+
+/// The byte chunks of a block's single codeword segment (the default style).
+fn only_segment<'a, 'b>(block: &'a CodeBlock<'b>) -> &'a CodedSegment<'b> {
+    assert_eq!(block.segments.len(), 1, "the default style has one segment");
+    &block.segments[0]
+}
+
 /// Parse `data` as a one-layer packet over `bands`, returning the subbands and
 /// the next byte offset — the shape `parse_packet` had before quality layers.
 fn parse_one_packet<'a>(data: &'a [u8], bands: &[BandGeom]) -> Result<(Vec<Subband<'a>>, usize)> {
@@ -39,10 +50,31 @@ fn parse_layers_with<'a>(
     layers: u32,
     delimiters: Delimiters,
 ) -> Result<(Vec<Subband<'a>>, usize)> {
+    parse_layers_styled(data, bands, layers, delimiters, 0)
+}
+
+/// As [`parse_layers`], with a code-block style — `restart` splits a block's
+/// passes across codeword segments.
+fn parse_layers_styled<'a>(
+    data: &'a [u8],
+    bands: &[BandGeom],
+    layers: u32,
+    delimiters: Delimiters,
+    style: u8,
+) -> Result<(Vec<Subband<'a>>, usize)> {
     let mut states: Vec<BandState<'a>> = bands.iter().map(BandState::new).collect();
     let mut cursor = 0usize;
     for layer in 0..layers {
-        cursor = parse_packet(data, cursor, layer, layer, delimiters, bands, &mut states)?;
+        cursor = parse_packet(
+            data,
+            cursor,
+            layer,
+            layer,
+            delimiters,
+            style,
+            bands,
+            &mut states,
+        )?;
     }
     Ok((build_subbands(bands, states)?, cursor))
 }
@@ -264,7 +296,7 @@ fn packet_one_included_block() {
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 1);
     assert_eq!(block.zero_bit_planes, 2);
-    assert_eq!(block.segments.concat(), body);
+    assert_eq!(all_bytes(block), body);
     assert_eq!(next, header_len + body.len());
 }
 
@@ -288,7 +320,7 @@ fn packet_length_field_width_tracks_passes() {
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 5);
     assert_eq!(block.zero_bit_planes, 0);
-    assert_eq!(block.segments.concat().len(), 20);
+    assert_eq!(all_bytes(block).len(), 20);
 }
 
 /// The Lblock unary run widens the length field one bit per `1`.
@@ -307,7 +339,7 @@ fn packet_lblock_increment() {
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let (subbands, _next) = parse_one_packet(&data, &bands).unwrap();
-    assert_eq!(subbands[0].blocks[0].segments.concat().len(), 9);
+    assert_eq!(all_bytes(&subbands[0].blocks[0]).len(), 9);
 }
 
 /// An empty packet (present bit 0) contributes nothing and is one byte long.
@@ -380,9 +412,9 @@ fn packet_two_blocks_partial_inclusion() {
     let (subbands, _next) = parse_one_packet(&data, &[band]).unwrap();
     let blocks = &subbands[0].blocks;
     assert_eq!(blocks[0].num_passes, 0);
-    assert!(blocks[0].segments.is_empty());
+    assert!(all_bytes(&blocks[0]).is_empty());
     assert_eq!(blocks[1].num_passes, 1);
-    assert_eq!(blocks[1].segments.concat(), &body);
+    assert_eq!(all_bytes(&blocks[1]), &body);
 }
 
 // ---- Seed codestream (the real-bitstream oracle) ----
@@ -423,7 +455,7 @@ fn seed_codestream_parses() {
         .iter()
         .flat_map(|r| &r.subbands)
         .flat_map(|s| &s.blocks)
-        .any(|b| b.num_passes > 0 && !b.segments.is_empty());
+        .any(|b| b.num_passes > 0 && !all_bytes(b).is_empty());
     assert!(included, "expected some included code-block");
 }
 
@@ -552,9 +584,9 @@ fn layers_accumulate_passes_and_segments() {
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 2, "passes accumulate across layers");
     assert_eq!(block.zero_bit_planes, 2, "read once, on first inclusion");
-    assert_eq!(block.segments.len(), 2, "one contribution per layer");
+    assert_eq!(only_segment(block).chunks.len(), 2, "one chunk per layer");
     // The MQ codeword is the concatenation, in layer order.
-    assert_eq!(block.segments.concat(), vec![1, 2, 3, 4, 5]);
+    assert_eq!(all_bytes(block), vec![1, 2, 3, 4, 5]);
     assert_eq!(next, data.len());
 }
 
@@ -582,7 +614,7 @@ fn a_block_first_included_in_a_later_layer() {
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 1);
     assert_eq!(block.zero_bit_planes, 0);
-    assert_eq!(block.segments.concat(), vec![0xAA, 0xBB]);
+    assert_eq!(all_bytes(block), vec![0xAA, 0xBB]);
     assert_eq!(next, data.len());
 }
 
@@ -608,7 +640,7 @@ fn an_included_block_may_skip_a_layer() {
 
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 1);
-    assert_eq!(block.segments.concat(), vec![9, 9]);
+    assert_eq!(all_bytes(block), vec![9, 9]);
     assert_eq!(next, data.len());
 }
 
@@ -639,7 +671,7 @@ fn lblock_persists_across_layers() {
 
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 2);
-    assert_eq!(block.segments.concat(), vec![1, 2, 3, 4, 5]);
+    assert_eq!(all_bytes(block), vec![1, 2, 3, 4, 5]);
     assert_eq!(next, data.len());
 }
 
@@ -670,7 +702,7 @@ fn length_field_width_uses_this_layers_passes_not_the_total() {
 
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 6, "the total still accumulates");
-    assert_eq!(block.segments.concat(), vec![1, 2, 3, 4, 5]);
+    assert_eq!(all_bytes(block), vec![1, 2, 3, 4, 5]);
     assert_eq!(next, data.len());
 }
 
@@ -695,7 +727,7 @@ fn an_empty_packet_leaves_the_tag_trees_alone() {
 
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 1);
-    assert_eq!(block.segments.concat(), vec![0x7F]);
+    assert_eq!(all_bytes(block), vec![0x7F]);
     assert_eq!(next, data.len());
 }
 
@@ -727,7 +759,7 @@ fn a_layer_may_contribute_passes_without_bytes() {
 
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 2, "both layers' passes count");
-    assert_eq!(block.segments.concat(), vec![0xC0, 0xDE]);
+    assert_eq!(all_bytes(block), vec![0xC0, 0xDE]);
     assert_eq!(next, data.len());
 }
 
@@ -913,7 +945,7 @@ fn sop_is_consumed_and_its_sequence_number_checked() {
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let (subbands, next) = parse_layers_with(&data, &bands, 1, SOP).unwrap();
-    assert_eq!(subbands[0].blocks[0].segments.concat(), vec![0xAB, 0xCD]);
+    assert_eq!(all_bytes(&subbands[0].blocks[0]), vec![0xAB, 0xCD]);
     assert_eq!(next, data.len());
 }
 
@@ -926,7 +958,7 @@ fn a_missing_sop_is_tolerated() {
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let (subbands, next) = parse_layers_with(&data, &bands, 1, SOP).unwrap();
-    assert_eq!(subbands[0].blocks[0].segments.concat(), vec![1, 2]);
+    assert_eq!(all_bytes(&subbands[0].blocks[0]), vec![1, 2]);
     assert_eq!(next, data.len());
 }
 
@@ -977,7 +1009,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let mut states: Vec<BandState<'_>> = bands.iter().map(BandState::new).collect();
     // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
-    parse_packet(&data, 0, 0, 65536, SOP, &bands, &mut states).expect("wraps to zero");
+    parse_packet(&data, 0, 0, 65536, SOP, 0, &bands, &mut states).expect("wraps to zero");
 }
 
 /// EPH sits between the packet header and its body, and `Scod` makes it
@@ -990,7 +1022,7 @@ fn eph_is_consumed_after_the_packet_header() {
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let (subbands, next) = parse_layers_with(&data, &bands, 1, EPH).unwrap();
-    assert_eq!(subbands[0].blocks[0].segments.concat(), vec![3, 4]);
+    assert_eq!(all_bytes(&subbands[0].blocks[0]), vec![3, 4]);
     assert_eq!(next, data.len());
 }
 
@@ -1019,5 +1051,124 @@ fn an_empty_packet_still_carries_its_eph() {
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let (subbands, next) = parse_layers_with(&data, &bands, 1, EPH).unwrap();
     assert_eq!(subbands[0].blocks[0].num_passes, 0);
+    assert_eq!(next, data.len());
+}
+
+// ---- Code-block style: restart / termall (issue #67) ----
+
+/// Under `restart` each coding pass is a terminated codeword segment of its own,
+/// so one contribution carries a length field per pass, not one per contribution.
+#[test]
+fn restart_splits_a_contribution_into_one_segment_per_pass() {
+    const RESTART: u8 = 0x04;
+    let mut w = PackedHeader::new();
+    w.bit(1); // present
+    w.bit(1); // included
+    w.bit(1); // zero-bitplane 0
+    w.bits(0b1100, 4); // num_passes = 3
+    w.bit(0); // Lblock stays 3
+    // Three length fields, one per pass. Each is `Lblock + floor(log2 1)` = 3
+    // bits wide, because each segment takes exactly one pass.
+    w.bits(1, 3);
+    w.bits(2, 3);
+    w.bits(3, 3);
+    let mut data = w.finish();
+    data.extend_from_slice(&[0xA1]); // pass 0
+    data.extend_from_slice(&[0xB1, 0xB2]); // pass 1
+    data.extend_from_slice(&[0xC1, 0xC2, 0xC3]); // pass 2
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers_styled(
+        &data,
+        &bands,
+        1,
+        Delimiters {
+            sop: false,
+            eph: false,
+        },
+        RESTART,
+    )
+    .unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 3);
+    assert_eq!(block.segments.len(), 3, "one segment per coding pass");
+    for segment in &block.segments {
+        assert_eq!(segment.passes, 1);
+    }
+    assert_eq!(block.segments[0].bytes(), vec![0xA1]);
+    assert_eq!(block.segments[1].bytes(), vec![0xB1, 0xB2]);
+    assert_eq!(block.segments[2].bytes(), vec![0xC1, 0xC2, 0xC3]);
+    assert_eq!(next, data.len());
+}
+
+/// Without `restart` the same three passes share one segment and one length
+/// field — the codeword is continuous.
+#[test]
+fn the_default_style_keeps_one_segment_for_every_pass() {
+    let mut w = PackedHeader::new();
+    w.bit(1);
+    w.bit(1); // included
+    w.bit(1); // zero-bitplane 0
+    w.bits(0b1100, 4); // num_passes = 3
+    w.bit(0); // Lblock stays 3
+    // One length field, `Lblock + floor(log2 3)` = 4 bits wide.
+    w.bits(6, 4);
+    let mut data = w.finish();
+    data.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers(&data, &bands, 1).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 3);
+    assert_eq!(block.segments.len(), 1, "one continuous codeword");
+    assert_eq!(block.segments[0].passes, 3);
+    assert_eq!(next, data.len());
+}
+
+/// A segment never takes more passes than it may. Under `restart` a layer that
+/// contributes several passes opens several segments inside one packet.
+#[test]
+fn restart_segments_fill_one_pass_at_a_time_across_layers() {
+    const RESTART: u8 = 0x04;
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bit(0); // 1 pass
+    l0.bit(0); // Lblock stays 3
+    l0.bits(1, 3); // one length
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1);
+    l1.bit(1); // contributes
+    l1.bit(0); // 1 pass — a *new* segment, since the first is full
+    l1.bit(0); // Lblock stays 3
+    l1.bits(2, 3);
+
+    let data = packets(&[(l0.finish(), vec![7]), (l1.finish(), vec![8, 9])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers_styled(
+        &data,
+        &bands,
+        2,
+        Delimiters {
+            sop: false,
+            eph: false,
+        },
+        RESTART,
+    )
+    .unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 2);
+    assert_eq!(
+        block.segments.len(),
+        2,
+        "a full segment does not take more passes"
+    );
+    assert_eq!(block.segments[0].bytes(), vec![7]);
+    assert_eq!(block.segments[1].bytes(), vec![8, 9]);
     assert_eq!(next, data.len());
 }
