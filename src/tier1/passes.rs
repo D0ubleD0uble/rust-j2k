@@ -444,6 +444,46 @@ fn read_segmentation_symbol(mq: &mut MqDecoder<'_>, cx: &mut [Context]) -> Resul
     Ok(())
 }
 
+/// Undo the maxshift on one coefficient magnitude (ISO/IEC 15444-1 H.2).
+///
+/// `mag` is the double-scale magnitude Tier-1 reconstructed, the value OpenJPEG
+/// holds in `datap` before `opj_t1_clbl_decode_processor` halves it. A magnitude
+/// **at or above** `2^roi_shift` was lifted there by the encoder and belongs to
+/// the region; everything strictly below is background, already on the common
+/// scale. Nothing else identifies the region — the shift is the label, which is
+/// why the boundary is `>=` and not `>`: a coefficient of exactly `2^roi_shift`
+/// is the smallest the encoder can have lifted.
+///
+/// Transliterated from `t1.c`:
+///
+/// ```text
+/// thresh = 1 << roishift;
+/// if (mag >= thresh) { mag >>= roishift; }
+/// ```
+///
+/// `roi_shift` must be at most [`MAX_BIT_PLANES`]; `decode_block` rejects more,
+/// so `1 << roi_shift` cannot overflow.
+fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
+    if roi_shift == 0 {
+        return mag;
+    }
+    let threshold = 1i32 << roi_shift;
+    if mag >= threshold {
+        mag >> roi_shift
+    } else {
+        mag
+    }
+}
+
+/// The per-component parameters a code-block decode needs beyond its own
+/// subband: the code-block style flags (`SPcod`/`SPcoc`) and the
+/// region-of-interest maxshift (`SPrgn`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlockParams {
+    pub style: u8,
+    pub roi_shift: u8,
+}
+
 /// Which of the three coding passes runs next within a bit-plane (ISO D.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PassType {
@@ -490,8 +530,9 @@ pub fn decode_block(
     numbps: u32,
     num_passes: u32,
     zero_bit_planes: u32,
-    style: u8,
+    params: BlockParams,
 ) -> Result<()> {
+    let BlockParams { style, roi_shift } = params;
     use crate::codestream::markers::code_block_style::{PTERM, SEGSYM, TERMALL};
     debug_assert_eq!(
         style & !(TERMALL | PTERM | SEGSYM),
@@ -510,13 +551,24 @@ pub fn decode_block(
     // drops it. A truncated (lossy) stream simply stops higher, leaving the
     // un-coded low planes zero. For a fully coded block
     // `Mb − zero_bit_planes == num_passes.div_ceil(3)`.
-    let top = numbps.saturating_sub(zero_bit_planes);
+    // Maxshift starts the block `roi_shift` planes higher, so that every
+    // region-of-interest coefficient outranks every background one. OpenJPEG's
+    // `bpno_plus_one = roishift + cblk->numbps`.
+    let top = numbps.saturating_sub(zero_bit_planes) + u32::from(roi_shift);
+    // The double scale means `1 << top` must stay inside `i32`. `decode_subband`
+    // rejects this too, before allocating; checking again here is where OpenJPEG
+    // puts it (`opj_t1_decode_cblk`'s `bpno_plus_one >= 31`), so a caller that
+    // reaches `decode_block` by another route cannot overflow
+    // `set_significant_magnitude`. `top >= roi_shift`, so this bounds the
+    // maxshift as well and `1 << roi_shift` cannot overflow either.
+    if top > MAX_BIT_PLANES {
+        return Err(Error::Unsupported(format!(
+            "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
+        )));
+    }
     if top < 1 {
         return Ok(()); // no coded magnitude planes: the block stays zero
     }
-    // Callers reject anything past this (see `decode_code_blocks`); the double
-    // scale means `1 << top` must stay inside `i32`.
-    debug_assert!(top <= MAX_BIT_PLANES, "bit-plane count {top} overflows i32");
 
     let mut cx = init_contexts();
     let mut bpno = top;
@@ -560,22 +612,28 @@ pub fn decode_block(
         // nothing and localises the damage.
         if style & PTERM != 0 && !mq.ends_predictably() {
             return Err(Error::Codestream(format!(
-                "code-block style declares predictable termination, but a codeword segment                  leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
+                "code-block style declares predictable termination, but a codeword segment \
+                 leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
                 mq.unconsumed(),
                 bytes.len(),
             )));
         }
     }
 
+    // Undo the maxshift (Annex H.2), then drop the carried low bit.
+    //
     // The passes carried each magnitude in the mid-point reconstruction form at
     // double scale (ISO E.1.1.2, r = ½): becoming significant set
     // `2^bpno + 2^(bpno−1)` and each refinement nudged it by ±2^(bpno−1). Halve
-    // toward zero to drop the carried low bit, then apply the decoded signs
-    // (OpenJPEG's reversible `tmp / 2`).
+    // toward zero to drop it, then apply the decoded signs (OpenJPEG's `tmp / 2`).
+    //
+    // The maxshift is undone first, as `opj_t1_clbl_decode_processor` does it:
+    // its threshold is stated in the coefficients' own scale, and halving first
+    // would drop a region coefficient below it.
     for y in 0..state.height {
         for x in 0..state.width {
             let i = state.idx(x, y);
-            let mag = state.coeffs[i] / 2;
+            let mag = undo_maxshift(state.coeffs[i], roi_shift) / 2;
             state.coeffs[i] = if state.is_negative(x, y) { -mag } else { mag };
         }
     }
@@ -601,7 +659,7 @@ mod tests {
             numbps,
             g.num_passes,
             g.zero_bit_planes,
-            0,
+            BlockParams::default(),
         )
         .expect("the default style decodes without a style check");
         state.coeffs
@@ -623,8 +681,16 @@ mod tests {
     #[test]
     fn zero_passes_yields_all_zero_coefficients() {
         let mut state = BlockState::new(4, 4);
-        decode_block(&[(vec![0x80], 0)], &mut state, Orientation::Ll, 8, 0, 0, 0)
-            .expect("zero passes decode to nothing");
+        decode_block(
+            &[(vec![0x80], 0)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            0,
+            0,
+            BlockParams::default(),
+        )
+        .expect("zero passes decode to nothing");
         assert!(state.coeffs.iter().all(|&c| c == 0));
     }
 
@@ -645,14 +711,25 @@ mod tests {
             8,
             1,
             0,
-            PTERM,
+            BlockParams {
+                style: PTERM,
+                roi_shift: 0,
+            },
         )
         .expect_err("eight bytes for one cleanup pass leaves more than two unconsumed");
         assert!(matches!(err, Error::Codestream(_)), "{err:?}");
 
         let mut state = BlockState::new(4, 4);
-        decode_block(&[(padded, 1)], &mut state, Orientation::Ll, 8, 1, 0, 0)
-            .expect("the same segment is fine without the flag");
+        decode_block(
+            &[(padded, 1)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            1,
+            0,
+            BlockParams::default(),
+        )
+        .expect("the same segment is fine without the flag");
     }
 
     /// A segment cut short because the bit-planes ran out is not a terminated
@@ -670,7 +747,10 @@ mod tests {
             8,
             4,
             7,
-            PTERM,
+            BlockParams {
+                style: PTERM,
+                roi_shift: 0,
+            },
         )
         .expect("a segment the decoder stops early in is not checked");
     }
@@ -691,13 +771,98 @@ mod tests {
             8,
             1,
             0,
-            SEGSYM,
+            BlockParams {
+                style: SEGSYM,
+                roi_shift: 0,
+            },
         )
         .expect_err("the trailing symbol is not 1010");
         let Error::Codestream(message) = &err else {
             panic!("{err:?}")
         };
         assert!(message.contains("segmentation symbol"), "{message}");
+    }
+
+    /// The maxshift boundary, against the reference formula. `t1.c` reads
+    ///
+    /// ```text
+    /// thresh = 1 << roishift;
+    /// if (mag >= thresh) { mag >>= roishift; }
+    /// ```
+    ///
+    /// so a magnitude of exactly `2^roi_shift` is the *smallest* the encoder can
+    /// have lifted, and it must come down. `>` for `>=` leaves it up by
+    /// `roi_shift` planes; the whole-component ROI fixture cannot see that,
+    /// because it has no background coefficient below the threshold at all.
+    #[test]
+    fn undo_maxshift_matches_the_reference_formula_across_the_boundary() {
+        /// `t1.c`'s roishift block, transliterated.
+        fn reference(mag: i32, roishift: u8) -> i32 {
+            if roishift == 0 {
+                return mag;
+            }
+            let thresh = 1i32 << roishift;
+            if mag >= thresh { mag >> roishift } else { mag }
+        }
+
+        for roi_shift in 0..=12u8 {
+            let threshold = 1i32 << roi_shift;
+            // Straddle the boundary, and cover zero and the far tails.
+            let cases = [
+                0,
+                1,
+                threshold - 2,
+                threshold - 1,
+                threshold,
+                threshold + 1,
+                threshold * 2,
+                threshold * 1234 + 7,
+                i32::MAX,
+            ];
+            for mag in cases.into_iter().filter(|&m| m >= 0) {
+                assert_eq!(
+                    undo_maxshift(mag, roi_shift),
+                    reference(mag, roi_shift),
+                    "mag {mag}, roi_shift {roi_shift}"
+                );
+            }
+        }
+    }
+
+    /// A magnitude one below the threshold is background and stays where it is;
+    /// one at the threshold is the region and comes down. This is the single
+    /// discriminating pair, spelled out so a boundary regression names itself.
+    #[test]
+    fn the_maxshift_threshold_separates_background_from_region() {
+        let roi_shift = 6;
+        let threshold = 1i32 << roi_shift; // 64
+        assert_eq!(undo_maxshift(threshold - 1, roi_shift), 63, "background");
+        assert_eq!(undo_maxshift(threshold, roi_shift), 1, "region");
+        assert_eq!(undo_maxshift(0, roi_shift), 0, "zero is neither");
+        // Without a shift nothing moves, whatever the magnitude.
+        assert_eq!(undo_maxshift(threshold, 0), threshold);
+    }
+
+    /// A hostile `SPrgn` must be rejected, not shift `1i32` past its width.
+    #[test]
+    fn an_out_of_range_maxshift_is_rejected_rather_than_overflowing() {
+        for roi_shift in [31u8, 32, 64, 255] {
+            let mut state = BlockState::new(4, 4);
+            let err = decode_block(
+                &[(vec![0x80], 1)],
+                &mut state,
+                Orientation::Ll,
+                8,
+                1,
+                0,
+                BlockParams {
+                    style: 0,
+                    roi_shift,
+                },
+            )
+            .expect_err("maxshift {roi_shift} passes the bit-plane limit");
+            assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+        }
     }
 
     /// A codeword segment may carry coding passes and no bytes: under `restart`
@@ -715,7 +880,10 @@ mod tests {
             8,
             2,
             0,
-            crate::codestream::markers::code_block_style::TERMALL,
+            BlockParams {
+                style: crate::codestream::markers::code_block_style::TERMALL,
+                roi_shift: 0,
+            },
         )
         .expect("an empty segment decodes as 0xFF padding");
     }

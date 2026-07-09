@@ -43,6 +43,7 @@ impl MainHeader {
             ComponentParams {
                 coding: cod.coding(),
                 quant: qcd.clone(),
+                roi_shift: 0,
             };
             siz.components.len()
         ];
@@ -132,7 +133,10 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
     }
 
     // Tile-part header: only SOD (and a skippable COM) belong here in the
-    // subset; tile-level coding/quant overrides are not yet decoded.
+    // subset. Tile-level overrides are not yet decoded — including RGN, whose
+    // main-header form *is* decoded. A tile-part RGN replaces the main header's
+    // for that tile, so honouring the main-header one alone would decode the
+    // wrong image rather than a slightly worse one.
     loop {
         let m = cur.u16()?;
         match m {
@@ -369,6 +373,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let mut qcd = None;
     let mut coc: Vec<Option<Coding>> = vec![None; siz.components.len()];
     let mut qcc: Vec<Option<Qcd>> = vec![None; siz.components.len()];
+    let mut rgn: Vec<Option<u8>> = vec![None; siz.components.len()];
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
@@ -409,6 +414,15 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
                     )));
                 }
             }
+            // A.6.3 allows one RGN per component per header, like COC and QCC.
+            marker::RGN => {
+                let (index, shift) = decode_rgn(body(), &siz)?;
+                if rgn[index].replace(shift).is_some() {
+                    return Err(Error::Codestream(format!(
+                        "duplicate RGN marker for component {index}"
+                    )));
+                }
+            }
             // Comment: recognised, carries nothing the decoder needs.
             marker::COM => {}
 
@@ -420,7 +434,6 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             // announces capabilities beyond Part 1 (an HTJ2K codestream carries
             // one), whose code-blocks this Tier-1 would misread as Part 1.
             marker::CAP
-            | marker::RGN
             | marker::POC
             | marker::TLM
             | marker::PLM
@@ -461,12 +474,19 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     // Start from COD/QCD's defaults, then lay each override over its component.
     // That is the whole of A.6.2's and A.6.5's resolution rule.
     let mut header = MainHeader::new(siz, cod, qcd);
-    for (params, (coding, quant)) in header.components.iter_mut().zip(coc.into_iter().zip(qcc)) {
+    for (params, ((coding, quant), shift)) in header
+        .components
+        .iter_mut()
+        .zip(coc.into_iter().zip(qcc).zip(rgn))
+    {
         if let Some(coding) = coding {
             params.coding = coding;
         }
         if let Some(quant) = quant {
             params.quant = quant;
+        }
+        if let Some(shift) = shift {
+            params.roi_shift = shift;
         }
     }
 
@@ -831,6 +851,25 @@ fn decode_qcc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Qcd)> {
     let index = component_index(&mut b, siz, "QCC")?;
     let quant = decode_quant(b, "QCC")?;
     Ok((index, quant))
+}
+
+/// Decode RGN — a region of interest for one component (A.6.3).
+///
+/// Returns the component index and its maxshift. `Srgn` selects the ROI style,
+/// and `0` (implicit — the maxshift of Annex H) is the only style Part 1
+/// defines. OpenJPEG reads the byte and never looks at it, so a codestream using
+/// a Part 2 style decodes there as though it were maxshift.
+fn decode_rgn(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, u8)> {
+    let index = component_index(&mut b, siz, "RGN")?;
+    let srgn = b.u8()?;
+    if srgn != 0 {
+        return Err(Error::Unsupported(format!(
+            "region-of-interest style {srgn}; only the implicit maxshift (Srgn = 0) is decoded"
+        )));
+    }
+    let shift = b.u8()?;
+    b.expect_consumed("RGN")?;
+    Ok((index, shift))
 }
 
 /// Decode the quantization body shared by QCD (A.6.4) and QCC (A.6.5): style,
