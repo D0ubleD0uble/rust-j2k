@@ -66,7 +66,8 @@ that the later phases widen is correct end-to-end before breadth work starts.
 | Significance-propagation / magnitude-refinement / cleanup passes | ✓ | 1 |
 | Context formation from the 3×3 neighbourhood | ✓ | 1 |
 | Code-block styles: selective arithmetic-coding bypass (lazy) | ○ | 2 |
-| Code-block styles: reset contexts, termination on each pass (restart) | ○ | 2 |
+| Code-block styles: termination on each pass (restart) | ✓ | 2 |
+| Code-block styles: reset context probabilities | ○ | 2 |
 | Code-block styles: vertically causal context | ○ | 2 |
 | Code-block styles: predictable termination, segmentation symbols | ○ | 2 |
 

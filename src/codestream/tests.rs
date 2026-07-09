@@ -1501,9 +1501,13 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         Variant::Unsupported,
     ));
 
-    // Every code-block style flag, individually. Each changes how Tier-1 reads a
-    // code-block, so none may be ignored.
+    // Every code-block style flag that is not yet decoded, individually. Each
+    // changes how Tier-1 reads a code-block, so none may be ignored. `restart`
+    // has left this table.
     for (bit, name) in markers::code_block_style::FLAGS {
+        if bit == markers::code_block_style::TERMALL {
+            continue;
+        }
         rows.push((
             name,
             err(&header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, bit, 1))),
@@ -1521,6 +1525,41 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         "{} inputs mapped to the wrong error variant:\n{}",
         wrong.len(),
         wrong.join("\n"),
+    );
+}
+
+/// `restart` (termination on each coding pass) is decoded; the other style bits
+/// are not, and a style byte mixing them still rejects, naming only the parts
+/// that block it.
+#[test]
+fn restart_parses_and_the_other_style_flags_still_reject() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0x04, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let (header, _) = parse_main_header(&bytes).expect("restart parses");
+    assert_eq!(header.cod.code_block_style, 0x04);
+
+    // restart | segmentation symbols: the message names only the segsym half.
+    let e = err(&header_with_cod(cod_body(
+        0,
+        0,
+        1,
+        0,
+        5,
+        4,
+        4,
+        0x04 | 0x20,
+        1,
+    )));
+    let Error::Unsupported(message) = &e else {
+        panic!("got {e:?}")
+    };
+    assert!(message.contains("segmentation symbols"), "{message}");
+    assert!(
+        !message.contains("termination on each coding pass"),
+        "restart is decoded and must not be named as a blocker: {message}"
     );
 }
 

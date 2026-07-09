@@ -12,7 +12,6 @@ pub mod passes;
 
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
-use crate::tier1::mq::MqDecoder;
 use crate::tier1::passes::{BlockState, MAX_BIT_PLANES, Orientation, decode_block};
 use crate::tier2::{BandKind, CodeBlock, CodedData, ComponentCoded, Resolution, Subband};
 use crate::{Error, Result};
@@ -224,14 +223,16 @@ where
             )));
         }
         let mut state = BlockState::new(block.width as u32, block.height as u32);
-        // Without per-pass termination the MQ codeword runs continuously across
-        // the layers that contributed, so the contributions decode as one
-        // stream. `concat` copies; a single-layer block copies once, which is
-        // cheap beside the bit-plane decode that follows.
-        let coded = block.segments.concat();
-        let mut mq = MqDecoder::new(&coded);
+        // Each codeword segment is decoded from its own MQ stream; a segment's
+        // bytes may still arrive in several layer-sized chunks, so they are
+        // concatenated first. Without termination there is exactly one segment.
+        let segments: Vec<(Vec<u8>, u32)> = block
+            .segments
+            .iter()
+            .map(|segment| (segment.bytes(), segment.passes))
+            .collect();
         decode_block(
-            &mut mq,
+            &segments,
             &mut state,
             orient,
             numbps,
@@ -292,7 +293,10 @@ mod tests {
                 height: 1,
                 num_passes,
                 zero_bit_planes,
-                segments: vec![&[0x80][..]],
+                segments: vec![crate::tier2::CodedSegment {
+                    passes: 1,
+                    chunks: vec![&[0x80][..]],
+                }],
             }],
         }
     }

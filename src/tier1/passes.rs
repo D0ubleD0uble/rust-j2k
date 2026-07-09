@@ -405,7 +405,16 @@ fn cleanup_pass(
     state.clear_visited();
 }
 
-/// Decode one code-block: run the bit-plane passes over `mq` into `state`.
+/// Which of the three coding passes runs next within a bit-plane (ISO D.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassType {
+    SigProp,
+    MagRef,
+    Cleanup,
+}
+
+/// Decode one code-block: run the bit-plane passes over its codeword segments
+/// into `state`.
 ///
 /// `numbps` is the subband's magnitude bit-plane count `Mb` (guard bits +
 /// quantization exponent − 1); `num_passes` and `zero_bit_planes` come from the
@@ -424,11 +433,17 @@ fn cleanup_pass(
 /// not yet decoded. Quality layers are handled in Tier-2, which concatenates a
 /// block's per-layer contributions into the single MQ codeword decoded here.
 ///
-/// `decode_cod` rejects a nonzero `style`, so this always runs the default pass
-/// structure. The parameter stays because each style flag alters the passes
-/// below, and it is where they will branch.
+/// `segments` carries the block's codeword segments in order, each with the
+/// coding passes it codes. The MQ decoder is re-initialised at every segment —
+/// under `restart` that is once per pass — while the context states, the
+/// significance map, and the bit-plane counter carry straight through, exactly
+/// as `opj_t1_decode_cblk` does. Without termination there is one segment and
+/// the codeword runs unbroken.
+///
+/// `decode_cod` rejects every style flag but `restart`, so the pass structure
+/// below is still the default one.
 pub fn decode_block(
-    mq: &mut MqDecoder<'_>,
+    segments: &[(Vec<u8>, u32)],
     state: &mut BlockState,
     orient: Orientation,
     numbps: u32,
@@ -436,8 +451,11 @@ pub fn decode_block(
     zero_bit_planes: u32,
     style: u8,
 ) {
-    debug_assert_eq!(style, 0, "decode_cod rejects a nonzero code-block style");
-    let _ = style;
+    debug_assert_eq!(
+        style & !crate::codestream::markers::code_block_style::TERMALL,
+        0,
+        "decode_cod rejects every style flag but restart",
+    );
     if num_passes == 0 {
         return;
     }
@@ -460,26 +478,35 @@ pub fn decode_block(
 
     let mut cx = init_contexts();
     let mut bpno = top;
-    let mut left = num_passes;
+    // The most significant plane runs the cleanup pass only (D.4), so the pass
+    // cycle starts at cleanup and wraps to the next plane after it.
+    let mut pass_type = PassType::Cleanup;
 
-    // The most significant plane runs the cleanup pass only (D.4).
-    cleanup_pass(mq, state, &mut cx, orient, bpno);
-    left -= 1;
-
-    while left > 0 && bpno > 1 {
-        bpno -= 1;
-        sig_prop_pass(mq, state, &mut cx, orient, bpno);
-        left -= 1;
-        if left == 0 {
-            break;
+    'segments: for (bytes, passes) in segments {
+        // Each segment is a terminated MQ codeword of its own. Context states
+        // and `bpno` are *not* reset — only the arithmetic decoder is.
+        let mut mq = MqDecoder::new(bytes);
+        for _ in 0..*passes {
+            if bpno < 1 {
+                break 'segments;
+            }
+            match pass_type {
+                PassType::SigProp => sig_prop_pass(&mut mq, state, &mut cx, orient, bpno),
+                PassType::MagRef => mag_ref_pass(&mut mq, state, &mut cx, bpno),
+                PassType::Cleanup => cleanup_pass(&mut mq, state, &mut cx, orient, bpno),
+            }
+            pass_type = match pass_type {
+                PassType::SigProp => PassType::MagRef,
+                PassType::MagRef => PassType::Cleanup,
+                // A cleanup pass closes the plane; the next one starts below it.
+                // `bpno >= 1` here, guaranteed by the guard above, so this
+                // cannot underflow — and a `bpno` of 0 stops the next pass.
+                PassType::Cleanup => {
+                    bpno -= 1;
+                    PassType::SigProp
+                }
+            };
         }
-        mag_ref_pass(mq, state, &mut cx, bpno);
-        left -= 1;
-        if left == 0 {
-            break;
-        }
-        cleanup_pass(mq, state, &mut cx, orient, bpno);
-        left -= 1;
     }
 
     // The passes carried each magnitude in the mid-point reconstruction form at
@@ -500,17 +527,16 @@ pub fn decode_block(
 mod tests {
     use super::golden_vectors::GOLDEN_BLOCKS;
     use super::*;
-    use crate::tier1::mq::MqDecoder;
-
     /// Decode one golden block from its committed segment into a fresh state.
     fn decode_golden(g: &super::golden_vectors::GoldenBlock) -> Vec<i32> {
-        let mut mq = MqDecoder::new(g.segment);
+        // The golden vectors carry no termination, so one segment holds them all.
+        let segments = [(g.segment.to_vec(), g.num_passes)];
         let mut state = BlockState::new(g.width, g.height);
         // The golden vectors are fully coded (lossless, every plane to plane 0),
         // so Mb = decoded-plane count + skipped MSB planes.
         let numbps = g.num_passes.div_ceil(3) + g.zero_bit_planes;
         decode_block(
-            &mut mq,
+            &segments,
             &mut state,
             Orientation::Ll,
             numbps,
@@ -536,9 +562,8 @@ mod tests {
     /// A code-block with no coding passes contributes nothing.
     #[test]
     fn zero_passes_yields_all_zero_coefficients() {
-        let mut mq = MqDecoder::new(GOLDEN_BLOCKS[0].segment);
         let mut state = BlockState::new(4, 4);
-        decode_block(&mut mq, &mut state, Orientation::Ll, 8, 0, 0, 0);
+        decode_block(&[(vec![0x80], 0)], &mut state, Orientation::Ll, 8, 0, 0, 0);
         assert!(state.coeffs.iter().all(|&c| c == 0));
     }
 

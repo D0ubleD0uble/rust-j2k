@@ -55,6 +55,10 @@ pub mod marker {
 /// decodes the wrong one. None are decoded yet; `decode_cod` rejects any that
 /// are set.
 pub mod code_block_style {
+    /// Bit 2: the MQ coder terminates after every coding pass, so each pass is
+    /// an independently decodable codeword segment.
+    pub const TERMALL: u8 = 0x04;
+
     /// Every flag of the style byte, low bit first, with the name used in error
     /// messages. All eight bits are allocated, so no value goes unnamed.
     ///
