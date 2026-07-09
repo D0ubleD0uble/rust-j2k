@@ -1502,10 +1502,11 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     ));
 
     // Every code-block style flag that is not yet decoded, individually. Each
-    // changes how Tier-1 reads a code-block, so none may be ignored. `restart`
-    // has left this table.
+    // changes how Tier-1 reads a code-block, so none may be ignored. `restart`,
+    // `predictable termination` and `segmentation symbols` have left this table.
+    use markers::code_block_style::{PTERM, SEGSYM, TERMALL};
     for (bit, name) in markers::code_block_style::FLAGS {
-        if bit == markers::code_block_style::TERMALL {
+        if bit & (TERMALL | PTERM | SEGSYM) != 0 {
             continue;
         }
         rows.push((
@@ -1532,16 +1533,22 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
 /// are not, and a style byte mixing them still rejects, naming only the parts
 /// that block it.
 #[test]
-fn restart_parses_and_the_other_style_flags_still_reject() {
-    let bytes = codestream(&[
-        seg(marker::SIZ, &one_component()),
-        seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0x04, 1)),
-        seg(marker::QCD, &qcd_none(2, &[8; 16])),
-    ]);
-    let (header, _) = parse_main_header(&bytes).expect("restart parses");
-    assert_eq!(header.cod.code_block_style, 0x04);
+fn the_decoded_styles_parse_and_the_rest_still_reject() {
+    use markers::code_block_style::{PTERM, SEGSYM, TERMALL};
 
-    // restart | segmentation symbols: the message names only the segsym half.
+    // Every combination of the three decoded flags parses.
+    for style in [0, TERMALL, PTERM, SEGSYM, TERMALL | PTERM | SEGSYM] {
+        let bytes = codestream(&[
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ]);
+        let (header, _) = parse_main_header(&bytes).expect("a decoded style parses");
+        assert_eq!(header.cod.code_block_style, style);
+    }
+
+    // A decoded flag beside an undecoded one: the message names only the
+    // undecoded half, so it says what is actually missing.
     let e = err(&header_with_cod(cod_body(
         0,
         0,
@@ -1550,24 +1557,31 @@ fn restart_parses_and_the_other_style_flags_still_reject() {
         5,
         4,
         4,
-        0x04 | 0x20,
+        TERMALL | SEGSYM | 0x08, // + vertically causal
         1,
     )));
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("segmentation symbols"), "{message}");
-    assert!(
-        !message.contains("termination on each coding pass"),
-        "restart is decoded and must not be named as a blocker: {message}"
-    );
+    assert!(message.contains("vertically causal context"), "{message}");
+    for decoded in [
+        "termination on each coding pass",
+        "segmentation symbols",
+        "predictable termination",
+    ] {
+        assert!(
+            !message.contains(decoded),
+            "{decoded} is decoded and must not be named as a blocker: {message}"
+        );
+    }
 }
 
 /// A code-block style names the flags it carries, so a rejection tells the
 /// caller which feature to look up rather than printing a bare bit pattern.
 #[test]
 fn code_block_style_rejection_names_the_flags() {
-    let bytes = header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, 0x01 | 0x20, 1));
+    // Two undecoded flags: bypass and reset.
+    let bytes = header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, 0x01 | 0x02, 1));
     let e = err(&bytes);
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
@@ -1576,7 +1590,7 @@ fn code_block_style_rejection_names_the_flags() {
         message.contains("selective arithmetic coding bypass"),
         "{message}"
     );
-    assert!(message.contains("segmentation symbols"), "{message}");
+    assert!(message.contains("reset context probabilities"), "{message}");
 
     // The high bits select the HTJ2K block coder rather than being reserved, so
     // they are named too. Such a codestream also carries CAP, which rejects on

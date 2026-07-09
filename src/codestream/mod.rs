@@ -632,12 +632,14 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     let code_block_style = b.u8()?;
     // Each style flag changes how Tier-1 reads a code-block's coded segments.
     // Ignoring one does not decode a slightly different image, it decodes the
-    // wrong one, so reject rather than half-decode until each lands. `restart`
-    // (termination on each coding pass) is decoded; the rest are not.
-    let undecoded = code_block_style & !markers::code_block_style::TERMALL;
+    // wrong one, so reject rather than half-decode until each lands. `restart`,
+    // `predictable termination` and `segmentation symbols` are decoded; the rest
+    // are not.
+    use markers::code_block_style::{PTERM, SEGSYM, TERMALL};
+    let undecoded = code_block_style & !(TERMALL | PTERM | SEGSYM);
     if undecoded != 0 {
         return Err(Error::Unsupported(format!(
-            "code-block style ({}); the subset decodes only the default style and restart",
+            "code-block style ({}) is outside the decoded subset",
             markers::code_block_style::describe(undecoded),
         )));
     }

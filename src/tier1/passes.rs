@@ -6,11 +6,16 @@
 //! refinement (D.3.2), and cleanup (D.3.3) with its run-length mode. Contexts
 //! come from the significance state of the 3×3 neighbourhood (D.3.* tables),
 //! and sign coding uses the neighbour-sign context (D.3.4). The cleanup pass
-//! of the top plane runs first; the optional code-block style flags
-//! (bypass/lazy, reset, restart, vertically-causal, segmentation) modulate
-//! termination and context reset.
+//! of the top plane runs first.
+//!
+//! Of the optional code-block style flags, only `segmentation symbols` changes
+//! a pass: it appends a four-symbol marker to every cleanup pass (D.5). The
+//! others modulate termination (`restart`, `predictable termination`) or
+//! context handling (`bypass`, `reset`, `vertically causal`), and the ones that
+//! are not decoded yet are rejected in `decode_cod`.
 
 use crate::tier1::mq::{Context, MqDecoder};
+use crate::{Error, Result};
 
 #[cfg(test)]
 #[path = "golden_vectors.rs"]
@@ -357,13 +362,17 @@ fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Contex
 /// aggregated through the run-length context — a 0 leaves all four
 /// insignificant, a 1 reads the first significant sample's position as two
 /// uniform bits — after which the column finishes with ordinary zero coding.
+///
+/// Under `segmentation symbols` the pass ends by reading the `1010` symbol
+/// (D.5); see [`read_segmentation_symbol`].
 fn cleanup_pass(
     mq: &mut MqDecoder<'_>,
     state: &mut BlockState,
     cx: &mut [Context],
     orient: Orientation,
     bpno: u32,
-) {
+    style: u8,
+) -> Result<()> {
     let (w, h) = (state.width, state.height);
     for (x, y0) in stripes(w, h) {
         let rows = (y0 + 4).min(h) - y0;
@@ -403,6 +412,36 @@ fn cleanup_pass(
         }
     }
     state.clear_visited();
+    if style & crate::codestream::markers::code_block_style::SEGSYM != 0 {
+        read_segmentation_symbol(mq, cx)?;
+    }
+    Ok(())
+}
+
+/// Read the segmentation symbol that closes a cleanup pass under `segmentation
+/// symbols` (ISO D.5): four decisions in the uniform context, most significant
+/// first, spelling `1010`.
+///
+/// The four decisions are part of the codeword whether or not anyone looks at
+/// the value, so a decoder that skips them desynchronises the MQ coder for every
+/// later pass. That is why this runs before the value is judged.
+///
+/// A wrong value means the coded data is corrupt. OpenJPEG decodes the symbol
+/// and leaves the comparison commented out, so it decodes the rest of the block
+/// from data it has already established is damaged; this returns an error
+/// instead, which is what the symbol exists to let a decoder do.
+fn read_segmentation_symbol(mq: &mut MqDecoder<'_>, cx: &mut [Context]) -> Result<()> {
+    let mut symbol = 0u8;
+    for _ in 0..4 {
+        symbol = (symbol << 1) | mq.decode(&mut cx[CTX_UNI as usize]);
+    }
+    if symbol != 0b1010 {
+        return Err(Error::Codestream(format!(
+            "segmentation symbol at the end of a cleanup pass is {symbol:#06b}, expected 0b1010; \
+             the coded data is corrupt"
+        )));
+    }
+    Ok(())
 }
 
 /// Which of the three coding passes runs next within a bit-plane (ISO D.3).
@@ -428,10 +467,8 @@ enum PassType {
 /// down three passes per plane to plane 1 (never plane 0), carrying each
 /// magnitude in mid-point form, then halves toward zero. A stream that stops
 /// early (the lossy/rate-truncated case) simply leaves the un-coded low planes
-/// zero. The decoder currently handles only the default code-block style; the
-/// non-default styles (bypass/reset/restart/vertically-causal/segmentation) are
-/// not yet decoded. Quality layers are handled in Tier-2, which concatenates a
-/// block's per-layer contributions into the single MQ codeword decoded here.
+/// zero. Quality layers are handled in Tier-2, which concatenates a block's
+/// per-layer contributions into the single MQ codeword decoded here.
 ///
 /// `segments` carries the block's codeword segments in order, each with the
 /// coding passes it codes. The MQ decoder is re-initialised at every segment —
@@ -440,8 +477,12 @@ enum PassType {
 /// as `opj_t1_decode_cblk` does. Without termination there is one segment and
 /// the codeword runs unbroken.
 ///
-/// `decode_cod` rejects every style flag but `restart`, so the pass structure
-/// below is still the default one.
+/// `decode_cod` admits `restart`, `predictable termination` and `segmentation
+/// symbols`, and rejects the rest. Of the three only `segmentation symbols`
+/// reaches into a pass: it appends four decisions to every cleanup pass.
+/// `restart` is a property of the segment split, which Tier-2 has already
+/// applied, and `predictable termination` constrains the encoder alone. So the
+/// pass structure below is still the default one.
 pub fn decode_block(
     segments: &[(Vec<u8>, u32)],
     state: &mut BlockState,
@@ -450,14 +491,15 @@ pub fn decode_block(
     num_passes: u32,
     zero_bit_planes: u32,
     style: u8,
-) {
+) -> Result<()> {
+    use crate::codestream::markers::code_block_style::{PTERM, SEGSYM, TERMALL};
     debug_assert_eq!(
-        style & !crate::codestream::markers::code_block_style::TERMALL,
+        style & !(TERMALL | PTERM | SEGSYM),
         0,
-        "decode_cod rejects every style flag but restart",
+        "decode_cod rejects every style flag but restart, pterm and segsym",
     );
     if num_passes == 0 {
-        return;
+        return Ok(());
     }
 
     // Decode at twice the final scale, matching OpenJPEG: the most significant
@@ -470,7 +512,7 @@ pub fn decode_block(
     // `Mb − zero_bit_planes == num_passes.div_ceil(3)`.
     let top = numbps.saturating_sub(zero_bit_planes);
     if top < 1 {
-        return; // no coded magnitude planes: the block stays zero
+        return Ok(()); // no coded magnitude planes: the block stays zero
     }
     // Callers reject anything past this (see `decode_code_blocks`); the double
     // scale means `1 << top` must stay inside `i32`.
@@ -488,12 +530,17 @@ pub fn decode_block(
         let mut mq = MqDecoder::new(bytes);
         for _ in 0..*passes {
             if bpno < 1 {
+                // The plane counter is exhausted, so this segment stops mid-way
+                // and every later one goes unread. None of them is the
+                // terminated whole `predictable termination` promises about, and
+                // their bytes are never consumed — checking them would reject a
+                // sound codestream for leaving a buffer it never had to read.
                 break 'segments;
             }
             match pass_type {
                 PassType::SigProp => sig_prop_pass(&mut mq, state, &mut cx, orient, bpno),
                 PassType::MagRef => mag_ref_pass(&mut mq, state, &mut cx, bpno),
-                PassType::Cleanup => cleanup_pass(&mut mq, state, &mut cx, orient, bpno),
+                PassType::Cleanup => cleanup_pass(&mut mq, state, &mut cx, orient, bpno, style)?,
             }
             pass_type = match pass_type {
                 PassType::SigProp => PassType::MagRef,
@@ -506,6 +553,17 @@ pub fn decode_block(
                     PassType::SigProp
                 }
             };
+        }
+        // Every codeword segment is separately terminated, so under `predictable
+        // termination` each one must account for its own bytes. OpenJPEG checks
+        // only the last segment of a block and warns; checking each one costs
+        // nothing and localises the damage.
+        if style & PTERM != 0 && !mq.ends_predictably() {
+            return Err(Error::Codestream(format!(
+                "code-block style declares predictable termination, but a codeword segment                  leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
+                mq.unconsumed(),
+                bytes.len(),
+            )));
         }
     }
 
@@ -521,6 +579,7 @@ pub fn decode_block(
             state.coeffs[i] = if state.is_negative(x, y) { -mag } else { mag };
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -543,7 +602,8 @@ mod tests {
             g.num_passes,
             g.zero_bit_planes,
             0,
-        );
+        )
+        .expect("the default style decodes without a style check");
         state.coeffs
     }
 
@@ -563,8 +623,81 @@ mod tests {
     #[test]
     fn zero_passes_yields_all_zero_coefficients() {
         let mut state = BlockState::new(4, 4);
-        decode_block(&[(vec![0x80], 0)], &mut state, Orientation::Ll, 8, 0, 0, 0);
+        decode_block(&[(vec![0x80], 0)], &mut state, Orientation::Ll, 8, 0, 0, 0)
+            .expect("zero passes decode to nothing");
         assert!(state.coeffs.iter().all(|&c| c == 0));
+    }
+
+    /// `predictable termination` promises each terminated segment accounts for
+    /// its own bytes, so a segment padded with bytes the codeword never reaches
+    /// is corrupt. Without the flag the same segment decodes without complaint,
+    /// which is what makes this a check and not a new parse rule.
+    #[test]
+    fn predictable_termination_catches_a_segment_the_codeword_does_not_consume() {
+        use crate::codestream::markers::code_block_style::PTERM;
+        let padded = vec![0x80, 0, 0, 0, 0, 0, 0, 0];
+
+        let mut state = BlockState::new(4, 4);
+        let err = decode_block(
+            &[(padded.clone(), 1)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            1,
+            0,
+            PTERM,
+        )
+        .expect_err("eight bytes for one cleanup pass leaves more than two unconsumed");
+        assert!(matches!(err, Error::Codestream(_)), "{err:?}");
+
+        let mut state = BlockState::new(4, 4);
+        decode_block(&[(padded, 1)], &mut state, Orientation::Ll, 8, 1, 0, 0)
+            .expect("the same segment is fine without the flag");
+    }
+
+    /// A segment cut short because the bit-planes ran out is not a terminated
+    /// whole, so the predictable-termination promise does not apply to it.
+    #[test]
+    fn predictable_termination_ignores_a_segment_stopped_by_the_bit_plane_floor() {
+        use crate::codestream::markers::code_block_style::PTERM;
+        let mut state = BlockState::new(4, 4);
+        // `top` is 1, so the first cleanup pass drops `bpno` to 0 and the second
+        // pass never runs; the segment's bytes stay unconsumed.
+        decode_block(
+            &[(vec![0x80, 0, 0, 0, 0, 0, 0, 0], 4)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            4,
+            7,
+            PTERM,
+        )
+        .expect("a segment the decoder stops early in is not checked");
+    }
+
+    /// The segmentation symbol is verified, not just consumed. Flipping a bit of
+    /// a cleanup pass's trailing symbol has to surface as a typed error rather
+    /// than as silently wrong coefficients.
+    #[test]
+    fn a_corrupt_segmentation_symbol_is_a_codestream_error() {
+        use crate::codestream::markers::code_block_style::SEGSYM;
+        // An all-zero codeword decodes the uniform context to a value that is
+        // not `1010`, which is exactly the corruption the symbol exists to find.
+        let mut state = BlockState::new(4, 4);
+        let err = decode_block(
+            &[(vec![0x00; 8], 1)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            1,
+            0,
+            SEGSYM,
+        )
+        .expect_err("the trailing symbol is not 1010");
+        let Error::Codestream(message) = &err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("segmentation symbol"), "{message}");
     }
 
     /// A codeword segment may carry coding passes and no bytes: under `restart`
@@ -583,7 +716,8 @@ mod tests {
             2,
             0,
             crate::codestream::markers::code_block_style::TERMALL,
-        );
+        )
+        .expect("an empty segment decodes as 0xFF padding");
     }
 
     /// Signs are recovered, not just magnitudes: the sparse block has both

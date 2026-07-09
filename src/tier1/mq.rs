@@ -89,6 +89,11 @@ pub struct MqDecoder<'a> {
     c: u32,
     a: u32,
     ct: i32,
+    /// How many times BYTEIN took the marker branch — a `0xFF` followed by a
+    /// byte above `0x8F`, which includes every synthesised byte past the end of
+    /// `data`. OpenJPEG's `end_of_byte_stream_counter`; only the predictable
+    /// termination check reads it.
+    marker_reads: u32,
 }
 
 impl<'a> MqDecoder<'a> {
@@ -100,6 +105,7 @@ impl<'a> MqDecoder<'a> {
             c: 0,
             a: 0,
             ct: 0,
+            marker_reads: 0,
         };
         d.init();
         d
@@ -111,6 +117,28 @@ impl<'a> MqDecoder<'a> {
     /// a truncated or exhausted segment can never index out of `data`.
     fn byte(&self, pos: usize) -> u8 {
         self.data.get(pos).copied().unwrap_or(0xFF)
+    }
+
+    /// Coded bytes of the segment this decoder has not consumed.
+    ///
+    /// OpenJPEG's `mqc->end - mqc->bp`. Under a predictable termination this is
+    /// bounded; see [`ends_predictably`](Self::ends_predictably).
+    pub fn unconsumed(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
+    }
+
+    /// Whether the segment ended the way `predictable termination` promises
+    /// (ISO/IEC 15444-1 D.4.2): the codeword accounts for all but the last two
+    /// bytes, and the decoder did not have to synthesise more than two bytes
+    /// past the end to finish.
+    ///
+    /// The two-byte slack is the MQ flush's, not a fudge factor: the terminating
+    /// procedure leaves up to two bytes whose value the decoder never needs.
+    /// This is `opj_t1_decode_cblk`'s check, condition for condition — OpenJPEG
+    /// reports it as a warning, and reporting it at all is the only thing the
+    /// flag buys a decoder.
+    pub fn ends_predictably(&self) -> bool {
+        self.unconsumed() <= 2 && self.marker_reads <= 2
     }
 
     /// INITDEC (ISO C.3.5): prime the registers and fold in the first byte.
@@ -131,6 +159,7 @@ impl<'a> MqDecoder<'a> {
             if self.byte(self.pos + 1) > 0x8F {
                 self.c += 0xFF00;
                 self.ct = 8;
+                self.marker_reads += 1;
             } else {
                 self.pos += 1;
                 self.c += (self.byte(self.pos) as u32) << 9;
