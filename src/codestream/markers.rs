@@ -207,6 +207,34 @@ impl Siz {
     }
 }
 
+/// The coding parameters that a component can override: `SPcod`'s tail, which
+/// `SPcoc` repeats verbatim (A.6.1, A.6.2). OpenJPEG's `opj_tccp_t`.
+///
+/// `COD` supplies the default for every component and `COC` replaces it for one,
+/// so these fields live here rather than on [`Cod`] — the fields that stay on
+/// `Cod` are the ones no `COC` can touch (progression, layer count, the colour
+/// transform, and the SOP/EPH flags, all of which are properties of the
+/// codestream rather than of a component).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Coding {
+    pub decomposition_levels: u8,
+    pub code_block_width: u8,  // exponent: width  = 2^(value + 2)
+    pub code_block_height: u8, // exponent: height = 2^(value + 2)
+    pub code_block_style: u8,  // bit flags: bypass, reset, restart, vcausal, segsym, …
+    pub transform: Transform,
+    /// Empty when the precinct partition is maximal (`PPx = PPy = 15`).
+    pub precinct_sizes: Vec<(u8, u8)>,
+}
+
+/// A component's effective coding and quantization parameters, after `COC` has
+/// been laid over `COD` and `QCC` over `QCD` (A.6.2, A.6.5). Resolved once at
+/// parse time so no later stage has to remember which marker won.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentParams {
+    pub coding: Coding,
+    pub quant: Qcd,
+}
+
 /// COD — coding style default (ISO A.6.1): the parameters Tier-2 and the DWT
 /// need (decomposition levels, code-block size + style, transform, precincts).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +270,21 @@ pub struct Qcd {
     pub guard_bits: u8,
     /// (exponent, mantissa) per subband; mantissa is 0 for the reversible style.
     pub steps: Vec<(u8, u16)>,
+}
+
+impl Cod {
+    /// COD's coding parameters, which every component takes unless a COC
+    /// replaces them.
+    pub fn coding(&self) -> Coding {
+        Coding {
+            decomposition_levels: self.decomposition_levels,
+            code_block_width: self.code_block_width,
+            code_block_height: self.code_block_height,
+            code_block_style: self.code_block_style,
+            transform: self.transform,
+            precinct_sizes: self.precinct_sizes.clone(),
+        }
+    }
 }
 
 impl Qcd {

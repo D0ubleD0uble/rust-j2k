@@ -232,8 +232,8 @@ mod tests {
     /// origin with unit sub-sampling. Only the SIZ fields `assemble` reads
     /// matter; COD/QCD are filler. Tests tweak offsets/sampling on the result.
     fn header(x_size: u32, y_size: u32, bit_depth: u8, signed: bool) -> MainHeader {
-        MainHeader {
-            siz: Siz {
+        MainHeader::new(
+            Siz {
                 x_size,
                 y_size,
                 x_offset: 0,
@@ -249,7 +249,7 @@ mod tests {
                     y_sampling: 1,
                 }],
             },
-            cod: Cod {
+            Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
                 decomposition_levels: 0,
@@ -262,12 +262,12 @@ mod tests {
                 transform: Transform::Reversible53,
                 precinct_sizes: vec![],
             },
-            qcd: Qcd {
+            Qcd {
                 style: QuantStyle::None,
                 guard_bits: 1,
                 steps: vec![],
             },
-        }
+        )
     }
 
     /// Assemble a single-component image: most of these tests predate the

@@ -114,8 +114,8 @@ fn valid_reversible_header_parses() {
 
     assert_eq!(
         header,
-        MainHeader {
-            siz: Siz {
+        MainHeader::new(
+            Siz {
                 x_size: 512,
                 y_size: 256,
                 x_offset: 0,
@@ -131,7 +131,7 @@ fn valid_reversible_header_parses() {
                     y_sampling: 1,
                 }],
             },
-            cod: Cod {
+            Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
                 decomposition_levels: 5,
@@ -144,12 +144,12 @@ fn valid_reversible_header_parses() {
                 transform: Transform::Reversible53,
                 precinct_sizes: vec![],
             },
-            qcd: Qcd {
+            Qcd {
                 style: QuantStyle::None,
                 guard_bits: 2,
                 steps: vec![(8, 0); 16],
             },
-        }
+        )
     );
     // The offset points at the terminating SOT marker.
     assert_eq!(sot_offset, bytes.len() - 2);
@@ -519,7 +519,7 @@ fn out_of_subset_marker_is_unsupported() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::COC, &[0, 0, 0]), // component coding override
+        seg(marker::RGN, &[0, 0, 0]), // region of interest
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
@@ -1035,8 +1035,6 @@ fn header_altering_markers_are_rejected_not_skipped() {
     // is named and rejected rather than passed over.
     for code in [
         marker::CAP,
-        marker::COC,
-        marker::QCC,
         marker::RGN,
         marker::POC,
         marker::TLM,
@@ -1243,15 +1241,16 @@ fn p0_02_reserved_marker_walks_cleanly() {
         "0xFF30 carries no segment",
     );
 
-    // The header walks; p0_02 is then rejected for a feature it uses (today its
-    // code-block style, tomorrow whatever remains). Which feature is not the
-    // point — that it is `Unsupported` rather than a structural error is. A
-    // naive walker reports `Codestream("truncated marker segment")` instead.
-    let e = parse(&bytes).expect_err("p0_02 is outside the decoded subset");
-    assert!(
-        matches!(&e, Error::Unsupported(_)),
-        "the walk must reach a feature rejection, not a structural one; got {e:?}",
-    );
+    // The walk steps over `0xFF30` and the whole header parses: p0_02's COD, its
+    // COC, and its `restart | pterm | segsym` style are all decoded. A naive
+    // walker reports `Codestream("truncated marker segment")` here instead,
+    // which is the regression this pins.
+    let cs = parse(&bytes).expect("p0_02's main header is inside the decoded subset");
+
+    // The COC overrides component 0, so the resolved parameters are its, not
+    // COD's. p0_02 has one component and `opj_dump` reports `cblksty=0x34`.
+    assert_eq!(cs.header.components.len(), 1);
+    assert_eq!(cs.header.components[0].coding.code_block_style, 0x34);
 }
 
 // --- the reject matrix (issue #78) ----------------------------------------
@@ -1477,8 +1476,6 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
 
     // Every main-header marker the subset does not decode.
     for (name, code) in [
-        ("COC", marker::COC),
-        ("QCC", marker::QCC),
         ("RGN", marker::RGN),
         ("POC", marker::POC),
         ("TLM", marker::TLM),
@@ -1608,4 +1605,223 @@ fn code_block_style_rejection_names_the_flags() {
         .iter()
         .fold(0, |acc, (bit, _)| acc | bit);
     assert_eq!(all, u8::MAX, "every style bit must be named");
+}
+
+// --- COC / QCC per-component overrides (issue #58) -------------------------
+
+/// `SPcoc` body: the tail COD and COC share, minus the component index and
+/// `Scoc`.
+fn coc_body(
+    index_bytes: &[u8],
+    scoc: u8,
+    nl: u8,
+    xcb: u8,
+    ycb: u8,
+    style: u8,
+    transform: u8,
+) -> Vec<u8> {
+    let mut b = index_bytes.to_vec();
+    b.push(scoc);
+    b.extend_from_slice(&[nl, xcb, ycb, style, transform]);
+    b
+}
+
+fn parsed(segments: &[Vec<u8>]) -> crate::codestream::MainHeader {
+    let (header, _) = parse_main_header(&codestream(segments)).expect("parses");
+    header
+}
+
+/// The whole of A.6.2 and A.6.5: a component with no COC takes COD's coding
+/// parameters, one with a COC takes the COC's, and the same for QCC over QCD.
+#[test]
+fn overrides_resolve_else_default_per_component() {
+    let siz = siz_body(3, &[(15, 1, 1); 3]);
+    let header = parsed(&[
+        seg(marker::SIZ, &siz),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0, 1)),
+        // Component 1 alone overrides the coding style: 3 levels, restart.
+        seg(marker::COC, &coc_body(&[1], 0, 3, 2, 2, 0x04, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        // Component 2 alone overrides the quantization: 4 guard bits.
+        seg(marker::QCC, &{
+            let mut b = vec![2u8];
+            b.extend_from_slice(&qcd_none(4, &[9; 10]));
+            b
+        }),
+    ]);
+
+    // Component 0: both defaults.
+    assert_eq!(header.components[0].coding, header.cod.coding());
+    assert_eq!(header.components[0].quant, header.qcd);
+
+    // Component 1: COC's coding, QCD's quantization.
+    assert_eq!(header.components[1].coding.decomposition_levels, 3);
+    assert_eq!(header.components[1].coding.code_block_style, 0x04);
+    assert_eq!(header.components[1].coding.code_block_width, 2);
+    assert_eq!(header.components[1].quant, header.qcd);
+
+    // Component 2: COD's coding, QCC's quantization.
+    assert_eq!(header.components[2].coding, header.cod.coding());
+    assert_eq!(header.components[2].quant.guard_bits, 4);
+    assert_ne!(header.components[2].quant, header.qcd);
+}
+
+/// `Ccoc`/`Cqcc` is one byte while `Csiz < 257` and two bytes at 257 and above
+/// (A.6.2). Read at the wrong width, every field after it shifts by a byte and
+/// the segment either overruns or decodes garbage. `p0_13` has 257 components,
+/// so this boundary is live in the corpus.
+#[test]
+fn component_index_is_two_bytes_from_257_components() {
+    // 256 components: one-byte index.
+    let narrow = vec![(15u8, 1u8, 1u8); 256];
+    let header = parsed(&[
+        seg(marker::SIZ, &siz_body(256, &narrow)),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0, 1)),
+        seg(marker::COC, &coc_body(&[255], 0, 3, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert_eq!(header.components[255].coding.decomposition_levels, 3);
+    assert_eq!(header.components[0].coding.decomposition_levels, 5);
+
+    // 257 components: two-byte index. The same one-byte body must now fail.
+    let wide = vec![(15u8, 1u8, 1u8); 257];
+    let header = parsed(&[
+        seg(marker::SIZ, &siz_body(257, &wide)),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0, 1)),
+        seg(marker::COC, &coc_body(&[0x01, 0x00], 0, 3, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert_eq!(header.components[256].coding.decomposition_levels, 3);
+    assert_eq!(header.components[0].coding.decomposition_levels, 5);
+}
+
+#[test]
+fn an_override_past_the_component_count_is_a_marker_error() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::COC, &coc_body(&[3], 0, 3, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+/// A.6.2 and A.6.5 allow one COC and one QCC per component per header. A second
+/// is malformed, not a later-wins override — guessing would decode an image the
+/// encoder never described.
+#[test]
+fn a_second_override_for_one_component_is_a_codestream_error() {
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0, 1));
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        coc.clone(),
+        coc,
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+
+    let qcc = seg(marker::QCC, &{
+        let mut b = vec![0u8];
+        b.extend_from_slice(&qcd_none(2, &[8; 16]));
+        b
+    });
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        qcc.clone(),
+        qcc,
+    ]);
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+/// `Scoc` bit 0 signals explicit precincts, which the subset does not decode;
+/// its other seven bits are reserved and must be zero.
+#[test]
+fn coc_precinct_flag_is_unsupported_and_reserved_scoc_bits_are_a_marker_error() {
+    let with = |scoc| {
+        codestream(&[
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_default(1)),
+            seg(marker::COC, &coc_body(&[0], scoc, 3, 4, 4, 0, 1)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ])
+    };
+    assert!(matches!(err(&with(0x01)), Error::Unsupported(_)));
+    assert!(matches!(err(&with(0x02)), Error::Marker(_)));
+    assert!(matches!(err(&with(0x80)), Error::Marker(_)));
+}
+
+/// A COC's style byte goes through the same gate COD's does: an undecoded flag
+/// on any component is still undecoded.
+#[test]
+fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0x08, 1)), // vertically causal
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let e = err(&bytes);
+    let Error::Unsupported(message) = &e else {
+        panic!("got {e:?}")
+    };
+    assert!(message.contains("vertically causal context"), "{message}");
+    assert!(
+        message.contains("COC"),
+        "the message must name the marker: {message}"
+    );
+}
+
+/// Which colour transform applies follows from the wavelet, and COC makes the
+/// wavelet per component. RCT is defined over three integer components, so a COC
+/// that moves one of the first three to 9/7 describes a transform that does not
+/// exist.
+#[test]
+fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
+    let siz = siz_body(3, &[(15, 1, 1); 3]);
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz),
+        // mct = 1, reversible 5/3: a valid RCT codestream.
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)),
+        // ... except component 1 is 9/7.
+        seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 0)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let e = err(&bytes);
+    let Error::Unsupported(message) = &e else {
+        panic!("got {e:?}")
+    };
+    assert!(message.contains("component 1"), "{message}");
+
+    // A fourth component on 9/7 is outside the transform, so it is allowed.
+    let siz = siz_body(4, &[(15, 1, 1); 4]);
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz),
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)),
+        seg(marker::COC, &coc_body(&[3], 0, 5, 4, 4, 0, 0)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(parse_main_header(&bytes).is_ok());
+}
+
+/// A malformed QCC must report as a QCC fault, not as a fault in QCD. The two
+/// share a body parser, and a per-component override that blames the
+/// codestream-wide default sends a reader to the wrong marker.
+#[test]
+fn a_malformed_qcc_names_qcc_and_not_qcd() {
+    // Scalar expounded (style 2) with an odd-length step table: truncated.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        seg(marker::QCC, &[0, (2 << 5) | 2, 0x00]),
+    ]);
+    let e = err(&bytes);
+    let Error::Codestream(message) = &e else {
+        panic!("got {e:?}")
+    };
+    assert!(message.contains("QCC"), "{message}");
+    assert!(!message.contains("QCD"), "{message}");
 }
