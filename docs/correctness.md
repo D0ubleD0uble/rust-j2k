@@ -83,6 +83,19 @@ bit-exact. That is the same shape of bug as reading `SPcod`'s code-block style
 byte and discarding it: the decoder reports success on a feature it does not
 implement.
 
+The same reasoning cuts the other way: two features can be *indistinguishable*
+rather than untested. PCRL and CPRL enumerate the identical packet sequence in
+the decoded subset — OpenJPEG's own output for the two differs in exactly one
+byte, the progression code in COD. No fixture separates them until the precinct
+partition lands.
+
+Notice what makes them coincide, because the shallow answer is wrong. It is not
+simply that there is one precinct: it is that a nonzero tile offset is rejected,
+so every component's precinct anchors at the origin and both orders emit the same
+`(component, resolution)` pairs. Restore a tile offset and the orders part
+company. An invariant that holds for a reason you have not identified is one you
+cannot rely on when the reason goes away.
+
 So before adding an entry to `IN_CLASS`, ask what about that entry would have to
 change for the new code to be wrong. If nothing would, the entry is not the
 oracle for that feature, and the milestone needs a fixture that can tell the

@@ -43,6 +43,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The remaining progression orders: RLCP, RPCL, PCRL, and CPRL (Annex B.12.1).
+  The packet walk is now driven by `COD`'s progression code rather than assuming
+  LRCP. Under maximal precincts the position axis has one value, so PCRL and CPRL
+  enumerate the same sequence; they are distinguishable only once the precinct
+  partition lands. A reserved progression code is a `Marker` error.
 - Multiple quality layers (Annex B.10). A code-block's coding passes and byte
   contributions now accumulate across the layers that include it, and its
   inclusion tag tree, zero-bitplane tag tree, and `Lblock` length indicator

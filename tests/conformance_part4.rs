@@ -38,7 +38,7 @@ use serde::Deserialize;
 /// Every other entry must report as *not yet decoded*. Grow this list as the
 /// Phase 2 milestones land; never shrink it without an explanation, because a
 /// shrink is a regression.
-const IN_CLASS: &[&str] = &["p0_09", "p0_14"];
+const IN_CLASS: &[&str] = &["p0_01", "p0_09", "p0_14", "p0_16"];
 
 fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance")

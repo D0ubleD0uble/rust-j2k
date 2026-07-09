@@ -192,9 +192,11 @@ is unblocked by layers alone, and `p0_01` cannot distinguish one progression
 order from another (see [correctness.md](correctness.md) §A passing entry is not
 proof the feature works). Both need synthetic OpenJPEG fixtures.
 
-**Done:** multiple quality layers have landed (`scripts/gen-multilayer-fixtures.py`
-grades them bit-exact). The progression orders and POC remain; they now have the
-multi-layer fixture they need to be told apart from LRCP.
+**Done:** multiple quality layers and all five progression orders have landed.
+`p0_16` (RLCP, three layers) is the corpus oracle for RLCP; RPCL/PCRL/CPRL are
+graded against `scripts/gen-progression-fixtures.py`. POC remains. Note PCRL and
+CPRL coincide under maximal precincts and can only be separated once P2.4
+(precincts) lands.
 
 ### P2.6 — Code-block coding styles (`src/tier1/`)
 

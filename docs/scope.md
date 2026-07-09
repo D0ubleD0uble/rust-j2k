@@ -77,7 +77,7 @@ that the later phases widen is correct end-to-end before breadth work starts.
 | Packet header parse: inclusion / zero-bitplane / pass-count / length tag-trees | ✓ | 1 |
 | Single quality layer | ✓ | 1 |
 | LRCP progression | ✓ | 1 |
-| Remaining progressions: RLCP, RPCL, PCRL, CPRL | — | 2 |
+| Remaining progressions: RLCP, RPCL, PCRL, CPRL | ✓ | 2 |
 | Multiple quality layers (accumulation across all layers) | ✓ | 2 |
 | Precinct partition (non-maximal precincts) | ○ | 2 |
 
