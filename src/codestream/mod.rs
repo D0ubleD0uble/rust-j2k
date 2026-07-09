@@ -409,6 +409,12 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let cod = cod.ok_or_else(|| Error::Codestream("missing required COD marker".into()))?;
     let qcd = qcd.ok_or_else(|| Error::Codestream("missing required QCD marker".into()))?;
 
+    // The colour transform is signalled by COD but constrains SIZ, so it can
+    // only be checked once both are read.
+    if cod.multiple_component_transform {
+        crate::mct::check_geometry(&siz.components)?;
+    }
+
     Ok((MainHeader { siz, cod, qcd }, sot_offset))
 }
 
@@ -603,12 +609,19 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         )));
     }
 
+    // SGcod multiple-component transform: 0 = none, 1 = the Part 1 colour
+    // transform over the first three components. 2 selects Part 2's array MCT,
+    // which is a different feature entirely.
     let mct = b.u8()?;
-    if mct != 0 {
-        return Err(Error::Unsupported(
-            "multiple-component transform (RCT/ICT); components decode independently".into(),
-        ));
-    }
+    let multiple_component_transform = match mct {
+        0 => false,
+        1 => true,
+        other => {
+            return Err(Error::Unsupported(format!(
+                "multiple-component transform type {other}; only the Part 1 colour transform is decoded"
+            )));
+        }
+    };
 
     let decomposition_levels = b.u8()?;
     let code_block_width = b.u8()?;
@@ -630,6 +643,14 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     };
     b.expect_consumed("COD")?;
 
+    // The wavelet picks the colour transform: 5/3 pairs with the reversible RCT
+    // (G.2), 9/7 with the irreversible ICT (G.3). Only RCT is decoded.
+    if multiple_component_transform && transform == Transform::Irreversible97 {
+        return Err(Error::Unsupported(
+            "irreversible colour transform (ICT) on the 9/7 path".into(),
+        ));
+    }
+
     Ok(Cod {
         progression,
         layers,
@@ -637,6 +658,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         code_block_width,
         code_block_height,
         code_block_style,
+        multiple_component_transform,
         transform,
         // Maximal precincts (PPx=PPy=15) when Scod bit 0 is clear, signalled by
         // an empty list; explicit precincts were rejected above.

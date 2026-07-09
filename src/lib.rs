@@ -6,16 +6,16 @@
 //! the initial surface tractable while exercising the whole pipeline:
 //!
 //! - the **raw codestream** (Annex A), not yet the JP2 file format (no boxes);
-//! - **components**, each with its own bit depth, sign, and sub-sampling; they
-//!   reconstruct independently, so the inter-component (color) transform
-//!   RCT/ICT is not applied yet;
+//! - **components**, each with its own bit depth, sign, and sub-sampling, plus
+//!   the reversible color transform (RCT) that decorrelates the first three;
+//!   its irreversible twin (ICT) is not decoded yet;
 //! - **integer** samples, signed or unsigned, up to 32 bits;
 //! - **both** the reversible 5/3 (lossless) and irreversible 9/7 (lossy)
 //!   wavelet paths (the 9/7 path is graded by re-encoding a real grid with
 //!   OpenJPEG, since no operational GRIB2 producer ships lossy 9/7).
 //!
-//! The color transform, JP2 boxes, HTJ2K, and an encoder are later-phase work,
-//! not permanent non-goals. See `docs/roadmap.md` and `docs/scope.md`.
+//! ICT, JP2 boxes, HTJ2K, and an encoder are later-phase work, not permanent
+//! non-goals. See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
 //!
@@ -72,6 +72,7 @@ pub(crate) mod codestream;
 pub(crate) mod dwt;
 pub(crate) mod error;
 pub(crate) mod image;
+pub(crate) mod mct;
 pub(crate) mod quant;
 pub(crate) mod tier1;
 pub(crate) mod tier2;
@@ -99,9 +100,8 @@ pub fn decode(codestream: &[u8]) -> Result<Image> {
     // Tier-1: MQ + EBCOT bit-plane decode each code block into subband coeffs.
     let coeffs = tier1::decode_code_blocks(&cs.header, &coded)?;
 
-    // Dequantize, then invert the DWT per resolution level into samples. The
-    // components are independent: no inter-component transform is applied.
-    let samples = coeffs
+    // Dequantize, then invert the DWT per resolution level into samples.
+    let mut samples = coeffs
         .into_iter()
         .enumerate()
         .map(|(component, coeffs)| {
@@ -109,6 +109,12 @@ pub fn decode(codestream: &[u8]) -> Result<Image> {
             dwt::inverse(&cs.header, dequant)
         })
         .collect::<Result<Vec<_>>>()?;
+
+    // Undo the inter-component decorrelation, if any, before the DC level shift
+    // (ISO/IEC 15444-1 G.1). Components past the third are untouched.
+    if cs.header.cod.multiple_component_transform {
+        mct::inverse_rct(&mut samples)?;
+    }
 
     image::assemble(&cs.header, samples)
 }

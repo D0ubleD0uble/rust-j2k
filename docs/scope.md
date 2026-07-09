@@ -54,8 +54,9 @@ that the later phases widen is correct end-to-end before breadth work starts.
 | Multiple resolution levels (decomposition) | ✓ | 1 |
 | Scalar dequantization: derived & expounded, guard bits | ✓ | 1 |
 | DC level shift + clamp to component depth | ✓ | 1 |
-| Multiple components (up to 16384) with subsampling | — | 2 |
-| Multiple component transform: RCT (reversible) / ICT (irreversible) color | — | 2 |
+| Multiple components (up to 16384) with subsampling | ✓ | 2 |
+| Multiple component transform: RCT (reversible) color | ✓ | 2 |
+| Multiple component transform: ICT (irreversible) color | — | 2 |
 
 ### Tier-1 — EBCOT block coding (Annexes C, D)
 

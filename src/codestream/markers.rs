@@ -205,6 +205,11 @@ pub struct Cod {
     pub code_block_width: u8,  // exponent: width  = 2^(value + 2)
     pub code_block_height: u8, // exponent: height = 2^(value + 2)
     pub code_block_style: u8,  // bit flags: bypass, reset, restart, vcausal, segsym, …
+    /// `SGcod` multiple-component transform: whether the first three components
+    /// were decorrelated before the wavelet. *Which* transform follows from
+    /// [`transform`](Self::transform) -- 5/3 means RCT, 9/7 means ICT -- not
+    /// from a flag of its own.
+    pub multiple_component_transform: bool,
     pub transform: Transform,
     /// Per-level precinct sizes when explicit; empty = maximal (PPx=PPy=15).
     pub precinct_sizes: Vec<(u8, u8)>,

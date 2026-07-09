@@ -43,12 +43,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The inverse reversible color transform (RCT, Annex G.2). When `COD` signals
+  the multiple-component transform on the 5/3 path, the first three components
+  are recombined after the inverse DWT and before the DC level shift. The
+  wavelet selects the transform: 5/3 means RCT, 9/7 means ICT, which is still
+  rejected as `Unsupported`, as is Part 2's array MCT (`Smct = 2`). A codestream
+  that signals the transform without three components of matching depth, sign,
+  and sub-sampling is rejected as a `Marker` error rather than silently decoded
+  without it. Conformance codestream `p0_14` now decodes bit-exact.
 - Multi-component decoding. Every component a codestream declares reconstructs
   onto its own sample grid, honoring its bit depth, sign, and `XRsiz`/`YRsiz`
   sub-sampling. The component axis runs through Tier-2 packet enumeration
   (LRCP's resolution-major, component-minor order), Tier-1, dequantization, and
-  the inverse DWT. Components are independent: the inter-component transform
-  (RCT/ICT) is still rejected as `Unsupported`.
+  the inverse DWT.
 - Two synthetic multi-component fixtures, generated and graded against OpenJPEG
   by `scripts/gen-multicomponent-fixtures.py`. The ISO/IEC 15444-4 corpus cannot
   grade multi-component decoding on its own: every one of its multi-component
