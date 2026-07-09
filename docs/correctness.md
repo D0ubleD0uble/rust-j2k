@@ -59,6 +59,38 @@ Two rules keep the grading honest:
   that turns one green — or a regression that turns one red — fails the test
   until the list is updated.
 
+## A passing entry is not proof the feature works
+
+`IN_CLASS` growing is the goal, but it is not the same as a feature being
+implemented. A conformance entry only exercises a feature if its *other*
+parameters let that feature change the answer.
+
+The sharp case is `p0_01`. It is RLCP, and it is the only entry whose sole
+remaining blocker is the progression order — so it looks like the test for
+progression support. It is not. `p0_01` has one component, one quality layer,
+one tile, and one precinct, and under those conditions all five progression
+orders enumerate the identical packet sequence, because four of the five nested
+loops run once:
+
+```text
+LRCP  l -> r -> c -> p       PCRL  p -> c -> r -> l
+RLCP  r -> l -> c -> p       CPRL  c -> p -> r -> l
+RPCL  r -> p -> c -> l       all collapse to: r
+```
+
+Accepting the RLCP code and changing nothing else makes `p0_01` decode
+bit-exact. That is the same shape of bug as reading `SPcod`'s code-block style
+byte and discarding it: the decoder reports success on a feature it does not
+implement.
+
+So before adding an entry to `IN_CLASS`, ask what about that entry would have to
+change for the new code to be wrong. If nothing would, the entry is not the
+oracle for that feature, and the milestone needs a fixture that can tell the
+difference — a multi-layer codestream to separate LRCP from RLCP, multiple
+precincts to separate RPCL from RLCP, and so on. Mutating the new code and
+watching the entry fail is the cheapest way to check; if no mutation makes it
+fail, the entry is not testing it.
+
 ## Per-stage golden tests
 
 The vertical oracle proves the *whole* pipeline; it does not localise a fault.
