@@ -444,6 +444,37 @@ fn read_segmentation_symbol(mq: &mut MqDecoder<'_>, cx: &mut [Context]) -> Resul
     Ok(())
 }
 
+/// Undo the maxshift on one coefficient magnitude (ISO/IEC 15444-1 H.2).
+///
+/// `mag` is the double-scale magnitude Tier-1 reconstructed, the value OpenJPEG
+/// holds in `datap` before `opj_t1_clbl_decode_processor` halves it. A magnitude
+/// **at or above** `2^roi_shift` was lifted there by the encoder and belongs to
+/// the region; everything strictly below is background, already on the common
+/// scale. Nothing else identifies the region — the shift is the label, which is
+/// why the boundary is `>=` and not `>`: a coefficient of exactly `2^roi_shift`
+/// is the smallest the encoder can have lifted.
+///
+/// Transliterated from `t1.c`:
+///
+/// ```text
+/// thresh = 1 << roishift;
+/// if (mag >= thresh) { mag >>= roishift; }
+/// ```
+///
+/// `roi_shift` must be at most [`MAX_BIT_PLANES`]; `decode_block` rejects more,
+/// so `1 << roi_shift` cannot overflow.
+fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
+    if roi_shift == 0 {
+        return mag;
+    }
+    let threshold = 1i32 << roi_shift;
+    if mag >= threshold {
+        mag >> roi_shift
+    } else {
+        mag
+    }
+}
+
 /// The per-component parameters a code-block decode needs beyond its own
 /// subband: the code-block style flags (`SPcod`/`SPcoc`) and the
 /// region-of-interest maxshift (`SPrgn`).
@@ -523,22 +554,21 @@ pub fn decode_block(
     // Maxshift starts the block `roi_shift` planes higher, so that every
     // region-of-interest coefficient outranks every background one. OpenJPEG's
     // `bpno_plus_one = roishift + cblk->numbps`.
-    //
-    // `decode_code_blocks` rejects a block whose `top` passes `MAX_BIT_PLANES`,
-    // which bounds `roi_shift` too. Re-check it rather than lean on the caller:
-    // `1 << roi_shift` below would otherwise overflow on a hostile `SPrgn`.
-    if u32::from(roi_shift) > MAX_BIT_PLANES {
+    let top = numbps.saturating_sub(zero_bit_planes) + u32::from(roi_shift);
+    // The double scale means `1 << top` must stay inside `i32`. `decode_subband`
+    // rejects this too, before allocating; checking again here is where OpenJPEG
+    // puts it (`opj_t1_decode_cblk`'s `bpno_plus_one >= 31`), so a caller that
+    // reaches `decode_block` by another route cannot overflow
+    // `set_significant_magnitude`. `top >= roi_shift`, so this bounds the
+    // maxshift as well and `1 << roi_shift` cannot overflow either.
+    if top > MAX_BIT_PLANES {
         return Err(Error::Unsupported(format!(
-            "region-of-interest maxshift {roi_shift}, over the {MAX_BIT_PLANES}-plane limit"
+            "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
         )));
     }
-    let top = numbps.saturating_sub(zero_bit_planes) + u32::from(roi_shift);
     if top < 1 {
         return Ok(()); // no coded magnitude planes: the block stays zero
     }
-    // Callers reject anything past this (see `decode_code_blocks`); the double
-    // scale means `1 << top` must stay inside `i32`.
-    debug_assert!(top <= MAX_BIT_PLANES, "bit-plane count {top} overflows i32");
 
     let mut cx = init_contexts();
     let mut bpno = top;
@@ -600,19 +630,10 @@ pub fn decode_block(
     // The maxshift is undone first, as `opj_t1_clbl_decode_processor` does it:
     // its threshold is stated in the coefficients' own scale, and halving first
     // would drop a region coefficient below it.
-    let threshold = 1i32 << roi_shift;
     for y in 0..state.height {
         for x in 0..state.width {
             let i = state.idx(x, y);
-            let mut mag = state.coeffs[i];
-            // A magnitude at or above the threshold was lifted by the encoder,
-            // so it belongs to the region; everything below it is background and
-            // is already on the common scale. Nothing else identifies the
-            // region — the shift is the label.
-            if roi_shift > 0 && mag >= threshold {
-                mag >>= roi_shift;
-            }
-            let mag = mag / 2;
+            let mag = undo_maxshift(state.coeffs[i], roi_shift) / 2;
             state.coeffs[i] = if state.is_negative(x, y) { -mag } else { mag };
         }
     }
@@ -760,6 +781,88 @@ mod tests {
             panic!("{err:?}")
         };
         assert!(message.contains("segmentation symbol"), "{message}");
+    }
+
+    /// The maxshift boundary, against the reference formula. `t1.c` reads
+    ///
+    /// ```text
+    /// thresh = 1 << roishift;
+    /// if (mag >= thresh) { mag >>= roishift; }
+    /// ```
+    ///
+    /// so a magnitude of exactly `2^roi_shift` is the *smallest* the encoder can
+    /// have lifted, and it must come down. `>` for `>=` leaves it up by
+    /// `roi_shift` planes; the whole-component ROI fixture cannot see that,
+    /// because it has no background coefficient below the threshold at all.
+    #[test]
+    fn undo_maxshift_matches_the_reference_formula_across_the_boundary() {
+        /// `t1.c`'s roishift block, transliterated.
+        fn reference(mag: i32, roishift: u8) -> i32 {
+            if roishift == 0 {
+                return mag;
+            }
+            let thresh = 1i32 << roishift;
+            if mag >= thresh { mag >> roishift } else { mag }
+        }
+
+        for roi_shift in 0..=12u8 {
+            let threshold = 1i32 << roi_shift;
+            // Straddle the boundary, and cover zero and the far tails.
+            let cases = [
+                0,
+                1,
+                threshold - 2,
+                threshold - 1,
+                threshold,
+                threshold + 1,
+                threshold * 2,
+                threshold * 1234 + 7,
+                i32::MAX,
+            ];
+            for mag in cases.into_iter().filter(|&m| m >= 0) {
+                assert_eq!(
+                    undo_maxshift(mag, roi_shift),
+                    reference(mag, roi_shift),
+                    "mag {mag}, roi_shift {roi_shift}"
+                );
+            }
+        }
+    }
+
+    /// A magnitude one below the threshold is background and stays where it is;
+    /// one at the threshold is the region and comes down. This is the single
+    /// discriminating pair, spelled out so a boundary regression names itself.
+    #[test]
+    fn the_maxshift_threshold_separates_background_from_region() {
+        let roi_shift = 6;
+        let threshold = 1i32 << roi_shift; // 64
+        assert_eq!(undo_maxshift(threshold - 1, roi_shift), 63, "background");
+        assert_eq!(undo_maxshift(threshold, roi_shift), 1, "region");
+        assert_eq!(undo_maxshift(0, roi_shift), 0, "zero is neither");
+        // Without a shift nothing moves, whatever the magnitude.
+        assert_eq!(undo_maxshift(threshold, 0), threshold);
+    }
+
+    /// A hostile `SPrgn` must be rejected, not shift `1i32` past its width.
+    #[test]
+    fn an_out_of_range_maxshift_is_rejected_rather_than_overflowing() {
+        for roi_shift in [31u8, 32, 64, 255] {
+            let mut state = BlockState::new(4, 4);
+            let err = decode_block(
+                &[(vec![0x80], 1)],
+                &mut state,
+                Orientation::Ll,
+                8,
+                1,
+                0,
+                BlockParams {
+                    style: 0,
+                    roi_shift,
+                },
+            )
+            .expect_err("maxshift {roi_shift} passes the bit-plane limit");
+            assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+        }
     }
 
     /// A codeword segment may carry coding passes and no bytes: under `restart`
