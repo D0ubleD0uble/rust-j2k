@@ -19,8 +19,9 @@ data section. That codestream is deliberately plain:
   operational GRIB2 producer ships lossy 9/7 (HRRR and NDFD are complex-packed,
   ECMWF is CCSDS), so the 9/7 path is graded by re-encoding a real grid with
   OpenJPEG's irreversible mode;
-- typically a single tile, a single quality layer, LRCP progression, and no
-  JP2 box wrapper, no region of interest, no precinct subdivision.
+- typically a single tile at the canvas origin, a single quality layer, LRCP
+  progression, and no JP2 box wrapper, no region of interest, no precinct
+  subdivision.
 
 So the GRIB2 MVP is a strict, well-defined subset of Part 1's *decoder*. The
 value of building it first is that the subset still exercises the whole vertical
@@ -44,6 +45,8 @@ that the later phases widen is correct end-to-end before breadth work starts.
 | SOP / EPH (start-of-packet / end-of-packet-header, error resilience) | ✓ | 2 |
 | COM (comment) — recognise and skip | ✓ | 1 |
 | Multiple tiles and multiple tile-parts per tile | — | 2 |
+| Non-zero image offset (XOsiz/YOsiz) | — | 2 |
+| Non-zero tile offset (XTOsiz/YTOsiz) | — | 2 |
 
 ### Transform & reconstruction
 
