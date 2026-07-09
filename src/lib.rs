@@ -86,6 +86,10 @@ pub use image::{Component, Image};
 /// section of a `grid_jpeg` message is exactly such a codestream. That subset
 /// is single-component, so the returned image carries one component; a
 /// codestream declaring more is rejected with [`Error::Unsupported`].
+///
+/// Pass the bare codestream, not a `.jp2` file: a JP2 wrapper is valid JPEG 2000
+/// but is rejected with [`Error::Unsupported`] rather than unwrapped. Anything
+/// else outside the decoded subset is rejected the same way, never half-decoded.
 pub fn decode(codestream: &[u8]) -> Result<Image> {
     let cs = codestream::parse(codestream)?;
 

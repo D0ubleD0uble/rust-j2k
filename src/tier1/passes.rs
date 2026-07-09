@@ -423,6 +423,10 @@ fn cleanup_pass(
 /// single quality layer; the non-default styles
 /// (bypass/reset/restart/vertically-causal/segmentation) and multi-layer
 /// progression are not yet decoded.
+///
+/// `decode_cod` rejects a nonzero `style`, so this always runs the default pass
+/// structure. The parameter stays because each style flag alters the passes
+/// below, and it is where they will branch.
 pub fn decode_block(
     mq: &mut MqDecoder<'_>,
     state: &mut BlockState,
@@ -432,6 +436,7 @@ pub fn decode_block(
     zero_bit_planes: u32,
     style: u8,
 ) {
+    debug_assert_eq!(style, 0, "decode_cod rejects a nonzero code-block style");
     let _ = style;
     if num_passes == 0 {
         return;

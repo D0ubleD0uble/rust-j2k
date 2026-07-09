@@ -43,6 +43,12 @@ pub struct Codestream<'a> {
     pub tile_parts: Vec<TilePart<'a>>,
 }
 
+/// The JP2 signature box that opens every JP2 file (ISO/IEC 15444-1 Annex I.5.1):
+/// a 12-byte box of type `jP  ` whose contents are the fixed `0D 0A 87 0A`.
+const JP2_SIGNATURE: [u8; 12] = [
+    0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
+];
+
 /// Parse a raw codestream (must start with SOC, end with EOC).
 ///
 /// Rejects the JP2 box wrapper (callers pass the bare codestream) and anything
@@ -50,6 +56,15 @@ pub struct Codestream<'a> {
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
 pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
+    // A JP2 file is valid JPEG 2000, just not the bare codestream this decoder
+    // reads, so say which it is rather than complain about a missing SOC.
+    if bytes.starts_with(&JP2_SIGNATURE) {
+        return Err(Error::Unsupported(
+            "JP2 file format wrapper; pass the contained codestream (the `jp2c` box contents)"
+                .into(),
+        ));
+    }
+
     let (header, sot_offset) = parse_main_header(bytes)?;
     let tile_parts = walk_tile_parts(bytes, sot_offset)?;
     Ok(Codestream { header, tile_parts })
@@ -595,6 +610,15 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     let code_block_width = b.u8()?;
     let code_block_height = b.u8()?;
     let code_block_style = b.u8()?;
+    // Each style flag changes how Tier-1 reads a code-block's coded segments.
+    // Ignoring one does not decode a slightly different image, it decodes the
+    // wrong one, so reject rather than half-decode until each lands.
+    if code_block_style != 0 {
+        return Err(Error::Unsupported(format!(
+            "code-block style ({}); the subset uses the default style",
+            markers::code_block_style::describe(code_block_style),
+        )));
+    }
     let transform = match b.u8()? {
         0 => Transform::Irreversible97,
         1 => Transform::Reversible53,
