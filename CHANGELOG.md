@@ -18,6 +18,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   This settles the output shape before multi-component decoding is threaded
   through the pipeline.
 
+- The main header is now walked before it is judged. Marker segments are located
+  first, then interpreted, so a codestream carrying a feature outside the decoded
+  subset is still traversed end to end rather than abandoned mid-header. An
+  unrecognized marker segment is stepped over by its length during the walk, and
+  the reserved `0xFF30`–`0xFF3F` range is treated as carrying no segment.
+- A marker the decoder does not recognize is now reported as `Unsupported`
+  instead of `Codestream`. It is walked past, not decoded past: every marker code
+  is allocated by some part of the standard, so an unknown one may change what
+  the packet data means. `CAP` (which an HTJ2K codestream carries), `PPM`, `PPT`,
+  `PLM`, and `CRG` are named for a clearer message, and `PPT` now rejects in a
+  tile-part header where it previously read as a structural error.
+
 ### Added
 
 - A grading harness over the vendored ISO/IEC 15444-4 conformance corpus
@@ -26,6 +38,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mean-squared error, reading the `.pgx` reference images directly. Entries
   using features the decoder does not implement yet report as *not yet
   decoded*; `p0_09` decodes and matches its reference exactly.
+- SIZ now parses every component a codestream declares (`Csiz` up to 16384),
+  with each component's bit depth, sign, and `XRsiz`/`YRsiz` sub-sampling, and
+  validates them: a zero or oversized component count, a zero sub-sampling
+  factor, a bit depth above 38, and a component-record count that disagrees with
+  `Csiz` are all typed errors. `Siz::component_extent` derives a component's own
+  sample-grid dimensions from the reference-grid equations. Reconstructing more
+  than one component is still `Unsupported`.
 
 ## [0.2.0] - 2026-06-21
 

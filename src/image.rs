@@ -110,16 +110,10 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<i32>) -> Result<Image> 
         ));
     }
 
-    let xr = comp.x_sampling as u32;
-    let yr = comp.y_sampling as u32;
-    let width = siz
-        .x_size
-        .div_ceil(xr)
-        .saturating_sub(siz.x_offset.div_ceil(xr));
-    let height = siz
-        .y_size
-        .div_ceil(yr)
-        .saturating_sub(siz.y_offset.div_ceil(yr));
+    // Safe now that the zero-factor case above is excluded.
+    let (width, height) = siz
+        .component_extent(0)
+        .ok_or_else(|| Error::Inconsistent("SIZ declares no components".into()))?;
 
     let expected = (width as usize) * (height as usize);
     if samples.len() != expected {
@@ -153,9 +147,10 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<i32>) -> Result<Image> 
         .map(|v| (v as i64 + shift).clamp(lo, hi) as i32)
         .collect();
 
+    let (image_width, image_height) = siz.image_extent();
     Ok(Image {
-        width: siz.x_size.saturating_sub(siz.x_offset),
-        height: siz.y_size.saturating_sub(siz.y_offset),
+        width: image_width,
+        height: image_height,
         components: vec![Component {
             width,
             height,
