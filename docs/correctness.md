@@ -31,6 +31,20 @@ The hierarchy is ordered for a reason: OpenJPEG is convenient, not authoritative
 Where the two conflict, the conformance suite wins and OpenJPEG stops being the
 oracle *for that quantity* — matching it would mean importing its bug.
 
+That is a narrow licence, not a general one. **Match OpenJPEG by default.**
+Deviating needs two things, and one is not enough:
+
+1. **Proof from a documented official source** — the ISO/IEC 15444 text, or the
+   15444-4 conformance reference images. That the arithmetic looks cleaner is not
+   proof.
+2. **A better result.** Show the output moves *toward* the authoritative
+   reference: a lower PAE or MSE against the conformance images, or a fixture
+   that now decodes bit-exactly where it did not. Being more correct in principle
+   while the numbers do not improve means the analysis is incomplete, and the
+   change is not yet earned.
+
+Assume first that a divergence is our bug. It almost always is.
+
 There is one known case. On the inverse 9/7, the standard scales the high-pass
 samples by `1/K` and the subband gain (Table E-1) enters the quantization step,
 so a high-pass coefficient is scaled by `2 · (1/K) = 1.6257861…`. OpenJPEG's
