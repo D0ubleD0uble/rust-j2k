@@ -14,6 +14,7 @@
 //!
 //! Components past the third pass through untouched.
 
+use crate::dwt::Samples;
 use crate::{Error, Result};
 
 /// Invert the reversible colour transform over the first three components
@@ -36,14 +37,26 @@ use crate::{Error, Result};
 /// on the overflow. Values are saturated back into `i32`, and `image::assemble`
 /// clamps them to the declared depth immediately afterwards.
 ///
-/// `components` must hold at least three equally sized sample vectors;
-/// [`check_geometry`] is what guarantees it.
-pub fn inverse_rct(components: &mut [Vec<i32>]) -> Result<()> {
+/// `components` must hold at least three equally sized sample vectors on the
+/// reversible arm; [`check_geometry`] and `decode_cod` are what guarantee it —
+/// the colour transform is only RCT when the wavelet is 5/3, and the 5/3 path
+/// reconstructs in integers.
+pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
+    let count = components.len();
     let [c0, c1, c2, ..] = components else {
         return Err(Error::Inconsistent(format!(
-            "the colour transform needs three components, found {}",
-            components.len()
+            "the colour transform needs three components, found {count}"
         )));
+    };
+    let [
+        Samples::Reversible(c0),
+        Samples::Reversible(c1),
+        Samples::Reversible(c2),
+    ] = [c0, c1, c2]
+    else {
+        return Err(Error::Inconsistent(
+            "the reversible colour transform needs integer samples; the 9/7 path is ICT".into(),
+        ));
     };
     if c0.len() != c1.len() || c0.len() != c2.len() {
         return Err(Error::Inconsistent(
@@ -135,10 +148,30 @@ mod tests {
         )
     }
 
+    /// Wrap integer samples on the reversible arm, which is the only arm RCT
+    /// ever sees.
+    fn reversible(values: &[&[i32]]) -> Vec<Samples> {
+        values
+            .iter()
+            .map(|v| Samples::Reversible(v.to_vec()))
+            .collect()
+    }
+
+    fn plain(components: &[Samples]) -> Vec<Vec<i32>> {
+        components
+            .iter()
+            .map(|c| match c {
+                Samples::Reversible(v) => v.clone(),
+                Samples::Irreversible(_) => panic!("RCT never sees the 9/7 arm"),
+            })
+            .collect()
+    }
+
     fn invert(y0: i32, y1: i32, y2: i32) -> (i32, i32, i32) {
-        let mut components = vec![vec![y0], vec![y1], vec![y2]];
+        let mut components = reversible(&[&[y0], &[y1], &[y2]]);
         inverse_rct(&mut components).expect("three equal components");
-        (components[0][0], components[1][0], components[2][0])
+        let out = plain(&components);
+        (out[0][0], out[1][0], out[2][0])
     }
 
     /// The standard's own worked shape: the inverse must undo the forward
@@ -185,25 +218,26 @@ mod tests {
 
     #[test]
     fn transform_applies_only_to_the_first_three_components() {
-        let mut components = vec![vec![0], vec![0], vec![0], vec![42], vec![-7]];
+        let mut components = reversible(&[&[0], &[0], &[0], &[42], &[-7]]);
         inverse_rct(&mut components).unwrap();
-        assert_eq!(components[3], vec![42]);
-        assert_eq!(components[4], vec![-7]);
+        let out = plain(&components);
+        assert_eq!(out[3], vec![42]);
+        assert_eq!(out[4], vec![-7]);
     }
 
     #[test]
     fn extreme_samples_saturate_rather_than_overflow() {
         // `Y1 + Y2` and `Y2 + G` both leave `i32` here; a wrapping build would
         // panic in debug and produce nonsense in release.
-        let mut components = vec![vec![i32::MAX], vec![i32::MAX], vec![i32::MAX]];
+        let mut components = reversible(&[&[i32::MAX], &[i32::MAX], &[i32::MAX]]);
         inverse_rct(&mut components).expect("saturates");
-        let mut components = vec![vec![i32::MIN], vec![i32::MIN], vec![i32::MIN]];
+        let mut components = reversible(&[&[i32::MIN], &[i32::MIN], &[i32::MIN]]);
         inverse_rct(&mut components).expect("saturates");
     }
 
     #[test]
     fn fewer_than_three_components_is_inconsistent() {
-        let mut components = vec![vec![1], vec![2]];
+        let mut components = reversible(&[&[1], &[2]]);
         assert!(matches!(
             inverse_rct(&mut components),
             Err(Error::Inconsistent(_))
@@ -212,7 +246,7 @@ mod tests {
 
     #[test]
     fn unequal_component_sizes_are_inconsistent() {
-        let mut components = vec![vec![1, 2], vec![3], vec![4, 5]];
+        let mut components = reversible(&[&[1, 2], &[3], &[4, 5]]);
         assert!(matches!(
             inverse_rct(&mut components),
             Err(Error::Inconsistent(_))

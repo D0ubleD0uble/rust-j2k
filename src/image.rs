@@ -5,6 +5,7 @@
 
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Siz;
+use crate::dwt::Samples;
 use crate::{Error, Result};
 
 /// A decoded image: the image area on the reference grid, plus its components.
@@ -92,7 +93,7 @@ impl Component {
 /// `samples` carries one reconstructed sample vector per SIZ component, in SIZ
 /// order. Each is level-shifted and clamped on its own component's depth and
 /// sign, then packed with that component's geometry.
-pub(crate) fn assemble(header: &MainHeader, samples: Vec<Vec<i32>>) -> Result<Image> {
+pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>) -> Result<Image> {
     let siz = &header.siz;
     if samples.len() != siz.components.len() {
         return Err(Error::Inconsistent(format!(
@@ -119,8 +120,32 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Vec<i32>>) -> Result<Im
     })
 }
 
-/// Level-shift, clamp, and package one component's reconstructed samples.
-fn assemble_component(siz: &Siz, index: usize, samples: Vec<i32>) -> Result<Component> {
+/// Round to the nearest integer, level-shift, clamp, and package one
+/// component's reconstructed samples.
+///
+/// This is the *only* place the irreversible path rounds. It happens after the
+/// inverse colour transform, matching `opj_tcd_dc_level_shift_decode`, which
+/// calls `opj_lrintf` and then adds the DC level shift and clamps:
+///
+/// ```c
+/// OPJ_INT64 l_value_int = (OPJ_INT64)opj_lrintf(l_value);
+/// *l_dest = opj_int64_clamp(l_value_int + l_tccp->m_dc_level_shift, l_min, l_max);
+/// ```
+///
+/// `opj_lrintf` is `lrintf` on GCC and Clang — the build that produced the
+/// committed oracles — and `lrintf` rounds under the default floating-point
+/// mode, which is ties-to-even. Its MSVC arms (`cvtss2si`, `fistp`) round
+/// ties-to-even too. Rust's `f32::round` rounds ties *away from zero*, so `2.5`
+/// would become `3` where the oracle gives `2`; `round_ties_even` agrees.
+///
+/// OpenJPEG tried the away-from-zero form and reverted it, leaving the evidence
+/// in `opj_includes.h`:
+///
+/// ```c
+/// /* commented out line breaks many tests */
+/// /* return (long)((f>0.0f) ? (f + 0.5f):(f -0.5f)); */
+/// ```
+fn assemble_component(siz: &Siz, index: usize, samples: Samples) -> Result<Component> {
     let comp = siz
         .components
         .get(index)
@@ -150,6 +175,16 @@ fn assemble_component(siz: &Siz, index: usize, samples: Vec<i32>) -> Result<Comp
             samples.len()
         )));
     }
+
+    // The irreversible path arrives unrounded. `as i32` saturates, so a value
+    // outside the container cannot wrap before the clamp below sees it.
+    let samples: Vec<i32> = match samples {
+        Samples::Reversible(values) => values,
+        Samples::Irreversible(values) => values
+            .into_iter()
+            .map(|v| v.round_ties_even() as i32)
+            .collect(),
+    };
 
     // Level-shift offset and the clamp bounds, all in i64 so the `1 << 31`
     // signed-32-bit case and the unsigned `2^depth - 1` upper bound cannot
@@ -236,7 +271,7 @@ mod tests {
     /// Assemble a single-component image: most of these tests predate the
     /// component axis and care only about level shift, clamping, and geometry.
     fn assemble1(header: &MainHeader, samples: Vec<i32>) -> Result<Image> {
-        assemble(header, vec![samples])
+        assemble(header, vec![Samples::Reversible(samples)])
     }
 
     /// The single component `assemble` produces, for tests that only care about
@@ -305,6 +340,38 @@ mod tests {
         let c = only(&img);
         assert_eq!((c.width, c.height), (4, 4));
         assert_eq!((c.x_sampling, c.y_sampling), (2, 2));
+    }
+
+    /// The irreversible path rounds once, here, and rounds ties to even —
+    /// matching `opj_lrintf` under the default floating-point mode. Rust's
+    /// `f32::round` rounds ties away from zero and would disagree at every
+    /// half-integer.
+    #[test]
+    fn irreversible_samples_round_ties_to_even() {
+        // 8-bit signed: no level shift, clamp to [-128, 127].
+        let h = header(5, 1, 8, true);
+        let img = assemble(
+            &h,
+            vec![Samples::Irreversible(vec![0.5, 1.5, 2.5, -0.5, -2.5])],
+        )
+        .unwrap();
+        assert_eq!(only(&img).samples, vec![0, 2, 2, 0, -2]);
+
+        // Away-from-zero would have given [1, 2, 3, -1, -3].
+        let away: Vec<i32> = [0.5f32, 1.5, 2.5, -0.5, -2.5]
+            .iter()
+            .map(|v| v.round() as i32)
+            .collect();
+        assert_ne!(away, only(&img).samples);
+    }
+
+    /// A reconstructed value outside the `i32` container saturates rather than
+    /// wrapping, before the depth clamp sees it.
+    #[test]
+    fn irreversible_samples_saturate_into_the_container() {
+        let h = header(2, 1, 16, true);
+        let img = assemble(&h, vec![Samples::Irreversible(vec![1e30, -1e30])]).unwrap();
+        assert_eq!(only(&img).samples, vec![32767, -32768]);
     }
 
     #[test]
