@@ -2,8 +2,10 @@
 //!
 //! Each header is assembled byte-for-byte from the Annex A field layout, so the
 //! expected `MainHeader` is checked against the spec, not against our own
-//! parser. The `opj_dump` cross-check on real seed codestreams lands with the
-//! fixture corpus (#4) and the tile-part walk (#6).
+//! parser. On top of that,
+//! [`siz_matches_opj_dump_across_the_conformance_corpus`] cross-checks the
+//! parsed per-component geometry of all 23 conformance codestreams against the
+//! `opj_dump` values recorded in the corpus manifest.
 
 use super::markers::{Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform, marker};
 use super::*;
@@ -445,7 +447,10 @@ fn eoc_before_tile_part_is_codestream() {
 }
 
 #[test]
-fn unknown_marker_is_codestream() {
+fn unknown_marker_without_a_length_is_codestream() {
+    // Stepping over an unknown marker needs its length to be there. At the very
+    // end of the header there is nothing to read, which is truncation — a
+    // malformed codestream, not merely an unsupported one.
     let mut bytes = be16(marker::SOC).to_vec();
     bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
     bytes.extend_from_slice(&be16(0xFF01)); // not a marker we know
@@ -664,4 +669,431 @@ fn truncated_sot_is_codestream() {
     bytes.extend_from_slice(&be16(10)); // Lsot promises 8 body bytes
     bytes.extend_from_slice(&[0, 0]); // only 2 are present
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+// --- per-component SIZ geometry (issue #56) -------------------------------
+
+/// A valid header carrying `comps` components, for exercising `decode_siz`
+/// directly: `parse_main_header` rejects anything but one component.
+fn siz_of(csiz: u16, comps: &[(u8, u8, u8)]) -> Siz {
+    let body = siz_body(csiz, comps);
+    decode_siz(Cursor::new(&body)).expect("SIZ parses")
+}
+
+#[test]
+fn multi_component_siz_parses_every_component() {
+    // 3 components: 8-bit unsigned, 12-bit signed, 1-bit unsigned.
+    let siz = siz_of(3, &[(7, 1, 1), (0x80 | 11, 1, 1), (0, 1, 1)]);
+    assert_eq!(
+        siz.components,
+        vec![
+            SizComponent {
+                bit_depth: 8,
+                signed: false,
+                x_sampling: 1,
+                y_sampling: 1
+            },
+            SizComponent {
+                bit_depth: 12,
+                signed: true,
+                x_sampling: 1,
+                y_sampling: 1
+            },
+            SizComponent {
+                bit_depth: 1,
+                signed: false,
+                x_sampling: 1,
+                y_sampling: 1
+            },
+        ]
+    );
+    // Unit sub-sampling: every component covers the whole image area.
+    assert_eq!(siz.image_extent(), (512, 256));
+    for i in 0..3 {
+        assert_eq!(siz.component_extent(i), Some((512, 256)));
+    }
+    assert_eq!(siz.component_extent(3), None);
+}
+
+#[test]
+fn subsampled_siz_derives_each_component_extent() {
+    // Image is 512x256 at the origin; the four classic sub-sampling factors.
+    let siz = siz_of(4, &[(7, 1, 1), (7, 2, 1), (7, 1, 2), (7, 2, 2)]);
+    assert_eq!(siz.image_extent(), (512, 256));
+    assert_eq!(siz.component_extent(0), Some((512, 256)));
+    assert_eq!(siz.component_extent(1), Some((256, 256)));
+    assert_eq!(siz.component_extent(2), Some((512, 128)));
+    assert_eq!(siz.component_extent(3), Some((256, 128)));
+}
+
+#[test]
+fn component_extent_ceils_each_edge_separately() {
+    // The spec subtracts two ceilings; it does not ceil the difference. With
+    // Xsiz=9, XOsiz=1 and XRsiz=2 the two forms disagree:
+    //   ceil(9/2) - ceil(1/2) = 5 - 1 = 4   (the standard)
+    //   ceil((9 - 1)/2)       = 4           (agrees here)
+    // but at XOsiz=3 they diverge:
+    //   ceil(9/2) - ceil(3/2) = 5 - 2 = 3   (the standard)
+    //   ceil((9 - 3)/2)       = 3           (agrees)
+    // and at Xsiz=8, XOsiz=1:
+    //   ceil(8/2) - ceil(1/2) = 4 - 1 = 3   (the standard)
+    //   ceil((8 - 1)/2)       = 4           (wrong)
+    let mut siz = siz_of(1, &[(7, 2, 2)]);
+    siz.x_size = 8;
+    siz.y_size = 8;
+    siz.x_offset = 1;
+    siz.y_offset = 1;
+    assert_eq!(siz.component_extent(0), Some((3, 3)));
+    assert_eq!(siz.image_extent(), (7, 7));
+}
+
+#[test]
+fn too_many_components_is_marker() {
+    // Csiz above the Table A-9 limit of 16384, without the body to match: the
+    // count is rejected before any allocation is sized from it.
+    let body = siz_body(markers::MAX_COMPONENTS + 1, &[]);
+    assert!(matches!(
+        decode_siz(Cursor::new(&body)),
+        Err(Error::Marker(_))
+    ));
+}
+
+#[test]
+fn component_record_count_must_match_csiz() {
+    // Csiz claims 2 components but only one 3-byte record follows.
+    let body = siz_body(2, &[(7, 1, 1)]);
+    assert!(matches!(
+        decode_siz(Cursor::new(&body)),
+        Err(Error::Codestream(_))
+    ));
+}
+
+#[test]
+fn zero_sub_sampling_factor_is_marker() {
+    for comp in [(7, 0, 1), (7, 1, 0)] {
+        let body = siz_body(1, &[comp]);
+        assert!(
+            matches!(decode_siz(Cursor::new(&body)), Err(Error::Marker(_))),
+            "{comp:?} should reject"
+        );
+    }
+}
+
+#[test]
+fn bit_depth_above_38_is_marker() {
+    // Ssiz low 7 bits are depth-1: 37 -> depth 38 (the Table A-11 limit), 38 -> 39.
+    assert_eq!(siz_of(1, &[(37, 1, 1)]).components[0].bit_depth, 38);
+    let body = siz_body(1, &[(38, 1, 1)]);
+    assert!(matches!(
+        decode_siz(Cursor::new(&body)),
+        Err(Error::Marker(_))
+    ));
+    // The sign bit must not be mistaken for depth.
+    assert_eq!(siz_of(1, &[(0x80 | 37, 1, 1)]).components[0].bit_depth, 38);
+    assert!(siz_of(1, &[(0x80 | 37, 1, 1)]).components[0].signed);
+}
+
+#[test]
+fn multi_component_codestream_reports_the_component_count() {
+    // SIZ itself accepts it; the subset check rejects it afterwards, naming the
+    // component count rather than whatever COD trips on first.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let e = err(&bytes);
+    assert!(
+        matches!(&e, Error::Unsupported(m) if m.contains("3 components")),
+        "got {e:?}"
+    );
+}
+
+// --- main-header marker walk (issue #56) ----------------------------------
+
+/// A valid single-component header with `extra` spliced in before the SOT.
+fn header_with(extra: &[u8]) -> Vec<u8> {
+    let mut bytes = be16(marker::SOC).to_vec();
+    bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
+    bytes.extend_from_slice(&seg(marker::COD, &cod_default(1)));
+    bytes.extend_from_slice(&seg(marker::QCD, &qcd_none(2, &[8; 16])));
+    bytes.extend_from_slice(extra);
+    bytes.extend_from_slice(&be16(marker::SOT));
+    bytes
+}
+
+#[test]
+fn reserved_markers_carry_no_segment() {
+    // 0xFF30..=0xFF3F stand alone. A walker that reads a length after one of
+    // them swallows the SOT that follows. p0_02 has 0xFF30 in its main header.
+    for code in [0xFF30u16, 0xFF37, 0xFF3F] {
+        let bytes = header_with(&be16(code));
+        parse_main_header(&bytes).unwrap_or_else(|e| panic!("{code:#06X} should walk: {e:?}"));
+    }
+    // Several in a row, and adjacent to other segments.
+    let mut extra = be16(0xFF30).to_vec();
+    extra.extend_from_slice(&be16(0xFF3F));
+    extra.extend_from_slice(&seg(marker::COM, b"note"));
+    extra.extend_from_slice(&be16(0xFF31));
+    assert!(parse_main_header(&header_with(&extra)).is_ok());
+}
+
+/// An unknown marker is *walked* by its length — that is what lets the header be
+/// traversed — but the decoder will not decode past it. Every marker code is
+/// allocated by some part of the standard, and an unknown one may change what
+/// the packet data means, so silently ignoring it would risk a wrong image.
+#[test]
+fn unknown_marker_segments_are_walked_then_reported_unsupported() {
+    for code in [
+        0xFF01u16, // no part of the standard we implement
+        0xFF2F,    // just below the reserved segment-less range
+        0xFF40,    // just above it
+        0xFF74,    // Part 2 MCT
+        0xFF78,    // Part 2 CBD
+    ] {
+        let bytes = header_with(&seg(code, &[1, 2, 3, 4]));
+
+        // The walk locates it and keeps going: the SOT after it is still found.
+        let (segments, _) =
+            walk_main_header(&bytes).unwrap_or_else(|e| panic!("{code:#06X}: {e:?}"));
+        assert!(
+            segments.iter().any(|s| s.code == code),
+            "{code:#06X} located"
+        );
+
+        // Interpreting the header then refuses to guess what it meant.
+        let e = err(&bytes);
+        assert!(
+            matches!(&e, Error::Unsupported(m) if m.contains("unrecognized")),
+            "{code:#06X}: got {e:?}",
+        );
+    }
+}
+
+#[test]
+fn a_non_marker_where_a_marker_belongs_is_codestream() {
+    // Every marker's high byte is 0xFF; anything else means we have lost sync.
+    let bytes = header_with(&[0x12, 0x34]);
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+#[test]
+fn header_altering_markers_are_rejected_not_skipped() {
+    // These are known markers outside the subset. Each changes how the
+    // codestream is interpreted (PPM/PPT relocate the packet headers), so each
+    // is named and rejected rather than passed over.
+    for code in [
+        marker::CAP,
+        marker::COC,
+        marker::QCC,
+        marker::RGN,
+        marker::POC,
+        marker::TLM,
+        marker::PLM,
+        marker::PLT,
+        marker::PPM,
+        marker::PPT,
+        marker::CRG,
+        marker::SOP,
+    ] {
+        let bytes = header_with(&seg(code, &[0, 0]));
+        assert!(
+            matches!(err(&bytes), Error::Unsupported(_)),
+            "{code:#06X} should be Unsupported"
+        );
+    }
+    // EPH carries no segment, so it is spliced in bare.
+    let bytes = header_with(&be16(marker::EPH));
+    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+}
+
+#[test]
+fn duplicate_siz_is_codestream() {
+    let bytes = header_with(&seg(marker::SIZ, &one_component()));
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+#[test]
+fn a_second_soc_in_the_main_header_is_codestream() {
+    let bytes = header_with(&be16(marker::SOC));
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+/// A segment-less marker costs two input bytes but one located-segment record,
+/// so a run of them must not grow the list without bound.
+#[test]
+fn too_many_marker_segments_is_codestream() {
+    let mut extra = Vec::new();
+    for _ in 0..=MAX_MAIN_HEADER_SEGMENTS {
+        extra.extend_from_slice(&be16(0xFF30));
+    }
+    let bytes = header_with(&extra);
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+
+    // One under the cap still walks (the three real segments plus the run).
+    let mut extra = Vec::new();
+    for _ in 0..MAX_MAIN_HEADER_SEGMENTS - 4 {
+        extra.extend_from_slice(&be16(0xFF30));
+    }
+    assert!(parse_main_header(&header_with(&extra)).is_ok());
+}
+
+// --- corpus cross-check against the opj_dump oracle (issue #56) ------------
+
+fn corpus_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance")
+}
+
+/// Read a `.pgx` reference image's declared dimensions from its header line.
+///
+/// The full reader lives in `tests/conformance_part4.rs`; here we only need the
+/// trailing `<width> <height>`, which is the last two whitespace-separated
+/// tokens of the first line whatever the sign is spelled like.
+fn pgx_extent(path: &std::path::Path) -> (u32, u32) {
+    let bytes = std::fs::read(path).expect("read reference");
+    let end = bytes.iter().position(|&b| b == b'\n').expect("header line");
+    let header = std::str::from_utf8(&bytes[..end]).expect("ASCII header");
+    let tokens: Vec<&str> = header.split_ascii_whitespace().collect();
+    let n = tokens.len();
+    (
+        tokens[n - 2].parse().expect("width"),
+        tokens[n - 1].parse().expect("height"),
+    )
+}
+
+/// Every conformance main header walks, and the per-component geometry SIZ
+/// yields agrees with `opj_dump` — which is what `manifest.json`'s `features`
+/// block records (see its `provenance.features`).
+///
+/// This is the oracle for issue #56: depth, sign, and sub-sampling for all
+/// `Csiz` components of 23 real codestreams, including `p0_13`'s 257 components
+/// and the four sub-sampling shapes in `p0_06`. The walk covers markers the
+/// decoder rejects (COC, PPM, POC, …) and `p0_02`'s reserved `0xFF30`, because
+/// walking is subset-agnostic.
+///
+/// Returns early if the corpus is absent: it is `exclude`d from the packaged
+/// crate, so a `cargo test` unpacked from crates.io has no fixtures.
+#[test]
+fn siz_matches_opj_dump_across_the_conformance_corpus() {
+    let dir = corpus_dir();
+    let Ok(text) = std::fs::read_to_string(dir.join("manifest.json")) else {
+        return;
+    };
+    let manifest: serde_json::Value = serde_json::from_str(&text).expect("manifest parses");
+
+    for entry in manifest["entries"].as_array().expect("entries") {
+        let name = entry["codestream"].as_str().expect("codestream path");
+        let bytes = std::fs::read(dir.join(name)).expect("read codestream");
+
+        let (segments, _) = walk_main_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!(segments[0].code, marker::SIZ, "{name}: SIZ must be first");
+        let siz = decode_siz(Cursor::new(segments[0].body))
+            .unwrap_or_else(|e| panic!("{name}: decode_siz: {e:?}"));
+
+        let features = &entry["features"];
+        // `features.width`/`height` are `Xsiz`/`Ysiz`, the reference grid, not
+        // the image area — p1_01 declares 127x227 with a (5, 128) origin.
+        assert_eq!(
+            siz.x_size as u64,
+            features["width"].as_u64().unwrap(),
+            "{name}: Xsiz"
+        );
+        assert_eq!(
+            siz.y_size as u64,
+            features["height"].as_u64().unwrap(),
+            "{name}: Ysiz"
+        );
+        assert_eq!(
+            siz.components.len() as u64,
+            features["components"].as_u64().unwrap(),
+            "{name}: Csiz",
+        );
+
+        for (i, comp) in siz.components.iter().enumerate() {
+            assert_eq!(
+                comp.bit_depth as u64,
+                features["precision"][i].as_u64().unwrap(),
+                "{name}: component {i} depth",
+            );
+            assert_eq!(
+                comp.signed,
+                features["signed"][i].as_bool().unwrap(),
+                "{name}: component {i} sign",
+            );
+            assert_eq!(
+                [comp.x_sampling as u64, comp.y_sampling as u64],
+                [
+                    features["subsampling"][i][0].as_u64().unwrap(),
+                    features["subsampling"][i][1].as_u64().unwrap(),
+                ],
+                "{name}: component {i} sub-sampling",
+            );
+        }
+
+        // The class-1 references are one `.pgx` per graded component, decoded at
+        // full resolution — so their dimensions are the oracle for
+        // `component_extent`. The sole exception is p0_08, which OpenJPEG's
+        // conformance suite decodes at resolution reduction 1
+        // (`C1P0_ResFactor_list` in its tests/conformance/CMakeLists.txt), so
+        // its references are half-size in each axis. Tracked separately; here
+        // we assert the reduction rather than skip it, so a corpus refresh that
+        // changes it fails loudly.
+        let reduced = name.contains("p0_08");
+        for (i, reference) in entry["references"]["class1"]
+            .as_array()
+            .expect("class1 refs")
+            .iter()
+            .enumerate()
+        {
+            let (rw, rh) = pgx_extent(&dir.join(reference.as_str().unwrap()));
+            let (cw, ch) = siz.component_extent(i).expect("graded component exists");
+            let (want_w, want_h) = if reduced {
+                (cw.div_ceil(2), ch.div_ceil(2))
+            } else {
+                (cw, ch)
+            };
+            assert_eq!(
+                (want_w, want_h),
+                (rw, rh),
+                "{name}: component {i} extent disagrees with its reference",
+            );
+        }
+    }
+}
+
+/// `p0_02` carries the reserved segment-less marker `0xFF30` in its main header,
+/// after `COM` and before `SOT`. The walk runs to completion before any segment
+/// is interpreted, so the whole header — `0xFF30` included — is traversed on the
+/// way to the `Unsupported` verdict its `COD` earns.
+///
+/// A walker that read a length after `0xFF30` would consume the `SOT` and report
+/// `Codestream("truncated marker segment")` instead. That is the bug this
+/// codestream exists to catch, so assert the *reason*, not merely that it failed.
+#[test]
+fn p0_02_reserved_marker_walks_cleanly() {
+    let path = corpus_dir().join("codestreams/p0_02.j2k");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+
+    let (segments, _) = walk_main_header(&bytes).expect("main header walks");
+    assert!(
+        segments.iter().any(|s| s.code == 0xFF30),
+        "p0_02 should carry the reserved 0xFF30 marker",
+    );
+    assert!(
+        segments
+            .iter()
+            .find(|s| s.code == 0xFF30)
+            .unwrap()
+            .body
+            .is_empty(),
+        "0xFF30 carries no segment",
+    );
+
+    let e = parse(&bytes).expect_err("p0_02 is outside the decoded subset");
+    assert!(
+        matches!(&e, Error::Unsupported(m) if m.contains("SOP/EPH")),
+        "expected the COD subset rejection, got {e:?}",
+    );
 }

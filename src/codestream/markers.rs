@@ -9,6 +9,7 @@ pub mod marker {
     pub const SOT: u16 = 0xFF90; // start of tile-part
     pub const SOD: u16 = 0xFF93; // start of data
     pub const EOC: u16 = 0xFFD9; // end of codestream
+    pub const CAP: u16 = 0xFF50; // extended capabilities (beyond Part 1)
     pub const SIZ: u16 = 0xFF51; // image and tile size
     pub const COD: u16 = 0xFF52; // coding style default
     pub const COC: u16 = 0xFF53; // coding style component
@@ -17,10 +18,33 @@ pub mod marker {
     pub const QCC: u16 = 0xFF5D; // quantization component
     pub const POC: u16 = 0xFF5F; // progression order change
     pub const TLM: u16 = 0xFF55; // tile-part lengths
+    pub const PLM: u16 = 0xFF57; // packet lengths, main header
     pub const PLT: u16 = 0xFF58; // packet lengths, tile-part
+    pub const PPM: u16 = 0xFF60; // packed packet headers, main header
+    pub const PPT: u16 = 0xFF61; // packed packet headers, tile-part
+    pub const CRG: u16 = 0xFF63; // component registration
     pub const SOP: u16 = 0xFF91; // start of packet
     pub const EPH: u16 = 0xFF92; // end of packet header
     pub const COM: u16 = 0xFF64; // comment
+
+    /// Reserved markers that carry no segment (ISO Table A-1). A walker that
+    /// reads a length after one of these consumes the bytes that follow it;
+    /// conformance codestream `p0_02` puts `0xFF30` in its main header to catch
+    /// exactly that bug.
+    pub const RESERVED_NO_SEGMENT: std::ops::RangeInclusive<u16> = 0xFF30..=0xFF3F;
+
+    /// Whether `m` is a marker code at all: every marker's high byte is `0xFF`.
+    pub fn is_marker(m: u16) -> bool {
+        m >> 8 == 0xFF
+    }
+
+    /// Whether `m` is followed by a length field and a segment body.
+    ///
+    /// The delimiting markers and the reserved `0xFF30..=0xFF3F` range stand
+    /// alone. `SOP` is not in this list: it does carry an `Lsop` length.
+    pub fn has_segment(m: u16) -> bool {
+        !matches!(m, SOC | SOD | EOC | EPH) && !RESERVED_NO_SEGMENT.contains(&m)
+    }
 }
 
 /// Wavelet transform (COD/COC, byte "SPcod transformation").
@@ -75,8 +99,7 @@ pub struct SizComponent {
     pub y_sampling: u8,
 }
 
-/// SIZ — image and tile size (ISO A.5.1). The GRIB2 subset expects exactly one
-/// component.
+/// SIZ — image and tile size (ISO A.5.1), including every declared component.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Siz {
     pub x_size: u32,
@@ -88,6 +111,50 @@ pub struct Siz {
     pub tile_x_offset: u32,
     pub tile_y_offset: u32,
     pub components: Vec<SizComponent>,
+}
+
+/// The largest `Csiz` the standard allows (ISO A.5.1, Table A-9).
+pub const MAX_COMPONENTS: u16 = 16384;
+
+impl Siz {
+    /// The image area on the reference grid: `Xsiz - XOsiz` by `Ysiz - YOsiz`.
+    pub fn image_extent(&self) -> (u32, u32) {
+        (
+            self.x_size.saturating_sub(self.x_offset),
+            self.y_size.saturating_sub(self.y_offset),
+        )
+    }
+
+    /// Component `index`'s own sample-grid dimensions (ISO/IEC 15444-1 §B.2):
+    ///
+    /// ```text
+    /// width  = ceil(Xsiz / XRsiz) - ceil(XOsiz / XRsiz)
+    /// height = ceil(Ysiz / YRsiz) - ceil(YOsiz / YRsiz)
+    /// ```
+    ///
+    /// which reduces to [`image_extent`](Self::image_extent) under unit
+    /// sub-sampling.
+    ///
+    /// Returns `None` if `index` names no component, or if that component
+    /// declares a zero sub-sampling factor. `decode_siz` rejects a zero factor,
+    /// so the second case is unreachable for any `Siz` the parser produced —
+    /// but the division is guarded here rather than by a `debug_assert` that
+    /// would compile out and leave a release-mode panic behind.
+    pub fn component_extent(&self, index: usize) -> Option<(u32, u32)> {
+        let comp = self.components.get(index)?;
+        let (xr, yr) = (comp.x_sampling as u32, comp.y_sampling as u32);
+        if xr == 0 || yr == 0 {
+            return None;
+        }
+        Some((
+            self.x_size
+                .div_ceil(xr)
+                .saturating_sub(self.x_offset.div_ceil(xr)),
+            self.y_size
+                .div_ceil(yr)
+                .saturating_sub(self.y_offset.div_ceil(yr)),
+        ))
+    }
 }
 
 /// COD — coding style default (ISO A.6.1): the parameters Tier-2 and the DWT

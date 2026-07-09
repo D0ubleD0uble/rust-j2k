@@ -5,6 +5,12 @@
 //! tile-parts (SOT … SOD … data). Produces a [`MainHeader`] of decode
 //! parameters and the byte ranges of each tile's packet data — everything the
 //! later stages need, with no interpretation of the entropy-coded bytes yet.
+//!
+//! The main header is located before it is judged: [`walk_main_header`] finds
+//! every marker segment without caring what the decoder supports, and
+//! [`parse_main_header`] then interprets them. That split is what lets a
+//! codestream be traversed past a feature we cannot decode, and is what makes
+//! the reserved segment-less markers and unknown segments handleable at all.
 
 pub mod markers;
 
@@ -99,6 +105,7 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
             | marker::POC
             | marker::TLM
             | marker::PLT
+            | marker::PPT
             | marker::SOP
             | marker::EPH => {
                 return Err(Error::Unsupported(format!(
@@ -194,12 +201,43 @@ fn read_u16(bytes: &[u8], pos: usize) -> Option<u16> {
     Some(u16::from_be_bytes([hi, lo]))
 }
 
-/// Parse the main header up to (but not into) the first `SOT`.
+/// One marker segment located by the structural walk: its code and its body
+/// (empty for the segment-less markers).
+struct Segment<'a> {
+    code: u16,
+    body: &'a [u8],
+}
+
+/// Upper bound on the marker segments a main header may carry.
 ///
-/// Returns the decoded [`MainHeader`] and the byte offset of that `SOT` marker,
-/// which is where tile-part walking (issue #6) begins. Stops before any
-/// entropy-coded data, so it never touches packet bytes.
-fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
+/// A segment-less marker costs two input bytes but one `Segment` record, so a
+/// run of them would grow the located-segment list several times faster than the
+/// input it came from. The largest conformant header is far smaller than this:
+/// `Csiz` tops out at 16384, and even a COC *and* a QCC per component is 32768
+/// segments, so this bound cannot reject a real codestream.
+const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
+
+/// Walk the main header's marker segments from just after `SOC` to the first
+/// `SOT`, without judging any of them (A.6).
+///
+/// This is deliberately subset-agnostic: it establishes *where every segment
+/// is*, and leaves "can we decode this?" to the caller. Running the whole walk
+/// before any segment is interpreted is what lets a codestream carrying an
+/// out-of-subset feature still be traversed end to end — which is the only way
+/// a marker sitting *after* the offending one gets exercised at all.
+///
+/// Two shapes a naive walker gets wrong, both present in the corpus:
+///
+/// - the reserved range `0xFF30..=0xFF3F` carries **no** length field; reading
+///   one consumes the bytes that follow (`p0_02` has `0xFF30` after its `COM`);
+/// - a marker this decoder does not recognise still has a length, so the walk
+///   can step over it. Whether the *decoder* may proceed past it is a different
+///   question, and `parse_main_header` answers it with `Unsupported`.
+///
+/// Returns the segments in codestream order and the offset of the `SOT` that
+/// ended the header. Truncation, a non-marker where a marker must be, and
+/// `SOD`/`EOC` before any tile-part are [`Error::Codestream`].
+fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
     let mut cur = Cursor::new(bytes);
 
     if cur.u16()? != marker::SOC {
@@ -207,68 +245,152 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             "does not start with the SOC marker".into(),
         ));
     }
+
+    let mut segments = Vec::new();
+    let sot_offset = loop {
+        let code = cur.u16()?;
+        match code {
+            // The first SOT ends the main header; point the offset back at it.
+            marker::SOT => break cur.pos - 2,
+
+            // A second SOC, or a delimiter that belongs to a tile-part, means
+            // the header is malformed rather than merely unfamiliar.
+            marker::SOC | marker::SOD | marker::EOC => {
+                return Err(Error::Codestream(format!(
+                    "unexpected marker {code:#06X} before any tile-part"
+                )));
+            }
+
+            _ if !marker::is_marker(code) => {
+                return Err(Error::Codestream(format!(
+                    "expected a marker in the main header, found {code:#06X}"
+                )));
+            }
+
+            // Everything else is located, not interpreted.
+            _ => {
+                // A segment-less marker advances only two bytes, so a run of
+                // them would grow `segments` at ~12x the input. Bound it: no
+                // conformant main header comes close, and the cap keeps a hostile
+                // input's allocation proportional to nothing but this constant.
+                if segments.len() == MAX_MAIN_HEADER_SEGMENTS {
+                    return Err(Error::Codestream(format!(
+                        "main header has more than {MAX_MAIN_HEADER_SEGMENTS} marker segments"
+                    )));
+                }
+                let body = if marker::has_segment(code) {
+                    segment(&mut cur)?.buf
+                } else {
+                    &[][..]
+                };
+                segments.push(Segment { code, body });
+            }
+        }
+    };
+
+    Ok((segments, sot_offset))
+}
+
+/// Parse the main header up to (but not into) the first `SOT`.
+///
+/// Returns the decoded [`MainHeader`] and the byte offset of that `SOT` marker,
+/// which is where tile-part walking (issue #6) begins. Stops before any
+/// entropy-coded data, so it never touches packet bytes.
+///
+/// The header is walked in full by [`walk_main_header`] first, then each
+/// located segment is interpreted in codestream order.
+fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
+    let (segments, sot_offset) = walk_main_header(bytes)?;
+
     // SIZ shall be the first marker segment after SOC (A.6).
-    if cur.u16()? != marker::SIZ {
+    let Some(first) = segments.first() else {
+        return Err(Error::Codestream(
+            "main header has no marker segments".into(),
+        ));
+    };
+    if first.code != marker::SIZ {
         return Err(Error::Codestream(
             "SIZ must be the first marker after SOC".into(),
         ));
     }
-    let siz = decode_siz(segment(&mut cur)?)?;
+    let siz = decode_siz(Cursor::new(first.body))?;
+
+    // Judge the image before its coding parameters, so a codestream outside the
+    // subset reports the *image* feature that blocks it (a component count, an
+    // origin, a tile grid) rather than whichever coding-style bit COD happens to
+    // trip on first. Both are `Unsupported`; this is about which reason is
+    // useful to read.
+    check_subset(&siz)?;
+    validate_geometry(&siz)?;
 
     let mut cod = None;
     let mut qcd = None;
 
-    let sot_offset = loop {
-        let m = cur.u16()?;
-        match m {
-            // First SOT ends the main header; point the offset back at it.
-            marker::SOT => break cur.pos - 2,
-
+    for seg in &segments[1..] {
+        let body = || Cursor::new(seg.body);
+        match seg.code {
+            marker::SIZ => {
+                return Err(Error::Codestream("duplicate SIZ marker".into()));
+            }
             marker::COD => {
                 if cod.is_some() {
                     return Err(Error::Codestream("duplicate COD marker".into()));
                 }
-                cod = Some(decode_cod(segment(&mut cur)?)?);
+                cod = Some(decode_cod(body())?);
             }
             marker::QCD => {
                 if qcd.is_some() {
                     return Err(Error::Codestream("duplicate QCD marker".into()));
                 }
-                qcd = Some(decode_qcd(segment(&mut cur)?)?);
+                qcd = Some(decode_qcd(body())?);
             }
-            // Comment: recognised, length-skipped.
-            marker::COM => {
-                segment(&mut cur)?;
-            }
+            // Comment: recognised, carries nothing the decoder needs.
+            marker::COM => {}
 
-            // Valid markers the decoded subset does not yet cover — reject
-            // cleanly, do not half-parse.
-            marker::COC
+            // Valid markers the decoded subset does not yet cover. Rejected
+            // rather than skipped: each one changes how the codestream is
+            // interpreted, so ignoring it would silently decode the wrong
+            // image. PPM/PPT relocate packet headers; PLM/PLT/TLM/CRG are
+            // informational but travel with features we do not decode. CAP
+            // announces capabilities beyond Part 1 (an HTJ2K codestream carries
+            // one), whose code-blocks this Tier-1 would misread as Part 1.
+            marker::CAP
+            | marker::COC
             | marker::QCC
             | marker::RGN
             | marker::POC
             | marker::TLM
+            | marker::PLM
             | marker::PLT
+            | marker::PPM
+            | marker::PPT
+            | marker::CRG
             | marker::SOP
             | marker::EPH => {
                 return Err(Error::Unsupported(format!(
-                    "marker {m:#06X} is outside the decoded subset"
+                    "marker {:#06X} is outside the decoded subset",
+                    seg.code
                 )));
             }
 
-            // SOD/EOC have no place in a main header.
-            marker::SOD | marker::EOC => {
-                return Err(Error::Codestream(format!(
-                    "unexpected marker {m:#06X} before any tile-part"
-                )));
-            }
+            // The reserved segment-less range is *defined* to carry nothing, so
+            // it is the one thing that can be passed over safely.
+            code if marker::RESERVED_NO_SEGMENT.contains(&code) => {}
+
+            // Any other marker this decoder does not know. The walk stepped over
+            // its segment — that is what lets the header be traversed at all —
+            // but we will not decode past it: every marker code is allocated by
+            // some part of the standard, and an unknown one may well change what
+            // the packet data means (Part 2's MCT/MCC/MCO, CBD, NLT; Part 15's
+            // HTJ2K block coder). Guessing that it is ignorable would trade a
+            // clean rejection for a silently wrong image.
             other => {
-                return Err(Error::Codestream(format!(
-                    "unknown marker {other:#06X} in main header"
+                return Err(Error::Unsupported(format!(
+                    "unrecognized marker {other:#06X} in the main header"
                 )));
             }
         }
-    };
+    }
 
     let cod = cod.ok_or_else(|| Error::Codestream("missing required COD marker".into()))?;
     let qcd = qcd.ok_or_else(|| Error::Codestream("missing required QCD marker".into()))?;
@@ -283,6 +405,23 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
 /// ~1.9M, MRMS ~24.5M) and below anything that threatens the decode. Not a
 /// format limit — raise it as larger imagery comes into scope.
 const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
+
+/// Enforce the decoded feature subset that SIZ alone determines.
+///
+/// SIZ now parses every component it declares (issue #56), because the geometry
+/// is needed before the decoder can say anything useful about a codestream.
+/// Reconstructing more than one component is separate work (issue #57), so a
+/// multi-component codestream parses and is then rejected here — not
+/// half-decoded.
+fn check_subset(siz: &Siz) -> Result<()> {
+    if siz.components.len() != 1 {
+        return Err(Error::Unsupported(format!(
+            "{} components; the decoded subset is single-component",
+            siz.components.len()
+        )));
+    }
+    Ok(())
+}
 
 /// Enforce the decoded geometry subset on the SIZ fields: a single tile at the
 /// canvas origin, bounded in area. The general canvas (nonzero image/tile
@@ -326,8 +465,16 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
     Ok(())
 }
 
-/// Decode SIZ — image and tile geometry plus the per-component depth/sign
-/// (A.5.1). Enforces the single-component subset.
+/// Decode SIZ — image and tile geometry plus every component's depth, sign, and
+/// sub-sampling (A.5.1).
+///
+/// Parses all `Csiz` components. Whether the decoder can *reconstruct* them is a
+/// separate question, enforced by [`check_subset`] after the whole main header
+/// is read, so a multi-component codestream still parses cleanly here.
+///
+/// `Ssiz` is a depth-minus-one in the low 7 bits with the sign in bit 7, so the
+/// declared depth is `1..=128`; the standard caps it at 38 (Table A-11) and
+/// anything above that is a malformed field, not an unsupported feature.
 fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
     let _rsiz = b.u16()?; // capabilities / profile — not needed by the decoder
     let x_size = b.u32()?;
@@ -343,19 +490,40 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
     if csiz == 0 {
         return Err(Error::Marker("SIZ declares zero components".into()));
     }
-    if csiz != 1 {
-        return Err(Error::Unsupported(format!(
-            "{csiz} components; the decoded subset is single-component"
+    if csiz > markers::MAX_COMPONENTS {
+        return Err(Error::Marker(format!(
+            "SIZ declares {csiz} components, above the limit of {}",
+            markers::MAX_COMPONENTS
+        )));
+    }
+    // Each component record is 3 bytes. Check the segment can actually hold them
+    // before reserving, so a lying `Csiz` cannot steer the allocation.
+    if b.remaining() != 3 * csiz as usize {
+        return Err(Error::Codestream(format!(
+            "SIZ has {} bytes for {csiz} component records, expected {}",
+            b.remaining(),
+            3 * csiz as usize,
         )));
     }
 
     let mut components = Vec::with_capacity(csiz as usize);
-    for _ in 0..csiz {
+    for index in 0..csiz {
         let ssiz = b.u8()?;
         let x_sampling = b.u8()?;
         let y_sampling = b.u8()?;
+        let bit_depth = (ssiz & 0x7F) + 1;
+        if bit_depth > 38 {
+            return Err(Error::Marker(format!(
+                "component {index} declares bit depth {bit_depth}, above the limit of 38"
+            )));
+        }
+        if x_sampling == 0 || y_sampling == 0 {
+            return Err(Error::Marker(format!(
+                "component {index} declares a zero sub-sampling factor ({x_sampling}, {y_sampling})"
+            )));
+        }
         components.push(SizComponent {
-            bit_depth: (ssiz & 0x7F) + 1,
+            bit_depth,
             signed: ssiz & 0x80 != 0,
             x_sampling,
             y_sampling,
@@ -374,7 +542,9 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
         tile_y_offset,
         components,
     };
-    validate_geometry(&siz)?;
+    // Geometry legality (`validate_geometry`) and the decoded subset
+    // (`check_subset`) are the caller's to apply, in that order, so this
+    // function stays a pure reader of the marker segment.
     Ok(siz)
 }
 
