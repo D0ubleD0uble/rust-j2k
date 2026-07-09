@@ -62,6 +62,115 @@ CLASS0_REF_SUFFIXES = {
 
 PROGRESSION = {0: "LRCP", 1: "RLCP", 2: "RPCL", 3: "PCRL", 4: "CPRL"}
 
+# Optional-marker names by code. Anything not listed here (e.g. the reserved
+# segment-less 0xFF30-0xFF3F range that p0_02 carries) is recorded as hex.
+MARKER_NAMES = {
+    0xFF51: "SIZ",
+    0xFF52: "COD",
+    0xFF53: "COC",
+    0xFF55: "TLM",
+    0xFF57: "PLM",
+    0xFF58: "PLT",
+    0xFF5C: "QCD",
+    0xFF5D: "QCC",
+    0xFF5E: "RGN",
+    0xFF5F: "POC",
+    0xFF60: "PPM",
+    0xFF61: "PPT",
+    0xFF63: "CRG",
+    0xFF64: "COM",
+}
+
+# Code-block style bits (SPcod/SPcoc, ISO/IEC 15444-1 Table A.19).
+CBLKSTY_BITS = [
+    ("bypass", 0x01),
+    ("reset", 0x02),
+    ("restart", 0x04),
+    ("vert_causal", 0x08),
+    ("pred_term", 0x10),
+    ("segsym", 0x20),
+]
+
+
+def marker_features(path: str) -> dict:
+    """Derive marker presence and coding-style flags from the bytes directly.
+
+    `opj_dump` reports the resolved coding parameters but not which optional
+    markers a codestream carries (and it silently skips reserved segment-less
+    markers), so the per-feature fixture mapping walks the marker segments
+    itself: main header and every tile-part header, using segment lengths and
+    Psot to step over entropy data.
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:2] != b"\xff\x4f":
+        raise ValueError(f"{path}: missing SOC marker")
+
+    main: set[str] = set()
+    tile: set[str] = set()
+    sop = eph = precincts = False
+    cblksty = 0
+    csiz = 0
+    tile_parts = 0
+    in_main = True
+    tile_end = 0
+    pos = 2
+    while pos < len(data):
+        marker = int.from_bytes(data[pos : pos + 2], "big")
+        pos += 2
+        if marker == 0xFFD9:  # EOC
+            break
+        if 0xFF30 <= marker <= 0xFF3F:  # reserved, segment-less
+            (main if in_main else tile).add(f"0x{marker:04X}")
+            continue
+        if marker == 0xFF90:  # SOT
+            tile_parts += 1
+            in_main = False
+            lsot = int.from_bytes(data[pos : pos + 2], "big")
+            psot = int.from_bytes(data[pos + 4 : pos + 8], "big")
+            if psot == 0:
+                # Legal ("extends to EOC/next SOT") but absent from this
+                # corpus; scanning entropy data for the boundary is not
+                # reliable, so fail loudly rather than guess.
+                raise ValueError(f"{path}: Psot=0 tile-part is unsupported here")
+            tile_end = pos - 2 + psot
+            pos += lsot
+            continue
+        if marker == 0xFF93:  # SOD: step over the entropy data
+            pos = tile_end
+            continue
+        length = int.from_bytes(data[pos : pos + 2], "big")
+        seg = data[pos + 2 : pos + length]
+        pos += length
+        name = MARKER_NAMES.get(marker, f"0x{marker:04X}")
+        (main if in_main else tile).add(name)
+        if marker == 0xFF52:  # COD: Scod flags + SPcod code-block style
+            scod = seg[0]
+            precincts |= bool(scod & 0x01)
+            sop |= bool(scod & 0x02)
+            eph |= bool(scod & 0x04)
+            cblksty |= seg[8]
+        elif marker == 0xFF53:  # COC: Ccoc is 2 bytes when Csiz >= 257
+            cidx = 2 if csiz >= 257 else 1
+            precincts |= bool(seg[cidx] & 0x01)
+            cblksty |= seg[cidx + 4]
+        elif marker == 0xFF51:  # SIZ: Csiz sizes later component indices
+            csiz = int.from_bytes(seg[34:36], "big")
+
+    # SIZ/COD/QCD are mandatory in the main header; listing them per entry
+    # would be constant noise. In a tile-part header the same markers are
+    # per-tile overrides, so there they stay listed (see p1_04's tile QCDs).
+    main -= {"SIZ", "COD", "QCD"}
+    return {
+        "markers_main": sorted(main),
+        "markers_tile": sorted(tile),
+        "tile_parts": tile_parts,
+        "sop": sop,
+        "eph": eph,
+        "precincts": precincts,
+        "cblksty": {name: bool(cblksty & bit) for name, bit in CBLKSTY_BITS},
+    }
+
 
 def codestreams():
     for i in range(1, 17):
@@ -166,6 +275,12 @@ def build_entry(profile: int, idx: int) -> dict:
     graded = len(pae1)
 
     features = opj_features(cs_path)
+    features.update(marker_features(cs_path))
+    if features["tile_parts"] < features["tiles"][0] * features["tiles"][1]:
+        raise ValueError(
+            f"{name}: {features['tile_parts']} tile-parts for "
+            f"{features['tiles']} tiles — marker walk went off the rails"
+        )
     if len(mse1) != graded:
         raise ValueError(
             f"{name}: class-1 PAE/MSE arity mismatch ({len(pae1)} vs {len(mse1)})"
@@ -257,8 +372,14 @@ def main():
                 ),
             },
             "features": {
-                "tool": "opj_dump -i",
-                "note": "per-codestream parameters parsed from the OpenJPEG oracle",
+                "tool": "opj_dump -i + direct marker-segment walk",
+                "note": (
+                    "coding parameters parsed from the OpenJPEG oracle; "
+                    "optional-marker presence (markers_main/markers_tile), "
+                    "SOP/EPH/precinct flags, and code-block style bits walked "
+                    "from the marker segments directly, since opj_dump does "
+                    "not report them"
+                ),
             },
             "license": (
                 "Conformance-only grant; see ./COPYRIGHT. Excluded from the "

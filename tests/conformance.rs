@@ -28,11 +28,11 @@ fn fixtures_dir() -> PathBuf {
 
 /// Decode every committed fixture and grade it against its oracle snapshot.
 ///
-/// While `decode` is a skeleton (`todo!()`), each real codestream reports as
-/// *not yet decoded* ([`Outcome::Pending`]) rather than panicking the suite —
-/// that is the expected steady state for P1.0. The gate fails only on a genuine
-/// disagreement ([`Outcome::Failed`]) or a broken fixture ([`Outcome::LoadError`]),
-/// so the harness goes green now and stays meaningful as the pipeline lands.
+/// A codestream that `decode` rejects as out of the supported subset reports as
+/// *not yet decoded* ([`Outcome::Pending`]) rather than panicking the suite, so
+/// fixtures for features that have not landed yet can sit in the corpus without
+/// breaking it. The gate fails only on a genuine disagreement
+/// ([`Outcome::Failed`]) or a broken fixture ([`Outcome::LoadError`]).
 #[test]
 fn decodes_corpus_against_oracle() {
     let fixtures = discover(&fixtures_dir());

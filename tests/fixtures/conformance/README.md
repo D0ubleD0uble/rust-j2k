@@ -53,7 +53,7 @@ conformance/
 | Codestreams | `uclouvain/openjpeg-data` `input/conformance/` | commit `39524bd3` |
 | References (`.pgx`) | `uclouvain/openjpeg-data` `baseline/conformance/` | commit `39524bd3` |
 | PAE/MSE bounds | `uclouvain/openjpeg` `tests/conformance/CMakeLists.txt` | `C1P*_*_list` |
-| Per-file features | `opj_dump -i` over each codestream | — |
+| Per-file features | `opj_dump -i` plus a direct marker-segment walk over each codestream | — |
 
 Every codestream, reference, and bound in `manifest.json` records where it came
 from, so the corpus regrows from these inputs alone.
@@ -139,7 +139,7 @@ entry:
 | `profile`, `index` | Profile (0/1) and number `NN`. |
 | `graded_components` | Components graded at class 1 (= number of class-1 references = bound arity). May be fewer than `features.components`: `p0_13` is a 257-component stress image of which only the first 4 are graded. |
 | `bit_exact` | True when the class-1 bounds are all zero, i.e. the decode must match the reference exactly. This tracks the bounds, not the wavelet: `p0_09` is 9/7 yet graded bit-exact, so it is decoupled from `features.reversible`. |
-| `features` | `opj_dump`-derived parameters (dimensions, subsampling, tiles, progression, layers, MCT flag, resolutions, code-block size, reversibility). |
+| `features` | `opj_dump`-derived parameters (dimensions, subsampling, tiles, progression, layers, MCT flag, resolutions, code-block size, reversibility) plus marker-walk fields: `markers_main`/`markers_tile` (optional markers by header, reserved codes as hex), `tile_parts`, `sop`/`eph`/`precincts` flags, and the six `cblksty` style bits. These map each Phase 2 feature to the entries that exercise it; `tests/conformance_corpus.rs` asserts the coverage, including the known gaps (no entry carries PLM or a tile-part COD/COC/QCC). |
 | `references.class0` / `.class1` | Reference `.pgx` paths; class-1 is one per component, in order. |
 | `bounds_class1` | Per-component `pae` and `mse` arrays — the grading bar. |
 | `bounds_class0_first_component` | First-component `pae`/`mse` for the disabled class-0 tier. |
