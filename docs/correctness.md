@@ -25,6 +25,44 @@ From strongest to most convenient:
    have small deterministic vectors we can assert against in isolation, so a
    single stage can be proven before the stages around it exist.
 
+### When the oracle and the standard disagree
+
+The hierarchy is ordered for a reason: OpenJPEG is convenient, not authoritative.
+Where the two conflict, the conformance suite wins and OpenJPEG stops being the
+oracle *for that quantity* — matching it would mean importing its bug.
+
+There is one known case. On the inverse 9/7, the standard scales the high-pass
+samples by `1/K` and the subband gain (Table E-1) enters the quantization step,
+so a high-pass coefficient is scaled by `2 · (1/K) = 1.6257861…`. OpenJPEG's
+decoder instead zeroes the gain and folds the factor of two into the transform:
+
+```c
+/* tcd.c */
+/* BUG_WEIRD_TWO_INVK (look for this identifier in dwt.c): */
+const OPJ_INT32 log2_gain = (!isEncoder && l_tccp->qmfbid == 0) ? 0 : ...;
+
+/* dwt.c */
+/* Due to using two_invK instead of invK, we have to compensate in tcd.c */
+const float two_invK = 1.625732422f;
+```
+
+`1.625732422` is 3.3e-5 short of `2/K`. Adopting OpenJPEG's split makes a
+multi-level 9/7 decode bit-exact against `opj_decompress` — and slightly wrong.
+This crate keeps the exact constant, and `p0_09` decodes bit-exact against the
+ISO reference image with it, which is the evidence that settles the question.
+
+So a 9/7 fixture graded `tolerance: exact` against OpenJPEG must not carry detail
+bands whose values reach a rounding boundary; grade multi-level 9/7 against the
+conformance reference instead, or within a stated tolerance. Two consequences
+worth carrying into any future disagreement:
+
+- **A bit-exact match with OpenJPEG is evidence, not proof.** It can mean the
+  decoder reproduced a defect. Ask what the standard says before celebrating.
+- **Emulate the oracle's convention completely or not at all.** Changing `K` to
+  match `two_invK` while leaving the gain in the step makes the divergence
+  *worse*, because the factor of two is then counted twice. A half-emulation
+  reads as a refutation of a correct hypothesis.
+
 ## Agreement standard
 
 - **Reversible path (5/3, lossless):** bit-exact sample equality. Any
