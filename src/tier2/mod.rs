@@ -25,7 +25,7 @@
 pub mod bio;
 pub mod tagtree;
 
-use crate::codestream::markers::Progression;
+use crate::codestream::markers::{Progression, marker};
 use crate::codestream::{Codestream, MainHeader};
 use crate::{Error, Result};
 use bio::BitReader;
@@ -148,7 +148,12 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
         })
         .collect();
 
+    let delimiters = Delimiters {
+        sop: cs.header.cod.use_sop,
+        eph: cs.header.cod.use_eph,
+    };
     let mut cursor = 0usize;
+    let mut packet_index = 0u32;
     for_each_packet(
         cs.header.cod.progression,
         cs.header.cod.layers as u32,
@@ -159,9 +164,12 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
                 data,
                 cursor,
                 layer,
+                packet_index,
+                delimiters,
                 &geoms[component][resolution],
                 &mut states[component][resolution],
             )?;
+            packet_index += 1;
             Ok(())
         },
     )?;
@@ -465,6 +473,60 @@ const ZBP_LIMIT: u32 = 64;
 /// read at most 31 bits, inside the `u32` [`BitReader::read`] accepts.
 const LBLOCK_MAX: u32 = 24;
 
+/// Which packet delimiters `COD` signals (`Scod` bits 1 and 2).
+#[derive(Debug, Clone, Copy)]
+struct Delimiters {
+    /// SOP *may* precede each packet.
+    sop: bool,
+    /// EPH *shall* follow each packet header.
+    eph: bool,
+}
+
+/// The two-byte marker at `pos`, or `None` if it would run past the end.
+fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
+    let hi = *data.get(pos)?;
+    let lo = *data.get(pos + 1)?;
+    Some(u16::from_be_bytes([hi, lo]))
+}
+
+/// Consume the SOP marker segment at `pos` and return the offset of the packet
+/// header that follows (ISO A.8.1).
+///
+/// `Lsop` is fixed at 4 and `Nsop` counts packets from zero **within the tile**,
+/// continuing across that tile's tile-parts: OpenJPEG's encoder writes
+/// `tile->packno`, which lives on the tile and is never reset per tile-part. The
+/// corpus agrees — every single-tile entry that carries SOP numbers its packets
+/// sequentially from zero, every multi-tile one restarts.
+///
+/// The decoded subset is one tile in one tile-part, so the packet index is the
+/// count. When tiles and tile-parts land (issues #59, #60) the counter must
+/// reset per *tile*, not per tile-part.
+///
+/// OpenJPEG leaves `Nsop` unchecked — `/* TODO : check the Nsop value */` — so
+/// this is stricter than the oracle. Validating the sequence number is the whole
+/// point of a resynchronisation marker.
+fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
+    let end = pos + 6;
+    if end > data.len() {
+        return Err(Error::Codestream("truncated SOP marker segment".into()));
+    }
+    let lsop = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
+    if lsop != 4 {
+        return Err(Error::Codestream(format!(
+            "SOP declares Lsop {lsop}, expected 4"
+        )));
+    }
+    let nsop = u16::from_be_bytes([data[pos + 4], data[pos + 5]]);
+    // Nsop is 16 bits and wraps; a tile with more than 65536 packets restarts it.
+    let expected = (packet_index % 65536) as u16;
+    if nsop != expected {
+        return Err(Error::Codestream(format!(
+            "SOP sequence number {nsop} for packet {packet_index}, expected {expected}"
+        )));
+    }
+    Ok(end)
+}
+
 /// One code-block's decode state, carried across the quality layers of its
 /// precinct (ISO/IEC 15444-1 B.10).
 ///
@@ -534,6 +596,8 @@ fn parse_packet<'a>(
     data: &'a [u8],
     start: usize,
     layer: u32,
+    packet_index: u32,
+    delimiters: Delimiters,
     bands: &[BandGeom],
     states: &mut [BandState<'a>],
 ) -> Result<usize> {
@@ -544,6 +608,20 @@ fn parse_packet<'a>(
             "tile-part ends before the last packet".into(),
         ));
     }
+
+    // SOP precedes the packet header when COD allows it — but only *may*
+    // (A.8.1), so its absence is not an error. OpenJPEG warns and carries on.
+    //
+    // The peek is unambiguous: a packet header can never begin `FF 91`. Its
+    // first byte may well be `0xFF`, but the header's bit stuffing then forces
+    // the next byte's most significant bit to zero, so that byte is at most
+    // `0x7F` and never `0x91`. See [`bio`].
+    let start = if delimiters.sop && peek_marker(data, start) == Some(marker::SOP) {
+        read_sop(data, start, packet_index)?
+    } else {
+        start
+    };
+
     let mut bio = BitReader::new(&data[start..]);
 
     // The first bit flags an empty packet (no contributions) against a present
@@ -557,9 +635,18 @@ fn parse_packet<'a>(
         }
     }
 
-    // The header is a whole number of bytes; the body follows immediately.
+    // The header is a whole number of bytes. EPH, when COD signals it, sits
+    // between the header and the body — after an empty packet's header too.
     bio.align();
     let mut body = start + bio.bytes_consumed();
+    if delimiters.eph {
+        if peek_marker(data, body) != Some(marker::EPH) {
+            return Err(Error::Codestream(
+                "COD signals EPH but the packet header is not followed by one".into(),
+            ));
+        }
+        body += 2;
+    }
 
     for contribution in &contributions {
         let end = body

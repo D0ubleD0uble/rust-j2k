@@ -174,6 +174,8 @@ mod tests {
                 code_block_width: 4,
                 code_block_height: 4,
                 code_block_style: 0,
+                use_sop: false,
+                use_eph: false,
                 multiple_component_transform: false,
                 transform: Transform::Irreversible97,
                 precinct_sizes: vec![],

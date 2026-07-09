@@ -98,6 +98,7 @@ This release decodes the JPEG 2000 codestream subset that GRIB2 template 5.40
 | Reversible color transform (RCT) | Irreversible color transform (ICT) |
 | Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | — |
 | Multiple quality layers, all five progression orders | Multiple tiles, POC |
+| SOP/EPH packet delimiters | — |
 | No precinct subdivision, no ROI | Precincts, region of interest |
 
 Anything outside the subset is rejected cleanly, not half-decoded. The long-run

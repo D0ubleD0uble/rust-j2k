@@ -41,7 +41,7 @@ that the later phases widen is correct end-to-end before breadth work starts.
 | PLM / PLT (packet-length markers) | ○ | 2 |
 | TLM (tile-part-length marker) | ○ | 2 |
 | CRG (component registration) | — | 2 |
-| SOP / EPH (start-of-packet / end-of-packet-header, error resilience) | ○ | 2 |
+| SOP / EPH (start-of-packet / end-of-packet-header, error resilience) | ✓ | 2 |
 | COM (comment) — recognise and skip | ✓ | 1 |
 | Multiple tiles and multiple tile-parts per tile | — | 2 |
 

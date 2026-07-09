@@ -577,18 +577,22 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
 /// progression, layers, code-block size/style. Rejects explicit precincts, the
 /// non-default code-block styles, Part 2's array MCT, and ICT.
 fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
+    // Scod bit 0: user-defined precincts in SPcod. Bit 1: SOP may precede each
+    // packet. Bit 2: EPH follows each packet header. Bits 3-7 are reserved.
     let scod = b.u8()?;
-    // Scod bit 0: user-defined precincts present in SPcod; bits 1/2: SOP/EPH.
     if scod & 0x01 != 0 {
         return Err(Error::Unsupported(
             "explicit precinct partition; the subset uses maximal precincts".into(),
         ));
     }
-    if scod & 0x06 != 0 {
-        return Err(Error::Unsupported(
-            "SOP/EPH error-resilience markers are outside the decoded subset".into(),
-        ));
+    if scod & 0xF8 != 0 {
+        return Err(Error::Marker(format!(
+            "COD sets reserved Scod bits {:#04X}",
+            scod & 0xF8
+        )));
     }
+    let use_sop = scod & 0x02 != 0;
+    let use_eph = scod & 0x04 != 0;
 
     let progression = match b.u8()? {
         0 => Progression::Lrcp,
@@ -657,6 +661,8 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         code_block_width,
         code_block_height,
         code_block_style,
+        use_sop,
+        use_eph,
         multiple_component_transform,
         transform,
         // Maximal precincts (PPx=PPy=15) when Scod bit 0 is clear, signalled by

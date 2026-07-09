@@ -231,6 +231,11 @@ resampling; the per-component record is the one piece that waits on P2.1's
 component geometry). Decoding must match with the lengths used and with them
 ignored.
 
+SOP/EPH have landed (`scripts/gen-delimiter-fixtures.py` grades them bit-exact).
+Note `Nsop` counts packets *within a tile*, so its counter must reset per tile
+once P2.3 lands — the corpus shows this plainly: the single-tile entries number
+their packets from zero, the multi-tile ones restart.
+
 **Oracle:** Part 4 codestreams carrying each marker — the manifest's
 `markers_main`/`markers_tile` fields say which entry carries what — except PLM,
 which no conformance entry carries (asserted by
