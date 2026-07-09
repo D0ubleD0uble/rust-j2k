@@ -757,3 +757,98 @@ fn a_tile_part_shorter_than_its_layers_is_codestream() {
         Err(Error::Codestream(_))
     ));
 }
+
+// ---- Progression orders (issue #62) ----
+
+/// Collect the `(layer, resolution, component)` sequence one order visits.
+fn order_of(
+    progression: Progression,
+    layers: u32,
+    resolutions: usize,
+    components: usize,
+) -> Vec<(u32, usize, usize)> {
+    let mut seen = Vec::new();
+    for_each_packet(progression, layers, resolutions, components, |l, r, c| {
+        seen.push((l, r, c));
+        Ok(())
+    })
+    .unwrap();
+    seen
+}
+
+/// Each order is a distinct permutation of the layer / resolution / component
+/// nesting (ISO B.12.1). The position axis has one value under maximal
+/// precincts, so it drops out.
+#[test]
+fn each_progression_nests_its_axes_in_the_right_order() {
+    // Two of each axis, so the nesting is visible in the first few packets.
+    let lrcp = order_of(Progression::Lrcp, 2, 2, 2);
+    assert_eq!(&lrcp[..4], &[(0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1)]);
+
+    let rlcp = order_of(Progression::Rlcp, 2, 2, 2);
+    assert_eq!(&rlcp[..4], &[(0, 0, 0), (0, 0, 1), (1, 0, 0), (1, 0, 1)]);
+
+    let rpcl = order_of(Progression::Rpcl, 2, 2, 2);
+    assert_eq!(&rpcl[..4], &[(0, 0, 0), (1, 0, 0), (0, 0, 1), (1, 0, 1)]);
+
+    let pcrl = order_of(Progression::Pcrl, 2, 2, 2);
+    assert_eq!(&pcrl[..4], &[(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]);
+}
+
+/// Every order visits every packet exactly once, whatever the nesting.
+#[test]
+fn every_progression_visits_each_packet_once() {
+    for progression in [
+        Progression::Lrcp,
+        Progression::Rlcp,
+        Progression::Rpcl,
+        Progression::Pcrl,
+        Progression::Cprl,
+    ] {
+        let seen = order_of(progression, 3, 4, 2);
+        assert_eq!(seen.len(), 3 * 4 * 2, "{progression:?} packet count");
+        let mut sorted = seen.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            seen.len(),
+            "{progression:?} visits a packet twice"
+        );
+    }
+}
+
+/// With one precinct per resolution, PCRL and CPRL genuinely enumerate the same
+/// sequence — their position loops both degenerate. No fixture can tell them
+/// apart until the precinct partition lands (issue #61), and OpenJPEG's own
+/// output for the two differs in exactly one byte: the COD progression code.
+#[test]
+fn pcrl_and_cprl_coincide_with_one_precinct() {
+    assert_eq!(
+        order_of(Progression::Pcrl, 3, 3, 3),
+        order_of(Progression::Cprl, 3, 3, 3),
+    );
+}
+
+/// The orders are distinct only when more than one of the axes is. A single
+/// component and a single layer collapse all five onto `r`, which is why the
+/// conformance entry `p0_01` cannot test any of them.
+#[test]
+fn the_orders_coincide_when_only_resolution_varies() {
+    let orders = [
+        Progression::Lrcp,
+        Progression::Rlcp,
+        Progression::Rpcl,
+        Progression::Pcrl,
+        Progression::Cprl,
+    ];
+    let first = order_of(orders[0], 1, 4, 1);
+    for progression in orders {
+        assert_eq!(order_of(progression, 1, 4, 1), first, "{progression:?}");
+    }
+    // Add a second layer and LRCP parts company with RLCP.
+    assert_ne!(
+        order_of(Progression::Lrcp, 2, 2, 1),
+        order_of(Progression::Rlcp, 2, 2, 1),
+    );
+}

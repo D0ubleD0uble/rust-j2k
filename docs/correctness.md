@@ -83,6 +83,13 @@ bit-exact. That is the same shape of bug as reading `SPcod`'s code-block style
 byte and discarding it: the decoder reports success on a feature it does not
 implement.
 
+The same reasoning cuts the other way: two features can be *indistinguishable*
+rather than untested. With one precinct per resolution, PCRL and CPRL enumerate
+the identical packet sequence — OpenJPEG's own output for the two differs in
+exactly one byte, the progression code in COD. No fixture separates them until
+the precinct partition lands. That is worth recording next to the code rather
+than mistaking one order's fixture for coverage of both.
+
 So before adding an entry to `IN_CLASS`, ask what about that entry would have to
 change for the new code to be wrong. If nothing would, the entry is not the
 oracle for that feature, and the milestone needs a fixture that can tell the

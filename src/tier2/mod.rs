@@ -8,17 +8,24 @@
 //! hands Tier-1 the coded byte segments per code-block — it does **not** run
 //! the arithmetic decoder.
 //!
-//! The decoded subset is one tile, LRCP, and
-//! maximal precincts (one precinct per resolution). That collapses the packet
-//! stream to exactly one packet per resolution level, coarsest first, so the
-//! whole tile-part is `header₀ body₀ header₁ body₁ …` with no precinct or layer
-//! nesting. `decode_packets` also computes the resolution / subband /
-//! code-block geometry from the [`MainHeader`](crate::codestream::MainHeader),
-//! so it is the single source of truth the assembly stage reuses.
+//! The decoded subset is one tile with maximal precincts, so the position axis
+//! has one value per resolution and the packet stream walks the remaining three
+//! axes — layer, resolution, component — in whichever order `COD` names. The
+//! tile-part is then `header₀ body₀ header₁ body₁ …` with no padding, and the
+//! packets must tile it exactly; a leftover byte means a misread field.
+//!
+//! A code-block's contributions accumulate across the layers that include it,
+//! so a precinct's tag trees and per-block state outlive any one packet. See
+//! [`for_each_packet`] for the orders and [`BlockState`] for what persists.
+//!
+//! `decode_packets` also computes the resolution / subband / code-block geometry
+//! from the [`MainHeader`](crate::codestream::MainHeader), so it is the single
+//! source of truth the assembly stage reuses.
 
 pub mod bio;
 pub mod tagtree;
 
+use crate::codestream::markers::Progression;
 use crate::codestream::{Codestream, MainHeader};
 use crate::{Error, Result};
 use bio::BitReader;
@@ -141,22 +148,23 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
         })
         .collect();
 
-    // LRCP: layer, then resolution, then component, then precinct (B.12.1.1).
-    // With maximal precincts the innermost loop has one iteration.
     let mut cursor = 0usize;
-    for layer in 0..cs.header.cod.layers as u32 {
-        for resolution in 0..resolution_count {
-            for (component, component_geoms) in geoms.iter().enumerate() {
-                cursor = parse_packet(
-                    data,
-                    cursor,
-                    layer,
-                    &component_geoms[resolution],
-                    &mut states[component][resolution],
-                )?;
-            }
-        }
-    }
+    for_each_packet(
+        cs.header.cod.progression,
+        cs.header.cod.layers as u32,
+        resolution_count,
+        component_count,
+        |layer, resolution, component| {
+            cursor = parse_packet(
+                data,
+                cursor,
+                layer,
+                &geoms[component][resolution],
+                &mut states[component][resolution],
+            )?;
+            Ok(())
+        },
+    )?;
 
     let components: Vec<ComponentCoded<'a>> = states
         .into_iter()
@@ -201,6 +209,82 @@ struct BandGeom {
     block_rows: usize,
     /// `(x, y, width, height)` per block, row-major.
     blocks: Vec<(usize, usize, usize, usize)>,
+}
+
+/// Visit every packet of the tile in the order `progression` prescribes
+/// (ISO/IEC 15444-1 B.12.1), calling `f(layer, resolution, component)` for each.
+///
+/// The standard nests four axes — layer, resolution, component, position — and
+/// each order is a permutation of them. The decoded subset has maximal
+/// precincts, so the *position* axis has exactly one value per resolution and
+/// drops out, leaving three:
+///
+/// ```text
+/// order   standard nesting   with one precinct
+/// LRCP    l → r → c → p      l → r → c
+/// RLCP    r → l → c → p      r → l → c
+/// RPCL    r → p → c → l      r → c → l
+/// PCRL    p → c → r → l      c → r → l
+/// CPRL    c → p → r → l      c → r → l
+/// ```
+///
+/// PCRL and CPRL therefore enumerate the *same* sequence here. That is not an
+/// approximation — with one precinct the orders genuinely coincide — but it does
+/// mean no test in this crate can tell them apart until the precinct partition
+/// lands (issue #61). The same caveat applies to any codestream with one layer
+/// and one component, where all five orders coincide; see `docs/correctness.md`
+/// §A passing entry is not proof the feature works.
+fn for_each_packet<F>(
+    progression: Progression,
+    layers: u32,
+    resolutions: usize,
+    components: usize,
+    mut f: F,
+) -> Result<()>
+where
+    F: FnMut(u32, usize, usize) -> Result<()>,
+{
+    match progression {
+        Progression::Lrcp => {
+            for layer in 0..layers {
+                for resolution in 0..resolutions {
+                    for component in 0..components {
+                        f(layer, resolution, component)?;
+                    }
+                }
+            }
+        }
+        Progression::Rlcp => {
+            for resolution in 0..resolutions {
+                for layer in 0..layers {
+                    for component in 0..components {
+                        f(layer, resolution, component)?;
+                    }
+                }
+            }
+        }
+        Progression::Rpcl => {
+            for resolution in 0..resolutions {
+                for component in 0..components {
+                    for layer in 0..layers {
+                        f(layer, resolution, component)?;
+                    }
+                }
+            }
+        }
+        // With one precinct these two are the same walk: PCRL's position loop
+        // and CPRL's both degenerate, leaving component outside resolution.
+        Progression::Pcrl | Progression::Cprl => {
+            for component in 0..components {
+                for resolution in 0..resolutions {
+                    for layer in 0..layers {
+                        f(layer, resolution, component)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `ceil(a / b)` for any integers with `b > 0` (Rust's `/` truncates toward
