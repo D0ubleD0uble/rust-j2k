@@ -386,12 +386,13 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
                 if qcd.is_some() {
                     return Err(Error::Codestream("duplicate QCD marker".into()));
                 }
-                qcd = Some(decode_qcd(body())?);
+                qcd = Some(decode_quant(body(), "QCD")?);
             }
             // A.6.2 and A.6.5 allow at most one COC and one QCC per component in
             // a header. A second one is not a later-wins override; it is a
             // malformed header, and guessing which wins would decode an image
-            // the encoder never described.
+            // the encoder never described. OpenJPEG is silently last-wins here;
+            // rejecting is stricter, and no conformant codestream carries two.
             marker::COC => {
                 let (index, coding) = decode_coc(body(), &siz)?;
                 if coc[index].replace(coding).is_some() {
@@ -809,6 +810,10 @@ fn decode_coc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Coding)> {
             "explicit precinct partition; the subset uses maximal precincts".into(),
         ));
     }
+    // Only bit 0 is defined in `Scoc` (Table A-21). SOP and EPH are signalled
+    // once for the tile, in COD's `Scod`, and have no per-component form — so
+    // unlike `Scod` there is nothing else here to read. OpenJPEG stores the byte
+    // without validating it and consults only bit 0.
     if scoc & 0xFE != 0 {
         return Err(Error::Marker(format!(
             "COC sets reserved Scoc bits {:#04X}",
@@ -824,13 +829,16 @@ fn decode_coc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Coding)> {
 /// after `Cqcc` is a `QCD` body, byte for byte.
 fn decode_qcc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Qcd)> {
     let index = component_index(&mut b, siz, "QCC")?;
-    let quant = decode_qcd(b)?;
+    let quant = decode_quant(b, "QCC")?;
     Ok((index, quant))
 }
 
-/// Decode QCD — default quantization (A.6.4): style, guard bits, and the
-/// per-subband (exponent, mantissa) step parameters.
-fn decode_qcd(mut b: Cursor<'_>) -> Result<Qcd> {
+/// Decode the quantization body shared by QCD (A.6.4) and QCC (A.6.5): style,
+/// guard bits, and the per-subband (exponent, mantissa) step parameters. QCC's
+/// body after `Cqcc` is a QCD body byte for byte, so `origin` only names the
+/// marker for error messages — a malformed override must not report as a fault
+/// in the codestream-wide default.
+fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
     let sqcd = b.u8()?;
     let guard_bits = sqcd >> 5;
     let style = match sqcd & 0x1F {
@@ -839,7 +847,7 @@ fn decode_qcd(mut b: Cursor<'_>) -> Result<Qcd> {
         2 => QuantStyle::ScalarExpounded,
         other => {
             return Err(Error::Marker(format!(
-                "reserved quantization style {other}"
+                "{origin} sets reserved quantization style {other}"
             )));
         }
     };
@@ -850,7 +858,9 @@ fn decode_qcd(mut b: Cursor<'_>) -> Result<Qcd> {
         // the exponent, mantissa is 0.
         QuantStyle::None => {
             if b.remaining() == 0 {
-                return Err(Error::Codestream("QCD carries no step entries".into()));
+                return Err(Error::Codestream(format!(
+                    "{origin} carries no step entries"
+                )));
             }
             while b.remaining() > 0 {
                 let v = b.u8()?;
@@ -861,12 +871,14 @@ fn decode_qcd(mut b: Cursor<'_>) -> Result<Qcd> {
         // Derived signals one entry (LL); expounded one per subband.
         QuantStyle::ScalarDerived | QuantStyle::ScalarExpounded => {
             if b.remaining() == 0 || !b.remaining().is_multiple_of(2) {
-                return Err(Error::Codestream("QCD step table is truncated".into()));
+                return Err(Error::Codestream(format!(
+                    "{origin} step table is truncated"
+                )));
             }
             if style == QuantStyle::ScalarDerived && b.remaining() != 2 {
-                return Err(Error::Codestream(
-                    "derived QCD must carry exactly one step entry".into(),
-                ));
+                return Err(Error::Codestream(format!(
+                    "derived {origin} must carry exactly one step entry"
+                )));
             }
             while b.remaining() > 0 {
                 let v = b.u16()?;

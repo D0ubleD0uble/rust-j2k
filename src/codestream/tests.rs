@@ -1805,3 +1805,23 @@ fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
     ]);
     assert!(parse_main_header(&bytes).is_ok());
 }
+
+/// A malformed QCC must report as a QCC fault, not as a fault in QCD. The two
+/// share a body parser, and a per-component override that blames the
+/// codestream-wide default sends a reader to the wrong marker.
+#[test]
+fn a_malformed_qcc_names_qcc_and_not_qcd() {
+    // Scalar expounded (style 2) with an odd-length step table: truncated.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        seg(marker::QCC, &[0, (2 << 5) | 2, 0x00]),
+    ]);
+    let e = err(&bytes);
+    let Error::Codestream(message) = &e else {
+        panic!("got {e:?}")
+    };
+    assert!(message.contains("QCC"), "{message}");
+    assert!(!message.contains("QCD"), "{message}");
+}
