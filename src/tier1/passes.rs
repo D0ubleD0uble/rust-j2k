@@ -567,6 +567,25 @@ mod tests {
         assert!(state.coeffs.iter().all(|&c| c == 0));
     }
 
+    /// A codeword segment may carry coding passes and no bytes: under `restart`
+    /// each pass is its own segment, and its length field may be zero. The MQ
+    /// decoder reads `0xFF` past the end of its slice, the way OpenJPEG pads
+    /// with `OPJ_COMMON_CBLK_DATA_EXTRA`, so this decodes rather than panicking.
+    /// `build_subbands` still rejects a block with passes and no bytes anywhere.
+    #[test]
+    fn an_empty_codeword_segment_does_not_panic() {
+        let mut state = BlockState::new(4, 4);
+        decode_block(
+            &[(Vec::new(), 1), (vec![0x80], 1)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            2,
+            0,
+            crate::codestream::markers::code_block_style::TERMALL,
+        );
+    }
+
     /// Signs are recovered, not just magnitudes: the sparse block has both
     /// positive and negative significant coefficients among its zeros.
     #[test]
