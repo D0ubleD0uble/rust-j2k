@@ -201,6 +201,13 @@ pub struct Cod {
     pub code_block_width: u8,  // exponent: width  = 2^(value + 2)
     pub code_block_height: u8, // exponent: height = 2^(value + 2)
     pub code_block_style: u8,  // bit flags: bypass, reset, restart, vcausal, segsym, …
+    /// `Scod` bit 1: SOP marker segments *may* precede each packet. The standard
+    /// makes them optional even when the bit is set (A.8.1), so a decoder must
+    /// tolerate their absence rather than demand them.
+    pub use_sop: bool,
+    /// `Scod` bit 2: an EPH marker *shall* follow every packet header (A.8.2),
+    /// including an empty packet's.
+    pub use_eph: bool,
     /// `SGcod` multiple-component transform: whether the first three components
     /// were decorrelated before the wavelet. *Which* transform follows from
     /// [`transform`](Self::transform) -- 5/3 means RCT, 9/7 means ICT -- not

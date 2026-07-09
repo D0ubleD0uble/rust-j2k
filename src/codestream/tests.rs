@@ -138,6 +138,8 @@ fn valid_reversible_header_parses() {
                 code_block_width: 4,
                 code_block_height: 4,
                 code_block_style: 0,
+                use_sop: false,
+                use_eph: false,
                 multiple_component_transform: false,
                 transform: Transform::Reversible53,
                 precinct_sizes: vec![],
@@ -400,12 +402,37 @@ fn explicit_precincts_is_unsupported() {
 }
 
 #[test]
-fn sop_eph_flag_is_unsupported() {
+fn sop_and_eph_flags_parse_independently() {
+    for (scod, sop, eph) in [
+        (0x00, false, false),
+        (0x02, true, false), // p0_12 signals SOP only
+        (0x04, false, true), // p0_11 signals EPH only
+        (0x06, true, true),
+    ] {
+        let bytes = codestream(&[
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_body(scod, 0, 1, 0, 5, 4, 4, 0, 1)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ]);
+        let (header, _) =
+            parse_main_header(&bytes).unwrap_or_else(|e| panic!("{scod:#04X}: {e:?}"));
+        assert_eq!(
+            (header.cod.use_sop, header.cod.use_eph),
+            (sop, eph),
+            "Scod {scod:#04X}"
+        );
+    }
+}
+
+/// `Scod` bits 3-7 are reserved; setting one is an illegal field, not a feature
+/// we have yet to decode.
+#[test]
+fn reserved_scod_bits_are_marker() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
-        seg(marker::COD, &cod_body(0x02, 0, 1, 0, 5, 4, 4, 0, 1)),
+        seg(marker::COD, &cod_body(0x08, 0, 1, 0, 5, 4, 4, 0, 1)),
     ]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+    assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
 #[test]
@@ -1192,7 +1219,8 @@ fn siz_matches_opj_dump_across_the_conformance_corpus() {
 ///
 /// A walker that read a length after `0xFF30` would consume the `SOT` and report
 /// `Codestream("truncated marker segment")` instead. That is the bug this
-/// codestream exists to catch, so assert the *reason*, not merely that it failed.
+/// codestream exists to catch, so assert the *kind* of failure: a feature
+/// rejection means the walk got there, a structural one means it did not.
 #[test]
 fn p0_02_reserved_marker_walks_cleanly() {
     let path = corpus_dir().join("codestreams/p0_02.j2k");
@@ -1215,10 +1243,14 @@ fn p0_02_reserved_marker_walks_cleanly() {
         "0xFF30 carries no segment",
     );
 
+    // The header walks; p0_02 is then rejected for a feature it uses (today its
+    // code-block style, tomorrow whatever remains). Which feature is not the
+    // point — that it is `Unsupported` rather than a structural error is. A
+    // naive walker reports `Codestream("truncated marker segment")` instead.
     let e = parse(&bytes).expect_err("p0_02 is outside the decoded subset");
     assert!(
-        matches!(&e, Error::Unsupported(m) if m.contains("SOP/EPH")),
-        "expected the COD subset rejection, got {e:?}",
+        matches!(&e, Error::Unsupported(_)),
+        "the walk must reach a feature rejection, not a structural one; got {e:?}",
     );
 }
 
@@ -1325,10 +1357,12 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with_cod(cod_body(0x01, 0, 1, 0, 5, 4, 4, 0, 1))),
             Variant::Unsupported,
         ),
+        // The SOP/EPH delimiters are decoded, so they left this table; a
+        // reserved Scod bit is still an illegal field.
         (
-            "SOP/EPH signalled in COD",
-            err(&header_with_cod(cod_body(0x02, 0, 1, 0, 5, 4, 4, 0, 1))),
-            Variant::Unsupported,
+            "reserved Scod bit",
+            err(&header_with_cod(cod_body(0x08, 0, 1, 0, 5, 4, 4, 0, 1))),
+            Variant::Marker,
         ),
         // Every progression order is decoded, so they left this table; a
         // reserved code is still an illegal field.

@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The packet delimiters SOP and EPH (Annex A.8). `COD`'s `Scod` bits 1 and 2 are
+  honoured independently. SOP *may* precede each packet even when signalled, so
+  its absence is tolerated; its `Lsop` and `Nsop` are validated, which is
+  stricter than OpenJPEG (whose source reads `/* TODO : check the Nsop value */`).
+  EPH *shall* follow every packet header, an empty packet's included, and its
+  absence is a `Codestream` error. A reserved `Scod` bit is a `Marker` error.
 - The remaining progression orders: RLCP, RPCL, PCRL, and CPRL (Annex B.12.1).
   The packet walk is now driven by `COD`'s progression code rather than assuming
   LRCP. Under maximal precincts the position axis has one value, so PCRL and CPRL

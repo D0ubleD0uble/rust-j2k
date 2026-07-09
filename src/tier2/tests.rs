@@ -15,16 +15,34 @@ fn parse_one_packet<'a>(data: &'a [u8], bands: &[BandGeom]) -> Result<(Vec<Subba
 }
 
 /// Parse `layers` consecutive packets over `bands`, carrying the precinct state
-/// across them the way `decode_packets` does.
+/// across them the way `decode_packets` does. No packet delimiters.
 fn parse_layers<'a>(
     data: &'a [u8],
     bands: &[BandGeom],
     layers: u32,
 ) -> Result<(Vec<Subband<'a>>, usize)> {
+    parse_layers_with(
+        data,
+        bands,
+        layers,
+        Delimiters {
+            sop: false,
+            eph: false,
+        },
+    )
+}
+
+/// As [`parse_layers`], with `COD`'s packet delimiters signalled.
+fn parse_layers_with<'a>(
+    data: &'a [u8],
+    bands: &[BandGeom],
+    layers: u32,
+    delimiters: Delimiters,
+) -> Result<(Vec<Subband<'a>>, usize)> {
     let mut states: Vec<BandState<'a>> = bands.iter().map(BandState::new).collect();
     let mut cursor = 0usize;
     for layer in 0..layers {
-        cursor = parse_packet(data, cursor, layer, bands, &mut states)?;
+        cursor = parse_packet(data, cursor, layer, layer, delimiters, bands, &mut states)?;
     }
     Ok((build_subbands(bands, states)?, cursor))
 }
@@ -106,6 +124,8 @@ fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
             code_block_width: cblk_exp - 2,
             code_block_height: cblk_exp - 2,
             code_block_style: 0,
+            use_sop: false,
+            use_eph: false,
             multiple_component_transform: false,
             transform: Transform::Reversible53,
             precinct_sizes: Vec::new(),
@@ -851,4 +871,153 @@ fn the_orders_coincide_when_only_resolution_varies() {
         order_of(Progression::Lrcp, 2, 2, 1),
         order_of(Progression::Rlcp, 2, 2, 1),
     );
+}
+
+// ---- Packet delimiters: SOP / EPH (issue #73) ----
+
+const SOP: Delimiters = Delimiters {
+    sop: true,
+    eph: false,
+};
+const EPH: Delimiters = Delimiters {
+    sop: false,
+    eph: true,
+};
+
+/// A six-byte SOP marker segment: `FF91 0004 Nsop`.
+fn sop_marker(nsop: u16) -> Vec<u8> {
+    let mut v = vec![0xFF, 0x91, 0x00, 0x04];
+    v.extend_from_slice(&nsop.to_be_bytes());
+    v
+}
+
+/// One included block: a header with `zero_bit_planes = 0`, one pass, length 2.
+fn one_block_header() -> Vec<u8> {
+    let mut w = PackedHeader::new();
+    w.bit(1); // present
+    w.bit(1); // included
+    w.bit(1); // zero-bitplane 0
+    w.bit(0); // 1 pass
+    w.bit(0); // Lblock stays 3
+    w.bits(2, 3); // length 2
+    w.finish()
+}
+
+/// SOP precedes the packet header and is consumed; its `Nsop` must match the
+/// packet's index within the tile.
+#[test]
+fn sop_is_consumed_and_its_sequence_number_checked() {
+    let mut data = sop_marker(0);
+    data.extend_from_slice(&one_block_header());
+    data.extend_from_slice(&[0xAB, 0xCD]);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers_with(&data, &bands, 1, SOP).unwrap();
+    assert_eq!(subbands[0].blocks[0].segments.concat(), vec![0xAB, 0xCD]);
+    assert_eq!(next, data.len());
+}
+
+/// SOP is optional even when `Scod` signals it (A.8.1). OpenJPEG warns and
+/// carries on; rejecting its absence would false-reject a valid codestream.
+#[test]
+fn a_missing_sop_is_tolerated() {
+    let mut data = one_block_header();
+    data.extend_from_slice(&[1, 2]);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers_with(&data, &bands, 1, SOP).unwrap();
+    assert_eq!(subbands[0].blocks[0].segments.concat(), vec![1, 2]);
+    assert_eq!(next, data.len());
+}
+
+/// A wrong `Nsop` means the packet boundary is not where the codestream says.
+/// That is what the marker exists to detect, so it is an error even though
+/// OpenJPEG leaves it unchecked (`/* TODO : check the Nsop value */`).
+#[test]
+fn a_wrong_sop_sequence_number_is_codestream() {
+    let mut data = sop_marker(7); // packet 0 claims to be packet 7
+    data.extend_from_slice(&one_block_header());
+    data.extend_from_slice(&[1, 2]);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let e = parse_layers_with(&data, &bands, 1, SOP).unwrap_err();
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.contains("sequence number")),
+        "got {e:?}"
+    );
+}
+
+#[test]
+fn a_malformed_sop_segment_is_codestream() {
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+
+    // Lsop must be 4.
+    let mut data = vec![0xFF, 0x91, 0x00, 0x06, 0x00, 0x00];
+    data.extend_from_slice(&one_block_header());
+    data.extend_from_slice(&[1, 2]);
+    let e = parse_layers_with(&data, &bands, 1, SOP).unwrap_err();
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.contains("Lsop")),
+        "got {e:?}"
+    );
+
+    // Truncated before Nsop.
+    let data = vec![0xFF, 0x91, 0x00, 0x04, 0x00];
+    let e = parse_layers_with(&data, &bands, 1, SOP).unwrap_err();
+    assert!(matches!(e, Error::Codestream(_)), "got {e:?}");
+}
+
+/// `Nsop` is 16 bits and wraps. Packet 65536 carries `Nsop = 0` again.
+#[test]
+fn the_sop_sequence_number_wraps_at_65536() {
+    let mut data = sop_marker(0);
+    data.extend_from_slice(&one_block_header());
+    data.extend_from_slice(&[1, 2]);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let mut states: Vec<BandState<'_>> = bands.iter().map(BandState::new).collect();
+    // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
+    parse_packet(&data, 0, 0, 65536, SOP, &bands, &mut states).expect("wraps to zero");
+}
+
+/// EPH sits between the packet header and its body, and `Scod` makes it
+/// mandatory rather than optional (A.8.2).
+#[test]
+fn eph_is_consumed_after_the_packet_header() {
+    let mut data = one_block_header();
+    data.extend_from_slice(&[0xFF, 0x92]);
+    data.extend_from_slice(&[3, 4]);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers_with(&data, &bands, 1, EPH).unwrap();
+    assert_eq!(subbands[0].blocks[0].segments.concat(), vec![3, 4]);
+    assert_eq!(next, data.len());
+}
+
+#[test]
+fn a_missing_eph_is_codestream() {
+    let mut data = one_block_header();
+    data.extend_from_slice(&[1, 2]);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let e = parse_layers_with(&data, &bands, 1, EPH).unwrap_err();
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.contains("EPH")),
+        "got {e:?}"
+    );
+}
+
+/// An empty packet still carries its EPH: the marker follows the header, and an
+/// empty packet has one.
+#[test]
+fn an_empty_packet_still_carries_its_eph() {
+    let mut w = PackedHeader::new();
+    w.bit(0); // empty packet
+    let mut data = w.finish();
+    data.extend_from_slice(&[0xFF, 0x92]);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers_with(&data, &bands, 1, EPH).unwrap();
+    assert_eq!(subbands[0].blocks[0].num_passes, 0);
+    assert_eq!(next, data.len());
 }
