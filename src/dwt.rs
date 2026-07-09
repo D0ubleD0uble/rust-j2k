@@ -52,21 +52,48 @@ const K: f32 = 1.230_174_1;
 /// (pre level-shift), driven by the COD transform choice and decomposition
 /// level count. Output is row-major, `width * height` of the full resolution.
 ///
+/// One component's reconstructed samples, still on the arithmetic the wavelet
+/// used. Reversible 5/3 reconstructs in exact integers; irreversible 9/7
+/// reconstructs in `f32` and is *not* rounded here.
+///
+/// The rounding is deferred to [`crate::image::assemble`] so that it happens
+/// exactly once, after the inverse colour transform. ICT mixes the first three
+/// components arithmetically (Annex G.3), and rounding each of them beforehand
+/// would inject up to half a unit of error into that mix. OpenJPEG defers it the
+/// same way: `opj_tcd_mct_decode` runs on `OPJ_FLOAT32*`, and
+/// `opj_tcd_dc_level_shift_decode` is what calls `opj_lrintf`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Samples {
+    /// 5/3 reversible: exact integers.
+    Reversible(Vec<i32>),
+    /// 9/7 irreversible: real-valued, unrounded.
+    Irreversible(Vec<f32>),
+}
+
+impl Samples {
+    /// Number of samples, whichever arm carries them.
+    pub fn len(&self) -> usize {
+        match self {
+            Samples::Reversible(v) => v.len(),
+            Samples::Irreversible(v) => v.len(),
+        }
+    }
+}
+
 /// The [`SubbandCoeffs`] arm fixes the arithmetic: reversible 5/3 reconstructs
-/// in exact integers, irreversible 9/7 in `f32` then rounds to the nearest
-/// integer. Both must agree with the COD transform (checked in debug builds).
-pub fn inverse(header: &MainHeader, coeffs: SubbandCoeffs) -> Result<Vec<i32>> {
+/// in exact integers, irreversible 9/7 in `f32`. Both must agree with the COD
+/// transform (checked in debug builds).
+pub fn inverse(header: &MainHeader, coeffs: SubbandCoeffs) -> Result<Samples> {
     match coeffs {
         SubbandCoeffs::Reversible(bands) => {
             debug_assert_eq!(header.cod.transform, Transform::Reversible53);
             debug_assert_eq!(bands.levels.len(), header.cod.decomposition_levels as usize);
-            Ok(reconstruct(bands, inverse_5_3).data)
+            Ok(Samples::Reversible(reconstruct(bands, inverse_5_3).data))
         }
         SubbandCoeffs::Irreversible(bands) => {
             debug_assert_eq!(header.cod.transform, Transform::Irreversible97);
             debug_assert_eq!(bands.levels.len(), header.cod.decomposition_levels as usize);
-            let raster = reconstruct(bands, inverse_9_7);
-            Ok(raster.data.into_iter().map(|v| v.round() as i32).collect())
+            Ok(Samples::Irreversible(reconstruct(bands, inverse_9_7).data))
         }
     }
 }
@@ -401,7 +428,7 @@ mod tests {
     // transform (rows then columns, then deinterleave into the four subbands)
     // builds the coefficient pyramid that `inverse` must take back to the image.
 
-    use super::inverse;
+    use super::{Samples, inverse};
     use crate::codestream::MainHeader;
     use crate::codestream::markers::{
         Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
@@ -557,13 +584,18 @@ mod tests {
             let bands = forward_bands(&image, w, h, levels, &forward_5_3);
             let hdr = header(Transform::Reversible53, levels as u8, w as u32, h as u32);
             let out = inverse(&hdr, SubbandCoeffs::Reversible(bands)).unwrap();
-            assert_eq!(out, image, "5/3 mismatch for {w}x{h}, {levels} levels");
+            assert_eq!(
+                out,
+                Samples::Reversible(image),
+                "5/3 mismatch for {w}x{h}, {levels} levels"
+            );
         }
     }
 
-    /// 9/7 is float, but rounding an integer-valued image through the round-trip
-    /// recovers it exactly (the per-sample error stays far below 0.5), which also
-    /// exercises the final round-to-`i32`.
+    /// 9/7 is float and stays float: `inverse` no longer rounds, so the samples
+    /// reach `image::assemble` unrounded. Rounding an integer-valued image
+    /// through the round-trip still recovers it exactly (the per-sample error
+    /// stays far below 0.5).
     #[test]
     fn reconstruct_9_7_within_tolerance() {
         for (w, h, levels) in CASES {
@@ -572,7 +604,32 @@ mod tests {
             let bands = forward_bands(&as_f32, w, h, levels, &forward_9_7);
             let hdr = header(Transform::Irreversible97, levels as u8, w as u32, h as u32);
             let out = inverse(&hdr, SubbandCoeffs::Irreversible(bands)).unwrap();
-            assert_eq!(out, image, "9/7 mismatch for {w}x{h}, {levels} levels");
+
+            let Samples::Irreversible(values) = out else {
+                panic!("the 9/7 path must carry f32");
+            };
+            let rounded: Vec<i32> = values.iter().map(|v| v.round_ties_even() as i32).collect();
+            assert_eq!(rounded, image, "9/7 mismatch for {w}x{h}, {levels} levels");
         }
+    }
+
+    /// The irreversible path hands `assemble` unrounded samples. A decoder that
+    /// rounded here would destroy the precision the inverse colour transform
+    /// needs (issue #76).
+    #[test]
+    fn the_irreversible_path_is_not_rounded_by_the_dwt() {
+        // A single 1x1 LL band with no decomposition: `inverse` returns it as is.
+        let hdr = header(Transform::Irreversible97, 0, 1, 1);
+        let bands = Bands {
+            ll: Band {
+                origin: (0, 0),
+                width: 1,
+                height: 1,
+                data: vec![2.5f32],
+            },
+            levels: Vec::new(),
+        };
+        let out = inverse(&hdr, SubbandCoeffs::Irreversible(bands)).unwrap();
+        assert_eq!(out, Samples::Irreversible(vec![2.5]));
     }
 }

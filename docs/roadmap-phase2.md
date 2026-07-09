@@ -254,9 +254,9 @@ P2.1 (multiple components).
 decodes; RCT bit-exact (reversible), ICT within the compliance-class bounds.
 
 **Done:** RCT has landed (`src/mct.rs`); `p0_14` decodes bit-exact, taking the
-gate to 2/23. ICT remains: it needs the inverse DWT to hand back the 9/7 path's
-floats rather than rounding to `i32` first, since rounding before the transform
-loses the precision the compliance-class bounds assume.
+gate to 2/23. ICT remains: the inverse DWT now hands back the 9/7 path's floats
+(`dwt::Samples`), so the precision ICT needs is there; what is left is the G.3
+matrix itself and a synthetic lossy fixture to grade it against.
 
 ### P2.9 — Region of interest, maxshift (`src/quant.rs`, `src/codestream/`)
 
