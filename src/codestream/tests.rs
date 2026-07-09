@@ -334,12 +334,31 @@ fn tile_larger_than_image_is_accepted() {
 }
 
 #[test]
-fn non_lrcp_progression_is_unsupported() {
+fn every_progression_order_parses() {
+    for (code, want) in [
+        (0, Progression::Lrcp),
+        (1, Progression::Rlcp),
+        (2, Progression::Rpcl),
+        (3, Progression::Pcrl),
+        (4, Progression::Cprl),
+    ] {
+        let bytes = codestream(&[
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_body(0, code, 1, 0, 5, 4, 4, 0, 1)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ]);
+        let (header, _) = parse_main_header(&bytes).unwrap_or_else(|e| panic!("{code}: {e:?}"));
+        assert_eq!(header.cod.progression, want, "progression code {code}");
+    }
+}
+
+#[test]
+fn reserved_progression_order_is_marker() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
-        seg(marker::COD, &cod_body(0, 2, 1, 0, 5, 4, 4, 0, 1)), // RPCL
+        seg(marker::COD, &cod_body(0, 5, 1, 0, 5, 4, 4, 0, 1)),
     ]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+    assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
 #[test]
@@ -1311,11 +1330,8 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with_cod(cod_body(0x02, 0, 1, 0, 5, 4, 4, 0, 1))),
             Variant::Unsupported,
         ),
-        (
-            "progression order other than LRCP",
-            err(&header_with_cod(cod_body(0, 1, 1, 0, 5, 4, 4, 0, 1))),
-            Variant::Unsupported,
-        ),
+        // Every progression order is decoded, so they left this table; a
+        // reserved code is still an illegal field.
         // Multiple quality layers are decoded, so they left this table; a
         // declared zero is still an illegal field.
         (

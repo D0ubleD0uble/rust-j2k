@@ -96,24 +96,20 @@ pub enum Transform {
 
 /// Progression order (COD, "SGcod progression order"). ISO Table A-16.
 ///
-/// Only [`Lrcp`](Progression::Lrcp) is decoded today; `decode_cod` rejects the
-/// others. The full set is kept so the parser names each code and the remaining
-/// orders have a home when they come online.
+/// All five are decoded. Under maximal precincts the position axis has one
+/// value, so `Pcrl` and `Cprl` enumerate the same packet sequence; see
+/// `tier2::for_each_packet`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progression {
     /// Layer / resolution / component / position.
     Lrcp,
-    /// Resolution / layer / component / position. Not yet decoded.
-    #[allow(dead_code)]
+    /// Resolution / layer / component / position.
     Rlcp,
-    /// Resolution / position / component / layer. Not yet decoded.
-    #[allow(dead_code)]
+    /// Resolution / position / component / layer.
     Rpcl,
-    /// Position / component / resolution / layer. Not yet decoded.
-    #[allow(dead_code)]
+    /// Position / component / resolution / layer.
     Pcrl,
-    /// Component / position / resolution / layer. Not yet decoded.
-    #[allow(dead_code)]
+    /// Component / position / resolution / layer.
     Cprl,
 }
 

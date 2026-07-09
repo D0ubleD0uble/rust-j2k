@@ -574,8 +574,8 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
 }
 
 /// Decode COD — default coding style (A.6.1): transform, decomposition depth,
-/// progression, layers, code-block size/style. Enforces LRCP, a single layer,
-/// no precincts, no multi-component transform.
+/// progression, layers, code-block size/style. Rejects explicit precincts, the
+/// non-default code-block styles, Part 2's array MCT, and ICT.
 fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     let scod = b.u8()?;
     // Scod bit 0: user-defined precincts present in SPcod; bits 1/2: SOP/EPH.
@@ -592,11 +592,10 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
 
     let progression = match b.u8()? {
         0 => Progression::Lrcp,
-        p @ 1..=4 => {
-            return Err(Error::Unsupported(format!(
-                "progression order {p}; the subset is LRCP only"
-            )));
-        }
+        1 => Progression::Rlcp,
+        2 => Progression::Rpcl,
+        3 => Progression::Pcrl,
+        4 => Progression::Cprl,
         other => {
             return Err(Error::Marker(format!("reserved progression order {other}")));
         }
