@@ -22,8 +22,8 @@ These two fixtures close that. Both are snapshotted `tolerance: exact` against
 
 A lossless 9/7 with decomposition levels is *not* bit-exact against OpenJPEG
 today: 2 of 1536 samples differ by 1. That is a separate rounding difference in
-the inverse 9/7 lifting, tracked on its own issue, and it is why the lossless
-fixture here uses one resolution and the multi-level one is lossy.
+the inverse 9/7 lifting (issue #104), and it is why the lossless fixture here uses
+one resolution and the multi-level one is lossy.
 
 Usage: python3 scripts/gen-irreversible-fixtures.py
 Requires `opj_compress` and `opj_decompress` on PATH.
