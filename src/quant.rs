@@ -33,7 +33,12 @@
 //! tmp = (float)datap * stepsize`. Adding a further `± ½ · Δ_b` here would bias
 //! every coefficient by a half step, and halving `q_double` with an integer
 //! divide first would silently cancel that bias for odd `q` while leaving it for
-//! even `q`. The decoder did exactly that until #101.
+//! even `q` — an easy pair of mistakes to make together, because they look
+//! correct on any coefficient that was coded to its last bit-plane.
+//!
+//! The two decoders split `gain_b` differently — see [`apply_band`] — so the
+//! step matches OpenJPEG's `band->stepsize` exactly on `LL` and only closely on
+//! the detail bands.
 
 use crate::Result;
 use crate::codestream::MainHeader;
@@ -132,23 +137,26 @@ fn step_params(qcd: &Qcd, band: usize) -> Result<(u8, u16)> {
     })
 }
 
-/// Reconstruct one subband's coefficients in place: `sign(q) · (|q| + ½) · Δ`,
-/// leaving zeros at zero. `gain` is the log2 nominal subband gain.
+/// Scale one subband by half its step size. `gain` is the log2 nominal subband
+/// gain (Table E-1: LL 0, HL/LH 1, HH 2).
 ///
-/// The step and the per-sample product are formed in `f64` and narrowed to
-/// `f32` only at the end: `R_I` can reach 38 bits (the SIZ depth), so the
-/// `2^(R_I + gain − ε)` factor exceeds the `f32` range, and the wider mantissa
-/// keeps `(|q| + ½)·Δ` accurate before the lossy-tolerance comparison. A `-0.0`
-/// index is filtered by the `!= 0.0` guard, so `signum` never sees it.
-/// Scale one subband by half its step size.
+/// The step is computed in `f64` because `R_I` can reach 38 bits (the SIZ
+/// depth), so the `2^(R_I + gain − ε)` factor can leave the `f32` range. It is
+/// then narrowed and halved the way OpenJPEG does — `(OPJ_FLOAT32)step`, then
+/// `0.5f * band->stepsize`. Narrowing first and halving after is exact (halving
+/// only decrements the exponent), and multiplying each coefficient by
+/// `0.5 · step` in one `f32` operation is a single rounding, as the oracle has.
+/// Keeping an `f64` intermediate would be *more* accurate and would round
+/// differently near a tie.
 ///
-/// The step is computed in `f64` because the `2^(R_I + gain − ε)` factor can
-/// leave the `f32` range, then narrowed and halved exactly as OpenJPEG does:
-/// `(OPJ_FLOAT32)step` followed by `0.5f * band->stepsize`. Halving after the
-/// narrowing is exact (it only decrements the exponent), so the order costs
-/// nothing — but multiplying by `0.5 * step` in one `f32` operation is what the
-/// oracle does, and doing it in `f64` and narrowing afterwards would round
-/// differently on coefficients near a tie.
+/// The gain lives here, in the step. OpenJPEG's decoder instead zeroes it
+/// (`tcd.c`'s `log2_gain = (!isEncoder && qmfbid == 0) ? 0 : …`) and folds the
+/// missing factor of two into the inverse 9/7 as `two_invK`. Its own comment
+/// calls that `BUG_WEIRD_TWO_INVK`, and the constant it uses, `1.625732422`,
+/// is 3.3e-5 off the true `2/K`. So on the detail bands the two decoders reach
+/// the same answer by different routes, and agreement there is close but not
+/// bit-for-bit. This crate keeps the exact `1/K`; `p0_09` decodes bit-exact
+/// against the ISO reference with it.
 fn apply_band(band: &mut Band<f32>, (exp, mant): (u8, u16), gain: i32, prec: i32) {
     let step = (1.0 + f64::from(mant) / MANTISSA_DENOM) * 2f64.powi(prec + gain - i32::from(exp));
     let half_step = 0.5f32 * step as f32;
