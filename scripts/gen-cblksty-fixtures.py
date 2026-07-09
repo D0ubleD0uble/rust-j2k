@@ -9,7 +9,20 @@ same block. That is the interesting case, so it is graded here.
 
 `opj_compress -M <mask>` sets the code-block style byte: 1 bypass, 2 reset,
 4 restart, 8 vertically causal, 16 predictable termination, 32 segmentation
-symbols. Only `restart` is decoded today.
+symbols. `restart`, `predictable termination` and `segmentation symbols` are
+decoded today.
+
+The corpus cannot grade the latter two. `p0_02` sets both (plus `restart`) and
+`p0_13` sets `predictable termination` alone, but each also carries a COC marker
+(#58), so both stop on COC before Tier-1 ever sees the style byte. Hence these
+synthetic fixtures.
+
+`segmentation symbols` appends four uniform-context decisions to every cleanup
+pass, so it is part of the codeword: a decoder that ignores the flag falls out
+of step with the MQ coder and reconstructs garbage. `predictable termination`
+constrains only the encoder, so `pterm` decodes identically to the default
+style -- the fixture exists to prove the flag is accepted and changes nothing,
+which is a claim worth a regression test rather than a comment.
 
 Two quality layers and two components; the last layer is lossless, so a full
 decode is bit-exact. A decoder that ran the segments as one continuous MQ
@@ -37,6 +50,11 @@ LAYER_RATES = "20,1"  # two layers, the last lossless
 # name -> (opj_compress -M mask, expected code-block style byte)
 VARIANTS = {
     "restart": (4, 0x04),
+    "segsym": (32, 0x20),
+    "pterm": (16, 0x10),
+    # All three at once: each cleanup pass is its own terminated segment *and*
+    # ends with a segmentation symbol. This is `p0_02`'s style byte (0x34).
+    "restart_pterm_segsym": (4 | 16 | 32, 0x34),
 }
 
 

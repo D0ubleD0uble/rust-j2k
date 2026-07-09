@@ -59,6 +59,18 @@ pub mod code_block_style {
     /// an independently decodable codeword segment.
     pub const TERMALL: u8 = 0x04;
 
+    /// Bit 4: the encoder used a predictable MQ termination, so a decoder can
+    /// check that each codeword segment ends where it should. It constrains the
+    /// encoder, not the decoder: the coded symbols, and so the reconstructed
+    /// coefficients, are the same either way.
+    pub const PTERM: u8 = 0x10;
+
+    /// Bit 5: every cleanup pass ends with a four-symbol `1010` segmentation
+    /// symbol, coded in the uniform context. Unlike [`PTERM`] this *is* part of
+    /// the codeword: a decoder that does not consume the four decisions falls
+    /// out of step with the MQ coder for every later pass.
+    pub const SEGSYM: u8 = 0x20;
+
     /// Every flag of the style byte, low bit first, with the name used in error
     /// messages. All eight bits are allocated, so no value goes unnamed.
     ///

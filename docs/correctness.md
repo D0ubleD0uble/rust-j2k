@@ -90,13 +90,26 @@ exactly one byte, the progression code in COD. No fixture separates them until
 the precinct partition lands. That is worth recording next to the code rather
 than mistaking one order's fixture for coverage of both.
 
+A third shape is the nastiest, because the fixture looks like it targets the
+feature by name. One feature can *mask* another. Under `restart` the MQ decoder
+is re-initialised for every coding pass, so a decoder that ignores `segmentation
+symbols` and never reads the four decisions ending each cleanup pass still
+decodes correctly: the symbols it skipped are trailing bytes in a segment nobody
+reads again. Turn `restart` off and the same decoder desynchronises immediately.
+So a `restart | segsym` codestream — which is exactly what `p0_02` is — grades
+`segsym`'s *verification* but not its *consumption*, and a fixture named for both
+flags is weaker than one carrying `segsym` alone. Where features compose, the
+fixture that isolates each one is the one that grades it.
+
 So before adding an entry to `IN_CLASS`, ask what about that entry would have to
 change for the new code to be wrong. If nothing would, the entry is not the
 oracle for that feature, and the milestone needs a fixture that can tell the
 difference — a multi-layer codestream to separate LRCP from RLCP, multiple
 precincts to separate RPCL from RLCP, and so on. Mutating the new code and
 watching the entry fail is the cheapest way to check; if no mutation makes it
-fail, the entry is not testing it.
+fail, the entry is not testing it. Run the mutation against *every* fixture, not
+just the one you expect to break: the fixtures that survive tell you which ones
+were never testing the feature.
 
 ## Per-stage golden tests
 

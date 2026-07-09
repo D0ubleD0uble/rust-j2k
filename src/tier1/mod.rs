@@ -239,7 +239,7 @@ where
             block.num_passes,
             block.zero_bit_planes,
             style,
-        );
+        )?;
         place_block(&mut data, sb.width, block, &state, &convert);
     }
 
