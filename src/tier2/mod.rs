@@ -8,7 +8,7 @@
 //! hands Tier-1 the coded byte segments per code-block — it does **not** run
 //! the arithmetic decoder.
 //!
-//! The decoded subset is one tile, one component, one quality layer, LRCP, and
+//! The decoded subset is one tile, LRCP, and
 //! maximal precincts (one precinct per resolution). That collapses the packet
 //! stream to exactly one packet per resolution level, coarsest first, so the
 //! whole tile-part is `header₀ body₀ header₁ body₁ …` with no precinct or layer
@@ -51,9 +51,13 @@ pub struct CodeBlock<'a> {
     pub y: usize,
     pub width: usize,
     pub height: usize,
+    /// Coding passes accumulated over every layer that contributed.
     pub num_passes: u32,
     pub zero_bit_planes: u32,
-    pub segment: &'a [u8],
+    /// This block's byte contributions, one per layer that included it, in
+    /// layer order. With no per-pass termination the MQ codeword runs
+    /// continuously across them, so Tier-1 decodes their concatenation.
+    pub segments: Vec<&'a [u8]>,
 }
 
 /// One subband: its orientation, tile-component origin, sample geometry, and the
@@ -124,26 +128,57 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
         ));
     }
 
-    let mut cursor = 0usize;
-    let mut components: Vec<ComponentCoded<'a>> = (0..component_count)
-        .map(|_| ComponentCoded {
-            resolutions: Vec::with_capacity(resolution_count),
+    // One state per (component, resolution, band), carried across every layer of
+    // the precinct. The tag trees decode incrementally, so they must outlive the
+    // packet that starts them.
+    let mut states: Vec<Vec<Vec<BandState<'a>>>> = geoms
+        .iter()
+        .map(|component| {
+            component
+                .iter()
+                .map(|bands| bands.iter().map(BandState::new).collect())
+                .collect()
         })
         .collect();
 
-    // `geoms` is component-major but the packets arrive resolution-major, so walk
-    // the resolution axis on the outside and the components within it.
-    for resolution in 0..resolution_count {
-        for (component, component_geoms) in components.iter_mut().zip(&geoms) {
-            let (subbands, next) = parse_packet(data, cursor, &component_geoms[resolution])?;
-            cursor = next;
-            component.resolutions.push(Resolution { subbands });
+    // LRCP: layer, then resolution, then component, then precinct (B.12.1.1).
+    // With maximal precincts the innermost loop has one iteration.
+    let mut cursor = 0usize;
+    for layer in 0..cs.header.cod.layers as u32 {
+        for resolution in 0..resolution_count {
+            for (component, component_geoms) in geoms.iter().enumerate() {
+                cursor = parse_packet(
+                    data,
+                    cursor,
+                    layer,
+                    &component_geoms[resolution],
+                    &mut states[component][resolution],
+                )?;
+            }
         }
     }
 
-    // Single-layer LRCP with maximal precincts packs the tile-part with no
-    // padding: the packets must tile it exactly up to the closing EOC. Any
-    // remainder means a misread field (this doubles as the parse self-check).
+    let components: Vec<ComponentCoded<'a>> = states
+        .into_iter()
+        .zip(&geoms)
+        .map(|(component_states, component_geoms)| {
+            Ok(ComponentCoded {
+                resolutions: component_states
+                    .into_iter()
+                    .zip(component_geoms)
+                    .map(|(band_states, bands)| {
+                        Ok(Resolution {
+                            subbands: build_subbands(bands, band_states)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // The packets tile the tile-part exactly, with no padding, up to the closing
+    // EOC. Any remainder means a misread field — a dropped layer shows up here
+    // as leftover bytes (this doubles as the parse self-check).
     if cursor != data.len() {
         return Err(Error::Codestream(format!(
             "tile-part has {} byte(s) left after the last packet",
@@ -346,149 +381,252 @@ const ZBP_LIMIT: u32 = 64;
 /// read at most 31 bits, inside the `u32` [`BitReader::read`] accepts.
 const LBLOCK_MAX: u32 = 24;
 
-/// Per-block metadata read from a packet header, before body bytes are sliced.
-struct BlockMeta {
-    num_passes: u32,
+/// One code-block's decode state, carried across the quality layers of its
+/// precinct (ISO/IEC 15444-1 B.10).
+///
+/// A block is included in the packets of one layer onward, never in isolation:
+/// once the inclusion tag tree resolves it, later layers signal a contribution
+/// with a single bit. `lblock` and `zero_bit_planes` are read once and then
+/// persist, and `num_passes` and `segments` accumulate. Rebuilding any of this
+/// per packet — which a single-layer decoder can get away with — desynchronises
+/// the header bit-reader on the second layer.
+struct BlockState<'a> {
+    included: bool,
+    /// Length-indicator width, grown by a unary run of 1s and never reset.
+    lblock: u32,
     zero_bit_planes: u32,
+    /// Coding passes summed over every contributing layer.
+    num_passes: u32,
+    /// Byte contributions in layer order.
+    segments: Vec<&'a [u8]>,
+}
+
+impl BlockState<'_> {
+    fn new() -> Self {
+        BlockState {
+            included: false,
+            lblock: 3,
+            zero_bit_planes: 0,
+            num_passes: 0,
+            segments: Vec::new(),
+        }
+    }
+}
+
+/// One subband's decode state across the layers of its precinct: the two tag
+/// trees, which decode incrementally at a rising threshold, plus a state per
+/// code-block.
+struct BandState<'a> {
+    inclusion: TagTree,
+    zero_bits: TagTree,
+    blocks: Vec<BlockState<'a>>,
+}
+
+impl BandState<'_> {
+    fn new(band: &BandGeom) -> Self {
+        BandState {
+            inclusion: TagTree::new(band.block_cols as u32, band.block_rows as u32),
+            zero_bits: TagTree::new(band.block_cols as u32, band.block_rows as u32),
+            blocks: band.blocks.iter().map(|_| BlockState::new()).collect(),
+        }
+    }
+}
+
+/// What one code-block contributes to *this* packet: its coding passes and the
+/// length of the byte range that follows the header.
+struct Contribution {
+    band: usize,
+    block: usize,
     seg_len: usize,
 }
 
-/// Parse one packet (the single precinct of one resolution) starting at byte
-/// `start` of the tile-part `data`. Returns the resolution's subbands with their
-/// segments and the byte offset where the next packet begins.
+/// Parse one packet — the single precinct of one resolution of one component in
+/// one layer — starting at byte `start` of the tile-part `data`.
+///
+/// Folds the packet's contributions into `states` and returns the byte offset
+/// where the next packet begins. The subbands are built once every layer has
+/// been read; see [`build_subbands`].
 fn parse_packet<'a>(
     data: &'a [u8],
     start: usize,
+    layer: u32,
     bands: &[BandGeom],
-) -> Result<(Vec<Subband<'a>>, usize)> {
+    states: &mut [BandState<'a>],
+) -> Result<usize> {
+    // A packet occupies at least one byte, so a start at or past the end means
+    // the codestream promised more packets than it carries.
+    if start >= data.len() {
+        return Err(Error::Codestream(
+            "tile-part ends before the last packet".into(),
+        ));
+    }
     let mut bio = BitReader::new(&data[start..]);
 
-    // The first bit flags an empty packet (no contributions) vs. a present one.
+    // The first bit flags an empty packet (no contributions) against a present
+    // one. An empty packet still costs its layer: the tag trees are untouched,
+    // not reset.
     let present = bio.read_bit() == 1;
-    let mut metas: Vec<Vec<BlockMeta>> = Vec::with_capacity(bands.len());
-    for band in bands {
-        if !present {
-            metas.push(band.blocks.iter().map(|_| BlockMeta::absent()).collect());
-            continue;
+    let mut contributions: Vec<Contribution> = Vec::new();
+    if present {
+        for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
+            parse_band_header(band_index, band, state, layer, &mut bio, &mut contributions)?;
         }
-        metas.push(parse_band_header(band, &mut bio)?);
     }
 
     // The header is a whole number of bytes; the body follows immediately.
     bio.align();
     let mut body = start + bio.bytes_consumed();
 
-    let mut subbands = Vec::with_capacity(bands.len());
-    for (band, band_meta) in bands.iter().zip(&metas) {
-        let mut blocks = Vec::with_capacity(band.blocks.len());
-        for (&(x, y, width, height), meta) in band.blocks.iter().zip(band_meta) {
-            // An included block (passes > 0) must carry coded bytes; a zero
-            // length there is malformed and would hand Tier-1 an empty MQ
-            // stream, so reject it here where the context is known.
-            if meta.num_passes > 0 && meta.seg_len == 0 {
-                return Err(Error::Codestream(
-                    "included code-block has coding passes but zero length".into(),
-                ));
+    for contribution in &contributions {
+        let end = body
+            .checked_add(contribution.seg_len)
+            .filter(|&e| e <= data.len())
+            .ok_or_else(|| {
+                Error::Codestream("packet body segment overruns the tile-part".into())
+            })?;
+        states[contribution.band].blocks[contribution.block]
+            .segments
+            .push(&data[body..end]);
+        body = end;
+    }
+
+    Ok(body)
+}
+
+/// Read one subband's code-block entries from this layer's packet header
+/// (ISO B.10): per block its inclusion, and for a contributing block the
+/// zero-bitplane count (first inclusion only), coding-pass count, and the
+/// length of its byte contribution.
+fn parse_band_header(
+    band_index: usize,
+    band: &BandGeom,
+    state: &mut BandState<'_>,
+    layer: u32,
+    bio: &mut BitReader,
+    contributions: &mut Vec<Contribution>,
+) -> Result<()> {
+    let cols = band.block_cols as u32;
+
+    for block_index in 0..band.blocks.len() {
+        let bx = block_index as u32 % cols;
+        let by = block_index as u32 / cols;
+
+        let was_included = state.blocks[block_index].included;
+        let contributes = if was_included {
+            // Already included: one bit says whether this layer adds passes.
+            bio.read_bit() == 1
+        } else {
+            // Not yet included: the inclusion tree resolves to the first layer
+            // that carries this block. Reading at `layer + 1` asks "is that
+            // layer at most this one?" and leaves the tree part-decoded when it
+            // is not, so the next layer resumes where this one stopped.
+            match state.inclusion.read(bx, by, layer + 1, bio) {
+                Some(_) => {
+                    state.blocks[block_index].included = true;
+                    true
+                }
+                None => false,
             }
-            let segment = if meta.seg_len == 0 {
-                &[][..]
-            } else {
-                let end = body
-                    .checked_add(meta.seg_len)
-                    .filter(|&e| e <= data.len())
-                    .ok_or_else(|| {
-                        Error::Codestream("packet body segment overruns the tile-part".into())
-                    })?;
-                let slice = &data[body..end];
-                body = end;
-                slice
-            };
-            blocks.push(CodeBlock {
-                x,
-                y,
-                width,
-                height,
-                num_passes: meta.num_passes,
-                zero_bit_planes: meta.zero_bit_planes,
-                segment,
+        };
+        if !contributes {
+            continue;
+        }
+
+        // The zero-bitplane tree is resolved in full the first time a block is
+        // included, so a single read at the ceiling settles it. Later layers
+        // never read it again.
+        if !was_included {
+            state.blocks[block_index].zero_bit_planes = state
+                .zero_bits
+                .read(bx, by, ZBP_LIMIT, bio)
+                .ok_or_else(|| Error::Codestream("zero-bitplane count exceeds the limit".into()))?;
+        }
+
+        // `read_num_passes` always returns >= 1, so the `ilog2` below never hits
+        // the zero case.
+        let num_passes = read_num_passes(bio);
+
+        // Lblock grows by a unary run of 1s and carries into later layers; the
+        // length field is then `Lblock + floor(log2(num_passes))` bits wide
+        // (ISO B.10.7.5), over *this* contribution's passes, not the running
+        // total. OpenJPEG spells the same thing `numlenbits +
+        // floorlog2(seg->numnewpasses)`.
+        //
+        // One length field, because one codeword segment. A contribution splits
+        // into several segments only under a code-block style that terminates
+        // (`termall`, `bypass`), which `decode_cod` rejects; there OpenJPEG's
+        // `do { ... } while (n > 0)` reads a length per segment.
+        let block = &mut state.blocks[block_index];
+        while bio.read_bit() == 1 {
+            block.lblock += 1;
+            if block.lblock > LBLOCK_MAX {
+                return Err(Error::Codestream("Lblock indicator runs too long".into()));
+            }
+        }
+        let length_bits = block.lblock + num_passes.ilog2();
+        let seg_len = bio.read(length_bits) as usize;
+
+        // A layer may add coding passes and no bytes. The MQ codeword is
+        // continuous across layers, so the encoder's rate split can put a
+        // block's passes in one layer and the bytes that carry them in the
+        // next; OpenJPEG reads such a length without complaint. What must not
+        // happen is a block ending up with passes and no bytes at all, which
+        // would hand Tier-1 an empty MQ stream — `build_subbands` checks that,
+        // once every layer has been read.
+        block.num_passes += num_passes;
+        if seg_len > 0 {
+            contributions.push(Contribution {
+                band: band_index,
+                block: block_index,
+                seg_len,
             });
         }
-        subbands.push(Subband {
+    }
+    Ok(())
+}
+
+/// Turn the accumulated per-layer state of one resolution into its subbands.
+///
+/// A block that took coding passes but no bytes from any layer would hand Tier-1
+/// an empty MQ stream. That is checked here rather than per packet, because a
+/// single layer is allowed to contribute passes without bytes.
+fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Result<Vec<Subband<'a>>> {
+    for state in &states {
+        for block in &state.blocks {
+            if block.num_passes > 0 && block.segments.is_empty() {
+                return Err(Error::Codestream(
+                    "included code-block has coding passes but no coded bytes".into(),
+                ));
+            }
+        }
+    }
+
+    Ok(bands
+        .iter()
+        .zip(states)
+        .map(|(band, state)| Subband {
             kind: band.kind,
             origin: band.origin,
             width: band.width,
             height: band.height,
             block_cols: band.block_cols,
             block_rows: band.block_rows,
-            blocks,
-        });
-    }
-
-    Ok((subbands, body))
-}
-
-impl BlockMeta {
-    /// A block that contributes nothing to this packet.
-    fn absent() -> Self {
-        BlockMeta {
-            num_passes: 0,
-            zero_bit_planes: 0,
-            seg_len: 0,
-        }
-    }
-}
-
-/// Read one subband's code-block entries from the packet header: per block, its
-/// inclusion (inclusion tag tree at layer 0), and for an included block the
-/// zero-bitplane count, coding-pass count, and contribution length.
-fn parse_band_header(band: &BandGeom, bio: &mut BitReader) -> Result<Vec<BlockMeta>> {
-    let cols = band.block_cols as u32;
-    let rows = band.block_rows as u32;
-    let mut inclusion = TagTree::new(cols, rows);
-    let mut zero_bits = TagTree::new(cols, rows);
-
-    let mut metas = Vec::with_capacity(band.blocks.len());
-    for idx in 0..band.blocks.len() {
-        let bx = idx as u32 % cols;
-        let by = idx as u32 / cols;
-
-        // Single layer: a block is included now iff its inclusion value is 0
-        // (it never appears in a later layer), so read at threshold 1.
-        if inclusion.read(bx, by, 1, bio).is_none() {
-            metas.push(BlockMeta::absent());
-            continue;
-        }
-
-        // Zero bit-planes: unlike inclusion (read once per layer at a rising
-        // threshold), the zero-bitplane tree is resolved in full the first time
-        // a block is included, so a single read at the ceiling resolves it.
-        let zero_bit_planes = zero_bits
-            .read(bx, by, ZBP_LIMIT, bio)
-            .ok_or_else(|| Error::Codestream("zero-bitplane count exceeds the limit".into()))?;
-
-        // `read_num_passes` always returns ≥ 1, so the `ilog2` below never hits
-        // the zero case.
-        let num_passes = read_num_passes(bio);
-
-        // Lblock grows by a unary run of 1s; the length field is then
-        // `Lblock + floor(log2(num_passes))` bits wide (ISO B.10.7.5).
-        let mut lblock = 3u32;
-        while bio.read_bit() == 1 {
-            lblock += 1;
-            if lblock > LBLOCK_MAX {
-                return Err(Error::Codestream("Lblock indicator runs too long".into()));
-            }
-        }
-        let length_bits = lblock + num_passes.ilog2();
-        let seg_len = bio.read(length_bits) as usize;
-
-        metas.push(BlockMeta {
-            num_passes,
-            zero_bit_planes,
-            seg_len,
-        });
-    }
-    Ok(metas)
+            blocks: band
+                .blocks
+                .iter()
+                .zip(state.blocks)
+                .map(|(&(x, y, width, height), block)| CodeBlock {
+                    x,
+                    y,
+                    width,
+                    height,
+                    num_passes: block.num_passes,
+                    zero_bit_planes: block.zero_bit_planes,
+                    segments: block.segments,
+                })
+                .collect(),
+        })
+        .collect())
 }
 
 /// Decode the number of coding passes (ISO Table B.4 / OpenJPEG

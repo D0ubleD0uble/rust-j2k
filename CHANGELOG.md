@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Multiple quality layers (Annex B.10). A code-block's coding passes and byte
+  contributions now accumulate across the layers that include it, and its
+  inclusion tag tree, zero-bitplane tag tree, and `Lblock` length indicator
+  persist across the packets of a precinct instead of being rebuilt per packet.
+  Tier-1 decodes the concatenated contributions as one MQ codeword. `COD`
+  declaring zero layers is a `Marker` error.
 - The inverse reversible color transform (RCT, Annex G.2). When `COD` signals
   the multiple-component transform on the 5/3 path, the first three components
   are recombined after the inverse DWT and before the DC level shift. The

@@ -352,12 +352,23 @@ fn reserved_progression_is_marker() {
 }
 
 #[test]
-fn multiple_layers_is_unsupported() {
+fn multiple_layers_parse() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
-        seg(marker::COD, &cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1)),
+        seg(marker::COD, &cod_body(0, 0, 5, 0, 5, 4, 4, 0, 1)), // 5 layers
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+    let (header, _) = parse_main_header(&bytes).expect("multi-layer header parses");
+    assert_eq!(header.cod.layers, 5);
+}
+
+#[test]
+fn zero_layers_is_marker() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_body(0, 0, 0, 0, 5, 4, 4, 0, 1)),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
 #[test]
@@ -1305,10 +1316,12 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with_cod(cod_body(0, 1, 1, 0, 5, 4, 4, 0, 1))),
             Variant::Unsupported,
         ),
+        // Multiple quality layers are decoded, so they left this table; a
+        // declared zero is still an illegal field.
         (
-            "multiple quality layers",
-            err(&header_with_cod(cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1))),
-            Variant::Unsupported,
+            "zero quality layers",
+            err(&header_with_cod(cod_body(0, 0, 0, 0, 5, 4, 4, 0, 1))),
+            Variant::Marker,
         ),
         // The reversible colour transform is decoded, so it left this table.
         // What remains out of subset: its irreversible twin, Part 2's array

@@ -6,6 +6,28 @@
 //! header walk against a real OpenJPEG-produced bitstream.
 
 use super::*;
+
+/// Parse `data` as a one-layer packet over `bands`, returning the subbands and
+/// the next byte offset — the shape `parse_packet` had before quality layers.
+fn parse_one_packet<'a>(data: &'a [u8], bands: &[BandGeom]) -> Result<(Vec<Subband<'a>>, usize)> {
+    let (subbands, next) = parse_layers(data, bands, 1)?;
+    Ok((subbands, next))
+}
+
+/// Parse `layers` consecutive packets over `bands`, carrying the precinct state
+/// across them the way `decode_packets` does.
+fn parse_layers<'a>(
+    data: &'a [u8],
+    bands: &[BandGeom],
+    layers: u32,
+) -> Result<(Vec<Subband<'a>>, usize)> {
+    let mut states: Vec<BandState<'a>> = bands.iter().map(BandState::new).collect();
+    let mut cursor = 0usize;
+    for layer in 0..layers {
+        cursor = parse_packet(data, cursor, layer, bands, &mut states)?;
+    }
+    Ok((build_subbands(bands, states)?, cursor))
+}
 use crate::codestream::MainHeader;
 use crate::codestream::markers::{Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform};
 use crate::tier2::bio::BitReader;
@@ -217,12 +239,12 @@ fn packet_one_included_block() {
     data.extend_from_slice(&body);
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let (subbands, next) = parse_packet(&data, 0, &bands).unwrap();
+    let (subbands, next) = parse_one_packet(&data, &bands).unwrap();
 
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 1);
     assert_eq!(block.zero_bit_planes, 2);
-    assert_eq!(block.segment, &body);
+    assert_eq!(block.segments.concat(), body);
     assert_eq!(next, header_len + body.len());
 }
 
@@ -242,11 +264,11 @@ fn packet_length_field_width_tracks_passes() {
     data.extend_from_slice(&body);
 
     let bands = [single_block_band(BandKind::Hh, 16, 16)];
-    let (subbands, _next) = parse_packet(&data, 0, &bands).unwrap();
+    let (subbands, _next) = parse_one_packet(&data, &bands).unwrap();
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 5);
     assert_eq!(block.zero_bit_planes, 0);
-    assert_eq!(block.segment.len(), 20);
+    assert_eq!(block.segments.concat().len(), 20);
 }
 
 /// The Lblock unary run widens the length field one bit per `1`.
@@ -264,8 +286,8 @@ fn packet_lblock_increment() {
     data.extend_from_slice(&body);
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let (subbands, _next) = parse_packet(&data, 0, &bands).unwrap();
-    assert_eq!(subbands[0].blocks[0].segment.len(), 9);
+    let (subbands, _next) = parse_one_packet(&data, &bands).unwrap();
+    assert_eq!(subbands[0].blocks[0].segments.concat().len(), 9);
 }
 
 /// An empty packet (present bit 0) contributes nothing and is one byte long.
@@ -277,10 +299,10 @@ fn packet_empty() {
     assert_eq!(data.len(), 1);
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let (subbands, next) = parse_packet(&data, 0, &bands).unwrap();
+    let (subbands, next) = parse_one_packet(&data, &bands).unwrap();
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 0);
-    assert!(block.segment.is_empty());
+    assert!(block.segments.is_empty());
     assert_eq!(next, 1);
 }
 
@@ -294,10 +316,10 @@ fn packet_block_not_included() {
     let data = w.finish();
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let (subbands, next) = parse_packet(&data, 0, &bands).unwrap();
+    let (subbands, next) = parse_one_packet(&data, &bands).unwrap();
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 0);
-    assert!(block.segment.is_empty());
+    assert!(block.segments.is_empty());
     assert_eq!(next, data.len());
 }
 
@@ -335,12 +357,12 @@ fn packet_two_blocks_partial_inclusion() {
         block_rows: 1,
         blocks: vec![(0, 0, 8, 8), (8, 0, 8, 8)],
     };
-    let (subbands, _next) = parse_packet(&data, 0, &[band]).unwrap();
+    let (subbands, _next) = parse_one_packet(&data, &[band]).unwrap();
     let blocks = &subbands[0].blocks;
     assert_eq!(blocks[0].num_passes, 0);
-    assert!(blocks[0].segment.is_empty());
+    assert!(blocks[0].segments.is_empty());
     assert_eq!(blocks[1].num_passes, 1);
-    assert_eq!(blocks[1].segment, &body);
+    assert_eq!(blocks[1].segments.concat(), &body);
 }
 
 // ---- Seed codestream (the real-bitstream oracle) ----
@@ -381,7 +403,7 @@ fn seed_codestream_parses() {
         .iter()
         .flat_map(|r| &r.subbands)
         .flat_map(|s| &s.blocks)
-        .any(|b| b.num_passes > 0 && !b.segment.is_empty());
+        .any(|b| b.num_passes > 0 && !b.segments.is_empty());
     assert!(included, "expected some included code-block");
 }
 
@@ -468,4 +490,270 @@ fn resolution_geoms_honour_each_components_sub_sampling() {
     // A component index past the SIZ list is an internal inconsistency, not a
     // silent fall back to component 0.
     assert!(resolution_geoms(&h, 4).is_err());
+}
+
+// ---- Quality layers (issue #64) ----
+
+/// Assemble `(header, body)` pairs into a tile-part. Each packet's header is a
+/// whole number of bytes and its body follows immediately, so the layers cannot
+/// share one bit-writer.
+fn packets(parts: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
+    let mut data = Vec::new();
+    for (header, body) in parts {
+        data.extend_from_slice(header);
+        data.extend_from_slice(body);
+    }
+    data
+}
+
+/// A block included in layer 0 signals its later contributions with a single
+/// bit, not another inclusion tag-tree read, and its coding passes accumulate.
+#[test]
+fn layers_accumulate_passes_and_segments() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(1); // present
+    l0.bit(1); // inclusion tag tree (1x1): value 0
+    l0.bits(0b001, 3); // zero-bitplane value 2
+    l0.bit(0); // num_passes = 1
+    l0.bit(0); // Lblock stays 3
+    l0.bits(3, 3); // length 3
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1); // present
+    l1.bit(1); // already included, so one bit: contributes
+    l1.bit(0); // num_passes = 1
+    l1.bit(0); // Lblock stays 3
+    l1.bits(2, 3); // length 2
+
+    let data = packets(&[(l0.finish(), vec![1, 2, 3]), (l1.finish(), vec![4, 5])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers(&data, &bands, 2).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 2, "passes accumulate across layers");
+    assert_eq!(block.zero_bit_planes, 2, "read once, on first inclusion");
+    assert_eq!(block.segments.len(), 2, "one contribution per layer");
+    // The MQ codeword is the concatenation, in layer order.
+    assert_eq!(block.segments.concat(), vec![1, 2, 3, 4, 5]);
+    assert_eq!(next, data.len());
+}
+
+/// A block absent from layer 0 is resolved by the inclusion tag tree at a rising
+/// threshold: the tree keeps its partial decode between packets. Rebuilding it
+/// per packet would re-read the same bit and desynchronise the header.
+#[test]
+fn a_block_first_included_in_a_later_layer() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(1); // present
+    l0.bit(0); // inclusion: not yet (raises the tree's bound to 1)
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1); // present
+    l1.bit(1); // inclusion resolves: value 1 <= layer 1
+    l1.bit(1); // zero-bitplane value 0
+    l1.bit(0); // num_passes = 1
+    l1.bit(0); // Lblock stays 3
+    l1.bits(2, 3); // length 2
+
+    let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![0xAA, 0xBB])]);
+    let bands = [single_block_band(BandKind::Hl, 8, 8)];
+    let (subbands, next) = parse_layers(&data, &bands, 2).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 1);
+    assert_eq!(block.zero_bit_planes, 0);
+    assert_eq!(block.segments.concat(), vec![0xAA, 0xBB]);
+    assert_eq!(next, data.len());
+}
+
+/// An included block that contributes nothing to a layer costs one zero bit and
+/// leaves its accumulated state alone.
+#[test]
+fn an_included_block_may_skip_a_layer() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bit(0); // 1 pass
+    l0.bit(0); // Lblock 3
+    l0.bits(2, 3); // length 2
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1); // present
+    l1.bit(0); // included, but no contribution this layer
+
+    let data = packets(&[(l0.finish(), vec![9, 9]), (l1.finish(), vec![])]);
+    let bands = [single_block_band(BandKind::Lh, 8, 8)];
+    let (subbands, next) = parse_layers(&data, &bands, 2).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 1);
+    assert_eq!(block.segments.concat(), vec![9, 9]);
+    assert_eq!(next, data.len());
+}
+
+/// `Lblock` grows by a unary run and carries into later layers: the width of the
+/// length field in layer 1 depends on what layer 0 signalled. A decoder that
+/// reset it would read the wrong number of bits and desynchronise.
+#[test]
+fn lblock_persists_across_layers() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bit(0); // 1 pass
+    l0.bit(1); // Lblock 3 -> 4
+    l0.bit(0); // end of the unary run
+    l0.bits(2, 4); // the length field is now 4 bits wide
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1);
+    l1.bit(1); // contributes
+    l1.bit(0); // 1 pass
+    l1.bit(0); // no further Lblock growth
+    l1.bits(3, 4); // still 4 bits, because Lblock persisted
+
+    let data = packets(&[(l0.finish(), vec![1, 2]), (l1.finish(), vec![3, 4, 5])]);
+    let bands = [single_block_band(BandKind::Hh, 8, 8)];
+    let (subbands, next) = parse_layers(&data, &bands, 2).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 2);
+    assert_eq!(block.segments.concat(), vec![1, 2, 3, 4, 5]);
+    assert_eq!(next, data.len());
+}
+
+/// The length field's width is `Lblock + floor(log2(passes))` for the passes of
+/// *this* contribution, not the running total. Layer 1 adds 3 passes to a block
+/// that already has 3: a decoder that used the accumulated 6 would read a 5-bit
+/// length where 4 were written, and desynchronise.
+#[test]
+fn length_field_width_uses_this_layers_passes_not_the_total() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bits(0b1100, 4); // num_passes = 3
+    l0.bit(0); // Lblock stays 3
+    l0.bits(2, 4); // length 2, in 3 + floor(log2 3) = 4 bits
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1);
+    l1.bit(1); // contributes
+    l1.bits(0b1100, 4); // num_passes = 3 again (total becomes 6)
+    l1.bit(0); // Lblock stays 3
+    l1.bits(3, 4); // still 4 bits: floor(log2 3) = 1, not floor(log2 6) = 2
+
+    let data = packets(&[(l0.finish(), vec![1, 2]), (l1.finish(), vec![3, 4, 5])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers(&data, &bands, 2).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 6, "the total still accumulates");
+    assert_eq!(block.segments.concat(), vec![1, 2, 3, 4, 5]);
+    assert_eq!(next, data.len());
+}
+
+/// An empty packet costs its layer a single bit and touches no state, so the
+/// inclusion tree still resolves at value 0 in the next layer.
+#[test]
+fn an_empty_packet_leaves_the_tag_trees_alone() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(0); // empty packet
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1);
+    l1.bit(1); // inclusion resolves at value 0 — the tree was never advanced
+    l1.bit(1); // zero-bitplane 0
+    l1.bit(0); // 1 pass
+    l1.bit(0); // Lblock 3
+    l1.bits(1, 3); // length 1
+
+    let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![0x7F])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers(&data, &bands, 2).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 1);
+    assert_eq!(block.segments.concat(), vec![0x7F]);
+    assert_eq!(next, data.len());
+}
+
+/// A layer may add coding passes and no bytes. The MQ codeword is continuous
+/// across layers, so the encoder's rate split can put a block's passes in one
+/// layer and the bytes carrying them in the next. OpenJPEG reads such a length
+/// without complaint, and so must this: rejecting it would false-reject a valid
+/// codestream.
+#[test]
+fn a_layer_may_contribute_passes_without_bytes() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bit(0); // 1 pass
+    l0.bit(0); // Lblock 3
+    l0.bits(0, 3); // length 0 — no bytes this layer
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1);
+    l1.bit(1); // contributes
+    l1.bit(0); // 1 pass
+    l1.bit(0); // Lblock 3
+    l1.bits(2, 3); // length 2 — the bytes arrive now
+
+    let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![0xC0, 0xDE])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, next) = parse_layers(&data, &bands, 2).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 2, "both layers' passes count");
+    assert_eq!(block.segments.concat(), vec![0xC0, 0xDE]);
+    assert_eq!(next, data.len());
+}
+
+/// A block that takes coding passes but no bytes from *any* layer would hand
+/// Tier-1 an empty MQ stream. That is the case worth rejecting.
+#[test]
+fn a_block_with_passes_and_no_bytes_at_all_is_codestream() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bit(0); // 1 pass
+    l0.bit(0); // Lblock 3
+    l0.bits(0, 3); // length 0
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1);
+    l1.bit(1); // contributes
+    l1.bit(0); // 1 pass
+    l1.bit(0); // Lblock 3
+    l1.bits(0, 3); // length 0 again — no bytes ever arrive
+
+    let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    assert!(matches!(
+        parse_layers(&data, &bands, 2),
+        Err(Error::Codestream(_))
+    ));
+}
+
+/// A tile-part that ends before its declared layers are read is truncation, not
+/// a silently short decode.
+#[test]
+fn a_tile_part_shorter_than_its_layers_is_codestream() {
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bit(0); // 1 pass
+    l0.bit(0); // Lblock 3
+    l0.bits(1, 3); // length 1
+
+    let data = packets(&[(l0.finish(), vec![0x01])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    assert!(matches!(
+        parse_layers(&data, &bands, 2),
+        Err(Error::Codestream(_))
+    ));
 }
