@@ -436,6 +436,7 @@ mod tests {
                 code_block_width: 4,
                 code_block_height: 4,
                 code_block_style: 0,
+                multiple_component_transform: false,
                 transform,
                 precinct_sizes: Vec::new(),
             },

@@ -242,14 +242,17 @@ signals it.
 
 **Work:** inverse reversible color transform (RCT, integer, Annex G.2) and
 inverse irreversible color transform (ICT, float YCbCr→RGB, G.3), applied to the
-first three components when the COD MCT flag is set. Depends on P2.1
-(multiple components); checkable on synthetic three-component input before the
-structural track finishes.
+first three components when COD signals the transform. Note the wavelet picks
+which one: 5/3 means RCT, 9/7 means ICT — there is no separate flag. Depends on
+P2.1 (multiple components).
 
 **Oracle:** three-component color Part 4 codestreams against their reference
 decodes; RCT bit-exact (reversible), ICT within the compliance-class bounds.
 
-**Done:** RCT and ICT codestreams reconstruct color in class.
+**Done:** RCT has landed (`src/mct.rs`); `p0_14` decodes bit-exact, taking the
+gate to 2/23. ICT remains: it needs the inverse DWT to hand back the 9/7 path's
+floats rather than rounding to `i32` first, since rounding before the transform
+loses the precision the compliance-class bounds assume.
 
 ### P2.9 — Region of interest, maxshift (`src/quant.rs`, `src/codestream/`)
 

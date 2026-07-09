@@ -84,6 +84,7 @@ fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
             code_block_width: cblk_exp - 2,
             code_block_height: cblk_exp - 2,
             code_block_style: 0,
+            multiple_component_transform: false,
             transform: Transform::Reversible53,
             precinct_sizes: Vec::new(),
         },

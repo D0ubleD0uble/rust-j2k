@@ -138,6 +138,7 @@ fn valid_reversible_header_parses() {
                 code_block_width: 4,
                 code_block_height: 4,
                 code_block_style: 0,
+                multiple_component_transform: false,
                 transform: Transform::Reversible53,
                 precinct_sizes: vec![],
             },
@@ -378,12 +379,73 @@ fn sop_eph_flag_is_unsupported() {
 }
 
 #[test]
-fn multi_component_transform_is_unsupported() {
+fn reversible_colour_transform_parses() {
+    // Three matching components, 5/3 wavelet, MCT signalled: this is RCT.
     let bytes = codestream(&[
-        seg(marker::SIZ, &one_component()),
-        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)), // mct = 1
+        seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)), // mct = 1, 5/3
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let (header, _) = parse_main_header(&bytes).expect("RCT header parses");
+    assert!(header.cod.multiple_component_transform);
+    assert_eq!(header.cod.transform, Transform::Reversible53);
+}
+
+/// The wavelet chooses the transform, so MCT on the 9/7 path is ICT, which is
+/// not decoded yet (issue #76). It is rejected before the geometry is judged.
+#[test]
+fn irreversible_colour_transform_is_unsupported() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)), // mct = 1, 9/7
+        seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
+    ]);
+    let e = err(&bytes);
+    assert!(
+        matches!(&e, Error::Unsupported(m) if m.contains("ICT")),
+        "got {e:?}"
+    );
+}
+
+/// `Smct = 2` selects Part 2's array MCT, a different feature.
+#[test]
+fn array_multiple_component_transform_is_unsupported() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+        seg(marker::COD, &cod_body(0, 0, 1, 2, 5, 4, 4, 0, 1)), // mct = 2
     ]);
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
+}
+
+/// The colour transform is defined over the first three components, so a
+/// codestream that signals it with fewer is describing something the transform
+/// cannot express. Skipping it (as OpenJPEG does) would decode the wrong image.
+#[test]
+fn colour_transform_needs_three_components() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let e = err(&bytes);
+    assert!(
+        matches!(&e, Error::Marker(m) if m.contains("first three")),
+        "got {e:?}"
+    );
+}
+
+/// The three transformed components must share a depth, sign, and sub-sampling.
+#[test]
+fn colour_transform_needs_matching_components() {
+    let bytes = codestream(&[
+        seg(
+            marker::SIZ,
+            &siz_body(3, &[(7, 1, 1), (11, 1, 1), (7, 1, 1)]),
+        ),
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
 #[test]
@@ -1248,10 +1310,27 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with_cod(cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1))),
             Variant::Unsupported,
         ),
+        // The reversible colour transform is decoded, so it left this table.
+        // What remains out of subset: its irreversible twin, Part 2's array
+        // MCT, and a codestream that signals the transform without the three
+        // components it is defined over.
         (
-            "multiple-component transform (COD)",
-            err(&header_with_cod(cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1))),
+            "irreversible colour transform (ICT)",
+            err(&codestream(&[
+                seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+                seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)),
+            ])),
             Variant::Unsupported,
+        ),
+        (
+            "Part 2 array multiple-component transform",
+            err(&header_with_cod(cod_body(0, 0, 1, 2, 5, 4, 4, 0, 1))),
+            Variant::Unsupported,
+        ),
+        (
+            "colour transform without three components",
+            err(&header_with_cod(cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1))),
+            Variant::Marker,
         ),
         (
             "reserved progression order",
