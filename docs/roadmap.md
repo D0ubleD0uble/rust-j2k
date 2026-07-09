@@ -62,7 +62,7 @@ that gates it, is in [roadmap-phase2.md](roadmap-phase2.md); in brief:
 - Region of interest (maxshift); all code-block coding styles (bypass, reset,
   restart, vertically causal, predictable termination, segmentation symbols).
 - Error-resilience markers (SOP/EPH); packed-header and length markers
-  (PPM/PPT/PLM/PLT/TLM).
+  (PPM/PPT/PLM/PLT/TLM); component registration (CRG).
 
 **Gate:** passes the relevant ISO/IEC 15444-4 conformance codestreams within
 their compliance-class error bounds, plus a clean fuzzing run on malformed

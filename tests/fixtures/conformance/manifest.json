@@ -24,8 +24,8 @@
       "note": "Class-1 (per-component) is the active grading tier upstream; the class-0 lists (C0P*) are commented out there (first component only) and are recorded per entry for reference, not used as the bar."
     },
     "features": {
-      "tool": "opj_dump -i",
-      "note": "per-codestream parameters parsed from the OpenJPEG oracle"
+      "tool": "opj_dump -i + direct marker-segment walk",
+      "note": "coding parameters parsed from the OpenJPEG oracle; optional-marker presence (markers_main/markers_tile), SOP/EPH/precinct flags, and code-block style bits walked from the marker segments directly, since opj_dump does not report them"
     },
     "license": "Conformance-only grant; see ./COPYRIGHT. Excluded from the published crate via Cargo.toml `exclude`."
   },
@@ -64,7 +64,21 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -126,7 +140,25 @@
           5,
           5
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "0xFF30",
+          "COC",
+          "COM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": true,
+        "eph": true,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": true,
+          "vert_causal": false,
+          "pred_term": true,
+          "segsym": true
+        }
       },
       "references": {
         "class0": [
@@ -188,7 +220,29 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COM",
+          "CRG",
+          "POC",
+          "QCC",
+          "TLM"
+        ],
+        "markers_tile": [
+          "RGN"
+        ],
+        "tile_parts": 4,
+        "sop": true,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -263,7 +317,24 @@
           6,
           6
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COM",
+          "QCC"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": true,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": true,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -349,7 +420,26 @@
           5,
           5
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COC",
+          "COM",
+          "QCC",
+          "TLM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -438,7 +528,27 @@
           6,
           6
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COC",
+          "QCC",
+          "RGN"
+        ],
+        "markers_tile": [
+          "RGN"
+        ],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -521,7 +631,26 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COM"
+        ],
+        "markers_tile": [
+          "PLT",
+          "POC"
+        ],
+        "tile_parts": 257,
+        "sop": true,
+        "eph": true,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -601,7 +730,25 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COC",
+          "COM",
+          "QCC"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": true,
+        "eph": true,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -669,7 +816,23 @@
           6,
           6
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -743,7 +906,21 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [],
+        "markers_tile": [],
+        "tile_parts": 9,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -811,7 +988,23 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": true,
+        "precincts": true,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": true
+        }
       },
       "references": {
         "class0": [
@@ -873,7 +1066,23 @@
           5,
           5
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": true,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": true,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -2471,7 +2680,27 @@
           5,
           5
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COC",
+          "COM",
+          "POC",
+          "QCC",
+          "RGN"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": true,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -2554,7 +2783,23 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -2622,7 +2867,29 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COM",
+          "CRG",
+          "POC",
+          "QCC",
+          "TLM"
+        ],
+        "markers_tile": [
+          "RGN"
+        ],
+        "tile_parts": 4,
+        "sop": true,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -2685,7 +2952,21 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -2747,7 +3028,24 @@
           5,
           5
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COC",
+          "COM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": true,
+        "eph": true,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": true,
+          "vert_causal": false,
+          "pred_term": true,
+          "segsym": true
+        }
       },
       "references": {
         "class0": [
@@ -2821,7 +3119,26 @@
           6,
           6
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COM",
+          "QCC"
+        ],
+        "markers_tile": [
+          "PPT"
+        ],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": true,
+        "cblksty": {
+          "bypass": false,
+          "reset": true,
+          "restart": false,
+          "vert_causal": true,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -2907,7 +3224,27 @@
           5,
           5
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COC",
+          "COM",
+          "PPM",
+          "QCC",
+          "TLM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": true,
+          "reset": false,
+          "restart": true,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -2978,7 +3315,27 @@
           6,
           6
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COM",
+          "TLM"
+        ],
+        "markers_tile": [
+          "COM",
+          "QCD"
+        ],
+        "tile_parts": 64,
+        "sop": false,
+        "eph": false,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -3053,7 +3410,24 @@
           3,
           6
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COM",
+          "PPM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 225,
+        "sop": true,
+        "eph": true,
+        "precincts": true,
+        "cblksty": {
+          "bypass": true,
+          "reset": false,
+          "restart": false,
+          "vert_causal": true,
+          "pred_term": true,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [
@@ -3133,7 +3507,25 @@
           6,
           5
         ],
-        "reversible": false
+        "reversible": false,
+        "markers_main": [
+          "COM"
+        ],
+        "markers_tile": [
+          "PPT"
+        ],
+        "tile_parts": 16,
+        "sop": true,
+        "eph": true,
+        "precincts": false,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": true,
+          "pred_term": false,
+          "segsym": true
+        }
       },
       "references": {
         "class0": [
@@ -3207,7 +3599,24 @@
           6,
           6
         ],
-        "reversible": true
+        "reversible": true,
+        "markers_main": [
+          "COC",
+          "COM"
+        ],
+        "markers_tile": [],
+        "tile_parts": 1,
+        "sop": true,
+        "eph": true,
+        "precincts": true,
+        "cblksty": {
+          "bypass": false,
+          "reset": false,
+          "restart": false,
+          "vert_causal": false,
+          "pred_term": false,
+          "segsym": false
+        }
       },
       "references": {
         "class0": [

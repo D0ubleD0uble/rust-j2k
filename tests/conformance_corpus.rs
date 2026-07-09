@@ -116,5 +116,129 @@ fn manifest_and_corpus_are_consistent() {
             bit_exact, all_zero,
             "{cs}: `bit_exact` disagrees with its bounds"
         );
+
+        // Feature-to-fixture fields: the Phase 2 issues key their acceptance
+        // criteria on "the matching Part 4 codestream", and these fields are
+        // what makes the match identifiable from committed data.
+        for key in ["markers_main", "markers_tile"] {
+            entry["features"][key]
+                .as_array()
+                .unwrap_or_else(|| panic!("{cs}: `features.{key}` is an array"));
+        }
+        for key in ["sop", "eph", "precincts"] {
+            entry["features"][key]
+                .as_bool()
+                .unwrap_or_else(|| panic!("{cs}: `features.{key}` is a bool"));
+        }
+        let cblksty = entry["features"]["cblksty"]
+            .as_object()
+            .expect("entry has `features.cblksty`");
+        for bit in CBLKSTY_BITS {
+            cblksty[bit]
+                .as_bool()
+                .unwrap_or_else(|| panic!("{cs}: `features.cblksty.{bit}` is a bool"));
+        }
+        // Every tile has at least one tile-part.
+        let tiles = entry["features"]["tiles"]
+            .as_array()
+            .expect("entry has `features.tiles`");
+        let tile_count: u64 = tiles.iter().map(|t| t.as_u64().unwrap()).product();
+        let tile_parts = entry["features"]["tile_parts"]
+            .as_u64()
+            .expect("entry has `features.tile_parts`");
+        assert!(
+            tile_parts >= tile_count,
+            "{cs}: {tile_parts} tile-parts for {tile_count} tiles"
+        );
+    }
+}
+
+const CBLKSTY_BITS: [&str; 6] = [
+    "bypass",
+    "reset",
+    "restart",
+    "vert_causal",
+    "pred_term",
+    "segsym",
+];
+
+/// The corpus covers every Phase 2 feature the issues gate on — except PLM,
+/// whose absence is asserted here so the gap stays visible: issue #72 grades
+/// PLM against a synthetic fixture instead.
+#[test]
+fn corpus_covers_the_phase2_feature_matrix() {
+    let dir = corpus_dir();
+    let text = std::fs::read_to_string(dir.join("manifest.json")).expect("read manifest.json");
+    let manifest: Value = serde_json::from_str(&text).expect("manifest.json parses as JSON");
+    let entries = manifest["entries"].as_array().expect("`entries` array");
+
+    let has = |pred: &dyn Fn(&Value) -> bool| entries.iter().any(|e| pred(&e["features"]));
+    let marker = |f: &Value, m: &str| {
+        ["markers_main", "markers_tile"].iter().any(|k| {
+            f[k].as_array()
+                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(m)))
+        })
+    };
+
+    for bit in CBLKSTY_BITS {
+        assert!(
+            has(&|f| f["cblksty"][bit].as_bool() == Some(true)),
+            "no corpus entry exercises code-block style `{bit}`"
+        );
+    }
+    for flag in ["sop", "eph", "precincts"] {
+        assert!(
+            has(&|f| f[flag].as_bool() == Some(true)),
+            "no corpus entry exercises `{flag}`"
+        );
+    }
+    for m in [
+        "COC", "QCC", "RGN", "POC", "PPM", "PPT", "PLT", "TLM", "CRG",
+    ] {
+        assert!(
+            has(&|f| marker(f, m)),
+            "no corpus entry carries the {m} marker"
+        );
+    }
+    for prog in ["LRCP", "RLCP", "RPCL", "PCRL", "CPRL"] {
+        assert!(
+            has(&|f| f["progression"].as_str() == Some(prog)),
+            "no corpus entry uses {prog} progression"
+        );
+    }
+    assert!(
+        has(&|f| f["components"].as_u64() > Some(1)),
+        "no multi-component corpus entry"
+    );
+    assert!(
+        has(&|f| {
+            let tiles = f["tiles"][0].as_u64().unwrap() * f["tiles"][1].as_u64().unwrap();
+            f["tile_parts"].as_u64() > Some(tiles)
+        }),
+        "no corpus entry with more tile-parts than tiles"
+    );
+    assert!(
+        has(&|f| f["mct"].as_u64() == Some(1) && f["reversible"] == Value::Bool(true)),
+        "no RCT corpus entry"
+    );
+    assert!(
+        has(&|f| f["mct"].as_u64() == Some(1) && f["reversible"] == Value::Bool(false)),
+        "no ICT corpus entry"
+    );
+
+    // Known coverage gaps, asserted so a corpus refresh that closes (or
+    // widens) them fails loudly and the affected issues get updated:
+    // - PLM appears in no entry (issue #72 uses a synthetic fixture);
+    // - no tile-part header carries a COD/COC/QCC override (issue #59 covers
+    //   per-tile COD/QCD resolution with a synthetic fixture; per-tile
+    //   quantization is exercised only via p1_04's tile-part QCDs).
+    assert!(!has(&|f| marker(f, "PLM")), "corpus now covers PLM");
+    for m in ["COD", "COC", "QCC"] {
+        assert!(
+            !has(&|f| f["markers_tile"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(m)))),
+            "corpus now covers tile-part {m}"
+        );
     }
 }

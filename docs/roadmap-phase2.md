@@ -35,8 +35,9 @@ What comes online:
 - **region of interest** (maxshift) and every **code-block coding style** (bypass,
   reset, restart, vertically causal, predictable termination, segmentation
   symbols);
-- the **error-resilience** markers (SOP/EPH) and the **packed-header / length**
-  markers (PPM/PPT/PLM/PLT/TLM).
+- the **error-resilience** markers (SOP/EPH), the **packed-header / length**
+  markers (PPM/PPT/PLM/PLT/TLM), and the informational **component
+  registration** marker (CRG).
 
 The subset boundary moves outward, but the contract is unchanged: a feature this
 phase does not yet own is rejected with `Error::Unsupported`, never half-decoded,
@@ -61,17 +62,22 @@ integration:
   decoder and are golden-vector testable in isolation, so this runs alongside the
   structural track, the way the reconstruction track ran beside the entropy track
   in Phase 1.
-- **Reconstruction track** (P2.8 → P2.9): the multiple component transform and
-  ROI. MCT needs multiple components (P2.1); both are checkable on synthetic
-  coefficient input before the structural track is finished.
-- **Marker plumbing** (P2.7): the packed-header, length, and resilience markers.
-  Parsing breadth that the other tracks can lean on but do not block on.
+- **Reconstruction track** (P2.8, P2.9): the multiple component transform and
+  ROI. MCT needs multiple components (P2.1); ROI is per-component dequant
+  scaling and needs only the harness, so the two are independent of each
+  other. Both are checkable on synthetic coefficient input before the
+  structural track is finished.
+- **Marker plumbing** (P2.7): the packed-header, length, resilience, and
+  registration markers. Mostly parsing breadth the other tracks can lean on
+  but do not block on (CRG's per-component record is the one piece that waits
+  on P2.1's component geometry).
 
 ```text
 P2.0 harness ─┬─ P2.1 multi-component ─ P2.2 COC/QCC ─ P2.3 tiles ─ P2.4 precincts ─ P2.5 progressions/POC/layers ─┐
               ├─ P2.6 code-block coding styles (Tier-1) ───────────────────────────────────────────────────────────┤
-              ├─ P2.7 PPM/PPT/PLM/PLT/TLM + SOP/EPH markers ────────────────────────────────────────────────────────┼─ P2.10 integrate ─ ISO 15444-4 gate
-              └─ P2.8 MCT: RCT/ICT (needs P2.1) ─ P2.9 ROI maxshift ────────────────────────────────────────────────┘
+              ├─ P2.7 PPM/PPT/PLM/PLT/TLM + SOP/EPH + CRG markers ─────────────────────────────────────────────────┼─ P2.10 integrate ─ ISO 15444-4 gate
+              ├─ P2.8 MCT: RCT/ICT (needs P2.1) ───────────────────────────────────────────────────────────────────┤
+              └─ P2.9 ROI maxshift ────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Milestones
@@ -81,12 +87,17 @@ P2.0 harness ─┬─ P2.1 multi-component ─ P2.2 COC/QCC ─ P2.3 tiles ─ 
 **Goal:** the Part 4 grading scaffold exists before the features it grades, the
 way P1.0 stood up the oracle harness before the decoder.
 
-**Work:** extend `tests/conformance.rs` (or a sibling) to load the ISO/IEC
-15444-4 Part 1 test codestreams and their reference decoded images, and grade by
-**compliance class**: bounded per-pixel maximum error and bounded mean-squared
-error against the reference, not bit-exact for lossy. Record each codestream's
-provenance and the class it is tested at, so the corpus stays reproducible
-without the reference decoder installed.
+**Work:** the corpus itself is already vendored (`tests/fixtures/conformance/`):
+`manifest.json` records each entry's provenance, compliance class, per-component
+PAE/MSE bounds, `bit_exact` flag, and feature tags (markers, coding-style bits,
+progression, geometry). Build the harness that consumes it: decode each entry
+and grade by **compliance class** — bounded per-pixel maximum error and bounded
+mean-squared error against the reference, not bit-exact for lossy. Grade
+exactness off each entry's `bit_exact` flag, never off its wavelet: p0_09 is
+9/7 yet graded bit-exact. This milestone also settles the multi-component
+`Image` representation — the class-1 references are one `.pgx` per component,
+so the harness fixes the output shape the rest of Phase 2 threads toward (a
+breaking API change; Phase 2 releases as 0.3).
 
 **Oracle:** the Part 4 suite is itself the authority here; this milestone is the
 machinery that consumes it.
@@ -193,7 +204,7 @@ track is golden-vector testable in isolation, so it runs alongside P2.1–P2.5.
 **Done:** each coding style decodes its golden vectors and the matching
 conformance codestreams in class.
 
-### P2.7 — Packed-header, length, and resilience markers (`src/codestream/`, `src/tier2/`)
+### P2.7 — Packed-header, length, resilience, and registration markers (`src/codestream/`, `src/tier2/`)
 
 **Goal:** parse the markers that move or annotate packet data so codestreams that
 carry them decode, whether or not the hints are used.
@@ -202,14 +213,21 @@ carry them decode, whether or not the hints are used.
 headers from the marker segment instead of inline; PLM/PLT and TLM (packet- and
 tile-part-length markers, A.7.1–A.7.3) — parse and optionally use the lengths;
 SOP/EPH (start-of-packet, end-of-packet-header, A.8.1/A.8.2) — recognize and
-resynchronize on the packet delimiters. Decoding must match with the lengths used
-and with them ignored.
+resynchronize on the packet delimiters; CRG (component registration, A.9.1) —
+parse and record the sub-pixel registration offsets (informational, no
+resampling; the per-component record is the one piece that waits on P2.1's
+component geometry). Decoding must match with the lengths used and with them
+ignored.
 
-**Oracle:** Part 4 codestreams carrying each marker; assert the decode matches
-the reference both using and ignoring the length hints.
+**Oracle:** Part 4 codestreams carrying each marker — the manifest's
+`markers_main`/`markers_tile` fields say which entry carries what — except PLM,
+which no conformance entry carries (asserted by
+`tests/conformance_corpus.rs`): grade PLM against a synthetic fixture instead.
+Assert the decode matches the reference both using and ignoring the length
+hints.
 
-**Done:** codestreams with packed-header, length, and resilience markers decode
-in class.
+**Done:** codestreams with packed-header, length, resilience, and registration
+markers decode in class; PLM parses against its synthetic fixture.
 
 ### P2.8 — Multiple component transform: RCT and ICT (`src/image.rs` or `src/mct.rs`)
 
@@ -233,7 +251,9 @@ decodes; RCT bit-exact (reversible), ICT within the compliance-class bounds.
 
 **Work:** parse the RGN marker (Annex A.6.3); undo the maxshift up-scaling of ROI
 coefficients (Annex H) before dequantization, so foreground and background
-coefficients return to a common scale. Slots into the existing dequant stage.
+coefficients return to a common scale. Slots into the existing dequant stage;
+depends only on the harness (P2.0), not on MCT — maxshift is per-component
+scaling.
 
 **Oracle:** Part 4 codestreams with an ROI against their reference decodes.
 
@@ -251,8 +271,10 @@ whatever remains Phase 3+.
 
 **Gate (this is the Phase 2 exit):** the decoder passes the ISO/IEC 15444-4 Part 1
 conformance codestreams within their compliance-class per-pixel maximum-error and
-mean-squared-error bounds; a `cargo fuzz` run over `decode` stays clean (no
-panics, no unbounded allocation, every reject a typed `Error`); and the quality
+mean-squared-error bounds; fuzzing is clean — the 60-second CI smoke stays green
+and a documented one-hour local `cargo fuzz` run over `decode`, seeded with the
+conformance corpus, finds nothing (no panics, allocations bounded by the declared
+image area, every reject a typed `Error`); and the quality
 gates are green: `cargo fmt --all -- --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo deny check`.
 
@@ -260,8 +282,9 @@ gates are green: `cargo fmt --all -- --check`,
 
 - **Critical path** is the structural track P2.1 → P2.5, because each step changes
   how packets are enumerated and coefficients are placed, and the later steps read
-  the geometry the earlier ones establish. Start P2.6 (code-block styles) and P2.8
-  (MCT, once P2.1 lands) in parallel to keep the critical path busy.
+  the geometry the earlier ones establish. Start P2.6 (code-block styles), P2.9
+  (ROI), and P2.8 (MCT, once P2.1 lands) in parallel to keep the critical path
+  busy.
 - **Highest-risk milestones** are P2.5 (the five-axis packet iterator with POC and
   layers) and P2.6 (the optional MQ modes, especially bypass and predictable
   termination). Both have small isolable vectors — a hand-built packet sequence,
