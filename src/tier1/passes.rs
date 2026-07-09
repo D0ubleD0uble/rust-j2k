@@ -530,9 +530,11 @@ pub fn decode_block(
         let mut mq = MqDecoder::new(bytes);
         for _ in 0..*passes {
             if bpno < 1 {
-                // The segment stops mid-way, so it is not the terminated whole
-                // that `predictable termination` makes a promise about. Leave
-                // without checking it.
+                // The plane counter is exhausted, so this segment stops mid-way
+                // and every later one goes unread. None of them is the
+                // terminated whole `predictable termination` promises about, and
+                // their bytes are never consumed — checking them would reject a
+                // sound codestream for leaving a buffer it never had to read.
                 break 'segments;
             }
             match pass_type {
