@@ -76,7 +76,7 @@ mod harness {
         Expected, Fixture, Geometry, Mismatch, Outcome, Provenance, Tolerance, classify, compare,
         discover, run_fixture,
     };
-    use rust_j2k::{Error, Image};
+    use rust_j2k::{Component, Error, Image};
     use std::path::{Path, PathBuf};
 
     fn geometry(width: u32, height: u32) -> Geometry {
@@ -88,13 +88,21 @@ mod harness {
         }
     }
 
+    /// A one-component image at unit sub-sampling, so the image area and the
+    /// component grid coincide — what the single-component snapshots describe.
     fn image(width: u32, height: u32, samples: Vec<i32>) -> Image {
         Image {
             width,
             height,
-            bit_depth: 16,
-            signed: false,
-            samples,
+            components: vec![Component {
+                width,
+                height,
+                bit_depth: 16,
+                signed: false,
+                x_sampling: 1,
+                y_sampling: 1,
+                samples,
+            }],
         }
     }
 

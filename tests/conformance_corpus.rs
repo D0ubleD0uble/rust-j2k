@@ -1,8 +1,8 @@
 //! Integrity check for the vendored ISO/IEC 15444-4 conformance corpus.
 //!
 //! This is *not* the grading harness — decoding these codestreams and comparing
-//! against the PAE/MSE bounds is separate work (issue #55). Here we only verify
-//! the corpus is internally consistent: every file `manifest.json` names exists
+//! against the PAE/MSE bounds is `tests/conformance_part4.rs`. Here we only
+//! verify the corpus is internally consistent: every file `manifest.json` names exists
 //! and carries the right magic (codestreams the JPEG 2000 SOC marker, references
 //! the PGX magic, so a truncated or LFS-pointer-only commit fails loudly), and
 //! the per-component bound arrays line up with the graded-component count and the

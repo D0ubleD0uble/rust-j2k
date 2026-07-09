@@ -255,16 +255,28 @@ fn load_snapshot(path: &Path) -> Result<Expected, String> {
 
 /// Compare a decoded [`Image`] against an oracle snapshot.
 ///
-/// Geometry must match exactly; then each sample must agree within the
-/// snapshot's tolerance — bit-exact for [`Tolerance::Exact`], within an
-/// absolute bound for [`Tolerance::Absolute`]. Returns the first divergence so
-/// a failure localises to a single cause.
+/// The snapshot schema is single-component (the Phase 1 fixtures are all one
+/// component), so a decode that produced any other number of components is a
+/// mismatch. Geometry must then match exactly; then each sample must agree
+/// within the snapshot's tolerance — bit-exact for [`Tolerance::Exact`], within
+/// an absolute bound for [`Tolerance::Absolute`]. Returns the first divergence
+/// so a failure localises to a single cause.
 pub fn compare(actual: &Image, expected: &Expected) -> Result<(), Mismatch> {
+    let component = match actual.components.as_slice() {
+        [only] => only,
+        others => {
+            return Err(Mismatch::DecodeError(format!(
+                "snapshot is single-component but the decode produced {} components",
+                others.len()
+            )));
+        }
+    };
+
     let actual_geometry = Geometry {
-        width: actual.width,
-        height: actual.height,
-        bit_depth: actual.bit_depth,
-        signed: actual.signed,
+        width: component.width,
+        height: component.height,
+        bit_depth: component.bit_depth,
+        signed: component.signed,
     };
     if actual_geometry != expected.geometry {
         return Err(Mismatch::Geometry {
@@ -272,13 +284,22 @@ pub fn compare(actual: &Image, expected: &Expected) -> Result<(), Mismatch> {
             actual: actual_geometry,
         });
     }
+    // Matching geometry already implies matching sample counts, but the loop
+    // below zips the two vectors: a short one would compare only its prefix.
+    if component.samples.len() != expected.samples.len() {
+        return Err(Mismatch::DecodeError(format!(
+            "decoded {} samples but the snapshot has {}",
+            component.samples.len(),
+            expected.samples.len(),
+        )));
+    }
 
     let bound = match expected.tolerance {
         Tolerance::Exact => 0.0,
         Tolerance::Absolute { max_abs_error } => max_abs_error,
     };
     let width = expected.geometry.width;
-    for (index, (&got, &want)) in actual.samples.iter().zip(&expected.samples).enumerate() {
+    for (index, (&got, &want)) in component.samples.iter().zip(&expected.samples).enumerate() {
         // i64 so the subtraction cannot overflow at the i32 extremes.
         let diff = (got as i64 - want as i64).abs() as f64;
         if diff > bound {

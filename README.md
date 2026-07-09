@@ -32,7 +32,9 @@ supported Rust version is **1.87**.
 ## Usage
 
 The public surface is one function: bytes of a raw JPEG 2000 codestream in, a
-decoded single-component `Image` out.
+decoded `Image` out. An `Image` is the image area on the reference grid plus one
+`Component` per codestream component, each on its own sample grid. The decoded
+subset is single-component, so today that vector holds one entry.
 
 ```rust
 use rust_j2k::decode;
@@ -43,18 +45,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = std::fs::read("grid.j2k")?;
 
     let image = decode(&bytes)?;
+    println!("image area {}x{}", image.width, image.height);
 
+    let component = image.component(0).expect("at least one component");
     println!(
         "{}x{}, {}-bit {}",
-        image.width,
-        image.height,
-        image.bit_depth,
-        if image.signed { "signed" } else { "unsigned" },
+        component.width,
+        component.height,
+        component.bit_depth,
+        if component.signed { "signed" } else { "unsigned" },
     );
 
     // `samples` is row-major `i32`, already DC-level-shifted and clamped to the
-    // declared depth. Index directly or use the bounds-checked accessor.
-    let top_left = image.sample(0, 0).expect("0,0 is in bounds");
+    // declared depth. Index directly or use the bounds-checked accessor. A
+    // sub-sampled component is smaller than the image area; `x_sampling` and
+    // `y_sampling` map it back onto the reference grid.
+    let top_left = component.sample(0, 0).expect("0,0 is in bounds");
     println!("first sample = {top_left}");
 
     Ok(())
@@ -70,7 +76,7 @@ yet supported":
 use rust_j2k::{decode, Error};
 
 match decode(&bytes) {
-    Ok(image) => { /* use image.samples … */ }
+    Ok(image) => { /* use image.components … */ }
     Err(Error::Unsupported(what)) => eprintln!("outside the decoded subset: {what}"),
     Err(e) => eprintln!("decode failed: {e}"),
 }

@@ -28,7 +28,10 @@
 //! # Example
 //!
 //! The entire public surface is [`decode`]: codestream bytes in, an [`Image`]
-//! out. Malformed input never panics; it comes back as a typed [`Error`].
+//! out. An [`Image`] is the image area on the reference grid plus one
+//! [`Component`] per codestream component; a sub-sampled component holds fewer
+//! samples than that area, so size sample buffers from the component, not from
+//! the image. Malformed input never panics; it comes back as a typed [`Error`].
 //!
 //! ```
 //! use rust_j2k::{decode, Error};
@@ -36,7 +39,13 @@
 //! // In real use these are the bytes of a `.j2k` codestream, or the GRIB2 §7
 //! // data section of a `grid_jpeg` message. Invalid input is rejected cleanly:
 //! match decode(b"not a codestream") {
-//!     Ok(image) => println!("decoded {}x{}", image.width, image.height),
+//!     Ok(image) => {
+//!         let first = image.component(0).expect("at least one component");
+//!         println!(
+//!             "image area {}x{}, first component {}x{}",
+//!             image.width, image.height, first.width, first.height,
+//!         );
+//!     }
 //!     Err(Error::Unsupported(what)) => println!("outside the decoded subset: {what}"),
 //!     Err(e) => println!("decode failed: {e}"),
 //! }
@@ -67,13 +76,16 @@ pub(crate) mod tier1;
 pub(crate) mod tier2;
 
 pub use error::{Error, Result};
-pub use image::Image;
+pub use image::{Component, Image};
 
-/// Decode a JPEG 2000 **codestream** (Annex A, no JP2 wrapper) into a single
-/// integer-component [`Image`].
+/// Decode a JPEG 2000 **codestream** (Annex A, no JP2 wrapper) into an
+/// [`Image`]: the reference-grid image area plus one [`Component`] per SIZ
+/// component, each on its own sample grid.
 ///
 /// This is the whole public surface for the GRIB2 use case: the §7 data
-/// section of a `grid_jpeg` message is exactly such a codestream.
+/// section of a `grid_jpeg` message is exactly such a codestream. That subset
+/// is single-component, so the returned image carries one component; a
+/// codestream declaring more is rejected with [`Error::Unsupported`].
 pub fn decode(codestream: &[u8]) -> Result<Image> {
     let cs = codestream::parse(codestream)?;
 

@@ -1,9 +1,9 @@
 # Phase 2 roadmap — general Part 1 decoder
 
-> **Status: planned (next).** Phase 1 shipped the GRIB2 subset in v0.1.0; this
-> phase is not started. The milestones below are the proposed build order, each
-> with the oracle that gates it. Milestone numbers track the Phase 2 milestone in
-> GitHub.
+> **Status: in progress.** Phase 1 shipped the GRIB2 subset in v0.1.0. P2.0, the
+> conformance harness, has landed; the decoding milestones have not started. The
+> milestones below are the build order, each with the oracle that gates it.
+> Milestone numbers track the Phase 2 milestone in GitHub.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file zooms
 into Phase 2 alone. It breaks the line item "general Part 1 decoder" into ordered
@@ -102,9 +102,11 @@ breaking API change; Phase 2 releases as 0.3).
 **Oracle:** the Part 4 suite is itself the authority here; this milestone is the
 machinery that consumes it.
 
-**Done:** the harness loads the conformance corpus and reports each entry as
-*not yet decoded* against its compliance class (expected, since the Phase 2
-features are still rejected). Unblocks the gate for every milestone below.
+**Done** (landed): `tests/conformance_part4.rs` grades all 23 entries at class 1.
+Twenty-two report *not yet decoded* — the features they need are still rejected
+as `Error::Unsupported` — and `p0_09` decodes and matches its reference exactly.
+`Image` now carries the reference-grid image area and a `Component` per
+codestream component. Unblocks the gate for every milestone below.
 
 ### P2.1 — Multiple components and subsampling (`src/codestream/`, `src/image.rs`)
 

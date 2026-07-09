@@ -15,7 +15,8 @@ From strongest to most convenient:
    equality (lossy decoders legitimately differ) but as staying within bounded
    per-pixel maximum error and bounded mean-squared error against the reference
    decoded image, at a stated compliance class. This is the authoritative bar
-   for "is the decoder correct" and is what Phase 2+ gates on.
+   for "is the decoder correct" and is what Phase 2+ gates on. The corpus sits
+   in `tests/fixtures/conformance/`; `tests/conformance_part4.rs` grades it.
 2. **Reference-decoder oracle** — decode the same input with OpenJPEG
    (`opj_decompress`), or eccodes for GRIB2-sourced files, and compare. Easy to
    run over any real-world file, so it is the day-to-day workhorse and the
@@ -33,6 +34,30 @@ From strongest to most convenient:
   against Part 4. Floating-point lifting means our result and
   OpenJPEG's will differ in the low bits; the tolerance is what makes the test
   meaningful rather than flaky.
+
+## Grading against Part 4
+
+`tests/conformance_part4.rs` decodes every entry in the vendored corpus and
+grades it at **compliance class 1**, which bounds each graded component
+independently. Per component it computes the peak absolute error (the largest
+difference from the reference sample) and the mean-squared error, and checks both
+against the bounds `manifest.json` records for that entry. The reference images
+are `.pgx` files, one per graded component; the harness reads them directly, so
+no reference decoder is needed to run the suite.
+
+Two rules keep the grading honest:
+
+- **Exactness comes from the manifest's `bit_exact` flag, not from the wavelet.**
+  A `bit_exact` entry is graded against zero bounds whatever the manifest quotes,
+  so a corpus edit cannot quietly relax it. The flag and the wavelet disagree in
+  both directions: `p0_09` is irreversible 9/7 yet reproduces its reference
+  exactly, and reversible entries can be graded lossily.
+- **An unimplemented feature is not a pass.** An entry the decoder rejects with
+  `Error::Unsupported` reports as *not yet decoded*. Any other rejection, a
+  panic, a geometry disagreement, or samples outside the class is a failure. The
+  `IN_CLASS` list names the entries that decode in class today, so a milestone
+  that turns one green — or a regression that turns one red — fails the test
+  until the list is updated.
 
 ## Per-stage golden tests
 
