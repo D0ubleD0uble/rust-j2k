@@ -1097,3 +1097,283 @@ fn p0_02_reserved_marker_walks_cleanly() {
         "expected the COD subset rejection, got {e:?}",
     );
 }
+
+// --- the reject matrix (issue #78) ----------------------------------------
+
+/// Which typed error a caller sees, per the mapping the crate commits to:
+/// `Codestream` for structural damage (truncation, lost sync, a missing
+/// required marker), `Marker` for a field encoded illegally, and `Unsupported`
+/// for valid JPEG 2000 that falls outside the decoded subset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Variant {
+    Codestream,
+    Marker,
+    Unsupported,
+}
+
+fn variant_of(e: &Error) -> Variant {
+    match e {
+        Error::Codestream(_) => Variant::Codestream,
+        Error::Marker(_) => Variant::Marker,
+        Error::Unsupported(_) => Variant::Unsupported,
+        other => panic!("main-header parsing should not raise {other:?}"),
+    }
+}
+
+/// A valid single-component header with a COD whose fields are overridden.
+fn header_with_cod(cod: Vec<u8>) -> Vec<u8> {
+    codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ])
+}
+
+/// Every input outside the decoded subset, mapped to the typed error a caller
+/// sees. This is the contract: valid-but-not-yet-decoded is `Unsupported`, an
+/// illegal field is `Marker`, and structural damage is `Codestream`. Nothing
+/// here may be silently accepted — the alternative to a clean rejection is not
+/// a slightly wrong image, it is an arbitrary one.
+///
+/// As each Phase 2 milestone lands, its row moves out of this table and into
+/// the decoded set. A row that stops rejecting fails here first.
+#[test]
+fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
+    let jp2 = {
+        let mut bytes = JP2_SIGNATURE.to_vec();
+        bytes.extend_from_slice(b"....ftypjp2 ");
+        bytes
+    };
+
+    // (what the input carries, the error it produced, the variant it must be)
+    let mut rows: Vec<(&str, Error, Variant)> = vec![
+        (
+            "JP2 file format wrapper",
+            parse(&jp2).expect_err("JP2 is not a bare codestream"),
+            Variant::Unsupported,
+        ),
+        (
+            "HTJ2K capabilities (CAP)",
+            err(&header_with(&seg(marker::CAP, &[0, 0]))),
+            Variant::Unsupported,
+        ),
+        (
+            "Part 2 multiple-component transform (MCT)",
+            err(&header_with(&seg(0xFF74, &[0, 0]))),
+            Variant::Unsupported,
+        ),
+        (
+            "Part 2 component bit depth (CBD)",
+            err(&header_with(&seg(0xFF78, &[0, 0]))),
+            Variant::Unsupported,
+        ),
+        (
+            "multiple components",
+            err(&codestream(&[seg(
+                marker::SIZ,
+                &siz_body(3, &[(7, 1, 1); 3]),
+            )])),
+            Variant::Unsupported,
+        ),
+        (
+            "image origin offset",
+            err(&codestream(&[seg(
+                marker::SIZ,
+                &siz_geom(512, 256, 1, 0, 512, 256, 0, 0),
+            )])),
+            Variant::Unsupported,
+        ),
+        (
+            "multi-tile grid",
+            err(&codestream(&[seg(
+                marker::SIZ,
+                &siz_geom(512, 256, 0, 0, 256, 256, 0, 0),
+            )])),
+            Variant::Unsupported,
+        ),
+        (
+            "explicit precinct partition",
+            err(&header_with_cod(cod_body(0x01, 0, 1, 0, 5, 4, 4, 0, 1))),
+            Variant::Unsupported,
+        ),
+        (
+            "SOP/EPH signalled in COD",
+            err(&header_with_cod(cod_body(0x02, 0, 1, 0, 5, 4, 4, 0, 1))),
+            Variant::Unsupported,
+        ),
+        (
+            "progression order other than LRCP",
+            err(&header_with_cod(cod_body(0, 1, 1, 0, 5, 4, 4, 0, 1))),
+            Variant::Unsupported,
+        ),
+        (
+            "multiple quality layers",
+            err(&header_with_cod(cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1))),
+            Variant::Unsupported,
+        ),
+        (
+            "multiple-component transform (COD)",
+            err(&header_with_cod(cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1))),
+            Variant::Unsupported,
+        ),
+        (
+            "reserved progression order",
+            err(&header_with_cod(cod_body(0, 5, 1, 0, 5, 4, 4, 0, 1))),
+            Variant::Marker,
+        ),
+        (
+            "reserved wavelet transform",
+            err(&header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, 0, 2))),
+            Variant::Marker,
+        ),
+        (
+            "zero components",
+            err(&codestream(&[seg(marker::SIZ, &siz_body(0, &[]))])),
+            Variant::Marker,
+        ),
+        (
+            "component count above the 16384 limit",
+            err(&codestream(&[seg(
+                marker::SIZ,
+                &siz_body(markers::MAX_COMPONENTS + 1, &[]),
+            )])),
+            Variant::Marker,
+        ),
+        (
+            "zero sub-sampling factor",
+            err(&codestream(&[seg(marker::SIZ, &siz_body(1, &[(7, 0, 1)]))])),
+            Variant::Marker,
+        ),
+        (
+            "bit depth above 38",
+            err(&codestream(&[seg(
+                marker::SIZ,
+                &siz_body(1, &[(38, 1, 1)]),
+            )])),
+            Variant::Marker,
+        ),
+        (
+            "zero-size image",
+            err(&codestream(&[seg(
+                marker::SIZ,
+                &siz_geom(0, 256, 0, 0, 512, 256, 0, 0),
+            )])),
+            Variant::Marker,
+        ),
+        (
+            "missing SOC",
+            err(&seg(marker::SIZ, &one_component())),
+            Variant::Codestream,
+        ),
+        (
+            "SIZ not the first marker",
+            err(&{
+                let mut b = be16(marker::SOC).to_vec();
+                b.extend_from_slice(&seg(marker::COD, &cod_default(1)));
+                b
+            }),
+            Variant::Codestream,
+        ),
+        (
+            "unknown marker without a length",
+            err(&{
+                let mut b = be16(marker::SOC).to_vec();
+                b.extend_from_slice(&seg(marker::SIZ, &one_component()));
+                b.extend_from_slice(&be16(0xFF01));
+                b
+            }),
+            Variant::Codestream,
+        ),
+        (
+            "duplicate COD",
+            err(&codestream(&[
+                seg(marker::SIZ, &one_component()),
+                seg(marker::COD, &cod_default(1)),
+                seg(marker::COD, &cod_default(1)),
+                seg(marker::QCD, &qcd_none(2, &[8; 16])),
+            ])),
+            Variant::Codestream,
+        ),
+    ];
+
+    // Every main-header marker the subset does not decode.
+    for (name, code) in [
+        ("COC", marker::COC),
+        ("QCC", marker::QCC),
+        ("RGN", marker::RGN),
+        ("POC", marker::POC),
+        ("TLM", marker::TLM),
+        ("PLM", marker::PLM),
+        ("PLT", marker::PLT),
+        ("PPM", marker::PPM),
+        ("PPT", marker::PPT),
+        ("CRG", marker::CRG),
+        ("SOP", marker::SOP),
+    ] {
+        rows.push((
+            name,
+            err(&header_with(&seg(code, &[0, 0]))),
+            Variant::Unsupported,
+        ));
+    }
+    rows.push((
+        "EPH",
+        err(&header_with(&be16(marker::EPH))),
+        Variant::Unsupported,
+    ));
+
+    // Every code-block style flag, individually. Each changes how Tier-1 reads a
+    // code-block, so none may be ignored.
+    for (bit, name) in markers::code_block_style::FLAGS {
+        rows.push((
+            name,
+            err(&header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, bit, 1))),
+            Variant::Unsupported,
+        ));
+    }
+
+    let wrong: Vec<String> = rows
+        .iter()
+        .filter(|(_, error, want)| variant_of(error) != *want)
+        .map(|(feature, error, want)| format!("  {feature}: expected {want:?}, got {error:?}"))
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "{} inputs mapped to the wrong error variant:\n{}",
+        wrong.len(),
+        wrong.join("\n"),
+    );
+}
+
+/// A code-block style names the flags it carries, so a rejection tells the
+/// caller which feature to look up rather than printing a bare bit pattern.
+#[test]
+fn code_block_style_rejection_names_the_flags() {
+    let bytes = header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, 0x01 | 0x20, 1));
+    let e = err(&bytes);
+    let Error::Unsupported(message) = &e else {
+        panic!("got {e:?}")
+    };
+    assert!(
+        message.contains("selective arithmetic coding bypass"),
+        "{message}"
+    );
+    assert!(message.contains("segmentation symbols"), "{message}");
+
+    // The high bits select the HTJ2K block coder rather than being reserved, so
+    // they are named too. Such a codestream also carries CAP, which rejects on
+    // its own, but the style byte alone must not read as the default style.
+    for (bit, name) in [(0x40u8, "high-throughput"), (0x80, "mixed-mode")] {
+        let e = err(&header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, bit, 1)));
+        let Error::Unsupported(message) = &e else {
+            panic!("{bit:#04X}: got {e:?}")
+        };
+        assert!(message.contains(name), "{bit:#04X}: {message}");
+    }
+
+    // Every bit of the style byte is allocated, so nothing goes unnamed.
+    let all: u8 = markers::code_block_style::FLAGS
+        .iter()
+        .fold(0, |acc, (bit, _)| acc | bit);
+    assert_eq!(all, u8::MAX, "every style bit must be named");
+}

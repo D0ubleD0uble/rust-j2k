@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A codestream that sets any `SPcod` code-block style flag — selective
+  arithmetic coding bypass, reset context probabilities, termination on each
+  coding pass, vertically causal context, predictable termination, segmentation
+  symbols, or either HTJ2K block-coding flag — decoded to wrong samples instead
+  of being rejected. The flag was parsed, passed to Tier-1, and discarded. It is
+  now rejected as `Unsupported`, naming the flags that are set, until each one is
+  decoded.
+- A JP2 file is now rejected as `Unsupported`, naming the wrapper and pointing at
+  the contained codestream, instead of reporting a missing `SOC` marker. JP2 is
+  valid JPEG 2000; it is simply not the bare codestream this decoder reads.
+
 ### Changed
 
 - **Breaking.** `Image` now carries the image area on the reference grid

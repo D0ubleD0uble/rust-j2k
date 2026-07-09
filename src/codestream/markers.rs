@@ -47,6 +47,44 @@ pub mod marker {
     }
 }
 
+/// The code-block style flags of `SPcod`/`SPcoc` (ISO Table A-19), plus the two
+/// high-throughput flags the HTJ2K amendment adds in the same byte.
+///
+/// Each flag changes how Tier-1 reads a code-block's coded segments, so a
+/// decoder that ignores one does not decode a slightly different image — it
+/// decodes the wrong one. None are decoded yet; `decode_cod` rejects any that
+/// are set.
+pub mod code_block_style {
+    /// Every flag of the style byte, low bit first, with the name used in error
+    /// messages. All eight bits are allocated, so no value goes unnamed.
+    ///
+    /// Bits `0x40` and `0x80` select the HTJ2K block coder (ISO/IEC 15444-15;
+    /// OpenJPEG's `J2K_CCP_CBLKSTY_HT` and `J2K_CCP_CBLKSTY_HTMIXED`). A
+    /// codestream that sets them also carries a `CAP` marker, which is rejected
+    /// on its own, but naming them here keeps the message accurate either way.
+    pub const FLAGS: [(u8, &str); 8] = [
+        (0x01, "selective arithmetic coding bypass"),
+        (0x02, "reset context probabilities"),
+        (0x04, "termination on each coding pass"),
+        (0x08, "vertically causal context"),
+        (0x10, "predictable termination"),
+        (0x20, "segmentation symbols"),
+        (0x40, "HTJ2K high-throughput block coding"),
+        (0x80, "HTJ2K mixed-mode block coding"),
+    ];
+
+    /// Name the flags set in `style`, comma-separated. Returns an empty string
+    /// for the default style, which `decode_cod` never asks about.
+    pub fn describe(style: u8) -> String {
+        FLAGS
+            .iter()
+            .filter(|(bit, _)| style & bit != 0)
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 /// Wavelet transform (COD/COC, byte "SPcod transformation").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transform {

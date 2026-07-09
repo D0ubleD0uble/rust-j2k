@@ -122,6 +122,15 @@ case, not an edge case:
 - **Typed failures** — the flat `Error` enum names the stage that failed, so a
   malformed header, an out-of-scope feature, and a Tier-1 decode fault are
   distinguishable by a caller. No `unwrap`/`panic` on the decode path.
+- **The reject matrix** — `reject_matrix_maps_every_out_of_subset_input_to_its_typed_error`
+  in `src/codestream/tests.rs` enumerates every input outside the decoded subset
+  and pins the typed error a caller sees: `Codestream` for structural damage,
+  `Marker` for an illegally encoded field, `Unsupported` for valid JPEG 2000 we
+  do not decode yet. Rejecting is not a formality. A feature the decoder reads
+  and then ignores does not yield a slightly wrong image, it yields an arbitrary
+  one, so anything not decoded must be refused rather than skipped. As each
+  milestone lands, its row leaves the table for the decoded set; a row that stops
+  rejecting fails the test first.
 - **No `unsafe`** on the correctness-critical path; if a measured hot path later
   needs it, it is justified, isolated, and fuzzed.
 
