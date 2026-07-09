@@ -6,15 +6,16 @@
 //! the initial surface tractable while exercising the whole pipeline:
 //!
 //! - the **raw codestream** (Annex A), not yet the JP2 file format (no boxes);
-//! - a **single component** (one scalar grid), so no multi-component or color
-//!   transform (MCT) yet;
+//! - **components**, each with its own bit depth, sign, and sub-sampling; they
+//!   reconstruct independently, so the inter-component (color) transform
+//!   RCT/ICT is not applied yet;
 //! - **integer** samples, signed or unsigned, up to 32 bits;
 //! - **both** the reversible 5/3 (lossless) and irreversible 9/7 (lossy)
 //!   wavelet paths (the 9/7 path is graded by re-encoding a real grid with
 //!   OpenJPEG, since no operational GRIB2 producer ships lossy 9/7).
 //!
-//! Multi-component/color, JP2 boxes, HTJ2K, and an encoder are later-phase
-//! work, not permanent non-goals. See `docs/roadmap.md` and `docs/scope.md`.
+//! The color transform, JP2 boxes, HTJ2K, and an encoder are later-phase work,
+//! not permanent non-goals. See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
 //!
@@ -83,9 +84,9 @@ pub use image::{Component, Image};
 /// component, each on its own sample grid.
 ///
 /// This is the whole public surface for the GRIB2 use case: the §7 data
-/// section of a `grid_jpeg` message is exactly such a codestream. That subset
-/// is single-component, so the returned image carries one component; a
-/// codestream declaring more is rejected with [`Error::Unsupported`].
+/// section of a `grid_jpeg` message is exactly such a codestream. That subset is
+/// single-component, so its images carry one component; a codestream declaring
+/// more decodes each component onto its own grid, independently.
 ///
 /// Pass the bare codestream, not a `.jp2` file: a JP2 wrapper is valid JPEG 2000
 /// but is rejected with [`Error::Unsupported`] rather than unwrapped. Anything
@@ -93,13 +94,21 @@ pub use image::{Component, Image};
 pub fn decode(codestream: &[u8]) -> Result<Image> {
     let cs = codestream::parse(codestream)?;
 
-    // Tier-2: parse packets into per-code-block coded segments.
+    // Tier-2: parse packets into per-code-block coded segments, per component.
     let coded = tier2::decode_packets(&cs)?;
     // Tier-1: MQ + EBCOT bit-plane decode each code block into subband coeffs.
     let coeffs = tier1::decode_code_blocks(&cs.header, &coded)?;
-    // Dequantize, then invert the DWT per resolution level into samples.
-    let dequant = quant::dequantize(&cs.header, coeffs)?;
-    let samples = dwt::inverse(&cs.header, dequant)?;
+
+    // Dequantize, then invert the DWT per resolution level into samples. The
+    // components are independent: no inter-component transform is applied.
+    let samples = coeffs
+        .into_iter()
+        .enumerate()
+        .map(|(component, coeffs)| {
+            let dequant = quant::dequantize(&cs.header, component, coeffs)?;
+            dwt::inverse(&cs.header, dequant)
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     image::assemble(&cs.header, samples)
 }

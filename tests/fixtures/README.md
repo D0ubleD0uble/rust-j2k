@@ -57,6 +57,18 @@ network fetch and no large operational grids.
 - `eta_lambert_irreversible` — the samples of `eta_lambert_lossless` re-encoded
   with OpenJPEG's irreversible 9/7 transform (`opj_compress -I`). Same NOAA Eta
   grid, public domain; only the codestream's wavelet differs.
+- `multicomponent_lossless` — three independent 8-bit components at unit
+  sub-sampling, reversible 5/3. Synthetic, generated with OpenJPEG by
+  `scripts/gen-multicomponent-fixtures.py`.
+- `multicomponent_subsampled_lossless` — the same, sub-sampled 2×2, so the 23×15
+  reference grid differs from each 12×8 component grid.
+
+The two multi-component fixtures are synthetic because the ISO/IEC 15444-4 corpus
+cannot grade multi-component decoding on its own: every one of its
+multi-component entries also needs a feature that is not decoded yet (a
+progression other than LRCP, several quality layers, a tile grid, an image
+origin, or the colour transform). The generator script records the details,
+including which OpenJPEG encoder flags do *not* work.
 
 All sources are Apache-2.0 or public domain, compatible with this repo.
 
@@ -113,19 +125,33 @@ than silently dropping data. Keep this document and that type in step.
 
 | Field        | Type     | Meaning                                                        |
 | ------------ | -------- | ------------------------------------------------------------- |
-| `geometry`   | object   | Sample-grid shape (below).                                    |
+| `image`      | object   | The reference-grid image area (below).                        |
 | `tolerance`  | object   | How close our decode must be to pass (below).                 |
-| `samples`    | int[]    | `width * height` reference samples, row-major.                |
+| `components` | object[] | One entry per component, in SIZ order (below).                |
 | `provenance` | object   | Where the fixture came from and how to regenerate (below).    |
 
-### `geometry`
+### `image`
 
-| Field       | Type   | Meaning                                            |
-| ----------- | ------ | -------------------------------------------------- |
-| `width`     | u32    | Component width in samples.                        |
-| `height`    | u32    | Component height in samples.                       |
-| `bit_depth` | u8     | Bits per sample as declared in SIZ (1–32).         |
-| `signed`    | bool   | Whether samples are signed (SIZ component sign).   |
+The reference-grid image area, `Xsiz - XOsiz` by `Ysiz - YOsiz`. A sub-sampled
+component covers this same area with fewer samples, so it is not in general the
+shape of any component.
+
+| Field    | Type | Meaning                                |
+| -------- | ---- | -------------------------------------- |
+| `width`  | u32  | Image area width, in grid points.      |
+| `height` | u32  | Image area height, in grid points.     |
+
+### `components[]`
+
+| Field        | Type   | Meaning                                              |
+| ------------ | ------ | ---------------------------------------------------- |
+| `width`      | u32    | Component width in samples.                          |
+| `height`     | u32    | Component height in samples.                         |
+| `bit_depth`  | u8     | Bits per sample as declared in SIZ (1–32).           |
+| `signed`     | bool   | Whether samples are signed (SIZ component sign).     |
+| `x_sampling` | u8     | Horizontal sub-sampling factor (SIZ `XRsiz`).        |
+| `y_sampling` | u8     | Vertical sub-sampling factor (SIZ `YRsiz`).          |
+| `samples`    | int[]  | `width * height` reference samples, row-major.       |
 
 ### `tolerance`
 

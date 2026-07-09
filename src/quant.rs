@@ -39,15 +39,25 @@ const MANTISSA_DENOM: f64 = 2048.0;
 /// mid-point rather than its lower edge (r = 0), which would be a one-line change.
 const RECON_BIAS: f64 = 0.5;
 
-/// Apply per-subband dequantization in place. Reversible: identity. Irreversible:
-/// multiply by the subband step (with the standard mid-point reconstruction
-/// bias). Returns coefficients ready for the inverse DWT.
-pub fn dequantize(header: &MainHeader, coeffs: SubbandCoeffs) -> Result<SubbandCoeffs> {
+/// Apply per-subband dequantization in place for component `comp`. Reversible:
+/// identity. Irreversible: multiply by the subband step (with the standard
+/// mid-point reconstruction bias). Returns coefficients ready for the inverse
+/// DWT.
+///
+/// The step size depends on the component's declared bit depth, so a
+/// multi-component image with mixed depths dequantizes each one on its own
+/// scale. The QCD itself is a main-header default shared by every component
+/// (per-component overrides are QCC, not yet decoded).
+pub fn dequantize(
+    header: &MainHeader,
+    comp: usize,
+    coeffs: SubbandCoeffs,
+) -> Result<SubbandCoeffs> {
     match coeffs {
         // Reversible (5/3): the integer coefficients are already exact.
         SubbandCoeffs::Reversible(bands) => Ok(SubbandCoeffs::Reversible(bands)),
         SubbandCoeffs::Irreversible(mut bands) => {
-            scale_irreversible(header, &mut bands)?;
+            scale_irreversible(header, comp, &mut bands)?;
             Ok(SubbandCoeffs::Irreversible(bands))
         }
     }
@@ -56,13 +66,13 @@ pub fn dequantize(header: &MainHeader, coeffs: SubbandCoeffs) -> Result<SubbandC
 /// Scale every subband of the 9/7 pyramid by its reconstructed step size. Bands
 /// run in QCD subband order: LL first, then each resolution level coarsest-first
 /// as `HL, LH, HH` ([`Bands`] stores `levels` coarsest-first to match).
-fn scale_irreversible(header: &MainHeader, bands: &mut Bands<f32>) -> Result<()> {
+fn scale_irreversible(header: &MainHeader, comp: usize, bands: &mut Bands<f32>) -> Result<()> {
     let prec = i32::from(
         header
             .siz
             .components
-            .first()
-            .ok_or_else(|| Error::Inconsistent("SIZ declares no components".into()))?
+            .get(comp)
+            .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {comp}")))?
             .bit_depth,
     );
     let qcd = &header.qcd;
@@ -237,7 +247,7 @@ mod tests {
             guard_bits: 2,
             steps: vec![(8, 0)],
         };
-        let out = dequantize(&header(8, qcd), SubbandCoeffs::Reversible(bands.clone())).unwrap();
+        let out = dequantize(&header(8, qcd), 0, SubbandCoeffs::Reversible(bands.clone())).unwrap();
         assert_eq!(out, SubbandCoeffs::Reversible(bands));
     }
 
@@ -250,8 +260,9 @@ mod tests {
             // (exp, mant) for LL, HL, LH, HH of the single level.
             steps: vec![(8, 0), (7, 512), (7, 512), (6, 1024)],
         };
-        let out =
-            irreversible(dequantize(&header(prec, qcd), one_level(5.0, -3.0, 0.0, 2.0)).unwrap());
+        let out = irreversible(
+            dequantize(&header(prec, qcd), 0, one_level(5.0, -3.0, 0.0, 2.0)).unwrap(),
+        );
 
         assert_close(out.ll.data[0], recon(5.0, step(8, 0, 8, 0)));
         assert_close(out.levels[0].hl.data[0], recon(-3.0, step(8, 1, 7, 512)));
@@ -285,7 +296,7 @@ mod tests {
                 },
             ],
         });
-        let out = irreversible(dequantize(&header(prec, qcd), coeffs).unwrap());
+        let out = irreversible(dequantize(&header(prec, qcd), 0, coeffs).unwrap());
 
         assert_close(out.ll.data[0], recon(1.0, step(8, 0, 10, 100)));
         assert_close(out.levels[0].hl.data[0], recon(1.0, step(8, 1, 10, 100)));
@@ -311,7 +322,7 @@ mod tests {
             ll: band(1.0),
             levels,
         });
-        let out = irreversible(dequantize(&header(8, qcd), coeffs).unwrap());
+        let out = irreversible(dequantize(&header(8, qcd), 0, coeffs).unwrap());
         assert_close(out.levels[2].hl.data[0], recon(1.0, step(8, 1, 0, 0)));
     }
 
@@ -323,7 +334,7 @@ mod tests {
             // Only the LL step, but a one-level pyramid needs four.
             steps: vec![(8, 0)],
         };
-        let err = dequantize(&header(8, qcd), one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
+        let err = dequantize(&header(8, qcd), 0, one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
         assert!(matches!(err, Error::Inconsistent(_)));
     }
 
@@ -336,7 +347,7 @@ mod tests {
             // QCD and COD decomposition depth disagree.
             steps: vec![(8, 0); 7],
         };
-        let err = dequantize(&header(8, qcd), one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
+        let err = dequantize(&header(8, qcd), 0, one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
         assert!(matches!(err, Error::Inconsistent(_)));
     }
 
@@ -373,7 +384,7 @@ mod tests {
                 },
             ],
         });
-        let out = irreversible(dequantize(&header(prec, qcd), coeffs).unwrap());
+        let out = irreversible(dequantize(&header(prec, qcd), 0, coeffs).unwrap());
 
         assert_close(out.ll.data[0], recon(2.0, step(8, 0, 9, 0)));
         assert_close(out.levels[0].lh.data[0], recon(2.0, step(8, 1, 8, 32)));
@@ -390,10 +401,10 @@ mod tests {
             steps: vec![(7, 300), (7, 300), (7, 300), (7, 300)],
         };
         let pos = irreversible(
-            dequantize(&header(10, qcd.clone()), one_level(6.0, 0.0, 0.0, 0.0)).unwrap(),
+            dequantize(&header(10, qcd.clone()), 0, one_level(6.0, 0.0, 0.0, 0.0)).unwrap(),
         );
         let neg =
-            irreversible(dequantize(&header(10, qcd), one_level(-6.0, 0.0, 0.0, 0.0)).unwrap());
+            irreversible(dequantize(&header(10, qcd), 0, one_level(-6.0, 0.0, 0.0, 0.0)).unwrap());
         assert_eq!(pos.ll.data[0], -neg.ll.data[0]);
         assert!(pos.ll.data[0] > 0.0);
     }
@@ -405,7 +416,7 @@ mod tests {
             guard_bits: 2,
             steps: vec![(8, 0)],
         };
-        let err = dequantize(&header(8, qcd), one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
+        let err = dequantize(&header(8, qcd), 0, one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
         assert!(matches!(err, Error::Inconsistent(_)));
     }
 }

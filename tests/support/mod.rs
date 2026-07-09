@@ -24,27 +24,63 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Expected {
-    /// Image geometry the samples are laid out against.
-    pub geometry: Geometry,
+    /// The reference-grid image area the components are registered against.
+    pub image: ImageGeometry,
     /// How close our decode must be to count as correct.
     pub tolerance: Tolerance,
-    /// `width * height` reference samples, row-major. `i32` mirrors
-    /// [`rust_j2k::Image::samples`], so the harness compares like-for-like.
-    pub samples: Vec<i32>,
+    /// One entry per component, in SIZ order.
+    pub components: Vec<ComponentSnapshot>,
     /// Where the fixture came from and how to regenerate this snapshot.
     pub provenance: Provenance,
 }
 
-/// Sample-grid geometry, matching the SIZ-declared component shape.
+/// The reference-grid image area (`Xsiz - XOsiz` by `Ysiz - YOsiz`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Geometry {
+pub struct ImageGeometry {
     pub width: u32,
     pub height: u32,
-    /// Bits per sample as declared in SIZ (1..=32 for the GRIB2 subset).
+}
+
+/// One component's oracle samples and the geometry they are laid out against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentSnapshot {
+    pub width: u32,
+    pub height: u32,
+    /// Bits per sample as declared in SIZ.
     pub bit_depth: u8,
     /// Whether samples are signed (SIZ component sign bit).
     pub signed: bool,
+    /// Sub-sampling factors (SIZ `XRsiz`/`YRsiz`); `1` means unit sampling.
+    pub x_sampling: u8,
+    pub y_sampling: u8,
+    /// `width * height` reference samples, row-major. `i32` mirrors
+    /// [`rust_j2k::Component::samples`], so the harness compares like-for-like.
+    pub samples: Vec<i32>,
+}
+
+/// Sample-grid geometry, matching the SIZ-declared component shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Geometry {
+    pub width: u32,
+    pub height: u32,
+    /// Bits per sample as declared in SIZ.
+    pub bit_depth: u8,
+    /// Whether samples are signed (SIZ component sign bit).
+    pub signed: bool,
+}
+
+impl ComponentSnapshot {
+    /// This component's geometry, for comparing against a decoded component.
+    pub fn geometry(&self) -> Geometry {
+        Geometry {
+            width: self.width,
+            height: self.height,
+            bit_depth: self.bit_depth,
+            signed: self.signed,
+        }
+    }
 }
 
 /// How exactly a decode must match the oracle.
@@ -139,14 +175,16 @@ pub enum Outcome {
 /// geometry differs, or the first sample that falls outside tolerance.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mismatch {
-    /// Decoded geometry differs from the oracle's.
+    /// A component's decoded geometry differs from the oracle's.
     Geometry {
+        component: usize,
         expected: Geometry,
         actual: Geometry,
     },
     /// A sample differs by more than the allowed bound. Reports the *first*
     /// such sample in row-major order so a failure points at one coordinate.
     Sample {
+        component: usize,
         index: usize,
         x: u32,
         y: u32,
@@ -155,17 +193,21 @@ pub enum Mismatch {
         /// Allowed absolute error (`0.0` for an exact/reversible fixture).
         bound: f64,
     },
-    /// The decode produced an error instead of an image (the decoder rejected
-    /// a fixture the oracle decoded successfully).
+    /// The decode produced an error instead of an image, or disagreed with the
+    /// oracle about the image's shape rather than its samples.
     DecodeError(String),
 }
 
 impl fmt::Display for Mismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Mismatch::Geometry { expected, actual } => write!(
+            Mismatch::Geometry {
+                component,
+                expected,
+                actual,
+            } => write!(
                 f,
-                "geometry mismatch: expected {}x{} (depth {}, signed {}), \
+                "component {component} geometry mismatch: expected {}x{} (depth {}, signed {}), \
                  got {}x{} (depth {}, signed {})",
                 expected.width,
                 expected.height,
@@ -177,6 +219,7 @@ impl fmt::Display for Mismatch {
                 actual.signed,
             ),
             Mismatch::Sample {
+                component,
                 index,
                 x,
                 y,
@@ -185,8 +228,8 @@ impl fmt::Display for Mismatch {
                 bound,
             } => write!(
                 f,
-                "sample #{index} at ({x},{y}): expected {expected}, got {actual} \
-                 (|diff| = {} exceeds bound {bound})",
+                "component {component} sample #{index} at ({x},{y}): expected {expected}, \
+                 got {actual} (|diff| = {} exceeds bound {bound})",
                 (*actual as i64 - *expected as i64).abs(),
             ),
             Mismatch::DecodeError(msg) => {
@@ -240,70 +283,108 @@ fn load_snapshot(path: &Path) -> Result<Expected, String> {
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let expected =
         Expected::from_json(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
-    let want = expected.geometry.sample_count();
-    if expected.samples.len() != want {
-        return Err(format!(
-            "malformed {}: geometry is {}x{} = {want} samples but the array has {}",
-            path.display(),
-            expected.geometry.width,
-            expected.geometry.height,
-            expected.samples.len(),
-        ));
+    if expected.components.is_empty() {
+        return Err(format!("malformed {}: no components", path.display()));
+    }
+    for (index, component) in expected.components.iter().enumerate() {
+        let want = component.geometry().sample_count();
+        if component.samples.len() != want {
+            return Err(format!(
+                "malformed {}: component {index} is {}x{} = {want} samples but the array has {}",
+                path.display(),
+                component.width,
+                component.height,
+                component.samples.len(),
+            ));
+        }
     }
     Ok(expected)
 }
 
 /// Compare a decoded [`Image`] against an oracle snapshot.
 ///
-/// The snapshot schema is single-component (the Phase 1 fixtures are all one
-/// component), so a decode that produced any other number of components is a
-/// mismatch. Geometry must then match exactly; then each sample must agree
-/// within the snapshot's tolerance — bit-exact for [`Tolerance::Exact`], within
-/// an absolute bound for [`Tolerance::Absolute`]. Returns the first divergence
-/// so a failure localises to a single cause.
+/// The image area, the component count, and each component's geometry must match
+/// exactly; then each sample must agree within the snapshot's tolerance —
+/// bit-exact for [`Tolerance::Exact`], within an absolute bound for
+/// [`Tolerance::Absolute`]. Returns the first divergence so a failure localises
+/// to a single cause.
 pub fn compare(actual: &Image, expected: &Expected) -> Result<(), Mismatch> {
-    let component = match actual.components.as_slice() {
-        [only] => only,
-        others => {
-            return Err(Mismatch::DecodeError(format!(
-                "snapshot is single-component but the decode produced {} components",
-                others.len()
-            )));
-        }
+    let actual_image = ImageGeometry {
+        width: actual.width,
+        height: actual.height,
     };
+    if actual_image != expected.image {
+        return Err(Mismatch::DecodeError(format!(
+            "image area is {}x{} but the snapshot says {}x{}",
+            actual.width, actual.height, expected.image.width, expected.image.height,
+        )));
+    }
+    if actual.components.len() != expected.components.len() {
+        return Err(Mismatch::DecodeError(format!(
+            "decoded {} components but the snapshot has {}",
+            actual.components.len(),
+            expected.components.len(),
+        )));
+    }
 
+    for (component_index, (component, want)) in actual
+        .components
+        .iter()
+        .zip(&expected.components)
+        .enumerate()
+    {
+        compare_component(component_index, component, want, expected.tolerance)?;
+    }
+    Ok(())
+}
+
+/// Compare one decoded component against its snapshot.
+fn compare_component(
+    component: usize,
+    actual: &rust_j2k::Component,
+    expected: &ComponentSnapshot,
+    tolerance: Tolerance,
+) -> Result<(), Mismatch> {
     let actual_geometry = Geometry {
-        width: component.width,
-        height: component.height,
-        bit_depth: component.bit_depth,
-        signed: component.signed,
+        width: actual.width,
+        height: actual.height,
+        bit_depth: actual.bit_depth,
+        signed: actual.signed,
     };
-    if actual_geometry != expected.geometry {
+    if actual_geometry != expected.geometry() {
         return Err(Mismatch::Geometry {
-            expected: expected.geometry,
+            component,
+            expected: expected.geometry(),
             actual: actual_geometry,
         });
     }
+    if (actual.x_sampling, actual.y_sampling) != (expected.x_sampling, expected.y_sampling) {
+        return Err(Mismatch::DecodeError(format!(
+            "component {component} sub-samples ({}, {}) but the snapshot says ({}, {})",
+            actual.x_sampling, actual.y_sampling, expected.x_sampling, expected.y_sampling,
+        )));
+    }
     // Matching geometry already implies matching sample counts, but the loop
     // below zips the two vectors: a short one would compare only its prefix.
-    if component.samples.len() != expected.samples.len() {
+    if actual.samples.len() != expected.samples.len() {
         return Err(Mismatch::DecodeError(format!(
-            "decoded {} samples but the snapshot has {}",
-            component.samples.len(),
+            "component {component} decoded {} samples but the snapshot has {}",
+            actual.samples.len(),
             expected.samples.len(),
         )));
     }
 
-    let bound = match expected.tolerance {
+    let bound = match tolerance {
         Tolerance::Exact => 0.0,
         Tolerance::Absolute { max_abs_error } => max_abs_error,
     };
-    let width = expected.geometry.width;
-    for (index, (&got, &want)) in component.samples.iter().zip(&expected.samples).enumerate() {
+    let width = expected.width;
+    for (index, (&got, &want)) in actual.samples.iter().zip(&expected.samples).enumerate() {
         // i64 so the subtraction cannot overflow at the i32 extremes.
         let diff = (got as i64 - want as i64).abs() as f64;
         if diff > bound {
             return Err(Mismatch::Sample {
+                component,
                 index,
                 x: (index as u32) % width,
                 y: (index as u32) / width,
