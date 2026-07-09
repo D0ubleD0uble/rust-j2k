@@ -17,11 +17,23 @@
 //! where `ε_b`/`μ_b` are the QCD exponent/mantissa, `R_I` the component bit
 //! depth (SIZ), and `gain_b` the log2 nominal subband gain (LL 0, HL/LH 1,
 //! HH 2). Guard bits do not enter the step; they size the magnitude bit-planes,
-//! which Tier-1/Tier-2 already consumed. A decoded index `q` reconstructs to the
-//! interval mid-point (E.1.1.2, parameter r = ½): `sign(q) · (|q| + ½) · Δ_b`,
-//! with zero mapping to zero. Every quality layer is decoded, so every coded
-//! bit-plane is present and the bias is exactly one half-step. A layer-truncated
-//! (rate-limited) read would need a different bias; the decoder does not offer one.
+//! which Tier-1/Tier-2 already consumed.
+//!
+//! **The mid-point reconstruction (E.1.1.2, r = ½) is not applied here.**
+//! Tier-1 already carries it: a coefficient that becomes significant at plane
+//! `b` is set to `2^b + 2^(b−1)`, which *is* the interval mid-point, and every
+//! refinement keeps the running half. Those magnitudes arrive at twice their
+//! weight, so the coefficient is
+//!
+//! ```text
+//! v = q_double · (Δ_b / 2)
+//! ```
+//!
+//! which is `opj_t1_clbl_decode_processor`'s `stepsize = 0.5f * band->stepsize;
+//! tmp = (float)datap * stepsize`. Adding a further `± ½ · Δ_b` here would bias
+//! every coefficient by a half step, and halving `q_double` with an integer
+//! divide first would silently cancel that bias for odd `q` while leaving it for
+//! even `q`. The decoder did exactly that until #101.
 
 use crate::Result;
 use crate::codestream::MainHeader;
@@ -32,18 +44,10 @@ use crate::tier1::{Band, Bands, SubbandCoeffs};
 /// 2^11 — the implicit denominator of the 11-bit QCD mantissa.
 const MANTISSA_DENOM: f64 = 2048.0;
 
-/// Mid-point reconstruction offset r (E.1.1.2). With every bit-plane decoded
-/// (single layer), the reconstruction bias is exactly one half-step.
-///
-/// The standard leaves r a decoder choice; the conformance gate confirms the
-/// OpenJPEG oracle also reconstructs at the interval mid-point rather than its
-/// lower edge (r = 0), which would be a one-line change.
-const RECON_BIAS: f64 = 0.5;
-
 /// Apply per-subband dequantization in place for component `comp`. Reversible:
-/// identity. Irreversible: multiply by the subband step (with the standard
-/// mid-point reconstruction bias). Returns coefficients ready for the inverse
-/// DWT.
+/// identity. Irreversible: multiply by half the subband step, because Tier-1
+/// hands over magnitudes at twice their weight and already at the interval
+/// mid-point. Returns coefficients ready for the inverse DWT.
 ///
 /// The step size depends on the component's declared bit depth, so a
 /// multi-component image with mixed depths dequantizes each one on its own
@@ -136,13 +140,20 @@ fn step_params(qcd: &Qcd, band: usize) -> Result<(u8, u16)> {
 /// `2^(R_I + gain − ε)` factor exceeds the `f32` range, and the wider mantissa
 /// keeps `(|q| + ½)·Δ` accurate before the lossy-tolerance comparison. A `-0.0`
 /// index is filtered by the `!= 0.0` guard, so `signum` never sees it.
+/// Scale one subband by half its step size.
+///
+/// The step is computed in `f64` because the `2^(R_I + gain − ε)` factor can
+/// leave the `f32` range, then narrowed and halved exactly as OpenJPEG does:
+/// `(OPJ_FLOAT32)step` followed by `0.5f * band->stepsize`. Halving after the
+/// narrowing is exact (it only decrements the exponent), so the order costs
+/// nothing — but multiplying by `0.5 * step` in one `f32` operation is what the
+/// oracle does, and doing it in `f64` and narrowing afterwards would round
+/// differently on coefficients near a tie.
 fn apply_band(band: &mut Band<f32>, (exp, mant): (u8, u16), gain: i32, prec: i32) {
     let step = (1.0 + f64::from(mant) / MANTISSA_DENOM) * 2f64.powi(prec + gain - i32::from(exp));
+    let half_step = 0.5f32 * step as f32;
     for v in &mut band.data {
-        if *v != 0.0 {
-            let q = f64::from(*v);
-            *v = (q.signum() * (q.abs() + RECON_BIAS) * step) as f32;
-        }
+        *v *= half_step;
     }
 }
 
@@ -216,13 +227,11 @@ mod tests {
         (1.0 + mant as f32 / 2048.0) * 2f32.powi(prec + gain - exp)
     }
 
-    /// Mid-point reconstruction of one index, mirroring [`apply_band`].
+    /// One coefficient, as `opj_t1_clbl_decode_processor` computes it:
+    /// `(float)datap * (0.5f * band->stepsize)`. `q` is the double-scale
+    /// magnitude Tier-1 produces, which already sits at the interval mid-point.
     fn recon(q: f32, step: f32) -> f32 {
-        if q == 0.0 {
-            0.0
-        } else {
-            q.signum() * (q.abs() + 0.5) * step
-        }
+        q * (0.5f32 * step)
     }
 
     fn assert_close(got: f32, want: f32) {
