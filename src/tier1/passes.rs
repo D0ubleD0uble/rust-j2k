@@ -499,8 +499,17 @@ enum PassType {
 /// quantization exponent − 1); `num_passes` and `zero_bit_planes` come from the
 /// Tier-2 packet headers; `orient` is the subband's orientation (it selects the
 /// zero-coding table); and `style` is the COD/COC code-block style flags. On
-/// return `state.coeffs` holds the signed quantized coefficients at their true
-/// bit weights.
+/// On return `state.coeffs` holds the signed quantized coefficients at **twice**
+/// their weight — OpenJPEG's `datap` as `opj_t1_clbl_decode_processor` receives
+/// it. Halving them is the caller's job because the two arms do it differently:
+///
+/// - reversible (5/3): an integer `datap[i] /= 2`, truncating toward zero;
+/// - irreversible (9/7): folded into the float dequantization, which multiplies
+///   by `0.5f * band->stepsize` rather than by `band->stepsize`. The half bit
+///   survives into the float, and truncating it first loses up to half a
+///   quantization step per coefficient.
+///
+/// Halving here would force the integer form on both.
 ///
 /// Following OpenJPEG, decoding runs at double scale: it begins at the most
 /// significant coded plane `Mb − zero_bit_planes` with a cleanup pass and walks
@@ -620,20 +629,23 @@ pub fn decode_block(
         }
     }
 
-    // Undo the maxshift (Annex H.2), then drop the carried low bit.
+    // Undo the maxshift (Annex H.2), then apply the decoded signs.
     //
     // The passes carried each magnitude in the mid-point reconstruction form at
     // double scale (ISO E.1.1.2, r = ½): becoming significant set
-    // `2^bpno + 2^(bpno−1)` and each refinement nudged it by ±2^(bpno−1). Halve
-    // toward zero to drop it, then apply the decoded signs (OpenJPEG's `tmp / 2`).
+    // `2^bpno + 2^(bpno−1)` and each refinement nudged it by ±2^(bpno−1). The
+    // coefficients are left at that scale; the caller halves them, because how
+    // the half bit is dropped depends on the arm it lands in (see this
+    // function's contract).
     //
-    // The maxshift is undone first, as `opj_t1_clbl_decode_processor` does it:
-    // its threshold is stated in the coefficients' own scale, and halving first
-    // would drop a region coefficient below it.
+    // The maxshift is undone here, before that halving, as
+    // `opj_t1_clbl_decode_processor` does it: its threshold is stated in the
+    // coefficients' own scale, and halving first would drop a region coefficient
+    // below it.
     for y in 0..state.height {
         for x in 0..state.width {
             let i = state.idx(x, y);
-            let mag = undo_maxshift(state.coeffs[i], roi_shift) / 2;
+            let mag = undo_maxshift(state.coeffs[i], roi_shift);
             state.coeffs[i] = if state.is_negative(x, y) { -mag } else { mag };
         }
     }
@@ -662,7 +674,9 @@ mod tests {
             BlockParams::default(),
         )
         .expect("the default style decodes without a style check");
-        state.coeffs
+        // `decode_block` leaves the coefficients at double scale; the golden
+        // vectors are the halved, integer values the reversible arm produces.
+        state.coeffs.iter().map(|&c| c / 2).collect()
     }
 
     /// Each committed code-block segment decodes bit-exactly to its oracle

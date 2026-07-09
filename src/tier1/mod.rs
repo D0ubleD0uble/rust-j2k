@@ -102,12 +102,19 @@ pub fn decode_code_blocks(
                 .coding
                 .transform;
             match transform {
+                // Drop the double-scale half bit. On the reversible arm this is
+                // OpenJPEG's integer `datap[i] /= 2`, exact by construction.
                 Transform::Reversible53 => Ok(SubbandCoeffs::Reversible(assemble(
                     header,
                     index,
                     component,
-                    |q| q,
+                    |q| q / 2,
                 )?)),
+                // On the irreversible arm the half bit must survive into the
+                // float: OpenJPEG multiplies by `0.5f * band->stepsize`, so the
+                // halving happens in float, not as an integer truncation. `q`
+                // can be odd, and dropping its low bit here loses up to half a
+                // quantization step on every coefficient.
                 Transform::Irreversible97 => Ok(SubbandCoeffs::Irreversible(assemble(
                     header,
                     index,
