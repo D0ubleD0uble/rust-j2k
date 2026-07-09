@@ -224,7 +224,12 @@ where
             )));
         }
         let mut state = BlockState::new(block.width as u32, block.height as u32);
-        let mut mq = MqDecoder::new(block.segment);
+        // Without per-pass termination the MQ codeword runs continuously across
+        // the layers that contributed, so the contributions decode as one
+        // stream. `concat` copies; a single-layer block copies once, which is
+        // cheap beside the bit-plane decode that follows.
+        let coded = block.segments.concat();
+        let mut mq = MqDecoder::new(&coded);
         decode_block(
             &mut mq,
             &mut state,
@@ -287,7 +292,7 @@ mod tests {
                 height: 1,
                 num_passes,
                 zero_bit_planes,
-                segment: &[0x80],
+                segments: vec![&[0x80][..]],
             }],
         }
     }

@@ -19,8 +19,9 @@
 //! HH 2). Guard bits do not enter the step; they size the magnitude bit-planes,
 //! which Tier-1/Tier-2 already consumed. A decoded index `q` reconstructs to the
 //! interval mid-point (E.1.1.2, parameter r = ½): `sign(q) · (|q| + ½) · Δ_b`,
-//! with zero mapping to zero. The single-layer decode covers every bit-plane, so
-//! the bias is exactly one half-step.
+//! with zero mapping to zero. Every quality layer is decoded, so every coded
+//! bit-plane is present and the bias is exactly one half-step. A layer-truncated
+//! (rate-limited) read would need a different bias; the decoder does not offer one.
 
 use crate::Result;
 use crate::codestream::MainHeader;
@@ -34,9 +35,9 @@ const MANTISSA_DENOM: f64 = 2048.0;
 /// Mid-point reconstruction offset r (E.1.1.2). With every bit-plane decoded
 /// (single layer), the reconstruction bias is exactly one half-step.
 ///
-/// The standard leaves r a decoder choice; the integration gate (#17) must
-/// confirm the OpenJPEG/eccodes oracle also reconstructs at the interval
-/// mid-point rather than its lower edge (r = 0), which would be a one-line change.
+/// The standard leaves r a decoder choice; the conformance gate confirms the
+/// OpenJPEG oracle also reconstructs at the interval mid-point rather than its
+/// lower edge (r = 0), which would be a one-line change.
 const RECON_BIAS: f64 = 0.5;
 
 /// Apply per-subband dequantization in place for component `comp`. Reversible:

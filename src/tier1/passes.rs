@@ -419,10 +419,10 @@ fn cleanup_pass(
 /// down three passes per plane to plane 1 (never plane 0), carrying each
 /// magnitude in mid-point form, then halves toward zero. A stream that stops
 /// early (the lossy/rate-truncated case) simply leaves the un-coded low planes
-/// zero. The decoder currently handles only the default code-block style and a
-/// single quality layer; the non-default styles
-/// (bypass/reset/restart/vertically-causal/segmentation) and multi-layer
-/// progression are not yet decoded.
+/// zero. The decoder currently handles only the default code-block style; the
+/// non-default styles (bypass/reset/restart/vertically-causal/segmentation) are
+/// not yet decoded. Quality layers are handled in Tier-2, which concatenates a
+/// block's per-layer contributions into the single MQ codeword decoded here.
 ///
 /// `decode_cod` rejects a nonzero `style`, so this always runs the default pass
 /// structure. The parameter stays because each style flag alters the passes

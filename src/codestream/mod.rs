@@ -602,11 +602,11 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         }
     };
 
+    // Every packet costs at least one byte, so a layer count is bounded by the
+    // tile-part in practice; a declared zero is malformed (ISO Table A-16).
     let layers = b.u16()?;
-    if layers != 1 {
-        return Err(Error::Unsupported(format!(
-            "{layers} quality layers; the subset is single-layer"
-        )));
+    if layers == 0 {
+        return Err(Error::Marker("COD declares zero quality layers".into()));
     }
 
     // SGcod multiple-component transform: 0 = none, 1 = the Part 1 colour

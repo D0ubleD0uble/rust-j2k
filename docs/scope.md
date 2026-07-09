@@ -78,7 +78,7 @@ that the later phases widen is correct end-to-end before breadth work starts.
 | Single quality layer | ✓ | 1 |
 | LRCP progression | ✓ | 1 |
 | Remaining progressions: RLCP, RPCL, PCRL, CPRL | — | 2 |
-| Multiple quality layers (accumulation across all layers) | — | 2 |
+| Multiple quality layers (accumulation across all layers) | ✓ | 2 |
 | Precinct partition (non-maximal precincts) | ○ | 2 |
 
 Phase 2 decodes every layer of a multi-layer codestream (the conformance bar).

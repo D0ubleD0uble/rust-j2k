@@ -187,10 +187,14 @@ accumulation, where each code-block's contributions add up across layers
 (B.10). With P2.4 done, the packet iterator now ranges over all five axes.
 
 **Oracle:** Part 4 codestreams exercising each progression order, a POC change,
-and multiple layers, each against its reference decode.
+and multiple layers, each against its reference decode — but note no corpus entry
+is unblocked by layers alone, and `p0_01` cannot distinguish one progression
+order from another (see [correctness.md](correctness.md) §A passing entry is not
+proof the feature works). Both need synthetic OpenJPEG fixtures.
 
-**Done:** every progression order, POC, and multi-layer codestream decodes in
-class. The structural track is complete.
+**Done:** multiple quality layers have landed (`scripts/gen-multilayer-fixtures.py`
+grades them bit-exact). The progression orders and POC remain; they now have the
+multi-layer fixture they need to be told apart from LRCP.
 
 ### P2.6 — Code-block coding styles (`src/tier1/`)
 
