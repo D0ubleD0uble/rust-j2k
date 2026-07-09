@@ -38,7 +38,17 @@ use serde::Deserialize;
 /// Every other entry must report as *not yet decoded*. Grow this list as the
 /// Phase 2 milestones land; never shrink it without an explanation, because a
 /// shrink is a regression.
-const IN_CLASS: &[&str] = &["p0_01", "p0_09", "p0_12", "p0_14", "p0_16"];
+const IN_CLASS: &[&str] = &["p0_01", "p0_02", "p0_09", "p0_12", "p0_14", "p0_16"];
+
+/// Entries whose `.pgx` reference is the image at a *reduced* resolution rather
+/// than at full size, so the samples cannot be compared until the decoder can
+/// stop the inverse DWT early (issue #85).
+///
+/// `p0_08`'s reference is 257x1536 against a 513x3072 image: reduction 1, half
+/// in each axis. The codestream itself decodes; there is simply nothing here to
+/// grade it against. This is checked *after* the decode runs, so a panic or a
+/// typed error still reports as a failure.
+const REDUCED_REFERENCE: &[&str] = &["p0_08"];
 
 fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance")
@@ -422,6 +432,14 @@ fn grade_entry(dir: &Path, entry: &Entry) -> Grade {
         Ok(Err(e)) => return Grade::Failed(format!("decoder rejected a valid codestream: {e}")),
         Ok(Ok(image)) => image,
     };
+
+    if REDUCED_REFERENCE.contains(&entry.name()) {
+        return Grade::NotYetDecoded(
+            "reference image is at resolution reduction 1; decoding at a reduced resolution \
+             is not implemented"
+                .into(),
+        );
+    }
 
     if image.components.len() < graded {
         return Grade::Failed(format!(

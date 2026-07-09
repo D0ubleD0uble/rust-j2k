@@ -89,17 +89,32 @@ pub fn decode_code_blocks(
     coded
         .components
         .iter()
-        .map(|component| match header.cod.transform {
-            Transform::Reversible53 => Ok(SubbandCoeffs::Reversible(assemble(
-                header,
-                component,
-                |q| q,
-            )?)),
-            Transform::Irreversible97 => Ok(SubbandCoeffs::Irreversible(assemble(
-                header,
-                component,
-                |q| q as f32,
-            )?)),
+        .enumerate()
+        .map(|(index, component)| {
+            // The wavelet is per component: a COC can put one component on 5/3
+            // and another on 9/7.
+            let transform = header
+                .components
+                .get(index)
+                .ok_or_else(|| {
+                    Error::Inconsistent(format!("no coding parameters for component {index}"))
+                })?
+                .coding
+                .transform;
+            match transform {
+                Transform::Reversible53 => Ok(SubbandCoeffs::Reversible(assemble(
+                    header,
+                    index,
+                    component,
+                    |q| q,
+                )?)),
+                Transform::Irreversible97 => Ok(SubbandCoeffs::Irreversible(assemble(
+                    header,
+                    index,
+                    component,
+                    |q| q as f32,
+                )?)),
+            }
         })
         .collect()
 }
@@ -112,12 +127,17 @@ pub fn decode_code_blocks(
 /// coarsest-first — which sets each band's magnitude bit-plane count `Mb`
 /// (guard bits + quantization exponent − 1) that Tier-1 needs to place bits at
 /// their true weights.
-fn assemble<T, F>(header: &MainHeader, coded: &ComponentCoded<'_>, convert: F) -> Result<Bands<T>>
+fn assemble<T, F>(
+    header: &MainHeader,
+    comp: usize,
+    coded: &ComponentCoded<'_>,
+    convert: F,
+) -> Result<Bands<T>>
 where
     T: Copy + Default,
     F: Fn(i32) -> T + Copy,
 {
-    let style = header.cod.code_block_style;
+    let style = header.components[comp].coding.code_block_style;
     let mut resolutions = coded.resolutions.iter();
     let coarsest = resolutions
         .next()
@@ -125,7 +145,7 @@ where
     // Subband index 0 is the LL band; the detail bands count up from 1.
     let ll = decode_subband(
         subband_of(coarsest, BandKind::Ll)?,
-        numbps(header, 0)?,
+        numbps(header, comp, 0)?,
         style,
         convert,
     )?;
@@ -136,19 +156,19 @@ where
         levels.push(DetailBands {
             hl: decode_subband(
                 subband_of(resolution, BandKind::Hl)?,
-                numbps(header, base)?,
+                numbps(header, comp, base)?,
                 style,
                 convert,
             )?,
             lh: decode_subband(
                 subband_of(resolution, BandKind::Lh)?,
-                numbps(header, base + 1)?,
+                numbps(header, comp, base + 1)?,
                 style,
                 convert,
             )?,
             hh: decode_subband(
                 subband_of(resolution, BandKind::Hh)?,
-                numbps(header, base + 2)?,
+                numbps(header, comp, base + 2)?,
                 style,
                 convert,
             )?,
@@ -162,18 +182,22 @@ where
 /// `guard_bits + ε_b − 1`, where the exponent `ε_b` comes from the shared
 /// [`Qcd::subband_step`] mapping (so it always matches the dequant step).
 ///
-/// Deliberately not per-component. `Mb` depends only on the quantization
-/// parameters, never on the component's bit depth `R_I` — the depth enters the
-/// *step size* (E-3), which is why [`crate::quant::dequantize`] takes a
-/// component index and this does not. A reversible encoder bakes the depth into
-/// the exponent it writes to QCD, so a decoder that read it back and added `R_I`
-/// again would double-count. Components that need different exponents carry a
-/// QCC, which is not decoded yet.
-fn numbps(header: &MainHeader, band: usize) -> Result<u32> {
-    let qcd = &header.qcd;
+/// `Mb` depends only on the component's quantization parameters, never on its
+/// bit depth `R_I` — the depth enters the *step size* (E-3), not the bit-plane
+/// count. A reversible encoder bakes the depth into the exponent it writes, so a
+/// decoder that read it back and added `R_I` again would double-count.
+///
+/// It is per component because a QCC can give one component its own guard bits
+/// and exponents; without an override the component's parameters are QCD's.
+fn numbps(header: &MainHeader, comp: usize, band: usize) -> Result<u32> {
+    let qcd = &header
+        .components
+        .get(comp)
+        .ok_or_else(|| Error::Inconsistent(format!("no coding parameters for component {comp}")))?
+        .quant;
     let (exp, _) = qcd.subband_step(band).ok_or_else(|| {
         Error::Inconsistent(format!(
-            "QCD carries {} step sizes but subband {band} needs one",
+            "component {comp} carries {} step sizes but subband {band} needs one",
             qcd.steps.len()
         ))
     })?;

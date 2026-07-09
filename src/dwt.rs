@@ -83,16 +83,18 @@ impl Samples {
 /// The [`SubbandCoeffs`] arm fixes the arithmetic: reversible 5/3 reconstructs
 /// in exact integers, irreversible 9/7 in `f32`. Both must agree with the COD
 /// transform (checked in debug builds).
-pub fn inverse(header: &MainHeader, coeffs: SubbandCoeffs) -> Result<Samples> {
+pub fn inverse(header: &MainHeader, comp: usize, coeffs: SubbandCoeffs) -> Result<Samples> {
     match coeffs {
         SubbandCoeffs::Reversible(bands) => {
-            debug_assert_eq!(header.cod.transform, Transform::Reversible53);
-            debug_assert_eq!(bands.levels.len(), header.cod.decomposition_levels as usize);
+            let coding = &header.components[comp].coding;
+            debug_assert_eq!(coding.transform, Transform::Reversible53);
+            debug_assert_eq!(bands.levels.len(), coding.decomposition_levels as usize);
             Ok(Samples::Reversible(reconstruct(bands, inverse_5_3).data))
         }
         SubbandCoeffs::Irreversible(bands) => {
-            debug_assert_eq!(header.cod.transform, Transform::Irreversible97);
-            debug_assert_eq!(bands.levels.len(), header.cod.decomposition_levels as usize);
+            let coding = &header.components[comp].coding;
+            debug_assert_eq!(coding.transform, Transform::Irreversible97);
+            debug_assert_eq!(bands.levels.len(), coding.decomposition_levels as usize);
             Ok(Samples::Irreversible(reconstruct(bands, inverse_9_7).data))
         }
     }
@@ -439,8 +441,8 @@ mod tests {
     /// transform choice and the decomposition-level count from it (both checked
     /// against the pyramid in debug builds); the rest is filler.
     fn header(transform: Transform, levels: u8, w: u32, h: u32) -> MainHeader {
-        MainHeader {
-            siz: Siz {
+        MainHeader::new(
+            Siz {
                 x_size: w,
                 y_size: h,
                 x_offset: 0,
@@ -456,7 +458,7 @@ mod tests {
                     y_sampling: 1,
                 }],
             },
-            cod: Cod {
+            Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
                 decomposition_levels: levels,
@@ -469,12 +471,12 @@ mod tests {
                 transform,
                 precinct_sizes: Vec::new(),
             },
-            qcd: Qcd {
+            Qcd {
                 style: QuantStyle::None,
                 guard_bits: 2,
                 steps: Vec::new(),
             },
-        }
+        )
     }
 
     /// Forward 1-D kernel down every column then across every row, in place —
@@ -585,7 +587,7 @@ mod tests {
             let image = ramp(w, h);
             let bands = forward_bands(&image, w, h, levels, &forward_5_3);
             let hdr = header(Transform::Reversible53, levels as u8, w as u32, h as u32);
-            let out = inverse(&hdr, SubbandCoeffs::Reversible(bands)).unwrap();
+            let out = inverse(&hdr, 0, SubbandCoeffs::Reversible(bands)).unwrap();
             assert_eq!(
                 out,
                 Samples::Reversible(image),
@@ -605,7 +607,7 @@ mod tests {
             let as_f32: Vec<f32> = image.iter().map(|&v| v as f32).collect();
             let bands = forward_bands(&as_f32, w, h, levels, &forward_9_7);
             let hdr = header(Transform::Irreversible97, levels as u8, w as u32, h as u32);
-            let out = inverse(&hdr, SubbandCoeffs::Irreversible(bands)).unwrap();
+            let out = inverse(&hdr, 0, SubbandCoeffs::Irreversible(bands)).unwrap();
 
             let Samples::Irreversible(values) = out else {
                 panic!("the 9/7 path must carry f32");
@@ -631,7 +633,7 @@ mod tests {
             },
             levels: Vec::new(),
         };
-        let out = inverse(&hdr, SubbandCoeffs::Irreversible(bands)).unwrap();
+        let out = inverse(&hdr, 0, SubbandCoeffs::Irreversible(bands)).unwrap();
         assert_eq!(out, Samples::Irreversible(vec![2.5]));
     }
 }

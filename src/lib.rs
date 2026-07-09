@@ -106,7 +106,7 @@ pub fn decode(codestream: &[u8]) -> Result<Image> {
         .enumerate()
         .map(|(component, coeffs)| {
             let dequant = quant::dequantize(&cs.header, component, coeffs)?;
-            dwt::inverse(&cs.header, dequant)
+            dwt::inverse(&cs.header, component, dequant)
         })
         .collect::<Result<Vec<_>>>()?;
 

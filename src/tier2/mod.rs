@@ -142,17 +142,12 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
     let geoms = (0..component_count)
         .map(|c| resolution_geoms(&cs.header, c))
         .collect::<Result<Vec<_>>>()?;
-    // COD is a main-header default, so every component decomposes to the same
-    // number of resolutions (per-component overrides are COC, not yet decoded).
-    // The packet loop below indexes `geoms[c][r]`, so state that rather than
-    // trust it: once COC lands, a component with its own decomposition depth
-    // must skip the resolutions it does not have, not index past its list.
-    let resolution_count = geoms.first().map_or(0, Vec::len);
-    if geoms.iter().any(|g| g.len() != resolution_count) {
-        return Err(Error::Inconsistent(
-            "components disagree on their resolution count".into(),
-        ));
-    }
+    // A COC gives a component its own decomposition depth, so the resolution
+    // axis is as long as the deepest component and the shallower ones simply do
+    // not appear at its tail. The progression walks the full axis and skips the
+    // pairs that do not exist, exactly as `opj_pi_next_*` does with
+    // `if (resno >= comp->numresolutions) continue;`.
+    let resolution_count = geoms.iter().map(Vec::len).max().unwrap_or(0);
 
     // One state per (component, resolution, band), carried across every layer of
     // the precinct. The tag trees decode incrementally, so they must outlive the
@@ -179,13 +174,19 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
         resolution_count,
         component_count,
         |layer, resolution, component| {
+            // This component has no such resolution: the packet is not in the
+            // codestream at all, so it also does not consume a packet index.
+            // Numbering it would desynchronise every later `Nsop`.
+            if resolution >= geoms[component].len() {
+                return Ok(());
+            }
             cursor = parse_packet(
                 data,
                 cursor,
                 layer,
                 packet_index,
                 delimiters,
-                cs.header.cod.code_block_style,
+                cs.header.components[component].coding.code_block_style,
                 &geoms[component][resolution],
                 &mut states[component][resolution],
             )?;
@@ -333,7 +334,11 @@ fn ceil_div(a: i64, b: i64) -> i64 {
 /// components of the same image can yield different subband sizes.
 fn resolution_geoms(header: &MainHeader, comp: usize) -> Result<Vec<Vec<BandGeom>>> {
     let siz = &header.siz;
-    let cod = &header.cod;
+    let cod = &header
+        .components
+        .get(comp)
+        .ok_or_else(|| Error::Inconsistent(format!("no coding parameters for component {comp}")))?
+        .coding;
 
     let nl = cod.decomposition_levels as i64;
     if nl > 32 {

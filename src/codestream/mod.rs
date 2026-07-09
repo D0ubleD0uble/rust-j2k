@@ -15,16 +15,44 @@
 pub mod markers;
 
 use crate::{Error, Result};
-use markers::{Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform, marker};
+use markers::{
+    Cod, Coding, ComponentParams, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
+    marker,
+};
 
-/// Parsed main-header decode parameters. COC/QCC/RGN component overrides will
-/// live here too once needed; for the single-component subset the defaults
-/// usually suffice.
+/// Parsed main-header decode parameters. COD/QCD carry the codestream-wide
+/// defaults; [`components`](Self::components) carries each component's effective
+/// parameters after any COC/QCC override. RGN is not decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MainHeader {
     pub siz: Siz,
     pub cod: Cod,
     pub qcd: Qcd,
+    /// Effective coding and quantization parameters per component, in SIZ order:
+    /// COD/QCD's defaults with any COC/QCC override already applied. Every stage
+    /// past the header reads these rather than [`cod`](Self::cod) or
+    /// [`qcd`](Self::qcd), which hold the codestream-wide defaults.
+    pub components: Vec<ComponentParams>,
+}
+
+impl MainHeader {
+    /// A header whose components all take the COD/QCD defaults — the shape of
+    /// every codestream that carries no COC and no QCC.
+    pub fn new(siz: Siz, cod: Cod, qcd: Qcd) -> Self {
+        let components = vec![
+            ComponentParams {
+                coding: cod.coding(),
+                quant: qcd.clone(),
+            };
+            siz.components.len()
+        ];
+        MainHeader {
+            siz,
+            cod,
+            qcd,
+            components,
+        }
+    }
 }
 
 /// One tile-part: its tile index and the slice of packet data between SOD and
@@ -339,6 +367,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
 
     let mut cod = None;
     let mut qcd = None;
+    let mut coc: Vec<Option<Coding>> = vec![None; siz.components.len()];
+    let mut qcc: Vec<Option<Qcd>> = vec![None; siz.components.len()];
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
@@ -358,6 +388,26 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
                 }
                 qcd = Some(decode_qcd(body())?);
             }
+            // A.6.2 and A.6.5 allow at most one COC and one QCC per component in
+            // a header. A second one is not a later-wins override; it is a
+            // malformed header, and guessing which wins would decode an image
+            // the encoder never described.
+            marker::COC => {
+                let (index, coding) = decode_coc(body(), &siz)?;
+                if coc[index].replace(coding).is_some() {
+                    return Err(Error::Codestream(format!(
+                        "duplicate COC marker for component {index}"
+                    )));
+                }
+            }
+            marker::QCC => {
+                let (index, quant) = decode_qcc(body(), &siz)?;
+                if qcc[index].replace(quant).is_some() {
+                    return Err(Error::Codestream(format!(
+                        "duplicate QCC marker for component {index}"
+                    )));
+                }
+            }
             // Comment: recognised, carries nothing the decoder needs.
             marker::COM => {}
 
@@ -369,8 +419,6 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             // announces capabilities beyond Part 1 (an HTJ2K codestream carries
             // one), whose code-blocks this Tier-1 would misread as Part 1.
             marker::CAP
-            | marker::COC
-            | marker::QCC
             | marker::RGN
             | marker::POC
             | marker::TLM
@@ -409,13 +457,38 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let cod = cod.ok_or_else(|| Error::Codestream("missing required COD marker".into()))?;
     let qcd = qcd.ok_or_else(|| Error::Codestream("missing required QCD marker".into()))?;
 
-    // The colour transform is signalled by COD but constrains SIZ, so it can
-    // only be checked once both are read.
-    if cod.multiple_component_transform {
-        crate::mct::check_geometry(&siz.components)?;
+    // Start from COD/QCD's defaults, then lay each override over its component.
+    // That is the whole of A.6.2's and A.6.5's resolution rule.
+    let mut header = MainHeader::new(siz, cod, qcd);
+    for (params, (coding, quant)) in header.components.iter_mut().zip(coc.into_iter().zip(qcc)) {
+        if let Some(coding) = coding {
+            params.coding = coding;
+        }
+        if let Some(quant) = quant {
+            params.quant = quant;
+        }
     }
 
-    Ok((MainHeader { siz, cod, qcd }, sot_offset))
+    // The colour transform is signalled by COD but constrains SIZ, so it can
+    // only be checked once both are read.
+    if header.cod.multiple_component_transform {
+        crate::mct::check_geometry(&header.siz.components)?;
+        // Which colour transform applies follows from the wavelet, and the
+        // wavelet is per component once COC is in play. RCT is defined over
+        // three components reconstructed as integers, so all three must be 5/3;
+        // a COC that moves one of them to 9/7 describes a transform that does
+        // not exist.
+        for (index, params) in header.components.iter().take(3).enumerate() {
+            if params.coding.transform != Transform::Reversible53 {
+                return Err(Error::Unsupported(format!(
+                    "COD signals the colour transform but component {index} uses the 9/7 \
+                     wavelet; the irreversible colour transform (ICT) is not decoded"
+                )));
+            }
+        }
+    }
+
+    Ok((header, sot_offset))
 }
 
 /// Upper bound on the declared image area (`Xsiz * Ysiz`), a robustness guard
@@ -626,28 +699,15 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         }
     };
 
-    let decomposition_levels = b.u8()?;
-    let code_block_width = b.u8()?;
-    let code_block_height = b.u8()?;
-    let code_block_style = b.u8()?;
-    // Each style flag changes how Tier-1 reads a code-block's coded segments.
-    // Ignoring one does not decode a slightly different image, it decodes the
-    // wrong one, so reject rather than half-decode until each lands. `restart`,
-    // `predictable termination` and `segmentation symbols` are decoded; the rest
-    // are not.
-    use markers::code_block_style::{PTERM, SEGSYM, TERMALL};
-    let undecoded = code_block_style & !(TERMALL | PTERM | SEGSYM);
-    if undecoded != 0 {
-        return Err(Error::Unsupported(format!(
-            "code-block style ({}) is outside the decoded subset",
-            markers::code_block_style::describe(undecoded),
-        )));
-    }
-    let transform = match b.u8()? {
-        0 => Transform::Irreversible97,
-        1 => Transform::Reversible53,
-        other => return Err(Error::Marker(format!("reserved wavelet transform {other}"))),
-    };
+    let coding = decode_coding(&mut b, "COD")?;
+    let Coding {
+        decomposition_levels,
+        code_block_width,
+        code_block_height,
+        code_block_style,
+        transform,
+        precinct_sizes,
+    } = coding;
     b.expect_consumed("COD")?;
 
     // The wavelet picks the colour transform: 5/3 pairs with the reversible RCT
@@ -671,8 +731,101 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         transform,
         // Maximal precincts (PPx=PPy=15) when Scod bit 0 is clear, signalled by
         // an empty list; explicit precincts were rejected above.
+        precinct_sizes,
+    })
+}
+
+/// Decode the `SPcod`/`SPcoc` tail shared by COD and COC (Tables A-12, A-14):
+/// decomposition levels, the two code-block exponents, the style byte, and the
+/// wavelet. `origin` names the marker for error messages.
+///
+/// Explicit precinct sizes are rejected by the caller before this runs (they are
+/// signalled in `Scod`/`Scoc`, not here), so `precinct_sizes` always comes back
+/// empty and the caller must have consumed the whole segment.
+fn decode_coding(b: &mut Cursor<'_>, origin: &str) -> Result<Coding> {
+    let decomposition_levels = b.u8()?;
+    let code_block_width = b.u8()?;
+    let code_block_height = b.u8()?;
+    let code_block_style = b.u8()?;
+    // Each style flag changes how Tier-1 reads a code-block's coded segments.
+    // Ignoring one does not decode a slightly different image, it decodes the
+    // wrong one, so reject rather than half-decode until each lands. `restart`,
+    // `predictable termination` and `segmentation symbols` are decoded; the rest
+    // are not.
+    use markers::code_block_style::{PTERM, SEGSYM, TERMALL};
+    let undecoded = code_block_style & !(TERMALL | PTERM | SEGSYM);
+    if undecoded != 0 {
+        return Err(Error::Unsupported(format!(
+            "{origin} code-block style ({}) is outside the decoded subset",
+            markers::code_block_style::describe(undecoded),
+        )));
+    }
+    let transform = match b.u8()? {
+        0 => Transform::Irreversible97,
+        1 => Transform::Reversible53,
+        other => {
+            return Err(Error::Marker(format!(
+                "{origin} sets reserved wavelet transform {other}"
+            )));
+        }
+    };
+    Ok(Coding {
+        decomposition_levels,
+        code_block_width,
+        code_block_height,
+        code_block_style,
+        transform,
         precinct_sizes: Vec::new(),
     })
+}
+
+/// The component index a COC or QCC applies to (`Ccoc`, `Cqcc`). One byte while
+/// `Csiz < 257`, two bytes otherwise (A.6.2, A.6.5) — the width depends on the
+/// component count, so SIZ must already be parsed.
+fn component_index(b: &mut Cursor<'_>, siz: &Siz, origin: &str) -> Result<usize> {
+    let count = siz.components.len();
+    let index = if count < 257 {
+        usize::from(b.u8()?)
+    } else {
+        usize::from(b.u16()?)
+    };
+    if index >= count {
+        return Err(Error::Marker(format!(
+            "{origin} targets component {index}, but SIZ declares {count}"
+        )));
+    }
+    Ok(index)
+}
+
+/// Decode COC — a coding-style override for one component (A.6.2).
+///
+/// Returns the component index and the coding parameters that replace COD's for
+/// it. `Scoc` carries only the precinct flag; every other bit is reserved.
+fn decode_coc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Coding)> {
+    let index = component_index(&mut b, siz, "COC")?;
+    let scoc = b.u8()?;
+    if scoc & 0x01 != 0 {
+        return Err(Error::Unsupported(
+            "explicit precinct partition; the subset uses maximal precincts".into(),
+        ));
+    }
+    if scoc & 0xFE != 0 {
+        return Err(Error::Marker(format!(
+            "COC sets reserved Scoc bits {:#04X}",
+            scoc & 0xFE
+        )));
+    }
+    let coding = decode_coding(&mut b, "COC")?;
+    b.expect_consumed("COC")?;
+    Ok((index, coding))
+}
+
+/// Decode QCC — a quantization override for one component (A.6.5). The body
+/// after `Cqcc` is a `QCD` body, byte for byte.
+fn decode_qcc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Qcd)> {
+    let index = component_index(&mut b, siz, "QCC")?;
+    let quant = decode_qcd(b)?;
+    Ok((index, quant))
 }
 
 /// Decode QCD — default quantization (A.6.4): style, guard bits, and the

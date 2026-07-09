@@ -132,8 +132,8 @@ impl PackedHeader {
 }
 
 fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
-    MainHeader {
-        siz: Siz {
+    MainHeader::new(
+        Siz {
             x_size,
             y_size,
             x_offset: 0,
@@ -149,7 +149,7 @@ fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
                 y_sampling: 1,
             }],
         },
-        cod: Cod {
+        Cod {
             progression: Progression::Lrcp,
             layers: 1,
             decomposition_levels: levels,
@@ -162,12 +162,12 @@ fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
             transform: Transform::Reversible53,
             precinct_sizes: Vec::new(),
         },
-        qcd: Qcd {
+        Qcd {
             style: QuantStyle::None,
             guard_bits: 2,
             steps: vec![(8, 0)],
         },
-    }
+    )
 }
 
 fn single_block_band(kind: BandKind, width: usize, height: usize) -> BandGeom {
@@ -524,6 +524,10 @@ fn resolution_geoms_honour_each_components_sub_sampling() {
             y_sampling: 2,
         },
     ];
+
+    // Re-resolve the per-component parameters against the widened SIZ: they are
+    // derived from the component count, not stored beside it.
+    let h = MainHeader::new(h.siz, h.cod, h.qcd);
 
     // One decomposition level, so resolution 0 is the LL at half the
     // tile-component extent in each axis.

@@ -76,10 +76,15 @@ fn scale_irreversible(header: &MainHeader, comp: usize, bands: &mut Bands<f32>) 
             .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {comp}")))?
             .bit_depth,
     );
-    let qcd = &header.qcd;
+    let qcd = &header
+        .components
+        .get(comp)
+        .ok_or_else(|| Error::Inconsistent(format!("no coding parameters for component {comp}")))?
+        .quant;
 
-    // Expounded QCDs carry exactly one step per subband (1 LL + 3 per level); a
-    // mismatch means the QCD and the COD decomposition depth disagree.
+    // Expounded quantization carries exactly one step per subband (1 LL + 3 per
+    // level); a mismatch means the component's quantization and its decomposition
+    // depth disagree.
     if qcd.style == QuantStyle::ScalarExpounded {
         let expected = 1 + 3 * bands.levels.len();
         if qcd.steps.len() != expected {
@@ -150,8 +155,8 @@ mod tests {
     /// A `prec`-bit single-component header carrying `qcd`. Only the component
     /// depth and the QCD feed dequantization; the rest is filler.
     fn header(prec: u8, qcd: Qcd) -> MainHeader {
-        MainHeader {
-            siz: Siz {
+        MainHeader::new(
+            Siz {
                 x_size: 4,
                 y_size: 4,
                 x_offset: 0,
@@ -167,7 +172,7 @@ mod tests {
                     y_sampling: 1,
                 }],
             },
-            cod: Cod {
+            Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
                 decomposition_levels: 1,
@@ -181,7 +186,7 @@ mod tests {
                 precinct_sizes: vec![],
             },
             qcd,
-        }
+        )
     }
 
     /// A 1×1 float band holding a single coefficient.
