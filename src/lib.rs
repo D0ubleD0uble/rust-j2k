@@ -9,7 +9,8 @@
 //! - **components**, each with its own bit depth, sign, and sub-sampling, plus
 //!   the reversible color transform (RCT) that decorrelates the first three;
 //!   its irreversible twin (ICT) is not decoded yet;
-//! - **integer** samples, signed or unsigned, up to 32 bits;
+//! - **integer** samples, signed up to 32 bits, unsigned up to 31 (the
+//!   samples land in an `i32` container);
 //! - **both** the reversible 5/3 (lossless) and irreversible 9/7 (lossy)
 //!   wavelet paths (the 9/7 path is graded by re-encoding a real grid with
 //!   OpenJPEG, since no operational GRIB2 producer ships lossy 9/7).
