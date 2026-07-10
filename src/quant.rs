@@ -56,8 +56,9 @@ const MANTISSA_DENOM: f64 = 2048.0;
 ///
 /// The step size depends on the component's declared bit depth, so a
 /// multi-component image with mixed depths dequantizes each one on its own
-/// scale. The QCD itself is a main-header default shared by every component
-/// (per-component overrides are QCC, not yet decoded).
+/// scale. The quantization parameters read here are per component: the
+/// codestream stage resolves QCD's main-header default and any QCC override
+/// before this runs.
 pub fn dequantize(
     header: &MainHeader,
     comp: usize,
