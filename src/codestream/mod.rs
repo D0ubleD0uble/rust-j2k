@@ -765,6 +765,13 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
 /// empty and the caller must have consumed the whole segment.
 fn decode_coding(b: &mut Cursor<'_>, origin: &str) -> Result<Coding> {
     let decomposition_levels = b.u8()?;
+    // Table A-15: 0–32 decomposition levels; 33–255 are reserved. A reserved
+    // field encoding rejects at parse, like the wavelet and style bytes below.
+    if decomposition_levels > 32 {
+        return Err(Error::Marker(format!(
+            "{origin} sets reserved decomposition level count {decomposition_levels} (max 32)"
+        )));
+    }
     let code_block_width = b.u8()?;
     let code_block_height = b.u8()?;
     let code_block_style = b.u8()?;

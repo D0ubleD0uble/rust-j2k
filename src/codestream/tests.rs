@@ -555,6 +555,18 @@ fn duplicate_cod_is_codestream() {
 }
 
 #[test]
+fn reserved_decomposition_levels_is_marker() {
+    // Table A-15 allows 0–32 levels; 33 is a reserved encoding, rejected at
+    // parse rather than deep in tier-2.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 33, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 97])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
 fn reserved_quant_style_is_marker() {
     let mut body = vec![(2u8 << 5) | 3]; // style 3 is reserved
     body.extend_from_slice(&be16(0));
