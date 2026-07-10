@@ -149,6 +149,27 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
     // `if (resno >= comp->numresolutions) continue;`.
     let resolution_count = geoms.iter().map(Vec::len).max().unwrap_or(0);
 
+    // The sample budget bounds the decoded buffers, but the per-block
+    // bookkeeping below — `BandState`, two tag trees, and the eventual
+    // `CodeBlock`s, roughly 200 bytes a block — is driven by the code-block
+    // *count*, which legal 4×4 blocks push toward samples/16: a sub-kilobyte
+    // header could demand ~1 GiB of metadata. 2^19 clears every plausible real
+    // encode (64×64 default blocks at the full sample budget need ~2^15)
+    // while capping hostile geometry near 100 MiB. The geometry tuples already
+    // built above are transient and an order of magnitude cheaper per block.
+    const MAX_CODE_BLOCKS: usize = 1 << 19;
+    let total_blocks: usize = geoms
+        .iter()
+        .flatten()
+        .flatten()
+        .map(|band| band.blocks.len())
+        .sum();
+    if total_blocks > MAX_CODE_BLOCKS {
+        return Err(Error::Unsupported(format!(
+            "{total_blocks} code-blocks exceeds the decode guard of {MAX_CODE_BLOCKS}"
+        )));
+    }
+
     // One state per (component, resolution, band), carried across every layer of
     // the precinct. The tag trees decode incrementally, so they must outlive the
     // packet that starts them.

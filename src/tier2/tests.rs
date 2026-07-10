@@ -503,6 +503,25 @@ fn malformed_tile_data_never_panics() {
     }
 }
 
+/// A header pairing a large image with tiny legal 4×4 code-blocks would drive
+/// millions of per-block states and tag trees before a single tile-part byte
+/// is read; the block-count guard rejects it up front instead.
+#[test]
+fn block_count_guard_rejects_metadata_bomb() {
+    use crate::codestream::{Codestream, TilePart};
+
+    // 4096×4096 with 4×4 blocks: ~1.4M blocks across the ladder, over the 2^19 cap.
+    let cs = Codestream {
+        header: header(4096, 4096, 1, 2),
+        tile_parts: vec![TilePart {
+            tile_index: 0,
+            data: &[],
+        }],
+    };
+    let err = decode_packets(&cs).expect_err("guard fires before any packet parse");
+    assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
+}
+
 // ---- Per-component geometry (issue #57) ----
 
 /// Each component's subbands derive from *its own* sub-sampling, so components
