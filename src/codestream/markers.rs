@@ -33,9 +33,12 @@ pub mod marker {
     /// exactly that bug.
     pub const RESERVED_NO_SEGMENT: std::ops::RangeInclusive<u16> = 0xFF30..=0xFF3F;
 
-    /// Whether `m` is a marker code at all: every marker's high byte is `0xFF`.
+    /// Whether `m` is a marker code at all: the high byte is `0xFF` and the
+    /// low byte is neither `0x00` nor `0xFF` — those two values are assigned
+    /// to no marker. Meeting one in marker position is lost sync (a stuffed
+    /// byte or fill read as structure), not an unfamiliar segment to walk over.
     pub fn is_marker(m: u16) -> bool {
-        m >> 8 == 0xFF
+        m >> 8 == 0xFF && !matches!(m & 0xFF, 0x00 | 0xFF)
     }
 
     /// Whether `m` is followed by a length field and a segment body.

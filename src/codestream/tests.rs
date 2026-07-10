@@ -656,6 +656,20 @@ fn eoc_before_tile_part_is_codestream() {
 }
 
 #[test]
+fn non_marker_ff00_and_ffff_are_lost_sync() {
+    // 0xFF00 and 0xFFFF are assigned to no marker; walking them as segments
+    // would read the following bytes as a length. They are lost sync, a
+    // malformed codestream rather than an unsupported feature.
+    for code in [0xFF00u16, 0xFFFF] {
+        let mut bytes = be16(marker::SOC).to_vec();
+        bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
+        bytes.extend_from_slice(&be16(code));
+        bytes.extend_from_slice(&[0x00, 0x04, 0xAA, 0xBB]); // a plausible fake segment
+        assert!(matches!(err(&bytes), Error::Codestream(_)), "{code:#06X}");
+    }
+}
+
+#[test]
 fn unknown_marker_without_a_length_is_codestream() {
     // Stepping over an unknown marker needs its length to be there. At the very
     // end of the header there is nothing to read, which is truncation — a
