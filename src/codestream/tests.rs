@@ -740,6 +740,21 @@ fn psot_zero_runs_to_eoc() {
     assert_eq!(cs.tile_parts[0].data, &data);
 }
 
+/// Bytes after the closing EOC are ignored in both Psot arms, as OpenJPEG
+/// ignores them; in the Psot = 0 arm the EOC is found by scanning, so a tail
+/// that itself ends `FF D9` cannot swallow the real EOC into the packet data.
+#[test]
+fn trailing_bytes_after_eoc_are_ignored() {
+    let data = [1, 2, 3, 4, 5];
+    for psot in [0, psot_for(&data)] {
+        let sot = sot_seg(0, psot, 0, 1);
+        let mut bytes = assemble(&default_header(), &sot, &data, true);
+        bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]); // garbage ending in FF D9
+        let cs = parse(&bytes).unwrap_or_else(|e| panic!("Psot={psot}: {e}"));
+        assert_eq!(cs.tile_parts[0].data, &data, "Psot={psot}");
+    }
+}
+
 #[test]
 fn empty_tile_part_data_parses() {
     let sot = sot_seg(0, psot_for(&[]), 0, 1);

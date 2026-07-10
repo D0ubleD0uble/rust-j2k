@@ -170,11 +170,15 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
 
     // Psot counts from the SOT marker's first byte to the end of the tile-part.
     // Psot == 0 marks the last tile-part: it runs to the closing EOC (A.4.2).
+    // That EOC is found by scanning, not by anchoring to the buffer end: bit
+    // stuffing keeps every byte after an 0xFF inside packet data below 0x90,
+    // so the first FF D9 at or after the data is the real terminator. Anchoring
+    // instead would let a trailing-garbage tail swallow the EOC into the packet
+    // data (or reject the stream), where the Psot != 0 arm — like OpenJPEG —
+    // ignores whatever follows the EOC.
     let data_end = if sot.psot == 0 {
-        bytes
-            .len()
-            .checked_sub(2)
-            .filter(|&end| end >= data_start && read_u16(bytes, end) == Some(marker::EOC))
+        (data_start..bytes.len().saturating_sub(1))
+            .find(|&at| read_u16(bytes, at) == Some(marker::EOC))
             .ok_or_else(|| Error::Codestream("Psot=0 tile-part is not terminated by EOC".into()))?
     } else {
         let end = sot_offset
