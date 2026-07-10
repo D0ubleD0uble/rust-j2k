@@ -237,6 +237,24 @@ fn geometry_max_decomposition_levels() {
     assert_eq!((geoms[0][0].width, geoms[0][0].height), (1, 1));
 }
 
+/// A tile-component larger than one maximal precinct (2^15 on either axis)
+/// would carry more packets than the single-precinct walk visits, so it must
+/// reject rather than desynchronize (Eq. B-16).
+#[test]
+fn geometry_rejects_multi_precinct_extent() {
+    for (w, h) in [(32769, 16), (16, 32769)] {
+        let err = resolution_geoms(&header(w, h, 1, 6), 0);
+        assert!(matches!(err, Err(crate::Error::Unsupported(_))), "{w}×{h}");
+    }
+}
+
+/// Exactly 2^15 still fits in the single maximal precinct.
+#[test]
+fn geometry_accepts_full_precinct_extent() {
+    let geoms = resolution_geoms(&header(32768, 16, 1, 6), 0).unwrap();
+    assert_eq!(geoms[1][0].width, 16384);
+}
+
 /// A code-block size past the standard's 2^10 / xcb+ycb≤12 limit is rejected,
 /// not silently clamped (which would also keep the grid shifts well-defined).
 #[test]

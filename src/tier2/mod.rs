@@ -367,6 +367,25 @@ fn resolution_geoms(header: &MainHeader, comp: usize) -> Result<Vec<Vec<BandGeom
     let (tcx0, tcx1) = (ceil_div(tx0, xr), ceil_div(tx1, xr));
     let (tcy0, tcy1) = (ceil_div(ty0, yr), ceil_div(ty1, yr));
 
+    // "One precinct per resolution" is an assumption the packet walk depends
+    // on, not a theorem: a maximal precinct (PPx = PPy = 15) spans 2^15
+    // resolution-grid units, so a tile-component larger than that carries more
+    // packets per (layer, resolution, component) than `for_each_packet` visits
+    // and the parse would desynchronize (Eq. B-16). The finest resolution uses
+    // the tile-component grid itself and coarser levels only shrink the span,
+    // so checking it here covers every resolution.
+    const PRECINCT_SPAN: i64 = 1 << 15;
+    let precincts_x = ceil_div(tcx1, PRECINCT_SPAN) - tcx0 / PRECINCT_SPAN;
+    let precincts_y = ceil_div(tcy1, PRECINCT_SPAN) - tcy0 / PRECINCT_SPAN;
+    if precincts_x > 1 || precincts_y > 1 {
+        return Err(Error::Unsupported(format!(
+            "tile-component {}×{} spans {precincts_x}×{precincts_y} maximal \
+             precincts; only single-precinct codestreams are decoded",
+            tcx1 - tcx0,
+            tcy1 - tcy0,
+        )));
+    }
+
     // Code-block exponents (COD stores `log2(size) - 2`). The standard bounds
     // each at 2^10 and their sum at 2^12 (ISO Table A-18); reject anything
     // larger so the grid shifts below stay well-defined and a malformed COD is
