@@ -80,14 +80,31 @@ impl<'a> BitReader<'a> {
     /// Whole bytes consumed from `data` so far. Meaningful at a byte boundary —
     /// before the first read, or after [`align`](Self::align). A partially-read
     /// byte (`ct > 0`) counts as not yet consumed.
+    ///
+    /// The subtraction saturates: a reader past the end of an empty `data` has
+    /// `ct > 0` with `pos == 0` (every bit synthesized, none consumed), where
+    /// a plain `pos - 1` would panic on underflow.
     pub fn bytes_consumed(&self) -> usize {
-        if self.ct == 0 { self.pos } else { self.pos - 1 }
+        if self.ct == 0 {
+            self.pos
+        } else {
+            self.pos.saturating_sub(1)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::BitReader;
+
+    /// A reader that has only synthesized past-end fill bits (empty input) has
+    /// consumed nothing; `bytes_consumed` must not underflow.
+    #[test]
+    fn bytes_consumed_on_empty_input_is_zero() {
+        let mut b = BitReader::new(&[]);
+        let _ = b.read_bit();
+        assert_eq!(b.bytes_consumed(), 0);
+    }
 
     /// Bits come out most significant first, byte by byte.
     #[test]

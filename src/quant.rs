@@ -56,8 +56,9 @@ const MANTISSA_DENOM: f64 = 2048.0;
 ///
 /// The step size depends on the component's declared bit depth, so a
 /// multi-component image with mixed depths dequantizes each one on its own
-/// scale. The QCD itself is a main-header default shared by every component
-/// (per-component overrides are QCC, not yet decoded).
+/// scale. The quantization parameters read here are per component: the
+/// codestream stage resolves QCD's main-header default and any QCC override
+/// before this runs.
 pub fn dequantize(
     header: &MainHeader,
     comp: usize,
@@ -91,12 +92,15 @@ fn scale_irreversible(header: &MainHeader, comp: usize, bands: &mut Bands<f32>) 
         .ok_or_else(|| Error::Inconsistent(format!("no coding parameters for component {comp}")))?
         .quant;
 
-    // Expounded quantization carries exactly one step per subband (1 LL + 3 per
-    // level); a mismatch means the component's quantization and its decomposition
-    // depth disagree.
+    // Expounded quantization carries one step per subband (1 LL + 3 per
+    // level). A shortfall means the component's quantization and its
+    // decomposition depth disagree — parse_main_header rejects that, so this
+    // is a backstop for callers that assemble a header by hand. Excess
+    // entries are ignored, as OpenJPEG ignores them and as the parse stage
+    // documents.
     if qcd.style == QuantStyle::ScalarExpounded {
         let expected = 1 + 3 * bands.levels.len();
-        if qcd.steps.len() != expected {
+        if qcd.steps.len() < expected {
             return Err(Error::Inconsistent(format!(
                 "expounded QCD carries {} step sizes, expected {expected} for {} levels",
                 qcd.steps.len(),
@@ -365,16 +369,17 @@ mod tests {
     }
 
     #[test]
-    fn expounded_with_too_many_steps_is_inconsistent() {
+    fn expounded_with_excess_steps_ignores_the_tail() {
         let qcd = Qcd {
             style: QuantStyle::ScalarExpounded,
             guard_bits: 2,
             // Seven steps (two levels' worth) against a one-level pyramid: the
-            // QCD and COD decomposition depth disagree.
+            // first four apply in order and the tail is ignored, as OpenJPEG
+            // ignores it (and as parse_main_header documents).
             steps: vec![(8, 0); 7],
         };
-        let err = dequantize(&header(8, qcd), 0, one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
-        assert!(matches!(err, Error::Inconsistent(_)));
+        dequantize(&header(8, qcd), 0, one_level(1.0, 1.0, 1.0, 1.0))
+            .expect("excess entries are padding, not a geometry disagreement");
     }
 
     #[test]

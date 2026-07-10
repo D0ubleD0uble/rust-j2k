@@ -152,9 +152,14 @@ fn assemble_component(siz: &Siz, index: usize, samples: Samples) -> Result<Compo
         .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
 
     let depth = comp.bit_depth;
-    if !(1..=32).contains(&depth) {
+    // The standard allows 1..=38 (Table A-11) and `decode_siz` enforces it;
+    // this defensive restatement keeps the shift arithmetic below well-defined
+    // for callers that assemble a header by hand. Legal depths whose range
+    // does not fit the i32 sample container (33..=38, and unsigned 32) fall
+    // through to the container check, which rejects them as Unsupported.
+    if !(1..=38).contains(&depth) {
         return Err(Error::Marker(format!(
-            "component {index} bit depth {depth} outside the supported range 1..=32"
+            "component {index} bit depth {depth} outside the standard's range 1..=38"
         )));
     }
     if comp.x_sampling == 0 || comp.y_sampling == 0 {
@@ -385,10 +390,14 @@ mod tests {
 
     #[test]
     fn depth_beyond_i32_container_is_unsupported() {
-        // Unsigned 32-bit's upper bound (2^32 - 1) cannot fit in i32.
-        let h = header(1, 1, 32, false);
-        let err = assemble1(&h, vec![0]).unwrap_err();
-        assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
+        // Unsigned 32-bit's upper bound (2^32 - 1) cannot fit in i32, and the
+        // standard-legal 33..=38 depths (Table A-11) exceed it either way —
+        // legal-but-undecodable, so Unsupported rather than Marker.
+        for (depth, signed) in [(32, false), (33, false), (33, true), (38, true)] {
+            let h = header(1, 1, depth, signed);
+            let err = assemble1(&h, vec![0]).unwrap_err();
+            assert!(matches!(err, Error::Unsupported(_)), "{depth} got {err:?}");
+        }
         // Signed 32-bit fits exactly and is accepted.
         let img = assemble1(&header(1, 1, 32, true), vec![i32::MIN]).unwrap();
         assert_eq!(only(&img).samples, vec![i32::MIN]);
@@ -396,7 +405,10 @@ mod tests {
 
     #[test]
     fn bad_depth_is_rejected() {
-        let h = header(1, 1, 0, false);
-        assert!(matches!(assemble1(&h, vec![0]), Err(Error::Marker(_))));
+        // 0 and 39+ are illegal encodings (Table A-11), not missing features.
+        for depth in [0, 39] {
+            let h = header(1, 1, depth, false);
+            assert!(matches!(assemble1(&h, vec![0]), Err(Error::Marker(_))));
+        }
     }
 }

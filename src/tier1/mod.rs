@@ -260,6 +260,13 @@ where
         // high-dynamic-range subbands that would overflow `i32` rather than
         // panic — the same rejection OpenJPEG makes with `bpno_plus_one >= 31`,
         // and the reason its `roishift >= 31` branch is unreachable on decode.
+        //
+        // More signalled zero bit-planes than the band has magnitude planes
+        // saturates to zero coded planes: OpenJPEG's unsigned `numbps - P`
+        // wraps huge, its `(OPJ_INT32)` cast turns that *negative*, the pass
+        // loop's `bpno_plus_one >= 1` guard runs zero passes, and the block
+        // decodes to all zeros with no error. Saturating reproduces exactly
+        // that outcome.
         let top = numbps.saturating_sub(block.zero_bit_planes) + u32::from(params.roi_shift);
         if top > MAX_BIT_PLANES {
             return Err(Error::Unsupported(format!(
@@ -372,6 +379,17 @@ mod tests {
 
         // One less, and the same block decodes.
         decode_subband::<i32, _>(&sb, MAX_BIT_PLANES - 1, params, |q| q).expect("in range");
+    }
+
+    /// More signalled zero bit-planes than the subband has magnitude planes
+    /// decodes the block to all zeros without an error — the exact outcome of
+    /// OpenJPEG's wrapped-negative `bpno_plus_one` running zero passes.
+    #[test]
+    fn excess_zero_bit_planes_decodes_to_zeros() {
+        let sb = one_block_subband(1, 5);
+        let band = decode_subband::<i32, _>(&sb, 4, default_params(), |q| q)
+            .expect("saturates to zero coded planes, as the oracle does");
+        assert!(band.data.iter().all(|&c| c == 0));
     }
 
     /// The largest in-range bit-plane count decodes without error or overflow.

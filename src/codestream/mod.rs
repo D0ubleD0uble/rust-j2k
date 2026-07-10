@@ -150,13 +150,18 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
             | marker::QCC
             | marker::RGN
             | marker::POC
-            | marker::TLM
             | marker::PLT
-            | marker::PPT
-            | marker::SOP
-            | marker::EPH => {
+            | marker::PPT => {
                 return Err(Error::Unsupported(format!(
                     "tile-part header marker {m:#06X} is outside the decoded subset"
+                )));
+            }
+            // These are legal markers, but not here: TLM is main-header-only
+            // (A.7.1), and SOP/EPH delimit packets after SOD. In a tile-part
+            // header they are a malformed codestream, not a missing feature.
+            marker::TLM | marker::SOP | marker::EPH => {
+                return Err(Error::Codestream(format!(
+                    "marker {m:#06X} is not permitted in a tile-part header"
                 )));
             }
             other => {
@@ -169,7 +174,15 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
     let data_start = cur.pos;
 
     // Psot counts from the SOT marker's first byte to the end of the tile-part.
-    // Psot == 0 marks the last tile-part: it runs to the closing EOC (A.4.2).
+    // Psot == 0 marks the last tile-part: it runs to the closing EOC (A.4.2),
+    // anchored to the last two bytes of the buffer — everything after SOD is
+    // the tile, which is also OpenJPEG's reading. Scanning for the first
+    // FF D9 instead would be unsound: bit stuffing keeps packet data and
+    // headers clear of it, but an SOP segment's Nsop counter is two raw bytes
+    // and can spell FF D9 (packet 65497, or a 0xFF low byte abutting 0xD9),
+    // which would silently truncate a valid tile. The asymmetry with the
+    // Psot != 0 arm (which ignores bytes after its EOC) is therefore
+    // deliberate: with no declared length there is nothing else to anchor to.
     let data_end = if sot.psot == 0 {
         bytes
             .len()
@@ -490,6 +503,41 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
         }
     }
 
+    // A quantization default or override must cover every subband its
+    // component decomposes into: 3·NL + 1 entries for the none/expounded
+    // styles (derived's single entry is enforced in `decode_quant`, and excess
+    // entries are ignored, as OpenJPEG does). NL is only known here, after the
+    // overrides are resolved; discovering the shortfall per subband at decode
+    // time would misreport a malformed marker as a geometry inconsistency.
+    for (index, params) in header.components.iter().enumerate() {
+        let needed = 3 * usize::from(params.coding.decomposition_levels) + 1;
+        if params.quant.style != QuantStyle::ScalarDerived && params.quant.steps.len() < needed {
+            return Err(Error::Marker(format!(
+                "component {index} carries {} quantization step entries but its {} \
+                 decomposition levels need {needed}",
+                params.quant.steps.len(),
+                params.coding.decomposition_levels
+            )));
+        }
+        // The wavelet constrains the quantization style (E.1 ties reversible
+        // to no quantization, irreversible to scalar). OpenJPEG decodes both
+        // non-conformant pairings: style-0 entries still carry exponents, so
+        // it derives 9/7 steps with mantissa 0 and reconstructs. This crate
+        // accepts the 5/3-with-scalar direction to match the oracle (the
+        // reversible path ignores the mantissas — same output) but rejects
+        // 9/7-with-none rather than adopt the oracle's zero-mantissa
+        // interpretation of a stream the standard forbids — a documented
+        // stricter-than-oracle call (docs/correctness.md), relaxed if a real
+        // file ever trips it.
+        if params.coding.transform == Transform::Irreversible97
+            && params.quant.style == QuantStyle::None
+        {
+            return Err(Error::Marker(format!(
+                "component {index} pairs the 9/7 wavelet with the no-quantization style"
+            )));
+        }
+    }
+
     // The colour transform is signalled by COD but constrains SIZ, so it can
     // only be checked once both are read.
     if header.cod.multiple_component_transform {
@@ -587,9 +635,10 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
 /// Decode SIZ — image and tile geometry plus every component's depth, sign, and
 /// sub-sampling (A.5.1).
 ///
-/// Parses all `Csiz` components. Whether the decoder can *reconstruct* them is a
-/// separate question, enforced by [`check_subset`] after the whole main header
-/// is read, so a multi-component codestream still parses cleanly here.
+/// Parses all `Csiz` components. Whether the decoder can *reconstruct* them is
+/// a separate question, enforced by [`validate_geometry`] and
+/// [`check_sample_budget`] once the whole main header is read, so a
+/// multi-component codestream still parses cleanly here.
 ///
 /// `Ssiz` is a depth-minus-one in the low 7 bits with the sign in bit 7, so the
 /// declared depth is `1..=128`; the standard caps it at 38 (Table A-11) and
@@ -661,9 +710,9 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
         tile_y_offset,
         components,
     };
-    // Geometry legality (`validate_geometry`) and the decoded subset
-    // (`check_subset`) are the caller's to apply, in that order, so this
-    // function stays a pure reader of the marker segment.
+    // Geometry legality (`validate_geometry`) and the sample budget
+    // (`check_sample_budget`) are the caller's to apply, in that order, so
+    // this function stays a pure reader of the marker segment.
     Ok(siz)
 }
 
@@ -765,6 +814,13 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
 /// empty and the caller must have consumed the whole segment.
 fn decode_coding(b: &mut Cursor<'_>, origin: &str) -> Result<Coding> {
     let decomposition_levels = b.u8()?;
+    // Table A-15: 0–32 decomposition levels; 33–255 are reserved. A reserved
+    // field encoding rejects at parse, like the wavelet and style bytes below.
+    if decomposition_levels > 32 {
+        return Err(Error::Marker(format!(
+            "{origin} sets reserved decomposition level count {decomposition_levels} (max 32)"
+        )));
+    }
     let code_block_width = b.u8()?;
     let code_block_height = b.u8()?;
     let code_block_style = b.u8()?;
@@ -891,6 +947,15 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
         }
     };
 
+    // A step table covers at most the 3·NL + 1 subbands of a 32-level
+    // decomposition (A.6.4, with NL ≤ 32 per Table A-15), so 97 entries.
+    // Entries past that are kept out of the table — but still consumed — the
+    // way OpenJPEG caps at J2K_MAXBANDS and decodes (verified empirically:
+    // a 120-entry QCD decodes without a warning). Dropping rather than
+    // rejecting also keeps a hostile 65535-byte Lqcd from inflating the
+    // per-component `Qcd` clones in [`MainHeader::new`].
+    const MAX_STEP_ENTRIES: usize = 3 * 32 + 1;
+
     let mut steps = Vec::new();
     match style {
         // No quantization (reversible): one byte per subband, high 5 bits are
@@ -903,7 +968,9 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
             }
             while b.remaining() > 0 {
                 let v = b.u8()?;
-                steps.push((v >> 3, 0));
+                if steps.len() < MAX_STEP_ENTRIES {
+                    steps.push((v >> 3, 0));
+                }
             }
         }
         // Scalar: 16-bit per entry, high 5 bits exponent, low 11 bits mantissa.
@@ -921,7 +988,9 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
             }
             while b.remaining() > 0 {
                 let v = b.u16()?;
-                steps.push((((v >> 11) & 0x1F) as u8, v & 0x07FF));
+                if steps.len() < MAX_STEP_ENTRIES {
+                    steps.push((((v >> 11) & 0x1F) as u8, v & 0x07FF));
+                }
             }
         }
     }

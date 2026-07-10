@@ -154,20 +154,26 @@ impl<'a> MqDecoder<'a> {
     /// BYTEIN (ISO C.3.4): pull the next coded byte into `c`, handling the
     /// `0xFF` stuffing carry (a stuffed byte contributes seven bits, not eight,
     /// and a `0xFF` followed by `> 0x8F` is a marker, so no byte is consumed).
+    ///
+    /// The adds wrap: with `chigh` steered to `0xFFFF` by hostile bytes, the
+    /// stuffed-byte add (`<< 9`) can carry past bit 31. The C reference does
+    /// this in `OPJ_UINT32` arithmetic, where the carry silently drops, so
+    /// wrapping is the oracle-faithful behaviour — spelled out here so debug
+    /// and release builds agree instead of the checked add panicking.
     fn bytein(&mut self) {
         if self.byte(self.pos) == 0xFF {
             if self.byte(self.pos + 1) > 0x8F {
-                self.c += 0xFF00;
+                self.c = self.c.wrapping_add(0xFF00);
                 self.ct = 8;
                 self.marker_reads += 1;
             } else {
                 self.pos += 1;
-                self.c += (self.byte(self.pos) as u32) << 9;
+                self.c = self.c.wrapping_add((self.byte(self.pos) as u32) << 9);
                 self.ct = 7;
             }
         } else {
             self.pos += 1;
-            self.c += (self.byte(self.pos) as u32) << 8;
+            self.c = self.c.wrapping_add((self.byte(self.pos) as u32) << 8);
             self.ct = 8;
         }
     }
@@ -312,6 +318,21 @@ mod tests {
                 let _ = mq.decode(&mut cx);
             }
         }
+    }
+
+    /// The BYTEIN adds run in wrapping arithmetic: the C reference does them in
+    /// `OPJ_UINT32`, where a carry past bit 31 silently drops. Hostile bytes can
+    /// steer `c` to the ceiling before a stuffed-byte add, so pin the wrap here —
+    /// a checked `+=` would panic under overflow checks instead.
+    #[test]
+    fn bytein_wraps_at_the_register_ceiling() {
+        let data = [0xFF, 0x8F];
+        let mut mq = MqDecoder::new(&data);
+        mq.pos = 0;
+        mq.ct = 0;
+        mq.c = u32::MAX;
+        mq.bytein();
+        assert_eq!(mq.c, u32::MAX.wrapping_add(0x8F << 9));
     }
 
     /// ISO/IEC 15444-1 Table C-2, transcribed independently of [`QE_TABLE`] as

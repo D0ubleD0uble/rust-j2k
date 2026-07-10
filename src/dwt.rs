@@ -212,22 +212,29 @@ fn reflect(i: isize, n: usize) -> usize {
 /// (F.3.8.2). Exact integer arithmetic: the arithmetic right shifts floor
 /// toward negative infinity, matching the standard's `floor` even for negative
 /// operands.
+///
+/// The lifting sums run in `i64`: Tier-1 admits double-scale magnitudes near
+/// `2^30`, so on a hostile codestream `left + right` (of already-lifted
+/// samples) and the `±` on the target can leave `i32` — a debug build would
+/// panic on the overflow. Saturating back preserves bit-exactness for every
+/// in-range (legal) input, exactly as [`crate::mct`] does for RCT.
 fn inverse_5_3(signal: &mut [i32]) {
     let n = signal.len();
     if n <= 1 {
         return;
     }
+    let saturate = crate::mct::saturate;
     // Undo the update step on the even (low-pass) samples first, then undo the
     // predict step on the odd (high-pass) samples — the forward order reversed.
     for i in (0..n).step_by(2) {
-        let left = signal[reflect(i as isize - 1, n)];
-        let right = signal[reflect(i as isize + 1, n)];
-        signal[i] -= (left + right + 2) >> 2;
+        let left = signal[reflect(i as isize - 1, n)] as i64;
+        let right = signal[reflect(i as isize + 1, n)] as i64;
+        signal[i] = saturate(signal[i] as i64 - ((left + right + 2) >> 2));
     }
     for i in (1..n).step_by(2) {
-        let left = signal[reflect(i as isize - 1, n)];
-        let right = signal[reflect(i as isize + 1, n)];
-        signal[i] += (left + right) >> 1;
+        let left = signal[reflect(i as isize - 1, n)] as i64;
+        let right = signal[reflect(i as isize + 1, n)] as i64;
+        signal[i] = saturate(signal[i] as i64 + ((left + right) >> 1));
     }
 }
 
@@ -362,6 +369,17 @@ mod tests {
             inverse_5_3(&mut a);
             assert_eq!(a, s, "5/3 round-trip mismatch for len {}", s.len());
         }
+    }
+
+    /// Hostile coefficients at the Tier-1 magnitude ceiling (~2^30 after
+    /// double-scale halving) must saturate, not overflow: the raw lifting sums
+    /// leave `i32`, which would panic any overflow-checked build.
+    #[test]
+    fn inverse_5_3_saturates_on_extreme_coefficients() {
+        let mut a = [i32::MAX / 2, i32::MIN / 2, i32::MAX / 2, i32::MIN / 2];
+        inverse_5_3(&mut a); // must not panic
+        let mut b = [i32::MAX, i32::MIN, i32::MAX, i32::MIN, i32::MAX];
+        inverse_5_3(&mut b); // must not panic
     }
 
     /// 9/7 is float, so forward-then-inverse must recover the input within a

@@ -237,6 +237,24 @@ fn geometry_max_decomposition_levels() {
     assert_eq!((geoms[0][0].width, geoms[0][0].height), (1, 1));
 }
 
+/// A tile-component larger than one maximal precinct (2^15 on either axis)
+/// would carry more packets than the single-precinct walk visits, so it must
+/// reject rather than desynchronize (Eq. B-16).
+#[test]
+fn geometry_rejects_multi_precinct_extent() {
+    for (w, h) in [(32769, 16), (16, 32769)] {
+        let err = resolution_geoms(&header(w, h, 1, 6), 0);
+        assert!(matches!(err, Err(crate::Error::Unsupported(_))), "{w}×{h}");
+    }
+}
+
+/// Exactly 2^15 still fits in the single maximal precinct.
+#[test]
+fn geometry_accepts_full_precinct_extent() {
+    let geoms = resolution_geoms(&header(32768, 16, 1, 6), 0).unwrap();
+    assert_eq!(geoms[1][0].width, 16384);
+}
+
 /// A code-block size past the standard's 2^10 / xcb+ycb≤12 limit is rejected,
 /// not silently clamped (which would also keep the grid shifts well-defined).
 #[test]
@@ -483,6 +501,25 @@ fn malformed_tile_data_never_panics() {
         // The result is allowed to be either Ok or Err; only a panic would fail.
         let _ = decode_packets(&cs);
     }
+}
+
+/// A header pairing a large image with tiny legal 4×4 code-blocks would drive
+/// millions of per-block states and tag trees before a single tile-part byte
+/// is read; the block-count guard rejects it up front instead.
+#[test]
+fn block_count_guard_rejects_metadata_bomb() {
+    use crate::codestream::{Codestream, TilePart};
+
+    // 4096×4096 with 4×4 blocks: ~1.4M blocks across the ladder, over the 2^19 cap.
+    let cs = Codestream {
+        header: header(4096, 4096, 1, 2),
+        tile_parts: vec![TilePart {
+            tile_index: 0,
+            data: &[],
+        }],
+    };
+    let err = decode_packets(&cs).expect_err("guard fires before any packet parse");
+    assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
 }
 
 // ---- Per-component geometry (issue #57) ----

@@ -555,6 +555,51 @@ fn duplicate_cod_is_codestream() {
 }
 
 #[test]
+fn reserved_decomposition_levels_is_marker() {
+    // Table A-15 allows 0–32 levels; 33 is a reserved encoding, rejected at
+    // parse rather than deep in tier-2.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 33, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 97])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn too_few_qcd_steps_for_the_decomposition_is_marker() {
+    // NL = 5 needs 3·5 + 1 = 16 entries; 10 leaves subbands without a step.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 10])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn too_few_expounded_qcd_steps_is_marker() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(0)),
+        seg(marker::QCD, &qcd_expounded(1, &[(10, 1234); 3])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn irreversible_wavelet_with_no_quantization_is_marker() {
+    // 9/7 coefficients need a scalar step to mean anything; the pairing is
+    // rejected at parse rather than misreported during dequantization.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(0)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
 fn reserved_quant_style_is_marker() {
     let mut body = vec![(2u8 << 5) | 3]; // style 3 is reserved
     body.extend_from_slice(&be16(0));
@@ -567,6 +612,45 @@ fn reserved_quant_style_is_marker() {
 }
 
 #[test]
+fn oversized_qcd_step_table_is_capped() {
+    // 120 one-byte entries, more than the 3·32 + 1 subbands a 32-level
+    // decomposition can carry. The excess is dropped — OpenJPEG caps at
+    // J2K_MAXBANDS and decodes — so a 65535-byte Lqcd cannot be cloned into
+    // every component's parameters (the memory amplifier).
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 120])),
+    ]);
+    let (header, _) = parse_main_header(&bytes).expect("padding parses");
+    assert_eq!(header.qcd.steps.len(), 97);
+    assert_eq!(header.qcd.steps[0], (8, 0));
+}
+
+#[test]
+fn oversized_expounded_qcd_step_table_is_capped() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(0)),
+        seg(marker::QCD, &qcd_expounded(1, &[(10, 1234); 120])),
+    ]);
+    let (header, _) = parse_main_header(&bytes).expect("padding parses");
+    assert_eq!(header.qcd.steps.len(), 97);
+    assert_eq!(header.qcd.steps[0], (10, 1234));
+}
+
+#[test]
+fn full_depth_qcd_step_table_parses() {
+    // Exactly 97 entries is legal even though this COD only needs 16.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 97])),
+    ]);
+    assert!(parse_main_header(&bytes).is_ok());
+}
+
+#[test]
 fn eoc_before_tile_part_is_codestream() {
     let mut bytes = be16(marker::SOC).to_vec();
     bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
@@ -574,6 +658,20 @@ fn eoc_before_tile_part_is_codestream() {
     bytes.extend_from_slice(&seg(marker::QCD, &qcd_none(2, &[8; 16])));
     bytes.extend_from_slice(&be16(marker::EOC));
     assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+#[test]
+fn non_marker_ff00_and_ffff_are_lost_sync() {
+    // 0xFF00 and 0xFFFF are assigned to no marker; walking them as segments
+    // would read the following bytes as a length. They are lost sync, a
+    // malformed codestream rather than an unsupported feature.
+    for code in [0xFF00u16, 0xFFFF] {
+        let mut bytes = be16(marker::SOC).to_vec();
+        bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
+        bytes.extend_from_slice(&be16(code));
+        bytes.extend_from_slice(&[0x00, 0x04, 0xAA, 0xBB]); // a plausible fake segment
+        assert!(matches!(err(&bytes), Error::Codestream(_)), "{code:#06X}");
+    }
 }
 
 #[test]
@@ -659,6 +757,30 @@ fn psot_zero_runs_to_eoc() {
 
     let cs = parse(&bytes).expect("parse");
     assert_eq!(cs.tile_parts[0].data, &data);
+}
+
+/// Bytes after the closing EOC are ignored when `Psot` declares the length,
+/// as OpenJPEG ignores them. A `Psot = 0` tile-part has no declared length —
+/// everything to the buffer-end EOC is the tile (also OpenJPEG's reading, and
+/// the only sound one: SOP's raw `Nsop` bytes can spell `FF D9`, so scanning
+/// for an earlier EOC could truncate a valid tile).
+#[test]
+fn trailing_bytes_after_eoc_are_ignored_when_psot_declares_the_length() {
+    let data = [1, 2, 3, 4, 5];
+    let sot = sot_seg(0, psot_for(&data), 0, 1);
+    let mut bytes = assemble(&default_header(), &sot, &data, true);
+    bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]); // garbage ending in FF D9
+    let cs = parse(&bytes).expect("trailing bytes after the declared extent");
+    assert_eq!(cs.tile_parts[0].data, &data);
+
+    // With Psot = 0 the same tail is absorbed into the tile up to the final
+    // EOC; the packet self-check downstream is what rejects it. Anchoring is
+    // pinned here: the embedded FF D9 must NOT terminate the data early.
+    let sot = sot_seg(0, 0, 0, 1);
+    let mut bytes = assemble(&default_header(), &sot, &data, true);
+    bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]);
+    let cs = parse(&bytes).expect("EOC anchored at the buffer end");
+    assert_eq!(cs.tile_parts[0].data.len(), data.len() + 4);
 }
 
 #[test]
@@ -752,6 +874,28 @@ fn out_of_subset_tile_header_marker_is_unsupported() {
     bytes.extend_from_slice(&be16(marker::EOC));
 
     assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+}
+
+/// TLM is main-header-only (A.7.1) and SOP/EPH belong after SOD, so meeting
+/// one in a tile-part header is a malformed codestream — unlike the QCC above,
+/// which is legal there and merely outside the subset.
+#[test]
+fn structurally_illegal_tile_header_marker_is_codestream() {
+    let data = [1, 2];
+    for illegal in [seg(marker::TLM, &[0, 0x60]), seg(marker::SOP, &[0, 0])] {
+        let psot = (12 + illegal.len() + 2 + data.len()) as u32;
+        let mut bytes = be16(marker::SOC).to_vec();
+        for part in default_header() {
+            bytes.extend_from_slice(&part);
+        }
+        bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+        bytes.extend_from_slice(&illegal);
+        bytes.extend_from_slice(&be16(marker::SOD));
+        bytes.extend_from_slice(&data);
+        bytes.extend_from_slice(&be16(marker::EOC));
+
+        assert!(matches!(perr(&bytes), Error::Codestream(_)));
+    }
 }
 
 #[test]
@@ -1640,10 +1784,11 @@ fn overrides_resolve_else_default_per_component() {
         // Component 1 alone overrides the coding style: 3 levels, restart.
         seg(marker::COC, &coc_body(&[1], 0, 3, 2, 2, 0x04, 1)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
-        // Component 2 alone overrides the quantization: 4 guard bits.
+        // Component 2 alone overrides the quantization: 4 guard bits. Its
+        // levels stay COD's 5, so the table needs the full 16 entries.
         seg(marker::QCC, &{
             let mut b = vec![2u8];
-            b.extend_from_slice(&qcd_none(4, &[9; 10]));
+            b.extend_from_slice(&qcd_none(4, &[9; 16]));
             b
         }),
     ]);
@@ -1778,6 +1923,16 @@ fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
 /// exist.
 #[test]
 fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
+    // Each 9/7 component gets a scalar QCC so the wavelet/quant pairing is
+    // sound and the failure under test is the colour transform alone.
+    let scalar_qcc = |component: u8| {
+        seg(marker::QCC, &{
+            let mut b = vec![component];
+            b.extend_from_slice(&qcd_expounded(2, &[(8, 0); 16]));
+            b
+        })
+    };
+
     let siz = siz_body(3, &[(15, 1, 1); 3]);
     let bytes = codestream(&[
         seg(marker::SIZ, &siz),
@@ -1786,6 +1941,7 @@ fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
         // ... except component 1 is 9/7.
         seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 0)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        scalar_qcc(1),
     ]);
     let e = err(&bytes);
     let Error::Unsupported(message) = &e else {
@@ -1800,6 +1956,7 @@ fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
         seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)),
         seg(marker::COC, &coc_body(&[3], 0, 5, 4, 4, 0, 0)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        scalar_qcc(3),
     ]);
     assert!(parse_main_header(&bytes).is_ok());
 }

@@ -9,7 +9,8 @@
 //! - **components**, each with its own bit depth, sign, and sub-sampling, plus
 //!   the reversible color transform (RCT) that decorrelates the first three;
 //!   its irreversible twin (ICT) is not decoded yet;
-//! - **integer** samples, signed or unsigned, up to 32 bits;
+//! - **integer** samples, signed up to 32 bits, unsigned up to 31 (the
+//!   samples land in an `i32` container);
 //! - **both** the reversible 5/3 (lossless) and irreversible 9/7 (lossy)
 //!   wavelet paths (the 9/7 path is graded by re-encoding a real grid with
 //!   OpenJPEG, since no operational GRIB2 producer ships lossy 9/7).
@@ -76,6 +77,13 @@ pub(crate) mod mct;
 pub(crate) mod quant;
 pub(crate) mod tier1;
 pub(crate) mod tier2;
+
+// Structured fuzz entry points for the detached fuzz/ workspace. Compiled
+// unconditionally so that workspace builds under plain cargo (rust-analyzer,
+// `cargo check` in fuzz/), but hidden from docs and exempt from semver: this
+// is a test seam, not public API.
+#[doc(hidden)]
+pub mod fuzz;
 
 pub use error::{Error, Result};
 pub use image::{Component, Image};

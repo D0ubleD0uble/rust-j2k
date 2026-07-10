@@ -77,6 +77,36 @@ worth carrying into any future disagreement:
   *worse*, because the factor of two is then counted twice. A half-emulation
   reads as a refutation of a correct hypothesis.
 
+### Stricter than the oracle on non-conforming streams
+
+Three tier-2 checks reject streams OpenJPEG decodes with a warning: an `Nsop`
+that does not match the packet sequence (OpenJPEG never checks it), a signalled
+EPH that is missing (OpenJPEG continues without consuming one), and tile-part
+bytes left over after the last packet (OpenJPEG ignores them). These are
+deliberate, and they are a different axis from the numeric rule above: each
+condition means the packet walk has probably desynchronized, and continuing
+risks a silently wrong image — the one outcome this crate never accepts. A
+typed error preserves the oracle-match property; warn-and-continue would bet
+the output on a parse the evidence says is broken.
+
+Two parse-time checks are also stricter than the oracle, for a different
+reason: the codestream is *missing data the standard requires*, and OpenJPEG
+fills the gap with invented values. A QCD/QCC carrying fewer than the
+3·NL + 1 step entries its decomposition needs is rejected as `Marker`;
+OpenJPEG zero-fills the missing step sizes and decodes, reconstructing those
+subbands at a scale the encoder never used. The 9/7 wavelet paired with the
+no-quantization style is rejected the same way; OpenJPEG derives steps from
+the style-0 exponents with mantissa zero. In both cases the oracle's output
+is a deterministic guess, not the encoder's image, and this crate does not
+half-decode. (The converses stay oracle-matched: extra step entries are
+ignored, and 5/3 with a scalar style decodes — the reversible path never
+reads the mantissas.)
+
+The cost is interop: a real-world encoder that produces such a stream decodes
+under OpenJPEG and rejects here. No corpus or conformance file trips any of
+these today. If one ever does, relax that check to match the oracle — the
+protective argument loses to a demonstrated real file.
+
 ## Agreement standard
 
 - **Reversible path (5/3, lossless):** bit-exact sample equality. Any

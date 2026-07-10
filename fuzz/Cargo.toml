@@ -29,3 +29,28 @@ doc = false
 bench = false
 
 [workspace]
+
+# `tile_body` pins a valid main header and fuzzes only the tile-part bytes, so
+# mutations reach the packet reader instead of dying in parse_main_header.
+[[bin]]
+name = "tile_body"
+path = "fuzz_targets/tile_body.rs"
+test = false
+doc = false
+bench = false
+
+# `tier1_block` and `mq` drive the deep state machines through the library's
+# `--cfg fuzzing` hooks (rust_j2k::fuzz).
+[[bin]]
+name = "tier1_block"
+path = "fuzz_targets/tier1_block.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mq"
+path = "fuzz_targets/mq.rs"
+test = false
+doc = false
+bench = false

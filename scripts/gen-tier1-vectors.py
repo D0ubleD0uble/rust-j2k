@@ -30,6 +30,15 @@ codestream is NOT lossless (quantization), so `sample - 128` would not be a
 trustworthy coefficient oracle; the 9/7 quantization/DWT path is graded instead
 at integration (issue #17) against the OpenJPEG oracle on the lossy fixture.
 
+The detail-band vectors (HL/LH/HH context tables, which a no-DWT codestream
+never reaches) come from a ONE-level 5/3 codestream instead. Their coefficient
+oracle is a forward 5/3 transform implemented here from Annex F — independent
+of the Rust decoder — applied to the DC-shifted samples. It is self-checked
+two ways: the Python inverse must reconstruct the samples bit-exactly, and the
+Rust golden test decodes OpenJPEG's actual coded segments against these
+coefficients, so a transform or parse mistake here fails at authoring time
+rather than committing a wrong oracle.
+
 Usage:
     scripts/gen-tier1-vectors.py            # writes src/tier1/golden_vectors.rs
     scripts/gen-tier1-vectors.py -o -       # print to stdout
@@ -117,6 +126,14 @@ class Bio:
         # Index of the next whole byte, accounting for a partially consumed one.
         return self.bp if self.ct == 0 else self.bp
 
+    def align(self) -> None:
+        """Byte-align at the end of a packet header (Annex B.10.1): drop any
+        partially-read byte, and if the last whole byte was 0xFF consume the
+        stuffed byte that follows it — its bits are not packet-body content."""
+        if self.buf == 0xFF:
+            self._bytein()
+        self.ct = 0
+
 
 def read_num_passes(bio: Bio) -> int:
     """Annex B Table B.4 (matches OpenJPEG opj_t2_getnumpasses)."""
@@ -141,17 +158,9 @@ def find_marker(data: bytes, marker: int) -> int:
     return pos
 
 
-def extract_segment(j2k: bytes) -> tuple[int, int, bytes]:
-    """Return (zero_bit_planes, num_passes, code-block segment) for a codestream
-    with a single tile / component / resolution / code-block / layer."""
-    sod = find_marker(j2k, 0xFF93)
-    eoc = find_marker(j2k, 0xFFD9)
-    body = j2k[sod + 2 : eoc]
-
-    bio = Bio(body)
-    present = bio.read1()
-    if present != 1:
-        raise ValueError("empty packet: no code-block content")
+def read_block_header(bio: Bio) -> tuple[int, int, int]:
+    """One included code-block's (zero_bit_planes, num_passes, segment_length)
+    from a packet header — the single-block-per-band shape every vector uses."""
     inclusion = bio.read1()  # 1-node tag tree, first-layer inclusion
     if inclusion != 1:
         raise ValueError("code-block not included in the first layer")
@@ -164,23 +173,112 @@ def extract_segment(j2k: bytes) -> tuple[int, int, bytes]:
         lblock += 1
     length_bits = lblock + (num_passes.bit_length() - 1)  # + floor(log2 passes)
     seg_len = bio.read(length_bits)
+    return zero_bit_planes, num_passes, seg_len
 
-    # The code-block data is byte-aligned right after the header (no EPH here).
-    # NOTE: this drops the partial byte but does not skip the stuffed byte that
-    # follows a header ending in 0xFF (the decoder's BitReader.align does). The
-    # single-block vectors here never end on 0xFF, so the self-check below holds;
-    # the Rust Tier-2 parser handles the general case.
-    if bio.ct != 0:
-        bio.ct = 0
-        bio.bp += 0  # the partial byte is consumed; next read starts at bp
-    header_bytes = bio.bp
-    segment = body[header_bytes : header_bytes + seg_len]
-    if header_bytes + seg_len != len(body):
+
+def parse_packet(body: bytes, nbands: int) -> tuple[list[tuple[int, int, bytes]], int]:
+    """Parse one packet holding one code-block per band. Returns each block's
+    (zero_bit_planes, num_passes, segment) plus the bytes the packet spans."""
+    bio = Bio(body)
+    if bio.read1() != 1:
+        raise ValueError("empty packet: no code-block content")
+    heads = [read_block_header(bio) for _ in range(nbands)]
+    bio.align()
+    at = bio.byte_pos()
+    blocks = []
+    for zbp, passes, seg_len in heads:
+        blocks.append((zbp, passes, bytes(body[at : at + seg_len])))
+        at += seg_len
+    return blocks, at
+
+
+def codestream_body(j2k: bytes) -> bytes:
+    return j2k[find_marker(j2k, 0xFF93) + 2 : find_marker(j2k, 0xFFD9)]
+
+
+def extract_segment(j2k: bytes) -> tuple[int, int, bytes]:
+    """Return (zero_bit_planes, num_passes, code-block segment) for a codestream
+    with a single tile / component / resolution / code-block / layer."""
+    body = codestream_body(j2k)
+    blocks, consumed = parse_packet(body, 1)
+    if consumed != len(body):
         raise ValueError(
-            f"packet parse mismatch: {header_bytes} header + {seg_len} segment "
-            f"!= {len(body)} body bytes"
+            f"packet parse mismatch: consumed {consumed} != {len(body)} body bytes"
         )
-    return zero_bit_planes, num_passes, bytes(segment)
+    return blocks[0]
+
+
+# ---- Forward 5/3 (Annex F), the detail-band coefficient oracle --------------
+
+
+def reflect(i: int, n: int) -> int:
+    """Whole-sample symmetric extension (F.3.6), period 2(n-1)."""
+    if n == 1:
+        return 0
+    period = 2 * (n - 1)
+    k = i % period  # Python % is already non-negative
+    return period - k if k >= n else k
+
+
+def forward_5_3(sig: list[int]) -> list[int]:
+    """One 1-D forward 5/3 lifting pass, in place order: predict the odd
+    (high-pass) samples, then update the even (low-pass) ones (F.4.8.2 run
+    forward; Python // floors like the standard's floor)."""
+    n = len(sig)
+    s = list(sig)
+    if n <= 1:
+        return s
+    for i in range(1, n, 2):
+        s[i] -= (s[reflect(i - 1, n)] + s[reflect(i + 1, n)]) // 2
+    for i in range(0, n, 2):
+        s[i] += (s[reflect(i - 1, n)] + s[reflect(i + 1, n)] + 2) // 4
+    return s
+
+
+def inverse_5_3(sig: list[int]) -> list[int]:
+    """The exact inverse of forward_5_3, for the round-trip self-check."""
+    n = len(sig)
+    s = list(sig)
+    if n <= 1:
+        return s
+    for i in range(0, n, 2):
+        s[i] -= (s[reflect(i - 1, n)] + s[reflect(i + 1, n)] + 2) // 4
+    for i in range(1, n, 2):
+        s[i] += (s[reflect(i - 1, n)] + s[reflect(i + 1, n)]) // 2
+    return s
+
+
+def dwt_1level(width: int, height: int, grid: list[int]) -> dict[str, list[int]]:
+    """One 5/3 decomposition of a DC-shifted sample grid into its four
+    subbands. Columns first, then rows — the inverse composition of the
+    decoder's rows-then-columns inverse (and OpenJPEG's encode order)."""
+    a = [list(grid[y * width : (y + 1) * width]) for y in range(height)]
+    for x in range(width):
+        col = forward_5_3([a[y][x] for y in range(height)])
+        for y in range(height):
+            a[y][x] = col[y]
+    for y in range(height):
+        a[y] = forward_5_3(a[y])
+
+    # Self-check: the Python inverse (rows then columns) must round-trip.
+    b = [inverse_5_3(row) for row in a]
+    for x in range(width):
+        col = inverse_5_3([b[y][x] for y in range(height)])
+        for y in range(height):
+            b[y][x] = col[y]
+    flat = [v for row in b for v in row]
+    if flat != list(grid):
+        raise SystemExit("forward/inverse 5/3 do not round-trip; oracle untrusted")
+
+    # Deinterleave: even/even LL, odd-column HL, odd-row LH, odd/odd HH.
+    def band(px: int, py: int) -> list[int]:
+        return [
+            a[y][x]
+            for y in range(py, height, 2)
+            for x in range(px, width, 2)
+        ]
+
+    return {"ll": band(0, 0), "hl": band(1, 0), "lh": band(0, 1), "hh": band(1, 1)}
 
 
 def make_vector(name: str, width: int, height: int, samples: list[int], note: str):
@@ -209,6 +307,7 @@ def make_vector(name: str, width: int, height: int, samples: list[int], note: st
         return {
             "name": name,
             "note": note,
+            "orient": "Ll",
             "width": width,
             "height": height,
             "zero_bit_planes": zbp,
@@ -216,6 +315,65 @@ def make_vector(name: str, width: int, height: int, samples: list[int], note: st
             "segment": segment,
             "coeffs": coeffs,
         }
+
+
+def make_dwt_vectors(prefix: str, width: int, height: int, samples: list[int]):
+    """Four vectors (LL + HL/LH/HH) from a ONE-level 5/3 codestream, so the
+    detail-band context tables are checked against real OpenJPEG segments.
+    The coefficient oracle is `dwt_1level` over the DC-shifted samples."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        pgm = tmp / "in.pgm"
+        j2k = tmp / "out.j2k"
+        out = tmp / "out.pgm"
+        write_pgm(pgm, width, height, samples)
+        # -n 2: two resolutions => one decomposition level. One block per band.
+        subprocess.run(
+            [need("opj_compress"), "-i", str(pgm), "-o", str(j2k),
+             "-n", "2", "-b", "64,64", "-r", "1"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            [need("opj_decompress"), "-i", str(j2k), "-o", str(out)],
+            check=True, capture_output=True,
+        )
+        _, _, decoded = read_pgm(out)
+        if decoded != samples:
+            raise SystemExit(f"{prefix}: 5/3 roundtrip not lossless; cannot trust oracle")
+
+        bands = dwt_1level(width, height, [s - DC_SHIFT for s in samples])
+
+        # LRCP with one layer: packet 0 carries the LL block, packet 1 the
+        # HL/LH/HH blocks in band order (B.10).
+        body = codestream_body(j2k.read_bytes())
+        (ll_block,), consumed = parse_packet(body, 1)
+        detail, used = parse_packet(body[consumed:], 3)
+        if consumed + used != len(body):
+            raise ValueError(
+                f"{prefix}: packets span {consumed + used} != {len(body)} body bytes"
+            )
+
+        bw, bh = width // 2 + width % 2, height // 2 + height % 2
+        vectors = []
+        for (orient, dims, block) in [
+            ("Ll", (bw, bh), ll_block),
+            ("Hl", (width - bw, bh), detail[0]),
+            ("Lh", (bw, height - bh), detail[1]),
+            ("Hh", (width - bw, height - bh), detail[2]),
+        ]:
+            zbp, num_passes, segment = block
+            vectors.append({
+                "name": f"{prefix}_{orient.lower()}_{dims[0]}x{dims[1]}",
+                "note": f"{orient.upper()} band of a one-level 5/3 codestream",
+                "orient": orient,
+                "width": dims[0],
+                "height": dims[1],
+                "zero_bit_planes": zbp,
+                "num_passes": num_passes,
+                "segment": segment,
+                "coeffs": bands[orient.lower()],
+            })
+        return vectors
 
 
 def gradient_8x8() -> list[int]:
@@ -249,6 +407,17 @@ def small_4x4() -> list[int]:
     return base
 
 
+def textured_8x8() -> list[int]:
+    # Horizontal, vertical, and diagonal energy plus signed swings around the
+    # DC value, so every detail band's block is included with nonzero
+    # coefficients and the sign/run-length paths run in all three contexts.
+    return [
+        (128 + 61 * ((x + y) % 2) - 30 + 9 * x - 7 * y + (x * y) % 5 * 6) % 256
+        for y in range(8)
+        for x in range(8)
+    ]
+
+
 def emit_rust(vectors: list[dict]) -> str:
     def hexbytes(b: bytes) -> str:
         return ", ".join(f"0x{x:02x}" for x in b)
@@ -257,14 +426,21 @@ def emit_rust(vectors: list[dict]) -> str:
         "// @generated by scripts/gen-tier1-vectors.py — do not edit by hand.",
         "//",
         "// Golden Tier-1 code-block vectors. Each is a real MQ code-block segment",
-        "// sliced from a reversible (5/3), single-resolution OpenJPEG codestream;",
-        "// `coeffs` is the decoder-independent ground truth (decoded sample minus",
-        "// the 2^7 DC level shift). See the generator for the full provenance.",
+        "// sliced from a reversible (5/3) OpenJPEG codestream. For the LL vectors",
+        "// (a single-resolution codestream, so no wavelet ran) `coeffs` is the",
+        "// decoded sample minus the 2^7 DC level shift, straight from",
+        "// `opj_decompress`; for the HL/LH/HH vectors (one decomposition level)",
+        "// it is the generator's own Annex F forward 5/3 of the shifted samples,",
+        "// cross-checked by the lossless round trip. See the generator for the",
+        "// full provenance.",
+        "",
+        "use super::Orientation;",
         "",
         "/// One golden code-block: the coded MQ `segment` plus the Tier-2-supplied",
         "/// `num_passes`/`zero_bit_planes` decode to the signed `coeffs` grid.",
         "pub(super) struct GoldenBlock {",
         "    pub name: &'static str,",
+        "    pub orient: Orientation,",
         "    pub width: u32,",
         "    pub height: u32,",
         "    pub num_passes: u32,",
@@ -279,6 +455,7 @@ def emit_rust(vectors: list[dict]) -> str:
         lines += [
             "    GoldenBlock {",
             f'        name: "{v["name"]}", // {v["note"]}',
+            f'        orient: Orientation::{v["orient"]},',
             f'        width: {v["width"]},',
             f'        height: {v["height"]},',
             f'        num_passes: {v["num_passes"]},',
@@ -306,7 +483,7 @@ def main() -> None:
                     "mostly-DC: heavy cleanup run-length over insignificant columns"),
         make_vector("small_4x4", 4, 4, small_4x4(),
                     "small magnitudes: few bit-planes, low num_passes"),
-    ]
+    ] + make_dwt_vectors("dwt1", 8, 8, textured_8x8())
     rust = emit_rust(vectors)
     if args.output == "-":
         sys.stdout.write(rust)
