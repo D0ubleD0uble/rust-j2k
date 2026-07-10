@@ -612,26 +612,31 @@ fn reserved_quant_style_is_marker() {
 }
 
 #[test]
-fn oversized_qcd_step_table_is_marker() {
-    // 98 one-byte entries: one more than the 3·32 + 1 subbands a 32-level
-    // decomposition can carry. Left uncapped, a 65535-byte Lqcd would be
-    // cloned into every component's parameters — a memory amplifier.
+fn oversized_qcd_step_table_is_capped() {
+    // 120 one-byte entries, more than the 3·32 + 1 subbands a 32-level
+    // decomposition can carry. The excess is dropped — OpenJPEG caps at
+    // J2K_MAXBANDS and decodes — so a 65535-byte Lqcd cannot be cloned into
+    // every component's parameters (the memory amplifier).
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::QCD, &qcd_none(2, &[8; 98])),
+        seg(marker::QCD, &qcd_none(2, &[8; 120])),
     ]);
-    assert!(matches!(err(&bytes), Error::Marker(_)));
+    let (header, _) = parse_main_header(&bytes).expect("padding parses");
+    assert_eq!(header.qcd.steps.len(), 97);
+    assert_eq!(header.qcd.steps[0], (8, 0));
 }
 
 #[test]
-fn oversized_expounded_qcd_step_table_is_marker() {
+fn oversized_expounded_qcd_step_table_is_capped() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(0)),
-        seg(marker::QCD, &qcd_expounded(1, &[(10, 1234); 98])),
+        seg(marker::QCD, &qcd_expounded(1, &[(10, 1234); 120])),
     ]);
-    assert!(matches!(err(&bytes), Error::Marker(_)));
+    let (header, _) = parse_main_header(&bytes).expect("padding parses");
+    assert_eq!(header.qcd.steps.len(), 97);
+    assert_eq!(header.qcd.steps[0], (10, 1234));
 }
 
 #[test]
@@ -754,19 +759,28 @@ fn psot_zero_runs_to_eoc() {
     assert_eq!(cs.tile_parts[0].data, &data);
 }
 
-/// Bytes after the closing EOC are ignored in both Psot arms, as OpenJPEG
-/// ignores them; in the Psot = 0 arm the EOC is found by scanning, so a tail
-/// that itself ends `FF D9` cannot swallow the real EOC into the packet data.
+/// Bytes after the closing EOC are ignored when `Psot` declares the length,
+/// as OpenJPEG ignores them. A `Psot = 0` tile-part has no declared length —
+/// everything to the buffer-end EOC is the tile (also OpenJPEG's reading, and
+/// the only sound one: SOP's raw `Nsop` bytes can spell `FF D9`, so scanning
+/// for an earlier EOC could truncate a valid tile).
 #[test]
-fn trailing_bytes_after_eoc_are_ignored() {
+fn trailing_bytes_after_eoc_are_ignored_when_psot_declares_the_length() {
     let data = [1, 2, 3, 4, 5];
-    for psot in [0, psot_for(&data)] {
-        let sot = sot_seg(0, psot, 0, 1);
-        let mut bytes = assemble(&default_header(), &sot, &data, true);
-        bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]); // garbage ending in FF D9
-        let cs = parse(&bytes).unwrap_or_else(|e| panic!("Psot={psot}: {e}"));
-        assert_eq!(cs.tile_parts[0].data, &data, "Psot={psot}");
-    }
+    let sot = sot_seg(0, psot_for(&data), 0, 1);
+    let mut bytes = assemble(&default_header(), &sot, &data, true);
+    bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]); // garbage ending in FF D9
+    let cs = parse(&bytes).expect("trailing bytes after the declared extent");
+    assert_eq!(cs.tile_parts[0].data, &data);
+
+    // With Psot = 0 the same tail is absorbed into the tile up to the final
+    // EOC; the packet self-check downstream is what rejects it. Anchoring is
+    // pinned here: the embedded FF D9 must NOT terminate the data early.
+    let sot = sot_seg(0, 0, 0, 1);
+    let mut bytes = assemble(&default_header(), &sot, &data, true);
+    bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]);
+    let cs = parse(&bytes).expect("EOC anchored at the buffer end");
+    assert_eq!(cs.tile_parts[0].data.len(), data.len() + 4);
 }
 
 #[test]

@@ -284,7 +284,7 @@ fn zc_label_hh(hv: u8, d: u8) -> u8 {
 /// uniform context starts at state 46, the run-length context at 3, and the
 /// all-insignificant zero-coding context at 4; every other context at 0. Using
 /// the default zero state for these three would desynchronize the decoder.
-fn init_contexts() -> [Context; NUM_CONTEXTS] {
+pub(crate) fn init_contexts() -> [Context; NUM_CONTEXTS] {
     let mut cx = [Context::default(); NUM_CONTEXTS];
     cx[CTX_ZC as usize].index = 4;
     cx[CTX_RUN as usize].index = 3;
@@ -563,16 +563,11 @@ pub fn decode_block(
     // Maxshift starts the block `roi_shift` planes higher, so that every
     // region-of-interest coefficient outranks every background one. OpenJPEG's
     // `bpno_plus_one = roishift + cblk->numbps`.
-    // As in `decode_subband`: more zero bit-planes than magnitude planes is a
-    // malformed header, not an all-zero block (OpenJPEG's unsigned wrap lands
-    // in its `bpno_plus_one >= 31` reject).
-    let coded = numbps.checked_sub(zero_bit_planes).ok_or_else(|| {
-        Error::Codestream(format!(
-            "code-block signals {zero_bit_planes} zero bit-planes but the subband \
-             has only {numbps} magnitude planes"
-        ))
-    })?;
-    let top = coded + u32::from(roi_shift);
+    // As in `decode_subband`: more zero bit-planes than magnitude planes
+    // saturates to zero coded planes — the oracle's outcome, since OpenJPEG's
+    // unsigned wrap casts negative and its pass loop runs zero passes,
+    // decoding the block to all zeros without an error.
+    let top = numbps.saturating_sub(zero_bit_planes) + u32::from(roi_shift);
     // The double scale means `1 << top` must stay inside `i32`. `decode_subband`
     // rejects this too, before allocating; checking again here is where OpenJPEG
     // puts it (`opj_t1_decode_cblk`'s `bpno_plus_one >= 31`), so a caller that

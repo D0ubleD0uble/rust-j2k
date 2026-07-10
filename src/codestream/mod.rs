@@ -174,16 +174,20 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
     let data_start = cur.pos;
 
     // Psot counts from the SOT marker's first byte to the end of the tile-part.
-    // Psot == 0 marks the last tile-part: it runs to the closing EOC (A.4.2).
-    // That EOC is found by scanning, not by anchoring to the buffer end: bit
-    // stuffing keeps every byte after an 0xFF inside packet data below 0x90,
-    // so the first FF D9 at or after the data is the real terminator. Anchoring
-    // instead would let a trailing-garbage tail swallow the EOC into the packet
-    // data (or reject the stream), where the Psot != 0 arm — like OpenJPEG —
-    // ignores whatever follows the EOC.
+    // Psot == 0 marks the last tile-part: it runs to the closing EOC (A.4.2),
+    // anchored to the last two bytes of the buffer — everything after SOD is
+    // the tile, which is also OpenJPEG's reading. Scanning for the first
+    // FF D9 instead would be unsound: bit stuffing keeps packet data and
+    // headers clear of it, but an SOP segment's Nsop counter is two raw bytes
+    // and can spell FF D9 (packet 65497, or a 0xFF low byte abutting 0xD9),
+    // which would silently truncate a valid tile. The asymmetry with the
+    // Psot != 0 arm (which ignores bytes after its EOC) is therefore
+    // deliberate: with no declared length there is nothing else to anchor to.
     let data_end = if sot.psot == 0 {
-        (data_start..bytes.len().saturating_sub(1))
-            .find(|&at| read_u16(bytes, at) == Some(marker::EOC))
+        bytes
+            .len()
+            .checked_sub(2)
+            .filter(|&end| end >= data_start && read_u16(bytes, end) == Some(marker::EOC))
             .ok_or_else(|| Error::Codestream("Psot=0 tile-part is not terminated by EOC".into()))?
     } else {
         let end = sot_offset
@@ -515,13 +519,16 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
                 params.coding.decomposition_levels
             )));
         }
-        // The wavelet constrains the quantization style in one direction: 9/7
-        // coefficients are meaningless without a scalar step, so that pairing
-        // rejects here rather than misreport as a geometry inconsistency deep
-        // in dequantization. The converse — 5/3 with a scalar style — is
-        // non-conformant (E.1 ties reversible to no quantization) but OpenJPEG
-        // decodes it, reading the exponents and ignoring the mantissas; that
-        // oracle behaviour is matched deliberately.
+        // The wavelet constrains the quantization style (E.1 ties reversible
+        // to no quantization, irreversible to scalar). OpenJPEG decodes both
+        // non-conformant pairings: style-0 entries still carry exponents, so
+        // it derives 9/7 steps with mantissa 0 and reconstructs. This crate
+        // accepts the 5/3-with-scalar direction to match the oracle (the
+        // reversible path ignores the mantissas — same output) but rejects
+        // 9/7-with-none rather than adopt the oracle's zero-mantissa
+        // interpretation of a stream the standard forbids — a documented
+        // stricter-than-oracle call (docs/correctness.md), relaxed if a real
+        // file ever trips it.
         if params.coding.transform == Transform::Irreversible97
             && params.quant.style == QuantStyle::None
         {
@@ -628,9 +635,10 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
 /// Decode SIZ — image and tile geometry plus every component's depth, sign, and
 /// sub-sampling (A.5.1).
 ///
-/// Parses all `Csiz` components. Whether the decoder can *reconstruct* them is a
-/// separate question, enforced by [`check_subset`] after the whole main header
-/// is read, so a multi-component codestream still parses cleanly here.
+/// Parses all `Csiz` components. Whether the decoder can *reconstruct* them is
+/// a separate question, enforced by [`validate_geometry`] and
+/// [`check_sample_budget`] once the whole main header is read, so a
+/// multi-component codestream still parses cleanly here.
 ///
 /// `Ssiz` is a depth-minus-one in the low 7 bits with the sign in bit 7, so the
 /// declared depth is `1..=128`; the standard caps it at 38 (Table A-11) and
@@ -702,9 +710,9 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
         tile_y_offset,
         components,
     };
-    // Geometry legality (`validate_geometry`) and the decoded subset
-    // (`check_subset`) are the caller's to apply, in that order, so this
-    // function stays a pure reader of the marker segment.
+    // Geometry legality (`validate_geometry`) and the sample budget
+    // (`check_sample_budget`) are the caller's to apply, in that order, so
+    // this function stays a pure reader of the marker segment.
     Ok(siz)
 }
 
@@ -941,20 +949,12 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
 
     // A step table covers at most the 3·NL + 1 subbands of a 32-level
     // decomposition (A.6.4, with NL ≤ 32 per Table A-15), so 97 entries.
-    // Rejecting longer tables here keeps a hostile 65535-byte Lqcd from
-    // inflating the per-component `Qcd` clones in [`MainHeader::new`].
+    // Entries past that are kept out of the table — but still consumed — the
+    // way OpenJPEG caps at J2K_MAXBANDS and decodes (verified empirically:
+    // a 120-entry QCD decodes without a warning). Dropping rather than
+    // rejecting also keeps a hostile 65535-byte Lqcd from inflating the
+    // per-component `Qcd` clones in [`MainHeader::new`].
     const MAX_STEP_ENTRIES: usize = 3 * 32 + 1;
-    let entry_bytes = match style {
-        QuantStyle::None => 1,
-        QuantStyle::ScalarDerived | QuantStyle::ScalarExpounded => 2,
-    };
-    if b.remaining() > MAX_STEP_ENTRIES * entry_bytes {
-        return Err(Error::Marker(format!(
-            "{origin} carries {} step entries, above the {MAX_STEP_ENTRIES} a \
-             32-level decomposition can use",
-            b.remaining() / entry_bytes
-        )));
-    }
 
     let mut steps = Vec::new();
     match style {
@@ -968,7 +968,9 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
             }
             while b.remaining() > 0 {
                 let v = b.u8()?;
-                steps.push((v >> 3, 0));
+                if steps.len() < MAX_STEP_ENTRIES {
+                    steps.push((v >> 3, 0));
+                }
             }
         }
         // Scalar: 16-bit per entry, high 5 bits exponent, low 11 bits mantissa.
@@ -986,7 +988,9 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
             }
             while b.remaining() > 0 {
                 let v = b.u16()?;
-                steps.push((((v >> 11) & 0x1F) as u8, v & 0x07FF));
+                if steps.len() < MAX_STEP_ENTRIES {
+                    steps.push((((v >> 11) & 0x1F) as u8, v & 0x07FF));
+                }
             }
         }
     }

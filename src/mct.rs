@@ -76,7 +76,9 @@ pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
 
 /// Narrow to `i32` without wrapping. The sample is clamped again to its declared
 /// depth in `image::assemble`, so saturating here only bounds the intermediate.
-fn saturate(v: i64) -> i32 {
+/// Shared with the 5/3 lifting in [`crate::dwt`], which faces the same
+/// hostile-coefficient headroom problem.
+pub(crate) fn saturate(v: i64) -> i32 {
     v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 

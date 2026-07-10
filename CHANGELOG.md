@@ -9,8 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Four resource and desync guards from a whole-repo review. A QCD/QCC step
-  table is capped at the 97 subbands a 32-level decomposition can use, so a
-  crafted 65535-byte segment can no longer multiply into gigabytes through the
+  table keeps at most the 97 entries a 32-level decomposition can use —
+  excess is dropped the way OpenJPEG caps at `J2K_MAXBANDS` — so a crafted
+  65535-byte segment can no longer multiply into gigabytes through the
   per-component parameter clones. The total code-block count is capped at 2^19
   before any per-block state is allocated, closing the counterpart bomb built
   from legal 4×4 code-blocks. A tile-component larger than one maximal precinct
@@ -19,19 +20,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failure — the skeleton-era `Pending` outcome had let one pass CI silently.
 - Arithmetic hardening against hostile coefficients: the 5/3 lifting sums run
   in `i64` and saturate (they could leave `i32` near the Tier-1 magnitude
-  ceiling), the MQ decoder's BYTEIN adds wrap explicitly (matching the C
-  reference's `OPJ_UINT32` semantics in every build profile), and a code-block
-  signalling more zero bit-planes than its subband has magnitude planes is
-  rejected as `Error::Codestream` instead of silently decoding to zeros where
-  OpenJPEG errors.
+  ceiling), and the MQ decoder's BYTEIN adds wrap explicitly (matching the C
+  reference's `OPJ_UINT32` semantics in every build profile).
 - Error classification now matches the crate's own variant conventions:
   reserved decomposition-level counts (33–255), short quantization step tables,
   and the 9/7-wavelet-with-no-quantization pairing reject at parse as
-  `Error::Marker`; `0xFF00`/`0xFFFF` in marker position and TLM/SOP/EPH in a
-  tile-part header reject as `Error::Codestream`; standard-legal bit depths
-  33–38 report `Unsupported` rather than `Marker`. Trailing bytes after the
-  closing `EOC` are ignored in both `Psot` arms (the `Psot = 0` arm previously
-  anchored `EOC` to the buffer end and could swallow garbage into packet data).
+  `Error::Marker` (the latter two previously surfaced deep in dequantization
+  as `Inconsistent`; both are documented stricter-than-oracle calls — see
+  `docs/correctness.md`); `0xFF00`/`0xFFFF` in marker position and TLM/SOP/EPH
+  in a tile-part header reject as `Error::Codestream`; standard-legal bit
+  depths 33–38 report `Unsupported` rather than `Marker`.
 
 - A codestream that sets any `SPcod` code-block style flag — selective
   arithmetic coding bypass, reset context probabilities, termination on each

@@ -223,7 +223,7 @@ fn inverse_5_3(signal: &mut [i32]) {
     if n <= 1 {
         return;
     }
-    let saturate = |v: i64| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    let saturate = crate::mct::saturate;
     // Undo the update step on the even (low-pass) samples first, then undo the
     // predict step on the odd (high-pass) samples — the forward order reversed.
     for i in (0..n).step_by(2) {
