@@ -567,6 +567,40 @@ fn reserved_quant_style_is_marker() {
 }
 
 #[test]
+fn oversized_qcd_step_table_is_marker() {
+    // 98 one-byte entries: one more than the 3·32 + 1 subbands a 32-level
+    // decomposition can carry. Left uncapped, a 65535-byte Lqcd would be
+    // cloned into every component's parameters — a memory amplifier.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 98])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn oversized_expounded_qcd_step_table_is_marker() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(0)),
+        seg(marker::QCD, &qcd_expounded(1, &[(10, 1234); 98])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn full_depth_qcd_step_table_parses() {
+    // Exactly 97 entries is legal even though this COD only needs 16.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 97])),
+    ]);
+    assert!(parse_main_header(&bytes).is_ok());
+}
+
+#[test]
 fn eoc_before_tile_part_is_codestream() {
     let mut bytes = be16(marker::SOC).to_vec();
     bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));

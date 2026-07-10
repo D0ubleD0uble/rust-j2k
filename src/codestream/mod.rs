@@ -891,6 +891,23 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
         }
     };
 
+    // A step table covers at most the 3·NL + 1 subbands of a 32-level
+    // decomposition (A.6.4, with NL ≤ 32 per Table A-15), so 97 entries.
+    // Rejecting longer tables here keeps a hostile 65535-byte Lqcd from
+    // inflating the per-component `Qcd` clones in [`MainHeader::new`].
+    const MAX_STEP_ENTRIES: usize = 3 * 32 + 1;
+    let entry_bytes = match style {
+        QuantStyle::None => 1,
+        QuantStyle::ScalarDerived | QuantStyle::ScalarExpounded => 2,
+    };
+    if b.remaining() > MAX_STEP_ENTRIES * entry_bytes {
+        return Err(Error::Marker(format!(
+            "{origin} carries {} step entries, above the {MAX_STEP_ENTRIES} a \
+             32-level decomposition can use",
+            b.remaining() / entry_bytes
+        )));
+    }
+
     let mut steps = Vec::new();
     match style {
         // No quantization (reversible): one byte per subband, high 5 bits are
