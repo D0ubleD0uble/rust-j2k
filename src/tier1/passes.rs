@@ -676,7 +676,7 @@ mod tests {
         decode_block(
             &segments,
             &mut state,
-            Orientation::Ll,
+            g.orient,
             numbps,
             g.num_passes,
             g.zero_bit_planes,
