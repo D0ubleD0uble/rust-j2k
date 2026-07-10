@@ -28,11 +28,10 @@ fn fixtures_dir() -> PathBuf {
 
 /// Decode every committed fixture and grade it against its oracle snapshot.
 ///
-/// A codestream that `decode` rejects as out of the supported subset reports as
-/// *not yet decoded* ([`Outcome::Pending`]) rather than panicking the suite, so
-/// fixtures for features that have not landed yet can sit in the corpus without
-/// breaking it. The gate fails only on a genuine disagreement
-/// ([`Outcome::Failed`]) or a broken fixture ([`Outcome::LoadError`]).
+/// Every fixture in this corpus is expected to decode: a rejection (including
+/// `Unsupported`), an oracle disagreement, or a panic grades as
+/// [`Outcome::Failed`], and a broken fixture as [`Outcome::LoadError`]; either
+/// fails the gate.
 #[test]
 fn decodes_corpus_against_oracle() {
     let fixtures = discover(&fixtures_dir());
@@ -46,9 +45,6 @@ fn decodes_corpus_against_oracle() {
         let outcome = run_fixture(fixture);
         match &outcome {
             Outcome::Passed => eprintln!("conformance: {} … ok", fixture.name),
-            Outcome::Pending => {
-                eprintln!("conformance: {} … pending (decode is todo!)", fixture.name)
-            }
             Outcome::Failed(m) => {
                 eprintln!("conformance: {} … FAILED: {m}", fixture.name);
                 failures.push(format!("{}: {m}", fixture.name));
@@ -228,11 +224,16 @@ mod harness {
     // --- classification -----------------------------------------------------
 
     #[test]
-    fn panic_classifies_as_pending() {
+    fn panic_classifies_as_failed() {
+        // `decode` promises a typed error for every input; a panic must fail
+        // the gate, not slip through as anything softer.
         let want = snapshot(geometry(1, 1), Tolerance::Exact, vec![0]);
         let decoded =
-            std::panic::catch_unwind(|| -> Result<Image, Error> { todo!("stubbed decode") });
-        assert_eq!(classify(decoded, &want), Outcome::Pending);
+            std::panic::catch_unwind(|| -> Result<Image, Error> { panic!("decoder bug") });
+        assert!(matches!(
+            classify(decoded, &want),
+            Outcome::Failed(Mismatch::DecodeError(_))
+        ));
     }
 
     #[test]
@@ -290,7 +291,7 @@ mod harness {
         // Not a real codestream, so end to end it classifies as Failed
         // (the decoder rightly rejects non-codestream bytes). What is under
         // test here is discovery: the `.j2k` is paired with its snapshot and
-        // run end to end. The Pending path is covered by `panic_classifies_as_pending`.
+        // run end to end. The panic path is covered by `panic_classifies_as_failed`.
         write(&dir, "alpha.j2k", "\x00not-a-codestream");
         write(&dir, "alpha.expected.json", VALID_SNAPSHOT);
 

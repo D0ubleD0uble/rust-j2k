@@ -159,11 +159,10 @@ pub struct Fixture {
 pub enum Outcome {
     /// Decode produced an image that agrees with the oracle.
     Passed,
-    /// Decode is not implemented yet for this fixture: the call panicked at a
-    /// `todo!()` on the decode path. Expected while the pipeline is a skeleton.
-    Pending,
-    /// Decode ran but disagreed with the oracle (or the decoder rejected a
-    /// known-good fixture). The [`Mismatch`] carries a readable diff.
+    /// Decode ran but disagreed with the oracle, the decoder rejected a
+    /// known-good fixture, or the decode panicked (a contract violation:
+    /// `decode` promises a typed error for every input). The [`Mismatch`]
+    /// carries a readable diff.
     Failed(Mismatch),
     /// The fixture itself is broken: its snapshot is missing, unreadable, or
     /// does not parse. Distinct from `Failed` so a corpus bug is not mistaken
@@ -399,7 +398,8 @@ fn compare_component(
 
 /// Map the result of a (panic-guarded) decode to an [`Outcome`].
 ///
-/// - a panic (a `todo!()` on the still-stubbed decode path) ⇒ [`Outcome::Pending`];
+/// - a panic ⇒ `Failed`: `decode` promises a typed error for every input, so
+///   a panic is a contract violation, not a not-yet-implemented feature;
 /// - `Ok(image)` ⇒ compared against the oracle ⇒ `Passed` or `Failed`;
 /// - `Err(e)` ⇒ `Failed`, since the decoder rejected a fixture the oracle decoded.
 pub fn classify(
@@ -407,7 +407,9 @@ pub fn classify(
     expected: &Expected,
 ) -> Outcome {
     match decoded {
-        Err(_) => Outcome::Pending,
+        Err(_) => Outcome::Failed(Mismatch::DecodeError(
+            "panicked (decode must return a typed error for every input)".into(),
+        )),
         Ok(Ok(image)) => match compare(&image, expected) {
             Ok(()) => Outcome::Passed,
             Err(mismatch) => Outcome::Failed(mismatch),
@@ -433,12 +435,11 @@ pub fn run_fixture(fixture: &Fixture) -> Outcome {
         }
     };
 
-    // `decode` panics at a `todo!()` while the pipeline is a skeleton; catch it
-    // so one not-yet-decoded fixture reports Pending instead of aborting the
-    // whole suite. We deliberately leave the default panic hook in place — a
-    // Pending fixture prints one informative `todo!: …` line to stderr — rather
-    // than swapping the process-global hook, which races with other tests
-    // running in parallel and could swallow a genuine panic's message.
+    // Catch a panic so one bad fixture reports as Failed instead of aborting
+    // the whole suite. We deliberately leave the default panic hook in place —
+    // the panic still prints one informative line to stderr — rather than
+    // swapping the process-global hook, which races with other tests running
+    // in parallel and could swallow a genuine panic's message.
     let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| rust_j2k::decode(&bytes)));
 
     classify(decoded, expected)
