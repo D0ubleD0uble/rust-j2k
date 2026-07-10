@@ -567,6 +567,27 @@ fn reserved_decomposition_levels_is_marker() {
 }
 
 #[test]
+fn too_few_qcd_steps_for_the_decomposition_is_marker() {
+    // NL = 5 needs 3·5 + 1 = 16 entries; 10 leaves subbands without a step.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 10])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
+fn too_few_expounded_qcd_steps_is_marker() {
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(0)),
+        seg(marker::QCD, &qcd_expounded(1, &[(10, 1234); 3])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
 fn reserved_quant_style_is_marker() {
     let mut body = vec![(2u8 << 5) | 3]; // style 3 is reserved
     body.extend_from_slice(&be16(0));
@@ -1686,10 +1707,11 @@ fn overrides_resolve_else_default_per_component() {
         // Component 1 alone overrides the coding style: 3 levels, restart.
         seg(marker::COC, &coc_body(&[1], 0, 3, 2, 2, 0x04, 1)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
-        // Component 2 alone overrides the quantization: 4 guard bits.
+        // Component 2 alone overrides the quantization: 4 guard bits. Its
+        // levels stay COD's 5, so the table needs the full 16 entries.
         seg(marker::QCC, &{
             let mut b = vec![2u8];
-            b.extend_from_slice(&qcd_none(4, &[9; 10]));
+            b.extend_from_slice(&qcd_none(4, &[9; 16]));
             b
         }),
     ]);

@@ -490,6 +490,24 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
         }
     }
 
+    // A quantization default or override must cover every subband its
+    // component decomposes into: 3·NL + 1 entries for the none/expounded
+    // styles (derived's single entry is enforced in `decode_quant`, and excess
+    // entries are ignored, as OpenJPEG does). NL is only known here, after the
+    // overrides are resolved; discovering the shortfall per subband at decode
+    // time would misreport a malformed marker as a geometry inconsistency.
+    for (index, params) in header.components.iter().enumerate() {
+        let needed = 3 * usize::from(params.coding.decomposition_levels) + 1;
+        if params.quant.style != QuantStyle::ScalarDerived && params.quant.steps.len() < needed {
+            return Err(Error::Marker(format!(
+                "component {index} carries {} quantization step entries but its {} \
+                 decomposition levels need {needed}",
+                params.quant.steps.len(),
+                params.coding.decomposition_levels
+            )));
+        }
+    }
+
     // The colour transform is signalled by COD but constrains SIZ, so it can
     // only be checked once both are read.
     if header.cod.multiple_component_transform {
