@@ -23,6 +23,11 @@ exclude = ["tests/fixtures/conformance/"]
 all-features   = true
 rustdoc-args   = ["--cfg", "docsrs"]
 
+# `cargo fuzz` sets `--cfg fuzzing` across the build graph; declare it so the
+# fuzz-only module in src/lib.rs passes the unexpected_cfgs lint everywhere else.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
+
 # Decode-only and self-contained on purpose: no third-party codec dependency, so
 # the crate stays pure-Rust and cross-compiles to every target with no C toolchain.
 [dependencies]

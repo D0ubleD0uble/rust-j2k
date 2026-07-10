@@ -2,8 +2,9 @@
 
 `decode` parses bytes it did not produce, so malformed input is a first-class
 case (see [`docs/correctness.md`](../docs/correctness.md) → Robustness). This
-crate stands up a [`cargo fuzz`](https://github.com/rust-fuzz/cargo-fuzz)
-(libFuzzer) target over the public [`rust_j2k::decode`] entry point. The bar:
+crate stands up [`cargo fuzz`](https://github.com/rust-fuzz/cargo-fuzz)
+(libFuzzer) targets over the decoder, from the public entry point down to the
+deep state machines. The bar:
 
 - no panics, aborts, or out-of-bounds access;
 - no unbounded allocation (a malformed SIZ cannot steer the buffers into an
@@ -24,9 +25,19 @@ support; it is a build/test tool here, not a runtime dependency of the codec.
 
 ```
 fuzz/
-  Cargo.toml            # detached crate, depends on libfuzzer-sys + rust-j2k
-  fuzz_targets/decode.rs # the target: drives rust_j2k::decode(&[u8])
+  Cargo.toml                    # detached crate, depends on libfuzzer-sys + rust-j2k
+  fuzz_targets/decode.rs        # the public entry point: rust_j2k::decode(&[u8])
+  fuzz_targets/tile_body.rs     # a pinned valid header around fuzzed tile-part bytes
+  fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
+  fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
 ```
+
+`decode` must mutate its way through a byte-perfect main header before anything
+reaches tier-2 or tier-1, so most of its executions die in `parse_main_header`.
+The other three start deeper: `tile_body` wraps the input in a valid main
+header so every execution reaches the packet reader, and `tier1_block`/`mq`
+call `--cfg fuzzing` hooks the library exposes (`rust_j2k::fuzz`, absent from
+normal builds) to drive the EBCOT block decoder and MQ coder directly.
 
 ## Running
 

@@ -78,6 +78,13 @@ pub(crate) mod quant;
 pub(crate) mod tier1;
 pub(crate) mod tier2;
 
+// Structured fuzz entry points: `cargo fuzz` sets `--cfg fuzzing` across the
+// build graph, so the deep-stage hooks exist only for the fuzzer (and under
+// `cfg(test)`, where a smoke test keeps them building). Not public API.
+#[cfg(any(fuzzing, test))]
+#[doc(hidden)]
+pub mod fuzz;
+
 pub use error::{Error, Result};
 pub use image::{Component, Image};
 
