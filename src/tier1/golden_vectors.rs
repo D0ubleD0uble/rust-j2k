@@ -32,8 +32,18 @@ pub(super) const GOLDEN_BLOCKS: &[GoldenBlock] = &[
         height: 8,
         num_passes: 19,
         zero_bit_planes: 2,
-        segment: &[0x13, 0x08, 0x72, 0x85, 0x97, 0xf6, 0x37, 0xb5, 0xc8, 0x64, 0x5a, 0x43, 0x5b, 0x4b, 0x2a, 0xbd, 0x4a, 0x4d, 0x18, 0xa4, 0xe8, 0x56, 0x47, 0x76, 0x4c, 0x29, 0x4f, 0xee, 0x4f, 0x2c, 0xb7, 0x18, 0x9a, 0xf2, 0x93, 0xc9, 0xd4, 0xf4, 0x9c, 0xe6, 0x10, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x45, 0x80, 0xe3],
-        coeffs: &[72, -112, -96, -80, -64, -48, -32, -16, -126, -123, -94, -78, -62, -46, -30, -14, -124, -108, -92, -76, -60, -44, -28, -12, -122, -106, -90, -74, -58, -42, -26, -10, -120, -104, -88, -72, -56, -40, -24, -8, -118, -102, -86, -70, -54, -38, -22, -6, -116, -100, -84, -68, -52, -36, -20, -4, -114, -98, -82, -66, -50, -34, -18, 127],
+        segment: &[
+            0x13, 0x08, 0x72, 0x85, 0x97, 0xf6, 0x37, 0xb5, 0xc8, 0x64, 0x5a, 0x43, 0x5b, 0x4b,
+            0x2a, 0xbd, 0x4a, 0x4d, 0x18, 0xa4, 0xe8, 0x56, 0x47, 0x76, 0x4c, 0x29, 0x4f, 0xee,
+            0x4f, 0x2c, 0xb7, 0x18, 0x9a, 0xf2, 0x93, 0xc9, 0xd4, 0xf4, 0x9c, 0xe6, 0x10, 0x80,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x45, 0x80, 0xe3,
+        ],
+        coeffs: &[
+            72, -112, -96, -80, -64, -48, -32, -16, -126, -123, -94, -78, -62, -46, -30, -14, -124,
+            -108, -92, -76, -60, -44, -28, -12, -122, -106, -90, -74, -58, -42, -26, -10, -120,
+            -104, -88, -72, -56, -40, -24, -8, -118, -102, -86, -70, -54, -38, -22, -6, -116, -100,
+            -84, -68, -52, -36, -20, -4, -114, -98, -82, -66, -50, -34, -18, 127,
+        ],
     },
     GoldenBlock {
         name: "sparse_8x8", // mostly-DC: heavy cleanup run-length over insignificant columns
@@ -43,7 +53,11 @@ pub(super) const GOLDEN_BLOCKS: &[GoldenBlock] = &[
         num_passes: 16,
         zero_bit_planes: 3,
         segment: &[0x24, 0x09, 0x1e, 0x90, 0x05, 0xe2, 0x29, 0xea, 0x96, 0xb6],
-        coeffs: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -32, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        coeffs: &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -32, 0, 0, 0, 0, 32,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -28, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+        ],
     },
     GoldenBlock {
         name: "small_4x4", // small magnitudes: few bit-planes, low num_passes
@@ -62,8 +76,13 @@ pub(super) const GOLDEN_BLOCKS: &[GoldenBlock] = &[
         height: 4,
         num_passes: 16,
         zero_bit_planes: 3,
-        segment: &[0x00, 0xe0, 0x86, 0xbd, 0xb3, 0xf2, 0xc9, 0xf2, 0x96, 0x60, 0xb8, 0x44, 0xa5, 0x26, 0xf4],
-        coeffs: &[1, 20, 44, 57, -12, 24, 38, 53, -19, 6, 10, 44, -43, -15, 8, 16],
+        segment: &[
+            0x00, 0xe0, 0x86, 0xbd, 0xb3, 0xf2, 0xc9, 0xf2, 0x96, 0x60, 0xb8, 0x44, 0xa5, 0x26,
+            0xf4,
+        ],
+        coeffs: &[
+            1, 20, 44, 57, -12, 24, 38, 53, -19, 6, 10, 44, -43, -15, 8, 16,
+        ],
     },
     GoldenBlock {
         name: "dwt1_hl_4x4", // HL band of a one-level 5/3 codestream
@@ -72,7 +91,9 @@ pub(super) const GOLDEN_BLOCKS: &[GoldenBlock] = &[
         height: 4,
         num_passes: 13,
         zero_bit_planes: 5,
-        segment: &[0x1b, 0x00, 0xf6, 0x87, 0x25, 0xc3, 0xb7, 0x35, 0x39, 0xd3, 0xc6, 0x4b, 0x61],
+        segment: &[
+            0x1b, 0x00, 0xf6, 0x87, 0x25, 0xc3, 0xb7, 0x35, 0x39, 0xd3, 0xc6, 0x4b, 0x61,
+        ],
         coeffs: &[0, 4, -3, 9, 2, -7, -16, 17, 15, 6, -11, -1, -1, -4, -11, 16],
     },
     GoldenBlock {
@@ -82,7 +103,9 @@ pub(super) const GOLDEN_BLOCKS: &[GoldenBlock] = &[
         height: 4,
         num_passes: 13,
         zero_bit_planes: 5,
-        segment: &[0x18, 0xa4, 0x56, 0xd5, 0x02, 0xa0, 0xcc, 0x85, 0x78, 0x4e, 0x1b, 0xec, 0x4f],
+        segment: &[
+            0x18, 0xa4, 0x56, 0xd5, 0x02, 0xa0, 0xcc, 0x85, 0x78, 0x4e, 0x1b, 0xec, 0x4f,
+        ],
         coeffs: &[0, 2, 15, -2, 4, -7, 6, -4, -3, -17, -11, -11, -7, 1, -17, 1],
     },
     GoldenBlock {
@@ -92,7 +115,13 @@ pub(super) const GOLDEN_BLOCKS: &[GoldenBlock] = &[
         height: 4,
         num_passes: 22,
         zero_bit_planes: 3,
-        segment: &[0x06, 0xfd, 0x55, 0xa5, 0xe9, 0xb9, 0xc6, 0xff, 0x45, 0xef, 0xa2, 0x4f, 0x13, 0xfe, 0xaa, 0xfb, 0xdd, 0x55],
-        coeffs: &[-122, -114, -129, -122, -114, -99, -122, -137, -129, -122, -107, -122, -122, -137, -122, -116],
+        segment: &[
+            0x06, 0xfd, 0x55, 0xa5, 0xe9, 0xb9, 0xc6, 0xff, 0x45, 0xef, 0xa2, 0x4f, 0x13, 0xfe,
+            0xaa, 0xfb, 0xdd, 0x55,
+        ],
+        coeffs: &[
+            -122, -114, -129, -122, -114, -99, -122, -137, -129, -122, -107, -122, -122, -137,
+            -122, -116,
+        ],
     },
 ];
