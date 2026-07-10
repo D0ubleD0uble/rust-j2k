@@ -588,6 +588,18 @@ fn too_few_expounded_qcd_steps_is_marker() {
 }
 
 #[test]
+fn irreversible_wavelet_with_no_quantization_is_marker() {
+    // 9/7 coefficients need a scalar step to mean anything; the pairing is
+    // rejected at parse rather than misreported during dequantization.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(0)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+#[test]
 fn reserved_quant_style_is_marker() {
     let mut body = vec![(2u8 << 5) | 3]; // style 3 is reserved
     body.extend_from_slice(&be16(0));
@@ -1846,6 +1858,16 @@ fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
 /// exist.
 #[test]
 fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
+    // Each 9/7 component gets a scalar QCC so the wavelet/quant pairing is
+    // sound and the failure under test is the colour transform alone.
+    let scalar_qcc = |component: u8| {
+        seg(marker::QCC, &{
+            let mut b = vec![component];
+            b.extend_from_slice(&qcd_expounded(2, &[(8, 0); 16]));
+            b
+        })
+    };
+
     let siz = siz_body(3, &[(15, 1, 1); 3]);
     let bytes = codestream(&[
         seg(marker::SIZ, &siz),
@@ -1854,6 +1876,7 @@ fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
         // ... except component 1 is 9/7.
         seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 0)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        scalar_qcc(1),
     ]);
     let e = err(&bytes);
     let Error::Unsupported(message) = &e else {
@@ -1868,6 +1891,7 @@ fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
         seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)),
         seg(marker::COC, &coc_body(&[3], 0, 5, 4, 4, 0, 0)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        scalar_qcc(3),
     ]);
     assert!(parse_main_header(&bytes).is_ok());
 }

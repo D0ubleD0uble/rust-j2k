@@ -506,6 +506,20 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
                 params.coding.decomposition_levels
             )));
         }
+        // The wavelet constrains the quantization style in one direction: 9/7
+        // coefficients are meaningless without a scalar step, so that pairing
+        // rejects here rather than misreport as a geometry inconsistency deep
+        // in dequantization. The converse — 5/3 with a scalar style — is
+        // non-conformant (E.1 ties reversible to no quantization) but OpenJPEG
+        // decodes it, reading the exponents and ignoring the mantissas; that
+        // oracle behaviour is matched deliberately.
+        if params.coding.transform == Transform::Irreversible97
+            && params.quant.style == QuantStyle::None
+        {
+            return Err(Error::Marker(format!(
+                "component {index} pairs the 9/7 wavelet with the no-quantization style"
+            )));
+        }
     }
 
     // The colour transform is signalled by COD but constrains SIZ, so it can
