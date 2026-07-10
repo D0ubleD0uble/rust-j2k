@@ -78,10 +78,10 @@ pub(crate) mod quant;
 pub(crate) mod tier1;
 pub(crate) mod tier2;
 
-// Structured fuzz entry points: `cargo fuzz` sets `--cfg fuzzing` across the
-// build graph, so the deep-stage hooks exist only for the fuzzer (and under
-// `cfg(test)`, where a smoke test keeps them building). Not public API.
-#[cfg(any(fuzzing, test))]
+// Structured fuzz entry points for the detached fuzz/ workspace. Compiled
+// unconditionally so that workspace builds under plain cargo (rust-analyzer,
+// `cargo check` in fuzz/), but hidden from docs and exempt from semver: this
+// is a test seam, not public API.
 #[doc(hidden)]
 pub mod fuzz;
 

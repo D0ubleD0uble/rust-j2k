@@ -7,17 +7,18 @@
 //! contract under test is the crate-wide one — typed errors, never a panic,
 //! bounded work — so results are discarded.
 //!
-//! Compiled for `cargo fuzz` builds (`--cfg fuzzing`) and for `cargo test` (a
-//! smoke test keeps the surface building); absent from a normal build.
+//! `#[doc(hidden)]` and semver-exempt: a test seam for the detached fuzz
+//! workspace, not public API. A smoke test below keeps it building in CI.
 
-use crate::tier1::mq::{Context, MqDecoder};
-use crate::tier1::passes::{BlockParams, BlockState, Orientation, decode_block};
+use crate::tier1::mq::MqDecoder;
+use crate::tier1::passes::{BlockParams, BlockState, Orientation, decode_block, init_contexts};
 
 /// Drive the raw MQ decoder over `data`: context transitions, BYTEIN
 /// stuffing, marker handling, and past-end synthesis, with bounded work.
 pub fn mq_stream(data: &[u8]) {
     let mut mq = MqDecoder::new(data);
-    let mut contexts: [Context; 19] = [Context::default(); 19];
+    // The real per-block context array, standard initial states included.
+    let mut contexts = init_contexts();
     // Enough decisions to consume every coded byte and run well past the end
     // into marker synthesis, capped so a large input cannot hang an exec.
     let decisions = (data.len() * 8).clamp(256, 1 << 20);
@@ -27,9 +28,10 @@ pub fn mq_stream(data: &[u8]) {
 }
 
 /// Decode one code-block whose shape, coding parameters, and coded bytes are
-/// all steered by `data`, the way tier-2 would hand them to tier-1.
+/// all steered by `data`, the way tier-2 would hand them to tier-1. Each
+/// parameter reads its own byte so no region of the grid is unreachable.
 pub fn tier1_block(data: &[u8]) {
-    let [a, b, c, d, e, coded @ ..] = data else {
+    let [a, b, c, d, e, f, g, coded @ ..] = data else {
         return;
     };
     use crate::codestream::markers::code_block_style::{PTERM, SEGSYM, TERMALL};
@@ -45,14 +47,14 @@ pub fn tier1_block(data: &[u8]) {
     let params = BlockParams {
         // Anything else is rejected by decode_cod, and decode_block
         // debug-asserts that precondition.
-        style: b & (TERMALL | PTERM | SEGSYM),
-        roi_shift: c & 0x3F,
+        style: c & (TERMALL | PTERM | SEGSYM),
+        roi_shift: d & 0x3F,
     };
-    let num_passes = u32::from(*c) % 110; // tier-2's 109-pass segment cap
-    let numbps = u32::from(*d) % 31; // MAX_BIT_PLANES
+    let num_passes = u32::from(*e) % 110; // tier-2's 109-pass segment cap
+    let numbps = u32::from(*f) % 31; // MAX_BIT_PLANES
     // One past the largest agreeing value, so the zero_bit_planes > numbps
-    // typed reject is exercised alongside in-range decodes.
-    let zero_bit_planes = u32::from(*e) % 32;
+    // saturation path is exercised alongside in-range decodes.
+    let zero_bit_planes = u32::from(*g) % 32;
 
     let mut state = BlockState::new(width, height);
     let segments = [(coded.to_vec(), num_passes)];

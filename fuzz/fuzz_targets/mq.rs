@@ -1,7 +1,7 @@
 #![no_main]
 //! Fuzz the raw MQ arithmetic decoder over arbitrary coded bytes: state-table
 //! transitions, BYTEIN stuffing and marker handling, and bounded past-end
-//! synthesis, via the `--cfg fuzzing` hook the library exposes.
+//! synthesis, via the hidden hook the library exposes (`rust_j2k::fuzz`).
 
 use libfuzzer_sys::fuzz_target;
 
