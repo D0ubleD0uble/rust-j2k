@@ -150,13 +150,18 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
             | marker::QCC
             | marker::RGN
             | marker::POC
-            | marker::TLM
             | marker::PLT
-            | marker::PPT
-            | marker::SOP
-            | marker::EPH => {
+            | marker::PPT => {
                 return Err(Error::Unsupported(format!(
                     "tile-part header marker {m:#06X} is outside the decoded subset"
+                )));
+            }
+            // These are legal markers, but not here: TLM is main-header-only
+            // (A.7.1), and SOP/EPH delimit packets after SOD. In a tile-part
+            // header they are a malformed codestream, not a missing feature.
+            marker::TLM | marker::SOP | marker::EPH => {
+                return Err(Error::Codestream(format!(
+                    "marker {m:#06X} is not permitted in a tile-part header"
                 )));
             }
             other => {

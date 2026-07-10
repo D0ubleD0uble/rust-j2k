@@ -862,6 +862,28 @@ fn out_of_subset_tile_header_marker_is_unsupported() {
     assert!(matches!(perr(&bytes), Error::Unsupported(_)));
 }
 
+/// TLM is main-header-only (A.7.1) and SOP/EPH belong after SOD, so meeting
+/// one in a tile-part header is a malformed codestream — unlike the QCC above,
+/// which is legal there and merely outside the subset.
+#[test]
+fn structurally_illegal_tile_header_marker_is_codestream() {
+    let data = [1, 2];
+    for illegal in [seg(marker::TLM, &[0, 0x60]), seg(marker::SOP, &[0, 0])] {
+        let psot = (12 + illegal.len() + 2 + data.len()) as u32;
+        let mut bytes = be16(marker::SOC).to_vec();
+        for part in default_header() {
+            bytes.extend_from_slice(&part);
+        }
+        bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+        bytes.extend_from_slice(&illegal);
+        bytes.extend_from_slice(&be16(marker::SOD));
+        bytes.extend_from_slice(&data);
+        bytes.extend_from_slice(&be16(marker::EOC));
+
+        assert!(matches!(perr(&bytes), Error::Codestream(_)));
+    }
+}
+
 #[test]
 fn unexpected_tile_header_marker_is_codestream() {
     let mut bytes = be16(marker::SOC).to_vec();
