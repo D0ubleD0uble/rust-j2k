@@ -527,10 +527,14 @@ fn grid_span(lo: i64, hi: i64, cell: i64) -> (usize, i64) {
 }
 
 /// Ceiling on the zero-bitplane count: a single read above this resolves any
-/// real value (the count is bounded by the magnitude bit-planes — at most the
-/// sample depth plus guard bits, well under 64 for the ≤32-bit subset), while
-/// rejecting a malformed run of zero bits rather than looping on it.
-const ZBP_LIMIT: u32 = 64;
+/// real value, while rejecting a malformed run of zero bits rather than
+/// looping on it. The count is bounded by the *raised* plane count
+/// `Kmax = Mb + SPrgn` (ISO H.2), not by `Mb` alone — a background-only block
+/// under a maxshift legitimately signals more zero bit-planes than the band
+/// has magnitude planes. `Mb` is at most 37 (7 guard bits + exponent 31 − 1)
+/// and the maxshift byte at most 255, so 292 is the largest value a
+/// conformant stream can signal and this threshold resolves every one.
+const ZBP_LIMIT: u32 = 293;
 
 /// Upper bound on the Lblock length-indicator before a malformed packet is
 /// rejected. The length field is `Lblock + floor(log2(num_passes))` bits and

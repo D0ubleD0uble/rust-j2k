@@ -318,6 +318,48 @@ fn packet_one_included_block() {
     assert_eq!(next, header_len + body.len());
 }
 
+/// Zero bit-planes count against the raised `Kmax = Mb + SPrgn` (ISO H.2), so
+/// under a maxshift a background-only block can signal far more of them than
+/// any band has magnitude planes — up to 292 (`Mb` ≤ 37, `SPrgn` ≤ 255). A
+/// count in that range must parse; only a run past it is a malformed header.
+#[test]
+fn packet_zero_bitplane_count_can_exceed_the_magnitude_planes() {
+    let mut w = PackedHeader::new();
+    w.bit(1); // present
+    w.bit(1); // included at layer 0
+    for _ in 0..292 {
+        w.bit(0); // zero-bitplane tag tree: 292 zeros...
+    }
+    w.bit(1); // ...then the terminating 1: value 292, the largest possible
+    w.bit(0); // num_passes = 1
+    w.bit(0); // Lblock stays 3
+    w.bits(5, 3); // length: 3 bits, value 5
+    let mut data = w.finish();
+    let body = [0xDE, 0xAD, 0xBE, 0xEF, 0x42];
+    data.extend_from_slice(&body);
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (subbands, _next) = parse_one_packet(&data, &bands).unwrap();
+    assert_eq!(subbands[0].blocks[0].zero_bit_planes, 292);
+}
+
+/// A run of zero bits past every value a conformant stream can signal is a
+/// malformed header, rejected rather than walked to the end of the buffer.
+#[test]
+fn packet_zero_bitplane_run_past_the_limit_is_rejected() {
+    let mut w = PackedHeader::new();
+    w.bit(1); // present
+    w.bit(1); // included at layer 0
+    for _ in 0..400 {
+        w.bit(0); // a zero run that never resolves inside the limit
+    }
+    let data = w.finish();
+
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let err = parse_one_packet(&data, &bands).expect_err("should reject");
+    assert!(matches!(err, Error::Codestream(_)), "{err:?}");
+}
+
 /// A larger pass count widens the length field by floor(log2 passes).
 #[test]
 fn packet_length_field_width_tracks_passes() {
