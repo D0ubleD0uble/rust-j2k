@@ -669,7 +669,7 @@ fn out_of_subset_marker_is_unsupported() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::CRG, &[0, 0, 0, 0]), // component registration
+        seg(marker::PPM, &[0, 0, 0, 0]), // packed packet headers, main header
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
@@ -697,6 +697,64 @@ fn a_poc_marker_parses_into_volumes() {
     assert_eq!((v.comp_start, v.comp_end), (0, 1));
     assert_eq!(v.layer_end, 1);
     assert_eq!(v.progression, markers::Progression::Lrcp);
+}
+
+/// `Xcrg`/`Ycrg` big-endian per component — the `CRG` body (A.9.1).
+fn crg_body(offsets: &[(u16, u16)]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(offsets.len() * 4);
+    for &(x, y) in offsets {
+        b.extend_from_slice(&be16(x));
+        b.extend_from_slice(&be16(y));
+    }
+    b
+}
+
+/// A CRG records one `(Xcrg, Ycrg)` sub-pixel offset per component; the decode is
+/// unaffected (the offsets are for display registration, A.9.1). The values match
+/// the ones `p0_03` carries.
+#[test]
+fn a_crg_marker_records_the_registration_offsets() {
+    let header = vec![
+        seg(marker::SIZ, &siz_body(3, &[(15, 1, 1); 3])),
+        seg(marker::COD, &cod_default(1)),
+        seg(
+            marker::CRG,
+            &crg_body(&[(65424, 32558), (0, 0), (1, 0xFFFF)]),
+        ),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let data = [0xDE, 0xAD];
+    let bytes = assemble(&header, &sot_seg(0, psot_for(&data), 0, 1), &data, true);
+    let cs = parse(&bytes).expect("CRG parses");
+    assert_eq!(cs.header.crg, vec![(65424, 32558), (0, 0), (1, 0xFFFF)]);
+}
+
+/// The CRG body is exactly `4 · Csiz` bytes; a body of any other length is a
+/// malformed field, not a missing feature — like OpenJPEG's own length check.
+#[test]
+fn a_crg_of_the_wrong_length_is_a_marker_error() {
+    // Two components need 8 bytes; give 4.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz_body(2, &[(15, 1, 1); 2])),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::CRG, &crg_body(&[(1, 2)])),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+/// One CRG per codestream (A.9.1); a second is a malformed header.
+#[test]
+fn a_duplicate_crg_is_a_codestream_error() {
+    let crg = seg(marker::CRG, &crg_body(&[(1, 2)]));
+    let mut segs = vec![
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+    ];
+    segs.push(crg.clone());
+    segs.push(crg);
+    segs.push(seg(marker::QCD, &qcd_none(2, &[8; 16])));
+    assert!(matches!(err(&codestream(&segs)), Error::Codestream(_)));
 }
 
 #[test]
@@ -1381,13 +1439,7 @@ fn header_altering_markers_are_rejected_not_skipped() {
     // codestream is interpreted (PPM/PPT relocate the packet headers), so each
     // is named and rejected rather than passed over. The length markers
     // TLM/PLM/PLT are absent: they are informational and decoded (issue #72).
-    for code in [
-        marker::CAP,
-        marker::PPM,
-        marker::PPT,
-        marker::CRG,
-        marker::SOP,
-    ] {
+    for code in [marker::CAP, marker::PPM, marker::PPT, marker::SOP] {
         let bytes = header_with(&seg(code, &[0, 0]));
         assert!(
             matches!(err(&bytes), Error::Unsupported(_)),
@@ -1832,7 +1884,6 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     for (name, code) in [
         ("PPM", marker::PPM),
         ("PPT", marker::PPT),
-        ("CRG", marker::CRG),
         ("SOP", marker::SOP),
     ] {
         rows.push((

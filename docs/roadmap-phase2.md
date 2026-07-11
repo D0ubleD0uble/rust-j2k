@@ -275,8 +275,12 @@ which no conformance entry carries (asserted by
 Assert the decode matches the reference both using and ignoring the length
 hints.
 
-**Done:** codestreams with packed-header, length, resilience, and registration
-markers decode in class; PLM parses against its synthetic fixture.
+**Done:** codestreams with length, resilience, and registration markers decode
+in class; PLM parses against its synthetic fixture. CRG (A.9.1) parses its
+per-component `(Xcrg, Ycrg)` offsets and records them on the header without
+resampling — the class-1 references were produced without resampling, so
+recording alone keeps `p0_03` and `p0_15` in class. Packed packet headers
+(PPM/PPT) remain (#71).
 
 ### P2.8 — Multiple component transform: RCT and ICT (`src/image.rs` or `src/mct.rs`)
 

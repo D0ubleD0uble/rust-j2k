@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- CRG (component registration): the per-component `(Xcrg, Ycrg)` sub-pixel
+  registration offsets are parsed and recorded on the decoded header. They are
+  informational — how a display should align the components, not a change to the
+  samples — so they are recorded, not resampled. Grades conformance entries
+  `p0_03` and `p0_15`.
 - POC (progression-order change): a codestream may now carry a `POC` marker that
   replaces `COD`'s single progression with a sequence of volumes, each an order
   over its own layer/resolution/component sub-range. The packet iterator walks the
