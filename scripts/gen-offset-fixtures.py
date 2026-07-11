@@ -23,6 +23,16 @@ Two fixtures:
   origin, and each tile clips to `[XOsiz, …)`, so the first tile row and column
   are partial in a way a canvas-origin grid never is. Every tile-component rect
   the reconstruction places is at an absolute origin of its own.
+- `offset_subsampled_lossless` — an image origin (5, 3) on a 2×2 sub-sampled
+  component. The component origin is `ceil(XOsiz / XRsiz) = ceil(5/2) = 3`, odd,
+  even though the image origin is not, so the inverse DWT decomposes on an odd
+  parity that only the `ceil` division under sub-sampling produces — the one
+  offset/sub-sampling combination the other fixtures and `p1_01`/`p1_07` (both
+  unit-sampled) miss.
+
+The snapshot is whatever `opj_decompress` emits, verbatim — the reference decoder
+is the oracle. A sub-sampled component's samples are not the input raster, so the
+lossless round-trip is only cross-checked for the unit-sampled fixtures.
 
 `opj_compress -r 1` keeps every bit-plane, so the decode is bit-exact and the
 snapshot records `tolerance: exact`.
@@ -45,20 +55,31 @@ FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 
 WIDTH, HEIGHT = 48, 40
 
-# name -> (components, extra opj_compress flags, expected (XOsiz, YOsiz), note)
-VARIANTS: dict[str, tuple[int, list[str], tuple[int, int], str]] = {
+# name -> (components, extra opj_compress flags, expected (XOsiz, YOsiz),
+#         unit-sampled (so a lossless round-trip is checked), note)
+VARIANTS: dict[str, tuple[int, list[str], tuple[int, int], bool, str]] = {
     "offset_odd_lossless": (
         1,
         ["-d", "5,3", "-n", "3"],
         (5, 3),
+        True,
         "single component at an odd image origin; isolates the inverse-DWT parity",
     ),
     "offset_tiled_lossless": (
         1,
         ["-d", "5,3", "-T", "3,2", "-t", "20,20", "-n", "3"],
         (5, 3),
+        True,
         "image origin (5,3) and tile origin (3,2) under a 3×3 tile grid; the "
         "leading tile row and column are partial",
+    ),
+    "offset_subsampled_lossless": (
+        1,
+        ["-d", "5,3", "-s", "2,2", "-n", "3"],
+        (5, 3),
+        False,
+        "image origin (5,3) on a 2×2 sub-sampled component; the component origin "
+        "ceil(5/2)=3 is odd, exercising the ceil-division parity path",
     ),
 }
 
@@ -97,18 +118,26 @@ def run(*argv: str) -> None:
         sys.exit(f"{argv[0]} failed:\n{result.stdout}\n{result.stderr}")
 
 
-def siz_origin(codestream: Path) -> tuple[int, int]:
-    """`(XOsiz, YOsiz)` straight out of SIZ, so a fixture cannot silently regress
-    to a canvas-origin image if OpenJPEG reinterprets a flag."""
+def siz_geometry(codestream: Path) -> tuple[int, int, int, int]:
+    """`(Xsiz, Ysiz, XOsiz, YOsiz)` straight out of SIZ, so a fixture cannot
+    silently regress to a canvas-origin image if OpenJPEG reinterprets a flag.
+    The reference-grid image extent the harness compares against is
+    `(Xsiz - XOsiz, Ysiz - YOsiz)`."""
     raw = codestream.read_bytes()
     # SOC(2) SIZ marker(2) Lsiz(2) Rsiz(2) Xsiz(4) Ysiz(4) XOsiz(4) YOsiz(4)
     assert raw[0:2] == b"\xff\x4f" and raw[2:4] == b"\xff\x51", "not a raw codestream"
-    xosiz = struct.unpack(">I", raw[16:20])[0]
-    yosiz = struct.unpack(">I", raw[20:24])[0]
-    return xosiz, yosiz
+    xsiz, ysiz, xosiz, yosiz = struct.unpack(">IIII", raw[8:24])
+    return xsiz, ysiz, xosiz, yosiz
 
 
-def build(name: str, components: int, flags: list[str], expected_origin: tuple[int, int], note: str) -> None:
+def build(
+    name: str,
+    components: int,
+    flags: list[str],
+    expected_origin: tuple[int, int],
+    unit_sampled: bool,
+    note: str,
+) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         planes = bytearray()
@@ -128,33 +157,40 @@ def build(name: str, components: int, flags: list[str], expected_origin: tuple[i
         ]
         run("opj_compress", "-i", str(tmp / "in.raw"), "-o", str(codestream), *flags)
 
-        origin = siz_origin(codestream)
+        xsiz, ysiz, xosiz, yosiz = siz_geometry(codestream)
+        origin = (xosiz, yosiz)
         if origin != expected_origin:
             sys.exit(f"{name}: SIZ origin {origin}, expected {expected_origin}")
 
         run("opj_decompress", "-i", str(codestream), "-o", str(tmp / "out.pgx"))
 
+        # The oracle's decode is the truth: snapshot exactly what it emits. For a
+        # unit-sampled component the samples are the input raster, so also confirm
+        # the encode was lossless; a sub-sampled component's are not.
         snapshot_components = []
+        sampling = 1 if unit_sampled else 2
         for component in range(components):
             suffix = f"_{component}" if components > 1 else "_0"
             w, h, depth, signed, values = read_pgx(tmp / f"out{suffix}.pgx")
-            expected = [sample(component, x, y) for y in range(HEIGHT) for x in range(WIDTH)]
-            if (w, h) != (WIDTH, HEIGHT) or values != expected:
-                sys.exit(f"{name}: component {component} did not round-trip losslessly")
+            if unit_sampled:
+                expected = [sample(component, x, y) for y in range(HEIGHT) for x in range(WIDTH)]
+                if (w, h) != (WIDTH, HEIGHT) or values != expected:
+                    sys.exit(f"{name}: component {component} did not round-trip losslessly")
             snapshot_components.append(
                 {
                     "width": w,
                     "height": h,
                     "bit_depth": depth,
                     "signed": signed,
-                    "x_sampling": 1,
-                    "y_sampling": 1,
+                    "x_sampling": sampling,
+                    "y_sampling": sampling,
                     "samples": values,
                 }
             )
 
+        # The reference-grid image extent the harness compares against.
         snapshot = {
-            "image": {"width": WIDTH, "height": HEIGHT},
+            "image": {"width": xsiz - xosiz, "height": ysiz - yosiz},
             "tolerance": {"mode": "exact"},
             "components": snapshot_components,
             "provenance": {
@@ -174,8 +210,8 @@ def main() -> None:
     for tool in ("opj_compress", "opj_decompress"):
         if shutil.which(tool) is None:
             sys.exit(f"{tool} not found on PATH; install OpenJPEG to regenerate the fixtures")
-    for name, (components, flags, origin, note) in VARIANTS.items():
-        build(name, components, flags, origin, note)
+    for name, (components, flags, origin, unit_sampled, note) in VARIANTS.items():
+        build(name, components, flags, origin, unit_sampled, note)
 
 
 if __name__ == "__main__":
