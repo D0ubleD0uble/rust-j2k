@@ -48,6 +48,13 @@ pub struct MainHeader {
     ///
     /// [`cod`]: Self::cod
     pub poc: Vec<PocVolume>,
+    /// `(Xcrg, Ycrg)` sub-pixel registration offsets per component, in SIZ
+    /// order, from a `CRG` marker; empty when the codestream carries none
+    /// (A.9.1). Informational: the offsets say how a display should register the
+    /// components against one another, in units of `1/65536` of the reference-grid
+    /// step, and do not change the decoded samples — so they are recorded for a
+    /// caller to act on, not resampled here (OpenJPEG likewise reads past them).
+    pub crg: Vec<(u16, u16)>,
 }
 
 impl MainHeader {
@@ -69,6 +76,7 @@ impl MainHeader {
             components,
             tlm: Vec::new(),
             poc: Vec::new(),
+            crg: Vec::new(),
         }
     }
 }
@@ -728,6 +736,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let mut rgn: Vec<Option<u8>> = vec![None; siz.components.len()];
     let mut tlm: Vec<TlmEntry> = Vec::new();
     let mut poc: Vec<PocVolume> = Vec::new();
+    let mut crg: Option<Vec<(u16, u16)>> = None;
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
@@ -794,6 +803,14 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             // accumulate across markers.
             marker::POC => decode_poc(body(), &siz, &mut poc)?,
 
+            // Component registration (A.9.1): sub-pixel display offsets, recorded
+            // but not applied. One CRG per codestream (main-header only).
+            marker::CRG => {
+                if crg.replace(decode_crg(body(), &siz)?).is_some() {
+                    return Err(Error::Codestream("duplicate CRG marker".into()));
+                }
+            }
+
             // PLT is the tile-part-header form of PLM (A.7.3); in the main
             // header it is a malformed codestream, not a missing feature.
             marker::PLT => {
@@ -806,11 +823,10 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             // Valid markers the decoded subset does not yet cover. Rejected
             // rather than skipped: each one changes how the codestream is
             // interpreted, so ignoring it would silently decode the wrong
-            // image. PPM/PPT relocate packet headers; CRG is informational but
-            // travels with features we do not decode. CAP announces
-            // capabilities beyond Part 1 (an HTJ2K codestream carries one),
-            // whose code-blocks this Tier-1 would misread as Part 1.
-            marker::CAP | marker::PPM | marker::PPT | marker::CRG | marker::SOP | marker::EPH => {
+            // image. PPM/PPT relocate packet headers. CAP announces capabilities
+            // beyond Part 1 (an HTJ2K codestream carries one), whose code-blocks
+            // this Tier-1 would misread as Part 1.
+            marker::CAP | marker::PPM | marker::PPT | marker::SOP | marker::EPH => {
                 return Err(Error::Unsupported(format!(
                     "marker {} is outside the decoded subset",
                     marker::describe(seg.code)
@@ -845,6 +861,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let mut header = MainHeader::new(siz, cod, qcd);
     header.tlm = tlm;
     header.poc = poc;
+    header.crg = crg.unwrap_or_default();
     for (params, ((coding, quant), shift)) in header
         .components
         .iter_mut()
@@ -1454,6 +1471,34 @@ fn decode_tlm(mut b: Cursor<'_>, siz: &Siz, entries: &mut Vec<TlmEntry>) -> Resu
         entries.push(TlmEntry { tile_index, length });
     }
     Ok(())
+}
+
+/// Decode CRG — component registration (A.9.1): one `(Xcrg, Ycrg)` sub-pixel
+/// offset per component, each a `u16` in units of `1/65536` of the reference-grid
+/// step. The body is exactly `4 · Csiz` bytes.
+///
+/// The offsets are recorded, not applied. CRG is informational — it registers
+/// the components for display, not for decoding — so the reconstructed samples
+/// are the same with it present or absent, and the class-1 references are made
+/// without resampling (issue #74). OpenJPEG reads past the body without keeping
+/// the values at all; recording them is the one place this is deliberately more
+/// than the oracle, so a caller that does care about registration can act on them.
+fn decode_crg(mut b: Cursor<'_>, siz: &Siz) -> Result<Vec<(u16, u16)>> {
+    let count = siz.components.len();
+    if b.remaining() != count * 4 {
+        return Err(Error::Marker(format!(
+            "CRG carries {} bytes, not the {} its {count} components need",
+            b.remaining(),
+            count * 4
+        )));
+    }
+    let mut offsets = Vec::with_capacity(count);
+    for _ in 0..count {
+        let x = b.u16()?;
+        let y = b.u16()?;
+        offsets.push((x, y));
+    }
+    Ok(offsets)
 }
 
 /// Decode PLM — main-header packet lengths (A.7.2).
