@@ -22,7 +22,8 @@ use markers::{
 
 /// Parsed main-header decode parameters. COD/QCD carry the codestream-wide
 /// defaults; [`components`](Self::components) carries each component's effective
-/// parameters after any COC/QCC override. RGN is not decoded.
+/// parameters after any COC/QCC override and any RGN maxshift — the main
+/// header's, replaced by the tile-part header's where one appears (A.6.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MainHeader {
     pub siz: Siz,
@@ -94,8 +95,8 @@ pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
         ));
     }
 
-    let (header, sot_offset) = parse_main_header(bytes)?;
-    let tile_parts = walk_tile_parts(bytes, sot_offset)?;
+    let (mut header, sot_offset) = parse_main_header(bytes)?;
+    let tile_parts = walk_tile_parts(bytes, sot_offset, &mut header)?;
     Ok(Codestream { header, tile_parts })
 }
 
@@ -106,7 +107,16 @@ pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
 /// Multiple tiles or tile-parts reject with [`Error::Unsupported`]; a `Psot`
 /// overrun, a truncated `SOT`, or a missing `EOC` reject with
 /// [`Error::Codestream`].
-fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>> {
+///
+/// A tile-part-header RGN *replaces* the main header's for that tile (A.6.3),
+/// and the subset's single tile is the whole image — so the override is written
+/// straight over `header.components[i].roi_shift` here. When multiple tiles
+/// land, this becomes a per-tile parameter instead.
+fn walk_tile_parts<'a>(
+    bytes: &'a [u8],
+    sot_offset: usize,
+    header: &mut MainHeader,
+) -> Result<Vec<TilePart<'a>>> {
     let mut cur = Cursor::at(bytes, sot_offset);
 
     // `parse_main_header` stopped on this SOT, so it is present; re-read it here
@@ -132,11 +142,15 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
         ));
     }
 
-    // Tile-part header: only SOD (and a skippable COM) belong here in the
-    // subset. Tile-level overrides are not yet decoded — including RGN, whose
-    // main-header form *is* decoded. A tile-part RGN replaces the main header's
-    // for that tile, so honouring the main-header one alone would decode the
-    // wrong image rather than a slightly worse one.
+    // Tile-part header: SOD, a skippable COM, and RGN belong here in the
+    // subset. The other tile-level overrides (COD/COC/QCD/QCC/POC) are not yet
+    // decoded; each changes how the packet data is interpreted, so skipping one
+    // would silently decode the wrong image.
+    //
+    // A.6.3 allows one RGN per component per header. The tile-part tally is
+    // tracked apart from the main header's: a tile-part RGN over a main-header
+    // one for the same component is the legal override, not a duplicate.
+    let mut tile_rgn_seen = vec![false; header.siz.components.len()];
     loop {
         let m = cur.u16()?;
         match m {
@@ -144,11 +158,19 @@ fn walk_tile_parts(bytes: &[u8], sot_offset: usize) -> Result<Vec<TilePart<'_>>>
             marker::COM => {
                 segment(&mut cur)?;
             }
+            marker::RGN => {
+                let (index, shift) = decode_rgn(segment(&mut cur)?, &header.siz)?;
+                if std::mem::replace(&mut tile_rgn_seen[index], true) {
+                    return Err(Error::Codestream(format!(
+                        "duplicate RGN marker for component {index} in the tile-part header"
+                    )));
+                }
+                header.components[index].roi_shift = shift;
+            }
             marker::COD
             | marker::COC
             | marker::QCD
             | marker::QCC
-            | marker::RGN
             | marker::POC
             | marker::PLT
             | marker::PPT => {

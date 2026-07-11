@@ -12,7 +12,9 @@ pub mod passes;
 
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
-use crate::tier1::passes::{BlockParams, BlockState, MAX_BIT_PLANES, Orientation, decode_block};
+use crate::tier1::passes::{
+    BlockParams, BlockState, MAX_BIT_PLANES, Orientation, decode_block, top_coded_plane,
+};
 use crate::tier2::{BandKind, CodeBlock, CodedData, ComponentCoded, Resolution, Subband};
 use crate::{Error, Result};
 
@@ -253,21 +255,17 @@ where
             continue;
         }
         // Maxshift lifts every region-of-interest coefficient above every
-        // background one, so the block starts `roi_shift` planes higher: this is
-        // OpenJPEG's `bpno_plus_one = roishift + cblk->numbps`.
+        // background one, so the block starts `roi_shift` planes higher (ISO
+        // H.2's Kmax = Mb + s); see `top_coded_plane` for the interplay with
+        // the zero bit-planes.
         //
         // The double-scale reconstruction shifts `1 << top`, so reject
         // high-dynamic-range subbands that would overflow `i32` rather than
-        // panic — the same rejection OpenJPEG makes with `bpno_plus_one >= 31`,
-        // and the reason its `roishift >= 31` branch is unreachable on decode.
-        //
-        // More signalled zero bit-planes than the band has magnitude planes
-        // saturates to zero coded planes: OpenJPEG's unsigned `numbps - P`
-        // wraps huge, its `(OPJ_INT32)` cast turns that *negative*, the pass
-        // loop's `bpno_plus_one >= 1` guard runs zero passes, and the block
-        // decodes to all zeros with no error. Saturating reproduces exactly
-        // that outcome.
-        let top = numbps.saturating_sub(block.zero_bit_planes) + u32::from(params.roi_shift);
+        // panic — the same rejection OpenJPEG makes with `bpno_plus_one >= 31`.
+        // This does not bound the maxshift itself: a block with more zero
+        // bit-planes than `Mb` keeps `top` small under any `SPrgn`, and
+        // `undo_maxshift` carries the oracle's `roishift >= 31` arm for it.
+        let top = top_coded_plane(numbps, block.zero_bit_planes, params.roi_shift);
         if top > MAX_BIT_PLANES {
             return Err(Error::Unsupported(format!(
                 "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"

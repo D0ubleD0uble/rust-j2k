@@ -457,15 +457,25 @@ fn read_segmentation_symbol(mq: &mut MqDecoder<'_>, cx: &mut [Context]) -> Resul
 /// Transliterated from `t1.c`:
 ///
 /// ```text
-/// thresh = 1 << roishift;
-/// if (mag >= thresh) { mag >>= roishift; }
+/// if (roishift >= 31) { datap[...] = 0; }
+/// else { thresh = 1 << roishift; if (mag >= thresh) { mag >>= roishift; } }
 /// ```
 ///
-/// `roi_shift` must be at most [`MAX_BIT_PLANES`]; `decode_block` rejects more,
-/// so `1 << roi_shift` cannot overflow.
+/// The `>= 31` arm is OpenJPEG's guard for a shift `1i32` cannot express, and
+/// it is reachable: `SPrgn` is a free byte, and a block whose zero bit-planes
+/// exceed `Mb` keeps [`top_coded_plane`] under the [`MAX_BIT_PLANES`] check
+/// however large the shift is. Zeroing the block is the *oracle's* reading,
+/// not H.2's: a threshold of `2^31` or more is above every `i32` magnitude,
+/// so the rule below, taken literally, would keep every coefficient as
+/// background. `t1.c` zeroes `datap` wholesale instead, and this follows it —
+/// changing the arm to keep the coefficients would diverge from OpenJPEG on
+/// every such stream (see `docs/correctness.md` on deviations).
 fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
     if roi_shift == 0 {
         return mag;
+    }
+    if roi_shift >= 31 {
+        return 0;
     }
     let threshold = 1i32 << roi_shift;
     if mag >= threshold {
@@ -473,6 +483,22 @@ fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
     } else {
         mag
     }
+}
+
+/// The most significant coded bit-plane of a code-block, one-based: OpenJPEG's
+/// `bpno_plus_one = roishift + cblk->numbps`, zero when nothing is coded.
+///
+/// The zero bit-planes signalled in the packet header count against the
+/// *raised* plane count `Mb + roi_shift` (ISO H.2 sets Kmax = Mb + s), so under
+/// a maxshift a background-only block can carry more of them than the band has
+/// magnitude planes — the shift must be added before the subtraction, or such
+/// a block starts too high and decodes its coefficients too large. OpenJPEG's
+/// arithmetic is signed; exceeding even the raised count saturates to zero
+/// coded planes here, which is also the oracle's outcome — its negative
+/// `bpno_plus_one` fails the pass loop's `>= 1` guard, running zero passes,
+/// and the block decodes to all zeros without an error.
+pub fn top_coded_plane(numbps: u32, zero_bit_planes: u32, roi_shift: u8) -> u32 {
+    (numbps + u32::from(roi_shift)).saturating_sub(zero_bit_planes)
 }
 
 /// The per-component parameters a code-block decode needs beyond its own
@@ -561,19 +587,16 @@ pub fn decode_block(
     // un-coded low planes zero. For a fully coded block
     // `Mb − zero_bit_planes == num_passes.div_ceil(3)`.
     // Maxshift starts the block `roi_shift` planes higher, so that every
-    // region-of-interest coefficient outranks every background one. OpenJPEG's
-    // `bpno_plus_one = roishift + cblk->numbps`.
-    // As in `decode_subband`: more zero bit-planes than magnitude planes
-    // saturates to zero coded planes — the oracle's outcome, since OpenJPEG's
-    // unsigned wrap casts negative and its pass loop runs zero passes,
-    // decoding the block to all zeros without an error.
-    let top = numbps.saturating_sub(zero_bit_planes) + u32::from(roi_shift);
+    // region-of-interest coefficient outranks every background one; see
+    // `top_coded_plane` for the interplay with the zero bit-planes.
+    let top = top_coded_plane(numbps, zero_bit_planes, roi_shift);
     // The double scale means `1 << top` must stay inside `i32`. `decode_subband`
     // rejects this too, before allocating; checking again here is where OpenJPEG
     // puts it (`opj_t1_decode_cblk`'s `bpno_plus_one >= 31`), so a caller that
     // reaches `decode_block` by another route cannot overflow
-    // `set_significant_magnitude`. `top >= roi_shift`, so this bounds the
-    // maxshift as well and `1 << roi_shift` cannot overflow either.
+    // `set_significant_magnitude`. It does *not* bound the maxshift: enough
+    // zero bit-planes keep `top` small under any `SPrgn`, which is why
+    // `undo_maxshift` carries its own `roi_shift >= 31` arm.
     if top > MAX_BIT_PLANES {
         return Err(Error::Unsupported(format!(
             "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
@@ -861,7 +884,26 @@ mod tests {
         assert_eq!(undo_maxshift(threshold, 0), threshold);
     }
 
-    /// A hostile `SPrgn` must be rejected, not shift `1i32` past its width.
+    /// The zero bit-planes count against the raised `Mb + roi_shift` (Kmax of
+    /// ISO H.2), so under a maxshift they may exceed `Mb` alone — a
+    /// background-only block in `p0_06` does exactly that. Subtracting them
+    /// from `Mb` first (saturating) and adding the shift after would start
+    /// such a block `zero_bit_planes − Mb` planes too high and decode its
+    /// coefficients that many planes too large.
+    #[test]
+    fn zero_bit_planes_count_against_the_maxshift_raised_planes() {
+        // OpenJPEG: bpno_plus_one = roishift + (numbps − P), signed.
+        assert_eq!(top_coded_plane(10, 3, 0), 7, "no ROI");
+        assert_eq!(top_coded_plane(10, 3, 9), 16, "ROI block, few zero planes");
+        assert_eq!(top_coded_plane(10, 13, 9), 6, "background block, P > Mb");
+        assert_eq!(top_coded_plane(10, 19, 9), 0, "all planes zero");
+        assert_eq!(top_coded_plane(10, 25, 9), 0, "past Kmax saturates");
+    }
+
+    /// A hostile `SPrgn` whose raised `top` overflows the bit-plane budget is
+    /// rejected. Rejection is only this arm's outcome: with enough zero
+    /// bit-planes the same shifts are *accepted* and the block zeroed — the
+    /// companion test below.
     #[test]
     fn an_out_of_range_maxshift_is_rejected_rather_than_overflowing() {
         for roi_shift in [31u8, 32, 64, 255] {
@@ -880,6 +922,36 @@ mod tests {
             )
             .expect_err("maxshift {roi_shift} passes the bit-plane limit");
             assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+        }
+    }
+
+    /// The bit-plane limit alone does not bound `SPrgn`: enough zero bit-planes
+    /// pull `top` back under it whatever the shift, so an inexpressible shift
+    /// reaches `undo_maxshift`. OpenJPEG's `roishift >= 31` arm zeroes such a
+    /// block — this must do the same, not overflow `1i32 << roi_shift`.
+    #[test]
+    fn an_inexpressible_maxshift_on_a_decodable_block_zeroes_it() {
+        for roi_shift in [31u8, 64, 255] {
+            let mut state = BlockState::new(4, 4);
+            // numbps 8, zero planes 8 + roi_shift − 5: top decodes 5 planes.
+            let zero_bit_planes = 8 + u32::from(roi_shift) - 5;
+            decode_block(
+                &[(vec![0x80, 0x27], 3)],
+                &mut state,
+                Orientation::Ll,
+                8,
+                3,
+                zero_bit_planes,
+                BlockParams {
+                    style: 0,
+                    roi_shift,
+                },
+            )
+            .expect("a small top decodes whatever the maxshift");
+            assert!(
+                state.coeffs.iter().all(|&c| c == 0),
+                "roi_shift {roi_shift}: every coefficient reads as region and shifts to nothing"
+            );
         }
     }
 
