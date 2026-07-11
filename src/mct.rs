@@ -8,9 +8,9 @@
 //! Which transform to invert is **not** a separate flag. The wavelet chooses it:
 //! the reversible 5/3 path pairs with the reversible colour transform (RCT,
 //! §G.2), the irreversible 9/7 path with the irreversible one (ICT, §G.3).
-//! OpenJPEG makes the same choice on `qmfbid == 1` in `opj_tcd_mct_decode`.
-//! Only RCT is decoded today; a codestream that signals the transform on the
-//! 9/7 path is rejected as [`Error::Unsupported`].
+//! OpenJPEG makes the same choice on `qmfbid == 1` in `opj_tcd_mct_decode`,
+//! reading the wavelet off component 0. [`inverse_rct`] inverts the 5/3 arm in
+//! exact integers; [`inverse_ict`] inverts the 9/7 arm in floats.
 //!
 //! Components past the third pass through untouched.
 
@@ -70,6 +70,58 @@ pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
         *y0 = saturate(v + g); // R
         *y1 = saturate(g); // G
         *y2 = saturate(u + g); // B
+    }
+    Ok(())
+}
+
+/// Invert the irreversible colour transform over the first three components
+/// (§G.3, equations G-9 to G-11):
+///
+/// ```text
+/// R = Y + 1.402·Cr
+/// G = Y − 0.34413·Cb − 0.71414·Cr
+/// B = Y + 1.772·Cb
+/// ```
+///
+/// The samples are floats — the 9/7 arm reconstructs in floating point — so the
+/// transform is not exactly invertible, and a decode is graded against the
+/// reference within a compliance-class bound rather than bit-exactly. To land
+/// inside that bound, the constants and the left-to-right evaluation order match
+/// OpenJPEG's `opj_mct_decode_real` exactly (`0.34413f`, `0.71414f`, not the
+/// spec's fuller `0.344136`/`0.714136`), so the rounding follows the oracle's.
+///
+/// `components` must hold at least three equally sized float sample vectors;
+/// [`check_geometry`] and the wavelet check in `parse_main_header` guarantee it —
+/// the colour transform is ICT only when the wavelet is 9/7, and the 9/7 path
+/// reconstructs in floats.
+pub fn inverse_ict(components: &mut [Samples]) -> Result<()> {
+    let count = components.len();
+    let [c0, c1, c2, ..] = components else {
+        return Err(Error::Inconsistent(format!(
+            "the colour transform needs three components, found {count}"
+        )));
+    };
+    let [
+        Samples::Irreversible(c0),
+        Samples::Irreversible(c1),
+        Samples::Irreversible(c2),
+    ] = [c0, c1, c2]
+    else {
+        return Err(Error::Inconsistent(
+            "the irreversible colour transform needs float samples; the 5/3 path is RCT".into(),
+        ));
+    };
+    if c0.len() != c1.len() || c0.len() != c2.len() {
+        return Err(Error::Inconsistent(
+            "the colour transform needs three components of equal size".into(),
+        ));
+    }
+
+    for ((y0, y1), y2) in c0.iter_mut().zip(c1.iter_mut()).zip(c2.iter_mut()) {
+        let (y, cb, cr) = (*y0, *y1, *y2);
+        *y0 = y + 1.402 * cr; // R
+        *y1 = y - 0.34413 * cb - 0.71414 * cr; // G
+        *y2 = y + 1.772 * cb; // B
     }
     Ok(())
 }
@@ -235,6 +287,99 @@ mod tests {
         inverse_rct(&mut components).expect("saturates");
         let mut components = reversible(&[&[i32::MIN], &[i32::MIN], &[i32::MIN]]);
         inverse_rct(&mut components).expect("saturates");
+    }
+
+    /// The forward ICT of §G.3 (equations G-4 to G-6): the transform the inverse
+    /// must undo, within the float round-trip tolerance.
+    ///
+    /// ```text
+    /// Y  =  0.299·R + 0.587·G + 0.114·B
+    /// Cb = -0.16875·R − 0.33126·G + 0.5·B
+    /// Cr =  0.5·R − 0.41869·G − 0.08131·B
+    /// ```
+    fn forward_ict(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+        (
+            0.299 * r + 0.587 * g + 0.114 * b,
+            -0.16875 * r - 0.33126 * g + 0.5 * b,
+            0.5 * r - 0.41869 * g - 0.08131 * b,
+        )
+    }
+
+    fn irreversible(values: &[&[f32]]) -> Vec<Samples> {
+        values
+            .iter()
+            .map(|v| Samples::Irreversible(v.to_vec()))
+            .collect()
+    }
+
+    fn floats(components: &[Samples]) -> Vec<Vec<f32>> {
+        components
+            .iter()
+            .map(|c| match c {
+                Samples::Irreversible(v) => v.clone(),
+                Samples::Reversible(_) => panic!("ICT never sees the 5/3 arm"),
+            })
+            .collect()
+    }
+
+    fn invert_ict(y: f32, cb: f32, cr: f32) -> (f32, f32, f32) {
+        let mut components = irreversible(&[&[y], &[cb], &[cr]]);
+        inverse_ict(&mut components).expect("three equal components");
+        let out = floats(&components);
+        (out[0][0], out[1][0], out[2][0])
+    }
+
+    /// The inverse ICT undoes the forward transform to within the float
+    /// round-trip error; unlike RCT it is not exact, so this is a tolerance
+    /// check, not equality.
+    #[test]
+    fn inverse_ict_undoes_the_forward_transform_within_tolerance() {
+        for r in [0.0, 1.0, 17.0, 128.0, 255.0] {
+            for g in [0.0, 3.0, 64.0, 200.0, 255.0] {
+                for b in [0.0, 7.0, 99.0, 254.0, 255.0] {
+                    let (y, cb, cr) = forward_ict(r, g, b);
+                    let (r2, g2, b2) = invert_ict(y, cb, cr);
+                    // The forward/inverse constant pairs are rounded independently
+                    // (OpenJPEG's `0.34413` is not the exact inverse of `0.33126`),
+                    // so a few tenths of drift is expected and within any
+                    // compliance-class bound.
+                    assert!(
+                        (r2 - r).abs() < 0.5 && (g2 - g).abs() < 0.5 && (b2 - b).abs() < 0.5,
+                        "RGB ({r}, {g}, {b}) round-tripped to ({r2}, {g2}, {b2})",
+                    );
+                }
+            }
+        }
+    }
+
+    /// The exact inverse-ICT constants and evaluation order match OpenJPEG's
+    /// `opj_mct_decode_real`, so a fixed input reproduces the oracle's output.
+    #[test]
+    fn inverse_ict_matches_the_reference_formula() {
+        // R = Y + 1.402·Cr; G = Y − 0.34413·Cb − 0.71414·Cr; B = Y + 1.772·Cb.
+        let (r, g, b) = invert_ict(100.0, 20.0, -30.0);
+        assert!((r - (100.0 + 1.402 * -30.0)).abs() < 1e-4);
+        assert!((g - (100.0 - 0.34413 * 20.0 - 0.71414 * -30.0)).abs() < 1e-4);
+        assert!((b - (100.0 + 1.772 * 20.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ict_applies_only_to_the_first_three_components() {
+        let mut components = irreversible(&[&[0.0], &[0.0], &[0.0], &[42.0], &[-7.0]]);
+        inverse_ict(&mut components).unwrap();
+        let out = floats(&components);
+        assert_eq!(out[3], vec![42.0]);
+        assert_eq!(out[4], vec![-7.0]);
+    }
+
+    #[test]
+    fn inverse_ict_rejects_the_integer_arm() {
+        // RCT samples on the ICT path: the wavelet/transform pairing is broken.
+        let mut components = reversible(&[&[1], &[2], &[3]]);
+        assert!(matches!(
+            inverse_ict(&mut components),
+            Err(Error::Inconsistent(_))
+        ));
     }
 
     #[test]

@@ -927,15 +927,16 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
     if header.cod.multiple_component_transform {
         crate::mct::check_geometry(&header.siz.components)?;
         // Which colour transform applies follows from the wavelet, and the
-        // wavelet is per component once COC is in play. RCT is defined over
-        // three components reconstructed as integers, so all three must be 5/3;
-        // a COC that moves one of them to 9/7 describes a transform that does
-        // not exist.
+        // wavelet is per component once COC is in play: 5/3 is RCT (integers),
+        // 9/7 is ICT (floats). The three components must share it — a mix
+        // reconstructs some as integers and some as floats and describes a
+        // transform that does not exist. OpenJPEG reads the type off component 0.
+        let transform = header.components[0].coding.transform;
         for (index, params) in header.components.iter().take(3).enumerate() {
-            if params.coding.transform != Transform::Reversible53 {
+            if params.coding.transform != transform {
                 return Err(Error::Unsupported(format!(
-                    "COD signals the colour transform but component {index} uses the 9/7 \
-                     wavelet; the irreversible colour transform (ICT) is not decoded"
+                    "COD signals the colour transform but component {index} uses a different \
+                     wavelet than component 0; the transform is undefined over a mix"
                 )));
             }
         }
@@ -1187,14 +1188,6 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         precinct_sizes,
     } = coding;
     b.expect_consumed("COD")?;
-
-    // The wavelet picks the colour transform: 5/3 pairs with the reversible RCT
-    // (G.2), 9/7 with the irreversible ICT (G.3). Only RCT is decoded.
-    if multiple_component_transform && transform == Transform::Irreversible97 {
-        return Err(Error::Unsupported(
-            "irreversible colour transform (ICT) on the 9/7 path".into(),
-        ));
-    }
 
     Ok(Cod {
         progression,

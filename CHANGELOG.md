@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Inverse ICT (irreversible colour transform): a three-component 9/7 codestream
+  that signals the multiple-component transform now reconstructs colour by
+  inverting the float YCbCr→RGB transform (Annex G.3), applied after the IDWT and
+  before the level shift. The wavelet picks the transform — 5/3 is RCT, 9/7 is
+  ICT — read off the first colour component; a mix across the three is rejected.
+  The inverse matrix matches OpenJPEG's constants, so the decode lands within the
+  compliance-class bounds. Grades conformance entry `p0_04`.
 - CRG (component registration): the per-component `(Xcrg, Ycrg)` sub-pixel
   registration offsets are parsed and recorded on the decoded header. They are
   informational — how a display should align the components, not a change to the

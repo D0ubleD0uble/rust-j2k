@@ -7,15 +7,15 @@
 //!
 //! - the **raw codestream** (Annex A), not yet the JP2 file format (no boxes);
 //! - **components**, each with its own bit depth, sign, and sub-sampling, plus
-//!   the reversible color transform (RCT) that decorrelates the first three;
-//!   its irreversible twin (ICT) is not decoded yet;
+//!   the colour transform that decorrelates the first three, in both its
+//!   reversible (RCT) and irreversible (ICT) forms;
 //! - **integer** samples, signed up to 32 bits, unsigned up to 31 (the
 //!   samples land in an `i32` container);
 //! - **both** the reversible 5/3 (lossless) and irreversible 9/7 (lossy)
 //!   wavelet paths (the 9/7 path is graded by re-encoding a real grid with
 //!   OpenJPEG, since no operational GRIB2 producer ships lossy 9/7).
 //!
-//! ICT, JP2 boxes, HTJ2K, and an encoder are later-phase work, not permanent
+//! JP2 boxes, HTJ2K, and an encoder are later-phase work, not permanent
 //! non-goals. See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
@@ -175,7 +175,14 @@ pub fn decode_with(codestream: &[u8], options: DecodeOptions) -> Result<Image> {
         // lives in COD, which a tile-part header can override. Components past
         // the third are untouched.
         if header.cod.multiple_component_transform {
-            mct::inverse_rct(&mut samples)?;
+            // The wavelet picks the transform (G.1): 5/3 reconstructs integers
+            // and inverts with the reversible RCT, 9/7 reconstructs floats and
+            // inverts with the irreversible ICT. All three colour components
+            // share the wavelet (checked at parse), so component 0's decides.
+            match header.components[0].coding.transform {
+                codestream::markers::Transform::Reversible53 => mct::inverse_rct(&mut samples)?,
+                codestream::markers::Transform::Irreversible97 => mct::inverse_ict(&mut samples)?,
+            }
         }
 
         for (component, samples) in samples.into_iter().enumerate() {
