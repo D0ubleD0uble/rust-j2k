@@ -219,11 +219,16 @@ is unblocked by layers alone, and `p0_01` cannot distinguish one progression
 order from another (see [correctness.md](correctness.md) §A passing entry is not
 proof the feature works). Both need synthetic OpenJPEG fixtures.
 
-**Done:** multiple quality layers and all five progression orders have landed.
-`p0_16` (RLCP, three layers) is the corpus oracle for RLCP; RPCL/PCRL/CPRL are
-graded against `scripts/gen-progression-fixtures.py`, and — since P2.4 —
+**Done:** multiple quality layers, all five progression orders, and POC have
+landed. `p0_16` (RLCP, three layers) is the corpus oracle for RLCP; RPCL/PCRL/CPRL
+are graded against `scripts/gen-progression-fixtures.py`, and — since P2.4 —
 against `scripts/gen-precinct-fixtures.py`, which is what separates PCRL from
-CPRL. POC remains.
+CPRL. POC parses in the main and tile-part headers into progression volumes, and
+the packet iterator walks the volume sequence with a shared dedup (a packet
+reached by more than one volume is emitted once, by the first — OpenJPEG's
+`include` array); it grades `p0_13` (main-header POC over 257 components) and
+`p0_07` (a tile-part POC whose volumes accumulate across the tile's two parts,
+since POC is legal in any tile-part, not only the first).
 
 ### P2.6 — Code-block coding styles (`src/tier1/`)
 

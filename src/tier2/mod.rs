@@ -11,9 +11,10 @@
 //! This stage runs once per **tile**: a tile's packets are its own, in its own
 //! progression, and nothing about them crosses a tile boundary. The packet
 //! stream walks four axes — layer, resolution, component, and *position* (the
-//! precinct) — in whichever order that tile's `COD` names. The tile's data is
-//! then `header₀ body₀ header₁ body₁ …` with no padding, and the packets must
-//! tile it exactly; a leftover byte means a misread field.
+//! precinct) — in the order that tile's `COD` names, or, when a `POC` marker is
+//! present, through the sequence of progression volumes it prescribes. The
+//! tile's data is then `header₀ body₀ header₁ body₁ …` with no padding, and the
+//! packets must tile it exactly; a leftover byte means a misread field.
 //!
 //! A code-block's contributions accumulate across the layers that include it,
 //! so a precinct's tag trees and per-block state outlive any one packet. See
@@ -25,6 +26,8 @@
 
 pub mod bio;
 pub mod tagtree;
+
+use std::collections::HashSet;
 
 use crate::codestream::markers::{Progression, Rect, Siz, marker};
 use crate::codestream::{MainHeader, Tile};
@@ -213,27 +216,22 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
     };
     let mut cursor = 0usize;
     let mut packet_index = 0u32;
-    for_each_packet(
-        header.cod.progression,
-        header.cod.layers as u32,
-        &walk,
-        |layer, resolution, component, precinct| {
-            let geom = &geoms[component][resolution];
-            cursor = parse_packet(
-                data,
-                cursor,
-                layer,
-                packet_index,
-                delimiters,
-                header.components[component].coding.code_block_style,
-                &geom.bands,
-                precinct,
-                &mut states[component][resolution],
-            )?;
-            packet_index += 1;
-            Ok(())
-        },
-    )?;
+    for_each_packet(header, &walk, |layer, resolution, component, precinct| {
+        let geom = &geoms[component][resolution];
+        cursor = parse_packet(
+            data,
+            cursor,
+            layer,
+            packet_index,
+            delimiters,
+            header.components[component].coding.code_block_style,
+            &geom.bands,
+            precinct,
+            &mut states[component][resolution],
+        )?;
+        packet_index += 1;
+        Ok(())
+    })?;
 
     let components: Vec<ComponentCoded<'a>> = states
         .into_iter()
@@ -461,12 +459,83 @@ fn shl32(value: u64, shift: u32) -> Option<u64> {
     (scaled <= u64::from(u32::MAX)).then_some(scaled)
 }
 
-/// Visit every packet of the tile in the order `progression` prescribes
-/// (ISO/IEC 15444-1 B.12.1), calling `f(layer, resolution, component, precinct)`
-/// for each.
+/// One progression volume the packet walk enumerates: an order over a sub-range
+/// of the layer, resolution, and component axes. Without a `POC` marker there is
+/// exactly one, spanning every axis in `COD`'s order.
+struct Volume {
+    progression: Progression,
+    /// Layers `0..layers` (a `POC` volume's layer range always starts at 0).
+    layers: u32,
+    resolutions: std::ops::Range<usize>,
+    components: std::ops::Range<usize>,
+}
+
+/// Visit every packet of the tile in `header`'s progression order (ISO/IEC
+/// 15444-1 B.12.1), calling `f(layer, resolution, component, precinct)` for each.
 ///
-/// The standard nests four axes — layer, resolution, component, position — and
-/// each order is a permutation of them:
+/// Without a `POC` marker the order is `COD`'s single progression over every
+/// axis. A `POC` marker replaces it with a *sequence* of progression volumes
+/// (A.6.6), each an order over its own layer/resolution/component sub-range; the
+/// packet stream is their concatenation, and a packet reached by more than one
+/// volume is emitted once, by the first — OpenJPEG dedups through a shared
+/// `include` array, mirrored here by `seen`.
+///
+/// Each volume is enumerated by [`run_order`]. The five orders are permutations
+/// of the four axes — layer, resolution, component, position — and the three
+/// positional ones sweep the reference grid; see that function.
+fn for_each_packet<F>(header: &MainHeader, walk: &PacketWalk<'_>, mut f: F) -> Result<()>
+where
+    F: FnMut(u32, usize, usize, usize) -> Result<()>,
+{
+    let components = walk.geoms.len();
+    let max_res = walk.geoms.iter().map(Vec::len).max().unwrap_or(0);
+    let layers = u32::from(header.cod.layers);
+
+    let volumes: Vec<Volume> = if header.poc.is_empty() {
+        vec![Volume {
+            progression: header.cod.progression,
+            layers,
+            resolutions: 0..max_res,
+            components: 0..components,
+        }]
+    } else {
+        // Clamp each volume to the axes that actually exist — the layer and
+        // component ends are only bounded here, where the counts are known
+        // (A.6.6): `layno1` to the layer count, `compno1` to the component count.
+        header
+            .poc
+            .iter()
+            .map(|v| Volume {
+                progression: v.progression,
+                layers: u32::from(v.layer_end).min(layers),
+                resolutions: usize::from(v.res_start)..usize::from(v.res_end).min(max_res),
+                components: usize::from(v.comp_start)..usize::from(v.comp_end).min(components),
+            })
+            .collect()
+    };
+
+    // With one volume every tuple is visited once, so the dedup is pure overhead
+    // and skipped; a `POC` sequence needs it, because volumes may overlap.
+    if volumes.len() == 1 {
+        return run_order(&volumes[0], walk, &mut f);
+    }
+    let mut seen: HashSet<(u32, usize, usize, usize)> = HashSet::new();
+    for volume in &volumes {
+        run_order(volume, walk, &mut |layer, res, comp, precinct| {
+            if seen.insert((layer, res, comp, precinct)) {
+                f(layer, res, comp, precinct)
+            } else {
+                Ok(())
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// Enumerate one progression volume, calling `emit` for each of its packets in
+/// order.
+///
+/// The five orders nest the four axes differently:
 ///
 /// ```text
 /// LRCP    l → r → c → p        RPCL    r → p → c → l
@@ -474,29 +543,24 @@ fn shl32(value: u64, shift: u32) -> Option<u64> {
 ///                              CPRL    c → p → r → l
 /// ```
 ///
-/// The two on the left put position innermost, so they enumerate it by counting:
-/// a resolution's precincts in raster order. The three on the right put it
-/// *outside* at least one other axis, and there counting will not do — a packet's
-/// place in the stream depends on where its precinct sits on the canvas, and two
-/// components with different sub-sampling or different precinct sizes interleave.
-/// Those three therefore sweep the reference grid itself, in steps of the finest
-/// precinct, and ask each (component, resolution) whether a precinct of its own
-/// starts at that point. This is OpenJPEG's `opj_pi_next_rpcl` / `_pcrl` /
-/// `_cprl`, and the three differ only in what is nested around the sweep.
-///
-/// All five visit exactly the same set of packets — they are permutations, not
-/// different selections — which `every_order_visits_the_same_packets` pins down.
-fn for_each_packet<F>(
-    progression: Progression,
-    layers: u32,
-    walk: &PacketWalk<'_>,
-    mut f: F,
-) -> Result<()>
+/// LRCP and RLCP put position innermost and enumerate it by counting a
+/// resolution's precincts in raster order. RPCL, PCRL and CPRL put it outside
+/// another axis, where counting will not do — a packet's place depends on where
+/// its precinct sits on the canvas, and components with different sub-sampling or
+/// precinct sizes interleave — so they sweep the reference grid in steps of the
+/// finest precinct and ask each (component, resolution) whether a precinct of its
+/// own starts at that point. The sweep step is minimised over *every* component
+/// and resolution, not just the volume's range (OpenJPEG's `opj_pi_next_rpcl`
+/// does the same in its `first` block), so a `POC` sub-range cannot coarsen it
+/// and skip a corner; only which packets are *emitted* is restricted to the
+/// range.
+fn run_order<F>(volume: &Volume, walk: &PacketWalk<'_>, emit: &mut F) -> Result<()>
 where
     F: FnMut(u32, usize, usize, usize) -> Result<()>,
 {
-    let components = walk.geoms.len();
-    let resolutions = walk.geoms.iter().map(Vec::len).max().unwrap_or(0);
+    let layers = volume.layers;
+    let res_range = volume.resolutions.clone();
+    let comp_range = volume.components.clone();
     // A component's resolution axis is as long as its own COD/COC says, so the
     // shallower ones simply do not appear at the tail of the deepest one's.
     let has = |comp: usize, res: usize| res < walk.geoms[comp].len();
@@ -505,59 +569,58 @@ where
     let (tx0, ty0) = (u64::from(walk.tile.x0), u64::from(walk.tile.y0));
     let (tx1, ty1) = (u64::from(walk.tile.x1), u64::from(walk.tile.y1));
 
-    match progression {
+    // The positional sweep's step, over every component and resolution — the
+    // range restricts emission, not the step.
+    let all_pairs =
+        || (0..walk.geoms.len()).flat_map(|c| (0..walk.geoms[c].len()).map(move |r| (c, r)));
+
+    match volume.progression {
         Progression::Lrcp => {
             for layer in 0..layers {
-                for res in 0..resolutions {
-                    for comp in 0..components {
+                for res in res_range.clone() {
+                    for comp in comp_range.clone() {
                         if !has(comp, res) {
                             continue;
                         }
                         for precinct in 0..precincts(comp, res) {
-                            f(layer, res, comp, precinct)?;
+                            emit(layer, res, comp, precinct)?;
                         }
                     }
                 }
             }
         }
         Progression::Rlcp => {
-            for res in 0..resolutions {
+            for res in res_range.clone() {
                 for layer in 0..layers {
-                    for comp in 0..components {
+                    for comp in comp_range.clone() {
                         if !has(comp, res) {
                             continue;
                         }
                         for precinct in 0..precincts(comp, res) {
-                            f(layer, res, comp, precinct)?;
+                            emit(layer, res, comp, precinct)?;
                         }
                     }
                 }
             }
         }
         // Resolution outermost, then the positional sweep, then component, then
-        // layer. The step is the finest precinct over *every* component and
-        // resolution — computed once, not per resolution: OpenJPEG's
-        // `opj_pi_next_rpcl` minimises `pi->dx` across all of them in its `first`
-        // block and reuses it for each resolution's sweep. A per-resolution step
-        // would be coarser and, with non-power-of-two sub-sampling, could step
-        // over a precinct corner belonging to this resolution.
+        // layer.
         Progression::Rpcl => {
-            let pairs = (0..components).flat_map(|c| (0..walk.geoms[c].len()).map(move |r| (c, r)));
-            let Some((step_x, step_y)) = walk.step(pairs) else {
+            let Some((step_x, step_y)) = walk.step(all_pairs()) else {
                 return Ok(());
             };
-            for res in 0..resolutions {
+            for res in res_range.clone() {
                 let mut y = ty0;
                 while y < ty1 {
                     let mut x = tx0;
                     while x < tx1 {
-                        for comp in 0..components {
+                        for comp in comp_range.clone() {
                             if !has(comp, res) {
                                 continue;
                             }
                             if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
                                 for layer in 0..layers {
-                                    f(layer, res, comp, precinct)?;
+                                    emit(layer, res, comp, precinct)?;
                                 }
                             }
                         }
@@ -567,22 +630,24 @@ where
                 }
             }
         }
-        // The sweep outermost, so its step is the finest precinct over *every*
+        // The sweep outermost, so its step is the finest precinct over every
         // component and resolution at once.
         Progression::Pcrl => {
-            let pairs = (0..components).flat_map(|c| (0..walk.geoms[c].len()).map(move |r| (c, r)));
-            let Some((step_x, step_y)) = walk.step(pairs) else {
+            let Some((step_x, step_y)) = walk.step(all_pairs()) else {
                 return Ok(());
             };
             let mut y = ty0;
             while y < ty1 {
                 let mut x = tx0;
                 while x < tx1 {
-                    for comp in 0..components {
-                        for res in 0..walk.geoms[comp].len() {
+                    for comp in comp_range.clone() {
+                        for res in res_range.clone() {
+                            if !has(comp, res) {
+                                continue;
+                            }
                             if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
                                 for layer in 0..layers {
-                                    f(layer, res, comp, precinct)?;
+                                    emit(layer, res, comp, precinct)?;
                                 }
                             }
                         }
@@ -594,10 +659,10 @@ where
         }
         // Component outermost, so each gets its own sweep — and its own step, the
         // finest precinct over that component's resolutions alone. This is where
-        // CPRL parts company with PCRL: PCRL interleaves the components inside
-        // one shared sweep, CPRL finishes a component before starting the next.
+        // CPRL parts company with PCRL: PCRL interleaves the components inside one
+        // shared sweep, CPRL finishes a component before starting the next.
         Progression::Cprl => {
-            for comp in 0..components {
+            for comp in comp_range.clone() {
                 let pairs = (0..walk.geoms[comp].len()).map(|r| (comp, r));
                 let Some((step_x, step_y)) = walk.step(pairs) else {
                     continue;
@@ -606,10 +671,13 @@ where
                 while y < ty1 {
                     let mut x = tx0;
                     while x < tx1 {
-                        for res in 0..walk.geoms[comp].len() {
+                        for res in res_range.clone() {
+                            if !has(comp, res) {
+                                continue;
+                            }
                             if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
                                 for layer in 0..layers {
-                                    f(layer, res, comp, precinct)?;
+                                    emit(layer, res, comp, precinct)?;
                                 }
                             }
                         }

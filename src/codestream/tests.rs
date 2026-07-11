@@ -669,10 +669,34 @@ fn out_of_subset_marker_is_unsupported() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::POC, &[0, 0, 0]), // progression order change
+        seg(marker::CRG, &[0, 0, 0, 0]), // component registration
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
+}
+
+/// A POC marker is decoded now: it parses into progression volumes rather than
+/// being rejected. A single volume covering the whole codestream in LRCP is a
+/// no-op relative to the COD order, but it must round-trip through the parser.
+#[test]
+fn a_poc_marker_parses_into_volumes() {
+    // One volume: resolutions [0, 6), components [0, 1), layers [0, 1), LRCP.
+    let poc = [0u8, 0, 0, 1, 6, 1, 0];
+    let header = vec![
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::POC, &poc),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let data = [0xDE, 0xAD];
+    let bytes = assemble(&header, &sot_seg(0, psot_for(&data), 0, 1), &data, true);
+    let cs = parse(&bytes).expect("POC parses");
+    assert_eq!(cs.header.poc.len(), 1);
+    let v = cs.header.poc[0];
+    assert_eq!((v.res_start, v.res_end), (0, 6));
+    assert_eq!((v.comp_start, v.comp_end), (0, 1));
+    assert_eq!(v.layer_end, 1);
+    assert_eq!(v.progression, markers::Progression::Lrcp);
 }
 
 #[test]
@@ -1033,13 +1057,13 @@ fn a_tile_with_no_tile_part_is_codestream() {
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
 
-/// POC and PPT are legal in a tile-part header but not yet decoded: each changes
-/// how the tile's packet data is read, so skipping one would decode the wrong
-/// image. (COD/COC/QCD/QCC/RGN *are* decoded there — see the override tests.)
+/// PPT is legal in a tile-part header but not yet decoded: it relocates the
+/// tile's packet headers, so skipping it would decode the wrong image.
+/// (COD/COC/QCD/QCC/RGN and POC *are* decoded there — see the override tests.)
 #[test]
 fn out_of_subset_tile_header_marker_is_unsupported() {
     let data = [1, 2];
-    let qcc = seg(marker::POC, &[0, 0, 0]);
+    let qcc = seg(marker::PPT, &[0]);
     let psot = (12 + qcc.len() + 2 + data.len()) as u32;
 
     let mut bytes = be16(marker::SOC).to_vec();
@@ -1359,7 +1383,6 @@ fn header_altering_markers_are_rejected_not_skipped() {
     // TLM/PLM/PLT are absent: they are informational and decoded (issue #72).
     for code in [
         marker::CAP,
-        marker::POC,
         marker::PPM,
         marker::PPT,
         marker::CRG,
@@ -1807,7 +1830,6 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     // left this table (informational, decoded — issue #72); PLT is decoded in
     // the tile-part header and structurally illegal in the main one.
     for (name, code) in [
-        ("POC", marker::POC),
         ("PPM", marker::PPM),
         ("PPT", marker::PPT),
         ("CRG", marker::CRG),
@@ -2336,6 +2358,38 @@ fn a_tile_part_rgn_names_one_component() {
     assert_eq!(
         tile.components[2].roi_shift, 11,
         "the main header's, unopposed"
+    );
+}
+
+/// A tile-part POC **appends** to the main header's, it does not replace it: a
+/// tile inherits the main volumes and adds its own after them (A.6.6, matching
+/// OpenJPEG's seed-then-append). Order is load-bearing — the first volume to
+/// reach a packet emits it — so the resolved sequence must be `[main, tile]`.
+#[test]
+fn a_tile_part_poc_appends_to_the_main_header_poc() {
+    // Main POC: resolutions [0, 2), LRCP. Tile POC: resolutions [0, 3), RLCP.
+    let main_poc = [0u8, 0, 0, 1, 2, 1, 0];
+    let header = [
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::POC, &main_poc),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let tile_poc = seg(marker::POC, &[0u8, 0, 0, 1, 3, 1, 1]);
+    let bytes = assemble_with_tile_markers(&header, &[tile_poc], &[1, 2]);
+
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.poc.len(), 2, "main volume then tile volume");
+    assert_eq!(
+        (tile.poc[0].res_end, tile.poc[0].progression),
+        (2, markers::Progression::Lrcp),
+        "the main header's volume comes first",
+    );
+    assert_eq!(
+        (tile.poc[1].res_end, tile.poc[1].progression),
+        (3, markers::Progression::Rlcp),
+        "the tile-part's volume is appended",
     );
 }
 
