@@ -207,13 +207,21 @@ fn one_precinct(cols: usize, rows: usize) -> Vec<PrecinctGeom> {
     }]
 }
 
+/// [`resolution_geoms`] with a full precinct budget — the budget is a
+/// DoS guard, exercised separately, and irrelevant to the geometry these tests
+/// check.
+fn geoms_of(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<ResolutionGeom>> {
+    let mut budget = usize::MAX;
+    resolution_geoms(header, tile, comp, &mut budget)
+}
+
 // ---- Geometry (ISO Eq. B-15, code-block grid B.7) ----
 
 /// A small image with 2^6 code-blocks gives one block per subband, and the
 /// subband dimensions follow the standard's half-resolution split.
 #[test]
 fn geometry_single_block_per_subband() {
-    let geoms = resolution_geoms(&header(100, 100, 2, 6), 0, 0).unwrap();
+    let geoms = geoms_of(&header(100, 100, 2, 6), 0, 0).unwrap();
     assert_eq!(geoms.len(), 3); // NL = 2 → resolutions 0,1,2
 
     // Resolution 0: the NLLL band at level 2, ceil(100/4) = 25 square.
@@ -240,7 +248,7 @@ fn geometry_single_block_per_subband() {
 #[test]
 fn geometry_multi_block_grid() {
     // 200×200, one level, 2^5 = 32 blocks. LL is ceil(200/2) = 100 square.
-    let geoms = resolution_geoms(&header(200, 200, 1, 5), 0, 0).unwrap();
+    let geoms = geoms_of(&header(200, 200, 1, 5), 0, 0).unwrap();
     let ll = &geoms[0].bands[0];
     assert_eq!((ll.width, ll.height), (100, 100));
     // ceil(100/32) = 4 blocks each way.
@@ -256,7 +264,7 @@ fn geometry_multi_block_grid() {
 /// and yields one resolution per level plus the base.
 #[test]
 fn geometry_max_decomposition_levels() {
-    let geoms = resolution_geoms(&header(2, 2, 32, 6), 0, 0).unwrap();
+    let geoms = geoms_of(&header(2, 2, 32, 6), 0, 0).unwrap();
     assert_eq!(geoms.len(), 33);
     // The coarsest LL collapses to a single sample; nothing panics on the way.
     assert_eq!((geoms[0].bands[0].width, geoms[0].bands[0].height), (1, 1));
@@ -268,21 +276,71 @@ fn geometry_max_decomposition_levels() {
 /// have desynchronized (Eq. B-16).
 #[test]
 fn geometry_splits_past_the_maximal_precinct_extent() {
-    let wide = resolution_geoms(&header(32769, 16, 1, 6), 0, 0).unwrap();
+    let wide = geoms_of(&header(32769, 16, 1, 6), 0, 0).unwrap();
     assert_eq!(
         (wide[1].precincts_wide, wide[1].precincts_high),
         (2, 1),
         "the finest resolution spans two maximal precincts across"
     );
-    let tall = resolution_geoms(&header(16, 32769, 1, 6), 0, 0).unwrap();
+    let tall = geoms_of(&header(16, 32769, 1, 6), 0, 0).unwrap();
     assert_eq!((tall[1].precincts_wide, tall[1].precincts_high), (1, 2));
 }
 
 /// Exactly 2^15 still fits in the single maximal precinct.
 #[test]
 fn geometry_accepts_full_precinct_extent() {
-    let geoms = resolution_geoms(&header(32768, 16, 1, 6), 0, 0).unwrap();
+    let geoms = geoms_of(&header(32768, 16, 1, 6), 0, 0).unwrap();
     assert_eq!(geoms[1].bands[0].width, 16384);
+}
+
+/// A hostile geometry — a tall, thin tile-component under a 2^1 precinct — has
+/// ~one precinct per two rows, tens of millions of them, each its own
+/// allocation. The budget stops it *before* the precincts are built, not after:
+/// with the guard enforced inside the geometry walk this returns in microseconds,
+/// where the after-the-fact check it replaced spent seconds and gigabytes first.
+#[test]
+fn geometry_rejects_a_precinct_bomb_before_allocating() {
+    use std::time::Instant;
+    let mut header = header(1, 1 << 24, 1, 6);
+    header.components[0].coding.precinct_sizes = vec![(1, 1), (1, 1)];
+
+    let mut budget = super::MAX_PRECINCTS;
+    let start = Instant::now();
+    let result = resolution_geoms(&header, 0, 0, &mut budget);
+    let elapsed = start.elapsed();
+
+    assert!(
+        matches!(result, Err(crate::Error::Unsupported(_))),
+        "a 1×2^24 tile-component at a 2^1 precinct must be rejected"
+    );
+    assert!(
+        elapsed.as_millis() < 100,
+        "the guard must fire before the precincts are built, not after ({elapsed:?})"
+    );
+}
+
+/// The budget is the tile's, not a component's: two components each individually
+/// under the cap but together over it are still rejected, because
+/// `resolution_geoms` spends one running total across them.
+#[test]
+fn the_precinct_budget_is_shared_across_components() {
+    // A 1024×1024 tile-component under a 2^1 precinct is ~512×512 = 2^18
+    // precincts at the finest resolution, right at the cap. Give the header two
+    // such components; the shared budget must not admit both.
+    let mut header = header(1024, 1024, 1, 6);
+    header.siz.components.push(header.siz.components[0]);
+    header.components.push(header.components[0].clone());
+    for comp in &mut header.components {
+        comp.coding.precinct_sizes = vec![(1, 1), (1, 1)];
+    }
+
+    let mut budget = super::MAX_PRECINCTS;
+    let first = resolution_geoms(&header, 0, 0, &mut budget);
+    let second = resolution_geoms(&header, 0, 1, &mut budget);
+    assert!(
+        first.is_err() || matches!(second, Err(crate::Error::Unsupported(_))),
+        "two components sharing the budget must not both allocate their precincts"
+    );
 }
 
 /// A code-block size past the standard's 2^10 / xcb+ycb≤12 limit is rejected,
@@ -290,7 +348,7 @@ fn geometry_accepts_full_precinct_extent() {
 #[test]
 fn geometry_rejects_oversized_code_block() {
     // code_block_width field 9 → exponent 11 (> 10).
-    let err = resolution_geoms(&header(64, 64, 1, 13), 0, 0);
+    let err = geoms_of(&header(64, 64, 1, 13), 0, 0);
     assert!(matches!(err, Err(crate::Error::Marker(_))));
 }
 
@@ -629,7 +687,7 @@ fn resolution_geoms_honour_each_components_sub_sampling() {
     // tile-component extent in each axis.
     let expected_ll = [(32, 32), (16, 32), (32, 16), (16, 16)];
     for (component, (want_width, want_height)) in expected_ll.into_iter().enumerate() {
-        let geoms = resolution_geoms(&h, 0, component).unwrap();
+        let geoms = geoms_of(&h, 0, component).unwrap();
         let ll = &geoms[0].bands[0];
         assert_eq!(ll.kind, BandKind::Ll);
         assert_eq!(
@@ -641,7 +699,7 @@ fn resolution_geoms_honour_each_components_sub_sampling() {
 
     // A component index past the SIZ list is an internal inconsistency, not a
     // silent fall back to component 0.
-    assert!(resolution_geoms(&h, 0, 4).is_err());
+    assert!(geoms_of(&h, 0, 4).is_err());
 }
 
 // ---- Quality layers (issue #64) ----
@@ -1008,7 +1066,7 @@ fn order_of(
 ) -> Vec<(u32, usize, usize, usize)> {
     let header = layout.header();
     let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
-        .map(|c| resolution_geoms(&header, 0, c).expect("geometry"))
+        .map(|c| geoms_of(&header, 0, c).expect("geometry"))
         .collect();
     let walk = PacketWalk {
         siz: &header.siz,

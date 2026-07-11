@@ -32,6 +32,16 @@ use crate::{Error, Result};
 use bio::BitReader;
 use tagtree::TagTree;
 
+/// Ceiling on the number of precincts one tile may hold, across every component
+/// and resolution. Each precinct costs a `PrecinctGeom` (its own `Vec`) plus a
+/// tag-tree pair per subband, none of it bounded by the code-block or sample
+/// budgets — a band empty in one axis carries no blocks while its resolution
+/// still has a full column of precincts. 2^18 leaves any real encode far behind
+/// (a 4096-square image at the 64×64 precincts JPIP favours needs ~5.5k) while
+/// capping the allocation in the tens of megabytes. Enforced *while* the geometry
+/// is built, before the precincts are allocated — see [`resolution_geoms`].
+const MAX_PRECINCTS: usize = 1 << 18;
+
 /// The four subband orientations. Kept Tier-2-local so this stage stays
 /// independent of Tier-1; the assembly stage maps it to the Tier-1
 /// `Orientation` that selects the zero-coding context table.
@@ -140,9 +150,19 @@ pub struct CodedData<'a> {
 pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<CodedData<'a>> {
     let data: &'a [u8] = &tile.data;
 
+    // Precincts are bounded *as the geometry is built*, not after: a precinct's
+    // grid dimensions are cheap to compute but each precinct then allocates a
+    // `PrecinctGeom` with its own `Vec`, and the block count does not bound them
+    // — a band empty in one axis has no blocks while its resolution still has a
+    // full column of precincts. A 1 × 2^26 image under a 2^1 precinct is the
+    // shape that exploits it: ~2^25 precincts, each a heap allocation, built
+    // before any after-the-fact check could fire. So the cap is threaded through
+    // `resolution_geoms` and enforced before the allocation, across every
+    // component of the tile (`resolution_geoms` mutates the running total).
+    let mut precinct_budget = MAX_PRECINCTS;
     let component_count = header.siz.components.len();
     let geoms = (0..component_count)
-        .map(|c| resolution_geoms(header, tile.index, c))
+        .map(|c| resolution_geoms(header, tile.index, c, &mut precinct_budget))
         .collect::<Result<Vec<_>>>()?;
 
     // The sample budget bounds the decoded buffers, but the per-block
@@ -163,25 +183,6 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
     if total_blocks > MAX_CODE_BLOCKS {
         return Err(Error::Unsupported(format!(
             "{total_blocks} code-blocks exceeds the decode guard of {MAX_CODE_BLOCKS}"
-        )));
-    }
-
-    // Precincts need a guard of their own, because the block count does not
-    // bound them: a precinct costs two tag trees per subband whether or not the
-    // band reaches it, and a band that is empty in one axis has *no* blocks while
-    // its resolution still has a full column of precincts. A 1 × 2^26 image under
-    // a 2^1 precinct is the shape that exploits it. 2^18 leaves any real encode
-    // far behind — a 4096-square image at the 64×64 precincts JPIP favours needs
-    // ~5.5k — while capping the tag-tree allocation in the tens of megabytes.
-    const MAX_PRECINCTS: usize = 1 << 18;
-    let total_precincts: usize = geoms
-        .iter()
-        .flatten()
-        .map(ResolutionGeom::precinct_count)
-        .sum();
-    if total_precincts > MAX_PRECINCTS {
-        return Err(Error::Unsupported(format!(
-            "{total_precincts} precincts exceeds the decode guard of {MAX_PRECINCTS}"
         )));
     }
 
@@ -618,7 +619,17 @@ fn ceil_div(a: i64, b: i64) -> i64 {
 /// offset, so two tiles of one component yield subbands at different origins.
 /// Those origins are as load-bearing as the sizes — the inverse DWT reads its
 /// interleave parity from them, and the assembly stage places the tile by them.
-fn resolution_geoms(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<ResolutionGeom>> {
+///
+/// `precinct_budget` is the remaining precinct allowance across the whole tile;
+/// this decrements it per resolution and errors before the allocation once it is
+/// spent, so the [`MAX_PRECINCTS`] cap holds regardless of how a hostile header
+/// splits the count between components.
+fn resolution_geoms(
+    header: &MainHeader,
+    tile: u32,
+    comp: usize,
+    precinct_budget: &mut usize,
+) -> Result<Vec<ResolutionGeom>> {
     let siz = &header.siz;
     let cod = &header
         .components
@@ -677,6 +688,22 @@ fn resolution_geoms(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<R
         // count and the lattice point the first precinct starts on.
         let (precincts_wide, tl_prc_x) = prc_span(trx0, trx1, ppx);
         let (precincts_high, tl_prc_y) = prc_span(try0, try1, ppy);
+
+        // Spend the tile's precinct budget before this resolution's precincts are
+        // allocated below. `precincts_wide/high` are cheap products of the rect
+        // and the exponents; the `PrecinctGeom`s that follow are not, so the cap
+        // has to bite here rather than after the fact. `checked_mul` guards the
+        // product itself, since a 2^0 precinct at resolution 0 makes each factor
+        // as large as the resolution.
+        let here = precincts_wide.checked_mul(precincts_high);
+        match here.filter(|&n| n <= *precinct_budget) {
+            Some(n) => *precinct_budget -= n,
+            None => {
+                return Err(Error::Unsupported(format!(
+                    "tile precinct count exceeds the decode guard of {MAX_PRECINCTS}"
+                )));
+            }
+        }
 
         // The *code-block group*: where that precinct lands on the subband grid.
         // At resolution 0 the band is the resolution, so the two coincide. Above
