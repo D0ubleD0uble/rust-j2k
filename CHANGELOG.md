@@ -8,6 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Non-zero image and tile origins (`XOsiz`/`YOsiz`, `XTOsiz`/`YTOsiz`): the
+  canvas no longer has to start at the reference-grid origin. Subband extents,
+  the code-block partition, and the inverse DWT's interleave parity already read
+  absolute coordinates, so the origin flows through unchanged; the SIZ validation
+  now enforces the Table A-9 constraints a non-zero origin makes load-bearing
+  (`XOsiz < Xsiz`, `XTOsiz <= XOsiz`, `XTOsiz + XTsiz > XOsiz`) and bounds the
+  decode by the image area `(Xsiz − XOsiz)·(Ysiz − YOsiz)` rather than
+  `Xsiz·Ysiz`. Grades conformance entries `p1_01` (odd offset) and `p1_07`.
 - Precinct partition: codestreams that subdivide each resolution into precincts
   (`Scod`/`Scoc` bit 0 and the `SPcod`/`SPcoc` precinct sizes) now decode, with
   one packet and one pair of tag trees per precinct. Because a resolution can now
