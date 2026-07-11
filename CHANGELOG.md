@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Two code-block coding styles: **vertically causal context** (the significance
+  context of a stripe's bottom row ignores the next stripe) and **reset context
+  probabilities** (the MQ context model reinitialises after every coding pass).
+  Both are graded bit-exact against OpenJPEG. Their conformance entries (`p1_02`,
+  `p1_06`) also carry a PPT marker and so still wait on that; `bypass` is the one
+  remaining style.
 - Inverse ICT (irreversible colour transform): a three-component 9/7 codestream
   that signals the multiple-component transform now reconstructs colour by
   inverting the float YCbCr→RGB transform (Annex G.3), applied after the IDWT and

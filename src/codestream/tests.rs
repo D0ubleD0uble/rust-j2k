@@ -1920,10 +1920,11 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
 
     // Every code-block style flag that is not yet decoded, individually. Each
     // changes how Tier-1 reads a code-block, so none may be ignored. `restart`,
-    // `predictable termination` and `segmentation symbols` have left this table.
-    use markers::code_block_style::{PTERM, SEGSYM, TERMALL};
+    // `predictable termination`, `segmentation symbols`, `vertically causal
+    // context` and `reset context probabilities` have left this table.
+    use markers::code_block_style::{PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
     for (bit, name) in markers::code_block_style::FLAGS {
-        if bit & (TERMALL | PTERM | SEGSYM) != 0 {
+        if bit & (TERMALL | PTERM | SEGSYM | VCAUSAL | RESET) != 0 {
             continue;
         }
         rows.push((
@@ -1946,15 +1947,24 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     );
 }
 
-/// `restart` (termination on each coding pass) is decoded; the other style bits
-/// are not, and a style byte mixing them still rejects, naming only the parts
-/// that block it.
+/// The decoded style bits — restart, predictable termination, segmentation
+/// symbols, vertically causal context, and reset context probabilities — parse;
+/// bypass and the HTJ2K bits do not, and a style byte mixing them still rejects,
+/// naming only the parts that block it.
 #[test]
 fn the_decoded_styles_parse_and_the_rest_still_reject() {
-    use markers::code_block_style::{PTERM, SEGSYM, TERMALL};
+    use markers::code_block_style::{PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
 
-    // Every combination of the three decoded flags parses.
-    for style in [0, TERMALL, PTERM, SEGSYM, TERMALL | PTERM | SEGSYM] {
+    // Every combination of the five decoded flags parses.
+    for style in [
+        0,
+        TERMALL,
+        PTERM,
+        SEGSYM,
+        VCAUSAL,
+        RESET,
+        TERMALL | PTERM | SEGSYM | VCAUSAL | RESET,
+    ] {
         let bytes = codestream(&[
             seg(marker::SIZ, &one_component()),
             seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)),
@@ -1974,14 +1984,19 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
         5,
         4,
         4,
-        TERMALL | SEGSYM | 0x08, // + vertically causal
+        VCAUSAL | RESET | 0x01, // + selective arithmetic coding bypass
         1,
     )));
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("vertically causal context"), "{message}");
+    assert!(
+        message.contains("selective arithmetic coding bypass"),
+        "{message}"
+    );
     for decoded in [
+        "vertically causal context",
+        "reset context probabilities",
         "termination on each coding pass",
         "segmentation symbols",
         "predictable termination",
@@ -1997,8 +2012,8 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
 /// caller which feature to look up rather than printing a bare bit pattern.
 #[test]
 fn code_block_style_rejection_names_the_flags() {
-    // Two undecoded flags: bypass and reset.
-    let bytes = header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, 0x01 | 0x02, 1));
+    // Two undecoded flags: bypass and the HTJ2K high-throughput bit.
+    let bytes = header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, 0x01 | 0x40, 1));
     let e = err(&bytes);
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
@@ -2007,7 +2022,7 @@ fn code_block_style_rejection_names_the_flags() {
         message.contains("selective arithmetic coding bypass"),
         "{message}"
     );
-    assert!(message.contains("reset context probabilities"), "{message}");
+    assert!(message.contains("high-throughput"), "{message}");
 
     // The high bits select the HTJ2K block coder rather than being reserved, so
     // they are named too. Such a codestream also carries CAP, which rejects on
@@ -2196,14 +2211,17 @@ fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0x08, 1)), // vertically causal
+        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0x01, 1)), // bypass (undecoded)
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     let e = err(&bytes);
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("vertically causal context"), "{message}");
+    assert!(
+        message.contains("selective arithmetic coding bypass"),
+        "{message}"
+    );
     assert!(
         message.contains("COC"),
         "the message must name the marker: {message}"

@@ -98,6 +98,20 @@ pub mod marker {
 /// decodes the wrong one. None are decoded yet; `decode_cod` rejects any that
 /// are set.
 pub mod code_block_style {
+    /// Bit 3: vertically causal context. The 3×3 significance context of a
+    /// sample never reaches into the *next* stripe — a sample on a stripe's
+    /// bottom row treats the row below it (which belongs to the following stripe)
+    /// as insignificant. This *is* part of the codeword: it changes which context
+    /// every affected decision is coded under, so a decoder that ignores the flag
+    /// desynchronises the MQ coder (D.3).
+    pub const VCAUSAL: u8 = 0x08;
+
+    /// Bit 1: reset the MQ context probability estimates to their initial states
+    /// at the end of every coding pass, so each pass starts from the same context
+    /// model. Like [`VCAUSAL`], this is part of the codeword — it changes the
+    /// probability every later decision is coded against (D.3).
+    pub const RESET: u8 = 0x02;
+
     /// Bit 2: the MQ coder terminates after every coding pass, so each pass is
     /// an independently decodable codeword segment.
     pub const TERMALL: u8 = 0x04;
