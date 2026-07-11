@@ -1059,23 +1059,19 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
 }
 
 /// Decode COD — default coding style (A.6.1): transform, decomposition depth,
-/// progression, layers, code-block size/style. Rejects explicit precincts, the
+/// progression, layers, code-block size/style, precinct sizes. Rejects the
 /// non-default code-block styles, Part 2's array MCT, and ICT.
 fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     // Scod bit 0: user-defined precincts in SPcod. Bit 1: SOP may precede each
     // packet. Bit 2: EPH follows each packet header. Bits 3-7 are reserved.
     let scod = b.u8()?;
-    if scod & 0x01 != 0 {
-        return Err(Error::Unsupported(
-            "explicit precinct partition; the subset uses maximal precincts".into(),
-        ));
-    }
     if scod & 0xF8 != 0 {
         return Err(Error::Marker(format!(
             "COD sets reserved Scod bits {:#04X}",
             scod & 0xF8
         )));
     }
+    let explicit_precincts = scod & 0x01 != 0;
     let use_sop = scod & 0x02 != 0;
     let use_eph = scod & 0x04 != 0;
 
@@ -1111,7 +1107,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         }
     };
 
-    let coding = decode_coding(&mut b, "COD")?;
+    let coding = decode_coding(&mut b, "COD", explicit_precincts)?;
     let Coding {
         decomposition_levels,
         code_block_width,
@@ -1148,13 +1144,14 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
 }
 
 /// Decode the `SPcod`/`SPcoc` tail shared by COD and COC (Tables A-12, A-14):
-/// decomposition levels, the two code-block exponents, the style byte, and the
-/// wavelet. `origin` names the marker for error messages.
+/// decomposition levels, the two code-block exponents, the style byte, the
+/// wavelet, and — when `explicit_precincts` — the per-resolution precinct sizes.
+/// `origin` names the marker for error messages.
 ///
-/// Explicit precinct sizes are rejected by the caller before this runs (they are
-/// signalled in `Scod`/`Scoc`, not here), so `precinct_sizes` always comes back
-/// empty and the caller must have consumed the whole segment.
-fn decode_coding(b: &mut Cursor<'_>, origin: &str) -> Result<Coding> {
+/// The precinct flag lives in `Scod`/`Scoc`, not here, so the caller reads it and
+/// passes it down. When it is clear the partition is maximal and
+/// `precinct_sizes` comes back empty.
+fn decode_coding(b: &mut Cursor<'_>, origin: &str, explicit_precincts: bool) -> Result<Coding> {
     let decomposition_levels = b.u8()?;
     // Table A-15: 0–32 decomposition levels; 33–255 are reserved. A reserved
     // field encoding rejects at parse, like the wavelet and style bytes below.
@@ -1188,13 +1185,39 @@ fn decode_coding(b: &mut Cursor<'_>, origin: &str) -> Result<Coding> {
             )));
         }
     };
+    // One `SPcod` precinct byte per resolution — `NL + 1` of them, coarsest
+    // first — each packing `PPx` in the low nibble and `PPy` in the high one
+    // (Table A-21). They are exponents on that *resolution's* grid, so the same
+    // byte means a different span at every level.
+    let precinct_sizes = if explicit_precincts {
+        let mut sizes = Vec::with_capacity(usize::from(decomposition_levels) + 1);
+        for resolution in 0..=usize::from(decomposition_levels) {
+            let byte = b.u8()?;
+            let (ppx, ppy) = (byte & 0x0F, byte >> 4);
+            // A 2^0 precinct is legal only at the coarsest resolution (Table
+            // A-21). Above it the precinct is halved onto the subband grid, so a
+            // zero exponent would ask for a 2^-1 code-block partition — the
+            // geometry is not merely unusual, it does not exist.
+            if resolution > 0 && (ppx == 0 || ppy == 0) {
+                return Err(Error::Marker(format!(
+                    "{origin} sets precinct 2^{ppx}×2^{ppy} at resolution {resolution}; \
+                     a zero exponent is permitted only at resolution 0"
+                )));
+            }
+            sizes.push((ppx, ppy));
+        }
+        sizes
+    } else {
+        Vec::new()
+    };
+
     Ok(Coding {
         decomposition_levels,
         code_block_width,
         code_block_height,
         code_block_style,
         transform,
-        precinct_sizes: Vec::new(),
+        precinct_sizes,
     })
 }
 
@@ -1223,11 +1246,7 @@ fn component_index(b: &mut Cursor<'_>, siz: &Siz, origin: &str) -> Result<usize>
 fn decode_coc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Coding)> {
     let index = component_index(&mut b, siz, "COC")?;
     let scoc = b.u8()?;
-    if scoc & 0x01 != 0 {
-        return Err(Error::Unsupported(
-            "explicit precinct partition; the subset uses maximal precincts".into(),
-        ));
-    }
+    let explicit_precincts = scoc & 0x01 != 0;
     // Only bit 0 is defined in `Scoc` (Table A-21). SOP and EPH are signalled
     // once for the tile, in COD's `Scod`, and have no per-component form — so
     // unlike `Scod` there is nothing else here to read. OpenJPEG stores the byte
@@ -1238,7 +1257,7 @@ fn decode_coc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Coding)> {
             scoc & 0xFE
         )));
     }
-    let coding = decode_coding(&mut b, "COC")?;
+    let coding = decode_coding(&mut b, "COC", explicit_precincts)?;
     b.expect_consumed("COC")?;
     Ok((index, coding))
 }

@@ -452,8 +452,26 @@ pub struct Coding {
     pub code_block_height: u8, // exponent: height = 2^(value + 2)
     pub code_block_style: u8,  // bit flags: bypass, reset, restart, vcausal, segsym, …
     pub transform: Transform,
-    /// Empty when the precinct partition is maximal (`PPx = PPy = 15`).
+    /// `(PPx, PPy)` per resolution, coarsest first, as read from `SPcod`/`SPcoc`.
+    /// Empty when the partition is maximal, which is the same as `(15, 15)`
+    /// everywhere — [`precinct`](Self::precinct) hides the difference.
     pub precinct_sizes: Vec<(u8, u8)>,
+}
+
+impl Coding {
+    /// The precinct exponents `(PPx, PPy)` at resolution `r`, on **that
+    /// resolution's** grid (ISO/IEC 15444-1 B.6).
+    ///
+    /// A maximal partition — `Scod` bit 0 clear — is `(15, 15)` at every
+    /// resolution, and 2^15 exceeds any tile-component the sample budget admits,
+    /// so it yields the single precinct the pre-#61 decoder assumed. That makes
+    /// the implicit case a special case of the explicit one rather than a
+    /// separate path.
+    pub fn precinct(&self, r: usize) -> (u32, u32) {
+        self.precinct_sizes
+            .get(r)
+            .map_or((15, 15), |&(ppx, ppy)| (u32::from(ppx), u32::from(ppy)))
+    }
 }
 
 /// A component's effective coding and quantization parameters, after `COC` has

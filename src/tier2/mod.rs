@@ -9,12 +9,11 @@
 //! the arithmetic decoder.
 //!
 //! This stage runs once per **tile**: a tile's packets are its own, in its own
-//! progression, and nothing about them crosses a tile boundary. The decoded
-//! subset uses maximal precincts, so the position axis has one value per
-//! resolution and the packet stream walks the remaining three axes — layer,
-//! resolution, component — in whichever order that tile's `COD` names. The
-//! tile's data is then `header₀ body₀ header₁ body₁ …` with no padding, and the
-//! packets must tile it exactly; a leftover byte means a misread field.
+//! progression, and nothing about them crosses a tile boundary. The packet
+//! stream walks four axes — layer, resolution, component, and *position* (the
+//! precinct) — in whichever order that tile's `COD` names. The tile's data is
+//! then `header₀ body₀ header₁ body₁ …` with no padding, and the packets must
+//! tile it exactly; a leftover byte means a misread field.
 //!
 //! A code-block's contributions accumulate across the layers that include it,
 //! so a precinct's tag trees and per-block state outlive any one packet. See
@@ -27,11 +26,21 @@
 pub mod bio;
 pub mod tagtree;
 
-use crate::codestream::markers::{Progression, marker};
+use crate::codestream::markers::{Progression, Rect, Siz, marker};
 use crate::codestream::{MainHeader, Tile};
 use crate::{Error, Result};
 use bio::BitReader;
 use tagtree::TagTree;
+
+/// Ceiling on the number of precincts one tile may hold, across every component
+/// and resolution. Each precinct costs a `PrecinctGeom` (its own `Vec`) plus a
+/// tag-tree pair per subband, none of it bounded by the code-block or sample
+/// budgets — a band empty in one axis carries no blocks while its resolution
+/// still has a full column of precincts. 2^18 leaves any real encode far behind
+/// (a 4096-square image at the 64×64 precincts JPIP favours needs ~5.5k) while
+/// capping the allocation in the tens of megabytes. Enforced *while* the geometry
+/// is built, before the precincts are allocated — see [`resolution_geoms`].
+const MAX_PRECINCTS: usize = 1 << 18;
 
 /// The four subband orientations. Kept Tier-2-local so this stage stays
 /// independent of Tier-1; the assembly stage maps it to the Tier-1
@@ -133,33 +142,37 @@ pub struct CodedData<'a> {
 /// tile-component bound is the *tile*'s rect on that component's grid, not the
 /// image's.
 ///
-/// LRCP orders packets layer, then resolution, then component, then precinct
-/// (ISO B.12.1.1). With maximal precincts that reduces to a layer-major sweep
-/// with resolutions and components nested inside it: `r0c0, r0c1, …, r1c0, r1c1,
-/// …`. Each component carries its own tile-component geometry, so a sub-sampled
-/// component's subbands are smaller at the same resolution.
+/// There is one packet per (layer, resolution, component, precinct) the tile
+/// carries, enumerated in `COD`'s progression order — see [`for_each_packet`].
+/// Each component carries its own tile-component geometry, so a sub-sampled
+/// component's subbands are smaller at the same resolution, and its precinct
+/// lattice is coarser on the reference grid.
 pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<CodedData<'a>> {
     let data: &'a [u8] = &tile.data;
 
+    // Precincts are bounded *as the geometry is built*, not after: a precinct's
+    // grid dimensions are cheap to compute but each precinct then allocates a
+    // `PrecinctGeom` with its own `Vec`, and the block count does not bound them
+    // — a band empty in one axis has no blocks while its resolution still has a
+    // full column of precincts. A 1 × 2^26 image under a 2^1 precinct is the
+    // shape that exploits it: ~2^25 precincts, each a heap allocation, built
+    // before any after-the-fact check could fire. So the cap is threaded through
+    // `resolution_geoms` and enforced before the allocation, across every
+    // component of the tile (`resolution_geoms` mutates the running total).
+    let mut precinct_budget = MAX_PRECINCTS;
     let component_count = header.siz.components.len();
     let geoms = (0..component_count)
-        .map(|c| resolution_geoms(header, tile.index, c))
+        .map(|c| resolution_geoms(header, tile.index, c, &mut precinct_budget))
         .collect::<Result<Vec<_>>>()?;
-    // A COC gives a component its own decomposition depth, so the resolution
-    // axis is as long as the deepest component and the shallower ones simply do
-    // not appear at its tail. The progression walks the full axis and skips the
-    // pairs that do not exist, exactly as `opj_pi_next_*` does with
-    // `if (resno >= comp->numresolutions) continue;`.
-    let resolution_count = geoms.iter().map(Vec::len).max().unwrap_or(0);
 
     // The sample budget bounds the decoded buffers, but the per-block
-    // bookkeeping below — `BandState`, two tag trees, and the eventual
-    // `CodeBlock`s, roughly 200 bytes a block — is driven by the code-block
-    // *count*, which legal 4×4 blocks push toward samples/16: a sub-kilobyte
-    // header could demand ~1 GiB of metadata. 2^19 clears every plausible real
-    // encode (64×64 default blocks at the full sample budget need ~2^15)
-    // while capping hostile geometry near 100 MiB. The geometry tuples already
-    // built above are transient and an order of magnitude cheaper per block.
+    // bookkeeping below — `BlockState` and the eventual `CodeBlock`s, roughly
+    // 200 bytes a block — is driven by the code-block *count*, which legal 4×4
+    // blocks push toward samples/16: a sub-kilobyte header could demand ~1 GiB
+    // of metadata. 2^19 clears every plausible real encode (64×64 default blocks
+    // at the full sample budget need ~2^15) while capping hostile geometry near
+    // 100 MiB. The geometry tuples already built above are transient and an
+    // order of magnitude cheaper per block.
     const MAX_CODE_BLOCKS: usize = 1 << 19;
     let total_blocks: usize = geoms
         .iter()
@@ -173,9 +186,9 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
         )));
     }
 
-    // One state per (component, resolution, band), carried across every layer of
-    // the precinct. The tag trees decode incrementally, so they must outlive the
-    // packet that starts them.
+    // One state per (component, resolution, band), carried across every layer.
+    // The tag trees decode incrementally and there is a pair per *precinct*, so
+    // they must outlive the packet that starts them.
     let mut states: Vec<Vec<Vec<BandState<'a>>>> = geoms
         .iter()
         .map(|component| {
@@ -186,6 +199,14 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
         })
         .collect();
 
+    let walk = PacketWalk {
+        siz: &header.siz,
+        tile: header
+            .siz
+            .tile_rect(tile.index)
+            .ok_or_else(|| Error::Inconsistent(format!("no tile {} in SIZ", tile.index)))?,
+        geoms: &geoms,
+    };
     let delimiters = Delimiters {
         sop: header.cod.use_sop,
         eph: header.cod.use_eph,
@@ -195,19 +216,9 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
     for_each_packet(
         header.cod.progression,
         header.cod.layers as u32,
-        resolution_count,
-        component_count,
-        |layer, resolution, component| {
-            // This component has no such resolution: the packet is not in the
-            // codestream at all, so it also does not consume a packet index.
-            // Numbering it would desynchronise every later `Nsop`.
-            if resolution >= geoms[component].len() {
-                return Ok(());
-            }
-            // Nor does an empty resolution, which has no precinct to carry one.
-            if geoms[component][resolution].empty {
-                return Ok(());
-            }
+        &walk,
+        |layer, resolution, component, precinct| {
+            let geom = &geoms[component][resolution];
             cursor = parse_packet(
                 data,
                 cursor,
@@ -215,7 +226,8 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
                 packet_index,
                 delimiters,
                 header.components[component].coding.code_block_style,
-                &geoms[component][resolution].bands,
+                &geom.bands,
+                precinct,
                 &mut states[component][resolution],
             )?;
             packet_index += 1;
@@ -255,8 +267,8 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
 }
 
 /// Geometry of one subband before its segments are parsed: orientation, origin,
-/// sample dimensions, and the code-block grid (each block's band-relative
-/// position and size).
+/// sample dimensions, the code-block grid (each block's band-relative position
+/// and size), and how the precincts divide that grid up.
 struct BandGeom {
     kind: BandKind,
     origin: (u32, u32),
@@ -264,18 +276,38 @@ struct BandGeom {
     height: usize,
     block_cols: usize,
     block_rows: usize,
-    /// `(x, y, width, height)` per block, row-major.
+    /// `(x, y, width, height)` per block, row-major over the **whole band**.
     blocks: Vec<(usize, usize, usize, usize)>,
+    /// One entry per precinct of the enclosing resolution, in raster order — so
+    /// `precincts.len()` is the same on every band of a resolution, even where
+    /// the band is empty and each entry owns nothing.
+    precincts: Vec<PrecinctGeom>,
 }
 
-/// One resolution level of a tile-component: its subbands, and whether it
-/// carries a packet at all.
+/// One precinct's slice of one subband: the sub-grid of code-blocks it owns
+/// (ISO/IEC 15444-1 B.7).
 ///
+/// The precinct partition and the code-block partition are both anchored at the
+/// canvas origin, and a code-block is never larger than its precinct, so the
+/// blocks of a precinct are a contiguous rectangle of the band's block grid and
+/// every block belongs to exactly one precinct. `cols × rows` is therefore both
+/// the block count and the dimensions of the two tag trees the packet header
+/// runs over this precinct.
+struct PrecinctGeom {
+    cols: usize,
+    rows: usize,
+    /// Indices into [`BandGeom::blocks`], row-major within the precinct.
+    blocks: Vec<usize>,
+}
+
+/// One resolution level of a tile-component: its precinct grid and its subbands.
+///
+/// A packet exists per (layer, resolution, component, **precinct**), so the
+/// precinct grid is what decides how many packets this resolution contributes.
 /// A resolution whose rectangle is empty — `trx0 == trx1` or `try0 == try1` —
-/// has **zero precincts** (ISO B.6), and a packet exists per precinct, so such a
-/// resolution contributes *no* packet to the codestream. Reading one anyway
-/// would consume the next resolution's bytes and desynchronise the rest of the
-/// tile.
+/// has **zero precincts** (ISO B.6) and so contributes *no* packet. Reading one
+/// anyway would consume the next resolution's bytes and desynchronise the rest
+/// of the tile.
 ///
 /// Empty resolutions are not a curiosity: a tile-component only one sample wide
 /// at an odd origin has `ceil(u0/2) == ceil(u1/2)`, so it vanishes one level up.
@@ -284,79 +316,306 @@ struct BandGeom {
 /// OpenJPEG skips them the same way: `opj_pi_next_*` bounds its precinct loop by
 /// `res->pw * res->ph`, which is zero here.
 struct ResolutionGeom {
-    empty: bool,
+    /// Precinct exponents `(PPx, PPy)` on **this resolution's** grid.
+    ppx: u32,
+    ppy: u32,
+    /// The precinct grid: OpenJPEG's `res->pw` and `res->ph`.
+    precincts_wide: usize,
+    precincts_high: usize,
     bands: Vec<BandGeom>,
 }
 
+impl ResolutionGeom {
+    /// How many packets this resolution carries per (layer, component): one per
+    /// precinct, and zero when the resolution is empty.
+    fn precinct_count(&self) -> usize {
+        self.precincts_wide * self.precincts_high
+    }
+}
+
+/// Everything the packet walk needs beyond the geometry itself: the tile's
+/// rectangle on the **reference grid** and the components' sub-sampling.
+///
+/// The two positional orders below enumerate precincts by sweeping the reference
+/// grid, not by counting, so they need the canvas coordinates a resolution's
+/// precinct lattice is anchored to — which the per-component geometry has
+/// already divided away.
+struct PacketWalk<'a> {
+    siz: &'a Siz,
+    tile: Rect,
+    geoms: &'a [Vec<ResolutionGeom>],
+}
+
+impl PacketWalk<'_> {
+    /// A component's sub-sampling `(XRsiz, YRsiz)`.
+    fn sampling(&self, comp: usize) -> (u64, u64) {
+        let c = &self.siz.components[comp];
+        (u64::from(c.x_sampling), u64::from(c.y_sampling))
+    }
+
+    /// How many decomposition levels still separate resolution `res` of `comp`
+    /// from the tile-component grid — OpenJPEG's `levelno`.
+    fn level(&self, comp: usize, res: usize) -> u32 {
+        (self.geoms[comp].len() - 1 - res) as u32
+    }
+
+    /// The precinct of `(comp, res)` whose top-left corner sits at the
+    /// reference-grid point `(x, y)`, or `None` if no precinct starts there
+    /// (ISO B.12.1.3–B.12.1.5; OpenJPEG's `opj_pi_next_rpcl`).
+    ///
+    /// The lattice test is what keeps the sweep injective: the step below is the
+    /// *finest* precinct over all components, so a component with a coarser
+    /// partition must be skipped at the points between its own precinct corners.
+    /// The `x == tx0` escape is the tile's leading partial precinct, whose corner
+    /// is off-lattice because the tile begins mid-precinct.
+    ///
+    /// All the scaling here is `u64` and unguarded: a resolution's precinct span
+    /// is `XRsiz · 2^(PPx + level)`, at most `255 · 2^(15 + 32) < 2^55`, so it
+    /// always fits. This is deliberately **not** the 32-bit [`shl32`] the step
+    /// uses — OpenJPEG guards the step at 32 bits but scales the emission span in
+    /// 64, and a coarse resolution of a deep pyramid (span past `2^32`) is a
+    /// packet it emits. Gating emission on `shl32` would drop that packet and
+    /// desynchronise the tile.
+    fn precinct_at(&self, comp: usize, res: usize, x: u64, y: u64) -> Option<usize> {
+        let geom = &self.geoms[comp][res];
+        if geom.precinct_count() == 0 {
+            return None;
+        }
+        let level = self.level(comp, res);
+        let (dx, dy) = self.sampling(comp);
+
+        // The tile-component-to-resolution scale, `XRsiz · 2^level`.
+        let (sx, sy) = (dx << level, dy << level);
+        let (tx0, ty0) = (u64::from(self.tile.x0), u64::from(self.tile.y0));
+        let (tx1, ty1) = (u64::from(self.tile.x1), u64::from(self.tile.y1));
+        let (trx0, trx1) = (tx0.div_ceil(sx), tx1.div_ceil(sx));
+        let (try0, try1) = (ty0.div_ceil(sy), ty1.div_ceil(sy));
+        if trx0 == trx1 || try0 == try1 {
+            return None;
+        }
+
+        // The precinct's span in reference-grid units: its resolution-grid
+        // exponent scaled back up through the pyramid and the sub-sampling.
+        let (rpx, rpy) = (geom.ppx + level, geom.ppy + level);
+        let (px, py) = (dx << rpx, dy << rpy);
+
+        // A precinct corner sits at `v` when `v` is on the precinct lattice — or
+        // when `v` is the tile's own leading edge and the lattice missed it,
+        // which is the partial precinct a tile that begins mid-precinct carries.
+        let corner = |v: u64, t0: u64, tr0: u64, span: u64, exp: u32| {
+            v.is_multiple_of(span) || (v == t0 && !(tr0 << level).is_multiple_of(1u64 << exp))
+        };
+        if !corner(y, ty0, try0, py, rpy) || !corner(x, tx0, trx0, px, rpx) {
+            return None;
+        }
+
+        let i = (x.div_ceil(sx) >> geom.ppx) - (trx0 >> geom.ppx);
+        let j = (y.div_ceil(sy) >> geom.ppy) - (try0 >> geom.ppy);
+        debug_assert!(
+            i < geom.precincts_wide as u64 && j < geom.precincts_high as u64,
+            "precinct index ({i}, {j}) out of the {}×{} grid",
+            geom.precincts_wide,
+            geom.precincts_high,
+        );
+        Some(j as usize * geom.precincts_wide + i as usize)
+    }
+
+    /// The sweep's step: the finest precinct span, in reference-grid units, over
+    /// the `(component, resolution)` pairs the order sweeps together. Stepping by
+    /// the minimum is what lets one sweep serve every component at once —
+    /// [`precinct_at`](Self::precinct_at) then filters out the points that are
+    /// not a given component's precinct corner.
+    ///
+    /// `None` when no pair contributes, which happens when every one of them
+    /// scales past the 32-bit reference grid. OpenJPEG skips those the same way,
+    /// so the packet stream stays aligned with the oracle's.
+    fn step(&self, pairs: impl Iterator<Item = (usize, usize)>) -> Option<(u64, u64)> {
+        let (mut step_x, mut step_y): (Option<u64>, Option<u64>) = (None, None);
+        for (comp, res) in pairs {
+            let geom = &self.geoms[comp][res];
+            let level = self.level(comp, res);
+            let (dx, dy) = self.sampling(comp);
+            if let Some(v) = shl32(dx, geom.ppx + level) {
+                step_x = Some(step_x.map_or(v, |cur: u64| cur.min(v)));
+            }
+            if let Some(v) = shl32(dy, geom.ppy + level) {
+                step_y = Some(step_y.map_or(v, |cur: u64| cur.min(v)));
+            }
+        }
+        Some((step_x?, step_y?))
+    }
+}
+
+/// `value << shift`, or `None` when the result leaves the 32-bit reference grid.
+///
+/// Used only to derive the sweep *step*: OpenJPEG minimises `pi->dx` under a
+/// 32-bit guard (`opj_pi_next_rpcl`'s `first` block), skipping a
+/// `(component, resolution)` pair whose span overflows 32 bits. A pair skipped
+/// here only widens the step past that pair's own precincts, which the corner
+/// test in [`PacketWalk::precinct_at`] filters back out — so the packet set is
+/// unchanged. Emission itself is **not** gated this way: `precinct_at` scales in
+/// full `u64`, because OpenJPEG emits a coarse-resolution packet whose span sits
+/// past `2^32`.
+fn shl32(value: u64, shift: u32) -> Option<u64> {
+    let scaled = value.checked_shl(shift)?;
+    (scaled <= u64::from(u32::MAX)).then_some(scaled)
+}
+
 /// Visit every packet of the tile in the order `progression` prescribes
-/// (ISO/IEC 15444-1 B.12.1), calling `f(layer, resolution, component)` for each.
+/// (ISO/IEC 15444-1 B.12.1), calling `f(layer, resolution, component, precinct)`
+/// for each.
 ///
 /// The standard nests four axes — layer, resolution, component, position — and
-/// each order is a permutation of them. The decoded subset has maximal
-/// precincts, so the *position* axis has exactly one value per resolution and
-/// drops out, leaving three:
+/// each order is a permutation of them:
 ///
 /// ```text
-/// order   standard nesting   with one precinct
-/// LRCP    l → r → c → p      l → r → c
-/// RLCP    r → l → c → p      r → l → c
-/// RPCL    r → p → c → l      r → c → l
-/// PCRL    p → c → r → l      c → r → l
-/// CPRL    c → p → r → l      c → r → l
+/// LRCP    l → r → c → p        RPCL    r → p → c → l
+/// RLCP    r → l → c → p        PCRL    p → c → r → l
+///                              CPRL    c → p → r → l
 /// ```
 ///
-/// PCRL and CPRL therefore enumerate the *same* sequence here. That is not an
-/// approximation — with one precinct the orders genuinely coincide — but it does
-/// mean no test in this crate can tell them apart until the precinct partition
-/// lands (issue #61). The same caveat applies to any codestream with one layer
-/// and one component, where all five orders coincide; see `docs/correctness.md`
-/// §A passing entry is not proof the feature works.
+/// The two on the left put position innermost, so they enumerate it by counting:
+/// a resolution's precincts in raster order. The three on the right put it
+/// *outside* at least one other axis, and there counting will not do — a packet's
+/// place in the stream depends on where its precinct sits on the canvas, and two
+/// components with different sub-sampling or different precinct sizes interleave.
+/// Those three therefore sweep the reference grid itself, in steps of the finest
+/// precinct, and ask each (component, resolution) whether a precinct of its own
+/// starts at that point. This is OpenJPEG's `opj_pi_next_rpcl` / `_pcrl` /
+/// `_cprl`, and the three differ only in what is nested around the sweep.
+///
+/// All five visit exactly the same set of packets — they are permutations, not
+/// different selections — which `every_order_visits_the_same_packets` pins down.
 fn for_each_packet<F>(
     progression: Progression,
     layers: u32,
-    resolutions: usize,
-    components: usize,
+    walk: &PacketWalk<'_>,
     mut f: F,
 ) -> Result<()>
 where
-    F: FnMut(u32, usize, usize) -> Result<()>,
+    F: FnMut(u32, usize, usize, usize) -> Result<()>,
 {
+    let components = walk.geoms.len();
+    let resolutions = walk.geoms.iter().map(Vec::len).max().unwrap_or(0);
+    // A component's resolution axis is as long as its own COD/COC says, so the
+    // shallower ones simply do not appear at the tail of the deepest one's.
+    let has = |comp: usize, res: usize| res < walk.geoms[comp].len();
+    let precincts = |comp: usize, res: usize| walk.geoms[comp][res].precinct_count();
+
+    let (tx0, ty0) = (u64::from(walk.tile.x0), u64::from(walk.tile.y0));
+    let (tx1, ty1) = (u64::from(walk.tile.x1), u64::from(walk.tile.y1));
+
     match progression {
         Progression::Lrcp => {
             for layer in 0..layers {
-                for resolution in 0..resolutions {
-                    for component in 0..components {
-                        f(layer, resolution, component)?;
+                for res in 0..resolutions {
+                    for comp in 0..components {
+                        if !has(comp, res) {
+                            continue;
+                        }
+                        for precinct in 0..precincts(comp, res) {
+                            f(layer, res, comp, precinct)?;
+                        }
                     }
                 }
             }
         }
         Progression::Rlcp => {
-            for resolution in 0..resolutions {
+            for res in 0..resolutions {
                 for layer in 0..layers {
-                    for component in 0..components {
-                        f(layer, resolution, component)?;
+                    for comp in 0..components {
+                        if !has(comp, res) {
+                            continue;
+                        }
+                        for precinct in 0..precincts(comp, res) {
+                            f(layer, res, comp, precinct)?;
+                        }
                     }
                 }
             }
         }
+        // Resolution outermost, then the positional sweep, then component, then
+        // layer. The step is the finest precinct over *every* component and
+        // resolution — computed once, not per resolution: OpenJPEG's
+        // `opj_pi_next_rpcl` minimises `pi->dx` across all of them in its `first`
+        // block and reuses it for each resolution's sweep. A per-resolution step
+        // would be coarser and, with non-power-of-two sub-sampling, could step
+        // over a precinct corner belonging to this resolution.
         Progression::Rpcl => {
-            for resolution in 0..resolutions {
-                for component in 0..components {
-                    for layer in 0..layers {
-                        f(layer, resolution, component)?;
+            let pairs = (0..components).flat_map(|c| (0..walk.geoms[c].len()).map(move |r| (c, r)));
+            let Some((step_x, step_y)) = walk.step(pairs) else {
+                return Ok(());
+            };
+            for res in 0..resolutions {
+                let mut y = ty0;
+                while y < ty1 {
+                    let mut x = tx0;
+                    while x < tx1 {
+                        for comp in 0..components {
+                            if !has(comp, res) {
+                                continue;
+                            }
+                            if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
+                                for layer in 0..layers {
+                                    f(layer, res, comp, precinct)?;
+                                }
+                            }
+                        }
+                        x += step_x - (x % step_x);
                     }
+                    y += step_y - (y % step_y);
                 }
             }
         }
-        // With one precinct these two are the same walk: PCRL's position loop
-        // and CPRL's both degenerate, leaving component outside resolution.
-        Progression::Pcrl | Progression::Cprl => {
-            for component in 0..components {
-                for resolution in 0..resolutions {
-                    for layer in 0..layers {
-                        f(layer, resolution, component)?;
+        // The sweep outermost, so its step is the finest precinct over *every*
+        // component and resolution at once.
+        Progression::Pcrl => {
+            let pairs = (0..components).flat_map(|c| (0..walk.geoms[c].len()).map(move |r| (c, r)));
+            let Some((step_x, step_y)) = walk.step(pairs) else {
+                return Ok(());
+            };
+            let mut y = ty0;
+            while y < ty1 {
+                let mut x = tx0;
+                while x < tx1 {
+                    for comp in 0..components {
+                        for res in 0..walk.geoms[comp].len() {
+                            if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
+                                for layer in 0..layers {
+                                    f(layer, res, comp, precinct)?;
+                                }
+                            }
+                        }
                     }
+                    x += step_x - (x % step_x);
+                }
+                y += step_y - (y % step_y);
+            }
+        }
+        // Component outermost, so each gets its own sweep — and its own step, the
+        // finest precinct over that component's resolutions alone. This is where
+        // CPRL parts company with PCRL: PCRL interleaves the components inside
+        // one shared sweep, CPRL finishes a component before starting the next.
+        Progression::Cprl => {
+            for comp in 0..components {
+                let pairs = (0..walk.geoms[comp].len()).map(|r| (comp, r));
+                let Some((step_x, step_y)) = walk.step(pairs) else {
+                    continue;
+                };
+                let mut y = ty0;
+                while y < ty1 {
+                    let mut x = tx0;
+                    while x < tx1 {
+                        for res in 0..walk.geoms[comp].len() {
+                            if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
+                                for layer in 0..layers {
+                                    f(layer, res, comp, precinct)?;
+                                }
+                            }
+                        }
+                        x += step_x - (x % step_x);
+                    }
+                    y += step_y - (y % step_y);
                 }
             }
         }
@@ -373,10 +632,8 @@ fn ceil_div(a: i64, b: i64) -> i64 {
     if a.rem_euclid(b) != 0 { q + 1 } else { q }
 }
 
-/// Compute the resolution → subband → code-block geometry for one
-/// tile-component, coarsest resolution first (ISO B.5–B.7, Eq. B-15). Maximal
-/// precincts mean one precinct per resolution, so the code-block grid tiles each
-/// whole subband.
+/// Compute the resolution → precinct → subband → code-block geometry for one
+/// tile-component, coarsest resolution first (ISO B.5–B.7, Eq. B-14/B-15/B-16).
 ///
 /// The bounds come from `tile`'s rect on *this component's* grid (B.3, Eq.
 /// B-7/B-12): they divide by the component's sub-sampling, so two components of
@@ -384,7 +641,17 @@ fn ceil_div(a: i64, b: i64) -> i64 {
 /// offset, so two tiles of one component yield subbands at different origins.
 /// Those origins are as load-bearing as the sizes — the inverse DWT reads its
 /// interleave parity from them, and the assembly stage places the tile by them.
-fn resolution_geoms(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<ResolutionGeom>> {
+///
+/// `precinct_budget` is the remaining precinct allowance across the whole tile;
+/// this decrements it per resolution and errors before the allocation once it is
+/// spent, so the [`MAX_PRECINCTS`] cap holds regardless of how a hostile header
+/// splits the count between components.
+fn resolution_geoms(
+    header: &MainHeader,
+    tile: u32,
+    comp: usize,
+    precinct_budget: &mut usize,
+) -> Result<Vec<ResolutionGeom>> {
     let siz = &header.siz;
     let cod = &header
         .components
@@ -410,25 +677,6 @@ fn resolution_geoms(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<R
     let (tcx0, tcx1) = (i64::from(rect.x0), i64::from(rect.x1));
     let (tcy0, tcy1) = (i64::from(rect.y0), i64::from(rect.y1));
 
-    // "One precinct per resolution" is an assumption the packet walk depends
-    // on, not a theorem: a maximal precinct (PPx = PPy = 15) spans 2^15
-    // resolution-grid units, so a tile-component larger than that carries more
-    // packets per (layer, resolution, component) than `for_each_packet` visits
-    // and the parse would desynchronize (Eq. B-16). The finest resolution uses
-    // the tile-component grid itself and coarser levels only shrink the span,
-    // so checking it here covers every resolution.
-    const PRECINCT_SPAN: i64 = 1 << 15;
-    let precincts_x = ceil_div(tcx1, PRECINCT_SPAN) - tcx0 / PRECINCT_SPAN;
-    let precincts_y = ceil_div(tcy1, PRECINCT_SPAN) - tcy0 / PRECINCT_SPAN;
-    if precincts_x > 1 || precincts_y > 1 {
-        return Err(Error::Unsupported(format!(
-            "tile-component {}×{} spans {precincts_x}×{precincts_y} maximal \
-             precincts; only single-precinct codestreams are decoded",
-            tcx1 - tcx0,
-            tcy1 - tcy0,
-        )));
-    }
-
     // Code-block exponents (COD stores `log2(size) - 2`). The standard bounds
     // each at 2^10 and their sum at 2^12 (ISO Table A-18); reject anything
     // larger so the grid shifts below stay well-defined and a malformed COD is
@@ -441,27 +689,92 @@ fn resolution_geoms(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<R
         )));
     }
 
-    // With maximal precincts (PPx = PPy = 15), the precinct never shrinks the
-    // block at level 0 and caps it one below the precinct at finer levels
-    // (ISO B.6); for the subset's 2^6 blocks neither cap bites.
-
     let mut levels = Vec::with_capacity((nl + 1) as usize);
     for r in 0..=nl {
+        // The resolution's own rectangle (ISO B.5, Eq. B-14). It is what the
+        // precinct grid is cut from — not the bands', which can be empty while
+        // the resolution is not.
+        let level = nl - r;
+        let pow = 1i64 << level;
+        let (trx0, trx1) = (ceil_div(tcx0, pow), ceil_div(tcx1, pow));
+        let (try0, try1) = (ceil_div(tcy0, pow), ceil_div(tcy1, pow));
+
+        // Precinct exponents are quoted on the resolution grid. The parser
+        // guarantees a non-zero exponent above resolution 0, so the `- 1` below
+        // is always in range.
+        let (ppx, ppy) = cod.precinct(r as usize);
+        debug_assert!(r == 0 || (ppx >= 1 && ppy >= 1));
+
+        // The precinct grid over the resolution (ISO B.6, Eq. B-16), anchored at
+        // the canvas origin like every other partition. `prc_span` returns the
+        // count and the lattice point the first precinct starts on.
+        let (precincts_wide, tl_prc_x) = prc_span(trx0, trx1, ppx);
+        let (precincts_high, tl_prc_y) = prc_span(try0, try1, ppy);
+
+        // Spend the tile's precinct budget before this resolution's precincts are
+        // allocated below. `precincts_wide/high` are cheap products of the rect
+        // and the exponents; the `PrecinctGeom`s that follow are not, so the cap
+        // has to bite here rather than after the fact. `checked_mul` guards the
+        // product itself, since a 2^0 precinct at resolution 0 makes each factor
+        // as large as the resolution.
+        let here = precincts_wide.checked_mul(precincts_high);
+        match here.filter(|&n| n <= *precinct_budget) {
+            Some(n) => *precinct_budget -= n,
+            None => {
+                return Err(Error::Unsupported(format!(
+                    "tile precinct count exceeds the decode guard of {MAX_PRECINCTS}"
+                )));
+            }
+        }
+
+        // The *code-block group*: where that precinct lands on the subband grid.
+        // At resolution 0 the band is the resolution, so the two coincide. Above
+        // it the three bands sit on a grid one level coarser than the
+        // resolution's, so the precinct halves — which is why a 2^0 precinct is
+        // legal only at resolution 0, and why the code-block is capped one
+        // exponent lower here (ISO B.6, Eq. B-17/B-18).
+        let cbg = if r == 0 {
+            Cbg {
+                x0: tl_prc_x,
+                y0: tl_prc_y,
+                x_exp: ppx,
+                y_exp: ppy,
+                wide: precincts_wide,
+                high: precincts_high,
+            }
+        } else {
+            Cbg {
+                x0: ceil_div(tl_prc_x, 2),
+                y0: ceil_div(tl_prc_y, 2),
+                x_exp: ppx - 1,
+                y_exp: ppy - 1,
+                wide: precincts_wide,
+                high: precincts_high,
+            }
+        };
+        // A code-block never outgrows the precinct that has to contain it
+        // (ISO B.7): OpenJPEG's `cblkwidthexpn = min(tccp->cblkw, cbgwidthexpn)`.
+        // With a maximal partition this caps at 2^15 / 2^14 and never bites; with
+        // a 2^7 precinct at resolution 3 it shrinks a 2^6 block to 2^6, and a
+        // 2^1 precinct shrinks it to a single sample.
+        let (xcb, ycb) = (xcb.min(cbg.x_exp), ycb.min(cbg.y_exp));
+
         let bands = if r == 0 {
-            // The coarsest resolution carries only the NLLL band.
-            let pow = 1i64 << nl;
+            // The coarsest resolution carries only the NLLL band, and it *is*
+            // the resolution rectangle.
             vec![band_geom(
                 BandKind::Ll,
-                ceil_div(tcx0, pow),
-                ceil_div(tcx1, pow),
-                ceil_div(tcy0, pow),
-                ceil_div(tcy1, pow),
-                xcb.min(15),
-                ycb.min(15),
+                trx0,
+                trx1,
+                try0,
+                try1,
+                xcb,
+                ycb,
+                &cbg,
             )]
         } else {
             // Finer levels add HL, LH, HH at decomposition level `nb = NL-r+1`.
-            let nb = nl - r + 1;
+            let nb = level + 1;
             let pow = 1i64 << nb;
             let half = 1i64 << (nb - 1);
             [
@@ -477,26 +790,56 @@ fn resolution_geoms(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<R
                     ceil_div(tcx1 - xob * half, pow),
                     ceil_div(tcy0 - yob * half, pow),
                     ceil_div(tcy1 - yob * half, pow),
-                    xcb.min(14),
-                    ycb.min(14),
+                    xcb,
+                    ycb,
+                    &cbg,
                 )
             })
             .collect()
         };
-        // The resolution's own rectangle (ISO B.5, Eq. B-14), which is what
-        // decides whether it carries a packet — not the bands', which can be
-        // empty while the resolution is not.
-        let pow = 1i64 << (nl - r);
-        let empty = ceil_div(tcx1, pow) <= ceil_div(tcx0, pow)
-            || ceil_div(tcy1, pow) <= ceil_div(tcy0, pow);
-        levels.push(ResolutionGeom { empty, bands });
+
+        levels.push(ResolutionGeom {
+            ppx,
+            ppy,
+            precincts_wide,
+            precincts_high,
+            bands,
+        });
     }
     Ok(levels)
 }
 
+/// The precinct partition as it lands on the *subband* grid: the top-left of the
+/// first code-block group, the group's exponents, and the grid's extent. One per
+/// resolution, shared by its bands (ISO B.6).
+struct Cbg {
+    x0: i64,
+    y0: i64,
+    x_exp: u32,
+    y_exp: u32,
+    wide: usize,
+    high: usize,
+}
+
+/// How many precincts of span `2^exp` cover `[lo, hi)`, and the lattice point the
+/// first one starts on (ISO B.6, Eq. B-16). An empty span has zero precincts —
+/// and so carries no packet — which is why this returns a count rather than
+/// rounding up to one.
+fn prc_span(lo: i64, hi: i64, exp: u32) -> (usize, i64) {
+    if hi <= lo {
+        return (0, 0);
+    }
+    let span = 1i64 << exp;
+    let start = lo.div_euclid(span) * span;
+    let end = ceil_div(hi, span) * span;
+    (((end - start) >> exp) as usize, start)
+}
+
 /// Build one subband's geometry from its sample bounds `[bx0, bx1) × [by0, by1)`
 /// and the effective code-block exponents, tiling it with the code-block grid
-/// anchored at the canvas origin (ISO B.7).
+/// anchored at the canvas origin (ISO B.7), then grouping those blocks by the
+/// precinct they fall in.
+#[allow(clippy::too_many_arguments)]
 fn band_geom(
     kind: BandKind,
     bx0: i64,
@@ -505,6 +848,7 @@ fn band_geom(
     by1: i64,
     xcb: u32,
     ycb: u32,
+    cbg: &Cbg,
 ) -> BandGeom {
     let width = (bx1 - bx0).max(0) as usize;
     let height = (by1 - by0).max(0) as usize;
@@ -532,6 +876,44 @@ fn band_geom(
         }
     }
 
+    // Cut the band's block grid up by precinct. A precinct's rectangle is its
+    // code-block group clipped to the band (OpenJPEG's `prc->x0 = max(cbgxstart,
+    // band->x0)`), and the block grid divides that rectangle evenly because the
+    // block never outgrew the group above. So every block lands in exactly one
+    // precinct, and a precinct the band does not reach simply owns none.
+    let group_w = 1i64 << cbg.x_exp;
+    let group_h = 1i64 << cbg.y_exp;
+    let mut precincts = Vec::with_capacity(cbg.wide * cbg.high);
+    for j in 0..cbg.high {
+        let gy0 = cbg.y0 + j as i64 * group_h;
+        let (py0, py1) = (gy0.max(by0), (gy0 + group_h).min(by1));
+        for i in 0..cbg.wide {
+            let gx0 = cbg.x0 + i as i64 * group_w;
+            let (px0, px1) = (gx0.max(bx0), (gx0 + group_w).min(bx1));
+
+            let (cols, col0) = grid_span(px0, px1, cbw);
+            let (rows, row0) = grid_span(py0, py1, cbh);
+            let mut owned = Vec::with_capacity(cols * rows);
+            for row in 0..rows {
+                let band_row = (row0 + row as i64 - first_row) as usize;
+                for col in 0..cols {
+                    let band_col = (col0 + col as i64 - first_col) as usize;
+                    owned.push(band_row * block_cols + band_col);
+                }
+            }
+            precincts.push(PrecinctGeom {
+                cols,
+                rows,
+                blocks: owned,
+            });
+        }
+    }
+    debug_assert_eq!(
+        precincts.iter().map(|p| p.blocks.len()).sum::<usize>(),
+        block_cols * block_rows,
+        "the precincts must partition the band's code-block grid"
+    );
+
     BandGeom {
         kind,
         origin: (bx0.max(0) as u32, by0.max(0) as u32),
@@ -540,6 +922,7 @@ fn band_geom(
         block_cols,
         block_rows,
         blocks,
+        precincts,
     }
 }
 
@@ -682,20 +1065,38 @@ impl BlockState<'_> {
     }
 }
 
-/// One subband's decode state across the layers of its precinct: the two tag
-/// trees, which decode incrementally at a rising threshold, plus a state per
-/// code-block.
+/// One subband's decode state across the layers: a tag-tree pair **per
+/// precinct**, plus a state per code-block of the whole band.
+///
+/// The trees are per precinct because a packet is per precinct — each one
+/// decodes incrementally at a rising threshold over its own precinct's block
+/// grid, and knows nothing of the blocks next door. The block states stay
+/// band-indexed so that [`build_subbands`] can hand the band back whole; a block
+/// is touched by exactly one precinct's packets, so the two indexings never
+/// collide.
 struct BandState<'a> {
+    precincts: Vec<PrecinctState>,
+    blocks: Vec<BlockState<'a>>,
+}
+
+/// The two tag trees one precinct runs over one subband: which code-blocks the
+/// packet includes, and how many of their leading bit-planes are all zero.
+struct PrecinctState {
     inclusion: TagTree,
     zero_bits: TagTree,
-    blocks: Vec<BlockState<'a>>,
 }
 
 impl BandState<'_> {
     fn new(band: &BandGeom) -> Self {
         BandState {
-            inclusion: TagTree::new(band.block_cols as u32, band.block_rows as u32),
-            zero_bits: TagTree::new(band.block_cols as u32, band.block_rows as u32),
+            precincts: band
+                .precincts
+                .iter()
+                .map(|precinct| PrecinctState {
+                    inclusion: TagTree::new(precinct.cols as u32, precinct.rows as u32),
+                    zero_bits: TagTree::new(precinct.cols as u32, precinct.rows as u32),
+                })
+                .collect(),
             blocks: band.blocks.iter().map(|_| BlockState::new()).collect(),
         }
     }
@@ -710,8 +1111,8 @@ struct Contribution {
     seg_len: usize,
 }
 
-/// Parse one packet — the single precinct of one resolution of one component in
-/// one layer — starting at byte `start` of the tile-part `data`.
+/// Parse one packet — one precinct of one resolution of one component in one
+/// layer — starting at byte `start` of the tile-part `data`.
 ///
 /// Folds the packet's contributions into `states` and returns the byte offset
 /// where the next packet begins. The subbands are built once every layer has
@@ -725,6 +1126,7 @@ fn parse_packet<'a>(
     delimiters: Delimiters,
     style: u8,
     bands: &[BandGeom],
+    precinct: usize,
     states: &mut [BandState<'a>],
 ) -> Result<usize> {
     // A packet occupies at least one byte, so a start at or past the end means
@@ -759,8 +1161,9 @@ fn parse_packet<'a>(
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
             parse_band_header(
                 band_index,
-                band,
-                state,
+                &band.precincts[precinct],
+                &mut state.precincts[precinct],
+                &mut state.blocks,
                 layer,
                 style,
                 &mut bio,
@@ -798,27 +1201,33 @@ fn parse_packet<'a>(
     Ok(body)
 }
 
-/// Read one subband's code-block entries from this layer's packet header
-/// (ISO B.10): per block its inclusion, and for a contributing block the
-/// zero-bitplane count (first inclusion only), coding-pass count, and the
-/// length of its byte contribution.
+/// Read one precinct's code-block entries, on one subband, from this layer's
+/// packet header (ISO B.10): per block its inclusion, and for a contributing
+/// block the zero-bitplane count (first inclusion only), coding-pass count, and
+/// the length of its byte contribution.
+///
+/// The blocks are visited in raster order **within the precinct**, and the tag
+/// trees are addressed in the precinct's own coordinates — the packet header
+/// knows nothing of the band's wider grid, so a band-relative index here would
+/// address the wrong leaf on every precinct but the first.
 #[allow(clippy::too_many_arguments)]
 fn parse_band_header(
     band_index: usize,
-    band: &BandGeom,
-    state: &mut BandState<'_>,
+    precinct: &PrecinctGeom,
+    trees: &mut PrecinctState,
+    blocks: &mut [BlockState<'_>],
     layer: u32,
     style: u8,
     bio: &mut BitReader,
     contributions: &mut Vec<Contribution>,
 ) -> Result<()> {
-    let cols = band.block_cols as u32;
+    let cols = precinct.cols as u32;
 
-    for block_index in 0..band.blocks.len() {
-        let bx = block_index as u32 % cols;
-        let by = block_index as u32 / cols;
+    for (entry, &block_index) in precinct.blocks.iter().enumerate() {
+        let bx = entry as u32 % cols;
+        let by = entry as u32 / cols;
 
-        let was_included = state.blocks[block_index].included;
+        let was_included = blocks[block_index].included;
         let contributes = if was_included {
             // Already included: one bit says whether this layer adds passes.
             bio.read_bit() == 1
@@ -827,9 +1236,9 @@ fn parse_band_header(
             // that carries this block. Reading at `layer + 1` asks "is that
             // layer at most this one?" and leaves the tree part-decoded when it
             // is not, so the next layer resumes where this one stopped.
-            match state.inclusion.read(bx, by, layer + 1, bio) {
+            match trees.inclusion.read(bx, by, layer + 1, bio) {
                 Some(_) => {
-                    state.blocks[block_index].included = true;
+                    blocks[block_index].included = true;
                     true
                 }
                 None => false,
@@ -843,7 +1252,7 @@ fn parse_band_header(
         // included, so a single read at the ceiling settles it. Later layers
         // never read it again.
         if !was_included {
-            state.blocks[block_index].zero_bit_planes = state
+            blocks[block_index].zero_bit_planes = trees
                 .zero_bits
                 .read(bx, by, ZBP_LIMIT, bio)
                 .ok_or_else(|| Error::Codestream("zero-bitplane count exceeds the limit".into()))?;
@@ -863,7 +1272,7 @@ fn parse_band_header(
         // into several segments only under a code-block style that terminates
         // (`termall`, `bypass`), which `decode_cod` rejects; there OpenJPEG's
         // `do { ... } while (n > 0)` reads a length per segment.
-        let block = &mut state.blocks[block_index];
+        let block = &mut blocks[block_index];
         while bio.read_bit() == 1 {
             block.lblock += 1;
             if block.lblock > LBLOCK_MAX {

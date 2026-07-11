@@ -17,12 +17,12 @@ feature works). With three of each:
     RLCP  r → l → c        PCRL  c → r → l
                            CPRL  c → r → l
 
-**PCRL and CPRL still coincide.** With one precinct per resolution their position
-loops both degenerate, and the two codestreams OpenJPEG emits for them differ in
-exactly one byte: the progression code in COD. That is not a shortcut in this
-script — the orders genuinely agree here — but it does mean no fixture can tell
-them apart until the precinct partition lands (issue #61). Both are generated
-anyway, so that when precincts arrive the regression shows up immediately.
+**PCRL and CPRL still coincide here.** With one precinct per resolution their
+position loops both degenerate, and the two codestreams OpenJPEG emits for them
+differ in exactly one byte: the progression code in COD. That is not a shortcut in
+this script — the orders genuinely agree under a maximal partition. Separating
+them needs more than one precinct to position, which is what
+`gen-precinct-fixtures.py` adds.
 
 `opj_compress -r 20,10,1` makes the last layer lossless, so a full decode is
 bit-exact and the snapshot records `tolerance: exact`. A packet enumerated in the

@@ -5,6 +5,8 @@
 //! parse self-check — packets must tile the tile-part exactly — proves the whole
 //! header walk against a real OpenJPEG-produced bitstream.
 
+use std::collections::BTreeSet;
+
 use super::*;
 
 /// Every byte of a code-block, across all its codeword segments.
@@ -73,6 +75,7 @@ fn parse_layers_styled<'a>(
             delimiters,
             style,
             bands,
+            0,
             &mut states,
         )?;
     }
@@ -189,7 +192,27 @@ fn single_block_band(kind: BandKind, width: usize, height: usize) -> BandGeom {
         block_cols: 1,
         block_rows: 1,
         blocks: vec![(0, 0, width, height)],
+        precincts: one_precinct(1, 1),
     }
+}
+
+/// The single maximal precinct that owns a band's whole `cols × rows` block
+/// grid — what every hand-built band below has, since these tests craft packet
+/// *headers* and the precinct partition is exercised against the oracle instead.
+fn one_precinct(cols: usize, rows: usize) -> Vec<PrecinctGeom> {
+    vec![PrecinctGeom {
+        cols,
+        rows,
+        blocks: (0..cols * rows).collect(),
+    }]
+}
+
+/// [`resolution_geoms`] with a full precinct budget — the budget is a
+/// DoS guard, exercised separately, and irrelevant to the geometry these tests
+/// check.
+fn geoms_of(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<ResolutionGeom>> {
+    let mut budget = usize::MAX;
+    resolution_geoms(header, tile, comp, &mut budget)
 }
 
 // ---- Geometry (ISO Eq. B-15, code-block grid B.7) ----
@@ -198,7 +221,7 @@ fn single_block_band(kind: BandKind, width: usize, height: usize) -> BandGeom {
 /// subband dimensions follow the standard's half-resolution split.
 #[test]
 fn geometry_single_block_per_subband() {
-    let geoms = resolution_geoms(&header(100, 100, 2, 6), 0, 0).unwrap();
+    let geoms = geoms_of(&header(100, 100, 2, 6), 0, 0).unwrap();
     assert_eq!(geoms.len(), 3); // NL = 2 → resolutions 0,1,2
 
     // Resolution 0: the NLLL band at level 2, ceil(100/4) = 25 square.
@@ -225,7 +248,7 @@ fn geometry_single_block_per_subband() {
 #[test]
 fn geometry_multi_block_grid() {
     // 200×200, one level, 2^5 = 32 blocks. LL is ceil(200/2) = 100 square.
-    let geoms = resolution_geoms(&header(200, 200, 1, 5), 0, 0).unwrap();
+    let geoms = geoms_of(&header(200, 200, 1, 5), 0, 0).unwrap();
     let ll = &geoms[0].bands[0];
     assert_eq!((ll.width, ll.height), (100, 100));
     // ceil(100/32) = 4 blocks each way.
@@ -241,28 +264,83 @@ fn geometry_multi_block_grid() {
 /// and yields one resolution per level plus the base.
 #[test]
 fn geometry_max_decomposition_levels() {
-    let geoms = resolution_geoms(&header(2, 2, 32, 6), 0, 0).unwrap();
+    let geoms = geoms_of(&header(2, 2, 32, 6), 0, 0).unwrap();
     assert_eq!(geoms.len(), 33);
     // The coarsest LL collapses to a single sample; nothing panics on the way.
     assert_eq!((geoms[0].bands[0].width, geoms[0].bands[0].height), (1, 1));
 }
 
-/// A tile-component larger than one maximal precinct (2^15 on either axis)
-/// would carry more packets than the single-precinct walk visits, so it must
-/// reject rather than desynchronize (Eq. B-16).
+/// A tile-component larger than one maximal precinct (2^15 on either axis) now
+/// splits into two — before #61 this was the case the decoder had to reject,
+/// because the packet walk visited a single precinct per resolution and would
+/// have desynchronized (Eq. B-16).
 #[test]
-fn geometry_rejects_multi_precinct_extent() {
-    for (w, h) in [(32769, 16), (16, 32769)] {
-        let err = resolution_geoms(&header(w, h, 1, 6), 0, 0);
-        assert!(matches!(err, Err(crate::Error::Unsupported(_))), "{w}×{h}");
-    }
+fn geometry_splits_past_the_maximal_precinct_extent() {
+    let wide = geoms_of(&header(32769, 16, 1, 6), 0, 0).unwrap();
+    assert_eq!(
+        (wide[1].precincts_wide, wide[1].precincts_high),
+        (2, 1),
+        "the finest resolution spans two maximal precincts across"
+    );
+    let tall = geoms_of(&header(16, 32769, 1, 6), 0, 0).unwrap();
+    assert_eq!((tall[1].precincts_wide, tall[1].precincts_high), (1, 2));
 }
 
 /// Exactly 2^15 still fits in the single maximal precinct.
 #[test]
 fn geometry_accepts_full_precinct_extent() {
-    let geoms = resolution_geoms(&header(32768, 16, 1, 6), 0, 0).unwrap();
+    let geoms = geoms_of(&header(32768, 16, 1, 6), 0, 0).unwrap();
     assert_eq!(geoms[1].bands[0].width, 16384);
+}
+
+/// A hostile geometry — a tall, thin tile-component under a 2^1 precinct — has
+/// ~one precinct per two rows, tens of millions of them, each its own
+/// allocation. The budget stops it *before* the precincts are built, not after:
+/// with the guard enforced inside the geometry walk this returns in microseconds,
+/// where the after-the-fact check it replaced spent seconds and gigabytes first.
+#[test]
+fn geometry_rejects_a_precinct_bomb_before_allocating() {
+    use std::time::Instant;
+    let mut header = header(1, 1 << 24, 1, 6);
+    header.components[0].coding.precinct_sizes = vec![(1, 1), (1, 1)];
+
+    let mut budget = super::MAX_PRECINCTS;
+    let start = Instant::now();
+    let result = resolution_geoms(&header, 0, 0, &mut budget);
+    let elapsed = start.elapsed();
+
+    assert!(
+        matches!(result, Err(crate::Error::Unsupported(_))),
+        "a 1×2^24 tile-component at a 2^1 precinct must be rejected"
+    );
+    assert!(
+        elapsed.as_millis() < 100,
+        "the guard must fire before the precincts are built, not after ({elapsed:?})"
+    );
+}
+
+/// The budget is the tile's, not a component's: two components each individually
+/// under the cap but together over it are still rejected, because
+/// `resolution_geoms` spends one running total across them.
+#[test]
+fn the_precinct_budget_is_shared_across_components() {
+    // A 1024×1024 tile-component under a 2^1 precinct is ~512×512 = 2^18
+    // precincts at the finest resolution, right at the cap. Give the header two
+    // such components; the shared budget must not admit both.
+    let mut header = header(1024, 1024, 1, 6);
+    header.siz.components.push(header.siz.components[0]);
+    header.components.push(header.components[0].clone());
+    for comp in &mut header.components {
+        comp.coding.precinct_sizes = vec![(1, 1), (1, 1)];
+    }
+
+    let mut budget = super::MAX_PRECINCTS;
+    let first = resolution_geoms(&header, 0, 0, &mut budget);
+    let second = resolution_geoms(&header, 0, 1, &mut budget);
+    assert!(
+        first.is_err() || matches!(second, Err(crate::Error::Unsupported(_))),
+        "two components sharing the budget must not both allocate their precincts"
+    );
 }
 
 /// A code-block size past the standard's 2^10 / xcb+ycb≤12 limit is rejected,
@@ -270,7 +348,7 @@ fn geometry_accepts_full_precinct_extent() {
 #[test]
 fn geometry_rejects_oversized_code_block() {
     // code_block_width field 9 → exponent 11 (> 10).
-    let err = resolution_geoms(&header(64, 64, 1, 13), 0, 0);
+    let err = geoms_of(&header(64, 64, 1, 13), 0, 0);
     assert!(matches!(err, Err(crate::Error::Marker(_))));
 }
 
@@ -478,6 +556,7 @@ fn packet_two_blocks_partial_inclusion() {
         block_cols: 2,
         block_rows: 1,
         blocks: vec![(0, 0, 8, 8), (8, 0, 8, 8)],
+        precincts: one_precinct(2, 1),
     };
     let (subbands, _next) = parse_one_packet(&data, &[band]).unwrap();
     let blocks = &subbands[0].blocks;
@@ -608,7 +687,7 @@ fn resolution_geoms_honour_each_components_sub_sampling() {
     // tile-component extent in each axis.
     let expected_ll = [(32, 32), (16, 32), (32, 16), (16, 16)];
     for (component, (want_width, want_height)) in expected_ll.into_iter().enumerate() {
-        let geoms = resolution_geoms(&h, 0, component).unwrap();
+        let geoms = geoms_of(&h, 0, component).unwrap();
         let ll = &geoms[0].bands[0];
         assert_eq!(ll.kind, BandKind::Ll);
         assert_eq!(
@@ -620,7 +699,7 @@ fn resolution_geoms_honour_each_components_sub_sampling() {
 
     // A component index past the SIZ list is an internal inconsistency, not a
     // silent fall back to component 0.
-    assert!(resolution_geoms(&h, 0, 4).is_err());
+    assert!(geoms_of(&h, 0, 4).is_err());
 }
 
 // ---- Quality layers (issue #64) ----
@@ -889,18 +968,114 @@ fn a_tile_part_shorter_than_its_layers_is_codestream() {
     ));
 }
 
-// ---- Progression orders (issue #62) ----
+// ---- Progression orders (issue #62) and the precinct partition (#61) ----
 
-/// Collect the `(layer, resolution, component)` sequence one order visits.
+const ORDERS: [Progression; 5] = [
+    Progression::Lrcp,
+    Progression::Rlcp,
+    Progression::Rpcl,
+    Progression::Pcrl,
+    Progression::Cprl,
+];
+
+/// The knobs the packet walk actually reads: how big the tile-component grids
+/// are, how deep the pyramid is, and how the precincts cut it up. The positional
+/// orders derive their sweep from all three, so a progression test that fixes an
+/// axis count instead of a geometry cannot exercise them.
+struct Layout {
+    size: (u32, u32),
+    /// One `(XRsiz, YRsiz)` per component.
+    sampling: Vec<(u8, u8)>,
+    levels: u8,
+    /// `(PPx, PPy)` per resolution, coarsest first. Empty = maximal.
+    precincts: Vec<(u8, u8)>,
+}
+
+impl Layout {
+    /// One component, no sub-sampling, maximal precincts.
+    fn plain(size: (u32, u32), levels: u8) -> Self {
+        Layout {
+            size,
+            sampling: vec![(1, 1)],
+            levels,
+            precincts: Vec::new(),
+        }
+    }
+
+    fn components(mut self, count: usize) -> Self {
+        self.sampling = vec![(1, 1); count];
+        self
+    }
+
+    /// The same precinct exponent at every resolution.
+    fn precincts(mut self, ppx: u8, ppy: u8) -> Self {
+        self.precincts = vec![(ppx, ppy); usize::from(self.levels) + 1];
+        self
+    }
+
+    fn header(&self) -> MainHeader {
+        MainHeader::new(
+            Siz {
+                x_size: self.size.0,
+                y_size: self.size.1,
+                x_offset: 0,
+                y_offset: 0,
+                tile_width: self.size.0,
+                tile_height: self.size.1,
+                tile_x_offset: 0,
+                tile_y_offset: 0,
+                components: self
+                    .sampling
+                    .iter()
+                    .map(|&(x_sampling, y_sampling)| SizComponent {
+                        bit_depth: 8,
+                        signed: false,
+                        x_sampling,
+                        y_sampling,
+                    })
+                    .collect(),
+            },
+            Cod {
+                progression: Progression::Lrcp,
+                layers: 1,
+                decomposition_levels: self.levels,
+                code_block_width: 4, // 2^6
+                code_block_height: 4,
+                code_block_style: 0,
+                use_sop: false,
+                use_eph: false,
+                multiple_component_transform: false,
+                transform: Transform::Reversible53,
+                precinct_sizes: self.precincts.clone(),
+            },
+            Qcd {
+                style: QuantStyle::None,
+                guard_bits: 2,
+                steps: vec![(8, 0); 3 * usize::from(self.levels) + 1],
+            },
+        )
+    }
+}
+
+/// The `(layer, resolution, component, precinct)` sequence one order visits over
+/// a real tile geometry.
 fn order_of(
+    layout: &Layout,
     progression: Progression,
     layers: u32,
-    resolutions: usize,
-    components: usize,
-) -> Vec<(u32, usize, usize)> {
+) -> Vec<(u32, usize, usize, usize)> {
+    let header = layout.header();
+    let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
+        .map(|c| geoms_of(&header, 0, c).expect("geometry"))
+        .collect();
+    let walk = PacketWalk {
+        siz: &header.siz,
+        tile: header.siz.tile_rect(0).expect("tile 0"),
+        geoms: &geoms,
+    };
     let mut seen = Vec::new();
-    for_each_packet(progression, layers, resolutions, components, |l, r, c| {
-        seen.push((l, r, c));
+    for_each_packet(progression, layers, &walk, |l, r, c, p| {
+        seen.push((l, r, c, p));
         Ok(())
     })
     .unwrap();
@@ -908,79 +1083,146 @@ fn order_of(
 }
 
 /// Each order is a distinct permutation of the layer / resolution / component
-/// nesting (ISO B.12.1). The position axis has one value under maximal
-/// precincts, so it drops out.
+/// nesting (ISO B.12.1). With one precinct per resolution the position axis has a
+/// single value and drops out, which is the shape every pre-#61 codestream had.
 #[test]
 fn each_progression_nests_its_axes_in_the_right_order() {
-    // Two of each axis, so the nesting is visible in the first few packets.
-    let lrcp = order_of(Progression::Lrcp, 2, 2, 2);
-    assert_eq!(&lrcp[..4], &[(0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1)]);
+    // Two resolutions, two components, two layers, and a single precinct each.
+    let layout = Layout::plain((32, 32), 1).components(2);
+    let first_four = |p| {
+        order_of(&layout, p, 2)[..4]
+            .iter()
+            .map(|&(l, r, c, _)| (l, r, c))
+            .collect::<Vec<_>>()
+    };
 
-    let rlcp = order_of(Progression::Rlcp, 2, 2, 2);
-    assert_eq!(&rlcp[..4], &[(0, 0, 0), (0, 0, 1), (1, 0, 0), (1, 0, 1)]);
-
-    let rpcl = order_of(Progression::Rpcl, 2, 2, 2);
-    assert_eq!(&rpcl[..4], &[(0, 0, 0), (1, 0, 0), (0, 0, 1), (1, 0, 1)]);
-
-    let pcrl = order_of(Progression::Pcrl, 2, 2, 2);
-    assert_eq!(&pcrl[..4], &[(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]);
+    assert_eq!(
+        first_four(Progression::Lrcp),
+        [(0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1)]
+    );
+    assert_eq!(
+        first_four(Progression::Rlcp),
+        [(0, 0, 0), (0, 0, 1), (1, 0, 0), (1, 0, 1)]
+    );
+    assert_eq!(
+        first_four(Progression::Rpcl),
+        [(0, 0, 0), (1, 0, 0), (0, 0, 1), (1, 0, 1)]
+    );
+    assert_eq!(
+        first_four(Progression::Pcrl),
+        [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+    );
 }
 
-/// Every order visits every packet exactly once, whatever the nesting.
+/// The five orders are permutations of one set, not five different selections of
+/// packets. This is the invariant that pins the positional sweeps down: they
+/// enumerate precincts by walking the reference grid rather than by counting, so
+/// a wrong step, a wrong lattice test, or a wrong `precno` shows up here as a
+/// packet visited twice or not at all — even though the *counting* orders next to
+/// them cannot go wrong that way.
 #[test]
-fn every_progression_visits_each_packet_once() {
-    for progression in [
-        Progression::Lrcp,
-        Progression::Rlcp,
-        Progression::Rpcl,
-        Progression::Pcrl,
-        Progression::Cprl,
-    ] {
-        let seen = order_of(progression, 3, 4, 2);
-        assert_eq!(seen.len(), 3 * 4 * 2, "{progression:?} packet count");
-        let mut sorted = seen.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
+fn every_order_visits_the_same_packets() {
+    // Sub-sampled components and precincts smaller than the resolution, so the
+    // components' precinct lattices genuinely differ and the sweep has to
+    // interleave them.
+    let layout = Layout {
+        size: (64, 48),
+        sampling: vec![(1, 1), (2, 1), (2, 2)],
+        levels: 2,
+        precincts: vec![(3, 3), (4, 4), (4, 5)],
+    };
+    let expected: BTreeSet<_> = order_of(&layout, Progression::Lrcp, 3)
+        .into_iter()
+        .collect();
+    assert!(expected.len() > 60, "the layout must be worth walking");
+
+    for progression in ORDERS {
+        let seen = order_of(&layout, progression, 3);
         assert_eq!(
-            sorted.len(),
             seen.len(),
-            "{progression:?} visits a packet twice"
+            expected.len(),
+            "{progression:?} visits {} packets, LRCP visits {}",
+            seen.len(),
+            expected.len(),
+        );
+        assert_eq!(
+            seen.iter().copied().collect::<BTreeSet<_>>(),
+            expected,
+            "{progression:?} visits a different set of packets than LRCP",
+        );
+    }
+}
+
+/// A deep pyramid pushes a coarse resolution's precinct span past 2^32 reference
+/// grid units — with maximal precincts that happens at `NL >= 17`. OpenJPEG scales
+/// that span in 64-bit arithmetic and still emits the packet; the positional
+/// sweep must do the same, or it silently drops the resolution and desynchronises
+/// the tile. The counting orders (LRCP/RLCP) never touch the span, so they are the
+/// oracle here: every order must still visit the same set.
+#[test]
+fn positional_orders_do_not_drop_deep_resolutions() {
+    // NL = 17: resolution 0 has span 2^(15+17) = 2^32, one past what a 32-bit
+    // shift holds. The low resolutions collapse to 1×1 at the origin, each its own
+    // single-precinct packet.
+    let layout = Layout::plain((8, 8), 17);
+    let expected: BTreeSet<_> = order_of(&layout, Progression::Lrcp, 1)
+        .into_iter()
+        .collect();
+
+    for progression in ORDERS {
+        let seen: BTreeSet<_> = order_of(&layout, progression, 1).into_iter().collect();
+        assert_eq!(
+            seen, expected,
+            "{progression:?} dropped a deep-resolution packet",
         );
     }
 }
 
 /// With one precinct per resolution, PCRL and CPRL genuinely enumerate the same
-/// sequence — their position loops both degenerate. No fixture can tell them
-/// apart until the precinct partition lands (issue #61), and OpenJPEG's own
-/// output for the two differs in exactly one byte: the COD progression code.
+/// sequence — their position loops both degenerate. That was true of every
+/// codestream this crate could decode before #61, and it is why OpenJPEG's own
+/// output for the two differed in exactly one byte: the COD progression code.
 #[test]
 fn pcrl_and_cprl_coincide_with_one_precinct() {
+    let layout = Layout::plain((32, 32), 2).components(3);
     assert_eq!(
-        order_of(Progression::Pcrl, 3, 3, 3),
-        order_of(Progression::Cprl, 3, 3, 3),
+        order_of(&layout, Progression::Pcrl, 3),
+        order_of(&layout, Progression::Cprl, 3),
     );
 }
 
+/// …and part company as soon as there is more than one precinct to position.
+/// PCRL sweeps the canvas once and interleaves the components at each point;
+/// CPRL finishes a component's whole sweep before starting the next. This is the
+/// distinction no fixture in the corpus could draw until now.
+#[test]
+fn pcrl_and_cprl_diverge_once_precincts_exist() {
+    let layout = Layout::plain((64, 64), 2).components(3).precincts(4, 4);
+    let pcrl = order_of(&layout, Progression::Pcrl, 1);
+    let cprl = order_of(&layout, Progression::Cprl, 1);
+
+    assert_eq!(pcrl.len(), cprl.len());
+    assert_ne!(pcrl, cprl, "the two orders must not coincide");
+    // CPRL's first packets all belong to component 0; PCRL's do not.
+    assert!(cprl[..cprl.len() / 3].iter().all(|&(_, _, c, _)| c == 0));
+    assert!(pcrl[..4].iter().any(|&(_, _, c, _)| c != 0));
+}
+
 /// The orders are distinct only when more than one of the axes is. A single
-/// component and a single layer collapse all five onto `r`, which is why the
-/// conformance entry `p0_01` cannot test any of them.
+/// component, a single layer and a single precinct collapse all five onto `r`,
+/// which is why the conformance entry `p0_01` cannot test any of them.
 #[test]
 fn the_orders_coincide_when_only_resolution_varies() {
-    let orders = [
-        Progression::Lrcp,
-        Progression::Rlcp,
-        Progression::Rpcl,
-        Progression::Pcrl,
-        Progression::Cprl,
-    ];
-    let first = order_of(orders[0], 1, 4, 1);
-    for progression in orders {
-        assert_eq!(order_of(progression, 1, 4, 1), first, "{progression:?}");
+    let layout = Layout::plain((32, 32), 3);
+    let first = order_of(&layout, ORDERS[0], 1);
+    for progression in ORDERS {
+        assert_eq!(order_of(&layout, progression, 1), first, "{progression:?}");
     }
     // Add a second layer and LRCP parts company with RLCP.
+    let layered = Layout::plain((32, 32), 1);
     assert_ne!(
-        order_of(Progression::Lrcp, 2, 2, 1),
-        order_of(Progression::Rlcp, 2, 2, 1),
+        order_of(&layered, Progression::Lrcp, 2),
+        order_of(&layered, Progression::Rlcp, 2),
     );
 }
 
@@ -1088,7 +1330,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let mut states: Vec<BandState<'_>> = bands.iter().map(BandState::new).collect();
     // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
-    parse_packet(&data, 0, 0, 65536, SOP, 0, &bands, &mut states).expect("wraps to zero");
+    parse_packet(&data, 0, 0, 65536, SOP, 0, &bands, 0, &mut states).expect("wraps to zero");
 }
 
 /// EPH sits between the packet header and its body, and `Scod` makes it

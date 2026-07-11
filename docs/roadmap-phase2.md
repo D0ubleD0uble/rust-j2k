@@ -187,8 +187,20 @@ which code-blocks each covers.
 **Oracle:** a precinct-partitioned Part 4 codestream; `opj_dump` precinct
 geometry.
 
-**Done:** precinct-partitioned codestreams split into the correct packets and
-decode in class.
+**Done.** `p0_11` grades in class. It is *not* the oracle for the partition,
+though: it has one resolution and one precinct, so it grades only that `SPcod`'s
+precinct bytes are parsed (see [correctness.md](correctness.md) §A passing entry
+is not proof the feature works). The partition is graded by the seven synthetic
+`precincts_*` fixtures instead — one per progression order, one with a different
+precinct size at each resolution, and one tiled so that a tile beginning
+off-lattice carries a partial leading precinct.
+
+With a real partition the *position* axis stops being a degenerate counter, so
+this milestone also had to replace the three positional progression orders
+(RPCL, PCRL, CPRL) with the reference-grid sweep the standard actually specifies
+(B.12.1.3–B.12.1.5): counting precincts is only correct when position is the
+innermost axis, as it is for LRCP and RLCP. That sweep is what finally separates
+PCRL from CPRL.
 
 ### P2.5 — Progression orders, POC, and multiple quality layers (`src/tier2/`)
 
@@ -209,9 +221,9 @@ proof the feature works). Both need synthetic OpenJPEG fixtures.
 
 **Done:** multiple quality layers and all five progression orders have landed.
 `p0_16` (RLCP, three layers) is the corpus oracle for RLCP; RPCL/PCRL/CPRL are
-graded against `scripts/gen-progression-fixtures.py`. POC remains. Note PCRL and
-CPRL coincide under maximal precincts and can only be separated once P2.4
-(precincts) lands.
+graded against `scripts/gen-progression-fixtures.py`, and — since P2.4 —
+against `scripts/gen-precinct-fixtures.py`, which is what separates PCRL from
+CPRL. POC remains.
 
 ### P2.6 — Code-block coding styles (`src/tier1/`)
 

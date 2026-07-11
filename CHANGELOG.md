@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Precinct partition: codestreams that subdivide each resolution into precincts
+  (`Scod`/`Scoc` bit 0 and the `SPcod`/`SPcoc` precinct sizes) now decode, with
+  one packet and one pair of tag trees per precinct. Because a resolution can now
+  hold more than one precinct, the position axis of the packet order stops being
+  a degenerate counter: RPCL, PCRL and CPRL now enumerate precincts by sweeping
+  the reference grid, which is also what tells PCRL and CPRL apart for the first
+  time. Precinct-partitioned codestreams are capped at 2^18 precincts.
 - `decode_with` and `DecodeOptions`: decode at a resolution reduction. Each
   dropped level halves the output in both axes (rounding up) using the wavelet
   pyramid's own lower resolutions — the natural way to get a thumbnail or a
@@ -23,10 +30,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   65535-byte segment can no longer multiply into gigabytes through the
   per-component parameter clones. The total code-block count is capped at 2^19
   before any per-block state is allocated, closing the counterpart bomb built
-  from legal 4×4 code-blocks. A tile-component larger than one maximal precinct
-  (2^15 on either axis) is rejected as `Unsupported` instead of desynchronizing
-  the packet walk. And the fixture harness now grades a panicking decode as a
-  failure — the skeleton-era `Pending` outcome had let one pass CI silently.
+  from legal 4×4 code-blocks; the precinct count is capped at 2^18 alongside it,
+  which the block count does not bound (a band empty in one axis has no blocks
+  while its resolution still has a full column of precincts). And the fixture
+  harness now grades a panicking decode as a failure — the skeleton-era `Pending`
+  outcome had let one pass CI silently.
 - Arithmetic hardening against hostile coefficients: the 5/3 lifting sums run
   in `i64` and saturate (they could leave `i32` near the Tier-1 magnitude
   ceiling), and the MQ decoder's BYTEIN adds wrap explicitly (matching the C
