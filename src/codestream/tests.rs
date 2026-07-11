@@ -1128,26 +1128,54 @@ fn a_tile_with_no_tile_part_is_codestream() {
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
 
-/// PPT is legal in a tile-part header but not yet decoded: it relocates the
-/// tile's packet headers, so skipping it would decode the wrong image.
-/// (COD/COC/QCD/QCC/RGN and POC *are* decoded there — see the override tests.)
+/// PPT moves the tile's packet headers into the tile-part header (A.7.5): it
+/// parses into the tile's packed-header buffer, ordered by `Zppt`, and the
+/// tile-part data is only the packet bodies. Two PPT markers, out of Zppt order,
+/// stitch back in order.
 #[test]
-fn out_of_subset_tile_header_marker_is_unsupported() {
-    let data = [1, 2];
-    let qcc = seg(marker::PPT, &[0]);
-    let psot = (12 + qcc.len() + 2 + data.len()) as u32;
+fn tile_part_ppt_collects_the_packed_headers() {
+    let data = [0xBB, 0xBB];
+    // Zppt 1 carries `[0xCD]`, Zppt 0 carries `[0xAB]`; the buffer is `AB CD`.
+    let ppt1 = seg(marker::PPT, &[1, 0xCD]);
+    let ppt0 = seg(marker::PPT, &[0, 0xAB]);
+    let psot = (12 + ppt1.len() + ppt0.len() + 2 + data.len()) as u32;
 
     let mut bytes = be16(marker::SOC).to_vec();
     for part in default_header() {
         bytes.extend_from_slice(&part);
     }
     bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
-    bytes.extend_from_slice(&qcc);
+    bytes.extend_from_slice(&ppt1);
+    bytes.extend_from_slice(&ppt0);
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.extend_from_slice(&data);
     bytes.extend_from_slice(&be16(marker::EOC));
 
-    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+    let cs = parse(&bytes).expect("PPT parses");
+    assert_eq!(cs.tiles[0].packed_headers, vec![0xAB, 0xCD]);
+    assert_eq!(cs.tiles[0].data.as_ref(), &data[..]);
+}
+
+/// A `Zppt` repeated across a tile-part's PPT markers is a malformed header.
+#[test]
+fn tile_part_duplicate_zppt_is_a_codestream_error() {
+    let data = [0xBB];
+    let a = seg(marker::PPT, &[0, 0x11]);
+    let b = seg(marker::PPT, &[0, 0x22]); // Zppt 0 again
+    let psot = (12 + a.len() + b.len() + 2 + data.len()) as u32;
+
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&a);
+    bytes.extend_from_slice(&b);
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&data);
+    bytes.extend_from_slice(&be16(marker::EOC));
+
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
 
 /// TLM is main-header-only (A.7.1) and SOP/EPH belong after SOD, so meeting

@@ -106,6 +106,11 @@ pub struct Tile<'a> {
     /// cost is `tiles + components`.
     pub header: TileHeader,
     pub data: Cow<'a, [u8]>,
+    /// The tile's packed packet headers (`PPT`), concatenated across its
+    /// tile-parts; empty when the headers are inline with the bodies. When
+    /// non-empty, Tier-2 reads every packet header from here and every packet
+    /// body from [`data`](Self::data) (A.7.5).
+    pub packed_headers: Vec<u8>,
 }
 
 /// A parsed codestream: the main header plus every tile, in tile-index order.
@@ -217,6 +222,11 @@ struct TileParts<'a> {
     declared_parts: Option<u8>,
     /// The tile's own header, from its first tile-part.
     header: TileHeader,
+    /// The tile's packed packet headers from any `PPT` markers, concatenated
+    /// across its tile-parts in `TPsot` order (and within a tile-part in `Zppt`
+    /// order). Empty when the tile carries none, in which case the packet headers
+    /// are inline with the bodies (A.7.5).
+    packed_headers: Vec<u8>,
 }
 
 /// Walk every tile-part from the first `SOT` to the closing `EOC` (A.4.2,
@@ -238,6 +248,7 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
             parts: Vec::new(),
             declared_parts: None,
             header: TileHeader::default(),
+            packed_headers: Vec::new(),
         })
         .collect();
 
@@ -292,7 +303,7 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
         }
 
         let first_part = sot.tile_part_index == 0;
-        let tile_header = read_tile_part_header(&mut cur, &main.siz, first_part)?;
+        let (tile_header, packed) = read_tile_part_header(&mut cur, &main.siz, first_part)?;
         if first_part {
             tile.header = tile_header;
         } else {
@@ -302,6 +313,9 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
             // across the tile's parts (A.6.6).
             tile.header.poc.extend(tile_header.poc);
         }
+        // Packed packet headers append across the tile's parts in TPsot order
+        // (which is arrival order, enforced above), matching the body order.
+        tile.packed_headers.extend(packed);
         let data_start = cur.pos;
 
         // Psot counts from the SOT marker's first byte to the end of the
@@ -379,6 +393,7 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
                 index: index as u32,
                 header: tile.header,
                 data,
+                packed_headers: tile.packed_headers,
             })
         })
         .collect()
@@ -392,8 +407,15 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
 /// later part cannot restate what the earlier parts were already decoded under.
 /// A conformant encoder never emits one; a codestream that does is malformed,
 /// not merely unsupported.
-fn read_tile_part_header(cur: &mut Cursor<'_>, siz: &Siz, first_part: bool) -> Result<TileHeader> {
+fn read_tile_part_header(
+    cur: &mut Cursor<'_>,
+    siz: &Siz,
+    first_part: bool,
+) -> Result<(TileHeader, Vec<u8>)> {
     let mut tile = TileHeader::default();
+    // `PPT` packet headers for this tile-part, collected as `(Zppt, bytes)` and
+    // concatenated in `Zppt` order below.
+    let mut ppt: Vec<(u8, Vec<u8>)> = Vec::new();
     // A.6 allows one of each per header. The tile-part tally is tracked apart
     // from the main header's: a tile-part marker over a main-header one for the
     // same component is the legal override, not a duplicate.
@@ -479,13 +501,23 @@ fn read_tile_part_header(cur: &mut Cursor<'_>, siz: &Siz, first_part: bool) -> R
             marker::POC => {
                 decode_poc(segment(cur)?, siz, &mut tile.poc)?;
             }
-            // Valid here, but not yet decoded: PPT relocates the packet headers,
-            // so skipping it would silently decode the wrong image.
+            // Packed packet headers (A.7.5): this tile-part's packet headers,
+            // moved out of the bitstream into the marker. `Zppt` orders the
+            // markers of one tile-part; the bytes after it are `Ippt`. Legal in
+            // any tile-part (the headers span all of them), so not gated by
+            // `overrides_here`. Collected here and stitched into the tile's
+            // packed buffer by the caller; a decoder that ignored them would read
+            // packet headers off the packet bodies and decode garbage.
             marker::PPT => {
-                return Err(Error::Unsupported(format!(
-                    "tile-part header marker {} is outside the decoded subset",
-                    marker::describe(m)
-                )));
+                let mut body = segment(cur)?;
+                let zppt = body.u8()?;
+                if ppt.iter().any(|&(z, _)| z == zppt) {
+                    return Err(Error::Codestream(format!(
+                        "duplicate PPT index Zppt {zppt} in one tile-part header"
+                    )));
+                }
+                let ippt = body.take(body.remaining())?;
+                ppt.push((zppt, ippt.to_vec()));
             }
             // These are legal markers, but not here: TLM and PLM are
             // main-header-only (A.7.1, A.7.2), and SOP/EPH delimit packets
@@ -503,7 +535,10 @@ fn read_tile_part_header(cur: &mut Cursor<'_>, siz: &Siz, first_part: bool) -> R
             }
         }
     }
-    Ok(tile)
+    // Stitch this tile-part's PPT markers into one buffer, ordered by Zppt.
+    ppt.sort_by_key(|&(z, _)| z);
+    let packed = ppt.into_iter().flat_map(|(_, bytes)| bytes).collect();
+    Ok((tile, packed))
 }
 
 /// Resolve one tile's effective parameters: the main header with the tile-part
