@@ -242,3 +242,27 @@ fn corpus_covers_the_phase2_feature_matrix() {
         );
     }
 }
+
+/// Length markers are informational: the packets and tile-parts they point at
+/// are read from the codestream itself, so decoding must not depend on the
+/// hint. Excise `p0_05`'s TLM segment and the decode must be identical —
+/// which is issue #72's "same result with the hints used and ignored", pinned
+/// against the one conformance entry that both carries a length marker and
+/// decodes today.
+#[test]
+fn decoding_p0_05_ignores_its_tlm_hint() {
+    let bytes = std::fs::read(corpus_dir().join("codestreams/p0_05.j2k")).expect("read p0_05");
+
+    // TLM = 0xFF55; its segment length immediately follows the marker.
+    let tlm = bytes
+        .windows(2)
+        .position(|w| w == [0xFF, 0x55])
+        .expect("p0_05 carries a TLM marker");
+    let seg_len = u16::from_be_bytes([bytes[tlm + 2], bytes[tlm + 3]]) as usize;
+    let mut without = bytes.clone();
+    without.drain(tlm..tlm + 2 + seg_len);
+
+    let with_hint = rust_j2k::decode(&bytes).expect("p0_05 decodes");
+    let without_hint = rust_j2k::decode(&without).expect("p0_05 decodes without its TLM");
+    assert_eq!(with_hint, without_hint);
+}
