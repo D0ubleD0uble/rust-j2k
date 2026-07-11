@@ -65,11 +65,16 @@ fn parse_layers_styled<'a>(
     style: u8,
 ) -> Result<(Vec<Subband<'a>>, usize)> {
     let mut states: Vec<BandState<'a>> = bands.iter().map(BandState::new).collect();
-    let mut cursor = 0usize;
+    let mut streams = PacketStreams {
+        header: data,
+        header_pos: 0,
+        data,
+        body_pos: 0,
+        packed: false,
+    };
     for layer in 0..layers {
-        cursor = parse_packet(
-            data,
-            cursor,
+        parse_packet(
+            &mut streams,
             layer,
             layer,
             delimiters,
@@ -79,7 +84,7 @@ fn parse_layers_styled<'a>(
             &mut states,
         )?;
     }
-    Ok((build_subbands(bands, states)?, cursor))
+    Ok((build_subbands(bands, states)?, streams.body_pos))
 }
 use crate::codestream::markers::{
     Cod, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
@@ -182,6 +187,7 @@ fn tile(data: &[u8]) -> Tile<'_> {
         index: 0,
         header: TileHeader::default(),
         data: std::borrow::Cow::Borrowed(data),
+        packed_headers: Vec::new(),
     }
 }
 
@@ -1437,8 +1443,15 @@ fn the_sop_sequence_number_wraps_at_65536() {
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let mut states: Vec<BandState<'_>> = bands.iter().map(BandState::new).collect();
+    let mut streams = PacketStreams {
+        header: &data,
+        header_pos: 0,
+        data: &data,
+        body_pos: 0,
+        packed: false,
+    };
     // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
-    parse_packet(&data, 0, 0, 65536, SOP, 0, &bands, 0, &mut states).expect("wraps to zero");
+    parse_packet(&mut streams, 0, 65536, SOP, 0, &bands, 0, &mut states).expect("wraps to zero");
 }
 
 /// EPH sits between the packet header and its body, and `Scod` makes it

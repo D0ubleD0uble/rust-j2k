@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- PPT (packed packet headers, tile-part): a single-tile codestream may move its
+  packet headers out of the bitstream into `PPT` marker segments, leaving only the
+  bodies inline. Tier-2 now reads headers from that packed buffer while bodies (and
+  SOP markers) stay inline, with EPH moving into the packed buffer alongside the
+  headers. Grades conformance entry `p1_02`. The multi-tile PPT case and the
+  main-header `PPM` form are not yet decoded.
 - Two code-block coding styles: **vertically causal context** (the significance
   context of a stripe's bottom row ignores the next stripe) and **reset context
   probabilities** (the MQ context model reinitialises after every coding pass).

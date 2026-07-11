@@ -214,13 +214,34 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
         sop: header.cod.use_sop,
         eph: header.cod.use_eph,
     };
-    let mut cursor = 0usize;
+    // When the tile carries PPT packed headers, packet headers come from that
+    // buffer and only the bodies stay inline; otherwise both are `data` and the
+    // two cursors move together.
+    let packed = !tile.packed_headers.is_empty();
+    // Single-tile PPT decodes; the multi-tile case is deferred. The Tier-2 parse
+    // is verified correct there — the packed headers extract byte-for-byte and
+    // the body cursor tracks the SOP layout exactly — but a *downstream*
+    // reconstruction bug surfaces on the corpus's only multi-tile PPT entry
+    // (`p1_06`: 9/7 over a 4×4 grid of 3×3 tiles), which no reference encoder
+    // reproduces to isolate. Rejecting keeps that a clean deferral rather than a
+    // silently wrong image; see the follow-up issue.
+    if packed && header.siz.num_tiles() > 1 {
+        return Err(Error::Unsupported(
+            "packed packet headers (PPT) over a tile grid are not yet decoded".into(),
+        ));
+    }
+    let mut streams = PacketStreams {
+        header: if packed { &tile.packed_headers } else { data },
+        header_pos: 0,
+        data,
+        body_pos: 0,
+        packed,
+    };
     let mut packet_index = 0u32;
     for_each_packet(header, &walk, |layer, resolution, component, precinct| {
         let geom = &geoms[component][resolution];
-        cursor = parse_packet(
-            data,
-            cursor,
+        parse_packet(
+            &mut streams,
             layer,
             packet_index,
             delimiters,
@@ -251,13 +272,21 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // The packets tile the tile-part exactly, with no padding, up to the closing
-    // EOC. Any remainder means a misread field — a dropped layer shows up here
-    // as leftover bytes (this doubles as the parse self-check).
-    if cursor != data.len() {
+    // The packets tile the tile-part data exactly, with no padding, up to the
+    // closing EOC. Any remainder means a misread field — a dropped layer shows up
+    // here as leftover bytes (this doubles as the parse self-check).
+    if streams.body_pos != data.len() {
         return Err(Error::Codestream(format!(
-            "tile-part has {} byte(s) left after the last packet",
-            data.len() - cursor
+            "tile-part has {} body byte(s) left after the last packet",
+            data.len() - streams.body_pos
+        )));
+    }
+    // The packed headers must be exhausted too: a leftover header byte is the
+    // same kind of misread, caught on the header stream instead of the body.
+    if packed && streams.header_pos != streams.header.len() {
+        return Err(Error::Codestream(format!(
+            "PPT packed headers have {} byte(s) left after the last packet",
+            streams.header.len() - streams.header_pos
         )));
     }
 
@@ -1045,6 +1074,24 @@ struct Delimiters {
     eph: bool,
 }
 
+/// The two byte streams a packet is read from, with a cursor into each.
+///
+/// A packet is a header followed by its body. Normally both are inline in the
+/// tile data and the two cursors move in lockstep. When the tile carries `PPT`
+/// packed headers, the header stream is that separate buffer and the body stream
+/// is still the tile data, so the cursors advance independently (A.7.5). SOP
+/// stays in the body stream; EPH moves with the headers.
+struct PacketStreams<'a> {
+    /// Where packet *headers* are read: the `PPT` buffer, or `data` when inline.
+    header: &'a [u8],
+    header_pos: usize,
+    /// Where packet *bodies* (and SOP markers) are read: always the tile data.
+    data: &'a [u8],
+    body_pos: usize,
+    /// Whether the header stream is separate from the body stream.
+    packed: bool,
+}
+
 /// The two-byte marker at `pos`, or `None` if it would run past the end.
 fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
     let hi = *data.get(pos)?;
@@ -1187,8 +1234,7 @@ struct Contribution {
 /// been read; see [`build_subbands`].
 #[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
-    data: &'a [u8],
-    start: usize,
+    streams: &mut PacketStreams<'a>,
     layer: u32,
     packet_index: u32,
     delimiters: Delimiters,
@@ -1196,29 +1242,34 @@ fn parse_packet<'a>(
     bands: &[BandGeom],
     precinct: usize,
     states: &mut [BandState<'a>],
-) -> Result<usize> {
-    // A packet occupies at least one byte, so a start at or past the end means
-    // the codestream promised more packets than it carries.
-    if start >= data.len() {
-        return Err(Error::Codestream(
-            "tile-part ends before the last packet".into(),
-        ));
-    }
-
-    // SOP precedes the packet header when COD allows it — but only *may*
-    // (A.8.1), so its absence is not an error. OpenJPEG warns and carries on.
+) -> Result<()> {
+    // SOP precedes the packet in the *body* stream when COD allows it — but only
+    // *may* (A.8.1), so its absence is not an error, and it stays inline even
+    // when the headers are packed. OpenJPEG warns and carries on.
     //
     // The peek is unambiguous: a packet header can never begin `FF 91`. Its
     // first byte may well be `0xFF`, but the header's bit stuffing then forces
     // the next byte's most significant bit to zero, so that byte is at most
     // `0x7F` and never `0x91`. See [`bio`].
-    let start = if delimiters.sop && peek_marker(data, start) == Some(marker::SOP) {
-        read_sop(data, start, packet_index)?
-    } else {
-        start
-    };
+    if delimiters.sop && peek_marker(streams.data, streams.body_pos) == Some(marker::SOP) {
+        streams.body_pos = read_sop(streams.data, streams.body_pos, packet_index)?;
+    }
 
-    let mut bio = BitReader::new(&data[start..]);
+    // Inline, the header starts where the body cursor now sits (past any SOP);
+    // packed, it continues in the separate buffer.
+    if !streams.packed {
+        streams.header_pos = streams.body_pos;
+    }
+    // A packet header occupies at least one byte, so a cursor at or past the end
+    // of the header stream means the codestream promised more packets than it
+    // carries.
+    if streams.header_pos >= streams.header.len() {
+        return Err(Error::Codestream(
+            "tile-part ends before the last packet".into(),
+        ));
+    }
+
+    let mut bio = BitReader::new(&streams.header[streams.header_pos..]);
 
     // The first bit flags an empty packet (no contributions) against a present
     // one. An empty packet still costs its layer: the tag trees are untouched,
@@ -1241,32 +1292,43 @@ fn parse_packet<'a>(
     }
 
     // The header is a whole number of bytes. EPH, when COD signals it, sits
-    // between the header and the body — after an empty packet's header too.
+    // between the header and the body — after an empty packet's header too — and
+    // moves into the packed buffer with the headers, so it is read from the
+    // header stream.
     bio.align();
-    let mut body = start + bio.bytes_consumed();
+    streams.header_pos += bio.bytes_consumed();
     if delimiters.eph {
-        if peek_marker(data, body) != Some(marker::EPH) {
+        if peek_marker(streams.header, streams.header_pos) != Some(marker::EPH) {
             return Err(Error::Codestream(
                 "COD signals EPH but the packet header is not followed by one".into(),
             ));
         }
-        body += 2;
+        streams.header_pos += 2;
     }
 
+    // Inline, the body follows the header in the same buffer.
+    if !streams.packed {
+        streams.body_pos = streams.header_pos;
+    }
     for contribution in &contributions {
-        let end = body
+        let end = streams
+            .body_pos
             .checked_add(contribution.seg_len)
-            .filter(|&e| e <= data.len())
+            .filter(|&e| e <= streams.data.len())
             .ok_or_else(|| {
                 Error::Codestream("packet body segment overruns the tile-part".into())
             })?;
         states[contribution.band].blocks[contribution.block].segments[contribution.segment]
             .chunks
-            .push(&data[body..end]);
-        body = end;
+            .push(&streams.data[streams.body_pos..end]);
+        streams.body_pos = end;
+    }
+    // Inline, keep the two cursors together for the next packet.
+    if !streams.packed {
+        streams.header_pos = streams.body_pos;
     }
 
-    Ok(body)
+    Ok(())
 }
 
 /// Read one precinct's code-block entries, on one subband, from this layer's

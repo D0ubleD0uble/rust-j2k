@@ -285,8 +285,13 @@ hints.
 in class; PLM parses against its synthetic fixture. CRG (A.9.1) parses its
 per-component `(Xcrg, Ycrg)` offsets and records them on the header without
 resampling — the class-1 references were produced without resampling, so
-recording alone keeps `p0_03` and `p0_15` in class. Packed packet headers
-(PPM/PPT) remain (#71).
+recording alone keeps `p0_03` and `p0_15` in class. PPT (A.7.5) reads a tile's
+packet headers from the packed marker buffer instead of inline, decoupling the
+header cursor from the body cursor; it grades `p1_02`. Two pieces of #71 remain:
+PPM (the main-header form, codestream-wide with per-tile-part framing), and PPT
+over a *tile grid* — `p1_06` exercises the latter and exposes a downstream
+9/7 multi-tile reconstruction bug (the Tier-2 parse is verified correct there),
+so multi-tile PPT is rejected for now pending that investigation.
 
 ### P2.8 — Multiple component transform: RCT and ICT (`src/image.rs` or `src/mct.rs`)
 
