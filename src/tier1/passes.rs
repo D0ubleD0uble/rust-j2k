@@ -8,11 +8,15 @@
 //! and sign coding uses the neighbour-sign context (D.3.4). The cleanup pass
 //! of the top plane runs first.
 //!
-//! Of the optional code-block style flags, only `segmentation symbols` changes
-//! a pass: it appends a four-symbol marker to every cleanup pass (D.5). The
-//! others modulate termination (`restart`, `predictable termination`) or
-//! context handling (`bypass`, `reset`, `vertically causal`), and the ones that
-//! are not decoded yet are rejected in `decode_cod`.
+//! The optional code-block style flags act at three points. `segmentation
+//! symbols` appends a four-symbol marker to every cleanup pass (D.5).
+//! `vertically causal context` narrows the significance context so a stripe's
+//! bottom row ignores the row below it, and `reset context probabilities`
+//! reinitialises the MQ context model after every pass — both change which
+//! context a decision is coded under, threaded through [`BlockState`] and
+//! [`decode_block`]. `restart` and `predictable termination` modulate
+//! termination. `bypass` (raw-coded passes) is the one still rejected in
+//! `decode_cod`.
 
 use crate::tier1::mq::{Context, MqDecoder};
 use crate::{Error, Result};
@@ -76,6 +80,11 @@ pub struct BlockState {
     /// The coefficient has been through at least one magnitude-refinement pass,
     /// which selects magnitude-refinement context 16 over 14/15 (D.3.2).
     refined: Vec<bool>,
+    /// Vertically causal context (the `VCAUSAL` style): the context of a sample
+    /// on a stripe's bottom row (`y % 4 == 3`) excludes the row below it, which
+    /// belongs to the next stripe. `false` for the default style, where the full
+    /// 3×3 neighbourhood is used. Set by [`decode_block`] from the style byte.
+    vcausal: bool,
 }
 
 impl BlockState {
@@ -89,6 +98,7 @@ impl BlockState {
             visited: vec![false; n],
             negative: vec![false; n],
             refined: vec![false; n],
+            vcausal: false,
         }
     }
 
@@ -185,16 +195,28 @@ impl BlockState {
         self.refined[i] = true;
     }
 
+    /// Whether the row below `(·, y)` lies in the next stripe and so is excluded
+    /// from the context under vertically causal coding: it is the stripe's bottom
+    /// row (`y % 4 == 3`) and the flag is set. Off, or on an interior row, the
+    /// full neighbourhood is used (D.3).
+    fn excludes_south(&self, y: u32) -> bool {
+        self.vcausal && y % 4 == 3
+    }
+
     /// (ΣH, ΣV, ΣD): the significance sums of the two horizontal, two vertical,
     /// and four diagonal neighbours of `(x, y)` — the inputs to every D.3 table.
+    /// Under vertically causal coding the south neighbours of a stripe's bottom
+    /// row read as insignificant.
     fn neighbour_sums(&self, x: u32, y: u32) -> (u8, u8, u8) {
+        let south = !self.excludes_south(y);
         let (x, y) = (x as i64, y as i64);
+        let sig_south = |dx: i64| (south && self.sig_at(x + dx, y + 1)) as u8;
         let h = self.sig_at(x - 1, y) as u8 + self.sig_at(x + 1, y) as u8;
-        let v = self.sig_at(x, y - 1) as u8 + self.sig_at(x, y + 1) as u8;
+        let v = self.sig_at(x, y - 1) as u8 + sig_south(0);
         let d = self.sig_at(x - 1, y - 1) as u8
             + self.sig_at(x + 1, y - 1) as u8
-            + self.sig_at(x - 1, y + 1) as u8
-            + self.sig_at(x + 1, y + 1) as u8;
+            + sig_south(-1)
+            + sig_south(1);
         (h, v, d)
     }
 
@@ -216,9 +238,14 @@ impl BlockState {
     /// D-3). The MQ decision is XORed with the returned bit to recover the sign
     /// (`0` positive, `1` negative).
     pub fn sc_context(&self, x: u32, y: u32) -> (u8, u8) {
+        let south_contrib = if self.excludes_south(y) {
+            0
+        } else {
+            self.contrib_at(x as i64, y as i64 + 1)
+        };
         let (x, y) = (x as i64, y as i64);
         let h = (self.contrib_at(x - 1, y) + self.contrib_at(x + 1, y)).clamp(-1, 1);
-        let v = (self.contrib_at(x, y - 1) + self.contrib_at(x, y + 1)).clamp(-1, 1);
+        let v = (self.contrib_at(x, y - 1) + south_contrib).clamp(-1, 1);
         let (label, xor) = match (h, v) {
             (1, 1) => (4, 0),
             (1, 0) => (3, 0),
@@ -568,12 +595,15 @@ pub fn decode_block(
     params: BlockParams,
 ) -> Result<()> {
     let BlockParams { style, roi_shift } = params;
-    use crate::codestream::markers::code_block_style::{PTERM, SEGSYM, TERMALL};
+    use crate::codestream::markers::code_block_style::{PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
     debug_assert_eq!(
-        style & !(TERMALL | PTERM | SEGSYM),
+        style & !(TERMALL | PTERM | SEGSYM | VCAUSAL | RESET),
         0,
-        "decode_cod rejects every style flag but restart, pterm and segsym",
+        "decode_cod rejects every style flag but restart, pterm, segsym, vcausal and reset",
     );
+    // Vertically causal context changes how every significance/sign context is
+    // formed; the pass functions read it off the state.
+    state.vcausal = style & VCAUSAL != 0;
     if num_passes == 0 {
         return Ok(());
     }
@@ -629,6 +659,15 @@ pub fn decode_block(
                 PassType::SigProp => sig_prop_pass(&mut mq, state, &mut cx, orient, bpno),
                 PassType::MagRef => mag_ref_pass(&mut mq, state, &mut cx, bpno),
                 PassType::Cleanup => cleanup_pass(&mut mq, state, &mut cx, orient, bpno, style)?,
+            }
+            // Under `reset context probabilities` the MQ context states return to
+            // their initial estimates after every pass (D.3, OpenJPEG's
+            // `opj_mqc_resetstates` + the three seeded contexts). The default
+            // style carries the states across passes. Only MQ-coded passes reset;
+            // the raw passes of `bypass` do not — but `bypass` is not decoded, so
+            // every pass here is MQ.
+            if style & RESET != 0 {
+                cx = init_contexts();
             }
             pass_type = match pass_type {
                 PassType::SigProp => PassType::MagRef,

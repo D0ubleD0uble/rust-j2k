@@ -55,6 +55,14 @@ VARIANTS = {
     # All three at once: each cleanup pass is its own terminated segment *and*
     # ends with a segmentation symbol. This is `p0_02`'s style byte (0x34).
     "restart_pterm_segsym": (4 | 16 | 32, 0x34),
+    # Vertically causal context (bit 3) and reset context probabilities (bit 1),
+    # each alone. Both change the MQ context every affected decision is coded
+    # under, so a decoder that ignores the flag reconstructs garbage — the golden
+    # vector is bit-exact against OpenJPEG. The conformance corpus's own vcausal
+    # and reset entries (`p1_02`, `p1_06`) are blocked on PPT, so these are the
+    # only bit-exact grade of the two modes.
+    "vcausal": (8, 0x08),
+    "reset": (2, 0x02),
 }
 
 

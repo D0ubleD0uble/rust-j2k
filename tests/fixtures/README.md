@@ -83,6 +83,14 @@ network fetch and no large operational grids.
 - `cblksty_restart_pterm_segsym_lossless` — all three at once, which is `p0_02`'s
   style byte (`0x34`). Grades that they compose. It cannot grade `segsym`
   consumption, for the reason above.
+- `cblksty_vcausal_lossless` — `vertically causal context` alone. The 3×3
+  significance context of a stripe's bottom row excludes the next stripe, so it
+  changes the MQ context of every affected decision; a decoder that ignores the
+  flag reconstructs garbage. The corpus's own vcausal entries (`p1_02`, `p1_06`)
+  are blocked on PPT, so this is the only bit-exact grade of the mode.
+- `cblksty_reset_lossless` — `reset context probabilities` alone. The MQ context
+  model reinitialises after every coding pass; again the corpus entries are
+  blocked on PPT, so this synthetic vector is the bit-exact grade.
 - `qcc_lossless` — per-component quantization overrides (QCC). Built by
   `scripts/gen-qcc-fixture.py` from `multicomponent_lossless.j2k`: QCD's guard
   bits and exponents are corrupted and a QCC restores the original values for

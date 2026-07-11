@@ -245,8 +245,14 @@ block decoder; the surrounding pipeline is untouched.
 with each style), plus Part 4 codestreams that set the corresponding flags. This
 track is golden-vector testable in isolation, so it runs alongside P2.1–P2.5.
 
-**Done:** each coding style decodes its golden vectors and the matching
-conformance codestreams in class.
+**Done:** restart, predictable termination, and segmentation symbols decode
+(their golden vectors grade bit-exact). Vertically causal context and reset of
+context probabilities now decode too, graded bit-exact against
+`scripts/gen-cblksty-fixtures.py`'s `vcausal`/`reset` vectors. Their conformance
+entries do not grade on those flags alone: `p1_06` (vcausal) and `p1_02`
+(vcausal + reset) both also carry a PPT marker (#71), so they wait on the packed
+packet headers. Selective arithmetic-coding bypass (#66) is the one mode left; it
+unblocks `p1_03` and, with vcausal, `p1_05`.
 
 ### P2.7 — Packed-header, length, resilience, and registration markers (`src/codestream/`, `src/tier2/`)
 
