@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- POC (progression-order change): a codestream may now carry a `POC` marker that
+  replaces `COD`'s single progression with a sequence of volumes, each an order
+  over its own layer/resolution/component sub-range. The packet iterator walks the
+  volumes in turn and emits each packet once, by the first volume that reaches it.
+  A `POC` is decoded in the main header and in any tile-part header, where its
+  volumes accumulate across the tile's parts. Grades conformance entries `p0_07`
+  and `p0_13`.
 - Non-zero image and tile origins (`XOsiz`/`YOsiz`, `XTOsiz`/`YTOsiz`): the
   canvas no longer has to start at the reference-grid origin. Subband extents,
   the code-block partition, and the inverse DWT's interleave parity already read

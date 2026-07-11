@@ -11,9 +11,10 @@
 //! This stage runs once per **tile**: a tile's packets are its own, in its own
 //! progression, and nothing about them crosses a tile boundary. The packet
 //! stream walks four axes — layer, resolution, component, and *position* (the
-//! precinct) — in whichever order that tile's `COD` names. The tile's data is
-//! then `header₀ body₀ header₁ body₁ …` with no padding, and the packets must
-//! tile it exactly; a leftover byte means a misread field.
+//! precinct) — in the order that tile's `COD` names, or, when a `POC` marker is
+//! present, through the sequence of progression volumes it prescribes. The
+//! tile's data is then `header₀ body₀ header₁ body₁ …` with no padding, and the
+//! packets must tile it exactly; a leftover byte means a misread field.
 //!
 //! A code-block's contributions accumulate across the layers that include it,
 //! so a precinct's tag trees and per-block state outlive any one packet. See
