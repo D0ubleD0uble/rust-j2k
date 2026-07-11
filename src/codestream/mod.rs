@@ -1,10 +1,11 @@
 //! Stage 1 — codestream parsing (ISO/IEC 15444-1 Annex A).
 //!
 //! Walks the marker segments of a raw J2K codestream: the main header
-//! (SIZ / COD / QCD, plus optional COC / QCC / RGN / POC / COM), then the
-//! tile-parts (SOT … SOD … data). Produces a [`MainHeader`] of decode
-//! parameters and the byte ranges of each tile's packet data — everything the
-//! later stages need, with no interpretation of the entropy-coded bytes yet.
+//! (SIZ / COD / QCD, plus optional COC / QCC / RGN / TLM / PLM / COM), then
+//! the tile-parts (SOT, optional RGN / PLT / COM, SOD, data). Produces a
+//! [`MainHeader`] of decode parameters and the byte ranges of each tile's
+//! packet data — everything the later stages need, with no interpretation of
+//! the entropy-coded bytes yet.
 //!
 //! The main header is located before it is judged: [`walk_main_header`] finds
 //! every marker segment without caring what the decoder supports, and
@@ -16,8 +17,8 @@ pub mod markers;
 
 use crate::{Error, Result};
 use markers::{
-    Cod, Coding, ComponentParams, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
-    marker,
+    Cod, Coding, ComponentParams, Progression, Qcd, QuantStyle, Siz, SizComponent, TlmEntry,
+    Transform, marker,
 };
 
 /// Parsed main-header decode parameters. COD/QCD carry the codestream-wide
@@ -34,6 +35,10 @@ pub struct MainHeader {
     /// past the header reads these rather than [`cod`](Self::cod) or
     /// [`qcd`](Self::qcd), which hold the codestream-wide defaults.
     pub components: Vec<ComponentParams>,
+    /// Tile-part lengths from any TLM markers, in marker order; empty when the
+    /// codestream carries none. Informational (A.7.1): decoding does not use
+    /// them, so they are recorded for callers to check, not consulted.
+    pub tlm: Vec<TlmEntry>,
 }
 
 impl MainHeader {
@@ -53,6 +58,7 @@ impl MainHeader {
             cod,
             qcd,
             components,
+            tlm: Vec::new(),
         }
     }
 }
@@ -167,21 +173,22 @@ fn walk_tile_parts<'a>(
                 }
                 header.components[index].roi_shift = shift;
             }
-            marker::COD
-            | marker::COC
-            | marker::QCD
-            | marker::QCC
-            | marker::POC
-            | marker::PLT
-            | marker::PPT => {
+            // Packet lengths (A.7.3): informational, so the structure is
+            // validated and the lengths discarded — the packets are read from
+            // the data itself, and decoding must not depend on the hint.
+            marker::PLT => {
+                decode_plt(segment(&mut cur)?)?;
+            }
+            marker::COD | marker::COC | marker::QCD | marker::QCC | marker::POC | marker::PPT => {
                 return Err(Error::Unsupported(format!(
                     "tile-part header marker {m:#06X} is outside the decoded subset"
                 )));
             }
-            // These are legal markers, but not here: TLM is main-header-only
-            // (A.7.1), and SOP/EPH delimit packets after SOD. In a tile-part
-            // header they are a malformed codestream, not a missing feature.
-            marker::TLM | marker::SOP | marker::EPH => {
+            // These are legal markers, but not here: TLM and PLM are
+            // main-header-only (A.7.1, A.7.2), and SOP/EPH delimit packets
+            // after SOD. In a tile-part header they are a malformed
+            // codestream, not a missing feature.
+            marker::TLM | marker::PLM | marker::SOP | marker::EPH => {
                 return Err(Error::Codestream(format!(
                     "marker {m:#06X} is not permitted in a tile-part header"
                 )));
@@ -409,6 +416,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let mut coc: Vec<Option<Coding>> = vec![None; siz.components.len()];
     let mut qcc: Vec<Option<Qcd>> = vec![None; siz.components.len()];
     let mut rgn: Vec<Option<u8>> = vec![None; siz.components.len()];
+    let mut tlm: Vec<TlmEntry> = Vec::new();
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
@@ -461,18 +469,33 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             // Comment: recognised, carries nothing the decoder needs.
             marker::COM => {}
 
+            // Length markers (A.7): pointers into the codestream, not decode
+            // parameters — the packet and tile-part structures they describe
+            // are read from the codestream itself, so decoding is identical
+            // with them present or absent. TLM's entries are validated and
+            // recorded; PLM's packet lengths are skipped as OpenJPEG skips
+            // them (`opj_j2k_read_plm` reads nothing past `Zplm`).
+            marker::TLM => decode_tlm(body(), &mut tlm)?,
+            marker::PLM => decode_plm(body())?,
+
+            // PLT is the tile-part-header form of PLM (A.7.3); in the main
+            // header it is a malformed codestream, not a missing feature.
+            marker::PLT => {
+                return Err(Error::Codestream(
+                    "PLT is a tile-part-header marker; it is not permitted in the main header"
+                        .into(),
+                ));
+            }
+
             // Valid markers the decoded subset does not yet cover. Rejected
             // rather than skipped: each one changes how the codestream is
             // interpreted, so ignoring it would silently decode the wrong
-            // image. PPM/PPT relocate packet headers; PLM/PLT/TLM/CRG are
-            // informational but travel with features we do not decode. CAP
-            // announces capabilities beyond Part 1 (an HTJ2K codestream carries
-            // one), whose code-blocks this Tier-1 would misread as Part 1.
+            // image. PPM/PPT relocate packet headers; CRG is informational but
+            // travels with features we do not decode. CAP announces
+            // capabilities beyond Part 1 (an HTJ2K codestream carries one),
+            // whose code-blocks this Tier-1 would misread as Part 1.
             marker::CAP
             | marker::POC
-            | marker::TLM
-            | marker::PLM
-            | marker::PLT
             | marker::PPM
             | marker::PPT
             | marker::CRG
@@ -509,6 +532,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     // Start from COD/QCD's defaults, then lay each override over its component.
     // That is the whole of A.6.2's and A.6.5's resolution rule.
     let mut header = MainHeader::new(siz, cod, qcd);
+    header.tlm = tlm;
     for (params, ((coding, quant), shift)) in header
         .components
         .iter_mut()
@@ -948,6 +972,99 @@ fn decode_rgn(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, u8)> {
     let shift = b.u8()?;
     b.expect_consumed("RGN")?;
     Ok((index, shift))
+}
+
+/// Decode TLM — tile-part lengths (A.7.1) — appending onto `entries`.
+///
+/// `Stlm` packs two field widths: `ST` (bits 4–5) is the tile-index width in
+/// bytes, where 0 means the index is implied by entry order across all TLM
+/// markers, and `SP` (bit 6) selects 16- or 32-bit lengths. `ST = 3` and the
+/// reserved bits (0–3 and 7) are illegal encodings; OpenJPEG warns and ignores
+/// the whole TLM chain on `ST = 3` or a bad entry size and never looks at the
+/// reserved bits, but as with `Scoc` rejecting is stricter and no conformant
+/// codestream carries them.
+///
+/// The subset decodes a single tile — enforced when SIZ is decoded — so tile 0
+/// is the only tile an entry can name; the tile grid of #59 generalizes this.
+/// OpenJPEG makes the same range check against its grid.
+fn decode_tlm(mut b: Cursor<'_>, entries: &mut Vec<TlmEntry>) -> Result<()> {
+    b.u8()?; // Ztlm: this marker's position among the TLMs
+    let stlm = b.u8()?;
+    if stlm & 0x8F != 0 {
+        return Err(Error::Marker(format!(
+            "TLM sets reserved Stlm bits {:#04X}",
+            stlm & 0x8F
+        )));
+    }
+    let st = (stlm >> 4) & 0x3;
+    if st == 3 {
+        return Err(Error::Marker(
+            "TLM tile-index width ST = 3 is not defined".into(),
+        ));
+    }
+    let sp = (stlm >> 6) & 0x1;
+
+    let entry_size = usize::from(st) + 2 * (usize::from(sp) + 1);
+    if !b.remaining().is_multiple_of(entry_size) {
+        return Err(Error::Codestream(format!(
+            "TLM carries {} entry bytes, not a multiple of its {entry_size}-byte entries",
+            b.remaining()
+        )));
+    }
+
+    while b.remaining() > 0 {
+        let tile_index = match st {
+            0 => entries.len() as u32,
+            1 => u32::from(b.u8()?),
+            _ => u32::from(b.u16()?),
+        };
+        if tile_index != 0 {
+            return Err(Error::Marker(format!(
+                "TLM names tile {tile_index}, but the grid has a single tile"
+            )));
+        }
+        let length = match sp {
+            0 => u32::from(b.u16()?),
+            _ => b.u32()?,
+        };
+        entries.push(TlmEntry { tile_index, length });
+    }
+    Ok(())
+}
+
+/// Decode PLM — main-header packet lengths (A.7.2).
+///
+/// Validated for presence and otherwise skipped, exactly as OpenJPEG's
+/// `opj_j2k_read_plm` does: an `Nplm`/`Iplm` chain may split across PLM
+/// markers mid-entry, so per-marker structural validation would reject
+/// codestreams the oracle accepts. The packets themselves are read from the
+/// codestream, so nothing here is needed to decode.
+fn decode_plm(mut b: Cursor<'_>) -> Result<()> {
+    b.u8()?; // Zplm: this marker's position among the PLMs
+    Ok(())
+}
+
+/// Decode PLT — tile-part packet lengths (A.7.3).
+///
+/// Each packet length is a base-128 chain of bytes, high bit meaning "another
+/// byte follows". The lengths are informational and discarded; what is checked
+/// is that the last chain is whole — a final byte with its continuation bit
+/// set is a truncated entry. OpenJPEG rejects the same way unless every
+/// payload bit of the dangling chain is zero (`opj_j2k_read_plt` tests the
+/// accumulated *value* at segment end, and `0 << 7` stays 0); rejecting the
+/// all-zero dangle too is stricter, the same documented stance as the TLM
+/// encodings above.
+fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
+    b.u8()?; // Zplt: this marker's position among the tile-part's PLTs
+    // The chains are self-delimiting, so whole-ness is one property: the last
+    // byte must not claim a continuation.
+    let chains = b.take(b.remaining())?;
+    if chains.last().is_some_and(|&last| last & 0x80 != 0) {
+        return Err(Error::Codestream(
+            "PLT ends in the middle of a packet-length entry".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Decode the quantization body shared by QCD (A.6.4) and QCC (A.6.5): style,

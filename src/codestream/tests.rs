@@ -1176,13 +1176,11 @@ fn a_non_marker_where_a_marker_belongs_is_codestream() {
 fn header_altering_markers_are_rejected_not_skipped() {
     // These are known markers outside the subset. Each changes how the
     // codestream is interpreted (PPM/PPT relocate the packet headers), so each
-    // is named and rejected rather than passed over.
+    // is named and rejected rather than passed over. The length markers
+    // TLM/PLM/PLT are absent: they are informational and decoded (issue #72).
     for code in [
         marker::CAP,
         marker::POC,
-        marker::TLM,
-        marker::PLM,
-        marker::PLT,
         marker::PPM,
         marker::PPT,
         marker::CRG,
@@ -1617,12 +1615,11 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         ),
     ];
 
-    // Every main-header marker the subset does not decode.
+    // Every main-header marker the subset does not decode. TLM and PLM have
+    // left this table (informational, decoded — issue #72); PLT is decoded in
+    // the tile-part header and structurally illegal in the main one.
     for (name, code) in [
         ("POC", marker::POC),
-        ("TLM", marker::TLM),
-        ("PLM", marker::PLM),
-        ("PLT", marker::PLT),
         ("PPM", marker::PPM),
         ("PPT", marker::PPT),
         ("CRG", marker::CRG),
@@ -1634,6 +1631,11 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             Variant::Unsupported,
         ));
     }
+    rows.push((
+        "PLT in the main header",
+        err(&header_with(&seg(marker::PLT, &[0, 0]))),
+        Variant::Codestream,
+    ));
     rows.push((
         "EPH",
         err(&header_with(&be16(marker::EPH))),
@@ -2140,4 +2142,191 @@ fn a_tile_part_rgn_with_a_part_2_style_is_unsupported() {
     let rgn = seg(marker::RGN, &rgn_body(&[0], 1, 9));
     let bytes = assemble_with_tile_markers(&default_header(), &[rgn], &[1, 2]);
     assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+}
+
+// --- TLM / PLM / PLT: length markers (issue #72) -----------------------------
+
+use super::markers::TlmEntry;
+
+/// TLM body: `Ztlm`, `Stlm`, then the entry bytes verbatim.
+fn tlm_body(stlm: u8, entries: &[u8]) -> Vec<u8> {
+    let mut b = vec![0, stlm];
+    b.extend_from_slice(entries);
+    b
+}
+
+/// Length markers are informational, so the parse records TLM's entries and
+/// nothing more. `Stlm = 0x60` is `ST = 2` (two-byte tile indices) and
+/// `SP = 1` (four-byte lengths) — the shape `p0_05` carries.
+#[test]
+fn tlm_records_the_tile_part_lengths() {
+    let mut segments = default_header();
+    segments.push(seg(
+        marker::TLM,
+        &tlm_body(0x60, &[0, 0, 0x00, 0x13, 0xFF, 0x4C]),
+    ));
+    let header = parsed(&segments);
+    assert_eq!(
+        header.tlm,
+        vec![TlmEntry {
+            tile_index: 0,
+            length: 0x0013_FF4C,
+        }]
+    );
+}
+
+/// `ST = 0` omits the tile index — entry order implies it — and `SP = 0`
+/// carries two-byte lengths. Entries accumulate across TLM markers in order.
+#[test]
+fn tlm_indices_can_be_implied_and_lengths_two_bytes() {
+    let mut segments = default_header();
+    segments.push(seg(marker::TLM, &tlm_body(0x00, &[0x12, 0x34])));
+    let header = parsed(&segments);
+    assert_eq!(
+        header.tlm,
+        vec![TlmEntry {
+            tile_index: 0,
+            length: 0x1234,
+        }]
+    );
+}
+
+/// Two TLM markers concatenate: one list of tile-parts, in codestream order.
+#[test]
+fn tlm_entries_accumulate_across_markers() {
+    let mut segments = default_header();
+    // ST = 1 (one-byte explicit index), SP = 0: entries `index, len16`.
+    segments.push(seg(marker::TLM, &tlm_body(0x10, &[0, 0x00, 0x14])));
+    segments.push(seg(marker::TLM, &tlm_body(0x10, &[0, 0x00, 0x2C])));
+    let header = parsed(&segments);
+    assert_eq!(header.tlm.len(), 2);
+    assert_eq!(header.tlm[0].length, 0x14);
+    assert_eq!(header.tlm[1].length, 0x2C);
+}
+
+/// `ST = 3` is undefined (Table A-33). OpenJPEG warns and ignores the TLM
+/// chain; as with `Scoc`, rejecting the illegal encoding is stricter.
+#[test]
+fn tlm_st_3_is_a_marker_error() {
+    let mut segments = default_header();
+    segments.push(seg(marker::TLM, &tlm_body(0x30, &[0, 0, 0, 0])));
+    let bytes = codestream(&segments);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+/// `Stlm` defines only bits 4–6; a reserved bit set is an illegal encoding.
+#[test]
+fn tlm_reserved_stlm_bits_are_a_marker_error() {
+    for stlm in [0x01u8, 0x08, 0x80] {
+        let mut segments = default_header();
+        segments.push(seg(marker::TLM, &tlm_body(stlm, &[0, 0x10])));
+        let bytes = codestream(&segments);
+        assert!(matches!(err(&bytes), Error::Marker(_)), "Stlm {stlm:#04X}");
+    }
+}
+
+/// A body that does not divide into whole entries is malformed.
+#[test]
+fn tlm_misaligned_body_is_a_codestream_error() {
+    let mut segments = default_header();
+    segments.push(seg(marker::TLM, &tlm_body(0x60, &[0, 0, 0, 0x13])));
+    let bytes = codestream(&segments);
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+/// The subset's grid is a single tile — enforced at SIZ — so an entry naming
+/// any other tile points at nothing. OpenJPEG makes the same range check
+/// against its tile grid.
+#[test]
+fn tlm_naming_a_missing_tile_is_a_marker_error() {
+    let mut segments = default_header();
+    segments.push(seg(marker::TLM, &tlm_body(0x10, &[1, 0x00, 0x14])));
+    let bytes = codestream(&segments);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+/// PLM is validated for its `Zplm` byte and otherwise skipped, exactly as
+/// OpenJPEG skips it: its packet-length chains may split across PLM markers
+/// mid-entry, so nothing else can be checked per marker. Synthetic fixture —
+/// no conformance entry carries PLM (`tests/conformance_corpus.rs` pins that
+/// gap): `Zplm = 0`, then one `Nplm = 2` chain of a two-byte packet length.
+#[test]
+fn plm_parses_and_is_skipped() {
+    let mut segments = default_header();
+    segments.push(seg(marker::PLM, &[0, 2, 0x85, 0x02]));
+    let header = parsed(&segments);
+    assert_eq!(header.tlm, vec![]);
+}
+
+/// A PLM with no `Zplm` byte at all is malformed.
+#[test]
+fn plm_without_zplm_is_a_codestream_error() {
+    let mut segments = default_header();
+    segments.push(seg(marker::PLM, &[]));
+    let bytes = codestream(&segments);
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+/// PLT parses in the tile-part header: `Zplt`, then packet lengths as
+/// base-128 byte chains (high bit = another byte follows). The lengths are
+/// discarded; the parse only requires whole chains.
+#[test]
+fn plt_parses_in_the_tile_part_header() {
+    // Two packet lengths: 0x282 (two bytes, 0x85 then 0x02) and 0x10 (one).
+    let plt = seg(marker::PLT, &[0, 0x85, 0x02, 0x10]);
+    let bytes = assemble_with_tile_markers(&default_header(), &[plt], &[1, 2]);
+    parse(&bytes).expect("PLT is informational and parses");
+}
+
+/// A PLT whose last byte still has the continuation bit set ends mid-entry —
+/// malformed, and OpenJPEG's `opj_j2k_read_plt` rejects it the same way.
+#[test]
+fn plt_ending_mid_entry_is_a_codestream_error() {
+    let plt = seg(marker::PLT, &[0, 0x85]);
+    let bytes = assemble_with_tile_markers(&default_header(), &[plt], &[1, 2]);
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+/// PLT belongs to the tile-part header alone (A.7.3); in the main header it is
+/// a malformed codestream, not a missing feature.
+#[test]
+fn plt_in_the_main_header_is_a_codestream_error() {
+    let mut segments = default_header();
+    segments.push(seg(marker::PLT, &[0, 0x10]));
+    let bytes = codestream(&segments);
+    assert!(matches!(err(&bytes), Error::Codestream(_)));
+}
+
+/// PLM belongs to the main header alone (A.7.2); in a tile-part header it is
+/// a malformed codestream.
+#[test]
+fn plm_in_the_tile_part_header_is_a_codestream_error() {
+    let plm = seg(marker::PLM, &[0]);
+    let bytes = assemble_with_tile_markers(&default_header(), &[plm], &[1, 2]);
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+/// `p0_05`'s TLM against the codestream itself: the single entry must name
+/// tile 0 with the exact `Psot` its SOT declares (`opj_dump` does not print
+/// TLM, so the codestream is the reference here — Ptlm and Psot describe the
+/// same span, A.4.2 and A.7.1). Returns early if the corpus is absent: it is
+/// `exclude`d from the packaged crate.
+#[test]
+fn tlm_of_p0_05_matches_its_tile_part_length() {
+    let path = corpus_dir().join("codestreams/p0_05.j2k");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+
+    let cs = parse(&bytes).expect("p0_05 parses");
+    assert_eq!(cs.header.tlm.len(), 1, "one tile-part, one entry");
+    assert_eq!(cs.header.tlm[0].tile_index, 0);
+
+    // Psot: bytes 6..10 of the SOT segment (marker, Lsot, Isot precede it).
+    let sot = bytes
+        .windows(2)
+        .position(|w| w == be16(marker::SOT))
+        .expect("SOT");
+    let psot = u32::from_be_bytes(bytes[sot + 6..sot + 10].try_into().unwrap());
+    assert_eq!(cs.header.tlm[0].length, psot);
 }
