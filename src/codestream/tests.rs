@@ -306,11 +306,63 @@ fn zero_size_tile_is_marker() {
     assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
+/// A tile grid finer than `Isot` can name has tiles no tile-part can reach, so
+/// SIZ is malformed rather than merely unsupported. `Isot` runs 0..=65534
+/// (Table A-10), which caps the grid at 65535 tiles.
 #[test]
-fn tile_smaller_than_image_is_unsupported() {
-    // A 512×256 image carved into 256-wide tiles is a multi-tile grid (not yet decoded).
-    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 256, 256, 0, 0))]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+fn a_tile_grid_past_the_isot_range_is_marker() {
+    // 65536 one-pixel tiles across a 65536x1 image: one tile past the limit.
+    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(65536, 1, 0, 0, 1, 1, 0, 0))]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+
+    // 65535 tiles is the largest grid that fits, and it parses.
+    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(65535, 1, 0, 0, 1, 1, 0, 0))]);
+    assert!(
+        matches!(err(&bytes), Error::Codestream(_)),
+        "reaches the missing-COD check"
+    );
+}
+
+/// The tile grid SIZ describes, and each tile's rectangle on the reference grid.
+/// The right and bottom tiles of a grid that does not divide the image evenly are
+/// clipped, which is what makes an edge tile partial.
+#[test]
+fn the_tile_grid_covers_the_image_with_clipped_edge_tiles() {
+    let header = parsed(&[
+        // 40x40 image in 16x16 tiles: a 3x3 grid whose last row and column are
+        // 8 wide, not 16.
+        seg(marker::SIZ, &siz_geom(40, 40, 0, 0, 16, 16, 0, 0)),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let siz = &header.siz;
+    assert_eq!(siz.tile_grid(), (3, 3));
+    assert_eq!(siz.num_tiles(), 9);
+
+    let rect = |i| siz.tile_rect(i).expect("tile in the grid");
+    assert_eq!(
+        (rect(0).x0, rect(0).y0, rect(0).x1, rect(0).y1),
+        (0, 0, 16, 16)
+    );
+    assert_eq!(
+        (rect(1).x0, rect(1).x1),
+        (16, 32),
+        "tiles are numbered in raster order"
+    );
+    assert_eq!(
+        (rect(2).x0, rect(2).x1),
+        (32, 40),
+        "the last column is clipped to the image"
+    );
+    assert_eq!(
+        (rect(8).x0, rect(8).y0, rect(8).x1, rect(8).y1),
+        (32, 32, 40, 40)
+    );
+    assert!(siz.tile_rect(9).is_none(), "past the grid");
+
+    // Every tile of the grid, laid side by side, is the image and nothing else.
+    let area: u64 = (0..siz.num_tiles()).map(|i| rect(i).area()).sum();
+    assert_eq!(area, 40 * 40);
 }
 
 #[test]
@@ -743,9 +795,9 @@ fn valid_single_tile_part_parses() {
     let bytes = assemble(&default_header(), &sot, &data, true);
 
     let cs = parse(&bytes).expect("parse");
-    assert_eq!(cs.tile_parts.len(), 1);
-    assert_eq!(cs.tile_parts[0].tile_index, 0);
-    assert_eq!(cs.tile_parts[0].data, &data);
+    assert_eq!(cs.tiles.len(), 1);
+    assert_eq!(cs.tiles[0].index, 0);
+    assert_eq!(cs.tiles[0].data.as_ref(), &data[..]);
     assert_eq!(cs.header.cod.transform, Transform::Reversible53);
 }
 
@@ -756,7 +808,7 @@ fn psot_zero_runs_to_eoc() {
     let bytes = assemble(&default_header(), &sot, &data, true);
 
     let cs = parse(&bytes).expect("parse");
-    assert_eq!(cs.tile_parts[0].data, &data);
+    assert_eq!(cs.tiles[0].data.as_ref(), &data[..]);
 }
 
 /// Bytes after the closing EOC are ignored when `Psot` declares the length,
@@ -771,7 +823,7 @@ fn trailing_bytes_after_eoc_are_ignored_when_psot_declares_the_length() {
     let mut bytes = assemble(&default_header(), &sot, &data, true);
     bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]); // garbage ending in FF D9
     let cs = parse(&bytes).expect("trailing bytes after the declared extent");
-    assert_eq!(cs.tile_parts[0].data, &data);
+    assert_eq!(cs.tiles[0].data.as_ref(), &data[..]);
 
     // With Psot = 0 the same tail is absorbed into the tile up to the final
     // EOC; the packet self-check downstream is what rejects it. Anchoring is
@@ -780,7 +832,7 @@ fn trailing_bytes_after_eoc_are_ignored_when_psot_declares_the_length() {
     let mut bytes = assemble(&default_header(), &sot, &data, true);
     bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]);
     let cs = parse(&bytes).expect("EOC anchored at the buffer end");
-    assert_eq!(cs.tile_parts[0].data.len(), data.len() + 4);
+    assert_eq!(cs.tiles[0].data.len(), data.len() + 4);
 }
 
 #[test]
@@ -789,7 +841,7 @@ fn empty_tile_part_data_parses() {
     let bytes = assemble(&default_header(), &sot, &[], true);
 
     let cs = parse(&bytes).expect("parse");
-    assert!(cs.tile_parts[0].data.is_empty());
+    assert!(cs.tiles[0].data.is_empty());
 }
 
 #[test]
@@ -809,37 +861,45 @@ fn tile_part_header_comment_is_skipped() {
     bytes.extend_from_slice(&be16(marker::EOC));
 
     let cs = parse(&bytes).expect("parse");
-    assert_eq!(cs.tile_parts[0].data, &data);
+    assert_eq!(cs.tiles[0].data.as_ref(), &data[..]);
 }
 
+/// `Isot` must name a tile the grid holds. The default header is a single tile,
+/// so tile 1 does not exist and the codestream is malformed.
 #[test]
-fn nonzero_tile_index_is_unsupported() {
-    let sot = sot_seg(1, 0, 0, 1); // Isot != 0
+fn a_tile_index_past_the_grid_is_codestream() {
+    let sot = sot_seg(1, 0, 0, 1); // Isot = 1, but the grid holds one tile
     let bytes = assemble(&default_header(), &sot, &[1, 2], true);
-    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
 
+/// `TNsot` states how many tile-parts the tile has. A tile that declares two and
+/// carries one is truncated, whatever the rest of the codestream says.
 #[test]
-fn multiple_tile_parts_count_is_unsupported() {
+fn a_tnsot_the_tile_parts_do_not_add_up_to_is_codestream() {
     let data = [1, 2];
-    let sot = sot_seg(0, psot_for(&data), 0, 2); // TNsot = 2
+    let sot = sot_seg(0, psot_for(&data), 0, 2); // TNsot = 2, but only one part follows
     let bytes = assemble(&default_header(), &sot, &data, true);
-    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
 
+/// A tile's parts are numbered from zero and arrive in order (A.4.2), so the
+/// first one to appear must be `TPsot = 0`. Starting at 1 means part 0 is missing.
 #[test]
-fn nonzero_tile_part_index_is_unsupported() {
-    let sot = sot_seg(0, 0, 1, 1); // TPsot = 1
+fn a_tile_part_index_out_of_order_is_codestream() {
+    let sot = sot_seg(0, 0, 1, 1); // TPsot = 1 with no part 0 before it
     let bytes = assemble(&default_header(), &sot, &[1, 2], true);
-    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
 
+/// A tile split across several tile-parts is one tile: its parts' packet bytes
+/// are joined, in `TPsot` order, into the single stream the packet walk reads.
+/// A tile-part holds a whole number of packets (B.9), so the join is exact.
 #[test]
-fn second_tile_part_is_unsupported() {
-    // First part states TNsot=0 ("not stated") so it passes the field checks;
-    // a second SOT where EOC was expected is what trips the reject.
-    let data = [7, 7, 7];
-    let first = sot_seg(0, psot_for(&data), 0, 0);
+fn several_tile_parts_of_one_tile_are_joined_in_order() {
+    let first_data = [7, 7, 7];
+    // TNsot = 0 in the first part: "not stated yet", which A.4.2 allows.
+    let first = sot_seg(0, psot_for(&first_data), 0, 0);
 
     let mut bytes = be16(marker::SOC).to_vec();
     for part in default_header() {
@@ -847,20 +907,41 @@ fn second_tile_part_is_unsupported() {
     }
     bytes.extend_from_slice(&first);
     bytes.extend_from_slice(&be16(marker::SOD));
-    bytes.extend_from_slice(&data);
-    bytes.extend_from_slice(&sot_seg(0, 0, 1, 2)); // a second tile-part
+    bytes.extend_from_slice(&first_data);
+    // The last part carries Psot = 0, so it runs to the closing EOC.
+    bytes.extend_from_slice(&sot_seg(0, 0, 1, 2));
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.extend_from_slice(&[8, 8]);
     bytes.extend_from_slice(&be16(marker::EOC));
 
-    assert!(matches!(perr(&bytes), Error::Unsupported(_)));
+    let cs = parse(&bytes).expect("two tile-parts of one tile");
+    assert_eq!(cs.tiles.len(), 1);
+    assert_eq!(cs.tiles[0].data.as_ref(), &[7, 7, 7, 8, 8]);
 }
 
+/// Every tile of the grid must be carried. A codestream that names a 2x1 grid and
+/// ships one tile describes an image it does not contain — a truncation, not a
+/// feature to decode around.
+#[test]
+fn a_tile_with_no_tile_part_is_codestream() {
+    let header = vec![
+        // 512x256 in 256-wide tiles: a 2x1 grid.
+        seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 256, 256, 0, 0)),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    // Only tile 0 is carried; tile 1 never appears.
+    let bytes = assemble(&header, &sot_seg(0, 0, 0, 1), &[1, 2], true);
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+/// POC and PPT are legal in a tile-part header but not yet decoded: each changes
+/// how the tile's packet data is read, so skipping one would decode the wrong
+/// image. (COD/COC/QCD/QCC/RGN *are* decoded there — see the override tests.)
 #[test]
 fn out_of_subset_tile_header_marker_is_unsupported() {
-    // A QCC override in the tile-part header is a later phase.
     let data = [1, 2];
-    let qcc = seg(marker::QCC, &[0, 0, 0]);
+    let qcc = seg(marker::POC, &[0, 0, 0]);
     let psot = (12 + qcc.len() + 2 + data.len()) as u32;
 
     let mut bytes = be16(marker::SOC).to_vec();
@@ -1482,13 +1563,16 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             )])),
             Variant::Unsupported,
         ),
+        // A tile grid is decoded now; one finer than `Isot` can name is not a
+        // missing feature but an illegal field, since no tile-part could ever
+        // name its tiles.
         (
-            "multi-tile grid",
+            "tile grid past the Isot range",
             err(&codestream(&[seg(
                 marker::SIZ,
-                &siz_geom(512, 256, 0, 0, 256, 256, 0, 0),
+                &siz_geom(65536, 1, 0, 0, 1, 1, 0, 0),
             )])),
-            Variant::Unsupported,
+            Variant::Marker,
         ),
         (
             "explicit precinct partition",
@@ -2092,6 +2176,10 @@ fn assemble_with_tile_markers(header: &[Vec<u8>], markers: &[Vec<u8>], data: &[u
 /// than a slightly worse one. `p0_06` is exactly this codestream: maxshift 11
 /// in the main header, 9 in the tile-part header — 9 is what the tile was
 /// coded with.
+///
+/// The override belongs to the *tile*, so it lands on the tile's header and the
+/// main header keeps its own value. Another tile of the same image, carrying no
+/// RGN, would still take 11.
 #[test]
 fn a_tile_part_rgn_overrides_the_main_header_shift() {
     let mut header = default_header();
@@ -2100,7 +2188,11 @@ fn a_tile_part_rgn_overrides_the_main_header_shift() {
     let bytes = assemble_with_tile_markers(&header, &[rgn], &[1, 2]);
 
     let cs = parse(&bytes).expect("parse");
-    assert_eq!(cs.header.components[0].roi_shift, 9);
+    assert_eq!(cs.tiles[0].header.components[0].roi_shift, 9);
+    assert_eq!(
+        cs.header.components[0].roi_shift, 11,
+        "the tile's override must not be written back over the main header"
+    );
 }
 
 /// A tile-part RGN with no main-header counterpart sets the shift from zero,
@@ -2117,9 +2209,153 @@ fn a_tile_part_rgn_names_one_component() {
     let bytes = assemble_with_tile_markers(&header, &[rgn], &[1, 2]);
 
     let cs = parse(&bytes).expect("parse");
-    assert_eq!(cs.header.components[0].roi_shift, 0);
-    assert_eq!(cs.header.components[1].roi_shift, 9);
-    assert_eq!(cs.header.components[2].roi_shift, 11);
+    let tile = &cs.tiles[0].header;
+    assert_eq!(tile.components[0].roi_shift, 0);
+    assert_eq!(tile.components[1].roi_shift, 9, "the tile-part's RGN");
+    assert_eq!(
+        tile.components[2].roi_shift, 11,
+        "the main header's, unopposed"
+    );
+}
+
+/// **A tile COD outranks a main-header COC.** This is the whole reason the main
+/// header keeps its raw overrides rather than only its resolved components.
+///
+/// A.6.1's precedence for a component is `tile COC > tile COD > main COC > main
+/// COD`. Component 0 here has a main-header COC (3 levels) and the tile carries a
+/// COD (2 levels). Resolving the tile by laying its markers over the main
+/// header's *resolved* components would leave the main COC's 3 levels on top —
+/// the value that lost — and every subband bound, packet count and code-block in
+/// the tile would be computed for a pyramid the encoder never used.
+///
+/// Component 1, with no COC anywhere, takes the tile COD too; a component whose
+/// COC is in the *tile* header would outrank it, which the next test covers.
+#[test]
+fn a_tile_cod_outranks_a_main_header_coc() {
+    let header = [
+        seg(marker::SIZ, &siz_body(2, &[(15, 1, 1); 2])),
+        // Main COD: 5 levels for everything.
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0, 1)),
+        // Main COC: component 0 alone drops to 3 levels.
+        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    // Tile COD: 2 levels, for every component of this tile.
+    let tile_cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 2, 4, 4, 0, 1));
+    let bytes = assemble_with_tile_markers(&header, &[tile_cod], &[1, 2]);
+
+    let cs = parse(&bytes).expect("parse");
+    let tile = &cs.tiles[0].header;
+    assert_eq!(
+        tile.components[0].coding.decomposition_levels, 2,
+        "the tile COD must beat the main-header COC, not lose to it"
+    );
+    assert_eq!(tile.components[1].coding.decomposition_levels, 2);
+
+    // The main header keeps its own resolution: another tile carrying no COD
+    // would still see the COC's 3 levels.
+    assert_eq!(cs.header.components[0].coding.decomposition_levels, 3);
+    assert_eq!(cs.header.components[1].coding.decomposition_levels, 5);
+}
+
+/// The rest of A.6.1's ladder: a tile COC beats the tile COD, and a component
+/// named by neither tile marker falls back through the main COC to the main COD.
+/// The same order governs QCC over QCD.
+#[test]
+fn tile_overrides_resolve_in_the_standard_s_precedence_order() {
+    let header = [
+        seg(marker::SIZ, &siz_body(3, &[(15, 1, 1); 3])),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0, 1)),
+        // Component 2's only override lives in the main header.
+        seg(marker::COC, &coc_body(&[2], 0, 4, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let tile_markers = [
+        // Tile COD: 2 levels, the tile's new default.
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 2, 4, 4, 0, 1)),
+        // Tile COC: component 0 alone goes to 1 level, outranking the tile COD.
+        seg(marker::COC, &coc_body(&[0], 0, 1, 4, 4, 0, 1)),
+        // Tile QCD: 5 guard bits for the tile.
+        seg(marker::QCD, &qcd_none(5, &[8; 16])),
+        // Tile QCC: component 1 alone goes to 6, outranking the tile QCD.
+        seg(marker::QCC, &{
+            let mut b = vec![1u8];
+            b.extend_from_slice(&qcd_none(6, &[8; 16]));
+            b
+        }),
+    ];
+    let bytes = assemble_with_tile_markers(&header, &tile_markers, &[1, 2]);
+
+    let cs = parse(&bytes).expect("parse");
+    let tile = &cs.tiles[0].header;
+    let levels = |c: usize| tile.components[c].coding.decomposition_levels;
+    assert_eq!(levels(0), 1, "tile COC beats tile COD");
+    assert_eq!(levels(1), 2, "tile COD, with no COC anywhere");
+    assert_eq!(levels(2), 2, "tile COD beats the main COC's 4");
+
+    let guard = |c: usize| tile.components[c].quant.guard_bits;
+    assert_eq!(guard(0), 5, "tile QCD");
+    assert_eq!(guard(1), 6, "tile QCC beats tile QCD");
+    assert_eq!(guard(2), 5, "tile QCD");
+}
+
+/// A component named by no tile marker at all still resolves through the main
+/// header's own ladder, unchanged.
+#[test]
+fn a_tile_with_no_overrides_takes_the_main_header_s_resolution() {
+    let header = [
+        seg(marker::SIZ, &siz_body(2, &[(15, 1, 1); 2])),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0, 1)),
+        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0, 1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let bytes = assemble(&header, &sot_seg(0, 0, 0, 1), &[1, 2], true);
+
+    let cs = parse(&bytes).expect("parse");
+    assert_eq!(cs.tiles[0].header.components, cs.header.components);
+}
+
+/// The coding-parameter overrides belong to the *first* tile-part of a tile
+/// (A.4.2): they say how the tile's packets are read, and a later part cannot
+/// restate what the earlier parts were already decoded under. A conformant
+/// encoder never emits one, so a codestream that does is malformed.
+#[test]
+fn a_coding_override_in_a_later_tile_part_is_codestream() {
+    let first_data = [7, 7, 7];
+    let tile_cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 2, 4, 4, 0, 1));
+
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, psot_for(&first_data), 0, 2));
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&first_data);
+    // The second tile-part carries a COD, which only the first one may.
+    bytes.extend_from_slice(&sot_seg(0, 0, 1, 2));
+    bytes.extend_from_slice(&tile_cod);
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&[8, 8]);
+    bytes.extend_from_slice(&be16(marker::EOC));
+
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+/// A tile COD/QCD pair must hold every invariant the main header's does: the
+/// quantization table has to cover the levels the coding style declares. A tile
+/// COD that deepens the pyramid past what the main QCD's table describes is a
+/// malformed marker, caught when the tile resolves rather than at decode time.
+#[test]
+fn a_tile_cod_outrunning_the_quantization_table_is_marker() {
+    let header = [
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_body(0, 0, 1, 0, 2, 4, 4, 0, 1)),
+        // Seven entries: enough for 2 levels (3*2 + 1), not for 5.
+        seg(marker::QCD, &qcd_none(2, &[8; 7])),
+    ];
+    let tile_cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0, 1));
+    let bytes = assemble_with_tile_markers(&header, &[tile_cod], &[1, 2]);
+    assert!(matches!(perr(&bytes), Error::Marker(_)));
 }
 
 /// A.6.3 allows one RGN per component per header. Two in the same tile-part

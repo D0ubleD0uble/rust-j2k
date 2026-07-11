@@ -135,30 +135,54 @@ pub fn decode_with(codestream: &[u8], options: DecodeOptions) -> Result<Image> {
         }
     }
 
-    // Tier-2: parse packets into per-code-block coded segments, per component.
-    // The walk covers every resolution whatever the reduction: packet order is
-    // the codestream's framing, so the dropped levels' packets must still be
-    // stepped over to reach the kept ones.
-    let coded = tier2::decode_packets(&cs)?;
-    // Tier-1: MQ + EBCOT bit-plane decode each code block into subband coeffs.
-    // The dropped resolutions' code-blocks are skipped, never decoded.
-    let coeffs = tier1::decode_code_blocks(&cs.header, &coded, reduction)?;
+    // Each tile is a whole decode of its own: its own header, its own packets,
+    // its own wavelet pyramid in its own coordinate frame. Nothing crosses a
+    // tile boundary — that is what tiling is for — so the tiles meet only at the
+    // end, when each writes its rectangle of the canvas.
+    let mut canvas = image::Canvas::new(&cs.header, reduction)?;
+    for tile in &cs.tiles {
+        // Tier-2: parse packets into per-code-block coded segments, per
+        // component. The walk covers every resolution whatever the reduction:
+        // packet order is the codestream's framing, so the dropped levels'
+        // packets must still be stepped over to reach the kept ones.
+        let coded = tier2::decode_packets(tile)?;
+        // Tier-1: MQ + EBCOT bit-plane decode each code block into subband
+        // coeffs. The dropped resolutions' code-blocks are skipped, never
+        // decoded.
+        let coeffs = tier1::decode_code_blocks(&tile.header, &coded, reduction)?;
 
-    // Dequantize, then invert the DWT per resolution level into samples.
-    let mut samples = coeffs
-        .into_iter()
-        .enumerate()
-        .map(|(component, coeffs)| {
-            let dequant = quant::dequantize(&cs.header, component, coeffs)?;
-            dwt::inverse(&cs.header, component, dequant)
-        })
-        .collect::<Result<Vec<_>>>()?;
+        // Dequantize, then invert the DWT per resolution level into samples.
+        let mut samples = coeffs
+            .into_iter()
+            .enumerate()
+            .map(|(component, coeffs)| {
+                let dequant = quant::dequantize(&tile.header, component, coeffs)?;
+                dwt::inverse(&tile.header, component, dequant)
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-    // Undo the inter-component decorrelation, if any, before the DC level shift
-    // (ISO/IEC 15444-1 G.1). Components past the third are untouched.
-    if cs.header.cod.multiple_component_transform {
-        mct::inverse_rct(&mut samples)?;
+        // Undo the inter-component decorrelation, if any, before the DC level
+        // shift (ISO/IEC 15444-1 G.1). It is a per-tile transform: the flag
+        // lives in COD, which a tile-part header can override. Components past
+        // the third are untouched.
+        if tile.header.cod.multiple_component_transform {
+            mct::inverse_rct(&mut samples)?;
+        }
+
+        for (component, samples) in samples.into_iter().enumerate() {
+            let rect = cs
+                .header
+                .siz
+                .tile_component_rect(tile.index, component)
+                .ok_or_else(|| {
+                    Error::Inconsistent(format!(
+                        "no tile {} or no component {component} in SIZ",
+                        tile.index
+                    ))
+                })?;
+            canvas.place(component, rect.reduced(reduction), samples)?;
+        }
     }
 
-    image::assemble(&cs.header, samples, reduction)
+    image::assemble(&cs.header, canvas.into_planes(), reduction)
 }

@@ -182,7 +182,159 @@ pub struct TlmEntry {
     pub length: u32,
 }
 
+/// A half-open rectangle `[x0, x1) × [y0, y1)` on some sample grid: the
+/// reference grid for [`Siz::tile_rect`], a component's own grid for
+/// [`Siz::tile_component_rect`] and [`Siz::component_rect`].
+///
+/// The standard writes every geometric bound this way (`tx0 … tx1`, `tcx0 …
+/// tcx1`, `trx0 … trx1`, ISO/IEC 15444-1 B.3–B.5), and the whole tiled decode
+/// is bookkeeping over these: a tile-component's rect says where in the canvas
+/// its reconstructed samples belong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rect {
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+}
+
+impl Rect {
+    /// Width, or 0 when the rectangle is empty.
+    pub fn width(&self) -> u32 {
+        self.x1.saturating_sub(self.x0)
+    }
+
+    /// Height, or 0 when the rectangle is empty.
+    pub fn height(&self) -> u32 {
+        self.y1.saturating_sub(self.y0)
+    }
+
+    /// Sample count.
+    pub fn area(&self) -> u64 {
+        u64::from(self.width()) * u64::from(self.height())
+    }
+
+    /// True when the rectangle encloses no samples.
+    pub fn is_empty(&self) -> bool {
+        self.x1 <= self.x0 || self.y1 <= self.y0
+    }
+
+    /// The same rectangle on the grid `reduction` resolution levels coarser:
+    /// **each bound** divided by `2^reduction`, rounding up (ISO B.5's
+    /// `trx0 = ceil(tcx0 / 2^r)`). Rounding the bounds rather than the extent is
+    /// what keeps neighbouring tiles abutting exactly: a shared edge rounds the
+    /// same way from both sides, so the reduced tiles still partition the
+    /// reduced canvas.
+    pub fn reduced(&self, reduction: u8) -> Rect {
+        let scale = 1u64 << reduction.min(32);
+        let reduce = |v: u32| u64::from(v).div_ceil(scale) as u32;
+        Rect {
+            x0: reduce(self.x0),
+            y0: reduce(self.y0),
+            x1: reduce(self.x1),
+            y1: reduce(self.y1),
+        }
+    }
+}
+
 impl Siz {
+    /// The tile grid: how many tiles span the image horizontally and vertically
+    /// (ISO/IEC 15444-1 B.3, Eq. B-5):
+    ///
+    /// ```text
+    /// numXtiles = ceil((Xsiz - XTOsiz) / XTsiz)
+    /// numYtiles = ceil((Ysiz - YTOsiz) / YTsiz)
+    /// ```
+    ///
+    /// Returns `(0, 0)` if a tile dimension is zero, which `decode_siz` rejects.
+    pub fn tile_grid(&self) -> (u32, u32) {
+        if self.tile_width == 0 || self.tile_height == 0 {
+            return (0, 0);
+        }
+        let across = u64::from(self.x_size).saturating_sub(u64::from(self.tile_x_offset));
+        let down = u64::from(self.y_size).saturating_sub(u64::from(self.tile_y_offset));
+        (
+            across.div_ceil(u64::from(self.tile_width)) as u32,
+            down.div_ceil(u64::from(self.tile_height)) as u32,
+        )
+    }
+
+    /// Total tile count — the number of tile indices a conformant codestream
+    /// carries, each as one or more tile-parts.
+    pub fn num_tiles(&self) -> u32 {
+        let (across, down) = self.tile_grid();
+        across.saturating_mul(down)
+    }
+
+    /// Tile `index`'s area on the reference grid, clipped to the image area
+    /// (ISO B.3, Eq. B-7). Tiles are numbered raster-order from the top-left.
+    ///
+    /// ```text
+    /// tx0 = max(XTOsiz + p * XTsiz, XOsiz)   tx1 = min(XTOsiz + (p+1) * XTsiz, Xsiz)
+    /// ```
+    ///
+    /// The clip is what makes the right and bottom tiles of a grid that does not
+    /// divide the image evenly come out partial. Returns `None` if `index` is
+    /// past the grid.
+    pub fn tile_rect(&self, index: u32) -> Option<Rect> {
+        let (across, _) = self.tile_grid();
+        if across == 0 || index >= self.num_tiles() {
+            return None;
+        }
+        let (p, q) = (u64::from(index % across), u64::from(index / across));
+        let (xt, yt) = (u64::from(self.tile_width), u64::from(self.tile_height));
+        let (xto, yto) = (u64::from(self.tile_x_offset), u64::from(self.tile_y_offset));
+        // Every term is bounded by Xsiz/Ysiz after the min, so the u64
+        // arithmetic lands back in u32 without a lossy cast.
+        Some(Rect {
+            x0: (xto + p * xt).max(u64::from(self.x_offset)) as u32,
+            y0: (yto + q * yt).max(u64::from(self.y_offset)) as u32,
+            x1: (xto + (p + 1) * xt).min(u64::from(self.x_size)) as u32,
+            y1: (yto + (q + 1) * yt).min(u64::from(self.y_size)) as u32,
+        })
+    }
+
+    /// Tile `index`'s area on component `comp`'s own sample grid (ISO B.3,
+    /// Eq. B-12): the reference-grid tile rect with every bound divided by that
+    /// component's sub-sampling factors, rounding up.
+    ///
+    /// Dividing the bounds rather than the extent is again what keeps the tiles
+    /// abutting: a sub-sampled component's tiles still partition its grid
+    /// exactly. Returns `None` if `index` names no tile or `comp` no component.
+    pub fn tile_component_rect(&self, index: u32, comp: usize) -> Option<Rect> {
+        let tile = self.tile_rect(index)?;
+        let c = self.components.get(comp)?;
+        let (xr, yr) = (u64::from(c.x_sampling), u64::from(c.y_sampling));
+        if xr == 0 || yr == 0 {
+            return None;
+        }
+        let div = |v: u32, r: u64| u64::from(v).div_ceil(r) as u32;
+        Some(Rect {
+            x0: div(tile.x0, xr),
+            y0: div(tile.y0, yr),
+            x1: div(tile.x1, xr),
+            y1: div(tile.y1, yr),
+        })
+    }
+
+    /// The whole image area on component `comp`'s sample grid (ISO B.2) — the
+    /// canvas each tile-component is placed into. Its extent is
+    /// [`component_extent`](Self::component_extent).
+    pub fn component_rect(&self, comp: usize) -> Option<Rect> {
+        let c = self.components.get(comp)?;
+        let (xr, yr) = (u64::from(c.x_sampling), u64::from(c.y_sampling));
+        if xr == 0 || yr == 0 {
+            return None;
+        }
+        let div = |v: u32, r: u64| u64::from(v).div_ceil(r) as u32;
+        Some(Rect {
+            x0: div(self.x_offset, xr),
+            y0: div(self.y_offset, yr),
+            x1: div(self.x_size, xr),
+            y1: div(self.y_size, yr),
+        })
+    }
+
     /// The image area on the reference grid at a resolution reduction:
     /// `Xsiz - XOsiz` by `Ysiz - YOsiz` at reduction 0, each bound scaled by
     /// `ceil(x / 2^r)` *before* the difference for every dropped level (ISO
