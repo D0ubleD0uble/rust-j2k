@@ -93,7 +93,7 @@ impl Component {
 /// `samples` carries one reconstructed sample vector per SIZ component, in SIZ
 /// order. Each is level-shifted and clamped on its own component's depth and
 /// sign, then packed with that component's geometry.
-pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>) -> Result<Image> {
+pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8) -> Result<Image> {
     let siz = &header.siz;
     if samples.len() != siz.components.len() {
         return Err(Error::Inconsistent(format!(
@@ -109,10 +109,14 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>) -> Result<Ima
     let components = samples
         .into_iter()
         .enumerate()
-        .map(|(index, component_samples)| assemble_component(siz, index, component_samples))
+        .map(|(index, component_samples)| {
+            assemble_component(siz, index, component_samples, reduction)
+        })
         .collect::<Result<Vec<_>>>()?;
 
-    let (image_width, image_height) = siz.image_extent();
+    // At a reduction the image area shrinks with its components, by the same
+    // halve-and-round-up per dropped level.
+    let (image_width, image_height) = siz.image_extent_at(reduction);
     Ok(Image {
         width: image_width,
         height: image_height,
@@ -145,7 +149,12 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>) -> Result<Ima
 /// /* commented out line breaks many tests */
 /// /* return (long)((f>0.0f) ? (f + 0.5f):(f -0.5f)); */
 /// ```
-fn assemble_component(siz: &Siz, index: usize, samples: Samples) -> Result<Component> {
+fn assemble_component(
+    siz: &Siz,
+    index: usize,
+    samples: Samples,
+    reduction: u8,
+) -> Result<Component> {
     let comp = siz
         .components
         .get(index)
@@ -170,7 +179,7 @@ fn assemble_component(siz: &Siz, index: usize, samples: Samples) -> Result<Compo
 
     // Safe now that the zero-factor case above is excluded.
     let (width, height) = siz
-        .component_extent(index)
+        .component_extent_at(index, reduction)
         .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
 
     let expected = (width as usize) * (height as usize);
@@ -278,7 +287,7 @@ mod tests {
     /// Assemble a single-component image: most of these tests predate the
     /// component axis and care only about level shift, clamping, and geometry.
     fn assemble1(header: &MainHeader, samples: Vec<i32>) -> Result<Image> {
-        assemble(header, vec![Samples::Reversible(samples)])
+        assemble(header, vec![Samples::Reversible(samples)], 0)
     }
 
     /// The single component `assemble` produces, for tests that only care about
@@ -360,6 +369,7 @@ mod tests {
         let img = assemble(
             &h,
             vec![Samples::Irreversible(vec![0.5, 1.5, 2.5, -0.5, -2.5])],
+            0,
         )
         .unwrap();
         assert_eq!(only(&img).samples, vec![0, 2, 2, 0, -2]);
@@ -377,7 +387,7 @@ mod tests {
     #[test]
     fn irreversible_samples_saturate_into_the_container() {
         let h = header(2, 1, 16, true);
-        let img = assemble(&h, vec![Samples::Irreversible(vec![1e30, -1e30])]).unwrap();
+        let img = assemble(&h, vec![Samples::Irreversible(vec![1e30, -1e30])], 0).unwrap();
         assert_eq!(only(&img).samples, vec![32767, -32768]);
     }
 

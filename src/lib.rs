@@ -101,12 +101,48 @@ pub use image::{Component, Image};
 /// but is rejected with [`Error::Unsupported`] rather than unwrapped. Anything
 /// else outside the decoded subset is rejected the same way, never half-decoded.
 pub fn decode(codestream: &[u8]) -> Result<Image> {
+    decode_with(codestream, DecodeOptions::default())
+}
+
+/// Options for [`decode_with`]. The default decodes at full resolution —
+/// [`decode`] is exactly that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DecodeOptions {
+    /// How many of the finest resolution levels to discard. Each level halves
+    /// the output in both axes (rounding up), so `1` decodes a half-size image,
+    /// `2` a quarter-size, and so on — the wavelet pyramid's own lower
+    /// resolutions, not a resample. Every component must keep at least one
+    /// resolution: a reduction that consumes some component's whole pyramid is
+    /// rejected as [`Error::Unsupported`].
+    pub resolution_reduction: u8,
+}
+
+/// Decode a JPEG 2000 codestream like [`decode`], governed by `options`.
+pub fn decode_with(codestream: &[u8], options: DecodeOptions) -> Result<Image> {
     let cs = codestream::parse(codestream)?;
 
+    // A reduction must leave every component a resolution to decode, checked
+    // against each component's own decomposition count: a COC can give one
+    // component a shallower pyramid than the rest (p0_08 does exactly that).
+    let reduction = options.resolution_reduction;
+    for (index, params) in cs.header.components.iter().enumerate() {
+        let resolutions = u32::from(params.coding.decomposition_levels) + 1;
+        if u32::from(reduction) >= resolutions {
+            return Err(Error::Unsupported(format!(
+                "resolution reduction {reduction} discards all {resolutions} resolutions \
+                 of component {index}"
+            )));
+        }
+    }
+
     // Tier-2: parse packets into per-code-block coded segments, per component.
+    // The walk covers every resolution whatever the reduction: packet order is
+    // the codestream's framing, so the dropped levels' packets must still be
+    // stepped over to reach the kept ones.
     let coded = tier2::decode_packets(&cs)?;
     // Tier-1: MQ + EBCOT bit-plane decode each code block into subband coeffs.
-    let coeffs = tier1::decode_code_blocks(&cs.header, &coded)?;
+    // The dropped resolutions' code-blocks are skipped, never decoded.
+    let coeffs = tier1::decode_code_blocks(&cs.header, &coded, reduction)?;
 
     // Dequantize, then invert the DWT per resolution level into samples.
     let mut samples = coeffs
@@ -124,5 +160,5 @@ pub fn decode(codestream: &[u8]) -> Result<Image> {
         mct::inverse_rct(&mut samples)?;
     }
 
-    image::assemble(&cs.header, samples)
+    image::assemble(&cs.header, samples, reduction)
 }

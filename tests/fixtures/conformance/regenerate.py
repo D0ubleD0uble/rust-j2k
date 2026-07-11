@@ -60,6 +60,18 @@ CLASS0_REF_SUFFIXES = {
     (1, 4): ["r0", "r3"],
 }
 
+# The resolution reduction each entry's class-1 references were decoded at:
+# `C1P0_ResFactor_list` in uclouvain/openjpeg tests/conformance/CMakeLists.txt
+# (semicolon-separated, 1-indexed like BOUNDS), passed as `-r` to
+# opj_decompress. Only p0_08 reduces; the profile-1 class-1 tests hardcode
+# `-r 0` and carry no list.
+RES_FACTOR = {
+    (0, idx): factor
+    for idx, factor in enumerate(
+        [None, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+    )
+}
+
 PROGRESSION = {0: "LRCP", 1: "RLCP", 2: "RPCL", 3: "PCRL", 4: "CPRL"}
 
 # Optional-marker names by code. Anything not listed here (e.g. the reserved
@@ -321,6 +333,9 @@ def build_entry(profile: int, idx: int) -> dict:
         # May be fewer than features.components (see p0_13).
         "graded_components": graded,
         "bit_exact": bit_exact,
+        # The resolution reduction the class-1 references were decoded at;
+        # grading must decode at the same reduction to compare geometry.
+        "reduction": RES_FACTOR.get((profile, idx), 0),
         "features": features,
         "references": {"class0": class0_refs, "class1": class1_refs},
         # Class 1 is the active per-component grading tier.
