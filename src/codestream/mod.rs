@@ -550,12 +550,15 @@ fn resolve_tile_header(main: &MainHeader, tile: &TileHeader) -> Result<MainHeade
         header.components[*index].roi_shift = *shift;
     }
 
-    // A tile-part POC replaces the main header's progression for this tile
-    // (A.6.6): the tile's volumes are its own, so its packet order is theirs and
-    // not the main header's, exactly as a tile COD displaces the main coding.
-    if !tile.poc.is_empty() {
-        header.poc = tile.poc.clone();
-    }
+    // A tile-part POC *appends* to the main header's, it does not replace it: a
+    // tile inherits the main header's progression volumes and adds its own after
+    // them (A.6.6). OpenJPEG seeds each tile's coding parameters from the main
+    // header — POC volumes included — then `opj_j2k_read_poc` appends the
+    // tile-part's, so the tile's order is `[main volumes…, tile volumes…]`. The
+    // volume walk emits each packet by the first volume that reaches it, so the
+    // two must stay in that order. `header.poc` is already the main header's
+    // here, from `main.clone()` above.
+    header.poc.extend(tile.poc.iter().copied());
 
     // The tile's resolved parameters must hold every invariant the main header's
     // do: a tile COD/QCD pair can break one the main header kept.

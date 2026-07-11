@@ -102,6 +102,14 @@ half-decode. (The converses stay oracle-matched: extra step entries are
 ignored, and 5/3 with a scalar style decodes — the reversible path never
 reads the mantissas.)
 
+A third parse-time check is in the same spirit: a `POC` volume whose resolution
+or component range is empty (`REpoc <= RSpoc`, or the component range inverted)
+is rejected as `Marker`. Table A-33 requires `RSpoc < REpoc`, so such a volume is
+malformed, but OpenJPEG performs no check and simply lets that volume's packet
+loops iterate zero times. Rejecting is the stricter, spec-faithful reading; a
+volume that covers nothing is almost certainly a corrupt field, not one the
+encoder meant.
+
 The cost is interop: a real-world encoder that produces such a stream decodes
 under OpenJPEG and rejects here. No corpus or conformance file trips any of
 these today. If one ever does, relax that check to match the oracle — the

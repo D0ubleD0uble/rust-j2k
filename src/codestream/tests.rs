@@ -2361,6 +2361,38 @@ fn a_tile_part_rgn_names_one_component() {
     );
 }
 
+/// A tile-part POC **appends** to the main header's, it does not replace it: a
+/// tile inherits the main volumes and adds its own after them (A.6.6, matching
+/// OpenJPEG's seed-then-append). Order is load-bearing — the first volume to
+/// reach a packet emits it — so the resolved sequence must be `[main, tile]`.
+#[test]
+fn a_tile_part_poc_appends_to_the_main_header_poc() {
+    // Main POC: resolutions [0, 2), LRCP. Tile POC: resolutions [0, 3), RLCP.
+    let main_poc = [0u8, 0, 0, 1, 2, 1, 0];
+    let header = [
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::POC, &main_poc),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let tile_poc = seg(marker::POC, &[0u8, 0, 0, 1, 3, 1, 1]);
+    let bytes = assemble_with_tile_markers(&header, &[tile_poc], &[1, 2]);
+
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.poc.len(), 2, "main volume then tile volume");
+    assert_eq!(
+        (tile.poc[0].res_end, tile.poc[0].progression),
+        (2, markers::Progression::Lrcp),
+        "the main header's volume comes first",
+    );
+    assert_eq!(
+        (tile.poc[1].res_end, tile.poc[1].progression),
+        (3, markers::Progression::Rlcp),
+        "the tile-part's volume is appended",
+    );
+}
+
 /// **A tile COD outranks a main-header COC.** This is the whole reason the main
 /// header keeps its raw overrides rather than only its resolved components.
 ///
