@@ -39,7 +39,8 @@ use serde::Deserialize;
 /// Phase 2 milestones land; never shrink it without an explanation, because a
 /// shrink is a regression.
 const IN_CLASS: &[&str] = &[
-    "p0_01", "p0_02", "p0_05", "p0_06", "p0_08", "p0_09", "p0_12", "p0_14", "p0_16",
+    "p0_01", "p0_02", "p0_05", "p0_06", "p0_08", "p0_09", "p0_10", "p0_12", "p0_14", "p0_16",
+    "p1_04",
 ];
 
 fn corpus_dir() -> PathBuf {

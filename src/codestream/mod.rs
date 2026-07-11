@@ -15,6 +15,8 @@
 
 pub mod markers;
 
+use std::borrow::Cow;
+
 use crate::{Error, Result};
 use markers::{
     Cod, Coding, ComponentParams, Progression, Qcd, QuantStyle, Siz, SizComponent, TlmEntry,
@@ -63,20 +65,54 @@ impl MainHeader {
     }
 }
 
-/// One tile-part: its tile index and the slice of packet data between SOD and
-/// the next marker. Multiple tile-parts can carry one tile; the GRIB2 common
-/// case is a single tile in a single part.
+/// One tile of the image: its index in the tile grid, the decode parameters in
+/// force inside it, and its packet data.
+///
+/// A tile can be split across several tile-parts, interleaved with other tiles'
+/// (A.4.2). They are gathered here: `data` is every one of this tile's
+/// tile-parts' packet bytes, concatenated in `TPsot` order. Concatenation is
+/// exact, not an approximation — a tile-part holds a whole number of packets
+/// (B.9), so no packet straddles the seam — and it is what OpenJPEG does
+/// (`opj_j2k_read_sod` appends each tile-part into the tile's buffer). It stays
+/// borrowed for the overwhelmingly common single-part tile, and only copies when
+/// there is more than one part to join.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TilePart<'a> {
-    pub tile_index: u16,
-    pub data: &'a [u8],
+pub struct Tile<'a> {
+    pub index: u32,
+    /// This tile's own tile-part-header markers, as parsed. Resolve them against
+    /// the main header with [`Codestream::tile_header`] to get the parameters the
+    /// tile decodes under.
+    ///
+    /// They are *not* resolved into a whole header here, because a header is
+    /// sized by the component count and there can be tens of thousands of tiles:
+    /// materializing one per tile would cost `tiles × components`, which a header
+    /// under 50 KB can drive into the gigabytes. Resolved one tile at a time, the
+    /// cost is `tiles + components`.
+    pub header: TileHeader,
+    pub data: Cow<'a, [u8]>,
 }
 
-/// A parsed codestream: main header plus the tile-part data ranges.
+/// A parsed codestream: the main header plus every tile, in tile-index order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Codestream<'a> {
     pub header: MainHeader,
-    pub tile_parts: Vec<TilePart<'a>>,
+    pub tiles: Vec<Tile<'a>>,
+}
+
+impl Codestream<'_> {
+    /// The parameters tile `index` decodes under: the main header with that
+    /// tile's tile-part-header markers resolved over it (A.6.1).
+    ///
+    /// Every stage past the codestream takes one of these, so nothing downstream
+    /// has to know that a tile header exists — a tile is just a header, a
+    /// rectangle, and some bytes.
+    pub fn tile_header(&self, index: usize) -> Result<MainHeader> {
+        let tile = self
+            .tiles
+            .get(index)
+            .ok_or_else(|| Error::Inconsistent(format!("no tile {index}")))?;
+        resolve_tile_header(&self.header, &tile.header)
+    }
 }
 
 /// The JP2 signature box that opens every JP2 file (ISO/IEC 15444-1 Annex I.5.1):
@@ -101,87 +137,322 @@ pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
         ));
     }
 
-    let (mut header, sot_offset) = parse_main_header(bytes)?;
-    let tile_parts = walk_tile_parts(bytes, sot_offset, &mut header)?;
-    Ok(Codestream { header, tile_parts })
+    let (header, sot_offset) = parse_main_header(bytes)?;
+    let tiles = walk_tiles(bytes, sot_offset, &header)?;
+    let codestream = Codestream { header, tiles };
+
+    // Resolve every tile's header once, here, so a malformed tile-part header is
+    // a parse error rather than a surprise partway through a decode. Each one is
+    // dropped again immediately: they are sized by the component count, and a
+    // codestream can declare tens of thousands of tiles.
+    for index in 0..codestream.tiles.len() {
+        let tile = codestream.tile_header(index)?;
+
+        // Every tile writes into one buffer per component, and that buffer's
+        // arithmetic follows the component's wavelet: 5/3 reconstructs exact
+        // integers, 9/7 reals. A tile-part COD may legally give a component a
+        // different wavelet than the main header does, which would ask one buffer
+        // to hold both. Nothing in Part 4 encodes that and no real encoder emits
+        // it, so it is rejected rather than given a widened container.
+        let pairs = tile.components.iter().zip(&codestream.header.components);
+        for (component, (in_tile, in_main)) in pairs.enumerate() {
+            if in_tile.coding.transform != in_main.coding.transform {
+                return Err(Error::Unsupported(format!(
+                    "tile {index} codes component {component} with the {:?} wavelet where the \
+                     main header uses {:?}; tiles that disagree on a component's wavelet are \
+                     not decoded",
+                    in_tile.coding.transform, in_main.coding.transform,
+                )));
+            }
+        }
+    }
+
+    Ok(codestream)
 }
 
-/// Walk the tile-parts from the first `SOT` to the closing `EOC` (A.4.2, A.4.4).
+/// A tile-part header's own markers (A.4.2): the tile-level COD/QCD defaults and
+/// the per-component COC/QCC/RGN overrides that layer over them. Only the *first*
+/// tile-part of a tile may carry any of these, so one per tile is enough however
+/// many parts the tile is split into.
 ///
-/// The GRIB2 subset is exactly one tile carried in one tile-part, so this reads
-/// a single `SOT … SOD … packet-data` run and requires `EOC` to follow it.
-/// Multiple tiles or tile-parts reject with [`Error::Unsupported`]; a `Psot`
-/// overrun, a truncated `SOT`, or a missing `EOC` reject with
-/// [`Error::Codestream`].
+/// The per-component overrides are **sparse** — only the components a marker
+/// actually names. Almost every tile carries none at all, and a dense vector per
+/// tile would cost `tiles × components` for nothing.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TileHeader {
+    cod: Option<Cod>,
+    qcd: Option<Qcd>,
+    coc: Vec<(usize, Coding)>,
+    qcc: Vec<(usize, Qcd)>,
+    rgn: Vec<(usize, u8)>,
+}
+
+/// What has been seen of one tile so far while the tile-parts are walked.
+#[derive(Debug)]
+struct TileParts<'a> {
+    /// Each tile-part's packet data, in `TPsot` order (which is the order they
+    /// must appear in, enforced below).
+    parts: Vec<&'a [u8]>,
+    /// `TNsot` from whichever tile-part stated it; `None` while every part so
+    /// far left it 0 ("not yet known", A.4.2).
+    declared_parts: Option<u8>,
+    /// The tile's own header, from its first tile-part.
+    header: TileHeader,
+}
+
+/// Walk every tile-part from the first `SOT` to the closing `EOC` (A.4.2,
+/// A.4.4) and gather them into one [`Tile`] per tile index.
 ///
-/// A tile-part-header RGN *replaces* the main header's for that tile (A.6.3),
-/// and the subset's single tile is the whole image — so the override is written
-/// straight over `header.components[i].roi_shift` here. When multiple tiles
-/// land, this becomes a per-tile parameter instead.
-fn walk_tile_parts<'a>(
-    bytes: &'a [u8],
-    sot_offset: usize,
-    header: &mut MainHeader,
-) -> Result<Vec<TilePart<'a>>> {
-    let mut cur = Cursor::at(bytes, sot_offset);
+/// Tile-parts of different tiles may interleave freely, so this accumulates by
+/// `Isot` and joins each tile's parts at the end. Within one tile they must
+/// arrive in `TPsot` order, and every tile of the grid must be present: a
+/// codestream that skips one describes an image it does not carry, which is a
+/// truncation, not a feature to decode around.
+///
+/// A `Psot` overrun, an out-of-range or out-of-order `TPsot`, a `TNsot` that
+/// disagrees with the parts that arrive, a missing tile, or a missing `EOC` all
+/// reject with [`Error::Codestream`].
+fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Result<Vec<Tile<'a>>> {
+    let tile_count = main.siz.num_tiles() as usize;
+    let mut tiles: Vec<TileParts<'a>> = (0..tile_count)
+        .map(|_| TileParts {
+            parts: Vec::new(),
+            declared_parts: None,
+            header: TileHeader::default(),
+        })
+        .collect();
 
-    // `parse_main_header` stopped on this SOT, so it is present; re-read it here
-    // so this function owns the whole tile-part structure.
-    if cur.u16()? != marker::SOT {
-        return Err(Error::Codestream(
-            "tile-part does not start with SOT".into(),
-        ));
-    }
-    let sot = decode_sot(segment(&mut cur)?)?;
+    let mut part_offset = sot_offset;
+    loop {
+        let mut cur = Cursor::at(bytes, part_offset);
+        // `parse_main_header` stopped on the first SOT and the loop below only
+        // continues when it has just read one, so this is always present.
+        if cur.u16()? != marker::SOT {
+            return Err(Error::Codestream(
+                "tile-part does not start with SOT".into(),
+            ));
+        }
+        let sot = decode_sot(segment(&mut cur)?)?;
 
-    // Single tile, single tile-part. Isot is the tile index, TPsot the part
-    // index within the tile, TNsot the part count (0 = "not stated").
-    if sot.tile_index != 0 {
-        return Err(Error::Unsupported(format!(
-            "tile index {}; the subset is a single tile",
-            sot.tile_index
-        )));
-    }
-    if sot.tile_part_index != 0 || sot.num_tile_parts > 1 {
-        return Err(Error::Unsupported(
-            "multiple tile-parts; the subset is a single tile-part".into(),
-        ));
+        let index = usize::from(sot.tile_index);
+        let tile = tiles.get_mut(index).ok_or_else(|| {
+            Error::Codestream(format!(
+                "tile-part names tile {index}, but the grid holds {tile_count} tiles"
+            ))
+        })?;
+
+        // A tile's parts are numbered from 0 and shall appear in order (A.4.2),
+        // so TPsot is exactly how many of this tile's parts have already been
+        // seen. That single equality catches a duplicate, a gap, and a
+        // reordering at once.
+        if usize::from(sot.tile_part_index) != tile.parts.len() {
+            return Err(Error::Codestream(format!(
+                "tile {index} tile-part index is {}, but {} of its tile-parts have been read",
+                sot.tile_part_index,
+                tile.parts.len(),
+            )));
+        }
+        // TNsot is 0 in a tile-part that does not yet know the count; any part
+        // that does state one must agree with every other that does.
+        if sot.num_tile_parts != 0 {
+            if sot.tile_part_index >= sot.num_tile_parts {
+                return Err(Error::Codestream(format!(
+                    "tile {index} tile-part {} of a declared {} tile-parts",
+                    sot.tile_part_index, sot.num_tile_parts,
+                )));
+            }
+            match tile.declared_parts {
+                Some(declared) if declared != sot.num_tile_parts => {
+                    return Err(Error::Codestream(format!(
+                        "tile {index} declares {} tile-parts in one SOT and {declared} in another",
+                        sot.num_tile_parts,
+                    )));
+                }
+                _ => tile.declared_parts = Some(sot.num_tile_parts),
+            }
+        }
+
+        let first_part = sot.tile_part_index == 0;
+        let tile_header = read_tile_part_header(&mut cur, &main.siz, first_part)?;
+        if first_part {
+            tile.header = tile_header;
+        }
+        let data_start = cur.pos;
+
+        // Psot counts from the SOT marker's first byte to the end of the
+        // tile-part. Psot == 0 marks the *last* tile-part: it runs to the
+        // closing EOC (A.4.2), anchored to the last two bytes of the buffer —
+        // everything after SOD is the tile, which is also OpenJPEG's reading.
+        // Scanning for the first FF D9 instead would be unsound: bit stuffing
+        // keeps packet data and headers clear of it, but an SOP segment's Nsop
+        // counter is two raw bytes and can spell FF D9 (packet 65497, or a 0xFF
+        // low byte abutting 0xD9), which would silently truncate a valid tile.
+        // The asymmetry with the Psot != 0 arm (which ignores bytes after its
+        // EOC) is therefore deliberate: with no declared length there is nothing
+        // else to anchor to.
+        let data_end = if sot.psot == 0 {
+            bytes
+                .len()
+                .checked_sub(2)
+                .filter(|&end| end >= data_start && read_u16(bytes, end) == Some(marker::EOC))
+                .ok_or_else(|| {
+                    Error::Codestream("Psot=0 tile-part is not terminated by EOC".into())
+                })?
+        } else {
+            let end = part_offset
+                .checked_add(sot.psot as usize)
+                .filter(|&end| end <= bytes.len())
+                .ok_or_else(|| Error::Codestream("Psot overruns the codestream".into()))?;
+            if end < data_start {
+                return Err(Error::Codestream(
+                    "Psot is shorter than the tile-part header".into(),
+                ));
+            }
+            end
+        };
+        tiles[index].parts.push(&bytes[data_start..data_end]);
+
+        // Another SOT continues the walk; EOC ends it. Anything else — or
+        // nothing at all — means the tile-part chain does not close.
+        match read_u16(bytes, data_end) {
+            Some(marker::EOC) => break,
+            Some(marker::SOT) => part_offset = data_end,
+            Some(other) => {
+                return Err(Error::Codestream(format!(
+                    "expected SOT or EOC after a tile-part, found {other:#06X}"
+                )));
+            }
+            None => return Err(Error::Codestream("missing EOC after the tile-part".into())),
+        }
     }
 
-    // Tile-part header: SOD, a skippable COM, and RGN belong here in the
-    // subset. The other tile-level overrides (COD/COC/QCD/QCC/POC) are not yet
-    // decoded; each changes how the packet data is interpreted, so skipping one
-    // would silently decode the wrong image.
-    //
-    // A.6.3 allows one RGN per component per header. The tile-part tally is
-    // tracked apart from the main header's: a tile-part RGN over a main-header
-    // one for the same component is the legal override, not a duplicate.
-    let mut tile_rgn_seen = vec![false; header.siz.components.len()];
+    tiles
+        .into_iter()
+        .enumerate()
+        .map(|(index, tile)| {
+            if tile.parts.is_empty() {
+                return Err(Error::Codestream(format!(
+                    "the codestream carries no tile-part for tile {index}"
+                )));
+            }
+            if let Some(declared) = tile.declared_parts {
+                if usize::from(declared) != tile.parts.len() {
+                    return Err(Error::Codestream(format!(
+                        "tile {index} declares {declared} tile-parts but carries {}",
+                        tile.parts.len()
+                    )));
+                }
+            }
+            // One part: borrow it. Several: join them, which is exact — a
+            // tile-part holds a whole number of packets (B.9), so nothing
+            // straddles the seam.
+            let data = match <[&[u8]; 1]>::try_from(tile.parts.as_slice()) {
+                Ok([only]) => Cow::Borrowed(only),
+                Err(_) => Cow::Owned(tile.parts.concat()),
+            };
+            Ok(Tile {
+                index: index as u32,
+                header: tile.header,
+                data,
+            })
+        })
+        .collect()
+}
+
+/// Read one tile-part header: the markers between its `SOT` segment and its
+/// `SOD` (A.4.2). The cursor is left on the first byte of the packet data.
+///
+/// Only the *first* tile-part of a tile may carry the coding-parameter overrides
+/// (COD/COC/QCD/QCC/RGN): they say how to read the tile's packets, and a
+/// later part cannot restate what the earlier parts were already decoded under.
+/// A conformant encoder never emits one; a codestream that does is malformed,
+/// not merely unsupported.
+fn read_tile_part_header(cur: &mut Cursor<'_>, siz: &Siz, first_part: bool) -> Result<TileHeader> {
+    let mut tile = TileHeader::default();
+    // A.6 allows one of each per header. The tile-part tally is tracked apart
+    // from the main header's: a tile-part marker over a main-header one for the
+    // same component is the legal override, not a duplicate.
+    let overrides_here = |code: u16| -> Result<()> {
+        if first_part {
+            Ok(())
+        } else {
+            Err(Error::Codestream(format!(
+                "marker {code:#06X} appears in a tile-part header other than the first; \
+                 the coding-parameter overrides belong to the first tile-part of a tile"
+            )))
+        }
+    };
+
     loop {
         let m = cur.u16()?;
         match m {
             marker::SOD => break,
             marker::COM => {
-                segment(&mut cur)?;
+                segment(cur)?;
+            }
+            marker::COD => {
+                overrides_here(m)?;
+                if tile.cod.replace(decode_cod(segment(cur)?)?).is_some() {
+                    return Err(Error::Codestream(
+                        "duplicate COD marker in the tile-part header".into(),
+                    ));
+                }
+            }
+            marker::QCD => {
+                overrides_here(m)?;
+                if tile
+                    .qcd
+                    .replace(decode_quant(segment(cur)?, "QCD")?)
+                    .is_some()
+                {
+                    return Err(Error::Codestream(
+                        "duplicate QCD marker in the tile-part header".into(),
+                    ));
+                }
+            }
+            marker::COC => {
+                overrides_here(m)?;
+                let (index, coding) = decode_coc(segment(cur)?, siz)?;
+                if tile.coc.iter().any(|&(i, _)| i == index) {
+                    return Err(Error::Codestream(format!(
+                        "duplicate COC marker for component {index} in the tile-part header"
+                    )));
+                }
+                tile.coc.push((index, coding));
+            }
+            marker::QCC => {
+                overrides_here(m)?;
+                let (index, quant) = decode_qcc(segment(cur)?, siz)?;
+                if tile.qcc.iter().any(|&(i, _)| i == index) {
+                    return Err(Error::Codestream(format!(
+                        "duplicate QCC marker for component {index} in the tile-part header"
+                    )));
+                }
+                tile.qcc.push((index, quant));
             }
             marker::RGN => {
-                let (index, shift) = decode_rgn(segment(&mut cur)?, &header.siz)?;
-                if std::mem::replace(&mut tile_rgn_seen[index], true) {
+                overrides_here(m)?;
+                let (index, shift) = decode_rgn(segment(cur)?, siz)?;
+                if tile.rgn.iter().any(|&(i, _)| i == index) {
                     return Err(Error::Codestream(format!(
                         "duplicate RGN marker for component {index} in the tile-part header"
                     )));
                 }
-                header.components[index].roi_shift = shift;
+                tile.rgn.push((index, shift));
             }
             // Packet lengths (A.7.3): informational, so the structure is
             // validated and the lengths discarded — the packets are read from
             // the data itself, and decoding must not depend on the hint.
             marker::PLT => {
-                decode_plt(segment(&mut cur)?)?;
+                decode_plt(segment(cur)?)?;
             }
-            marker::COD | marker::COC | marker::QCD | marker::QCC | marker::POC | marker::PPT => {
+            // Valid here, but not yet decoded: both relocate or reorder what the
+            // packet data means, so skipping one would silently decode the wrong
+            // image.
+            marker::POC | marker::PPT => {
                 return Err(Error::Unsupported(format!(
-                    "tile-part header marker {m:#06X} is outside the decoded subset"
+                    "tile-part header marker {} is outside the decoded subset",
+                    marker::describe(m)
                 )));
             }
             // These are legal markers, but not here: TLM and PLM are
@@ -200,60 +471,65 @@ fn walk_tile_parts<'a>(
             }
         }
     }
-    let data_start = cur.pos;
+    Ok(tile)
+}
 
-    // Psot counts from the SOT marker's first byte to the end of the tile-part.
-    // Psot == 0 marks the last tile-part: it runs to the closing EOC (A.4.2),
-    // anchored to the last two bytes of the buffer — everything after SOD is
-    // the tile, which is also OpenJPEG's reading. Scanning for the first
-    // FF D9 instead would be unsound: bit stuffing keeps packet data and
-    // headers clear of it, but an SOP segment's Nsop counter is two raw bytes
-    // and can spell FF D9 (packet 65497, or a 0xFF low byte abutting 0xD9),
-    // which would silently truncate a valid tile. The asymmetry with the
-    // Psot != 0 arm (which ignores bytes after its EOC) is therefore
-    // deliberate: with no declared length there is nothing else to anchor to.
-    let data_end = if sot.psot == 0 {
-        bytes
-            .len()
-            .checked_sub(2)
-            .filter(|&end| end >= data_start && read_u16(bytes, end) == Some(marker::EOC))
-            .ok_or_else(|| Error::Codestream("Psot=0 tile-part is not terminated by EOC".into()))?
-    } else {
-        let end = sot_offset
-            .checked_add(sot.psot as usize)
-            .filter(|&end| end <= bytes.len())
-            .ok_or_else(|| Error::Codestream("Psot overruns the codestream".into()))?;
-        if end < data_start {
-            return Err(Error::Codestream(
-                "Psot is shorter than the tile-part header".into(),
-            ));
-        }
-        end
-    };
+/// Resolve one tile's effective parameters: the main header with the tile-part
+/// header's markers laid over it, in the standard's precedence order (A.6.1).
+///
+/// For each component the winner is the first of
+///
+/// ```text
+/// tile COC  >  tile COD  >  main COC  >  main COD
+/// ```
+///
+/// and likewise QCC > QCD down the same two levels. The middle two are the trap:
+/// a **tile COD outranks a main-header COC**. So it is not enough to lay the
+/// tile's markers over the main header's resolved components — the main COC
+/// would win a contest it lost, and the tile would decode on a pyramid no marker
+/// described.
+///
+/// The ladder falls out instead: the main header's resolved components already
+/// encode `main COC > main COD`, so a tile COD overwrites *every* component's
+/// coding (beating any main COC), and a tile COC then overwrites the one
+/// component it names (beating the tile COD). An RGN in a tile-part header
+/// likewise *replaces* the main header's for that component (A.6.3).
+fn resolve_tile_header(main: &MainHeader, tile: &TileHeader) -> Result<MainHeader> {
+    let mut header = main.clone();
 
-    let data = &bytes[data_start..data_end];
-
-    // A single tile-part must be followed by EOC. A second SOT means more than
-    // one tile-part, which the subset does not decode.
-    match read_u16(bytes, data_end) {
-        Some(marker::EOC) => {}
-        Some(marker::SOT) => {
-            return Err(Error::Unsupported(
-                "multiple tile-parts; the subset is a single tile-part".into(),
-            ));
+    // A tile COD/QCD is the tile's new default: it displaces the main header's
+    // COD/QCD *and* any main-header COC/QCC, so it lands on every component.
+    if let Some(cod) = &tile.cod {
+        header.cod = cod.clone();
+        let coding = header.cod.coding();
+        for params in &mut header.components {
+            params.coding = coding.clone();
         }
-        Some(other) => {
-            return Err(Error::Codestream(format!(
-                "expected EOC after the tile-part, found {other:#06X}"
-            )));
+    }
+    if let Some(qcd) = &tile.qcd {
+        header.qcd = qcd.clone();
+        for params in &mut header.components {
+            params.quant = qcd.clone();
         }
-        None => return Err(Error::Codestream("missing EOC after the tile-part".into())),
     }
 
-    Ok(vec![TilePart {
-        tile_index: sot.tile_index,
-        data,
-    }])
+    // Then the tile's own per-component markers, which outrank its COD/QCD.
+    // `decode_coc`/`decode_qcc`/`decode_rgn` already bounded each index by the
+    // SIZ component count, so these cannot land outside the vector.
+    for (index, coding) in &tile.coc {
+        header.components[*index].coding = coding.clone();
+    }
+    for (index, quant) in &tile.qcc {
+        header.components[*index].quant = quant.clone();
+    }
+    for (index, shift) in &tile.rgn {
+        header.components[*index].roi_shift = *shift;
+    }
+
+    // The tile's resolved parameters must hold every invariant the main header's
+    // do: a tile COD/QCD pair can break one the main header kept.
+    validate_resolved(&header)?;
+    Ok(header)
 }
 
 /// SOT fields (A.4.2): the tile index, tile-part length, part index, and part
@@ -475,7 +751,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             // with them present or absent. TLM's entries are validated and
             // recorded; PLM's packet lengths are skipped as OpenJPEG skips
             // them (`opj_j2k_read_plm` reads nothing past `Zplm`).
-            marker::TLM => decode_tlm(body(), &mut tlm)?,
+            marker::TLM => decode_tlm(body(), &siz, &mut tlm)?,
             marker::PLM => decode_plm(body())?,
 
             // PLT is the tile-part-header form of PLM (A.7.3); in the main
@@ -502,8 +778,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             | marker::SOP
             | marker::EPH => {
                 return Err(Error::Unsupported(format!(
-                    "marker {:#06X} is outside the decoded subset",
-                    seg.code
+                    "marker {} is outside the decoded subset",
+                    marker::describe(seg.code)
                 )));
             }
 
@@ -530,7 +806,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let qcd = qcd.ok_or_else(|| Error::Codestream("missing required QCD marker".into()))?;
 
     // Start from COD/QCD's defaults, then lay each override over its component.
-    // That is the whole of A.6.2's and A.6.5's resolution rule.
+    // That is the whole of A.6.2's and A.6.5's resolution rule at the main
+    // header's level; `resolve_tile_header` continues the ladder for a tile.
     let mut header = MainHeader::new(siz, cod, qcd);
     header.tlm = tlm;
     for (params, ((coding, quant), shift)) in header
@@ -549,6 +826,15 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
         }
     }
 
+    validate_resolved(&header)?;
+    Ok((header, sot_offset))
+}
+
+/// Check the invariants that only hold once a header's per-component parameters
+/// are resolved — whichever header level resolved them. A tile-part COD/QCD pair
+/// can break one the main header kept, so this runs for every tile header too,
+/// not just the main one.
+fn validate_resolved(header: &MainHeader) -> Result<()> {
     // A quantization default or override must cover every subband its
     // component decomposes into: 3·NL + 1 entries for the none/expounded
     // styles (derived's single entry is enforced in `decode_quant`, and excess
@@ -603,7 +889,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
         }
     }
 
-    Ok((header, sot_offset))
+    Ok(())
 }
 
 /// Upper bound on the declared image area (`Xsiz * Ysiz`), a robustness guard
@@ -636,12 +922,11 @@ fn check_sample_budget(siz: &Siz) -> Result<()> {
     Ok(())
 }
 
-/// Enforce the decoded geometry subset on the SIZ fields: a single tile at the
-/// canvas origin, bounded in area. The general canvas (nonzero image/tile
-/// offsets, a multi-tile grid) is valid JPEG 2000 but not yet decoded, so reject
-/// it cleanly here rather than let an out-of-subset origin reach the DWT (whose
-/// interleaving assumes even, canvas-anchored subband origins) or an unbounded
-/// area reach the buffer allocations.
+/// Enforce the decoded geometry subset on the SIZ fields: a tile grid anchored
+/// at the canvas origin, bounded in area and tile count. A nonzero image origin
+/// is valid JPEG 2000 but not yet decoded, so reject it cleanly here rather than
+/// let an out-of-subset origin reach the reconstruction, and reject an unbounded
+/// area or tile count before either reaches the buffer allocations.
 fn validate_geometry(siz: &Siz) -> Result<()> {
     if siz.x_size == 0 || siz.y_size == 0 {
         return Err(Error::Marker("SIZ declares a zero-size image".into()));
@@ -652,6 +937,11 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
             siz.x_offset, siz.y_offset
         )));
     }
+    // The standard requires XTOsiz <= XOsiz (Table A-9), so with the image
+    // pinned at the origin the tile grid is pinned there too. A nonzero tile
+    // offset here is therefore a malformed SIZ, not an undecoded feature —
+    // but it only becomes one once the image offset above is decoded, so it
+    // stays `Unsupported` and moves with #96.
     if siz.tile_x_offset != 0 || siz.tile_y_offset != 0 {
         return Err(Error::Unsupported(format!(
             "tile offset ({}, {}); the decoded subset is canvas-origin only",
@@ -661,18 +951,24 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
     if siz.tile_width == 0 || siz.tile_height == 0 {
         return Err(Error::Marker("SIZ declares a zero-size tile".into()));
     }
-    // A single tile must span the whole image; a smaller tile means a multi-tile
-    // grid, which is not yet decoded.
-    if (siz.tile_width as u64) < siz.x_size as u64 || (siz.tile_height as u64) < siz.y_size as u64 {
-        return Err(Error::Unsupported(
-            "tile smaller than the image (multi-tile grid); the decoded subset is single-tile"
-                .into(),
-        ));
-    }
     if siz.x_size as u64 * siz.y_size as u64 > MAX_IMAGE_SAMPLES {
         return Err(Error::Unsupported(format!(
             "image area {}×{} exceeds the decode guard of {MAX_IMAGE_SAMPLES} samples",
             siz.x_size, siz.y_size
+        )));
+    }
+    // `Isot` is a `u16` running 0..=65534 (Table A-10), so a grid finer than
+    // that has tiles no tile-part can name. The bound also caps the per-tile
+    // bookkeeping — one resolved header and one geometry walk each — that the
+    // sample budget alone does not: a 1×1 tile costs a header but almost no
+    // samples.
+    const MAX_TILES: u32 = 65535;
+    let tiles = siz.num_tiles();
+    if tiles > MAX_TILES {
+        return Err(Error::Marker(format!(
+            "tile grid is {}×{} = {tiles} tiles, past the {MAX_TILES}-tile limit on Isot",
+            siz.tile_grid().0,
+            siz.tile_grid().1,
         )));
     }
     Ok(())
@@ -984,10 +1280,9 @@ fn decode_rgn(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, u8)> {
 /// reserved bits, but as with `Scoc` rejecting is stricter and no conformant
 /// codestream carries them.
 ///
-/// The subset decodes a single tile — enforced when SIZ is decoded — so tile 0
-/// is the only tile an entry can name; the tile grid of #59 generalizes this.
-/// OpenJPEG makes the same range check against its grid.
-fn decode_tlm(mut b: Cursor<'_>, entries: &mut Vec<TlmEntry>) -> Result<()> {
+/// An entry may only name a tile the grid actually holds. OpenJPEG makes the
+/// same range check against its grid.
+fn decode_tlm(mut b: Cursor<'_>, siz: &Siz, entries: &mut Vec<TlmEntry>) -> Result<()> {
     b.u8()?; // Ztlm: this marker's position among the TLMs
     let stlm = b.u8()?;
     if stlm & 0x8F != 0 {
@@ -1018,9 +1313,10 @@ fn decode_tlm(mut b: Cursor<'_>, entries: &mut Vec<TlmEntry>) -> Result<()> {
             1 => u32::from(b.u8()?),
             _ => u32::from(b.u16()?),
         };
-        if tile_index != 0 {
+        if tile_index >= siz.num_tiles() {
             return Err(Error::Marker(format!(
-                "TLM names tile {tile_index}, but the grid has a single tile"
+                "TLM names tile {tile_index}, but the grid holds {} tiles",
+                siz.num_tiles()
             )));
         }
         let length = match sp {

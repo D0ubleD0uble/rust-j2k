@@ -8,10 +8,12 @@
 //! hands Tier-1 the coded byte segments per code-block — it does **not** run
 //! the arithmetic decoder.
 //!
-//! The decoded subset is one tile with maximal precincts, so the position axis
-//! has one value per resolution and the packet stream walks the remaining three
-//! axes — layer, resolution, component — in whichever order `COD` names. The
-//! tile-part is then `header₀ body₀ header₁ body₁ …` with no padding, and the
+//! This stage runs once per **tile**: a tile's packets are its own, in its own
+//! progression, and nothing about them crosses a tile boundary. The decoded
+//! subset uses maximal precincts, so the position axis has one value per
+//! resolution and the packet stream walks the remaining three axes — layer,
+//! resolution, component — in whichever order that tile's `COD` names. The
+//! tile's data is then `header₀ body₀ header₁ body₁ …` with no padding, and the
 //! packets must tile it exactly; a leftover byte means a misread field.
 //!
 //! A code-block's contributions accumulate across the layers that include it,
@@ -26,7 +28,7 @@ pub mod bio;
 pub mod tagtree;
 
 use crate::codestream::markers::{Progression, marker};
-use crate::codestream::{Codestream, MainHeader};
+use crate::codestream::{MainHeader, Tile};
 use crate::{Error, Result};
 use bio::BitReader;
 use tagtree::TagTree;
@@ -123,24 +125,25 @@ pub struct CodedData<'a> {
     pub components: Vec<ComponentCoded<'a>>,
 }
 
-/// Parse all packets in the codestream's single tile-part into per-code-block
-/// coded segments.
+/// Parse all packets of one tile into per-code-block coded segments.
+///
+/// `header` is the tile's resolved header (`Codestream::tile_header`), so a
+/// tile-part COD/QCD override is already in force and nothing below needs to know
+/// a main header exists. The geometry is the tile's own too: every
+/// tile-component bound is the *tile*'s rect on that component's grid, not the
+/// image's.
 ///
 /// LRCP orders packets layer, then resolution, then component, then precinct
-/// (ISO B.12.1.1). With one layer and maximal precincts that reduces to a
-/// resolution-major sweep with the components nested inside it: `r0c0, r0c1, …,
-/// r1c0, r1c1, …`. Each component carries its own tile-component geometry, so a
-/// sub-sampled component's subbands are smaller at the same resolution.
-pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
-    let tile = cs
-        .tile_parts
-        .first()
-        .ok_or_else(|| Error::Codestream("codestream carries no tile-part".into()))?;
-    let data = tile.data;
+/// (ISO B.12.1.1). With maximal precincts that reduces to a layer-major sweep
+/// with resolutions and components nested inside it: `r0c0, r0c1, …, r1c0, r1c1,
+/// …`. Each component carries its own tile-component geometry, so a sub-sampled
+/// component's subbands are smaller at the same resolution.
+pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<CodedData<'a>> {
+    let data: &'a [u8] = &tile.data;
 
-    let component_count = cs.header.siz.components.len();
+    let component_count = header.siz.components.len();
     let geoms = (0..component_count)
-        .map(|c| resolution_geoms(&cs.header, c))
+        .map(|c| resolution_geoms(header, tile.index, c))
         .collect::<Result<Vec<_>>>()?;
     // A COC gives a component its own decomposition depth, so the resolution
     // axis is as long as the deepest component and the shallower ones simply do
@@ -161,7 +164,7 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
     let total_blocks: usize = geoms
         .iter()
         .flatten()
-        .flatten()
+        .flat_map(|level| &level.bands)
         .map(|band| band.blocks.len())
         .sum();
     if total_blocks > MAX_CODE_BLOCKS {
@@ -178,20 +181,20 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
         .map(|component| {
             component
                 .iter()
-                .map(|bands| bands.iter().map(BandState::new).collect())
+                .map(|level| level.bands.iter().map(BandState::new).collect())
                 .collect()
         })
         .collect();
 
     let delimiters = Delimiters {
-        sop: cs.header.cod.use_sop,
-        eph: cs.header.cod.use_eph,
+        sop: header.cod.use_sop,
+        eph: header.cod.use_eph,
     };
     let mut cursor = 0usize;
     let mut packet_index = 0u32;
     for_each_packet(
-        cs.header.cod.progression,
-        cs.header.cod.layers as u32,
+        header.cod.progression,
+        header.cod.layers as u32,
         resolution_count,
         component_count,
         |layer, resolution, component| {
@@ -201,14 +204,18 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
             if resolution >= geoms[component].len() {
                 return Ok(());
             }
+            // Nor does an empty resolution, which has no precinct to carry one.
+            if geoms[component][resolution].empty {
+                return Ok(());
+            }
             cursor = parse_packet(
                 data,
                 cursor,
                 layer,
                 packet_index,
                 delimiters,
-                cs.header.components[component].coding.code_block_style,
-                &geoms[component][resolution],
+                header.components[component].coding.code_block_style,
+                &geoms[component][resolution].bands,
                 &mut states[component][resolution],
             )?;
             packet_index += 1;
@@ -224,9 +231,9 @@ pub fn decode_packets<'a>(cs: &Codestream<'a>) -> Result<CodedData<'a>> {
                 resolutions: component_states
                     .into_iter()
                     .zip(component_geoms)
-                    .map(|(band_states, bands)| {
+                    .map(|(band_states, level)| {
                         Ok(Resolution {
-                            subbands: build_subbands(bands, band_states)?,
+                            subbands: build_subbands(&level.bands, band_states)?,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -259,6 +266,26 @@ struct BandGeom {
     block_rows: usize,
     /// `(x, y, width, height)` per block, row-major.
     blocks: Vec<(usize, usize, usize, usize)>,
+}
+
+/// One resolution level of a tile-component: its subbands, and whether it
+/// carries a packet at all.
+///
+/// A resolution whose rectangle is empty — `trx0 == trx1` or `try0 == try1` —
+/// has **zero precincts** (ISO B.6), and a packet exists per precinct, so such a
+/// resolution contributes *no* packet to the codestream. Reading one anyway
+/// would consume the next resolution's bytes and desynchronise the rest of the
+/// tile.
+///
+/// Empty resolutions are not a curiosity: a tile-component only one sample wide
+/// at an odd origin has `ceil(u0/2) == ceil(u1/2)`, so it vanishes one level up.
+/// A single tile at the canvas origin can never produce one (its `trx0` is 0 and
+/// its `trx1` at least 1), which is why this only matters once tiles exist.
+/// OpenJPEG skips them the same way: `opj_pi_next_*` bounds its precinct loop by
+/// `res->pw * res->ph`, which is zero here.
+struct ResolutionGeom {
+    empty: bool,
+    bands: Vec<BandGeom>,
 }
 
 /// Visit every packet of the tile in the order `progression` prescribes
@@ -346,14 +373,18 @@ fn ceil_div(a: i64, b: i64) -> i64 {
     if a.rem_euclid(b) != 0 { q + 1 } else { q }
 }
 
-/// Compute the resolution → subband → code-block geometry for tile-component
-/// `comp`, coarsest resolution first (ISO B.5–B.7, Eq. B-15). Maximal precincts
-/// mean one precinct per resolution, so the code-block grid tiles each whole
-/// subband.
+/// Compute the resolution → subband → code-block geometry for one
+/// tile-component, coarsest resolution first (ISO B.5–B.7, Eq. B-15). Maximal
+/// precincts mean one precinct per resolution, so the code-block grid tiles each
+/// whole subband.
 ///
-/// The tile-component bounds divide by *this component's* sub-sampling, so two
-/// components of the same image can yield different subband sizes.
-fn resolution_geoms(header: &MainHeader, comp: usize) -> Result<Vec<Vec<BandGeom>>> {
+/// The bounds come from `tile`'s rect on *this component's* grid (B.3, Eq.
+/// B-7/B-12): they divide by the component's sub-sampling, so two components of
+/// one tile can yield different subband sizes, and they sit at the tile's own
+/// offset, so two tiles of one component yield subbands at different origins.
+/// Those origins are as load-bearing as the sizes — the inverse DWT reads its
+/// interleave parity from them, and the assembly stage places the tile by them.
+fn resolution_geoms(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<ResolutionGeom>> {
     let siz = &header.siz;
     let cod = &header
         .components
@@ -368,25 +399,16 @@ fn resolution_geoms(header: &MainHeader, comp: usize) -> Result<Vec<Vec<BandGeom
         )));
     }
 
-    // Tile-component bounds: the single tile clipped to the image, divided by
-    // the component sub-sampling (Annex B.3, Eq. B-7/B-12). The decoded subset
-    // uses zero offsets and unit sub-sampling, but the general form costs
-    // nothing — provided the tile origin is clamped up to the image offset.
-    let component = siz
-        .components
-        .get(comp)
-        .ok_or_else(|| Error::Codestream(format!("SIZ declares no component {comp}")))?;
-    let xr = (component.x_sampling.max(1)) as i64;
-    let yr = (component.y_sampling.max(1)) as i64;
-    let tx0 = (siz.tile_x_offset as i64).max(siz.x_offset as i64);
-    let ty0 = (siz.tile_y_offset as i64).max(siz.y_offset as i64);
-    let tx1 = (siz.tile_x_offset as i64 + siz.tile_width as i64).min(siz.x_size as i64);
-    let ty1 = (siz.tile_y_offset as i64 + siz.tile_height as i64).min(siz.y_size as i64);
-    if tx1 <= tx0 || ty1 <= ty0 {
-        return Err(Error::Codestream("tile has empty area".into()));
+    let rect = siz.tile_component_rect(tile, comp).ok_or_else(|| {
+        Error::Inconsistent(format!("no tile {tile} or no component {comp} in SIZ"))
+    })?;
+    if rect.is_empty() {
+        return Err(Error::Codestream(format!(
+            "tile {tile} has an empty area on component {comp}"
+        )));
     }
-    let (tcx0, tcx1) = (ceil_div(tx0, xr), ceil_div(tx1, xr));
-    let (tcy0, tcy1) = (ceil_div(ty0, yr), ceil_div(ty1, yr));
+    let (tcx0, tcx1) = (i64::from(rect.x0), i64::from(rect.x1));
+    let (tcy0, tcy1) = (i64::from(rect.y0), i64::from(rect.y1));
 
     // "One precinct per resolution" is an assumption the packet walk depends
     // on, not a theorem: a maximal precinct (PPx = PPy = 15) spans 2^15
@@ -461,7 +483,13 @@ fn resolution_geoms(header: &MainHeader, comp: usize) -> Result<Vec<Vec<BandGeom
             })
             .collect()
         };
-        levels.push(bands);
+        // The resolution's own rectangle (ISO B.5, Eq. B-14), which is what
+        // decides whether it carries a packet — not the bands', which can be
+        // empty while the resolution is not.
+        let pow = 1i64 << (nl - r);
+        let empty = ceil_div(tcx1, pow) <= ceil_div(tcx0, pow)
+            || ceil_div(tcy1, pow) <= ceil_div(tcy0, pow);
+        levels.push(ResolutionGeom { empty, bands });
     }
     Ok(levels)
 }
@@ -582,9 +610,9 @@ fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
 /// corpus agrees — every single-tile entry that carries SOP numbers its packets
 /// sequentially from zero, every multi-tile one restarts.
 ///
-/// The decoded subset is one tile in one tile-part, so the packet index is the
-/// count. When tiles and tile-parts land (issues #59, #60) the counter must
-/// reset per *tile*, not per tile-part.
+/// The counter therefore lives in [`decode_packets`], which runs once per tile
+/// over that tile's tile-parts joined end to end: it starts at zero for each
+/// tile and does not restart at a tile-part boundary.
 ///
 /// OpenJPEG leaves `Nsop` unchecked — `/* TODO : check the Nsop value */` — so
 /// this is stricter than the oracle. Validating the sequence number is the whole

@@ -121,44 +121,77 @@ pub struct DecodeOptions {
 pub fn decode_with(codestream: &[u8], options: DecodeOptions) -> Result<Image> {
     let cs = codestream::parse(codestream)?;
 
-    // A reduction must leave every component a resolution to decode, checked
-    // against each component's own decomposition count: a COC can give one
-    // component a shallower pyramid than the rest (p0_08 does exactly that).
     let reduction = options.resolution_reduction;
-    for (index, params) in cs.header.components.iter().enumerate() {
-        let resolutions = u32::from(params.coding.decomposition_levels) + 1;
-        if u32::from(reduction) >= resolutions {
-            return Err(Error::Unsupported(format!(
-                "resolution reduction {reduction} discards all {resolutions} resolutions \
-                 of component {index}"
-            )));
+
+    // Each tile is a whole decode of its own: its own header, its own packets,
+    // its own wavelet pyramid in its own coordinate frame. Nothing crosses a
+    // tile boundary — that is what tiling is for — so the tiles meet only at the
+    // end, when each writes its rectangle of the canvas.
+    let mut canvas = image::Canvas::new(&cs.header, reduction)?;
+    for (index, tile) in cs.tiles.iter().enumerate() {
+        // The tile's own parameters: the main header with this tile's tile-part
+        // header resolved over it. Held for one tile at a time — a header is
+        // sized by the component count, and a codestream can declare tens of
+        // thousands of tiles.
+        let header = cs.tile_header(index)?;
+
+        // A reduction must leave every component a resolution to decode, checked
+        // against each component's own decomposition count: a COC can give one
+        // component a shallower pyramid than the rest (p0_08 does exactly that),
+        // and a tile COD can give one tile a shallower pyramid than the rest — so
+        // this is per tile, not once for the image.
+        for (component, params) in header.components.iter().enumerate() {
+            let resolutions = u32::from(params.coding.decomposition_levels) + 1;
+            if u32::from(reduction) >= resolutions {
+                return Err(Error::Unsupported(format!(
+                    "resolution reduction {reduction} discards all {resolutions} resolutions \
+                     of component {component} in tile {index}"
+                )));
+            }
+        }
+
+        // Tier-2: parse packets into per-code-block coded segments, per
+        // component. The walk covers every resolution whatever the reduction:
+        // packet order is the codestream's framing, so the dropped levels'
+        // packets must still be stepped over to reach the kept ones.
+        let coded = tier2::decode_packets(&header, tile)?;
+        // Tier-1: MQ + EBCOT bit-plane decode each code block into subband
+        // coeffs. The dropped resolutions' code-blocks are skipped, never
+        // decoded.
+        let coeffs = tier1::decode_code_blocks(&header, &coded, reduction)?;
+
+        // Dequantize, then invert the DWT per resolution level into samples.
+        let mut samples = coeffs
+            .into_iter()
+            .enumerate()
+            .map(|(component, coeffs)| {
+                let dequant = quant::dequantize(&header, component, coeffs)?;
+                dwt::inverse(&header, component, dequant)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Undo the inter-component decorrelation, if any, before the DC level
+        // shift (ISO/IEC 15444-1 G.1). It is a per-tile transform: the flag
+        // lives in COD, which a tile-part header can override. Components past
+        // the third are untouched.
+        if header.cod.multiple_component_transform {
+            mct::inverse_rct(&mut samples)?;
+        }
+
+        for (component, samples) in samples.into_iter().enumerate() {
+            let rect = cs
+                .header
+                .siz
+                .tile_component_rect(tile.index, component)
+                .ok_or_else(|| {
+                    Error::Inconsistent(format!(
+                        "no tile {} or no component {component} in SIZ",
+                        tile.index
+                    ))
+                })?;
+            canvas.place(component, rect.reduced(reduction), samples)?;
         }
     }
 
-    // Tier-2: parse packets into per-code-block coded segments, per component.
-    // The walk covers every resolution whatever the reduction: packet order is
-    // the codestream's framing, so the dropped levels' packets must still be
-    // stepped over to reach the kept ones.
-    let coded = tier2::decode_packets(&cs)?;
-    // Tier-1: MQ + EBCOT bit-plane decode each code block into subband coeffs.
-    // The dropped resolutions' code-blocks are skipped, never decoded.
-    let coeffs = tier1::decode_code_blocks(&cs.header, &coded, reduction)?;
-
-    // Dequantize, then invert the DWT per resolution level into samples.
-    let mut samples = coeffs
-        .into_iter()
-        .enumerate()
-        .map(|(component, coeffs)| {
-            let dequant = quant::dequantize(&cs.header, component, coeffs)?;
-            dwt::inverse(&cs.header, component, dequant)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    // Undo the inter-component decorrelation, if any, before the DC level shift
-    // (ISO/IEC 15444-1 G.1). Components past the third are untouched.
-    if cs.header.cod.multiple_component_transform {
-        mct::inverse_rct(&mut samples)?;
-    }
-
-    image::assemble(&cs.header, samples, reduction)
+    image::assemble(&cs.header, canvas.into_planes(), reduction)
 }

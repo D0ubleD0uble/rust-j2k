@@ -78,8 +78,8 @@ fn parse_layers_styled<'a>(
     }
     Ok((build_subbands(bands, states)?, cursor))
 }
-use crate::codestream::MainHeader;
 use crate::codestream::markers::{Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform};
+use crate::codestream::{MainHeader, Tile, TileHeader};
 use crate::tier2::bio::BitReader;
 
 /// The encode side of [`BitReader`]: MSB-first packing with the Annex B.10.1
@@ -170,6 +170,16 @@ fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
     )
 }
 
+/// Tile 0, carrying `data`. A tile keeps only its own tile-part-header markers —
+/// none, here — so the header `decode_packets` decodes under is passed alongside.
+fn tile(data: &[u8]) -> Tile<'_> {
+    Tile {
+        index: 0,
+        header: TileHeader::default(),
+        data: std::borrow::Cow::Borrowed(data),
+    }
+}
+
 fn single_block_band(kind: BandKind, width: usize, height: usize) -> BandGeom {
     BandGeom {
         kind,
@@ -188,24 +198,24 @@ fn single_block_band(kind: BandKind, width: usize, height: usize) -> BandGeom {
 /// subband dimensions follow the standard's half-resolution split.
 #[test]
 fn geometry_single_block_per_subband() {
-    let geoms = resolution_geoms(&header(100, 100, 2, 6), 0).unwrap();
+    let geoms = resolution_geoms(&header(100, 100, 2, 6), 0, 0).unwrap();
     assert_eq!(geoms.len(), 3); // NL = 2 → resolutions 0,1,2
 
     // Resolution 0: the NLLL band at level 2, ceil(100/4) = 25 square.
-    let ll = &geoms[0][0];
+    let ll = &geoms[0].bands[0];
     assert_eq!(ll.kind, BandKind::Ll);
     assert_eq!((ll.width, ll.height), (25, 25));
     assert_eq!((ll.block_cols, ll.block_rows), (1, 1));
 
     // Resolution 1 detail bands sit at level 2 as well: 25 square.
-    assert_eq!(geoms[1].len(), 3);
-    assert_eq!(geoms[1][0].kind, BandKind::Hl);
-    for b in &geoms[1] {
+    assert_eq!(geoms[1].bands.len(), 3);
+    assert_eq!(geoms[1].bands[0].kind, BandKind::Hl);
+    for b in &geoms[1].bands {
         assert_eq!((b.width, b.height), (25, 25));
     }
 
     // Resolution 2 detail bands at level 1: ceil(99/2) = 50 square.
-    for b in &geoms[2] {
+    for b in &geoms[2].bands {
         assert_eq!((b.width, b.height), (50, 50));
     }
 }
@@ -215,8 +225,8 @@ fn geometry_single_block_per_subband() {
 #[test]
 fn geometry_multi_block_grid() {
     // 200×200, one level, 2^5 = 32 blocks. LL is ceil(200/2) = 100 square.
-    let geoms = resolution_geoms(&header(200, 200, 1, 5), 0).unwrap();
-    let ll = &geoms[0][0];
+    let geoms = resolution_geoms(&header(200, 200, 1, 5), 0, 0).unwrap();
+    let ll = &geoms[0].bands[0];
     assert_eq!((ll.width, ll.height), (100, 100));
     // ceil(100/32) = 4 blocks each way.
     assert_eq!((ll.block_cols, ll.block_rows), (4, 4));
@@ -231,10 +241,10 @@ fn geometry_multi_block_grid() {
 /// and yields one resolution per level plus the base.
 #[test]
 fn geometry_max_decomposition_levels() {
-    let geoms = resolution_geoms(&header(2, 2, 32, 6), 0).unwrap();
+    let geoms = resolution_geoms(&header(2, 2, 32, 6), 0, 0).unwrap();
     assert_eq!(geoms.len(), 33);
     // The coarsest LL collapses to a single sample; nothing panics on the way.
-    assert_eq!((geoms[0][0].width, geoms[0][0].height), (1, 1));
+    assert_eq!((geoms[0].bands[0].width, geoms[0].bands[0].height), (1, 1));
 }
 
 /// A tile-component larger than one maximal precinct (2^15 on either axis)
@@ -243,7 +253,7 @@ fn geometry_max_decomposition_levels() {
 #[test]
 fn geometry_rejects_multi_precinct_extent() {
     for (w, h) in [(32769, 16), (16, 32769)] {
-        let err = resolution_geoms(&header(w, h, 1, 6), 0);
+        let err = resolution_geoms(&header(w, h, 1, 6), 0, 0);
         assert!(matches!(err, Err(crate::Error::Unsupported(_))), "{w}×{h}");
     }
 }
@@ -251,8 +261,8 @@ fn geometry_rejects_multi_precinct_extent() {
 /// Exactly 2^15 still fits in the single maximal precinct.
 #[test]
 fn geometry_accepts_full_precinct_extent() {
-    let geoms = resolution_geoms(&header(32768, 16, 1, 6), 0).unwrap();
-    assert_eq!(geoms[1][0].width, 16384);
+    let geoms = resolution_geoms(&header(32768, 16, 1, 6), 0, 0).unwrap();
+    assert_eq!(geoms[1].bands[0].width, 16384);
 }
 
 /// A code-block size past the standard's 2^10 / xcb+ycb≤12 limit is rejected,
@@ -260,7 +270,7 @@ fn geometry_accepts_full_precinct_extent() {
 #[test]
 fn geometry_rejects_oversized_code_block() {
     // code_block_width field 9 → exponent 11 (> 10).
-    let err = resolution_geoms(&header(64, 64, 1, 13), 0);
+    let err = resolution_geoms(&header(64, 64, 1, 13), 0, 0);
     assert!(matches!(err, Err(crate::Error::Marker(_))));
 }
 
@@ -487,7 +497,7 @@ fn packet_two_blocks_partial_inclusion() {
 fn seed_codestream_parses() {
     let bytes = include_bytes!("../../tests/fixtures/jpeg2000_regular_latlon.j2k");
     let cs = crate::codestream::parse(bytes).unwrap();
-    let coded = decode_packets(&cs).unwrap();
+    let coded = decode_packets(&cs.header, &cs.tiles[0]).unwrap();
 
     // opj_dump reports numresolutions = 5 (NL = 4): one LL packet + four detail
     // levels.
@@ -523,8 +533,6 @@ fn seed_codestream_parses() {
 /// every shift, slice, and loop is bounded. (Full fuzzing is issue #18.)
 #[test]
 fn malformed_tile_data_never_panics() {
-    use crate::codestream::{Codestream, TilePart};
-
     let cases: [Vec<u8>; 5] = [
         Vec::new(),
         vec![0xFF; 64],
@@ -532,16 +540,11 @@ fn malformed_tile_data_never_panics() {
         (0..=255u8).cycle().take(300).collect(),
         vec![0x80, 0x01, 0xFF, 0xFE, 0x00, 0x7F],
     ];
+    let h = header(32, 32, 3, 6);
     for data in &cases {
-        let cs = Codestream {
-            header: header(32, 32, 3, 6),
-            tile_parts: vec![TilePart {
-                tile_index: 0,
-                data,
-            }],
-        };
+        let t = tile(data);
         // The result is allowed to be either Ok or Err; only a panic would fail.
-        let _ = decode_packets(&cs);
+        let _ = decode_packets(&h, &t);
     }
 }
 
@@ -550,17 +553,10 @@ fn malformed_tile_data_never_panics() {
 /// is read; the block-count guard rejects it up front instead.
 #[test]
 fn block_count_guard_rejects_metadata_bomb() {
-    use crate::codestream::{Codestream, TilePart};
-
     // 4096×4096 with 4×4 blocks: ~1.4M blocks across the ladder, over the 2^19 cap.
-    let cs = Codestream {
-        header: header(4096, 4096, 1, 2),
-        tile_parts: vec![TilePart {
-            tile_index: 0,
-            data: &[],
-        }],
-    };
-    let err = decode_packets(&cs).expect_err("guard fires before any packet parse");
+    let h = header(4096, 4096, 1, 2);
+    let t = tile(&[]);
+    let err = decode_packets(&h, &t).expect_err("guard fires before any packet parse");
     assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
 }
 
@@ -612,8 +608,8 @@ fn resolution_geoms_honour_each_components_sub_sampling() {
     // tile-component extent in each axis.
     let expected_ll = [(32, 32), (16, 32), (32, 16), (16, 16)];
     for (component, (want_width, want_height)) in expected_ll.into_iter().enumerate() {
-        let geoms = resolution_geoms(&h, component).unwrap();
-        let ll = &geoms[0][0];
+        let geoms = resolution_geoms(&h, 0, component).unwrap();
+        let ll = &geoms[0].bands[0];
         assert_eq!(ll.kind, BandKind::Ll);
         assert_eq!(
             (ll.width, ll.height),
@@ -624,7 +620,7 @@ fn resolution_geoms_honour_each_components_sub_sampling() {
 
     // A component index past the SIZ list is an internal inconsistency, not a
     // silent fall back to component 0.
-    assert!(resolution_geoms(&h, 4).is_err());
+    assert!(resolution_geoms(&h, 0, 4).is_err());
 }
 
 // ---- Quality layers (issue #64) ----

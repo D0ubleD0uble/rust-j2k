@@ -158,6 +158,21 @@ compared against its reference decode.
 **Done:** multi-tile, multi-tile-part codestreams reconstruct the full canvas in
 class. The Phase 1 single-tile guard in SIZ validation comes off here.
 
+This has landed. Two things it turned up that the plan above did not name:
+
+- **A tile-part header resolves against the main header's *markers*, not against
+  its resolved components.** A tile COD outranks a main-header COC for the same
+  component (A.6.1), so laying a tile's markers over the already-resolved
+  components would let the main COC win a contest it lost. `MainHeader` keeps its
+  raw overrides for that reason.
+- **The inverse DWT's interleave parity stops being a constant.** A sample is
+  low-pass when its tile-component coordinate is even, so a tile that does not
+  start at the canvas origin — or a sub-sampled component of one — decomposes on
+  odd parities, and index 0 of an interleaved row becomes a high-pass sample.
+  Both 1-D kernels take that parity (OpenJPEG's `cas`). It is recovered from the
+  band origins alone: `ceil(u0/2) + floor(u0/2) == u0`, so an LL origin plus its
+  HL origin is the resolution's origin.
+
 ### P2.4 — Precinct partition (`src/tier2/`)
 
 **Goal:** decode non-maximal precincts, the packet-grouping subdivision Phase 1
@@ -232,9 +247,9 @@ component geometry). Decoding must match with the lengths used and with them
 ignored.
 
 SOP/EPH have landed (`scripts/gen-delimiter-fixtures.py` grades them bit-exact).
-Note `Nsop` counts packets *within a tile*, so its counter must reset per tile
-once P2.3 lands — the corpus shows this plainly: the single-tile entries number
-their packets from zero, the multi-tile ones restart.
+`Nsop` counts packets *within a tile*, which P2.3 satisfied by construction: the
+packet walk runs once per tile, so its counter starts at zero for each one and
+carries across that tile's tile-parts.
 
 **Oracle:** Part 4 codestreams carrying each marker — the manifest's
 `markers_main`/`markers_tile` fields say which entry carries what — except PLM,

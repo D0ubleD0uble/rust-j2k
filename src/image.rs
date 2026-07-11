@@ -4,7 +4,7 @@
 //! signedness, sub-sampling).
 
 use crate::codestream::MainHeader;
-use crate::codestream::markers::Siz;
+use crate::codestream::markers::{Rect, Siz, Transform};
 use crate::dwt::Samples;
 use crate::{Error, Result};
 
@@ -93,6 +93,128 @@ impl Component {
 /// `samples` carries one reconstructed sample vector per SIZ component, in SIZ
 /// order. Each is level-shifted and clamped on its own component's depth and
 /// sign, then packed with that component's geometry.
+/// The per-component sample planes a tiled decode reconstructs into: one plane
+/// per SIZ component, sized to that component's whole grid, which each tile
+/// writes its own rectangle of.
+///
+/// Tiles are decoded independently — their own coordinate frame, their own
+/// header, their own wavelet pyramid — and the canvas is where they meet again.
+/// A tile-component's reconstructed raster is placed at the tile's offset on the
+/// component grid; the tiles partition that grid exactly, so every sample is
+/// written once. Nothing is blended and no tile overlaps another: the wavelet
+/// transform is applied per tile, which is why a tiled encode can show seams,
+/// and reproducing them is correct.
+pub(crate) struct Canvas {
+    planes: Vec<Samples>,
+    /// Each component's whole grid at the decode's reduction — the rectangle a
+    /// tile's placement is measured against.
+    rects: Vec<Rect>,
+}
+
+impl Canvas {
+    /// Allocate one zeroed plane per component, at the reduced size
+    /// [`assemble`] will expect.
+    ///
+    /// A plane's arithmetic follows its component's wavelet — 5/3 reconstructs
+    /// exact integers, 9/7 reals — which is why `parse` rejects a codestream
+    /// whose tiles disagree about a component's wavelet: it would ask one plane
+    /// to hold both.
+    pub(crate) fn new(header: &MainHeader, reduction: u8) -> Result<Self> {
+        let siz = &header.siz;
+        let (mut planes, mut rects) = (Vec::new(), Vec::new());
+        for index in 0..siz.components.len() {
+            let (width, height) = siz
+                .component_extent_at(index, reduction)
+                .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
+            let count = (width as usize) * (height as usize);
+            planes.push(match header.components[index].coding.transform {
+                Transform::Reversible53 => Samples::Reversible(vec![0; count]),
+                Transform::Irreversible97 => Samples::Irreversible(vec![0.0; count]),
+            });
+            rects.push(
+                siz.component_rect(index)
+                    .ok_or_else(|| {
+                        Error::Inconsistent(format!("SIZ declares no component {index}"))
+                    })?
+                    .reduced(reduction),
+            );
+        }
+        Ok(Canvas { planes, rects })
+    }
+
+    /// Write one tile-component's reconstructed raster into its component's
+    /// plane. `rect` is the tile-component's rectangle on the component grid, at
+    /// the same reduction the canvas was built at.
+    pub(crate) fn place(&mut self, index: usize, rect: Rect, samples: Samples) -> Result<()> {
+        let (plane, canvas) = self
+            .planes
+            .get_mut(index)
+            .zip(self.rects.get(index))
+            .ok_or_else(|| Error::Inconsistent(format!("no canvas plane for component {index}")))?;
+        if samples.len() as u64 != rect.area() {
+            return Err(Error::Inconsistent(format!(
+                "component {index} of a tile reconstructed {} samples but its {}x{} rectangle \
+                 holds {}",
+                samples.len(),
+                rect.width(),
+                rect.height(),
+                rect.area(),
+            )));
+        }
+        // The tile grid partitions the canvas, so this only fails on a header
+        // whose SIZ tiling and whose decoded geometry disagree.
+        if rect.x0 < canvas.x0 || rect.y0 < canvas.y0 || rect.x1 > canvas.x1 || rect.y1 > canvas.y1
+        {
+            return Err(Error::Inconsistent(format!(
+                "a tile's component {index} rectangle {rect:?} falls outside the canvas {canvas:?}",
+            )));
+        }
+        let (left, top) = (
+            (rect.x0 - canvas.x0) as usize,
+            (rect.y0 - canvas.y0) as usize,
+        );
+        let stride = canvas.width() as usize;
+        match (plane, samples) {
+            (Samples::Reversible(dst), Samples::Reversible(src)) => {
+                blit(dst, stride, &src, rect.width() as usize, left, top);
+            }
+            (Samples::Irreversible(dst), Samples::Irreversible(src)) => {
+                blit(dst, stride, &src, rect.width() as usize, left, top);
+            }
+            _ => {
+                return Err(Error::Inconsistent(format!(
+                    "a tile reconstructed component {index} on the other wavelet's arithmetic"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The finished planes, in SIZ component order, ready for [`assemble`].
+    pub(crate) fn into_planes(self) -> Vec<Samples> {
+        self.planes
+    }
+}
+
+/// Copy a `src_width`-wide raster into `dst` (a `stride`-wide raster) with its
+/// top-left at `(left, top)`. The caller has already checked that it fits.
+fn blit<T: Copy>(
+    dst: &mut [T],
+    stride: usize,
+    src: &[T],
+    src_width: usize,
+    left: usize,
+    top: usize,
+) {
+    if src_width == 0 {
+        return;
+    }
+    for (row, line) in src.chunks_exact(src_width).enumerate() {
+        let start = (top + row) * stride + left;
+        dst[start..start + src_width].copy_from_slice(line);
+    }
+}
+
 pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8) -> Result<Image> {
     let siz = &header.siz;
     if samples.len() != siz.components.len() {
