@@ -81,7 +81,9 @@ fn parse_layers_styled<'a>(
     }
     Ok((build_subbands(bands, states)?, cursor))
 }
-use crate::codestream::markers::{Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform};
+use crate::codestream::markers::{
+    Cod, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
+};
 use crate::codestream::{MainHeader, Tile, TileHeader};
 use crate::tier2::bio::BitReader;
 
@@ -1064,9 +1066,16 @@ fn order_of(
     progression: Progression,
     layers: u32,
 ) -> Vec<(u32, usize, usize, usize)> {
-    let header = layout.header();
+    let mut header = layout.header();
+    header.cod.progression = progression;
+    header.cod.layers = layers as u16;
+    order_of_header(&header)
+}
+
+/// [`order_of`] driven by an already-built header, so a test can set a `POC`.
+fn order_of_header(header: &MainHeader) -> Vec<(u32, usize, usize, usize)> {
     let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
-        .map(|c| geoms_of(&header, 0, c).expect("geometry"))
+        .map(|c| geoms_of(header, 0, c).expect("geometry"))
         .collect();
     let walk = PacketWalk {
         siz: &header.siz,
@@ -1074,7 +1083,7 @@ fn order_of(
         geoms: &geoms,
     };
     let mut seen = Vec::new();
-    for_each_packet(progression, layers, &walk, |l, r, c, p| {
+    for_each_packet(header, &walk, |l, r, c, p| {
         seen.push((l, r, c, p));
         Ok(())
     })
@@ -1223,6 +1232,105 @@ fn the_orders_coincide_when_only_resolution_varies() {
     assert_ne!(
         order_of(&layered, Progression::Lrcp, 2),
         order_of(&layered, Progression::Rlcp, 2),
+    );
+}
+
+// ---- POC: progression-order change (issue #63) ----
+
+/// A `POC` splits the packet stream into progression volumes, each an order over
+/// its own sub-range. This one runs resolution 0 in LRCP, then resolutions 1–2
+/// in RLCP, over three layers — the packet order across the boundary must be the
+/// first volume's sequence followed by the second's, which is hand-built here.
+#[test]
+fn poc_switches_order_at_the_volume_boundary() {
+    // Two resolutions of detail (NL = 2 → resolutions 0,1,2), three layers, one
+    // component, one precinct each — so a packet is `(layer, resolution)`.
+    let mut header = Layout::plain((32, 32), 2).header();
+    header.cod.layers = 3;
+    header.poc = vec![
+        PocVolume {
+            res_start: 0,
+            res_end: 1,
+            comp_start: 0,
+            comp_end: 1,
+            layer_end: 3,
+            progression: Progression::Lrcp,
+        },
+        PocVolume {
+            res_start: 1,
+            res_end: 3,
+            comp_start: 0,
+            comp_end: 1,
+            layer_end: 3,
+            progression: Progression::Rlcp,
+        },
+    ];
+    let seq: Vec<(u32, usize)> = order_of_header(&header)
+        .into_iter()
+        .map(|(l, r, _, _)| (l, r))
+        .collect();
+
+    // Volume 0 — resolution 0 only, LRCP (layer outer): (0,0),(1,0),(2,0).
+    // Volume 1 — resolutions 1,2, RLCP (resolution outer): all layers of res 1,
+    // then all of res 2.
+    assert_eq!(
+        seq,
+        vec![
+            (0, 0),
+            (1, 0),
+            (2, 0),
+            (0, 1),
+            (1, 1),
+            (2, 1),
+            (0, 2),
+            (1, 2),
+            (2, 2),
+        ],
+    );
+}
+
+/// The `POC` volumes may overlap; a packet reached by more than one is emitted
+/// once, by the first volume — OpenJPEG's shared `include` array. Here volume 1
+/// re-covers everything volume 0 already emitted, so the second volume must add
+/// nothing, and the whole stream must still be exactly the tile's packet set.
+#[test]
+fn poc_emits_each_packet_once_across_overlapping_volumes() {
+    let mut header = Layout::plain((32, 32), 2).header();
+    header.cod.layers = 2;
+    let full = PocVolume {
+        res_start: 0,
+        res_end: 3,
+        comp_start: 0,
+        comp_end: 1,
+        layer_end: 2,
+        progression: Progression::Lrcp,
+    };
+    // Volume 0 covers everything; volume 1 covers everything again in a different
+    // order.
+    header.poc = vec![
+        full,
+        PocVolume {
+            progression: Progression::Rlcp,
+            ..full
+        },
+    ];
+    let with_overlap = order_of_header(&header);
+
+    // The reference: the same geometry with no POC, plain LRCP over two layers.
+    let mut plain = Layout::plain((32, 32), 2).header();
+    plain.cod.layers = 2;
+    let no_poc = order_of_header(&plain);
+
+    let seen: BTreeSet<_> = with_overlap.iter().copied().collect();
+    assert_eq!(
+        with_overlap.len(),
+        seen.len(),
+        "a packet was emitted twice across the overlapping volumes",
+    );
+    assert_eq!(
+        seen,
+        no_poc.into_iter().collect::<BTreeSet<_>>(),
+        "the overlapping volumes must cover exactly the tile's packet set",
     );
 }
 

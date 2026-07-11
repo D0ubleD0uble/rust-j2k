@@ -19,8 +19,8 @@ use std::borrow::Cow;
 
 use crate::{Error, Result};
 use markers::{
-    Cod, Coding, ComponentParams, Progression, Qcd, QuantStyle, Siz, SizComponent, TlmEntry,
-    Transform, marker,
+    Cod, Coding, ComponentParams, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent,
+    TlmEntry, Transform, marker,
 };
 
 /// Parsed main-header decode parameters. COD/QCD carry the codestream-wide
@@ -41,6 +41,13 @@ pub struct MainHeader {
     /// codestream carries none. Informational (A.7.1): decoding does not use
     /// them, so they are recorded for callers to check, not consulted.
     pub tlm: Vec<TlmEntry>,
+    /// The progression volumes of any `POC` marker, in order; empty when the
+    /// codestream carries none, in which case the packet order is [`cod`]'s
+    /// single progression over every axis (A.6.6). A tile-part `POC` replaces
+    /// this for its tile, the same way a tile COD replaces the coding style.
+    ///
+    /// [`cod`]: Self::cod
+    pub poc: Vec<PocVolume>,
 }
 
 impl MainHeader {
@@ -61,6 +68,7 @@ impl MainHeader {
             qcd,
             components,
             tlm: Vec::new(),
+            poc: Vec::new(),
         }
     }
 }
@@ -185,6 +193,9 @@ pub struct TileHeader {
     coc: Vec<(usize, Coding)>,
     qcc: Vec<(usize, Qcd)>,
     rgn: Vec<(usize, u8)>,
+    /// A tile-part `POC`'s progression volumes; empty when the tile carries none,
+    /// in which case the main header's `POC` (or its single COD order) governs.
+    poc: Vec<PocVolume>,
 }
 
 /// What has been seen of one tile so far while the tile-parts are walked.
@@ -276,6 +287,12 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
         let tile_header = read_tile_part_header(&mut cur, &main.siz, first_part)?;
         if first_part {
             tile.header = tile_header;
+        } else {
+            // A later tile-part carries no coding-style overrides — those are
+            // rejected inside `read_tile_part_header` — but its POC volumes are
+            // legal and append to the tile's, so the progression can be split
+            // across the tile's parts (A.6.6).
+            tile.header.poc.extend(tile_header.poc);
         }
         let data_start = cur.pos;
 
@@ -446,10 +463,17 @@ fn read_tile_part_header(cur: &mut Cursor<'_>, siz: &Siz, first_part: bool) -> R
             marker::PLT => {
                 decode_plt(segment(cur)?)?;
             }
-            // Valid here, but not yet decoded: both relocate or reorder what the
-            // packet data means, so skipping one would silently decode the wrong
-            // image.
-            marker::POC | marker::PPT => {
+            // A tile-part POC sets the progression for this tile, replacing the
+            // main header's. Unlike the coding-style overrides, it is legal in
+            // *any* tile-part, not just the first (A.6.6, OpenJPEG's
+            // `J2K_STATE_TPH`), and volumes accumulate across every one of the
+            // tile's parts — so it is not gated by `overrides_here`.
+            marker::POC => {
+                decode_poc(segment(cur)?, siz, &mut tile.poc)?;
+            }
+            // Valid here, but not yet decoded: PPT relocates the packet headers,
+            // so skipping it would silently decode the wrong image.
+            marker::PPT => {
                 return Err(Error::Unsupported(format!(
                     "tile-part header marker {} is outside the decoded subset",
                     marker::describe(m)
@@ -524,6 +548,13 @@ fn resolve_tile_header(main: &MainHeader, tile: &TileHeader) -> Result<MainHeade
     }
     for (index, shift) in &tile.rgn {
         header.components[*index].roi_shift = *shift;
+    }
+
+    // A tile-part POC replaces the main header's progression for this tile
+    // (A.6.6): the tile's volumes are its own, so its packet order is theirs and
+    // not the main header's, exactly as a tile COD displaces the main coding.
+    if !tile.poc.is_empty() {
+        header.poc = tile.poc.clone();
     }
 
     // The tile's resolved parameters must hold every invariant the main header's
@@ -693,6 +724,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let mut qcc: Vec<Option<Qcd>> = vec![None; siz.components.len()];
     let mut rgn: Vec<Option<u8>> = vec![None; siz.components.len()];
     let mut tlm: Vec<TlmEntry> = Vec::new();
+    let mut poc: Vec<PocVolume> = Vec::new();
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
@@ -754,6 +786,11 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             marker::TLM => decode_tlm(body(), &siz, &mut tlm)?,
             marker::PLM => decode_plm(body())?,
 
+            // Progression-order change (A.6.6): a sequence of progression volumes
+            // that replaces COD's single order for the whole codestream. Volumes
+            // accumulate across markers.
+            marker::POC => decode_poc(body(), &siz, &mut poc)?,
+
             // PLT is the tile-part-header form of PLM (A.7.3); in the main
             // header it is a malformed codestream, not a missing feature.
             marker::PLT => {
@@ -770,13 +807,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             // travels with features we do not decode. CAP announces
             // capabilities beyond Part 1 (an HTJ2K codestream carries one),
             // whose code-blocks this Tier-1 would misread as Part 1.
-            marker::CAP
-            | marker::POC
-            | marker::PPM
-            | marker::PPT
-            | marker::CRG
-            | marker::SOP
-            | marker::EPH => {
+            marker::CAP | marker::PPM | marker::PPT | marker::CRG | marker::SOP | marker::EPH => {
                 return Err(Error::Unsupported(format!(
                     "marker {} is outside the decoded subset",
                     marker::describe(seg.code)
@@ -810,6 +841,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     // header's level; `resolve_tile_header` continues the ladder for a tile.
     let mut header = MainHeader::new(siz, cod, qcd);
     header.tlm = tlm;
+    header.poc = poc;
     for (params, ((coding, quant), shift)) in header
         .components
         .iter_mut()
@@ -1159,6 +1191,62 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         // an empty list; explicit precincts were rejected above.
         precinct_sizes,
     })
+}
+
+/// Decode a POC marker (A.6.6, Table A-32): a sequence of progression volumes.
+///
+/// Each volume is `RSpoc`(1) `CSpoc`(1 or 2) `LYEpoc`(2) `REpoc`(1) `CEpoc`(1 or
+/// 2) `Ppoc`(1). The component fields are two bytes once the image has 257 or
+/// more components (like `Ccoc`/`Cqcc`), so the whole volume is `7` or `9` bytes,
+/// and the marker body must be a whole number of them. `CSpoc`/`CEpoc` are read
+/// against the component count; `LYEpoc` is clamped to the layer count later,
+/// where it is known for certain.
+///
+/// A `POC` in a *tile-part* header appends to any already parsed for that tile,
+/// as OpenJPEG's `opj_j2k_read_poc` does; a decoder that replaced them would drop
+/// a split-across-markers progression.
+fn decode_poc(mut b: Cursor<'_>, siz: &Siz, into: &mut Vec<PocVolume>) -> Result<()> {
+    let comp_room = if siz.components.len() < 257 { 1 } else { 2 };
+    let volume_size = 5 + 2 * comp_room;
+    let body_len = b.remaining();
+    if body_len == 0 || !body_len.is_multiple_of(volume_size) {
+        return Err(Error::Marker(format!(
+            "POC body is {body_len} bytes, not a whole number of {volume_size}-byte volumes"
+        )));
+    }
+    let read_comp = |b: &mut Cursor<'_>| -> Result<u16> {
+        if comp_room == 1 {
+            Ok(u16::from(b.u8()?))
+        } else {
+            b.u16()
+        }
+    };
+    for _ in 0..body_len / volume_size {
+        let res_start = b.u8()?;
+        let comp_start = read_comp(&mut b)?;
+        let layer_end = b.u16()?;
+        let res_end = b.u8()?;
+        let comp_end = read_comp(&mut b)?;
+        let progression = Progression::from_u8(b.u8()?)
+            .ok_or_else(|| Error::Marker("POC volume sets a reserved progression order".into()))?;
+        // A volume that encloses nothing would consume no packets and desync
+        // nothing, but it is a malformed field, not a no-op the encoder meant.
+        if res_end <= res_start || comp_end <= comp_start {
+            return Err(Error::Marker(format!(
+                "POC volume has an empty range: resolutions [{res_start}, {res_end}), \
+                 components [{comp_start}, {comp_end})"
+            )));
+        }
+        into.push(PocVolume {
+            res_start,
+            res_end,
+            comp_start,
+            comp_end,
+            layer_end,
+            progression,
+        });
+    }
+    Ok(())
 }
 
 /// Decode the `SPcod`/`SPcoc` tail shared by COD and COC (Tables A-12, A-14):

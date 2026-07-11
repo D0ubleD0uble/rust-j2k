@@ -172,6 +172,47 @@ pub enum Progression {
     Cprl,
 }
 
+impl Progression {
+    /// The progression order for a `SGcod`/`Ppoc` code (Table A-16), or `None`
+    /// for a reserved value.
+    pub fn from_u8(code: u8) -> Option<Progression> {
+        Some(match code {
+            0 => Progression::Lrcp,
+            1 => Progression::Rlcp,
+            2 => Progression::Rpcl,
+            3 => Progression::Pcrl,
+            4 => Progression::Cprl,
+            _ => return None,
+        })
+    }
+}
+
+/// One progression volume of a `POC` marker (ISO/IEC 15444-1 A.6.6): a
+/// progression order applied to a sub-range of the layer, resolution, and
+/// component axes. A `POC` marker carries a sequence of these, and the packet
+/// stream is their concatenation with each packet emitted once, by the first
+/// volume that reaches it.
+///
+/// The bounds are stored raw as the marker carries them; the layer end is
+/// clamped to the layer count and the component end to the component count where
+/// they are used, since neither is known for certain at the marker's position in
+/// the header (Table A-33). The layer range always starts at 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PocVolume {
+    /// `RSpoc`: first resolution (inclusive).
+    pub res_start: u8,
+    /// `REpoc`: last resolution (exclusive).
+    pub res_end: u8,
+    /// `CSpoc`: first component (inclusive).
+    pub comp_start: u16,
+    /// `CEpoc`: last component (exclusive), clamped to the component count.
+    pub comp_end: u16,
+    /// `LYEpoc`: last layer (exclusive), clamped to the layer count.
+    pub layer_end: u16,
+    /// `Ppoc`: the progression order over this volume.
+    pub progression: Progression,
+}
+
 /// Quantization style (QCD/QCC, low 5 bits of Sqcd). ISO Table A-28.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantStyle {

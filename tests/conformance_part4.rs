@@ -40,7 +40,7 @@ use serde::Deserialize;
 /// shrink is a regression.
 const IN_CLASS: &[&str] = &[
     "p0_01", "p0_02", "p0_05", "p0_06", "p0_08", "p0_09", "p0_10", "p0_11", "p0_12", "p0_14",
-    "p0_16", "p1_01", "p1_04", "p1_07",
+    "p0_07", "p0_13", "p0_16", "p1_01", "p1_04", "p1_07",
 ];
 
 fn corpus_dir() -> PathBuf {
