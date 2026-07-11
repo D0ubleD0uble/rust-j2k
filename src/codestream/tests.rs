@@ -598,20 +598,33 @@ fn reversible_colour_transform_parses() {
     assert_eq!(header.cod.transform, Transform::Reversible53);
 }
 
-/// The wavelet chooses the transform, so MCT on the 9/7 path is ICT, which is
-/// not decoded yet (issue #76). It is rejected before the geometry is judged.
+/// The wavelet chooses the transform, so MCT on the 9/7 path is ICT (issue #76).
+/// A well-formed three-component 9/7 codestream with the transform signalled
+/// parses; the geometry check accepts three matching components on either arm.
 #[test]
-fn irreversible_colour_transform_is_unsupported() {
-    let bytes = codestream(&[
+fn irreversible_colour_transform_parses() {
+    let header = parsed(&[
         seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
         seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)), // mct = 1, 9/7
         seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
     ]);
-    let e = err(&bytes);
-    assert!(
-        matches!(&e, Error::Unsupported(m) if m.contains("ICT")),
-        "got {e:?}"
-    );
+    assert!(header.cod.multiple_component_transform);
+    assert_eq!(header.cod.transform, Transform::Irreversible97);
+}
+
+/// The three colour components must share a wavelet: a COC that moves one of the
+/// first three to the other arm makes the transform undefined (integers on one,
+/// floats on another), and is rejected.
+#[test]
+fn a_colour_transform_over_mixed_wavelets_is_unsupported() {
+    // All-9/7 COD with MCT; a COC drops component 1 to 5/3.
+    let bytes = codestream(&[
+        seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)), // mct = 1, 9/7
+        seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 1)),    // component 1 → 5/3
+        seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Unsupported(_)));
 }
 
 /// `Smct = 2` selects Part 2's array MCT, a different feature.
@@ -1776,15 +1789,17 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with_cod(cod_body(0, 0, 0, 0, 5, 4, 4, 0, 1))),
             Variant::Marker,
         ),
-        // The reversible colour transform is decoded, so it left this table.
-        // What remains out of subset: its irreversible twin, Part 2's array
-        // MCT, and a codestream that signals the transform without the three
-        // components it is defined over.
+        // Both colour transforms are decoded now (RCT and ICT), so they left
+        // this table. What remains out of subset: Part 2's array MCT, a
+        // codestream that signals the transform without the three components it
+        // is defined over, and one that mixes wavelets across those components.
         (
-            "irreversible colour transform (ICT)",
+            "colour transform over mixed wavelets",
             err(&codestream(&[
                 seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
                 seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)),
+                seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 1)),
+                seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
             ])),
             Variant::Unsupported,
         ),

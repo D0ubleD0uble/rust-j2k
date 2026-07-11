@@ -175,7 +175,14 @@ pub fn decode_with(codestream: &[u8], options: DecodeOptions) -> Result<Image> {
         // lives in COD, which a tile-part header can override. Components past
         // the third are untouched.
         if header.cod.multiple_component_transform {
-            mct::inverse_rct(&mut samples)?;
+            // The wavelet picks the transform (G.1): 5/3 reconstructs integers
+            // and inverts with the reversible RCT, 9/7 reconstructs floats and
+            // inverts with the irreversible ICT. All three colour components
+            // share the wavelet (checked at parse), so component 0's decides.
+            match header.components[0].coding.transform {
+                codestream::markers::Transform::Reversible53 => mct::inverse_rct(&mut samples)?,
+                codestream::markers::Transform::Irreversible97 => mct::inverse_ict(&mut samples)?,
+            }
         }
 
         for (component, samples) in samples.into_iter().enumerate() {

@@ -296,10 +296,12 @@ P2.1 (multiple components).
 **Oracle:** three-component color Part 4 codestreams against their reference
 decodes; RCT bit-exact (reversible), ICT within the compliance-class bounds.
 
-**Done:** RCT has landed (`src/mct.rs`); `p0_14` decodes bit-exact, taking the
-gate to 2/23. ICT remains: the inverse DWT now hands back the 9/7 path's floats
-(`dwt::Samples`), so the precision ICT needs is there; what is left is the G.3
-matrix itself and a synthetic lossy fixture to grade it against.
+**Done:** RCT and ICT have both landed (`src/mct.rs`). `p0_14` grades RCT
+bit-exact; `p0_04` grades ICT within the class-1 bounds. The wavelet picks the
+transform, read off component 0 (a mix across the three colour components is
+rejected). ICT's inverse matrix and left-to-right evaluation order match
+OpenJPEG's `opj_mct_decode_real` (`0.34413f`/`0.71414f`), so its float rounding
+follows the oracle's and lands inside the tolerance.
 
 ### P2.9 — Region of interest, maxshift (`src/quant.rs`, `src/codestream/`)
 
