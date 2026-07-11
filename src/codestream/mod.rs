@@ -451,7 +451,8 @@ fn read_tile_part_header(cur: &mut Cursor<'_>, siz: &Siz, first_part: bool) -> R
             // image.
             marker::POC | marker::PPT => {
                 return Err(Error::Unsupported(format!(
-                    "tile-part header marker {m:#06X} is outside the decoded subset"
+                    "tile-part header marker {} is outside the decoded subset",
+                    marker::describe(m)
                 )));
             }
             // These are legal markers, but not here: TLM and PLM are
@@ -777,8 +778,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
             | marker::SOP
             | marker::EPH => {
                 return Err(Error::Unsupported(format!(
-                    "marker {:#06X} is outside the decoded subset",
-                    seg.code
+                    "marker {} is outside the decoded subset",
+                    marker::describe(seg.code)
                 )));
             }
 

@@ -33,6 +33,46 @@ pub mod marker {
     /// exactly that bug.
     pub const RESERVED_NO_SEGMENT: std::ops::RangeInclusive<u16> = 0xFF30..=0xFF3F;
 
+    /// The marker's name, for an error message. `"POC"` reads a great deal
+    /// better than `0xFF5F` in a rejection a caller has to act on, and a
+    /// conformance report that lists which feature blocks each entry is only
+    /// useful if it names the feature.
+    pub fn name(m: u16) -> Option<&'static str> {
+        Some(match m {
+            SOC => "SOC",
+            SOT => "SOT",
+            SOD => "SOD",
+            EOC => "EOC",
+            CAP => "CAP",
+            SIZ => "SIZ",
+            COD => "COD",
+            COC => "COC",
+            RGN => "RGN",
+            QCD => "QCD",
+            QCC => "QCC",
+            POC => "POC",
+            TLM => "TLM",
+            PLM => "PLM",
+            PLT => "PLT",
+            PPM => "PPM",
+            PPT => "PPT",
+            CRG => "CRG",
+            SOP => "SOP",
+            EPH => "EPH",
+            COM => "COM",
+            _ => return None,
+        })
+    }
+
+    /// The marker's name and code, for an error message: `"POC (0xFF5F)"`, or
+    /// just the code when the marker is not one this decoder knows.
+    pub fn describe(m: u16) -> String {
+        match name(m) {
+            Some(name) => format!("{name} ({m:#06X})"),
+            None => format!("{m:#06X}"),
+        }
+    }
+
     /// Whether `m` is a marker code at all: the high byte is `0xFF` and the
     /// low byte is neither `0x00` nor `0xFF` — those two values are assigned
     /// to no marker. Meeting one in marker position is lost sync (a stuffed
