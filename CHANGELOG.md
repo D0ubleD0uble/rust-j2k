@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `decode_with` and `DecodeOptions`: decode at a resolution reduction. Each
+  dropped level halves the output in both axes (rounding up) using the wavelet
+  pyramid's own lower resolutions — the natural way to get a thumbnail or a
+  quick preview without paying for the full image. `decode` is unchanged and
+  equals `decode_with` at the default options. A reduction that would consume
+  some component's whole pyramid is rejected as `Error::Unsupported`.
+
 ### Fixed
 
 - Four resource and desync guards from a whole-repo review. A QCD/QCC step

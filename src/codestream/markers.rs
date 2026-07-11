@@ -183,11 +183,23 @@ pub struct TlmEntry {
 }
 
 impl Siz {
-    /// The image area on the reference grid: `Xsiz - XOsiz` by `Ysiz - YOsiz`.
-    pub fn image_extent(&self) -> (u32, u32) {
+    /// The image area on the reference grid at a resolution reduction:
+    /// `Xsiz - XOsiz` by `Ysiz - YOsiz` at reduction 0, each bound scaled by
+    /// `ceil(x / 2^r)` *before* the difference for every dropped level (ISO
+    /// B.5's resolution coordinates).
+    ///
+    /// A reduction only ever reaches 32 — one per possible decomposition
+    /// level (Table A-15) — and the clamp is exact even past it: for `u32`
+    /// bounds, `ceil(x / 2^r)` is identical for every `r >= 32`.
+    pub fn image_extent_at(&self, reduction: u8) -> (u32, u32) {
+        let scale = 1u64 << reduction.min(32);
+        let reduce = |size: u32, offset: u32| {
+            (u64::from(size).div_ceil(scale)).saturating_sub(u64::from(offset).div_ceil(scale))
+                as u32
+        };
         (
-            self.x_size.saturating_sub(self.x_offset),
-            self.y_size.saturating_sub(self.y_offset),
+            reduce(self.x_size, self.x_offset),
+            reduce(self.y_size, self.y_offset),
         )
     }
 
@@ -198,8 +210,8 @@ impl Siz {
     /// height = ceil(Ysiz / YRsiz) - ceil(YOsiz / YRsiz)
     /// ```
     ///
-    /// which reduces to [`image_extent`](Self::image_extent) under unit
-    /// sub-sampling.
+    /// which reduces to [`image_extent_at`](Self::image_extent_at)`(0)` under
+    /// unit sub-sampling.
     ///
     /// Returns `None` if `index` names no component, or if that component
     /// declares a zero sub-sampling factor. `decode_siz` rejects a zero factor,
@@ -207,18 +219,28 @@ impl Siz {
     /// but the division is guarded here rather than by a `debug_assert` that
     /// would compile out and leave a release-mode panic behind.
     pub fn component_extent(&self, index: usize) -> Option<(u32, u32)> {
+        self.component_extent_at(index, 0)
+    }
+
+    /// [`component_extent`](Self::component_extent) at a resolution reduction:
+    /// each dropped level halves both component axes, rounding up — the same
+    /// bound-then-difference rule as [`image_extent_at`](Self::image_extent_at),
+    /// applied on the component's own grid.
+    pub fn component_extent_at(&self, index: usize, reduction: u8) -> Option<(u32, u32)> {
         let comp = self.components.get(index)?;
-        let (xr, yr) = (comp.x_sampling as u32, comp.y_sampling as u32);
+        let (xr, yr) = (comp.x_sampling as u64, comp.y_sampling as u64);
         if xr == 0 || yr == 0 {
             return None;
         }
+        let scale = 1u64 << reduction.min(32);
+        let reduce = |size: u32, offset: u32, sampling: u64| {
+            let hi = (u64::from(size)).div_ceil(sampling).div_ceil(scale);
+            let lo = (u64::from(offset)).div_ceil(sampling).div_ceil(scale);
+            hi.saturating_sub(lo) as u32
+        };
         Some((
-            self.x_size
-                .div_ceil(xr)
-                .saturating_sub(self.x_offset.div_ceil(xr)),
-            self.y_size
-                .div_ceil(yr)
-                .saturating_sub(self.y_offset.div_ceil(yr)),
+            reduce(self.x_size, self.x_offset, xr),
+            reduce(self.y_size, self.y_offset, yr),
         ))
     }
 }

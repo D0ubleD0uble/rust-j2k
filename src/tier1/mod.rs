@@ -83,10 +83,16 @@ pub enum SubbandCoeffs {
 /// Returns one [`SubbandCoeffs`] per component, in SIZ order. Components are
 /// independent here: no inter-component transform is applied.
 ///
+/// `reduction` is the resolution reduction: that many of each component's
+/// finest resolutions are dropped from the pyramid, their code-blocks skipped
+/// rather than decoded. The caller has already checked it leaves every
+/// component at least its coarsest resolution.
+///
 /// [`dequant`]: crate::quant::dequantize
 pub fn decode_code_blocks(
     header: &MainHeader,
     coded: &CodedData<'_>,
+    reduction: u8,
 ) -> Result<Vec<SubbandCoeffs>> {
     coded
         .components
@@ -110,6 +116,7 @@ pub fn decode_code_blocks(
                     header,
                     index,
                     component,
+                    reduction,
                     |q| q / 2,
                 )?)),
                 // On the irreversible arm the half bit must survive into the
@@ -121,6 +128,7 @@ pub fn decode_code_blocks(
                     header,
                     index,
                     component,
+                    reduction,
                     |q| q as f32,
                 )?)),
             }
@@ -140,6 +148,7 @@ fn assemble<T, F>(
     header: &MainHeader,
     comp: usize,
     coded: &ComponentCoded<'_>,
+    reduction: u8,
     convert: F,
 ) -> Result<Bands<T>>
 where
@@ -150,6 +159,15 @@ where
         style: header.components[comp].coding.code_block_style,
         roi_shift: header.components[comp].roi_shift,
     };
+    // A resolution reduction drops that many of the finest levels: their
+    // packets were parsed (the codestream's framing demands it) but their
+    // code-blocks never reach the bit-plane decoder. The caller has checked
+    // `reduction` against this component's decomposition count, so `keep`
+    // cannot underflow past the coarsest resolution.
+    let keep = coded
+        .resolutions
+        .len()
+        .saturating_sub(1 + usize::from(reduction));
     let mut resolutions = coded.resolutions.iter();
     let coarsest = resolutions
         .next()
@@ -162,8 +180,8 @@ where
         convert,
     )?;
 
-    let mut levels = Vec::with_capacity(coded.resolutions.len().saturating_sub(1));
-    for (level, resolution) in resolutions.enumerate() {
+    let mut levels = Vec::with_capacity(keep);
+    for (level, resolution) in resolutions.take(keep).enumerate() {
         let base = 1 + level * 3;
         levels.push(DetailBands {
             hl: decode_subband(

@@ -39,18 +39,8 @@ use serde::Deserialize;
 /// Phase 2 milestones land; never shrink it without an explanation, because a
 /// shrink is a regression.
 const IN_CLASS: &[&str] = &[
-    "p0_01", "p0_02", "p0_05", "p0_06", "p0_09", "p0_12", "p0_14", "p0_16",
+    "p0_01", "p0_02", "p0_05", "p0_06", "p0_08", "p0_09", "p0_12", "p0_14", "p0_16",
 ];
-
-/// Entries whose `.pgx` reference is the image at a *reduced* resolution rather
-/// than at full size, so the samples cannot be compared until the decoder can
-/// stop the inverse DWT early (issue #85).
-///
-/// `p0_08`'s reference is 257x1536 against a 513x3072 image: reduction 1, half
-/// in each axis. The codestream itself decodes; there is simply nothing here to
-/// grade it against. This is checked *after* the decode runs, so a panic or a
-/// typed error still reports as a failure.
-const REDUCED_REFERENCE: &[&str] = &["p0_08"];
 
 fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance")
@@ -78,6 +68,11 @@ struct Entry {
     graded_components: usize,
     /// Whether the decode must equal the reference exactly.
     bit_exact: bool,
+    /// The resolution reduction the class-1 references were decoded at
+    /// (OpenJPEG's `C1P0_ResFactor_list`; only `p0_08` reduces). Grading
+    /// decodes at the same reduction, or the geometries cannot meet. Required,
+    /// not defaulted: a corpus refresh must record it for every entry.
+    reduction: u8,
     references: References,
     bounds_class1: Bounds,
 }
@@ -424,24 +419,23 @@ fn grade_entry(dir: &Path, entry: &Entry) -> Grade {
         Err(e) => return Grade::Failed(format!("cannot read {}: {e}", entry.codestream)),
     };
 
-    // `decode` promises a typed error for every input, so a panic here is a
-    // contract violation, not a not-yet-implemented feature. Catch it so one bad
-    // entry reports as a failure instead of aborting the whole harness.
-    let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| rust_j2k::decode(&bytes)));
+    // `decode_with` promises a typed error for every input, so a panic here is
+    // a contract violation, not a not-yet-implemented feature. Catch it so one
+    // bad entry reports as a failure instead of aborting the whole harness.
+    // The entry's recorded reduction is the one its references were decoded
+    // at, so grading decodes there too (`-r` in OpenJPEG's conformance runs).
+    let options = rust_j2k::DecodeOptions {
+        resolution_reduction: entry.reduction,
+    };
+    let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        rust_j2k::decode_with(&bytes, options)
+    }));
     let image = match decoded {
         Err(_) => return Grade::Failed("panicked (decode must return a typed error)".into()),
         Ok(Err(Error::Unsupported(what))) => return Grade::NotYetDecoded(what),
         Ok(Err(e)) => return Grade::Failed(format!("decoder rejected a valid codestream: {e}")),
         Ok(Ok(image)) => image,
     };
-
-    if REDUCED_REFERENCE.contains(&entry.name()) {
-        return Grade::NotYetDecoded(
-            "reference image is at resolution reduction 1; decoding at a reduced resolution \
-             is not implemented"
-                .into(),
-        );
-    }
 
     if image.components.len() < graded {
         return Grade::Failed(format!(
@@ -831,6 +825,7 @@ mod tests {
             codestream: "codestreams/nonexistent.j2k".into(),
             graded_components: 0,
             bit_exact: true,
+            reduction: 0,
             references: References {
                 class1: vec![],
                 class0: vec![],
@@ -855,6 +850,7 @@ mod tests {
             codestream: "codestreams/p0_09.j2k".into(),
             graded_components: 1,
             bit_exact: true,
+            reduction: 0,
             references: References {
                 class1: vec!["references/c1p0_09_0.pgx".into()],
                 class0: vec!["references/c0p0_09.pgx".into()],
@@ -874,4 +870,52 @@ mod tests {
         };
         assert_eq!(lossy.bound(0), Bound { pae: 5.0, mse: 5.0 });
     }
+}
+
+/// The default options are full resolution: `decode` and `decode_with` at
+/// reduction 0 are the same decode.
+#[test]
+fn decode_with_no_reduction_equals_decode() {
+    let bytes = std::fs::read(corpus_dir().join("codestreams/p0_01.j2k")).expect("read p0_01");
+    let full = rust_j2k::decode(&bytes).expect("p0_01 decodes");
+    let with = rust_j2k::decode_with(&bytes, rust_j2k::DecodeOptions::default())
+        .expect("p0_01 decodes with default options");
+    assert_eq!(full, with);
+}
+
+/// A reduction must leave every component at least its coarsest resolution;
+/// one that consumes a whole pyramid is rejected, as OpenJPEG rejects it, and
+/// one under the limit halves each axis per level, rounding up.
+#[test]
+fn reduction_is_bounded_by_the_resolution_count() {
+    let bytes = std::fs::read(corpus_dir().join("codestreams/p0_01.j2k")).expect("read p0_01");
+    let full = rust_j2k::decode(&bytes).expect("p0_01 decodes");
+
+    let reduced = rust_j2k::decode_with(
+        &bytes,
+        rust_j2k::DecodeOptions {
+            resolution_reduction: 1,
+        },
+    )
+    .expect("one level fewer still decodes");
+    assert_eq!(reduced.width, full.width.div_ceil(2));
+    assert_eq!(reduced.height, full.height.div_ceil(2));
+    assert_eq!(
+        reduced.components[0].width,
+        full.components[0].width.div_ceil(2)
+    );
+    assert_eq!(
+        reduced.components[0].height,
+        full.components[0].height.div_ceil(2)
+    );
+
+    // p0_01 has 3 decomposition levels: 4 resolutions, so 4 is one too many.
+    let err = rust_j2k::decode_with(
+        &bytes,
+        rust_j2k::DecodeOptions {
+            resolution_reduction: 4,
+        },
+    )
+    .expect_err("a reduction past the coarsest resolution is rejected");
+    assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
 }

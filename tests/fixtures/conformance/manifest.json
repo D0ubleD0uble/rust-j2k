@@ -36,6 +36,7 @@
       "index": 1,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 128,
         "height": 128,
@@ -112,6 +113,7 @@
       "index": 2,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 127,
         "height": 126,
@@ -192,6 +194,7 @@
       "index": 3,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 256,
         "height": 256,
@@ -277,6 +280,7 @@
       "index": 4,
       "graded_components": 3,
       "bit_exact": false,
+      "reduction": 0,
       "features": {
         "width": 640,
         "height": 480,
@@ -374,6 +378,7 @@
       "index": 5,
       "graded_components": 4,
       "bit_exact": false,
+      "reduction": 0,
       "features": {
         "width": 1024,
         "height": 1024,
@@ -482,6 +487,7 @@
       "index": 6,
       "graded_components": 4,
       "bit_exact": false,
+      "reduction": 0,
       "features": {
         "width": 513,
         "height": 129,
@@ -591,6 +597,7 @@
       "index": 7,
       "graded_components": 3,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 2048,
         "height": 2048,
@@ -690,6 +697,7 @@
       "index": 8,
       "graded_components": 3,
       "bit_exact": true,
+      "reduction": 1,
       "features": {
         "width": 513,
         "height": 3072,
@@ -788,6 +796,7 @@
       "index": 9,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 17,
         "height": 37,
@@ -866,6 +875,7 @@
       "index": 10,
       "graded_components": 3,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 256,
         "height": 256,
@@ -960,6 +970,7 @@
       "index": 11,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 128,
         "height": 1,
@@ -1038,6 +1049,7 @@
       "index": 12,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 3,
         "height": 5,
@@ -1116,6 +1128,7 @@
       "index": 13,
       "graded_components": 4,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 1,
         "height": 1,
@@ -2743,6 +2756,7 @@
       "index": 14,
       "graded_components": 3,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 49,
         "height": 49,
@@ -2839,6 +2853,7 @@
       "index": 15,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 256,
         "height": 256,
@@ -2924,6 +2939,7 @@
       "index": 16,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 128,
         "height": 128,
@@ -3000,6 +3016,7 @@
       "index": 1,
       "graded_components": 1,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 127,
         "height": 227,
@@ -3079,6 +3096,7 @@
       "index": 2,
       "graded_components": 3,
       "bit_exact": false,
+      "reduction": 0,
       "features": {
         "width": 640,
         "height": 480,
@@ -3178,6 +3196,7 @@
       "index": 3,
       "graded_components": 4,
       "bit_exact": false,
+      "reduction": 0,
       "features": {
         "width": 1024,
         "height": 1024,
@@ -3287,6 +3306,7 @@
       "index": 4,
       "graded_components": 1,
       "bit_exact": false,
+      "reduction": 0,
       "features": {
         "width": 1024,
         "height": 1024,
@@ -3370,6 +3390,7 @@
       "index": 5,
       "graded_components": 3,
       "bit_exact": false,
+      "reduction": 0,
       "features": {
         "width": 529,
         "height": 524,
@@ -3467,6 +3488,7 @@
       "index": 6,
       "graded_components": 3,
       "bit_exact": false,
+      "reduction": 0,
       "features": {
         "width": 12,
         "height": 12,
@@ -3565,6 +3587,7 @@
       "index": 7,
       "graded_components": 2,
       "bit_exact": true,
+      "reduction": 0,
       "features": {
         "width": 12,
         "height": 12,

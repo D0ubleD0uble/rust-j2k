@@ -982,7 +982,7 @@ fn multi_component_siz_parses_every_component() {
         ]
     );
     // Unit sub-sampling: every component covers the whole image area.
-    assert_eq!(siz.image_extent(), (512, 256));
+    assert_eq!(siz.image_extent_at(0), (512, 256));
     for i in 0..3 {
         assert_eq!(siz.component_extent(i), Some((512, 256)));
     }
@@ -993,7 +993,7 @@ fn multi_component_siz_parses_every_component() {
 fn subsampled_siz_derives_each_component_extent() {
     // Image is 512x256 at the origin; the four classic sub-sampling factors.
     let siz = siz_of(4, &[(7, 1, 1), (7, 2, 1), (7, 1, 2), (7, 2, 2)]);
-    assert_eq!(siz.image_extent(), (512, 256));
+    assert_eq!(siz.image_extent_at(0), (512, 256));
     assert_eq!(siz.component_extent(0), Some((512, 256)));
     assert_eq!(siz.component_extent(1), Some((256, 256)));
     assert_eq!(siz.component_extent(2), Some((512, 128)));
@@ -1018,7 +1018,7 @@ fn component_extent_ceils_each_edge_separately() {
     siz.x_offset = 1;
     siz.y_offset = 1;
     assert_eq!(siz.component_extent(0), Some((3, 3)));
-    assert_eq!(siz.image_extent(), (7, 7));
+    assert_eq!(siz.image_extent_at(0), (7, 7));
 }
 
 #[test]
@@ -1320,15 +1320,15 @@ fn siz_matches_opj_dump_across_the_conformance_corpus() {
             );
         }
 
-        // The class-1 references are one `.pgx` per graded component, decoded at
-        // full resolution — so their dimensions are the oracle for
-        // `component_extent`. The sole exception is p0_08, which OpenJPEG's
-        // conformance suite decodes at resolution reduction 1
-        // (`C1P0_ResFactor_list` in its tests/conformance/CMakeLists.txt), so
-        // its references are half-size in each axis. Tracked separately; here
-        // we assert the reduction rather than skip it, so a corpus refresh that
-        // changes it fails loudly.
-        let reduced = name.contains("p0_08");
+        // The class-1 references are one `.pgx` per graded component, decoded
+        // at the entry's recorded `reduction` (OpenJPEG's `C1P0_ResFactor_list`;
+        // 0 everywhere but p0_08) — so their dimensions are the oracle for
+        // `component_extent_at` at that reduction, for all 23 entries. A corpus
+        // refresh that changes a factor without re-recording it fails here.
+        let reduction = entry["reduction"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{name}: manifest entry records no reduction"))
+            as u8;
         for (i, reference) in entry["references"]["class1"]
             .as_array()
             .expect("class1 refs")
@@ -1336,16 +1336,14 @@ fn siz_matches_opj_dump_across_the_conformance_corpus() {
             .enumerate()
         {
             let (rw, rh) = pgx_extent(&dir.join(reference.as_str().unwrap()));
-            let (cw, ch) = siz.component_extent(i).expect("graded component exists");
-            let (want_w, want_h) = if reduced {
-                (cw.div_ceil(2), ch.div_ceil(2))
-            } else {
-                (cw, ch)
-            };
+            let (cw, ch) = siz
+                .component_extent_at(i, reduction)
+                .expect("graded component exists");
             assert_eq!(
-                (want_w, want_h),
+                (cw, ch),
                 (rw, rh),
-                "{name}: component {i} extent disagrees with its reference",
+                "{name}: component {i} extent at reduction {reduction} disagrees with its \
+                 reference",
             );
         }
     }

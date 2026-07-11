@@ -88,13 +88,15 @@ pub fn inverse(header: &MainHeader, comp: usize, coeffs: SubbandCoeffs) -> Resul
         SubbandCoeffs::Reversible(bands) => {
             let coding = &header.components[comp].coding;
             debug_assert_eq!(coding.transform, Transform::Reversible53);
-            debug_assert_eq!(bands.levels.len(), coding.decomposition_levels as usize);
+            // `<=`: under a resolution reduction the pyramid arrives with its
+            // finest levels already dropped; the synthesis just stops early.
+            debug_assert!(bands.levels.len() <= coding.decomposition_levels as usize);
             Ok(Samples::Reversible(reconstruct(bands, inverse_5_3).data))
         }
         SubbandCoeffs::Irreversible(bands) => {
             let coding = &header.components[comp].coding;
             debug_assert_eq!(coding.transform, Transform::Irreversible97);
-            debug_assert_eq!(bands.levels.len(), coding.decomposition_levels as usize);
+            debug_assert!(bands.levels.len() <= coding.decomposition_levels as usize);
             Ok(Samples::Irreversible(reconstruct(bands, inverse_9_7).data))
         }
     }
