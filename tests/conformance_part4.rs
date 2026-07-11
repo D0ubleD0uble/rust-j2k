@@ -38,7 +38,9 @@ use serde::Deserialize;
 /// Every other entry must report as *not yet decoded*. Grow this list as the
 /// Phase 2 milestones land; never shrink it without an explanation, because a
 /// shrink is a regression.
-const IN_CLASS: &[&str] = &["p0_01", "p0_02", "p0_09", "p0_12", "p0_14", "p0_16"];
+const IN_CLASS: &[&str] = &[
+    "p0_01", "p0_02", "p0_06", "p0_09", "p0_12", "p0_14", "p0_16",
+];
 
 /// Entries whose `.pgx` reference is the image at a *reduced* resolution rather
 /// than at full size, so the samples cannot be compared until the decoder can

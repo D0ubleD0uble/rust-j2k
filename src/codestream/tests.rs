@@ -2073,26 +2073,71 @@ fn a_wrong_length_rgn_is_rejected() {
     }
 }
 
-/// The main header decodes RGN, the tile-part header does not. A tile-part RGN
-/// *replaces* the main header's for that tile, so honouring only the main-header
-/// one would decode a different image rather than a slightly worse one. `p0_06`
-/// is exactly that codestream: maxshift 11 in the main header, 9 in the
-/// tile-part header.
-#[test]
-fn a_tile_part_rgn_is_unsupported_rather_than_ignored() {
-    let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 9));
-    let data = [1u8, 2];
-    let psot = (12 + rgn.len() + 2 + data.len()) as u32;
-
-    let mut bytes = be16(marker::SOC).to_vec();
-    for part in default_header() {
-        bytes.extend_from_slice(&part);
+/// SOC + `header` + a tile-part whose header carries `markers` before SOD.
+///
+/// The markers ride in the `sot` slot of [`assemble`], which splices its
+/// argument verbatim between the main header and SOD — one byte layout for
+/// every tile-part test. `Psot` counts them as part of the tile-part header.
+fn assemble_with_tile_markers(header: &[Vec<u8>], markers: &[Vec<u8>], data: &[u8]) -> Vec<u8> {
+    let markers_len: usize = markers.iter().map(Vec::len).sum();
+    let mut sot = sot_seg(0, psot_for(data) + markers_len as u32, 0, 1);
+    for m in markers {
+        sot.extend_from_slice(m);
     }
-    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
-    bytes.extend_from_slice(&rgn);
-    bytes.extend_from_slice(&be16(marker::SOD));
-    bytes.extend_from_slice(&data);
-    bytes.extend_from_slice(&be16(marker::EOC));
+    assemble(header, &sot, data, true)
+}
 
+/// A tile-part RGN *replaces* the main header's for that tile (A.6.3), so
+/// honouring only the main-header one would decode a different image rather
+/// than a slightly worse one. `p0_06` is exactly this codestream: maxshift 11
+/// in the main header, 9 in the tile-part header — 9 is what the tile was
+/// coded with.
+#[test]
+fn a_tile_part_rgn_overrides_the_main_header_shift() {
+    let mut header = default_header();
+    header.push(seg(marker::RGN, &rgn_body(&[0], 0, 11)));
+    let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 9));
+    let bytes = assemble_with_tile_markers(&header, &[rgn], &[1, 2]);
+
+    let cs = parse(&bytes).expect("parse");
+    assert_eq!(cs.header.components[0].roi_shift, 9);
+}
+
+/// A tile-part RGN with no main-header counterpart sets the shift from zero,
+/// and it applies only to the component it names.
+#[test]
+fn a_tile_part_rgn_names_one_component() {
+    let header = [
+        seg(marker::SIZ, &siz_body(3, &[(15, 1, 1); 3])),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::RGN, &rgn_body(&[2], 0, 11)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let rgn = seg(marker::RGN, &rgn_body(&[1], 0, 9));
+    let bytes = assemble_with_tile_markers(&header, &[rgn], &[1, 2]);
+
+    let cs = parse(&bytes).expect("parse");
+    assert_eq!(cs.header.components[0].roi_shift, 0);
+    assert_eq!(cs.header.components[1].roi_shift, 9);
+    assert_eq!(cs.header.components[2].roi_shift, 11);
+}
+
+/// A.6.3 allows one RGN per component per header. Two in the same tile-part
+/// header for one component is a malformed codestream, exactly as it is in the
+/// main header; guessing which wins would decode an image the encoder never
+/// described.
+#[test]
+fn a_second_tile_part_rgn_for_one_component_is_a_codestream_error() {
+    let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 9));
+    let bytes = assemble_with_tile_markers(&default_header(), &[rgn.clone(), rgn], &[1, 2]);
+    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+/// The tile-part form goes through the same `decode_rgn` as the main header's,
+/// so a non-maxshift style rejects as unsupported there too.
+#[test]
+fn a_tile_part_rgn_with_a_part_2_style_is_unsupported() {
+    let rgn = seg(marker::RGN, &rgn_body(&[0], 1, 9));
+    let bytes = assemble_with_tile_markers(&default_header(), &[rgn], &[1, 2]);
     assert!(matches!(perr(&bytes), Error::Unsupported(_)));
 }
