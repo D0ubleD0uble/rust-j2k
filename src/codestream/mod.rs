@@ -335,13 +335,13 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
                     "the codestream carries no tile-part for tile {index}"
                 )));
             }
-            if let Some(declared) = tile.declared_parts
-                && usize::from(declared) != tile.parts.len()
-            {
-                return Err(Error::Codestream(format!(
-                    "tile {index} declares {declared} tile-parts but carries {}",
-                    tile.parts.len()
-                )));
+            if let Some(declared) = tile.declared_parts {
+                if usize::from(declared) != tile.parts.len() {
+                    return Err(Error::Codestream(format!(
+                        "tile {index} declares {declared} tile-parts but carries {}",
+                        tile.parts.len()
+                    )));
+                }
             }
             // One part: borrow it. Several: join them, which is exact — a
             // tile-part holds a whole number of packets (B.9), so nothing
