@@ -368,6 +368,14 @@ impl PacketWalk<'_> {
     /// partition must be skipped at the points between its own precinct corners.
     /// The `x == tx0` escape is the tile's leading partial precinct, whose corner
     /// is off-lattice because the tile begins mid-precinct.
+    ///
+    /// All the scaling here is `u64` and unguarded: a resolution's precinct span
+    /// is `XRsiz · 2^(PPx + level)`, at most `255 · 2^(15 + 32) < 2^55`, so it
+    /// always fits. This is deliberately **not** the 32-bit [`shl32`] the step
+    /// uses — OpenJPEG guards the step at 32 bits but scales the emission span in
+    /// 64, and a coarse resolution of a deep pyramid (span past `2^32`) is a
+    /// packet it emits. Gating emission on `shl32` would drop that packet and
+    /// desynchronise the tile.
     fn precinct_at(&self, comp: usize, res: usize, x: u64, y: u64) -> Option<usize> {
         let geom = &self.geoms[comp][res];
         if geom.precinct_count() == 0 {
@@ -377,7 +385,7 @@ impl PacketWalk<'_> {
         let (dx, dy) = self.sampling(comp);
 
         // The tile-component-to-resolution scale, `XRsiz · 2^level`.
-        let (sx, sy) = (shl32(dx, level)?, shl32(dy, level)?);
+        let (sx, sy) = (dx << level, dy << level);
         let (tx0, ty0) = (u64::from(self.tile.x0), u64::from(self.tile.y0));
         let (tx1, ty1) = (u64::from(self.tile.x1), u64::from(self.tile.y1));
         let (trx0, trx1) = (tx0.div_ceil(sx), tx1.div_ceil(sx));
@@ -389,7 +397,7 @@ impl PacketWalk<'_> {
         // The precinct's span in reference-grid units: its resolution-grid
         // exponent scaled back up through the pyramid and the sub-sampling.
         let (rpx, rpy) = (geom.ppx + level, geom.ppy + level);
-        let (px, py) = (shl32(dx, rpx)?, shl32(dy, rpy)?);
+        let (px, py) = (dx << rpx, dy << rpy);
 
         // A precinct corner sits at `v` when `v` is on the precinct lattice — or
         // when `v` is the tile's own leading edge and the lattice missed it,
@@ -403,6 +411,12 @@ impl PacketWalk<'_> {
 
         let i = (x.div_ceil(sx) >> geom.ppx) - (trx0 >> geom.ppx);
         let j = (y.div_ceil(sy) >> geom.ppy) - (try0 >> geom.ppy);
+        debug_assert!(
+            i < geom.precincts_wide as u64 && j < geom.precincts_high as u64,
+            "precinct index ({i}, {j}) out of the {}×{} grid",
+            geom.precincts_wide,
+            geom.precincts_high,
+        );
         Some(j as usize * geom.precincts_wide + i as usize)
     }
 
@@ -434,11 +448,14 @@ impl PacketWalk<'_> {
 
 /// `value << shift`, or `None` when the result leaves the 32-bit reference grid.
 ///
-/// A 32-level pyramid under a 2^15 precinct asks for a 2^47 span, which no
-/// coordinate can reach. OpenJPEG guards the same shift and skips the
-/// `(component, resolution)` pair when it overflows, so skipping it here keeps
-/// the packet stream aligned with the oracle's rather than inventing a packet it
-/// never wrote.
+/// Used only to derive the sweep *step*: OpenJPEG minimises `pi->dx` under a
+/// 32-bit guard (`opj_pi_next_rpcl`'s `first` block), skipping a
+/// `(component, resolution)` pair whose span overflows 32 bits. A pair skipped
+/// here only widens the step past that pair's own precincts, which the corner
+/// test in [`PacketWalk::precinct_at`] filters back out — so the packet set is
+/// unchanged. Emission itself is **not** gated this way: `precinct_at` scales in
+/// full `u64`, because OpenJPEG emits a coarse-resolution packet whose span sits
+/// past `2^32`.
 fn shl32(value: u64, shift: u32) -> Option<u64> {
     let scaled = value.checked_shl(shift)?;
     (scaled <= u64::from(u32::MAX)).then_some(scaled)
@@ -518,13 +535,18 @@ where
             }
         }
         // Resolution outermost, then the positional sweep, then component, then
-        // layer. The sweep's step is the finest precinct *at this resolution*.
+        // layer. The step is the finest precinct over *every* component and
+        // resolution — computed once, not per resolution: OpenJPEG's
+        // `opj_pi_next_rpcl` minimises `pi->dx` across all of them in its `first`
+        // block and reuses it for each resolution's sweep. A per-resolution step
+        // would be coarser and, with non-power-of-two sub-sampling, could step
+        // over a precinct corner belonging to this resolution.
         Progression::Rpcl => {
+            let pairs = (0..components).flat_map(|c| (0..walk.geoms[c].len()).map(move |r| (c, r)));
+            let Some((step_x, step_y)) = walk.step(pairs) else {
+                return Ok(());
+            };
             for res in 0..resolutions {
-                let pairs = (0..components).filter(|&c| has(c, res)).map(|c| (c, res));
-                let Some((step_x, step_y)) = walk.step(pairs) else {
-                    continue;
-                };
                 let mut y = ty0;
                 while y < ty1 {
                     let mut x = tx0;

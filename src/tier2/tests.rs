@@ -1153,6 +1153,31 @@ fn every_order_visits_the_same_packets() {
     }
 }
 
+/// A deep pyramid pushes a coarse resolution's precinct span past 2^32 reference
+/// grid units — with maximal precincts that happens at `NL >= 17`. OpenJPEG scales
+/// that span in 64-bit arithmetic and still emits the packet; the positional
+/// sweep must do the same, or it silently drops the resolution and desynchronises
+/// the tile. The counting orders (LRCP/RLCP) never touch the span, so they are the
+/// oracle here: every order must still visit the same set.
+#[test]
+fn positional_orders_do_not_drop_deep_resolutions() {
+    // NL = 17: resolution 0 has span 2^(15+17) = 2^32, one past what a 32-bit
+    // shift holds. The low resolutions collapse to 1×1 at the origin, each its own
+    // single-precinct packet.
+    let layout = Layout::plain((8, 8), 17);
+    let expected: BTreeSet<_> = order_of(&layout, Progression::Lrcp, 1)
+        .into_iter()
+        .collect();
+
+    for progression in ORDERS {
+        let seen: BTreeSet<_> = order_of(&layout, progression, 1).into_iter().collect();
+        assert_eq!(
+            seen, expected,
+            "{progression:?} dropped a deep-resolution packet",
+        );
+    }
+}
+
 /// With one precinct per resolution, PCRL and CPRL genuinely enumerate the same
 /// sequence — their position loops both degenerate. That was true of every
 /// codestream this crate could decode before #61, and it is why OpenJPEG's own
