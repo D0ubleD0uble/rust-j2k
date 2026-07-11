@@ -168,9 +168,15 @@ implement.
 The same reasoning cuts the other way: two features can be *indistinguishable*
 rather than untested. With one precinct per resolution, PCRL and CPRL enumerate
 the identical packet sequence — OpenJPEG's own output for the two differs in
-exactly one byte, the progression code in COD. No fixture separates them until
-the precinct partition lands. That is worth recording next to the code rather
-than mistaking one order's fixture for coverage of both.
+exactly one byte, the progression code in COD. That was the state of this crate
+until the precinct partition landed, and it is why `progression_pcrl_lossless`
+and `progression_cprl_lossless` graded one order between them, not two. The
+`precincts_*` fixtures are what separate them: with a real partition the position
+axis has more than one value, PCRL interleaves the components inside one sweep of
+the canvas and CPRL finishes a component before starting the next, and the two
+packet streams diverge. A pair of features that cannot be told apart is worth
+recording next to the code rather than mistaking one's fixture for coverage of
+both.
 
 A third shape is the nastiest, because the fixture looks like it targets the
 feature by name. One feature can *mask* another. Under `restart` the MQ decoder

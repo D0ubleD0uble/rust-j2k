@@ -444,13 +444,73 @@ fn zero_layers_is_marker() {
     assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
-#[test]
-fn explicit_precincts_is_unsupported() {
-    let bytes = codestream(&[
+/// A main header whose COD signals an explicit precinct partition (`Scod` bit 0)
+/// with `sizes` as its `SPcod` tail, wrapped in a complete codestream. Two
+/// decomposition levels, so a partition is three bytes.
+fn with_precincts(sizes: &[u8]) -> Vec<u8> {
+    let mut cod = cod_body(0x01, 0, 1, 0, 2, 4, 4, 0, 1);
+    cod.extend_from_slice(sizes);
+    let header = vec![
         seg(marker::SIZ, &one_component()),
-        seg(marker::COD, &cod_body(0x01, 0, 1, 0, 5, 4, 4, 0, 1)),
-    ]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+        seg(marker::COD, &cod),
+        seg(marker::QCD, &qcd_none(2, &[8; 7])),
+    ];
+    let data = [0xDE, 0xAD];
+    assemble(&header, &sot_seg(0, psot_for(&data), 0, 1), &data, true)
+}
+
+/// `Scod` bit 0 adds one `SPcod` byte per resolution — `NL + 1` of them, coarsest
+/// first — each packing `PPx` in the low nibble and `PPy` in the high one
+/// (Table A-21).
+#[test]
+fn explicit_precinct_sizes_parse_from_spcod() {
+    // Three resolutions: 2^0 × 2^1, 2^6 × 2^5, 2^7 × 2^7.
+    let bytes = with_precincts(&[0x10, 0x56, 0x77]);
+    let cs = parse(&bytes).expect("explicit precincts parse");
+    assert_eq!(
+        cs.header.cod.precinct_sizes,
+        vec![(0, 1), (6, 5), (7, 7)],
+        "PPx is the low nibble, PPy the high one"
+    );
+    let coding = &cs.header.components[0].coding;
+    assert_eq!(coding.precinct(0), (0, 1));
+    assert_eq!(coding.precinct(2), (7, 7));
+}
+
+/// A maximal partition — `Scod` bit 0 clear — carries no `SPcod` bytes and reads
+/// back as `(15, 15)` everywhere, which is the single precinct that spans any
+/// tile-component the sample budget admits.
+#[test]
+fn an_implicit_precinct_partition_is_maximal() {
+    let data = [0xDE, 0xAD];
+    let bytes = assemble(
+        &default_header(),
+        &sot_seg(0, psot_for(&data), 0, 1),
+        &data,
+        true,
+    );
+    let cs = parse(&bytes).expect("implicit precincts parse");
+    assert!(cs.header.cod.precinct_sizes.is_empty());
+    assert_eq!(cs.header.components[0].coding.precinct(0), (15, 15));
+    assert_eq!(cs.header.components[0].coding.precinct(5), (15, 15));
+}
+
+/// A 2^0 precinct is legal only at the coarsest resolution (Table A-21): above
+/// it the precinct halves onto the subband grid, so a zero exponent would ask
+/// for a partition that does not exist. That is an illegal field encoding, not a
+/// missing feature.
+#[test]
+fn a_zero_precinct_exponent_above_resolution_zero_is_a_marker_error() {
+    assert!(
+        parse(&with_precincts(&[0x00, 0x55, 0x55])).is_ok(),
+        "2^0 is legal at resolution 0"
+    );
+    for sizes in [[0x55, 0x50, 0x55], [0x55, 0x05, 0x55]] {
+        assert!(
+            matches!(perr(&with_precincts(&sizes)), Error::Marker(_)),
+            "{sizes:02X?}"
+        );
+    }
 }
 
 #[test]
@@ -1574,10 +1634,16 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             )])),
             Variant::Marker,
         ),
+        // The precinct partition is decoded, so it left this table; a zero
+        // exponent above resolution 0 is still an illegal field.
         (
-            "explicit precinct partition",
-            err(&header_with_cod(cod_body(0x01, 0, 1, 0, 5, 4, 4, 0, 1))),
-            Variant::Unsupported,
+            "zero precinct exponent above resolution 0",
+            err(&header_with_cod({
+                let mut body = cod_body(0x01, 0, 1, 0, 1, 4, 4, 0, 1);
+                body.extend_from_slice(&[0x55, 0x50]);
+                body
+            })),
+            Variant::Marker,
         ),
         // The SOP/EPH delimiters are decoded, so they left this table; a
         // reserved Scod bit is still an illegal field.
@@ -1963,21 +2029,36 @@ fn a_second_override_for_one_component_is_a_codestream_error() {
     assert!(matches!(err(&bytes), Error::Codestream(_)));
 }
 
-/// `Scoc` bit 0 signals explicit precincts, which the subset does not decode;
-/// its other seven bits are reserved and must be zero.
+/// `Scoc` bit 0 signals an explicit precinct partition for one component, which
+/// overrides COD's for that component alone; its other seven bits are reserved
+/// and must be zero.
 #[test]
-fn coc_precinct_flag_is_unsupported_and_reserved_scoc_bits_are_a_marker_error() {
-    let with = |scoc| {
-        codestream(&[
+fn a_coc_carries_its_own_precinct_partition() {
+    let with = |scoc, tail: &[u8]| {
+        let mut coc = coc_body(&[0], scoc, 3, 4, 4, 0, 1);
+        coc.extend_from_slice(tail);
+        let header = vec![
             seg(marker::SIZ, &one_component()),
             seg(marker::COD, &cod_default(1)),
-            seg(marker::COC, &coc_body(&[0], scoc, 3, 4, 4, 0, 1)),
+            seg(marker::COC, &coc),
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
-        ])
+        ];
+        let data = [0xDE, 0xAD];
+        assemble(&header, &sot_seg(0, psot_for(&data), 0, 1), &data, true)
     };
-    assert!(matches!(err(&with(0x01)), Error::Unsupported(_)));
-    assert!(matches!(err(&with(0x02)), Error::Marker(_)));
-    assert!(matches!(err(&with(0x80)), Error::Marker(_)));
+    // Four resolutions (NL = 3), so four precinct bytes.
+    let bytes = with(0x01, &[0x22, 0x33, 0x44, 0x55]);
+    let cs = parse(&bytes).expect("COC precincts parse");
+    assert_eq!(
+        cs.header.components[0].coding.precinct_sizes,
+        vec![(2, 2), (3, 3), (4, 4), (5, 5)],
+    );
+    // COD's own partition stays maximal — the COC replaced it for the component,
+    // not for the codestream.
+    assert!(cs.header.cod.precinct_sizes.is_empty());
+
+    assert!(matches!(perr(&with(0x02, &[])), Error::Marker(_)));
+    assert!(matches!(perr(&with(0x80, &[])), Error::Marker(_)));
 }
 
 /// A COC's style byte goes through the same gate COD's does: an undecoded flag
