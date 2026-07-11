@@ -289,15 +289,53 @@ fn zero_size_image_is_marker() {
 }
 
 #[test]
-fn nonzero_image_offset_is_unsupported() {
-    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(512, 256, 1, 0, 512, 256, 0, 0))]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+fn a_nonzero_image_and_tile_offset_is_accepted() {
+    // A non-zero image origin with a tile origin at or before it (Table A-9) is
+    // valid JPEG 2000 — the reference-grid geometry the conformance entries
+    // p1_01 and p1_07 carry. `validate_geometry` must pass it.
+    let mut siz = siz_of(1, &[(8, 1, 1)]);
+    siz.x_size = 128;
+    siz.y_size = 128;
+    siz.x_offset = 5;
+    siz.y_offset = 3;
+    siz.tile_x_offset = 1;
+    siz.tile_y_offset = 2;
+    assert!(validate_geometry(&siz).is_ok());
 }
 
 #[test]
-fn nonzero_tile_offset_is_unsupported() {
-    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 512, 256, 1, 0))]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+fn an_image_offset_at_or_past_the_far_edge_is_marker() {
+    // Table A-9: `XOsiz < Xsiz`. An origin at the far edge encloses no image.
+    let mut siz = siz_of(1, &[(8, 1, 1)]);
+    siz.x_size = 64;
+    siz.y_size = 64;
+    siz.x_offset = 64;
+    assert!(matches!(validate_geometry(&siz), Err(Error::Marker(_))));
+}
+
+#[test]
+fn a_tile_offset_past_the_image_offset_is_marker() {
+    // Table A-9: `XTOsiz <= XOsiz`. A tile grid starting right of the image
+    // origin is malformed, not an undecoded feature.
+    let mut siz = siz_of(1, &[(8, 1, 1)]);
+    siz.x_size = 64;
+    siz.y_size = 64;
+    siz.x_offset = 2;
+    siz.tile_x_offset = 3;
+    assert!(matches!(validate_geometry(&siz), Err(Error::Marker(_))));
+}
+
+#[test]
+fn a_first_tile_that_never_reaches_the_image_is_marker() {
+    // Table A-9: `XTOsiz + XTsiz > XOsiz`. Otherwise the first tile column clips
+    // to nothing and `tile_rect` hands `resolution_geoms` an empty leading tile.
+    let mut siz = siz_of(1, &[(8, 1, 1)]);
+    siz.x_size = 64;
+    siz.y_size = 64;
+    siz.x_offset = 10;
+    siz.tile_x_offset = 0;
+    siz.tile_width = 8; // 0 + 8 = 8 <= 10
+    assert!(matches!(validate_geometry(&siz), Err(Error::Marker(_))));
 }
 
 #[test]
@@ -1615,13 +1653,15 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             ])),
             Variant::Unsupported,
         ),
+        // A non-zero image origin is decoded now; one at or past the far edge
+        // (XOsiz >= Xsiz, Table A-9) encloses no image and is an illegal field.
         (
-            "image origin offset",
+            "image origin at the far edge",
             err(&codestream(&[seg(
                 marker::SIZ,
-                &siz_geom(512, 256, 1, 0, 512, 256, 0, 0),
+                &siz_geom(512, 256, 512, 0, 512, 256, 0, 0),
             )])),
-            Variant::Unsupported,
+            Variant::Marker,
         ),
         // A tile grid is decoded now; one finer than `Isot` can name is not a
         // missing feature but an illegal field, since no tile-part could ever

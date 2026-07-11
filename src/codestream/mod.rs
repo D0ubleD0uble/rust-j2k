@@ -922,39 +922,57 @@ fn check_sample_budget(siz: &Siz) -> Result<()> {
     Ok(())
 }
 
-/// Enforce the decoded geometry subset on the SIZ fields: a tile grid anchored
-/// at the canvas origin, bounded in area and tile count. A nonzero image origin
-/// is valid JPEG 2000 but not yet decoded, so reject it cleanly here rather than
-/// let an out-of-subset origin reach the reconstruction, and reject an unbounded
-/// area or tile count before either reaches the buffer allocations.
+/// Enforce the decoded geometry subset on the SIZ fields: a well-formed image
+/// and tile grid, bounded in area and tile count. The image and tile origins may
+/// be non-zero (Annex B's reference grid), so this checks the Table A-9
+/// constraints that a non-zero origin makes load-bearing, then bounds the area
+/// and tile count before either reaches the buffer allocations.
 fn validate_geometry(siz: &Siz) -> Result<()> {
     if siz.x_size == 0 || siz.y_size == 0 {
         return Err(Error::Marker("SIZ declares a zero-size image".into()));
     }
-    if siz.x_offset != 0 || siz.y_offset != 0 {
-        return Err(Error::Unsupported(format!(
-            "image offset ({}, {}); the decoded subset is canvas-origin only",
-            siz.x_offset, siz.y_offset
-        )));
-    }
-    // The standard requires XTOsiz <= XOsiz (Table A-9), so with the image
-    // pinned at the origin the tile grid is pinned there too. A nonzero tile
-    // offset here is therefore a malformed SIZ, not an undecoded feature —
-    // but it only becomes one once the image offset above is decoded, so it
-    // stays `Unsupported` and moves with #96.
-    if siz.tile_x_offset != 0 || siz.tile_y_offset != 0 {
-        return Err(Error::Unsupported(format!(
-            "tile offset ({}, {}); the decoded subset is canvas-origin only",
-            siz.tile_x_offset, siz.tile_y_offset
+    // Table A-9: `0 <= XOsiz < Xsiz`. An origin at or past the far edge encloses
+    // no image, so it is a malformed field, not an undecoded feature.
+    if siz.x_offset >= siz.x_size || siz.y_offset >= siz.y_size {
+        return Err(Error::Marker(format!(
+            "image offset ({}, {}) is not inside the image {}×{}",
+            siz.x_offset, siz.y_offset, siz.x_size, siz.y_size
         )));
     }
     if siz.tile_width == 0 || siz.tile_height == 0 {
         return Err(Error::Marker("SIZ declares a zero-size tile".into()));
     }
-    if siz.x_size as u64 * siz.y_size as u64 > MAX_IMAGE_SAMPLES {
+    // Table A-9: `XTOsiz <= XOsiz` and `XTOsiz + XTsiz > XOsiz`. The first keeps
+    // the tile grid from starting to the right of the image; the second keeps
+    // the first tile column non-empty (its rect clips to `[XOsiz, …)`), without
+    // which `tile_rect` would hand `resolution_geoms` an empty leading tile.
+    if siz.tile_x_offset > siz.x_offset || siz.tile_y_offset > siz.y_offset {
+        return Err(Error::Marker(format!(
+            "tile offset ({}, {}) is past the image offset ({}, {})",
+            siz.tile_x_offset, siz.tile_y_offset, siz.x_offset, siz.y_offset
+        )));
+    }
+    if u64::from(siz.tile_x_offset) + u64::from(siz.tile_width) <= u64::from(siz.x_offset)
+        || u64::from(siz.tile_y_offset) + u64::from(siz.tile_height) <= u64::from(siz.y_offset)
+    {
+        return Err(Error::Marker(format!(
+            "tile ({}×{} at offset ({}, {})) does not reach the image offset ({}, {})",
+            siz.tile_width,
+            siz.tile_height,
+            siz.tile_x_offset,
+            siz.tile_y_offset,
+            siz.x_offset,
+            siz.y_offset,
+        )));
+    }
+    // The area guard is on the *image* area — `(Xsiz - XOsiz)·(Ysiz - YOsiz)` —
+    // not `Xsiz·Ysiz`, so a large origin cannot inflate the bound and reject an
+    // image that reconstructs to a small canvas. `check_sample_budget` re-derives
+    // the same area per component; this is the cheap early-out before that walk.
+    let (width, height) = siz.image_extent_at(0);
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_SAMPLES {
         return Err(Error::Unsupported(format!(
-            "image area {}×{} exceeds the decode guard of {MAX_IMAGE_SAMPLES} samples",
-            siz.x_size, siz.y_size
+            "image area {width}×{height} exceeds the decode guard of {MAX_IMAGE_SAMPLES} samples",
         )));
     }
     // `Isot` is a `u16` running 0..=65534 (Table A-10), so a grid finer than
