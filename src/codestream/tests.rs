@@ -2188,7 +2188,7 @@ fn a_tile_part_rgn_overrides_the_main_header_shift() {
     let bytes = assemble_with_tile_markers(&header, &[rgn], &[1, 2]);
 
     let cs = parse(&bytes).expect("parse");
-    assert_eq!(cs.tiles[0].header.components[0].roi_shift, 9);
+    assert_eq!(cs.tile_header(0).unwrap().components[0].roi_shift, 9);
     assert_eq!(
         cs.header.components[0].roi_shift, 11,
         "the tile's override must not be written back over the main header"
@@ -2209,7 +2209,7 @@ fn a_tile_part_rgn_names_one_component() {
     let bytes = assemble_with_tile_markers(&header, &[rgn], &[1, 2]);
 
     let cs = parse(&bytes).expect("parse");
-    let tile = &cs.tiles[0].header;
+    let tile = cs.tile_header(0).expect("resolve tile 0");
     assert_eq!(tile.components[0].roi_shift, 0);
     assert_eq!(tile.components[1].roi_shift, 9, "the tile-part's RGN");
     assert_eq!(
@@ -2245,7 +2245,7 @@ fn a_tile_cod_outranks_a_main_header_coc() {
     let bytes = assemble_with_tile_markers(&header, &[tile_cod], &[1, 2]);
 
     let cs = parse(&bytes).expect("parse");
-    let tile = &cs.tiles[0].header;
+    let tile = cs.tile_header(0).expect("resolve tile 0");
     assert_eq!(
         tile.components[0].coding.decomposition_levels, 2,
         "the tile COD must beat the main-header COC, not lose to it"
@@ -2287,7 +2287,7 @@ fn tile_overrides_resolve_in_the_standard_s_precedence_order() {
     let bytes = assemble_with_tile_markers(&header, &tile_markers, &[1, 2]);
 
     let cs = parse(&bytes).expect("parse");
-    let tile = &cs.tiles[0].header;
+    let tile = cs.tile_header(0).expect("resolve tile 0");
     let levels = |c: usize| tile.components[c].coding.decomposition_levels;
     assert_eq!(levels(0), 1, "tile COC beats tile COD");
     assert_eq!(levels(1), 2, "tile COD, with no COC anywhere");
@@ -2312,7 +2312,7 @@ fn a_tile_with_no_overrides_takes_the_main_header_s_resolution() {
     let bytes = assemble(&header, &sot_seg(0, 0, 0, 1), &[1, 2], true);
 
     let cs = parse(&bytes).expect("parse");
-    assert_eq!(cs.tiles[0].header.components, cs.header.components);
+    assert_eq!(cs.tile_header(0).unwrap().components, cs.header.components);
 }
 
 /// The coding-parameter overrides belong to the *first* tile-part of a tile

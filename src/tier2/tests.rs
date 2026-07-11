@@ -78,8 +78,8 @@ fn parse_layers_styled<'a>(
     }
     Ok((build_subbands(bands, states)?, cursor))
 }
-use crate::codestream::MainHeader;
 use crate::codestream::markers::{Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform};
+use crate::codestream::{MainHeader, Tile, TileHeader};
 use crate::tier2::bio::BitReader;
 
 /// The encode side of [`BitReader`]: MSB-first packing with the Annex B.10.1
@@ -170,12 +170,12 @@ fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
     )
 }
 
-/// The single tile of `header`, carrying `data` — the shape `decode_packets`
-/// reads now that a tile owns its resolved header and its own packet bytes.
-fn tile(header: MainHeader, data: &[u8]) -> Tile<'_> {
+/// Tile 0, carrying `data`. A tile keeps only its own tile-part-header markers —
+/// none, here — so the header `decode_packets` decodes under is passed alongside.
+fn tile(data: &[u8]) -> Tile<'_> {
     Tile {
         index: 0,
-        header,
+        header: TileHeader::default(),
         data: std::borrow::Cow::Borrowed(data),
     }
 }
@@ -497,7 +497,7 @@ fn packet_two_blocks_partial_inclusion() {
 fn seed_codestream_parses() {
     let bytes = include_bytes!("../../tests/fixtures/jpeg2000_regular_latlon.j2k");
     let cs = crate::codestream::parse(bytes).unwrap();
-    let coded = decode_packets(&cs.tiles[0]).unwrap();
+    let coded = decode_packets(&cs.header, &cs.tiles[0]).unwrap();
 
     // opj_dump reports numresolutions = 5 (NL = 4): one LL packet + four detail
     // levels.
@@ -540,10 +540,11 @@ fn malformed_tile_data_never_panics() {
         (0..=255u8).cycle().take(300).collect(),
         vec![0x80, 0x01, 0xFF, 0xFE, 0x00, 0x7F],
     ];
+    let h = header(32, 32, 3, 6);
     for data in &cases {
-        let t = tile(header(32, 32, 3, 6), data);
+        let t = tile(data);
         // The result is allowed to be either Ok or Err; only a panic would fail.
-        let _ = decode_packets(&t);
+        let _ = decode_packets(&h, &t);
     }
 }
 
@@ -553,8 +554,9 @@ fn malformed_tile_data_never_panics() {
 #[test]
 fn block_count_guard_rejects_metadata_bomb() {
     // 4096×4096 with 4×4 blocks: ~1.4M blocks across the ladder, over the 2^19 cap.
-    let t = tile(header(4096, 4096, 1, 2), &[]);
-    let err = decode_packets(&t).expect_err("guard fires before any packet parse");
+    let h = header(4096, 4096, 1, 2);
+    let t = tile(&[]);
+    let err = decode_packets(&h, &t).expect_err("guard fires before any packet parse");
     assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
 }
 

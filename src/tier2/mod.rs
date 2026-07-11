@@ -127,18 +127,18 @@ pub struct CodedData<'a> {
 
 /// Parse all packets of one tile into per-code-block coded segments.
 ///
-/// `tile` carries its own resolved header, so a tile-part COD/QCD override is
-/// already in force here and nothing below needs to know a main header exists.
-/// Its geometry is its own too: every tile-component bound is the *tile*'s rect
-/// on that component's grid, not the image's.
+/// `header` is the tile's resolved header (`Codestream::tile_header`), so a
+/// tile-part COD/QCD override is already in force and nothing below needs to know
+/// a main header exists. The geometry is the tile's own too: every
+/// tile-component bound is the *tile*'s rect on that component's grid, not the
+/// image's.
 ///
 /// LRCP orders packets layer, then resolution, then component, then precinct
 /// (ISO B.12.1.1). With maximal precincts that reduces to a layer-major sweep
 /// with resolutions and components nested inside it: `r0c0, r0c1, …, r1c0, r1c1,
 /// …`. Each component carries its own tile-component geometry, so a sub-sampled
 /// component's subbands are smaller at the same resolution.
-pub fn decode_packets<'a>(tile: &'a Tile<'a>) -> Result<CodedData<'a>> {
-    let header = &tile.header;
+pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<CodedData<'a>> {
     let data: &'a [u8] = &tile.data;
 
     let component_count = header.siz.components.len();
