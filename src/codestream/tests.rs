@@ -712,6 +712,80 @@ fn a_poc_marker_parses_into_volumes() {
     assert_eq!(v.progression, markers::Progression::Lrcp);
 }
 
+/// A POC body of `n` copies of the whole-codestream LRCP volume.
+fn poc_volumes(n: usize) -> Vec<u8> {
+    [0u8, 0, 0, 1, 6, 1, 0]
+        .iter()
+        .copied()
+        .cycle()
+        .take(7 * n)
+        .collect()
+}
+
+/// `LYEpoc` ranges over 1–65535 (Table A-33): a zero-layer volume would enclose
+/// no packets, so it is a malformed field like an empty resolution or component
+/// range, not a no-op.
+#[test]
+fn a_poc_volume_with_zero_layers_is_a_marker_error() {
+    let poc = [0u8, 0, 0, 0, 6, 1, 0]; // LYEpoc == 0
+    let bytes = codestream(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::POC, &poc),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert!(matches!(err(&bytes), Error::Marker(_)));
+}
+
+/// The volume list is capped at OpenJPEG's 32 (`opj_tcp_t::pocs`): every volume
+/// re-enumerates the packet space and a duplicate emission consumes no bitstream
+/// bytes, so an uncapped list buys quadratic work with linear input. 32 volumes
+/// parse; 33 reject as the guard, whether they arrive in one marker or split
+/// across two.
+#[test]
+fn a_poc_past_the_volume_guard_is_unsupported() {
+    let header = |poc_segs: &[Vec<u8>]| {
+        let mut h = vec![
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_default(1)),
+        ];
+        h.extend(poc_segs.iter().cloned());
+        h.push(seg(marker::QCD, &qcd_none(2, &[8; 16])));
+        h
+    };
+    let at_cap = codestream(&header(&[seg(marker::POC, &poc_volumes(32))]));
+    assert!(
+        parse_main_header(&at_cap).is_ok(),
+        "32 volumes are within the guard"
+    );
+
+    let one_marker = codestream(&header(&[seg(marker::POC, &poc_volumes(33))]));
+    assert!(matches!(err(&one_marker), Error::Unsupported(_)));
+
+    let split = codestream(&header(&[
+        seg(marker::POC, &poc_volumes(20)),
+        seg(marker::POC, &poc_volumes(13)),
+    ]));
+    assert!(matches!(err(&split), Error::Unsupported(_)));
+}
+
+/// A tile's walk runs the *combined* main-plus-tile volume list, and OpenJPEG's
+/// 32-entry array holds that combination, so the guard binds the sum: a main
+/// header at the cap leaves a tile-part POC no room.
+#[test]
+fn main_and_tile_poc_volumes_share_the_guard() {
+    let header = vec![
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::POC, &poc_volumes(32)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let tile_poc = seg(marker::POC, &poc_volumes(1));
+    let bytes = assemble_with_tile_markers(&header, &[tile_poc], &[1, 2]);
+    let error = parse(&bytes).expect_err("33 combined volumes should reject");
+    assert!(matches!(error, Error::Unsupported(_)));
+}
+
 /// `Xcrg`/`Ycrg` big-endian per component — the `CRG` body (A.9.1).
 fn crg_body(offsets: &[(u16, u16)]) -> Vec<u8> {
     let mut b = Vec::with_capacity(offsets.len() * 4);

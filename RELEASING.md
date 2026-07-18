@@ -28,10 +28,39 @@ published manually:
 
 After this, every later release goes through the workflow with no token.
 
+## Pre-release review
+
+Every release starts with a full-project review, before any version bump. The
+point is production completeness: the tag should never be the first time a
+whole-crate look happens.
+
+1. **Pre-flight.** `rustup update stable` (CI uses the newest stable), clean
+   tree on an up-to-date `main`, latest `main` CI run green.
+2. **Three whole-crate reviews**, each by a fresh reviewer (delegated agents
+   work well; keep the scopes disjoint):
+   - *Architecture*: module boundaries, dependency direction, public API shape
+     against the next roadmap phases, error taxonomy, test-harness structure.
+   - *Code quality*: panic paths reachable from `decode`, copy-paste
+     divergence, doc-comment accuracy against the code, lint and test hygiene.
+   - *Security*: every input-driven allocation against its guard (guard before
+     allocation), attacker-steered loop bounds and quadratic blowups, the CI
+     and release workflows, fuzz coverage against the current feature surface.
+3. **Fix what emerges.** Triage by severity: fix-now findings land in a review
+   PR ahead of the release PR; structural work becomes issues (drafted for
+   approval first, per the conventions).
+4. **Documentation currency pass.** README (install version, feature table,
+   status), `SECURITY.md`'s supported-versions table, `docs/`, rustdoc on the
+   public surface, and CHANGELOG completeness against
+   `git log <last-tag>..HEAD`.
+5. **Extended gate**, beyond the per-PR gates: `cargo doc` warning-free,
+   `cargo publish --dry-run` (confirm the package excludes the conformance
+   corpus), and a bounded fuzz smoke over the current targets.
+
 ## Cutting a release
 
 1. Update `CHANGELOG.md`: move items from `[Unreleased]` into a new dated version
-   section and refresh the compare links at the bottom.
+   section and refresh the compare links at the bottom. Consolidate duplicate
+   Keep-a-Changelog section headers that accumulated while features landed.
 2. Bump `version` in `Cargo.toml` to match.
 3. Open a PR with those two changes; merge once CI is green.
 4. Tag the merged commit and push the tag:

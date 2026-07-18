@@ -23,9 +23,10 @@ or machine paths.
 - `cargo test`
 - `cargo deny check`
 
-While the decoder is a skeleton, `src/lib.rs` carries a crate-level
-`allow(dead_code, unused_variables)`; remove it as the stages land so clippy's
-`-D warnings` does real work.
+Before a release, additionally run the pre-release review in `RELEASING.md`:
+three whole-crate reviews (architecture, code quality, security), a
+documentation currency pass, and the extended gate (`cargo doc`,
+`cargo publish --dry-run`, a fuzz smoke).
 
 ## Correctness is defined by the oracle, not by self-consistency
 - This crate decodes a binary format. Every stage is cross-checked against a

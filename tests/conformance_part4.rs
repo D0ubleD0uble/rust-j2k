@@ -18,11 +18,10 @@
 //! When the flag is set the bounds are forced to zero regardless of what the
 //! manifest records, so a corpus edit cannot quietly relax an exact entry.
 //!
-//! Entries whose features the decoder does not implement yet come back as
-//! `Error::Unsupported` and report as *not yet decoded* — expected while the
-//! Phase 2 milestones land, and the reason this harness is useful from day one.
-//! [`IN_CLASS`] is the ratchet: it names exactly the entries that decode today,
-//! so a milestone that turns one green, or a regression that turns one red,
+//! An entry whose features the decoder does not implement comes back as
+//! `Error::Unsupported` and reports as *not yet decoded*. Every current entry
+//! decodes — [`IN_CLASS`] holds all 23 — and that list is the ratchet: a
+//! regression that turns an entry red, or a corpus refresh that adds one,
 //! fails this test until the list is updated.
 
 use std::collections::BTreeSet;
@@ -426,9 +425,7 @@ fn grade_entry(dir: &Path, entry: &Entry) -> Grade {
     // bad entry reports as a failure instead of aborting the whole harness.
     // The entry's recorded reduction is the one its references were decoded
     // at, so grading decodes there too (`-r` in OpenJPEG's conformance runs).
-    let options = rust_j2k::DecodeOptions {
-        resolution_reduction: entry.reduction,
-    };
+    let options = rust_j2k::DecodeOptions::default().with_resolution_reduction(entry.reduction);
     let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| {
         rust_j2k::decode_with(&bytes, options)
     }));
@@ -727,15 +724,7 @@ mod tests {
     }
 
     fn component(samples: Vec<i32>) -> Component {
-        Component {
-            width: samples.len() as u32,
-            height: 1,
-            bit_depth: 8,
-            signed: false,
-            x_sampling: 1,
-            y_sampling: 1,
-            samples,
-        }
+        Component::new(samples.len() as u32, 1, 8, false, 1, 1, samples)
     }
 
     fn reference(samples: Vec<i32>) -> Pgx {
@@ -895,9 +884,7 @@ fn reduction_is_bounded_by_the_resolution_count() {
 
     let reduced = rust_j2k::decode_with(
         &bytes,
-        rust_j2k::DecodeOptions {
-            resolution_reduction: 1,
-        },
+        rust_j2k::DecodeOptions::default().with_resolution_reduction(1),
     )
     .expect("one level fewer still decodes");
     assert_eq!(reduced.width, full.width.div_ceil(2));
@@ -914,9 +901,7 @@ fn reduction_is_bounded_by_the_resolution_count() {
     // p0_01 has 3 decomposition levels: 4 resolutions, so 4 is one too many.
     let err = rust_j2k::decode_with(
         &bytes,
-        rust_j2k::DecodeOptions {
-            resolution_reduction: 4,
-        },
+        rust_j2k::DecodeOptions::default().with_resolution_reduction(4),
     )
     .expect_err("a reduction past the coarsest resolution is rejected");
     assert!(matches!(err, Error::Unsupported(_)), "{err:?}");

@@ -1103,7 +1103,7 @@ mod tests {
                     roi_shift,
                 },
             )
-            .expect_err("maxshift {roi_shift} passes the bit-plane limit");
+            .expect_err(&format!("maxshift {roi_shift} passes the bit-plane limit"));
             assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
         }
     }

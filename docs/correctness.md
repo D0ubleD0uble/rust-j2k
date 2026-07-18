@@ -155,8 +155,8 @@ Two rules keep the grading honest:
 implemented. A conformance entry only exercises a feature if its *other*
 parameters let that feature change the answer.
 
-The sharp case is `p0_01`. It is RLCP, and it is the only entry whose sole
-remaining blocker is the progression order — so it looks like the test for
+The sharp case is `p0_01`. It is RLCP, and it was the only entry whose sole
+remaining blocker was the progression order — so it looked like the test for
 progression support. It is not. `p0_01` has one component, one quality layer,
 one tile, and one precinct, and under those conditions all five progression
 orders enumerate the identical packet sequence, because four of the five nested
@@ -173,8 +173,8 @@ bit-exact. That is the same shape of bug as reading `SPcod`'s code-block style
 byte and discarding it: the decoder reports success on a feature it does not
 implement.
 
-`p0_11` is the same trap wearing the precinct partition's name. It is the only
-corpus entry the partition alone unblocks, so it looks like the test for it — but
+`p0_11` is the same trap wearing the precinct partition's name. It was the only
+corpus entry the partition alone unblocked, so it looked like the test for it — but
 it is 128×1 with **one** resolution and a 2^7 × 2^1 precinct, which is one
 precinct. It grades that `SPcod`'s precinct bytes are *parsed* (get the count
 wrong and the marker segment misreads) and nothing beyond that. Mutating the
@@ -264,8 +264,8 @@ Seed it from:
   `jpeg2000_regular_latlon.grib2`), plus a 9/7 re-encode for the irreversible
   path — no GRIB2 producer ships lossy 9/7 (HRRR/NDFD are complex-packed, ECMWF
   is CCSDS), so OpenJPEG's irreversible mode re-encodes a real grid;
-- the ISO/IEC 15444-4 conformance codestreams, as Phase 2 brings general Part 1
-  features online;
+- the ISO/IEC 15444-4 conformance codestreams, which gated Phase 2 (all 23
+  entries now decode in class);
 - real `.jp2` files for Phase 3, HTJ2K codestreams for Phase 4.
 
 ## Robustness (the input is untrusted)

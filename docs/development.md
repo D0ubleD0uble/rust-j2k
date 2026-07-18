@@ -28,18 +28,18 @@ the cargo gates track their current release (they do not affect oracle output).
 
 | Tool | Version | Provides | Used by |
 | ---- | ------- | -------- | ------- |
-| OpenJPEG | 2.5.0 (apt) / 2.5.4 (source) | `opj_decompress`, `opj_dump`, `opj_compress` | oracle snapshots, header checks, Tier-1 vectors |
+| OpenJPEG | 2.5.0 (apt) / 2.5.4 (source) | `opj_decompress`, `opj_dump`, `opj_compress` | oracle snapshots, header checks, Tier-1 vectors, synthetic fixtures |
 | eccodes | 2.34.1 | `grib_dump`, `grib_get_data` | GRIB2-sourced fixtures |
 | cargo-deny | current release | `cargo deny` | license/advisory quality gate |
 | cargo-fuzz | current release (+ nightly) | `cargo fuzz` | robustness fuzzing |
-| Python 3 | 3.8+ | `.pgx` → `expected.json` conversion | `scripts/gen-oracle.sh` |
+| Python 3 | 3.8+ | `.pgx` → `expected.json` conversion, fixture generation | `scripts/gen-oracle.sh`, `scripts/gen-*-fixtures.py` |
 
 ### OpenJPEG
 
 The reference JPEG 2000 decoder. `opj_decompress` produces the sample oracle;
-`opj_dump` prints marker fields for header cross-checks (issue #5);
-`opj_compress` can synthesize small codestreams for isolated Tier-1 golden
-vectors (issue #10).
+`opj_dump` prints marker fields for header cross-checks; `opj_compress`
+synthesizes the codestreams behind the isolated Tier-1 golden vectors and the
+`scripts/gen-*-fixtures.py` synthetic corpus.
 
 ```sh
 # Debian/Ubuntu (ships 2.5.0)
@@ -100,7 +100,8 @@ cargo install cargo-deny
 
 libFuzzer-based fuzzing of the `decode` entry point. It needs a nightly
 toolchain, an LLVM sanitizer runtime, and a C++ compiler, and runs on x86-64 /
-aarch64 Unix only. This page installs the tool; the fuzz *target* is issue #18.
+aarch64 Unix only. This page installs the tool; the targets live in the
+detached [`fuzz/`](../fuzz/) workspace (see [`fuzz/README.md`](../fuzz/README.md)).
 
 ```sh
 rustup toolchain install nightly
@@ -109,9 +110,10 @@ cargo install cargo-fuzz
 
 ### Python 3
 
-Used only by `scripts/gen-oracle.sh` to turn an OpenJPEG `.pgx` decode into the
-`expected.json` sample array. Standard library only, no third-party packages.
-Present by default on Linux and macOS.
+Used by `scripts/gen-oracle.sh` to turn an OpenJPEG `.pgx` decode into the
+`expected.json` sample array, and by the `scripts/gen-*-fixtures.py` generators
+that synthesize the fixture corpus. Standard library only, no third-party
+packages. Present by default on Linux and macOS.
 
 ## Regenerating an oracle snapshot
 
@@ -130,7 +132,7 @@ scripts/gen-oracle.sh tests/fixtures/eta_lambert_irreversible.j2k \
     --notes "9/7 lossy path"
 ```
 
-For a GRIB2-sourced fixture, extract the §5.40 codestream first and pass that
-`.j2k` (codestream extraction is part of sourcing the fixture; see issue #4).
-The committed corpus and its snapshots are added in issue #4 — this page only
-sets up the tools that produce them.
+For a GRIB2-sourced fixture, extract the §5.40 codestream first with
+[`scripts/extract-grib2-codestream.py`](../scripts/extract-grib2-codestream.py)
+and pass that `.j2k`. The committed corpus and its snapshots live under
+`tests/fixtures/` — this page only sets up the tools that (re)generate them.

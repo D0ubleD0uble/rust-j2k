@@ -19,13 +19,20 @@ use crate::{Error, Result};
 ///
 /// Components are in SIZ order and are independent: no inter-component (color)
 /// transform is applied here.
+///
+/// The struct is `#[non_exhaustive]`: [`decode`](crate::decode) is the normal
+/// producer, and later metadata (a JP2 wrapper's colour description, say) can
+/// then land as new fields without a breaking change. To build one by hand —
+/// an expected image in a test harness, for instance — use [`Image::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Image {
     /// Reference-grid image area width, in reference-grid points.
     pub width: u32,
     /// Reference-grid image area height, in reference-grid points.
     pub height: u32,
-    /// One entry per SIZ component, in SIZ order. Never empty.
+    /// One entry per SIZ component, in SIZ order. Never empty in decoder
+    /// output.
     pub components: Vec<Component>,
 }
 
@@ -34,7 +41,11 @@ pub struct Image {
 ///
 /// `samples` is row-major, `width * height` entries, each already
 /// DC-level-shifted and clamped to the declared depth.
+///
+/// `#[non_exhaustive]`, like [`Image`]; build one by hand with
+/// [`Component::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Component {
     /// Component width in samples.
     pub width: u32,
@@ -53,6 +64,18 @@ pub struct Component {
 }
 
 impl Image {
+    /// Package `components` with the reference-grid image area they are
+    /// registered against. The values are stored as given; only
+    /// [`decode`](crate::decode) vouches for their consistency.
+    #[must_use]
+    pub fn new(width: u32, height: u32, components: Vec<Component>) -> Self {
+        Self {
+            width,
+            height,
+            components,
+        }
+    }
+
     /// The component at `index` in SIZ order, or `None` if out of range.
     pub fn component(&self, index: usize) -> Option<&Component> {
         self.components.get(index)
@@ -60,6 +83,30 @@ impl Image {
 }
 
 impl Component {
+    /// Package a component's samples with their geometry and interpretation.
+    /// The values are stored as given; only [`decode`](crate::decode) vouches
+    /// for their consistency.
+    #[must_use]
+    pub fn new(
+        width: u32,
+        height: u32,
+        bit_depth: u8,
+        signed: bool,
+        x_sampling: u8,
+        y_sampling: u8,
+        samples: Vec<i32>,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            bit_depth,
+            signed,
+            x_sampling,
+            y_sampling,
+            samples,
+        }
+    }
+
     /// Sample at `(x, y)` on this component's own grid, or `None` if out of bounds.
     pub fn sample(&self, x: u32, y: u32) -> Option<i32> {
         if x >= self.width || y >= self.height {
@@ -71,28 +118,6 @@ impl Component {
     }
 }
 
-/// Final stage: apply the inverse DC level shift, clamp to the component depth,
-/// and package the reconstructed samples with their geometry.
-///
-/// The component geometry follows the SIZ reference-grid equations (ISO/IEC
-/// 15444-1 §B.2): for sub-sampling factors `XRsiz`/`YRsiz`,
-///
-/// ```text
-/// width  = ceil(Xsiz / XRsiz) - ceil(XOsiz / XRsiz)
-/// height = ceil(Ysiz / YRsiz) - ceil(YOsiz / YRsiz)
-/// ```
-///
-/// which reduces to the image area `Xsiz - XOsiz` by `Ysiz - YOsiz` under unit
-/// sub-sampling. The image area itself is carried on the [`Image`].
-///
-/// The inverse DC level shift (§G.1.2) adds `2^(depth-1)` back to *unsigned*
-/// components (the encoder subtracted it before the forward transform); signed
-/// components are left as-is. Samples are then clamped to the declared depth
-/// and sign before being packed row-major into a [`Component`].
-///
-/// `samples` carries one reconstructed sample vector per SIZ component, in SIZ
-/// order. Each is level-shifted and clamped on its own component's depth and
-/// sign, then packed with that component's geometry.
 /// The per-component sample planes a tiled decode reconstructs into: one plane
 /// per SIZ component, sized to that component's whole grid, which each tile
 /// writes its own rectangle of.
@@ -215,6 +240,29 @@ fn blit<T: Copy>(
     }
 }
 
+/// Final stage: apply the inverse DC level shift, clamp to the component depth,
+/// and package the reconstructed samples with their geometry.
+///
+/// The component geometry follows the SIZ reference-grid equations (ISO/IEC
+/// 15444-1 §B.2): for sub-sampling factors `XRsiz`/`YRsiz`,
+///
+/// ```text
+/// width  = ceil(Xsiz / XRsiz) - ceil(XOsiz / XRsiz)
+/// height = ceil(Ysiz / YRsiz) - ceil(YOsiz / YRsiz)
+/// ```
+///
+/// which reduces to the image area `Xsiz - XOsiz` by `Ysiz - YOsiz` under unit
+/// sub-sampling. The image area itself is carried on the [`Image`].
+///
+/// The inverse DC level shift (§G.1.2) adds `2^(depth-1)` back to *unsigned*
+/// components (the encoder subtracted it before the forward transform); signed
+/// components are left as-is. Samples are then clamped to the declared depth
+/// and sign before being packed row-major into a [`Component`].
+///
+/// `samples` carries one reconstructed sample vector per SIZ component, in SIZ
+/// order — [`Canvas::into_planes`] output. Each is level-shifted and clamped
+/// on its own component's depth and sign, then packed with that component's
+/// geometry.
 pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8) -> Result<Image> {
     let siz = &header.siz;
     if samples.len() != siz.components.len() {

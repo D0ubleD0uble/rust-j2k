@@ -87,19 +87,11 @@ mod harness {
     /// A one-component image at unit sub-sampling, so the image area and the
     /// component grid coincide — what the single-component snapshots describe.
     fn image(width: u32, height: u32, samples: Vec<i32>) -> Image {
-        Image {
+        Image::new(
             width,
             height,
-            components: vec![Component {
-                width,
-                height,
-                bit_depth: 16,
-                signed: false,
-                x_sampling: 1,
-                y_sampling: 1,
-                samples,
-            }],
-        }
+            vec![Component::new(width, height, 16, false, 1, 1, samples)],
+        )
     }
 
     /// A single-component snapshot at unit sub-sampling, matching [`image`].
@@ -333,21 +325,30 @@ mod harness {
     fn snapshot_with_wrong_sample_count_is_a_load_error() {
         let dir = scratch("wrong-count");
         write(&dir, "bad.j2k", "bytes");
-        // geometry declares 2x2 = 4 samples, but only 3 are listed.
+        // The component declares 2x2 = 4 samples, but only 3 are listed. The
+        // JSON itself is well-formed, so this must fail the consistency check,
+        // not deserialization.
         write(
             &dir,
             "bad.expected.json",
             r#"{
-  "geometry": { "width": 2, "height": 2, "bit_depth": 8, "signed": false },
+  "image": { "width": 2, "height": 2 },
   "tolerance": { "mode": "exact" },
-  "samples": [0, 1, 2],
+  "components": [
+    { "width": 2, "height": 2, "bit_depth": 8, "signed": false,
+      "x_sampling": 1, "y_sampling": 1, "samples": [0, 1, 2] }
+  ],
   "provenance": { "source": "s", "oracle_command": "c" }
 }"#,
         );
 
         let found = discover(&dir);
         assert_eq!(found.len(), 1);
-        assert!(found[0].expected.is_err());
+        let reason = found[0].expected.as_ref().expect_err("must not load");
+        assert!(
+            reason.contains("4 samples but the array has 3"),
+            "must fail the sample-count check, not parsing: {reason}"
+        );
         assert!(matches!(run_fixture(&found[0]), Outcome::LoadError(_)));
     }
 
@@ -524,22 +525,36 @@ mod expected_schema {
         // A typo'd key (here `sample` instead of `samples`) must fail loudly
         // rather than silently deserialize to an empty grid.
         let json = r#"{
-  "geometry": { "width": 1, "height": 1, "bit_depth": 8, "signed": false },
+  "image": { "width": 1, "height": 1 },
   "tolerance": { "mode": "exact" },
-  "sample": [0],
+  "components": [
+    { "width": 1, "height": 1, "bit_depth": 8, "signed": false,
+      "x_sampling": 1, "y_sampling": 1, "sample": [0] }
+  ],
   "provenance": { "source": "s", "oracle_command": "c" }
 }"#;
-        assert!(Expected::from_json(json).is_err());
+        let error = Expected::from_json(json).expect_err("a typo'd key must not parse");
+        assert!(
+            error.to_string().contains("unknown field `sample`"),
+            "must fail on the typo'd key: {error}"
+        );
     }
 
     #[test]
     fn rejects_unknown_tolerance_mode() {
         let json = r#"{
-  "geometry": { "width": 1, "height": 1, "bit_depth": 8, "signed": false },
+  "image": { "width": 1, "height": 1 },
   "tolerance": { "mode": "relative", "max_abs_error": 1.0 },
-  "samples": [0],
+  "components": [
+    { "width": 1, "height": 1, "bit_depth": 8, "signed": false,
+      "x_sampling": 1, "y_sampling": 1, "samples": [0] }
+  ],
   "provenance": { "source": "s", "oracle_command": "c" }
 }"#;
-        assert!(Expected::from_json(json).is_err());
+        let error = Expected::from_json(json).expect_err("an unknown mode must not parse");
+        assert!(
+            error.to_string().contains("unknown variant `relative`"),
+            "must fail on the tolerance mode: {error}"
+        );
     }
 }

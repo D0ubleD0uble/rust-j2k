@@ -18,8 +18,9 @@ pub enum Error {
     /// A marker segment carried an illegal field encoding (a reserved value,
     /// a bad length, an out-of-range field).
     Marker(String),
-    /// A valid-but-not-decoded feature (a JP2 container, a multi-tile grid,
-    /// nonzero canvas offsets, an irreversible color transform).
+    /// A valid-but-not-decoded feature (a JP2 container, an HTJ2K codestream,
+    /// a Part 2 extension), or an input past one of the decoder's resource
+    /// guards.
     Unsupported(String),
     /// Declared geometry and decoded sample counts disagreed.
     Inconsistent(String),

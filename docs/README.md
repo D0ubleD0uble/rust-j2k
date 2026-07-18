@@ -16,8 +16,9 @@ the standard that GRIB2 template 5.40 (`grid_jpeg`) needs, because that path
 unblocks a real downstream consumer (the fieldglass GRIB2 reader) and forces the
 hardest core (the EBCOT block coder and the wavelet transform) to be correct
 before any breadth work begins. Everything after that widens the same engine
-outward toward full Part 1, the JP2 file format, HTJ2K, an encoder, and the
-later parts of the standard.
+outward: the general Part 1 codestream decoder is done (all 23 ISO/IEC 15444-4
+conformance entries decode in class), and the JP2 file format, HTJ2K, an
+encoder, and the later parts of the standard follow.
 
 This is a real gap to fill: as of 2026 there is no production-grade pure-Rust
 JPEG 2000 codec. The usable options (`jp2k`, `openjpeg-sys`, `grokj2k-sys`) all
@@ -30,8 +31,8 @@ and stale.
   OpenJPEG implements, which part of the standard it belongs to, whether GRIB2
   needs it, and which project phase delivers it.
 - [roadmap.md](roadmap.md) — the phased plan, from the initial skeleton through
-  the GRIB2 decode MVP (Phase 1, shipped in v0.1.0) to full-codec parity, with
-  the gate for each phase.
+  the GRIB2 decode MVP (Phase 1, shipped in v0.1.0) and the general Part 1
+  decoder (Phase 2, shipped) to full-codec parity, with the gate for each phase.
 - [roadmap-phase1.md](roadmap-phase1.md) — the GRIB2 decode MVP broken into
   ordered milestones, each tied to its module, its oracle, and what it unblocks.
 - [roadmap-phase2.md](roadmap-phase2.md) — the general Part 1 decoder broken into
