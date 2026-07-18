@@ -39,7 +39,7 @@
 use crate::Result;
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
-use crate::tier1::{Band, Bands, DetailBands, SubbandCoeffs};
+use crate::pipeline::{Band, Bands, DetailBands, Samples, SubbandCoeffs};
 
 /// 9/7 lifting coefficients (ISO/IEC 15444-1 Table F.4): the two predict
 /// (`ALPHA`, `GAMMA`) and two update (`BETA`, `DELTA`) factors.
@@ -57,34 +57,6 @@ const K: f32 = 1.230_174_1;
 /// (pre level-shift), driven by the COD transform choice and decomposition
 /// level count. Output is row-major, `width * height` of the full resolution.
 ///
-/// One component's reconstructed samples, still on the arithmetic the wavelet
-/// used. Reversible 5/3 reconstructs in exact integers; irreversible 9/7
-/// reconstructs in `f32` and is *not* rounded here.
-///
-/// The rounding is deferred to [`crate::image::assemble`] so that it happens
-/// exactly once, after the inverse colour transform. ICT mixes the first three
-/// components arithmetically (Annex G.3), and rounding each of them beforehand
-/// would inject up to half a unit of error into that mix. OpenJPEG defers it the
-/// same way: `opj_tcd_mct_decode` runs on `OPJ_FLOAT32*`, and
-/// `opj_tcd_dc_level_shift_decode` is what calls `opj_lrintf`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Samples {
-    /// 5/3 reversible: exact integers.
-    Reversible(Vec<i32>),
-    /// 9/7 irreversible: real-valued, unrounded.
-    Irreversible(Vec<f32>),
-}
-
-impl Samples {
-    /// Number of samples, whichever arm carries them.
-    pub fn len(&self) -> usize {
-        match self {
-            Samples::Reversible(v) => v.len(),
-            Samples::Irreversible(v) => v.len(),
-        }
-    }
-}
-
 /// The [`SubbandCoeffs`] arm fixes the arithmetic: reversible 5/3 reconstructs
 /// in exact integers, irreversible 9/7 in `f32`. Both must agree with the COD
 /// transform (checked in debug builds).
@@ -604,7 +576,7 @@ mod tests {
     use crate::codestream::markers::{
         Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
     };
-    use crate::tier1::SubbandCoeffs;
+    use crate::pipeline::SubbandCoeffs;
 
     /// A minimal single-component main header. The inverse reads only the
     /// transform choice and the decomposition-level count from it (both checked

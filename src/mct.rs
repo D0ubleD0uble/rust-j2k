@@ -14,7 +14,7 @@
 //!
 //! Components past the third pass through untouched.
 
-use crate::dwt::Samples;
+use crate::pipeline::Samples;
 use crate::{Error, Result};
 
 /// Invert the reversible colour transform over the first three components

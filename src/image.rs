@@ -5,7 +5,7 @@
 
 use crate::codestream::MainHeader;
 use crate::codestream::markers::{Rect, Siz, Transform};
-use crate::dwt::Samples;
+use crate::pipeline::Samples;
 use crate::{Error, Result};
 
 /// A decoded image: the image area on the reference grid, plus its components.
