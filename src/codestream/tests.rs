@@ -1490,12 +1490,15 @@ fn reserved_markers_carry_no_segment() {
 /// the packet data means, so silently ignoring it would risk a wrong image.
 #[test]
 fn unknown_marker_segments_are_walked_then_reported_unsupported() {
+    // Codes this decoder names — the Part 2 block (0xFF74..=0xFF78) among them —
+    // reject under their own message, checked in the reject matrix. These are the
+    // ones it genuinely does not recognise, which the walk must still step over.
     for code in [
         0xFF01u16, // no part of the standard we implement
         0xFF2F,    // just below the reserved segment-less range
         0xFF40,    // just above it
-        0xFF74,    // Part 2 MCT
-        0xFF78,    // Part 2 CBD
+        0xFF73,    // just below the Part 2 block
+        0xFF79,    // just above the Part 2 block
     ] {
         let bytes = header_with(&seg(code, &[1, 2, 3, 4]));
 
@@ -1795,16 +1798,6 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with(&seg(marker::CAP, &[0, 0]))),
             Variant::Unsupported,
         ),
-        (
-            "Part 2 multiple-component transform (MCT)",
-            err(&header_with(&seg(0xFF74, &[0, 0]))),
-            Variant::Unsupported,
-        ),
-        (
-            "Part 2 component bit depth (CBD)",
-            err(&header_with(&seg(0xFF78, &[0, 0]))),
-            Variant::Unsupported,
-        ),
         // Multiple components are decoded, so they left this table. What
         // replaces them is the allocation guard: every component reconstructs
         // into its own buffer, so a large image with many components must be
@@ -1975,6 +1968,23 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     // packet headers are decoded — issue #71); PLT is decoded in the tile-part
     // header and structurally illegal in the main one.
     for (name, code) in [("PPT", marker::PPT), ("SOP", marker::SOP)] {
+        rows.push((
+            name,
+            err(&header_with(&seg(code, &[0, 0]))),
+            Variant::Unsupported,
+        ));
+    }
+
+    // Every JPEG 2000 Part 2 codestream marker (0xFF74..=0xFF78): out of the
+    // Part 1 subset, so each is an `Unsupported` feature the moment it appears,
+    // never half-parsed as Part 1 (issue #78). CAP (Part 15/HTJ2K) is above.
+    for (name, code) in [
+        ("MCT", marker::MCT),
+        ("MCC", marker::MCC),
+        ("NLT", marker::NLT),
+        ("MCO", marker::MCO),
+        ("CBD", marker::CBD),
+    ] {
         rows.push((
             name,
             err(&header_with(&seg(code, &[0, 0]))),
