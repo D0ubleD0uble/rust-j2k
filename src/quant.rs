@@ -8,7 +8,7 @@
 //! expounded, reconstructed from the QCD/QCC (exponent, mantissa) and the
 //! number of guard bits.
 //!
-//! For subband `b`, the step size (E-3) is
+//! For subband `b`, the ISO step size (E-3) is
 //!
 //! ```text
 //! Δ_b = (1 + μ_b / 2^11) · 2^(R_I + gain_b − ε_b)
@@ -17,7 +17,9 @@
 //! where `ε_b`/`μ_b` are the QCD exponent/mantissa, `R_I` the component bit
 //! depth (SIZ), and `gain_b` the log2 nominal subband gain (LL 0, HL/LH 1,
 //! HH 2). Guard bits do not enter the step; they size the magnitude bit-planes,
-//! which Tier-1/Tier-2 already consumed.
+//! which Tier-1/Tier-2 already consumed. The `gain_b` term is **not** applied
+//! here — the inverse 9/7 carries it, one factor of two per high-pass filtering
+//! (see [`apply_band`] and [`crate::dwt`]).
 //!
 //! **The mid-point reconstruction (E.1.1.2, r = ½) is not applied here.**
 //! Tier-1 already carries it: a coefficient that becomes significant at plane
@@ -36,9 +38,8 @@
 //! even `q` — an easy pair of mistakes to make together, because they look
 //! correct on any coefficient that was coded to its last bit-plane.
 //!
-//! The two decoders split `gain_b` differently — see [`apply_band`] — so the
-//! step matches OpenJPEG's `band->stepsize` exactly on `LL` and only closely on
-//! the detail bands.
+//! The step here therefore matches OpenJPEG's gain-free 9/7 decode step on
+//! every band; the gain moves to the inverse transform (see [`apply_band`]).
 
 use crate::Result;
 use crate::codestream::MainHeader;
@@ -109,12 +110,12 @@ fn scale_irreversible(header: &MainHeader, comp: usize, bands: &mut Bands<f32>) 
         }
     }
 
-    apply_band(&mut bands.ll, step_params(qcd, 0)?, 0, prec);
+    apply_band(&mut bands.ll, step_params(qcd, 0)?, prec);
     let mut b = 1;
     for level in &mut bands.levels {
-        apply_band(&mut level.hl, step_params(qcd, b)?, 1, prec);
-        apply_band(&mut level.lh, step_params(qcd, b + 1)?, 1, prec);
-        apply_band(&mut level.hh, step_params(qcd, b + 2)?, 2, prec);
+        apply_band(&mut level.hl, step_params(qcd, b)?, prec);
+        apply_band(&mut level.lh, step_params(qcd, b + 1)?, prec);
+        apply_band(&mut level.hh, step_params(qcd, b + 2)?, prec);
         b += 3;
     }
     Ok(())
@@ -141,28 +142,31 @@ fn step_params(qcd: &Qcd, band: usize) -> Result<(u8, u16)> {
     })
 }
 
-/// Scale one subband by half its step size. `gain` is the log2 nominal subband
-/// gain (Table E-1: LL 0, HL/LH 1, HH 2).
+/// Scale one subband by half its step size.
 ///
 /// The step is computed in `f64` because `R_I` can reach 38 bits (the SIZ
-/// depth), so the `2^(R_I + gain − ε)` factor can leave the `f32` range. It is
-/// then narrowed and halved the way OpenJPEG does — `(OPJ_FLOAT32)step`, then
+/// depth), so the `2^(R_I − ε)` factor can leave the `f32` range. It is then
+/// narrowed and halved the way OpenJPEG does — `(OPJ_FLOAT32)step`, then
 /// `0.5f * band->stepsize`. Narrowing first and halving after is exact (halving
 /// only decrements the exponent), and multiplying each coefficient by
 /// `0.5 · step` in one `f32` operation is a single rounding, as the oracle has.
 /// Keeping an `f64` intermediate would be *more* accurate and would round
 /// differently near a tie.
 ///
-/// The gain lives here, in the step. OpenJPEG's decoder instead zeroes it
-/// (`tcd.c`'s `log2_gain = (!isEncoder && qmfbid == 0) ? 0 : …`) and folds the
-/// missing factor of two into the inverse 9/7 as `two_invK`. Its own comment
-/// calls that `BUG_WEIRD_TWO_INVK`, and the constant it uses, `1.625732422`,
-/// is 3.3e-5 off the true `2/K`. So on the detail bands the two decoders reach
-/// the same answer by different routes, and agreement there is close but not
-/// bit-for-bit. This crate keeps the exact `1/K`; `p0_09` decodes bit-exact
-/// against the ISO reference with it.
-fn apply_band(band: &mut Band<f32>, (exp, mant): (u8, u16), gain: i32, prec: i32) {
-    let step = (1.0 + f64::from(mant) / MANTISSA_DENOM) * 2f64.powi(prec + gain - i32::from(exp));
+/// The step deliberately omits the log2 nominal subband gain (Table E-1: LL 0,
+/// HL/LH 1, HH 2). OpenJPEG omits it too for the 9/7 decode (`tcd.c`'s
+/// `log2_gain = (!isEncoder && qmfbid == 0) ? 0 : …`) and folds the gain into
+/// the inverse 9/7 instead, one factor of two per high-pass filtering. This
+/// crate does the same in [`crate::dwt`] (high-pass reconstruction scaled by
+/// `2/K` rather than `1/K`). Placing the gain per-filter, not per-subband, is
+/// what makes it correct on a tile-component whose coarse resolutions are empty:
+/// there a coefficient can be high-pass a different number of times than its
+/// nominal subband gain, and a fixed `2^gain` in the step would mis-scale it
+/// (see #126). `2/K` is applied as an exact `2 · (1/K)`, so for the ordinary
+/// case — where the high-pass count equals the gain — the result is bit-for-bit
+/// what the old `2^gain`-in-step form produced, and `p0_09` stays exact.
+fn apply_band(band: &mut Band<f32>, (exp, mant): (u8, u16), prec: i32) {
+    let step = (1.0 + f64::from(mant) / MANTISSA_DENOM) * 2f64.powi(prec - i32::from(exp));
     let half_step = 0.5f32 * step as f32;
     for v in &mut band.data {
         *v *= half_step;
@@ -235,8 +239,10 @@ mod tests {
     }
 
     /// The Annex E.1 step size, recomputed independently for the assertions.
-    fn step(prec: i32, gain: i32, exp: i32, mant: i32) -> f32 {
-        (1.0 + mant as f32 / 2048.0) * 2f32.powi(prec + gain - exp)
+    /// The gain is not part of the step (dequantization omits it; the inverse
+    /// 9/7 carries it — see [`apply_band`]), so it does not appear here.
+    fn step(prec: i32, exp: i32, mant: i32) -> f32 {
+        (1.0 + mant as f32 / 2048.0) * 2f32.powi(prec - exp)
     }
 
     /// One coefficient, as `opj_t1_clbl_decode_processor` computes it:
@@ -294,11 +300,11 @@ mod tests {
             dequantize(&header(prec, qcd), 0, one_level(5.0, -3.0, 0.0, 2.0)).unwrap(),
         );
 
-        assert_close(out.ll.data[0], recon(5.0, step(8, 0, 8, 0)));
-        assert_close(out.levels[0].hl.data[0], recon(-3.0, step(8, 1, 7, 512)));
+        assert_close(out.ll.data[0], recon(5.0, step(8, 8, 0)));
+        assert_close(out.levels[0].hl.data[0], recon(-3.0, step(8, 7, 512)));
         // A zero index stays exactly zero, no bias applied.
         assert_eq!(out.levels[0].lh.data[0], 0.0);
-        assert_close(out.levels[0].hh.data[0], recon(2.0, step(8, 2, 6, 1024)));
+        assert_close(out.levels[0].hh.data[0], recon(2.0, step(8, 6, 1024)));
     }
 
     #[test]
@@ -328,9 +334,9 @@ mod tests {
         });
         let out = irreversible(dequantize(&header(prec, qcd), 0, coeffs).unwrap());
 
-        assert_close(out.ll.data[0], recon(1.0, step(8, 0, 10, 100)));
-        assert_close(out.levels[0].hl.data[0], recon(1.0, step(8, 1, 10, 100)));
-        assert_close(out.levels[1].hl.data[0], recon(1.0, step(8, 1, 9, 100)));
+        assert_close(out.ll.data[0], recon(1.0, step(8, 10, 100)));
+        assert_close(out.levels[0].hl.data[0], recon(1.0, step(8, 10, 100)));
+        assert_close(out.levels[1].hl.data[0], recon(1.0, step(8, 9, 100)));
     }
 
     #[test]
@@ -353,7 +359,7 @@ mod tests {
             levels,
         });
         let out = irreversible(dequantize(&header(8, qcd), 0, coeffs).unwrap());
-        assert_close(out.levels[2].hl.data[0], recon(1.0, step(8, 1, 0, 0)));
+        assert_close(out.levels[2].hl.data[0], recon(1.0, step(8, 0, 0)));
     }
 
     #[test]
@@ -417,11 +423,11 @@ mod tests {
         });
         let out = irreversible(dequantize(&header(prec, qcd), 0, coeffs).unwrap());
 
-        assert_close(out.ll.data[0], recon(2.0, step(8, 0, 9, 0)));
-        assert_close(out.levels[0].lh.data[0], recon(2.0, step(8, 1, 8, 32)));
-        assert_close(out.levels[0].hh.data[0], recon(2.0, step(8, 2, 7, 64)));
-        assert_close(out.levels[1].hl.data[0], recon(2.0, step(8, 1, 6, 128)));
-        assert_close(out.levels[1].hh.data[0], recon(2.0, step(8, 2, 5, 512)));
+        assert_close(out.ll.data[0], recon(2.0, step(8, 9, 0)));
+        assert_close(out.levels[0].lh.data[0], recon(2.0, step(8, 8, 32)));
+        assert_close(out.levels[0].hh.data[0], recon(2.0, step(8, 7, 64)));
+        assert_close(out.levels[1].hl.data[0], recon(2.0, step(8, 6, 128)));
+        assert_close(out.levels[1].hh.data[0], recon(2.0, step(8, 5, 512)));
     }
 
     #[test]

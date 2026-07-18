@@ -297,13 +297,21 @@ fn inverse_9_7(signal: &mut [f32], cas: usize) {
         return;
     }
     let (low, high) = (cas, 1 - cas);
-    let inv_k = 1.0 / K;
-    // Undo scaling: low-pass by K, high-pass by 1/K.
+    // Undo scaling: low-pass by K, high-pass by 2/K. The extra factor of two
+    // over the ISO `1/K` carries the subband gain, which dequantization leaves
+    // out of the step (see [`crate::quant`]): every high-pass filtering
+    // contributes one gain doubling here, so a coefficient is scaled by exactly
+    // `2^(number of times it is high-pass)` rather than by a fixed `2^gain`.
+    // For an ordinary tile-component the two agree, but they diverge once a
+    // coarse resolution is empty, where the high-pass count no longer equals the
+    // nominal gain (#126). Written `2.0 * (1/K)` so the doubling is exact and
+    // the ordinary case stays bit-for-bit identical to the old form.
+    let two_inv_k = 2.0 * (1.0 / K);
     for i in (low..n).step_by(2) {
         signal[i] *= K;
     }
     for i in (high..n).step_by(2) {
-        signal[i] *= inv_k;
+        signal[i] *= two_inv_k;
     }
     // Each lifting step adjusts one parity using its two immediate neighbours of
     // the other parity, swept across the whole row before the next step runs.
@@ -325,7 +333,10 @@ fn lift_step(signal: &mut [f32], n: usize, start: usize, coeff: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALPHA, BETA, DELTA, GAMMA, K, inverse_5_3, inverse_9_7, lift_step, reflect};
+    use super::{
+        ALPHA, BETA, Band, Bands, DELTA, DetailBands, GAMMA, K, inverse_5_3, inverse_9_7,
+        lift_step, reconstruct, reflect,
+    };
 
     /// Forward 5/3 lifting, the exact inverse of [`inverse_5_3`], transcribed
     /// straight from the standard's predict-then-update order. Kept in the test
@@ -363,12 +374,13 @@ mod tests {
         lift_step(signal, n, low, BETA);
         lift_step(signal, n, high, GAMMA);
         lift_step(signal, n, low, DELTA);
-        let inv_k = 1.0 / K;
+        // Reciprocals of the inverse scaling: low-pass by 1/K, high-pass by K/2
+        // (the inverse multiplies high-pass by 2/K, carrying the subband gain).
         for i in (low..n).step_by(2) {
-            signal[i] *= inv_k;
+            signal[i] *= 1.0 / K;
         }
         for i in (high..n).step_by(2) {
-            signal[i] *= K;
+            signal[i] *= K / 2.0;
         }
     }
 
@@ -389,6 +401,70 @@ mod tests {
         // Degenerate single sample: everything folds to 0.
         for i in -3..3 {
             assert_eq!(reflect(i, 1), 0);
+        }
+    }
+
+    /// A non-first tile-component under a high `NL` over a tiny tile can have its
+    /// coarse resolutions empty at an odd origin, so a coefficient is high-pass a
+    /// different number of times than its nominal subband gain. With the gain
+    /// carried per high-pass filtering (2/K) rather than baked into the step
+    /// (2^gain), the 9/7 reconstruction is correct here; the old form was not
+    /// (#126). These are `p1_06`'s tile (1,0), component 0 — `x ∈ [3, 6)`,
+    /// `NL = 4` — with its dequantized coefficients (LL empty; the DC is carried
+    /// by an HL coefficient at the first non-empty level), and the expected
+    /// column-constant output matches the ISO/IEC 15444-4 reference within class.
+    #[test]
+    fn empty_coarse_resolution_carries_the_subband_gain_per_filter() {
+        fn fb(ox: u32, oy: u32, w: usize, h: usize, data: &[f32]) -> Band<f32> {
+            Band {
+                origin: (ox, oy),
+                width: w,
+                height: h,
+                data: data.to_vec(),
+            }
+        }
+        let bands = Bands {
+            ll: fb(1, 0, 0, 1, &[]),
+            levels: vec![
+                DetailBands {
+                    hl: fb(0, 0, 0, 1, &[]),
+                    lh: fb(1, 0, 0, 0, &[]),
+                    hh: fb(0, 0, 0, 0, &[]),
+                },
+                // First non-empty level: a lone HL coefficient carries the DC.
+                DetailBands {
+                    hl: fb(0, 0, 1, 1, &[4.910_476]),
+                    lh: fb(1, 0, 0, 0, &[]),
+                    hh: fb(0, 0, 1, 0, &[]),
+                },
+                DetailBands {
+                    hl: fb(1, 0, 0, 1, &[]),
+                    lh: fb(1, 0, 1, 1, &[0.0]),
+                    hh: fb(1, 0, 0, 1, &[]),
+                },
+                DetailBands {
+                    hl: fb(
+                        1,
+                        0,
+                        2,
+                        2,
+                        &[-21.382_141, 2.101_135, -21.382_141, 2.101_135],
+                    ),
+                    lh: fb(2, 0, 1, 1, &[0.0]),
+                    hh: fb(1, 0, 2, 1, &[0.0, 0.0]),
+                },
+            ],
+        };
+        let out = reconstruct(bands, inverse_9_7);
+        assert_eq!((out.width, out.height), (3, 3));
+        // Column-constant (all vertical detail is zero), the reference structure.
+        let expected = [-23.819, 14.551, 14.359];
+        for (i, v) in out.data.iter().enumerate() {
+            let want = expected[i % 3];
+            assert!(
+                (v - want).abs() < 0.02,
+                "sample {i}: got {v}, want ~{want} (gain must be per-filter, not 2^gain)"
+            );
         }
     }
 
@@ -528,7 +604,7 @@ mod tests {
     use crate::codestream::markers::{
         Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
     };
-    use crate::tier1::{Band, Bands, DetailBands, SubbandCoeffs};
+    use crate::tier1::SubbandCoeffs;
 
     /// A minimal single-component main header. The inverse reads only the
     /// transform choice and the decomposition-level count from it (both checked
