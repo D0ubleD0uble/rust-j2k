@@ -919,6 +919,17 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
                 )));
             }
 
+            // A JPEG 2000 Part 2 codestream marker (ISO/IEC 15444-2). Named so
+            // the rejection says which Part 2 feature blocks the decode —
+            // multiple-component transforms, non-linearity, extra bit depths —
+            // rather than reading as a bare unknown code.
+            code if marker::PART2.contains(&code) => {
+                return Err(Error::Unsupported(format!(
+                    "{} is a JPEG 2000 Part 2 marker, outside the Part 1 subset",
+                    marker::describe(seg.code)
+                )));
+            }
+
             // The reserved segment-less range is *defined* to carry nothing, so
             // it is the one thing that can be passed over safely.
             code if marker::RESERVED_NO_SEGMENT.contains(&code) => {}
@@ -927,9 +938,9 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // its segment — that is what lets the header be traversed at all —
             // but we will not decode past it: every marker code is allocated by
             // some part of the standard, and an unknown one may well change what
-            // the packet data means (Part 2's MCT/MCC/MCO, CBD, NLT; Part 15's
-            // HTJ2K block coder). Guessing that it is ignorable would trade a
-            // clean rejection for a silently wrong image.
+            // the packet data means (Part 15's HTJ2K block coder, later
+            // extensions). Guessing that it is ignorable would trade a clean
+            // rejection for a silently wrong image.
             other => {
                 return Err(Error::Unsupported(format!(
                     "unrecognized marker {other:#06X} in the main header"

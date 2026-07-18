@@ -27,6 +27,19 @@ pub mod marker {
     pub const EPH: u16 = 0xFF92; // end of packet header
     pub const COM: u16 = 0xFF64; // comment
 
+    // JPEG 2000 Part 2 (ISO/IEC 15444-2) codestream markers, the contiguous
+    // 0xFF74..=0xFF78 block. Outside the Part 1 subset this decoder reads: a
+    // codestream carrying one is rejected — named, so the report says which
+    // Part 2 feature blocks it — rather than half-parsed as Part 1.
+    pub const MCT: u16 = 0xFF74; // multiple-component transformation
+    pub const MCC: u16 = 0xFF75; // multiple-component collection
+    pub const NLT: u16 = 0xFF76; // non-linearity point transformation
+    pub const MCO: u16 = 0xFF77; // multiple-component transformation ordering
+    pub const CBD: u16 = 0xFF78; // component bit depth definition
+
+    /// The Part 2 codestream markers, rejected as a block.
+    pub const PART2: std::ops::RangeInclusive<u16> = MCT..=CBD;
+
     /// Reserved markers that carry no segment (ISO Table A-1). A walker that
     /// reads a length after one of these consumes the bytes that follow it;
     /// conformance codestream `p0_02` puts `0xFF30` in its main header to catch
@@ -60,6 +73,11 @@ pub mod marker {
             SOP => "SOP",
             EPH => "EPH",
             COM => "COM",
+            MCT => "MCT",
+            MCC => "MCC",
+            NLT => "NLT",
+            MCO => "MCO",
+            CBD => "CBD",
             _ => return None,
         })
     }
