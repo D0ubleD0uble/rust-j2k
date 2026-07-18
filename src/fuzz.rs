@@ -48,7 +48,9 @@ pub fn tier1_block(data: &[u8]) {
         // Every decoded style flag whose contract this hook can honour. `LAZY`
         // stays out: `decode_block` requires the lazy split's homogeneous
         // segments (raw runs never carry a cleanup pass), and this hook feeds
-        // one unsplit segment. The HTJ2K bits are rejected by decode_cod.
+        // one unsplit segment — the `tile_body` target's bypass shape covers
+        // it through the real tier-2 split instead. The HTJ2K bits are
+        // rejected by decode_cod.
         style: c & (RESET | TERMALL | VCAUSAL | PTERM | SEGSYM),
         roi_shift: d & 0x3F,
     };

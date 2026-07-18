@@ -119,10 +119,12 @@ jobs:
       # whose std isn't installed on the runner.
       - name: Build all fuzz targets
         run: cargo fuzz build --target x86_64-unknown-linux-gnu
+      # The codestream-reading targets take the J2K marker dictionary so
+      # mutation can splice whole marker codes instead of rediscovering them.
       - name: Fuzz decode (60s)
-        run: cargo fuzz run decode --target x86_64-unknown-linux-gnu -- -max_total_time=60 -rss_limit_mb=4096
+        run: cargo fuzz run decode --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
       - name: Fuzz tile_body (45s)
-        run: cargo fuzz run tile_body --target x86_64-unknown-linux-gnu -- -max_total_time=45 -rss_limit_mb=4096
+        run: cargo fuzz run tile_body --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=45 -rss_limit_mb=4096
       - name: Fuzz tier1_block (30s)
         run: cargo fuzz run tier1_block --target x86_64-unknown-linux-gnu -- -max_total_time=30 -rss_limit_mb=4096
       - name: Fuzz mq (15s)

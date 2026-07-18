@@ -1,0 +1,44 @@
+# JPEG 2000 Part 1 codestream marker dictionary (ISO/IEC 15444-1 Table A-1),
+# for libFuzzer's `-dict=` on the codestream-reading targets (`decode`,
+# `tile_body`). Marker codes are the two-byte tokens mutation almost never
+# synthesizes on its own; with the dictionary the fuzzer can splice a POC into
+# a main header or an SOT into a tile body in one step.
+#
+# Names mirror src/codestream/markers.rs.
+
+# Delimiters (no segment body).
+soc="\xff\x4f"
+sod="\xff\x93"
+eoc="\xff\xd9"
+eph="\xff\x92"
+
+# Fixed and functional marker segments.
+cap="\xff\x50"
+siz="\xff\x51"
+cod="\xff\x52"
+coc="\xff\x53"
+tlm="\xff\x55"
+plm="\xff\x57"
+plt="\xff\x58"
+qcd="\xff\x5c"
+qcc="\xff\x5d"
+rgn="\xff\x5e"
+poc="\xff\x5f"
+ppm="\xff\x60"
+ppt="\xff\x61"
+crg="\xff\x63"
+com="\xff\x64"
+sot="\xff\x90"
+
+# Part 2 markers the decoder names in its rejects.
+mct="\xff\x74"
+mcc="\xff\x75"
+nlt="\xff\x76"
+mco="\xff\x77"
+cbd="\xff\x78"
+
+# Composites: a whole SOP segment (Lsop = 4, Nsop = 0), and an SOT segment
+# skeleton (Isot 0, Psot 0 = runs to EOC, TPsot 0 of TNsot 1) that turns a
+# spliced buffer into a last tile-part in one mutation.
+sop_segment="\xff\x91\x00\x04\x00\x00"
+sot_segment="\xff\x90\x00\x0a\x00\x00\x00\x00\x00\x00\x00\x01"
