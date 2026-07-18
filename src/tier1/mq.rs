@@ -89,11 +89,6 @@ pub struct MqDecoder<'a> {
     c: u32,
     a: u32,
     ct: i32,
-    /// How many times BYTEIN took the marker branch — a `0xFF` followed by a
-    /// byte above `0x8F`, which includes every synthesised byte past the end of
-    /// `data`. OpenJPEG's `end_of_byte_stream_counter`; only the predictable
-    /// termination check reads it.
-    marker_reads: u32,
 }
 
 impl<'a> MqDecoder<'a> {
@@ -105,7 +100,6 @@ impl<'a> MqDecoder<'a> {
             c: 0,
             a: 0,
             ct: 0,
-            marker_reads: 0,
         };
         d.init();
         d
@@ -129,16 +123,18 @@ impl<'a> MqDecoder<'a> {
 
     /// Whether the segment ended the way `predictable termination` promises
     /// (ISO/IEC 15444-1 D.4.2): the codeword accounts for all but the last two
-    /// bytes, and the decoder did not have to synthesise more than two bytes
-    /// past the end to finish.
+    /// bytes, whose value the MQ flush leaves undefined.
     ///
-    /// The two-byte slack is the MQ flush's, not a fudge factor: the terminating
-    /// procedure leaves up to two bytes whose value the decoder never needs.
-    /// This is `opj_t1_decode_cblk`'s check, condition for condition — OpenJPEG
-    /// reports it as a warning, and reporting it at all is the only thing the
-    /// flag buys a decoder.
+    /// This checks only the *unconsumed* side — a segment padded with bytes the
+    /// codeword never reaches, which signals a wrong segment length. It does not
+    /// check the other direction OpenJPEG's `check_pterm` warns on (the decoder
+    /// synthesising `0xFF` markers past a short segment): a rate-truncated or
+    /// `bypass` segment routinely runs a few bytes past its end and OpenJPEG
+    /// decodes it anyway, so rejecting there would refuse a valid codestream
+    /// (`p1_05`). OpenJPEG only warns either way; this crate keeps the one half
+    /// that catches corruption without rejecting sound input.
     pub fn ends_predictably(&self) -> bool {
-        self.unconsumed() <= 2 && self.marker_reads <= 2
+        self.unconsumed() <= 2
     }
 
     /// INITDEC (ISO C.3.5): prime the registers and fold in the first byte.
@@ -165,7 +161,6 @@ impl<'a> MqDecoder<'a> {
             if self.byte(self.pos + 1) > 0x8F {
                 self.c = self.c.wrapping_add(0xFF00);
                 self.ct = 8;
-                self.marker_reads += 1;
             } else {
                 self.pos += 1;
                 self.c = self.c.wrapping_add((self.byte(self.pos) as u32) << 9);
