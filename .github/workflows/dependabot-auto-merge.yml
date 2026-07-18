@@ -24,19 +24,15 @@ jobs:
     steps:
       - name: Fetch Dependabot metadata
         id: meta
-        uses: dependabot/fetch-metadata@v3
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
 
-      # Auto-merge only:
-      #   - any patch bump (dev or prod), or
-      #   - any dev-dependency bump up to and including minor.
-      # Major bumps and production minor bumps stay manual. For grouped PRs the
-      # update-type/dependency-type reflects the highest-risk member, so the
-      # gate stays conservative.
+      # Auto-merge patch bumps only. Anything wider — dev-dependency minors
+      # included — stays manual: dev dependencies run inside CI with access to
+      # its secrets, so a compromised minor is not low-risk. For grouped PRs
+      # the update-type reflects the highest-risk member, so the gate stays
+      # conservative.
       - name: Enable auto-merge
-        if: >
-          steps.meta.outputs.update-type != 'version-update:semver-major' &&
-          (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
-           steps.meta.outputs.dependency-type == 'direct:development')
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
