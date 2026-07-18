@@ -63,6 +63,13 @@ VARIANTS = {
     # only bit-exact grade of the two modes.
     "vcausal": (8, 0x08),
     "reset": (2, 0x02),
+    # Selective arithmetic coding bypass (lazy, bit 0). From the fifth coded
+    # bit-plane on, the significance and refinement passes are raw bits rather
+    # than MQ-coded, and each raw/MQ run is a separately terminated codeword
+    # segment (Annex D.5). A decoder that runs the whole block as one MQ codeword
+    # reconstructs garbage. The corpus's own bypass entries carry a COC marker
+    # and stop before Tier-1, so this synthetic fixture is the bit-exact grade.
+    "bypass": (1, 0x01),
 }
 
 

@@ -1614,3 +1614,36 @@ fn restart_segments_fill_one_pass_at_a_time_across_layers() {
     assert_eq!(block.segments[1].bytes(), vec![8, 9]);
     assert_eq!(next, data.len());
 }
+
+// ---- Code-block style: bypass / lazy (issue #66) ----
+
+/// The lazy (`bypass`) split terminates at every raw/MQ boundary: the ten MQ
+/// passes of the four most significant bit-planes come first, then each lower
+/// plane splits into a two-pass raw segment (significance + refinement) and a
+/// one-pass MQ segment (cleanup) — OpenJPEG's `opj_t2_init_seg` `10, 2, 1, 2,
+/// 1, …`.
+#[test]
+fn lazy_segment_max_passes_follows_the_10_2_1_pattern() {
+    const LAZY: u8 = 0x01;
+    let mut segments: Vec<SegmentState<'_>> = Vec::new();
+    let mut pattern = Vec::new();
+    for _ in 0..7 {
+        let max_passes = segment_max_passes(LAZY, &segments);
+        pattern.push(max_passes);
+        segments.push(SegmentState {
+            passes: 0,
+            max_passes,
+            chunks: Vec::new(),
+        });
+    }
+    assert_eq!(pattern, [10, 2, 1, 2, 1, 2, 1]);
+}
+
+/// `bypass` leaves the other split rules untouched: `termall` still terminates
+/// every pass, and the default style takes a single 109-pass segment.
+#[test]
+fn non_lazy_segment_max_passes_is_unchanged() {
+    const TERMALL: u8 = 0x04;
+    assert_eq!(segment_max_passes(TERMALL, &[]), 1);
+    assert_eq!(segment_max_passes(0, &[]), 109);
+}

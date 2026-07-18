@@ -1319,11 +1319,12 @@ fn decode_coding(b: &mut Cursor<'_>, origin: &str, explicit_precincts: bool) -> 
     let code_block_style = b.u8()?;
     // Each style flag changes how Tier-1 reads a code-block's coded segments.
     // Ignoring one does not decode a slightly different image, it decodes the
-    // wrong one, so reject rather than half-decode until each lands. `restart`,
-    // `predictable termination`, `segmentation symbols`, `vertically causal
-    // context` and `reset context probabilities` are decoded; the rest are not.
-    use markers::code_block_style::{PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
-    let undecoded = code_block_style & !(TERMALL | PTERM | SEGSYM | VCAUSAL | RESET);
+    // wrong one, so reject rather than half-decode until each lands. `bypass`,
+    // `restart`, `predictable termination`, `segmentation symbols`, `vertically
+    // causal context` and `reset context probabilities` are decoded; the two
+    // HTJ2K bits are not.
+    use markers::code_block_style::{LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
+    let undecoded = code_block_style & !(LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET);
     if undecoded != 0 {
         return Err(Error::Unsupported(format!(
             "{origin} code-block style ({}) is outside the decoded subset",
