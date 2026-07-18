@@ -27,7 +27,7 @@ support; it is a build/test tool here, not a runtime dependency of the codec.
 fuzz/
   Cargo.toml                    # detached crate, depends on libfuzzer-sys + rust-j2k
   fuzz_targets/decode.rs        # the public entry point: rust_j2k::decode(&[u8])
-  fuzz_targets/tile_body.rs     # a pinned valid header around fuzzed tile-part bytes
+  fuzz_targets/tile_body.rs     # a pinned valid header (geometry steered) around fuzzed tile-part bytes
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
 ```
@@ -38,6 +38,13 @@ The other three start deeper: `tile_body` wraps the input in a valid main
 header so every execution reaches the packet reader, and `tier1_block`/`mq`
 call hidden hooks the library exposes (`rust_j2k::fuzz`, `#[doc(hidden)]` and
 not public API) to drive the EBCOT block decoder and MQ coder directly.
+
+`tile_body`'s first input byte also steers the tile-component geometry, so one
+run reaches the widened Phase 2 tier-2 paths — three components with the colour
+transform, three quality layers, and an explicit precinct partition — not only
+the single-component single-layer default. Multi-*tile* geometry needs several
+tile-parts, which a single fuzzed body cannot supply, so it is covered by the
+`decode` target seeded with multi-tile codestreams.
 
 ## Running
 
@@ -53,11 +60,18 @@ real codestreams to mutate, which reaches far more of the pipeline than random
 bytes:
 
 ```sh
-# Seed the corpus once from the conformance fixtures.
-mkdir -p fuzz/corpus/decode && cp tests/fixtures/*.j2k fuzz/corpus/decode/
+# Seed the corpus once. The conformance codestreams carry the widened Phase 2
+# geometry — multi-tile, multi-component, multi-layer, precinct-partitioned —
+# so they reach far more of tier-2 than the synthetic single-tile fixtures.
+mkdir -p fuzz/corpus/decode
+cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode/
 
 # Time-boxed run (CI-friendly: no panics, no OOM, no hangs).
 cargo +nightly fuzz run decode -- -max_total_time=300 -rss_limit_mb=2048
+
+# Deeper periodic run over the widened surface; expected to find nothing.
+cargo +nightly fuzz run decode -- -max_total_time=3600 -rss_limit_mb=4096
+cargo +nightly fuzz run tile_body -- -max_total_time=1800 -rss_limit_mb=4096
 ```
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
