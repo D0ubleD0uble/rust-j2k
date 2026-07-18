@@ -7,6 +7,7 @@
 
 use std::collections::BTreeSet;
 
+use super::geometry::ResolutionGeom;
 use super::*;
 
 /// Every byte of a code-block, across all its codeword segments.
