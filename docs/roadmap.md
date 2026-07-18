@@ -16,8 +16,8 @@ sequence and the rationale.
 
 Every stage compiles, is stubbed with `todo!()`, and cites the ISO section it
 owns. The module layout is the pipeline: `codestream → tier2 → tier1 → quant →
-dwt → image`. Crate-level `allow(dead_code, unused_variables)` is in place and
-comes off as stages land.
+dwt → image`. Crate-level `allow(dead_code, unused_variables)` was in place and
+came off as the Phase 1 stages landed.
 
 ## Phase 1 — GRIB2 decode MVP *(done — shipped in v0.1.0)*
 

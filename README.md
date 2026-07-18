@@ -23,7 +23,7 @@ Or add it to `Cargo.toml`:
 
 ```toml
 [dependencies]
-rust-j2k = "0.1"
+rust-j2k = "0.3"
 ```
 
 The crate has no runtime dependencies and no C toolchain requirement. Minimum
@@ -31,10 +31,10 @@ supported Rust version is **1.87**.
 
 ## Usage
 
-The public surface is one function: bytes of a raw JPEG 2000 codestream in, a
-decoded `Image` out. An `Image` is the image area on the reference grid plus one
-`Component` per codestream component, each on its own sample grid. The decoded
-subset is single-component, so today that vector holds one entry.
+The public surface is small: bytes of a raw JPEG 2000 codestream in, a decoded
+`Image` out — `decode`, or `decode_with` to set options such as a resolution
+reduction. An `Image` is the image area on the reference grid plus one
+`Component` per codestream component, each on its own sample grid.
 
 ```rust
 use rust_j2k::decode;
@@ -88,23 +88,23 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 
 ## What it decodes
 
-This release decodes the JPEG 2000 codestream subset that GRIB2 template 5.40
-(`grid_jpeg`) produces:
-
 | Decoded | Not yet (returns `Error::Unsupported`) |
 | --- | --- |
 | Raw codestream (Annex A) | JP2 file format / boxes |
-| Integer components, signed or unsigned, up to 32 bits, with sub-sampling | — |
-| Reversible color transform (RCT) | Irreversible color transform (ICT) |
-| Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | — |
-| Multiple quality layers, all five progression orders | Multiple tiles, POC |
-| SOP/EPH packet delimiters | — |
-| No precinct subdivision, no ROI | Precincts, region of interest |
+| Integer components, signed or unsigned, up to 32 bits, with sub-sampling | Depths past the `i32` container (33–38 bits) |
+| Both color transforms: reversible (RCT) and irreversible (ICT) | Part 2 extensions (array MCT, …) |
+| Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | HTJ2K (Part 15) block coding |
+| Multiple tiles and tile-parts | — |
+| Multiple quality layers; all five progression orders and POC changes | — |
+| Precinct partitions; SOP/EPH delimiters; PPM/PPT packed headers | — |
+| All six code-block coding styles; region of interest (maxshift) | — |
+| Resolution-reduced decode (each level halves the output) | — |
 
-Anything outside the subset is rejected cleanly, not half-decoded. The long-run
-target is OpenJPEG-level coverage (full Part 1, the JP2 file format, HTJ2K, an
-encoder, and the later parts); we get there by widening this same engine
-outward. See [docs/roadmap.md](docs/roadmap.md) and [docs/scope.md](docs/scope.md).
+Anything outside the decoded set is rejected cleanly, not half-decoded. The
+long-run target is OpenJPEG-level coverage (full Part 1, the JP2 file format,
+HTJ2K, an encoder, and the later parts); we get there by widening this same
+engine outward. See [docs/roadmap.md](docs/roadmap.md) and
+[docs/scope.md](docs/scope.md).
 
 ## Pipeline
 
@@ -118,23 +118,24 @@ it owns.
 
 ## Status
 
-Phase 1 complete (v0.1.0). The GRIB2 §5.40 decode path is implemented end to end
-— codestream parsing, the MQ decoder, EBCOT passes, Tier-2 packets, the inverse
-DWT (5/3 and 9/7), dequantization, and image assembly — and passes the
-conformance gate against the OpenJPEG/eccodes oracle: bit-exact for the
-reversible 5/3 path, within tolerance for the irreversible 9/7 path.
+All 23 entries of the ISO/IEC 15444-4 conformance suite decode within their
+class-1 error bounds, gated in CI against committed reference images. The GRIB2
+§5.40 (`grid_jpeg`) path — the crate's original target — is gated bit-exact
+against the OpenJPEG/eccodes oracle.
 
-Later phases widen this same engine toward general Part 1 decode, the JP2 file
-format, HTJ2K, and an encoder. The phased plan is in
-[docs/roadmap.md](docs/roadmap.md).
+Next comes the JP2 file format, then HTJ2K and an encoder, widening this same
+engine. The plan is in [docs/roadmap.md](docs/roadmap.md).
 
 ## Correctness
 
-`tests/conformance.rs` is the bar: decode a corpus of real codestreams and
-compare against a trusted decoder (OpenJPEG, or eccodes for the GRIB2-sourced
-files). Bit-exact for the reversible path, within a stated tolerance for lossy.
-The full strategy — oracle cross-check, conformance suite, golden vectors,
-fuzzing — is in [docs/correctness.md](docs/correctness.md).
+Two harnesses set the bar. `tests/conformance_part4.rs` grades the vendored
+ISO/IEC 15444-4 conformance corpus against its class-1 error bounds — the
+standard's own definition of a compliant decoder. `tests/conformance.rs` decodes
+a corpus of real and synthetic codestreams and compares against a trusted
+decoder (OpenJPEG, or eccodes for the GRIB2-sourced files): bit-exact for the
+reversible path, within a stated tolerance for lossy. The full strategy —
+oracle cross-check, conformance suite, golden vectors, fuzzing — is in
+[docs/correctness.md](docs/correctness.md).
 
 ## Development
 

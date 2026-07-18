@@ -247,14 +247,14 @@ block decoder; the surrounding pipeline is untouched.
 with each style), plus Part 4 codestreams that set the corresponding flags. This
 track is golden-vector testable in isolation, so it runs alongside P2.1–P2.5.
 
-**Done:** restart, predictable termination, and segmentation symbols decode
-(their golden vectors grade bit-exact). Vertically causal context and reset of
-context probabilities now decode too, graded bit-exact against
+**Done:** all six styles decode. Restart, predictable termination, and
+segmentation symbols grade bit-exact against their golden vectors; vertically
+causal context and reset of context probabilities against
 `scripts/gen-cblksty-fixtures.py`'s `vcausal`/`reset` vectors. Their conformance
 entries do not grade on those flags alone: `p1_06` (vcausal) and `p1_02`
-(vcausal + reset) both also carry a PPT marker (#71), so they wait on the packed
-packet headers. Selective arithmetic-coding bypass (#66) is the one mode left; it
-unblocks `p1_03` and, with vcausal, `p1_05`.
+(vcausal + reset) both also carry a PPT marker, so they waited on the packed
+packet headers (P2.7). Selective arithmetic-coding bypass landed last; it grades
+`p1_03` and, with vcausal, `p1_05`.
 
 ### P2.7 — Packed-header, length, resilience, and registration markers (`src/codestream/`, `src/tier2/`)
 
@@ -289,11 +289,11 @@ per-component `(Xcrg, Ycrg)` offsets and records them on the header without
 resampling — the class-1 references were produced without resampling, so
 recording alone keeps `p0_03` and `p0_15` in class. PPT (A.7.5) reads a tile's
 packet headers from the packed marker buffer instead of inline, decoupling the
-header cursor from the body cursor; it grades `p1_02`. Two pieces of #71 remain:
-PPM (the main-header form, codestream-wide with per-tile-part framing), and PPT
-over a *tile grid* — `p1_06` exercises the latter and exposes a downstream
-9/7 multi-tile reconstruction bug (the Tier-2 parse is verified correct there),
-so multi-tile PPT is rejected for now pending that investigation.
+header cursor from the body cursor; it grades `p1_02`. PPM (the main-header
+form, codestream-wide with per-tile-part framing) and PPT over a *tile grid*
+have landed too — `p1_06` exposed a downstream 9/7 multi-tile reconstruction
+bug on the way (the subband gain was carried per subband instead of per
+high-pass filter, #126), now fixed, and it grades in class.
 
 ### P2.8 — Multiple component transform: RCT and ICT (`src/image.rs` or `src/mct.rs`)
 
