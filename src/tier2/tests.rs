@@ -220,7 +220,8 @@ fn one_precinct(cols: usize, rows: usize) -> Vec<PrecinctGeom> {
 /// check.
 fn geoms_of(header: &MainHeader, tile: u32, comp: usize) -> Result<Vec<ResolutionGeom>> {
     let mut budget = usize::MAX;
-    resolution_geoms(header, tile, comp, &mut budget)
+    let mut block_budget = usize::MAX;
+    resolution_geoms(header, tile, comp, &mut budget, &mut block_budget)
 }
 
 // ---- Geometry (ISO Eq. B-15, code-block grid B.7) ----
@@ -313,8 +314,9 @@ fn geometry_rejects_a_precinct_bomb_before_allocating() {
     header.components[0].coding.precinct_sizes = vec![(1, 1), (1, 1)];
 
     let mut budget = super::MAX_PRECINCTS;
+    let mut block_budget = super::MAX_CODE_BLOCKS;
     let start = Instant::now();
-    let result = resolution_geoms(&header, 0, 0, &mut budget);
+    let result = resolution_geoms(&header, 0, 0, &mut budget, &mut block_budget);
     let elapsed = start.elapsed();
 
     assert!(
@@ -343,8 +345,9 @@ fn the_precinct_budget_is_shared_across_components() {
     }
 
     let mut budget = super::MAX_PRECINCTS;
-    let first = resolution_geoms(&header, 0, 0, &mut budget);
-    let second = resolution_geoms(&header, 0, 1, &mut budget);
+    let mut block_budget = super::MAX_CODE_BLOCKS;
+    let first = resolution_geoms(&header, 0, 0, &mut budget, &mut block_budget);
+    let second = resolution_geoms(&header, 0, 1, &mut budget, &mut block_budget);
     assert!(
         first.is_err() || matches!(second, Err(crate::Error::Limit(_))),
         "two components sharing the budget must not both allocate their precincts"
@@ -645,6 +648,34 @@ fn block_count_guard_rejects_metadata_bomb() {
     let t = tile(&[]);
     let err = decode_packets(&h, &t).expect_err("guard fires before any packet parse");
     assert!(matches!(err, crate::Error::Limit(_)), "{err}");
+}
+
+/// The block budget bites *before* the band's block vector — and its per-precinct
+/// index vectors — are built, not after summing them: an 8192×8192 single-band
+/// tile-component under 4×4 blocks is ~2^22 blocks, and materializing that grid
+/// first is the ~160 MiB / multi-second cost the after-the-fact check paid. With
+/// the guard enforced inside the geometry walk this returns in microseconds.
+#[test]
+fn block_count_guard_rejects_before_allocating() {
+    use std::time::Instant;
+    // nl = 0 → one resolution, one LL band covering the whole tile-component;
+    // 8192/4 = 2048 blocks each way, ~2^22 in the single band.
+    let header = header(8192, 8192, 0, 2);
+
+    let mut budget = super::MAX_PRECINCTS;
+    let mut block_budget = super::MAX_CODE_BLOCKS;
+    let start = Instant::now();
+    let result = resolution_geoms(&header, 0, 0, &mut budget, &mut block_budget);
+    let elapsed = start.elapsed();
+
+    assert!(
+        matches!(result, Err(crate::Error::Limit(_))),
+        "an 8192×8192 single-band tile-component under 4×4 blocks must be rejected"
+    );
+    assert!(
+        elapsed.as_millis() < 100,
+        "the guard must fire before the block vectors are built, not after ({elapsed:?})"
+    );
 }
 
 // ---- Per-component geometry (issue #57) ----

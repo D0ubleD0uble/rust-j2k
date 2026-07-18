@@ -45,6 +45,17 @@ use tagtree::TagTree;
 /// is built, before the precincts are allocated — see [`resolution_geoms`].
 const MAX_PRECINCTS: usize = 1 << 18;
 
+/// Ceiling on the number of code-blocks one tile may hold, across every
+/// component, resolution, and subband. The sample budget bounds the decoded
+/// buffers, but the per-block bookkeeping — `BlockState`, the tag trees, and the
+/// eventual `CodeBlock`s, roughly 200 bytes a block — is driven by the code-block
+/// *count*, which legal 4×4 blocks push toward samples/16: a sub-kilobyte header
+/// could demand ~1 GiB of metadata. 2^19 clears every plausible real encode
+/// (64×64 default blocks at the full sample budget need ~2^15) while capping
+/// hostile geometry near 100 MiB. Enforced *while* the geometry is built, before
+/// each band's block vector is allocated — see [`band_geom`].
+const MAX_CODE_BLOCKS: usize = 1 << 19;
+
 /// The four subband orientations. Kept Tier-2-local so this stage stays
 /// independent of Tier-1; the assembly stage maps it to the Tier-1
 /// `Orientation` that selects the zero-coding context table.
@@ -162,32 +173,26 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
     // before any after-the-fact check could fire. So the cap is threaded through
     // `resolution_geoms` and enforced before the allocation, across every
     // component of the tile (`resolution_geoms` mutates the running total).
+    //
+    // The code-block count is bounded the same way and for the same reason: each
+    // band's `blocks` vector plus its per-block `BlockState`/tag trees dwarf the
+    // geometry tuple, and legal 4×4 blocks push the count toward samples/16, so
+    // the cap has to bite before those vectors fill rather than summing them
+    // afterwards. Both running totals are threaded through `resolution_geoms`.
     let mut precinct_budget = MAX_PRECINCTS;
+    let mut block_budget = MAX_CODE_BLOCKS;
     let component_count = header.siz.components.len();
     let geoms = (0..component_count)
-        .map(|c| resolution_geoms(header, tile.index, c, &mut precinct_budget))
+        .map(|c| {
+            resolution_geoms(
+                header,
+                tile.index,
+                c,
+                &mut precinct_budget,
+                &mut block_budget,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
-
-    // The sample budget bounds the decoded buffers, but the per-block
-    // bookkeeping below — `BlockState` and the eventual `CodeBlock`s, roughly
-    // 200 bytes a block — is driven by the code-block *count*, which legal 4×4
-    // blocks push toward samples/16: a sub-kilobyte header could demand ~1 GiB
-    // of metadata. 2^19 clears every plausible real encode (64×64 default blocks
-    // at the full sample budget need ~2^15) while capping hostile geometry near
-    // 100 MiB. The geometry tuples already built above are transient and an
-    // order of magnitude cheaper per block.
-    const MAX_CODE_BLOCKS: usize = 1 << 19;
-    let total_blocks: usize = geoms
-        .iter()
-        .flatten()
-        .flat_map(|level| &level.bands)
-        .map(|band| band.blocks.len())
-        .sum();
-    if total_blocks > MAX_CODE_BLOCKS {
-        return Err(Error::Limit(format!(
-            "{total_blocks} code-blocks exceeds the decode guard of {MAX_CODE_BLOCKS}"
-        )));
-    }
 
     // One state per (component, resolution, band), carried across every layer.
     // The tag trees decode incrementally and there is a pair per *precinct*, so
@@ -730,12 +735,15 @@ fn ceil_div(a: i64, b: i64) -> i64 {
 /// `precinct_budget` is the remaining precinct allowance across the whole tile;
 /// this decrements it per resolution and errors before the allocation once it is
 /// spent, so the [`MAX_PRECINCTS`] cap holds regardless of how a hostile header
-/// splits the count between components.
+/// splits the count between components. `block_budget` is the matching allowance
+/// for code-blocks, spent inside [`band_geom`] before each band's block vector is
+/// filled, so the [`MAX_CODE_BLOCKS`] cap holds the same way.
 fn resolution_geoms(
     header: &MainHeader,
     tile: u32,
     comp: usize,
     precinct_budget: &mut usize,
+    block_budget: &mut usize,
 ) -> Result<Vec<ResolutionGeom>> {
     let siz = &header.siz;
     let cod = &header
@@ -856,7 +864,8 @@ fn resolution_geoms(
                 xcb,
                 ycb,
                 &cbg,
-            )]
+                block_budget,
+            )?]
         } else {
             // Finer levels add HL, LH, HH at decomposition level `nb = NL-r+1`.
             let nb = level + 1;
@@ -878,9 +887,10 @@ fn resolution_geoms(
                     xcb,
                     ycb,
                     &cbg,
+                    block_budget,
                 )
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?
         };
 
         levels.push(ResolutionGeom {
@@ -924,6 +934,11 @@ fn prc_span(lo: i64, hi: i64, exp: u32) -> (usize, i64) {
 /// and the effective code-block exponents, tiling it with the code-block grid
 /// anchored at the canvas origin (ISO B.7), then grouping those blocks by the
 /// precinct they fall in.
+///
+/// `block_budget` is the tile's remaining code-block allowance; this band's
+/// `block_cols × block_rows` is spent against it before either the band-wide or
+/// the per-precinct index vectors are allocated, so a hostile geometry is
+/// rejected up front rather than after megabytes have been built.
 #[allow(clippy::too_many_arguments)]
 fn band_geom(
     kind: BandKind,
@@ -934,7 +949,8 @@ fn band_geom(
     xcb: u32,
     ycb: u32,
     cbg: &Cbg,
-) -> BandGeom {
+    block_budget: &mut usize,
+) -> Result<BandGeom> {
     let width = (bx1 - bx0).max(0) as usize;
     let height = (by1 - by0).max(0) as usize;
     let cbw = 1i64 << xcb;
@@ -942,6 +958,22 @@ fn band_geom(
 
     let (block_cols, first_col) = grid_span(bx0, bx1, cbw);
     let (block_rows, first_row) = grid_span(by0, by1, cbh);
+
+    // Spend the tile's code-block budget before this band's block vector — and
+    // the per-precinct index vectors below — are allocated. `checked_mul` guards
+    // the product itself, since a thin band under tiny blocks makes one factor as
+    // large as the band.
+    match block_cols
+        .checked_mul(block_rows)
+        .filter(|&n| n <= *block_budget)
+    {
+        Some(n) => *block_budget -= n,
+        None => {
+            return Err(Error::Limit(format!(
+                "tile code-block count exceeds the decode guard of {MAX_CODE_BLOCKS}"
+            )));
+        }
+    }
 
     let mut blocks = Vec::with_capacity(block_cols * block_rows);
     for j in 0..block_rows {
@@ -999,7 +1031,7 @@ fn band_geom(
         "the precincts must partition the band's code-block grid"
     );
 
-    BandGeom {
+    Ok(BandGeom {
         kind,
         origin: (bx0.max(0) as u32, by0.max(0) as u32),
         width,
@@ -1008,7 +1040,7 @@ fn band_geom(
         block_rows,
         blocks,
         precincts,
-    }
+    })
 }
 
 /// Number of code-block grid cells spanning `[lo, hi)` and the index of the

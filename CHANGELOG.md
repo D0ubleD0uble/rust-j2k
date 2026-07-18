@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The code-block count guard now rejects before allocating the per-band
+  geometry, matching the precinct guard. The budget is threaded through the
+  geometry walk and spent per subband, so a header pairing a large tile with
+  tiny code-blocks is refused up front instead of after its block and
+  precinct-index vectors have been materialized (~160 MiB transient in the
+  worst case).
+
 ### Changed
 
 - Two new error variants split what `Error::Unsupported` used to conflate
