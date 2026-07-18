@@ -218,18 +218,6 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
     // buffer and only the bodies stay inline; otherwise both are `data` and the
     // two cursors move together.
     let packed = !tile.packed_headers.is_empty();
-    // Single-tile PPT decodes; the multi-tile case is deferred. The Tier-2 parse
-    // is verified correct there — the packed headers extract byte-for-byte and
-    // the body cursor tracks the SOP layout exactly — but a *downstream*
-    // reconstruction bug surfaces on the corpus's only multi-tile PPT entry
-    // (`p1_06`: 9/7 over a 4×4 grid of 3×3 tiles), which no reference encoder
-    // reproduces to isolate. Rejecting keeps that a clean deferral rather than a
-    // silently wrong image; see the follow-up issue.
-    if packed && header.siz.num_tiles() > 1 {
-        return Err(Error::Unsupported(
-            "packed packet headers (PPT) over a tile grid are not yet decoded".into(),
-        ));
-    }
     let mut streams = PacketStreams {
         header: if packed { &tile.packed_headers } else { data },
         header_pos: 0,
