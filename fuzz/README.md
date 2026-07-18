@@ -26,6 +26,7 @@ support; it is a build/test tool here, not a runtime dependency of the codec.
 ```
 fuzz/
   Cargo.toml                    # detached crate, depends on libfuzzer-sys + rust-j2k
+  j2k.dict                      # J2K marker dictionary for the codestream-reading targets
   fuzz_targets/decode.rs        # the public entry point: rust_j2k::decode(&[u8])
   fuzz_targets/tile_body.rs     # a pinned valid header (geometry steered) around fuzzed tile-part bytes
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
@@ -39,12 +40,22 @@ header so every execution reaches the packet reader, and `tier1_block`/`mq`
 call hidden hooks the library exposes (`rust_j2k::fuzz`, `#[doc(hidden)]` and
 not public API) to drive the EBCOT block decoder and MQ coder directly.
 
-`tile_body`'s first input byte also steers the tile-component geometry, so one
-run reaches the widened Phase 2 tier-2 paths — three components with the colour
-transform, three quality layers, and an explicit precinct partition — not only
-the single-component single-layer default. Multi-*tile* geometry needs several
-tile-parts, which a single fuzzed body cannot supply, so it is covered by the
-`decode` target seeded with multi-tile codestreams.
+`tile_body`'s first input byte also steers the codestream shape, so one run
+reaches the widened tier-2 paths, not only the single-component single-layer
+default: three components with the colour transform, three quality layers, an
+explicit precinct partition, the bypass (lazy) code-block style combined with
+the other style flags, fuzzed POC progression volumes over the widened
+geometry, a 2×2 tile grid with interleaved tile-parts, and PPM/PPT packed
+packet headers stitched from out-of-order marker segments. The bypass shape is
+deliberately a `tile_body` variant rather than a `rust_j2k::fuzz` hook: the
+lazy `10, 2, 1, 2, 1, …` codeword-segment split belongs to tier-2, so setting
+the style byte in the pinned COD drives `decode_block` through the same split
+production decodes use instead of a hand-built one.
+
+`j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
+SOT composite), for the targets that read codestream structure (`decode`,
+`tile_body`): mutation almost never synthesizes a two-byte marker code, and
+with the dictionary the fuzzer splices one in a single step.
 
 ## Running
 
@@ -67,11 +78,11 @@ mkdir -p fuzz/corpus/decode
 cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode/
 
 # Time-boxed run (CI-friendly: no panics, no OOM, no hangs).
-cargo +nightly fuzz run decode -- -max_total_time=300 -rss_limit_mb=2048
+cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=2048
 
 # Deeper periodic run over the widened surface; expected to find nothing.
-cargo +nightly fuzz run decode -- -max_total_time=3600 -rss_limit_mb=4096
-cargo +nightly fuzz run tile_body -- -max_total_time=1800 -rss_limit_mb=4096
+cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
+cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
 ```
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
