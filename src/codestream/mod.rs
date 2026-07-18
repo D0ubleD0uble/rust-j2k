@@ -145,7 +145,8 @@ const JP2_SIGNATURE: [u8; 12] = [
 /// Parse a raw codestream (must start with SOC, end with EOC).
 ///
 /// Rejects the JP2 box wrapper (callers pass the bare codestream) and anything
-/// outside the single-component subset with [`Error::Unsupported`].
+/// outside the decoded feature set — HTJ2K, Part 2 extensions, unknown markers
+/// — with [`Error::Unsupported`].
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
 pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
@@ -318,7 +319,9 @@ fn walk_tiles<'a>(
             // A later tile-part carries no coding-style overrides — those are
             // rejected inside `read_tile_part_header` — but its POC volumes are
             // legal and append to the tile's, so the progression can be split
-            // across the tile's parts (A.6.6).
+            // across the tile's parts (A.6.6). Each part's list is capped, so
+            // the accumulation across parts must be re-checked.
+            check_poc_budget(tile.header.poc.len() + tile_header.poc.len())?;
             tile.header.poc.extend(tile_header.poc);
         }
         // Packed packet headers append across the tile's parts in TPsot order
@@ -636,7 +639,9 @@ fn resolve_tile_header(main: &MainHeader, tile: &TileHeader) -> Result<MainHeade
     // tile-part's, so the tile's order is `[main volumes…, tile volumes…]`. The
     // volume walk emits each packet by the first volume that reaches it, so the
     // two must stay in that order. `header.poc` is already the main header's
-    // here, from `main.clone()` above.
+    // here, from `main.clone()` above. OpenJPEG's 32-entry array holds the
+    // *combined* list, so the budget binds the sum, not each side.
+    check_poc_budget(header.poc.len() + tile.poc.len())?;
     header.poc.extend(tile.poc.iter().copied());
 
     // The tile's resolved parameters must hold every invariant the main header's
@@ -1228,8 +1233,9 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
 }
 
 /// Decode COD — default coding style (A.6.1): transform, decomposition depth,
-/// progression, layers, code-block size/style, precinct sizes. Rejects the
-/// non-default code-block styles, Part 2's array MCT, and ICT.
+/// progression, layers, code-block size/style, precinct sizes. All six Part 1
+/// style flags and both colour transforms are accepted; the HTJ2K style bits
+/// and Part 2's array MCT are rejected.
 fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     // Scod bit 0: user-defined precincts in SPcod. Bit 1: SOP may precede each
     // packet. Bit 2: EPH follows each packet header. Bits 3-7 are reserved.
@@ -1304,6 +1310,26 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     })
 }
 
+/// The most progression volumes a tile's walk will honour, matching OpenJPEG's
+/// 32-entry `opj_tcp_t::pocs` array ("Too many POCs" past it). The standard sets
+/// no limit, but each volume re-enumerates the packet space and a duplicate
+/// emission consumes no bitstream bytes, so an uncapped list is a quadratic
+/// work bomb: `V` volumes over `P` one-byte packets cost `V·P` dedup probes
+/// while the input pays for `P + 7V` bytes. The cap is enforced wherever
+/// volumes accumulate — per marker, across a tile's parts, and on the resolved
+/// main-plus-tile list.
+const MAX_POC_VOLUMES: usize = 32;
+
+/// Reject a progression-volume count past [`MAX_POC_VOLUMES`].
+fn check_poc_budget(volumes: usize) -> Result<()> {
+    if volumes > MAX_POC_VOLUMES {
+        return Err(Error::Unsupported(format!(
+            "{volumes} progression volumes exceeds the decode guard of {MAX_POC_VOLUMES}"
+        )));
+    }
+    Ok(())
+}
+
 /// Decode a POC marker (A.6.6, Table A-32): a sequence of progression volumes.
 ///
 /// Each volume is `RSpoc`(1) `CSpoc`(1 or 2) `LYEpoc`(2) `REpoc`(1) `CEpoc`(1 or
@@ -1325,6 +1351,7 @@ fn decode_poc(mut b: Cursor<'_>, siz: &Siz, into: &mut Vec<PocVolume>) -> Result
             "POC body is {body_len} bytes, not a whole number of {volume_size}-byte volumes"
         )));
     }
+    check_poc_budget(into.len() + body_len / volume_size)?;
     let read_comp = |b: &mut Cursor<'_>| -> Result<u16> {
         if comp_room == 1 {
             Ok(u16::from(b.u8()?))
@@ -1342,10 +1369,13 @@ fn decode_poc(mut b: Cursor<'_>, siz: &Siz, into: &mut Vec<PocVolume>) -> Result
             .ok_or_else(|| Error::Marker("POC volume sets a reserved progression order".into()))?;
         // A volume that encloses nothing would consume no packets and desync
         // nothing, but it is a malformed field, not a no-op the encoder meant.
-        if res_end <= res_start || comp_end <= comp_start {
+        // `LYEpoc` shares the rule: Table A-33 gives it the range 1–65535, so a
+        // zero-layer volume is a malformed field too, rejected here rather than
+        // surfacing later as a less precise desync error.
+        if res_end <= res_start || comp_end <= comp_start || layer_end == 0 {
             return Err(Error::Marker(format!(
                 "POC volume has an empty range: resolutions [{res_start}, {res_end}), \
-                 components [{comp_start}, {comp_end})"
+                 components [{comp_start}, {comp_end}), layers [0, {layer_end})"
             )));
         }
         into.push(PocVolume {

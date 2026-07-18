@@ -63,6 +63,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The progression-volume list is capped at 32, matching OpenJPEG's `pocs`
+  array, and the cap binds everywhere volumes accumulate: per marker, across a
+  tile's parts, and on the combined main-plus-tile list a tile's walk runs.
+  Uncapped, the walk re-enumerates the packet space once per volume and a
+  duplicate emission consumes no bitstream bytes, so a crafted megabyte of POC
+  markers over one-byte packets could buy minutes of compute — quadratic work
+  from linear input. Found in the v0.3.0 pre-release security review. A POC
+  volume declaring zero layers (`LYEpoc == 0`, illegal per Table A-33) is also
+  now rejected at parse as `Error::Marker` instead of surfacing later as a
+  packet desync.
 - Four resource and desync guards from a whole-repo review. A QCD/QCC step
   table keeps at most the 97 entries a 32-level decomposition can use —
   excess is dropped the way OpenJPEG caps at `J2K_MAXBANDS` — so a crafted
@@ -100,6 +110,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking.** `Image`, `Component`, and `DecodeOptions` are now
+  `#[non_exhaustive]`, so adding a field — decoded metadata on the image, a new
+  decode option — stops being a semver break. Construct options with
+  `DecodeOptions::default()` and the new `with_resolution_reduction` method;
+  construct images by hand (a test harness's expected values, say) with the new
+  `Image::new` and `Component::new`. `DecodeOptions` also drops its
+  `PartialEq`/`Eq` derives, which a future non-comparable option would forbid.
 - **Breaking.** The never-constructed `Error::Packet` and `Error::Tier1`
   variants are gone — tier-2 and tier-1 corruption reports as
   `Error::Codestream`, as it always did — and `Error` is now
