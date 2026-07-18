@@ -1050,16 +1050,32 @@ const ZBP_LIMIT: u32 = 293;
 /// read at most 31 bits, inside the `u32` [`BitReader::read`] accepts.
 const LBLOCK_MAX: u32 = 24;
 
-/// How many coding passes one codeword segment may hold, given the code-block
-/// style (`opj_t2_init_seg`).
+/// How many coding passes the *next* codeword segment may hold, given the
+/// code-block style and the segments already opened (`opj_t2_init_seg`).
 ///
 /// `termall` terminates the MQ coder after every pass, so each pass is its own
-/// segment. Otherwise a segment takes up to 109 passes — `3 * Mb - 2` with `Mb`
-/// capped at 37 — which a code-block can never exceed, so the default never
-/// splits.
-fn segment_max_passes(style: u8) -> u32 {
-    if style & crate::codestream::markers::code_block_style::TERMALL != 0 {
+/// segment. `bypass` (lazy) terminates at every raw/MQ boundary: the first
+/// segment holds the ten MQ passes of the four most significant bit-planes, then
+/// each lower plane splits into a two-pass raw segment (significance +
+/// refinement) and a one-pass MQ segment (cleanup) — the `10, 2, 1, 2, 1, …`
+/// pattern OpenJPEG spells with `prev.maxpasses in {1, 10} ? 2 : 1`. Otherwise a
+/// segment takes up to 109 passes — `3 * Mb - 2` with `Mb` capped at 37 — which a
+/// code-block can never exceed, so the default never splits.
+fn segment_max_passes(style: u8, segments: &[SegmentState<'_>]) -> u32 {
+    use crate::codestream::markers::code_block_style::{LAZY, TERMALL};
+    if style & TERMALL != 0 {
         1
+    } else if style & LAZY != 0 {
+        match segments.last() {
+            None => 10,
+            Some(prev) => {
+                if prev.max_passes == 1 || prev.max_passes == 10 {
+                    2
+                } else {
+                    1
+                }
+            }
+        }
     } else {
         109
     }
@@ -1161,9 +1177,10 @@ struct BlockState<'a> {
 struct SegmentState<'a> {
     passes: u32,
     /// How many passes this segment may hold before the next one starts:
-    /// 1 under `termall`, otherwise 109 — the most a code-block can carry
-    /// (`3 * Mb - 2` with `Mb <= 37`), so the default never splits.
-    /// OpenJPEG's `opj_t2_init_seg` sets exactly these.
+    /// 1 under `termall`, the `10, 2, 1, 2, 1, …` pattern under `bypass`,
+    /// otherwise 109 — the most a code-block can carry (`3 * Mb - 2` with
+    /// `Mb <= 37`), so the default never splits. See [`segment_max_passes`],
+    /// which mirrors OpenJPEG's `opj_t2_init_seg`.
     max_passes: u32,
     chunks: Vec<&'a [u8]>,
 }
@@ -1400,8 +1417,8 @@ fn parse_band_header(
         //
         // One length field, because one codeword segment. A contribution splits
         // into several segments only under a code-block style that terminates
-        // (`termall`, `bypass`), which `decode_cod` rejects; there OpenJPEG's
-        // `do { ... } while (n > 0)` reads a length per segment.
+        // (`termall`, `bypass`); there OpenJPEG's `do { ... } while (n > 0)`
+        // reads a length per segment, which the loop below mirrors.
         let block = &mut blocks[block_index];
         while bio.read_bit() == 1 {
             block.lblock += 1;
@@ -1421,9 +1438,10 @@ fn parse_band_header(
                 .last()
                 .is_none_or(|s| s.passes >= s.max_passes)
             {
+                let max_passes = segment_max_passes(style, &block.segments);
                 block.segments.push(SegmentState {
                     passes: 0,
-                    max_passes: segment_max_passes(style),
+                    max_passes,
                     chunks: Vec::new(),
                 });
             }

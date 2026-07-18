@@ -15,10 +15,11 @@
 //! reinitialises the MQ context model after every pass — both change which
 //! context a decision is coded under, threaded through [`BlockState`] and
 //! [`decode_block`]. `restart` and `predictable termination` modulate
-//! termination. `bypass` (raw-coded passes) is the one still rejected in
-//! `decode_cod`.
+//! termination. `bypass` (lazy) codes the significance and refinement passes of
+//! the low bit-planes as raw bits rather than MQ decisions (D.5); the raw reader
+//! and the per-segment coder choice live in [`decode_block`].
 
-use crate::tier1::mq::{Context, MqDecoder};
+use crate::tier1::mq::{Context, MqDecoder, RawDecoder};
 use crate::{Error, Result};
 
 #[cfg(test)]
@@ -384,6 +385,54 @@ fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Contex
     }
 }
 
+/// Significance-propagation pass under `bypass` (ISO D.5): the same scan and the
+/// same sample selection as [`sig_prop_pass`], but the significance decision and
+/// the sign are read as raw bits instead of MQ-coded ones. The zero-coding
+/// context still decides *which* samples are visited (a non-zero context means a
+/// significant neighbour), it just no longer codes the bit — so the sign is the
+/// raw bit itself, without the neighbour-sign context or its XOR.
+fn sig_prop_pass_raw(
+    raw: &mut RawDecoder<'_>,
+    state: &mut BlockState,
+    orient: Orientation,
+    bpno: u32,
+) {
+    let (w, h) = (state.width, state.height);
+    for (x, y0) in stripes(w, h) {
+        for y in y0..(y0 + 4).min(h) {
+            if state.is_significant(x, y) {
+                continue;
+            }
+            if state.zc_context(x, y, orient) == CTX_ZC {
+                continue; // no significant neighbour: deferred to cleanup
+            }
+            if raw.decode() == 1 {
+                state.set_significant_magnitude(x, y, bpno);
+                state.set_significant(x, y);
+                state.set_negative(x, y, raw.decode() == 1);
+            }
+            state.set_visited(x, y, true);
+        }
+    }
+}
+
+/// Magnitude-refinement pass under `bypass` (ISO D.5): identical to
+/// [`mag_ref_pass`] except the refinement bit is a raw bit rather than an
+/// MQ-coded decision under the refinement context.
+fn mag_ref_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32) {
+    let (w, h) = (state.width, state.height);
+    for (x, y0) in stripes(w, h) {
+        for y in y0..(y0 + 4).min(h) {
+            if !state.is_significant(x, y) || state.is_visited(x, y) {
+                continue;
+            }
+            let bit = raw.decode();
+            state.refine_magnitude(x, y, bpno, bit);
+            state.set_refined(x, y);
+        }
+    }
+}
+
 /// Cleanup pass (D.3.3): code every sample not yet handled this plane. A full
 /// column of four insignificant samples with no significant neighbours is
 /// aggregated through the run-length context — a 0 leaves all four
@@ -545,6 +594,14 @@ enum PassType {
     Cleanup,
 }
 
+/// How a codeword segment is decoded: the MQ arithmetic decoder for the
+/// context-coded passes, or a raw bit reader for the `bypass` (lazy) passes of
+/// the low bit-planes (D.5). One codeword segment uses exactly one of them.
+enum PassCoder<'a> {
+    Mq(MqDecoder<'a>),
+    Raw(RawDecoder<'a>),
+}
+
 /// Decode one code-block: run the bit-plane passes over its codeword segments
 /// into `state`.
 ///
@@ -579,12 +636,13 @@ enum PassType {
 /// as `opj_t1_decode_cblk` does. Without termination there is one segment and
 /// the codeword runs unbroken.
 ///
-/// `decode_cod` admits `restart`, `predictable termination` and `segmentation
-/// symbols`, and rejects the rest. Of the three only `segmentation symbols`
-/// reaches into a pass: it appends four decisions to every cleanup pass.
-/// `restart` is a property of the segment split, which Tier-2 has already
-/// applied, and `predictable termination` constrains the encoder alone. So the
-/// pass structure below is still the default one.
+/// `decode_cod` admits every Part 1 style flag and rejects only the two HTJ2K
+/// bits. Most act at the segment split or the context, which Tier-2 and
+/// [`BlockState`] have already applied, so the pass cycle below is unchanged.
+/// Two reach into the passes themselves: `segmentation symbols` appends four
+/// decisions to every cleanup pass, and `bypass` (lazy) switches the
+/// significance and refinement passes of the low bit-planes from MQ-coded to raw
+/// (D.5) — see the per-segment coder choice below.
 pub fn decode_block(
     segments: &[(Vec<u8>, u32)],
     state: &mut BlockState,
@@ -595,11 +653,13 @@ pub fn decode_block(
     params: BlockParams,
 ) -> Result<()> {
     let BlockParams { style, roi_shift } = params;
-    use crate::codestream::markers::code_block_style::{PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
+    use crate::codestream::markers::code_block_style::{
+        LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL,
+    };
     debug_assert_eq!(
-        style & !(TERMALL | PTERM | SEGSYM | VCAUSAL | RESET),
+        style & !(LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET),
         0,
-        "decode_cod rejects every style flag but restart, pterm, segsym, vcausal and reset",
+        "decode_cod rejects every style flag but bypass, restart, pterm, segsym, vcausal and reset",
     );
     // Vertically causal context changes how every significance/sign context is
     // formed; the pass functions read it off the state.
@@ -642,10 +702,30 @@ pub fn decode_block(
     // cycle starts at cleanup and wraps to the next plane after it.
     let mut pass_type = PassType::Cleanup;
 
+    let bypass = style & LAZY != 0;
+    // OpenJPEG's `cblk->numbps`, the coded plane count without the maxshift: our
+    // `top` is `bpno_plus_one` (`roishift + cblk->numbps`), so subtracting the
+    // shift recovers it. Under `bypass` a significance or refinement pass turns
+    // raw once the four most significant bit-planes are behind it, i.e. once
+    // `bpno <= cblk->numbps - 4` (t1.c). Signed, because that difference is
+    // negative on a shallow block that never reaches the raw region.
+    let cblk_numbps = top as i32 - i32::from(roi_shift);
+
     'segments: for (bytes, passes) in segments {
-        // Each segment is a terminated MQ codeword of its own. Context states
-        // and `bpno` are *not* reset — only the arithmetic decoder is.
-        let mut mq = MqDecoder::new(bytes);
+        // A codeword segment is a single terminated stream — MQ for the
+        // context-coded passes, raw for the `bypass` ones. Context states and
+        // `bpno` carry across segments; only the arithmetic decoder restarts.
+        //
+        // The coder is fixed by the pass the segment opens on, matching t1.c's
+        // per-segment `type`: the lazy split (Tier-2) keeps each segment
+        // homogeneous — a two-pass raw run (significance + refinement) or a
+        // one-pass MQ cleanup — so this one decision holds for every pass in it.
+        let raw = bypass && pass_type != PassType::Cleanup && (bpno as i32) <= cblk_numbps - 4;
+        let mut coder = if raw {
+            PassCoder::Raw(RawDecoder::new(bytes))
+        } else {
+            PassCoder::Mq(MqDecoder::new(bytes))
+        };
         for _ in 0..*passes {
             if bpno < 1 {
                 // The plane counter is exhausted, so this segment stops mid-way
@@ -655,19 +735,31 @@ pub fn decode_block(
                 // sound codestream for leaving a buffer it never had to read.
                 break 'segments;
             }
-            match pass_type {
-                PassType::SigProp => sig_prop_pass(&mut mq, state, &mut cx, orient, bpno),
-                PassType::MagRef => mag_ref_pass(&mut mq, state, &mut cx, bpno),
-                PassType::Cleanup => cleanup_pass(&mut mq, state, &mut cx, orient, bpno, style)?,
+            match (&mut coder, pass_type) {
+                (PassCoder::Mq(mq), PassType::SigProp) => {
+                    sig_prop_pass(mq, state, &mut cx, orient, bpno)
+                }
+                (PassCoder::Mq(mq), PassType::MagRef) => mag_ref_pass(mq, state, &mut cx, bpno),
+                (PassCoder::Mq(mq), PassType::Cleanup) => {
+                    cleanup_pass(mq, state, &mut cx, orient, bpno, style)?
+                }
+                (PassCoder::Raw(rd), PassType::SigProp) => {
+                    sig_prop_pass_raw(rd, state, orient, bpno)
+                }
+                (PassCoder::Raw(rd), PassType::MagRef) => mag_ref_pass_raw(rd, state, bpno),
+                // The lazy split routes every cleanup to its own MQ segment, so a
+                // raw segment never carries one.
+                (PassCoder::Raw(_), PassType::Cleanup) => {
+                    unreachable!("a bypass cleanup pass is MQ-coded, never raw")
+                }
             }
             // Under `reset context probabilities` the MQ context states return to
             // their initial estimates after every pass (D.3, OpenJPEG's
             // `opj_mqc_resetstates` + the three seeded contexts). The default
             // style carries the states across passes. OpenJPEG guards this with
-            // `type == T1_TYPE_MQ`: only MQ-coded passes reset, not the raw passes
-            // of `bypass`. TODO(bypass): restore that guard once bypass decodes;
-            // until then every pass here is MQ, so the reset is unconditional.
-            if style & RESET != 0 {
+            // `type == T1_TYPE_MQ`: the raw passes of `bypass` carry no context,
+            // so they never reset it.
+            if style & RESET != 0 && !raw {
                 cx = init_contexts();
             }
             pass_type = match pass_type {
@@ -685,14 +777,18 @@ pub fn decode_block(
         // Every codeword segment is separately terminated, so under `predictable
         // termination` each one must account for its own bytes. OpenJPEG checks
         // only the last segment of a block and warns; checking each one costs
-        // nothing and localises the damage.
-        if style & PTERM != 0 && !mq.ends_predictably() {
-            return Err(Error::Codestream(format!(
-                "code-block style declares predictable termination, but a codeword segment \
-                 leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
-                mq.unconsumed(),
-                bytes.len(),
-            )));
+        // nothing and localises the damage. The check is the MQ flush's, so it
+        // applies to MQ segments only — a raw `bypass` segment ends on a byte
+        // boundary with no such guarantee.
+        if let PassCoder::Mq(mq) = &coder {
+            if style & PTERM != 0 && !mq.ends_predictably() {
+                return Err(Error::Codestream(format!(
+                    "code-block style declares predictable termination, but a codeword segment \
+                     leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
+                    mq.unconsumed(),
+                    bytes.len(),
+                )));
+            }
         }
     }
 

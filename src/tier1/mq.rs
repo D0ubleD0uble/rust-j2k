@@ -252,9 +252,75 @@ impl<'a> MqDecoder<'a> {
     }
 }
 
+/// Raw bit reader for the lazy (`bypass`) coding style (ISO/IEC 15444-1 D.5,
+/// OpenJPEG's `opj_mqc_raw_decode`).
+///
+/// Under `bypass` the significance-propagation and magnitude-refinement passes
+/// of the low bit-planes are not MQ-coded — their decisions are packed as plain
+/// bits, most significant first, one raw codeword segment at a time. The only
+/// twist is bit-unstuffing: because a `0xFF` byte followed by a byte above
+/// `0x8F` is a marker, the encoder stuffs a `0` after every `0xFF`, so the byte
+/// after a `0xFF` yields seven bits, not eight. Past the segment the reader sees
+/// the `0xFF` marker convention (all further bits read as `1`), which also keeps
+/// every access inside `data`.
+#[derive(Debug)]
+pub struct RawDecoder<'a> {
+    data: &'a [u8],
+    /// Index of the next byte to pull into `c` (OpenJPEG's `bp`).
+    pos: usize,
+    /// The byte currently being consumed, MSB first.
+    c: u8,
+    /// Bits left in `c`.
+    ct: i32,
+}
+
+impl<'a> RawDecoder<'a> {
+    /// Start a raw reader over one codeword segment's bytes.
+    pub fn new(data: &'a [u8]) -> Self {
+        RawDecoder {
+            data,
+            pos: 0,
+            c: 0,
+            ct: 0,
+        }
+    }
+
+    /// The byte at `pos`, or `0xFF` once `pos` runs off the end — the marker
+    /// convention (ISO C.3.4) that feeds 1-bits past the segment and bounds
+    /// every read, exactly as [`MqDecoder::byte`] does for the MQ path.
+    fn byte(&self, pos: usize) -> u8 {
+        self.data.get(pos).copied().unwrap_or(0xFF)
+    }
+
+    /// Decode one raw bit (`opj_mqc_raw_decode`). Returns 0 or 1.
+    pub fn decode(&mut self) -> u8 {
+        if self.ct == 0 {
+            if self.c == 0xFF {
+                // A `0xFF` was just consumed. `> 0x8F` is a marker: stay put and
+                // keep feeding 1-bits. Otherwise the next byte's top bit is the
+                // stuffed `0`, so it contributes only its low seven bits.
+                if self.byte(self.pos) > 0x8F {
+                    self.c = 0xFF;
+                    self.ct = 8;
+                } else {
+                    self.c = self.byte(self.pos);
+                    self.pos += 1;
+                    self.ct = 7;
+                }
+            } else {
+                self.c = self.byte(self.pos);
+                self.pos += 1;
+                self.ct = 8;
+            }
+        }
+        self.ct -= 1;
+        (self.c >> self.ct) & 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Context, MqDecoder, QE_TABLE, QeEntry};
+    use super::{Context, MqDecoder, QE_TABLE, QeEntry, RawDecoder};
 
     /// ISO/IEC 15444-1 Annex C / ITU-T T.88 (08/2018) §H.2 "Test sequence for
     /// arithmetic coder": these 30 coded bytes decode to [`H2_DECODED`] under a
@@ -333,6 +399,49 @@ mod tests {
         mq.c = u32::MAX;
         mq.bytein();
         assert_eq!(mq.c, u32::MAX.wrapping_add(0x8F << 9));
+    }
+
+    /// The raw reader returns each byte's bits most significant first.
+    #[test]
+    fn raw_reads_bits_msb_first() {
+        let data = [0xB2u8, 0x41]; // 1011_0010  0100_0001
+        let mut raw = RawDecoder::new(&data);
+        let bits: Vec<u8> = (0..16).map(|_| raw.decode()).collect();
+        assert_eq!(bits, [1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1]);
+    }
+
+    /// After a `0xFF` byte the next byte contributes only its low seven bits:
+    /// the encoder stuffs a `0` in the top bit so the pair can never look like a
+    /// marker, and the reader must skip that bit.
+    #[test]
+    fn raw_unstuffs_the_bit_after_0xff() {
+        let data = [0xFFu8, 0x41]; // 0x41 = 0_1000001; the leading 0 is the stuff bit
+        let mut raw = RawDecoder::new(&data);
+        let bits: Vec<u8> = (0..15).map(|_| raw.decode()).collect();
+        // Eight 1s from 0xFF, then the seven low bits of 0x41.
+        assert_eq!(bits, [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1]);
+    }
+
+    /// A `0xFF` followed by a byte above `0x8F` is a marker: the reader stops
+    /// advancing and feeds 1-bits forever, which is also what happens past the
+    /// end of the segment (every synthesised byte is `0xFF`).
+    #[test]
+    fn raw_past_the_marker_is_all_ones_and_bounded() {
+        for data in [[0xFFu8, 0x90].as_slice(), [].as_slice(), [0x00].as_slice()] {
+            let mut raw = RawDecoder::new(data);
+            // Far more bits than the bytes encode; never indexes out of `data`.
+            for _ in 0..256 {
+                let _ = raw.decode();
+            }
+        }
+        // The tail past a real marker is all 1s.
+        let mut raw = RawDecoder::new(&[0xFF, 0x90]);
+        for _ in 0..8 {
+            assert_eq!(raw.decode(), 1); // the 0xFF byte
+        }
+        for _ in 0..64 {
+            assert_eq!(raw.decode(), 1); // the synthesised marker tail
+        }
     }
 
     /// ISO/IEC 15444-1 Table C-2, transcribed independently of [`QE_TABLE`] as

@@ -95,9 +95,17 @@ pub mod marker {
 ///
 /// Each flag changes how Tier-1 reads a code-block's coded segments, so a
 /// decoder that ignores one does not decode a slightly different image — it
-/// decodes the wrong one. None are decoded yet; `decode_cod` rejects any that
-/// are set.
+/// decodes the wrong one. `decode_cod` rejects the two HTJ2K bits (`0x40`,
+/// `0x80`); the six Part 1 flags below are decoded.
 pub mod code_block_style {
+    /// Bit 0: selective arithmetic coding bypass (lazy). From the fifth coded
+    /// bit-plane on, the significance-propagation and magnitude-refinement passes
+    /// are coded as raw bits instead of MQ-coded decisions, and each raw run and
+    /// each MQ cleanup is a separately terminated codeword segment (D.5). Part of
+    /// the codeword: a decoder that runs the whole block as one MQ codeword
+    /// reconstructs garbage.
+    pub const LAZY: u8 = 0x01;
+
     /// Bit 3: vertically causal context. The 3×3 significance context of a
     /// sample never reaches into the *next* stripe — a sample on a stripe's
     /// bottom row treats the row below it (which belongs to the following stripe)
