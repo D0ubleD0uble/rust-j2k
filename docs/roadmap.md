@@ -49,7 +49,7 @@ bit-exact lossless, within tolerance lossy. Crate-level dead-code `allow` remove
 **Status:** met. The gate passes for all four corpus fixtures, and the
 crate-level dead-code `allow` is gone. Released as v0.1.0.
 
-## Phase 2 — general Part 1 decoder *(next)*
+## Phase 2 — general Part 1 decoder *(done)*
 
 **Goal:** decode any conformant Part 1 *codestream*, not just the GRIB2 subset.
 
@@ -64,8 +64,8 @@ that gates it, is in [roadmap-phase2.md](roadmap-phase2.md); in brief:
 - Error-resilience markers (SOP/EPH); packed-header and length markers
   (PPM/PPT/PLM/PLT/TLM); component registration (CRG).
 
-**Gate:** passes the relevant ISO/IEC 15444-4 conformance codestreams within
-their compliance-class error bounds, plus a clean fuzzing run on malformed
+**Gate (met):** all 23 ISO/IEC 15444-4 Part 1 conformance codestreams decode
+within their compliance-class error bounds, with a clean fuzzing run on malformed
 input (no panics, no `unsafe`, bounded memory).
 
 ## Phase 3 — JP2 file format decode
