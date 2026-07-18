@@ -1,9 +1,11 @@
 # Phase 2 roadmap — general Part 1 decoder
 
-> **Status: in progress.** Phase 1 shipped the GRIB2 subset in v0.1.0. P2.0, the
-> conformance harness, has landed; the decoding milestones have not started. The
-> milestones below are the build order, each with the oracle that gates it.
-> Milestone numbers track the Phase 2 milestone in GitHub.
+> **Status: shipped.** Every milestone below has landed, and the phase gate
+> (P2.10) is green: all 23 ISO/IEC 15444-4 Part 1 conformance codestreams decode
+> within their compliance class, fuzzing is clean, and the quality gates pass.
+> The decoder now reads a general Part 1 codestream, not just the GRIB2 subset.
+> The milestones below are the build order that was followed, each with the
+> oracle that gated it. Milestone numbers track the Phase 2 milestone in GitHub.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file zooms
 into Phase 2 alone. It breaks the line item "general Part 1 decoder" into ordered
@@ -338,14 +340,15 @@ overrides interacting with precincts and progressions, MCT after multi-tile
 assembly, ROI under each coding style); keep the subset-boundary rejects sharp for
 whatever remains Phase 3+.
 
-**Gate (this is the Phase 2 exit):** the decoder passes the ISO/IEC 15444-4 Part 1
-conformance codestreams within their compliance-class per-pixel maximum-error and
-mean-squared-error bounds; fuzzing is clean — the 60-second CI smoke stays green
-and a documented one-hour local `cargo fuzz` run over `decode`, seeded with the
-conformance corpus, finds nothing (no panics, allocations bounded by the declared
-image area, every reject a typed `Error`); and the quality
-gates are green: `cargo fmt --all -- --check`,
-`cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo deny check`.
+**Gate (this is the Phase 2 exit — passed):** the decoder passes the ISO/IEC
+15444-4 Part 1 conformance codestreams within their compliance-class per-pixel
+maximum-error and mean-squared-error bounds — all 23 entries in class, tracked by
+`IN_CLASS` in `tests/conformance_part4.rs`; fuzzing is clean — the 60-second CI
+smoke stays green and a documented `cargo fuzz` run over `decode` and `tile_body`,
+seeded with the conformance corpus, finds nothing (no panics, allocations bounded
+by the declared image area, every reject a typed `Error`); and the quality gates
+are green: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D
+warnings`, `cargo test`, `cargo deny check`.
 
 ## Sequencing notes
 
