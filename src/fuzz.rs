@@ -34,7 +34,7 @@ pub fn tier1_block(data: &[u8]) {
     let [a, b, c, d, e, f, g, coded @ ..] = data else {
         return;
     };
-    use crate::codestream::markers::code_block_style::{PTERM, SEGSYM, TERMALL};
+    use crate::codestream::markers::code_block_style::{PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
 
     let width = u32::from(a & 0x3F) + 1; // 1..=64, the subset's block ceiling
     let height = u32::from(b & 0x3F) + 1;
@@ -45,9 +45,11 @@ pub fn tier1_block(data: &[u8]) {
         _ => Orientation::Hh,
     };
     let params = BlockParams {
-        // Anything else is rejected by decode_cod, and decode_block
-        // debug-asserts that precondition.
-        style: c & (TERMALL | PTERM | SEGSYM),
+        // Every decoded style flag whose contract this hook can honour. `LAZY`
+        // stays out: `decode_block` requires the lazy split's homogeneous
+        // segments (raw runs never carry a cleanup pass), and this hook feeds
+        // one unsplit segment. The HTJ2K bits are rejected by decode_cod.
+        style: c & (RESET | TERMALL | VCAUSAL | PTERM | SEGSYM),
         roi_shift: d & 0x3F,
     };
     let num_passes = u32::from(*e) % 110; // tier-2's 109-pass segment cap

@@ -1,22 +1,19 @@
 //! Pure-Rust JPEG 2000 codec, built GRIB2-decode-first toward OpenJPEG-level
 //! coverage. No C dependency, so it cross-compiles cleanly to every target.
 //!
-//! JPEG 2000 (ISO/IEC 15444-1 and later parts) is a large standard. The first
-//! deliverable decodes the slice GRIB2 §5.40 (`grid_jpeg`) needs, which keeps
-//! the initial surface tractable while exercising the whole pipeline:
+//! The decoder reads a **raw codestream** (ISO/IEC 15444-1 Annex A, not yet
+//! the JP2 file format) into **integer** samples: one grid per component,
+//! signed up to 32 bits, unsigned up to 31 (an `i32` container), each with its
+//! own bit depth, sign, and sub-sampling. Both wavelet paths decode — the
+//! reversible 5/3 bit-exactly, the irreversible 9/7 within the standard's
+//! compliance bounds — as do tiling and tile-parts, precincts, quality layers,
+//! all five progression orders and POC changes between them, packed packet
+//! headers (PPM/PPT), every Part 1 code-block coding style, region of interest
+//! (maxshift), non-zero canvas offsets, resolution-reduced decoding, and the
+//! reversible (RCT) and irreversible (ICT) colour transforms.
 //!
-//! - the **raw codestream** (Annex A), not yet the JP2 file format (no boxes);
-//! - **components**, each with its own bit depth, sign, and sub-sampling, plus
-//!   the colour transform that decorrelates the first three, in both its
-//!   reversible (RCT) and irreversible (ICT) forms;
-//! - **integer** samples, signed up to 32 bits, unsigned up to 31 (the
-//!   samples land in an `i32` container);
-//! - **both** the reversible 5/3 (lossless) and irreversible 9/7 (lossy)
-//!   wavelet paths (the 9/7 path is graded by re-encoding a real grid with
-//!   OpenJPEG, since no operational GRIB2 producer ships lossy 9/7).
-//!
-//! JP2 boxes, HTJ2K, and an encoder are later-phase work, not permanent
-//! non-goals. See `docs/roadmap.md` and `docs/scope.md`.
+//! JP2 boxes, HTJ2K, and an encoder are later work, not permanent non-goals.
+//! See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
 //!
@@ -55,14 +52,16 @@
 //!
 //! # Status
 //!
-//! The GRIB2 §5.40 decode path described above is implemented end to end and
-//! passes the conformance gate (bit-exact 5/3, within tolerance 9/7). Anything
-//! outside that subset is rejected with [`Error::Unsupported`], never
-//! half-decoded. See each module's docs for the ISO §reference and what it owns.
-//! Correctness is defined by the conformance harness in `tests/` (cross-check
-//! against OpenJPEG / eccodes), not by self-consistency. The plan for widening
-//! this same engine toward general Part 1 is in `docs/roadmap.md`; the feature
-//! map is in `docs/scope.md`.
+//! All 23 entries of the ISO/IEC 15444-4 conformance suite decode within their
+//! class-1 error bounds, and that gate runs in `tests/` against committed
+//! oracle snapshots, with no external tools. Correctness is defined by
+//! cross-checking a reference decoder (OpenJPEG / eccodes), not by
+//! self-consistency. A codestream using a feature outside the decoded set — a
+//! JP2 wrapper, HTJ2K, a Part 2 extension — is rejected with
+//! [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
+//! payloads, the crate's original target, are raw codestreams and decode
+//! directly. See each module's docs for the ISO §reference and what it owns;
+//! the feature map is in `docs/scope.md`.
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`, `Image`,
@@ -106,7 +105,12 @@ pub fn decode(codestream: &[u8]) -> Result<Image> {
 
 /// Options for [`decode_with`]. The default decodes at full resolution —
 /// [`decode`] is exactly that.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Start from [`DecodeOptions::default`] and set what differs, with the
+/// `with_*` methods or the fields directly. The struct is `#[non_exhaustive]`,
+/// so a new option is not a breaking change.
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct DecodeOptions {
     /// How many of the finest resolution levels to discard. Each level halves
     /// the output in both axes (rounding up), so `1` decodes a half-size image,
@@ -115,6 +119,16 @@ pub struct DecodeOptions {
     /// resolution: a reduction that consumes some component's whole pyramid is
     /// rejected as [`Error::Unsupported`].
     pub resolution_reduction: u8,
+}
+
+impl DecodeOptions {
+    /// These options with
+    /// [`resolution_reduction`](Self::resolution_reduction) set to `levels`.
+    #[must_use]
+    pub fn with_resolution_reduction(mut self, levels: u8) -> Self {
+        self.resolution_reduction = levels;
+        self
+    }
 }
 
 /// Decode a JPEG 2000 codestream like [`decode`], governed by `options`.

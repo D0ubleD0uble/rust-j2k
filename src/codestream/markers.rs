@@ -1,7 +1,8 @@
 //! JPEG 2000 codestream marker codes and the segment structs we parse.
 //!
-//! ISO/IEC 15444-1 Annex A. Only the markers the GRIB2 subset needs are parsed
-//! in full; the rest are recognised so they can be skipped or rejected cleanly.
+//! ISO/IEC 15444-1 Annex A. The markers the decoded feature set needs are
+//! parsed in full; the rest are recognised so they can be skipped or rejected
+//! cleanly.
 
 /// Delimiting and fixed-information markers (ISO Table A-1).
 pub mod marker {
