@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-18
+
+General ISO/IEC 15444-1 codestream decoding: all 23 entries of the ISO/IEC
+15444-4 conformance suite decode within their class-1 error bounds. This
+release also carries the v0.3.0 pre-release review's security hardening and
+API future-proofing.
+
 ### Added
 
 - PPM (main-header packed packet headers, A.7.4): every tile-part's packet
@@ -306,6 +313,7 @@ wrapper, and no multi-component or color transform. Anything outside the subset
 is rejected cleanly rather than half-decoded. Wider Part 1 coverage, the JP2 file
 format, HTJ2K, and an encoder are later-phase work; see `docs/roadmap.md`.
 
-[Unreleased]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/D0ubleD0uble/rust-j2k/releases/tag/v0.1.0
