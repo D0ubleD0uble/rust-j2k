@@ -73,6 +73,7 @@ pub(crate) mod dwt;
 pub(crate) mod error;
 pub(crate) mod image;
 pub(crate) mod mct;
+pub(crate) mod pipeline;
 pub(crate) mod quant;
 pub(crate) mod tier1;
 pub(crate) mod tier2;

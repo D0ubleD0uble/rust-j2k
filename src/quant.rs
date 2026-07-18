@@ -45,7 +45,7 @@ use crate::Result;
 use crate::codestream::MainHeader;
 use crate::codestream::markers::{Qcd, QuantStyle};
 use crate::error::Error;
-use crate::tier1::{Band, Bands, SubbandCoeffs};
+use crate::pipeline::{Band, Bands, SubbandCoeffs};
 
 /// 2^11 — the implicit denominator of the 11-bit QCD mantissa.
 const MANTISSA_DENOM: f64 = 2048.0;
@@ -177,7 +177,7 @@ fn apply_band(band: &mut Band<f32>, (exp, mant): (u8, u16), prec: i32) {
 mod tests {
     use super::*;
     use crate::codestream::markers::{Cod, Progression, Siz, SizComponent, Transform};
-    use crate::tier1::DetailBands;
+    use crate::pipeline::DetailBands;
 
     /// A `prec`-bit single-component header carrying `qcd`. Only the component
     /// depth and the QCD feed dequantization; the rest is filler.
