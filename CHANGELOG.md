@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Two new error variants split what `Error::Unsupported` used to conflate
+  (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
+  wildcard arms now see these instead of `Unsupported`): `Error::Limit` is
+  returned when an input exceeds a decoder resource guard (image/component
+  sample budget, precinct and code-block counts, bit-plane depth, progression
+  volumes), and `Error::InvalidOptions` when the caller's `DecodeOptions` are
+  invalid for the codestream (a `resolution_reduction` that consumes a whole
+  pyramid). `Error::Unsupported` now means only a valid-but-not-decoded
+  feature.
+
 ## [0.3.0] - 2026-07-18
 
 General ISO/IEC 15444-1 codestream decoding: all 23 entries of the ISO/IEC

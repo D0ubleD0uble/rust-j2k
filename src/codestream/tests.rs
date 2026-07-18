@@ -404,11 +404,11 @@ fn the_tile_grid_covers_the_image_with_clipped_edge_tiles() {
 }
 
 #[test]
-fn oversize_image_area_is_unsupported() {
+fn oversize_image_area_is_a_limit() {
     // 16384×16384 = 2^28 samples, past the 2^26 decode guard.
     let n = 16384;
     let bytes = codestream(&[seg(marker::SIZ, &siz_geom(n, n, 0, 0, n, n, 0, 0))]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+    assert!(matches!(err(&bytes), Error::Limit(_)));
 }
 
 #[test]
@@ -743,7 +743,7 @@ fn a_poc_volume_with_zero_layers_is_a_marker_error() {
 /// parse; 33 reject as the guard, whether they arrive in one marker or split
 /// across two.
 #[test]
-fn a_poc_past_the_volume_guard_is_unsupported() {
+fn a_poc_past_the_volume_guard_is_a_limit() {
     let header = |poc_segs: &[Vec<u8>]| {
         let mut h = vec![
             seg(marker::SIZ, &one_component()),
@@ -760,13 +760,13 @@ fn a_poc_past_the_volume_guard_is_unsupported() {
     );
 
     let one_marker = codestream(&header(&[seg(marker::POC, &poc_volumes(33))]));
-    assert!(matches!(err(&one_marker), Error::Unsupported(_)));
+    assert!(matches!(err(&one_marker), Error::Limit(_)));
 
     let split = codestream(&header(&[
         seg(marker::POC, &poc_volumes(20)),
         seg(marker::POC, &poc_volumes(13)),
     ]));
-    assert!(matches!(err(&split), Error::Unsupported(_)));
+    assert!(matches!(err(&split), Error::Limit(_)));
 }
 
 /// A tile's walk runs the *combined* main-plus-tile volume list, and OpenJPEG's
@@ -783,7 +783,7 @@ fn main_and_tile_poc_volumes_share_the_guard() {
     let tile_poc = seg(marker::POC, &poc_volumes(1));
     let bytes = assemble_with_tile_markers(&header, &[tile_poc], &[1, 2]);
     let error = parse(&bytes).expect_err("33 combined volumes should reject");
-    assert!(matches!(error, Error::Unsupported(_)));
+    assert!(matches!(error, Error::Limit(_)));
 }
 
 /// `Xcrg`/`Ycrg` big-endian per component — the `CRG` body (A.9.1).
@@ -1516,7 +1516,7 @@ fn many_components_exceed_the_sample_budget() {
     ]);
     let e = err(&bytes);
     assert!(
-        matches!(&e, Error::Unsupported(m) if m.contains("decode guard")),
+        matches!(&e, Error::Limit(m) if m.contains("decode guard")),
         "got {e:?}"
     );
 
@@ -1817,13 +1817,15 @@ fn p0_02_reserved_marker_walks_cleanly() {
 
 /// Which typed error a caller sees, per the mapping the crate commits to:
 /// `Codestream` for structural damage (truncation, lost sync, a missing
-/// required marker), `Marker` for a field encoded illegally, and `Unsupported`
-/// for valid JPEG 2000 that falls outside the decoded subset.
+/// required marker), `Marker` for a field encoded illegally, `Unsupported`
+/// for valid JPEG 2000 that falls outside the decoded subset, and `Limit` for
+/// an input past one of the decoder's resource guards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Variant {
     Codestream,
     Marker,
     Unsupported,
+    Limit,
 }
 
 fn variant_of(e: &Error) -> Variant {
@@ -1831,6 +1833,7 @@ fn variant_of(e: &Error) -> Variant {
         Error::Codestream(_) => Variant::Codestream,
         Error::Marker(_) => Variant::Marker,
         Error::Unsupported(_) => Variant::Unsupported,
+        Error::Limit(_) => Variant::Limit,
         other => panic!("main-header parsing should not raise {other:?}"),
     }
 }
@@ -1846,7 +1849,8 @@ fn header_with_cod(cod: Vec<u8>) -> Vec<u8> {
 
 /// Every input outside the decoded subset, mapped to the typed error a caller
 /// sees. This is the contract: valid-but-not-yet-decoded is `Unsupported`, an
-/// illegal field is `Marker`, and structural damage is `Codestream`. Nothing
+/// input past a resource guard is `Limit`, an illegal field is `Marker`, and
+/// structural damage is `Codestream`. Nothing
 /// here may be silently accepted — the alternative to a clean rejection is not
 /// a slightly wrong image, it is an arbitrary one.
 ///
@@ -1883,7 +1887,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
                 seg(marker::COD, &cod_default(1)),
                 seg(marker::QCD, &qcd_none(2, &[8; 16])),
             ])),
-            Variant::Unsupported,
+            Variant::Limit,
         ),
         // A non-zero image origin is decoded now; one at or past the far edge
         // (XOsiz >= Xsiz, Table A-9) encloses no image and is an illegal field.

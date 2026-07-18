@@ -1070,7 +1070,7 @@ fn check_sample_budget(siz: &Siz) -> Result<()> {
             .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
         total += u64::from(width) * u64::from(height);
         if total > MAX_IMAGE_SAMPLES {
-            return Err(Error::Unsupported(format!(
+            return Err(Error::Limit(format!(
                 "components total over {MAX_IMAGE_SAMPLES} samples, above the decode guard"
             )));
         }
@@ -1127,7 +1127,7 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
     // the same area per component; this is the cheap early-out before that walk.
     let (width, height) = siz.image_extent_at(0);
     if u64::from(width) * u64::from(height) > MAX_IMAGE_SAMPLES {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::Limit(format!(
             "image area {width}×{height} exceeds the decode guard of {MAX_IMAGE_SAMPLES} samples",
         )));
     }
@@ -1323,7 +1323,7 @@ const MAX_POC_VOLUMES: usize = 32;
 /// Reject a progression-volume count past [`MAX_POC_VOLUMES`].
 fn check_poc_budget(volumes: usize) -> Result<()> {
     if volumes > MAX_POC_VOLUMES {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::Limit(format!(
             "{volumes} progression volumes exceeds the decode guard of {MAX_POC_VOLUMES}"
         )));
     }

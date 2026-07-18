@@ -117,7 +117,7 @@ pub struct DecodeOptions {
     /// `2` a quarter-size, and so on — the wavelet pyramid's own lower
     /// resolutions, not a resample. Every component must keep at least one
     /// resolution: a reduction that consumes some component's whole pyramid is
-    /// rejected as [`Error::Unsupported`].
+    /// rejected as [`Error::InvalidOptions`].
     pub resolution_reduction: u8,
 }
 
@@ -157,7 +157,7 @@ pub fn decode_with(codestream: &[u8], options: DecodeOptions) -> Result<Image> {
         for (component, params) in header.components.iter().enumerate() {
             let resolutions = u32::from(params.coding.decomposition_levels) + 1;
             if u32::from(reduction) >= resolutions {
-                return Err(Error::Unsupported(format!(
+                return Err(Error::InvalidOptions(format!(
                     "resolution reduction {reduction} discards all {resolutions} resolutions \
                      of component {component} in tile {index}"
                 )));
