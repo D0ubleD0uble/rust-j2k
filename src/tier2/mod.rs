@@ -184,7 +184,7 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
         .map(|band| band.blocks.len())
         .sum();
     if total_blocks > MAX_CODE_BLOCKS {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::Limit(format!(
             "{total_blocks} code-blocks exceeds the decode guard of {MAX_CODE_BLOCKS}"
         )));
     }
@@ -806,7 +806,7 @@ fn resolution_geoms(
         match here.filter(|&n| n <= *precinct_budget) {
             Some(n) => *precinct_budget -= n,
             None => {
-                return Err(Error::Unsupported(format!(
+                return Err(Error::Limit(format!(
                     "tile precinct count exceeds the decode guard of {MAX_PRECINCTS}"
                 )));
             }

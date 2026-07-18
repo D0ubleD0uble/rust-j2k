@@ -285,7 +285,7 @@ where
         // `undo_maxshift` carries the oracle's `roishift >= 31` arm for it.
         let top = top_coded_plane(numbps, block.zero_bit_planes, params.roi_shift);
         if top > MAX_BIT_PLANES {
-            return Err(Error::Unsupported(format!(
+            return Err(Error::Limit(format!(
                 "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
             )));
         }
@@ -369,14 +369,14 @@ mod tests {
     }
 
     /// A subband whose coded bit-plane count `Mb − zero_bit_planes` exceeds the
-    /// `i32` double-scale limit is rejected as unsupported, not decoded into an
+    /// `i32` double-scale limit is rejected at the guard, not decoded into an
     /// overflow.
     #[test]
     fn excessive_bit_planes_rejected() {
         let sb = one_block_subband(1, 0);
         let err = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES + 1, default_params(), |q| q)
             .expect_err("must reject");
-        assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, Error::Limit(_)), "got {err:?}");
     }
 
     /// A maxshift pushes the same subband over the limit even when its own
@@ -391,7 +391,7 @@ mod tests {
         };
         let err = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, params, |q| q)
             .expect_err("MAX_BIT_PLANES + 1 planes");
-        assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, Error::Limit(_)), "got {err:?}");
 
         // One less, and the same block decodes.
         decode_subband::<i32, _>(&sb, MAX_BIT_PLANES - 1, params, |q| q).expect("in range");

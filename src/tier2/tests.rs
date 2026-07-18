@@ -318,7 +318,7 @@ fn geometry_rejects_a_precinct_bomb_before_allocating() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(result, Err(crate::Error::Unsupported(_))),
+        matches!(result, Err(crate::Error::Limit(_))),
         "a 1×2^24 tile-component at a 2^1 precinct must be rejected"
     );
     assert!(
@@ -346,7 +346,7 @@ fn the_precinct_budget_is_shared_across_components() {
     let first = resolution_geoms(&header, 0, 0, &mut budget);
     let second = resolution_geoms(&header, 0, 1, &mut budget);
     assert!(
-        first.is_err() || matches!(second, Err(crate::Error::Unsupported(_))),
+        first.is_err() || matches!(second, Err(crate::Error::Limit(_))),
         "two components sharing the budget must not both allocate their precincts"
     );
 }
@@ -644,7 +644,7 @@ fn block_count_guard_rejects_metadata_bomb() {
     let h = header(4096, 4096, 1, 2);
     let t = tile(&[]);
     let err = decode_packets(&h, &t).expect_err("guard fires before any packet parse");
-    assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
+    assert!(matches!(err, crate::Error::Limit(_)), "{err}");
 }
 
 // ---- Per-component geometry (issue #57) ----

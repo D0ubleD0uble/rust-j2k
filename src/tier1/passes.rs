@@ -688,7 +688,7 @@ pub fn decode_block(
     // zero bit-planes keep `top` small under any `SPrgn`, which is why
     // `undo_maxshift` carries its own `roi_shift >= 31` arm.
     if top > MAX_BIT_PLANES {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::Limit(format!(
             "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
         )));
     }
@@ -1104,7 +1104,7 @@ mod tests {
                 },
             )
             .expect_err(&format!("maxshift {roi_shift} passes the bit-plane limit"));
-            assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+            assert!(matches!(err, Error::Limit(_)), "{err:?}");
         }
     }
 

@@ -288,7 +288,8 @@ case, not an edge case:
   in `src/codestream/tests.rs` enumerates every input outside the decoded subset
   and pins the typed error a caller sees: `Codestream` for structural damage,
   `Marker` for an illegally encoded field, `Unsupported` for valid JPEG 2000 we
-  do not decode yet. Rejecting is not a formality. A feature the decoder reads
+  do not decode yet, `Limit` for an input past one of the decoder's resource
+  guards. Rejecting is not a formality. A feature the decoder reads
   and then ignores does not yield a slightly wrong image, it yields an arbitrary
   one, so anything not decoded must be refused rather than skipped. As each
   milestone lands, its row leaves the table for the decoded set; a row that stops

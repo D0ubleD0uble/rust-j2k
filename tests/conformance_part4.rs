@@ -904,5 +904,5 @@ fn reduction_is_bounded_by_the_resolution_count() {
         rust_j2k::DecodeOptions::default().with_resolution_reduction(4),
     )
     .expect_err("a reduction past the coarsest resolution is rejected");
-    assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+    assert!(matches!(err, Error::InvalidOptions(_)), "{err:?}");
 }
