@@ -110,7 +110,7 @@ fn valid_reversible_header_parses() {
         seg(marker::QCD, &qcd_none(2, &exps)),
     ]);
 
-    let (header, sot_offset) = parse_main_header(&bytes).expect("parse");
+    let (header, sot_offset, _) = parse_main_header(&bytes).expect("parse");
 
     assert_eq!(
         header,
@@ -165,7 +165,7 @@ fn valid_irreversible_header_parses() {
         seg(marker::QCD, &qcd_expounded(1, &steps)),
     ]);
 
-    let (header, _) = parse_main_header(&bytes).expect("parse");
+    let (header, _, _) = parse_main_header(&bytes).expect("parse");
 
     assert_eq!(header.siz.components[0].bit_depth, 12);
     assert!(header.siz.components[0].signed);
@@ -185,7 +185,7 @@ fn derived_quant_keeps_single_step() {
         seg(marker::QCD, &body),
     ]);
 
-    let (header, _) = parse_main_header(&bytes).expect("parse");
+    let (header, _, _) = parse_main_header(&bytes).expect("parse");
     assert_eq!(header.qcd.style, QuantStyle::ScalarDerived);
     assert_eq!(header.qcd.steps, vec![(9, 42)]);
 }
@@ -253,7 +253,7 @@ fn multiple_components_parse() {
         seg(marker::COD, &cod_default(1)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
-    let (header, _) = parse_main_header(&bytes).expect("multi-component header parses");
+    let (header, _, _) = parse_main_header(&bytes).expect("multi-component header parses");
     assert_eq!(header.siz.components.len(), 3);
     // Each component keeps its own depth and sub-sampling.
     assert_eq!(header.siz.component_extent(0), Some((512, 256)));
@@ -439,7 +439,7 @@ fn every_progression_order_parses() {
             seg(marker::COD, &cod_body(0, code, 1, 0, 5, 4, 4, 0, 1)),
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
         ]);
-        let (header, _) = parse_main_header(&bytes).unwrap_or_else(|e| panic!("{code}: {e:?}"));
+        let (header, _, _) = parse_main_header(&bytes).unwrap_or_else(|e| panic!("{code}: {e:?}"));
         assert_eq!(header.cod.progression, want, "progression code {code}");
     }
 }
@@ -469,7 +469,7 @@ fn multiple_layers_parse() {
         seg(marker::COD, &cod_body(0, 0, 5, 0, 5, 4, 4, 0, 1)), // 5 layers
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
-    let (header, _) = parse_main_header(&bytes).expect("multi-layer header parses");
+    let (header, _, _) = parse_main_header(&bytes).expect("multi-layer header parses");
     assert_eq!(header.cod.layers, 5);
 }
 
@@ -564,7 +564,7 @@ fn sop_and_eph_flags_parse_independently() {
             seg(marker::COD, &cod_body(scod, 0, 1, 0, 5, 4, 4, 0, 1)),
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
         ]);
-        let (header, _) =
+        let (header, _, _) =
             parse_main_header(&bytes).unwrap_or_else(|e| panic!("{scod:#04X}: {e:?}"));
         assert_eq!(
             (header.cod.use_sop, header.cod.use_eph),
@@ -593,7 +593,7 @@ fn reversible_colour_transform_parses() {
         seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)), // mct = 1, 5/3
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
-    let (header, _) = parse_main_header(&bytes).expect("RCT header parses");
+    let (header, _, _) = parse_main_header(&bytes).expect("RCT header parses");
     assert!(header.cod.multiple_component_transform);
     assert_eq!(header.cod.transform, Transform::Reversible53);
 }
@@ -682,7 +682,7 @@ fn out_of_subset_marker_is_unsupported() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::PPM, &[0, 0, 0, 0]), // packed packet headers, main header
+        seg(marker::CAP, &[0, 0]), // extended capabilities (HTJ2K et al.)
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
@@ -867,7 +867,7 @@ fn oversized_qcd_step_table_is_capped() {
         seg(marker::COD, &cod_default(1)),
         seg(marker::QCD, &qcd_none(2, &[8; 120])),
     ]);
-    let (header, _) = parse_main_header(&bytes).expect("padding parses");
+    let (header, _, _) = parse_main_header(&bytes).expect("padding parses");
     assert_eq!(header.qcd.steps.len(), 97);
     assert_eq!(header.qcd.steps[0], (8, 0));
 }
@@ -879,7 +879,7 @@ fn oversized_expounded_qcd_step_table_is_capped() {
         seg(marker::COD, &cod_default(0)),
         seg(marker::QCD, &qcd_expounded(1, &[(10, 1234); 120])),
     ]);
-    let (header, _) = parse_main_header(&bytes).expect("padding parses");
+    let (header, _, _) = parse_main_header(&bytes).expect("padding parses");
     assert_eq!(header.qcd.steps.len(), 97);
     assert_eq!(header.qcd.steps[0], (10, 1234));
 }
@@ -1126,6 +1126,55 @@ fn a_tile_with_no_tile_part_is_codestream() {
     // Only tile 0 is carried; tile 1 never appears.
     let bytes = assemble(&header, &sot_seg(0, 0, 0, 1), &[1, 2], true);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+/// PPM's payload frames one packet-header chunk per tile-part with a 4-byte
+/// `Nppm` length (A.7.4). `decode_ppm_chunks` strips the lengths and returns the
+/// per-tile-part chunks, in `Zppm` order, joining markers so an `Nppm` can
+/// straddle a marker boundary — the same bytes an inline codestream would carry
+/// as each tile-part's packet headers, which is why a PPM stream decodes to the
+/// same packets as its inline equivalent (proven end-to-end by `p1_03`/`p1_05`).
+#[test]
+fn ppm_chunks_split_by_nppm_across_markers() {
+    // Two tile-parts in one marker: Nppm 1 then Nppm 2.
+    let one = decode_ppm_chunks(vec![(0, vec![0, 0, 0, 1, 0xAA, 0, 0, 0, 2, 0xBB, 0xCC])]).unwrap();
+    assert_eq!(one, vec![vec![0xAA], vec![0xBB, 0xCC]]);
+
+    // Nppm=3 straddles two markers; joined in Zppm order (given out of order).
+    let split =
+        decode_ppm_chunks(vec![(1, vec![0xBB, 0xCC]), (0, vec![0, 0, 0, 3, 0xAA])]).unwrap();
+    assert_eq!(split, vec![vec![0xAA, 0xBB, 0xCC]]);
+
+    // A zero-length chunk is a tile-part that carries no packet headers.
+    assert_eq!(
+        decode_ppm_chunks(vec![(0, vec![0, 0, 0, 0])]).unwrap(),
+        vec![Vec::<u8>::new()]
+    );
+
+    // No PPM markers: no chunks.
+    assert_eq!(decode_ppm_chunks(vec![]).unwrap(), Vec::<Vec<u8>>::new());
+}
+
+/// A malformed PPM payload — a duplicate `Zppm`, an `Nppm` the payload cannot
+/// satisfy, or a trailing fragment too short to be a length — is a codestream
+/// error, not a wrong decode.
+#[test]
+fn ppm_chunks_reject_malformed_framing() {
+    // Nppm=5 but only one byte follows.
+    assert!(matches!(
+        decode_ppm_chunks(vec![(0, vec![0, 0, 0, 5, 0xAA])]),
+        Err(Error::Codestream(_))
+    ));
+    // Three trailing bytes: too short for a 4-byte Nppm.
+    assert!(matches!(
+        decode_ppm_chunks(vec![(0, vec![0, 0, 0])]),
+        Err(Error::Codestream(_))
+    ));
+    // Two markers share Zppm 0.
+    assert!(matches!(
+        decode_ppm_chunks(vec![(0, vec![0, 0, 0, 0]), (0, vec![0, 0, 0, 0])]),
+        Err(Error::Codestream(_))
+    ));
 }
 
 /// PPT moves the tile's packet headers into the tile-part header (A.7.5): it
@@ -1477,10 +1526,10 @@ fn a_non_marker_where_a_marker_belongs_is_codestream() {
 #[test]
 fn header_altering_markers_are_rejected_not_skipped() {
     // These are known markers outside the subset. Each changes how the
-    // codestream is interpreted (PPM/PPT relocate the packet headers), so each
-    // is named and rejected rather than passed over. The length markers
-    // TLM/PLM/PLT are absent: they are informational and decoded (issue #72).
-    for code in [marker::CAP, marker::PPM, marker::PPT, marker::SOP] {
+    // codestream is interpreted, so each is named and rejected rather than
+    // passed over. PPM has left this list — it is decoded now (issue #71); the
+    // length markers TLM/PLM/PLT are absent too, being informational (#72).
+    for code in [marker::CAP, marker::PPT, marker::SOP] {
         let bytes = header_with(&seg(code, &[0, 0]));
         assert!(
             matches!(err(&bytes), Error::Unsupported(_)),
@@ -1922,13 +1971,10 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     ];
 
     // Every main-header marker the subset does not decode. TLM and PLM have
-    // left this table (informational, decoded — issue #72); PLT is decoded in
-    // the tile-part header and structurally illegal in the main one.
-    for (name, code) in [
-        ("PPM", marker::PPM),
-        ("PPT", marker::PPT),
-        ("SOP", marker::SOP),
-    ] {
+    // left this table (informational, decoded — issue #72); PPM too (its packed
+    // packet headers are decoded — issue #71); PLT is decoded in the tile-part
+    // header and structurally illegal in the main one.
+    for (name, code) in [("PPT", marker::PPT), ("SOP", marker::SOP)] {
         rows.push((
             name,
             err(&header_with(&seg(code, &[0, 0]))),
@@ -2000,7 +2046,7 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
             seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)),
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
         ]);
-        let (header, _) = parse_main_header(&bytes).expect("a decoded style parses");
+        let (header, _, _) = parse_main_header(&bytes).expect("a decoded style parses");
         assert_eq!(header.cod.code_block_style, style);
     }
 
@@ -2087,7 +2133,7 @@ fn coc_body(
 }
 
 fn parsed(segments: &[Vec<u8>]) -> crate::codestream::MainHeader {
-    let (header, _) = parse_main_header(&codestream(segments)).expect("parses");
+    let (header, _, _) = parse_main_header(&codestream(segments)).expect("parses");
     header
 }
 

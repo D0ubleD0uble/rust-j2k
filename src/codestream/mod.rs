@@ -158,8 +158,8 @@ pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
         ));
     }
 
-    let (header, sot_offset) = parse_main_header(bytes)?;
-    let tiles = walk_tiles(bytes, sot_offset, &header)?;
+    let (header, sot_offset, ppm) = parse_main_header(bytes)?;
+    let tiles = walk_tiles(bytes, sot_offset, &header, &ppm)?;
     let codestream = Codestream { header, tiles };
 
     // Resolve every tile's header once, here, so a malformed tile-part header is
@@ -241,8 +241,16 @@ struct TileParts<'a> {
 /// A `Psot` overrun, an out-of-range or out-of-order `TPsot`, a `TNsot` that
 /// disagrees with the parts that arrive, a missing tile, or a missing `EOC` all
 /// reject with [`Error::Codestream`].
-fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Result<Vec<Tile<'a>>> {
+fn walk_tiles<'a>(
+    bytes: &'a [u8],
+    sot_offset: usize,
+    main: &MainHeader,
+    ppm: &[Vec<u8>],
+) -> Result<Vec<Tile<'a>>> {
     let tile_count = main.siz.num_tiles() as usize;
+    // `PPM` (main header) supplies one packet-header chunk per tile-part in
+    // codestream order; this counter walks them as the tile-parts are read.
+    let mut ppm_seq = 0usize;
     let mut tiles: Vec<TileParts<'a>> = (0..tile_count)
         .map(|_| TileParts {
             parts: Vec::new(),
@@ -315,7 +323,26 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
         }
         // Packed packet headers append across the tile's parts in TPsot order
         // (which is arrival order, enforced above), matching the body order.
-        tile.packed_headers.extend(packed);
+        // They come from `PPT` (this tile-part's own markers) or `PPM` (the main
+        // header, one chunk per tile-part in codestream order) — never both for
+        // the same packets, so a codestream carrying each is out of subset.
+        if ppm.is_empty() {
+            tile.packed_headers.extend(packed);
+        } else {
+            if !packed.is_empty() {
+                return Err(Error::Unsupported(
+                    "a codestream carrying both PPM and PPT packed headers is not decoded".into(),
+                ));
+            }
+            let chunk = ppm.get(ppm_seq).ok_or_else(|| {
+                Error::Codestream(
+                    "PPM carries fewer packet-header chunks than the codestream has tile-parts"
+                        .into(),
+                )
+            })?;
+            ppm_seq += 1;
+            tile.packed_headers.extend_from_slice(chunk);
+        }
         let data_start = cur.pos;
 
         // Psot counts from the SOT marker's first byte to the end of the
@@ -363,6 +390,15 @@ fn walk_tiles<'a>(bytes: &'a [u8], sot_offset: usize, main: &MainHeader) -> Resu
             }
             None => return Err(Error::Codestream("missing EOC after the tile-part".into())),
         }
+    }
+
+    // Every PPM chunk maps to one tile-part; leftover chunks mean the main header
+    // packed headers for tile-parts the codestream never carried.
+    if ppm_seq != ppm.len() {
+        return Err(Error::Codestream(format!(
+            "PPM carries {} packet-header chunk(s) but the codestream has {ppm_seq} tile-part(s)",
+            ppm.len(),
+        )));
     }
 
     tiles
@@ -741,7 +777,7 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
 ///
 /// The header is walked in full by [`walk_main_header`] first, then each
 /// located segment is interpreted in codestream order.
-fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
+fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> {
     let (segments, sot_offset) = walk_main_header(bytes)?;
 
     // SIZ shall be the first marker segment after SOC (A.6).
@@ -772,6 +808,9 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     let mut tlm: Vec<TlmEntry> = Vec::new();
     let mut poc: Vec<PocVolume> = Vec::new();
     let mut crg: Option<Vec<(u16, u16)>> = None;
+    // Packed packet headers (A.7.4), collected as `(Zppm, Ippm)` and split into
+    // per-tile-part chunks after the walk by `decode_ppm_chunks`.
+    let mut ppm: Vec<(u8, Vec<u8>)> = Vec::new();
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
@@ -855,13 +894,25 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
                 ));
             }
 
+            // Packed packet headers in the main header (A.7.4): `Zppm` orders
+            // this marker among the header's PPM markers, and the rest is `Ippm`.
+            // Collected here and split per tile-part after the walk; a tile-part
+            // then sources its packet headers from its chunk (see `walk_tiles`).
+            marker::PPM => {
+                let mut b = body();
+                let zppm = b.u8()?;
+                let ippm = b.take(b.remaining())?;
+                ppm.push((zppm, ippm.to_vec()));
+            }
+
             // Valid markers the decoded subset does not yet cover. Rejected
             // rather than skipped: each one changes how the codestream is
             // interpreted, so ignoring it would silently decode the wrong
-            // image. PPM/PPT relocate packet headers. CAP announces capabilities
-            // beyond Part 1 (an HTJ2K codestream carries one), whose code-blocks
-            // this Tier-1 would misread as Part 1.
-            marker::CAP | marker::PPM | marker::PPT | marker::SOP | marker::EPH => {
+            // image. CAP announces capabilities beyond Part 1 (an HTJ2K
+            // codestream carries one), whose code-blocks this Tier-1 would
+            // misread as Part 1. PPT/SOP/EPH belong after SOD or in a tile-part
+            // header, not the main one.
+            marker::CAP | marker::PPT | marker::SOP | marker::EPH => {
                 return Err(Error::Unsupported(format!(
                     "marker {} is outside the decoded subset",
                     marker::describe(seg.code)
@@ -914,7 +965,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize)> {
     }
 
     validate_resolved(&header)?;
-    Ok((header, sot_offset))
+    let ppm_chunks = decode_ppm_chunks(ppm)?;
+    Ok((header, sot_offset, ppm_chunks))
 }
 
 /// Check the invariants that only hold once a header's per-component parameters
@@ -1563,6 +1615,39 @@ fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Split the main header's packed packet headers (`PPM`, A.7.4) into one chunk
+/// per tile-part, in codestream order.
+///
+/// Each `PPM` marker carries `Zppm` (its position) and `Ippm` (payload). Joined
+/// across every marker in `Zppm` order, the payload is a run of `(Nppm, bytes)`
+/// records — `Nppm` a 4-byte length, `bytes` that tile-part's packet headers —
+/// one record per tile-part. `Nppm` may straddle a marker boundary, so the
+/// payloads are concatenated before the records are read, matching OpenJPEG's
+/// `opj_j2k_merge_ppm`. Each returned chunk feeds a tile-part's packet-header
+/// stream in [`walk_tiles`], the same role `PPT` plays for a single tile-part.
+fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
+    if markers.is_empty() {
+        return Ok(Vec::new());
+    }
+    // `Zppm` orders the markers; a repeated index is a malformed main header.
+    markers.sort_by_key(|&(z, _)| z);
+    if markers.windows(2).any(|w| w[0].0 == w[1].0) {
+        return Err(Error::Codestream(
+            "duplicate PPM index Zppm in the main header".into(),
+        ));
+    }
+    let joined: Vec<u8> = markers.into_iter().flat_map(|(_, bytes)| bytes).collect();
+
+    let mut cur = Cursor::new(&joined);
+    let mut chunks = Vec::new();
+    while cur.remaining() > 0 {
+        // Nppm: the byte count of this tile-part's packet headers (may be 0).
+        let nppm = cur.u32()? as usize;
+        chunks.push(cur.take(nppm)?.to_vec());
+    }
+    Ok(chunks)
 }
 
 /// Decode the quantization body shared by QCD (A.6.4) and QCC (A.6.5): style,
