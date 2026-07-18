@@ -12,6 +12,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Let a new release age before it can arrive as a PR: a freshly published
+    # version is the likeliest to be malicious or broken, and a week costs
+    # nothing here.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels: [dependencies, rust]
     groups:
@@ -27,6 +32,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels: [dependencies, github-actions]
     groups:
@@ -34,8 +41,9 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
     ignore:
-      # dtolnay/rust-toolchain is referenced by its Rust-version tag (the msrv
-      # job pins @1.87, matching rust-version in Cargo.toml). Dependabot reads
-      # that tag as an action version and would "bump" it, silently changing
-      # what the MSRV check tests. Bump it manually in lockstep with the MSRV.
+      # dtolnay/rust-toolchain is pinned to a master commit and selects its
+      # toolchain via the explicit `toolchain:` input (the msrv job passes
+      # "1.87", matching rust-version in Cargo.toml). The repo publishes only
+      # moving tags, which Dependabot mishandles as versions. Bump the pin
+      # manually; bump the msrv input in lockstep with the MSRV.
       - dependency-name: "dtolnay/rust-toolchain"
