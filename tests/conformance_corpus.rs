@@ -8,11 +8,20 @@
 //! the per-component bound arrays line up with the graded-component count and the
 //! class-1 references.
 //!
+//! The manifest is deserialized through the single typed schema in
+//! [`support::part4`], whose `#[serde(deny_unknown_fields)]` is the
+//! exhaustive-fields check: a manifest key with no matching struct field (a
+//! schema drift) fails [`load_manifest`] here, and every modelled field is
+//! required, so a missing or mistyped field fails too — replacing the parallel
+//! untyped field-path assertions this test used to carry.
+//!
 //! See `tests/fixtures/conformance/README.md` for the corpus and its license.
+
+mod support;
 
 use std::path::PathBuf;
 
-use serde_json::Value;
+use support::part4::{Cblksty, Features, load_manifest};
 
 fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance")
@@ -21,20 +30,17 @@ fn corpus_dir() -> PathBuf {
 #[test]
 fn manifest_and_corpus_are_consistent() {
     let dir = corpus_dir();
-    let manifest_path = dir.join("manifest.json");
-    let text = std::fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", manifest_path.display()));
-    let manifest: Value = serde_json::from_str(&text).expect("manifest.json parses as JSON");
+    // Deserializing through the typed schema is itself the field check: an
+    // unknown key, or a missing/mistyped modelled field, panics here.
+    let manifest = load_manifest(&dir);
+    assert_eq!(
+        manifest.entries.len(),
+        23,
+        "expected 23 conformance entries"
+    );
 
-    let entries = manifest["entries"]
-        .as_array()
-        .expect("manifest has an `entries` array");
-    assert_eq!(entries.len(), 23, "expected 23 conformance entries");
-
-    for entry in entries {
-        let cs = entry["codestream"]
-            .as_str()
-            .expect("entry has `codestream`");
+    for entry in &manifest.entries {
+        let cs = &entry.codestream;
         let cs_path = dir.join(cs);
         let bytes = std::fs::read(&cs_path)
             .unwrap_or_else(|e| panic!("read codestream {}: {e}", cs_path.display()));
@@ -45,38 +51,36 @@ fn manifest_and_corpus_are_consistent() {
 
         // Components graded at class 1 — may be fewer than the image's total
         // (p0_13 is a 257-component image of which 4 are graded).
-        let graded = entry["graded_components"]
-            .as_u64()
-            .expect("entry has `graded_components`") as usize;
+        let graded = entry.graded_components;
         assert!(graded >= 1, "{cs}: graded_components must be >= 1");
-        let image_components = entry["features"]["components"]
-            .as_u64()
-            .expect("entry has `features.components`") as usize;
+        let image_components = entry.features.components as usize;
         assert!(
             graded <= image_components,
             "{cs}: grades {graded} but image has {image_components} components"
         );
 
-        let class1 = entry["references"]["class1"]
-            .as_array()
-            .expect("entry has `references.class1`");
         assert_eq!(
-            class1.len(),
+            entry.references.class1.len(),
             graded,
             "{cs}: {} class-1 references for {graded} graded components",
-            class1.len(),
+            entry.references.class1.len(),
         );
 
-        let class0 = entry["references"]["class0"]
-            .as_array()
-            .expect("entry has `references.class0`");
-        assert!(!class0.is_empty(), "{cs}: no class-0 reference");
+        assert!(
+            !entry.references.class0.is_empty(),
+            "{cs}: no class-0 reference"
+        );
         // Validate every reference is real content, not a zero-byte stub or an
         // LFS pointer: each .pgx must be non-empty and carry the PGX magic. This
         // keeps the docstring's "truncated commit fails loudly" promise honest
         // for references, the way the SOC check does for codestreams.
-        for r in class1.iter().chain(class0.iter()) {
-            let rp = dir.join(r.as_str().expect("reference path is a string"));
+        for r in entry
+            .references
+            .class1
+            .iter()
+            .chain(&entry.references.class0)
+        {
+            let rp = dir.join(r);
             let rb = std::fs::read(&rp)
                 .unwrap_or_else(|e| panic!("read reference {}: {e}", rp.display()));
             assert!(
@@ -87,19 +91,13 @@ fn manifest_and_corpus_are_consistent() {
         }
 
         // Class-1 bounds are the grading bar: one PAE and one MSE per component.
-        let pae = entry["bounds_class1"]["pae"]
-            .as_array()
-            .expect("entry has `bounds_class1.pae`");
-        let mse = entry["bounds_class1"]["mse"]
-            .as_array()
-            .expect("entry has `bounds_class1.mse`");
         assert_eq!(
-            pae.len(),
+            entry.bounds_class1.pae.len(),
             graded,
             "{cs}: one PAE bound per graded component"
         );
         assert_eq!(
-            mse.len(),
+            entry.bounds_class1.mse.len(),
             graded,
             "{cs}: one MSE bound per graded component"
         );
@@ -107,45 +105,20 @@ fn manifest_and_corpus_are_consistent() {
         // `bit_exact` must agree with all-zero bounds (graded for an exact
         // match). This tracks the bounds, not the wavelet: p0_09 is 9/7 yet
         // bit_exact, so it is intentionally decoupled from `features.reversible`.
-        let bit_exact = entry["bit_exact"].as_bool().expect("entry has `bit_exact`");
-        let all_zero = pae
+        let all_zero = entry
+            .bounds_class1
+            .pae
             .iter()
-            .chain(mse.iter())
-            .all(|v| v.as_f64() == Some(0.0));
+            .chain(&entry.bounds_class1.mse)
+            .all(|&v| v == 0.0);
         assert_eq!(
-            bit_exact, all_zero,
+            entry.bit_exact, all_zero,
             "{cs}: `bit_exact` disagrees with its bounds"
         );
 
-        // Feature-to-fixture fields: the Phase 2 issues key their acceptance
-        // criteria on "the matching Part 4 codestream", and these fields are
-        // what makes the match identifiable from committed data.
-        for key in ["markers_main", "markers_tile"] {
-            entry["features"][key]
-                .as_array()
-                .unwrap_or_else(|| panic!("{cs}: `features.{key}` is an array"));
-        }
-        for key in ["sop", "eph", "precincts"] {
-            entry["features"][key]
-                .as_bool()
-                .unwrap_or_else(|| panic!("{cs}: `features.{key}` is a bool"));
-        }
-        let cblksty = entry["features"]["cblksty"]
-            .as_object()
-            .expect("entry has `features.cblksty`");
-        for bit in CBLKSTY_BITS {
-            cblksty[bit]
-                .as_bool()
-                .unwrap_or_else(|| panic!("{cs}: `features.cblksty.{bit}` is a bool"));
-        }
         // Every tile has at least one tile-part.
-        let tiles = entry["features"]["tiles"]
-            .as_array()
-            .expect("entry has `features.tiles`");
-        let tile_count: u64 = tiles.iter().map(|t| t.as_u64().unwrap()).product();
-        let tile_parts = entry["features"]["tile_parts"]
-            .as_u64()
-            .expect("entry has `features.tile_parts`");
+        let tile_count = entry.features.tiles[0] as u64 * entry.features.tiles[1] as u64;
+        let tile_parts = entry.features.tile_parts as u64;
         assert!(
             tile_parts >= tile_count,
             "{cs}: {tile_parts} tile-parts for {tile_count} tiles"
@@ -153,45 +126,31 @@ fn manifest_and_corpus_are_consistent() {
     }
 }
 
-const CBLKSTY_BITS: [&str; 6] = [
-    "bypass",
-    "reset",
-    "restart",
-    "vert_causal",
-    "pred_term",
-    "segsym",
-];
-
 /// The corpus covers every Phase 2 feature the issues gate on — except PLM,
 /// whose absence is asserted here so the gap stays visible: issue #72 grades
 /// PLM against a synthetic fixture instead.
 #[test]
 fn corpus_covers_the_phase2_feature_matrix() {
-    let dir = corpus_dir();
-    let text = std::fs::read_to_string(dir.join("manifest.json")).expect("read manifest.json");
-    let manifest: Value = serde_json::from_str(&text).expect("manifest.json parses as JSON");
-    let entries = manifest["entries"].as_array().expect("`entries` array");
+    let manifest = load_manifest(&corpus_dir());
+    let entries = &manifest.entries;
 
-    let has = |pred: &dyn Fn(&Value) -> bool| entries.iter().any(|e| pred(&e["features"]));
-    let marker = |f: &Value, m: &str| {
-        ["markers_main", "markers_tile"].iter().any(|k| {
-            f[k].as_array()
-                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(m)))
-        })
+    let has = |pred: &dyn Fn(&Features) -> bool| entries.iter().any(|e| pred(&e.features));
+    let marker = |f: &Features, m: &str| {
+        f.markers_main.iter().any(|x| x == m) || f.markers_tile.iter().any(|x| x == m)
     };
 
-    for bit in CBLKSTY_BITS {
+    for bit in Cblksty::NAMES {
         assert!(
-            has(&|f| f["cblksty"][bit].as_bool() == Some(true)),
+            has(&|f| f.cblksty.flag(bit)),
             "no corpus entry exercises code-block style `{bit}`"
         );
     }
-    for flag in ["sop", "eph", "precincts"] {
-        assert!(
-            has(&|f| f[flag].as_bool() == Some(true)),
-            "no corpus entry exercises `{flag}`"
-        );
-    }
+    assert!(has(&|f| f.sop), "no corpus entry exercises `sop`");
+    assert!(has(&|f| f.eph), "no corpus entry exercises `eph`");
+    assert!(
+        has(&|f| f.precincts),
+        "no corpus entry exercises `precincts`"
+    );
     for m in [
         "COC", "QCC", "RGN", "POC", "PPM", "PPT", "PLT", "TLM", "CRG",
     ] {
@@ -202,29 +161,23 @@ fn corpus_covers_the_phase2_feature_matrix() {
     }
     for prog in ["LRCP", "RLCP", "RPCL", "PCRL", "CPRL"] {
         assert!(
-            has(&|f| f["progression"].as_str() == Some(prog)),
+            has(&|f| f.progression == prog),
             "no corpus entry uses {prog} progression"
         );
     }
     assert!(
-        has(&|f| f["components"].as_u64() > Some(1)),
+        has(&|f| f.components > 1),
         "no multi-component corpus entry"
     );
     assert!(
         has(&|f| {
-            let tiles = f["tiles"][0].as_u64().unwrap() * f["tiles"][1].as_u64().unwrap();
-            f["tile_parts"].as_u64() > Some(tiles)
+            let tiles = f.tiles[0] as u64 * f.tiles[1] as u64;
+            f.tile_parts as u64 > tiles
         }),
         "no corpus entry with more tile-parts than tiles"
     );
-    assert!(
-        has(&|f| f["mct"].as_u64() == Some(1) && f["reversible"] == Value::Bool(true)),
-        "no RCT corpus entry"
-    );
-    assert!(
-        has(&|f| f["mct"].as_u64() == Some(1) && f["reversible"] == Value::Bool(false)),
-        "no ICT corpus entry"
-    );
+    assert!(has(&|f| f.mct == 1 && f.reversible), "no RCT corpus entry");
+    assert!(has(&|f| f.mct == 1 && !f.reversible), "no ICT corpus entry");
 
     // Known coverage gaps, asserted so a corpus refresh that closes (or
     // widens) them fails loudly and the affected issues get updated:
@@ -235,9 +188,7 @@ fn corpus_covers_the_phase2_feature_matrix() {
     assert!(!has(&|f| marker(f, "PLM")), "corpus now covers PLM");
     for m in ["COD", "COC", "QCC"] {
         assert!(
-            !has(&|f| f["markers_tile"]
-                .as_array()
-                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(m)))),
+            !has(&|f| f.markers_tile.iter().any(|x| x == m)),
             "corpus now covers tile-part {m}"
         );
     }
