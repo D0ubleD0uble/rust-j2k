@@ -11,6 +11,18 @@
 //! This module owns the schema *and* the harness that runs it: fixture
 //! discovery ([`discover`]), the sample comparator ([`compare`]), and the
 //! decode-outcome classifier ([`classify`]) the corpus test drives.
+//!
+//! It also carries the shared machinery for the ISO/IEC 15444-4 conformance
+//! corpus: the PGX reference reader ([`pgx`]) and the manifest schema, PAE/MSE
+//! comparator, and ratchet driver ([`part4`]). Each `tests/*.rs` file is its own
+//! crate, so any given test binary uses only a slice of this module; the
+//! module-wide `#![allow(dead_code)]` keeps the unused-in-this-binary slice from
+//! tripping the `dead_code` lint.
+
+#![allow(dead_code)]
+
+pub mod part4;
+pub mod pgx;
 
 use std::fmt;
 use std::panic;
