@@ -37,6 +37,8 @@ and stale.
   ordered milestones, each tied to its module, its oracle, and what it unblocks.
 - [roadmap-phase2.md](roadmap-phase2.md) — the general Part 1 decoder broken into
   ordered milestones, gated on the ISO/IEC 15444-4 conformance suite.
+- [roadmap-phase3.md](roadmap-phase3.md) — the JP2 file format decoder broken
+  into ordered milestones, gated on the ISO/IEC 15444-4 JP2 reader files.
 - [correctness.md](correctness.md) — how we know a stage is right: the oracle
   cross-check, the ISO 15444-4 conformance suite, per-stage golden vectors,
   fuzzing, and round-trip testing once the encoder lands.
