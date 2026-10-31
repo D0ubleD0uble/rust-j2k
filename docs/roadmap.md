@@ -72,13 +72,20 @@ input (no panics, no `unsafe`, bounded memory).
 
 **Goal:** open `.jp2` files, not just bare codestreams.
 
-- Box parser: signature, ftyp, jp2h (ihdr, bpcc, colr, pclr, cmap, cdef, res),
-  jp2c contiguous codestream.
-- Enumerated colorspaces (sRGB, greyscale), restricted ICC profiles, palette
-  and channel mapping.
+The milestone-by-milestone build order, each step with the oracle that gates
+it, is in [roadmap-phase3.md](roadmap-phase3.md); in brief:
 
-**Gate:** decodes a corpus of real `.jp2` files matching OpenJPEG's output
-within compliance bounds.
+- Box parser: signature, ftyp, jp2h (ihdr, bpcc, colr, pclr, cmap, cdef, res),
+  jp2c contiguous codestream. `decode` accepts a JP2 file or a raw codestream.
+- Colour metadata: enumerated sRGB, greyscale and sYCC, and restricted ICC
+  profiles passed through as bytes. Palette and channel mapping applied.
+- Opt-in sRGB output: sYCC to RGB and restricted ICC to sRGB. The default
+  output stays the samples as coded, plus the metadata to interpret them.
+- `read_header`: the image and JP2 metadata without decoding pixels.
+
+**Gate:** all nine ISO/IEC 15444-4 JP2 reader files decode within their
+compliance bounds against the Part 4 references, and a set of real `.jp2`
+files matches OpenJPEG's output. Ships as one release.
 
 ## Phase 4 — HTJ2K decode (Part 15)
 
