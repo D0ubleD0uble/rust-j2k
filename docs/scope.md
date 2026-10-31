@@ -96,10 +96,13 @@ quality-progressive read — is a decode-control feature deferred past Phase 2.
 |---|---|---|
 | Box parsing: signature, ftyp, jp2h, jp2c (contiguous codestream) | — | 3 |
 | Image header (ihdr), bits-per-component (bpcc) | — | 3 |
-| Enumerated colorspaces (sRGB, greyscale) | — | 3 |
-| Restricted ICC profile (colr) | — | 3 |
+| Enumerated colorspaces (sRGB, greyscale, sYCC), reported as metadata | — | 3 |
+| Restricted ICC profile (colr), passed through as bytes | — | 3 |
+| Opt-in sRGB output: sYCC to RGB, restricted ICC to sRGB | — | 3 |
 | Palette (pclr), component mapping (cmap), channel definition (cdef) | — | 3 |
 | Resolution (res), capture/display metadata | — | 3 |
+| xml / uuid boxes passed through as bytes | — | 3 |
+| Header-only read (`read_header`) without decoding pixels | — | 3 |
 
 ## Part 15 — High Throughput JPEG 2000 / HTJ2K (ISO/IEC 15444-15)
 
