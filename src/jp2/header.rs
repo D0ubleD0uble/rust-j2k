@@ -79,32 +79,28 @@ impl Ihdr {
     }
 }
 
-/// The JP2 Header box's contents: `ihdr` parsed, every other child kept as its
-/// raw contents in file order. Repeats are kept too, so the code that reads a
-/// box can apply its own rule (the first `colr` wins; a second `pclr` is an
-/// error).
+/// The JP2 Header box's contents: `ihdr` parsed, every other child kept in one
+/// list in the order OpenJPEG reads them. Repeats are kept too, so the code
+/// that reads a box can apply its own rule (the first `colr` wins; a second
+/// `pclr` is an error).
 ///
-/// The children are gathered the way OpenJPEG gathers them: from every `jp2h`
-/// box before the codestream, and from the header boxes it finds misplaced at
-/// the top level after the first `jp2h` (see [`Jp2Header::add_misplaced`]).
+/// The order matters because OpenJPEG runs a box's handler as it meets the
+/// box, and a handler can depend on the ones before it (`bpcc` is checked
+/// against the component count `ihdr` sets). The list is in file order: the
+/// children of each `jp2h` box before the codestream, with the header boxes
+/// found misplaced at the top level after the first `jp2h` (see
+/// [`Jp2Header::add_misplaced`]) between them where they sit. [`Jp2Header::ihdr_at`]
+/// says where the first `ihdr` sat in it. The per-type accessors ([`Jp2Header::colr`]
+/// and the like) give the payloads of one type, in that order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Jp2Header<'a> {
     /// The first `ihdr` read; later ones are ignored.
     pub(crate) ihdr: Ihdr,
-    /// Bits Per Component boxes (I.5.3.2).
-    pub(crate) bpcc: Vec<&'a [u8]>,
-    /// Colour Specification boxes (I.5.3.3).
-    pub(crate) colr: Vec<&'a [u8]>,
-    /// Palette boxes (I.5.3.4).
-    pub(crate) pclr: Vec<&'a [u8]>,
-    /// Component Mapping boxes (I.5.3.5).
-    pub(crate) cmap: Vec<&'a [u8]>,
-    /// Channel Definition boxes (I.5.3.6).
-    pub(crate) cdef: Vec<&'a [u8]>,
-    /// Resolution superboxes (I.5.3.7), contents not yet descended into.
-    pub(crate) res: Vec<&'a [u8]>,
-    /// Boxes this reader does not know, skipped (I.4: a reader ignores them).
-    pub(crate) unknown: Vec<Jp2Box<'a>>,
+    /// How many entries of `children` come before the first `ihdr` in read
+    /// order.
+    pub(crate) ihdr_at: usize,
+    /// Every child other than `ihdr`, in read order.
+    pub(crate) children: Vec<Jp2Box<'a>>,
 }
 
 impl<'a> Jp2Header<'a> {
@@ -130,7 +126,7 @@ impl<'a> Jp2Header<'a> {
         match &item.kind {
             b"ihdr" => true,
             b"bpcc" | b"colr" | b"pclr" | b"cmap" | b"cdef" => {
-                self.record(item);
+                self.children.push(item);
                 true
             }
             _ => false,
@@ -141,53 +137,84 @@ impl<'a> Jp2Header<'a> {
     /// of 14 bytes, anywhere among its children (OpenJPEG requires both and
     /// nothing more); only the first `ihdr` of the file is parsed.
     fn read(payload: &'a [u8], previous: Option<Self>) -> Result<Self> {
-        let mut ihdr = previous.as_ref().map(|header| header.ihdr);
+        let mut known = previous
+            .as_ref()
+            .map(|header| (header.ihdr, header.ihdr_at));
         let mut has_ihdr = false;
-        let mut children = Vec::new();
+        let mut children = previous.map(|header| header.children).unwrap_or_default();
         for child in Boxes::children(payload, "the `jp2h` box") {
             let child = child?;
             if &child.kind == b"ihdr" {
                 has_ihdr = true;
-                if ihdr.is_none() {
-                    ihdr = Some(Ihdr::parse(child.payload)?);
+                if known.is_none() {
+                    known = Some((Ihdr::parse(child.payload)?, children.len()));
                 }
             } else {
                 children.push(child);
             }
         }
-        let ihdr = match ihdr {
-            Some(ihdr) if has_ihdr => ihdr,
-            _ => {
-                return Err(Error::FileFormat("a `jp2h` box has no `ihdr` box".into()));
-            }
-        };
-
-        let mut header = previous.unwrap_or(Jp2Header {
-            ihdr,
-            bpcc: Vec::new(),
-            colr: Vec::new(),
-            pclr: Vec::new(),
-            cmap: Vec::new(),
-            cdef: Vec::new(),
-            res: Vec::new(),
-            unknown: Vec::new(),
-        });
-        for child in children {
-            header.record(child);
+        match known {
+            Some((ihdr, ihdr_at)) if has_ihdr => Ok(Jp2Header {
+                ihdr,
+                ihdr_at,
+                children,
+            }),
+            _ => Err(Error::FileFormat("a `jp2h` box has no `ihdr` box".into())),
         }
-        Ok(header)
     }
 
-    /// File one child box under its type.
-    fn record(&mut self, child: Jp2Box<'a>) {
-        match &child.kind {
-            b"bpcc" => self.bpcc.push(child.payload),
-            b"colr" => self.colr.push(child.payload),
-            b"pclr" => self.pclr.push(child.payload),
-            b"cmap" => self.cmap.push(child.payload),
-            b"cdef" => self.cdef.push(child.payload),
-            b"res " => self.res.push(child.payload),
-            _ => self.unknown.push(child),
-        }
+    /// The payloads of the children of one type, in read order.
+    fn payloads(&self, kind: &[u8; 4]) -> Vec<&'a [u8]> {
+        self.children
+            .iter()
+            .filter(|child| &child.kind == kind)
+            .map(|child| child.payload)
+            .collect()
+    }
+
+    /// Colour Specification boxes (I.5.3.3).
+    pub(crate) fn colr(&self) -> Vec<&'a [u8]> {
+        self.payloads(b"colr")
+    }
+
+    /// Palette boxes (I.5.3.4).
+    pub(crate) fn pclr(&self) -> Vec<&'a [u8]> {
+        self.payloads(b"pclr")
+    }
+
+    /// Component Mapping boxes (I.5.3.5).
+    pub(crate) fn cmap(&self) -> Vec<&'a [u8]> {
+        self.payloads(b"cmap")
+    }
+
+    /// Channel Definition boxes (I.5.3.6).
+    pub(crate) fn cdef(&self) -> Vec<&'a [u8]> {
+        self.payloads(b"cdef")
+    }
+
+    /// Bits Per Component boxes (I.5.3.2).
+    #[cfg(test)]
+    pub(crate) fn bpcc(&self) -> Vec<&'a [u8]> {
+        self.payloads(b"bpcc")
+    }
+
+    /// Resolution superboxes (I.5.3.7), contents not yet descended into.
+    #[cfg(test)]
+    pub(crate) fn res(&self) -> Vec<&'a [u8]> {
+        self.payloads(b"res ")
+    }
+
+    /// Boxes this reader does not know, skipped (I.4: a reader ignores them).
+    #[cfg(test)]
+    pub(crate) fn unknown(&self) -> Vec<&Jp2Box<'a>> {
+        self.children
+            .iter()
+            .filter(|child| {
+                !matches!(
+                    &child.kind,
+                    b"bpcc" | b"colr" | b"pclr" | b"cmap" | b"cdef" | b"res "
+                )
+            })
+            .collect()
     }
 }

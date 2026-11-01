@@ -20,6 +20,13 @@ pub struct Jp2Metadata {
 }
 
 /// The colour space a JP2 file declares for its colour channels.
+///
+/// It comes from the first usable Colour Specification (`colr`) box, the way
+/// OpenJPEG reads it: a box whose method is neither 1 (enumerated) nor 2
+/// (restricted ICC) is skipped and does not count as the first, and every
+/// later usable box is ignored. Boxes placed after `jp2h` at the top level
+/// count in file order with the ones inside `jp2h`. The samples are never converted, whatever
+/// the value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColourSpace {
     /// sRGB (enumerated colour space 16).
@@ -29,11 +36,14 @@ pub enum ColourSpace {
     /// sYCC (enumerated colour space 18).
     Sycc,
     /// A restricted ICC profile (a monochrome or three-component matrix/TRC
-    /// input profile), bytes verbatim. Not applied to the samples.
+    /// input profile), the box's bytes after its three header bytes, verbatim.
+    /// Not checked and not applied to the samples.
     RestrictedIcc(Vec<u8>),
-    /// Another enumerated colour space value, reported but not interpreted.
+    /// Another enumerated colour space value from the first usable box,
+    /// reported but not interpreted.
     Enumerated(u32),
-    /// The file gives no colour space this decoder reads.
+    /// The file gives no colour space: no usable `colr` box. The image
+    /// header's unknown-colour-space flag does not change this.
     Unknown,
 }
 

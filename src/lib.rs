@@ -168,7 +168,7 @@ fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     // rather than an unsupported box.
     jp2::check_supported(&file.header)?;
     let image = decode_codestream(cs, options)?;
-    let (components, metadata) = jp2::present(&file, image.components)?;
+    let (components, metadata) = jp2::present(file, image.components)?;
     Ok(Image {
         components,
         jp2: Some(metadata),
