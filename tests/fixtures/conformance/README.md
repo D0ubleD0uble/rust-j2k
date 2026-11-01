@@ -190,13 +190,16 @@ the same measurement.
 `needs_srgb` marks files 2, 3, 5, 7 and 8, whose references are sRGB display
 output (sYCC or an ICC profile converted). Until the decoder has an sRGB
 output option, those entries report *needs sRGB output* instead of being graded
-against the display reference (files 3, 5, 7 and 8 are still graded as coded, below).
+against the display reference (files 2, 3, 5, 7 and 8 are still graded as coded, below).
 `shift_right` is the right shift that takes decoded samples to the reference's
 8 bits (file 6: 4, file 7: 8).
 
-Files 3, 5, 7 and 8 also carry an `as_coded` section: one reference per codestream
+Files 2, 3, 5, 7 and 8 also carry an `as_coded` section: one reference per codestream
 component (`references/jp2_N_ascoded_K.pgx`), at the component's own size and
-depth, with no colour conversion and no shift. While sRGB output is unavailable
+depth, with no colour conversion and no shift. File 2's are in the order its
+`cdef` gives (components 2, 1, 0), and that order is checked against
+`opj_decompress` on `file2.jp2` with its `colr` rewritten to sRGB, so OpenJPEG
+applies the `cdef` without converting sYCC. While sRGB output is unavailable
 the harness grades these bit-exactly and still reports *needs sRGB output*. The
 references come from OpenJPEG decoding the `jp2c` payload as a bare codestream,
 which keeps ICC handling out. Two OpenJPEG behaviours shape how: it converts

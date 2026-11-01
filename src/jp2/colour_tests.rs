@@ -257,10 +257,7 @@ fn a_malformed_colr_is_refused_before_an_unsupported_box() {
 }
 
 /// The nine ISO/IEC 15444-4 JP2 reader files, read through the same box walk
-/// `decode` uses. Files 2 and 9 carry `cdef` / `pclr`, which `decode` still
-/// refuses as unsupported before it returns metadata, so this checks the
-/// parsed colour space for all nine and `tests/jp2_colour.rs` checks `decode`
-/// for the rest.
+/// `decode` uses; `tests/jp2_colour.rs` checks what `decode` reports.
 #[test]
 fn the_conformance_files_declare_the_expected_colour_spaces() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -297,9 +294,8 @@ fn the_conformance_files_declare_the_expected_colour_spaces() {
     }
 }
 
-/// `bpcc` 12,12,12,0 in a real Kakadu-style file: the box is accepted and the
-/// header parses. `decode` of it stops at the `cdef` guard (see
-/// `tests/jp2_real.rs`), so this reads the box walk directly.
+/// `bpcc` 12,12,12,0 in a real ECW SDK file: the box is accepted and the
+/// header parses (`tests/jp2_real.rs` decodes the file).
 #[test]
 fn a_real_file_with_a_bpcc_box_parses() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

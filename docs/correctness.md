@@ -146,6 +146,18 @@ identity mapping. Two differences, both approved by the owner on 2026-11-01:
   `jp2_palette_subsampled_*` are graded by table lookup over OpenJPEG's
   decode of the bare codestream.
 
+Channel definitions (`cdef`) follow OpenJPEG on what it accepts and on the
+output channel order, including its sequential swap rule: each colour entry
+swaps its channel to `Asoc - 1`, later entries follow their channels, and an
+entry may repeat a channel once every channel is named. The labels on
+`Jp2Metadata::channels` have no OpenJPEG output to match: its library keeps
+only the type, in `comps[].alpha`, which `opj_decompress` never writes out
+(no PGX, PNG or TIFF writer reads it). That field is also written to the
+position the entry named before its swap, so after a swap it can sit on the
+wrong channel (an ARGB layout loses its opacity flag). Here each channel
+carries the entry that names it, so the label moves with the samples, as
+I.5.3.6 defines `Cn`.
+
 Looser here, where OpenJPEG fails: a malformed header box after the
 codestream (a second signature or `ftyp` box, a `jp2h` without `ihdr`, a
 `colr` running past the end of the file, a bad `cdef`). OpenJPEG runs its box

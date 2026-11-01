@@ -452,6 +452,33 @@ fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8) -> Result
 }
 
 impl PalettePlan {
+    /// The channels the plan outputs, from the boxes and SIZ alone: one per
+    /// palette column when the palette applies, otherwise each codestream
+    /// component as coded.
+    pub(crate) fn output_channels(&self, siz: &Siz) -> Result<Vec<PlannedChannel>> {
+        if let PalettePlan::Apply { channels, .. } = self {
+            return Ok(channels.clone());
+        }
+        siz.components
+            .iter()
+            .enumerate()
+            .map(|(k, component)| {
+                let component_index = u16::try_from(k).map_err(|_| {
+                    Error::Inconsistent(format!("SIZ component {k} exceeds the u16 index"))
+                })?;
+                Ok(PlannedChannel {
+                    source: Source::Direct {
+                        component: component_index,
+                    },
+                    bit_depth: component.bit_depth,
+                    signed: component.signed,
+                    x_sampling: component.x_sampling,
+                    y_sampling: component.y_sampling,
+                })
+            })
+            .collect()
+    }
+
     /// The output channels from the decoded components, in SIZ order. Each
     /// channel is built on its source component's grid. A direct channel
     /// takes its component's plane when no later channel reads it.
