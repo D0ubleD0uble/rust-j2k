@@ -7,10 +7,11 @@
 //! compares each channel to its `.pgx` plane with the Part 1 comparator
 //! ([`support::part4`]) and the same ratchet.
 //!
-//! [`IN_CLASS`] starts empty: `decode` rejects the JP2 wrapper as
-//! `Unsupported`, so every entry reports *not yet decoded*. Any other outcome
-//! fails: a decode that errors differently or misses its reference is a
-//! failure, and an entry that starts to pass must be added to [`IN_CLASS`].
+//! [`IN_CLASS`] lists the entries that grade in class. An entry outside it
+//! must report *not yet decoded* (`decode` returns `Unsupported`, or the entry
+//! needs sRGB output). Any other outcome fails: a decode that errors
+//! differently or misses its reference is a failure, and an entry that starts
+//! to pass must be added to [`IN_CLASS`].
 //! Entries marked `needs_srgb` wait for the sRGB output option; flip
 //! [`SRGB_OUTPUT_AVAILABLE`] (and `options_for` in `support/jp2.rs`) when it
 //! exists.
@@ -24,7 +25,7 @@ use support::pgx::parse_pgx;
 
 /// The entries that decode within their compliance class today. Grow it as the
 /// file-format milestones land; never shrink it without an explanation.
-const IN_CLASS: &[&str] = &[];
+const IN_CLASS: &[&str] = &["file1", "file4", "file6"];
 
 /// Whether the decoder can produce sRGB output. While `false`, `needs_srgb`
 /// entries that decode report *needs sRGB output* and are not graded.

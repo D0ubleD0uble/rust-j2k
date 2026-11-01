@@ -1,7 +1,8 @@
 //! Error type for the decoder. One flat enum; each failure maps to the variant
 //! that names its class, so a caller can tell a malformed input from an
 //! unsupported feature: [`Error::Codestream`] for structural damage,
-//! [`Error::Marker`] for an illegal field encoding, [`Error::Unsupported`] for
+//! [`Error::Marker`] for an illegal field encoding, [`Error::FileFormat`] for a
+//! malformed JP2 box structure, [`Error::Unsupported`] for
 //! a valid-but-out-of-subset feature, [`Error::Limit`] for an input past a
 //! decoder resource guard, [`Error::InvalidOptions`] for bad caller options,
 //! and [`Error::Inconsistent`] for a violated internal invariant. Structural
@@ -23,8 +24,13 @@ pub enum Error {
     /// A marker segment carried an illegal field encoding (a reserved value,
     /// a bad length, an out-of-range field).
     Marker(String),
-    /// A valid-but-not-decoded feature: a JP2 container, an HTJ2K codestream,
-    /// a Part 2 extension. A newer version of the decoder may accept the same
+    /// The JP2 box structure or a box field is malformed: a truncated box, a
+    /// missing or misplaced required box, an illegal field value, or a box
+    /// that disagrees with the codestream.
+    FileFormat(String),
+    /// A valid-but-not-decoded feature: an HTJ2K codestream, a Part 2
+    /// extension, a JP2 box this decoder cannot apply, a file that is not
+    /// JP2-compatible. A newer version of the decoder may accept the same
     /// input.
     Unsupported(String),
     /// The input exceeded one of the decoder's resource guards — a hostile or
@@ -45,6 +51,7 @@ impl fmt::Display for Error {
         match self {
             Error::Codestream(m) => write!(f, "codestream: {m}"),
             Error::Marker(m) => write!(f, "marker: {m}"),
+            Error::FileFormat(m) => write!(f, "file format: {m}"),
             Error::Unsupported(m) => write!(f, "unsupported: {m}"),
             Error::Limit(m) => write!(f, "limit: {m}"),
             Error::InvalidOptions(m) => write!(f, "invalid options: {m}"),

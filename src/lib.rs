@@ -1,8 +1,8 @@
 //! Pure-Rust JPEG 2000 codec, built GRIB2-decode-first toward OpenJPEG-level
 //! coverage. No C dependency, so it cross-compiles cleanly to every target.
 //!
-//! The decoder reads a **raw codestream** (ISO/IEC 15444-1 Annex A, not yet
-//! the JP2 file format) into **integer** samples: one grid per component,
+//! The decoder reads a **raw codestream** (ISO/IEC 15444-1 Annex A) or a
+//! **JP2 file** (Annex I) into **integer** samples: one grid per component,
 //! signed up to 32 bits, unsigned up to 31 (an `i32` container), each with its
 //! own bit depth, sign, and sub-sampling. Both wavelet paths decode — the
 //! reversible 5/3 bit-exactly, the irreversible 9/7 within the standard's
@@ -12,22 +12,24 @@
 //! (maxshift), non-zero canvas offsets, resolution-reduced decoding, and the
 //! reversible (RCT) and irreversible (ICT) colour transforms.
 //!
-//! JP2 boxes, HTJ2K, and an encoder are later work, not permanent non-goals.
+//! A JP2 file's codestream decodes the same way, and the file's header comes
+//! back on [`Image::jp2`]. JP2 palettes and channel definitions, colour
+//! conversion, HTJ2K, and an encoder are later work, not permanent non-goals.
 //! See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
 //!
 //! ```text
-//! bytes ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequant ─▶ inverse DWT ─▶ Image
-//!         (markers)     (packets)  (MQ+EBCOT) (quant)    (5/3 | 9/7)
+//! bytes ─▶ [jp2 boxes] ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequant ─▶ inverse DWT ─▶ Image
+//!          (Annex I)      (markers)     (packets)  (MQ+EBCOT) (quant)    (5/3 | 9/7)
 //! ```
 //!
 //! Each stage is a module below. [`decode`] wires them together.
 //!
 //! # Example
 //!
-//! The entire public surface is [`decode`]: codestream bytes in, an [`Image`]
-//! out. An [`Image`] is the image area on the reference grid plus one
+//! The entire public surface is [`decode`]: codestream or JP2 bytes in, an
+//! [`Image`] out. An [`Image`] is the image area on the reference grid plus one
 //! [`Component`] per codestream component; a sub-sampled component holds fewer
 //! samples than that area, so size sample buffers from the component, not from
 //! the image. Malformed input never panics; it comes back as a typed [`Error`].
@@ -56,8 +58,8 @@
 //! class-1 error bounds, and that gate runs in `tests/` against committed
 //! oracle snapshots, with no external tools. Correctness is defined by
 //! cross-checking a reference decoder (OpenJPEG / eccodes), not by
-//! self-consistency. A codestream using a feature outside the decoded set — a
-//! JP2 wrapper, HTJ2K, a Part 2 extension — is rejected with
+//! self-consistency. An input using a feature outside the decoded set — HTJ2K,
+//! a Part 2 extension, a JP2 palette — is rejected with
 //! [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. See each module's docs for the ISO §reference and what it owns;
@@ -72,6 +74,7 @@ pub(crate) mod codestream;
 pub(crate) mod dwt;
 pub(crate) mod error;
 pub(crate) mod image;
+pub(crate) mod jp2;
 pub(crate) mod mct;
 pub(crate) mod pipeline;
 pub(crate) mod quant;
@@ -87,21 +90,30 @@ pub mod fuzz;
 
 pub use error::{Error, Result};
 pub use image::{Component, Image};
+pub use jp2::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
 
-/// Decode a JPEG 2000 **codestream** (Annex A, no JP2 wrapper) into an
-/// [`Image`]: the reference-grid image area plus one [`Component`] per SIZ
-/// component, each on its own sample grid.
+/// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
+/// into an [`Image`]: the reference-grid image area plus one [`Component`] per
+/// SIZ component, each on its own sample grid.
+///
+/// The input kind is detected from its first bytes: a codestream opens with
+/// the `SOC` and `SIZ` markers (`FF 4F FF 51`), a JP2 file with its 12-byte
+/// signature box. Nothing else is sniffed. A JP2 file decodes its codestream
+/// (the first `jp2c` box) and reports the file's header on [`Image::jp2`],
+/// which is `None` for a raw codestream.
 ///
 /// This is the whole public surface for the GRIB2 use case: the §7 data
-/// section of a `grid_jpeg` message is exactly such a codestream. That subset is
+/// section of a `grid_jpeg` message is a raw codestream. That subset is
 /// single-component, so its images carry one component; a codestream declaring
 /// more decodes each component onto its own grid, independently.
 ///
-/// Pass the bare codestream, not a `.jp2` file: a JP2 wrapper is valid JPEG 2000
-/// but is rejected with [`Error::Unsupported`] rather than unwrapped. Anything
-/// else outside the decoded subset is rejected the same way, never half-decoded.
-pub fn decode(codestream: &[u8]) -> Result<Image> {
-    decode_with(codestream, DecodeOptions::default())
+/// A malformed JP2 box structure is [`Error::FileFormat`]. A file that is not
+/// JP2-compatible, or whose header holds a palette (`pclr`, `cmap`) or channel
+/// definitions (`cdef`), is valid JPEG 2000 but is rejected with
+/// [`Error::Unsupported`]. Anything else outside the decoded subset is
+/// rejected the same way, never half-decoded.
+pub fn decode(bytes: &[u8]) -> Result<Image> {
+    decode_with(bytes, DecodeOptions::default())
 }
 
 /// Options for [`decode_with`]. The default decodes at full resolution —
@@ -132,10 +144,37 @@ impl DecodeOptions {
     }
 }
 
-/// Decode a JPEG 2000 codestream like [`decode`], governed by `options`.
-pub fn decode_with(codestream: &[u8], options: DecodeOptions) -> Result<Image> {
-    let cs = codestream::parse(codestream)?;
+/// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
+/// `options`.
+pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
+    // A codestream opens with SOC; anything else that carries the signature
+    // box's type is read as a JP2 file, so a damaged signature box is reported
+    // as a box fault. The rest falls to the codestream parser, which reports
+    // the missing SOC.
+    if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
+        return decode_jp2(bytes, options);
+    }
+    decode_codestream(codestream::parse(bytes)?, options)
+}
 
+/// Decode a JP2 file: walk its boxes, decode the codestream they carry, and
+/// attach what the header says about the samples.
+fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
+    let file = jp2::parse(bytes)?;
+    jp2::check_supported(&file.header)?;
+    let cs = codestream::parse(file.codestream)?;
+    jp2::check_against_siz(&file.header, &cs.header.siz)?;
+    let image = decode_codestream(cs, options)?;
+    let (components, metadata) = jp2::present(&file, image.components)?;
+    Ok(Image {
+        components,
+        jp2: Some(metadata),
+        ..image
+    })
+}
+
+/// Decode a parsed codestream into its components.
+fn decode_codestream(cs: codestream::Codestream<'_>, options: DecodeOptions) -> Result<Image> {
     let reduction = options.resolution_reduction;
 
     // Each tile is a whole decode of its own: its own header, its own packets,

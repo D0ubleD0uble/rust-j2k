@@ -1855,22 +1855,12 @@ fn header_with_cod(cod: Vec<u8>) -> Vec<u8> {
 /// a slightly wrong image, it is an arbitrary one.
 ///
 /// As each Phase 2 milestone lands, its row moves out of this table and into
-/// the decoded set. A row that stops rejecting fails here first.
+/// the decoded set. A row that stops rejecting fails here first. The JP2 box
+/// layer has its own matrix in `src/jp2/tests.rs`.
 #[test]
 fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
-    let jp2 = {
-        let mut bytes = JP2_SIGNATURE.to_vec();
-        bytes.extend_from_slice(b"....ftypjp2 ");
-        bytes
-    };
-
     // (what the input carries, the error it produced, the variant it must be)
     let mut rows: Vec<(&str, Error, Variant)> = vec![
-        (
-            "JP2 file format wrapper",
-            parse(&jp2).expect_err("JP2 is not a bare codestream"),
-            Variant::Unsupported,
-        ),
         (
             "HTJ2K capabilities (CAP)",
             err(&header_with(&seg(marker::CAP, &[0, 0]))),
