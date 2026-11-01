@@ -283,7 +283,7 @@ fn the_conformance_files_declare_the_expected_colour_spaces() {
                     assert_eq!(profile.len(), *len, "file{n}");
                     // The profile is the first `colr` box's payload less its
                     // three header bytes.
-                    assert_eq!(profile.as_slice(), &parsed.header.colr[0][3..], "file{n}");
+                    assert_eq!(profile.as_slice(), &parsed.header.colr()[0][3..], "file{n}");
                 }
                 other => panic!("file{n}: expected RestrictedIcc, got {other:?}"),
             },
@@ -301,6 +301,51 @@ fn a_real_file_with_a_bpcc_box_parses() {
         .join("tests/fixtures/jp2_real/3_13bit_and_1bit.jp2");
     let bytes = std::fs::read(path).expect("fixture");
     let parsed = super::parse(&bytes).expect("parses");
-    assert_eq!(parsed.header.bpcc, vec![&[12, 12, 12, 0][..]]);
+    assert_eq!(parsed.header.bpcc(), vec![&[12, 12, 12, 0][..]]);
     assert_eq!(parsed.header.ihdr.bits_per_component, 255);
+}
+
+/// A file whose `jp2h` boxes are given whole, in order.
+fn with_jp2h_boxes(jp2h_children: &[Vec<Vec<u8>>]) -> Vec<u8> {
+    let mut out = SIGNATURE.to_vec();
+    out.extend_from_slice(&bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    for children in jp2h_children {
+        out.extend_from_slice(&bx(b"jp2h", &children.concat()));
+    }
+    out.extend_from_slice(&bx(b"jp2c", CODESTREAM));
+    out
+}
+
+/// OpenJPEG checks a `bpcc` against the `NC` read so far, which is 0 until
+/// `ihdr` is read: measured with `opj_decompress` 2.5.0, a one-byte `bpcc`
+/// before `ihdr` is "Bad BPCC header box (bad size)", an empty one passes, and
+/// in a second `jp2h` (after the first `ihdr`) the right length passes.
+#[test]
+fn a_bpcc_before_ihdr_must_be_empty() {
+    let bpcc = |bytes: &[u8]| bx(b"bpcc", bytes);
+    refused(
+        &with_jp2h_boxes(&[vec![bpcc(&[7, 7, 7]), ihdr(255, 0)]]),
+        "`ihdr` has not been read",
+    );
+    assert_eq!(
+        colour_of(&with_jp2h_boxes(&[vec![
+            bpcc(&[]),
+            ihdr(255, 0),
+            enum_colr(16)
+        ]])),
+        ColourSpace::Srgb
+    );
+    // After `ihdr` in the same box the length must be NC.
+    refused(
+        &with_jp2h_boxes(&[vec![ihdr(255, 0), bpcc(&[])]]),
+        "one per component",
+    );
+    // A second `jp2h` sees the first one's `ihdr`, even before its own.
+    assert_eq!(
+        colour_of(&with_jp2h_boxes(&[
+            vec![ihdr(255, 0), enum_colr(17)],
+            vec![bpcc(&[7, 7, 7]), ihdr(255, 0)],
+        ])),
+        ColourSpace::Greyscale
+    );
 }

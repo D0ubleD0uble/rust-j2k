@@ -12,8 +12,9 @@
 //! - `METH` 1 needs 7 bytes (`EnumCS` is 4); extra bytes are ignored.
 //!   `METH` 2 keeps everything after the 3 header bytes as the profile, and an
 //!   empty profile is refused.
-//! - Every `bpcc` must hold exactly `NC` bytes, whatever `ihdr.BPC` says. The
-//!   depths themselves are not used: SIZ is the truth for depth and sign.
+//! - Every `bpcc` must hold exactly `NC` bytes, whatever `ihdr.BPC` says; a
+//!   `bpcc` that comes before `ihdr` sees `NC` as 0. The depths themselves are
+//!   not used: SIZ is the truth for depth and sign.
 
 use super::header::Jp2Header;
 use super::metadata::ColourSpace;
@@ -24,14 +25,29 @@ const ENUMERATED: u8 = 1;
 /// `METH` for a restricted ICC profile.
 const RESTRICTED_ICC: u8 = 2;
 
-/// Check every `bpcc` against `ihdr.NC`.
+/// Check every `bpcc` against the component count. OpenJPEG checks a `bpcc`
+/// as it reads it, against the `NC` of the `ihdr` read so far, which is still
+/// 0 for a `bpcc` that comes before `ihdr`: such a box must be empty.
 pub(crate) fn check_bpcc(header: &Jp2Header<'_>) -> Result<()> {
-    let components = usize::from(header.ihdr.components);
-    for bpcc in &header.bpcc {
-        if bpcc.len() != components {
+    for (at, child) in header.children.iter().enumerate() {
+        if &child.kind != b"bpcc" {
+            continue;
+        }
+        let before_ihdr = at < header.ihdr_at;
+        let components = if before_ihdr {
+            0
+        } else {
+            usize::from(header.ihdr.components)
+        };
+        if child.payload.len() != components {
             return Err(Error::FileFormat(format!(
-                "a `bpcc` box holds {} bytes; it needs one per component ({components})",
-                bpcc.len()
+                "a `bpcc` box holds {} bytes; it needs one per component ({components}{})",
+                child.payload.len(),
+                if before_ihdr {
+                    ", as `ihdr` has not been read yet"
+                } else {
+                    ""
+                }
             )));
         }
     }
@@ -44,7 +60,7 @@ pub(crate) fn check_bpcc(header: &Jp2Header<'_>) -> Result<()> {
 /// would not have been used.
 pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColourSpace> {
     let mut first = None;
-    for payload in &header.colr {
+    for payload in header.colr() {
         if payload.len() < 3 {
             return Err(Error::FileFormat(format!(
                 "a `colr` box holds {} bytes; it needs at least 3 (`METH`, `PREC`, `APPROX`)",

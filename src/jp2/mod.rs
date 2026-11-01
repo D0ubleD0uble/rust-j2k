@@ -170,13 +170,13 @@ pub(crate) fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
             "the file has a `{name}` box, which this decoder does not apply"
         )))
     };
-    if !header.pclr.is_empty() {
+    if !header.pclr().is_empty() {
         return unsupported("pclr");
     }
-    if !header.cmap.is_empty() {
+    if !header.cmap().is_empty() {
         return unsupported("cmap");
     }
-    if !header.cdef.is_empty() {
+    if !header.cdef().is_empty() {
         return unsupported("cdef");
     }
     Ok(())

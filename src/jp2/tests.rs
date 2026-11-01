@@ -433,8 +433,8 @@ fn a_second_jp2h_is_merged_into_the_first() {
     assert_decodes_like_raw(&bytes);
     let parsed = super::parse(&bytes).expect("parses");
     assert_eq!(parsed.header.ihdr.width, WIDTH, "the first ihdr wins");
-    assert_eq!(parsed.header.colr.len(), 2, "both colr boxes, in order");
-    assert_eq!(parsed.header.colr[0], &colr()[8..]);
+    assert_eq!(parsed.header.colr().len(), 2, "both colr boxes, in order");
+    assert_eq!(parsed.header.colr()[0], &colr()[8..]);
 }
 
 /// The guarded boxes meet the guard wherever OpenJPEG would apply them: in a
@@ -474,7 +474,7 @@ fn header_boxes_misplaced_before_jp2h_are_ignored() {
     ]);
     assert_decodes_like_raw(&bytes);
     let parsed = super::parse(&bytes).expect("parses");
-    assert_eq!(parsed.header.colr, vec![&colr()[8..]]);
+    assert_eq!(parsed.header.colr(), vec![&colr()[8..]]);
     assert_eq!(parsed.other.len(), 4);
 }
 
@@ -730,12 +730,12 @@ fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
         (HEIGHT, WIDTH, COMPONENTS)
     );
     let first_colr = colr();
-    assert_eq!(header.colr, vec![&first_colr[8..], &[3, 0, 0][..]]);
-    assert_eq!(header.bpcc, vec![&[7, 7, 7][..]]);
-    assert_eq!(header.res, vec![&[1, 2][..]]);
-    assert!(header.pclr.is_empty() && header.cmap.is_empty() && header.cdef.is_empty());
-    assert_eq!(header.unknown.len(), 1);
-    assert_eq!(&header.unknown[0].kind, b"zzzz");
+    assert_eq!(header.colr(), vec![&first_colr[8..], &[3, 0, 0][..]]);
+    assert_eq!(header.bpcc(), vec![&[7, 7, 7][..]]);
+    assert_eq!(header.res(), vec![&[1, 2][..]]);
+    assert!(header.pclr().is_empty() && header.cmap().is_empty() && header.cdef().is_empty());
+    assert_eq!(header.unknown().len(), 1);
+    assert_eq!(&header.unknown()[0].kind, b"zzzz");
     assert_eq!(parsed.codestream, CODESTREAM);
     assert_eq!(parsed.other.len(), 1);
     assert_eq!(parsed.other[0].payload, b"<before/>");
