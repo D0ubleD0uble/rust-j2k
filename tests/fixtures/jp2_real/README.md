@@ -3,10 +3,11 @@
 Nine small `.jp2` files from GDAL's test data, used by `tests/jp2_real.rs` to
 check the JP2 box reader against the box layouts real encoders write (Kakadu,
 the ECW JPEG 2000 SDK, OpenJPEG). The test decodes each file and compares it
-with its oracle (below). `rgb16_ecwsdk.jp2` is the exception: its last tile-part has `Psot = 0` and no `EOC`, so the codestream
-loses its last two data bytes, as in OpenJPEG, and fails with the same `Codestream` error as its extracted
-codestream. OpenJPEG 2.5.0 does not decode it either (it fails in tile
-decoding, "segment too long").
+with its oracle (below). `rgb16_ecwsdk.jp2` is the exception: its last
+tile-part has `Psot = 0` and no `EOC`, so the codestream loses its last two
+data bytes, as in OpenJPEG, and fails with the same `Codestream` error as its
+extracted codestream. OpenJPEG 2.5.0 does not decode it either (it fails in
+tile decoding, "segment too long").
 
 ## Rights
 

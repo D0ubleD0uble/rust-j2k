@@ -55,10 +55,10 @@ fn psot_zero_with_junk_in_place_of_eoc_decodes() {
 #[test]
 fn psot_zero_without_eoc_fails_in_the_tile() {
     for name in [
-        "single_psot0_no_eoc.j2c",
-        "single_psot0_no_eoc_trunc100.j2c",
-        "tiled_psot0_no_eoc.j2c",
-        "tileparts_psot0_no_eoc.j2c",
+        "single_psot0_no_eoc.j2k",
+        "single_psot0_no_eoc_trunc100.j2k",
+        "tiled_psot0_no_eoc.j2k",
+        "tileparts_psot0_no_eoc.j2k",
     ] {
         match decode_file(name) {
             Err(Error::Codestream(m)) => {
@@ -74,7 +74,7 @@ fn psot_zero_without_eoc_fails_in_the_tile() {
 #[test]
 fn psot_zero_with_no_room_for_the_tail_is_codestream() {
     assert!(matches!(
-        decode_file("single_psot0_one_byte_after_sod.j2c"),
+        decode_file("single_psot0_one_byte_after_sod.j2k"),
         Err(Error::Codestream(m)) if m.contains("fewer than two bytes")
     ));
 }

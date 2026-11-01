@@ -5,8 +5,9 @@ has `Psot = 0`, with and without the closing EOC.
 
 ## Source and tools
 
-`source.pgm` is a 48x40 8-bit image (`x*5 + y*3 + noise(0..7)`, Python
-`random.seed(7)`). The three base codestreams were made from it with
+`source.pgm` is a 48x40 8-bit image, row-major. Sample (x, y) is
+`x*5 + y*3 + n` mod 256, with `n = random.randint(0, 7)` drawn per sample after
+`random.seed(7)`. The three base codestreams were made from it with
 OpenJPEG 2.5.0 (`opj_compress`/`opj_decompress` from the system package):
 
 | File | Command |
@@ -22,9 +23,9 @@ of the last tile-part is set to 0, then:
 | ---- | ---- | -------------- |
 | `*_psot0_eoc` | none | decodes; equals the base's decode |
 | `*_psot0_junk_tail` | EOC replaced by `41 42` | warns "Stream does not end with EOC", decodes the same |
-| `*_psot0_no_eoc` (`.j2c`) | EOC removed | `segment too long`, no output |
-| `single_psot0_no_eoc_trunc100` (`.j2c`) | EOC and the last 100 bytes removed | `segment too long`, no output |
-| `single_psot0_one_byte_after_sod` (`.j2c`) | cut one byte after SOD | `Tile part length size inconsistent with stream length` |
+| `*_psot0_no_eoc` | EOC removed | `segment too long`, no output |
+| `single_psot0_no_eoc_trunc100` | EOC and the last 100 bytes removed | `segment too long`, no output |
+| `single_psot0_one_byte_after_sod` | cut one byte after SOD | `Tile part length size inconsistent with stream length` |
 
 `*.expected.pgm` are `opj_decompress` outputs of the bases. Each shape that
 decodes gives exactly that output.
@@ -33,7 +34,3 @@ Not covered, because they hit other tile-part rules: a `Psot = 0` that is not
 on the last tile of the grid, or on a tile-part before the tile's last
 declared one. OpenJPEG decodes those with missing tiles or missing parts; this
 crate rejects them (missing tile, `TNsot` mismatch).
-
-The shapes that do not decode use the extension `.j2c`, so the
-`read_header`-against-`decode` sweep over every `.j2k` (`tests/read_header.rs`)
-does not pick them up.

@@ -16,12 +16,24 @@ use rust_j2k::{ColourSpace, Error, Header, Image, Jp2Metadata, Ratio, Res, read_
 /// Files where `decode` fails on tile data while `read_header` succeeds, and
 /// why. `rgb16_ecwsdk.jp2`'s codestream has no EOC: `decode` fails on its
 /// packets ("overruns the tile-part"; OpenJPEG fails there too), while its
-/// header, `cdef` included, reads cleanly.
+/// header, `cdef` included, reads cleanly. The `psot0/` files are the same
+/// shape (a `Psot = 0` last tile-part with no EOC or too little data), made
+/// from OpenJPEG codestreams.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
-const TILE_FAULTS: &[(&str, &str)] = &[("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC")];
+const TILE_FAULTS: &[(&str, &str)] = &[
+    ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
+    ("psot0/single_psot0_no_eoc.j2k", "no EOC"),
+    (
+        "psot0/single_psot0_no_eoc_trunc100.j2k",
+        "no EOC, truncated",
+    ),
+    ("psot0/single_psot0_one_byte_after_sod.j2k", "no tile data"),
+    ("psot0/tiled_psot0_no_eoc.j2k", "no EOC"),
+    ("psot0/tileparts_psot0_no_eoc.j2k", "no EOC"),
+];
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
