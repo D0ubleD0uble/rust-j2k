@@ -21,7 +21,7 @@
 //! [`for_each_packet`] for the orders and [`BlockState`] for what persists.
 //!
 //! `decode_packets` also computes the resolution / subband / code-block geometry
-//! from the [`MainHeader`](crate::codestream::MainHeader), so it is the single
+//! from the [`MainHeader`], so it is the single
 //! source of truth the assembly stage reuses.
 
 pub mod bio;

@@ -19,7 +19,7 @@ pub struct BitReader<'a> {
     /// A 16-bit window: the previously consumed byte in bits 8..=15, the current
     /// byte in bits 0..=7 (matching OpenJPEG's `opj_bio` convention).
     buf: u32,
-    /// Bits left to read from `buf`'s low byte before the next [`bytein`].
+    /// Bits left to read from `buf`'s low byte before the next [`Self::bytein`].
     ct: i32,
 }
 
