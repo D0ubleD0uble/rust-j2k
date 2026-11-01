@@ -379,10 +379,10 @@ impl ToneCurve {
     /// `cmsReverseToneCurveEx`: analytic for a parametric curve, else the
     /// table inverted by linear interpolation into `samples` entries.
     fn reverse(&self, samples: usize) -> ToneCurve {
-        if let Some((kind, params)) = self.parametric
-            && kind > 0
-        {
-            return ToneCurve::parametric(-kind, params);
+        if let Some((kind, params)) = self.parametric {
+            if kind > 0 {
+                return ToneCurve::parametric(-kind, params);
+            }
         }
         let n = self.table.len();
         let ascending = !self.descending();
@@ -1124,10 +1124,10 @@ fn slope_limit(curve: &mut ToneCurve) {
 /// `OptimizeByComputingLinearization` for 8-bit RGB: per-channel curves from
 /// a grey ramp, then a table sampled through their inverses.
 fn linearization(stages: &[Stage], intent: u32) -> Option<Eval> {
-    if let Some(Stage::Curves(last)) = stages.last()
-        && last.iter().any(ToneCurve::is_degenerated)
-    {
-        return None;
+    if let Some(Stage::Curves(last)) = stages.last() {
+        if last.iter().any(ToneCurve::is_degenerated) {
+            return None;
+        }
     }
     let mut trans = vec![vec![0u16; PRELIN_POINTS]; 3];
     for i in 0..PRELIN_POINTS {
