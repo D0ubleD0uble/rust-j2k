@@ -80,11 +80,12 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "rgb16_ecwsdk.jp2",
         "86cf3c0a005b640e1cc9bd8dcf9f5955897b6576551383fc89f9d18adf32a507",
-        // The codestream has no EOC. OpenJPEG 2.5.0 reads its header but fails
-        // to decode the tile ("segment too long"), so neither decoder decodes
-        // it. Its `cdef` (every type unspecified) is checked by
-        // `the_ecw_unspecified_cdef_is_read` below.
-        Outcome::BrokenCodestream("not terminated by EOC"),
+        // The last tile-part has Psot = 0 and the codestream has no EOC, so
+        // the last two data bytes are taken for one. OpenJPEG 2.5.0 reads its
+        // header but fails to decode the tile ("segment too long"), so neither
+        // decoder decodes it. Its `cdef` (every type unspecified) is checked
+        // by `the_ecw_unspecified_cdef_is_read` below.
+        Outcome::BrokenCodestream("overruns the tile-part"),
     ),
     (
         "rgbwcmyk01_YeGeo_kakadu.jp2",
