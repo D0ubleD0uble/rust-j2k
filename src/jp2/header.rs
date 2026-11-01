@@ -17,7 +17,7 @@ const JP2_BRAND: [u8; 4] = *b"jp2 ";
 /// that does not claim JP2 compatibility, and is [`Error::Unsupported`].
 pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<()> {
     let payload = ftyp.payload;
-    if payload.len() < 8 || payload.len() % 4 != 0 {
+    if payload.len() < 8 || !payload.len().is_multiple_of(4) {
         return Err(Error::FileFormat(format!(
             "the `ftyp` box holds {} bytes; it needs a brand, a version, and whole \
              4-byte compatibility codes",

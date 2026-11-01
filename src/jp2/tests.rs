@@ -7,7 +7,8 @@
 
 use super::SIGNATURE;
 use crate::{
-    Association, ChannelDefinition, ChannelType, ColourSpace, Error, Image, Jp2Metadata, decode,
+    Association, ChannelDefinition, ChannelType, ColourSpace, DecodeOptions, Error, Image,
+    Jp2Metadata, decode, decode_with,
 };
 
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
@@ -187,6 +188,19 @@ fn a_jp2c_with_a_64_bit_length_decodes() {
         good_jp2h(),
         xl_box(b"jp2c", CODESTREAM),
     ]));
+}
+
+/// `ihdr` is checked against the full-resolution image area, so a reduced
+/// decode of a JP2 file works and equals the reduced codestream decode.
+#[test]
+fn a_reduced_decode_of_a_jp2_matches_its_codestream() {
+    let options = DecodeOptions::default().with_resolution_reduction(1);
+    let file = decode_with(&minimal(), options).expect("reduced JP2 decode");
+    let raw = decode_with(CODESTREAM, options).expect("reduced codestream decode");
+    assert_eq!((file.width, file.height), (raw.width, raw.height));
+    assert_eq!((file.width, file.height), (WIDTH / 2, HEIGHT / 2));
+    assert_eq!(file.components, raw.components);
+    assert!(file.jp2.is_some());
 }
 
 #[test]
@@ -512,4 +526,47 @@ fn truncations_and_header_corruptions_never_panic() {
             let _ = decode(&corrupt);
         }
     }
+}
+
+/// The walk keeps what the later header code reads: the `jp2h` children as raw
+/// slices in file order, the other top-level boxes before the codestream, and
+/// the unread bytes after it.
+#[test]
+fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
+    let trailing = bx(b"xml ", b"<after/>");
+    let bytes = file(&[
+        jp2_ftyp(),
+        bx(b"xml ", b"<before/>"),
+        jp2h(&[
+            good_ihdr(),
+            colr(),
+            bx(b"colr", &[2, 0, 0]),
+            bx(b"bpcc", &[7, 7, 7]),
+            bx(b"res ", &[1, 2]),
+            bx(b"zzzz", b"?"),
+        ]),
+        jp2c(),
+        trailing.clone(),
+    ]);
+    let parsed = super::parse(&bytes).expect("parses");
+    let header = &parsed.header;
+    assert_eq!(
+        (
+            header.ihdr.height,
+            header.ihdr.width,
+            header.ihdr.components
+        ),
+        (HEIGHT, WIDTH, COMPONENTS)
+    );
+    let first_colr = colr();
+    assert_eq!(header.colr, vec![&first_colr[8..], &[2, 0, 0][..]]);
+    assert_eq!(header.bpcc, vec![&[7, 7, 7][..]]);
+    assert_eq!(header.res, vec![&[1, 2][..]]);
+    assert!(header.pclr.is_empty() && header.cmap.is_empty() && header.cdef.is_empty());
+    assert_eq!(header.unknown.len(), 1);
+    assert_eq!(&header.unknown[0].kind, b"zzzz");
+    assert_eq!(parsed.codestream, CODESTREAM);
+    assert_eq!(parsed.other.len(), 1);
+    assert_eq!(parsed.other[0].payload, b"<before/>");
+    assert_eq!(parsed.after_codestream, trailing.as_slice());
 }

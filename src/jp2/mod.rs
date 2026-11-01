@@ -58,6 +58,9 @@ pub(crate) struct Jp2File<'a> {
     /// The other top-level boxes before the codestream (`xml `, `uuid`, `rreq`
     /// and the like), in file order.
     pub(crate) other: Vec<Jp2Box<'a>>,
+    /// Everything after the first `jp2c` box, not walked: the decode never
+    /// depends on it, so a damaged box there cannot fail a decode.
+    pub(crate) after_codestream: &'a [u8],
 }
 
 /// Walk a JP2 file's top-level boxes to the first `jp2c`.
@@ -88,7 +91,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
 
     let mut header = None;
     let mut other = Vec::new();
-    for item in boxes {
+    while let Some(item) = boxes.next() {
         let item = item?;
         match &item.kind {
             b"jp2h" if header.is_some() => {
@@ -107,6 +110,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                     header,
                     codestream: item.payload,
                     other,
+                    after_codestream: boxes.rest(),
                 });
             }
             _ => other.push(item),
@@ -123,7 +127,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
 pub(crate) fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
     let unsupported = |name: &str| {
         Err(Error::Unsupported(format!(
-            "the `{name}` box in the JP2 header is not applied yet"
+            "the JP2 header holds a `{name}` box, which this decoder does not apply"
         )))
     };
     if !header.pclr.is_empty() {
@@ -162,8 +166,8 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
 }
 
 /// Turn the decoded codestream components into the file's output channels and
-/// describe them. Today the channels are the components as coded: no palette,
-/// every channel colour `i + 1`, and the colour space not yet read.
+/// describe them. The channels are the components as coded: no palette, every
+/// channel colour `i + 1`, and the colour space not read.
 pub(crate) fn present(
     _file: &Jp2File<'_>,
     components: Vec<Component>,

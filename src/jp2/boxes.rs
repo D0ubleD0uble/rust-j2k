@@ -80,6 +80,11 @@ impl<'a> Boxes<'a> {
         }
     }
 
+    /// The bytes after the last box read, not yet walked.
+    pub(crate) fn rest(&self) -> &'a [u8] {
+        self.data.get(self.pos..).unwrap_or_default()
+    }
+
     /// Read the box at `self.pos` and step past it.
     fn read(&mut self) -> Result<Jp2Box<'a>> {
         let rest = self.data.get(self.pos..).unwrap_or_default();

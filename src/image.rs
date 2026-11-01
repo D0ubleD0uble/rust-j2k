@@ -32,8 +32,8 @@ pub struct Image {
     /// Reference-grid image area height, in reference-grid points.
     pub height: u32,
     /// One entry per output channel. For a raw codestream, and for a JP2 file
-    /// as decoded today, that is one per SIZ component, in SIZ order. Never
-    /// empty in decoder output.
+    /// without a palette or channel definitions, that is one per SIZ
+    /// component, in SIZ order. Never empty in decoder output.
     pub components: Vec<Component>,
     /// What the JP2 wrapper said about the samples: their colour space and
     /// what each channel is. `None` for a raw codestream.
