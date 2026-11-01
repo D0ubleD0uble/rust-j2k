@@ -5,7 +5,7 @@
 //! The oracle is the file's own codestream: `decode` of the `.jp2` must equal
 //! `decode` of its first `jp2c` box's contents, extracted here by a separate,
 //! deliberately simple box walk. A file whose header carries a box the decoder
-//! does not apply yet (`pclr`, `cmap`, `cdef`) must instead be `Unsupported`
+//! does not apply yet (`cdef`) must instead be `Unsupported`
 //! naming that box. A file whose codestream is itself broken is rejected for
 //! that first, as the raw codestream is.
 

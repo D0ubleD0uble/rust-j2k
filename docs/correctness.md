@@ -129,6 +129,18 @@ Stricter here, where OpenJPEG decodes:
   since the codestream is cut at the box end). OpenJPEG ignores the
   codestream box's length and reads to the end. Not yet decided.
 
+The palette (`pclr` + `cmap`) follows OpenJPEG on what it accepts and on
+every output sample, including its quirks: `cmap` holds `NPC` entries
+whatever its length, a direct channel `i` takes column `i`'s depth, signed
+entries are not sign-extended, and a single-component file whose `cmap`
+leaves a column unused is read as the identity mapping. Two differences:
+
+- looser: a palette channel `i` may look up any column. OpenJPEG refuses
+  `PCOL != i` as its own implementation limit; such files are graded by table
+  lookup over OpenJPEG's decode of the index plane (`jp2_palette_permuted`);
+- stricter: a palette column too deep for the `i32` sample container is
+  `Unsupported`, as such a codestream component is.
+
 Looser here, where OpenJPEG fails: a malformed header box after the
 codestream (a second signature or `ftyp` box, a `jp2h` without `ihdr`, a
 `colr` running past the end of the file, a bad `cdef`). OpenJPEG runs its box

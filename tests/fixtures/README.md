@@ -183,6 +183,25 @@ including which OpenJPEG encoder flags do *not* work.
 
 All sources are Apache-2.0 or public domain, compatible with this repo.
 
+### Synthetic JP2 files
+
+`jp2_*.jp2` files wrap a lossless codestream in hand-built JP2 boxes, each with
+an `<name>.expected.json` snapshot graded bit-exactly by `tests/jp2_synthetic.rs`.
+All are written by `scripts/gen-jp2-fixtures.py` with OpenJPEG 2.5.0
+(`opj_compress`, `opj_decompress`); each snapshot's `provenance` records the
+source codestream and the oracle command.
+
+| Fixture | Source codestream | Boxes under test | Oracle |
+| ------- | ----------------- | ---------------- | ------ |
+| `jp2_palette_8bit` | `multilayer_lossless.j2k` | `pclr` 256 x 3 at 8 bits, identity `cmap` | `opj_decompress -i jp2_palette_8bit.jp2 -o out.pgx` |
+| `jp2_palette_12bit` | `multilayer_lossless.j2k` | `pclr` 256 x 3 at 12 bits (two-byte entries) | `opj_decompress` on the `.jp2` |
+| `jp2_palette_mixed` | `multicomponent_lossless.j2k` | `cmap` channel 0 direct from component 2, channels 1-2 palette from component 0 | `opj_decompress` on the `.jp2` |
+| `jp2_palette_clamp` | a signed 8-bit plane coded by the script (`opj_compress -i signed.raw -o signed.j2k -F 32,24,1,8,s -n 3`) | `pclr` of 100 entries over indices -128..127 (clamped) | `opj_decompress` on the `.jp2` |
+| `jp2_palette_corrected` | `multilayer_lossless.j2k` | one component, `cmap` channel 1 direct: OpenJPEG's "Trying to correct" identity mapping | `opj_decompress` on the `.jp2` |
+| `jp2_palette_permuted` | `multilayer_lossless.j2k` | `cmap` channel i looks up column (i + 2) % 3 | OpenJPEG refuses this file (its `pcol[i] == i` limit), so: `opj_decompress` on the bare codestream, then a table lookup in the script |
+
+They are ours, built over the Apache-2.0 / synthetic codestreams above.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

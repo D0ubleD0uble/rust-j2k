@@ -1,7 +1,7 @@
 # Phase 3 roadmap — JP2 file format decode
 
-> **Status: in progress.** P3.0 (the harness) and P3.1 (the box reader) have
-> landed; the rest is planned. The milestones are the build order to follow,
+> **Status: in progress.** P3.0 (the harness), P3.1 (the box reader) and
+> P3.3 (the palette) have landed; the rest is planned. The milestones are the build order to follow,
 > each with the oracle that gates it.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file
@@ -568,7 +568,7 @@ so and why we differ (or do not).
 | `LBox = 0` on a box that is not last | error unless `jp2c` | same | `FileFormat`; legal on the last box, including `jp2c` |
 | `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice; past the end of the file, truncation, or clamped for `jp2c` | `FileFormat` for a box other than `jp2c` past the end of the file; slice-based, nothing is allocated from the length |
 | `jp2h` missing | error | reject | `FileFormat` |
-| Second `jp2h` before `jp2c` | merged (its `ihdr` ignored, other children applied) | merged the same way | none (match oracle); its `pclr`/`cmap`/`cdef` meet the guards; each `jp2h` must hold an `ihdr`, as OpenJPEG requires |
+| Second `jp2h` before `jp2c` | merged (its `ihdr` ignored, other children applied) | merged the same way | none (match oracle); its `pclr`/`cmap` are applied and its `cdef` meets the guard; each `jp2h` must hold an `ihdr`, as OpenJPEG requires |
 | `jp2c` before `jp2h` | error | reject | `FileFormat` |
 | `ihdr` missing or not 14 bytes | error | reject | `FileFormat` |
 | `ihdr` not first in `jp2h` | decodes | decodes | none (match oracle; I.5.3.1 says first, but nothing depends on the order) |
@@ -581,16 +581,23 @@ so and why we differ (or do not).
 | No `colr` at all | decodes, colour unknown | decodes, `Unknown` | none (samples are unaffected) |
 | `colr METH 2` with too few bytes for a profile header | reads what is there | reject | `FileFormat` under `Srgb` only; passthrough otherwise |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |
-| `cmap` without `pclr` | error | reject | `FileFormat` |
+| `cmap` without `pclr`, or before it in file order | error ("Need to read a PCLR box before the CMAP box") | reject | `FileFormat` |
+| `cmap` shorter than `4 * NPC` bytes | error | reject | `FileFormat` |
+| `cmap` longer than `4 * NPC` bytes | reads `NPC` entries, ignores the rest | same | none (match oracle): the channel count is `NPC` |
 | `pclr` without `cmap` | palette dropped | palette dropped | none (I.5.3.4) |
 | `cmap CMP >= Csiz`, `MTYP > 1`, `PCOL >= NPC`, `MTYP 0 && PCOL != 0` | error | reject | `FileFormat` |
+| `cmap` palette column mapped twice, or palette channel `i` with column `i` unmapped (a direct channel marks column 0) | error | reject | `FileFormat` |
 | `cmap` with `MTYP 1 && PCOL != i` | error (implementation limit) | accept | none; spec allows it |
+| One component, `cmap` leaves a column unused | rewritten to the identity mapping ("Trying to correct") | same | none (match oracle) |
+| Direct channel `i` | labelled with column `i`'s `Bi` | same | none (match oracle) |
+| Palette column deeper than the `i32` container (unsigned 32, any > 32) | decodes (> 32 bits misread at 4 bytes per entry) | reject when applied | `Unsupported`, as for such a codestream component |
+| Signed palette column | entries not sign-extended | same | none (match oracle; owner question open) |
 | Palette index out of range | clamp | clamp | none (match oracle) |
 | Second `pclr` / `cmap` / `cdef` | error | reject | `FileFormat` |
 | `cdef N = 0`, truncated, `Cn` or `Asoc-1` out of range, incomplete list | error | reject | `FileFormat` |
 | `cdef Typ` not 0/1/2/65535 | passed through | `Other(n)` | none |
 | Unknown box anywhere | skipped | skipped | none |
-| `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | `Unsupported` for `pclr`/`cmap`/`cdef` until applied, the same guard as inside `jp2h` |
+| `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none for `pclr`/`cmap` (applied); `Unsupported` for `cdef` until applied, the same guard as inside `jp2h` |
 | The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |
 | Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`) fails OpenJPEG but decodes here |
 | Second `jp2c` | never read | ignored | none (I.5.4) |
