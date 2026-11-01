@@ -58,6 +58,20 @@ pub struct Jp2Entry {
     /// Size and SHA-256 of each reference plane, in `references` order.
     pub reference_digests: Vec<Digest>,
     pub bounds: Bounds,
+    /// OpenJPEG's per-component decode of the codestream as coded, for the
+    /// `needs_srgb` entries that decode today. Graded bit-exactly until sRGB
+    /// output exists.
+    #[serde(default)]
+    pub as_coded: Option<AsCoded>,
+}
+
+/// As-coded references: one `.pgx` per codestream component (native size and
+/// depth, no colour conversion, no shift) and the digest of each.
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AsCoded {
+    pub references: Vec<String>,
+    pub reference_digests: Vec<Digest>,
 }
 
 /// A committed file's byte size and lowercase hex SHA-256.
@@ -169,6 +183,14 @@ pub fn grade_entry(dir: &Path, entry: &Jp2Entry, srgb_available: bool) -> Grade 
     };
 
     if entry.needs_srgb && !srgb_available {
+        // The display reference is out of reach, but the samples as coded are
+        // checked bit-exactly. A match still reports *needs sRGB output*, so
+        // the entry stays out of the class ratchet.
+        if let Some(as_coded) = &entry.as_coded {
+            if let Err(why) = grade_as_coded(dir, as_coded, &image.components) {
+                return Grade::Failed(format!("as coded: {why}"));
+            }
+        }
         return Grade::NotYetDecoded("needs sRGB output".into());
     }
 
@@ -200,6 +222,25 @@ pub fn grade_entry(dir: &Path, entry: &Jp2Entry, srgb_available: bool) -> Grade 
     } else {
         Grade::WithinClass
     }
+}
+
+/// Compare every decoded component with its as-coded reference, with zero
+/// tolerance. The count, size, depth, and every sample must match; no shift is
+/// applied and chroma stays at its own size.
+pub fn grade_as_coded(
+    dir: &Path,
+    as_coded: &AsCoded,
+    components: &[Component],
+) -> Result<(), String> {
+    check_component_count(components.len(), as_coded.references.len())?;
+    for (index, (path, component)) in as_coded.references.iter().zip(components).enumerate() {
+        let raw = std::fs::read(dir.join(path)).map_err(|e| format!("cannot read {path}: {e}"))?;
+        let reference = parse_pgx(&raw).map_err(|e| format!("cannot parse {path}: {e}"))?;
+        let exact = Bound { pae: 0.0, mse: 0.0 };
+        grade_component(component, &reference, exact)
+            .map_err(|why| format!("component {index}: {why}"))?;
+    }
+    Ok(())
 }
 
 /// The decode must have exactly the channels the corpus grades; an extra one

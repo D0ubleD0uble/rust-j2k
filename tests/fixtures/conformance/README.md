@@ -193,6 +193,17 @@ output option, those entries report *needs sRGB output* instead of being graded.
 `shift_right` is the right shift that takes decoded samples to the reference's
 8 bits (file 6: 4, file 7: 8).
 
+Files 3, 5, 7 and 8 also carry an `as_coded` section: one reference per codestream
+component (`references/jp2_N_ascoded_K.pgx`), at the component's own size and
+depth, with no colour conversion and no shift. While sRGB output is unavailable
+the harness grades these bit-exactly and still reports *needs sRGB output*. The
+references come from OpenJPEG decoding the `jp2c` payload as a bare codestream,
+which keeps ICC handling out. Two OpenJPEG behaviours shape how: it converts
+sYCC to RGB by heuristic for any 3-component image with sub-sampled chroma
+(`opj_decompress.c:1620-1626`), so file 3 is decoded one component at a time
+with `-c K` (its chroma stays 240×320); and `-c K` skips the inverse component
+transform, so files 5 and 7 (`mct` 1) are decoded whole instead.
+
 `jp2/manifest.json` has the same top level as the Part 1 manifest, and every
 object denies unknown fields. Per entry: `file`, `index`, `graded_components`,
 `bit_exact`, `shift_right`, `needs_srgb`, `boxes` (`top` and `jp2h` box types in

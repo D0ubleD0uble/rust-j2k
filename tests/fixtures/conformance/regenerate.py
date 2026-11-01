@@ -414,6 +414,19 @@ def main_part1():
                     "used as the bar."
                 ),
             },
+            "as_coded": {
+                "files": "3, 5, 7, 8 (file2 waits on its cdef)",
+                "oracle_command": (
+                    "the jp2c payload as a bare codestream: opj_decompress -i cs.j2k "
+                    "-o out.pgx; the sub-sampled file (3) one component at a time with -c K"
+                ),
+                "note": (
+                    "codestream samples at the native component size and depth, no "
+                    "colour conversion and no shift. -c avoids opj_decompress's sYCC "
+                    "heuristic but skips the inverse MCT, so it is used only for the "
+                    "sub-sampled file (mct 0); the bare codestream carries no ICC"
+                ),
+            },
             "features": {
                 "tool": "opj_dump -i + direct marker-segment walk",
                 "note": (
@@ -462,6 +475,10 @@ JP2_SHIFT_RIGHT = {6: 4, 7: 8}
 # The reference is sRGB display output the decoder must be asked for (ICC
 # profile, sYCC, or palette+cdef-driven channel order).
 JP2_NEEDS_SRGB = {2, 3, 5, 7, 8}
+# The needs-sRGB files that decode as coded today (file2 waits on its `cdef`).
+# Each gets an as-coded reference per component: the codestream samples at the
+# native component size and depth, no colour conversion, no shift.
+JP2_AS_CODED = {3, 5, 7, 8}
 # OpenJPEG tests/conformance/CMakeLists.txt, "Tests about JP2 file": Part 4
 # Table G.1, `compare_images -n 3 -p 4:4:4 -m 1:1:1`.
 JP2_PAE = 4
@@ -588,6 +605,72 @@ def regrade_with_opj(n: int, jp2_path: str, planes: list, bit_exact: bool) -> li
     return results
 
 
+def as_coded_references(n: int, info: dict, features: dict) -> list:
+    """One PGX per component of the codestream as coded, from OpenJPEG.
+
+    The `jp2c` payload is decoded as a bare codestream, so no box-layer colour
+    handling (ICC, palette, `cdef`) can touch the samples; the file must have
+    no palette or `cdef` anyway. Two OpenJPEG behaviours decide how:
+
+    - `opj_decompress` converts sYCC to RGB by heuristic whenever a
+      3-component image has sub-sampled chroma (opj_decompress.c:1620-1626),
+      whatever `colr` says. A sub-sampled file is therefore decoded one
+      component per run with `-c k`.
+    - `-c k` skips the inverse multiple component transform (it needs all
+      three components), so `-c` is only used when `mct` is 0. A file with
+      `mct` 1 is decoded whole, and must not be sub-sampled.
+
+    Each output is checked to be the native component size and depth (chroma
+    is not upsampled).
+    """
+    jp2h = info["boxes"]["jp2h"]
+    for banned in ("pclr", "cmap", "cdef"):
+        if banned in jp2h:
+            raise ValueError(f"file{n}: has {banned}; not an as-coded file")
+    count = features["components"]
+    use_c = any(sub != [1, 1] for sub in features["subsampling"])
+    if use_c and features["mct"] != 0:
+        raise ValueError(f"file{n}: sub-sampled with mct; -c would skip the transform")
+    raws = []
+    with tempfile.TemporaryDirectory() as tmp:
+        cs = os.path.join(tmp, "cs.j2k")
+        with open(cs, "wb") as f:
+            f.write(info["payload"])
+        if use_c:
+            for k in range(count):
+                out = os.path.join(tmp, f"c{k}.pgx")
+                subprocess.run(
+                    ["opj_decompress", "-i", cs, "-o", out, "-c", str(k)],
+                    check=True,
+                    capture_output=True,
+                )
+                # With -c, OpenJPEG names the single output <stem>_0.pgx.
+                with open(os.path.join(tmp, f"c{k}_0.pgx"), "rb") as f:
+                    raws.append(f.read())
+        else:
+            out = os.path.join(tmp, "all.pgx")
+            subprocess.run(
+                ["opj_decompress", "-i", cs, "-o", out], check=True, capture_output=True
+            )
+            for k in range(count):
+                name = f"all_{k}.pgx"
+                with open(os.path.join(tmp, name), "rb") as f:
+                    raws.append(f.read())
+    refs = []
+    for k, raw in enumerate(raws):
+        dx, dy = features["subsampling"][k]
+        want = (features["precision"][k], -(-features["width"] // dx), -(-features["height"] // dy))
+        header = raw[: raw.index(b"\n")].decode("ascii").split()
+        got = (int(header[-3].lstrip("+-")), int(header[-2]), int(header[-1]))
+        if got != want:
+            raise ValueError(f"file{n} comp {k}: opj gave depth/w/h {got}, expected {want}")
+        rel = f"references/jp2_{n}_ascoded_{k}.pgx"
+        with open(os.path.join(JP2_DIR, rel), "wb") as f:
+            f.write(raw)
+        refs.append(rel)
+    return refs
+
+
 def digest(path: str) -> dict:
     """Size and SHA-256 of a committed file, as the manifest records them."""
     return {"size": os.path.getsize(path), "sha256": sha256_file(path)}
@@ -638,7 +721,7 @@ def build_jp2_entry(n: int) -> dict:
     features = opj_features(jp2_path)
     features.update(marker_features_data(info["payload"], name))
     graded = len(planes)
-    return {
+    entry = {
         "file": f"files/{name}",
         "index": n,
         "graded_components": graded,
@@ -656,6 +739,13 @@ def build_jp2_entry(n: int) -> dict:
         "reference_digests": [digest(os.path.join(JP2_DIR, r)) for r in refs],
         "bounds": {"pae": [JP2_PAE] * graded, "mse": [JP2_MSE] * graded},
     }
+    if n in JP2_AS_CODED:
+        as_coded = as_coded_references(n, info, features)
+        entry["as_coded"] = {
+            "references": as_coded,
+            "reference_digests": [digest(os.path.join(JP2_DIR, r)) for r in as_coded],
+        }
+    return entry
 
 
 def main_jp2():
