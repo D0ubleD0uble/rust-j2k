@@ -31,16 +31,20 @@
 //! codestream is merged into the first, a header box misplaced at the top
 //! level after `jp2h` is applied as if it were inside, and a `jp2c` that runs
 //! past the end of the file is clamped to it. The walk stops at the first
-//! `jp2c`; after it, only the two length faults OpenJPEG rejects there are
-//! checked ([`boxes::walk_after_codestream`]). The two decoders still differ
-//! on some files, in both directions; `docs/correctness.md` and the reject
-//! matrix in `docs/roadmap-phase3.md` list where.
+//! `jp2c`. OpenJPEG does not use that box's length: the codestream ends where
+//! its tile-parts end ([`after::codestream_end`]), and the boxes from there on
+//! are walked and read as OpenJPEG reads them once it has decoded the
+//! codestream ([`boxes::walk_after_codestream`], [`after::check`]). The two
+//! decoders still differ on some files, in both directions;
+//! `docs/correctness.md` and the reject matrix in `docs/roadmap-phase3.md`
+//! list where.
 //!
 //! Every length is checked before use and nothing is allocated from one (see
 //! [`boxes`]). Box-layer faults are [`Error::FileFormat`]; a file this decoder
 //! does not read (no `jp2 ` compatibility, or a palette mapping or column depth
 //! it does not decode) is [`Error::Unsupported`].
 
+mod after;
 mod boxes;
 mod channels;
 mod colour;
@@ -57,6 +61,7 @@ mod srgb_tests;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use after::check as check_after_codestream;
 pub use metadata::{
     Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata, Ratio, Res, Resolution,
     UuidBox,
@@ -64,6 +69,7 @@ pub use metadata::{
 
 use crate::codestream::markers::Siz;
 use crate::{Component, ComponentInfo, Error, Result};
+use after::End;
 use boxes::{Boxes, Jp2Box, walk_after_codestream};
 use channels::ChannelPlan;
 use header::{Jp2Header, check_file_type};
@@ -91,16 +97,33 @@ pub(crate) struct Jp2File<'a> {
     pub(crate) header: Jp2Header<'a>,
     /// The colour space the header declares (see [`colour::read`]).
     pub(crate) colour: ColourSpace,
-    /// The first `jp2c` box's contents: the codestream.
+    /// The codestream: from the start of the first `jp2c` box's contents to
+    /// the end of its last tile-part, or the box's contents when that end
+    /// cannot be found from the tile-part lengths (see [`after::codestream_end`]).
     pub(crate) codestream: &'a [u8],
     /// The other top-level boxes before the codestream (`xml `, `uuid`, `rreq`
     /// and the like, and header boxes misplaced before `jp2h`, which OpenJPEG
     /// ignores), in file order.
     pub(crate) other: Vec<Jp2Box<'a>>,
-    /// The whole boxes after the first `jp2c` box, as far as OpenJPEG's walk
-    /// there follows them (see [`walk_after_codestream`]). Only their `xml `
-    /// and `uuid` boxes are read.
+    /// The whole boxes after the codestream, from just after its last
+    /// tile-part, as far as OpenJPEG's walk there follows them (see
+    /// [`walk_after_codestream`]). When [`Jp2File::after_read`] is set,
+    /// [`after::check`] reads the header boxes among them.
     pub(crate) after_codestream: Vec<Jp2Box<'a>>,
+    /// The whole boxes after both the codestream and the `jp2c` box, walked
+    /// the same way. Their `xml ` and `uuid` boxes are passed through. This
+    /// differs from `after_codestream` when the box is longer than its
+    /// codestream: padding inside the box is skipped by its length here.
+    pub(crate) after_box: Vec<Jp2Box<'a>>,
+    /// Whether OpenJPEG reads the boxes after the codestream: true when the
+    /// codestream's end was found from its tile-part lengths. When the last
+    /// tile-part runs to the end of the file, OpenJPEG's walk starts at the
+    /// end and finds nothing; when the end cannot be found, the codestream
+    /// does not decode.
+    pub(crate) after_read: bool,
+    /// The length fault that ended the walk after the codestream, reported by
+    /// [`after::check`] after the boxes before it.
+    pub(crate) after_fault: Option<Error>,
 }
 
 /// Walk a JP2 file's top-level boxes to the first `jp2c`.
@@ -150,15 +173,27 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                         "the file has no `jp2h` header box before its `jp2c` codestream box".into(),
                     ));
                 };
-                let after_codestream = walk_after_codestream(boxes.rest())?;
                 colour::check_bpcc(&header)?;
                 let colour = colour::read(&header)?;
+                let (codestream, rest, after_read) =
+                    locate_codestream(bytes, item.payload, boxes.rest());
+                let after = walk_after_codestream(rest);
+                // Both are ends of the file; the shorter starts later.
+                let past_box = boxes.rest();
+                let after_box = if past_box.len() < rest.len() {
+                    walk_after_codestream(past_box).boxes
+                } else {
+                    after.boxes.clone()
+                };
                 return Ok(Jp2File {
                     header,
                     colour,
-                    codestream: item.payload,
+                    codestream,
                     other,
-                    after_codestream,
+                    after_codestream: after.boxes,
+                    after_box,
+                    after_read,
+                    after_fault: after.fault,
                 });
             }
             _ => {
@@ -180,6 +215,40 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
     } else {
         missing.into()
     }))
+}
+
+/// Find the codestream that starts with the `jp2c` box's contents `payload`,
+/// the box being followed by `rest` in `file`. Returns the codestream, the
+/// bytes after it, and whether OpenJPEG reads those bytes as boxes.
+///
+/// OpenJPEG reads the codestream from the start of the box to wherever its
+/// tile-parts end, whatever the box's length says. When every tile-part has a
+/// length, that is just after `EOC`, and the boxes from there on are walked.
+/// A last tile-part of `Psot = 0` runs to the end of the file and nothing
+/// after it is walked. The box's contents are kept when they end in `EOC`:
+/// anything after them would be tile data past the last packet, which
+/// OpenJPEG ignores. Otherwise the codestream runs to the end of the file.
+/// When the tile-part chain is broken, the box's contents go to the
+/// codestream parser to be rejected (or to `read_header`, which reads only
+/// the main header).
+fn locate_codestream<'a>(
+    file: &'a [u8],
+    payload: &'a [u8],
+    rest: &'a [u8],
+) -> (&'a [u8], &'a [u8], bool) {
+    // `payload` and `rest` are the end of `file`, back to back.
+    let tail = file
+        .len()
+        .checked_sub(rest.len() + payload.len())
+        .and_then(|start| file.get(start..));
+    let Some(tail) = tail else {
+        return (payload, rest, false);
+    };
+    match after::codestream_end(tail) {
+        End::At(end) => (&tail[..end], &tail[end..], true),
+        End::OpenLastPart if !payload.ends_with(&[0xFF, 0xD9]) => (tail, &[], false),
+        End::OpenLastPart | End::Unknown => (payload, rest, false),
+    }
 }
 
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image
@@ -259,7 +328,7 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
 /// they are bounded by its length.
 fn passthrough(file: &Jp2File<'_>) -> (Vec<Vec<u8>>, Vec<UuidBox>) {
     let (mut xml, mut uuid) = (Vec::new(), Vec::new());
-    for item in file.other.iter().chain(&file.after_codestream) {
+    for item in file.other.iter().chain(&file.after_box) {
         match &item.kind {
             b"xml " => xml.push(item.payload.to_vec()),
             b"uuid" => {

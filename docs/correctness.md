@@ -113,8 +113,11 @@ encoder meant.
 The JP2 box layer follows OpenJPEG 2.5.0 where a file bends Annex I in a
 way it tolerates: `ihdr` anywhere in `jp2h`, a second `jp2h` merged into the
 first, a header box misplaced at the top level after `jp2h` applied as if it
-were inside, a `jp2c` that runs past the end of the file clamped to it, and
-after the codestream only the two length faults OpenJPEG rejects there. An
+were inside, and a `jp2c` box whose length is wrong (past the end of the
+file, shorter than its header, or shorter than its codestream): the codestream
+is read from the box to its last tile-part, as OpenJPEG ignores the length.
+After the codestream it walks the boxes from where OpenJPEG's decoder stops
+and reads the header boxes again, failing where OpenJPEG fails. An
 `ihdr.NC` that differs from `Csiz` decodes, as there: the codestream decides
 the image, `bpcc` is still held to `NC`, and the palette's `cmap` is checked
 against `Csiz`, as OpenJPEG checks it (owner decision, 2026-11-01). An
@@ -130,7 +133,9 @@ short reports the `ihdr` fault, as OpenJPEG does. The palette and channel
 definition checks come next, still before the tiles; OpenJPEG checks the
 `cmap` mapping and the `cdef` entries against the channels only after
 decoding the tiles, so a file with both a palette or `cdef` fault and a tile
-fault reports the box fault here and the tile fault there. Both reject it. This order is what lets `read_header`
+fault reports the box fault here and the tile fault there. Both reject it.
+The header boxes after the codestream are read last, also before the tiles,
+where OpenJPEG reads them after decoding. This order is what lets `read_header`
 return the same error as `decode` for every header fault.
 
 Stricter here, where OpenJPEG decodes:
@@ -142,10 +147,20 @@ Stricter here, where OpenJPEG decodes:
   extensions, `rreq` features), so its first codestream can be the wrong
   image with no error. Refusing it lets a later JPX reader produce the right
   image without silently changing output that already "worked";
-- a `jp2c` whose `LBox` is 2..7 or whose `XLBox` is below 16 (`FileFormat`),
-  or whose `LBox` is 8 or more but shorter than its codestream (`Codestream`,
-  since the codestream is cut at the box end). OpenJPEG ignores the
-  codestream box's length and reads to the end. Not yet decided.
+- a last tile-part with `Psot = 0` followed by more bytes in the slice it
+  runs to: no `EOC`, a `jp2c` with `LBox` 0, or a `jp2c` length that does not
+  end at the `EOC`. In both decoders the tile-part runs to the end of the
+  file, so the bytes after it are tile data. OpenJPEG ignores them; the
+  codestream parser rejects them as `Codestream` ("left after the last
+  packet"). This is a known difference, not the tier-2 rule above: the
+  packets themselves decode. The policy is pending owner issue #183.
+
+A `jp2c` whose length is wrong (`LBox` 2..7, `XLBox` below 16, or shorter
+than its codestream) decodes as in OpenJPEG, which ignores the length: the
+codestream ends where its tile-parts end. The boxes after the codestream
+are walked from that point and their header boxes are read again, as
+OpenJPEG does once it has decoded, so a malformed header box there, or
+padding inside the `jp2c` box that reads as one, is `FileFormat` in both.
 
 The palette (`pclr` + `cmap`) follows OpenJPEG on what it accepts and on
 its output samples, including its quirks: `cmap` holds `NPC` entries

@@ -111,6 +111,11 @@ fn parse(payload: &[u8]) -> Result<Vec<Entry>> {
         .collect())
 }
 
+/// Check a `cdef` payload's layout only, as OpenJPEG reads the box.
+pub(super) fn check_layout(payload: &[u8]) -> Result<()> {
+    parse(payload).map(|_| ())
+}
+
 /// What the `cdef` box does to the file's channels. Computed before any tile
 /// is decoded, so a header-only read can report the output channels too.
 #[derive(Debug, Clone, PartialEq, Eq)]

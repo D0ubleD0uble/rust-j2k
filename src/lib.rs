@@ -314,6 +314,9 @@ struct Jp2Prefix<'a> {
 
 /// Read a JP2 file up to its tile data, in OpenJPEG's order: the box walk,
 /// the codestream's main header, `ihdr` against SIZ, then the channel plans.
+/// The header boxes after the codestream, which OpenJPEG reads again once it
+/// has decoded, are checked next, then the sRGB step is planned; all of it
+/// before any tile is read.
 fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>> {
     let file = jp2::parse(bytes)?;
     let parsed = codestream::parse_header(file.codestream)?;
@@ -325,6 +328,7 @@ fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>
         options.resolution_reduction,
         options.raw_channels,
     )?;
+    jp2::check_after_codestream(&file, options.raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
     let srgb = match options.colour {
         ColourOutput::AsCoded => None,
