@@ -13,7 +13,7 @@
 //! - bits 0-1, how the `jp2c` box holding the pinned codestream is written:
 //!   0 a 32-bit `LBox`, 1 a 64-bit `XLBox`, 2 `LBox = 0` (to the end of the
 //!   file), 3 a 32-bit `LBox` followed by `body` again (boxes after the
-//!   codestream, which must never be read);
+//!   codestream, which are walked and their header boxes read again);
 //! - bit 2, a pinned prefix: the signature and a `jp2 ` `ftyp` come first and
 //!   `body` follows them. Clear, `body` is the whole file before `jp2c`,
 //!   signature included (the shape of the seeds cut from real files);

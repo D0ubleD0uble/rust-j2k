@@ -113,8 +113,11 @@ encoder meant.
 The JP2 box layer follows OpenJPEG 2.5.0 where a file bends Annex I in a
 way it tolerates: `ihdr` anywhere in `jp2h`, a second `jp2h` merged into the
 first, a header box misplaced at the top level after `jp2h` applied as if it
-were inside, a `jp2c` that runs past the end of the file clamped to it, and
-after the codestream only the two length faults OpenJPEG rejects there. An
+were inside, and a `jp2c` box whose length is wrong (past the end of the
+file, shorter than its header, or shorter than its codestream): the codestream
+is read from the box to its last tile-part, as OpenJPEG ignores the length.
+After the codestream it walks the boxes from where OpenJPEG's decoder stops
+and reads the header boxes again, failing where OpenJPEG fails. An
 `ihdr.NC` that differs from `Csiz` decodes, as there: the codestream decides
 the image, `bpcc` is still held to `NC`, and the palette's `cmap` is checked
 against `Csiz`, as OpenJPEG checks it (owner decision, 2026-11-01). An

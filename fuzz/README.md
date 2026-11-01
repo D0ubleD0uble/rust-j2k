@@ -67,7 +67,9 @@ every box type.
 `header` drives the header-only entry point, `read_header`, and checks it
 against `decode` on the same input: a `read_header` error must be `decode`'s
 error too, and a successful decode must match the header field for field.
-Seed it with both codestreams and JP2 files, and give it the JP2 box
+A decode costs far more than the header, so once the header reads, inputs
+over 64 KiB or images over 2^16 samples are not decoded. Seed it with the
+small synthetic codestreams and JP2 files, and give it the JP2 box
 dictionary.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
@@ -98,19 +100,27 @@ cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus
 # Time-boxed run (CI-friendly: no panics, no OOM, no hangs).
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=2048
 
-# The JP2 box target, seeded from the ISO/IEC 15444-4 JP2 reader files.
+# The JP2 box target, seeded from the ISO/IEC 15444-4 JP2 reader files and
+# the synthetic JP2 fixtures.
 python3 scripts/gen-jp2-fuzz-seeds.py
 cargo +nightly fuzz run jp2_boxes -- -dict=fuzz/jp2.dict -max_total_time=300
 
-# The header target, seeded with codestreams and JP2 files.
+# The header target, seeded with the small synthetic codestreams and JP2 files.
 mkdir -p fuzz/corpus/header
-cp tests/fixtures/*.j2k tests/fixtures/*.jp2 tests/fixtures/jp2_real/*.jp2 fuzz/corpus/header/
+cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 fuzz/corpus/header/
 cargo +nightly fuzz run header -- -dict=fuzz/jp2.dict -max_total_time=300
 
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
 cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
 ```
+
+## Recorded runs
+
+| Date | Target | Seeds | Length | Result |
+| ---- | ------ | ----- | ------ | ------ |
+| 2026-11-01 | `jp2_boxes` | `gen-jp2-fuzz-seeds.py` (46 seeds), `jp2.dict` | 61 s, 785 605 runs, under `nice` | no crash, leak, or timeout |
+| 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

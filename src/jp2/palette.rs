@@ -43,7 +43,8 @@
 //! present. The mapping, the column depths, and the sample budget are checked
 //! only when the palette is applied, so a caller asking for the raw channels
 //! gets them whatever the `cmap` says, as OpenJPEG does with its "ignore
-//! palette" flag.
+//! palette" flag. The budget bounds the expanded channels; with the decoded
+//! components still held, the peak is about twice it (`check_budget`).
 
 use super::header::Jp2Header;
 use super::metadata::{Association, ChannelDefinition, ChannelType, Jp2Metadata};
@@ -98,7 +99,7 @@ pub(crate) struct Palette {
 impl Palette {
     /// Parse a `pclr` box: `NE` (2 bytes), `NPC` (1 byte), `NPC` `Bi` bytes,
     /// then `NE` rows of `NPC` entries (see [`Column::entry_bytes`]).
-    fn parse(payload: &[u8]) -> Result<Self> {
+    pub(super) fn parse(payload: &[u8]) -> Result<Self> {
         let &[ne0, ne1, npc, ref rest @ ..] = payload else {
             return Err(Error::FileFormat(format!(
                 "the `pclr` box holds {} bytes, fewer than its 3-byte header",
@@ -158,6 +159,11 @@ impl Palette {
             columns,
             values,
         })
+    }
+
+    /// `NPC`, the number of palette columns.
+    pub(super) fn columns(&self) -> usize {
+        self.columns.len()
     }
 
     /// The value of entry `index` (clamped to `0..NE`) in `column`.
@@ -432,6 +438,9 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
 
 /// Hold the expanded channels to the decoder's sample budget, from the SIZ
 /// extents at `reduction`, before any tile is decoded or plane allocated.
+/// The budget bounds the expanded channels alone: the decoded components are
+/// held while the channels are built from them, so the peak is about twice
+/// the budget (2^26 samples is 256 MiB as `i32`, so roughly 512 MiB).
 fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8) -> Result<()> {
     let mut total: u64 = 0;
     for channel in channels {

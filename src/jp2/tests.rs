@@ -11,7 +11,9 @@ use crate::{
     Jp2Metadata, Ratio, Res, Resolution, UuidBox, decode, decode_with, read_header,
 };
 
+mod after;
 mod channels;
+mod matrix;
 mod palette;
 
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
@@ -1105,7 +1107,8 @@ fn xml_and_uuid_boxes_are_passed_through_in_file_order() {
 
 /// After the codestream, the boxes are collected as far as OpenJPEG's walk
 /// there goes, and collecting them never fails a decode it accepts: a box
-/// past the end of the file, `LBox` 0, or a second `jp2c` ends the walk.
+/// past the end of the file or a second `jp2c` ends the walk, and a box of
+/// `LBox` 0 runs to the end of the file.
 #[test]
 fn boxes_after_the_codestream_are_collected_as_far_as_the_walk_goes() {
     let xml = |text: &[u8]| bx(b"xml ", text);
@@ -1119,7 +1122,7 @@ fn boxes_after_the_codestream_are_collected_as_far_as_the_walk_goes() {
         (
             "an open-ended xml",
             [xml(b"<a/>"), open_box(b"xml ", b"<b/>")].concat(),
-            1,
+            2,
         ),
         (
             "after a second jp2c",

@@ -12,11 +12,27 @@
 //!
 //! `decode` may still fail where `read_header` succeeds: a fault in the tile
 //! data is only found by decoding it.
+//!
+//! A full decode costs far more than the header, so when the header reads and
+//! the input or the image is large, the decode is skipped and only
+//! `read_header` is exercised. The `decode` target covers large decodes.
 
 use libfuzzer_sys::fuzz_target;
 
+/// Inputs above this many bytes are not decoded once their header reads.
+const MAX_DECODED_INPUT: usize = 1 << 16;
+/// Images above this many samples, over all channels, are not decoded.
+const MAX_DECODED_SAMPLES: u64 = 1 << 16;
+
 fuzz_target!(|data: &[u8]| {
     let header = rust_j2k::read_header(data);
+    if let Ok(header) = &header {
+        let samples = (u64::from(header.width) * u64::from(header.height))
+            .saturating_mul(header.components.len() as u64);
+        if data.len() > MAX_DECODED_INPUT || samples > MAX_DECODED_SAMPLES {
+            return;
+        }
+    }
     let decoded = rust_j2k::decode(data);
     match (&header, &decoded) {
         (Err(h), _) => assert_eq!(decoded.as_ref().err(), Some(h), "the same error"),

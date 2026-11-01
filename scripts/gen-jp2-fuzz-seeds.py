@@ -8,14 +8,16 @@ Run from the repository root:
 The target takes `variant byte + body` and appends one of two pinned
 codestreams (see fuzz/fuzz_targets/jp2_boxes.rs): bit 4 of the variant picks
 the three-component one. Each ISO/IEC 15444-4 JP2 reader file
-(tests/fixtures/conformance/jp2/files/fileN.jp2) gives two seeds, each paired
-with the pinned codestream that has the file's component count:
+(tests/fixtures/conformance/jp2/files/fileN.jp2) and each synthetic JP2
+fixture (tests/fixtures/jp2_*.jp2) gives two seeds, each paired with the
+pinned single-component codestream if the file has one component, else the
+three-component one:
 
-- `fileN_prefix`: variant 0x00 or 0x10, and the file's bytes before its first
+- `NAME_prefix`: variant 0x00 or 0x10, and the file's bytes before its first
   `jp2c` box, signature included, with the `ihdr` rewritten to the pinned
   codestream's size and component count so the seed gets past the check
   against SIZ. The fuzzer starts from a real top-level layout.
-- `fileN_jp2h`: variant 0x0C or 0x1C (pinned signature, `ftyp`, and an `ihdr`
+- `NAME_jp2h`: variant 0x0C or 0x1C (pinned signature, `ftyp`, and an `ihdr`
   that matches the pinned codestream), and the file's other `jp2h` children,
   so the fuzzer starts from real `colr`, `pclr`, `cmap` and `cdef` boxes.
 
@@ -29,7 +31,8 @@ import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FILES = os.path.join(ROOT, "tests", "fixtures", "conformance", "jp2", "files")
+FIXTURES = os.path.join(ROOT, "tests", "fixtures")
+FILES = os.path.join(FIXTURES, "conformance", "jp2", "files")
 OUT = os.path.join(ROOT, "fuzz", "corpus", "jp2_boxes")
 
 # The target's pinned codestreams, by component count, with their variant bit.
@@ -78,8 +81,14 @@ def main():
             f.write(bytes([variant]) + body)
         written += 1
 
-    for n in range(1, 10):
-        data = bytearray(open(os.path.join(FILES, f"file{n}.jp2"), "rb").read())
+    sources = [(f"file{n}", os.path.join(FILES, f"file{n}.jp2")) for n in range(1, 10)]
+    sources += [
+        (name[:-4], os.path.join(FIXTURES, name))
+        for name in sorted(os.listdir(FIXTURES))
+        if name.startswith("jp2_") and name.endswith(".jp2")
+    ]
+    for stem, path in sources:
+        data = bytearray(open(path, "rb").read())
         top = list(boxes(data))
         jp2h = next(b for b in top if b[3] == b"jp2h")
         jp2c = next(b for b in top if b[3] == b"jp2c")
@@ -88,16 +97,16 @@ def main():
         ihdr = next(c for c in children if c[3] == b"ihdr")
         ihdr_at = start + ihdr[0] + ihdr[1]
         components = struct.unpack(">H", data[ihdr_at + 8:ihdr_at + 10])[0]
-        (height, width, nc), bit = pinned[components]
+        (height, width, nc), bit = pinned[1 if components == 1 else 3]
 
         prefix = bytearray(data[:jp2c[0]])
         prefix[ihdr_at:ihdr_at + 10] = struct.pack(">IIH", height, width, nc)
-        write(f"file{n}_prefix", bit, bytes(prefix))
+        write(f"{stem}_prefix", bit, bytes(prefix))
 
         others = b"".join(
             bytes(data[start + c[0]:start + c[0] + c[2]]) for c in children if c[3] != b"ihdr"
         )
-        write(f"file{n}_jp2h", 0x0C | bit, others)
+        write(f"{stem}_jp2h", 0x0C | bit, others)
 
     # A minimal file in each jp2c length form; form 0 is plain `LBox`.
     for form in range(4):

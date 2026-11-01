@@ -567,8 +567,8 @@ so and why we differ (or do not).
 | Box length `< 8` (or `< 16` with `XLBox`) | error | reject | `FileFormat` |
 | Box runs past its parent or the file | error | reject | `FileFormat` (truncation) |
 | `jp2c` runs past the end of the file | decodes (the codestream is read to its end) | clamped to the file, decodes | none (match oracle); the codestream parser still rejects a codestream that is cut short |
-| `jp2c` with `LBox` 2..7 or `XLBox < 16` | decodes (the length is not used) | reject | `FileFormat`; stricter, not yet decided |
-| `jp2c` with `LBox >= 8` but shorter than its codestream | decodes (the length is not used; output identical to the raw decode) | reject (the codestream is cut at the box end) | `Codestream` ("Psot overruns the codestream", "truncated marker segment"); stricter, not yet decided |
+| `jp2c` with `LBox` 2..7 or `XLBox < 16` | decodes (the length is not used) | decodes, the codestream read to the end of the file | none (match oracle) |
+| `jp2c` with `LBox >= 8` but shorter than its codestream | decodes (the length is not used; output identical to the raw decode) | decodes the same | none (match oracle): the codestream ends where its tile-parts end (`Psot`), not at the box end |
 | `LBox = 0` on a box that is not last | error unless `jp2c` | same | `FileFormat`; legal on the last box, including `jp2c` |
 | `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice; past the end of the file, truncation, or clamped for `jp2c` | `FileFormat` for a box other than `jp2c` past the end of the file; slice-based, nothing is allocated from the length |
 | `jp2h` missing | error | reject | `FileFormat` |
@@ -618,16 +618,20 @@ so and why we differ (or do not).
 | `ihdr` W/H wrong and the codestream truncated | error at SIZ ("IHDR w(769) … vs. SIZ w(768)") | `FileFormat` | none (match oracle): the header is checked before any tile-part is read |
 | `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none (applied) |
 | The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |
-| Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`, a short `colr`, a wrong-length `bpcc`, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a `cmap` without `pclr`, a second `pclr`, `cmap` or `cdef`) fails OpenJPEG but decodes here, and a `pclr`/`cmap`/`cdef` there is never applied. That includes raw mode: a `cdef` in `jp2h` plus a second `cdef` after `jp2c` fails OpenJPEG even with its ignore flag (`OPJ_DPARAMETERS_IGNORE_PCLR_CMAP_CDEF_FLAG`), and decodes here under `raw_channels` |
+| Boxes after `jp2c` | walked after decoding, from just after `EOC` (any padding inside the `jp2c` box is walked too), or not at all when the last tile-part has `Psot = 0`: a box shorter than its header is an error; a header box past the end of the file is an error, any other box there ends the walk; fewer than 8 bytes, `LBox` 0 (the box runs to the end), an `XLBox` it cannot read, or a second `jp2c` end it; header boxes are read again and can fail | the same walk and the same reads | `FileFormat` (match oracle): a second signature or `ftyp`, a `jp2h` without `ihdr`, a `colr` under 3 bytes, a `bpcc` not `NC` bytes, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a second `pclr` while one is held, a `cmap` without a held `pclr` or a second one, a short `cmap`, a second `cdef` while one is held, or a malformed `pclr`/`cdef`. What is held depends on the mode, as in OpenJPEG: a header `pclr` without `cmap` is dropped, and a header `cdef` is dropped once applied but kept under `raw_channels`. Nothing read here is applied; a valid `colr` does not change the colour space. One difference remains: when the last tile-part has `Psot = 0` and the `jp2c` box does not end at its `EOC` (`LBox` 0 or a wrong length), the tile-part runs to the end of the file in both decoders, so any boxes after it become tile data. OpenJPEG ignores those bytes; the codestream parser rejects them ("body byte(s) left after the last packet"), the deliberate check in `docs/correctness.md` |
 | Second `jp2c` | never read | ignored | none (I.5.4) |
 | Deeply nested superboxes | n/a | only `jp2h` and `res ` are entered | no recursion, so no depth bomb |
+| 10 000 unknown boxes before `jp2h` and after `jp2c` | skipped | skipped | none; each box is one step of a linear walk: about 1.2 ms more per `decode` + `read_header` than the bare file (release build), linear up to 100 000 boxes |
+| Palette expansion over the sample budget (`NPC` planes totalling more than 2^26 samples) | decodes if it can allocate | reject before any tile is decoded | `Limit` |
 | Metadata boxes totalling more than the file | impossible by construction | copies bounded by input length | none |
 
 Allocation discipline: no buffer is sized from a box field. Palette tables are
 bounded by `NE <= 1024` and `NPC <= 255` from the standard. Palette expansion
 allocates `NPC` planes of the index component's size, which is already inside
 the Phase 2 sample budget per plane; the total is checked against the same
-`Limit` budget before allocation. The codestream stage keeps all its existing
+`Limit` budget (2^26 samples, 256 MiB as `i32`) before allocation. The decoded
+components are held while the expanded channels are built from them, so the
+peak is about twice the budget, roughly 512 MiB. The codestream stage keeps all its existing
 guards, since `jp2c` is handed to it as a slice.
 
 Fuzzing: the `jp2_boxes` target (P3.7) plus the existing `decode` target with
@@ -658,9 +662,8 @@ part of the gate.
   codestream themselves is unaffected (they still pass the payload), but one
   that starts passing the `.jp2` gets more channels than before. Documented in
   the changelog and on `Image.jp2`.
-- **Stricter-than-oracle rows** (non-`jp2 `-compatible brand,
-  a `jp2c` whose `LBox` is 2..7 or `XLBox` below 16) may refuse real files
-  OpenJPEG opens. Each is one `if`; the rule from correctness.md applies: a
+- **Stricter-than-oracle rows** (non-`jp2 `-compatible brand) may refuse
+  real files OpenJPEG opens. Each is one `if`; the rule from correctness.md applies: a
   demonstrated real file relaxes the check. Where Annex I is bent in ways
   OpenJPEG tolerates (`ihdr` not first, a second `jp2h`, a `jp2c` past the end
   of the file, a header box misplaced after `jp2h`), the box layer follows

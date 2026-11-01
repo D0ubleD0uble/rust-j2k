@@ -4,7 +4,8 @@
 //! Both are read the way OpenJPEG 2.5.0 reads them (`opj_jp2_read_colr`,
 //! `opj_jp2_read_bpcc`), on accept and reject as well as on value, for the
 //! boxes before the codestream. OpenJPEG reads the header boxes again after
-//! `jp2c` and can reject these shapes there; this decoder does not yet:
+//! `jp2c` and can reject these shapes there; so does this decoder (see
+//! [`super::after`]):
 //!
 //! - Every `colr` before the codestream must hold at least 3 bytes, including
 //!   the ones that are ignored, because the size check runs before the "already have a `colr`"
@@ -80,7 +81,7 @@ pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColourSpace> {
 
 /// Read one `colr` of at least 3 bytes. `None` for a `METH` that is neither 1
 /// nor 2: the box is ignored and does not count as the first.
-fn parse_usable(payload: &[u8]) -> Result<Option<ColourSpace>> {
+pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColourSpace>> {
     let method = payload[0];
     let rest = &payload[3..];
     match method {
