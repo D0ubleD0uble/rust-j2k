@@ -96,11 +96,12 @@ pub use jp2::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metad
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
 /// SIZ component, each on its own sample grid.
 ///
-/// The input kind is detected from its first bytes: a codestream opens with
-/// the `SOC` and `SIZ` markers (`FF 4F FF 51`), a JP2 file with its 12-byte
-/// signature box. Nothing else is sniffed. A JP2 file decodes its codestream
-/// (the first `jp2c` box) and reports the file's header on [`Image::jp2`],
-/// which is `None` for a raw codestream.
+/// The input kind is detected from its first bytes. Input that opens with the
+/// `SOC` marker (`FF 4F`) is a codestream. Otherwise, input whose bytes 4..8
+/// are `jP  ` (the signature box's type) is a JP2 file, and anything else goes
+/// to the codestream parser, which rejects it for its missing `SOC`. A JP2 file
+/// decodes its codestream (the first `jp2c` box) and reports the file's header
+/// on [`Image::jp2`], which is `None` for a raw codestream.
 ///
 /// This is the whole public surface for the GRIB2 use case: the §7 data
 /// section of a `grid_jpeg` message is a raw codestream. That subset is
@@ -161,9 +162,11 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
 /// attach what the header says about the samples.
 fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     let file = jp2::parse(bytes)?;
-    jp2::check_supported(&file.header)?;
     let cs = codestream::parse(file.codestream)?;
     jp2::check_against_siz(&file.header, &cs.header.siz)?;
+    // After the structural checks, so a malformed file reports its fault
+    // rather than an unsupported box.
+    jp2::check_supported(&file.header)?;
     let image = decode_codestream(cs, options)?;
     let (components, metadata) = jp2::present(&file, image.components)?;
     Ok(Image {

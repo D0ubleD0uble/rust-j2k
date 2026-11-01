@@ -11,10 +11,15 @@
 //!   for the last box of the file, so it is accepted at the top level and
 //!   rejected inside a superbox (OpenJPEG rejects it there too).
 //! - `LBox` of 2..=7 is shorter than the box's own header.
-//! - A box longer than the bytes left in its parent is truncated.
+//! - A box longer than the bytes left in its parent is truncated, except a
+//!   top-level `jp2c`: OpenJPEG ignores the codestream box's length and reads
+//!   the codestream to its end, so a `jp2c` that runs past the end of the file
+//!   is clamped to it. The codestream parser still rejects a codestream that
+//!   is actually cut short.
 //!
 //! Each fault is an [`Error::FileFormat`], and the reader stops after the
-//! first one.
+//! first one. [`check_after_codestream`] applies OpenJPEG's looser rule to the
+//! bytes after the codestream.
 
 use crate::{Error, Result};
 
@@ -55,6 +60,8 @@ pub(crate) struct Boxes<'a> {
     parent: &'static str,
     /// Set once an error has been returned, so the iterator then ends.
     done: bool,
+    /// Whether the last box read had `LBox == 0`.
+    last_open_ended: bool,
 }
 
 impl<'a> Boxes<'a> {
@@ -66,6 +73,7 @@ impl<'a> Boxes<'a> {
             open_ended: true,
             parent: "the file",
             done: false,
+            last_open_ended: false,
         }
     }
 
@@ -77,12 +85,18 @@ impl<'a> Boxes<'a> {
             open_ended: false,
             parent,
             done: false,
+            last_open_ended: false,
         }
     }
 
     /// The bytes after the last box read, not yet walked.
     pub(crate) fn rest(&self) -> &'a [u8] {
         self.data.get(self.pos..).unwrap_or_default()
+    }
+
+    /// Whether the last box read had length 0, running to the end of the file.
+    pub(crate) fn last_was_open_ended(&self) -> bool {
+        self.last_open_ended
     }
 
     /// Read the box at `self.pos` and step past it.
@@ -101,6 +115,7 @@ impl<'a> Boxes<'a> {
             }
         };
         let name = type_name(kind);
+        self.last_open_ended = lbox == 0;
 
         // The box's total length (header included) and its header length.
         let (length, header): (u64, usize) = match lbox {
@@ -136,6 +151,13 @@ impl<'a> Boxes<'a> {
             n => (u64::from(n), 8),
         };
 
+        // OpenJPEG reads a codestream to its end whatever its box says, so a
+        // top-level `jp2c` that runs past the end of the file is clamped.
+        let length = if self.open_ended && &kind == b"jp2c" {
+            length.min(rest.len() as u64)
+        } else {
+            length
+        };
         if length > rest.len() as u64 {
             return Err(Error::FileFormat(format!(
                 "box `{name}` is {length} bytes but only {} remain in {}",
@@ -168,4 +190,61 @@ impl<'a> Iterator for Boxes<'a> {
         self.done = item.is_err();
         Some(item)
     }
+}
+
+/// Check the bytes after the first `jp2c` box the way OpenJPEG does when it
+/// walks them after decoding: only a box whose `LBox` is 2..=7, or whose
+/// `XLBox` is below 16, is an error. The walk stops quietly at anything it
+/// cannot follow (fewer than 8 bytes left, `LBox` 0, a truncated `XLBox`, a box
+/// past the end of the file) and at the next `jp2c`, as OpenJPEG's does. Box
+/// contents are never read.
+pub(crate) fn check_after_codestream(mut rest: &[u8]) -> Result<()> {
+    while let [a, b, c, d, t0, t1, t2, t3, ..] = *rest {
+        let lbox = u32::from_be_bytes([a, b, c, d]);
+        let kind = [t0, t1, t2, t3];
+        let length = match lbox {
+            0 => return Ok(()),
+            1 => {
+                let Some(xl) = rest.get(8..16) else {
+                    return Ok(());
+                };
+                let mut be = [0u8; 8];
+                be.copy_from_slice(xl);
+                let xlbox = u64::from_be_bytes(be);
+                if xlbox < 16 {
+                    return Err(Error::FileFormat(format!(
+                        "box `{}` after the codestream has XLBox {xlbox}, shorter than its \
+                         16-byte header",
+                        type_name(kind)
+                    )));
+                }
+                xlbox
+            }
+            2..=7 => {
+                return Err(Error::FileFormat(format!(
+                    "box `{}` after the codestream has length {lbox}, shorter than its \
+                     8-byte header",
+                    type_name(kind)
+                )));
+            }
+            n => u64::from(n),
+        };
+        if &kind == b"jp2c" || length > rest.len() as u64 {
+            return Ok(());
+        }
+        // `8 <= length <= rest.len()` by the arms above, so every step moves at
+        // least 8 bytes and the walk ends. Checked rather than assumed, so a
+        // future arm that let a shorter length through fails loudly instead of
+        // looping.
+        let step = usize::try_from(length)
+            .ok()
+            .filter(|&step| step >= 8)
+            .ok_or_else(|| {
+                Error::Inconsistent(format!(
+                    "box walk step of {length} bytes after the codestream"
+                ))
+            })?;
+        rest = rest.get(step..).unwrap_or_default();
+    }
+    Ok(())
 }

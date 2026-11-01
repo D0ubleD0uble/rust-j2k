@@ -11,9 +11,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `decode` and `decode_with` read JP2 files as well as raw codestreams,
   telling them apart by their first bytes. The boxes are checked (signature,
   `ftyp` with `jp2 ` compatibility, `jp2h` with an `ihdr` that matches the
-  codestream) and the first `jp2c` codestream is decoded. A file whose header
-  holds a palette (`pclr`, `cmap`) or channel definitions (`cdef`) is still
-  `Unsupported`, as is a file that is not JP2-compatible.
+  codestream) and the first `jp2c` codestream is decoded. Files that bend the
+  box rules the way OpenJPEG tolerates decode as they do there: `ihdr`
+  anywhere in `jp2h`, a second `jp2h`, a `jp2c` whose length runs past the end
+  of the file, and loose bytes after the codestream. A file with a palette
+  (`pclr`, `cmap`) or channel definitions (`cdef`), inside `jp2h` or after it,
+  is still `Unsupported`, as is a file that is not JP2-compatible.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
   the samples (`None` for a raw codestream), with `ColourSpace`,
   `ChannelDefinition`, `ChannelType`, and `Association`. The `colr` box is

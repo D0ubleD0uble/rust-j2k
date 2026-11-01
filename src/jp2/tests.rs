@@ -226,17 +226,61 @@ fn unknown_and_repeated_boxes_are_skipped() {
     ]));
 }
 
-/// Only the first `jp2c` is the codestream (I.5.4), and the walk stops there,
-/// so what follows it is never read.
+/// Only the first `jp2c` is the codestream (I.5.4). OpenJPEG then walks what
+/// follows it and accepts anything it cannot follow, so these all decode
+/// (each measured with `opj_decompress` 2.5.0, which warns at most).
 #[test]
-fn boxes_after_the_first_jp2c_are_not_read() {
-    assert_decodes_like_raw(&file(&[
-        jp2_ftyp(),
-        good_jp2h(),
-        jp2c(),
-        bx(b"jp2c", b"not a codestream"),
-        header_only(3, b"junk"),
-    ]));
+fn bytes_after_the_codestream_that_openjpeg_accepts_decode() {
+    let tails: Vec<(&str, Vec<u8>)> = vec![
+        ("a second jp2c", bx(b"jp2c", b"not a codestream")),
+        (
+            "a bad length after a second jp2c, which ends the walk",
+            [bx(b"jp2c", b"zz"), header_only(3, b"junk")].concat(),
+        ),
+        ("a box past the end of the file", header_only(100, b"junk")),
+        (
+            "a bad length after a box past the end",
+            [header_only(100, b"junk"), header_only(3, b"junk")].concat(),
+        ),
+        ("ASCII text", b"hello, trailing text\n".to_vec()),
+        ("three bytes", b"abc".to_vec()),
+        ("seven zero bytes", vec![0; 7]),
+        ("sixteen zero bytes (LBox 0)", vec![0; 16]),
+        ("LBox 0", [header_only(0, b"junk"), b"zz".to_vec()].concat()),
+        (
+            "a truncated XLBox field",
+            [header_only(1, b"junk"), vec![0; 3]].concat(),
+        ),
+        ("a well-formed box", bx(b"xml ", b"<after/>")),
+    ];
+    for (what, tail) in tails {
+        let mut bytes = minimal();
+        bytes.extend_from_slice(&tail);
+        let image = decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(image.components, raw().components, "{what}");
+    }
+}
+
+/// The two faults OpenJPEG does reject after the codestream: a box whose
+/// `LBox` is 2..=7, or whose `XLBox` is below 16, wherever the walk reaches it.
+#[test]
+fn a_short_box_length_after_the_codestream_is_rejected() {
+    for lbox in 2..=7 {
+        let mut bytes = minimal();
+        bytes.extend_from_slice(&header_only(lbox, b"junk"));
+        file_format(&bytes, "after the codestream has length");
+    }
+    for xlbox in [0, 8, 15] {
+        let mut bytes = minimal();
+        bytes.extend_from_slice(&xl_header_only(xlbox, b"junk"));
+        file_format(&bytes, "after the codestream has XLBox");
+    }
+    // Reached after well-formed boxes of both length forms.
+    let mut bytes = minimal();
+    bytes.extend_from_slice(&bx(b"xml ", b"<a/>"));
+    bytes.extend_from_slice(&xl_box(b"uuid", &[0; 8]));
+    bytes.extend_from_slice(&header_only(3, b"junk"));
+    file_format(&bytes, "after the codestream has length 3");
 }
 
 /// A JPX-branded file that lists `jp2 ` as compatible is read; so is a `jp2 `
@@ -306,13 +350,12 @@ fn an_xlbox_of_zero_or_past_the_end_is_rejected() {
         ]);
         file_format(&bytes, "shorter than its 16-byte header");
     }
-    // One byte longer than the file, and far past it: both are truncation,
-    // and nothing is allocated from the length.
-    let body_len = CODESTREAM.len() as u64;
-    for xlbox in [16 + body_len + 1, 1 << 40, u64::MAX] {
+    // One byte longer than the file, and far past it: both are truncation
+    // for any box but the codestream, and nothing is allocated from the length.
+    for xlbox in [16 + 4 + 1, 1 << 40, u64::MAX] {
         let mut bytes = file(&[jp2_ftyp(), good_jp2h()]);
-        bytes.extend_from_slice(&xl_header_only(xlbox, b"jp2c"));
-        bytes.extend_from_slice(CODESTREAM);
+        bytes.extend_from_slice(&xl_header_only(xlbox, b"xml "));
+        bytes.extend_from_slice(b"<a/>");
         file_format(&bytes, "remain in the file");
     }
 }
@@ -329,13 +372,131 @@ fn a_child_box_overrunning_its_superbox_is_rejected() {
     );
 }
 
+/// OpenJPEG reads a codestream to its end whatever its box length says, so a
+/// `jp2c` whose `LBox` or `XLBox` runs past the end of the file is clamped to
+/// it and decodes.
 #[test]
-fn a_jp2c_overrunning_the_file_is_rejected() {
+fn a_jp2c_overrunning_the_file_is_clamped_and_decodes() {
+    let claimed = u32::try_from(8 + CODESTREAM.len() + 100).unwrap();
     let mut bytes = file(&[jp2_ftyp(), good_jp2h()]);
-    let claimed = u32::try_from(8 + CODESTREAM.len() + 1).unwrap();
     bytes.extend_from_slice(&header_only(claimed, b"jp2c"));
     bytes.extend_from_slice(CODESTREAM);
-    file_format(&bytes, "remain in the file");
+    assert_decodes_like_raw(&bytes);
+
+    for xlbox in [16 + CODESTREAM.len() as u64 + 1, 1 << 40, u64::MAX] {
+        let mut bytes = file(&[jp2_ftyp(), good_jp2h()]);
+        bytes.extend_from_slice(&xl_header_only(xlbox, b"jp2c"));
+        bytes.extend_from_slice(CODESTREAM);
+        assert_decodes_like_raw(&bytes);
+    }
+}
+
+/// Clamping does not rescue a codestream that is actually cut short: the
+/// codestream parser still rejects it.
+#[test]
+fn a_clamped_jp2c_with_a_truncated_codestream_is_still_rejected() {
+    let cut = &CODESTREAM[..CODESTREAM.len() - 40];
+    let mut bytes = file(&[jp2_ftyp(), good_jp2h()]);
+    bytes.extend_from_slice(&header_only(
+        u32::try_from(8 + CODESTREAM.len()).unwrap(),
+        b"jp2c",
+    ));
+    bytes.extend_from_slice(cut);
+    assert!(
+        matches!(decode(&bytes), Err(Error::Codestream(_))),
+        "{:?}",
+        decode(&bytes)
+    );
+}
+
+/// `ihdr` may come anywhere in `jp2h`, as OpenJPEG reads it.
+#[test]
+fn an_ihdr_after_other_header_boxes_decodes() {
+    assert_decodes_like_raw(&file(&[
+        jp2_ftyp(),
+        jp2h(&[colr(), bx(b"zzzz", b"?"), good_ihdr()]),
+        jp2c(),
+    ]));
+}
+
+/// A second `jp2h` before the codestream is merged into the first, as
+/// OpenJPEG does: its `ihdr` is ignored (here it disagrees with SIZ) and its
+/// other children are added to the first box's.
+#[test]
+fn a_second_jp2h_is_merged_into_the_first() {
+    let bytes = file(&[
+        jp2_ftyp(),
+        good_jp2h(),
+        jp2h(&[ihdr(1, 1, 1), bx(b"colr", &[1, 0, 0, 0, 0, 0, 17])]),
+        jp2c(),
+    ]);
+    assert_decodes_like_raw(&bytes);
+    let parsed = super::parse(&bytes).expect("parses");
+    assert_eq!(parsed.header.ihdr.width, WIDTH, "the first ihdr wins");
+    assert_eq!(parsed.header.colr.len(), 2, "both colr boxes, in order");
+    assert_eq!(parsed.header.colr[0], &colr()[8..]);
+}
+
+/// The guarded boxes meet the guard wherever OpenJPEG would apply them: in a
+/// second `jp2h`, or misplaced at the top level after the first `jp2h`.
+#[test]
+fn guarded_boxes_in_a_second_jp2h_or_after_jp2h_are_unsupported() {
+    for (kind, payload) in [
+        (b"pclr", &[0u8; 8][..]),
+        (b"cmap", &[0; 4][..]),
+        (b"cdef", &[0, 0][..]),
+    ] {
+        let name = format!("`{}`", std::str::from_utf8(kind).unwrap());
+        let in_second_jp2h = file(&[
+            jp2_ftyp(),
+            good_jp2h(),
+            jp2h(&[good_ihdr(), bx(kind, payload)]),
+            jp2c(),
+        ]);
+        unsupported(&in_second_jp2h, &name);
+        let after_jp2h = file(&[jp2_ftyp(), good_jp2h(), bx(kind, payload), jp2c()]);
+        unsupported(&after_jp2h, &name);
+    }
+}
+
+/// Before `jp2h`, OpenJPEG ignores a misplaced header box ("JPEG2000 Header
+/// box not read yet ... will be ignored"), so the file decodes as coded.
+#[test]
+fn header_boxes_misplaced_before_jp2h_are_ignored() {
+    let bytes = file(&[
+        jp2_ftyp(),
+        bx(b"cdef", &[0, 0]),
+        bx(b"pclr", &[0; 8]),
+        bx(b"cmap", &[0; 4]),
+        bx(b"colr", &[1, 0, 0, 0, 0, 0, 17]),
+        good_jp2h(),
+        jp2c(),
+    ]);
+    assert_decodes_like_raw(&bytes);
+    let parsed = super::parse(&bytes).expect("parses");
+    assert_eq!(parsed.header.colr, vec![&colr()[8..]]);
+    assert_eq!(parsed.other.len(), 4);
+}
+
+/// A file that is malformed and also carries a guarded box reports the fault,
+/// not the unsupported box.
+#[test]
+fn a_structural_fault_wins_over_an_unsupported_box() {
+    let with_cdef = |ihdr_box: Vec<u8>, stream: &[u8]| {
+        file(&[
+            jp2_ftyp(),
+            jp2h(&[ihdr_box, colr(), bx(b"cdef", &[0, 0])]),
+            bx(b"jp2c", stream),
+        ])
+    };
+    file_format(
+        &with_cdef(ihdr(1, 1, 1), CODESTREAM),
+        "`ihdr` declares a 1x1 image",
+    );
+    assert!(matches!(
+        decode(&with_cdef(good_ihdr(), b"not a codestream")),
+        Err(Error::Codestream(_))
+    ));
 }
 
 /// The JP2 box layer's reject matrix: every malformed box shape, mapped to
@@ -387,12 +548,12 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
         (
             "no jp2h (signature, ftyp, jp2c)",
             file(&[jp2_ftyp(), jp2c()]),
-            "comes before the `jp2h`",
+            "no `jp2h` header box before its `jp2c`",
         ),
         (
             "jp2c before jp2h",
             file(&[jp2_ftyp(), jp2c(), good_jp2h()]),
-            "comes before the `jp2h`",
+            "no `jp2h` header box before its `jp2c`",
         ),
         ("no jp2c", file(&[jp2_ftyp(), good_jp2h()]), "no `jp2c`"),
         (
@@ -401,19 +562,19 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
             "no `jp2h` header box and no `jp2c`",
         ),
         (
-            "a second jp2h",
-            file(&[jp2_ftyp(), good_jp2h(), good_jp2h(), jp2c()]),
-            "second `jp2h`",
-        ),
-        (
             "empty jp2h",
             file(&[jp2_ftyp(), jp2h(&[]), jp2c()]),
-            "`jp2h` box is empty",
+            "`jp2h` box has no `ihdr`",
         ),
         (
-            "ihdr not first in jp2h",
-            file(&[jp2_ftyp(), jp2h(&[colr(), good_ihdr()]), jp2c()]),
-            "must start with `ihdr`, not `colr`",
+            "jp2h without ihdr",
+            file(&[jp2_ftyp(), jp2h(&[colr()]), jp2c()]),
+            "`jp2h` box has no `ihdr`",
+        ),
+        (
+            "a second jp2h without ihdr",
+            file(&[jp2_ftyp(), good_jp2h(), jp2h(&[colr()]), jp2c()]),
+            "`jp2h` box has no `ihdr`",
         ),
         (
             "ihdr of 13 bytes",
@@ -475,7 +636,17 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
         (
             "LBox 0 on a box that is not last",
             file(&[jp2_ftyp(), open_box(b"xml ", b""), good_jp2h(), jp2c()]),
-            "no `jp2h` header box and no `jp2c`",
+            "a box of length 0 (to the end of the file) swallowed the rest",
+        ),
+        (
+            "LBox 2..7 after the codestream",
+            [minimal(), header_only(5, b"junk")].concat(),
+            "after the codestream has length 5",
+        ),
+        (
+            "XLBox below 16 after the codestream",
+            [minimal(), xl_header_only(15, b"junk")].concat(),
+            "after the codestream has XLBox 15",
         ),
         (
             "a box header cut short before jp2c",

@@ -5,6 +5,10 @@ check the JP2 box reader against the box layouts real encoders write (Kakadu,
 the ECW JPEG 2000 SDK, OpenJPEG). The test decodes each file and compares it
 with a decode of its own `jp2c` codestream; files carrying a box the decoder
 does not apply yet are expected to be refused as `Unsupported`.
+`rgb16_ecwsdk.jp2` is the exception: its codestream has no `EOC`, so it fails
+with the same `Codestream` error as its extracted codestream, before the
+`cdef` guard is reached. OpenJPEG 2.5.0 does not decode it either (it fails in
+tile decoding, "segment too long").
 
 ## Rights
 

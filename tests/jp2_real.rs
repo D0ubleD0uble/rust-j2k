@@ -6,7 +6,8 @@
 //! `decode` of its first `jp2c` box's contents, extracted here by a separate,
 //! deliberately simple box walk. A file whose header carries a box the decoder
 //! does not apply yet (`pclr`, `cmap`, `cdef`) must instead be `Unsupported`
-//! naming that box.
+//! naming that box. A file whose codestream is itself broken is rejected for
+//! that first, as the raw codestream is.
 
 mod support;
 
@@ -21,6 +22,9 @@ enum Outcome {
     Decodes,
     /// Be refused as `Unsupported`, naming this box.
     Unsupported(&'static str),
+    /// Be rejected with the same `Codestream` error as its extracted
+    /// codestream, whose message holds this text.
+    BrokenCodestream(&'static str),
 }
 
 /// Every vendored file, its SHA-256 (the README records the same), and its
@@ -54,7 +58,10 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "rgb16_ecwsdk.jp2",
         "86cf3c0a005b640e1cc9bd8dcf9f5955897b6576551383fc89f9d18adf32a507",
-        Outcome::Unsupported("cdef"),
+        // The codestream has no EOC. OpenJPEG 2.5.0 reads its header but fails
+        // to decode the tile ("segment too long"), so neither decoder decodes
+        // it; the structural fault is reported before the `cdef` guard.
+        Outcome::BrokenCodestream("not terminated by EOC"),
     ),
     (
         "rgbwcmyk01_YeGeo_kakadu.jp2",
@@ -124,6 +131,17 @@ fn every_fixture_decodes_like_its_codestream_or_is_refused_by_the_guard() {
                 ),
                 other => panic!("{name}: expected Unsupported({what}), got {other:?}"),
             },
+            Outcome::BrokenCodestream(what) => {
+                let file = decode(&bytes);
+                let raw = decode(first_jp2c(&bytes));
+                match &file {
+                    Err(Error::Codestream(message)) => {
+                        assert!(message.contains(what), "{name}: {message:?}")
+                    }
+                    other => panic!("{name}: expected Codestream({what}), got {other:?}"),
+                }
+                assert_eq!(file, raw, "{name}: the same error as the raw codestream");
+            }
         }
     }
     assert_eq!(decoded, 5, "five fixtures carry no guarded box");

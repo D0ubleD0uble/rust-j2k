@@ -83,8 +83,13 @@ impl Ihdr {
 /// raw contents in file order. Repeats are kept too, so the code that reads a
 /// box can apply its own rule (the first `colr` wins; a second `pclr` is an
 /// error).
+///
+/// The children are gathered the way OpenJPEG gathers them: from every `jp2h`
+/// box before the codestream, and from the header boxes it finds misplaced at
+/// the top level after the first `jp2h` (see [`Jp2Header::add_misplaced`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Jp2Header<'a> {
+    /// The first `ihdr` read; later ones are ignored.
     pub(crate) ihdr: Ihdr,
     /// Bits Per Component boxes (I.5.3.2).
     pub(crate) bpcc: Vec<&'a [u8]>,
@@ -103,29 +108,61 @@ pub(crate) struct Jp2Header<'a> {
 }
 
 impl<'a> Jp2Header<'a> {
-    /// Walk a `jp2h` box's children. `ihdr` must come first (I.5.3.1); a later
-    /// `ihdr` is ignored, as OpenJPEG does.
+    /// Read the first `jp2h` box.
     pub(crate) fn parse(payload: &'a [u8]) -> Result<Self> {
-        let mut children = Boxes::children(payload, "the `jp2h` box");
-        let ihdr = match children.next() {
-            None => {
-                return Err(Error::FileFormat(
-                    "the `jp2h` box is empty; it must start with `ihdr`".into(),
-                ));
+        Self::read(payload, None)
+    }
+
+    /// Read a later `jp2h` box into this header. OpenJPEG merges a second
+    /// `jp2h` this way: its `ihdr` is ignored and its other children are
+    /// applied, so they are appended here and meet the same checks.
+    pub(crate) fn merge(self, payload: &'a [u8]) -> Result<Self> {
+        Self::read(payload, Some(self))
+    }
+
+    /// Take a header box found at the top level after the first `jp2h`.
+    /// OpenJPEG reads such a box as though it were inside `jp2h` ("read
+    /// anyway, we already have jp2h"), so it is recorded the same way; a
+    /// misplaced `ihdr` is ignored like any later one. Returns `false` for a
+    /// box that is not a `jp2h` child type, which the caller keeps as a
+    /// top-level box.
+    pub(crate) fn add_misplaced(&mut self, item: Jp2Box<'a>) -> bool {
+        match &item.kind {
+            b"ihdr" => true,
+            b"bpcc" | b"colr" | b"pclr" | b"cmap" | b"cdef" => {
+                self.record(item);
+                true
             }
-            Some(first) => {
-                let first = first?;
-                if &first.kind != b"ihdr" {
-                    return Err(Error::FileFormat(format!(
-                        "the `jp2h` box must start with `ihdr`, not `{}`",
-                        first.name()
-                    )));
+            _ => false,
+        }
+    }
+
+    /// Walk one `jp2h` box's children. Every `jp2h` box must hold an `ihdr`
+    /// of 14 bytes, anywhere among its children (OpenJPEG requires both and
+    /// nothing more); only the first `ihdr` of the file is parsed.
+    fn read(payload: &'a [u8], previous: Option<Self>) -> Result<Self> {
+        let mut ihdr = previous.as_ref().map(|header| header.ihdr);
+        let mut has_ihdr = false;
+        let mut children = Vec::new();
+        for child in Boxes::children(payload, "the `jp2h` box") {
+            let child = child?;
+            if &child.kind == b"ihdr" {
+                has_ihdr = true;
+                if ihdr.is_none() {
+                    ihdr = Some(Ihdr::parse(child.payload)?);
                 }
-                Ihdr::parse(first.payload)?
+            } else {
+                children.push(child);
+            }
+        }
+        let ihdr = match ihdr {
+            Some(ihdr) if has_ihdr => ihdr,
+            _ => {
+                return Err(Error::FileFormat("a `jp2h` box has no `ihdr` box".into()));
             }
         };
 
-        let mut header = Jp2Header {
+        let mut header = previous.unwrap_or(Jp2Header {
             ihdr,
             bpcc: Vec::new(),
             colr: Vec::new(),
@@ -134,20 +171,23 @@ impl<'a> Jp2Header<'a> {
             cdef: Vec::new(),
             res: Vec::new(),
             unknown: Vec::new(),
-        };
+        });
         for child in children {
-            let child = child?;
-            match &child.kind {
-                b"ihdr" => {}
-                b"bpcc" => header.bpcc.push(child.payload),
-                b"colr" => header.colr.push(child.payload),
-                b"pclr" => header.pclr.push(child.payload),
-                b"cmap" => header.cmap.push(child.payload),
-                b"cdef" => header.cdef.push(child.payload),
-                b"res " => header.res.push(child.payload),
-                _ => header.unknown.push(child),
-            }
+            header.record(child);
         }
         Ok(header)
+    }
+
+    /// File one child box under its type.
+    fn record(&mut self, child: Jp2Box<'a>) {
+        match &child.kind {
+            b"bpcc" => self.bpcc.push(child.payload),
+            b"colr" => self.colr.push(child.payload),
+            b"pclr" => self.pclr.push(child.payload),
+            b"cmap" => self.cmap.push(child.payload),
+            b"cdef" => self.cdef.push(child.payload),
+            b"res " => self.res.push(child.payload),
+            _ => self.unknown.push(child),
+        }
     }
 }

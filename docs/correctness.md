@@ -110,15 +110,18 @@ loops iterate zero times. Rejecting is the stricter, spec-faithful reading; a
 volume that covers nothing is almost certainly a corrupt field, not one the
 encoder meant.
 
-The JP2 box layer has four checks of the same kind, each one where the file
-breaks a rule of Annex I and a lenient reader would have to guess: an `ihdr`
-that is not the first box in `jp2h` (I.5.3.1), a second `jp2h` box (I.5.3;
-OpenJPEG merges the two), an `ihdr.NC` that differs from `Csiz` (palette and
-channel definitions index components by `NC`), and a `jp2c` box whose length
-runs past the end of the file (OpenJPEG ignores the length and reads the
-codestream to `EOC`). A file whose `ftyp` does not claim `jp2 ` compatibility
-is refused too, as `Unsupported`: OpenJPEG decodes it anyway, but such a file
-may use features a JP2 reader does not understand.
+The JP2 box layer follows OpenJPEG 2.5.0 where a file bends Annex I in a
+way it tolerates: `ihdr` anywhere in `jp2h`, a second `jp2h` merged into the
+first, a header box misplaced at the top level after `jp2h` applied as if it
+were inside, a `jp2c` that runs past the end of the file clamped to it, and
+after the codestream only the two length faults OpenJPEG rejects there. Two
+checks stay stricter, because a lenient reader would have to guess: an
+`ihdr.NC` that differs from `Csiz` (palette and channel definitions index
+components by `NC`), and a `jp2c` whose `LBox` is 2..7 or whose `XLBox` is
+below 16 (OpenJPEG ignores the codestream box's length). A file whose `ftyp`
+does not claim `jp2 ` compatibility is refused too, as `Unsupported`:
+OpenJPEG decodes it anyway, but such a file may use features a JP2 reader
+does not understand.
 
 The cost is interop: a real-world encoder that produces such a stream decodes
 under OpenJPEG and rejects here. No corpus or conformance file trips any of

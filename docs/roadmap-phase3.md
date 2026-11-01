@@ -108,12 +108,15 @@ Two consequences shape the plan:
 ### Entry point: `decode` auto-detects the container
 
 `decode(bytes)` and `decode_with(bytes, options)` accept either a raw codestream
-(`FF4F FF51`) or a JP2 file (the 12-byte signature box). Nothing else is
-sniffed. This is additive: every input that decoded before still decodes to the
-same `Image`, and the one input class that was `Error::Unsupported` ("JP2 file
-format wrapper") now decodes. openreadout sniffs exactly these two magics
-before calling us, so the auto-detect replaces their unwrapping with no change
-on their side.
+or a JP2 file. Input that opens with `FF4F` (`SOC`) is a codestream; otherwise
+input whose bytes 4..8 are `jP  ` (the signature box's type) is a JP2 file, so a
+damaged signature box is a `FileFormat` error rather than a missing `SOC`.
+Anything else goes to the codestream parser, which rejects it. This is
+additive: every input that decoded before still decodes to the same `Image`,
+and the one input class that was `Error::Unsupported` ("JP2 file format
+wrapper") now decodes. openreadout sniffs the same two magics before calling
+us, so the auto-detect replaces their unwrapping (their test fixture needs a
+`jp2h` box, see P3.1).
 
 A file whose `ftyp` lacks `jp2 ` in brand or compatibility list (a JPX, JPM,
 or MJ2 that is not JP2-compatible) is `Error::Unsupported`, not a parse error:
@@ -553,19 +556,21 @@ so and why we differ (or do not).
 
 | Input | OpenJPEG 2.5.0 | Ours | Variant |
 | ----- | -------------- | ---- | ------- |
-| Neither magic | error | reject | `Codestream` ("not a codestream or JP2 file") |
+| Neither magic | error | reject | `Codestream` ("does not start with the SOC marker") |
 | Signature box wrong length or payload | error | reject | `FileFormat` |
 | `ftyp` missing or not second | error | reject | `FileFormat` |
 | No `jp2 ` in brand or compatibility list | decodes anyway | reject | `Unsupported` (a JPX/JPM we do not read; stricter, because the spec says such a reader may not understand the file and we would be guessing) |
 | Box length `< 8` (or `< 16` with `XLBox`) | error | reject | `FileFormat` |
-| Box runs past its parent or the file | error; a `jp2c` that runs past the file decodes (the codestream is read to `EOC`) | reject | `FileFormat` (truncation); stricter for `jp2c` |
+| Box runs past its parent or the file | error | reject | `FileFormat` (truncation) |
+| `jp2c` runs past the end of the file | decodes (the codestream is read to its end) | clamped to the file, decodes | none (match oracle); the codestream parser still rejects a codestream that is cut short |
+| `jp2c` with `LBox` 2..7 or `XLBox < 16` | decodes (the length is not used) | reject | `FileFormat`; stricter, not yet decided |
 | `LBox = 0` on a box that is not last | error unless `jp2c` | same | `FileFormat`; legal on the last box, including `jp2c` |
-| `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice, else truncation | `FileFormat` past the end of the file; slice-based, nothing is allocated from the length |
+| `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice; past the end of the file, truncation, or clamped for `jp2c` | `FileFormat` for a box other than `jp2c` past the end of the file; slice-based, nothing is allocated from the length |
 | `jp2h` missing | error | reject | `FileFormat` |
-| Second `jp2h` | merged (a second `ihdr` ignored, other children applied) | reject | `FileFormat`; stricter: I.5.3 allows one, and a `cdef` or `pclr` in the second box would otherwise be applied by one reader and not another |
+| Second `jp2h` before `jp2c` | merged (its `ihdr` ignored, other children applied) | merged the same way | none (match oracle); its `pclr`/`cmap`/`cdef` meet the guards; each `jp2h` must hold an `ihdr`, as OpenJPEG requires |
 | `jp2c` before `jp2h` | error | reject | `FileFormat` |
 | `ihdr` missing or not 14 bytes | error | reject | `FileFormat` |
-| `ihdr` not first in `jp2h` | decodes | reject | `FileFormat`; stricter: I.5.3.1 says `ihdr` shall be the first box in `jp2h` |
+| `ihdr` not first in `jp2h` | decodes | decodes | none (match oracle; I.5.3.1 says first, but nothing depends on the order) |
 | `ihdr` W/H `!=` SIZ image area | error | reject | `FileFormat` |
 | `ihdr.NC != Csiz` | not checked | reject | `FileFormat`; stricter: palette and `cdef` index against `NC`, so a lie here steers the channel mapping. Relax if a real file trips it. |
 | `ihdr.BPC` or `bpcc` disagree with SIZ depth | not checked | accept, SIZ wins | none (match oracle) |
@@ -584,7 +589,9 @@ so and why we differ (or do not).
 | `cdef N = 0`, truncated, `Cn` or `Asoc-1` out of range, incomplete list | error | reject | `FileFormat` |
 | `cdef Typ` not 0/1/2/65535 | passed through | `Other(n)` | none |
 | Unknown box anywhere | skipped | skipped | none |
-| Boxes after `jp2c` | never read | read for metadata, else skipped | none |
+| `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | `Unsupported` for `pclr`/`cmap`/`cdef` until applied, the same guard as inside `jp2h` |
+| The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |
+| Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`) fails OpenJPEG but decodes here |
 | Second `jp2c` | never read | ignored | none (I.5.4) |
 | Deeply nested superboxes | n/a | only `jp2h` and `res ` are entered | no recursion, so no depth bomb |
 | Metadata boxes totalling more than the file | impossible by construction | copies bounded by input length | none |
@@ -624,9 +631,13 @@ part of the gate.
   codestream themselves is unaffected (they still pass the payload), but one
   that starts passing the `.jp2` gets more channels than before. Documented in
   the changelog and on `Image.jp2`.
-- **Stricter-than-oracle rows** (`NC != Csiz`, non-`jp2 `-compatible brand)
-  may refuse real files OpenJPEG opens. Each is one `if`; the rule from
-  correctness.md applies: a demonstrated real file relaxes the check.
+- **Stricter-than-oracle rows** (`NC != Csiz`, non-`jp2 `-compatible brand,
+  a `jp2c` whose `LBox` is 2..7 or `XLBox` below 16) may refuse real files
+  OpenJPEG opens. Each is one `if`; the rule from correctness.md applies: a
+  demonstrated real file relaxes the check. Where Annex I is bent in ways
+  OpenJPEG tolerates (`ihdr` not first, a second `jp2h`, a `jp2c` past the end
+  of the file, a header box misplaced after `jp2h`), the box layer follows
+  OpenJPEG (owner decision, 2026-11-01).
 - **GDAL sample provenance.** GDAL's license covers its code "in general"
   and says nothing about test data, and some samples are third-party encoder
   output. Committing them anyway is decision 2; the fixture README states the
