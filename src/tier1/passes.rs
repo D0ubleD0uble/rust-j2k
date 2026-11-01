@@ -28,7 +28,7 @@ mod golden_vectors;
 
 /// MQ context indices, laid out as ISO/IEC 15444-1 Table D-7 allocates them and
 /// OpenJPEG's `T1_CTXNO_*` constants order them. A code-block's decoder owns one
-/// [`Context`](crate::tier1::mq::Context) per index (`NUM_CONTEXTS` total); the
+/// [`Context`] per index (`NUM_CONTEXTS` total); the
 /// context-formation routines below return an index into that array.
 ///
 /// - `0..=8`   zero coding (the nine significance contexts, [`zc_context`](BlockState::zc_context))
