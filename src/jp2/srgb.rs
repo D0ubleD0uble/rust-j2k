@@ -33,6 +33,10 @@
 //!   differs by up to 254 at its native depth), since lcms runs fixed-point
 //!   pipelines.
 //!
+//! One or two channels with no colour space this step converts (no `colr`,
+//! or another enumerated colour space) pass through as grey, as OpenJPEG
+//! reads them.
+//!
 //! Everything else is [`Error::Unsupported`]: another enumerated colour
 //! space, no colour space, a profile of another class or form, and colour
 //! channels that differ in depth, sign or sub-sampling (except the sYCC
@@ -194,6 +198,12 @@ pub(crate) fn plan(
         }
         ColourSpace::Sycc => plan_sycc(channels, outputs, siz, reduction),
         ColourSpace::RestrictedIcc(profile) => plan_icc(profile, channels, outputs),
+        // One or two channels with no colour space this step converts:
+        // OpenJPEG reads any image of two or fewer components as grey (and
+        // grey plus opacity) and passes it through, so this does too.
+        ColourSpace::Enumerated(_) | ColourSpace::Unknown if outputs.len() <= 2 => {
+            Ok(SrgbPlan::PassThrough)
+        }
         ColourSpace::Enumerated(value) => Err(Error::Unsupported(format!(
             "sRGB output from the enumerated colour space {value}; only sRGB, greyscale, \
              sYCC and restricted ICC profiles are converted"

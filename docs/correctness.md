@@ -276,12 +276,15 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   4:4:4 file, as-coded R `[-7, -62, 61, 114, ...]` comes out
   `[0, 0, 15, 0, ...]`. sYCC is defined on unsigned samples, so there is no
   right answer to match;
-- an enumerated colour space other than sRGB, greyscale or sYCC, and a file
-  with no `colr`;
-- a raw codestream of three or more components, which declares no colour
-  space (`opj_decompress -force-rgb` fails there too). One or two
-  components pass through as grey, and grey plus opacity, as OpenJPEG
-  reads them;
+- three or more channels with an enumerated colour space other than sRGB,
+  greyscale or sYCC, or with no `colr`, and a raw codestream of three or
+  more components, which declares no colour space. For three components at
+  the same sampling `opj_decompress -force-rgb` fails too; with sub-sampled
+  chroma it guesses sYCC and converts, which owner decision (2) above
+  refuses. One or two channels, from a raw codestream or a JP2 file with no
+  `colr` or such an enumerated space, pass through as grey (and grey plus
+  opacity), as OpenJPEG reads any image of two or fewer components; their
+  metadata stays as declared, since nothing was converted;
 - an ICC profile that is not one of the restricted forms: a class other than
   input (`scnr`), a colour space other than RGB or grey, a connection space
   other than XYZ, a lookup-table tag (`A2B0`..`A2B2`, `D2B0`..`D2B3`, which
@@ -297,13 +300,19 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   file5's profile with a D65 `wtpt`, the exact transform with the white
   scaling is up to 27 levels off OpenJPEG near black; a model of the
   table's interpolation gets within 1 on two white points but stays up to
-  10 off on a third, so it is not reproduced;
+  10 off on a third, so it is not reproduced. Above intent 3, lcms
+  refuses to build the transform and OpenJPEG writes the samples
+  unconverted while reporting them converted; for that and for every refusal
+  in this list the owner's rule from the 2026-11-01 decisions on #165
+  applies: an error beats a silently wrong image;
 - an RGB profile on samples other than 8- or 16-bit unsigned, or a grey
   profile on samples other than 8-bit unsigned (owner decision, 2026-11-01,
   on #165). OpenJPEG picks an lcms format from the precision alone
   (`TYPE_RGB_8` up to 8 bits, else `TYPE_RGB_16`; `TYPE_GRAY_8` for grey)
-  and so scales other depths wrongly: a 12-bit sample of 4095 comes out
-  7413, past the 12-bit range, and a 4-bit sample of 15 comes out 20;
+  and so scales other depths wrongly, past the samples' own range. The
+  review measured a 12-bit 4095 coming out 7413. With file5's profile on a
+  4-bit RGB image, measured here, grey 15 comes out 18, grey 12 comes out
+  13, and (15, 0, 0) comes out with red 29, all written into 4-bit planes;
 - a profile shorter than its header, a tag table or tag past its end, or a
   tag cut short or of the wrong type: `FileFormat`;
 - `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.

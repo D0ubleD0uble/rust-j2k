@@ -924,6 +924,32 @@ fn a_raw_grey_codestream_passes_through() {
     }
 }
 
+/// A JP2 file of one or two channels with no `colr`, or an enumerated
+/// colour space this step does not convert, passes through as grey (and
+/// grey plus opacity), as OpenJPEG reads it, with the metadata as declared.
+/// Three channels (here from a palette) are still refused.
+#[test]
+fn a_grey_jp2_without_a_converted_colour_space_passes_through() {
+    for (codestream, colr, declared) in [
+        (ONE, vec![], ColourSpace::Unknown),
+        (TWO, vec![], ColourSpace::Unknown),
+        (ONE, enumerated(12), ColourSpace::Enumerated(12)),
+        (TWO, enumerated(20), ColourSpace::Enumerated(20)),
+    ] {
+        let bytes = file(codestream, &colr, &[]);
+        let coded = decode(&bytes).expect("as coded");
+        let image = decode_srgb(&bytes).expect("sRGB");
+        assert_eq!(image.components, coded.components);
+        assert_eq!(image.jp2.unwrap().colour, declared);
+    }
+    let boxes = palette(&[7, 7, 7], 4, |j, _| u32::from(j));
+    expect_err(
+        decode_srgb(&file(ONE, &[], &boxes)),
+        is_unsupported,
+        "no colour specification",
+    );
+}
+
 /// The sRGB curve's linear segment near black: 12.92 x up to 0.0031308,
 /// where the power segment would give a different value.
 #[test]

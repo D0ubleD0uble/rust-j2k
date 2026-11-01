@@ -57,7 +57,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to
   full resolution first), and a restricted ICC profile (monochrome or
   three-component matrix/TRC) applied. sRGB and greyscale pass through,
-  and so does a raw codestream of one or two components. After a
+  and so do one or two channels with no colour space to convert from (a
+  raw codestream, or a file with no `colr` or another enumerated space). After a
   conversion `Jp2Metadata::colour` says sRGB, or greyscale for a monochrome
   profile. Other colour spaces, other profiles, and colour channels that
   differ in depth, sign or sub-sampling are `Unsupported`; `Srgb` with

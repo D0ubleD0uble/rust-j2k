@@ -206,12 +206,13 @@ pub enum ColourOutput {
     /// [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for a monochrome
     /// profile, with no ICC profile. [`read_header`] and the default
     /// [`ColourOutput::AsCoded`] report the colour space the file declares.
-    /// A raw codestream of one or two components (grey, or grey and
-    /// opacity) passes through.
+    /// One or two channels with no colour space to convert from (a raw
+    /// codestream, a file with no `colr`, or another enumerated colour
+    /// space) are read as grey, or grey and opacity, and pass through.
     ///
-    /// Anything else is [`Error::Unsupported`]: another colour space, no
-    /// colour specification (which includes a raw codestream of three or
-    /// more components), another kind
+    /// Anything else is [`Error::Unsupported`]: three or more channels in
+    /// another colour space or with no colour specification (a raw
+    /// codestream included), another kind
     /// of ICC profile, an RGB profile on samples that are not 8 or 16-bit
     /// unsigned (8-bit for a monochrome profile), signed sYCC, and colour
     /// channels that differ in depth, sign or sub-sampling other than sYCC's
