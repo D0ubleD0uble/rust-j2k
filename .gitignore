@@ -2,3 +2,6 @@
 
 # Python bytecode from the dev/oracle scripts (scripts/*.py)
 __pycache__/
+
+# orchestration worker scratch output
+/scratch/
