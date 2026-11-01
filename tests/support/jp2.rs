@@ -61,13 +61,12 @@ pub struct Jp2Entry {
     /// OpenJPEG's per-component decode of the codestream as coded, for the
     /// `needs_srgb` entries that decode today. Graded bit-exactly until sRGB
     /// output exists.
-    #[serde(default)]
     pub as_coded: Option<AsCoded>,
 }
 
 /// As-coded references: one `.pgx` per codestream component (native size and
 /// depth, no colour conversion, no shift) and the digest of each.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AsCoded {
     pub references: Vec<String>,
@@ -147,7 +146,9 @@ pub fn shifted(component: &Component, shift: u8) -> Component {
 ///
 /// `srgb_available` says whether the decoder can produce sRGB output yet. While
 /// it cannot, a `needs_srgb` entry that decodes reports *needs sRGB output*
-/// instead of being graded against a reference it cannot match.
+/// instead of being graded against the display reference it cannot match. Its
+/// samples are still checked bit-exactly against the `as_coded` references
+/// when the entry has them.
 pub fn grade_entry(dir: &Path, entry: &Jp2Entry, srgb_available: bool) -> Grade {
     let graded = entry.graded_components;
     if graded == 0 {

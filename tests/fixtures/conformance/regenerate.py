@@ -414,19 +414,6 @@ def main_part1():
                     "used as the bar."
                 ),
             },
-            "as_coded": {
-                "files": "3, 5, 7, 8 (file2 waits on its cdef)",
-                "oracle_command": (
-                    "the jp2c payload as a bare codestream: opj_decompress -i cs.j2k "
-                    "-o out.pgx; the sub-sampled file (3) one component at a time with -c K"
-                ),
-                "note": (
-                    "codestream samples at the native component size and depth, no "
-                    "colour conversion and no shift. -c avoids opj_decompress's sYCC "
-                    "heuristic but skips the inverse MCT, so it is used only for the "
-                    "sub-sampled file (mct 0); the bare codestream carries no ICC"
-                ),
-            },
             "features": {
                 "tool": "opj_dump -i + direct marker-segment walk",
                 "note": (
@@ -783,6 +770,19 @@ def main_jp2():
                 "note": (
                     "files 1, 4, 6 and 9 are graded bit-exact (measured: the OpenJPEG "
                     "decode equals the reference); the rest use PAE 4 / MSE 1"
+                ),
+            },
+            "as_coded": {
+                "files": "3, 5, 7, 8 (file2 waits on its cdef)",
+                "oracle_command": (
+                    "the jp2c payload as a bare codestream: opj_decompress -i cs.j2k "
+                    "-o out.pgx; the sub-sampled file (3) one component at a time with -c K"
+                ),
+                "note": (
+                    "codestream samples at the native component size and depth, no "
+                    "colour conversion and no shift. -c avoids opj_decompress's sYCC "
+                    "heuristic but skips the inverse MCT, so it is used only for the "
+                    "sub-sampled file (mct 0); the bare codestream carries no ICC"
                 ),
             },
             "features": {

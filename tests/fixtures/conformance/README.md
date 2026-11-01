@@ -189,7 +189,8 @@ the same measurement.
 
 `needs_srgb` marks files 2, 3, 5, 7 and 8, whose references are sRGB display
 output (sYCC or an ICC profile converted). Until the decoder has an sRGB
-output option, those entries report *needs sRGB output* instead of being graded.
+output option, those entries report *needs sRGB output* instead of being graded
+against the display reference (files 3, 5, 7 and 8 are still graded as coded, below).
 `shift_right` is the right shift that takes decoded samples to the reference's
 8 bits (file 6: 4, file 7: 8).
 
@@ -209,7 +210,7 @@ object denies unknown fields. Per entry: `file`, `index`, `graded_components`,
 `bit_exact`, `shift_right`, `needs_srgb`, `boxes` (`top` and `jp2h` box types in
 file order), `colour` (the first `colr`: `method` with `enum_cs` or
 `icc_bytes`), `features` (the Part 1 `features` object for the `jp2c` payload),
-`references`, `file_digest` and `reference_digests` (byte size and SHA-256 of each committed file, re-checked by the tests), and `bounds`.
+`references`, `file_digest` and `reference_digests` (byte size and SHA-256 of each committed file, re-checked by the tests), `bounds`, and optionally `as_coded` (`references` and `reference_digests`, as above).
 
 The re-grade was run with OpenJPEG 2.5.0 (the system build). Provenance is the same pinned `uclouvain/openjpeg-data` commit (`39524bd3`):
 `input/conformance/file{1..9}.jp2` and `baseline/conformance/jp2_{1..9}.tif`.

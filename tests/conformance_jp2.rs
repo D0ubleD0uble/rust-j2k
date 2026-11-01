@@ -14,7 +14,8 @@
 //! to pass must be added to [`IN_CLASS`].
 //! Entries marked `needs_srgb` wait for the sRGB output option; flip
 //! [`SRGB_OUTPUT_AVAILABLE`] (and `options_for` in `support/jp2.rs`) when it
-//! exists.
+//! exists. Until then, those that decode are graded bit-exactly as coded
+//! against their `as_coded` references.
 
 mod support;
 
@@ -28,7 +29,8 @@ use support::pgx::parse_pgx;
 const IN_CLASS: &[&str] = &["file1", "file4", "file6"];
 
 /// Whether the decoder can produce sRGB output. While `false`, `needs_srgb`
-/// entries that decode report *needs sRGB output* and are not graded.
+/// entries that decode report *needs sRGB output*, after an as-coded check
+/// where the manifest has references.
 const SRGB_OUTPUT_AVAILABLE: bool = false;
 
 fn jp2_dir() -> PathBuf {
@@ -208,6 +210,14 @@ fn the_manifest_rejects_unknown_keys() {
     reject(
         &|v| v["entries"][0]["boxes"]["surprise"] = 1.into(),
         "in boxes",
+    );
+    let i = value["entries"]
+        .as_array()
+        .and_then(|e| e.iter().position(|x| x.get("as_coded").is_some()))
+        .expect("an entry with as_coded");
+    reject(
+        &|v| v["entries"][i]["as_coded"]["surprise"] = 1.into(),
+        "in as_coded",
     );
 }
 
