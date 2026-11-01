@@ -502,7 +502,19 @@ impl Siz {
     /// applied on the component's own grid.
     pub fn component_extent_at(&self, index: usize, reduction: u8) -> Option<(u32, u32)> {
         let comp = self.components.get(index)?;
-        let (xr, yr) = (comp.x_sampling as u64, comp.y_sampling as u64);
+        self.sampled_extent_at(comp.x_sampling, comp.y_sampling, reduction)
+    }
+
+    /// The extent of a component sub-sampled `x_sampling` by `y_sampling` at
+    /// a resolution reduction, as [`component_extent_at`](Self::component_extent_at)
+    /// gives it. `None` for a zero factor.
+    pub fn sampled_extent_at(
+        &self,
+        x_sampling: u8,
+        y_sampling: u8,
+        reduction: u8,
+    ) -> Option<(u32, u32)> {
+        let (xr, yr) = (u64::from(x_sampling), u64::from(y_sampling));
         if xr == 0 || yr == 0 {
             return None;
         }

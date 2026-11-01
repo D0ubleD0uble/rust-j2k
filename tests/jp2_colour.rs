@@ -132,8 +132,8 @@ fn decode_reports_the_colour_space_of_each_conformance_file() {
 }
 
 /// File 2's `cdef` (components 0, 1, 2 are colours 3, 2, 1) puts its channels
-/// in colour order and labels them so. Its sYCC samples are not converted, so
-/// it still grades as *needs sRGB output* in `tests/conformance_jp2.rs`, after
+/// in colour order and labels them so. Its sYCC samples are converted only
+/// under `ColourOutput::Srgb`, which `tests/conformance_jp2.rs` grades after
 /// its as-coded check.
 #[test]
 fn file2_comes_out_in_colour_order() {

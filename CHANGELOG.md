@@ -52,6 +52,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every top-level `xml ` and `uuid` box verbatim (`UuidBox`), including those
   after the codestream. A malformed `res ` never fails a decode, as in
   OpenJPEG.
+- `DecodeOptions::colour` takes a `ColourOutput`. The default, `AsCoded`,
+  returns the samples as the file codes them. `Srgb` converts a JP2 file's
+  colour channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to
+  full resolution first), and a restricted ICC profile (monochrome or
+  three-component matrix/TRC) applied. sRGB and greyscale pass through,
+  and so do one or two channels with no colour space to convert from (a
+  raw codestream, or a file with no `colr` or another enumerated space). After a
+  conversion `Jp2Metadata::colour` says sRGB, or greyscale for a monochrome
+  profile. Other colour spaces, other profiles, and colour channels that
+  differ in depth, sign or sub-sampling are `Unsupported`; `Srgb` with
+  `raw_channels` is `InvalidOptions`.
 
 ### Fixed
 
