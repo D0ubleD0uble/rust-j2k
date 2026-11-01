@@ -441,11 +441,19 @@ pub fn run_ratchet(dir: &Path, in_class: &[&str]) {
         .map(|entry| (entry.name(), grade_entry(dir, entry)))
         .collect();
 
-    eprintln!(
-        "\nISO/IEC 15444-4 class-{} grading:",
-        manifest.compliance_class
+    ratchet(
+        &format!("ISO/IEC 15444-4 class-{}", manifest.compliance_class),
+        &graded,
+        in_class,
     );
-    for (name, grade) in &graded {
+}
+
+/// Report `graded` under `title` and enforce the ratchet: no entry may fail,
+/// and the entries in class must be exactly `in_class`. Shared by every
+/// conformance set (Part 1 codestreams, JP2 files) so they ratchet alike.
+pub fn ratchet(title: &str, graded: &[(&str, Grade)], in_class: &[&str]) {
+    eprintln!("\n{title} grading:");
+    for (name, grade) in graded {
         match grade {
             Grade::NotYetDecoded(what) => eprintln!("  {name:<8} {:<20} {what}", grade.label()),
             Grade::Failed(why) => eprintln!("  {name:<8} {:<20} {why}", grade.label()),
