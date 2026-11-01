@@ -161,7 +161,7 @@ where
 
 /// The magnitude bit-plane count `Mb` for subband index `band` (ISO E-2):
 /// `guard_bits + ε_b − 1`, where the exponent `ε_b` comes from the shared
-/// [`Qcd::subband_step`] mapping (so it always matches the dequant step).
+/// [`Qcd::subband_step`](crate::codestream::markers::Qcd::subband_step) mapping (so it always matches the dequant step).
 ///
 /// `Mb` depends only on the component's quantization parameters, never on its
 /// bit depth `R_I` — the depth enters the *step size* (E-3), not the bit-plane
