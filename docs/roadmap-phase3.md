@@ -204,8 +204,8 @@ Decisions baked in, each with its reason:
   rest). `METH > 2` makes the whole box ignorable; if nothing usable is left,
   `ColourSpace::Unknown`.
 - **`ihdr.BPC` and `bpcc` are read and cross-checked but SIZ is the truth** for
-  depth and sign, as in OpenJPEG. Width/height and component count must agree
-  with SIZ (below).
+  depth and sign, as in OpenJPEG. Width/height must agree with SIZ; the
+  component count need not, as in OpenJPEG (below).
 - **No colour conversion changes `bit_depth`.** sRGB output of a 16-bit ICC file
   is 16-bit sRGB; the harness does the `>> 8` the ISO references need.
 
@@ -254,7 +254,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header>;
 pub struct Header {
     pub width: u32,
     pub height: u32,
-    pub components: Vec<ComponentInfo>,  // bit_depth, signed, dx, dy
+    pub components: Vec<ComponentInfo>,  // bit_depth, signed, x_sampling, y_sampling
     pub jp2: Option<Jp2Metadata>,        // what `decode` would put on `Image.jp2`
 }
 ```
@@ -344,7 +344,8 @@ machinery.
   compatibility list, else `Unsupported`. The first `jp2c` is the codestream;
   later ones are ignored (I.5.4).
 - `jp2h`: `ihdr` must be present and first (14 bytes); `HEIGHT`/`WIDTH` must
-  equal the SIZ image area and `NC` must equal `Csiz`, else `FileFormat`. The
+  equal the SIZ image area, else `FileFormat` (`NC` may differ from `Csiz`,
+  as in OpenJPEG; relaxed in P3.5 by owner decision, 2026-11-01). The
   other `jp2h` boxes are recognised and parked for P3.2–P3.5.
 - Until P3.3 and P3.4 land, a `jp2h` holding `pclr`, `cmap` or `cdef` is
   `Error::Unsupported` naming the box, so `main` never decodes a JP2 it would
@@ -560,7 +561,7 @@ so and why we differ (or do not).
 | Neither magic | error | reject | `Codestream` ("does not start with the SOC marker") |
 | Signature box wrong length or payload | error | reject | `FileFormat` |
 | `ftyp` missing or not second | error | reject | `FileFormat` |
-| No `jp2 ` in brand or compatibility list | decodes anyway | reject | `Unsupported` (a JPX/JPM we do not read; stricter, because the spec says such a reader may not understand the file and we would be guessing) |
+| No `jp2 ` in brand or compatibility list | decodes anyway | reject | `Unsupported` (a JPX/JPM we do not read; stricter, because the spec says such a reader may not understand the file and we would be guessing; kept as a deliberate deviation by owner decision 2026-11-01, reasoning in correctness.md) |
 | Box length `< 8` (or `< 16` with `XLBox`) | error | reject | `FileFormat` |
 | Box runs past its parent or the file | error | reject | `FileFormat` (truncation) |
 | `jp2c` runs past the end of the file | decodes (the codestream is read to its end) | clamped to the file, decodes | none (match oracle); the codestream parser still rejects a codestream that is cut short |
@@ -573,8 +574,9 @@ so and why we differ (or do not).
 | `jp2c` before `jp2h` | error | reject | `FileFormat` |
 | `ihdr` missing or not 14 bytes | error | reject | `FileFormat` |
 | `ihdr` not first in `jp2h` | decodes | decodes | none (match oracle; I.5.3.1 says first, but nothing depends on the order) |
-| `ihdr` W/H `!=` SIZ image area | error | reject | `FileFormat` |
-| `ihdr.NC != Csiz` | not checked | reject | `FileFormat`; stricter: palette and `cdef` index against `NC`, so a lie here steers the channel mapping. Relax if a real file trips it. |
+| `ihdr` W/H `!=` SIZ image area | error | reject | `FileFormat`, before any tile-part is read |
+| `ihdr.NC != Csiz` | not checked | decodes, the codestream decides | none (match oracle, owner decision 2026-11-01); `bpcc` is still held to `NC`, and `cmap` and `cdef` are checked against the codestream's components, as OpenJPEG checks them |
+| `ihdr` width, height or `NC` of 0, or `NC > 16384` | error | reject | `FileFormat` (match oracle) |
 | `ihdr.BPC` or `bpcc` disagree with SIZ depth | not checked | accept, SIZ wins | none (match oracle) |
 | Second `ihdr` | ignored with warning | ignored | none (match oracle; spec says one) |
 | Second `colr` | ignored | ignored | none (I.5.3.3) |
@@ -604,6 +606,11 @@ so and why we differ (or do not).
 | `cdef N = 0`, truncated, `Cn` or `Asoc-1` out of range, incomplete list | error | reject | `FileFormat` |
 | `cdef Typ` not 0/1/2/65535 | passed through | `Other(n)` | none |
 | Unknown box anywhere | skipped | skipped | none |
+| `res ` malformed: a `resc`/`resd` not 10 bytes, a child with a bad length or past the end of `res `, garbage contents | `res ` never read: decodes | decodes; the malformed `resc`/`resd` is reported as absent, a fault in the child walk ends that `res ` | none (match oracle); each shape measured with `opj_decompress` |
+| `resc`/`resd` with a zero denominator | never read | reported as stored | none; `Ratio::grid_points_per_metre` is `None` |
+| `uuid` shorter than its 16-byte identifier | never read | skipped, not reported | none (match oracle) |
+| `xml `/`uuid` after `jp2c` | never read | collected as far as the after-`jp2c` walk goes | none; collecting them never fails a decode |
+| `ihdr` W/H wrong and the codestream truncated | error at SIZ ("IHDR w(769) … vs. SIZ w(768)") | `FileFormat` | none (match oracle): the header is checked before any tile-part is read |
 | `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none for `pclr`/`cmap` (applied); `Unsupported` for `cdef` until applied, the same guard as inside `jp2h` |
 | The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |
 | Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`, a short `colr`, a wrong-length `bpcc`, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a `cmap` without `pclr`, a second `pclr` or `cmap`) fails OpenJPEG but decodes here, and a `pclr`/`cmap` there is never applied |
@@ -646,7 +653,7 @@ part of the gate.
   codestream themselves is unaffected (they still pass the payload), but one
   that starts passing the `.jp2` gets more channels than before. Documented in
   the changelog and on `Image.jp2`.
-- **Stricter-than-oracle rows** (`NC != Csiz`, non-`jp2 `-compatible brand,
+- **Stricter-than-oracle rows** (non-`jp2 `-compatible brand,
   a `jp2c` whose `LBox` is 2..7 or `XLBox` below 16) may refuse real files
   OpenJPEG opens. Each is one `if`; the rule from correctness.md applies: a
   demonstrated real file relaxes the check. Where Annex I is bent in ways

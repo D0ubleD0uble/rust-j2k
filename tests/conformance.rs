@@ -116,6 +116,7 @@ mod harness {
                 oracle_command: "n/a".into(),
                 notes: None,
             },
+            jp2: None,
         }
     }
 

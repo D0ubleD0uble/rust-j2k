@@ -63,3 +63,12 @@ path = "fuzz_targets/jp2_boxes.rs"
 test = false
 doc = false
 bench = false
+
+# `header` drives the public header-only entry point and checks it against
+# `decode` on the same input.
+[[bin]]
+name = "header"
+path = "fuzz_targets/header.rs"
+test = false
+doc = false
+bench = false

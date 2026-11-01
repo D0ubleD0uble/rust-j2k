@@ -1,5 +1,5 @@
 //! Decoder output: the image area on the reference grid, and one integer
-//! component per SIZ component, each in raster order on its own sample grid,
+//! component per output channel, each in raster order on its own sample grid,
 //! plus the metadata a caller needs to interpret the samples (bit depth,
 //! signedness, sub-sampling).
 
@@ -17,8 +17,9 @@ use crate::{Error, Jp2Metadata, Result};
 /// [`Component::width`]/[`Component::height`] can be smaller. With unit
 /// sub-sampling — the common case — they are equal.
 ///
-/// Components are in SIZ order and are independent: no inter-component (color)
-/// transform is applied here.
+/// Components are in output-channel order: SIZ order, except for a JP2
+/// file's palette channels (see [`components`](Self::components)). No
+/// inter-component (colour) transform is applied here.
 ///
 /// The struct is `#[non_exhaustive]`: [`decode`](crate::decode) is the normal
 /// producer, and later metadata can then land as new fields without a breaking
@@ -89,7 +90,8 @@ impl Image {
         }
     }
 
-    /// The component at `index` in SIZ order, or `None` if out of range.
+    /// The component at `index` in [`components`](Self::components) order,
+    /// or `None` if out of range.
     pub fn component(&self, index: usize) -> Option<&Component> {
         self.components.get(index)
     }

@@ -14,7 +14,8 @@
 //!
 //! A JP2 file's codestream decodes the same way, and the file's header comes
 //! back on [`Image::jp2`]. A palettised JP2 file decodes to the palette's
-//! channels. JP2 channel definitions, colour conversion, HTJ2K, and an
+//! channels. [`read_header`] reads the same header without decoding any tile
+//! data. JP2 channel definitions, colour conversion, HTJ2K, and an
 //! encoder are later work, not permanent non-goals.
 //! See `docs/roadmap.md` and `docs/scope.md`.
 //!
@@ -29,11 +30,13 @@
 //!
 //! # Example
 //!
-//! The entire public surface is [`decode`]: codestream or JP2 bytes in, an
-//! [`Image`] out. An [`Image`] is the image area on the reference grid plus one
-//! [`Component`] per codestream component; a sub-sampled component holds fewer
-//! samples than that area, so size sample buffers from the component, not from
-//! the image. Malformed input never panics; it comes back as a typed [`Error`].
+//! The core of the public surface is [`decode`]: codestream or JP2 bytes in,
+//! an [`Image`] out. An [`Image`] is the image area on the reference grid plus
+//! one [`Component`] per output channel: per codestream component, or per
+//! palette channel for a palettised JP2 file. A sub-sampled component holds
+//! fewer samples than that area, so size sample buffers from the component,
+//! not from the image. Malformed input never panics; it comes back as a typed
+//! [`Error`].
 //!
 //! ```
 //! use rust_j2k::{decode, Error};
@@ -67,13 +70,15 @@
 //! the feature map is in `docs/scope.md`.
 #![warn(missing_docs)]
 
-// The pipeline modules are crate-internal: the public API is `decode`, `Image`,
-// `Error`, and `Result`. Keeping the stages private lets each one evolve freely
+// The pipeline modules are crate-internal: the public API is `decode`,
+// `read_header`, their options and output types, `Error`, and `Result`. Keeping
+// the stages private lets each one evolve freely
 // (the roadmap widens all of them) without churning the crate's committed
 // surface, and keeps the docs.rs page to what a caller can actually use.
 pub(crate) mod codestream;
 pub(crate) mod dwt;
 pub(crate) mod error;
+pub(crate) mod header;
 pub(crate) mod image;
 pub(crate) mod jp2;
 pub(crate) mod mct;
@@ -90,12 +95,17 @@ pub(crate) mod tier2;
 pub mod fuzz;
 
 pub use error::{Error, Result};
+pub use header::{ComponentInfo, Header};
 pub use image::{Component, Image};
-pub use jp2::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
+pub use jp2::{
+    Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata, Ratio, Res, Resolution,
+    UuidBox,
+};
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
-/// SIZ component, each on its own sample grid.
+/// output channel, each on its own sample grid. That is one per SIZ component,
+/// in SIZ order, except for a palettised JP2 file (below).
 ///
 /// The input kind is detected from its first bytes. Input that opens with the
 /// `SOC` marker (`FF 4F`) is a codestream. Otherwise, input whose bytes 4..8
@@ -121,6 +131,51 @@ pub use jp2::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metad
 /// rejected the same way, never half-decoded.
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, DecodeOptions::default())
+}
+
+/// Read a JPEG 2000 codestream's or JP2 file's [`Header`] without decoding any
+/// tile data: the image area, each output channel's sample format, and, for a
+/// JP2 file, the same [`Jp2Metadata`] that [`decode`] would put on
+/// [`Image::jp2`].
+///
+/// The input is detected as [`decode`] detects it. The read covers a JP2
+/// file's boxes and the codestream's main header, up to the first tile-part
+/// (`SOT` marker), and stops there, so a file whose tile data is cut short or
+/// missing still has a readable header. Nothing is allocated for the samples.
+///
+/// A fault in what it reads is the same [`Error`] that [`decode`] returns for
+/// that input, since `decode` runs the same checks first. A fault in the tile
+/// data (a broken tile-part, a tile header that changes a component's
+/// wavelet) is only found by `decode`.
+///
+/// ```
+/// use rust_j2k::read_header;
+///
+/// // A codestream's main header is enough: no tile data is needed.
+/// assert!(read_header(b"not a codestream").is_err());
+/// ```
+pub fn read_header(bytes: &[u8]) -> Result<Header> {
+    let options = DecodeOptions::default();
+    if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
+        let prefix = read_jp2_prefix(bytes, options)?;
+        let siz = &prefix.parsed.header.siz;
+        let (width, height) = siz.image_extent_at(0);
+        return Ok(Header {
+            width,
+            height,
+            components: prefix.plans.outputs(siz),
+            jp2: Some(prefix.metadata),
+        });
+    }
+    let parsed = codestream::parse_header(bytes)?;
+    let siz = &parsed.header.siz;
+    let (width, height) = siz.image_extent_at(0);
+    Ok(Header {
+        width,
+        height,
+        components: siz.components.iter().map(ComponentInfo::from).collect(),
+        jp2: None,
+    })
 }
 
 /// Options for [`decode_with`]. The default decodes at full resolution —
@@ -175,28 +230,49 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     decode_codestream(codestream::parse(bytes)?, options)
 }
 
-/// Decode a JP2 file: walk its boxes, decode the codestream they carry, and
-/// attach what the header says about the samples.
-fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
+/// A JP2 file read up to its tile data: the boxes, the codestream's main
+/// header, the channel plans and the metadata. Everything here is checked
+/// before any tile is read, so [`read_header`] and [`decode`] share it and
+/// report a header fault the same way.
+struct Jp2Prefix<'a> {
+    codestream: &'a [u8],
+    parsed: codestream::ParsedHeader,
+    plans: jp2::ChannelPlans,
+    metadata: Jp2Metadata,
+}
+
+/// Read a JP2 file up to its tile data, in OpenJPEG's order: the box walk,
+/// the codestream's main header, `ihdr` against SIZ, then the channel plans.
+fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>> {
     let file = jp2::parse(bytes)?;
-    let cs = codestream::parse(file.codestream)?;
-    jp2::check_against_siz(&file.header, &cs.header.siz)?;
-    let palette = jp2::plan_palette(
+    let parsed = codestream::parse_header(file.codestream)?;
+    let siz = &parsed.header.siz;
+    jp2::check_against_siz(&file.header, siz)?;
+    let plans = jp2::ChannelPlans::plan(
         &file.header,
-        &cs.header.siz,
+        siz,
         options.resolution_reduction,
         options.raw_channels,
     )?;
-    // After the structural checks, so a malformed file reports its fault
-    // rather than an unsupported box.
-    jp2::check_supported(&file.header)?;
+    let metadata = jp2::metadata(&file, &plans, siz)?;
+    Ok(Jp2Prefix {
+        codestream: file.codestream,
+        parsed,
+        plans,
+        metadata,
+    })
+}
+
+/// Decode a JP2 file: read it up to its tile data, decode the codestream,
+/// and apply the channel plans to the samples.
+fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
+    let prefix = read_jp2_prefix(bytes, options)?;
+    let cs = codestream::parse_tiles(prefix.codestream, prefix.parsed)?;
     let image = decode_codestream(cs, options)?;
-    let components = palette.apply(image.components)?;
-    let (components, mut metadata) = jp2::present(file, components)?;
-    palette.describe(&mut metadata);
+    let components = prefix.plans.apply(image.components)?;
     Ok(Image {
         components,
-        jp2: Some(metadata),
+        jp2: Some(prefix.metadata),
         ..image
     })
 }

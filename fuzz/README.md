@@ -33,6 +33,7 @@ fuzz/
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
   fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream
+  fuzz_targets/header.rs        # rust_j2k::read_header(&[u8]), checked against decode
 ```
 
 `decode` must mutate its way through a byte-perfect main header before anything
@@ -62,6 +63,12 @@ Its first byte picks how the `jp2c` box is written (32-bit length, 64-bit
 `ftyp`, and a matching `ihdr` are pinned, so mutations can land on the whole
 top level or only on the `jp2h` children. `jp2.dict` holds the signature and
 every box type.
+
+`header` drives the header-only entry point, `read_header`, and checks it
+against `decode` on the same input: a `read_header` error must be `decode`'s
+error too, and a successful decode must match the header field for field.
+Seed it with both codestreams and JP2 files, and give it the JP2 box
+dictionary.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
@@ -94,6 +101,11 @@ cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_l
 # The JP2 box target, seeded from the ISO/IEC 15444-4 JP2 reader files.
 python3 scripts/gen-jp2-fuzz-seeds.py
 cargo +nightly fuzz run jp2_boxes -- -dict=fuzz/jp2.dict -max_total_time=300
+
+# The header target, seeded with codestreams and JP2 files.
+mkdir -p fuzz/corpus/header
+cp tests/fixtures/*.j2k tests/fixtures/*.jp2 tests/fixtures/jp2_real/*.jp2 fuzz/corpus/header/
+cargo +nightly fuzz run header -- -dict=fuzz/jp2.dict -max_total_time=300
 
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096

@@ -29,7 +29,7 @@ use std::fmt;
 use std::panic;
 use std::path::{Path, PathBuf};
 
-use rust_j2k::{Error, Image};
+use rust_j2k::{Association, ChannelType, ColourSpace, Error, Image, Jp2Metadata, Res};
 use serde::{Deserialize, Serialize};
 
 /// One fixture's oracle snapshot: the decode a trusted reference produced, plus
@@ -45,6 +45,112 @@ pub struct Expected {
     pub components: Vec<ComponentSnapshot>,
     /// Where the fixture came from and how to regenerate this snapshot.
     pub provenance: Provenance,
+    /// For a JP2 fixture, what its header says; checked against
+    /// [`Image::jp2`] when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jp2: Option<Jp2Snapshot>,
+}
+
+/// What a JP2 file's header says, in a form a box dump can be checked against
+/// by hand: the optional `jp2` section of an [`Expected`] snapshot, and the
+/// per-file record in `tests/fixtures/jp2_real/metadata.json`.
+///
+/// ```json
+/// "jp2": {
+///   "colour": "srgb",
+///   "channels": ["colour/1", "colour/2", "colour/3"],
+///   "palette_applied": false,
+///   "resolution": { "capture": [10000, 254, 10000, 254, 0, 0], "display": null },
+///   "xml": [431, 741],
+///   "uuid": [["b14bf8bd083d4b43a5ae8cd7d5a6ce03", 300]]
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Jp2Snapshot {
+    /// `srgb`, `greyscale`, `sycc`, `icc:<profile bytes>`, `enumerated:<n>`
+    /// or `unknown`.
+    pub colour: String,
+    /// One `<type>/<association>` per output channel: `colour/1`,
+    /// `opacity/whole`, `unspecified/none`, `other(7)/other(9)`.
+    pub channels: Vec<String>,
+    pub palette_applied: bool,
+    pub resolution: ResolutionSnapshot,
+    /// The byte length of each top-level `xml ` box, in file order.
+    pub xml: Vec<usize>,
+    /// Each top-level `uuid` box's identifier (lowercase hex) and payload
+    /// length, in file order.
+    pub uuid: Vec<(String, usize)>,
+}
+
+/// `resc` and `resd` as the box stores them: `VRN, VRD, HRN, HRD, VRE, HRE`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolutionSnapshot {
+    pub capture: Option<[i32; 6]>,
+    pub display: Option<[i32; 6]>,
+}
+
+impl Jp2Snapshot {
+    /// The snapshot of decoded metadata, to compare against a recorded one.
+    pub fn of(metadata: &Jp2Metadata) -> Self {
+        let colour = match &metadata.colour {
+            ColourSpace::Srgb => "srgb".to_string(),
+            ColourSpace::Greyscale => "greyscale".to_string(),
+            ColourSpace::Sycc => "sycc".to_string(),
+            ColourSpace::RestrictedIcc(profile) => format!("icc:{}", profile.len()),
+            ColourSpace::Enumerated(n) => format!("enumerated:{n}"),
+            ColourSpace::Unknown => "unknown".to_string(),
+        };
+        let kind = |k: ChannelType| match k {
+            ChannelType::Colour => "colour".to_string(),
+            ChannelType::Opacity => "opacity".to_string(),
+            ChannelType::PremultipliedOpacity => "premultiplied".to_string(),
+            ChannelType::Unspecified => "unspecified".to_string(),
+            ChannelType::Other(n) => format!("other({n})"),
+        };
+        let association = |a: Association| match a {
+            Association::WholeImage => "whole".to_string(),
+            Association::Colour(n) => n.to_string(),
+            Association::None => "none".to_string(),
+            Association::Other(n) => format!("other({n})"),
+        };
+        let res = |r: Option<Res>| {
+            r.map(|r| {
+                let (v, h) = (r.vertical, r.horizontal);
+                [
+                    i32::from(v.numerator),
+                    i32::from(v.denominator),
+                    i32::from(h.numerator),
+                    i32::from(h.denominator),
+                    i32::from(v.exponent),
+                    i32::from(h.exponent),
+                ]
+            })
+        };
+        Jp2Snapshot {
+            colour,
+            channels: metadata
+                .channels
+                .iter()
+                .map(|c| format!("{}/{}", kind(c.kind), association(c.association)))
+                .collect(),
+            palette_applied: metadata.palette_applied,
+            resolution: ResolutionSnapshot {
+                capture: res(metadata.resolution.capture),
+                display: res(metadata.resolution.display),
+            },
+            xml: metadata.xml.iter().map(Vec::len).collect(),
+            uuid: metadata
+                .uuid
+                .iter()
+                .map(|u| {
+                    let hex: String = u.id.iter().map(|b| format!("{b:02x}")).collect();
+                    (hex, u.payload.len())
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The reference-grid image area (`Xsiz - XOsiz` by `Ysiz - YOsiz`).
@@ -337,6 +443,15 @@ pub fn compare(actual: &Image, expected: &Expected) -> Result<(), Mismatch> {
             actual.components.len(),
             expected.components.len(),
         )));
+    }
+
+    if let Some(want) = &expected.jp2 {
+        let got = actual.jp2.as_ref().map(Jp2Snapshot::of);
+        if got.as_ref() != Some(want) {
+            return Err(Mismatch::DecodeError(format!(
+                "JP2 metadata is {got:?} but the snapshot says {want:?}"
+            )));
+        }
     }
 
     for (component_index, (component, want)) in actual

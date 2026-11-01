@@ -37,6 +37,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without a profile, and a `bpcc` box that is not one byte per component are
   `FileFormat` errors, as in OpenJPEG for boxes before the codestream.
 - `Error::FileFormat` for a malformed JP2 box structure.
+- `read_header` returns a codestream's or JP2 file's `Header` (image area,
+  each output channel's `ComponentInfo`, and the same `Jp2Metadata` as
+  `decode`) without decoding any tile data, so a file whose tile data is cut
+  short still has a readable header. A header fault is the same error
+  `decode` returns.
+- `Jp2Metadata` reports the `res ` box's capture and display resolutions
+  (`Resolution`, `Res`, `Ratio`, with `Ratio::grid_points_per_metre`), and
+  every top-level `xml ` and `uuid` box verbatim (`UuidBox`), including those
+  after the codestream. A malformed `res ` never fails a decode, as in
+  OpenJPEG.
 
 ### Fixed
 
@@ -51,6 +61,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A JP2 file used to be `Unsupported`; it now decodes, or fails with
   `FileFormat` when its boxes are malformed.
+- A JP2 file whose `ihdr` component count differs from its codestream's
+  decodes, as in OpenJPEG; the codestream decides the image. An `ihdr` with a
+  zero width, height or component count, or more than 16384 components, is
+  `FileFormat`.
+- A JP2 file's header is checked before its tile data: a file with a header
+  fault and a broken codestream reports the header fault.
+- A codestream component too deep for an `i32` sample is refused as
+  `Unsupported` when the main header is read, before any tile data.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is

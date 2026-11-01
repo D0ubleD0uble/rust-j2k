@@ -144,7 +144,40 @@ impl Codestream<'_> {
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
 pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
+    parse_tiles(bytes, parse_header(bytes)?)
+}
+
+/// A codestream's main header, parsed, with what the tile walk needs to carry
+/// on from it. It reads nothing past the first `SOT` marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedHeader {
+    pub header: MainHeader,
+    /// Offset of the first `SOT` marker, where the tile walk starts.
+    sot_offset: usize,
+    /// The main header's `PPM` packet headers, one chunk per tile-part.
+    ppm: Vec<Vec<u8>>,
+}
+
+/// Parse a codestream's main header, from `SOC` up to the first `SOT` marker,
+/// and stop there: no tile-part header or packet byte is read. [`parse`] is
+/// this followed by [`parse_tiles`].
+pub fn parse_header(bytes: &[u8]) -> Result<ParsedHeader> {
     let (header, sot_offset, ppm) = parse_main_header(bytes)?;
+    Ok(ParsedHeader {
+        header,
+        sot_offset,
+        ppm,
+    })
+}
+
+/// Walk the tile-parts of the codestream whose main header `parsed` holds, and
+/// resolve and check every tile's header.
+pub fn parse_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
+    let ParsedHeader {
+        header,
+        sot_offset,
+        ppm,
+    } = parsed;
     let tiles = walk_tiles(bytes, sot_offset, &header, &ppm)?;
     let codestream = Codestream { header, tiles };
 
@@ -789,6 +822,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     // are `Unsupported`; this is about which reason is useful to read.
     validate_geometry(&siz)?;
     check_sample_budget(&siz)?;
+    check_sample_container(&siz)?;
 
     let mut cod = None;
     let mut qcd = None;
@@ -1057,6 +1091,29 @@ fn check_sample_budget(siz: &Siz) -> Result<()> {
         if total > MAX_IMAGE_SAMPLES {
             return Err(Error::Limit(format!(
                 "components total over {MAX_IMAGE_SAMPLES} samples, above the decode guard"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a component whose sample range does not fit the `i32` container
+/// (unsigned 32 bits, or more than 32), from SIZ alone. It is a header fault,
+/// so it is found before any tile is read, as OpenJPEG finds a depth over 31
+/// bits when it reads SIZ. `image::assemble` repeats the check for headers
+/// built by hand.
+fn check_sample_container(siz: &Siz) -> Result<()> {
+    for (index, comp) in siz.components.iter().enumerate() {
+        let fits = if comp.signed {
+            comp.bit_depth <= 32
+        } else {
+            comp.bit_depth <= 31
+        };
+        if !fits {
+            return Err(Error::Unsupported(format!(
+                "component {index} depth {} ({}) exceeds the i32 sample container",
+                comp.bit_depth,
+                if comp.signed { "signed" } else { "unsigned" }
             )));
         }
     }

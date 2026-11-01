@@ -52,3 +52,10 @@ The test's oracle is the file's own codestream: `decode` of the `.jp2` must
 equal `decode` of its first `jp2c` box's contents. The five files without a
 `cdef` box were also checked by hand against `opj_decompress` 2.5.0 (`-i
 <file>.jp2 -o <file>.pgx`, one PGX per component): every sample matched.
+
+`metadata.json` records what each of those five files' header says (colour,
+channels, resolution, top-level `xml ` and `uuid` boxes), in the `jp2`
+snapshot schema of `tests/fixtures/README.md`. The values come from a box dump
+of each file (the `colr` `EnumCS`, the `resc`/`resd` fields, the top-level
+`xml ` and `uuid` box sizes and identifiers), not from this decoder. Both
+`decode` and `read_header` must report them.

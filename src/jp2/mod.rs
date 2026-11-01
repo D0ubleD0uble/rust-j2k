@@ -9,13 +9,21 @@
 //! jp2c the codestream (the first one; later ones are ignored, I.5.4)
 //! ```
 //!
-//! Other boxes are skipped. [`parse`] walks the boxes up to the first `jp2c`
-//! and hands back the codestream slice with the header boxes; the codestream
-//! stage decodes the slice as it would a raw codestream. [`check_against_siz`]
-//! then holds `ihdr` to the codestream's SIZ, [`plan_palette`] plans the
-//! palette (see [`palette`]), [`check_supported`] refuses the header boxes not
-//! applied yet, and [`present`] builds the [`Jp2Metadata`] that rides on the
-//! [`Image`](crate::Image).
+//! Other boxes are skipped without being descended into: `uinf`, `jp2i`, the
+//! JPX boxes (`rreq`, `jpch`, `jplh`, `asoc`, `lbl `, `ftbl`) and anything
+//! unknown. Only `jp2h` and `res ` are entered. The top-level `xml ` and
+//! `uuid` boxes are passed through verbatim, including those after the
+//! codestream.
+//!
+//! [`parse`] walks the boxes up to the first `jp2c` and hands back the
+//! codestream slice with the header boxes. The rest runs before any tile data
+//! is read, so `read_header` shares it with `decode`: the codestream's main
+//! header is parsed, [`check_against_siz`] holds `ihdr` to its SIZ,
+//! [`ChannelPlans::plan`] plans the output channels (the palette, see
+//! [`palette`], then the guard on the header boxes not applied yet), and
+//! [`metadata`] builds the [`Jp2Metadata`] that rides on the
+//! [`Image`](crate::Image). Only then are the tiles decoded and the plans
+//! applied to their samples.
 //!
 //! For these ways a file can bend Annex I, the walk does what OpenJPEG 2.5.0
 //! does: `ihdr` may sit anywhere in `jp2h`, a second `jp2h` before the
@@ -23,7 +31,7 @@
 //! level after `jp2h` is applied as if it were inside, and a `jp2c` that runs
 //! past the end of the file is clamped to it. The walk stops at the first
 //! `jp2c`; after it, only the two length faults OpenJPEG rejects there are
-//! checked ([`boxes::check_after_codestream`]). The two decoders still differ
+//! checked ([`boxes::walk_after_codestream`]). The two decoders still differ
 //! on some files, in both directions; `docs/correctness.md` and the reject
 //! matrix in `docs/roadmap-phase3.md` list where.
 //!
@@ -37,19 +45,23 @@ mod colour;
 mod header;
 mod metadata;
 mod palette;
+mod resolution;
 
 #[cfg(test)]
 mod colour_tests;
 #[cfg(test)]
 mod tests;
 
-pub use metadata::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
-pub(crate) use palette::plan as plan_palette;
+pub use metadata::{
+    Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata, Ratio, Res, Resolution,
+    UuidBox,
+};
 
 use crate::codestream::markers::Siz;
-use crate::{Component, Error, Result};
-use boxes::{Boxes, Jp2Box, check_after_codestream};
+use crate::{Component, ComponentInfo, Error, Result};
+use boxes::{Boxes, Jp2Box, walk_after_codestream};
 use header::{Jp2Header, check_file_type};
+use palette::PalettePlan;
 
 /// The JP2 signature box (I.5.1): length 12, type `jP  `, contents
 /// `0D 0A 87 0A`.
@@ -78,9 +90,10 @@ pub(crate) struct Jp2File<'a> {
     /// and the like, and header boxes misplaced before `jp2h`, which OpenJPEG
     /// ignores), in file order.
     pub(crate) other: Vec<Jp2Box<'a>>,
-    /// Everything after the first `jp2c` box. Only checked for the length
-    /// faults OpenJPEG rejects there; its contents are not read.
-    pub(crate) after_codestream: &'a [u8],
+    /// The whole boxes after the first `jp2c` box, as far as OpenJPEG's walk
+    /// there follows them (see [`walk_after_codestream`]). Only their `xml `
+    /// and `uuid` boxes are read.
+    pub(crate) after_codestream: Vec<Jp2Box<'a>>,
 }
 
 /// Walk a JP2 file's top-level boxes to the first `jp2c`.
@@ -130,8 +143,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                         "the file has no `jp2h` header box before its `jp2c` codestream box".into(),
                     ));
                 };
-                let after_codestream = boxes.rest();
-                check_after_codestream(after_codestream)?;
+                let after_codestream = walk_after_codestream(boxes.rest())?;
                 colour::check_bpcc(&header)?;
                 let colour = colour::read(&header)?;
                 return Ok(Jp2File {
@@ -167,7 +179,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
 /// never decoded into channels it would present wrongly. `header` holds the
 /// boxes inside every `jp2h` and those misplaced at the top level after it, so
 /// this one check covers both places OpenJPEG applies them from.
-pub(crate) fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
+fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
     if !header.cdef().is_empty() {
         return Err(Error::Unsupported(
             "the file has a `cdef` box, which this decoder does not apply".into(),
@@ -177,9 +189,9 @@ pub(crate) fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
 }
 
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image
-/// area and `NC` must equal `Csiz` (I.5.3.1). OpenJPEG checks the area but not
-/// `NC`; palette and channel definitions index components by `NC`, so a file
-/// whose header disagrees with its codestream is refused.
+/// area (I.5.3.1), as OpenJPEG requires. `NC` is not held to `Csiz`: OpenJPEG
+/// lets the codestream decide the image, and the palette's `cmap` and the
+/// channel definitions are checked against the codestream's components.
 pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()> {
     let ihdr = &header.ihdr;
     let (width, height) = siz.image_extent_at(0);
@@ -189,30 +201,82 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
             ihdr.width, ihdr.height
         )));
     }
-    if usize::from(ihdr.components) != siz.components.len() {
-        return Err(Error::FileFormat(format!(
-            "`ihdr` declares {} components but the codestream's SIZ declares {}",
-            ihdr.components,
-            siz.components.len()
-        )));
-    }
     Ok(())
 }
 
-/// Describe the file's output channels: the decoded components, after the
-/// palette when one was applied. Every channel is colour `i + 1`.
-pub(crate) fn present(
-    file: Jp2File<'_>,
-    components: Vec<Component>,
-) -> Result<(Vec<Component>, Jp2Metadata)> {
-    let colour = file.colour;
-    let channels = colour_channels(components.len())?;
-    let metadata = Jp2Metadata {
-        colour,
-        channels,
+/// What the header boxes do to a file's channels, worked out from the boxes
+/// and the codestream's main header before any tile is decoded. The palette
+/// is planned first; channel definitions, once applied, plan after it on the
+/// palette's output channels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChannelPlans {
+    palette: PalettePlan,
+}
+
+impl ChannelPlans {
+    /// Plan the channels for a decode at `reduction` resolution levels down.
+    /// The palette is planned before the guard on the boxes not applied yet,
+    /// so a malformed palette reports its fault rather than an unsupported box.
+    pub(crate) fn plan(
+        header: &Jp2Header<'_>,
+        siz: &Siz,
+        reduction: u8,
+        raw_channels: bool,
+    ) -> Result<Self> {
+        let palette = palette::plan(header, siz, reduction, raw_channels)?;
+        // Channel definitions (`cdef`) plan here, on the palette's output.
+        check_supported(header)?;
+        Ok(ChannelPlans { palette })
+    }
+
+    /// The output channels' formats, in output order.
+    pub(crate) fn outputs(&self, siz: &Siz) -> Vec<ComponentInfo> {
+        self.palette.output_channels(siz)
+    }
+
+    /// Build the output channels from the decoded components.
+    pub(crate) fn apply(&self, components: Vec<Component>) -> Result<Vec<Component>> {
+        self.palette.apply(components)
+    }
+}
+
+/// The file's metadata, from its boxes and the channel plans alone: no
+/// sample is needed. `siz` is the codestream's.
+pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> Result<Jp2Metadata> {
+    let (xml, uuid) = passthrough(file);
+    let mut metadata = Jp2Metadata {
+        colour: file.colour.clone(),
+        channels: colour_channels(plans.outputs(siz).len())?,
         palette_applied: false,
+        resolution: resolution::read(&file.header),
+        xml,
+        uuid,
     };
-    Ok((components, metadata))
+    plans.palette.describe(&mut metadata);
+    Ok(metadata)
+}
+
+/// The top-level `xml ` and `uuid` boxes in file order: those before the
+/// codestream, then those after it. A `uuid` box too short for its 16-byte
+/// identifier is skipped. Every copy is of bytes in the input, so together
+/// they are bounded by its length.
+fn passthrough(file: &Jp2File<'_>) -> (Vec<Vec<u8>>, Vec<UuidBox>) {
+    let (mut xml, mut uuid) = (Vec::new(), Vec::new());
+    for item in file.other.iter().chain(&file.after_codestream) {
+        match &item.kind {
+            b"xml " => xml.push(item.payload.to_vec()),
+            b"uuid" => {
+                if let Some((id, payload)) = item.payload.split_first_chunk::<16>() {
+                    uuid.push(UuidBox {
+                        id: *id,
+                        payload: payload.to_vec(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    (xml, uuid)
 }
 
 /// The channel definitions of a file without `cdef`: channel `i` is colour
