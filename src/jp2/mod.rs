@@ -32,9 +32,12 @@
 //! [`Error::Unsupported`].
 
 mod boxes;
+mod colour;
 mod header;
 mod metadata;
 
+#[cfg(test)]
+mod colour_tests;
 #[cfg(test)]
 mod tests;
 
@@ -64,6 +67,8 @@ pub(crate) struct Jp2File<'a> {
     /// The `jp2h` contents, merged over every `jp2h` box and every header box
     /// misplaced at the top level after the first `jp2h`.
     pub(crate) header: Jp2Header<'a>,
+    /// The colour space the header declares (see [`colour::read`]).
+    pub(crate) colour: ColourSpace,
     /// The first `jp2c` box's contents: the codestream.
     pub(crate) codestream: &'a [u8],
     /// The other top-level boxes before the codestream (`xml `, `uuid`, `rreq`
@@ -124,8 +129,11 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                 };
                 let after_codestream = boxes.rest();
                 check_after_codestream(after_codestream)?;
+                colour::check_bpcc(&header)?;
+                let colour = colour::read(&header)?;
                 return Ok(Jp2File {
                     header,
+                    colour,
                     codestream: item.payload,
                     other,
                     after_codestream,
@@ -162,13 +170,13 @@ pub(crate) fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
             "the file has a `{name}` box, which this decoder does not apply"
         )))
     };
-    if !header.pclr.is_empty() {
+    if !header.pclr().is_empty() {
         return unsupported("pclr");
     }
-    if !header.cmap.is_empty() {
+    if !header.cmap().is_empty() {
         return unsupported("cmap");
     }
-    if !header.cdef.is_empty() {
+    if !header.cdef().is_empty() {
         return unsupported("cdef");
     }
     Ok(())
@@ -198,13 +206,13 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
 }
 
 /// Turn the decoded codestream components into the file's output channels and
-/// describe them. The channels are the components as coded: no palette, every
-/// channel colour `i + 1`, and the colour space not read.
+/// describe them. The channels are the components as coded: no palette and
+/// every channel colour `i + 1`.
 pub(crate) fn present(
-    _file: &Jp2File<'_>,
+    file: Jp2File<'_>,
     components: Vec<Component>,
 ) -> Result<(Vec<Component>, Jp2Metadata)> {
-    let colour = ColourSpace::Unknown;
+    let colour = file.colour;
     let channels = colour_channels(components.len())?;
     let metadata = Jp2Metadata {
         colour,
