@@ -14,7 +14,8 @@
 //! to pass must be added to [`IN_CLASS`].
 //! Entries marked `needs_srgb` wait for the sRGB output option; flip
 //! [`SRGB_OUTPUT_AVAILABLE`] (and `options_for` in `support/jp2.rs`) when it
-//! exists.
+//! exists. Until then, those that decode are graded bit-exactly as coded
+//! against their `as_coded` references.
 
 mod support;
 
@@ -28,7 +29,8 @@ use support::pgx::parse_pgx;
 const IN_CLASS: &[&str] = &["file1", "file4", "file6", "file9"];
 
 /// Whether the decoder can produce sRGB output. While `false`, `needs_srgb`
-/// entries that decode report *needs sRGB output* and are not graded.
+/// entries that decode report *needs sRGB output*, after an as-coded check
+/// where the manifest has references.
 const SRGB_OUTPUT_AVAILABLE: bool = false;
 
 fn jp2_dir() -> PathBuf {
@@ -64,6 +66,72 @@ fn every_jp2_reference_parses() {
         parsed, 21,
         "six colour files x3 planes, three grey files x1"
     );
+}
+
+/// The as-coded references exist for files 3, 5, 7 and 8, one per codestream
+/// component, at the component's own size and depth (file3's chroma is not
+/// upsampled).
+#[test]
+fn the_as_coded_references_match_the_codestream_layout() {
+    let dir = jp2_dir();
+    let mut with_refs = Vec::new();
+    for entry in load_manifest(&dir).entries {
+        let Some(as_coded) = &entry.as_coded else {
+            continue;
+        };
+        with_refs.push(entry.index);
+        assert!(entry.needs_srgb, "{}: only needs_srgb entries", entry.file);
+        let f = &entry.features;
+        assert_eq!(as_coded.references.len(), f.components as usize);
+        for (k, path) in as_coded.references.iter().enumerate() {
+            assert_eq!(
+                *path,
+                format!("references/jp2_{}_ascoded_{k}.pgx", entry.index)
+            );
+            let pgx = parse_pgx(&std::fs::read(dir.join(path)).expect("read")).expect("parse");
+            let [dx, dy] = f.subsampling[k];
+            assert_eq!(pgx.width, f.width.div_ceil(dx), "{path}: width");
+            assert_eq!(pgx.height, f.height.div_ceil(dy), "{path}: height");
+            assert_eq!(
+                (u32::from(pgx.bit_depth), pgx.signed),
+                (f.precision[k], f.signed[k]),
+                "{path}"
+            );
+        }
+    }
+    assert_eq!(with_refs, [3, 5, 7, 8]);
+}
+
+/// One wrong sample in the decoded output fails the as-coded grade, and so
+/// does a missing component.
+#[test]
+fn the_as_coded_grade_catches_a_changed_sample() {
+    use support::jp2::grade_as_coded;
+    let dir = jp2_dir();
+    for entry in load_manifest(&dir).entries {
+        let Some(as_coded) = &entry.as_coded else {
+            continue;
+        };
+        let bytes = std::fs::read(dir.join(&entry.file)).expect("read jp2");
+        let image = rust_j2k::decode(&bytes).expect("decode");
+        let name = entry.name();
+        grade_as_coded(&dir, as_coded, &image.components)
+            .unwrap_or_else(|why| panic!("{name}: {why}"));
+
+        // Flip the first sample of the first component, then the last of the last.
+        for index in [0, image.components.len() - 1] {
+            let mut components = image.components.clone();
+            let samples = &mut components[index].samples;
+            let at = if index == 0 { 0 } else { samples.len() - 1 };
+            samples[at] ^= 1;
+            assert!(
+                grade_as_coded(&dir, as_coded, &components).is_err(),
+                "{name}: a changed sample in component {index} went unnoticed"
+            );
+        }
+        let short = &image.components[..image.components.len() - 1];
+        assert!(grade_as_coded(&dir, as_coded, short).is_err(), "{name}");
+    }
 }
 
 /// The manifest records what the issue and OpenJPEG's conformance run say, so
@@ -143,6 +211,14 @@ fn the_manifest_rejects_unknown_keys() {
         &|v| v["entries"][0]["boxes"]["surprise"] = 1.into(),
         "in boxes",
     );
+    let i = value["entries"]
+        .as_array()
+        .and_then(|e| e.iter().position(|x| x.get("as_coded").is_some()))
+        .expect("an entry with as_coded");
+    reject(
+        &|v| v["entries"][i]["as_coded"]["surprise"] = 1.into(),
+        "in as_coded",
+    );
 }
 
 /// The shift is arithmetic and takes the depth down with it.
@@ -173,8 +249,13 @@ fn committed_bytes_match_the_manifest_digests() {
     let dir = jp2_dir();
     for entry in load_manifest(&dir).entries {
         assert_eq!(entry.reference_digests.len(), entry.references.len());
+        let as_coded = entry.as_coded.iter().flat_map(|a| {
+            assert_eq!(a.reference_digests.len(), a.references.len());
+            a.references.iter().zip(&a.reference_digests)
+        });
         let files = std::iter::once((&entry.file, &entry.file_digest))
-            .chain(entry.references.iter().zip(&entry.reference_digests));
+            .chain(entry.references.iter().zip(&entry.reference_digests))
+            .chain(as_coded);
         for (path, digest) in files {
             let bytes = std::fs::read(dir.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
             assert_eq!(bytes.len() as u64, digest.size, "{path}: size");
