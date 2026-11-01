@@ -13,9 +13,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ftyp` with `jp2 ` compatibility, `jp2h` with an `ihdr` that matches the
   codestream) and the first `jp2c` codestream is decoded. Files that bend the
   box rules the way OpenJPEG tolerates decode as they do there: `ihdr`
-  anywhere in `jp2h`, a second `jp2h`, a `jp2c` whose length runs past the end
-  of the file, and loose bytes after the codestream. A file that is not
-  JP2-compatible is `Unsupported`.
+  anywhere in `jp2h`, a second `jp2h`, and a `jp2c` whose length is wrong
+  (past the end of the file, `LBox` 2..7, `XLBox` below 16, or shorter than
+  its codestream), since the codestream ends where its tile-parts end. A file
+  that is not JP2-compatible is `Unsupported`.
+- The boxes after the codestream are read as OpenJPEG reads them after
+  decoding. Unknown boxes there are skipped, but a malformed header box is
+  `FileFormat`: a second signature or `ftyp`, a `jp2h` without `ihdr`, a bad
+  `colr`, `bpcc`, `pclr`, `cmap` or `cdef`, or a box shorter than its header.
+  That includes junk after the `EOC` of a `jp2c` with `LBox` 0, and padding
+  inside a `jp2c` that reads as a bad box.
 - A JP2 file with a palette (`pclr` + `cmap`) decodes to the palette's
   channels, one per palette column, with each channel's depth and sign from the
   palette. What is accepted and the output samples follow OpenJPEG, so a

@@ -112,6 +112,71 @@ fn unknown_boxes(count: usize) -> Vec<u8> {
     header_only(8, b"zzzz").repeat(count)
 }
 
+/// The fixture codestream split into two tile-parts, the last with
+/// `Psot = 0`, still ending in `EOC`.
+fn two_parts_last_open() -> Vec<u8> {
+    let sot = CODESTREAM
+        .windows(2)
+        .position(|w| w == [0xFF, 0x90])
+        .expect("the fixture has a tile-part");
+    let data = &CODESTREAM[sot + 14..CODESTREAM.len() - 2];
+    let (first, second) = data.split_at(data.len() / 2);
+    let part = |index: u8, data: &[u8], psot: u32| {
+        let mut out = vec![0xFF, 0x90, 0, 10, 0, 0];
+        out.extend_from_slice(&psot.to_be_bytes());
+        out.extend_from_slice(&[index, 2, 0xFF, 0x93]);
+        out.extend_from_slice(data);
+        out
+    };
+    let first_psot = u32::try_from(14 + first.len()).unwrap();
+    [
+        &CODESTREAM[..sot],
+        &part(0, first, first_psot),
+        &part(1, second, 0),
+        &[0xFF, 0xD9][..],
+    ]
+    .concat()
+}
+
+/// A `Psot = 0` last tile-part followed by more bytes in the slice it runs
+/// to: the `jp2c` box does not end at its `EOC` (no `EOC`, `LBox` 0, or a
+/// wrong length). OpenJPEG 2.5.0 decodes each, ignoring the bytes past the
+/// last packet; the codestream parser rejects them. The policy is pending
+/// (#183), so these rows pin today's `Codestream`.
+fn open_last_part_then_more() -> Vec<(&'static str, Vec<u8>)> {
+    let with_eoc = psot_zero_codestream();
+    let without_eoc = &with_eoc[..with_eoc.len() - 2];
+    let xml = bx(b"xml ", b"<a>hello</a>");
+    let bad_colr = bx(b"colr", &[1, 0]);
+    let prefix = file(&[jp2_ftyp(), good_jp2h()]);
+    let short = |lbox: u32, codestream: &[u8], tail: &[u8]| {
+        [&prefix[..], &header_only(lbox, b"jp2c"), codestream, tail].concat()
+    };
+    vec![
+        (
+            "no EOC, then an xml box",
+            [&prefix[..], &bx(b"jp2c", without_eoc), &xml].concat(),
+        ),
+        ("LBox 108, then an xml box", short(108, &with_eoc, &xml)),
+        (
+            "LBox 108, then a short colr",
+            short(108, &with_eoc, &bad_colr),
+        ),
+        (
+            "two tile-parts, LBox 200, then a short colr",
+            short(200, &two_parts_last_open(), &bad_colr),
+        ),
+        (
+            "LBox 0 holding the codestream and an xml box",
+            [
+                &prefix[..],
+                &open_box(b"jp2c", &[&with_eoc[..], &xml].concat()),
+            ]
+            .concat(),
+        ),
+    ]
+}
+
 /// `depth` `asoc` superboxes nested in one another.
 fn nested_asoc(depth: usize) -> Vec<u8> {
     (0..depth).fold(bx(b"xml ", b"<deep/>"), |inner, _| bx(b"asoc", &inner))
@@ -788,6 +853,14 @@ fn every_robustness_table_row_has_its_outcome() {
             Limit,
         ),
     ];
+    let rows: Vec<(String, Vec<u8>, Mode, Outcome)> = rows
+        .into_iter()
+        .map(|(what, bytes, mode, want)| (what.to_string(), bytes, mode, want))
+        .chain(open_last_part_then_more().into_iter().map(|(what, bytes)| {
+            let what = format!("Psot = 0 then more bytes: {what}");
+            (what, bytes, Default, Codestream)
+        }))
+        .collect();
     let mut wrong = Vec::new();
     for (what, bytes, mode, want) in &rows {
         let got = outcome(match mode {
@@ -802,5 +875,25 @@ fn every_robustness_table_row_has_its_outcome() {
         wrong.is_empty(),
         "rows off the table:\n{}",
         wrong.join("\n")
+    );
+}
+
+/// The `Psot = 0` rows fail on the bytes past the last packet, and without
+/// the trailing bytes the split codestream decodes.
+#[test]
+fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
+    for (what, bytes) in open_last_part_then_more() {
+        match decode(&bytes) {
+            Err(Error::Codestream(message)) => assert!(
+                message.contains("left after the last packet"),
+                "{what}: {message}"
+            ),
+            other => panic!("{what}: expected Codestream, got {other:?}"),
+        }
+    }
+    let two_parts = file(&[jp2_ftyp(), good_jp2h(), bx(b"jp2c", &two_parts_last_open())]);
+    assert_eq!(
+        decode(&two_parts).expect("decodes").components,
+        raw().components
     );
 }

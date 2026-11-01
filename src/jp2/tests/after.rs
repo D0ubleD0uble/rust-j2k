@@ -443,3 +443,33 @@ fn nothing_after_a_codestream_whose_last_tile_part_runs_to_the_end_is_read() {
     bytes.extend_from_slice(&codestream);
     assert_eq!(decode(&bytes).expect("decodes").components, raw.components);
 }
+
+/// Padding inside a `jp2c` box longer than its codestream is walked for
+/// OpenJPEG's reads, but the `xml ` and `uuid` boxes after the box are still
+/// found by the box's length. Both files decode in OpenJPEG 2.5.0.
+#[test]
+fn padding_inside_the_codestream_box_does_not_hide_later_metadata() {
+    let xml = bx(b"xml ", b"<a>hello</a>");
+    for (what, padding) in [
+        ("zeros", vec![0; 8]),
+        ("junk", [0x12, 0x34, 0x56, 0x78].repeat(4)),
+    ] {
+        let bytes = [
+            file(&[
+                jp2_ftyp(),
+                good_jp2h(),
+                bx(b"jp2c", &[CODESTREAM, &padding].concat()),
+            ]),
+            xml.clone(),
+        ]
+        .concat();
+        let image = decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let metadata = image.jp2.expect("a JP2 file");
+        assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()], "{what}");
+        assert_eq!(read_header(&bytes).unwrap().jp2, Some(metadata), "{what}");
+    }
+    // A `jp2c` shorter than its codestream: the boxes after `EOC` are found.
+    let short = with_jp2c_length(108, &xml);
+    let metadata = decode(&short).expect("decodes").jp2.expect("a JP2 file");
+    assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
+}

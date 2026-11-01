@@ -100,11 +100,16 @@ pub(crate) struct Jp2File<'a> {
     /// and the like, and header boxes misplaced before `jp2h`, which OpenJPEG
     /// ignores), in file order.
     pub(crate) other: Vec<Jp2Box<'a>>,
-    /// The whole boxes after the codestream, as far as OpenJPEG's walk there
-    /// follows them (see [`walk_after_codestream`]). Their `xml ` and `uuid`
-    /// boxes are passed through; when [`Jp2File::after_read`] is set,
+    /// The whole boxes after the codestream, from just after its last
+    /// tile-part, as far as OpenJPEG's walk there follows them (see
+    /// [`walk_after_codestream`]). When [`Jp2File::after_read`] is set,
     /// [`after::check`] reads the header boxes among them.
     pub(crate) after_codestream: Vec<Jp2Box<'a>>,
+    /// The whole boxes after both the codestream and the `jp2c` box, walked
+    /// the same way. Their `xml ` and `uuid` boxes are passed through. This
+    /// differs from `after_codestream` when the box is longer than its
+    /// codestream: padding inside the box is skipped by its length here.
+    pub(crate) after_box: Vec<Jp2Box<'a>>,
     /// Whether OpenJPEG reads the boxes after the codestream: true when the
     /// codestream's end was found from its tile-part lengths. When the last
     /// tile-part runs to the end of the file, OpenJPEG's walk starts at the
@@ -168,12 +173,20 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                 let (codestream, rest, after_read) =
                     locate_codestream(bytes, item.payload, boxes.rest());
                 let after = walk_after_codestream(rest);
+                // Both are ends of the file; the shorter starts later.
+                let past_box = boxes.rest();
+                let after_box = if past_box.len() < rest.len() {
+                    walk_after_codestream(past_box).boxes
+                } else {
+                    after.boxes.clone()
+                };
                 return Ok(Jp2File {
                     header,
                     colour,
                     codestream,
                     other,
                     after_codestream: after.boxes,
+                    after_box,
                     after_read,
                     after_fault: after.fault,
                 });
@@ -310,7 +323,7 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
 /// they are bounded by its length.
 fn passthrough(file: &Jp2File<'_>) -> (Vec<Vec<u8>>, Vec<UuidBox>) {
     let (mut xml, mut uuid) = (Vec::new(), Vec::new());
-    for item in file.other.iter().chain(&file.after_codestream) {
+    for item in file.other.iter().chain(&file.after_box) {
         match &item.kind {
             b"xml " => xml.push(item.payload.to_vec()),
             b"uuid" => {

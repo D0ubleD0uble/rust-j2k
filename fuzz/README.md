@@ -68,7 +68,9 @@ every box type.
 against `decode` on the same input: a `read_header` error must be `decode`'s
 error too, and a successful decode must match the header field for field.
 A decode costs far more than the header, so once the header reads, inputs
-over 64 KiB or images over 2^16 samples are not decoded. Seed it with the
+over 64 KiB or images over 2^16 samples are not decoded. For those inputs the
+target checks `read_header` alone: it does not compare a successful header
+with a successful decode field by field. Seed it with the
 small synthetic codestreams and JP2 files, and give it the JP2 box
 dictionary.
 
