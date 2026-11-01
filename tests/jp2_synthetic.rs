@@ -8,7 +8,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use rust_j2k::{DecodeOptions, decode, decode_with};
+use rust_j2k::{Association, ChannelDefinition, ChannelType, DecodeOptions, decode, decode_with};
 use support::{Expected, compare};
 
 fn dir() -> PathBuf {
@@ -62,6 +62,11 @@ fn the_fixture_set_is_complete() {
     assert_eq!(
         names,
         [
+            "jp2_cdef_alpha_first",
+            "jp2_cdef_palette",
+            "jp2_cdef_reversed",
+            "jp2_cdef_rgba",
+            "jp2_cdef_unspecified",
             "jp2_palette_12bit",
             "jp2_palette_8bit",
             "jp2_palette_clamp",
@@ -85,8 +90,83 @@ fn every_fixture_matches_its_oracle_bit_exactly() {
             panic!("{name}: {mismatch}");
         }
         let jp2 = image.jp2.as_ref().expect("JP2 metadata");
-        assert!(jp2.palette_applied, "{name}");
+        let stem = path.file_stem().unwrap().to_string_lossy();
+        let palette = stem.starts_with("jp2_palette") || stem == "jp2_cdef_palette";
+        assert_eq!(jp2.palette_applied, palette, "{name}");
         assert_eq!(jp2.channels.len(), image.components.len(), "{name}");
+    }
+}
+
+/// The `cdef` box of a file, as `(Cn, Typ, Asoc)` triples: a test-side read
+/// of the first one inside `jp2h`.
+fn cdef_entries(bytes: &[u8]) -> Vec<(u16, u16, u16)> {
+    let boxes = |data: &[u8]| {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at + 8 <= data.len() {
+            let length = u32::from_be_bytes(data[at..at + 4].try_into().unwrap()) as usize;
+            out.push((
+                data[at + 4..at + 8].to_vec(),
+                data[at + 8..at + length].to_vec(),
+            ));
+            at += length;
+        }
+        out
+    };
+    let top = boxes(&bytes[12..]);
+    let (_, jp2h) = top.iter().find(|(kind, _)| kind == b"jp2h").unwrap();
+    let (_, cdef) = boxes(jp2h)
+        .into_iter()
+        .find(|(kind, _)| kind == b"cdef")
+        .unwrap();
+    let be = |at: usize| u16::from_be_bytes([cdef[at], cdef[at + 1]]);
+    (0..usize::from(be(0)))
+        .map(|i| (be(2 + 6 * i), be(4 + 6 * i), be(6 + 6 * i)))
+        .collect()
+}
+
+/// Each `cdef` fixture's box, and the label `decode` must give each output
+/// channel: the entry of the channel that ends up there. The samples' order is
+/// checked against the oracle above.
+#[test]
+fn every_cdef_fixture_labels_its_channels_from_the_box() {
+    use Association::{Colour, None as Unassociated, WholeImage};
+    use ChannelType::{Colour as C, Opacity, Unspecified};
+    let def = |kind, association| ChannelDefinition { kind, association };
+    let colours = |n: u16| (1..=n).map(|c| def(C, Colour(c))).collect::<Vec<_>>();
+    let rgba = [colours(3), vec![def(Opacity, WholeImage)]].concat();
+    let cases: &[(&str, &[(u16, u16, u16)], Vec<ChannelDefinition>)] = &[
+        (
+            "jp2_cdef_rgba",
+            &[(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 1, 0)],
+            rgba.clone(),
+        ),
+        (
+            "jp2_cdef_alpha_first",
+            &[(0, 1, 0), (1, 0, 1), (2, 0, 2), (3, 0, 3)],
+            rgba,
+        ),
+        (
+            "jp2_cdef_reversed",
+            &[(0, 0, 3), (1, 0, 2), (2, 0, 1)],
+            colours(3),
+        ),
+        (
+            "jp2_cdef_palette",
+            &[(0, 0, 3), (1, 0, 2), (2, 0, 1)],
+            colours(3),
+        ),
+        (
+            "jp2_cdef_unspecified",
+            &[(0, 65535, 65535), (1, 65535, 65535), (2, 65535, 65535)],
+            vec![def(Unspecified, Unassociated); 3],
+        ),
+    ];
+    for (name, entries, want) in cases {
+        let bytes = std::fs::read(dir().join(format!("{name}.jp2"))).unwrap();
+        assert_eq!(cdef_entries(&bytes), *entries, "{name}: the box");
+        let image = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(image.jp2.unwrap().channels, *want, "{name}");
     }
 }
 

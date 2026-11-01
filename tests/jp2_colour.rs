@@ -4,30 +4,23 @@
 //! The oracle is each file's own `colr` box: a separate, minimal box walk here
 //! pulls out the first `colr` payload, and the ICC bytes `decode` returns must
 //! equal it past the three header bytes (and hash to the recorded SHA-256).
-//!
-//! File 2 still stops at the `cdef` guard before `decode` returns an image,
-//! so it is expected `Unsupported` here. Its colour space (sYCC) is checked at
-//! the box-walk level by `jp2::colour_tests` in the crate; when channel
-//! definitions are applied, move it into `EXPECT` as a decoded file.
 
 mod support;
 
 use std::path::PathBuf;
 
-use rust_j2k::{ColourSpace, Error, decode};
+use rust_j2k::{ColourSpace, decode};
 use support::jp2::sha256_hex;
 
 enum Want {
     Colour(ColourSpace),
     /// The first `colr` is an ICC profile of this length and SHA-256.
     Icc(usize, &'static str),
-    /// `decode` refuses the file for this box.
-    Guarded(&'static str),
 }
 
 const EXPECT: &[(u32, Want)] = &[
     (1, Want::Colour(ColourSpace::Srgb)),
-    (2, Want::Guarded("cdef")),
+    (2, Want::Colour(ColourSpace::Sycc)),
     (3, Want::Colour(ColourSpace::Sycc)),
     (4, Want::Colour(ColourSpace::Greyscale)),
     (
@@ -118,12 +111,6 @@ fn decode_reports_the_colour_space_of_each_conformance_file() {
     for (n, want) in EXPECT {
         let bytes = std::fs::read(path(*n)).unwrap_or_else(|e| panic!("file{n}: {e}"));
         match want {
-            Want::Guarded(what) => match decode(&bytes) {
-                Err(Error::Unsupported(message)) => {
-                    assert!(message.contains(&format!("`{what}`")), "file{n}: {message}")
-                }
-                other => panic!("file{n}: expected the `{what}` guard, got {other:?}"),
-            },
             Want::Colour(colour) => {
                 let image = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
                 assert_eq!(&image.jp2.expect("metadata").colour, colour, "file{n}");
@@ -142,4 +129,34 @@ fn decode_reports_the_colour_space_of_each_conformance_file() {
             }
         }
     }
+}
+
+/// File 2's `cdef` (components 0, 1, 2 are colours 3, 2, 1) puts its channels
+/// in colour order and labels them so. Its sYCC samples are not converted, so
+/// it still grades as *needs sRGB output* in `tests/conformance_jp2.rs`, after
+/// its as-coded check.
+#[test]
+fn file2_comes_out_in_colour_order() {
+    use rust_j2k::{Association, ChannelDefinition, ChannelType};
+    let bytes = std::fs::read(path(2)).expect("file2");
+    let at = bytes.windows(4).position(|w| w == b"cdef").unwrap() + 4;
+    assert_eq!(
+        &bytes[at..at + 20],
+        &[0, 3, 0, 0, 0, 0, 0, 3, 0, 1, 0, 0, 0, 2, 0, 2, 0, 0, 0, 1],
+        "the cdef box"
+    );
+    let image = decode(&bytes).expect("decodes");
+    let jp2 = image.jp2.expect("metadata");
+    assert_eq!(jp2.colour, ColourSpace::Sycc);
+    let colours: Vec<ChannelDefinition> = (1..=3)
+        .map(|n| ChannelDefinition {
+            kind: ChannelType::Colour,
+            association: Association::Colour(n),
+        })
+        .collect();
+    assert_eq!(jp2.channels, colours);
+    let jp2c = bytes.windows(4).position(|w| w == b"jp2c").unwrap() + 4;
+    let raw = decode(&bytes[jp2c..]).expect("bare codestream");
+    let reversed: Vec<_> = raw.components.into_iter().rev().collect();
+    assert_eq!(image.components, reversed);
 }

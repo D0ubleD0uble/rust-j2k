@@ -68,9 +68,10 @@ fn every_jp2_reference_parses() {
     );
 }
 
-/// The as-coded references exist for files 3, 5, 7 and 8, one per codestream
-/// component, at the component's own size and depth (file3's chroma is not
-/// upsampled).
+/// The as-coded references exist for files 2, 3, 5, 7 and 8, one per
+/// codestream component, at the component's own size and depth (file3's chroma
+/// is not upsampled). File2's are in its `cdef` order, components 2, 1, 0, all
+/// of one size and depth.
 #[test]
 fn the_as_coded_references_match_the_codestream_layout() {
     let dir = jp2_dir();
@@ -99,7 +100,7 @@ fn the_as_coded_references_match_the_codestream_layout() {
             );
         }
     }
-    assert_eq!(with_refs, [3, 5, 7, 8]);
+    assert_eq!(with_refs, [2, 3, 5, 7, 8]);
 }
 
 /// One wrong sample in the decoded output fails the as-coded grade, and so
