@@ -345,6 +345,23 @@ fn a_bpcc_before_ihdr_must_be_empty() {
         &with_jp2h_boxes(&[vec![ihdr(255, 0), bpcc(&[])]]),
         "one per component",
     );
+    // Merging a second `jp2h` keeps where the first `ihdr` sat: the empty
+    // `bpcc` before it is still fine, and so is a one-per-component `bpcc`
+    // after it.
+    assert_eq!(
+        colour_of(&with_jp2h_boxes(&[
+            vec![bpcc(&[]), ihdr(255, 0), enum_colr(16)],
+            vec![ihdr(255, 0)],
+        ])),
+        ColourSpace::Srgb
+    );
+    assert_eq!(
+        colour_of(&with_jp2h_boxes(&[
+            vec![bpcc(&[]), ihdr(255, 0)],
+            vec![bpcc(&[7, 7, 7]), ihdr(255, 0), enum_colr(16)],
+        ])),
+        ColourSpace::Srgb
+    );
     // A second `jp2h` sees the first one's `ihdr`, even before its own.
     assert_eq!(
         colour_of(&with_jp2h_boxes(&[

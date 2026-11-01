@@ -86,11 +86,11 @@ impl Ihdr {
 ///
 /// The order matters because OpenJPEG runs a box's handler as it meets the
 /// box, and a handler can depend on the ones before it (`bpcc` is checked
-/// against the component count `ihdr` sets). The list holds the children of
-/// every `jp2h` box before the codestream in file order, then the header boxes
+/// against the component count `ihdr` sets). The list is in file order: the
+/// children of each `jp2h` box before the codestream, with the header boxes
 /// found misplaced at the top level after the first `jp2h` (see
-/// [`Jp2Header::add_misplaced`]) as they come. [`Jp2Header::ihdr_at`] says
-/// where the first `ihdr` sat in it. The per-type accessors ([`Jp2Header::colr`]
+/// [`Jp2Header::add_misplaced`]) between them where they sit. [`Jp2Header::ihdr_at`]
+/// says where the first `ihdr` sat in it. The per-type accessors ([`Jp2Header::colr`]
 /// and the like) give the payloads of one type, in that order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Jp2Header<'a> {

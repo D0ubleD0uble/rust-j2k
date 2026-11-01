@@ -24,7 +24,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes of a `METH` 2 box are returned as they are, not applied. A `colr`
   shorter than 3 bytes, a `METH` 1 box without its `EnumCS`, a `METH` 2 box
   without a profile, and a `bpcc` box that is not one byte per component are
-  `FileFormat` errors, as in OpenJPEG.
+  `FileFormat` errors, as in OpenJPEG for boxes before the codestream.
 - `Error::FileFormat` for a malformed JP2 box structure.
 
 ### Fixed

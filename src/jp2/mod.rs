@@ -209,10 +209,10 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
 /// describe them. The channels are the components as coded: no palette and
 /// every channel colour `i + 1`.
 pub(crate) fn present(
-    file: &Jp2File<'_>,
+    file: Jp2File<'_>,
     components: Vec<Component>,
 ) -> Result<(Vec<Component>, Jp2Metadata)> {
-    let colour = file.colour.clone();
+    let colour = file.colour;
     let channels = colour_channels(components.len())?;
     let metadata = Jp2Metadata {
         colour,

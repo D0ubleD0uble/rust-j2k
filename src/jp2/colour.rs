@@ -2,17 +2,19 @@
 //! (I.5.3.2).
 //!
 //! Both are read the way OpenJPEG 2.5.0 reads them (`opj_jp2_read_colr`,
-//! `opj_jp2_read_bpcc`), on accept and reject as well as on value:
+//! `opj_jp2_read_bpcc`), on accept and reject as well as on value, for the
+//! boxes before the codestream. OpenJPEG reads the header boxes again after
+//! `jp2c` and can reject these shapes there; this decoder does not yet:
 //!
-//! - Every `colr` must hold at least 3 bytes, including the ones that are
-//!   ignored, because the size check runs before the "already have a `colr`"
+//! - Every `colr` before the codestream must hold at least 3 bytes, including
+//!   the ones that are ignored, because the size check runs before the "already have a `colr`"
 //!   check.
 //! - The first `colr` with `METH` 1 or 2 is the one that counts. A box with
 //!   any other `METH` is ignored whole and does not count as the first.
 //! - `METH` 1 needs 7 bytes (`EnumCS` is 4); extra bytes are ignored.
 //!   `METH` 2 keeps everything after the 3 header bytes as the profile, and an
 //!   empty profile is refused.
-//! - Every `bpcc` must hold exactly `NC` bytes, whatever `ihdr.BPC` says; a
+//! - Every `bpcc` before the codestream must hold exactly `NC` bytes, whatever `ihdr.BPC` says; a
 //!   `bpcc` that comes before `ihdr` sees `NC` as 0. The depths themselves are
 //!   not used: SIZ is the truth for depth and sign.
 

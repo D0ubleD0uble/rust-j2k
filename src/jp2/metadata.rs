@@ -25,7 +25,7 @@ pub struct Jp2Metadata {
 /// OpenJPEG reads it: a box whose method is neither 1 (enumerated) nor 2
 /// (restricted ICC) is skipped and does not count as the first, and every
 /// later usable box is ignored. Boxes placed after `jp2h` at the top level
-/// count after the ones inside it. The samples are never converted, whatever
+/// count in file order with the ones inside `jp2h`. The samples are never converted, whatever
 /// the value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColourSpace {
