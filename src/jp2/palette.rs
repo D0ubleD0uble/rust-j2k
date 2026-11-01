@@ -5,8 +5,9 @@
 //! `cmap` entry says which component feeds a channel and whether the channel is
 //! that component as coded (`MTYP 0`) or its samples looked up in one palette
 //! column (`MTYP 1`). OpenJPEG 2.5.0 (`opj_jp2_read_pclr`, `opj_jp2_read_cmap`,
-//! `opj_jp2_check_color`, `opj_jp2_apply_pclr`) is the reference, and this
-//! module follows it on what is accepted and on every output sample:
+//! `opj_jp2_check_color`, `opj_jp2_apply_pclr`) is the reference. This module
+//! follows it on what is accepted and on the output samples, with the two
+//! exceptions listed after these rules:
 //!
 //! - The `cmap` box holds one entry per palette column (`NPC` entries); a
 //!   shorter box is an error and bytes past the last entry are ignored.
@@ -14,29 +15,35 @@
 //! - A palette column mapped by two channels, or a palette channel `i` whose
 //!   column `i` no channel maps (a direct channel counts as mapping column 0),
 //!   is an error.
-//! - A palette index is clamped to `0..NE`.
-//! - An entry is its stored bytes as an unsigned number: a signed column is
-//!   not sign-extended and stray high bits are kept.
-//! - A palette channel takes its depth and sign from its column's `Bi`; a
-//!   direct channel `i` takes them from `Bi` of column `i`, as OpenJPEG does.
+//! - A palette channel `i` must look up column `i`. OpenJPEG has no general
+//!   mapping, so another column is [`Error::Unsupported`].
 //! - A single-component file whose mapping leaves a palette column unused is
 //!   read as the identity mapping (channel `i` from column `i`), OpenJPEG's
 //!   correction for files with a broken `cmap`.
+//! - A palette index is clamped to `0..NE`.
+//! - An entry is read as OpenJPEG reads it: at most 4 bytes, unsigned, so a
+//!   signed column is not sign-extended and stray high bits are kept.
+//! - A palette channel takes its depth and sign from its column's `Bi`; a
+//!   direct channel `i` takes them from `Bi` of column `i`. Samples may fall
+//!   outside that declared range.
 //!
-//! Two rules differ. OpenJPEG requires channel `i` of a palette mapping to use
-//! column `i`, an implementation limit of its own; any column is accepted
-//! here, and such a file is mapped as its `cmap` says. And a palette column
-//! deeper than the `i32` sample container (over 31 bits unsigned, 32 signed)
-//! is [`Error::Unsupported`], as such a codestream component is; OpenJPEG
-//! decodes it.
+//! The exceptions:
+//!
+//! - A palette column deeper than the `i32` sample container (over 31 bits
+//!   unsigned, 32 signed) is [`Error::Unsupported`] when the palette is
+//!   applied, as such a codestream component is. OpenJPEG decodes it.
+//! - Each channel is built on its own source component's grid, so palette and
+//!   direct channels from components of different sub-sampling decode
+//!   correctly. OpenJPEG sizes every channel by the first one's grid and
+//!   crashes or reads uninitialised memory.
 //!
 //! [`plan`] reads the boxes and the main header into a [`PalettePlan`] before
 //! any tile is decoded; [`PalettePlan::apply`] then builds the channels from
 //! the decoded components. The box layout is checked whenever a palette is
-//! present. The mapping is checked against the codestream only when the
-//! palette is applied, so a caller asking for the raw channels gets them from
-//! a file whose `cmap` names a component that does not exist, as OpenJPEG does
-//! with its "ignore palette" flag.
+//! present. The mapping, the column depths, and the sample budget are checked
+//! only when the palette is applied, so a caller asking for the raw channels
+//! gets them whatever the `cmap` says, as OpenJPEG does with its "ignore
+//! palette" flag.
 
 use super::header::Jp2Header;
 use super::metadata::{Association, ChannelDefinition, ChannelType, Jp2Metadata};
@@ -57,9 +64,12 @@ struct Column {
 }
 
 impl Column {
-    /// Bytes per stored entry: the depth rounded up to whole bytes.
+    /// Bytes per stored entry as OpenJPEG reads the table: the depth rounded
+    /// up to whole bytes, but at most 4. A column deeper than 32 bits is
+    /// therefore read at a 4-byte stride; such a column is never applied (see
+    /// [`Column::fits_i32`]), so this only decides how long the table must be.
     fn entry_bytes(self) -> usize {
-        usize::from(self.depth).div_ceil(8)
+        usize::from(self.depth).div_ceil(8).min(4)
     }
 
     /// Whether the column's range fits the `i32` sample container (signed up
@@ -87,7 +97,7 @@ pub(crate) struct Palette {
 
 impl Palette {
     /// Parse a `pclr` box: `NE` (2 bytes), `NPC` (1 byte), `NPC` `Bi` bytes,
-    /// then `NE` rows of `NPC` entries, each `ceil(depth / 8)` bytes.
+    /// then `NE` rows of `NPC` entries (see [`Column::entry_bytes`]).
     fn parse(payload: &[u8]) -> Result<Self> {
         let &[ne0, ne1, npc, ref rest @ ..] = payload else {
             return Err(Error::FileFormat(format!(
@@ -158,12 +168,10 @@ impl Palette {
     }
 }
 
-/// An entry's stored bytes as OpenJPEG reads them: big-endian, unsigned, at
-/// most the last four bytes significant, then reinterpreted as `i32`. Columns
-/// deeper than 32 bits never reach the output (see [`Column::fits_i32`]).
+/// An entry's stored bytes (1 to 4 of them), big-endian and unsigned, then
+/// reinterpreted as `i32` as OpenJPEG's `(OPJ_INT32)` cast does.
 fn entry_value(bytes: &[u8]) -> i32 {
-    let low = &bytes[bytes.len().saturating_sub(4)..];
-    let value = low.iter().fold(0u32, |acc, &b| (acc << 8) | u32::from(b));
+    let value = bytes.iter().fold(0u32, |acc, &b| (acc << 8) | u32::from(b));
     value as i32
 }
 
@@ -210,17 +218,23 @@ pub(crate) enum PalettePlan {
     /// palette channel would have looked up, so it can be labelled as an
     /// index plane rather than a colour.
     Skipped { index_components: Vec<bool> },
-    /// The palette applies: one output channel per entry.
+    /// The palette applies: one output channel per palette column.
     Apply {
         palette: Palette,
         channels: Vec<PlannedChannel>,
     },
 }
 
-/// Read the file's palette boxes into a [`PalettePlan`]. The box layout is
-/// always checked; the mapping is checked against `siz` only when the palette
-/// is applied.
-pub(crate) fn plan(header: &Jp2Header<'_>, siz: &Siz, raw_channels: bool) -> Result<PalettePlan> {
+/// Read the file's palette boxes into a [`PalettePlan`], for a decode at
+/// `reduction` resolution levels down. The box layout is always checked; the
+/// mapping, the column depths and the expanded sample count only when the
+/// palette is applied.
+pub(crate) fn plan(
+    header: &Jp2Header<'_>,
+    siz: &Siz,
+    reduction: u8,
+    raw_channels: bool,
+) -> Result<PalettePlan> {
     if header.pclr.len() > 1 {
         return Err(Error::FileFormat(
             "the file has more than one `pclr` box".into(),
@@ -259,11 +273,12 @@ pub(crate) fn plan(header: &Jp2Header<'_>, siz: &Siz, raw_channels: bool) -> Res
         return Ok(PalettePlan::Skipped { index_components });
     }
     let sources = map_channels(&entries, palette.columns.len(), siz.components.len())?;
-    let channels = sources
+    let channels: Vec<PlannedChannel> = sources
         .into_iter()
         .enumerate()
         .map(|(i, source)| plan_channel(i, source, &palette, siz))
         .collect::<Result<_>>()?;
+    check_budget(&channels, siz, reduction)?;
     Ok(PalettePlan::Apply { palette, channels })
 }
 
@@ -283,14 +298,17 @@ fn parse_cmap(payload: &[u8], count: usize) -> Result<Vec<(u16, u8, u8)>> {
         .collect())
 }
 
-/// Check the `cmap` entries the way `opj_jp2_check_color` does, less its
-/// "channel `i` uses column `i`" limit, and turn them into channel sources.
+/// Check the `cmap` entries the way `opj_jp2_check_color` does, and turn them
+/// into channel sources.
 ///
 /// OpenJPEG tracks which columns are used: a palette channel uses its column,
-/// and a direct channel (whose `PCOL` is 0) marks column 0. A column used by
-/// two palette channels, or a palette channel `i` whose column `i` ends up
-/// unused, is refused. A single-component file that still leaves a column
-/// unused is then read as the identity mapping.
+/// and a direct channel (whose `PCOL` is 0) marks column 0. A malformed entry,
+/// a column used by two palette channels, or a palette channel `i` whose
+/// column `i` ends up unused is [`Error::FileFormat`]; those come first, so a
+/// malformed file reports its fault. A palette channel `i` that looks up
+/// another column is then [`Error::Unsupported`] (OpenJPEG's "implementation
+/// limitation"). A single-component file that still leaves a column unused is
+/// read as the identity mapping.
 fn map_channels(
     entries: &[(u16, u8, u8)],
     columns: usize,
@@ -331,6 +349,14 @@ fn map_channels(
         if mtyp != 0 && !used[i] {
             return Err(Error::FileFormat(format!(
                 "`cmap` channel {i} is a palette channel but palette column {i} is not mapped"
+            )));
+        }
+    }
+    for (i, &(_, mtyp, pcol)) in entries.iter().enumerate() {
+        if mtyp == 1 && usize::from(pcol) != i {
+            return Err(Error::Unsupported(format!(
+                "`cmap` channel {i} looks up palette column {pcol}; only channel i from \
+                 column i is decoded"
             )));
         }
     }
@@ -392,58 +418,71 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
     })
 }
 
+/// Hold the expanded channels to the decoder's sample budget, from the SIZ
+/// extents at `reduction`, before any tile is decoded or plane allocated.
+fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8) -> Result<()> {
+    let mut total: u64 = 0;
+    for channel in channels {
+        let index = usize::from(channel.source.component());
+        let (width, height) = siz
+            .component_extent_at(index, reduction)
+            .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
+        total = total.saturating_add(u64::from(width) * u64::from(height));
+        if total > MAX_IMAGE_SAMPLES {
+            return Err(Error::Limit(format!(
+                "palette expansion to {} channels totals over {MAX_IMAGE_SAMPLES} samples, \
+                 above the decode guard",
+                channels.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl PalettePlan {
-    /// The output channels from the decoded components, in SIZ order.
-    pub(crate) fn apply(&self, components: Vec<Component>) -> Result<Vec<Component>> {
+    /// The output channels from the decoded components, in SIZ order. Each
+    /// channel is built on its source component's grid. A direct channel
+    /// takes its component's plane when no later channel reads it.
+    pub(crate) fn apply(&self, mut components: Vec<Component>) -> Result<Vec<Component>> {
         let PalettePlan::Apply { palette, channels } = self else {
             return Ok(components);
         };
-        let source = |channel: &PlannedChannel| {
-            let index = channel.source.component();
-            components.get(usize::from(index)).ok_or_else(|| {
+        let mut reads_left = vec![0usize; components.len()];
+        for channel in channels {
+            let index = usize::from(channel.source.component());
+            let slot = reads_left.get_mut(index).ok_or_else(|| {
                 Error::Inconsistent(format!(
                     "`cmap` names component {index}, which was not decoded"
                 ))
-            })
-        };
-
-        // The expansion allocates a plane per channel: hold the total to the
-        // decoder's sample budget before allocating any of them.
-        let mut total: u64 = 0;
-        for channel in channels {
-            total = total.saturating_add(source(channel)?.samples.len() as u64);
-            if total > MAX_IMAGE_SAMPLES {
-                return Err(Error::Limit(format!(
-                    "palette expansion to {} channels totals over {MAX_IMAGE_SAMPLES} samples, \
-                     above the decode guard",
-                    channels.len()
-                )));
-            }
+            })?;
+            *slot += 1;
         }
 
-        channels
-            .iter()
-            .map(|channel| {
-                let from = source(channel)?;
-                let samples = match channel.source {
-                    Source::Direct { .. } => from.samples.clone(),
-                    Source::Palette { column, .. } => from
-                        .samples
-                        .iter()
-                        .map(|&index| palette.lookup(index, usize::from(column)))
-                        .collect(),
-                };
-                Ok(Component::new(
-                    from.width,
-                    from.height,
-                    channel.bit_depth,
-                    channel.signed,
-                    channel.x_sampling,
-                    channel.y_sampling,
-                    samples,
-                ))
-            })
-            .collect()
+        let mut out = Vec::with_capacity(channels.len());
+        for channel in channels {
+            let index = usize::from(channel.source.component());
+            reads_left[index] -= 1;
+            let from = &mut components[index];
+            let samples = match channel.source {
+                Source::Direct { .. } if reads_left[index] == 0 => std::mem::take(&mut from.samples),
+                Source::Direct { .. } => from.samples.clone(),
+                Source::Palette { column, .. } => from
+                    .samples
+                    .iter()
+                    .map(|&k| palette.lookup(k, usize::from(column)))
+                    .collect(),
+            };
+            out.push(Component::new(
+                from.width,
+                from.height,
+                channel.bit_depth,
+                channel.signed,
+                channel.x_sampling,
+                channel.y_sampling,
+                samples,
+            ));
+        }
+        Ok(out)
     }
 
     /// Record the plan on the file's metadata: whether the palette was
@@ -468,6 +507,7 @@ impl PalettePlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codestream::markers::SizComponent;
 
     fn pclr(entries: u16, bi: &[u8], table: &[u8]) -> Vec<u8> {
         let mut out = entries.to_be_bytes().to_vec();
@@ -502,6 +542,19 @@ mod tests {
         );
     }
 
+    /// OpenJPEG reads a column deeper than 32 bits at a 4-byte stride, so a
+    /// 38-bit column's table is 4 bytes per entry.
+    #[test]
+    fn a_deep_column_is_read_at_a_four_byte_stride() {
+        let palette = Palette::parse(&pclr(2, &[37], &[0, 0, 0, 7, 0xFF, 0xFF, 0xFF, 0xFF]))
+            .expect("4 bytes per entry is enough");
+        assert_eq!(palette.values, [7, -1]);
+        assert!(matches!(
+            Palette::parse(&pclr(2, &[37], &[0; 7])),
+            Err(Error::FileFormat(_))
+        ));
+    }
+
     /// Measured with `opj_decompress` 2.5.0: a signed 12-bit column holding
     /// `0xFFF` decodes to 4095, not -1, and a 12-bit entry `0xF000` keeps its
     /// high bits.
@@ -522,11 +575,30 @@ mod tests {
         assert_eq!(looked, [10, 10, 20, 30, 30, 30, 10, 30]);
     }
 
-    /// 255 channels over a 300 000-sample component is 76.5 M samples, over
-    /// the 2^26 budget: refused before any channel is allocated.
+    fn siz(width: u32, height: u32) -> Siz {
+        Siz {
+            x_size: width,
+            y_size: height,
+            x_offset: 0,
+            y_offset: 0,
+            tile_width: width,
+            tile_height: height,
+            tile_x_offset: 0,
+            tile_y_offset: 0,
+            components: vec![SizComponent {
+                bit_depth: 8,
+                signed: false,
+                x_sampling: 1,
+                y_sampling: 1,
+            }],
+        }
+    }
+
+    /// 255 channels over a 600x500 component is 76.5 M samples, over the 2^26
+    /// budget: refused from SIZ alone. A reduced decode, or fewer channels,
+    /// fits.
     #[test]
     fn the_expansion_is_held_to_the_sample_budget() {
-        let palette = Palette::parse(&pclr(1, &[7; 255], &[0; 255])).unwrap();
         let channel = |column| PlannedChannel {
             source: Source::Palette {
                 component: 0,
@@ -537,31 +609,56 @@ mod tests {
             x_sampling: 1,
             y_sampling: 1,
         };
-        let plan = PalettePlan::Apply {
-            palette,
-            channels: (0..=254).map(channel).collect(),
-        };
-        let index = Component::new(600, 500, 8, false, 1, 1, vec![0; 300_000]);
+        let channels: Vec<PlannedChannel> = (0..=254).map(channel).collect();
+        let siz = siz(600, 500);
         assert!(matches!(
-            plan.apply(vec![index.clone()]),
+            check_budget(&channels, &siz, 0),
             Err(Error::Limit(_))
         ));
+        assert!(check_budget(&channels, &siz, 1).is_ok());
+        assert!(check_budget(&channels[..200], &siz, 0).is_ok());
+    }
 
-        // Within budget the same plan expands.
-        let PalettePlan::Apply { palette, channels } = plan else {
-            unreachable!()
+    /// A direct channel moves its component's plane when nothing later reads
+    /// it, and copies it otherwise; either way the samples are the component's.
+    #[test]
+    fn a_direct_channel_moves_or_copies_its_plane() {
+        let palette = Palette::parse(&pclr(2, &[7, 7], &[10, 20, 30, 40])).unwrap();
+        let direct = PlannedChannel {
+            source: Source::Direct { component: 0 },
+            bit_depth: 8,
+            signed: false,
+            x_sampling: 1,
+            y_sampling: 1,
         };
-        let small = PalettePlan::Apply {
-            palette,
-            channels: channels[..2].to_vec(),
+        let lookup = PlannedChannel {
+            source: Source::Palette {
+                component: 0,
+                column: 1,
+            },
+            ..direct
         };
-        assert_eq!(small.apply(vec![index]).unwrap().len(), 2);
+        let index = Component::new(2, 1, 8, false, 1, 1, vec![0, 1]);
+        for channels in [vec![direct, lookup], vec![lookup, direct], vec![direct, direct]] {
+            let plan = PalettePlan::Apply {
+                palette: palette.clone(),
+                channels: channels.clone(),
+            };
+            let out = plan.apply(vec![index.clone()]).unwrap();
+            for (channel, got) in channels.iter().zip(&out) {
+                let want = match channel.source {
+                    Source::Direct { .. } => vec![0, 1],
+                    Source::Palette { .. } => vec![20, 40],
+                };
+                assert_eq!(got.samples, want, "{channels:?}");
+            }
+        }
     }
 
     #[test]
-    fn a_wide_entry_keeps_its_last_four_bytes() {
-        assert_eq!(entry_value(&[0xAA, 0x01, 0x02, 0x03, 0x04]), 0x0102_0304);
+    fn entries_are_big_endian_and_cast_to_i32() {
+        assert_eq!(entry_value(&[0x01, 0x02, 0x03, 0x04]), 0x0102_0304);
         assert_eq!(entry_value(&[0xFF, 0xFF, 0xFF, 0xFF]), -1);
-        assert_eq!(entry_value(&[]), 0);
+        assert_eq!(entry_value(&[0x0A, 0xBC]), 0xABC);
     }
 }

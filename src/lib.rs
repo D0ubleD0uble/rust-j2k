@@ -126,8 +126,8 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// Options for [`decode_with`]. The default decodes at full resolution —
 /// [`decode`] is exactly that.
 ///
-/// Start from [`DecodeOptions::default`] and set what differs, with the
-/// `with_*` methods or the fields directly. The struct is `#[non_exhaustive]`,
+/// Start from [`DecodeOptions::default`] and set what differs, with a
+/// `with_*` method where one exists or the field directly. The struct is `#[non_exhaustive]`,
 /// so a new option is not a breaking change.
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
@@ -142,8 +142,13 @@ pub struct DecodeOptions {
     /// Return a JP2 file's codestream components as coded, without applying
     /// the file's palette (`pclr` + `cmap`): a palettised file then decodes
     /// to its index plane, exactly as its codestream does on its own, and
-    /// [`Jp2Metadata::palette_applied`] is `false`. No effect on a raw
-    /// codestream. Default `false`.
+    /// [`Jp2Metadata::palette_applied`] is `false`. Each index plane is
+    /// reported on [`Jp2Metadata::channels`] as [`ChannelType::Unspecified`]
+    /// with [`Association::None`], since it is not a colour until it goes
+    /// through the palette. The palette boxes' layout is still checked, so a
+    /// malformed `pclr` or `cmap` is still [`Error::FileFormat`]; the mapping
+    /// and the palette's column depths are not. No effect on a raw codestream.
+    /// Default `false`.
     pub raw_channels: bool,
 }
 
@@ -176,7 +181,12 @@ fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     let file = jp2::parse(bytes)?;
     let cs = codestream::parse(file.codestream)?;
     jp2::check_against_siz(&file.header, &cs.header.siz)?;
-    let palette = jp2::plan_palette(&file.header, &cs.header.siz, options.raw_channels)?;
+    let palette = jp2::plan_palette(
+        &file.header,
+        &cs.header.siz,
+        options.resolution_reduction,
+        options.raw_channels,
+    )?;
     // After the structural checks, so a malformed file reports its fault
     // rather than an unsupported box.
     jp2::check_supported(&file.header)?;
