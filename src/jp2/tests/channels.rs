@@ -106,6 +106,16 @@ fn accepted_layouts_come_out_in_openjpeg_order() {
             [1, 0, 2],
         ),
         (
+            "an opacity entry with a colour association moves nothing",
+            cdef_of(&[(0, 1, 3), (1, 0, 2), (2, 0, 1)]),
+            [2, 1, 0],
+        ),
+        (
+            "unspecified entries with colour associations move nothing",
+            cdef_of(&[(0, 65535, 3), (1, 65535, 2), (2, 65535, 1)]),
+            [0, 1, 2],
+        ),
+        (
             "Asoc 0 and 65535 on colour channels",
             cdef_of(&[(0, 0, 0), (1, 0, 65535), (2, 0, 3)]),
             [0, 1, 2],
