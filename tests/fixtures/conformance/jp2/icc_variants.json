@@ -1,0 +1,340 @@
+{
+  "provenance": {
+    "source": "tests/fixtures/conformance/jp2/files/file{5,7,8}.jp2 with the ICC profile's rendering intent (header bytes 64..68) and, where `white` is set, its wtpt XYZ (s15Fixed16) patched in place, by scripts/gen-icc-oracles.py",
+    "oracle_command": "opj_decompress -i <variant>.jp2 -o out.pgx -force-rgb [-p 8S for 8-bit files]",
+    "oracle_version": "OpenJPEG 2.5.0 with LittleCMS 2.14",
+    "hash": "SHA-256 of each output plane's samples in raster order, each a 4-byte big-endian signed integer"
+  },
+  "variants": [
+    {
+      "file": "files/file5.jp2",
+      "variant": "intent0",
+      "intent": 0,
+      "white": null,
+      "width": 768,
+      "height": 512,
+      "bit_depth": 8,
+      "planes": [
+        "c9454b61450821a80cabc4cb8215db9f9a6e0dbf92887f516459eaeee0341c6d",
+        "91d442cb2effef92ecc840a3d7664694ce24c48e9b23cea1cdac1c221e11266f",
+        "532dd11361c04540983f4fcc32d408135cdd813e60227b94ab713741f763984e"
+      ]
+    },
+    {
+      "file": "files/file5.jp2",
+      "variant": "intent1",
+      "intent": 1,
+      "white": null,
+      "width": 768,
+      "height": 512,
+      "bit_depth": 8,
+      "planes": [
+        "c9454b61450821a80cabc4cb8215db9f9a6e0dbf92887f516459eaeee0341c6d",
+        "91d442cb2effef92ecc840a3d7664694ce24c48e9b23cea1cdac1c221e11266f",
+        "532dd11361c04540983f4fcc32d408135cdd813e60227b94ab713741f763984e"
+      ]
+    },
+    {
+      "file": "files/file5.jp2",
+      "variant": "intent2",
+      "intent": 2,
+      "white": null,
+      "width": 768,
+      "height": 512,
+      "bit_depth": 8,
+      "planes": [
+        "c9454b61450821a80cabc4cb8215db9f9a6e0dbf92887f516459eaeee0341c6d",
+        "91d442cb2effef92ecc840a3d7664694ce24c48e9b23cea1cdac1c221e11266f",
+        "532dd11361c04540983f4fcc32d408135cdd813e60227b94ab713741f763984e"
+      ]
+    },
+    {
+      "file": "files/file5.jp2",
+      "variant": "intent3",
+      "intent": 3,
+      "white": null,
+      "width": 768,
+      "height": 512,
+      "bit_depth": 8,
+      "planes": [
+        "c9454b61450821a80cabc4cb8215db9f9a6e0dbf92887f516459eaeee0341c6d",
+        "91d442cb2effef92ecc840a3d7664694ce24c48e9b23cea1cdac1c221e11266f",
+        "532dd11361c04540983f4fcc32d408135cdd813e60227b94ab713741f763984e"
+      ]
+    },
+    {
+      "file": "files/file5.jp2",
+      "variant": "intent3_d65",
+      "intent": 3,
+      "white": [
+        0.9505,
+        1.0,
+        1.089
+      ],
+      "width": 768,
+      "height": 512,
+      "bit_depth": 8,
+      "planes": [
+        "7ff84bf675120eecaa9118a8c5e6cc641c8689193c3bd76e28e1e8748e5bed3b",
+        "1c88a12818f2ebba4fcd79e7c67c32370cb05d65c5bd19b676ef58a8e7eb67f0",
+        "c3894e0f16c18ba2f567f092d7a927e4f917f0991f6a270b2e44b7bfbee6e1a5"
+      ]
+    },
+    {
+      "file": "files/file5.jp2",
+      "variant": "intent3_white_1",
+      "intent": 3,
+      "white": [
+        1.2,
+        1.1,
+        1.0
+      ],
+      "width": 768,
+      "height": 512,
+      "bit_depth": 8,
+      "planes": [
+        "bd84b0a13ded4348660ba7756bc483e7926684e342e126a51caa65bfbe4eeb4c",
+        "b16915855246246e9602466baa1c06d8e1daf9a6eafac7492fa0e15504cfe023",
+        "9b1b7f3b46a701e832760ba2b20b97c669df2d950d0fba196be23ccc8410a982"
+      ]
+    },
+    {
+      "file": "files/file5.jp2",
+      "variant": "intent3_white_2",
+      "intent": 3,
+      "white": [
+        0.9,
+        0.95,
+        0.7
+      ],
+      "width": 768,
+      "height": 512,
+      "bit_depth": 8,
+      "planes": [
+        "1b9839bd92f0d116e41dd0c8c86dde88c55b0038051699d01fedd9a137ae9eed",
+        "d2877c931896d21ba736347251182593dc8c1833c6333f477be9ec423a4b17f8",
+        "473aa54845ff64fe1e06ac5404b25b192e61bcb71b24578bb9b8159571ac06a5"
+      ]
+    },
+    {
+      "file": "files/file7.jp2",
+      "variant": "intent0",
+      "intent": 0,
+      "white": null,
+      "width": 480,
+      "height": 640,
+      "bit_depth": 16,
+      "planes": [
+        "4bef838b6a1154f2cfe1792f4c846ba896b878c49d9a717b6cacf26efc3fcd18",
+        "81d1363cc28f4dcdf26a9f3e6f2a5814982a2b570b10b7bf6add87a276179dac",
+        "42ed0e3b3a414fd04ebff0667632e4467904f81fa6354ae9ccd46d66c0c7d381"
+      ]
+    },
+    {
+      "file": "files/file7.jp2",
+      "variant": "intent1",
+      "intent": 1,
+      "white": null,
+      "width": 480,
+      "height": 640,
+      "bit_depth": 16,
+      "planes": [
+        "4bef838b6a1154f2cfe1792f4c846ba896b878c49d9a717b6cacf26efc3fcd18",
+        "81d1363cc28f4dcdf26a9f3e6f2a5814982a2b570b10b7bf6add87a276179dac",
+        "42ed0e3b3a414fd04ebff0667632e4467904f81fa6354ae9ccd46d66c0c7d381"
+      ]
+    },
+    {
+      "file": "files/file7.jp2",
+      "variant": "intent2",
+      "intent": 2,
+      "white": null,
+      "width": 480,
+      "height": 640,
+      "bit_depth": 16,
+      "planes": [
+        "4bef838b6a1154f2cfe1792f4c846ba896b878c49d9a717b6cacf26efc3fcd18",
+        "81d1363cc28f4dcdf26a9f3e6f2a5814982a2b570b10b7bf6add87a276179dac",
+        "42ed0e3b3a414fd04ebff0667632e4467904f81fa6354ae9ccd46d66c0c7d381"
+      ]
+    },
+    {
+      "file": "files/file7.jp2",
+      "variant": "intent3",
+      "intent": 3,
+      "white": null,
+      "width": 480,
+      "height": 640,
+      "bit_depth": 16,
+      "planes": [
+        "4bef838b6a1154f2cfe1792f4c846ba896b878c49d9a717b6cacf26efc3fcd18",
+        "81d1363cc28f4dcdf26a9f3e6f2a5814982a2b570b10b7bf6add87a276179dac",
+        "42ed0e3b3a414fd04ebff0667632e4467904f81fa6354ae9ccd46d66c0c7d381"
+      ]
+    },
+    {
+      "file": "files/file7.jp2",
+      "variant": "intent3_d65",
+      "intent": 3,
+      "white": [
+        0.9505,
+        1.0,
+        1.089
+      ],
+      "width": 480,
+      "height": 640,
+      "bit_depth": 16,
+      "planes": [
+        "c714e28123bda3fab186fd52d546a96e6e76ce37d912c552657149ac34b33131",
+        "f6264d414b710d083c4522cde86c29862211af1584b74401a062fa59e3aa868a",
+        "6d53eca0a47256247454059389037c1a6616d900a068a46d4a957194ba39f947"
+      ]
+    },
+    {
+      "file": "files/file7.jp2",
+      "variant": "intent3_white_1",
+      "intent": 3,
+      "white": [
+        1.2,
+        1.1,
+        1.0
+      ],
+      "width": 480,
+      "height": 640,
+      "bit_depth": 16,
+      "planes": [
+        "d7e942bdf4c6c6bd96ce8337148633a760b8457116f60a6ef6f4150fdf2b40b4",
+        "618722abdc2fd1b7638147d642c0f1624c1038633b7b061b85097b64ebe1ca8f",
+        "0b73a93f4ced1378acc645326f5e6d0f17aeea392aadbf0c7ab2bb4d6703f89e"
+      ]
+    },
+    {
+      "file": "files/file7.jp2",
+      "variant": "intent3_white_2",
+      "intent": 3,
+      "white": [
+        0.9,
+        0.95,
+        0.7
+      ],
+      "width": 480,
+      "height": 640,
+      "bit_depth": 16,
+      "planes": [
+        "f888adfba6863e42113949b15b9708fe6dc035c3ebff5675a38896382135cab1",
+        "25ed24dddf0ea040274164dc3d8d0bbe7083dbb7a61036b9158cd1b1ac894536",
+        "28000826901f88865f14f2494ff13b1eafc84cea4f24f5b5265d47c4e49f7ee4"
+      ]
+    },
+    {
+      "file": "files/file8.jp2",
+      "variant": "intent0",
+      "intent": 0,
+      "white": null,
+      "width": 700,
+      "height": 400,
+      "bit_depth": 8,
+      "planes": [
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934",
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934",
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934"
+      ]
+    },
+    {
+      "file": "files/file8.jp2",
+      "variant": "intent1",
+      "intent": 1,
+      "white": null,
+      "width": 700,
+      "height": 400,
+      "bit_depth": 8,
+      "planes": [
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934",
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934",
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934"
+      ]
+    },
+    {
+      "file": "files/file8.jp2",
+      "variant": "intent2",
+      "intent": 2,
+      "white": null,
+      "width": 700,
+      "height": 400,
+      "bit_depth": 8,
+      "planes": [
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934",
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934",
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934"
+      ]
+    },
+    {
+      "file": "files/file8.jp2",
+      "variant": "intent3",
+      "intent": 3,
+      "white": null,
+      "width": 700,
+      "height": 400,
+      "bit_depth": 8,
+      "planes": [
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934",
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934",
+        "a7af9b8802db317580e0200c2bc62964d364ae01dd3eefe69ddcf68d067de934"
+      ]
+    },
+    {
+      "file": "files/file8.jp2",
+      "variant": "intent3_d65",
+      "intent": 3,
+      "white": [
+        0.9505,
+        1.0,
+        1.089
+      ],
+      "width": 700,
+      "height": 400,
+      "bit_depth": 8,
+      "planes": [
+        "b93b184a26112e82ac3bd7b0f8a9f8b819e90212497b514badfe1d194da95c39",
+        "91504a65b3676a3857169828e71dddb93d2f5d74b4e4c3f3d1bb484ee4f7209a",
+        "471e129359a2a6813b7c1773665d169b771795ca6becaa172e8bc3afe3ee4493"
+      ]
+    },
+    {
+      "file": "files/file8.jp2",
+      "variant": "intent3_white_1",
+      "intent": 3,
+      "white": [
+        1.2,
+        1.1,
+        1.0
+      ],
+      "width": 700,
+      "height": 400,
+      "bit_depth": 8,
+      "planes": [
+        "5d5d9ebf0ff2c487d7520a42655432342386c788eb14afef9c209c4627289d56",
+        "a9276c97817f82849bd7550712ad62924ec1b94f323551b63dc539f4d463e935",
+        "f2fc4f2737f3f1de03c7e91495b159f25ac9230ba13d6e7d4273cea197ce3c52"
+      ]
+    },
+    {
+      "file": "files/file8.jp2",
+      "variant": "intent3_white_2",
+      "intent": 3,
+      "white": [
+        0.9,
+        0.95,
+        0.7
+      ],
+      "width": 700,
+      "height": 400,
+      "bit_depth": 8,
+      "planes": [
+        "2a15c0fcb710834092460fe3f6a0ba16e997b256acba0a1775acbe04c302fb47",
+        "14217c1f0aaa6fc7eb22326c6f402b79cf789454d89bb1094dc48e26d27d37a2",
+        "851e254b2708074bd4a99634083388285d47654ba49ccdde8fd34c7d7bfaeaa7"
+      ]
+    }
+  ]
+}

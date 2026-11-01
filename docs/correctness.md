@@ -243,29 +243,44 @@ odd column whose pair index reaches the chroma width also takes zero
 `opj_decompress` sample for sample. The only change is where OpenJPEG would
 read past the chroma plane: that sample takes chroma zero here.
 
-**ICC profiles are converted in floating point, not by lcms.** OpenJPEG
-hands the profile to LittleCMS 2. This decoder parses the restricted tags
-and evaluates them in `f64`: the tone curves (a `curv` of 0, 1 or n entries,
-or a `para` of types 0 to 4), the profile's matrix into XYZ (D50), the
-D50-adapted sRGB matrix lcms builds (Rec. 709 primaries, the white point of
-`cmsWhitePointFromTemp(6504)`, Bradford-adapted), the sRGB curve, then
-rounding. lcms runs fixed-point 8- or 16-bit pipelines, so at 8 bits the
-two differ by at most 1. At 16 bits they differ by about one 8-bit level:
-file7 at its native depth is up to 254 off (PAE), which the `>> 8` of the
-grade brings to 1. Against the ISO references ours is closer on files 5 and 8 and
-slightly further on file7 (by at most 0.0056 MSE), all well inside the
-class bounds:
+**ICC profiles are converted as LittleCMS converts them.** OpenJPEG hands
+the profile to LittleCMS 2 (2.14 in the oracle build) with the profile's
+rendering intent. `src/jp2/lcms.rs` ports the part of lcms these profiles
+reach: the pipeline it builds (the tone curves and matrix into XYZ, the
+white-point scaling of absolute colorimetric, black point compensation under
+perceptual and saturation, since lcms's sRGB profile is ICC v4, then the
+inverse sRGB matrix and curves), the optimisation it picks for that pipeline
+(the 8-bit matrix-shaper in 1.14 fixed point, prelinearisation curves with a
+33-point table, or resampling into a 33-point table, with the white fix-up;
+for 16-bit RGB on a profile of gamma below 1.6, no optimisation), and its
+16-bit interpolation, step for step at lcms's precision. The output matches
+`opj_decompress -force-rgb` sample for sample (`tests/jp2_icc.rs`):
 
-| File | Ours vs ISO (MSE) | OpenJPEG vs ISO (MSE) | Ours vs OpenJPEG (MSE) |
-| ---- | ----------------- | --------------------- | ---------------------- |
-| file5 (RGB, gamma 1.8) | 0.0846 / 0.1723 / 0.2025 | 0.0897 / 0.1750 / 0.2050 | 0.0189 / 0.0091 / 0.0124 |
-| file7 (RGB, 16-bit, 2048-entry curves; after `>> 8`) | 0.1498 / 0.1771 / 0.1905 | 0.1442 / 0.1770 / 0.1900 | 0.0191 / 0.0092 / 0.0059 |
-| file8 (grey, `kTRC`) | 0.2115 | 0.2739 | 0.0624 |
+- files 5, 7 and 8 at rendering intents 0 to 3, and at intent 3 with the
+  media white point set to D65, (1.2, 1.1, 1.0) and (0.9, 0.95, 0.7): 21
+  variants, file7 at its native 16 bits;
+- 63 synthetic RGB profiles at 8 and 16 bits and 10 monochrome ones: edge
+  cases (degenerate, descending and noisy curves, every parametric type,
+  extreme matrices and white points, nonzero black points, both sides of
+  the gamma 1.6 threshold) and the 24 malformed profiles of the PR #184
+  review. Where lcms refuses a profile, the decode is a typed error.
 
-Peak error 1 everywhere. The hand vectors in `src/jp2/srgb_tests.rs` agree with
-lcms (Pillow's `ImageCms`) exactly; the one value seen to differ is grey
-input 1 through the gamma-1.8 `kTRC`, 0.15 before rounding, which lcms
-gives as 1 and this decoder as 0.
+During development the port also matched lcms 2.14 itself on every 8-bit
+RGB input (2^24) and a million random 16-bit pixels for each of these
+profiles. Against the ISO references the result is OpenJPEG's, inside the
+class bounds (PAE 4, MSE 1):
+
+| File | Ours vs ISO (MSE) | Ours vs OpenJPEG |
+| ---- | ----------------- | ---------------- |
+| file5 (RGB, gamma 1.8) | 0.0897 / 0.1750 / 0.2050 | identical |
+| file7 (RGB, 16-bit, 2048-entry curves; after `>> 8`) | 0.1442 / 0.1770 / 0.1900 | identical at 16 bits |
+| file8 (grey, `kTRC`) | 0.2739 | identical |
+
+Peak error against ISO is 1 everywhere. The floating-point evaluation this
+replaced was slightly closer to ISO on files 5 and 8 (MSE 0.0846 / 0.1723 /
+0.2025 and 0.2115). OpenJPEG is the reference decoder, and nothing in the
+standard asks for a closer match to these display references, so the
+evidence rule above keeps OpenJPEG's output.
 
 Two output shapes differ from `opj_decompress`, by choice of the grading
 harness and not of the samples: file7 stays 16-bit, and the harness shifts
@@ -305,21 +320,13 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   other than XYZ, a lookup-table tag (`A2B0`..`A2B2`, `D2B0`..`D2B3`, which
   lcms would prefer over the matrix), a missing tag, or a curve type other
   than `curv` and `para` 0 to 4. lcms converts most of these;
-- rendering intent 3 (absolute colorimetric) with a media white point
-  (`wtpt`) other than D50, and any intent above 3. Absolute colorimetric
-  scales XYZ by the profile's white over the output's, D50 for lcms's sRGB.
-  With a D50 or missing `wtpt` that is 1, and OpenJPEG's output is
-  byte-identical to intent 0, so it converts here as intent 0 does. With
-  another white point lcms no longer builds a matrix-shaper transform: it
-  resamples the pipeline into a 33-point table and interpolates. Measured on
-  file5's profile with a D65 `wtpt`, the exact transform with the white
-  scaling is up to 27 levels off OpenJPEG near black; a model of the
-  table's interpolation gets within 1 on two white points but stays up to
-  10 off on a third, so it is not reproduced. Above intent 3, lcms
-  refuses to build the transform and OpenJPEG writes the samples
-  unconverted while reporting them converted; for that and for every refusal
-  in this list the owner's rule from the 2026-11-01 decisions on #165
-  applies: an error beats a silently wrong image;
+- a rendering intent above 3. lcms refuses to build the transform and
+  OpenJPEG writes the samples unconverted while reporting them converted;
+  for that and for every refusal in this list the owner's rule from the
+  2026-11-01 decisions on #165 applies: an error beats a silently wrong
+  image;
+- a `curv` tone curve of more than 32767 entries, which lcms does not read
+  (OpenJPEG then converts nothing);
 - an RGB profile on samples other than 8- or 16-bit unsigned, or a grey
   profile on samples other than 8-bit unsigned (owner decision, 2026-11-01,
   on #165). OpenJPEG picks an lcms format from the precision alone
@@ -329,7 +336,12 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   4-bit RGB image, measured here, grey 15 comes out 18, grey 12 comes out
   13, and (15, 0, 0) comes out with red 29, all written into 4-bit planes;
 - a profile shorter than its header, a tag table or tag past its end, or a
-  tag cut short or of the wrong type: `FileFormat`;
+  tag cut short or of the wrong type: `FileFormat`. lcms reads some of these
+  anyway: an `XYZ ` tag too short for its value is read on into the next
+  tag;
+- a monochrome profile on three colour channels. OpenJPEG runs its grey
+  transform over the interleaved RGB samples, one byte per pixel, so the
+  output is scrambled.
 - `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.
 
 Chroma replication grows the output, so it is checked against the decode's
@@ -337,6 +349,11 @@ sample budget before the tiles are read (`Limit`), as palette expansion is.
 After a conversion `Image::jp2` reports what the samples now are, as
 OpenJPEG does (owner decision, 2026-11-01, on #165): `ColourSpace::Srgb`,
 or `ColourSpace::Greyscale` for a monochrome profile, with no ICC profile.
+A monochrome profile whose output is not neutral (absolute colorimetric with
+a tinted media white point) gives three channels, R, G and B in place of the
+grey one, as `ColourSpace::Srgb`; this is checked against the sample budget
+too. sYCC or an RGB profile on one or two colour channels passes through, as
+OpenJPEG leaves it, with the metadata as declared.
 A pass-through, the default `AsCoded` decode and `read_header` report the
 colour space the file declares.
 

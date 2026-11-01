@@ -478,6 +478,10 @@ GeoJP2 `uuid` payloads, GML `asoc` trees) and the Part 4 files' `xml ` boxes.
   the sRGB curve; round. For monochrome, `kTRC` then the sRGB curve gives one
   grey channel. Any other profile class or tag set is `Unsupported` (it is not a
   restricted profile, so not a JP2).
+  Shipped differently (#187): the closed form came within 1 of OpenJPEG but
+  not exact, so `src/jp2/lcms.rs` ports the pipeline and optimisations
+  LittleCMS 2.14 builds for these profiles, at every intent from 0 to 3, and
+  matches `opj_decompress -force-rgb` sample for sample.
 - Everything else: `Srgb` and `Greyscale` pass through; `Enumerated(_)` and
   `Unknown` are `Unsupported` under `Srgb`.
 
@@ -593,7 +597,7 @@ so and why we differ (or do not).
 | Under `Srgb`: colour channels of different depth, sign or sub-sampling (other than sYCC chroma at 2x1 or 2x2) | ICC: conversion skipped, samples as coded; three components with sub-sampled chroma and an sRGB or absent `colr`: converted as if sYCC | reject | `Unsupported` (owner decision 2026-11-01); `AsCoded` decodes them; row of `srgb_reject_matrix_maps_each_input_to_its_typed_error` |
 | Under `Srgb`: sYCC with sub-sampled luma or another chroma layout | "CAN NOT CONVERT", samples as coded | reject | `Unsupported` |
 | Under `Srgb`: signed sYCC | converted silently as if unsigned, then clamped (R `[-7,-62,61,114]` → `[0,0,15,0]`) | reject | `Unsupported` (owner decision 2026-11-01) |
-| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, a non-restricted ICC profile (class not `scnr`, space not RGB/GRAY, PCS not XYZ, a LUT tag, intent 3 with a non-D50 `wtpt` or intent above 3, a missing tag, a curve other than `curv`/`para` 0-4), or ICC on samples other than 8/16-bit (RGB) or 8-bit (grey) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit grey 15 → 18 | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as grey, metadata as declared; a tag table or tag past the profile's end, or a tag cut short or of the wrong type, is `FileFormat` (`docs/correctness.md`, sRGB output) |
+| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, a non-restricted ICC profile (class not `scnr`, space not RGB/GRAY, PCS not XYZ, a LUT tag, an intent above 3, a missing tag, a curve other than `curv`/`para` 0-4 or a `curv` of more than 32767 entries), or ICC on samples other than 8/16-bit (RGB) or 8-bit (grey) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit grey 15 → 18 | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as grey, metadata as declared; a tag table or tag past the profile's end, or a tag cut short or of the wrong type, is `FileFormat` (`docs/correctness.md`, sRGB output) |
 | `raw_channels` with `Srgb` | n/a | reject before reading | `InvalidOptions` |
 | sYCC chroma replication past the sample budget | allocates | reject before any tile | `Limit` |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |

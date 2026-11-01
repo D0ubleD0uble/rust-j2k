@@ -7,7 +7,7 @@
 //! on every value used here.
 
 use super::SIGNATURE;
-use super::srgb::{ChromaLayout, Curve, replicate, srgb_encode, sycc_sample};
+use super::srgb::{ChromaLayout, replicate, sycc_sample};
 use crate::{
     ColourOutput, ColourSpace, DecodeOptions, Error, Image, decode, decode_with, read_header,
 };
@@ -441,40 +441,6 @@ fn replication_reproduces_openjpeg_on_the_sycc_fixtures() {
 // ICC
 // ---------------------------------------------------------------------------
 
-#[test]
-fn curves_evaluate_as_icc_defines_them() {
-    assert_eq!(Curve::Identity.eval(0.3), 0.3);
-    assert!((Curve::Gamma(2.0).eval(0.5) - 0.25).abs() < 1e-12);
-    let table = Curve::Table(vec![0, 32768, 65535]);
-    assert!((table.eval(0.25) - 16384.0 / 65535.0).abs() < 1e-12);
-    assert_eq!(table.eval(1.0), 1.0);
-    // Type 0 is a plain gamma; type 3 is linear below d (the sRGB form).
-    assert!(
-        (Curve::Parametric(0, [2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).eval(0.5) - 0.25).abs() < 1e-12
-    );
-    let srgb = [
-        2.4,
-        1.0 / 1.055,
-        0.055 / 1.055,
-        1.0 / 12.92,
-        0.04045,
-        0.0,
-        0.0,
-    ];
-    let s = Curve::Parametric(3, srgb);
-    assert!((s.eval(0.02) - 0.02 / 12.92).abs() < 1e-12);
-    assert!((s.eval(0.5) - 0.214_041_140_5).abs() < 1e-9);
-    // Type 4 adds e above d and f below it.
-    let p = Curve::Parametric(4, [1.0, 1.0, 0.0, 2.0, 0.5, 0.1, 0.05]);
-    assert!((p.eval(0.25) - 0.55).abs() < 1e-12);
-    assert!((p.eval(0.75) - 0.85).abs() < 1e-12);
-    // Out of range values clamp.
-    assert_eq!(
-        Curve::Parametric(2, [1.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0]).eval(0.5),
-        1.0
-    );
-}
-
 /// A 1-pixel image through file5's gamma-1.8 wide-gamut profile, via a
 /// palette so the pixel is exact: (120, 100, 80) -> (160, 114, 95) and
 /// (200, 100, 50) -> (255, 80, 46), as numpy and LittleCMS both give.
@@ -683,12 +649,6 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "`Lab ` connection space",
         ),
         (
-            "absolute colorimetric, D65 white point",
-            white(xyz(D65)),
-            is_unsupported,
-            "rendering intent 3 (absolute colorimetric) and a media white point other than D50",
-        ),
-        (
             "absolute colorimetric, white point not XYZ",
             white(curv(&[1])),
             is_file_format,
@@ -766,12 +726,6 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             file(THREE, &icc_colr(&grey_profile()), &[]),
             is_unsupported,
             "monochrome ICC profile needs one colour channel; the file has 3",
-        ),
-        (
-            "RGB profile, one colour",
-            file(ONE, &icc_colr(&wide_gamut()), &[]),
-            is_unsupported,
-            "needs colour channels 1, 2 and 3; the file has 1",
         ),
         (
             "RGB profile on 12-bit samples",
@@ -950,18 +904,6 @@ fn a_grey_jp2_without_a_converted_colour_space_passes_through() {
     );
 }
 
-/// The sRGB curve's linear segment near black: 12.92 x up to 0.0031308,
-/// where the power segment would give a different value.
-#[test]
-fn the_srgb_curve_is_linear_near_black() {
-    assert!((srgb_encode(0.002) - 0.02584).abs() < 1e-12);
-    assert!((srgb_encode(0.0031308) - 12.92 * 0.0031308).abs() < 1e-12);
-    assert!((srgb_encode(0.5) - (1.055 * 0.5f64.powf(1.0 / 2.4) - 0.055)).abs() < 1e-12);
-    assert_eq!(srgb_encode(-1.0), 0.0);
-    assert_eq!(srgb_encode(f64::NAN), 0.0);
-    assert!((srgb_encode(2.0) - 1.0).abs() < 1e-12);
-}
-
 /// D65 as an `s15Fixed16` white point.
 const D65: [i32; 3] = [62290, 65536, 71369];
 
@@ -991,6 +933,26 @@ fn absolute_colorimetric_with_a_d50_white_point_converts_as_relative() {
     for tags in [with_d50, wide_gamut_tags()] {
         let image = decode_srgb(&intent_3(tags)).expect("intent 3");
         assert_eq!(image.components, intent_0.components);
+    }
+}
+
+/// Absolute colorimetric with another media white point scales XYZ by it
+/// over D50, so it no longer matches intent 0 and stays in range.
+#[test]
+fn absolute_colorimetric_with_a_d65_white_point_scales_by_it() {
+    let mut with_d65 = wide_gamut_tags();
+    with_d65.push((b"wtpt", xyz(D65)));
+    let intent_0 = with_d65.clone();
+    let relative = decode_srgb(&file(
+        THREE,
+        &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", 0, &intent_0)),
+        &[],
+    ))
+    .expect("intent 0");
+    let absolute = decode_srgb(&intent_3(with_d65)).expect("intent 3");
+    assert_ne!(absolute.components, relative.components);
+    for c in &absolute.components {
+        assert!(c.samples.iter().all(|&s| (0..=255).contains(&s)));
     }
 }
 

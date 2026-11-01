@@ -22,20 +22,18 @@
 //!   build carries the `comp12w` guard from upstream master, which tag v2.5.0
 //!   does not have.
 //! - **Restricted ICC** profiles of the two forms Annex I allows are applied
-//!   in closed form: a monochrome input profile (`kTRC`) gives one grey
-//!   channel, and a three-component matrix/TRC input profile (`rXYZ`, `gXYZ`,
-//!   `bXYZ`, `rTRC`, `gTRC`, `bTRC`) gives RGB. Each channel is linearised by
-//!   its curve, the matrix takes it to XYZ (D50), the inverse of the
-//!   D50-adapted sRGB matrix takes it to linear sRGB, and the sRGB curve
-//!   encodes it. This is the transform LittleCMS builds for these profiles,
-//!   in floating point. At 8 bits the result is within one level of
-//!   OpenJPEG + lcms; at 16 bits it is within about one 8-bit level (file7
-//!   differs by up to 254 at its native depth), since lcms runs fixed-point
-//!   pipelines.
+//!   as OpenJPEG applies them, through a port of LittleCMS 2.14
+//!   ([`super::lcms`]): a monochrome input profile (`kTRC`) and a
+//!   three-component matrix/TRC input profile (`rXYZ`, `gXYZ`, `bXYZ`,
+//!   `rTRC`, `gTRC`, `bTRC`), at every rendering intent from 0 to 3. The
+//!   output matches `opj_decompress -force-rgb` sample for sample. A
+//!   monochrome profile gives one grey channel when its output is neutral,
+//!   as it is unless absolute colorimetric scales by a tinted white point;
+//!   then it gives R, G and B in place of the grey channel.
 //!
-//! One or two channels with no colour space this step converts (no `colr`,
-//! or another enumerated colour space) pass through as grey, as OpenJPEG
-//! reads them.
+//! sYCC or an RGB profile on one or two colour channels passes through, as
+//! OpenJPEG leaves them, and so do one or two channels with no colour space
+//! this step converts (no `colr`, or another enumerated colour space).
 //!
 //! Everything else is [`Error::Unsupported`]: another enumerated colour
 //! space, no colour space, a profile of another class or form, and colour
@@ -43,39 +41,11 @@
 //! layouts above). OpenJPEG converts some of those anyway and gets them
 //! wrong; `docs/correctness.md` lists each case.
 
-use super::metadata::{Association, ChannelDefinition, ChannelType, ColourSpace};
+use super::lcms::{Format, InputProfile, ToneCurve, Transform};
+use super::metadata::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
 use crate::codestream::MAX_IMAGE_SAMPLES;
 use crate::codestream::markers::Siz;
 use crate::{Component, ComponentInfo, Error, Result};
-
-/// The XYZ (D50) to linear sRGB matrix: the inverse of the sRGB primaries
-/// adapted to D50 with the Bradford transform, as LittleCMS builds its sRGB
-/// profile (`cmsCreate_sRGBProfile`: Rec. 709 primaries, the white point of
-/// `cmsWhitePointFromTemp(6504)`, D50 = 0.9642, 1.0, 0.8249). Computed in
-/// double precision; each row of the forward matrix sums to D50.
-const XYZ_D50_TO_SRGB: [[f64; 3]; 3] = [
-    [3.135866755, -1.6186701432, -0.4908868735],
-    [-0.9786373621, 1.9160069766, 0.0334527432],
-    [0.0720010749, -0.229141816, 1.4058896589],
-];
-
-/// The PCS illuminant, D50, as LittleCMS holds it (`cmsD50_XYZ`).
-const D50: [f64; 3] = [0.9642, 1.0, 0.8249];
-
-/// Whether a media white point is D50 to within the `s15Fixed16` step it is
-/// stored at. Absolute colorimetric (intent 3) scales XYZ by the input white
-/// over the output's (D50 for LittleCMS's sRGB), so with a D50 white point
-/// it is relative colorimetric, which is what OpenJPEG + lcms give: the
-/// output is byte-identical to intent 0. Any other white point makes lcms
-/// resample the transform into a 33-point table, whose interpolation this
-/// decoder does not reproduce (measured up to 10 levels off), so it is
-/// refused.
-fn is_d50(white: [f64; 3]) -> bool {
-    white
-        .iter()
-        .zip(D50)
-        .all(|(&w, d)| (w - d).abs() <= 1.0 / 65536.0)
-}
 
 /// The ICC header and the tag count that follows it.
 const PROFILE_HEADER: usize = 132;
@@ -98,12 +68,17 @@ pub(crate) enum SrgbPlan {
     /// A matrix/TRC profile applied to the R, G, B channels at these positions.
     IccRgb {
         channels: [usize; 3],
-        curves: Box<[Curve; 3]>,
-        /// Linear RGB of the profile to linear sRGB, in one matrix.
-        matrix: [[f64; 3]; 3],
+        transform: Box<Transform>,
     },
-    /// A monochrome profile applied to the grey channel at this position.
-    IccGrey { channel: usize, curve: Curve },
+    /// A monochrome profile applied to the grey channel at this position,
+    /// through the RGB each 8-bit grey level maps to. When every level maps
+    /// to a grey (`neutral`), the channel stays one grey channel; otherwise
+    /// it becomes R, G, B in its place.
+    IccGrey {
+        channel: usize,
+        table: Box<[[u8; 3]; 256]>,
+        neutral: bool,
+    },
 }
 
 /// How sYCC chroma is sampled relative to luma (always at full resolution).
@@ -115,70 +90,6 @@ pub(crate) enum ChromaLayout {
     Horizontal,
     /// 4:2:0: chroma sub-sampled 2x2.
     Both,
-}
-
-/// A tone reproduction curve: device value in `0..=1` to linear.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Curve {
-    /// `curv` with no entries.
-    Identity,
-    /// `curv` with one entry: a `u8.8` gamma.
-    Gamma(f64),
-    /// `curv` with two or more entries, sampled evenly over `0..=1`.
-    Table(Vec<u16>),
-    /// `para` (ICC v4): the function type and its parameters, unused ones 0.
-    Parametric(u16, [f64; 7]),
-}
-
-impl Curve {
-    /// The curve at `x` in `0..=1`, clamped to `0..=1`.
-    pub(crate) fn eval(&self, x: f64) -> f64 {
-        let y = match self {
-            Curve::Identity => x,
-            Curve::Gamma(g) => x.powf(*g),
-            Curve::Table(table) => {
-                let last = table.len() - 1;
-                let at = x.clamp(0.0, 1.0) * last as f64;
-                let i = (at.floor() as usize).min(last);
-                let j = (i + 1).min(last);
-                let frac = at - i as f64;
-                let (a, b) = (f64::from(table[i]), f64::from(table[j]));
-                (a + (b - a) * frac) / 65535.0
-            }
-            Curve::Parametric(kind, p) => parametric(*kind, p, x),
-        };
-        if y.is_nan() { 0.0 } else { y.clamp(0.0, 1.0) }
-    }
-}
-
-/// ICC.1:2010 10.18 `parametricCurveType`, in LittleCMS's form: a power of a
-/// non-positive base is 0.
-fn parametric(kind: u16, p: &[f64; 7], x: f64) -> f64 {
-    let [g, a, b, c, d, e, f] = *p;
-    let power = |base: f64| if base > 0.0 { base.powf(g) } else { 0.0 };
-    match kind {
-        0 => power(x),
-        1 => power(a * x + b),
-        2 => power(a * x + b) + c,
-        3 if x >= d => power(a * x + b),
-        3 => c * x,
-        4 if x >= d => power(a * x + b) + e,
-        _ => c * x + f,
-    }
-}
-
-/// The sRGB encoding curve (IEC 61966-2-1) on a linear value, clamped first.
-pub(crate) fn srgb_encode(linear: f64) -> f64 {
-    let x = if linear.is_nan() {
-        0.0
-    } else {
-        linear.clamp(0.0, 1.0)
-    };
-    if x <= 0.0031308 {
-        12.92 * x
-    } else {
-        1.055 * x.powf(1.0 / 2.4) - 0.055
-    }
 }
 
 /// Plan the sRGB step for a JP2 file's output channels: their formats
@@ -196,8 +107,11 @@ pub(crate) fn plan(
             uniform(&colour_channels(channels, outputs, 0), outputs)?;
             Ok(SrgbPlan::PassThrough)
         }
+        // OpenJPEG converts sYCC and an RGB profile only on three or more
+        // components; one or two pass through as declared.
+        ColourSpace::Sycc if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
         ColourSpace::Sycc => plan_sycc(channels, outputs, siz, reduction),
-        ColourSpace::RestrictedIcc(profile) => plan_icc(profile, channels, outputs),
+        ColourSpace::RestrictedIcc(profile) => plan_icc(profile, channels, outputs, siz, reduction),
         // One or two channels with no colour space this step converts:
         // OpenJPEG reads any image of two or fewer components as grey (and
         // grey plus opacity) and passes it through, so this does too.
@@ -366,8 +280,16 @@ fn plan_icc(
     profile: &[u8],
     channels: &[ChannelDefinition],
     outputs: &[ComponentInfo],
+    siz: &Siz,
+    reduction: u8,
 ) -> Result<SrgbPlan> {
     let icc = Profile::parse(profile)?;
+    let intent = icc.intent;
+    let white = if intent == 3 && icc.entry(b"wtpt").is_some() {
+        Some(icc.xyz(b"wtpt")?)
+    } else {
+        None
+    };
     match &icc.space {
         b"GRAY" => {
             let colours = colour_channels(channels, outputs, 0);
@@ -379,34 +301,83 @@ fn plan_icc(
                 )));
             };
             check_icc_format(outputs[channel], &[8], "monochrome")?;
+            let input = InputProfile {
+                intent,
+                white,
+                curves: vec![icc.curve(b"kTRC")?],
+                colorants: [[0.0; 3]; 3],
+            };
+            let transform = Transform::new(&input, Format::Grey8);
+            let mut table = Box::new([[0u8; 3]; 256]);
+            for (grey, rgb) in (0..=255u8).zip(table.iter_mut()) {
+                *rgb = transform.grey8(grey);
+            }
+            let neutral = table.iter().all(|&[r, g, b]| r == g && g == b);
+            if !neutral {
+                check_grey_budget(outputs, channel, siz, reduction)?;
+            }
             Ok(SrgbPlan::IccGrey {
                 channel,
-                curve: icc.curve(b"kTRC")?,
+                table,
+                neutral,
             })
         }
+        // OpenJPEG applies an RGB profile only to three or more components.
+        _ if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
         _ => {
             let colours = three_colours(channels, outputs, "an RGB ICC profile")?;
             uniform(&colours, outputs)?;
-            check_icc_format(outputs[colours[0]], &[8, 16], "RGB")?;
-            let curves = Box::new([
+            let info = outputs[colours[0]];
+            check_icc_format(info, &[8, 16], "RGB")?;
+            let curves = vec![
                 icc.curve(b"rTRC")?,
                 icc.curve(b"gTRC")?,
                 icc.curve(b"bTRC")?,
-            ]);
+            ];
             let columns = [icc.xyz(b"rXYZ")?, icc.xyz(b"gXYZ")?, icc.xyz(b"bXYZ")?];
-            let mut matrix = [[0.0; 3]; 3];
-            for (row, out) in XYZ_D50_TO_SRGB.iter().zip(&mut matrix) {
-                for (k, cell) in out.iter_mut().enumerate() {
-                    *cell = (0..3).map(|i| row[i] * columns[k][i]).sum();
-                }
-            }
+            let colorants = [0, 1, 2].map(|row| columns.map(|column| column[row]));
+            let input = InputProfile {
+                intent,
+                white,
+                curves,
+                colorants,
+            };
+            let format = if info.bit_depth == 8 {
+                Format::Rgb8
+            } else {
+                Format::Rgb16
+            };
             Ok(SrgbPlan::IccRgb {
                 channels: colours,
-                curves,
-                matrix,
+                transform: Box::new(Transform::new(&input, format)),
             })
         }
     }
+}
+
+/// A grey channel that becomes R, G, B grows the output by two channels of
+/// its size, which must stay under the decode guard.
+fn check_grey_budget(
+    outputs: &[ComponentInfo],
+    channel: usize,
+    siz: &Siz,
+    reduction: u8,
+) -> Result<()> {
+    let mut total: u64 = 0;
+    for (at, info) in outputs.iter().enumerate() {
+        let (width, height) = siz
+            .sampled_extent_at(info.x_sampling, info.y_sampling, reduction)
+            .ok_or_else(|| Error::Inconsistent("a channel has a zero sub-sampling".into()))?;
+        let copies = if at == channel { 3 } else { 1 };
+        total = total.saturating_add(copies * u64::from(width) * u64::from(height));
+    }
+    if total > MAX_IMAGE_SAMPLES {
+        return Err(Error::Limit(format!(
+            "a monochrome ICC profile that maps grey to colour grows the output to over \
+             {MAX_IMAGE_SAMPLES} samples, above the decode guard"
+        )));
+    }
+    Ok(())
 }
 
 /// The depths a profile is applied at: those where OpenJPEG + lcms read the
@@ -429,6 +400,8 @@ fn check_icc_format(info: ComponentInfo, depths: &[u8], form: &str) -> Result<()
 struct Profile<'a> {
     bytes: &'a [u8],
     space: [u8; 4],
+    /// The header's rendering intent, 0 to 3.
+    intent: u32,
     table: &'a [u8],
 }
 
@@ -486,6 +459,7 @@ impl<'a> Profile<'a> {
         let profile = Profile {
             bytes,
             space,
+            intent,
             table,
         };
         for lut in [
@@ -497,13 +471,6 @@ impl<'a> Profile<'a> {
                     String::from_utf8_lossy(lut)
                 )));
             }
-        }
-        if intent == 3 && profile.entry(b"wtpt").is_some() && !is_d50(profile.xyz(b"wtpt")?) {
-            return Err(unsupported(
-                "with rendering intent 3 (absolute colorimetric) and a media white point \
-                 other than D50"
-                    .into(),
-            ));
         }
         Ok(profile)
     }
@@ -556,8 +523,9 @@ impl<'a> Profile<'a> {
         Ok([s15_16(&data[8..]), s15_16(&data[12..]), s15_16(&data[16..])])
     }
 
-    /// A `curveType` or `parametricCurveType` tag.
-    fn curve(&self, signature: &[u8; 4]) -> Result<Curve> {
+    /// A `curveType` or `parametricCurveType` tag, as LittleCMS reads it
+    /// (`Type_Curve_Read`, `Type_ParametricCurve_Read`).
+    fn curve(&self, signature: &[u8; 4]) -> Result<ToneCurve> {
         let data = self.tag(signature)?;
         let name = String::from_utf8_lossy(signature);
         let short = || {
@@ -567,10 +535,19 @@ impl<'a> Profile<'a> {
             ))
         };
         let kind = data.get(..4).ok_or_else(short)?;
+        let mut params = [0.0; 10];
         match kind {
             b"curv" => {
                 let count = data.get(8..12).ok_or_else(short)?;
                 let count = u32::from_be_bytes([count[0], count[1], count[2], count[3]]);
+                // LittleCMS refuses a longer table, so OpenJPEG converts
+                // nothing.
+                if count > 0x7fff {
+                    return Err(Error::Unsupported(format!(
+                        "sRGB output through an ICC `{name}` curve of {count} entries; \
+                         LittleCMS reads at most 32767"
+                    )));
+                }
                 let entries = usize::try_from(count)
                     .ok()
                     .and_then(|n| n.checked_mul(2))
@@ -581,9 +558,15 @@ impl<'a> Profile<'a> {
                     .map(|v| u16::from_be_bytes([v[0], v[1]]))
                     .collect();
                 Ok(match values[..] {
-                    [] => Curve::Identity,
-                    [gamma] => Curve::Gamma(f64::from(gamma) / 256.0),
-                    _ => Curve::Table(values),
+                    [] => {
+                        params[0] = 1.0;
+                        ToneCurve::parametric(1, params)
+                    }
+                    [gamma] => {
+                        params[0] = f64::from(gamma) / 256.0;
+                        ToneCurve::parametric(1, params)
+                    }
+                    _ => ToneCurve::tabulated(values),
                 })
             }
             b"para" => {
@@ -603,11 +586,10 @@ impl<'a> Profile<'a> {
                     }
                 };
                 let raw = data.get(12..12 + 4 * used).ok_or_else(short)?;
-                let mut params = [0.0; 7];
                 for (param, bytes) in params.iter_mut().zip(raw.chunks_exact(4)) {
                     *param = s15_16(bytes);
                 }
-                Ok(Curve::Parametric(function, params))
+                Ok(ToneCurve::parametric(i32::from(function) + 1, params))
             }
             other => Err(Error::Unsupported(format!(
                 "sRGB output through an ICC `{name}` curve of type `{}`",
@@ -623,13 +605,37 @@ fn s15_16(bytes: &[u8]) -> f64 {
 }
 
 impl SrgbPlan {
-    /// The colour space the output is in once converted: sRGB, or grey for
-    /// a monochrome profile. `None` when the samples pass through.
-    pub(crate) fn converted_colour(&self) -> Option<ColourSpace> {
+    /// Describe the converted output in `metadata`: sRGB, or grey for a
+    /// monochrome profile that keeps grey, with no ICC profile. A grey
+    /// channel that becomes R, G, B gains two channel definitions, colours 2
+    /// and 3, after it, and a non-colour channel associated with the grey
+    /// one is now associated with the whole image. Nothing changes when the
+    /// samples pass through.
+    pub(crate) fn describe(&self, metadata: &mut Jp2Metadata) {
         match self {
-            SrgbPlan::PassThrough => None,
-            SrgbPlan::Sycc { .. } | SrgbPlan::IccRgb { .. } => Some(ColourSpace::Srgb),
-            SrgbPlan::IccGrey { .. } => Some(ColourSpace::Greyscale),
+            SrgbPlan::PassThrough => {}
+            SrgbPlan::Sycc { .. } | SrgbPlan::IccRgb { .. } => metadata.colour = ColourSpace::Srgb,
+            SrgbPlan::IccGrey { neutral: true, .. } => metadata.colour = ColourSpace::Greyscale,
+            SrgbPlan::IccGrey { channel, .. } => {
+                metadata.colour = ColourSpace::Srgb;
+                for definition in &mut metadata.channels {
+                    if definition.kind != ChannelType::Colour
+                        && definition.association == Association::Colour(1)
+                    {
+                        definition.association = Association::WholeImage;
+                    }
+                }
+                let at = (*channel + 1).min(metadata.channels.len());
+                for colour in [3, 2] {
+                    metadata.channels.insert(
+                        at,
+                        ChannelDefinition {
+                            kind: ChannelType::Colour,
+                            association: Association::Colour(colour),
+                        },
+                    );
+                }
+            }
         }
     }
 
@@ -651,23 +657,32 @@ impl SrgbPlan {
             }
             SrgbPlan::IccRgb {
                 channels,
-                curves,
-                matrix,
+                transform,
             } => {
                 let [r, g, b] = channels.map(|at| &components[at]);
-                let rgb = icc_rgb(r, g, b, curves, matrix)?;
+                let rgb = icc_rgb(r, g, b, transform)?;
                 for (at, out) in channels.iter().zip(rgb) {
                     components[*at] = out;
                 }
             }
-            SrgbPlan::IccGrey { channel, curve } => {
-                let grey = &mut components[*channel];
-                let lut = linearise(curve, grey.bit_depth);
-                let max = lut.len() - 1;
-                let scale = max as f64;
-                for sample in &mut grey.samples {
-                    let linear = lut[clamp_index(*sample, max)];
-                    *sample = (srgb_encode(linear) * scale).round() as i32;
+            SrgbPlan::IccGrey {
+                channel,
+                table,
+                neutral,
+            } => {
+                let grey = &components[*channel];
+                let mut rgb = [grey.clone(), grey.clone(), grey.clone()];
+                for (i, &sample) in grey.samples.iter().enumerate() {
+                    let out = table[clamp_index(sample, 255)];
+                    for (plane, value) in rgb.iter_mut().zip(out) {
+                        plane.samples[i] = i32::from(value);
+                    }
+                }
+                let [r, g, b] = rgb;
+                components[*channel] = r;
+                if !neutral {
+                    components.insert(*channel + 1, b);
+                    components.insert(*channel + 1, g);
                 }
             }
         }
@@ -680,36 +695,28 @@ fn clamp_index(sample: i32, max: usize) -> usize {
     usize::try_from(sample.max(0)).map_or(max, |s| s.min(max))
 }
 
-/// The curve sampled at every code value of an unsigned `depth`-bit channel
-/// (`depth` is 8 or 16: checked by the plan).
-fn linearise(curve: &Curve, depth: u8) -> Vec<f64> {
-    let max = (1u32 << depth) - 1;
-    (0..=max)
-        .map(|v| curve.eval(f64::from(v) / f64::from(max)))
-        .collect()
-}
-
+/// An RGB profile on 8 or 16-bit samples (the plan checked the depth).
 fn icc_rgb(
     r: &Component,
     g: &Component,
     b: &Component,
-    curves: &[Curve; 3],
-    matrix: &[[f64; 3]; 3],
+    transform: &Transform,
 ) -> Result<[Component; 3]> {
     same_grid(&[r, g, b])?;
-    let luts = curves.each_ref().map(|curve| linearise(curve, r.bit_depth));
-    let max = luts[0].len() - 1;
-    let scale = max as f64;
     let mut out = [r.clone(), g.clone(), b.clone()];
+    let eight = r.bit_depth == 8;
+    let max = if eight { 255 } else { 65535 };
     for i in 0..r.samples.len() {
-        let linear = [
-            luts[0][clamp_index(r.samples[i], max)],
-            luts[1][clamp_index(g.samples[i], max)],
-            luts[2][clamp_index(b.samples[i], max)],
-        ];
-        for (row, channel) in matrix.iter().zip(out.iter_mut()) {
-            let value = row[0] * linear[0] + row[1] * linear[1] + row[2] * linear[2];
-            channel.samples[i] = (srgb_encode(value) * scale).round() as i32;
+        let [rv, gv, bv] = [r, g, b].map(|c| clamp_index(c.samples[i], max));
+        let rgb = if eight {
+            transform.rgb8([rv, gv, bv].map(|v| v as u8)).map(i32::from)
+        } else {
+            transform
+                .rgb16([rv, gv, bv].map(|v| v as u16))
+                .map(i32::from)
+        };
+        for (channel, value) in out.iter_mut().zip(rgb) {
+            channel.samples[i] = value;
         }
     }
     Ok(out)

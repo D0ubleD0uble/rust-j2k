@@ -63,11 +63,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   returns the samples as the file codes them. `Srgb` converts a JP2 file's
   colour channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to
   full resolution first), and a restricted ICC profile (monochrome or
-  three-component matrix/TRC) applied. sRGB and greyscale pass through,
-  and so do one or two channels with no colour space to convert from (a
+  three-component matrix/TRC) applied at its rendering intent, with the
+  same output as OpenJPEG with LittleCMS, sample for sample. sRGB and
+  greyscale pass through, and so do sYCC or an RGB profile on one or two
+  channels, and one or two channels with no colour space to convert from (a
   raw codestream, or a file with no `colr` or another enumerated space). After a
   conversion `Jp2Metadata::colour` says sRGB, or greyscale for a monochrome
-  profile. Other colour spaces, other profiles, and colour channels that
+  profile whose output is neutral. Other colour spaces, other profiles, and colour channels that
   differ in depth, sign or sub-sampling are `Unsupported`; `Srgb` with
   `raw_channels` is `InvalidOptions`.
 

@@ -72,3 +72,12 @@ path = "fuzz_targets/header.rs"
 test = false
 doc = false
 bench = false
+
+# `icc_srgb` pins the codestream and boxes and fuzzes the ICC profile under
+# `ColourOutput::Srgb`: the profile parser and the LittleCMS port.
+[[bin]]
+name = "icc_srgb"
+path = "fuzz_targets/icc_srgb.rs"
+test = false
+doc = false
+bench = false
