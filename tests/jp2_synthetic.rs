@@ -135,7 +135,12 @@ fn every_cdef_fixture_labels_its_channels_from_the_box() {
     let def = |kind, association| ChannelDefinition { kind, association };
     let colours = |n: u16| (1..=n).map(|c| def(C, Colour(c))).collect::<Vec<_>>();
     let rgba = [colours(3), vec![def(Opacity, WholeImage)]].concat();
-    let cases: &[(&str, &[(u16, u16, u16)], Vec<ChannelDefinition>)] = &[
+    type Case = (
+        &'static str,
+        &'static [(u16, u16, u16)],
+        Vec<ChannelDefinition>,
+    );
+    let cases: &[Case] = &[
         (
             "jp2_cdef_rgba",
             &[(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 1, 0)],

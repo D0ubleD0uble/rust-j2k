@@ -282,7 +282,8 @@ mod tests {
     /// file (see `tests/fixtures/README.md` for the harness).
     #[test]
     fn placement_follows_openjpeg() {
-        let cases: &[(&[(u16, u16, u16)], [usize; 3])] = &[
+        type Case = (&'static [(u16, u16, u16)], [usize; 3]);
+        let cases: &[Case] = &[
             (&[(0, 0, 1), (1, 0, 2), (2, 0, 3)], [0, 1, 2]),
             (&[(0, 0, 3), (1, 0, 2), (2, 0, 1)], [2, 1, 0]),
             (&[(2, 0, 1), (1, 0, 2), (0, 0, 3)], [2, 1, 0]),

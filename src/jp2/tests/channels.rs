@@ -144,7 +144,11 @@ fn accepted_layouts_come_out_in_openjpeg_order() {
         ),
     ];
     for (what, cdef, want) in cases {
-        assert_eq!(order(&with_children(&[cdef.clone()])), want, "{what}");
+        assert_eq!(
+            order(&with_children(std::slice::from_ref(cdef))),
+            want,
+            "{what}"
+        );
     }
 }
 
@@ -188,7 +192,7 @@ fn every_channel_is_labelled_with_its_entry() {
         ),
     ];
     for (what, cdef, want) in cases {
-        let image = decode(&with_children(&[cdef.clone()])).expect(what);
+        let image = decode(&with_children(std::slice::from_ref(cdef))).expect(what);
         assert_eq!(image.jp2.expect("metadata").channels, want, "{what}");
     }
 }
@@ -334,8 +338,10 @@ fn entries_are_checked_against_the_channels_after_the_palette() {
 /// `opj_jp2_check_color` under its ignore flag). The box layout still is.
 #[test]
 fn raw_channels_skips_the_channel_definitions() {
-    let mut options = DecodeOptions::default();
-    options.raw_channels = true;
+    let options = DecodeOptions {
+        raw_channels: true,
+        ..DecodeOptions::default()
+    };
     let raw = raw();
     for cdef in [
         reversed(),
@@ -368,8 +374,10 @@ fn raw_channels_skips_the_channel_definitions() {
 #[test]
 fn raw_channels_keeps_the_index_plane_label_with_a_cdef() {
     use super::palette::{cmap_box, pclr_box};
-    let mut options = DecodeOptions::default();
-    options.raw_channels = true;
+    let options = DecodeOptions {
+        raw_channels: true,
+        ..DecodeOptions::default()
+    };
     let image = decode_with(
         &with_children(&[pclr_box(), cmap_box(), reversed()]),
         options,
