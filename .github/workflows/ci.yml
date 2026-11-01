@@ -129,6 +129,12 @@ jobs:
         run: cargo fuzz run tier1_block --target x86_64-unknown-linux-gnu -- -max_total_time=30 -rss_limit_mb=4096
       - name: Fuzz mq (15s)
         run: cargo fuzz run mq --target x86_64-unknown-linux-gnu -- -max_total_time=15 -rss_limit_mb=4096
+      # Seed the JP2 targets so the short smoke reaches the colour and header code.
+      - name: Seed the JP2 fuzz corpora
+        run: |
+          python3 scripts/gen-jp2-fuzz-seeds.py
+          mkdir -p fuzz/corpus/header
+          cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 fuzz/corpus/header/
       # The JP2 box target takes the box dictionary instead.
       - name: Fuzz jp2_boxes (30s)
         run: cargo fuzz run jp2_boxes --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096
