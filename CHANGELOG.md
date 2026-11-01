@@ -18,7 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   definitions (`cdef`), inside `jp2h` or after it, is still `Unsupported`, as
   is a file that is not JP2-compatible.
 - A JP2 file with a palette (`pclr` + `cmap`) decodes to the palette's
-  channels, one per `cmap` entry, with each channel's depth and sign from the
+  channels, one per palette column, with each channel's depth and sign from the
   palette. What is accepted and every output sample follow OpenJPEG, except
   that a palette channel may look up any column, not only its own.
   `Jp2Metadata::palette_applied` says whether the palette was applied.

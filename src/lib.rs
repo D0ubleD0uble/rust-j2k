@@ -105,7 +105,7 @@ pub use jp2::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metad
 /// on [`Image::jp2`], which is `None` for a raw codestream.
 ///
 /// A JP2 file with a palette (`pclr` and `cmap`) decodes to the palette's
-/// channels, one per `cmap` entry, so it can have more components than its
+/// channels, one per palette column, so it can have more components than its
 /// codestream. [`DecodeOptions::raw_channels`] returns the index plane
 /// instead. A `pclr` without a `cmap` is ignored.
 ///
