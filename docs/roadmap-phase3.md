@@ -590,6 +590,11 @@ so and why we differ (or do not).
 | `ihdr.UnkC = 1` with a `colr` | `UnkC` read, never used | `colr` value reported | none (match oracle; I.5.3.1) |
 | No `colr` at all | decodes, colour unknown | decodes, `Unknown` | none (samples are unaffected) |
 | `colr METH 2` with too few bytes for a profile header | reads what is there | reject | applies only to the later sRGB conversion: `FileFormat` under `Srgb` only; the colour space and bytes are passed through as they are |
+| Under `Srgb`: colour channels of different depth, sign or sub-sampling (other than sYCC chroma at 2x1 or 2x2) | ICC: conversion skipped, samples as coded; three components with sub-sampled chroma and an sRGB or absent `colr`: converted as if sYCC | reject | `Unsupported` (owner decision 2026-11-01); `AsCoded` decodes them; row of `srgb_reject_matrix_maps_each_input_to_its_typed_error` |
+| Under `Srgb`: sYCC with sub-sampled luma or another chroma layout, or signed | "CAN NOT CONVERT", samples as coded | reject | `Unsupported` |
+| Under `Srgb`: no `colr`, an enumerated space other than 16/17/18, a raw codestream, a non-restricted ICC profile (class not `scnr`, space not RGB/GRAY, PCS not XYZ, a LUT tag, intent 3, a missing tag, a curve other than `curv`/`para` 0-4), or ICC on samples other than 8/16-bit (RGB) or 8-bit (grey) unsigned | no conversion, or converted by lcms | reject | `Unsupported`; a tag table or tag past the profile's end, or a tag cut short or of the wrong type, is `FileFormat` (`docs/correctness.md`, sRGB output) |
+| `raw_channels` with `Srgb` | n/a | reject before reading | `InvalidOptions` |
+| sYCC chroma replication past the sample budget | allocates | reject before any tile | `Limit` |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |
 | `cmap` without `pclr`, or before it in file order | error ("Need to read a PCLR box before the CMAP box") | reject | `FileFormat` |
 | `cmap` shorter than `4 * NPC` bytes | error | reject | `FileFormat` |

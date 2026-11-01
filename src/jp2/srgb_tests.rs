@@ -246,6 +246,17 @@ fn sycc_matches_hand_computed_values() {
         sycc_sample(40000, 32868, 32768, 32768, 65535),
         [40000, 39966, 40177]
     );
+    // Large 16-bit chroma pins each green constant to six places: Cb = +30000
+    // gives 30000 - 10324.08 (0.344 would give 19680), Cr = +30000 gives
+    // 30000 - 21424.08 (0.714 would give 8580).
+    assert_eq!(
+        sycc_sample(30000, 62768, 32768, 32768, 65535),
+        [30000, 19676, 65535]
+    );
+    assert_eq!(
+        sycc_sample(30000, 32768, 62768, 32768, 65535),
+        [65535, 8576, 30000]
+    );
     // The IEC constants and rounding, not OpenJPEG's 0.344 and truncation:
     // Cb = Cr = +100 gives G = 200 - 105.8272 = 94.17 (OpenJPEG: 200 - 105 = 95).
     assert_eq!(sycc_sample(200, 228, 228, 128, 255)[1], 94);
