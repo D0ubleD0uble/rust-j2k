@@ -39,6 +39,10 @@ pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<()> {
     Ok(())
 }
 
+/// The most components `ihdr` may declare: `NC` is 1..=16384 (I.5.3.1), the
+/// same range as the codestream's `Csiz`.
+const MAX_COMPONENTS: u16 = 16384;
+
 /// The Image Header box (I.5.3.1), 14 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Ihdr {
@@ -46,7 +50,8 @@ pub(crate) struct Ihdr {
     pub(crate) height: u32,
     /// `WIDTH`: the image area width.
     pub(crate) width: u32,
-    /// `NC`: the number of components.
+    /// `NC`: the number of components. Only `bpcc` is held to it; the
+    /// codestream's `Csiz` decides the image, as in OpenJPEG.
     pub(crate) components: u16,
     /// `BPC`: bit depth minus one and sign, or 255 when `bpcc` gives the
     /// depths per component. Read, not used: SIZ is the truth for depth.
@@ -67,10 +72,28 @@ impl Ihdr {
                 payload.len()
             )));
         };
+        let (height, width) = (
+            u32::from_be_bytes([h0, h1, h2, h3]),
+            u32::from_be_bytes([w0, w1, w2, w3]),
+        );
+        let components = u16::from_be_bytes([n0, n1]);
+        // OpenJPEG's `opj_jp2_read_ihdr` limits, checked as the box is read.
+        if height == 0 || width == 0 || components == 0 {
+            return Err(Error::FileFormat(format!(
+                "the `ihdr` box declares a {width}x{height} image of {components} components; \
+                 none may be 0"
+            )));
+        }
+        if components > MAX_COMPONENTS {
+            return Err(Error::FileFormat(format!(
+                "the `ihdr` box declares {components} components; a file holds at most \
+                 {MAX_COMPONENTS}"
+            )));
+        }
         Ok(Ihdr {
-            height: u32::from_be_bytes([h0, h1, h2, h3]),
-            width: u32::from_be_bytes([w0, w1, w2, w3]),
-            components: u16::from_be_bytes([n0, n1]),
+            height,
+            width,
+            components,
             bits_per_component: bpc,
             compression: c,
             unknown_colourspace: unk_c,
@@ -198,8 +221,7 @@ impl<'a> Jp2Header<'a> {
         self.payloads(b"bpcc")
     }
 
-    /// Resolution superboxes (I.5.3.7), contents not yet descended into.
-    #[cfg(test)]
+    /// Resolution superboxes (I.5.3.7), read by [`super::resolution`].
     pub(crate) fn res(&self) -> Vec<&'a [u8]> {
         self.payloads(b"res ")
     }

@@ -241,6 +241,19 @@ def write(name: str, data: bytes, geometry: dict, components: list[dict], proven
         "components": components,
         "provenance": provenance,
     }
+    if name.startswith("jp2_palette_"):
+        # Each palette fixture carries COLR_SRGB and a palette that applies,
+        # with no `cdef`, `res `, `xml ` or `uuid` box: one colour channel per
+        # palette column. The `cdef` fixtures' labels are checked by
+        # tests/jp2_synthetic.rs instead.
+        snapshot["jp2"] = {
+            "colour": "srgb",
+            "channels": [f"colour/{i + 1}" for i in range(len(components))],
+            "palette_applied": True,
+            "resolution": {"capture": None, "display": None},
+            "xml": [],
+            "uuid": [],
+        }
     (FIXTURES / f"{name}.expected.json").write_text(json.dumps(snapshot, indent=2) + "\n")
     print(f"wrote {name}.jp2 + {name}.expected.json ({len(components)} channels)")
 

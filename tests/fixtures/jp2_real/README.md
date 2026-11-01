@@ -57,6 +57,14 @@ The three files with a `cdef` box (`3_13bit_and_1bit.jp2`,
 (`opj_decompress -i <file>.jp2 -o <stem>.pgx`), and their channel labels
 against their `cdef` boxes. Two match bit-exactly. `stefan_full_rgba.jp2` is
 9/7 and is graded within 1: 10 of its 97200 samples differ from OpenJPEG's by
-1, from OpenJPEG's 9/7 scaling constant (see `docs/correctness.md`). The
-references are OpenJPEG output for files whose rights are not confirmed, so
-they share the status in Rights above.
+1, from 9/7 float rounding, mostly OpenJPEG's 2/K constant (see
+`docs/correctness.md`). The references are OpenJPEG output for files whose
+rights are not confirmed, so they share the status in Rights above.
+
+`metadata.json` records what each file's header says (colour, channels,
+resolution, top-level `xml ` and `uuid` boxes), in the `jp2` snapshot schema of
+`tests/fixtures/README.md`, for every file whose header reads cleanly. The
+values come from a box dump of each file (the `colr` `EnumCS`, the
+`cdef` entries, the `resc`/`resd` fields, the top-level `xml ` and `uuid` box
+sizes and identifiers), not from this decoder. `read_header` must report them,
+and so must `decode` for each file it decodes.

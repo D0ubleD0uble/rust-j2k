@@ -1,0 +1,203 @@
+{
+  "_comment": "What each decodable file's header says, in the `jp2` snapshot schema of tests/support/mod.rs (Jp2Snapshot). Recorded from a box dump of each file (colr EnumCS, the resc/resd fields in box order VRN VRD HRN HRD VRE HRE, the top-level xml and uuid boxes), not from this decoder. Channels follow each file's cdef entries, in output order.",
+  "files": {
+    "3_13bit_and_1bit.jp2": {
+      "colour": "srgb",
+      "channels": [
+        "colour/1",
+        "colour/2",
+        "colour/3",
+        "opacity/whole"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": null,
+        "display": null
+      },
+      "xml": [
+        589
+      ],
+      "uuid": [
+        [
+          "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
+          671
+        ]
+      ]
+    },
+    "byte.jp2": {
+      "colour": "greyscale",
+      "channels": [
+        "colour/1"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": null,
+        "display": null
+      },
+      "xml": [],
+      "uuid": [
+        [
+          "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
+          300
+        ]
+      ]
+    },
+    "byte_tlm_plt.jp2": {
+      "colour": "greyscale",
+      "channels": [
+        "colour/1"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": [
+          10000,
+          254,
+          10000,
+          254,
+          0,
+          0
+        ],
+        "display": null
+      },
+      "xml": [],
+      "uuid": [
+        [
+          "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
+          365
+        ]
+      ]
+    },
+    "byte_with_xmp.jp2": {
+      "colour": "greyscale",
+      "channels": [
+        "colour/1"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": null,
+        "display": null
+      },
+      "xml": [],
+      "uuid": [
+        [
+          "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
+          348
+        ],
+        [
+          "be7acfcb97a942e89c71999491e3afac",
+          3578
+        ]
+      ]
+    },
+    "int16.jp2": {
+      "colour": "greyscale",
+      "channels": [
+        "colour/1"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": null,
+        "display": null
+      },
+      "xml": [],
+      "uuid": [
+        [
+          "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
+          300
+        ]
+      ]
+    },
+    "rgb16_ecwsdk.jp2": {
+      "colour": "srgb",
+      "channels": [
+        "unspecified/none",
+        "unspecified/none",
+        "unspecified/none"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": null,
+        "display": null
+      },
+      "xml": [
+        616
+      ],
+      "uuid": [
+        [
+          "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
+          706
+        ]
+      ]
+    },
+    "rgbwcmyk01_YeGeo_kakadu.jp2": {
+      "colour": "srgb",
+      "channels": [
+        "colour/1",
+        "colour/2",
+        "colour/3"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": null,
+        "display": [
+          12901,
+          32768,
+          12901,
+          32768,
+          4,
+          4
+        ]
+      },
+      "xml": [],
+      "uuid": [
+        [
+          "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
+          792
+        ]
+      ]
+    },
+    "small_200ppcm.jp2": {
+      "colour": "srgb",
+      "channels": [
+        "colour/1",
+        "colour/2",
+        "colour/3"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": null,
+        "display": [
+          6554,
+          32768,
+          6554,
+          32768,
+          5,
+          5
+        ]
+      },
+      "xml": [],
+      "uuid": [
+        [
+          "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
+          348
+        ]
+      ]
+    },
+    "stefan_full_rgba.jp2": {
+      "colour": "srgb",
+      "channels": [
+        "colour/1",
+        "colour/2",
+        "colour/3",
+        "opacity/whole"
+      ],
+      "palette_applied": false,
+      "resolution": {
+        "capture": null,
+        "display": null
+      },
+      "xml": [],
+      "uuid": []
+    }
+  }
+}

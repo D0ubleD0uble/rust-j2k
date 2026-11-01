@@ -264,6 +264,7 @@ than silently dropping data. Keep this document and that type in step.
 | `tolerance`  | object   | How close our decode must be to pass (below).                 |
 | `components` | object[] | One entry per component, in SIZ order (below).                |
 | `provenance` | object   | Where the fixture came from and how to regenerate (below).    |
+| `jp2`        | object, optional | For a JP2 fixture, what its header says (below).      |
 
 ### `image`
 
@@ -311,6 +312,22 @@ Tagged by `mode`, so both arms read the same in JSON:
 | `source`         | string          | Where the codestream came from.                          |
 | `oracle_command` | string          | Exact command that regenerates this snapshot.            |
 | `notes`          | string, optional | Free-form note (how the source was obtained, caveats).  |
+
+### `jp2`
+
+Optional; present on the synthetic JP2 fixtures, and the schema of each record
+in `jp2_real/metadata.json`. Checked against `Image::jp2` when present. It is
+the `Jp2Snapshot` type in `tests/support/mod.rs`, written so a box dump can be
+checked against it by hand.
+
+| Field             | Type     | Meaning                                                              |
+| ----------------- | -------- | -------------------------------------------------------------------- |
+| `colour`          | string   | `srgb`, `greyscale`, `sycc`, `icc:<profile bytes>`, `enumerated:<n>`, `unknown`. |
+| `channels`        | string[] | One `<type>/<association>` per output channel, e.g. `colour/1`.      |
+| `palette_applied` | bool     | Whether the palette was applied.                                     |
+| `resolution`      | object   | `capture` and `display`: `[VRN, VRD, HRN, HRD, VRE, HRE]` in box order, or `null`. |
+| `xml`             | int[]    | Byte length of each top-level `xml ` box, in file order.             |
+| `uuid`            | array[]  | `[id as lowercase hex, payload length]` per top-level `uuid` box.    |
 
 ## Example
 

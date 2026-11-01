@@ -114,16 +114,34 @@ The JP2 box layer follows OpenJPEG 2.5.0 where a file bends Annex I in a
 way it tolerates: `ihdr` anywhere in `jp2h`, a second `jp2h` merged into the
 first, a header box misplaced at the top level after `jp2h` applied as if it
 were inside, a `jp2c` that runs past the end of the file clamped to it, and
-after the codestream only the two length faults OpenJPEG rejects there. The
-two decoders still differ in both directions.
+after the codestream only the two length faults OpenJPEG rejects there. An
+`ihdr.NC` that differs from `Csiz` decodes, as there: the codestream decides
+the image, `bpcc` is still held to `NC`, and the palette's `cmap` is checked
+against `Csiz`, as OpenJPEG checks it (owner decision, 2026-11-01). An
+`ihdr` with a zero width, height or `NC`, or an `NC` over 16384, is refused
+as OpenJPEG refuses it. The `res ` box, which OpenJPEG never reads, never
+fails a decode: a malformed `resc` or `resd` is reported as absent. The two
+decoders still differ in both directions.
+
+The header is checked before any tile data is read, in OpenJPEG's order up to
+the codestream's main header: the boxes, the main header, `ihdr` against SIZ.
+So a file whose `ihdr` disagrees with SIZ and whose codestream is also cut
+short reports the `ihdr` fault, as OpenJPEG does. The palette and channel
+definition checks come next, still before the tiles; OpenJPEG checks the
+`cmap` mapping and the `cdef` entries against the channels only after
+decoding the tiles, so a file with both a palette or `cdef` fault and a tile
+fault reports the box fault here and the tile fault there. Both reject it. This order is what lets `read_header`
+return the same error as `decode` for every header fault.
 
 Stricter here, where OpenJPEG decodes:
 
-- an `ihdr.NC` that differs from `Csiz` (palette and channel definitions
-  index components by `NC`, so a lenient reader would have to guess);
-- a file whose `ftyp` does not claim `jp2 ` compatibility, refused as
-  `Unsupported` (such a file may use features a JP2 reader does not
-  understand);
+- a file whose `ftyp` does not claim `jp2 ` compatibility (pure JPX, JPM or
+  MJ2), refused as `Unsupported`. OpenJPEG decodes its first codestream. The
+  deviation is deliberate (owner decision, 2026-11-01): such a file says a
+  JP2 reader cannot present it correctly (composited codestreams, Part 2
+  extensions, `rreq` features), so its first codestream can be the wrong
+  image with no error. Refusing it lets a later JPX reader produce the right
+  image without silently changing output that already "worked";
 - a `jp2c` whose `LBox` is 2..7 or whose `XLBox` is below 16 (`FileFormat`),
   or whose `LBox` is 8 or more but shorter than its codestream (`Codestream`,
   since the codestream is cut at the box end). OpenJPEG ignores the

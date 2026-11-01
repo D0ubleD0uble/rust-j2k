@@ -8,13 +8,20 @@
 //! with a `cdef` box is checked against `opj_decompress` 2.5.0's decode of the
 //! `.jp2`, committed as one PGX per channel under `references/`, and its
 //! channel labels against its `cdef` box. A file whose codestream is itself
-//! broken is rejected for that first, as the raw codestream is.
+//! broken is rejected with the same error as the raw codestream.
+//!
+//! Every file's header, including the broken one's, must also match its record
+//! in `metadata.json` (taken from a box dump) through `read_header`, and
+//! through `decode` for each file that decodes.
 
 mod support;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use rust_j2k::{Association, ChannelDefinition, ChannelType, Error, decode};
+use rust_j2k::{Association, ChannelDefinition, ChannelType, Error, decode, read_header};
+use serde::Deserialize;
+use support::Jp2Snapshot;
 use support::jp2::sha256_hex;
 use support::pgx::parse_pgx;
 
@@ -94,7 +101,8 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
         "53ecd23500a0f7921f8af6ef39b101a776503a797462ed10dcde77790b0916d5",
         // cdef (0,0,1) (1,0,2) (2,0,3) (3,1,0), written by opj_compress. The
         // codestream is 9/7: 10 of its 97200 samples differ from OpenJPEG's by
-        // 1, from OpenJPEG's 9/7 scaling constant (docs/correctness.md).
+        // 1, from 9/7 float rounding, mostly OpenJPEG's 2/K constant
+        // (docs/correctness.md).
         Outcome::Reference {
             channels: RGBA,
             max_abs: 1,
@@ -124,6 +132,20 @@ fn dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jp2_real")
 }
 
+/// `metadata.json`: the recorded metadata of each file.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Metadata {
+    #[serde(rename = "_comment")]
+    _comment: String,
+    files: BTreeMap<String, Jp2Snapshot>,
+}
+
+fn metadata() -> Metadata {
+    let text = std::fs::read_to_string(dir().join("metadata.json")).expect("read metadata.json");
+    serde_json::from_str(&text).expect("parse metadata.json")
+}
+
 /// The contents of the first top-level `jp2c` box. Test-side and minimal on
 /// purpose: these files are known-good, so any surprise is a panic here.
 fn first_jp2c(bytes: &[u8]) -> &[u8] {
@@ -149,10 +171,26 @@ fn first_jp2c(bytes: &[u8]) -> &[u8] {
 
 #[test]
 fn every_fixture_decodes_like_its_oracle() {
+    let recorded = metadata();
+    assert_eq!(
+        recorded.files.len(),
+        FIXTURES.len(),
+        "a record for each file"
+    );
     let mut decoded = 0;
     for (name, sha256, outcome) in FIXTURES {
         let bytes = std::fs::read(dir().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(sha256_hex(&bytes), *sha256, "{name}: sha256");
+        let want = recorded
+            .files
+            .get(*name)
+            .unwrap_or_else(|| panic!("{name}: no record in metadata.json"));
+        let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let header_jp2 = header.jp2.as_ref().expect("JP2 metadata");
+        assert_eq!(&Jp2Snapshot::of(header_jp2), want, "{name}: read_header");
+        if let Ok(image) = decode(&bytes) {
+            assert_eq!(image.jp2.as_ref(), Some(header_jp2), "{name}: decode");
+        }
         match outcome {
             Outcome::Decodes => {
                 let file = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));

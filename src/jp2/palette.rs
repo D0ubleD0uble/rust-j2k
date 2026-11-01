@@ -49,7 +49,7 @@ use super::header::Jp2Header;
 use super::metadata::{Association, ChannelDefinition, ChannelType, Jp2Metadata};
 use crate::codestream::MAX_IMAGE_SAMPLES;
 use crate::codestream::markers::Siz;
-use crate::{Component, Error, Result};
+use crate::{Component, ComponentInfo, Error, Result};
 
 /// The most entries a palette may hold (I.5.3.4: `NE` is 1..=1024).
 const MAX_ENTRIES: u16 = 1024;
@@ -452,31 +452,24 @@ fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8) -> Result
 }
 
 impl PalettePlan {
-    /// The channels the plan outputs, from the boxes and SIZ alone: one per
-    /// palette column when the palette applies, otherwise each codestream
-    /// component as coded.
-    pub(crate) fn output_channels(&self, siz: &Siz) -> Result<Vec<PlannedChannel>> {
-        if let PalettePlan::Apply { channels, .. } = self {
-            return Ok(channels.clone());
-        }
-        siz.components
-            .iter()
-            .enumerate()
-            .map(|(k, component)| {
-                let component_index = u16::try_from(k).map_err(|_| {
-                    Error::Inconsistent(format!("SIZ component {k} exceeds the u16 index"))
-                })?;
-                Ok(PlannedChannel {
-                    source: Source::Direct {
-                        component: component_index,
-                    },
-                    bit_depth: component.bit_depth,
-                    signed: component.signed,
-                    x_sampling: component.x_sampling,
-                    y_sampling: component.y_sampling,
+    /// The format of each output channel, from the plan and SIZ alone: the
+    /// palette's channels when it applies, otherwise the codestream's
+    /// components as coded.
+    pub(crate) fn output_channels(&self, siz: &Siz) -> Vec<ComponentInfo> {
+        match self {
+            PalettePlan::Apply { channels, .. } => channels
+                .iter()
+                .map(|c| ComponentInfo {
+                    bit_depth: c.bit_depth,
+                    signed: c.signed,
+                    x_sampling: c.x_sampling,
+                    y_sampling: c.y_sampling,
                 })
-            })
-            .collect()
+                .collect(),
+            PalettePlan::None | PalettePlan::Skipped { .. } => {
+                siz.components.iter().map(ComponentInfo::from).collect()
+            }
+        }
     }
 
     /// The output channels from the decoded components, in SIZ order. Each

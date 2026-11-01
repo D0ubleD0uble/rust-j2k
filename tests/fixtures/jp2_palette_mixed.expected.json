@@ -1194,5 +1194,20 @@
     "source": "tests/fixtures/multicomponent_lossless.j2k, wrapped by scripts/gen-jp2-fixtures.py",
     "oracle_command": "opj_decompress -i jp2_palette_mixed.jp2 -o out.pgx",
     "notes": "cmap mixes direct and palette channels: channel 0 = component 2 as coded, channels 1 and 2 = component 0 through columns 1 and 2; column 0 is 8-bit like component 2, since OpenJPEG labels a direct channel i with column i's depth"
+  },
+  "jp2": {
+    "colour": "srgb",
+    "channels": [
+      "colour/1",
+      "colour/2",
+      "colour/3"
+    ],
+    "palette_applied": true,
+    "resolution": {
+      "capture": null,
+      "display": null
+    },
+    "xml": [],
+    "uuid": []
   }
 }

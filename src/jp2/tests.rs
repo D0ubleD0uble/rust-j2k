@@ -8,7 +8,7 @@
 use super::SIGNATURE;
 use crate::{
     Association, ChannelDefinition, ChannelType, ColourSpace, DecodeOptions, Error, Image,
-    Jp2Metadata, decode, decode_with,
+    Jp2Metadata, Ratio, Res, Resolution, UuidBox, decode, decode_with, read_header,
 };
 
 mod channels;
@@ -180,6 +180,9 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
             colour: ColourSpace::Srgb,
             channels: vec![colour(1), colour(2), colour(3)],
             palette_applied: false,
+            resolution: Resolution::default(),
+            xml: Vec::new(),
+            uuid: Vec::new(),
         })
     );
 }
@@ -681,13 +684,36 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
             "`ihdr` declares a 24x15 image",
         ),
         (
-            "ihdr NC differs from Csiz",
+            "ihdr NC of 0",
+            file(&[jp2_ftyp(), jp2h(&[ihdr(HEIGHT, WIDTH, 0), colr()]), jp2c()]),
+            "none may be 0",
+        ),
+        (
+            "ihdr width of 0",
             file(&[
                 jp2_ftyp(),
-                jp2h(&[ihdr(HEIGHT, WIDTH, COMPONENTS - 1), colr()]),
+                jp2h(&[ihdr(HEIGHT, 0, COMPONENTS), colr()]),
                 jp2c(),
             ]),
-            "`ihdr` declares 2 components",
+            "none may be 0",
+        ),
+        (
+            "ihdr height of 0",
+            file(&[
+                jp2_ftyp(),
+                jp2h(&[ihdr(0, WIDTH, COMPONENTS), colr()]),
+                jp2c(),
+            ]),
+            "none may be 0",
+        ),
+        (
+            "ihdr NC over 16384",
+            file(&[
+                jp2_ftyp(),
+                jp2h(&[ihdr(HEIGHT, WIDTH, 16385), colr()]),
+                jp2c(),
+            ]),
+            "declares 16385 components",
         ),
         (
             "LBox 0 inside jp2h",
@@ -804,5 +830,346 @@ fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
     assert_eq!(parsed.codestream, CODESTREAM);
     assert_eq!(parsed.other.len(), 1);
     assert_eq!(parsed.other[0].payload, b"<before/>");
-    assert_eq!(parsed.after_codestream, trailing.as_slice());
+    assert_eq!(parsed.after_codestream.len(), 1);
+    assert_eq!(&parsed.after_codestream[0].kind, b"xml ");
+    assert_eq!(parsed.after_codestream[0].payload, b"<after/>");
+}
+
+/// `ihdr.NC` is not held to `Csiz`: the codestream decides the image, as in
+/// OpenJPEG 2.5.0 (owner decision, 2026-11-01). Measured: `opj_decompress`
+/// decodes a one-component codestream under an `ihdr` with `NC` 2 or 9. A
+/// `bpcc` is still held to `NC`, so it must hold `NC` bytes, not `Csiz`.
+#[test]
+fn an_ihdr_component_count_unlike_csiz_decodes() {
+    for nc in [1, 2, 4, 9, 16384] {
+        let bytes = file(&[jp2_ftyp(), jp2h(&[ihdr(HEIGHT, WIDTH, nc), colr()]), jp2c()]);
+        assert_decodes_like_raw(&bytes);
+        let header = read_header(&bytes).unwrap_or_else(|e| panic!("NC {nc}: {e}"));
+        assert_eq!(header.components.len(), usize::from(COMPONENTS), "NC {nc}");
+    }
+    let with_bpcc = |nc: u16, bytes: usize| {
+        file(&[
+            jp2_ftyp(),
+            jp2h(&[
+                ihdr(HEIGHT, WIDTH, nc),
+                bx(b"bpcc", &vec![7; bytes]),
+                colr(),
+            ]),
+            jp2c(),
+        ])
+    };
+    assert_decodes_like_raw(&with_bpcc(4, 4));
+    file_format(&with_bpcc(4, 3), "a `bpcc` box holds 3 bytes");
+}
+
+/// A file with a wrong `ihdr` width and a truncated codestream reports the
+/// box fault: `ihdr` is held to SIZ before any tile-part is read, as
+/// OpenJPEG does ("Error with SIZ marker: IHDR w(769) h(512) vs. SIZ w(768)
+/// h(512)" on file1 cut to 20000 bytes). Header faults found by the channel
+/// plans come before tile faults too.
+#[test]
+fn a_header_fault_wins_over_a_truncated_codestream() {
+    let truncated = &CODESTREAM[..CODESTREAM.len() - 40];
+    assert!(matches!(decode(truncated), Err(Error::Codestream(_))));
+    let with = |children: &[Vec<u8>], wide: bool| {
+        let width = if wide { WIDTH + 1 } else { WIDTH };
+        let mut all = vec![ihdr(HEIGHT, width, COMPONENTS), colr()];
+        all.extend_from_slice(children);
+        file(&[jp2_ftyp(), jp2h(&all), bx(b"jp2c", truncated)])
+    };
+    file_format(&with(&[], true), "`ihdr` declares a 25x16 image");
+    file_format(
+        &with(&[bx(b"cmap", &[0, 0, 1, 0])], false),
+        "a `cmap` box but no `pclr` box",
+    );
+    file_format(
+        &with(&[bx(b"cdef", &[0, 0])], false),
+        "declares 0 channel definitions",
+    );
+    // With no header fault, the truncation is what is reported.
+    assert!(matches!(
+        decode(&with(&[], false)),
+        Err(Error::Codestream(_))
+    ));
+}
+
+fn res_box(children: &[Vec<u8>]) -> Vec<u8> {
+    bx(b"res ", &children.concat())
+}
+
+fn res_payload(v: (u16, u16, i8), h: (u16, u16, i8)) -> Vec<u8> {
+    let mut out = Vec::new();
+    for value in [v.0, v.1, h.0, h.1] {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+    out.extend_from_slice(&[v.2 as u8, h.2 as u8]);
+    out
+}
+
+fn ratio(numerator: u16, denominator: u16, exponent: i8) -> Ratio {
+    Ratio {
+        numerator,
+        denominator,
+        exponent,
+    }
+}
+
+/// `resc` and `resd` are read from `res ` as four `u16` and two `i8`: the
+/// vertical ratio first, the exponents last.
+#[test]
+fn the_resolution_box_is_read() {
+    let resc = res_payload((10000, 254, 0), (3, 4, -2));
+    let resd = res_payload((12901, 32768, 4), (1, 2, 127));
+    let bytes = file(&[
+        jp2_ftyp(),
+        jp2h(&[
+            good_ihdr(),
+            colr(),
+            res_box(&[bx(b"resc", &resc), bx(b"resd", &resd)]),
+        ]),
+        jp2c(),
+    ]);
+    assert_decodes_like_raw(&bytes);
+    let want = Resolution {
+        capture: Some(Res {
+            vertical: ratio(10000, 254, 0),
+            horizontal: ratio(3, 4, -2),
+        }),
+        display: Some(Res {
+            vertical: ratio(12901, 32768, 4),
+            horizontal: ratio(1, 2, 127),
+        }),
+    };
+    assert_eq!(decode(&bytes).unwrap().jp2.unwrap().resolution, want);
+    assert_eq!(read_header(&bytes).unwrap().jp2.unwrap().resolution, want);
+}
+
+#[test]
+fn a_ratio_converts_to_grid_points_per_metre() {
+    assert_eq!(ratio(3, 4, 2).grid_points_per_metre(), Some(75.0));
+    assert_eq!(ratio(5, 1, -1).grid_points_per_metre(), Some(0.5));
+    assert_eq!(ratio(1, 0, 0).grid_points_per_metre(), None);
+}
+
+/// OpenJPEG 2.5.0 does not read `res `, so no shape of it fails there: every
+/// one below was built and decoded with `opj_decompress`. Here they decode
+/// too, and a malformed `resc` or `resd` is reported as absent. The first
+/// well-formed box of each kind counts.
+#[test]
+fn a_malformed_resolution_box_never_fails_a_decode() {
+    let good = res_payload((10000, 254, 0), (10000, 254, 0));
+    let capture = |v| {
+        Some(Res {
+            vertical: v,
+            horizontal: v,
+        })
+    };
+    let dpi = capture(ratio(10000, 254, 0));
+    let cases: Vec<(&str, Vec<u8>, Resolution)> = vec![
+        ("empty res", res_box(&[]), Resolution::default()),
+        (
+            "garbage in res",
+            bx(b"res ", &[1, 2, 3]),
+            Resolution::default(),
+        ),
+        (
+            "resc of 9 bytes",
+            res_box(&[bx(b"resc", &good[..9])]),
+            Resolution::default(),
+        ),
+        (
+            "resc of 11 bytes",
+            res_box(&[bx(b"resc", &[good.as_slice(), &[0]].concat())]),
+            Resolution::default(),
+        ),
+        (
+            "empty resd",
+            res_box(&[bx(b"resd", &[])]),
+            Resolution::default(),
+        ),
+        (
+            "a child with LBox 3",
+            bx(b"res ", &[header_only(3, b"resc"), good.clone()].concat()),
+            Resolution::default(),
+        ),
+        (
+            "a child past the end of res",
+            bx(b"res ", &[header_only(200, b"resc"), good.clone()].concat()),
+            Resolution::default(),
+        ),
+        (
+            "a zero denominator",
+            res_box(&[bx(b"resc", &res_payload((1, 0, 0), (1, 0, 0)))]),
+            Resolution {
+                capture: capture(ratio(1, 0, 0)),
+                display: None,
+            },
+        ),
+        (
+            "a good resc before a broken child",
+            res_box(&[bx(b"resc", &good), header_only(3, b"resd")]),
+            Resolution {
+                capture: dpi,
+                display: None,
+            },
+        ),
+        (
+            "a short resc, then a good one",
+            res_box(&[bx(b"resc", &good[..4]), bx(b"resc", &good)]),
+            Resolution {
+                capture: dpi,
+                display: None,
+            },
+        ),
+        (
+            "two good resc: the first counts",
+            res_box(&[
+                bx(b"resc", &good),
+                bx(b"resc", &res_payload((1, 1, 1), (1, 1, 1))),
+            ]),
+            Resolution {
+                capture: dpi,
+                display: None,
+            },
+        ),
+        (
+            "an unknown child",
+            res_box(&[bx(b"zzzz", b"?"), bx(b"resd", &good)]),
+            Resolution {
+                capture: None,
+                display: dpi,
+            },
+        ),
+    ];
+    for (what, res, want) in cases {
+        let bytes = file(&[jp2_ftyp(), jp2h(&[good_ihdr(), colr(), res]), jp2c()]);
+        let image = decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(image.jp2.unwrap().resolution, want, "{what}");
+    }
+}
+
+/// A `res ` box outside `jp2h` is not read (I.5.3.7 puts it inside).
+#[test]
+fn a_resolution_box_at_the_top_level_is_not_read() {
+    let res = res_box(&[bx(b"resc", &res_payload((10000, 254, 0), (10000, 254, 0)))]);
+    let bytes = file(&[jp2_ftyp(), good_jp2h(), res, jp2c()]);
+    assert_eq!(
+        decode(&bytes).unwrap().jp2.unwrap().resolution,
+        Resolution::default()
+    );
+}
+
+/// Every top-level `xml ` and `uuid` box comes back verbatim in file order,
+/// before and after the codestream. Ones nested in a skipped superbox
+/// (`asoc`), or inside `jp2h`, are not top-level and are not collected. A
+/// `uuid` shorter than its identifier is skipped (OpenJPEG decodes such a
+/// file; measured with `opj_decompress`).
+#[test]
+fn xml_and_uuid_boxes_are_passed_through_in_file_order() {
+    let id: [u8; 16] = core::array::from_fn(|i| i as u8);
+    let other_id = [0xAB; 16];
+    let bytes = file(&[
+        jp2_ftyp(),
+        bx(b"xml ", b"<one/>"),
+        bx(b"uuid", &[id.as_slice(), b"first"].concat()),
+        bx(b"uuid", b"too short"),
+        bx(b"rreq", &[1, 0x80, 0, 0]),
+        bx(b"asoc", &bx(b"xml ", b"<nested/>")),
+        jp2h(&[good_ihdr(), colr(), bx(b"xml ", b"<in jp2h/>")]),
+        xl_box(b"xml ", b"<two/>"),
+        jp2c(),
+        bx(b"uuid", &other_id),
+        bx(b"xml ", b"<three/>"),
+    ]);
+    assert_decodes_like_raw(&bytes);
+    let metadata = decode(&bytes).unwrap().jp2.unwrap();
+    assert_eq!(
+        metadata.xml,
+        vec![b"<one/>".to_vec(), b"<two/>".to_vec(), b"<three/>".to_vec()]
+    );
+    assert_eq!(
+        metadata.uuid,
+        vec![
+            UuidBox {
+                id,
+                payload: b"first".to_vec(),
+            },
+            UuidBox {
+                id: other_id,
+                payload: Vec::new(),
+            },
+        ]
+    );
+    assert_eq!(read_header(&bytes).unwrap().jp2, Some(metadata));
+}
+
+/// After the codestream, the boxes are collected as far as OpenJPEG's walk
+/// there goes, and collecting them never fails a decode it accepts: a box
+/// past the end of the file, `LBox` 0, or a second `jp2c` ends the walk.
+#[test]
+fn boxes_after_the_codestream_are_collected_as_far_as_the_walk_goes() {
+    let xml = |text: &[u8]| bx(b"xml ", text);
+    let tails: Vec<(&str, Vec<u8>, usize)> = vec![
+        ("two xml", [xml(b"<a/>"), xml(b"<b/>")].concat(), 2),
+        (
+            "an xml past the end of the file",
+            [xml(b"<a/>"), header_only(100, b"xml ")].concat(),
+            1,
+        ),
+        (
+            "an open-ended xml",
+            [xml(b"<a/>"), open_box(b"xml ", b"<b/>")].concat(),
+            1,
+        ),
+        (
+            "after a second jp2c",
+            [xml(b"<a/>"), bx(b"jp2c", b"zz"), xml(b"<b/>")].concat(),
+            1,
+        ),
+        (
+            "three stray bytes",
+            [xml(b"<a/>"), vec![0, 0, 0]].concat(),
+            1,
+        ),
+    ];
+    for (what, tail, count) in tails {
+        let bytes = [minimal(), tail].concat();
+        let image = decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(image.jp2.unwrap().xml.len(), count, "{what}");
+    }
+}
+
+/// `read_header` stops at the codestream's first `SOT` marker: a file cut
+/// right after it has the same header as the whole file. Cut before the
+/// marker, the main header is unterminated, which OpenJPEG also refuses
+/// ("Stream too short").
+#[test]
+fn read_header_reads_no_tile_data() {
+    let sot = CODESTREAM
+        .windows(2)
+        .position(|w| w == [0xFF, 0x90])
+        .expect("the fixture has a tile-part");
+    let whole = read_header(&minimal()).expect("header");
+    let jp2c_at = minimal().len() - CODESTREAM.len();
+    for cut in [sot + 2, sot + 6, sot + 20, CODESTREAM.len() - 1] {
+        let bytes = file(&[jp2_ftyp(), good_jp2h(), bx(b"jp2c", &CODESTREAM[..cut])]);
+        assert_eq!(read_header(&bytes).as_ref(), Ok(&whole), "cut at {cut}");
+        assert!(decode(&bytes).is_err(), "cut at {cut}");
+        // Clamped `jp2c` and raw codestream alike.
+        let clamped = &minimal()[..jp2c_at + cut];
+        assert_eq!(
+            read_header(clamped).as_ref(),
+            Ok(&whole),
+            "clamped at {cut}"
+        );
+        let raw = read_header(&CODESTREAM[..cut]).expect("raw header");
+        assert_eq!(
+            (raw.width, raw.height, &raw.components),
+            (whole.width, whole.height, &whole.components)
+        );
+    }
+    assert!(matches!(
+        read_header(&CODESTREAM[..sot]),
+        Err(Error::Codestream(_))
+    ));
 }

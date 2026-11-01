@@ -2346,5 +2346,20 @@
     "source": "tests/fixtures/multilayer_lossless.j2k, wrapped by scripts/gen-jp2-fixtures.py",
     "oracle_command": "opj_decompress -i jp2_palette_8bit.jp2 -o out.pgx",
     "notes": "pclr 256 entries x 3 columns, 8-bit; cmap channel i = component 0 through column i"
+  },
+  "jp2": {
+    "colour": "srgb",
+    "channels": [
+      "colour/1",
+      "colour/2",
+      "colour/3"
+    ],
+    "palette_applied": true,
+    "resolution": {
+      "capture": null,
+      "display": null
+    },
+    "xml": [],
+    "uuid": []
   }
 }

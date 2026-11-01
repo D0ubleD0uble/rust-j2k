@@ -2346,5 +2346,20 @@
     "source": "synthetic signed 8-bit plane, coded with `opj_compress -i signed.raw -o signed.j2k -F 32,24,1,8,s -n 3`, wrapped by scripts/gen-jp2-fixtures.py",
     "oracle_command": "opj_decompress -i jp2_palette_clamp.jp2 -o out.pgx",
     "notes": "pclr of 100 entries over indices -128..127: below 0 clamps to entry 0, past 99 to entry 99"
+  },
+  "jp2": {
+    "colour": "srgb",
+    "channels": [
+      "colour/1",
+      "colour/2",
+      "colour/3"
+    ],
+    "palette_applied": true,
+    "resolution": {
+      "capture": null,
+      "display": null
+    },
+    "xml": [],
+    "uuid": []
   }
 }

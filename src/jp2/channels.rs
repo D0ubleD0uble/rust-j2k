@@ -32,7 +32,7 @@
 
 use super::header::Jp2Header;
 use super::metadata::{Association, ChannelDefinition, ChannelType, Jp2Metadata};
-use crate::{Component, Error, Result};
+use crate::{Error, Result};
 
 /// The bytes of one `cdef` entry: `Cn`, `Typ`, `Asoc`.
 const ENTRY_BYTES: usize = 6;
@@ -223,8 +223,9 @@ fn place(entries: &[Entry], channels: usize) -> ChannelPlan {
 }
 
 impl ChannelPlan {
-    /// Put the channels in their output order.
-    pub(crate) fn apply(&self, components: Vec<Component>) -> Result<Vec<Component>> {
+    /// Put the channels in their output order: the decoded components, or
+    /// their formats for a header-only read.
+    pub(crate) fn apply<T>(&self, components: Vec<T>) -> Result<Vec<T>> {
         let ChannelPlan::Apply { order, .. } = self else {
             return Ok(components);
         };
@@ -235,7 +236,7 @@ impl ChannelPlan {
                 components.len()
             )));
         }
-        let mut slots: Vec<Option<Component>> = components.into_iter().map(Some).collect();
+        let mut slots: Vec<Option<T>> = components.into_iter().map(Some).collect();
         order
             .iter()
             .map(|&from| {
@@ -257,6 +258,7 @@ impl ChannelPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Component;
 
     fn entries(triples: &[(u16, u16, u16)]) -> Vec<Entry> {
         triples

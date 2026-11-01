@@ -20,6 +20,88 @@ pub struct Jp2Metadata {
     /// file has no palette (or a `pclr` without a `cmap`), or the caller set
     /// [`DecodeOptions::raw_channels`](crate::DecodeOptions::raw_channels).
     pub palette_applied: bool,
+    /// The capture and default display resolutions from the header's `res `
+    /// box, each `None` when the file does not give it.
+    pub resolution: Resolution,
+    /// The contents of every top-level `xml ` box, verbatim and in file
+    /// order, including those after the codestream. Not parsed.
+    pub xml: Vec<Vec<u8>>,
+    /// Every top-level `uuid` box, in file order, including those after the
+    /// codestream. Not interpreted.
+    pub uuid: Vec<UuidBox>,
+}
+
+/// The resolutions a JP2 file's `res ` box gives, in grid points per metre.
+///
+/// The capture resolution (`resc`) is the one the image was digitised at; the
+/// default display resolution (`resd`) is the one it should be shown at. A
+/// box that is missing, or that does not hold exactly its ten bytes, leaves
+/// its field `None`: OpenJPEG does not read `res ` at all, so a malformed one
+/// never fails a decode. When more than one is present, the first counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Resolution {
+    /// The capture resolution (`resc`).
+    pub capture: Option<Res>,
+    /// The default display resolution (`resd`).
+    pub display: Option<Res>,
+}
+
+/// One resolution: grid points per metre in each direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Res {
+    /// Vertical grid points per metre (`VRN`, `VRD`, `VRE`).
+    pub vertical: Ratio,
+    /// Horizontal grid points per metre (`HRN`, `HRD`, `HRE`).
+    pub horizontal: Ratio,
+}
+
+/// A resolution as the file stores it: `numerator / denominator × 10^exponent`
+/// grid points per metre. Kept as integers, so the value is exact;
+/// [`Ratio::grid_points_per_metre`] gives it as a float.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ratio {
+    /// `N`.
+    pub numerator: u16,
+    /// `D`.
+    pub denominator: u16,
+    /// `E`, a power of ten.
+    pub exponent: i8,
+}
+
+impl Ratio {
+    /// The resolution in grid points per metre, or `None` when the
+    /// denominator is 0.
+    ///
+    /// ```
+    /// use rust_j2k::Ratio;
+    ///
+    /// // 10000 / 254 points per metre is one per inch.
+    /// let dpi = Ratio { numerator: 10000, denominator: 254, exponent: 0 };
+    /// let per_inch = dpi.grid_points_per_metre().unwrap() * 0.0254;
+    /// assert!((per_inch - 1.0).abs() < 1e-12);
+    /// ```
+    #[must_use]
+    pub fn grid_points_per_metre(self) -> Option<f64> {
+        if self.denominator == 0 {
+            return None;
+        }
+        Some(
+            f64::from(self.numerator) / f64::from(self.denominator)
+                * 10f64.powi(i32::from(self.exponent)),
+        )
+    }
+}
+
+/// A `uuid` box: a 16-byte identifier and the data it labels.
+///
+/// GeoJP2 georeferencing and XMP are carried this way. A `uuid` box shorter
+/// than its 16-byte identifier is skipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UuidBox {
+    /// The identifier, as stored.
+    pub id: [u8; 16],
+    /// The box contents after the identifier, verbatim.
+    pub payload: Vec<u8>,
 }
 
 /// The colour space a JP2 file declares for its colour channels.

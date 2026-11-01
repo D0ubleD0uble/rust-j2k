@@ -18,7 +18,7 @@
 //!   is actually cut short.
 //!
 //! Each fault is an [`Error::FileFormat`], and the reader stops after the
-//! first one. [`check_after_codestream`] applies OpenJPEG's looser rule to the
+//! first one. [`walk_after_codestream`] applies OpenJPEG's looser rule to the
 //! bytes after the codestream.
 
 use crate::{Error, Result};
@@ -192,21 +192,23 @@ impl<'a> Iterator for Boxes<'a> {
     }
 }
 
-/// Check the bytes after the first `jp2c` box the way OpenJPEG does when it
-/// walks them after decoding: only a box whose `LBox` is 2..=7, or whose
-/// `XLBox` is below 16, is an error. The walk stops quietly at anything it
-/// cannot follow (fewer than 8 bytes left, `LBox` 0, a truncated `XLBox`, a box
-/// past the end of the file) and at the next `jp2c`, as OpenJPEG's does. Box
-/// contents are never read.
-pub(crate) fn check_after_codestream(mut rest: &[u8]) -> Result<()> {
+/// Walk the bytes after the first `jp2c` box the way OpenJPEG does after
+/// decoding, and return the whole boxes it stepped over, in file order: only a
+/// box whose `LBox` is 2..=7, or whose `XLBox` is below 16, is an error. The
+/// walk stops quietly at anything it cannot follow (fewer than 8 bytes left,
+/// `LBox` 0, a truncated `XLBox`, a box past the end of the file) and at the
+/// next `jp2c`, as OpenJPEG's does. Nothing here reads a box's contents; the
+/// caller picks out the `xml ` and `uuid` boxes it passes through.
+pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> Result<Vec<Jp2Box<'_>>> {
+    let mut walked = Vec::new();
     while let [a, b, c, d, t0, t1, t2, t3, ..] = *rest {
         let lbox = u32::from_be_bytes([a, b, c, d]);
         let kind = [t0, t1, t2, t3];
-        let length = match lbox {
-            0 => return Ok(()),
+        let (length, header) = match lbox {
+            0 => return Ok(walked),
             1 => {
                 let Some(xl) = rest.get(8..16) else {
-                    return Ok(());
+                    return Ok(walked);
                 };
                 let mut be = [0u8; 8];
                 be.copy_from_slice(xl);
@@ -218,7 +220,7 @@ pub(crate) fn check_after_codestream(mut rest: &[u8]) -> Result<()> {
                         type_name(kind)
                     )));
                 }
-                xlbox
+                (xlbox, 16)
             }
             2..=7 => {
                 return Err(Error::FileFormat(format!(
@@ -227,10 +229,10 @@ pub(crate) fn check_after_codestream(mut rest: &[u8]) -> Result<()> {
                     type_name(kind)
                 )));
             }
-            n => u64::from(n),
+            n => (u64::from(n), 8),
         };
         if &kind == b"jp2c" || length > rest.len() as u64 {
-            return Ok(());
+            return Ok(walked);
         }
         // `8 <= length <= rest.len()` by the arms above, so every step moves at
         // least 8 bytes and the walk ends. Checked rather than assumed, so a
@@ -244,7 +246,11 @@ pub(crate) fn check_after_codestream(mut rest: &[u8]) -> Result<()> {
                     "box walk step of {length} bytes after the codestream"
                 ))
             })?;
+        // `header <= length` by the arms above, so the payload is in bounds.
+        if let Some(payload) = rest.get(header..step) {
+            walked.push(Jp2Box { kind, payload });
+        }
         rest = rest.get(step..).unwrap_or_default();
     }
-    Ok(())
+    Ok(walked)
 }

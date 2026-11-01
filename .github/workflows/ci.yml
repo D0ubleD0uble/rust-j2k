@@ -132,3 +132,6 @@ jobs:
       # The JP2 box target takes the box dictionary instead.
       - name: Fuzz jp2_boxes (30s)
         run: cargo fuzz run jp2_boxes --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096
+      # The header target checks read_header against decode on the same input.
+      - name: Fuzz header (30s)
+        run: cargo fuzz run header --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096

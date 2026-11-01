@@ -517,3 +517,31 @@ fn channel_definitions_apply_to_the_palette_channels() {
         assert_eq!(jp2.channels, super::channels::colours(3));
     }
 }
+
+/// `read_header` reports the channels in the order `decode` returns them,
+/// after the palette and the `cdef` placement. The palette's columns differ
+/// in depth and sign, so a header that skipped the placement would list them
+/// in the wrong order.
+#[test]
+fn read_header_places_palette_channels_by_their_definitions() {
+    let pclr = bx(
+        b"pclr",
+        &pclr_payload(256, &[7, 11, 0x84], |j, i| u64::from(entry(j, i))),
+    );
+    let bytes = with_children(&[pclr, cmap_box(), super::channels::reversed()]);
+    let image = decode(&bytes).expect("decodes");
+    let header = read_header(&bytes).expect("header");
+    let decoded: Vec<(u8, bool)> = image
+        .components
+        .iter()
+        .map(|c| (c.bit_depth, c.signed))
+        .collect();
+    let read: Vec<(u8, bool)> = header
+        .components
+        .iter()
+        .map(|c| (c.bit_depth, c.signed))
+        .collect();
+    assert_eq!(decoded, [(5, true), (12, false), (8, false)]);
+    assert_eq!(read, decoded);
+    assert_eq!(header.jp2, image.jp2);
+}

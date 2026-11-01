@@ -44,6 +44,8 @@ documentation currency pass, and the extended gate (`cargo doc`,
 - The reason this crate exists is to avoid a C JPEG 2000 dependency. Do not add
   a native/C-binding dependency, ever. No `unsafe` unless a measured hot path
   needs it and it is justified and tested.
+- A test-only allocator shim that forwards to `System` (to measure
+  allocation in a test binary) is allowed `unsafe`.
 - Decode-first: the near-term phases are decode-only. An encoder is a later
   roadmap phase (Phase 5), so "decode" is the current focus, not a permanent
   ceiling. The long-run target is OpenJPEG-level coverage — see `docs/`.
