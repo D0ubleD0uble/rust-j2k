@@ -35,9 +35,13 @@ here (variant 0x0C | codestream << 4, body one `colr`):
   0-4 (type 3 with the sRGB parameters).
 - `icc_grey_*`: a monochrome profile (`kTRC`, `wtpt`) with the same curve
   kinds, on the 8-bit single-component codestream.
-- `icc_rgb_subsampled`, `icc_grey_16bit`: the same profiles on the sub-sampled
-  three-component and the 16-bit single-component codestreams, which the
-  conversion refuses after reading the profile.
+- `icc_rgb_subsampled`: the RGB profile on the three-component codestream
+  sub-sampled 2x2 in all three components. The channels agree, so it converts.
+- `icc_grey_16bit`: the monochrome profile on the 16-bit single-component
+  codestream, which the conversion refuses after reading the profile (8-bit
+  only).
+- `icc_rgb_mixed`: the RGB profile on the sYCC 4:2:0 codestream (luma full
+  size, chroma 2x2), refused for channels that differ in sub-sampling.
 - `sycc_420`, `sycc_422`: METH 1, EnumCS 18 on the sYCC codestreams (Y full
   size, chroma 2x2 and 2x1 sub-sampled), as the committed jp2_sycc_*.jp2
   fixtures. `sycc_subsampled_all` is sYCC on the 2x2 three-component one.
@@ -216,6 +220,7 @@ def main():
         write(f"icc_grey_{name}", 0x0C | ONE_8, colr(2, icc_grey(curve)))
     write("icc_rgb_subsampled", 0x0C | THREE_SUB, colr(2, icc_rgb(CURVES["gamma"])))
     write("icc_grey_16bit", 0x0C | ONE_16, colr(2, icc_grey(CURVES["gamma"])))
+    write("icc_rgb_mixed", 0x0C | SYCC_420, colr(2, icc_rgb(CURVES["gamma"])))
     write("sycc_420", 0x0C | SYCC_420, colr(1, be32(18)))
     write("sycc_422", 0x0C | SYCC_422, colr(1, be32(18)))
     write("sycc_subsampled_all", 0x0C | THREE_SUB, colr(1, be32(18)))

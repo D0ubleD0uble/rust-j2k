@@ -2,7 +2,7 @@
 //! Fuzz the JP2 box layer.
 //!
 //! The `decode` target would have to mutate its way to both a valid box
-//! structure and a valid codestream. Here the codestream is pinned (one of two
+//! structure and a valid codestream. Here the codestream is pinned (one of six
 //! small committed fixtures) and the fuzzer controls the boxes around it, so
 //! every execution reaches the box reader and a valid file is one mutation
 //! away from a full decode. Same contract as `decode`: a typed result, never a
@@ -141,10 +141,43 @@ fuzz_target!(|data: &[u8]| {
     let file = wrap(variant, body);
     // A file that fails as coded fails before any colour conversion, so only
     // one that decodes goes through the profile reader and the sYCC and ICC
-    // conversions. The result is only checked for being a typed one.
-    if rust_j2k::decode(&file).is_ok() {
-        let mut srgb = rust_j2k::DecodeOptions::default();
-        srgb.colour = rust_j2k::ColourOutput::Srgb;
-        let _ = rust_j2k::decode_with(&file, srgb);
+    // conversions. The sRGB result may be a typed error, and its samples
+    // differ from the first decode's when converted; these checks hold either
+    // way.
+    let Ok(coded) = rust_j2k::decode(&file) else {
+        return;
+    };
+    let mut options = rust_j2k::DecodeOptions::default();
+    options.colour = rust_j2k::ColourOutput::Srgb;
+    let Ok(srgb) = rust_j2k::decode_with(&file, options) else {
+        return;
+    };
+    assert_eq!(
+        srgb.components.len(),
+        coded.components.len(),
+        "channel count"
+    );
+    let palette = srgb.jp2.as_ref().is_some_and(|m| m.palette_applied);
+    for c in &srgb.components {
+        assert_eq!(
+            c.samples.len() as u64,
+            u64::from(c.width) * u64::from(c.height)
+        );
+        // A palette channel's samples may fall outside its declared depth.
+        if !c.signed && !palette {
+            let max = (1i64 << c.bit_depth) - 1;
+            assert!(
+                c.samples.iter().all(|&v| (0..=max).contains(&i64::from(v))),
+                "sample outside its bit depth"
+            );
+        }
+    }
+    // Colour left as declared means the samples were passed through.
+    let colour = |i: &rust_j2k::Image| i.jp2.as_ref().map(|m| m.colour.clone());
+    if colour(&srgb) == colour(&coded) {
+        assert_eq!(
+            srgb.components, coded.components,
+            "pass-through changed samples"
+        );
     }
 });
