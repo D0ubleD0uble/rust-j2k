@@ -20,10 +20,13 @@ Palette fixtures (`pclr` + `cmap`):
 - `jp2_palette_corrected`: a one-component file whose `cmap` makes channel 1
   direct, which leaves column 1 unused; OpenJPEG then reads the mapping as the
   identity ("Component mapping seems wrong. Trying to correct.").
-- `jp2_palette_permuted`: channel i looks up column (i + 2) % 3. OpenJPEG
-  refuses this ("Implementation limitation: for palette mapping, pcol[0]
-  should be equal to 0"), so the oracle is a table lookup over OpenJPEG's
-  decode of the bare codestream (the index plane), done here in Python.
+- `jp2_palette_subsampled_big_first` and `jp2_palette_subsampled_small_first`:
+  a two-component codestream (generated here; component 0 at full resolution,
+  component 1 sub-sampled 2x2) with one palette and one direct channel, in
+  both orders. OpenJPEG 2.5.0 sizes every channel by the first one's grid and
+  crashes or emits uninitialised memory, so the oracle is OpenJPEG's decode of
+  the bare codestream, with the palette applied by table lookup here. Each
+  channel keeps its own component's grid (an owner-approved deviation).
 
 Usage: python3 scripts/gen-jp2-fixtures.py
 Requires `opj_compress` and `opj_decompress` on PATH (OpenJPEG 2.5.0 was used).
@@ -123,6 +126,7 @@ def opj_decode(data: bytes, suffix: str) -> tuple[list[dict], str]:
         components = []
         for plane in planes:
             w, h, depth, signed, values = read_pgx(plane)
+            check_container(plane.name, depth, signed, values)
             components.append(
                 {
                     "width": w,
@@ -135,6 +139,20 @@ def opj_decode(data: bytes, suffix: str) -> tuple[list[dict], str]:
                 }
             )
         return components, result.stdout + result.stderr
+
+
+def check_container(name: str, depth: int, signed: bool, values: list[int]) -> None:
+    """Refuse a reference that may have been clamped. `imagetopgx` clamps each
+    sample to the PGX container (1, 2 or 4 bytes), not to the declared depth,
+    so a sample sitting on a container bound outside the declared range may be
+    a clamp, not the decoder's value."""
+    bytes_ = 1 if depth <= 8 else (2 if depth <= 16 else 4)
+    lo, hi = (-(1 << (8 * bytes_ - 1)), (1 << (8 * bytes_ - 1)) - 1) if signed else (0, (1 << (8 * bytes_)) - 1)
+    in_lo, in_hi = (-(1 << (depth - 1)), (1 << (depth - 1)) - 1) if signed else (0, (1 << depth) - 1)
+    for v in values:
+        if v in (lo, hi) and not in_lo <= v <= in_hi:
+            sys.exit(f"{name}: sample {v} sits on the PGX container bound outside the "
+                     f"declared {depth}-bit range; opj_decompress may have clamped it")
 
 
 def entry8(j: int, i: int) -> int:
@@ -188,6 +206,58 @@ def oracle(name: str, data: bytes, geometry: dict, source: str, notes: str, expe
             "notes": notes,
         },
     )
+
+
+def subsampled_codestream(tmp: Path) -> tuple[bytes, str]:
+    """A 24x16 image: component 0 full resolution, component 1 sub-sampled 2x2."""
+    full = bytes((x * 11 + y * 7) % 256 for y in range(16) for x in range(24))
+    half = bytes((x * 29 + y * 5 + 100) % 256 for y in range(8) for x in range(12))
+    (tmp / "sub.raw").write_bytes(full + half)
+    flags = ["-F", "24,16,2,8,u@1x1:2x2", "-n", "2"]
+    run("opj_compress", "-i", str(tmp / "sub.raw"), "-o", str(tmp / "sub.j2k"), *flags)
+    codestream = (tmp / "sub.j2k").read_bytes()
+    decoded, _ = opj_decode(codestream, ".j2k")
+    if [c["samples"] for c in decoded] != [list(full), list(half)]:
+        sys.exit("the sub-sampled codestream did not round-trip losslessly")
+    return codestream, "opj_compress -i sub.raw -o sub.j2k " + " ".join(flags)
+
+
+def subsampled_fixtures() -> None:
+    """Palette and direct channels from components of different sub-sampling."""
+    with tempfile.TemporaryDirectory() as tmp:
+        codestream, compress = subsampled_codestream(Path(tmp))
+    geometry = {"width": 24, "height": 16, "components": 2, "depth": 8, "signed": False}
+    planes, _ = opj_decode(codestream, ".j2k")
+    planes[1]["x_sampling"] = planes[1]["y_sampling"] = 2
+    palette = pclr(256, [7, 7], entry8)
+    for name, mapping in [
+        ("jp2_palette_subsampled_big_first", [(0, 1, 0), (1, 0, 0)]),
+        ("jp2_palette_subsampled_small_first", [(1, 1, 0), (0, 0, 0)]),
+    ]:
+        data = jp2(codestream, geometry, [palette, cmap(mapping)])
+        channels = []
+        for i, (component, mtyp, _) in enumerate(mapping):
+            channel = dict(planes[component])
+            if mtyp == 1:
+                channel["samples"] = [entry8(min(max(k, 0), 255), i) for k in channel["samples"]]
+            channels.append(channel)
+        write(
+            name,
+            data,
+            geometry,
+            channels,
+            {
+                "source": f"synthetic two-component plane pair, coded with `{compress}`, "
+                f"wrapped by {SCRIPT}",
+                "oracle_command": f"opj_decompress -i sub.j2k -o out.pgx, then cmap "
+                f"{mapping} applied by table lookup in Python",
+                "notes": "component 0 is full resolution, component 1 sub-sampled 2x2. "
+                "OpenJPEG 2.5.0 sizes every palette channel by the first channel's grid and "
+                "crashes or emits uninitialised memory on this file, so it is graded by "
+                "table lookup over OpenJPEG's decode of the bare codestream; each channel "
+                "keeps its source component's grid (owner-approved deviation, 2026-11-01)",
+            },
+        )
 
 
 def main() -> None:
@@ -253,39 +323,7 @@ def main() -> None:
         },
     )
 
-    # The permutation: OpenJPEG refuses it, so check that, then grade by table
-    # lookup over its decode of the bare codestream.
-    permutation = [2, 0, 1]
-    permuted = jp2(one, one_geometry, [palette8, cmap([(0, 1, c) for c in permutation])])
-    with tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / "in.jp2").write_bytes(permuted)
-        refused = subprocess.run(
-            ["opj_decompress", "-i", str(Path(tmp) / "in.jp2"), "-o", str(Path(tmp) / "o.pgx")],
-            capture_output=True,
-            text=True,
-        )
-    if refused.returncode == 0 or "Implementation limitation" not in refused.stdout + refused.stderr:
-        sys.exit("expected opj_decompress to refuse the PCOL permutation as its own limitation")
-    (index,), _ = opj_decode(one, ".j2k")
-    channels = []
-    for column in permutation:
-        channel = dict(index)
-        channel["samples"] = [entry8(min(max(k, 0), 255), column) for k in index["samples"]]
-        channels.append(channel)
-    write(
-        "jp2_palette_permuted",
-        permuted,
-        one_geometry,
-        channels,
-        {
-            "source": f"tests/fixtures/multilayer_lossless.j2k, wrapped by {SCRIPT}",
-            "oracle_command": "opj_decompress -i multilayer_lossless.j2k -o out.pgx, "
-            "then channel i = entry8(index, (i + 2) % 3) in Python",
-            "notes": "cmap channel i looks up column (i + 2) % 3. OpenJPEG 2.5.0 refuses "
-            "this as an implementation limit (pcol[i] must equal i), so the oracle is a "
-            "table lookup over OpenJPEG's decode of the bare codestream (the index plane)",
-        },
-    )
+    subsampled_fixtures()
 
 
 if __name__ == "__main__":

@@ -198,7 +198,7 @@ source codestream and the oracle command.
 | `jp2_palette_mixed` | `multicomponent_lossless.j2k` | `cmap` channel 0 direct from component 2, channels 1-2 palette from component 0 | `opj_decompress` on the `.jp2` |
 | `jp2_palette_clamp` | a signed 8-bit plane coded by the script (`opj_compress -i signed.raw -o signed.j2k -F 32,24,1,8,s -n 3`) | `pclr` of 100 entries over indices -128..127 (clamped) | `opj_decompress` on the `.jp2` |
 | `jp2_palette_corrected` | `multilayer_lossless.j2k` | one component, `cmap` channel 1 direct: OpenJPEG's "Trying to correct" identity mapping | `opj_decompress` on the `.jp2` |
-| `jp2_palette_permuted` | `multilayer_lossless.j2k` | `cmap` channel i looks up column (i + 2) % 3 | OpenJPEG refuses this file (its `pcol[i] == i` limit), so: `opj_decompress` on the bare codestream, then a table lookup in the script |
+| `jp2_palette_subsampled_big_first`, `jp2_palette_subsampled_small_first` | a two-component pair coded by the script (`opj_compress -i sub.raw -o sub.j2k -F 24,16,2,8,u@1x1:2x2 -n 2`): component 0 full resolution, component 1 sub-sampled 2x2 | one palette and one direct channel from components of different sub-sampling, in both orders | OpenJPEG crashes on the first (`free(): invalid pointer`) and leaves 287 of 384 direct-channel samples unset on the second, so: `opj_decompress` on the bare codestream, then the palette applied by table lookup in the script. Each channel keeps its own grid (owner-approved deviation) |
 
 They are ours, built over the Apache-2.0 / synthetic codestreams above.
 

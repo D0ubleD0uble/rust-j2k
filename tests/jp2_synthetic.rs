@@ -67,7 +67,8 @@ fn the_fixture_set_is_complete() {
             "jp2_palette_clamp",
             "jp2_palette_corrected",
             "jp2_palette_mixed",
-            "jp2_palette_permuted",
+            "jp2_palette_subsampled_big_first",
+            "jp2_palette_subsampled_small_first",
         ]
     );
 }

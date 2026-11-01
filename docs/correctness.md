@@ -130,16 +130,21 @@ Stricter here, where OpenJPEG decodes:
   codestream box's length and reads to the end. Not yet decided.
 
 The palette (`pclr` + `cmap`) follows OpenJPEG on what it accepts and on
-every output sample, including its quirks: `cmap` holds `NPC` entries
-whatever its length, a direct channel `i` takes column `i`'s depth, signed
-entries are not sign-extended, and a single-component file whose `cmap`
-leaves a column unused is read as the identity mapping. Two differences:
+its output samples, including its quirks: `cmap` holds `NPC` entries
+whatever its length, a palette channel `i` must read column `i` (another
+column is `Unsupported`, as OpenJPEG refuses it), a direct channel `i` takes
+column `i`'s depth, signed entries are not sign-extended, and a
+single-component file whose `cmap` leaves a column unused is read as the
+identity mapping. Two differences, both approved by the owner on 2026-11-01:
 
-- looser: a palette channel `i` may look up any column. OpenJPEG refuses
-  `PCOL != i` as its own implementation limit; such files are graded by table
-  lookup over OpenJPEG's decode of the index plane (`jp2_palette_permuted`);
-- stricter: a palette column too deep for the `i32` sample container is
-  `Unsupported`, as such a codestream component is.
+- stricter: a palette column too deep for the `i32` sample container
+  (unsigned 32 bits, or more than 32) is `Unsupported` when the palette is
+  applied, as such a codestream component is. OpenJPEG decodes it;
+- looser: palette and direct channels from components of different
+  sub-sampling each keep their own component's grid. OpenJPEG sizes every
+  channel by the first one's grid and crashes or leaves samples unset, so
+  `jp2_palette_subsampled_*` are graded by table lookup over OpenJPEG's
+  decode of the bare codestream.
 
 Looser here, where OpenJPEG fails: a malformed header box after the
 codestream (a second signature or `ftyp` box, a `jp2h` without `ihdr`, a

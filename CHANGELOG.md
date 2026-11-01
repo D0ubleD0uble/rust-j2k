@@ -19,12 +19,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is a file that is not JP2-compatible.
 - A JP2 file with a palette (`pclr` + `cmap`) decodes to the palette's
   channels, one per palette column, with each channel's depth and sign from the
-  palette. What is accepted and every output sample follow OpenJPEG, except
-  that a palette channel may look up any column, not only its own.
+  palette. What is accepted and the output samples follow OpenJPEG, so a
+  palette channel that reads another channel's column is `Unsupported`. Two
+  differences: a palette column too deep for an `i32` sample is
+  `Unsupported`, and channels from components of different sub-sampling each
+  keep their own grid, where OpenJPEG fails.
   `Jp2Metadata::palette_applied` says whether the palette was applied.
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
   coded, without the palette. The index plane is then labelled
-  `ChannelType::Unspecified`.
+  `ChannelType::Unspecified`, and only the palette boxes' layout is checked.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
   the samples (`None` for a raw codestream), with `ColourSpace`,
   `ChannelDefinition`, `ChannelType`, and `Association`. The colour space

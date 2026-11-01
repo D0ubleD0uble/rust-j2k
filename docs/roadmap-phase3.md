@@ -593,11 +593,12 @@ so and why we differ (or do not).
 | `pclr` without `cmap` | palette dropped | palette dropped | none (I.5.3.4) |
 | `cmap CMP >= Csiz`, `MTYP > 1`, `PCOL >= NPC`, `MTYP 0 && PCOL != 0` | error | reject | `FileFormat` |
 | `cmap` palette column mapped twice, or palette channel `i` with column `i` unmapped (a direct channel marks column 0) | error | reject | `FileFormat` |
-| `cmap` with `MTYP 1 && PCOL != i` | error (implementation limit) | accept | none; spec allows it |
+| `cmap` with `MTYP 1 && PCOL != i` | error (implementation limit) | reject | `Unsupported` (match oracle, owner decision 2026-11-01); after the `FileFormat` checks, before the correction below |
 | One component, `cmap` leaves a column unused | rewritten to the identity mapping ("Trying to correct") | same | none (match oracle) |
 | Direct channel `i` | labelled with column `i`'s `Bi` | same | none (match oracle) |
-| Palette column deeper than the `i32` container (unsigned 32, any > 32) | decodes (> 32 bits misread at 4 bytes per entry) | reject when applied | `Unsupported`, as for such a codestream component |
-| Signed palette column | entries not sign-extended | same | none (match oracle; owner question open) |
+| Palette column deeper than the `i32` container (unsigned 32, any > 32) | decodes (> 32 bits read at a 4-byte stride) | reject when applied; under `raw_channels` the index plane decodes | `Unsupported`, as for such a codestream component (owner-approved deviation) |
+| Palette and direct channels from components of different sub-sampling | sizes every channel by the first one's grid: crashes or leaves samples unset | each channel on its own component's grid | none (owner-approved deviation) |
+| Signed palette column | entries not sign-extended | same | none (match oracle, owner decision 2026-11-01) |
 | Palette index out of range | clamp | clamp | none (match oracle) |
 | Second `pclr` / `cmap` / `cdef` | error | reject | `FileFormat` |
 | `cdef N = 0`, truncated, `Cn` or `Asoc-1` out of range, incomplete list | error | reject | `FileFormat` |
@@ -605,7 +606,7 @@ so and why we differ (or do not).
 | Unknown box anywhere | skipped | skipped | none |
 | `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none for `pclr`/`cmap` (applied); `Unsupported` for `cdef` until applied, the same guard as inside `jp2h` |
 | The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |
-| Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`, a short `colr`, a wrong-length `bpcc`, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a `cmap` without `pclr`) fails OpenJPEG but decodes here |
+| Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`, a short `colr`, a wrong-length `bpcc`, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a `cmap` without `pclr`, a second `pclr` or `cmap`) fails OpenJPEG but decodes here, and a `pclr`/`cmap` there is never applied |
 | Second `jp2c` | never read | ignored | none (I.5.4) |
 | Deeply nested superboxes | n/a | only `jp2h` and `res ` are entered | no recursion, so no depth bomb |
 | Metadata boxes totalling more than the file | impossible by construction | copies bounded by input length | none |
