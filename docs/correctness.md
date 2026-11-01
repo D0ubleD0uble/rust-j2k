@@ -114,14 +114,25 @@ The JP2 box layer follows OpenJPEG 2.5.0 where a file bends Annex I in a
 way it tolerates: `ihdr` anywhere in `jp2h`, a second `jp2h` merged into the
 first, a header box misplaced at the top level after `jp2h` applied as if it
 were inside, a `jp2c` that runs past the end of the file clamped to it, and
-after the codestream only the two length faults OpenJPEG rejects there. Two
-checks stay stricter, because a lenient reader would have to guess: an
-`ihdr.NC` that differs from `Csiz` (palette and channel definitions index
-components by `NC`), and a `jp2c` whose `LBox` is 2..7 or whose `XLBox` is
-below 16 (OpenJPEG ignores the codestream box's length). A file whose `ftyp`
-does not claim `jp2 ` compatibility is refused too, as `Unsupported`:
-OpenJPEG decodes it anyway, but such a file may use features a JP2 reader
-does not understand.
+after the codestream only the two length faults OpenJPEG rejects there. The
+two decoders still differ in both directions.
+
+Stricter here, where OpenJPEG decodes:
+
+- an `ihdr.NC` that differs from `Csiz` (palette and channel definitions
+  index components by `NC`, so a lenient reader would have to guess);
+- a file whose `ftyp` does not claim `jp2 ` compatibility, refused as
+  `Unsupported` (such a file may use features a JP2 reader does not
+  understand);
+- a `jp2c` whose `LBox` is 2..7 or whose `XLBox` is below 16 (`FileFormat`),
+  or whose `LBox` is 8 or more but shorter than its codestream (`Codestream`,
+  since the codestream is cut at the box end). OpenJPEG ignores the
+  codestream box's length and reads to the end. Not yet decided.
+
+Looser here, where OpenJPEG fails: a malformed header box after the
+codestream (a second signature or `ftyp` box, a `jp2h` without `ihdr`, a
+`colr` running past the end of the file, a bad `cdef`). OpenJPEG runs its box
+handlers on what follows `jp2c`; this decoder only checks lengths there.
 
 The cost is interop: a real-world encoder that produces such a stream decodes
 under OpenJPEG and rejects here. No corpus or conformance file trips any of

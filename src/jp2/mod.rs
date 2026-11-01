@@ -16,13 +16,15 @@
 //! header boxes not applied yet, and [`present`] builds the [`Jp2Metadata`]
 //! that rides on the [`Image`](crate::Image).
 //!
-//! Where a file bends Annex I, the walk does what OpenJPEG 2.5.0 does, so a
-//! file decodes here exactly when it decodes there: `ihdr` may sit anywhere in
-//! `jp2h`, a second `jp2h` before the codestream is merged into the first, a
-//! header box misplaced at the top level after `jp2h` is applied as if it were
-//! inside, and a `jp2c` that runs past the end of the file is clamped to it.
-//! The walk stops at the first `jp2c`; after it, only the two length faults
-//! OpenJPEG rejects there are checked ([`boxes::check_after_codestream`]).
+//! For these ways a file can bend Annex I, the walk does what OpenJPEG 2.5.0
+//! does: `ihdr` may sit anywhere in `jp2h`, a second `jp2h` before the
+//! codestream is merged into the first, a header box misplaced at the top
+//! level after `jp2h` is applied as if it were inside, and a `jp2c` that runs
+//! past the end of the file is clamped to it. The walk stops at the first
+//! `jp2c`; after it, only the two length faults OpenJPEG rejects there are
+//! checked ([`boxes::check_after_codestream`]). The two decoders still differ
+//! on some files, in both directions; `docs/correctness.md` and the reject
+//! matrix in `docs/roadmap-phase3.md` list where.
 //!
 //! Every length is checked before use and nothing is allocated from one (see
 //! [`boxes`]). Box-layer faults are [`Error::FileFormat`]; a file this decoder

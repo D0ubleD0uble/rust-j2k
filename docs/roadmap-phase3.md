@@ -564,6 +564,7 @@ so and why we differ (or do not).
 | Box runs past its parent or the file | error | reject | `FileFormat` (truncation) |
 | `jp2c` runs past the end of the file | decodes (the codestream is read to its end) | clamped to the file, decodes | none (match oracle); the codestream parser still rejects a codestream that is cut short |
 | `jp2c` with `LBox` 2..7 or `XLBox < 16` | decodes (the length is not used) | reject | `FileFormat`; stricter, not yet decided |
+| `jp2c` with `LBox >= 8` but shorter than its codestream | decodes (the length is not used; output identical to the raw decode) | reject (the codestream is cut at the box end) | `Codestream` ("Psot overruns the codestream", "truncated marker segment"); stricter, not yet decided |
 | `LBox = 0` on a box that is not last | error unless `jp2c` | same | `FileFormat`; legal on the last box, including `jp2c` |
 | `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice; past the end of the file, truncation, or clamped for `jp2c` | `FileFormat` for a box other than `jp2c` past the end of the file; slice-based, nothing is allocated from the length |
 | `jp2h` missing | error | reject | `FileFormat` |
