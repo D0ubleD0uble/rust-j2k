@@ -1,0 +1,60 @@
+# JP2 file format box dictionary (ISO/IEC 15444-1 Annex I, plus the JPX and
+# metadata box types real files carry), for libFuzzer's `-dict=` on the
+# `jp2_boxes` target. Box types are four-byte tokens mutation almost never
+# synthesizes on its own; with the dictionary the fuzzer splices a whole box
+# type, or a box header, in one step.
+
+# The signature box, whole, and its contents.
+signature="\x00\x00\x00\x0cjP  \x0d\x0a\x87\x0a"
+signature_contents="\x0d\x0a\x87\x0a"
+
+# Box types the reader knows (Annex I).
+jp="jP  "
+ftyp="ftyp"
+jp2h="jp2h"
+ihdr="ihdr"
+bpcc="bpcc"
+colr="colr"
+pclr="pclr"
+cmap="cmap"
+cdef="cdef"
+res="res "
+resc="resc"
+resd="resd"
+jp2c="jp2c"
+jp2i="jp2i"
+xml="xml "
+uuid="uuid"
+uinf="uinf"
+ulst="ulst"
+url="url "
+
+# JPX boxes a JP2-compatible file may carry (ISO/IEC 15444-2 Annex M).
+rreq="rreq"
+asoc="asoc"
+lbl="lbl "
+jpch="jpch"
+jplh="jplh"
+ftbl="ftbl"
+
+# Brands and compatibility codes.
+brand_jp2="jp2 "
+brand_jpx="jpx "
+brand_jpxb="jpxb"
+brand_jpm="jpm "
+brand_mj2="mjp2"
+brand_j2p0="J2P0"
+brand_j2p1="J2P1"
+
+# Box lengths: LBox 0 (to the end of the file), LBox 1 (an XLBox follows),
+# and the short lengths 2..7 below the 8-byte header.
+lbox_open="\x00\x00\x00\x00"
+lbox_xl="\x00\x00\x00\x01"
+lbox_short="\x00\x00\x00\x07"
+xlbox_huge="\x00\x00\x01\x00\x00\x00\x00\x00"
+
+# Whole box headers for the boxes that steer the walk.
+hdr_jp2h="\x00\x00\x00\x2djp2h"
+hdr_ihdr="\x00\x00\x00\x16ihdr"
+hdr_colr="\x00\x00\x00\x0fcolr"
+hdr_jp2c_open="\x00\x00\x00\x00jp2c"
