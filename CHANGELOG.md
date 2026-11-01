@@ -19,8 +19,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is still `Unsupported`, as is a file that is not JP2-compatible.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
   the samples (`None` for a raw codestream), with `ColourSpace`,
-  `ChannelDefinition`, `ChannelType`, and `Association`. The `colr` box is
-  not read yet, so the colour space is `Unknown`.
+  `ChannelDefinition`, `ChannelType`, and `Association`. The colour space
+  comes from the first usable `colr` box (`METH` 1 or 2); the ICC profile
+  bytes of a `METH` 2 box are returned as they are, not applied. A `colr`
+  shorter than 3 bytes, a `METH` 1 box without its `EnumCS`, a `METH` 2 box
+  without a profile, and a `bpcc` box that is not one byte per component are
+  `FileFormat` errors, as in OpenJPEG.
 - `Error::FileFormat` for a malformed JP2 box structure.
 
 ### Fixed

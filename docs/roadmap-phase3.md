@@ -577,7 +577,12 @@ so and why we differ (or do not).
 | `ihdr.BPC` or `bpcc` disagree with SIZ depth | not checked | accept, SIZ wins | none (match oracle) |
 | Second `ihdr` | ignored with warning | ignored | none (match oracle; spec says one) |
 | Second `colr` | ignored | ignored | none (I.5.3.3) |
-| `colr METH > 2` | box ignored | box ignored | none (Table I.9) |
+| `colr METH` other than 1 or 2 | box ignored, and it does not count as the first `colr` | the same | none (Table I.9); `METH 0` is skipped the same way |
+| `colr` under 3 bytes | error, on every `colr` including ignored later ones | reject | `FileFormat` |
+| `colr METH 1` under 7 bytes, or `METH 2` with no profile | error (checked only on the first usable `colr`) | reject | `FileFormat` |
+| `colr METH 1` with bytes past `EnumCS`, or a short `METH 2` profile | accepted | accepted | none; `RestrictedIcc` holds whatever follows the 3 header bytes |
+| `bpcc` not `NC` bytes | error, on every `bpcc`, whatever `ihdr.BPC` is | reject | `FileFormat` |
+| `ihdr.UnkC = 1` with a `colr` | colour space still read | `ColourSpace::Unknown` | our API (issue #161); a malformed `colr` is still refused |
 | No `colr` at all | decodes, colour unknown | decodes, `Unknown` | none (samples are unaffected) |
 | `colr METH 2` with too few bytes for a profile header | reads what is there | reject | `FileFormat` under `Srgb` only; passthrough otherwise |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |
