@@ -188,19 +188,38 @@ harness forces `bit_exact` entries to zero. The other five stay within PAE 1 in
 the same measurement.
 
 `needs_srgb` marks files 2, 3, 5, 7 and 8, whose references are sRGB display
-output (sYCC or an ICC profile converted). Until the decoder has an sRGB
-output option, those entries report *needs sRGB output* instead of being graded
-against the display reference (files 2, 3, 5, 7 and 8 are still graded as coded, below).
-`shift_right` is the right shift that takes decoded samples to the reference's
-8 bits (file 6: 4, file 7: 8).
+output (sYCC or an ICC profile converted). The harness decodes those with
+`ColourOutput::Srgb` and grades the result against the display reference,
+after grading the default decode as coded (below). `shift_right` is the right
+shift that takes decoded samples to the reference's 8 bits (file 6: 4, file
+7: 8); file 7's sRGB output stays 16-bit and takes the same shift. File 8's
+sRGB output is one grey channel, graded against the one kept plane.
+
+Measured on the converted files (PAE / MSE per channel, R/G/B or grey; the
+OpenJPEG column is `opj_decompress -p 8S -force-rgb` on the `.jp2`, OpenJPEG
+2.5.0 with LittleCMS 2):
+
+| File | Ours vs ISO | OpenJPEG vs ISO | Ours vs OpenJPEG |
+| ---- | ----------- | --------------- | ---------------- |
+| file2 | 1 / 0.0003, 1 / 0.0155, 1 / 0.0242 | 1 / 0.3853, 1 / 0.4748, 1 / 0.5135 | 1 / 0.3850, 1 / 0.4803, 1 / 0.4895 |
+| file3 | 1 / 0.0002, 1 / 0.0151, 1 / 0.0239 | 1 / 0.3862, 1 / 0.4724, 1 / 0.5109 | 1 / 0.3860, 1 / 0.4774, 1 / 0.4872 |
+| file5 | 1 / 0.0846, 1 / 0.1723, 1 / 0.2025 | 1 / 0.0897, 1 / 0.1750, 1 / 0.2050 | 1 / 0.0189, 1 / 0.0091, 1 / 0.0124 |
+| file7 | 1 / 0.1498, 1 / 0.1771, 1 / 0.1905 | 1 / 0.1442, 1 / 0.1770, 1 / 0.1900 | 1 / 0.0191, 1 / 0.0092, 1 / 0.0059 |
+| file8 | 1 / 0.2115 | 1 / 0.2739 | 1 / 0.0624 |
+
+All five are in class (PAE 4, MSE 1). The sYCC files differ from OpenJPEG by
+its formula (shortened constants, truncation), an owner-approved deviation;
+the ICC files by lcms's fixed-point pipeline against this decoder's
+floating-point one. Both are written up in `docs/correctness.md`.
 
 Files 2, 3, 5, 7 and 8 also carry an `as_coded` section: one reference per codestream
 component (`references/jp2_N_ascoded_K.pgx`), at the component's own size and
 depth, with no colour conversion and no shift. File 2's are in the order its
 `cdef` gives (components 2, 1, 0), and that order is checked against
 `opj_decompress` on `file2.jp2` with its `colr` rewritten to sRGB, so OpenJPEG
-applies the `cdef` without converting sYCC. While sRGB output is unavailable
-the harness grades these bit-exactly and still reports *needs sRGB output*. The
+applies the `cdef` without converting sYCC. The harness grades these
+bit-exactly against the default decode, so the as-coded output cannot drift
+while the sRGB output is graded. The
 references come from OpenJPEG decoding the `jp2c` payload as a bare codestream,
 which keeps ICC handling out. Two OpenJPEG behaviours shape how: it converts
 sYCC to RGB by heuristic for any 3-component image with sub-sampled chroma

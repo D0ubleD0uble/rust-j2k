@@ -16,8 +16,9 @@
 //! back on [`Image::jp2`]. A palettised JP2 file decodes to the palette's
 //! channels, and a file with channel definitions puts its colour channels in
 //! colour order. [`read_header`] reads the same header without decoding any
-//! tile data. Colour conversion, HTJ2K, and an encoder are later work, not
-//! permanent non-goals.
+//! tile data. Samples come out as coded by default;
+//! [`ColourOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
+//! HTJ2K and an encoder are later work, not permanent non-goals.
 //! See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
@@ -186,6 +187,33 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
     })
 }
 
+/// What colour space a JP2 file's colour channels come out in: the
+/// [`DecodeOptions::colour`] option.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ColourOutput {
+    /// The samples as the codestream coded them, after the palette and the
+    /// channel definitions. [`Jp2Metadata::colour`] says how to read them;
+    /// an ICC profile is passed through, not applied.
+    #[default]
+    AsCoded,
+    /// sRGB. sYCC is converted to RGB, with sub-sampled chroma (2x1 or 2x2)
+    /// replicated to full resolution first, and a restricted ICC profile (a
+    /// monochrome or a three-component matrix/TRC input profile) is applied;
+    /// sRGB and greyscale pass through. A monochrome profile gives one grey
+    /// channel, and no conversion changes a channel's bit depth.
+    /// Non-colour channels (opacity, say) are untouched, and
+    /// [`Jp2Metadata`] still describes the file as it is.
+    ///
+    /// Anything else is [`Error::Unsupported`]: another colour space, no
+    /// colour specification (which includes a raw codestream), another kind
+    /// of ICC profile, an RGB profile on samples that are not 8 or 16-bit
+    /// unsigned (8-bit for a monochrome profile), signed sYCC, and colour
+    /// channels that differ in depth, sign or sub-sampling other than sYCC's
+    /// chroma layouts. An ICC profile too short for its header or with a tag
+    /// past its end is [`Error::FileFormat`].
+    Srgb,
+}
+
 /// Options for [`decode_with`]. The default decodes at full resolution —
 /// [`decode`] is exactly that.
 ///
@@ -205,7 +233,9 @@ pub struct DecodeOptions {
     /// Return a JP2 file's codestream components as coded, without applying
     /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
     /// the file decodes exactly as its codestream does on its own, in SIZ
-    /// order, and [`Jp2Metadata::palette_applied`] is `false`. Each index
+    /// order, and [`Jp2Metadata::palette_applied`] is `false`. It means no
+    /// colour conversion either, so it cannot be combined with
+    /// [`ColourOutput::Srgb`] ([`Error::InvalidOptions`]). Each index
     /// plane is reported on [`Jp2Metadata::channels`] as
     /// [`ChannelType::Unspecified`] with [`Association::None`], since it is
     /// not a colour until it goes through the palette; every other channel
@@ -215,6 +245,9 @@ pub struct DecodeOptions {
     /// depths, and the channel definitions' entries, are not. No effect on a
     /// raw codestream. Default `false`.
     pub raw_channels: bool,
+    /// What colour space the colour channels come out in. Default
+    /// [`ColourOutput::AsCoded`].
+    pub colour: ColourOutput,
 }
 
 impl DecodeOptions {
@@ -230,6 +263,14 @@ impl DecodeOptions {
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
 /// `options`.
 pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
+    let srgb = options.colour == ColourOutput::Srgb;
+    if srgb && options.raw_channels {
+        return Err(Error::InvalidOptions(
+            "raw channels means no colour conversion, so it cannot be combined with sRGB \
+             output"
+                .into(),
+        ));
+    }
     // A codestream opens with SOC; anything else that carries the signature
     // box's type is read as a JP2 file, so a damaged signature box is reported
     // as a box fault. The rest falls to the codestream parser, which reports
@@ -237,7 +278,13 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         return decode_jp2(bytes, options);
     }
-    decode_codestream(codestream::parse(bytes)?, options)
+    let cs = codestream::parse(bytes)?;
+    if srgb {
+        return Err(Error::Unsupported(
+            "sRGB output from a raw codestream, which declares no colour space".into(),
+        ));
+    }
+    decode_codestream(cs, options)
 }
 
 /// A JP2 file read up to its tile data: the boxes, the codestream's main
@@ -249,6 +296,8 @@ struct Jp2Prefix<'a> {
     parsed: codestream::ParsedHeader,
     plans: jp2::ChannelPlans,
     metadata: Jp2Metadata,
+    /// The sRGB step, when the caller asked for it.
+    srgb: Option<jp2::SrgbPlan>,
 }
 
 /// Read a JP2 file up to its tile data, in OpenJPEG's order: the box walk,
@@ -265,21 +314,34 @@ fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>
         options.raw_channels,
     )?;
     let metadata = jp2::metadata(&file, &plans, siz)?;
+    let srgb = match options.colour {
+        ColourOutput::AsCoded => None,
+        ColourOutput::Srgb => Some(jp2::plan_srgb(
+            &metadata,
+            &plans,
+            siz,
+            options.resolution_reduction,
+        )?),
+    };
     Ok(Jp2Prefix {
         codestream: file.codestream,
         parsed,
         plans,
         metadata,
+        srgb,
     })
 }
 
 /// Decode a JP2 file: read it up to its tile data, decode the codestream,
-/// and apply the channel plans to the samples.
+/// and apply the channel plans, then any sRGB step, to the samples.
 fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
     let cs = codestream::parse_tiles(prefix.codestream, prefix.parsed)?;
     let image = decode_codestream(cs, options)?;
-    let components = prefix.plans.apply(image.components)?;
+    let mut components = prefix.plans.apply(image.components)?;
+    if let Some(srgb) = &prefix.srgb {
+        components = srgb.apply(components)?;
+    }
     Ok(Image {
         components,
         jp2: Some(prefix.metadata),

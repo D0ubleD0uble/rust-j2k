@@ -46,6 +46,22 @@ Every `cdef` fixture is three or four components at full resolution with an
 sRGB `colr`, so `opj_decompress` does not convert sYCC by its sub-sampling
 heuristic, and the oracle is its decode of the `.jp2` itself.
 
+sYCC fixtures (`colr` 18), for sRGB output's chroma replication:
+
+- `jp2_sycc_420_odd`: a 14x12 image at origin (5, 3), luma at full
+  resolution and chroma sub-sampled 2x2 (generated here). The odd origin
+  makes OpenJPEG give the first row and column chroma of 0, and the odd
+  height leaves a last unpaired row.
+- `jp2_sycc_422_odd`: a 13x5 image at origin (5, 3), chroma sub-sampled 2x1.
+
+Their `.expected.json` is the decode as coded: `opj_decompress -c K` on the
+bare codestream, one component at a time (`mct` 0), so the sub-sampling
+heuristic stays out. Their `.srgb.json` is `opj_decompress` on the `.jp2`,
+which converts sYCC to RGB. That output uses OpenJPEG's formula (0.344 and
+0.714, products truncated); the decoder uses the IEC constants and rounds (an
+owner-approved deviation), so it is graded within 1 of it, and the test
+build's OpenJPEG formula must match it exactly.
+
 Usage: python3 scripts/gen-jp2-fixtures.py
 Requires `opj_compress` and `opj_decompress` on PATH (OpenJPEG 2.5.0 was used).
 """
@@ -78,6 +94,7 @@ def ihdr(height: int, width: int, components: int, depth: int, signed: bool) -> 
 
 FTYP = box(b"ftyp", b"jp2 " + b"\0\0\0\0" + b"jp2 ")
 COLR_SRGB = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 16))
+COLR_SYCC = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 18))
 
 
 def pclr(entries: int, bi: list[int], value) -> bytes:
@@ -110,12 +127,12 @@ def top_boxes(data: bytes) -> list[tuple[bytes, bytes]]:
     return out
 
 
-def jp2(codestream: bytes, geometry: dict, children: list[bytes]) -> bytes:
+def jp2(codestream: bytes, geometry: dict, children: list[bytes], colr: bytes = COLR_SRGB) -> bytes:
     header = ihdr(
         geometry["height"], geometry["width"], geometry["components"],
         geometry["depth"], geometry["signed"],
     )
-    return SIGNATURE + FTYP + box(b"jp2h", header + COLR_SRGB + b"".join(children)) + box(
+    return SIGNATURE + FTYP + box(b"jp2h", header + colr + b"".join(children)) + box(
         b"jp2c", codestream
     )
 
@@ -421,6 +438,81 @@ def subsampled_fixtures() -> None:
         )
 
 
+def sycc_fixture(tmp: Path, name: str, width: int, height: int, chroma: tuple[int, int]) -> None:
+    """A three-component sYCC file at origin (5, 3) with chroma sub-sampled by `chroma`."""
+    dx, dy = chroma
+    x0, y0 = 5, 3
+    # opj_compress reads a raw component as ceil(w/dx) x ceil(h/dy) samples;
+    # what it codes is taken from its own decode below.
+    sizes = [(width, height)] + [(-(-width // dx), -(-height // dy))] * 2
+    seed = 12345
+    raw = bytearray()
+    for w, h in sizes:
+        for _ in range(w * h):
+            seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+            raw.append(seed >> 23)
+    (tmp / "sycc.raw").write_bytes(bytes(raw))
+    flags = ["-F", f"{width},{height},3,8,u@1x1:{dx}x{dy}:{dx}x{dy}", "-d", f"{x0},{y0}",
+             "-mct", "0", "-n", "2"]
+    run("opj_compress", "-i", str(tmp / "sycc.raw"), "-o", str(tmp / "sycc.j2k"), *flags)
+    codestream = (tmp / "sycc.j2k").read_bytes()
+    command = "opj_compress -i sycc.raw -o sycc.j2k " + " ".join(flags)
+
+    # As coded: one component at a time, so the bare codestream's sub-sampled
+    # chroma does not trigger opj_decompress's sYCC heuristic.
+    planes = []
+    for k, sampling in enumerate([(1, 1), (dx, dy), (dx, dy)]):
+        run("opj_decompress", "-i", str(tmp / "sycc.j2k"), "-o", str(tmp / f"c{k}.pgx"), "-c", str(k))
+        w, h, depth, signed, values = read_pgx(tmp / f"c{k}_0.pgx")
+        check_container(f"{name} component {k}", depth, signed, values)
+        planes.append({"width": w, "height": h, "bit_depth": depth, "signed": signed,
+                       "x_sampling": sampling[0], "y_sampling": sampling[1], "samples": values})
+    luma = planes[0]
+    geometry = {"width": luma["width"], "height": luma["height"], "components": 3, "depth": 8,
+                "signed": False}
+    data = jp2(codestream, geometry, [], colr=COLR_SYCC)
+    write(
+        name,
+        data,
+        geometry,
+        planes,
+        {
+            "source": f"synthetic three-component sYCC planes, coded with `{command}`, "
+            f"wrapped by {SCRIPT}",
+            "oracle_command": "opj_decompress -i sycc.j2k -o c<K>.pgx -c <K> for K = 0, 1, 2",
+            "notes": f"image origin ({x0}, {y0}), chroma sub-sampled {dx}x{dy}, colr sYCC; "
+            "decoded as coded, one component at a time (mct 0)",
+        },
+    )
+
+    # Converted: opj_decompress on the .jp2 itself applies its sYCC to RGB.
+    converted, _ = opj_decode(data, ".jp2")
+    if [(c["width"], c["height"]) for c in converted] != [(luma["width"], luma["height"])] * 3:
+        sys.exit(f"{name}: opj_decompress did not convert the chroma to full resolution")
+    snapshot = {
+        "image": {"width": geometry["width"], "height": geometry["height"]},
+        "tolerance": {"mode": "absolute", "max_abs_error": 1.0},
+        "components": converted,
+        "provenance": {
+            "source": f"{name}.jp2",
+            "oracle_command": f"opj_decompress -i {name}.jp2 -o out.pgx",
+            "notes": "OpenJPEG 2.5.0's sYCC to RGB, with its replication of sub-sampled chroma "
+            "and its odd-origin rule. Its formula uses 0.344 and 0.714 and truncates each "
+            "product; the decoder uses the IEC constants and rounds (owner-approved "
+            "deviation, 2026-11-01), hence the tolerance of 1",
+        },
+    }
+    (FIXTURES / f"{name}.srgb.json").write_text(json.dumps(snapshot, indent=2) + "\n")
+    print(f"wrote {name}.srgb.json")
+
+
+def sycc_fixtures() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        sycc_fixture(Path(tmp), "jp2_sycc_420_odd", 14, 12, (2, 2))
+    with tempfile.TemporaryDirectory() as tmp:
+        sycc_fixture(Path(tmp), "jp2_sycc_422_odd", 13, 5, (2, 1))
+
+
 def main() -> None:
     for tool in ("opj_compress", "opj_decompress"):
         if shutil.which(tool) is None:
@@ -486,6 +578,7 @@ def main() -> None:
 
     subsampled_fixtures()
     cdef_fixtures(one, one_geometry, three, three_geometry)
+    sycc_fixtures()
 
 
 if __name__ == "__main__":

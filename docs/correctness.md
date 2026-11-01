@@ -186,6 +186,109 @@ under OpenJPEG and rejects here. No corpus or conformance file trips any of
 these today. If one ever does, relax that check to match the oracle — the
 protective argument loses to a demonstrated real file.
 
+### sRGB output
+
+`ColourOutput::Srgb` converts sYCC and the two restricted ICC profile forms
+(I.5.3.3) to sRGB. The default output is as coded and is unaffected by
+everything here. The measured error against the ISO references and against
+`opj_decompress -p 8S -force-rgb` is tabulated per channel in
+[`tests/fixtures/conformance/README.md`](../tests/fixtures/conformance/README.md).
+
+**sYCC uses the IEC constants and rounds (owner decision, 2026-11-01, on
+#165).** OpenJPEG's `sycc_to_rgb` computes `G = Y - (int)(0.344 Cb + 0.714
+Cr)`, `R = Y + (int)(1.402 Cr)`, `B = Y + (int)(1.772 Cb)`: shortened
+constants and each product truncated toward zero. This decoder uses IEC
+61966-2-1 Amd 1's `0.344136` and `0.714136` and rounds to nearest. Both meet
+the evidence rule above. The proof is the conformance references for files 2
+and 3; the result is an MSE against them 20 to 1000 times lower:
+
+| File | Ours vs ISO (MSE R/G/B) | OpenJPEG vs ISO (MSE R/G/B) | Ours vs OpenJPEG (MSE R/G/B) |
+| ---- | ----------------------- | --------------------------- | ---------------------------- |
+| file2 | 0.0003 / 0.0155 / 0.0242 | 0.3853 / 0.4748 / 0.5135 | 0.3850 / 0.4803 / 0.4895 |
+| file3 | 0.0002 / 0.0151 / 0.0239 | 0.3862 / 0.4724 / 0.5109 | 0.3860 / 0.4774 / 0.4872 |
+
+The peak error is 1 in every column. OpenJPEG's formula, reproduced in
+`src/jp2/srgb_tests.rs` (`sycc_sample_openjpeg`), is bit-exact against
+`opj_decompress` on both files and on the two synthetic sYCC fixtures, so
+the difference is the formula alone. The IEC constants with truncation fit
+neither (green off OpenJPEG by up to 2), so the two changes go together.
+
+**Chroma replication follows OpenJPEG**, including where it is a convention
+rather than the standard. Sub-sampled chroma is replicated to the luma grid
+in the order of `sycc422_to_rgb` and `sycc420_to_rgb`. At an odd image
+origin (`XOsiz` or `YOsiz` odd, on the full-resolution grid even under
+resolution reduction) OpenJPEG gives the first column of each row (4:2:2),
+or the first row and the first column of the upper row of each pair and of
+a last unpaired row (4:2:0), chroma of zero, which comes out tinted. A last
+odd column whose pair index reaches the chroma width also takes zero
+(`comp12w`). `jp2_sycc_420_odd` and `jp2_sycc_422_odd` pin this against
+`opj_decompress` sample for sample. The only change is where OpenJPEG would
+read past the chroma plane: that sample takes chroma zero here.
+
+**ICC profiles are converted in floating point, not by lcms.** OpenJPEG
+hands the profile to LittleCMS 2. This decoder parses the restricted tags
+and evaluates them in `f64`: the tone curves (a `curv` of 0, 1 or n entries,
+or a `para` of types 0 to 4), the profile's matrix into XYZ (D50), the
+D50-adapted sRGB matrix lcms builds (Rec. 709 primaries, the white point of
+`cmsWhitePointFromTemp(6504)`, Bradford-adapted), the sRGB curve, then
+rounding. lcms runs fixed-point 8- or 16-bit pipelines, so the two differ by
+at most 1. Against the ISO references ours is closer on files 5 and 8 and
+slightly further on file7 (by at most 0.0056 MSE), all well inside the
+class bounds:
+
+| File | Ours vs ISO (MSE) | OpenJPEG vs ISO (MSE) | Ours vs OpenJPEG (MSE) |
+| ---- | ----------------- | --------------------- | ---------------------- |
+| file5 (RGB, gamma 1.8) | 0.0846 / 0.1723 / 0.2025 | 0.0897 / 0.1750 / 0.2050 | 0.0189 / 0.0091 / 0.0124 |
+| file7 (RGB, 16-bit, 2048-entry curves; after `>> 8`) | 0.1498 / 0.1771 / 0.1905 | 0.1442 / 0.1770 / 0.1900 | 0.0191 / 0.0092 / 0.0059 |
+| file8 (grey, `kTRC`) | 0.2115 | 0.2739 | 0.0624 |
+
+Peak error 1 everywhere. The hand vectors in `src/jp2/srgb_tests.rs` agree with
+lcms (Pillow's `ImageCms`) exactly; the one value seen to differ is grey
+input 1 through the gamma-1.8 `kTRC`, 0.15 before rounding, which lcms
+gives as 1 and this decoder as 0.
+
+Two output shapes differ from `opj_decompress`, by choice of the grading
+harness and not of the samples: file7 stays 16-bit, and the harness shifts
+it down by 8 to compare with the 8-bit reference (its `shift_right`, as for
+the as-coded grade), and file8 stays one grey channel where OpenJPEG writes
+three identical ones (graded on that one channel).
+
+**Stricter: inputs refused under `Srgb` that OpenJPEG decodes some other
+way.** Each is `Unsupported` unless noted, and each is a row of
+`srgb_reject_matrix_maps_each_input_to_its_typed_error` in
+`src/jp2/srgb_tests.rs`:
+
+- colour channels that differ in depth, sign or sub-sampling, other than
+  the sYCC chroma layouts below (owner decision, 2026-11-01). OpenJPEG
+  skips the ICC conversion silently and writes the samples as coded. For a
+  three-component file with sub-sampled chroma and an sRGB or absent `colr`
+  (or a raw codestream), `opj_decompress` guesses sYCC and converts it; that
+  guess is not made here;
+- sYCC other than full-resolution luma with chroma at 1x1, 2x1 or 2x2, or
+  signed. OpenJPEG prints "CAN NOT CONVERT" and writes the samples as coded;
+- an enumerated colour space other than sRGB, greyscale or sYCC, and a file
+  with no `colr`;
+- a raw codestream, which declares no colour space;
+- an ICC profile that is not one of the restricted forms: a class other than
+  input (`scnr`), a colour space other than RGB or grey, a connection space
+  other than XYZ, a lookup-table tag (`A2B0`..`A2B2`, `D2B0`..`D2B3`, which
+  lcms would prefer over the matrix), a missing tag, or a curve type other
+  than `curv` and `para` 0 to 4. lcms converts most of these;
+- rendering intent 3 (absolute colorimetric), which needs the media white
+  point this path does not apply;
+- an RGB profile on samples other than 8- or 16-bit unsigned, or a grey
+  profile on samples other than 8-bit unsigned. OpenJPEG picks an lcms
+  format from the precision alone (`TYPE_RGB_8` up to 8 bits, else
+  `TYPE_RGB_16`; `TYPE_GRAY_8` for grey) and scales other depths wrongly;
+- a profile shorter than its header, a tag table or tag past its end, or a
+  tag cut short or of the wrong type: `FileFormat`;
+- `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.
+
+Chroma replication grows the output, so it is checked against the decode's
+sample budget before the tiles are read (`Limit`), as palette expansion is.
+After a conversion `Image::jp2` still reports the colour space and profile
+the file declares.
+
 ## Agreement standard
 
 - **Reversible path (5/3, lossless):** bit-exact sample equality. Any
@@ -362,7 +465,9 @@ case, not an edge case:
   do not decode yet, `Limit` for an input past one of the decoder's resource
   guards. The JP2 box layer has its own matrix,
   `reject_matrix_maps_every_malformed_box_shape_to_its_typed_error` in
-  `src/jp2/tests.rs`, where a malformed box is `FileFormat`. Rejecting is not
+  `src/jp2/tests.rs`, where a malformed box is `FileFormat`, and the sRGB
+  output step has `srgb_reject_matrix_maps_each_input_to_its_typed_error` in
+  `src/jp2/srgb_tests.rs`. Rejecting is not
   a formality. A feature the decoder reads
   and then ignores does not yield a slightly wrong image, it yields an arbitrary
   one, so anything not decoded must be refused rather than skipped. As each

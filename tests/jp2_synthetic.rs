@@ -74,6 +74,8 @@ fn the_fixture_set_is_complete() {
             "jp2_palette_mixed",
             "jp2_palette_subsampled_big_first",
             "jp2_palette_subsampled_small_first",
+            "jp2_sycc_420_odd",
+            "jp2_sycc_422_odd",
         ]
     );
 }
