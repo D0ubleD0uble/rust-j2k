@@ -31,7 +31,7 @@ fn srgb() -> DecodeOptions {
 /// Each sYCC fixture converts to within 1 of `opj_decompress` (OpenJPEG's
 /// formula truncates and uses 0.344 and 0.714; ours rounds with the IEC
 /// constants), at full resolution, with the chroma replicated as OpenJPEG
-/// does at an odd origin. The metadata still says sYCC.
+/// does at an odd origin. The metadata then says sRGB.
 #[test]
 fn sycc_fixtures_match_openjpeg_within_one() {
     for name in ["jp2_sycc_420_odd", "jp2_sycc_422_odd"] {
@@ -54,11 +54,9 @@ fn sycc_fixtures_match_openjpeg_within_one() {
             "{name}"
         );
         let jp2 = image.jp2.as_ref().expect("JP2 metadata");
-        assert_eq!(
-            jp2.colour,
-            ColourSpace::Sycc,
-            "{name}: metadata as declared"
-        );
+        assert_eq!(jp2.colour, ColourSpace::Srgb, "{name}: converted to sRGB");
+        let declared = coded.jp2.as_ref().expect("JP2 metadata");
+        assert_eq!(declared.colour, ColourSpace::Sycc, "{name}: as declared");
     }
 }
 

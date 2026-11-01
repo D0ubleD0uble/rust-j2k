@@ -201,11 +201,17 @@ pub enum ColourOutput {
     /// monochrome or a three-component matrix/TRC input profile) is applied;
     /// sRGB and greyscale pass through. A monochrome profile gives one grey
     /// channel, and no conversion changes a channel's bit depth.
-    /// Non-colour channels (opacity, say) are untouched, and
-    /// [`Jp2Metadata`] still describes the file as it is.
+    /// Non-colour channels (opacity, say) are untouched. When the samples
+    /// are converted, [`Jp2Metadata::colour`] says what they now are:
+    /// [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for a monochrome
+    /// profile, with no ICC profile. [`read_header`] and the default
+    /// [`ColourOutput::AsCoded`] report the colour space the file declares.
+    /// A raw codestream of one or two components (grey, or grey and
+    /// opacity) passes through.
     ///
     /// Anything else is [`Error::Unsupported`]: another colour space, no
-    /// colour specification (which includes a raw codestream), another kind
+    /// colour specification (which includes a raw codestream of three or
+    /// more components), another kind
     /// of ICC profile, an RGB profile on samples that are not 8 or 16-bit
     /// unsigned (8-bit for a monochrome profile), signed sYCC, and colour
     /// channels that differ in depth, sign or sub-sampling other than sYCC's
@@ -279,10 +285,15 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
         return decode_jp2(bytes, options);
     }
     let cs = codestream::parse(bytes)?;
-    if srgb {
-        return Err(Error::Unsupported(
-            "sRGB output from a raw codestream, which declares no colour space".into(),
-        ));
+    // A raw codestream declares no colour space. Like OpenJPEG, one or two
+    // components are read as grey (and grey plus opacity) and pass through;
+    // three or more have nothing to convert from.
+    let components = cs.header.siz.components.len();
+    if srgb && components > 2 {
+        return Err(Error::Unsupported(format!(
+            "sRGB output from a raw codestream of {components} components, which declares \
+             no colour space"
+        )));
     }
     decode_codestream(cs, options)
 }
@@ -313,15 +324,18 @@ fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>
         options.resolution_reduction,
         options.raw_channels,
     )?;
-    let metadata = jp2::metadata(&file, &plans, siz)?;
+    let mut metadata = jp2::metadata(&file, &plans, siz)?;
     let srgb = match options.colour {
         ColourOutput::AsCoded => None,
-        ColourOutput::Srgb => Some(jp2::plan_srgb(
-            &metadata,
-            &plans,
-            siz,
-            options.resolution_reduction,
-        )?),
+        ColourOutput::Srgb => {
+            let plan = jp2::plan_srgb(&metadata, &plans, siz, options.resolution_reduction)?;
+            // A converted image is sRGB (or grey) and carries no profile, as
+            // OpenJPEG reports it.
+            if let Some(colour) = plan.converted_colour() {
+                metadata.colour = colour;
+            }
+            Some(plan)
+        }
     };
     Ok(Jp2Prefix {
         codestream: file.codestream,

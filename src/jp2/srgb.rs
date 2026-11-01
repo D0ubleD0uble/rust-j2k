@@ -15,10 +15,12 @@
 //!   reference images match this formula much more closely, so it is a
 //!   documented deviation (`docs/correctness.md`). Chroma sub-sampled 2x1
 //!   (4:2:2) or 2x2 (4:2:0) is replicated to the luma grid first. The
-//!   replication follows OpenJPEG 2.5.0's `sycc422_to_rgb` and
-//!   `sycc420_to_rgb` sample for sample, including the odd image origin: there
-//!   the first column (and, for 4:2:0, the first row) takes chroma samples of
-//!   0 rather than a neighbour's.
+//!   replication follows `sycc422_to_rgb` and `sycc420_to_rgb` in the
+//!   oracle build, Ubuntu's OpenJPEG 2.5.0-2ubuntu0.5, sample for sample,
+//!   including the odd image origin: there the first column (and, for 4:2:0,
+//!   the first row) takes chroma samples of 0 rather than a neighbour's. That
+//!   build carries the `comp12w` guard from upstream master, which tag v2.5.0
+//!   does not have.
 //! - **Restricted ICC** profiles of the two forms Annex I allows are applied
 //!   in closed form: a monochrome input profile (`kTRC`) gives one grey
 //!   channel, and a three-component matrix/TRC input profile (`rXYZ`, `gXYZ`,
@@ -26,7 +28,10 @@
 //!   its curve, the matrix takes it to XYZ (D50), the inverse of the
 //!   D50-adapted sRGB matrix takes it to linear sRGB, and the sRGB curve
 //!   encodes it. This is the transform LittleCMS builds for these profiles,
-//!   in floating point: the result is within one level of OpenJPEG + lcms.
+//!   in floating point. At 8 bits the result is within one level of
+//!   OpenJPEG + lcms; at 16 bits it is within about one 8-bit level (file7
+//!   differs by up to 254 at its native depth), since lcms runs fixed-point
+//!   pipelines.
 //!
 //! Everything else is [`Error::Unsupported`]: another enumerated colour
 //! space, no colour space, a profile of another class or form, and colour
@@ -49,6 +54,24 @@ const XYZ_D50_TO_SRGB: [[f64; 3]; 3] = [
     [-0.9786373621, 1.9160069766, 0.0334527432],
     [0.0720010749, -0.229141816, 1.4058896589],
 ];
+
+/// The PCS illuminant, D50, as LittleCMS holds it (`cmsD50_XYZ`).
+const D50: [f64; 3] = [0.9642, 1.0, 0.8249];
+
+/// Whether a media white point is D50 to within the `s15Fixed16` step it is
+/// stored at. Absolute colorimetric (intent 3) scales XYZ by the input white
+/// over the output's (D50 for LittleCMS's sRGB), so with a D50 white point
+/// it is relative colorimetric, which is what OpenJPEG + lcms give: the
+/// output is byte-identical to intent 0. Any other white point makes lcms
+/// resample the transform into a 33-point table, whose interpolation this
+/// decoder does not reproduce (measured up to 10 levels off), so it is
+/// refused.
+fn is_d50(white: [f64; 3]) -> bool {
+    white
+        .iter()
+        .zip(D50)
+        .all(|(&w, d)| (w - d).abs() <= 1.0 / 65536.0)
+}
 
 /// The ICC header and the tag count that follows it.
 const PROFILE_HEADER: usize = 132;
@@ -141,7 +164,7 @@ fn parametric(kind: u16, p: &[f64; 7], x: f64) -> f64 {
 }
 
 /// The sRGB encoding curve (IEC 61966-2-1) on a linear value, clamped first.
-fn srgb_encode(linear: f64) -> f64 {
+pub(crate) fn srgb_encode(linear: f64) -> f64 {
     let x = if linear.is_nan() {
         0.0
     } else {
@@ -441,7 +464,7 @@ impl<'a> Profile<'a> {
             )));
         }
         let intent = u32::from_be_bytes(four(64));
-        if intent > 2 {
+        if intent > 3 {
             return Err(unsupported(format!("with rendering intent {intent}")));
         }
         let count = u32::from_be_bytes(four(128));
@@ -464,6 +487,13 @@ impl<'a> Profile<'a> {
                     String::from_utf8_lossy(lut)
                 )));
             }
+        }
+        if intent == 3 && profile.entry(b"wtpt").is_some() && !is_d50(profile.xyz(b"wtpt")?) {
+            return Err(unsupported(
+                "with rendering intent 3 (absolute colorimetric) and a media white point \
+                 other than D50"
+                    .into(),
+            ));
         }
         Ok(profile)
     }
@@ -583,6 +613,16 @@ fn s15_16(bytes: &[u8]) -> f64 {
 }
 
 impl SrgbPlan {
+    /// The colour space the output is in once converted: sRGB, or grey for
+    /// a monochrome profile. `None` when the samples pass through.
+    pub(crate) fn converted_colour(&self) -> Option<ColourSpace> {
+        match self {
+            SrgbPlan::PassThrough => None,
+            SrgbPlan::Sycc { .. } | SrgbPlan::IccRgb { .. } => Some(ColourSpace::Srgb),
+            SrgbPlan::IccGrey { .. } => Some(ColourSpace::Greyscale),
+        }
+    }
+
     /// Convert the decoded output channels.
     pub(crate) fn apply(&self, mut components: Vec<Component>) -> Result<Vec<Component>> {
         match self {
@@ -751,7 +791,8 @@ fn sycc_to_rgb(
 }
 
 /// Walk the luma grid in OpenJPEG's order (`sycc444_to_rgb`,
-/// `sycc422_to_rgb`, `sycc420_to_rgb` in 2.5.0), calling `put(luma, chroma)`
+/// `sycc422_to_rgb`, `sycc420_to_rgb` in the oracle build, Ubuntu's
+/// 2.5.0-2ubuntu0.5, which has upstream master's `comp12w` guard), calling `put(luma, chroma)`
 /// with the index of each luma sample and of the chroma sample it takes, or
 /// `None` where OpenJPEG uses chroma samples of 0. The chroma index is
 /// OpenJPEG's running pointer; past the chroma plane it reads as `None` in

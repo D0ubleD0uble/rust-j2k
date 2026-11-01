@@ -7,13 +7,17 @@
 //! on every value used here.
 
 use super::SIGNATURE;
-use super::srgb::{ChromaLayout, Curve, replicate, sycc_sample};
-use crate::{ColourOutput, DecodeOptions, Error, Image, decode, decode_with};
+use super::srgb::{ChromaLayout, Curve, replicate, srgb_encode, sycc_sample};
+use crate::{
+    ColourOutput, ColourSpace, DecodeOptions, Error, Image, decode, decode_with, read_header,
+};
 
 /// Three 8-bit components at full resolution, 24x16.
 const THREE: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
 /// One 8-bit component, 32x24.
 const ONE: &[u8] = include_bytes!("../../tests/fixtures/multilayer_lossless.j2k");
+/// Two components.
+const TWO: &[u8] = include_bytes!("../../tests/fixtures/cblksty_bypass_lossless.j2k");
 /// Three 8-bit components, all sub-sampled 2x2.
 const ALL_SUBSAMPLED: &[u8] =
     include_bytes!("../../tests/fixtures/multicomponent_subsampled_lossless.j2k");
@@ -630,6 +634,11 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
     let sycc_jp2c = top_box(SYCC_420, b"jp2c");
     let mut lut_tags = wide_gamut_tags();
     lut_tags.push((b"A2B0", vec![0; 32]));
+    let white = |value: Vec<u8>| {
+        let mut tags = wide_gamut_tags();
+        tags.push((b"wtpt", value));
+        intent_3(tags)
+    };
     let missing_rtrc: Vec<_> = wide_gamut_tags()
         .into_iter()
         .filter(|(n, _)| *n != b"rTRC")
@@ -674,10 +683,22 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "`Lab ` connection space",
         ),
         (
-            "absolute colorimetric",
-            rgb_profile(&|p| p[64..68].copy_from_slice(&3u32.to_be_bytes())),
+            "absolute colorimetric, D65 white point",
+            white(xyz(D65)),
             is_unsupported,
-            "rendering intent 3",
+            "rendering intent 3 (absolute colorimetric) and a media white point other than D50",
+        ),
+        (
+            "absolute colorimetric, white point not XYZ",
+            white(curv(&[1])),
+            is_file_format,
+            "`wtpt` tag is not an `XYZ ` value",
+        ),
+        (
+            "rendering intent 4",
+            rgb_profile(&|p| p[64..68].copy_from_slice(&4u32.to_be_bytes())),
+            is_unsupported,
+            "rendering intent 4",
         ),
         (
             "tag table past the end",
@@ -883,8 +904,95 @@ fn raw_channels_with_srgb_output_is_invalid() {
 /// from; a malformed one still reports its own fault.
 #[test]
 fn srgb_output_from_a_raw_codestream_is_unsupported() {
-    expect_err(decode_srgb(THREE), is_unsupported, "raw codestream");
+    expect_err(
+        decode_srgb(THREE),
+        is_unsupported,
+        "raw codestream of 3 components",
+    );
     assert!(matches!(decode_srgb(b"junk"), Err(Error::Codestream(_))));
+}
+
+/// One or two components in a raw codestream are grey (and grey plus
+/// opacity), as OpenJPEG reads them, and pass through.
+#[test]
+fn a_raw_grey_codestream_passes_through() {
+    for codestream in [ONE, TWO] {
+        let coded = decode(codestream).expect("as coded");
+        let image = decode_srgb(codestream).expect("sRGB");
+        assert_eq!(image.components, coded.components);
+        assert!(image.jp2.is_none());
+    }
+}
+
+/// The sRGB curve's linear segment near black: 12.92 x up to 0.0031308,
+/// where the power segment would give a different value.
+#[test]
+fn the_srgb_curve_is_linear_near_black() {
+    assert!((srgb_encode(0.002) - 0.02584).abs() < 1e-12);
+    assert!((srgb_encode(0.0031308) - 12.92 * 0.0031308).abs() < 1e-12);
+    assert!((srgb_encode(0.5) - (1.055 * 0.5f64.powf(1.0 / 2.4) - 0.055)).abs() < 1e-12);
+    assert_eq!(srgb_encode(-1.0), 0.0);
+    assert_eq!(srgb_encode(f64::NAN), 0.0);
+    assert!((srgb_encode(2.0) - 1.0).abs() < 1e-12);
+}
+
+/// D65 as an `s15Fixed16` white point.
+const D65: [i32; 3] = [62290, 65536, 71369];
+
+/// A three-component file with an RGB profile of intent 3 and these tags.
+fn intent_3(tags: Vec<(&[u8; 4], Vec<u8>)>) -> Vec<u8> {
+    file(
+        THREE,
+        &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", 3, &tags)),
+        &[],
+    )
+}
+
+/// Absolute colorimetric with a D50 (or no) media white point scales by 1,
+/// so it converts exactly as intent 0, as OpenJPEG + lcms give it
+/// byte-identically.
+#[test]
+fn absolute_colorimetric_with_a_d50_white_point_converts_as_relative() {
+    let mut with_d50 = wide_gamut_tags();
+    with_d50.push((b"wtpt", xyz([63190, 65536, 54061])));
+    let intent_0 = decode_srgb(&file(
+        THREE,
+        &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", 0, &with_d50)),
+        &[],
+    ))
+    .expect("intent 0");
+    assert_ne!(intent_0.components, decode(THREE).unwrap().components);
+    for tags in [with_d50, wide_gamut_tags()] {
+        let image = decode_srgb(&intent_3(tags)).expect("intent 3");
+        assert_eq!(image.components, intent_0.components);
+    }
+}
+
+/// Once converted, the metadata says what the samples are: sRGB with no
+/// profile, or grey for a monochrome profile. `read_header` and the default
+/// decode report what the file declares; a pass-through keeps it too.
+#[test]
+fn converted_output_reports_its_colour_space() {
+    let rgb = file(THREE, &icc_colr(&wide_gamut()), &[]);
+    let boxes = palette(&[7], 256, |j, _| u32::from(j));
+    let grey = file(ONE, &icc_colr(&grey_profile()), &boxes);
+    let sycc = SYCC_420.to_vec();
+    for (bytes, want) in [
+        (&rgb, ColourSpace::Srgb),
+        (&grey, ColourSpace::Greyscale),
+        (&sycc, ColourSpace::Srgb),
+    ] {
+        let declared = read_header(bytes).unwrap().jp2.unwrap().colour;
+        assert_ne!(declared, want);
+        assert_eq!(decode(bytes).unwrap().jp2.unwrap().colour, declared);
+        assert_eq!(decode_srgb(bytes).unwrap().jp2.unwrap().colour, want);
+    }
+    for (bytes, want) in [
+        (file(THREE, &enumerated(16), &[]), ColourSpace::Srgb),
+        (file(ONE, &enumerated(17), &[]), ColourSpace::Greyscale),
+    ] {
+        assert_eq!(decode_srgb(&bytes).unwrap().jp2.unwrap().colour, want);
+    }
 }
 
 /// sYCC chroma replication that would grow the output past the decode guard

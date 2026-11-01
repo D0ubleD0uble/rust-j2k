@@ -215,7 +215,10 @@ neither (green off OpenJPEG by up to 2), so the two changes go together.
 
 **Chroma replication follows OpenJPEG**, including where it is a convention
 rather than the standard. Sub-sampled chroma is replicated to the luma grid
-in the order of `sycc422_to_rgb` and `sycc420_to_rgb`. At an odd image
+in the order of `sycc422_to_rgb` and `sycc420_to_rgb` in the oracle
+build, Ubuntu's OpenJPEG 2.5.0-2ubuntu0.5. That build carries upstream
+master's `comp12w` guard (below), which tag v2.5.0 (`a589155`) does not
+have; the committed fixtures are its output. At an odd image
 origin (`XOsiz` or `YOsiz` odd, on the full-resolution grid even under
 resolution reduction) OpenJPEG gives the first column of each row (4:2:2),
 or the first row and the first column of the upper row of each pair and of
@@ -231,8 +234,10 @@ and evaluates them in `f64`: the tone curves (a `curv` of 0, 1 or n entries,
 or a `para` of types 0 to 4), the profile's matrix into XYZ (D50), the
 D50-adapted sRGB matrix lcms builds (Rec. 709 primaries, the white point of
 `cmsWhitePointFromTemp(6504)`, Bradford-adapted), the sRGB curve, then
-rounding. lcms runs fixed-point 8- or 16-bit pipelines, so the two differ by
-at most 1. Against the ISO references ours is closer on files 5 and 8 and
+rounding. lcms runs fixed-point 8- or 16-bit pipelines, so at 8 bits the
+two differ by at most 1. At 16 bits they differ by about one 8-bit level:
+file7 at its native depth is up to 254 off (PAE), which the `>> 8` of the
+grade brings to 1. Against the ISO references ours is closer on files 5 and 8 and
 slightly further on file7 (by at most 0.0056 MSE), all well inside the
 class bounds:
 
@@ -264,30 +269,52 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   three-component file with sub-sampled chroma and an sRGB or absent `colr`
   (or a raw codestream), `opj_decompress` guesses sYCC and converts it; that
   guess is not made here;
-- sYCC other than full-resolution luma with chroma at 1x1, 2x1 or 2x2, or
-  signed. OpenJPEG prints "CAN NOT CONVERT" and writes the samples as coded;
+- sYCC other than full-resolution luma with chroma at 1x1, 2x1 or 2x2.
+  OpenJPEG prints "CAN NOT CONVERT" and writes the samples as coded;
+- signed sYCC (owner decision, 2026-11-01, on #165). OpenJPEG converts it
+  without a message, as if it were unsigned, and clamps: on an 8-bit signed
+  4:4:4 file, as-coded R `[-7, -62, 61, 114, ...]` comes out
+  `[0, 0, 15, 0, ...]`. sYCC is defined on unsigned samples, so there is no
+  right answer to match;
 - an enumerated colour space other than sRGB, greyscale or sYCC, and a file
   with no `colr`;
-- a raw codestream, which declares no colour space;
+- a raw codestream of three or more components, which declares no colour
+  space (`opj_decompress -force-rgb` fails there too). One or two
+  components pass through as grey, and grey plus opacity, as OpenJPEG
+  reads them;
 - an ICC profile that is not one of the restricted forms: a class other than
   input (`scnr`), a colour space other than RGB or grey, a connection space
   other than XYZ, a lookup-table tag (`A2B0`..`A2B2`, `D2B0`..`D2B3`, which
   lcms would prefer over the matrix), a missing tag, or a curve type other
   than `curv` and `para` 0 to 4. lcms converts most of these;
-- rendering intent 3 (absolute colorimetric), which needs the media white
-  point this path does not apply;
+- rendering intent 3 (absolute colorimetric) with a media white point
+  (`wtpt`) other than D50, and any intent above 3. Absolute colorimetric
+  scales XYZ by the profile's white over the output's, D50 for lcms's sRGB.
+  With a D50 or missing `wtpt` that is 1, and OpenJPEG's output is
+  byte-identical to intent 0, so it converts here as intent 0 does. With
+  another white point lcms no longer builds a matrix-shaper transform: it
+  resamples the pipeline into a 33-point table and interpolates. Measured on
+  file5's profile with a D65 `wtpt`, the exact transform with the white
+  scaling is up to 27 levels off OpenJPEG near black; a model of the
+  table's interpolation gets within 1 on two white points but stays up to
+  10 off on a third, so it is not reproduced;
 - an RGB profile on samples other than 8- or 16-bit unsigned, or a grey
-  profile on samples other than 8-bit unsigned. OpenJPEG picks an lcms
-  format from the precision alone (`TYPE_RGB_8` up to 8 bits, else
-  `TYPE_RGB_16`; `TYPE_GRAY_8` for grey) and scales other depths wrongly;
+  profile on samples other than 8-bit unsigned (owner decision, 2026-11-01,
+  on #165). OpenJPEG picks an lcms format from the precision alone
+  (`TYPE_RGB_8` up to 8 bits, else `TYPE_RGB_16`; `TYPE_GRAY_8` for grey)
+  and so scales other depths wrongly: a 12-bit sample of 4095 comes out
+  7413, past the 12-bit range, and a 4-bit sample of 15 comes out 20;
 - a profile shorter than its header, a tag table or tag past its end, or a
   tag cut short or of the wrong type: `FileFormat`;
 - `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.
 
 Chroma replication grows the output, so it is checked against the decode's
 sample budget before the tiles are read (`Limit`), as palette expansion is.
-After a conversion `Image::jp2` still reports the colour space and profile
-the file declares.
+After a conversion `Image::jp2` reports what the samples now are, as
+OpenJPEG does (owner decision, 2026-11-01, on #165): `ColourSpace::Srgb`,
+or `ColourSpace::Greyscale` for a monochrome profile, with no ICC profile.
+A pass-through, the default `AsCoded` decode and `read_header` report the
+colour space the file declares.
 
 ## Agreement standard
 
