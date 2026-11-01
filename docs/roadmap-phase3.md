@@ -434,7 +434,9 @@ GDAL's `rgb16_ecwsdk.jp2`), and a 1-bit alpha with `bpcc` (GDAL's
 only after P3.6.
 
 **Done:** every `cdef` fixture matches the oracle's channel order and depth,
-and `jp2.channels` matches the box dump.
+and `jp2.channels` matches the box dump. `rgb16_ecwsdk.jp2` does not decode in
+either decoder (its codestream has no `EOC`), so its all-unspecified layout is
+checked on the synthetic `jp2_cdef_unspecified` instead.
 
 ### P3.5 — Resolution, metadata passthrough, JPX-compatible skipping (`src/jp2/`)
 
@@ -569,7 +571,7 @@ so and why we differ (or do not).
 | `LBox = 0` on a box that is not last | error unless `jp2c` | same | `FileFormat`; legal on the last box, including `jp2c` |
 | `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice; past the end of the file, truncation, or clamped for `jp2c` | `FileFormat` for a box other than `jp2c` past the end of the file; slice-based, nothing is allocated from the length |
 | `jp2h` missing | error | reject | `FileFormat` |
-| Second `jp2h` before `jp2c` | merged (its `ihdr` ignored, other children applied) | merged the same way | none (match oracle); its `pclr`/`cmap` are applied and its `cdef` meets the guard; each `jp2h` must hold an `ihdr`, as OpenJPEG requires |
+| Second `jp2h` before `jp2c` | merged (its `ihdr` ignored, other children applied) | merged the same way | none (match oracle); its `pclr`/`cmap`/`cdef` are applied; each `jp2h` must hold an `ihdr`, as OpenJPEG requires |
 | `jp2c` before `jp2h` | error | reject | `FileFormat` |
 | `ihdr` missing or not 14 bytes | error | reject | `FileFormat` |
 | `ihdr` not first in `jp2h` | decodes | decodes | none (match oracle; I.5.3.1 says first, but nothing depends on the order) |
@@ -601,10 +603,13 @@ so and why we differ (or do not).
 | Signed palette column | entries not sign-extended | same | none (match oracle, owner decision 2026-11-01) |
 | Palette index out of range | clamp | clamp | none (match oracle) |
 | Second `pclr` / `cmap` / `cdef` | error | reject | `FileFormat` |
-| `cdef N = 0`, truncated, `Cn` or `Asoc-1` out of range, incomplete list | error | reject | `FileFormat` |
+| `cdef N = 0`, truncated, `Cn` or `Asoc-1` out of range, incomplete list | error | reject | `FileFormat`; `Cn` and `Asoc` are checked against the channels after the palette (`NPC` with `pclr` + `cmap`, else `Csiz`); under `raw_channels` only the box layout (`N = 0`, truncated, a second `cdef`) is checked, as OpenJPEG skips `opj_jp2_check_color` under its ignore flag |
+| `cdef` names a channel twice, every channel named | decodes; entries applied in order | same | none (match oracle); the channel keeps its last entry's label |
+| `cdef` colour entry not at `Asoc - 1` | swapped there; later entries follow their channels | same | none (match oracle) |
+| `cdef` labels after a swap | type kept in `comps[].alpha`, written to the position named before the swap, never written out by `opj_decompress` | each channel labelled with its own entry | none: OpenJPEG has no label output to match (`docs/correctness.md`) |
 | `cdef Typ` not 0/1/2/65535 | passed through | `Other(n)` | none |
 | Unknown box anywhere | skipped | skipped | none |
-| `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none for `pclr`/`cmap` (applied); `Unsupported` for `cdef` until applied, the same guard as inside `jp2h` |
+| `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none (applied) |
 | The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |
 | Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`, a short `colr`, a wrong-length `bpcc`, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a `cmap` without `pclr`, a second `pclr` or `cmap`) fails OpenJPEG but decodes here, and a `pclr`/`cmap` there is never applied |
 | Second `jp2c` | never read | ignored | none (I.5.4) |
