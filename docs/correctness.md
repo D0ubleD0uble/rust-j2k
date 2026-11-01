@@ -110,6 +110,16 @@ loops iterate zero times. Rejecting is the stricter, spec-faithful reading; a
 volume that covers nothing is almost certainly a corrupt field, not one the
 encoder meant.
 
+The JP2 box layer has four checks of the same kind, each one where the file
+breaks a rule of Annex I and a lenient reader would have to guess: an `ihdr`
+that is not the first box in `jp2h` (I.5.3.1), a second `jp2h` box (I.5.3;
+OpenJPEG merges the two), an `ihdr.NC` that differs from `Csiz` (palette and
+channel definitions index components by `NC`), and a `jp2c` box whose length
+runs past the end of the file (OpenJPEG ignores the length and reads the
+codestream to `EOC`). A file whose `ftyp` does not claim `jp2 ` compatibility
+is refused too, as `Unsupported`: OpenJPEG decodes it anyway, but such a file
+may use features a JP2 reader does not understand.
+
 The cost is interop: a real-world encoder that produces such a stream decodes
 under OpenJPEG and rejects here. No corpus or conformance file trips any of
 these today. If one ever does, relax that check to match the oracle — the
@@ -289,7 +299,10 @@ case, not an edge case:
   and pins the typed error a caller sees: `Codestream` for structural damage,
   `Marker` for an illegally encoded field, `Unsupported` for valid JPEG 2000 we
   do not decode yet, `Limit` for an input past one of the decoder's resource
-  guards. Rejecting is not a formality. A feature the decoder reads
+  guards. The JP2 box layer has its own matrix,
+  `reject_matrix_maps_every_malformed_box_shape_to_its_typed_error` in
+  `src/jp2/tests.rs`, where a malformed box is `FileFormat`. Rejecting is not
+  a formality. A feature the decoder reads
   and then ignores does not yield a slightly wrong image, it yields an arbitrary
   one, so anything not decoded must be refused rather than skipped. As each
   milestone lands, its row leaves the table for the decoded set; a row that stops

@@ -1,8 +1,8 @@
 # Phase 3 roadmap — JP2 file format decode
 
-> **Status: planned.** Nothing below has landed. The milestones are the build
-> order to follow, each with the oracle that gates it. Milestone numbers will
-> track the Phase 3 milestone in GitHub once the issues are approved.
+> **Status: in progress.** P3.0 (the harness) and P3.1 (the box reader) have
+> landed; the rest is planned. The milestones are the build order to follow,
+> each with the oracle that gates it.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file
 zooms into Phase 3 alone. It breaks the line item "JP2 file format decode" into
@@ -360,7 +360,10 @@ decode to exactly what `decode` gives for its extracted `jp2c` payload, or be
 
 **Done:** `file1`, `file4`, `file6` in class; the real-world set decodes equal
 to its raw payloads (or is `Unsupported` per the guard); a JPX without `jp2 ` compatibility is `Unsupported`;
-openreadout's `jp2_boxes_are_unwrapped` shape (signature + ftyp + jp2c) decodes.
+openreadout's `jp2_boxes_are_unwrapped` shape (signature + ftyp + jp2c, no
+`jp2h`) is `FileFormat`. OpenJPEG 2.5.0 rejects that shape too ("bad placed
+jpeg codestream"), and I.5.3 requires `jp2h`, so openreadout's test fixture
+needs a `jp2h` with an `ihdr` to decode through `decode`.
 
 ### P3.2 — Colour specification and `bpcc` (`src/jp2/`)
 
@@ -555,12 +558,14 @@ so and why we differ (or do not).
 | `ftyp` missing or not second | error | reject | `FileFormat` |
 | No `jp2 ` in brand or compatibility list | decodes anyway | reject | `Unsupported` (a JPX/JPM we do not read; stricter, because the spec says such a reader may not understand the file and we would be guessing) |
 | Box length `< 8` (or `< 16` with `XLBox`) | error | reject | `FileFormat` |
-| Box runs past its parent or the file | error | reject | `FileFormat` (truncation) |
+| Box runs past its parent or the file | error; a `jp2c` that runs past the file decodes (the codestream is read to `EOC`) | reject | `FileFormat` (truncation); stricter for `jp2c` |
 | `LBox = 0` on a box that is not last | error unless `jp2c` | same | `FileFormat`; legal on the last box, including `jp2c` |
-| `XLBox >= 2^32` | error ("cannot handle") | accept if it fits the slice | no variant; slice-based, nothing is allocated from the length |
+| `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice, else truncation | `FileFormat` past the end of the file; slice-based, nothing is allocated from the length |
 | `jp2h` missing | error | reject | `FileFormat` |
+| Second `jp2h` | merged (a second `ihdr` ignored, other children applied) | reject | `FileFormat`; stricter: I.5.3 allows one, and a `cdef` or `pclr` in the second box would otherwise be applied by one reader and not another |
 | `jp2c` before `jp2h` | error | reject | `FileFormat` |
-| `ihdr` missing or not first in `jp2h`, or not 14 bytes | error | reject | `FileFormat` |
+| `ihdr` missing or not 14 bytes | error | reject | `FileFormat` |
+| `ihdr` not first in `jp2h` | decodes | reject | `FileFormat`; stricter: I.5.3.1 says `ihdr` shall be the first box in `jp2h` |
 | `ihdr` W/H `!=` SIZ image area | error | reject | `FileFormat` |
 | `ihdr.NC != Csiz` | not checked | reject | `FileFormat`; stricter: palette and `cdef` index against `NC`, so a lie here steers the channel mapping. Relax if a real file trips it. |
 | `ihdr.BPC` or `bpcc` disagree with SIZ depth | not checked | accept, SIZ wins | none (match oracle) |
