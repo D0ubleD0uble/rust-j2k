@@ -136,29 +136,14 @@ impl Codestream<'_> {
     }
 }
 
-/// The JP2 signature box that opens every JP2 file (ISO/IEC 15444-1 Annex I.5.1):
-/// a 12-byte box of type `jP  ` whose contents are the fixed `0D 0A 87 0A`.
-const JP2_SIGNATURE: [u8; 12] = [
-    0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
-];
-
 /// Parse a raw codestream (must start with SOC, end with EOC).
 ///
-/// Rejects the JP2 box wrapper (callers pass the bare codestream) and anything
-/// outside the decoded feature set — HTJ2K, Part 2 extensions, unknown markers
-/// — with [`Error::Unsupported`].
+/// Rejects anything outside the decoded feature set — HTJ2K, Part 2
+/// extensions, unknown markers — with [`Error::Unsupported`]. A JP2 file is
+/// unwrapped before it gets here (see `crate::jp2`).
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
 pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
-    // A JP2 file is valid JPEG 2000, just not the bare codestream this decoder
-    // reads, so say which it is rather than complain about a missing SOC.
-    if bytes.starts_with(&JP2_SIGNATURE) {
-        return Err(Error::Unsupported(
-            "JP2 file format wrapper; pass the contained codestream (the `jp2c` box contents)"
-                .into(),
-        ));
-    }
-
     let (header, sot_offset, ppm) = parse_main_header(bytes)?;
     let tiles = walk_tiles(bytes, sot_offset, &header, &ppm)?;
     let codestream = Codestream { header, tiles };

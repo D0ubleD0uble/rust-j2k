@@ -54,3 +54,12 @@ path = "fuzz_targets/mq.rs"
 test = false
 doc = false
 bench = false
+
+# `jp2_boxes` pins a valid codestream and fuzzes the JP2 boxes around it, so
+# mutations reach the box reader and a valid file is one step from a decode.
+[[bin]]
+name = "jp2_boxes"
+path = "fuzz_targets/jp2_boxes.rs"
+test = false
+doc = false
+bench = false

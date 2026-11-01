@@ -27,10 +27,12 @@ support; it is a build/test tool here, not a runtime dependency of the codec.
 fuzz/
   Cargo.toml                    # detached crate, depends on libfuzzer-sys + rust-j2k
   j2k.dict                      # J2K marker dictionary for the codestream-reading targets
+  jp2.dict                      # JP2 box-type dictionary for jp2_boxes
   fuzz_targets/decode.rs        # the public entry point: rust_j2k::decode(&[u8])
   fuzz_targets/tile_body.rs     # a pinned valid header (geometry steered) around fuzzed tile-part bytes
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
+  fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream
 ```
 
 `decode` must mutate its way through a byte-perfect main header before anything
@@ -51,6 +53,15 @@ deliberately a `tile_body` variant rather than a `rust_j2k::fuzz` hook: the
 lazy `10, 2, 1, 2, 1, …` codeword-segment split belongs to tier-2, so setting
 the style byte in the pinned COD drives `decode_block` through the same split
 production decodes use instead of a hand-built one.
+
+`jp2_boxes` does for the JP2 file format what `tile_body` does for tile
+data: the codestream is pinned (one of two small committed fixtures) and the
+input becomes the boxes around it, so every execution reaches the box reader.
+Its first byte picks how the `jp2c` box is written (32-bit length, 64-bit
+`XLBox`, length 0, or followed by more boxes) and whether the signature,
+`ftyp`, and a matching `ihdr` are pinned, so mutations can land on the whole
+top level or only on the `jp2h` children. `jp2.dict` holds the signature and
+every box type.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
@@ -79,6 +90,10 @@ cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus
 
 # Time-boxed run (CI-friendly: no panics, no OOM, no hangs).
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=2048
+
+# The JP2 box target, seeded from the ISO/IEC 15444-4 JP2 reader files.
+python3 scripts/gen-jp2-fuzz-seeds.py
+cargo +nightly fuzz run jp2_boxes -- -dict=fuzz/jp2.dict -max_total_time=300
 
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096

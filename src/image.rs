@@ -6,7 +6,7 @@
 use crate::codestream::MainHeader;
 use crate::codestream::markers::{Rect, Siz, Transform};
 use crate::pipeline::Samples;
-use crate::{Error, Result};
+use crate::{Error, Jp2Metadata, Result};
 
 /// A decoded image: the image area on the reference grid, plus its components.
 ///
@@ -21,9 +21,9 @@ use crate::{Error, Result};
 /// transform is applied here.
 ///
 /// The struct is `#[non_exhaustive]`: [`decode`](crate::decode) is the normal
-/// producer, and later metadata (a JP2 wrapper's colour description, say) can
-/// then land as new fields without a breaking change. To build one by hand —
-/// an expected image in a test harness, for instance — use [`Image::new`].
+/// producer, and later metadata can then land as new fields without a breaking
+/// change. To build one by hand — an expected image in a test harness, for
+/// instance — use [`Image::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Image {
@@ -31,9 +31,13 @@ pub struct Image {
     pub width: u32,
     /// Reference-grid image area height, in reference-grid points.
     pub height: u32,
-    /// One entry per SIZ component, in SIZ order. Never empty in decoder
-    /// output.
+    /// One entry per output channel. For a raw codestream, and for a JP2 file
+    /// without a palette or channel definitions, that is one per SIZ
+    /// component, in SIZ order. Never empty in decoder output.
     pub components: Vec<Component>,
+    /// What the JP2 wrapper said about the samples: their colour space and
+    /// what each channel is. `None` for a raw codestream.
+    pub jp2: Option<Jp2Metadata>,
 }
 
 /// One decoded component: its own sample grid, its declared depth and sign, and
@@ -65,14 +69,16 @@ pub struct Component {
 
 impl Image {
     /// Package `components` with the reference-grid image area they are
-    /// registered against. The values are stored as given; only
-    /// [`decode`](crate::decode) vouches for their consistency.
+    /// registered against, and no JP2 metadata ([`jp2`](Self::jp2) is `None`).
+    /// The values are stored as given; only [`decode`](crate::decode) vouches
+    /// for their consistency.
     #[must_use]
     pub fn new(width: u32, height: u32, components: Vec<Component>) -> Self {
         Self {
             width,
             height,
             components,
+            jp2: None,
         }
     }
 
@@ -287,11 +293,7 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8
     // At a reduction the image area shrinks with its components, by the same
     // halve-and-round-up per dropped level.
     let (image_width, image_height) = siz.image_extent_at(reduction);
-    Ok(Image {
-        width: image_width,
-        height: image_height,
-        components,
-    })
+    Ok(Image::new(image_width, image_height, components))
 }
 
 /// Round to the nearest integer, level-shift, clamp, and package one
