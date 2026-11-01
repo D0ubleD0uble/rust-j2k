@@ -46,6 +46,12 @@ pub struct Image {
 /// `samples` is row-major, `width * height` entries, each already
 /// DC-level-shifted and clamped to the declared depth.
 ///
+/// A channel made by a JP2 palette (`pclr`) is different: its depth and sign
+/// come from the palette's `Bi` (for a direct channel `i`, from column `i`),
+/// and its samples are the palette entries as stored (for a direct channel,
+/// the component's samples). Either may fall outside that declared range, as
+/// in OpenJPEG.
+///
 /// `#[non_exhaustive]`, like [`Image`]; build one by hand with
 /// [`Component::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,9 +61,10 @@ pub struct Component {
     pub width: u32,
     /// Component height in samples.
     pub height: u32,
-    /// Bits per sample as declared in SIZ `Ssiz` (1..=32).
+    /// Bits per sample as declared in SIZ `Ssiz` (1..=32), or by the palette
+    /// for a palette channel.
     pub bit_depth: u8,
-    /// Whether samples are signed (SIZ component sign bit).
+    /// Whether samples are signed (SIZ component sign bit, or the palette's).
     pub signed: bool,
     /// Horizontal sub-sampling factor (SIZ `XRsiz`); `1` means unit sampling.
     pub x_sampling: u8,

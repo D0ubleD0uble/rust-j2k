@@ -26,7 +26,7 @@ use support::pgx::parse_pgx;
 
 /// The entries that decode within their compliance class today. Grow it as the
 /// file-format milestones land; never shrink it without an explanation.
-const IN_CLASS: &[&str] = &["file1", "file4", "file6"];
+const IN_CLASS: &[&str] = &["file1", "file4", "file6", "file9"];
 
 /// Whether the decoder can produce sRGB output. While `false`, `needs_srgb`
 /// entries that decode report *needs sRGB output*, after an as-coded check

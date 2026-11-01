@@ -13,8 +13,9 @@
 //! reversible (RCT) and irreversible (ICT) colour transforms.
 //!
 //! A JP2 file's codestream decodes the same way, and the file's header comes
-//! back on [`Image::jp2`]. JP2 palettes and channel definitions, colour
-//! conversion, HTJ2K, and an encoder are later work, not permanent non-goals.
+//! back on [`Image::jp2`]. A palettised JP2 file decodes to the palette's
+//! channels. JP2 channel definitions, colour conversion, HTJ2K, and an
+//! encoder are later work, not permanent non-goals.
 //! See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
@@ -59,7 +60,7 @@
 //! oracle snapshots, with no external tools. Correctness is defined by
 //! cross-checking a reference decoder (OpenJPEG / eccodes), not by
 //! self-consistency. An input using a feature outside the decoded set — HTJ2K,
-//! a Part 2 extension, a JP2 palette — is rejected with
+//! a Part 2 extension, JP2 channel definitions — is rejected with
 //! [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. See each module's docs for the ISO §reference and what it owns;
@@ -103,14 +104,19 @@ pub use jp2::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metad
 /// decodes its codestream (the first `jp2c` box) and reports the file's header
 /// on [`Image::jp2`], which is `None` for a raw codestream.
 ///
+/// A JP2 file with a palette (`pclr` and `cmap`) decodes to the palette's
+/// channels, one per palette column, so it can have more components than its
+/// codestream. [`DecodeOptions::raw_channels`] returns the index plane
+/// instead. A `pclr` without a `cmap` is ignored.
+///
 /// This is the whole public surface for the GRIB2 use case: the §7 data
 /// section of a `grid_jpeg` message is a raw codestream. That subset is
 /// single-component, so its images carry one component; a codestream declaring
 /// more decodes each component onto its own grid, independently.
 ///
 /// A malformed JP2 box structure is [`Error::FileFormat`]. A file that is not
-/// JP2-compatible, or whose header holds a palette (`pclr`, `cmap`) or channel
-/// definitions (`cdef`), is valid JPEG 2000 but is rejected with
+/// JP2-compatible, or whose header holds channel definitions (`cdef`), is
+/// valid JPEG 2000 but is rejected with
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 pub fn decode(bytes: &[u8]) -> Result<Image> {
@@ -120,8 +126,8 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// Options for [`decode_with`]. The default decodes at full resolution —
 /// [`decode`] is exactly that.
 ///
-/// Start from [`DecodeOptions::default`] and set what differs, with the
-/// `with_*` methods or the fields directly. The struct is `#[non_exhaustive]`,
+/// Start from [`DecodeOptions::default`] and set what differs, with a
+/// `with_*` method where one exists or the field directly. The struct is `#[non_exhaustive]`,
 /// so a new option is not a breaking change.
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
@@ -133,6 +139,17 @@ pub struct DecodeOptions {
     /// resolution: a reduction that consumes some component's whole pyramid is
     /// rejected as [`Error::InvalidOptions`].
     pub resolution_reduction: u8,
+    /// Return a JP2 file's codestream components as coded, without applying
+    /// the file's palette (`pclr` + `cmap`): a palettised file then decodes
+    /// to its index plane, exactly as its codestream does on its own, and
+    /// [`Jp2Metadata::palette_applied`] is `false`. Each index plane is
+    /// reported on [`Jp2Metadata::channels`] as [`ChannelType::Unspecified`]
+    /// with [`Association::None`], since it is not a colour until it goes
+    /// through the palette. The palette boxes' layout is still checked, so a
+    /// malformed `pclr` or `cmap` is still [`Error::FileFormat`]; the mapping
+    /// and the palette's column depths are not. No effect on a raw codestream.
+    /// Default `false`.
+    pub raw_channels: bool,
 }
 
 impl DecodeOptions {
@@ -164,11 +181,19 @@ fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     let file = jp2::parse(bytes)?;
     let cs = codestream::parse(file.codestream)?;
     jp2::check_against_siz(&file.header, &cs.header.siz)?;
+    let palette = jp2::plan_palette(
+        &file.header,
+        &cs.header.siz,
+        options.resolution_reduction,
+        options.raw_channels,
+    )?;
     // After the structural checks, so a malformed file reports its fault
     // rather than an unsupported box.
     jp2::check_supported(&file.header)?;
     let image = decode_codestream(cs, options)?;
-    let (components, metadata) = jp2::present(file, image.components)?;
+    let components = palette.apply(image.components)?;
+    let (components, mut metadata) = jp2::present(file, components)?;
+    palette.describe(&mut metadata);
     Ok(Image {
         components,
         jp2: Some(metadata),

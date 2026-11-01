@@ -5,11 +5,10 @@
 //! pulls out the first `colr` payload, and the ICC bytes `decode` returns must
 //! equal it past the three header bytes (and hash to the recorded SHA-256).
 //!
-//! Files 2 and 9 still stop at the `cdef` and `pclr` guards before `decode`
-//! returns an image, so they are expected `Unsupported` here. Their colour
-//! spaces (sYCC, sRGB) are checked at the box-walk level by
-//! `jp2::colour_tests` in the crate; when channel definitions and palettes are
-//! applied, move them into `EXPECT` as decoded files.
+//! File 2 still stops at the `cdef` guard before `decode` returns an image,
+//! so it is expected `Unsupported` here. Its colour space (sYCC) is checked at
+//! the box-walk level by `jp2::colour_tests` in the crate; when channel
+//! definitions are applied, move it into `EXPECT` as a decoded file.
 
 mod support;
 
@@ -53,7 +52,7 @@ const EXPECT: &[(u32, Want)] = &[
             "64ed586e213e2dd285927f0eb9cc994076b2777b9815589a532889d7703e05da",
         ),
     ),
-    (9, Want::Guarded("pclr")),
+    (9, Want::Colour(ColourSpace::Srgb)),
 ];
 
 fn path(n: u32) -> PathBuf {

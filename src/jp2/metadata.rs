@@ -14,8 +14,9 @@ pub struct Jp2Metadata {
     /// One entry per [`Image::components`](crate::Image::components) entry,
     /// saying what that channel is.
     pub channels: Vec<ChannelDefinition>,
-    /// Whether the samples went through a palette. `false` when the file has
-    /// no palette.
+    /// Whether the samples went through the file's palette. `false` when the
+    /// file has no palette (or a `pclr` without a `cmap`), or the caller set
+    /// [`DecodeOptions::raw_channels`](crate::DecodeOptions::raw_channels).
     pub palette_applied: bool,
 }
 
