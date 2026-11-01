@@ -149,10 +149,15 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// wavelet) is only found by `decode`.
 ///
 /// ```
-/// use rust_j2k::read_header;
+/// use rust_j2k::{read_header, Error};
 ///
-/// // A codestream's main header is enough: no tile data is needed.
-/// assert!(read_header(b"not a codestream").is_err());
+/// // In real use these are a codestream's or JP2 file's bytes; the tile data
+/// // may be missing. Invalid input is the same typed error `decode` gives.
+/// match read_header(b"not a codestream") {
+///     Ok(header) => println!("{}x{}, {} channels", header.width, header.height, header.components.len()),
+///     Err(Error::Codestream(why)) => println!("malformed: {why}"),
+///     Err(e) => println!("refused: {e}"),
+/// }
 /// ```
 pub fn read_header(bytes: &[u8]) -> Result<Header> {
     let options = DecodeOptions::default();
