@@ -11,7 +11,7 @@
 use std::panic;
 use std::path::Path;
 
-use rust_j2k::{Component, DecodeOptions, Error};
+use rust_j2k::{ColourOutput, Component, DecodeOptions, Error};
 use serde::Deserialize;
 
 use super::part4::{Bound, Bounds, Features, Grade, grade_component, ratchet};
@@ -44,8 +44,8 @@ pub struct Jp2Entry {
     /// Right shift that takes the decoded samples to the reference's 8 bits
     /// (`opj_decompress -p 8S`).
     pub shift_right: u8,
-    /// The reference is sRGB display output, so the entry cannot be graded
-    /// until the decoder offers an sRGB option.
+    /// The reference is sRGB display output (sYCC or an ICC profile
+    /// converted), so the entry is graded with `ColourOutput::Srgb`.
     pub needs_srgb: bool,
     pub boxes: Boxes,
     pub colour: Colour,
@@ -59,8 +59,8 @@ pub struct Jp2Entry {
     pub reference_digests: Vec<Digest>,
     pub bounds: Bounds,
     /// OpenJPEG's per-component decode of the codestream as coded, for the
-    /// `needs_srgb` entries that decode today. Graded bit-exactly until sRGB
-    /// output exists.
+    /// `needs_srgb` entries. The default (as coded) decode is graded against
+    /// it bit-exactly.
     pub as_coded: Option<AsCoded>,
 }
 
@@ -121,10 +121,15 @@ impl Jp2Entry {
     }
 }
 
-/// The decode options an entry is graded with. This is the one place #165
-/// changes to ask for sRGB output on `needs_srgb` entries.
-fn options_for(_entry: &Jp2Entry) -> DecodeOptions {
-    DecodeOptions::default()
+/// The decode options an entry is graded with: sRGB output for the
+/// `needs_srgb` entries, whose references are display output, and the default
+/// (as coded) for the rest.
+pub fn options_for(entry: &Jp2Entry) -> DecodeOptions {
+    let mut options = DecodeOptions::default();
+    if entry.needs_srgb {
+        options.colour = ColourOutput::Srgb;
+    }
+    options
 }
 
 /// `component` shifted right by `shift` bits, the way `opj_decompress -p 8S`
@@ -142,14 +147,12 @@ pub fn shifted(component: &Component, shift: u8) -> Component {
     )
 }
 
-/// Decode one entry with default options, shift, and grade every channel.
+/// Decode one entry with [`options_for`], shift, and grade every channel.
 ///
-/// `srgb_available` says whether the decoder can produce sRGB output yet. While
-/// it cannot, a `needs_srgb` entry that decodes reports *needs sRGB output*
-/// instead of being graded against the display reference it cannot match. Its
-/// samples are still checked bit-exactly against the `as_coded` references
-/// when the entry has them.
-pub fn grade_entry(dir: &Path, entry: &Jp2Entry, srgb_available: bool) -> Grade {
+/// An entry with `as_coded` references is first decoded with the default
+/// options and checked bit-exactly against them, so the as-coded output is
+/// graded alongside the sRGB output.
+pub fn grade_entry(dir: &Path, entry: &Jp2Entry) -> Grade {
     let graded = entry.graded_components;
     if graded == 0 {
         return Grade::Failed("manifest: entry grades no components".into());
@@ -172,28 +175,31 @@ pub fn grade_entry(dir: &Path, entry: &Jp2Entry, srgb_available: bool) -> Grade 
     };
 
     // A panic is a contract violation, not a not-yet-implemented feature.
-    let options = options_for(entry);
-    let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+    let decode = |options: DecodeOptions| match panic::catch_unwind(panic::AssertUnwindSafe(|| {
         rust_j2k::decode_with(&bytes, options)
-    }));
-    let image = match decoded {
-        Err(_) => return Grade::Failed("panicked (decode must return a typed error)".into()),
-        Ok(Err(Error::Unsupported(what))) => return Grade::NotYetDecoded(what),
-        Ok(Err(e)) => return Grade::Failed(format!("decoder rejected a valid file: {e}")),
-        Ok(Ok(image)) => image,
+    })) {
+        Err(_) => Err(Grade::Failed(
+            "panicked (decode must return a typed error)".into(),
+        )),
+        Ok(Err(Error::Unsupported(what))) => Err(Grade::NotYetDecoded(what)),
+        Ok(Err(e)) => Err(Grade::Failed(format!("decoder rejected a valid file: {e}"))),
+        Ok(Ok(image)) => Ok(image),
     };
 
-    if entry.needs_srgb && !srgb_available {
-        // The display reference is out of reach, but the samples as coded are
-        // checked bit-exactly. A match still reports *needs sRGB output*, so
-        // the entry stays out of the class ratchet.
-        if let Some(as_coded) = &entry.as_coded {
-            if let Err(why) = grade_as_coded(dir, as_coded, &image.components) {
-                return Grade::Failed(format!("as coded: {why}"));
-            }
+    if let Some(as_coded) = &entry.as_coded {
+        let image = match decode(DecodeOptions::default()) {
+            Ok(image) => image,
+            Err(grade) => return grade,
+        };
+        if let Err(why) = grade_as_coded(dir, as_coded, &image.components) {
+            return Grade::Failed(format!("as coded: {why}"));
         }
-        return Grade::NotYetDecoded("needs sRGB output".into());
     }
+
+    let image = match decode(options_for(entry)) {
+        Ok(image) => image,
+        Err(grade) => return grade,
+    };
 
     // Exactly the graded channels: greyscale files decode to one component,
     // colour files (and the palettised file9, once expanded) to three.
@@ -264,7 +270,7 @@ pub fn load_manifest(dir: &Path) -> Jp2Manifest {
 }
 
 /// Decode and grade every entry, then enforce the ratchet against `in_class`.
-pub fn run_ratchet(dir: &Path, in_class: &[&str], srgb_available: bool) {
+pub fn run_ratchet(dir: &Path, in_class: &[&str]) {
     let manifest = load_manifest(dir);
     assert_eq!(
         manifest.compliance_class, 1,
@@ -275,7 +281,7 @@ pub fn run_ratchet(dir: &Path, in_class: &[&str], srgb_available: bool) {
         .entries
         .iter()
         .zip(&names)
-        .map(|(entry, name)| (name.as_str(), grade_entry(dir, entry, srgb_available)))
+        .map(|(entry, name)| (name.as_str(), grade_entry(dir, entry)))
         .collect();
     ratchet("ISO/IEC 15444-4 JP2 reader files", &graded, in_class);
 }

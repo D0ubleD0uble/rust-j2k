@@ -122,7 +122,9 @@ pub enum ColourSpace {
     Sycc,
     /// A restricted ICC profile (a monochrome or three-component matrix/TRC
     /// input profile), the box's bytes after its three header bytes, verbatim.
-    /// Not checked and not applied to the samples.
+    /// Applied to the samples only under
+    /// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb), which then reports
+    /// the converted colour space instead.
     RestrictedIcc(Vec<u8>),
     /// Another enumerated colour space value from the first usable box,
     /// reported but not interpreted.

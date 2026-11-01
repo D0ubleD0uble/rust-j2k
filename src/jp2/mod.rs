@@ -22,8 +22,9 @@
 //! [`ChannelPlans::plan`] plans the output channels (the palette, see
 //! [`palette`], then the channel definitions, see [`channels`]), and
 //! [`metadata`] builds the [`Jp2Metadata`] that rides on the
-//! [`Image`](crate::Image). Only then are the tiles decoded and the plans
-//! applied to their samples.
+//! [`Image`](crate::Image). When the caller asks for sRGB output,
+//! [`plan_srgb`] plans that conversion too (see [`srgb`]). Only then are the
+//! tiles decoded and the plans applied to their samples.
 //!
 //! For these ways a file can bend Annex I, the walk does what OpenJPEG 2.5.0
 //! does: `ihdr` may sit anywhere in `jp2h`, a second `jp2h` before the
@@ -51,9 +52,12 @@ mod header;
 mod metadata;
 mod palette;
 mod resolution;
+mod srgb;
 
 #[cfg(test)]
 mod colour_tests;
+#[cfg(test)]
+mod srgb_tests;
 #[cfg(test)]
 mod tests;
 
@@ -70,6 +74,7 @@ use boxes::{Boxes, Jp2Box, walk_after_codestream};
 use channels::ChannelPlan;
 use header::{Jp2Header, check_file_type};
 use palette::PalettePlan;
+pub(crate) use srgb::SrgbPlan;
 
 /// The JP2 signature box (I.5.1): length 12, type `jP  `, contents
 /// `0D 0A 87 0A`.
@@ -354,4 +359,22 @@ fn colour_channels(count: usize) -> Result<Vec<ChannelDefinition>> {
             })
         })
         .collect()
+}
+
+/// Plan the sRGB output step ([`ColourOutput::Srgb`](crate::ColourOutput::Srgb))
+/// from the file's colour space and the planned output channels, before any
+/// tile is decoded.
+pub(crate) fn plan_srgb(
+    metadata: &Jp2Metadata,
+    plans: &ChannelPlans,
+    siz: &Siz,
+    reduction: u8,
+) -> Result<SrgbPlan> {
+    srgb::plan(
+        &metadata.colour,
+        &metadata.channels,
+        &plans.outputs(siz)?,
+        siz,
+        reduction,
+    )
 }

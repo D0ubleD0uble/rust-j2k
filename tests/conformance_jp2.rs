@@ -8,14 +8,13 @@
 //! ([`support::part4`]) and the same ratchet.
 //!
 //! [`IN_CLASS`] lists the entries that grade in class. An entry outside it
-//! must report *not yet decoded* (`decode` returns `Unsupported`, or the entry
-//! needs sRGB output). Any other outcome fails: a decode that errors
-//! differently or misses its reference is a failure, and an entry that starts
-//! to pass must be added to [`IN_CLASS`].
-//! Entries marked `needs_srgb` wait for the sRGB output option; flip
-//! [`SRGB_OUTPUT_AVAILABLE`] (and `options_for` in `support/jp2.rs`) when it
-//! exists. Until then, those that decode are graded bit-exactly as coded
-//! against their `as_coded` references.
+//! must report *not yet decoded* (`decode` returns `Unsupported`). Any other
+//! outcome fails: a decode that errors differently or misses its reference is
+//! a failure, and an entry that starts to pass must be added to [`IN_CLASS`].
+//! Entries marked `needs_srgb` (files 2, 3, 5, 7, 8) are decoded with
+//! `ColourOutput::Srgb`, since their references are display output; their
+//! default decode is also graded bit-exactly against their `as_coded`
+//! references.
 
 mod support;
 
@@ -26,12 +25,9 @@ use support::pgx::parse_pgx;
 
 /// The entries that decode within their compliance class today. Grow it as the
 /// file-format milestones land; never shrink it without an explanation.
-const IN_CLASS: &[&str] = &["file1", "file4", "file6", "file9"];
-
-/// Whether the decoder can produce sRGB output. While `false`, `needs_srgb`
-/// entries that decode report *needs sRGB output*, after an as-coded check
-/// where the manifest has references.
-const SRGB_OUTPUT_AVAILABLE: bool = false;
+const IN_CLASS: &[&str] = &[
+    "file1", "file2", "file3", "file4", "file5", "file6", "file7", "file8", "file9",
+];
 
 fn jp2_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance/jp2")
@@ -40,7 +36,7 @@ fn jp2_dir() -> PathBuf {
 /// Decode every JP2 file and grade it, enforcing the ratchet.
 #[test]
 fn grades_the_jp2_reader_files_by_compliance_class() {
-    run_ratchet(&jp2_dir(), IN_CLASS, SRGB_OUTPUT_AVAILABLE);
+    run_ratchet(&jp2_dir(), IN_CLASS);
 }
 
 /// Every reference plane parses as an 8-bit unsigned PGX of the file's size.
