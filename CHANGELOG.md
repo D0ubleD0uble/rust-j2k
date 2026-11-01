@@ -61,6 +61,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tiny code-blocks is refused up front instead of after its block and
   precinct-index vectors have been materialized (~160 MiB transient in the
   worst case).
+- A tile-part with `Psot = 0` (the last one) now takes its data up to the last
+  two bytes of the codestream without checking that they are `EOC`, as
+  OpenJPEG does. A codestream that ends in two other bytes now decodes. One
+  with no `EOC` loses its last two data bytes and fails in the tile
+  ("overruns the tile-part"); it used to be rejected as not terminated by
+  `EOC`.
 
 ### Changed
 
