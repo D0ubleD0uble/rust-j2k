@@ -13,19 +13,15 @@ use std::path::{Path, PathBuf};
 
 use rust_j2k::{ColourSpace, Error, Header, Image, Jp2Metadata, Ratio, Res, read_header};
 
-/// Files where `decode` may fail on tile data while `read_header` succeeds,
-/// and why. Today none of them differs: `rgb16_ecwsdk.jp2` is refused for its
-/// `cdef` box by both, because that guard is a header check. Once `cdef` is
-/// applied, `decode` fails on its tile-part ("not terminated by EOC"; OpenJPEG
-/// fails there too) while its header reads cleanly.
+/// Files where `decode` fails on tile data while `read_header` succeeds, and
+/// why. `rgb16_ecwsdk.jp2`'s codestream has no EOC: `decode` fails on its
+/// tile-part ("not terminated by EOC"; OpenJPEG fails there too), while its
+/// header, `cdef` included, reads cleanly.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
-const TILE_FAULTS: &[(&str, &str)] = &[(
-    "jp2_real/rgb16_ecwsdk.jp2",
-    "its codestream has no EOC; refused for `cdef` until cdef is applied",
-)];
+const TILE_FAULTS: &[(&str, &str)] = &[("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC")];
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -72,6 +68,8 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     files(&root, &mut all);
     all.sort();
     let mut seen = [0usize; 4];
+    let mut differing = Vec::new();
+    let mut names = Vec::new();
     for path in &all {
         let name = path
             .strip_prefix(&root)
@@ -87,6 +85,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
             }
         }
         seen[3] += 1;
+        names.push(name.clone());
         let bytes = std::fs::read(path).unwrap();
         let header = read_header(&bytes);
         let decoded = rust_j2k::decode(&bytes);
@@ -95,16 +94,28 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                 assert_eq!(shape_of_header(header), shape_of_image(image), "{name}");
             }
             (Err(h), Err(d)) => assert_eq!(h, d, "{name}: the same error"),
-            (Ok(_), Err(Error::Codestream(_))) => assert!(
-                TILE_FAULTS.iter().any(|(listed, _)| *listed == name),
-                "{name}: decode failed on tile data but read_header succeeded: {decoded:?}"
-            ),
+            (Ok(_), Err(Error::Codestream(_))) => {
+                assert!(
+                    TILE_FAULTS.iter().any(|(listed, _)| *listed == name),
+                    "{name}: decode failed on tile data but read_header succeeded: {decoded:?}"
+                );
+                differing.push(name.clone());
+            }
             _ => panic!("{name}: read_header {header:?} but decode {decoded:?}"),
         }
     }
     assert_eq!(seen[0], 9, "the nine Part 4 JP2 files");
     assert_eq!(seen[1], 9, "the nine jp2_real files");
     assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
+    // Every listed tile fault really differs.
+    let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
+    assert_eq!(differing, listed);
+    // Files whose `cdef` reorders the channels are in the sweep. Their
+    // channels share one format, so the placement of the formats is pinned by
+    // `read_header_places_palette_channels_by_their_definitions` in the crate.
+    for name in ["jp2_cdef_reversed.jp2", "conformance/jp2/files/file2.jp2"] {
+        assert!(names.iter().any(|n| n == name), "{name} is swept");
+    }
 }
 
 fn part4(n: u32) -> Vec<u8> {
@@ -222,4 +233,28 @@ fn a_component_too_deep_for_i32_is_refused_from_the_header() {
     refused(&bytes);
     let cut = bytes.len() - 10;
     refused(&bytes[..cut]);
+}
+
+/// GDAL's `byte_with_xmp.jp2` carries two `uuid` boxes at the top level and
+/// its GML `xml ` inside an `asoc`, which is skipped, so no `xml ` is
+/// reported. Identifiers and sizes from a box dump.
+#[test]
+fn byte_with_xmp_has_two_uuid_boxes_and_no_top_level_xml() {
+    let jp2 = read_header(&real("byte_with_xmp.jp2"))
+        .unwrap()
+        .jp2
+        .unwrap();
+    assert!(jp2.xml.is_empty());
+    let ids: Vec<[u8; 16]> = jp2.uuid.iter().map(|u| u.id).collect();
+    assert_eq!(
+        ids,
+        [
+            *b"\xb1\x4b\xf8\xbd\x08\x3d\x4b\x43\xa5\xae\x8c\xd7\xd5\xa6\xce\x03",
+            *b"\xbe\x7a\xcf\xcb\x97\xa9\x42\xe8\x9c\x71\x99\x94\x91\xe3\xaf\xac",
+        ]
+    );
+    assert_eq!(
+        jp2.uuid.iter().map(|u| u.payload.len()).collect::<Vec<_>>(),
+        [348, 3578]
+    );
 }

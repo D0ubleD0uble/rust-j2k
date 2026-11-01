@@ -28,6 +28,24 @@ Palette fixtures (`pclr` + `cmap`):
   the bare codestream, with the palette applied by table lookup here. Each
   channel keeps its own component's grid (an owner-approved deviation).
 
+Channel definition fixtures (`cdef`):
+
+- `jp2_cdef_rgba`: `opj_compress` output for a 16x12 RGBA PNG (generated
+  here), which writes a `cdef` of three colours and one opacity channel.
+- `jp2_cdef_alpha_first`: the same codestream with a `cdef` that names
+  component 0 as opacity and components 1..3 as colours 1..3, so every colour
+  entry swaps and the opacity channel ends up last.
+- `jp2_cdef_reversed`: file2's layout (components 0, 1, 2 are colours 3, 2,
+  1) over `multicomponent_lossless.j2k`, so the channels come out reversed.
+- `jp2_cdef_unspecified`: every channel `Typ 65535`, `Asoc 65535` (the ECW
+  SDK's layout), so nothing moves.
+- `jp2_cdef_palette`: the 8-bit palette over `multilayer_lossless.j2k` with
+  the reversed `cdef`, which applies to the palette's channels.
+
+Every `cdef` fixture is three or four components at full resolution with an
+sRGB `colr`, so `opj_decompress` does not convert sYCC by its sub-sampling
+heuristic, and the oracle is its decode of the `.jp2` itself.
+
 Usage: python3 scripts/gen-jp2-fixtures.py
 Requires `opj_compress` and `opj_decompress` on PATH (OpenJPEG 2.5.0 was used).
 """
@@ -36,6 +54,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import zlib
 import struct
 import subprocess
 import sys
@@ -74,6 +93,21 @@ def pclr(entries: int, bi: list[int], value) -> bytes:
 def cmap(channels: list[tuple[int, int, int]]) -> bytes:
     """A Component Mapping box from (CMP, MTYP, PCOL) triples."""
     return box(b"cmap", b"".join(struct.pack(">HBB", *c) for c in channels))
+
+
+def cdef(entries: list[tuple[int, int, int]]) -> bytes:
+    """A Channel Definition box from (Cn, Typ, Asoc) triples."""
+    return box(b"cdef", struct.pack(">H", len(entries)) + b"".join(struct.pack(">HHH", *e) for e in entries))
+
+
+def top_boxes(data: bytes) -> list[tuple[bytes, bytes]]:
+    """(type, payload) of each top-level box after the signature; 32-bit lengths only."""
+    out, at = [], len(SIGNATURE)
+    while at < len(data):
+        length, kind = struct.unpack(">I4s", data[at : at + 8])
+        out.append((kind, data[at + 8 : at + length]))
+        at += length
+    return out
 
 
 def jp2(codestream: bytes, geometry: dict, children: list[bytes]) -> bytes:
@@ -115,29 +149,42 @@ def run(*args: str) -> subprocess.CompletedProcess:
     return result
 
 
-def opj_decode(data: bytes, suffix: str) -> tuple[list[dict], str]:
-    """Decode `data` with opj_decompress; return the PGX planes and its log."""
+def opj_decode(
+    data: bytes, suffix: str, sampling: list[tuple[int, int]] | None = None, verified: bool = False
+) -> tuple[list[dict], str]:
+    """Decode `data` with opj_decompress; return the PGX planes and its log.
+
+    PGX does not record sub-sampling, so `sampling` gives each plane's
+    `(dx, dy)`; without it every plane must be the same size, and is taken to
+    be at full resolution. `verified` skips the clamp guard for planes the
+    caller compares with known values itself."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         source = tmp / f"in{suffix}"
         source.write_bytes(data)
         result = run("opj_decompress", "-i", str(source), "-o", str(tmp / "out.pgx"))
-        planes = sorted(tmp.glob("out*.pgx"), key=lambda p: p.name)
+        planes = sorted(tmp.glob("out*.pgx"), key=lambda p: int(p.stem.rsplit("_", 1)[1]))
+        if sampling is not None and len(sampling) != len(planes):
+            sys.exit(f"{len(planes)} planes decoded but {len(sampling)} samplings given")
         components = []
-        for plane in planes:
+        for k, plane in enumerate(planes):
             w, h, depth, signed, values = read_pgx(plane)
-            check_container(plane.name, depth, signed, values)
+            if not verified:
+                check_container(plane.name, depth, signed, values)
+            dx, dy = sampling[k] if sampling is not None else (1, 1)
             components.append(
                 {
                     "width": w,
                     "height": h,
                     "bit_depth": depth,
                     "signed": signed,
-                    "x_sampling": 1,
-                    "y_sampling": 1,
+                    "x_sampling": dx,
+                    "y_sampling": dy,
                     "samples": values,
                 }
             )
+        if sampling is None and len({(c["width"], c["height"]) for c in components}) > 1:
+            sys.exit("planes of different sizes: pass their sub-sampling to opj_decode")
         return components, result.stdout + result.stderr
 
 
@@ -145,14 +192,20 @@ def check_container(name: str, depth: int, signed: bool, values: list[int]) -> N
     """Refuse a reference that may have been clamped. `imagetopgx` clamps each
     sample to the PGX container (1, 2 or 4 bytes), not to the declared depth,
     so a sample sitting on a container bound outside the declared range may be
-    a clamp, not the decoder's value."""
+    a clamp, not the decoder's value. A signed 8- or 16-bit plane fills its
+    container, so its bounds are in range and a clamp onto them cannot be told
+    apart: any sample on them is refused too. (A full unsigned 8- or 16-bit
+    plane has the same blind spot, but 0 and 255 are ordinary values there;
+    the guard does not cover it.)"""
     bytes_ = 1 if depth <= 8 else (2 if depth <= 16 else 4)
     lo, hi = (-(1 << (8 * bytes_ - 1)), (1 << (8 * bytes_ - 1)) - 1) if signed else (0, (1 << (8 * bytes_)) - 1)
     in_lo, in_hi = (-(1 << (depth - 1)), (1 << (depth - 1)) - 1) if signed else (0, (1 << depth) - 1)
+    fills = signed and depth == 8 * bytes_
     for v in values:
-        if v in (lo, hi) and not in_lo <= v <= in_hi:
-            sys.exit(f"{name}: sample {v} sits on the PGX container bound outside the "
-                     f"declared {depth}-bit range; opj_decompress may have clamped it")
+        if v in (lo, hi) and (fills or not in_lo <= v <= in_hi):
+            sys.exit(f"{name}: sample {v} sits on the PGX container bound of a "
+                     f"{'signed' if signed else 'unsigned'} {depth}-bit plane; "
+                     "opj_decompress may have clamped it")
 
 
 def entry8(j: int, i: int) -> int:
@@ -172,7 +225,8 @@ def signed_index_codestream(tmp: Path) -> tuple[bytes, str]:
     flags = ["-F", f"{width},{height},1,8,s", "-n", "3"]
     run("opj_compress", "-i", str(tmp / "signed.raw"), "-o", str(tmp / "signed.j2k"), *flags)
     codestream = (tmp / "signed.j2k").read_bytes()
-    decoded, _ = opj_decode(codestream, ".j2k")
+    # Compared with the source values just below, so the clamp guard is moot.
+    decoded, _ = opj_decode(codestream, ".j2k", verified=True)
     if decoded[0]["samples"] != values:
         sys.exit("the signed index plane did not round-trip losslessly")
     command = "opj_compress -i signed.raw -o signed.j2k " + " ".join(flags)
@@ -186,17 +240,20 @@ def write(name: str, data: bytes, geometry: dict, components: list[dict], proven
         "tolerance": {"mode": "exact"},
         "components": components,
         "provenance": provenance,
-        # Every fixture carries COLR_SRGB and a palette that applies, with no
-        # `res `, `xml ` or `uuid` box: one colour channel per palette column.
-        "jp2": {
+    }
+    if name.startswith("jp2_palette_"):
+        # Each palette fixture carries COLR_SRGB and a palette that applies,
+        # with no `cdef`, `res `, `xml ` or `uuid` box: one colour channel per
+        # palette column. The `cdef` fixtures' labels are checked by
+        # tests/jp2_synthetic.rs instead.
+        snapshot["jp2"] = {
             "colour": "srgb",
             "channels": [f"colour/{i + 1}" for i in range(len(components))],
             "palette_applied": True,
             "resolution": {"capture": None, "display": None},
             "xml": [],
             "uuid": [],
-        },
-    }
+        }
     (FIXTURES / f"{name}.expected.json").write_text(json.dumps(snapshot, indent=2) + "\n")
     print(f"wrote {name}.jp2 + {name}.expected.json ({len(components)} channels)")
 
@@ -218,6 +275,95 @@ def oracle(name: str, data: bytes, geometry: dict, source: str, notes: str, expe
     )
 
 
+def png_rgba(width: int, height: int, pixel) -> bytes:
+    """An 8-bit RGBA PNG; `pixel(x, y)` gives the four samples."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    rows = b"".join(
+        b"\0" + b"".join(bytes(pixel(x, y)) for x in range(width)) for y in range(height)
+    )
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+
+
+def rgba_pixel(x: int, y: int) -> tuple[int, int, int, int]:
+    return ((x * 16 + y) & 0xFF, (y * 20 + 3 * x) & 0xFF, (x * y * 5 + 40) & 0xFF, (x * 9 + y * 13 + 7) & 0xFF)
+
+
+RGBA_CDEF = [(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 1, 0)]
+
+
+def cdef_fixtures(one: bytes, one_geometry: dict, three: bytes, three_geometry: dict) -> None:
+    """The channel definition fixtures; see the module docstring."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "rgba.png").write_bytes(png_rgba(16, 12, rgba_pixel))
+        run("opj_compress", "-i", str(tmp / "rgba.png"), "-o", str(tmp / "rgba.jp2"), "-n", "3")
+        rgba = (tmp / "rgba.jp2").read_bytes()
+    boxes = dict(top_boxes(rgba))
+    jp2h_children = top_boxes(SIGNATURE + boxes[b"jp2h"])
+    written = [payload for kind, payload in jp2h_children if kind == b"cdef"]
+    if written != [cdef(RGBA_CDEF)[8:]]:
+        sys.exit(f"opj_compress wrote cdef {written}, expected {RGBA_CDEF}")
+    codestream = boxes[b"jp2c"]
+    decoded, _ = opj_decode(codestream, ".j2k")
+    source = [[rgba_pixel(x, y)[c] for y in range(12) for x in range(16)] for c in range(4)]
+    if [c["samples"] for c in decoded] != source:
+        sys.exit("opj_compress did not code the RGBA PNG losslessly")
+    rgba_geometry = {"width": 16, "height": 12, "components": 4, "depth": 8, "signed": False}
+    png = "a 16x12 RGBA PNG generated by png_rgba(), coded with `opj_compress -i rgba.png -o rgba.jp2 -n 3`"
+
+    oracle(
+        "jp2_cdef_rgba",
+        rgba,
+        rgba_geometry,
+        png,
+        f"opj_compress's own file, unchanged: cdef {RGBA_CDEF} (three colours, then an "
+        "opacity channel for the whole image), so nothing moves",
+    )
+    alpha_first = [(0, 1, 0), (1, 0, 1), (2, 0, 2), (3, 0, 3)]
+    oracle(
+        "jp2_cdef_alpha_first",
+        jp2(codestream, rgba_geometry, [cdef(alpha_first)]),
+        rgba_geometry,
+        f"the jp2c codestream of {png}",
+        f"cdef {alpha_first}: component 0 is opacity, 1..3 are colours 1..3; each colour "
+        "entry swaps its channel into place, so the output is components 1, 2, 3, 0",
+    )
+    reversed_ = [(0, 0, 3), (1, 0, 2), (2, 0, 1)]
+    oracle(
+        "jp2_cdef_reversed",
+        jp2(three, three_geometry, [cdef(reversed_)]),
+        three_geometry,
+        "tests/fixtures/multicomponent_lossless.j2k",
+        f"cdef {reversed_} (the layout of the ISO/IEC 15444-4 file2), so the output is "
+        "components 2, 1, 0",
+    )
+    unspecified = [(0, 65535, 65535), (1, 65535, 65535), (2, 65535, 65535)]
+    oracle(
+        "jp2_cdef_unspecified",
+        jp2(three, three_geometry, [cdef(unspecified)]),
+        three_geometry,
+        "tests/fixtures/multicomponent_lossless.j2k",
+        f"cdef {unspecified}: every type and association unspecified, as the ECW SDK "
+        "writes; nothing moves",
+    )
+    oracle(
+        "jp2_cdef_palette",
+        jp2(one, one_geometry, [pclr(256, [7, 7, 7], entry8), cmap([(0, 1, 0), (0, 1, 1), (0, 1, 2)]), cdef(reversed_)]),
+        one_geometry,
+        "tests/fixtures/multilayer_lossless.j2k",
+        f"the 8-bit palette with the identity cmap, then cdef {reversed_}, which applies "
+        "to the palette's three channels: the output is columns 2, 1, 0",
+    )
+
+
 def subsampled_codestream(tmp: Path) -> tuple[bytes, str]:
     """A 24x16 image: component 0 full resolution, component 1 sub-sampled 2x2."""
     full = bytes((x * 11 + y * 7) % 256 for y in range(16) for x in range(24))
@@ -226,7 +372,7 @@ def subsampled_codestream(tmp: Path) -> tuple[bytes, str]:
     flags = ["-F", "24,16,2,8,u@1x1:2x2", "-n", "2"]
     run("opj_compress", "-i", str(tmp / "sub.raw"), "-o", str(tmp / "sub.j2k"), *flags)
     codestream = (tmp / "sub.j2k").read_bytes()
-    decoded, _ = opj_decode(codestream, ".j2k")
+    decoded, _ = opj_decode(codestream, ".j2k", sampling=[(1, 1), (2, 2)])
     if [c["samples"] for c in decoded] != [list(full), list(half)]:
         sys.exit("the sub-sampled codestream did not round-trip losslessly")
     return codestream, "opj_compress -i sub.raw -o sub.j2k " + " ".join(flags)
@@ -237,19 +383,24 @@ def subsampled_fixtures() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         codestream, compress = subsampled_codestream(Path(tmp))
     geometry = {"width": 24, "height": 16, "components": 2, "depth": 8, "signed": False}
-    planes, _ = opj_decode(codestream, ".j2k")
-    planes[1]["x_sampling"] = planes[1]["y_sampling"] = 2
-    palette = pclr(256, [7, 7], entry8)
+    planes, _ = opj_decode(codestream, ".j2k", sampling=[(1, 1), (2, 2)])
+    bi = [7, 7]
+    palette = pclr(256, bi, entry8)
     for name, mapping in [
         ("jp2_palette_subsampled_big_first", [(0, 1, 0), (1, 0, 0)]),
         ("jp2_palette_subsampled_small_first", [(1, 1, 0), (0, 0, 0)]),
     ]:
         data = jp2(codestream, geometry, [palette, cmap(mapping)])
         channels = []
-        for i, (component, mtyp, _) in enumerate(mapping):
+        for i, (component, mtyp, pcol) in enumerate(mapping):
             channel = dict(planes[component])
             if mtyp == 1:
-                channel["samples"] = [entry8(min(max(k, 0), 255), i) for k in channel["samples"]]
+                channel["samples"] = [entry8(min(max(k, 0), 255), pcol) for k in channel["samples"]]
+            # OpenJPEG labels a palette channel with its column's Bi, and a
+            # direct channel i with Bi[i].
+            label = bi[pcol] if mtyp == 1 else bi[i]
+            channel["bit_depth"] = (label & 0x7F) + 1
+            channel["signed"] = bool(label & 0x80)
             channels.append(channel)
         write(
             name,
@@ -334,6 +485,7 @@ def main() -> None:
     )
 
     subsampled_fixtures()
+    cdef_fixtures(one, one_geometry, three, three_geometry)
 
 
 if __name__ == "__main__":

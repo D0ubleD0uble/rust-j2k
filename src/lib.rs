@@ -14,9 +14,10 @@
 //!
 //! A JP2 file's codestream decodes the same way, and the file's header comes
 //! back on [`Image::jp2`]. A palettised JP2 file decodes to the palette's
-//! channels. [`read_header`] reads the same header without decoding any tile
-//! data. JP2 channel definitions, colour conversion, HTJ2K, and an
-//! encoder are later work, not permanent non-goals.
+//! channels, and a file with channel definitions puts its colour channels in
+//! colour order. [`read_header`] reads the same header without decoding any
+//! tile data. Colour conversion, HTJ2K, and an encoder are later work, not
+//! permanent non-goals.
 //! See `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
@@ -63,7 +64,7 @@
 //! oracle snapshots, with no external tools. Correctness is defined by
 //! cross-checking a reference decoder (OpenJPEG / eccodes), not by
 //! self-consistency. An input using a feature outside the decoded set — HTJ2K,
-//! a Part 2 extension, JP2 channel definitions — is rejected with
+//! a Part 2 extension — is rejected with
 //! [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. See each module's docs for the ISO §reference and what it owns;
@@ -116,8 +117,11 @@ pub use jp2::{
 ///
 /// A JP2 file with a palette (`pclr` and `cmap`) decodes to the palette's
 /// channels, one per palette column, so it can have more components than its
-/// codestream. [`DecodeOptions::raw_channels`] returns the index plane
-/// instead. A `pclr` without a `cmap` is ignored.
+/// codestream. A `pclr` without a `cmap` is ignored. A file with channel
+/// definitions (`cdef`) moves each colour channel to its colour's position
+/// (colour 1 first) and labels every channel on [`Jp2Metadata::channels`].
+/// [`DecodeOptions::raw_channels`] skips both and returns the codestream's
+/// components as coded.
 ///
 /// This is the whole public surface for the GRIB2 use case: the §7 data
 /// section of a `grid_jpeg` message is a raw codestream. That subset is
@@ -125,8 +129,7 @@ pub use jp2::{
 /// more decodes each component onto its own grid, independently.
 ///
 /// A malformed JP2 box structure is [`Error::FileFormat`]. A file that is not
-/// JP2-compatible, or whose header holds channel definitions (`cdef`), is
-/// valid JPEG 2000 but is rejected with
+/// JP2-compatible is valid JPEG 2000 but is rejected with
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 pub fn decode(bytes: &[u8]) -> Result<Image> {
@@ -168,7 +171,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
         return Ok(Header {
             width,
             height,
-            components: prefix.plans.outputs(siz),
+            components: prefix.plans.outputs(siz)?,
             jp2: Some(prefix.metadata),
         });
     }
@@ -200,15 +203,17 @@ pub struct DecodeOptions {
     /// rejected as [`Error::InvalidOptions`].
     pub resolution_reduction: u8,
     /// Return a JP2 file's codestream components as coded, without applying
-    /// the file's palette (`pclr` + `cmap`): a palettised file then decodes
-    /// to its index plane, exactly as its codestream does on its own, and
-    /// [`Jp2Metadata::palette_applied`] is `false`. Each index plane is
-    /// reported on [`Jp2Metadata::channels`] as [`ChannelType::Unspecified`]
-    /// with [`Association::None`], since it is not a colour until it goes
-    /// through the palette. The palette boxes' layout is still checked, so a
-    /// malformed `pclr` or `cmap` is still [`Error::FileFormat`]; the mapping
-    /// and the palette's column depths are not. No effect on a raw codestream.
-    /// Default `false`.
+    /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
+    /// the file decodes exactly as its codestream does on its own, in SIZ
+    /// order, and [`Jp2Metadata::palette_applied`] is `false`. Each index
+    /// plane is reported on [`Jp2Metadata::channels`] as
+    /// [`ChannelType::Unspecified`] with [`Association::None`], since it is
+    /// not a colour until it goes through the palette; every other channel
+    /// `i` is reported as colour `i + 1`, whatever the `cdef` box says. The
+    /// boxes' layout is still checked, so a malformed `pclr`, `cmap` or
+    /// `cdef` is still [`Error::FileFormat`]; the palette mapping and column
+    /// depths, and the channel definitions' entries, are not. No effect on a
+    /// raw codestream. Default `false`.
     pub raw_channels: bool,
 }
 

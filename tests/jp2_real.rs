@@ -2,35 +2,42 @@
 //! provenance in its README): Kakadu, ECW SDK and OpenJPEG output with the box
 //! layouts those encoders write.
 //!
-//! The oracle is the file's own codestream: `decode` of the `.jp2` must equal
-//! `decode` of its first `jp2c` box's contents, extracted here by a separate,
-//! deliberately simple box walk, and its metadata must equal the record in
-//! `metadata.json` (taken from a box dump), from `decode` and `read_header`
-//! alike. A file whose header carries a box the decoder does not apply yet
-//! (`cdef`) must instead be `Unsupported` naming that box: the header is
-//! checked before any tile data is read, so that holds even when the
-//! codestream is broken too. A file whose codestream is itself broken is
-//! rejected with the same error as the raw codestream.
+//! For a file without channel definitions the oracle is its own codestream:
+//! `decode` of the `.jp2` must equal `decode` of its first `jp2c` box's
+//! contents, extracted here by a separate, deliberately simple box walk. A file
+//! with a `cdef` box is checked against `opj_decompress` 2.5.0's decode of the
+//! `.jp2`, committed as one PGX per channel under `references/`, and its
+//! channel labels against its `cdef` box. A file whose codestream is itself
+//! broken is rejected with the same error as the raw codestream.
+//!
+//! Every file's header, including the broken one's, must also match its record
+//! in `metadata.json` (taken from a box dump) through `read_header`, and
+//! through `decode` for each file that decodes.
 
 mod support;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use rust_j2k::{Error, decode, read_header};
+use rust_j2k::{Association, ChannelDefinition, ChannelType, Error, decode, read_header};
 use serde::Deserialize;
 use support::Jp2Snapshot;
 use support::jp2::sha256_hex;
+use support::pgx::parse_pgx;
 
 /// What a fixture must do.
 enum Outcome {
     /// Decode equal to its extracted codestream.
     Decodes,
-    /// Be refused as `Unsupported`, naming this box.
-    Unsupported(&'static str),
+    /// Decode to the committed OpenJPEG references
+    /// `references/<stem>_<k>.pgx`, every sample within `max_abs` of them,
+    /// with these channel labels (the file's `cdef` entries, in output order).
+    Reference {
+        channels: &'static [ChannelDefinition],
+        max_abs: i32,
+    },
     /// Be rejected with the same `Codestream` error as its extracted
     /// codestream, whose message holds this text.
-    #[allow(dead_code)]
     BrokenCodestream(&'static str),
 }
 
@@ -40,7 +47,11 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "3_13bit_and_1bit.jp2",
         "f67d0b8fa68634659a74e0c7e1768348ed64b588e835bb8efbf6f8308acc72f7",
-        Outcome::Unsupported("cdef"),
+        // cdef (0,0,1) (1,0,2) (2,0,3) (3,1,0): 13-bit colour, 1-bit opacity.
+        Outcome::Reference {
+            channels: RGBA,
+            max_abs: 0,
+        },
     ),
     (
         "byte.jp2",
@@ -55,7 +66,11 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "byte_with_xmp.jp2",
         "cda36211b536322d28b96f17123ee2154e14826b69533e44ade7242906cc0b7d",
-        Outcome::Unsupported("cdef"),
+        // cdef (0,0,1): one grey channel.
+        Outcome::Reference {
+            channels: &[COLOUR_1],
+            max_abs: 0,
+        },
     ),
     (
         "int16.jp2",
@@ -66,10 +81,10 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
         "rgb16_ecwsdk.jp2",
         "86cf3c0a005b640e1cc9bd8dcf9f5955897b6576551383fc89f9d18adf32a507",
         // The codestream has no EOC. OpenJPEG 2.5.0 reads its header but fails
-        // to decode the tile ("segment too long"). The `cdef` guard is a
-        // header check, so it is reported first; once `cdef` is applied this
-        // becomes `BrokenCodestream("not terminated by EOC")`.
-        Outcome::Unsupported("cdef"),
+        // to decode the tile ("segment too long"), so neither decoder decodes
+        // it. Its `cdef` (every type unspecified) is checked by
+        // `the_ecw_unspecified_cdef_is_read` below.
+        Outcome::BrokenCodestream("not terminated by EOC"),
     ),
     (
         "rgbwcmyk01_YeGeo_kakadu.jp2",
@@ -84,15 +99,40 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "stefan_full_rgba.jp2",
         "53ecd23500a0f7921f8af6ef39b101a776503a797462ed10dcde77790b0916d5",
-        Outcome::Unsupported("cdef"),
+        // cdef (0,0,1) (1,0,2) (2,0,3) (3,1,0), written by opj_compress. The
+        // codestream is 9/7: 10 of its 97200 samples differ from OpenJPEG's by
+        // 1, from 9/7 float rounding, mostly OpenJPEG's 2/K constant
+        // (docs/correctness.md).
+        Outcome::Reference {
+            channels: RGBA,
+            max_abs: 1,
+        },
     ),
 ];
+
+const COLOUR_1: ChannelDefinition = colour(1);
+const RGBA: &[ChannelDefinition] = &[
+    colour(1),
+    colour(2),
+    colour(3),
+    ChannelDefinition {
+        kind: ChannelType::Opacity,
+        association: Association::WholeImage,
+    },
+];
+
+const fn colour(n: u16) -> ChannelDefinition {
+    ChannelDefinition {
+        kind: ChannelType::Colour,
+        association: Association::Colour(n),
+    }
+}
 
 fn dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jp2_real")
 }
 
-/// `metadata.json`: the recorded metadata of each decodable file.
+/// `metadata.json`: the recorded metadata of each file.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Metadata {
@@ -130,12 +170,27 @@ fn first_jp2c(bytes: &[u8]) -> &[u8] {
 }
 
 #[test]
-fn every_fixture_decodes_like_its_codestream_or_is_refused_by_the_guard() {
+fn every_fixture_decodes_like_its_oracle() {
     let recorded = metadata();
+    assert_eq!(
+        recorded.files.len(),
+        FIXTURES.len(),
+        "a record for each file"
+    );
     let mut decoded = 0;
     for (name, sha256, outcome) in FIXTURES {
         let bytes = std::fs::read(dir().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(sha256_hex(&bytes), *sha256, "{name}: sha256");
+        let want = recorded
+            .files
+            .get(*name)
+            .unwrap_or_else(|| panic!("{name}: no record in metadata.json"));
+        let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let header_jp2 = header.jp2.as_ref().expect("JP2 metadata");
+        assert_eq!(&Jp2Snapshot::of(header_jp2), want, "{name}: read_header");
+        if let Ok(image) = decode(&bytes) {
+            assert_eq!(image.jp2.as_ref(), Some(header_jp2), "{name}: decode");
+        }
         match outcome {
             Outcome::Decodes => {
                 let file = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -143,23 +198,37 @@ fn every_fixture_decodes_like_its_codestream_or_is_refused_by_the_guard() {
                     .unwrap_or_else(|e| panic!("{name}: raw codestream: {e}"));
                 assert_eq!((file.width, file.height), (raw.width, raw.height), "{name}");
                 assert_eq!(file.components, raw.components, "{name}");
-                let want = recorded.files.get(*name).unwrap_or_else(|| {
-                    panic!("{name}: no record in metadata.json");
-                });
-                let jp2 = file.jp2.as_ref().expect("JP2 metadata");
-                assert_eq!(&Jp2Snapshot::of(jp2), want, "{name}: metadata");
-                let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
-                assert_eq!(header.jp2.as_ref(), Some(jp2), "{name}: read_header");
+                assert!(file.jp2.is_some(), "{name}: JP2 metadata");
                 assert!(raw.jp2.is_none(), "{name}: raw codestream metadata");
                 decoded += 1;
             }
-            Outcome::Unsupported(what) => match decode(&bytes) {
-                Err(Error::Unsupported(message)) => assert!(
-                    message.contains(&format!("`{what}`")),
-                    "{name}: expected the `{what}` guard, got {message:?}"
-                ),
-                other => panic!("{name}: expected Unsupported({what}), got {other:?}"),
-            },
+            Outcome::Reference { channels, max_abs } => {
+                let file = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+                let stem = name.trim_end_matches(".jp2");
+                assert_eq!(file.components.len(), channels.len(), "{name}");
+                for (k, got) in file.components.iter().enumerate() {
+                    let path = dir().join(format!("references/{stem}_{k}.pgx"));
+                    let raw = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+                    let want = parse_pgx(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
+                    assert_eq!(
+                        (got.width, got.height, got.bit_depth, got.signed),
+                        (want.width, want.height, want.bit_depth, want.signed),
+                        "{name} channel {k}"
+                    );
+                    assert_eq!(got.samples.len(), want.samples.len(), "{name} channel {k}");
+                    let pae = got
+                        .samples
+                        .iter()
+                        .zip(&want.samples)
+                        .map(|(a, b)| (a - b).abs())
+                        .max()
+                        .unwrap_or(0);
+                    assert!(pae <= *max_abs, "{name} channel {k}: PAE {pae} > {max_abs}");
+                }
+                let jp2 = file.jp2.expect("JP2 metadata");
+                assert_eq!(jp2.channels, *channels, "{name}");
+                decoded += 1;
+            }
             Outcome::BrokenCodestream(what) => {
                 let file = decode(&bytes);
                 let raw = decode(first_jp2c(&bytes));
@@ -173,11 +242,9 @@ fn every_fixture_decodes_like_its_codestream_or_is_refused_by_the_guard() {
             }
         }
     }
-    assert_eq!(decoded, 5, "five fixtures carry no guarded box");
     assert_eq!(
-        recorded.files.len(),
-        decoded,
-        "a record for each decoded file"
+        decoded, 8,
+        "every fixture but the broken codestream decodes"
     );
 }
 
@@ -192,5 +259,43 @@ fn the_table_lists_every_vendored_file() {
         .collect();
     on_disk.sort();
     let listed: Vec<&str> = FIXTURES.iter().map(|(name, ..)| *name).collect();
+    assert_eq!(on_disk, listed);
+}
+
+/// `rgb16_ecwsdk.jp2` does not decode (see above), but its `cdef` box is the
+/// ECW SDK's all-unspecified layout: N = 3, each entry `Typ 65535`,
+/// `Asoc 65535`. Read here so the fixture's claim stays true; the same layout
+/// decodes in `jp2_cdef_unspecified` (`tests/jp2_synthetic.rs`).
+#[test]
+fn the_ecw_unspecified_cdef_is_read() {
+    let bytes = std::fs::read(dir().join("rgb16_ecwsdk.jp2")).unwrap();
+    let at = bytes.windows(4).position(|w| w == b"cdef").unwrap() + 4;
+    let mut want = vec![0, 3];
+    for cn in 0..3u8 {
+        want.extend_from_slice(&[0, cn, 0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+    assert_eq!(&bytes[at..at + 20], want.as_slice());
+}
+
+/// Every committed reference belongs to a `Reference` fixture.
+#[test]
+fn every_reference_is_used() {
+    let mut on_disk: Vec<String> = std::fs::read_dir(dir().join("references"))
+        .expect("read references")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = FIXTURES
+        .iter()
+        .filter_map(|(name, _, outcome)| match outcome {
+            Outcome::Reference { channels, .. } => {
+                Some((name.trim_end_matches(".jp2"), channels.len()))
+            }
+            _ => None,
+        })
+        .flat_map(|(stem, n)| (0..n).map(move |k| format!("{stem}_{k}.pgx")))
+        .collect();
+    listed.sort();
     assert_eq!(on_disk, listed);
 }

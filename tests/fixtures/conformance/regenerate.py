@@ -462,10 +462,11 @@ JP2_SHIFT_RIGHT = {6: 4, 7: 8}
 # The reference is sRGB display output the decoder must be asked for (ICC
 # profile, sYCC, or palette+cdef-driven channel order).
 JP2_NEEDS_SRGB = {2, 3, 5, 7, 8}
-# The needs-sRGB files that decode as coded today (file2 waits on its `cdef`).
-# Each gets an as-coded reference per component: the codestream samples at the
-# native component size and depth, no colour conversion, no shift.
-JP2_AS_CODED = {3, 5, 7, 8}
+# The needs-sRGB files that decode as coded today. Each gets an as-coded
+# reference per channel: the codestream samples at the native component size
+# and depth, no colour conversion, no shift, in the order the file's `cdef`
+# gives (file2's puts its components in reverse).
+JP2_AS_CODED = {2, 3, 5, 7, 8}
 # OpenJPEG tests/conformance/CMakeLists.txt, "Tests about JP2 file": Part 4
 # Table G.1, `compare_images -n 3 -p 4:4:4 -m 1:1:1`.
 JP2_PAE = 4
@@ -494,12 +495,23 @@ def read_boxes(data: bytes, start: int, end: int):
 
 def jp2_structure(data: bytes) -> dict:
     """Box layout, colour specification, and the jp2c payload of one JP2 file."""
-    top, jp2h, colour, payload = [], [], None, None
+    top, jp2h, colour, payload, cdef = [], [], None, None, None
     for tbox, s, e in read_boxes(data, 0, len(data)):
         top.append(tbox.decode("latin-1"))
         if tbox == b"jp2h":
             for ctype, cs, ce in read_boxes(data, s, e):
                 jp2h.append(ctype.decode("latin-1"))
+                if ctype == b"cdef" and cdef is None:
+                    n = int.from_bytes(data[cs : cs + 2], "big")
+                    cdef = [
+                        tuple(
+                            int.from_bytes(data[at + 2 * f : at + 2 * f + 2], "big")
+                            for f in range(3)
+                        )
+                        for at in range(cs + 2, cs + 2 + 6 * n, 6)
+                    ]
+                    if cs + 2 + 6 * n > ce:
+                        raise ValueError("truncated cdef box")
                 if ctype == b"colr" and colour is None:  # the first colr wins
                     meth = data[cs]
                     colour = {"method": meth}
@@ -511,7 +523,12 @@ def jp2_structure(data: bytes) -> dict:
             payload = data[s:e]
     if payload is None or colour is None:
         raise ValueError("no jp2c or no colr box")
-    return {"boxes": {"top": top, "jp2h": jp2h}, "colour": colour, "payload": payload}
+    return {
+        "boxes": {"top": top, "jp2h": jp2h},
+        "colour": colour,
+        "payload": payload,
+        "cdef": cdef,
+    }
 
 
 def read_tiff_planes(path: str):
@@ -592,12 +609,51 @@ def regrade_with_opj(n: int, jp2_path: str, planes: list, bit_exact: bool) -> li
     return results
 
 
-def as_coded_references(n: int, info: dict, features: dict) -> list:
-    """One PGX per component of the codestream as coded, from OpenJPEG.
+def cdef_order(n: int, cdef: list, count: int) -> list:
+    """The output order a `cdef` gives: `order[p]` is the component at position
+    `p`. Only the simple form is accepted (every entry a colour, each component
+    and each colour once), where OpenJPEG's swaps put colour `a` at `a - 1`."""
+    if sorted(cn for cn, _, _ in cdef) != list(range(count)) or sorted(
+        asoc for _, _, asoc in cdef
+    ) != list(range(1, count + 1)) or any(typ != 0 for _, typ, _ in cdef):
+        raise ValueError(f"file{n}: cdef {cdef} is not a plain colour permutation")
+    order = [0] * count
+    for cn, _, asoc in cdef:
+        order[asoc - 1] = cn
+    return order
+
+
+def opj_cdef_check(n: int, data: bytes, info: dict, raws: list, tmp: str) -> None:
+    """Hold the permuted planes to OpenJPEG's own `cdef` handling: decode the
+    `.jp2` whole with its first `colr` rewritten to sRGB (enum 16), which stops
+    `opj_decompress` converting sYCC, and require the same planes."""
+    if info["colour"].get("method") != 1:
+        raise ValueError(f"file{n}: the cdef check rewrites an enumerated colr")
+    at = data.index(b"colr") + 4
+    patched = data[: at + 3] + (16).to_bytes(4, "big") + data[at + 7 :]
+    jp2 = os.path.join(tmp, "srgb.jp2")
+    with open(jp2, "wb") as f:
+        f.write(patched)
+    subprocess.run(
+        ["opj_decompress", "-i", jp2, "-o", os.path.join(tmp, "srgb.pgx")],
+        check=True,
+        capture_output=True,
+    )
+    for k, raw in enumerate(raws):
+        with open(os.path.join(tmp, f"srgb_{k}.pgx"), "rb") as f:
+            if f.read() != raw:
+                raise ValueError(f"file{n} channel {k}: OpenJPEG's cdef order disagrees")
+
+
+def as_coded_references(n: int, info: dict, features: dict, data: bytes) -> list:
+    """One PGX per channel of the codestream as coded, from OpenJPEG.
 
     The `jp2c` payload is decoded as a bare codestream, so no box-layer colour
-    handling (ICC, palette, `cdef`) can touch the samples; the file must have
-    no palette or `cdef` anyway. Two OpenJPEG behaviours decide how:
+    handling (ICC, palette) can touch the samples; the file must have no
+    palette. A `cdef` only reorders the channels: the planes are put in its
+    order (see `cdef_order`), and that order is checked against OpenJPEG
+    decoding the file itself with its colour space rewritten to sRGB
+    (`opj_cdef_check`). Two OpenJPEG behaviours decide how:
 
     - `opj_decompress` converts sYCC to RGB by heuristic whenever a
       3-component image has sub-sampled chroma (opj_decompress.c:1620-1626),
@@ -611,13 +667,18 @@ def as_coded_references(n: int, info: dict, features: dict) -> list:
     is not upsampled).
     """
     jp2h = info["boxes"]["jp2h"]
-    for banned in ("pclr", "cmap", "cdef"):
+    for banned in ("pclr", "cmap"):
         if banned in jp2h:
             raise ValueError(f"file{n}: has {banned}; not an as-coded file")
     count = features["components"]
     use_c = any(sub != [1, 1] for sub in features["subsampling"])
     if use_c and features["mct"] != 0:
         raise ValueError(f"file{n}: sub-sampled with mct; -c would skip the transform")
+    order = list(range(count))
+    if info["cdef"] is not None:
+        if use_c:
+            raise ValueError(f"file{n}: cdef on a sub-sampled file; the check would hit sYCC")
+        order = cdef_order(n, info["cdef"], count)
     raws = []
     with tempfile.TemporaryDirectory() as tmp:
         cs = os.path.join(tmp, "cs.j2k")
@@ -643,10 +704,14 @@ def as_coded_references(n: int, info: dict, features: dict) -> list:
                 name = f"all_{k}.pgx"
                 with open(os.path.join(tmp, name), "rb") as f:
                     raws.append(f.read())
+        raws = [raws[c] for c in order]
+        if info["cdef"] is not None:
+            opj_cdef_check(n, data, info, raws, tmp)
     refs = []
     for k, raw in enumerate(raws):
-        dx, dy = features["subsampling"][k]
-        want = (features["precision"][k], -(-features["width"] // dx), -(-features["height"] // dy))
+        c = order[k]
+        dx, dy = features["subsampling"][c]
+        want = (features["precision"][c], -(-features["width"] // dx), -(-features["height"] // dy))
         header = raw[: raw.index(b"\n")].decode("ascii").split()
         got = (int(header[-3].lstrip("+-")), int(header[-2]), int(header[-1]))
         if got != want:
@@ -727,7 +792,7 @@ def build_jp2_entry(n: int) -> dict:
         "bounds": {"pae": [JP2_PAE] * graded, "mse": [JP2_MSE] * graded},
     }
     if n in JP2_AS_CODED:
-        as_coded = as_coded_references(n, info, features)
+        as_coded = as_coded_references(n, info, features, data)
         entry["as_coded"] = {
             "references": as_coded,
             "reference_digests": [digest(os.path.join(JP2_DIR, r)) for r in as_coded],
@@ -773,10 +838,12 @@ def main_jp2():
                 ),
             },
             "as_coded": {
-                "files": "3, 5, 7, 8 (file2 waits on its cdef)",
+                "files": "2, 3, 5, 7, 8",
                 "oracle_command": (
                     "the jp2c payload as a bare codestream: opj_decompress -i cs.j2k "
-                    "-o out.pgx; the sub-sampled file (3) one component at a time with -c K"
+                    "-o out.pgx; the sub-sampled file (3) one component at a time with -c K; "
+                    "file2's planes put in its cdef order and checked against opj_decompress "
+                    "on file2.jp2 with its colr rewritten to sRGB (enum 16)"
                 ),
                 "note": (
                     "codestream samples at the native component size and depth, no "

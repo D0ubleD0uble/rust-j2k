@@ -5,6 +5,11 @@
 //! The peak is measured with a counting global allocator, so this file holds a
 //! single test: a second one running in parallel would count into the same
 //! peak.
+//!
+//! A global allocator can only be written with `unsafe`. This one is a shim in
+//! a test binary that forwards every call to `System` unchanged, which the
+//! project conventions allow (`.claude/rules/conventions.md`, "Stay
+//! pure-Rust"). The library itself has no `unsafe`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

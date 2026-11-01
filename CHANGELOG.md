@@ -14,9 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   codestream) and the first `jp2c` codestream is decoded. Files that bend the
   box rules the way OpenJPEG tolerates decode as they do there: `ihdr`
   anywhere in `jp2h`, a second `jp2h`, a `jp2c` whose length runs past the end
-  of the file, and loose bytes after the codestream. A file with channel
-  definitions (`cdef`), inside `jp2h` or after it, is still `Unsupported`, as
-  is a file that is not JP2-compatible.
+  of the file, and loose bytes after the codestream. A file that is not
+  JP2-compatible is `Unsupported`.
 - A JP2 file with a palette (`pclr` + `cmap`) decodes to the palette's
   channels, one per palette column, with each channel's depth and sign from the
   palette. What is accepted and the output samples follow OpenJPEG, so a
@@ -25,9 +24,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Unsupported`, and channels from components of different sub-sampling each
   keep their own grid, where OpenJPEG fails.
   `Jp2Metadata::palette_applied` says whether the palette was applied.
+- A JP2 file with channel definitions (`cdef`) puts its colour channels in
+  colour order and labels every channel on `Jp2Metadata::channels` with its
+  type and association. What is accepted and the output order follow
+  OpenJPEG: each colour entry moves its channel to its colour's position, and
+  other channels stay where the file put them. The entries describe the
+  channels after the palette.
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
-  coded, without the palette. The index plane is then labelled
-  `ChannelType::Unspecified`, and only the palette boxes' layout is checked.
+  coded, without the palette or channel definitions. The index plane is then
+  labelled `ChannelType::Unspecified`, and only the boxes' layout is checked.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
   the samples (`None` for a raw codestream), with `ColourSpace`,
   `ChannelDefinition`, `ChannelType`, and `Association`. The colour space

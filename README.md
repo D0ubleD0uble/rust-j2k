@@ -90,7 +90,7 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 
 | Decoded | Not yet (returns `Error::Unsupported`) |
 | --- | --- |
-| Raw codestream (Annex A) and JP2 files (Annex I), detected from the first bytes; JP2 palettes (`pclr`, `cmap`) | JP2 channel definitions (`cdef`) |
+| Raw codestream (Annex A) and JP2 files (Annex I), detected from the first bytes; JP2 palettes (`pclr`, `cmap`) and channel definitions (`cdef`) | — |
 | Integer components, signed or unsigned, up to 32 bits, with sub-sampling | Depths past the `i32` container (33–38 bits) |
 | Both color transforms: reversible (RCT) and irreversible (ICT) | Part 2 extensions (array MCT, …) |
 | Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | HTJ2K (Part 15) block coding |

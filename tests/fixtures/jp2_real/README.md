@@ -3,12 +3,10 @@
 Nine small `.jp2` files from GDAL's test data, used by `tests/jp2_real.rs` to
 check the JP2 box reader against the box layouts real encoders write (Kakadu,
 the ECW JPEG 2000 SDK, OpenJPEG). The test decodes each file and compares it
-with a decode of its own `jp2c` codestream; files carrying a box the decoder
-does not apply yet are expected to be refused as `Unsupported`.
-`rgb16_ecwsdk.jp2` is the exception: its codestream has no `EOC`, so it fails
-with the same `Codestream` error as its extracted codestream, before the
-`cdef` guard is reached. OpenJPEG 2.5.0 does not decode it either (it fails in
-tile decoding, "segment too long").
+with its oracle (below). `rgb16_ecwsdk.jp2` is the exception: its codestream
+has no `EOC`, so it fails with the same `Codestream` error as its extracted
+codestream. OpenJPEG 2.5.0 does not decode it either (it fails in tile
+decoding, "segment too long").
 
 ## Rights
 
@@ -48,14 +46,25 @@ edited or swapped file fails there.
 
 ## Oracle
 
-The test's oracle is the file's own codestream: `decode` of the `.jp2` must
-equal `decode` of its first `jp2c` box's contents. The five files without a
-`cdef` box were also checked by hand against `opj_decompress` 2.5.0 (`-i
-<file>.jp2 -o <file>.pgx`, one PGX per component): every sample matched.
+For the five files without a `cdef` box the oracle is the file's own
+codestream: `decode` of the `.jp2` must equal `decode` of its first `jp2c`
+box's contents. They were also checked by hand against `opj_decompress` 2.5.0
+(`-i <file>.jp2 -o <file>.pgx`, one PGX per component): every sample matched.
 
-`metadata.json` records what each of those five files' header says (colour,
-channels, resolution, top-level `xml ` and `uuid` boxes), in the `jp2`
-snapshot schema of `tests/fixtures/README.md`. The values come from a box dump
-of each file (the `colr` `EnumCS`, the `resc`/`resd` fields, the top-level
-`xml ` and `uuid` box sizes and identifiers), not from this decoder. Both
-`decode` and `read_header` must report them.
+The three files with a `cdef` box (`3_13bit_and_1bit.jp2`,
+`byte_with_xmp.jp2`, `stefan_full_rgba.jp2`) are graded against
+`references/<stem>_<k>.pgx`, `opj_decompress` 2.5.0's output for the `.jp2`
+(`opj_decompress -i <file>.jp2 -o <stem>.pgx`), and their channel labels
+against their `cdef` boxes. Two match bit-exactly. `stefan_full_rgba.jp2` is
+9/7 and is graded within 1: 10 of its 97200 samples differ from OpenJPEG's by
+1, from 9/7 float rounding, mostly OpenJPEG's 2/K constant (see
+`docs/correctness.md`). The references are OpenJPEG output for files whose
+rights are not confirmed, so they share the status in Rights above.
+
+`metadata.json` records what each file's header says (colour, channels,
+resolution, top-level `xml ` and `uuid` boxes), in the `jp2` snapshot schema of
+`tests/fixtures/README.md`, for every file whose header reads cleanly. The
+values come from a box dump of each file (the `colr` `EnumCS`, the
+`cdef` entries, the `resc`/`resd` fields, the top-level `xml ` and `uuid` box
+sizes and identifiers), not from this decoder. `read_header` must report them,
+and so must `decode` for each file it decodes.

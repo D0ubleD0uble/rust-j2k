@@ -20,7 +20,7 @@
 //! is read, so `read_header` shares it with `decode`: the codestream's main
 //! header is parsed, [`check_against_siz`] holds `ihdr` to its SIZ,
 //! [`ChannelPlans::plan`] plans the output channels (the palette, see
-//! [`palette`], then the guard on the header boxes not applied yet), and
+//! [`palette`], then the channel definitions, see [`channels`]), and
 //! [`metadata`] builds the [`Jp2Metadata`] that rides on the
 //! [`Image`](crate::Image). Only then are the tiles decoded and the plans
 //! applied to their samples.
@@ -37,10 +37,11 @@
 //!
 //! Every length is checked before use and nothing is allocated from one (see
 //! [`boxes`]). Box-layer faults are [`Error::FileFormat`]; a file this decoder
-//! does not read (no `jp2 ` compatibility, or a box it cannot yet apply) is
-//! [`Error::Unsupported`].
+//! does not read (no `jp2 ` compatibility, or a palette mapping or column depth
+//! it does not decode) is [`Error::Unsupported`].
 
 mod boxes;
+mod channels;
 mod colour;
 mod header;
 mod metadata;
@@ -60,6 +61,7 @@ pub use metadata::{
 use crate::codestream::markers::Siz;
 use crate::{Component, ComponentInfo, Error, Result};
 use boxes::{Boxes, Jp2Box, walk_after_codestream};
+use channels::ChannelPlan;
 use header::{Jp2Header, check_file_type};
 use palette::PalettePlan;
 
@@ -175,19 +177,6 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
     }))
 }
 
-/// Reject a file with a header box the decoder cannot yet apply, so a file is
-/// never decoded into channels it would present wrongly. `header` holds the
-/// boxes inside every `jp2h` and those misplaced at the top level after it, so
-/// this one check covers both places OpenJPEG applies them from.
-fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
-    if !header.cdef().is_empty() {
-        return Err(Error::Unsupported(
-            "the file has a `cdef` box, which this decoder does not apply".into(),
-        ));
-    }
-    Ok(())
-}
-
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image
 /// area (I.5.3.1), as OpenJPEG requires. `NC` is not held to `Csiz`: OpenJPEG
 /// lets the codestream decide the image, and the palette's `cmap` and the
@@ -205,18 +194,18 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
 }
 
 /// What the header boxes do to a file's channels, worked out from the boxes
-/// and the codestream's main header before any tile is decoded. The palette
-/// is planned first; channel definitions, once applied, plan after it on the
-/// palette's output channels.
+/// and the codestream's main header before any tile is decoded: the palette,
+/// then the channel definitions over the palette's output channels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChannelPlans {
     palette: PalettePlan,
+    channels: ChannelPlan,
 }
 
 impl ChannelPlans {
     /// Plan the channels for a decode at `reduction` resolution levels down.
-    /// The palette is planned before the guard on the boxes not applied yet,
-    /// so a malformed palette reports its fault rather than an unsupported box.
+    /// The palette is planned first, so a malformed palette reports its fault
+    /// before a malformed `cdef` does, as OpenJPEG reads them.
     pub(crate) fn plan(
         header: &Jp2Header<'_>,
         siz: &Siz,
@@ -224,35 +213,38 @@ impl ChannelPlans {
         raw_channels: bool,
     ) -> Result<Self> {
         let palette = palette::plan(header, siz, reduction, raw_channels)?;
-        // Channel definitions (`cdef`) plan here, on the palette's output.
-        check_supported(header)?;
-        Ok(ChannelPlans { palette })
+        let count = palette.output_channels(siz).len();
+        let channels = channels::plan(header, count, raw_channels)?;
+        Ok(ChannelPlans { palette, channels })
     }
 
-    /// The output channels' formats, in output order.
-    pub(crate) fn outputs(&self, siz: &Siz) -> Vec<ComponentInfo> {
-        self.palette.output_channels(siz)
+    /// The output channels' formats, in output order: the palette's output,
+    /// then placed by the channel definitions.
+    pub(crate) fn outputs(&self, siz: &Siz) -> Result<Vec<ComponentInfo>> {
+        self.channels.apply(self.palette.output_channels(siz))
     }
 
     /// Build the output channels from the decoded components.
     pub(crate) fn apply(&self, components: Vec<Component>) -> Result<Vec<Component>> {
-        self.palette.apply(components)
+        self.channels.apply(self.palette.apply(components)?)
     }
 }
 
 /// The file's metadata, from its boxes and the channel plans alone: no
-/// sample is needed. `siz` is the codestream's.
+/// sample is needed. Every channel starts as colour `i + 1`; the palette and
+/// channel plans relabel them. `siz` is the codestream's.
 pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> Result<Jp2Metadata> {
     let (xml, uuid) = passthrough(file);
     let mut metadata = Jp2Metadata {
         colour: file.colour.clone(),
-        channels: colour_channels(plans.outputs(siz).len())?,
+        channels: colour_channels(plans.outputs(siz)?.len())?,
         palette_applied: false,
         resolution: resolution::read(&file.header),
         xml,
         uuid,
     };
     plans.palette.describe(&mut metadata);
+    plans.channels.describe(&mut metadata);
     Ok(metadata)
 }
 

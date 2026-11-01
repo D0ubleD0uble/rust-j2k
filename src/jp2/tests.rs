@@ -11,6 +11,7 @@ use crate::{
     Jp2Metadata, Ratio, Res, Resolution, UuidBox, decode, decode_with, read_header,
 };
 
+mod channels;
 mod palette;
 
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
@@ -338,12 +339,16 @@ fn a_palette_box_without_a_component_mapping_box_is_ignored() {
     assert!(!decode(&bytes).unwrap().jp2.unwrap().palette_applied);
 }
 
-/// The header box not applied yet is refused by name, so a file is never
-/// decoded into channels it would present wrongly.
+/// A channel definition box is applied: file2's layout (components 0, 1, 2
+/// are colours 3, 2, 1) comes out in colour order.
 #[test]
-fn a_channel_definition_box_is_unsupported() {
-    let with = |child: Vec<u8>| file(&[jp2_ftyp(), jp2h(&[good_ihdr(), colr(), child]), jp2c()]);
-    unsupported(&with(bx(b"cdef", &[0, 0])), "`cdef`");
+fn a_channel_definition_box_is_applied() {
+    let bytes = file(&[
+        jp2_ftyp(),
+        jp2h(&[good_ihdr(), colr(), channels::reversed()]),
+        jp2c(),
+    ]);
+    channels::assert_reversed(&decode(&bytes).expect("decodes"));
 }
 
 /// A box whose length is shorter than its own 8-byte header, for every such
@@ -460,20 +465,21 @@ fn a_second_jp2h_is_merged_into_the_first() {
     assert_eq!(parsed.header.colr()[0], &colr()[8..]);
 }
 
-/// The guarded box meets the guard wherever OpenJPEG would apply it: in a
-/// second `jp2h`, or misplaced at the top level after the first `jp2h`.
+/// A `cdef` is applied wherever OpenJPEG applies it: in a second `jp2h`, or
+/// misplaced at the top level after the first `jp2h` (both measured with
+/// `opj_decompress` 2.5.0: the channels come out reversed).
 #[test]
-fn a_guarded_box_in_a_second_jp2h_or_after_jp2h_is_unsupported() {
-    let cdef = bx(b"cdef", &[0, 0]);
+fn a_cdef_in_a_second_jp2h_or_after_jp2h_is_applied() {
+    let cdef = channels::reversed();
     let in_second_jp2h = file(&[
         jp2_ftyp(),
         good_jp2h(),
         jp2h(&[good_ihdr(), cdef.clone()]),
         jp2c(),
     ]);
-    unsupported(&in_second_jp2h, "`cdef`");
+    channels::assert_reversed(&decode(&in_second_jp2h).expect("decodes"));
     let after_jp2h = file(&[jp2_ftyp(), good_jp2h(), cdef, jp2c()]);
-    unsupported(&after_jp2h, "`cdef`");
+    channels::assert_reversed(&decode(&after_jp2h).expect("decodes"));
 }
 
 /// The palette boxes are applied wherever OpenJPEG applies them: in a second
@@ -540,10 +546,10 @@ fn header_boxes_misplaced_before_jp2h_are_ignored() {
     assert_eq!(parsed.other.len(), 4);
 }
 
-/// A file that is malformed and also carries a guarded box reports the fault,
-/// not the unsupported box.
+/// A file with a header or codestream fault and a malformed `cdef` reports
+/// the first fault: the `cdef` is read after the codestream's main header.
 #[test]
-fn a_structural_fault_wins_over_an_unsupported_box() {
+fn a_structural_fault_wins_over_a_malformed_cdef() {
     let with_cdef = |ihdr_box: Vec<u8>, stream: &[u8]| {
         file(&[
             jp2_ftyp(),
@@ -876,7 +882,10 @@ fn a_header_fault_wins_over_a_truncated_codestream() {
         &with(&[bx(b"cmap", &[0, 0, 1, 0])], false),
         "a `cmap` box but no `pclr` box",
     );
-    unsupported(&with(&[bx(b"cdef", &[0, 0])], false), "`cdef`");
+    file_format(
+        &with(&[bx(b"cdef", &[0, 0])], false),
+        "declares 0 channel definitions",
+    );
     // With no header fault, the truncation is what is reported.
     assert!(matches!(
         decode(&with(&[], false)),
@@ -1163,32 +1172,4 @@ fn read_header_reads_no_tile_data() {
         read_header(&CODESTREAM[..sot]),
         Err(Error::Codestream(_))
     ));
-}
-
-/// GDAL's `byte_with_xmp.jp2` carries two `uuid` boxes at the top level and
-/// its GML `xml ` inside an `asoc`, which is skipped. Its `cdef` is still
-/// refused, so this reads the metadata past the public guard.
-#[test]
-fn byte_with_xmp_has_two_uuid_boxes_and_no_top_level_xml() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/jp2_real/byte_with_xmp.jp2"
-    );
-    let bytes = std::fs::read(path).expect("read the fixture");
-    let file = super::parse(&bytes).expect("box walk");
-    let (xml, uuid) = super::passthrough(&file);
-    assert!(xml.is_empty());
-    let ids: Vec<[u8; 16]> = uuid.iter().map(|u| u.id).collect();
-    assert_eq!(
-        ids,
-        [
-            *b"\xb1\x4b\xf8\xbd\x08\x3d\x4b\x43\xa5\xae\x8c\xd7\xd5\xa6\xce\x03",
-            *b"\xbe\x7a\xcf\xcb\x97\xa9\x42\xe8\x9c\x71\x99\x94\x91\xe3\xaf\xac",
-        ]
-    );
-    assert_eq!(
-        uuid.iter().map(|u| u.payload.len()).collect::<Vec<_>>(),
-        [348, 3578]
-    );
-    assert!(matches!(read_header(&bytes), Err(Error::Unsupported(_))));
 }

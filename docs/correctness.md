@@ -126,10 +126,11 @@ decoders still differ in both directions.
 The header is checked before any tile data is read, in OpenJPEG's order up to
 the codestream's main header: the boxes, the main header, `ihdr` against SIZ.
 So a file whose `ihdr` disagrees with SIZ and whose codestream is also cut
-short reports the `ihdr` fault, as OpenJPEG does. The palette checks come next,
-still before the tiles; OpenJPEG runs them after decoding the tiles, so a file
-with both a palette fault and a tile fault reports the palette fault here and
-the tile fault there. Both reject it. This order is what lets `read_header`
+short reports the `ihdr` fault, as OpenJPEG does. The palette and channel
+definition checks come next, still before the tiles; OpenJPEG checks the
+`cmap` mapping and the `cdef` entries against the channels only after
+decoding the tiles, so a file with both a palette or `cdef` fault and a tile
+fault reports the box fault here and the tile fault there. Both reject it. This order is what lets `read_header`
 return the same error as `decode` for every header fault.
 
 Stricter here, where OpenJPEG decodes:
@@ -162,6 +163,18 @@ identity mapping. Two differences, both approved by the owner on 2026-11-01:
   channel by the first one's grid and crashes or leaves samples unset, so
   `jp2_palette_subsampled_*` are graded by table lookup over OpenJPEG's
   decode of the bare codestream.
+
+Channel definitions (`cdef`) follow OpenJPEG on what it accepts and on the
+output channel order, including its sequential swap rule: each colour entry
+swaps its channel to `Asoc - 1`, later entries follow their channels, and an
+entry may repeat a channel once every channel is named. The labels on
+`Jp2Metadata::channels` have no OpenJPEG output to match: its library keeps
+only the type, in `comps[].alpha`, which `opj_decompress` never writes out
+(no PGX, PNG or TIFF writer reads it). That field is also written to the
+position the entry named before its swap, so after a swap it can sit on the
+wrong channel (an ARGB layout loses its opacity flag). Here each channel
+carries the entry that names it, so the label moves with the samples, as
+I.5.3.6 defines `Cn`.
 
 Looser here, where OpenJPEG fails: a malformed header box after the
 codestream (a second signature or `ftyp` box, a `jp2h` without `ihdr`, a
