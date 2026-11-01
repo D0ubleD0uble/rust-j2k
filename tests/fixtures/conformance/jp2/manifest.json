@@ -20,6 +20,11 @@
       "block": "Tests about JP2 file (Part 4 Table G.1): compare_images -n 3 -p 4:4:4 -m 1:1:1",
       "note": "files 1, 4, 6 and 9 are graded bit-exact (measured: the OpenJPEG decode equals the reference); the rest use PAE 4 / MSE 1"
     },
+    "as_coded": {
+      "files": "3, 5, 7, 8 (file2 waits on its cdef)",
+      "oracle_command": "the jp2c payload as a bare codestream: opj_decompress -i cs.j2k -o out.pgx; the sub-sampled file (3) one component at a time with -c K",
+      "note": "codestream samples at the native component size and depth, no colour conversion and no shift. -c avoids opj_decompress's sYCC heuristic but skips the inverse MCT, so it is used only for the sub-sampled file (mct 0); the bare codestream carries no ICC"
+    },
     "features": {
       "tool": "opj_dump -i + direct marker-segment walk of the jp2c payload",
       "note": "boxes and colour are read from the JP2 box layer directly"
@@ -373,6 +378,27 @@
           1,
           1
         ]
+      },
+      "as_coded": {
+        "references": [
+          "references/jp2_3_ascoded_0.pgx",
+          "references/jp2_3_ascoded_1.pgx",
+          "references/jp2_3_ascoded_2.pgx"
+        ],
+        "reference_digests": [
+          {
+            "size": 307218,
+            "sha256": "302aef136923ca6c703b5fa11f1f55e0ca8779189236dde6276c0c2caa38edb9"
+          },
+          {
+            "size": 76818,
+            "sha256": "caf7b09140b67fe880dd0bb4af8f7d0a8d1287de988033268311fa31f94446ff"
+          },
+          {
+            "size": 76818,
+            "sha256": "7a51e741aa8dfd0b75541fb21476619bf4bf10a7e50d62345432fe914f6d212f"
+          }
+        ]
       }
     },
     {
@@ -578,6 +604,27 @@
           1,
           1,
           1
+        ]
+      },
+      "as_coded": {
+        "references": [
+          "references/jp2_5_ascoded_0.pgx",
+          "references/jp2_5_ascoded_1.pgx",
+          "references/jp2_5_ascoded_2.pgx"
+        ],
+        "reference_digests": [
+          {
+            "size": 393234,
+            "sha256": "b832397eda344a0267f43be2d2659aeccdbfd8a421f846843a5f8f0d2424898b"
+          },
+          {
+            "size": 393234,
+            "sha256": "3e869ebe15327b5dde3bb091dd4eda016265ea7d878f331021dffb0585c4b5bf"
+          },
+          {
+            "size": 393234,
+            "sha256": "7df85b0ce116fc2e7aaafb7929d99b8f35cafe3e169d9313bdfdbe3b69243f37"
+          }
         ]
       }
     },
@@ -785,6 +832,27 @@
           1,
           1
         ]
+      },
+      "as_coded": {
+        "references": [
+          "references/jp2_7_ascoded_0.pgx",
+          "references/jp2_7_ascoded_1.pgx",
+          "references/jp2_7_ascoded_2.pgx"
+        ],
+        "reference_digests": [
+          {
+            "size": 614419,
+            "sha256": "43d50d2a795583981304b183922af359aa72cd3cad8b1d26b6206ea0c984a358"
+          },
+          {
+            "size": 614419,
+            "sha256": "fc22a50f48f8507e10f4855facbec9234fe51eb650dd281a0fd782ac93343221"
+          },
+          {
+            "size": 614419,
+            "sha256": "b000d5115b43d5f4ec18cc8e9815749f28ec61d8f55f3a2e1f417a83e968f5b7"
+          }
+        ]
       }
     },
     {
@@ -877,6 +945,17 @@
         ],
         "mse": [
           1
+        ]
+      },
+      "as_coded": {
+        "references": [
+          "references/jp2_8_ascoded_0.pgx"
+        ],
+        "reference_digests": [
+          {
+            "size": 280018,
+            "sha256": "b95a257fb06eb56612701df86089a44329461fdcd158f25a458aa27711198ced"
+          }
         ]
       }
     },
