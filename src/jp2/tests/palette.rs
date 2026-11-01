@@ -1,8 +1,6 @@
 //! Palette (`pclr` + `cmap`) tests through the public [`decode`]. Every shape
 //! here was measured with `opj_decompress` 2.5.0; each test says what
-//! OpenJPEG does with it. The one deliberate difference, a palette channel
-//! `i` that looks up a column other than `i` (OpenJPEG's own limit), is
-//! graded by table lookup over the raw index plane.
+//! OpenJPEG does with it.
 
 use super::*;
 
@@ -320,40 +318,43 @@ fn a_direct_channel_copies_its_component_with_column_i_depth() {
     );
 }
 
-/// The general mapping OpenJPEG refuses ("Implementation limitation: for
-/// palette mapping, pcol[0] should be equal to 0"): channel `i` looks up the
-/// column its `cmap` entry names.
+/// OpenJPEG has no general mapping ("Implementation limitation: for palette
+/// mapping, pcol[0] should be equal to 0"): a palette channel `i` that looks
+/// up another column is `Unsupported`, with or without a direct channel, and
+/// before the single-component correction could rewrite it.
 #[test]
-fn a_palette_channel_may_look_up_any_column() {
-    let image = decode(&with_children(&[
-        pclr_box(),
-        cmap_of(&[(0, 1, 2), (0, 1, 0), (0, 1, 1)]),
-    ]))
-    .expect("decodes");
-    let index = &raw().components[0].samples;
-    for (i, column) in [2, 0, 1].into_iter().enumerate() {
-        assert_eq!(image.components[i].samples, looked_up(index, column, 256));
-    }
+fn a_palette_channel_reading_another_column_is_unsupported() {
+    let message = "looks up palette column";
+    unsupported(
+        &with_children(&[pclr_box(), cmap_of(&[(0, 1, 2), (0, 1, 0), (0, 1, 1)])]),
+        message,
+    );
+    // The review's `perm_direct_3comp` and `perm_direct_onecomp` shapes; the
+    // second used to be rewritten by the correction and decode wrongly.
+    unsupported(
+        &with_children(&[pclr_box(), cmap_of(&[(0, 1, 1), (0, 1, 0), (2, 0, 0)])]),
+        message,
+    );
+    unsupported(
+        &one_component_with(&[pclr_box(), cmap_of(&[(0, 1, 1), (0, 1, 0), (0, 0, 0)])]),
+        message,
+    );
 }
 
-/// A palette channel takes its depth and sign from the column it looks up.
+/// A palette channel takes its depth and sign from its column.
 #[test]
-fn a_palette_channel_takes_its_looked_up_columns_format() {
+fn a_palette_channel_takes_its_columns_format() {
     let pclr = bx(
         b"pclr",
         &pclr_payload(256, &[7, 11, 0x84], |j, i| u64::from(entry(j, i))),
     );
-    let image = decode(&with_children(&[
-        pclr,
-        cmap_of(&[(0, 1, 2), (0, 1, 0), (0, 1, 1)]),
-    ]))
-    .expect("decodes");
+    let image = decode(&with_children(&[pclr, cmap_box()])).expect("decodes");
     let formats: Vec<(u8, bool)> = image
         .components
         .iter()
         .map(|c| (c.bit_depth, c.signed))
         .collect();
-    assert_eq!(formats, [(5, true), (8, false), (12, false)]);
+    assert_eq!(formats, [(8, false), (12, false), (5, true)]);
 }
 
 /// OpenJPEG's single-component correction ("Component mapping seems wrong.
@@ -464,6 +465,20 @@ fn raw_channels_checks_the_boxes_but_not_the_mapping() {
         decode_with(&bad_box, options),
         Err(Error::FileFormat(_))
     ));
+
+    // The review's `w38_opj`: a 38-bit column stored at OpenJPEG's 4-byte
+    // stride. Applied it is too deep; raw, it does not block the index plane,
+    // as OpenJPEG decodes it under its ignore flag.
+    let mut deep = 256u16.to_be_bytes().to_vec();
+    deep.extend_from_slice(&[3, 37, 7, 7]);
+    for j in 0..256u32 {
+        deep.extend_from_slice(&j.to_be_bytes());
+        deep.extend_from_slice(&[entry(j as usize, 1), entry(j as usize, 2)]);
+    }
+    let deep = with_children(&[bx(b"pclr", &deep), cmap_box()]);
+    unsupported(&deep, "exceeds the i32");
+    let image = decode_with(&deep, options).expect("decodes raw");
+    assert_eq!(image.components, raw().components);
 }
 
 /// A reduced decode applies the palette to the reduced index plane.

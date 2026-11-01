@@ -164,8 +164,8 @@ fn a_minimal_jp2_decodes_to_its_codestream() {
     assert_decodes_like_raw(&minimal());
 }
 
-/// The skeleton every JP2 decode carries until the header boxes are read:
-/// colour unknown, one colour channel per component, no palette.
+/// The skeleton every JP2 decode carries without `cdef` or `pclr`: the colour
+/// space from `colr`, one colour channel per component, no palette.
 #[test]
 fn a_jp2_decode_carries_the_metadata_skeleton() {
     let image = decode(&minimal()).expect("decodes");
@@ -176,7 +176,7 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
     assert_eq!(
         image.jp2,
         Some(Jp2Metadata {
-            colour: ColourSpace::Unknown,
+            colour: ColourSpace::Srgb,
             channels: vec![colour(1), colour(2), colour(3)],
             palette_applied: false,
         })
@@ -453,8 +453,8 @@ fn a_second_jp2h_is_merged_into_the_first() {
     assert_decodes_like_raw(&bytes);
     let parsed = super::parse(&bytes).expect("parses");
     assert_eq!(parsed.header.ihdr.width, WIDTH, "the first ihdr wins");
-    assert_eq!(parsed.header.colr.len(), 2, "both colr boxes, in order");
-    assert_eq!(parsed.header.colr[0], &colr()[8..]);
+    assert_eq!(parsed.header.colr().len(), 2, "both colr boxes, in order");
+    assert_eq!(parsed.header.colr()[0], &colr()[8..]);
 }
 
 /// The guarded box meets the guard wherever OpenJPEG would apply it: in a
@@ -533,7 +533,7 @@ fn header_boxes_misplaced_before_jp2h_are_ignored() {
     ]);
     assert_decodes_like_raw(&bytes);
     let parsed = super::parse(&bytes).expect("parses");
-    assert_eq!(parsed.header.colr, vec![&colr()[8..]]);
+    assert_eq!(parsed.header.colr(), vec![&colr()[8..]]);
     assert_eq!(parsed.other.len(), 4);
 }
 
@@ -770,7 +770,7 @@ fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
         jp2h(&[
             good_ihdr(),
             colr(),
-            bx(b"colr", &[2, 0, 0]),
+            bx(b"colr", &[3, 0, 0]),
             bx(b"bpcc", &[7, 7, 7]),
             bx(b"res ", &[1, 2]),
             bx(b"zzzz", b"?"),
@@ -789,12 +789,12 @@ fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
         (HEIGHT, WIDTH, COMPONENTS)
     );
     let first_colr = colr();
-    assert_eq!(header.colr, vec![&first_colr[8..], &[2, 0, 0][..]]);
-    assert_eq!(header.bpcc, vec![&[7, 7, 7][..]]);
-    assert_eq!(header.res, vec![&[1, 2][..]]);
-    assert!(header.pclr.is_empty() && header.cmap.is_empty() && header.cdef.is_empty());
-    assert_eq!(header.unknown.len(), 1);
-    assert_eq!(&header.unknown[0].kind, b"zzzz");
+    assert_eq!(header.colr(), vec![&first_colr[8..], &[3, 0, 0][..]]);
+    assert_eq!(header.bpcc(), vec![&[7, 7, 7][..]]);
+    assert_eq!(header.res(), vec![&[1, 2][..]]);
+    assert!(header.pclr().is_empty() && header.cmap().is_empty() && header.cdef().is_empty());
+    assert_eq!(header.unknown().len(), 1);
+    assert_eq!(&header.unknown()[0].kind, b"zzzz");
     assert_eq!(parsed.codestream, CODESTREAM);
     assert_eq!(parsed.other.len(), 1);
     assert_eq!(parsed.other[0].payload, b"<before/>");

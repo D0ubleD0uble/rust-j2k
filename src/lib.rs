@@ -192,7 +192,7 @@ fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     jp2::check_supported(&file.header)?;
     let image = decode_codestream(cs, options)?;
     let components = palette.apply(image.components)?;
-    let (components, mut metadata) = jp2::present(&file, components)?;
+    let (components, mut metadata) = jp2::present(file, components)?;
     palette.describe(&mut metadata);
     Ok(Image {
         components,

@@ -149,7 +149,7 @@ One struct, `#[non_exhaustive]`, plain data a caller can match on:
 
 ```rust
 pub struct Jp2Metadata {
-    /// The first colour specification box, which is the one a JP2 reader uses.
+    /// The first usable colour specification box, which is the one a JP2 reader uses.
     pub colour: ColourSpace,
     /// One entry per `components` entry, after palette and cdef application.
     pub channels: Vec<ChannelDefinition>,
@@ -171,7 +171,8 @@ pub enum ColourSpace {
     /// A Part 2 enumerated value (12 CMYK, 20 e-sRGB, 21 ROMM-RGB, 24 e-sYCC …),
     /// reported, not interpreted.
     Enumerated(u32),
-    /// No usable `colr` box, or `ihdr.UnkC = 1`.
+    /// No usable `colr` box. `ihdr.UnkC` is not consulted (OpenJPEG ignores
+    /// it, and Kakadu writes `UnkC = 1` beside a valid `colr`).
     Unknown,
 }
 
@@ -374,8 +375,8 @@ needs a `jp2h` with an `ihdr` to decode through `decode`.
 reach the caller untouched.
 
 **Work:** parse `colr` (`METH`, `PREC`, `APPROX`, then `EnumCS` or the ICC
-bytes); first box wins, `METH > 2` ignored, `UnkC = 1` forces `Unknown`;
-parse `bpcc` when `BPC == 255` and check its length is `NC`; record nothing
+bytes); first box wins, `METH` other than 1 or 2 ignored, `UnkC` not consulted;
+check every `bpcc`'s length is `NC` (OpenJPEG does so whatever `BPC` is); record nothing
 from it beyond a consistency check against SIZ (SIZ is the truth).
 
 **Oracle:** the box bytes themselves. Assert file8's profile is the 414 bytes
@@ -577,9 +578,14 @@ so and why we differ (or do not).
 | `ihdr.BPC` or `bpcc` disagree with SIZ depth | not checked | accept, SIZ wins | none (match oracle) |
 | Second `ihdr` | ignored with warning | ignored | none (match oracle; spec says one) |
 | Second `colr` | ignored | ignored | none (I.5.3.3) |
-| `colr METH > 2` | box ignored | box ignored | none (Table I.9) |
+| `colr METH` other than 1 or 2 | box ignored, and it does not count as the first `colr` | the same | none (Table I.9); `METH 0` is skipped the same way |
+| `colr` under 3 bytes | error, on every `colr` before the codestream including ignored later ones | reject | `FileFormat`; the same shapes after `jp2c`: see the row on boxes after `jp2c` |
+| `colr METH 1` under 7 bytes, or `METH 2` with no profile | error (checked only on the first usable `colr`) | reject | `FileFormat` |
+| `colr METH 1` with bytes past `EnumCS`, or a short `METH 2` profile | accepted | accepted | none; `RestrictedIcc` holds whatever follows the 3 header bytes |
+| `bpcc` not `NC` bytes | error, on every `bpcc` before the codestream, whatever `ihdr.BPC` is; a `bpcc` before `ihdr` sees `NC` as 0 | reject | `FileFormat`; the same shapes after `jp2c`: see the row on boxes after `jp2c` |
+| `ihdr.UnkC = 1` with a `colr` | `UnkC` read, never used | `colr` value reported | none (match oracle; I.5.3.1) |
 | No `colr` at all | decodes, colour unknown | decodes, `Unknown` | none (samples are unaffected) |
-| `colr METH 2` with too few bytes for a profile header | reads what is there | reject | `FileFormat` under `Srgb` only; passthrough otherwise |
+| `colr METH 2` with too few bytes for a profile header | reads what is there | reject | applies only to the later sRGB conversion: `FileFormat` under `Srgb` only; the colour space and bytes are passed through as they are |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |
 | `cmap` without `pclr`, or before it in file order | error ("Need to read a PCLR box before the CMAP box") | reject | `FileFormat` |
 | `cmap` shorter than `4 * NPC` bytes | error | reject | `FileFormat` |
@@ -599,7 +605,7 @@ so and why we differ (or do not).
 | Unknown box anywhere | skipped | skipped | none |
 | `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none for `pclr`/`cmap` (applied); `Unsupported` for `cdef` until applied, the same guard as inside `jp2h` |
 | The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |
-| Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`) fails OpenJPEG but decodes here |
+| Boxes after `jp2c` | walked after decoding: `LBox` 2..7 or `XLBox < 16` is an error; anything it cannot follow (fewer than 8 bytes, `LBox` 0, a box past the end) ends the walk with a warning; a second `jp2c` ends it; known header boxes are read and can fail | the same length faults rejected, the rest accepted unread | `FileFormat` for the two length faults; a malformed header box after `jp2c` (a second signature, an empty `jp2h`, a short `colr`, a wrong-length `bpcc`, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a `cmap` without `pclr`) fails OpenJPEG but decodes here |
 | Second `jp2c` | never read | ignored | none (I.5.4) |
 | Deeply nested superboxes | n/a | only `jp2h` and `res ` are entered | no recursion, so no depth bomb |
 | Metadata boxes totalling more than the file | impossible by construction | copies bounded by input length | none |

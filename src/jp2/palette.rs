@@ -235,31 +235,32 @@ pub(crate) fn plan(
     reduction: u8,
     raw_channels: bool,
 ) -> Result<PalettePlan> {
-    if header.pclr.len() > 1 {
+    let (pclrs, cmaps) = (header.pclr(), header.cmap());
+    if pclrs.len() > 1 {
         return Err(Error::FileFormat(
             "the file has more than one `pclr` box".into(),
         ));
     }
-    if header.cmap.len() > 1 {
+    if cmaps.len() > 1 {
         return Err(Error::FileFormat(
             "the file has more than one `cmap` box".into(),
         ));
     }
-    let Some(pclr) = header.pclr.first() else {
-        if header.cmap.is_empty() {
+    let Some(pclr) = pclrs.first() else {
+        if cmaps.is_empty() {
             return Ok(PalettePlan::None);
         }
         return Err(Error::FileFormat(
             "the file has a `cmap` box but no `pclr` box".into(),
         ));
     };
-    if header.cmap_before_pclr {
+    if cmap_before_pclr(header) {
         return Err(Error::FileFormat(
             "the `cmap` box comes before the `pclr` box it maps".into(),
         ));
     }
     let palette = Palette::parse(pclr)?;
-    let Some(cmap) = header.cmap.first() else {
+    let Some(cmap) = cmaps.first() else {
         return Ok(PalettePlan::None);
     };
     let entries = parse_cmap(cmap, palette.columns.len())?;
@@ -280,6 +281,17 @@ pub(crate) fn plan(
         .collect::<Result<_>>()?;
     check_budget(&channels, siz, reduction)?;
     Ok(PalettePlan::Apply { palette, channels })
+}
+
+/// Whether the first `cmap` comes before the first `pclr` in read order (every
+/// `jp2h`, then the header boxes misplaced after it). OpenJPEG needs the
+/// palette first to know how many `cmap` entries to read.
+fn cmap_before_pclr(header: &Jp2Header<'_>) -> bool {
+    let position = |kind: &[u8; 4]| header.children.iter().position(|c| &c.kind == kind);
+    match (position(b"cmap"), position(b"pclr")) {
+        (Some(cmap), Some(pclr)) => cmap < pclr,
+        _ => false,
+    }
 }
 
 /// Parse a `cmap` box into `(CMP, MTYP, PCOL)` triples, one per palette
@@ -464,7 +476,9 @@ impl PalettePlan {
             reads_left[index] -= 1;
             let from = &mut components[index];
             let samples = match channel.source {
-                Source::Direct { .. } if reads_left[index] == 0 => std::mem::take(&mut from.samples),
+                Source::Direct { .. } if reads_left[index] == 0 => {
+                    std::mem::take(&mut from.samples)
+                }
                 Source::Direct { .. } => from.samples.clone(),
                 Source::Palette { column, .. } => from
                     .samples
@@ -639,7 +653,11 @@ mod tests {
             ..direct
         };
         let index = Component::new(2, 1, 8, false, 1, 1, vec![0, 1]);
-        for channels in [vec![direct, lookup], vec![lookup, direct], vec![direct, direct]] {
+        for channels in [
+            vec![direct, lookup],
+            vec![lookup, direct],
+            vec![direct, direct],
+        ] {
             let plan = PalettePlan::Apply {
                 palette: palette.clone(),
                 channels: channels.clone(),
