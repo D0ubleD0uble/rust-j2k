@@ -10,7 +10,12 @@ This is a development tool, not part of the crate: it needs network access and
 `opj_dump` on PATH, neither of which the runtime test suite requires. The
 committed corpus is self-contained; rerun this only to refresh or re-pin it.
 
-    python3 regenerate.py
+    python3 regenerate.py          # both corpora
+    python3 regenerate.py part1    # the Part 1 codestreams only
+    python3 regenerate.py jp2      # the JP2 reader files only (see jp2/)
+
+The JP2 half also needs `Pillow` (and numpy) to read the TIFF references; see
+README.md. The committed corpus never needs them.
 
 The per-file peak-absolute-error (PAE) and mean-squared-error (MSE) bounds are
 transcribed verbatim from OpenJPEG's `tests/conformance/CMakeLists.txt`. The
@@ -21,10 +26,13 @@ recorded for reference, not used as the bar. See README.md and ./COPYRIGHT.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
 import json
+import sys
+import tempfile
 
 # openjpeg-data commit the corpus is pinned to (master @ 2026-06).
 DATA_COMMIT = "39524bd3a601d90ed8e0177559400d23945f96a9"
@@ -115,6 +123,11 @@ def marker_features(path: str) -> dict:
     """
     with open(path, "rb") as f:
         data = f.read()
+    return marker_features_data(data, path)
+
+
+def marker_features_data(data: bytes, path: str) -> dict:
+    """`marker_features` over codestream bytes already in memory."""
     if data[:2] != b"\xff\x4f":
         raise ValueError(f"{path}: missing SOC marker")
 
@@ -207,14 +220,29 @@ def bound_cell(profile: int, idx: int, cls: int, kind: str):
     return out
 
 
+def sha256_file(path: str) -> str:
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def download(rel_path: str, dest: str):
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
-        return
+    """Fetch `rel_path` from the pinned commit to `dest`.
+
+    A file already at `dest` is not trusted: the pinned bytes are fetched again
+    and compared, and a mismatch (a truncated or edited copy) raises. Delete the
+    file to refresh it deliberately.
+    """
     url = RAW % rel_path
     # Download to a temp path and rename on success, so an interrupted curl
     # never leaves a truncated file that later runs would skip as "present".
     tmp = dest + ".part"
     subprocess.run(["curl", "-fsSL", "-o", tmp, url], check=True)
+    if os.path.exists(dest):
+        same = sha256_file(tmp) == sha256_file(dest)
+        os.remove(tmp)
+        if not same:
+            raise ValueError(f"{dest} differs from {rel_path} at {DATA_COMMIT[:8]}")
+        return
     os.replace(tmp, dest)
 
 
@@ -347,7 +375,7 @@ def build_entry(profile: int, idx: int) -> dict:
     }
 
 
-def main():
+def main_part1():
     os.makedirs(CS_DIR, exist_ok=True)
     os.makedirs(REF_DIR, exist_ok=True)
 
@@ -409,6 +437,290 @@ def main():
         f.write("\n")
 
     print(f"wrote manifest.json with {len(entries)} entries")
+
+
+# ---------------------------------------------------------------------------
+# JP2 reader files (ISO/IEC 15444-4 Annex G): file1.jp2 .. file9.jp2.
+#
+# The references (`jp2_N.tif`) are what OpenJPEG's conformance run grades
+# against: 8-bit RGB *display output*, produced after palette expansion, cdef,
+# sYCC -> RGB and ICC -> sRGB, then `-p 8S` (a plain right shift to 8 bits).
+# Greyscale files carry three identical channels, of which one PGX plane is kept.
+# ---------------------------------------------------------------------------
+
+JP2_DIR = os.path.join(HERE, "jp2")
+JP2_FILES_DIR = os.path.join(JP2_DIR, "files")
+JP2_REF_DIR = os.path.join(JP2_DIR, "references")
+
+JP2_COUNT = 9
+# Greyscale: the TIFF reference has three identical channels; keep one plane.
+JP2_GREY = {4, 6, 8}
+# Graded bit-exactly (measured: opj_decompress -p 8S matches the reference).
+JP2_BIT_EXACT = {1, 4, 6, 9}
+# Output depth scaling: `opj_decompress -p 8S` right-shifts to 8 bits.
+JP2_SHIFT_RIGHT = {6: 4, 7: 8}
+# The reference is sRGB display output the decoder must be asked for (ICC
+# profile, sYCC, or palette+cdef-driven channel order).
+JP2_NEEDS_SRGB = {2, 3, 5, 7, 8}
+# OpenJPEG tests/conformance/CMakeLists.txt, "Tests about JP2 file": Part 4
+# Table G.1, `compare_images -n 3 -p 4:4:4 -m 1:1:1`.
+JP2_PAE = 4
+JP2_MSE = 1
+
+
+def read_boxes(data: bytes, start: int, end: int):
+    """Yield (type, payload_start, payload_end) for the boxes in data[start:end]."""
+    pos = start
+    while pos < end:
+        if pos + 8 > end:
+            raise ValueError("truncated box header")
+        lbox = int.from_bytes(data[pos : pos + 4], "big")
+        tbox = data[pos + 4 : pos + 8]
+        hdr = 8
+        if lbox == 1:
+            lbox = int.from_bytes(data[pos + 8 : pos + 16], "big")
+            hdr = 16
+        elif lbox == 0:
+            lbox = end - pos
+        if lbox < hdr or pos + lbox > end:
+            raise ValueError(f"box {tbox!r} at {pos} overruns its parent")
+        yield tbox, pos + hdr, pos + lbox
+        pos += lbox
+
+
+def jp2_structure(data: bytes) -> dict:
+    """Box layout, colour specification, and the jp2c payload of one JP2 file."""
+    top, jp2h, colour, payload = [], [], None, None
+    for tbox, s, e in read_boxes(data, 0, len(data)):
+        top.append(tbox.decode("latin-1"))
+        if tbox == b"jp2h":
+            for ctype, cs, ce in read_boxes(data, s, e):
+                jp2h.append(ctype.decode("latin-1"))
+                if ctype == b"colr" and colour is None:  # the first colr wins
+                    meth = data[cs]
+                    colour = {"method": meth}
+                    if meth == 1:
+                        colour["enum_cs"] = int.from_bytes(data[cs + 3 : cs + 7], "big")
+                    elif meth == 2:
+                        colour["icc_bytes"] = ce - (cs + 3)
+        elif tbox == b"jp2c":
+            payload = data[s:e]
+    if payload is None or colour is None:
+        raise ValueError("no jp2c or no colr box")
+    return {"boxes": {"top": top, "jp2h": jp2h}, "colour": colour, "payload": payload}
+
+
+def read_tiff_planes(path: str):
+    """A reference TIFF as a list of per-channel 2-D uint8 arrays.
+
+    Read with Pillow and numpy (Pillow decodes the references' LZW without
+    extra codecs). Layout verified against the nine references: 8-bit
+    contiguous RGB, one page.
+    """
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(path) as im:
+        if getattr(im, "n_frames", 1) != 1:
+            raise ValueError(f"{path}: expected one page, got {im.n_frames}")
+        if im.mode not in ("RGB", "L"):
+            raise ValueError(f"{path}: expected 8-bit RGB or L, got mode {im.mode}")
+        arr = np.asarray(im)
+    if arr.dtype.name != "uint8":
+        raise ValueError(f"{path}: expected 8-bit samples, got {arr.dtype}")
+    if arr.ndim == 2:
+        return [arr]
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        raise ValueError(f"{path}: expected HxWx3, got shape {arr.shape}")
+    return [arr[:, :, c] for c in range(3)]
+
+
+def write_pgx(path: str, plane) -> None:
+    """One unsigned 8-bit plane as a big-endian PGX file."""
+    h, w = plane.shape
+    with open(path, "wb") as f:
+        f.write(f"PG ML 8 {w} {h}\n".encode("ascii"))
+        f.write(plane.astype("uint8").tobytes())
+
+
+def plane_metrics(actual, reference):
+    diff = actual.astype("int64") - reference.astype("int64")
+    return int(abs(diff).max()), float((diff * diff).mean())
+
+
+def regrade_with_opj(n: int, jp2_path: str, planes: list, bit_exact: bool) -> list:
+    """Decode with `opj_decompress -p 8S -force-rgb` and grade against `planes`.
+
+    This is the script's own check that the converted PGX references are the
+    ones the conformance decode matches, within the recorded bounds. It raises
+    rather than loosen a bound.
+    """
+    bound_pae = 0 if bit_exact else JP2_PAE
+    bound_mse = 0 if bit_exact else JP2_MSE
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, f"file{n}.tif")
+        subprocess.run(
+            ["opj_decompress", "-i", jp2_path, "-o", out, "-p", "8S", "-force-rgb"],
+            check=True,
+            capture_output=True,
+        )
+        got = read_tiff_planes(out)
+    # A greyscale decode may come back as one channel or three identical ones;
+    # either way it is graded against the single kept plane.
+    want = planes if len(planes) == len(got) else [planes[0]] * len(got)
+    if len(planes) == 1 and len(got) == 3:
+        for c in (1, 2):
+            if not (got[0] == got[c]).all():
+                raise ValueError(f"file{n}: opj_decompress grey channel {c} differs from 0")
+    elif len(got) != len(planes):
+        raise ValueError(f"file{n}: opj output has {len(got)} channels, expected {len(planes)}")
+    results = []
+    for c, (g, w) in enumerate(zip(got, want)):
+        if g.shape != w.shape:
+            raise ValueError(f"file{n} ch{c}: shape {g.shape} vs reference {w.shape}")
+        pae, mse = plane_metrics(g, w)
+        results.append((pae, mse))
+        if pae > bound_pae or mse > bound_mse:
+            raise ValueError(
+                f"file{n} ch{c}: opj_decompress -p 8S -force-rgb is PAE {pae}, MSE {mse:.4f}; "
+                f"bound is PAE {bound_pae}, MSE {bound_mse} (bit_exact={bit_exact})"
+            )
+    return results
+
+
+def digest(path: str) -> dict:
+    """Size and SHA-256 of a committed file, as the manifest records them."""
+    return {"size": os.path.getsize(path), "sha256": sha256_file(path)}
+
+
+def build_jp2_entry(n: int) -> dict:
+    name = f"file{n}.jp2"
+    jp2_path = os.path.join(JP2_FILES_DIR, name)
+    download(f"input/conformance/{name}", jp2_path)
+    # The TIFF is only an intermediate: fetch it aside and keep the PGX planes.
+    tif_path = os.path.join(JP2_REF_DIR, f"jp2_{n}.tif")
+    download(f"baseline/conformance/jp2_{n}.tif", tif_path)
+    try:
+        channels = read_tiff_planes(tif_path)
+    finally:
+        os.remove(tif_path)
+
+    if len(channels) != 3:
+        raise ValueError(f"jp2_{n}.tif: expected 3 channels, got {len(channels)}")
+    if n in JP2_GREY:
+        for c in (1, 2):
+            if not (channels[0] == channels[c]).all():
+                raise ValueError(f"jp2_{n}.tif: grey channel {c} differs from channel 0")
+        planes = [channels[0]]
+    else:
+        planes = channels
+
+    with open(jp2_path, "rb") as f:
+        data = f.read()
+    if data[:12] != b"\x00\x00\x00\x0cjP  \r\n\x87\n":
+        raise ValueError(f"{name}: not a JP2 signature box")
+    info = jp2_structure(data)
+
+    refs = []
+    for k, plane in enumerate(planes):
+        rel = f"references/jp2_{n}_{k}.pgx"
+        write_pgx(os.path.join(JP2_DIR, rel), plane)
+        refs.append(rel)
+
+    bit_exact = n in JP2_BIT_EXACT
+    results = regrade_with_opj(n, jp2_path, planes, bit_exact)
+    print(
+        f"  file{n}: "
+        + ", ".join(f"PAE {p} MSE {m:.4f}" for p, m in results)
+        + (" (bit-exact bound)" if bit_exact else f" (bound PAE {JP2_PAE} MSE {JP2_MSE})")
+    )
+
+    features = opj_features(jp2_path)
+    features.update(marker_features_data(info["payload"], name))
+    graded = len(planes)
+    return {
+        "file": f"files/{name}",
+        "index": n,
+        "graded_components": graded,
+        "bit_exact": bit_exact,
+        # `opj_decompress -p 8S` shifts the decoded samples right by this much.
+        "shift_right": JP2_SHIFT_RIGHT.get(n, 0),
+        # The reference is sRGB display output the decoder must be asked for.
+        "needs_srgb": n in JP2_NEEDS_SRGB,
+        "boxes": info["boxes"],
+        "colour": info["colour"],
+        "features": features,
+        "references": refs,
+        # Pins the committed bytes; tests/conformance_jp2.rs re-hashes them.
+        "file_digest": digest(jp2_path),
+        "reference_digests": [digest(os.path.join(JP2_DIR, r)) for r in refs],
+        "bounds": {"pae": [JP2_PAE] * graded, "mse": [JP2_MSE] * graded},
+    }
+
+
+def main_jp2():
+    os.makedirs(JP2_FILES_DIR, exist_ok=True)
+    os.makedirs(JP2_REF_DIR, exist_ok=True)
+    print("re-grading opj_decompress -p 8S -force-rgb against the converted references:")
+    entries = [build_jp2_entry(n) for n in range(1, JP2_COUNT + 1)]
+    manifest = {
+        "_comment": (
+            "ISO/IEC 15444-4 Annex G JP2 reader files. Generated by regenerate.py; "
+            "do not edit by hand. See ../README.md and ../COPYRIGHT."
+        ),
+        "compliance_class": 1,
+        "provenance": {
+            "files": {
+                "repo": "uclouvain/openjpeg-data",
+                "commit": DATA_COMMIT,
+                "path": "input/conformance/file{1..9}.jp2",
+            },
+            "references": {
+                "repo": "uclouvain/openjpeg-data",
+                "commit": DATA_COMMIT,
+                "path": "baseline/conformance/jp2_{1..9}.tif",
+                "conversion": (
+                    "8-bit RGB TIFF read with Pillow, written as one unsigned 8-bit "
+                    "PGX plane per channel; greyscale files (4, 6, 8) keep one plane "
+                    "after asserting the three channels are identical"
+                ),
+                "oracle_command": "opj_decompress -i fileN.jp2 -o fileN.tif -p 8S -force-rgb",
+            },
+            "bounds": {
+                "repo": "uclouvain/openjpeg",
+                "path": "tests/conformance/CMakeLists.txt",
+                "block": "Tests about JP2 file (Part 4 Table G.1): compare_images -n 3 -p 4:4:4 -m 1:1:1",
+                "note": (
+                    "files 1, 4, 6 and 9 are graded bit-exact (measured: the OpenJPEG "
+                    "decode equals the reference); the rest use PAE 4 / MSE 1"
+                ),
+            },
+            "features": {
+                "tool": "opj_dump -i + direct marker-segment walk of the jp2c payload",
+                "note": "boxes and colour are read from the JP2 box layer directly",
+            },
+            "license": (
+                "Conformance-only grant; see ../COPYRIGHT. Excluded from the "
+                "published crate via Cargo.toml `exclude`."
+            ),
+        },
+        "entries": entries,
+    }
+    with open(os.path.join(JP2_DIR, "manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=2)
+        f.write("\n")
+    print(f"wrote jp2/manifest.json with {len(entries)} entries")
+
+
+def main():
+    which = sys.argv[1:] or ["part1", "jp2"]
+    unknown = [w for w in which if w not in ("part1", "jp2")]
+    if unknown:
+        raise SystemExit(f"usage: regenerate.py [part1] [jp2]; got {unknown}")
+    if "part1" in which:
+        main_part1()
+    if "jp2" in which:
+        main_jp2()
 
 
 if __name__ == "__main__":

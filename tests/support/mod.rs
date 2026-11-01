@@ -21,6 +21,7 @@
 
 #![allow(dead_code)]
 
+pub mod jp2;
 pub mod part4;
 pub mod pgx;
 
