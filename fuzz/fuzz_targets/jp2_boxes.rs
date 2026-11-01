@@ -20,17 +20,32 @@
 //! - bit 3 (with bit 2), a pinned header: `body` becomes the children of a
 //!   `jp2h` box after an `ihdr` that matches the codestream, so every mutation
 //!   lands in the `jp2h` child walk (`colr`, `pclr`, `cmap`, `cdef`, ...);
-//! - bit 4, which codestream: a 16x31 single-component one or a 23x15
-//!   three-component one.
+//! - bits 4-6, which codestream (see `codestream`): 0 a 16x31 one-component
+//!   16-bit one, 1 a 23x15 three-component one sub-sampled 2x2, 2 a 32x24
+//!   one-component 8-bit one, 3 a 24x16 three-component 8-bit one, 4 and 5 the
+//!   sYCC 4:2:0 and 4:2:2 codestreams. Values 6 and 7 pick 0. The 8-bit ones
+//!   are what the ICC profile paths of `ColourOutput::Srgb` need: a
+//!   monochrome profile applies at 8 bits and an RGB one at 8 or 16 bits with
+//!   three channels of one format.
+//!
+//! Every input that decodes as coded is decoded again with
+//! `ColourOutput::Srgb`, which reads the `colr` profile bytes. That result is
+//! only checked for being a result: it may differ from the first, and most
+//! inputs end in a typed `Unsupported`.
 //!
 //! `scripts/gen-jp2-fuzz-seeds.py` writes seeds in both shapes from the
-//! ISO/IEC 15444-4 JP2 reader files.
+//! ISO/IEC 15444-4 JP2 reader files, plus built ICC and sYCC `colr` seeds.
 
 use libfuzzer_sys::fuzz_target;
 
 const ONE_COMPONENT: &[u8] = include_bytes!("../../tests/fixtures/regular_latlon_lossy.j2k");
 const THREE_COMPONENTS: &[u8] =
     include_bytes!("../../tests/fixtures/multicomponent_subsampled_lossless.j2k");
+const ONE_COMPONENT_8: &[u8] = include_bytes!("../../tests/fixtures/derived_quant_lossy.j2k");
+const THREE_COMPONENTS_8: &[u8] =
+    include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
+const SYCC_420: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_420_odd.jp2");
+const SYCC_422: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_422_odd.jp2");
 
 const SIGNATURE: [u8; 12] = [
     0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
@@ -55,12 +70,33 @@ fn ihdr_for(codestream: &[u8]) -> Vec<u8> {
     bx(b"ihdr", &payload)
 }
 
+/// The `jp2c` payload of a committed JP2 file whose boxes all have a 32-bit
+/// `LBox`.
+fn jp2c_payload(file: &[u8]) -> &[u8] {
+    let mut at = 0;
+    while at + 8 <= file.len() {
+        let len = u32::from_be_bytes(file[at..at + 4].try_into().unwrap()) as usize;
+        if &file[at + 4..at + 8] == b"jp2c" {
+            return &file[at + 8..at + len];
+        }
+        at += len;
+    }
+    unreachable!("the committed fixture has a jp2c box")
+}
+
+fn codestream(variant: u8) -> &'static [u8] {
+    match (variant >> 4) & 7 {
+        1 => THREE_COMPONENTS,
+        2 => ONE_COMPONENT_8,
+        3 => THREE_COMPONENTS_8,
+        4 => jp2c_payload(SYCC_420),
+        5 => jp2c_payload(SYCC_422),
+        _ => ONE_COMPONENT,
+    }
+}
+
 fn wrap(variant: u8, body: &[u8]) -> Vec<u8> {
-    let codestream = if variant & 0x10 != 0 {
-        THREE_COMPONENTS
-    } else {
-        ONE_COMPONENT
-    };
+    let codestream = codestream(variant);
 
     let mut file = Vec::new();
     if variant & 0x04 != 0 {
@@ -102,5 +138,13 @@ fuzz_target!(|data: &[u8]| {
     let Some((&variant, body)) = data.split_first() else {
         return;
     };
-    let _ = rust_j2k::decode(&wrap(variant, body));
+    let file = wrap(variant, body);
+    // A file that fails as coded fails before any colour conversion, so only
+    // one that decodes goes through the profile reader and the sYCC and ICC
+    // conversions. The result is only checked for being a typed one.
+    if rust_j2k::decode(&file).is_ok() {
+        let mut srgb = rust_j2k::DecodeOptions::default();
+        srgb.colour = rust_j2k::ColourOutput::Srgb;
+        let _ = rust_j2k::decode_with(&file, srgb);
+    }
 });

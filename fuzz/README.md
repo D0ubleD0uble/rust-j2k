@@ -32,7 +32,7 @@ fuzz/
   fuzz_targets/tile_body.rs     # a pinned valid header (geometry steered) around fuzzed tile-part bytes
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
-  fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream
+  fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream, also decoded as sRGB
   fuzz_targets/header.rs        # rust_j2k::read_header(&[u8]), checked against decode
 ```
 
@@ -56,13 +56,23 @@ the style byte in the pinned COD drives `decode_block` through the same split
 production decodes use instead of a hand-built one.
 
 `jp2_boxes` does for the JP2 file format what `tile_body` does for tile
-data: the codestream is pinned (one of two small committed fixtures) and the
+data: the codestream is pinned (one of six small committed fixtures) and the
 input becomes the boxes around it, so every execution reaches the box reader.
 Its first byte picks how the `jp2c` box is written (32-bit length, 64-bit
-`XLBox`, length 0, or followed by more boxes) and whether the signature,
+`XLBox`, length 0, or followed by more boxes), whether the signature,
 `ftyp`, and a matching `ihdr` are pinned, so mutations can land on the whole
-top level or only on the `jp2h` children. `jp2.dict` holds the signature and
-every box type.
+top level or only on the `jp2h` children, and which codestream. `jp2.dict`
+holds the signature and every box type.
+
+A file that decodes as coded is decoded again with `ColourOutput::Srgb`, which
+reads the `colr` ICC profile and converts sYCC. The result is only checked to
+be `Ok` or a typed error. The codestreams are chosen so each conversion path
+is reachable: an 8-bit single-component one (the monochrome profile, `kTRC`),
+an 8-bit three-component one without sub-sampling (the RGB profile, `rXYZ`,
+`rTRC`, ... with `curv` and `para` curves), the sYCC 4:2:0 and 4:2:2
+codestreams of `jp2_sycc_*_odd.jp2` (chroma replication), and the 16-bit and
+the sub-sampled ones, where the conversion reads the profile and refuses.
+`gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds.
 
 `header` drives the header-only entry point, `read_header`, and checks it
 against `decode` on the same input: a `read_header` error must be `decode`'s
@@ -122,6 +132,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | Date | Target | Seeds | Length | Result |
 | ---- | ------ | ----- | ------ | ------ |
 | 2026-11-01 | `jp2_boxes` | `gen-jp2-fuzz-seeds.py` (46 seeds), `jp2.dict` | 61 s, 785 605 runs, under `nice` | no crash, leak, or timeout |
+| 2026-11-01 | `jp2_boxes` with the `Srgb` decode | `gen-jp2-fuzz-seeds.py` (71 seeds), `jp2.dict` | 61 s, 86 856 runs (1 423 exec/s), under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
