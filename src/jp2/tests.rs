@@ -11,6 +11,8 @@ use crate::{
     Jp2Metadata, decode, decode_with,
 };
 
+mod palette;
+
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
 const WIDTH: u32 = 24;
 const HEIGHT: u32 = 16;
@@ -303,20 +305,38 @@ fn a_jpx_without_jp2_compatibility_is_unsupported() {
     );
 }
 
-/// Each of the header boxes not applied yet is refused by name, so a file is
-/// never decoded into channels it would present wrongly.
+/// A palette in `jp2h` is applied: one channel per `cmap` entry.
 #[test]
-fn a_palette_box_is_unsupported() {
-    let with = |child: Vec<u8>| file(&[jp2_ftyp(), jp2h(&[good_ihdr(), child, colr()]), jp2c()]);
-    unsupported(&with(bx(b"pclr", &[0; 8])), "`pclr`");
+fn a_palette_box_decodes() {
+    let image = decode(&file(&[
+        jp2_ftyp(),
+        jp2h(&[
+            good_ihdr(),
+            palette::pclr_box(),
+            colr(),
+            palette::cmap_box(),
+        ]),
+        jp2c(),
+    ]))
+    .expect("a palettised file decodes");
+    palette::assert_palette_applied(&image);
 }
 
+/// A `pclr` without a `cmap` is ignored (I.5.3.4: both or neither), as
+/// OpenJPEG does.
 #[test]
-fn a_component_mapping_box_is_unsupported() {
-    let with = |child: Vec<u8>| file(&[jp2_ftyp(), jp2h(&[good_ihdr(), colr(), child]), jp2c()]);
-    unsupported(&with(bx(b"cmap", &[0; 4])), "`cmap`");
+fn a_palette_box_without_a_component_mapping_box_is_ignored() {
+    let bytes = file(&[
+        jp2_ftyp(),
+        jp2h(&[good_ihdr(), colr(), palette::pclr_box()]),
+        jp2c(),
+    ]);
+    assert_decodes_like_raw(&bytes);
+    assert!(!decode(&bytes).unwrap().jp2.unwrap().palette_applied);
 }
 
+/// The header box not applied yet is refused by name, so a file is never
+/// decoded into channels it would present wrongly.
 #[test]
 fn a_channel_definition_box_is_unsupported() {
     let with = |child: Vec<u8>| file(&[jp2_ftyp(), jp2h(&[good_ihdr(), colr(), child]), jp2c()]);
@@ -437,25 +457,64 @@ fn a_second_jp2h_is_merged_into_the_first() {
     assert_eq!(parsed.header.colr[0], &colr()[8..]);
 }
 
-/// The guarded boxes meet the guard wherever OpenJPEG would apply them: in a
+/// The guarded box meets the guard wherever OpenJPEG would apply it: in a
 /// second `jp2h`, or misplaced at the top level after the first `jp2h`.
 #[test]
-fn guarded_boxes_in_a_second_jp2h_or_after_jp2h_are_unsupported() {
-    for (kind, payload) in [
-        (b"pclr", &[0u8; 8][..]),
-        (b"cmap", &[0; 4][..]),
-        (b"cdef", &[0, 0][..]),
-    ] {
-        let name = format!("`{}`", std::str::from_utf8(kind).unwrap());
-        let in_second_jp2h = file(&[
-            jp2_ftyp(),
-            good_jp2h(),
-            jp2h(&[good_ihdr(), bx(kind, payload)]),
-            jp2c(),
-        ]);
-        unsupported(&in_second_jp2h, &name);
-        let after_jp2h = file(&[jp2_ftyp(), good_jp2h(), bx(kind, payload), jp2c()]);
-        unsupported(&after_jp2h, &name);
+fn a_guarded_box_in_a_second_jp2h_or_after_jp2h_is_unsupported() {
+    let cdef = bx(b"cdef", &[0, 0]);
+    let in_second_jp2h = file(&[
+        jp2_ftyp(),
+        good_jp2h(),
+        jp2h(&[good_ihdr(), cdef.clone()]),
+        jp2c(),
+    ]);
+    unsupported(&in_second_jp2h, "`cdef`");
+    let after_jp2h = file(&[jp2_ftyp(), good_jp2h(), cdef, jp2c()]);
+    unsupported(&after_jp2h, "`cdef`");
+}
+
+/// The palette boxes are applied wherever OpenJPEG applies them: in a second
+/// `jp2h`, or misplaced at the top level after the first `jp2h` (each shape
+/// measured with `opj_decompress` 2.5.0).
+#[test]
+fn palette_boxes_in_a_second_jp2h_or_after_jp2h_are_applied() {
+    let (pclr, cmap) = (palette::pclr_box(), palette::cmap_box());
+    let shapes = [
+        (
+            "both in a second jp2h",
+            file(&[
+                jp2_ftyp(),
+                good_jp2h(),
+                jp2h(&[good_ihdr(), pclr.clone(), cmap.clone()]),
+                jp2c(),
+            ]),
+        ),
+        (
+            "pclr in jp2h, cmap in a second jp2h",
+            file(&[
+                jp2_ftyp(),
+                jp2h(&[good_ihdr(), colr(), pclr.clone()]),
+                jp2h(&[good_ihdr(), cmap.clone()]),
+                jp2c(),
+            ]),
+        ),
+        (
+            "both after jp2h",
+            file(&[jp2_ftyp(), good_jp2h(), pclr.clone(), cmap.clone(), jp2c()]),
+        ),
+        (
+            "pclr in jp2h, cmap after it",
+            file(&[
+                jp2_ftyp(),
+                jp2h(&[good_ihdr(), colr(), pclr.clone()]),
+                cmap.clone(),
+                jp2c(),
+            ]),
+        ),
+    ];
+    for (what, bytes) in shapes {
+        let image = decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+        palette::assert_palette_applied(&image);
     }
 }
 

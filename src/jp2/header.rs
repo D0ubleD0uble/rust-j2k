@@ -99,6 +99,9 @@ pub(crate) struct Jp2Header<'a> {
     pub(crate) pclr: Vec<&'a [u8]>,
     /// Component Mapping boxes (I.5.3.5).
     pub(crate) cmap: Vec<&'a [u8]>,
+    /// Whether a `cmap` was read before any `pclr`, in file order. OpenJPEG
+    /// needs the palette first to know how many `cmap` entries to read.
+    pub(crate) cmap_before_pclr: bool,
     /// Channel Definition boxes (I.5.3.6).
     pub(crate) cdef: Vec<&'a [u8]>,
     /// Resolution superboxes (I.5.3.7), contents not yet descended into.
@@ -168,6 +171,7 @@ impl<'a> Jp2Header<'a> {
             colr: Vec::new(),
             pclr: Vec::new(),
             cmap: Vec::new(),
+            cmap_before_pclr: false,
             cdef: Vec::new(),
             res: Vec::new(),
             unknown: Vec::new(),
@@ -184,7 +188,10 @@ impl<'a> Jp2Header<'a> {
             b"bpcc" => self.bpcc.push(child.payload),
             b"colr" => self.colr.push(child.payload),
             b"pclr" => self.pclr.push(child.payload),
-            b"cmap" => self.cmap.push(child.payload),
+            b"cmap" => {
+                self.cmap_before_pclr |= self.pclr.is_empty();
+                self.cmap.push(child.payload);
+            }
             b"cdef" => self.cdef.push(child.payload),
             b"res " => self.res.push(child.payload),
             _ => self.unknown.push(child),

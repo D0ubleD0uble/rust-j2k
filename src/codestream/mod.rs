@@ -1039,7 +1039,7 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
 /// today: 2^26 samples is 256 MiB as `i32`, well above operational grids (HRRR
 /// ~1.9M, MRMS ~24.5M) and below anything that threatens the decode. Not a
 /// format limit — raise it as larger imagery comes into scope.
-const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
+pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
 
 /// Bound the samples a codestream can ask the decoder to allocate.
 ///

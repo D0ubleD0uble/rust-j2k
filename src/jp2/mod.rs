@@ -12,9 +12,10 @@
 //! Other boxes are skipped. [`parse`] walks the boxes up to the first `jp2c`
 //! and hands back the codestream slice with the header boxes; the codestream
 //! stage decodes the slice as it would a raw codestream. [`check_against_siz`]
-//! then holds `ihdr` to the codestream's SIZ, [`check_supported`] refuses the
-//! header boxes not applied yet, and [`present`] builds the [`Jp2Metadata`]
-//! that rides on the [`Image`](crate::Image).
+//! then holds `ihdr` to the codestream's SIZ, [`plan_palette`] plans the
+//! palette (see [`palette`]), [`check_supported`] refuses the header boxes not
+//! applied yet, and [`present`] builds the [`Jp2Metadata`] that rides on the
+//! [`Image`](crate::Image).
 //!
 //! For these ways a file can bend Annex I, the walk does what OpenJPEG 2.5.0
 //! does: `ihdr` may sit anywhere in `jp2h`, a second `jp2h` before the
@@ -34,11 +35,13 @@
 mod boxes;
 mod header;
 mod metadata;
+mod palette;
 
 #[cfg(test)]
 mod tests;
 
 pub use metadata::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
+pub(crate) use palette::plan as plan_palette;
 
 use crate::codestream::markers::Siz;
 use crate::{Component, Error, Result};
@@ -157,19 +160,10 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
 /// boxes inside every `jp2h` and those misplaced at the top level after it, so
 /// this one check covers both places OpenJPEG applies them from.
 pub(crate) fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
-    let unsupported = |name: &str| {
-        Err(Error::Unsupported(format!(
-            "the file has a `{name}` box, which this decoder does not apply"
-        )))
-    };
-    if !header.pclr.is_empty() {
-        return unsupported("pclr");
-    }
-    if !header.cmap.is_empty() {
-        return unsupported("cmap");
-    }
     if !header.cdef.is_empty() {
-        return unsupported("cdef");
+        return Err(Error::Unsupported(
+            "the file has a `cdef` box, which this decoder does not apply".into(),
+        ));
     }
     Ok(())
 }
@@ -197,9 +191,9 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
     Ok(())
 }
 
-/// Turn the decoded codestream components into the file's output channels and
-/// describe them. The channels are the components as coded: no palette, every
-/// channel colour `i + 1`, and the colour space not read.
+/// Describe the file's output channels: the decoded components, after the
+/// palette when one was applied. Every channel is colour `i + 1`, and the
+/// colour space is not read.
 pub(crate) fn present(
     _file: &Jp2File<'_>,
     components: Vec<Component>,
