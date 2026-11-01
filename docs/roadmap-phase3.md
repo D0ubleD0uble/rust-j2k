@@ -171,7 +171,8 @@ pub enum ColourSpace {
     /// A Part 2 enumerated value (12 CMYK, 20 e-sRGB, 21 ROMM-RGB, 24 e-sYCC …),
     /// reported, not interpreted.
     Enumerated(u32),
-    /// No usable `colr` box, or `ihdr.UnkC = 1`.
+    /// No usable `colr` box. `ihdr.UnkC` is not consulted (OpenJPEG ignores
+    /// it, and Kakadu writes `UnkC = 1` beside a valid `colr`).
     Unknown,
 }
 
@@ -374,7 +375,7 @@ needs a `jp2h` with an `ihdr` to decode through `decode`.
 reach the caller untouched.
 
 **Work:** parse `colr` (`METH`, `PREC`, `APPROX`, then `EnumCS` or the ICC
-bytes); first box wins, `METH > 2` ignored, `UnkC = 1` forces `Unknown`;
+bytes); first box wins, `METH` other than 1 or 2 ignored, `UnkC` not consulted;
 parse `bpcc` when `BPC == 255` and check its length is `NC`; record nothing
 from it beyond a consistency check against SIZ (SIZ is the truth).
 
@@ -582,7 +583,7 @@ so and why we differ (or do not).
 | `colr METH 1` under 7 bytes, or `METH 2` with no profile | error (checked only on the first usable `colr`) | reject | `FileFormat` |
 | `colr METH 1` with bytes past `EnumCS`, or a short `METH 2` profile | accepted | accepted | none; `RestrictedIcc` holds whatever follows the 3 header bytes |
 | `bpcc` not `NC` bytes | error, on every `bpcc`, whatever `ihdr.BPC` is | reject | `FileFormat` |
-| `ihdr.UnkC = 1` with a `colr` | colour space still read | `ColourSpace::Unknown` | our API (issue #161); a malformed `colr` is still refused |
+| `ihdr.UnkC = 1` with a `colr` | `UnkC` read, never used | `colr` value reported | none (match oracle; I.5.3.1) |
 | No `colr` at all | decodes, colour unknown | decodes, `Unknown` | none (samples are unaffected) |
 | `colr METH 2` with too few bytes for a profile header | reads what is there | reject | `FileFormat` under `Srgb` only; passthrough otherwise |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |

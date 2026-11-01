@@ -92,6 +92,28 @@ fn first_colr(bytes: &[u8]) -> &[u8] {
     colr
 }
 
+/// Kakadu writes `UnkC` 1 beside a valid `colr`; the `colr` value is still
+/// reported. (Each file's `ihdr` is checked for `UnkC` 1 so this stays true to
+/// its purpose.)
+#[test]
+fn kakadu_files_with_unkc_1_report_their_colr_value() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jp2_real");
+    let files = [
+        ("byte.jp2", ColourSpace::Greyscale),
+        ("byte_tlm_plt.jp2", ColourSpace::Greyscale),
+        ("int16.jp2", ColourSpace::Greyscale),
+        ("rgbwcmyk01_YeGeo_kakadu.jp2", ColourSpace::Srgb),
+        ("small_200ppcm.jp2", ColourSpace::Srgb),
+    ];
+    for (name, want) in files {
+        let bytes = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let ihdr = bytes.windows(4).position(|w| w == b"ihdr").unwrap() + 4;
+        assert_eq!(bytes[ihdr + 12], 1, "{name}: UnkC");
+        let image = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(image.jp2.expect("metadata").colour, want, "{name}");
+    }
+}
+
 #[test]
 fn decode_reports_the_colour_space_of_each_conformance_file() {
     for (n, want) in EXPECT {

@@ -140,14 +140,19 @@ fn a_method_other_than_1_or_2_is_ignored_and_does_not_count_as_the_first() {
 }
 
 #[test]
-fn unknown_colourspace_in_ihdr_overrides_colr() {
-    let bytes = file_with(ihdr(7, 1), &[enum_colr(16)], &[]);
-    assert_eq!(colour_of(&bytes), ColourSpace::Unknown);
+fn the_unknown_colourspace_flag_in_ihdr_does_not_change_the_colr_value() {
+    // OpenJPEG never uses `UnkC`, and Kakadu writes 1 beside a real `colr`.
+    for unk_c in [0, 1, 2] {
+        let bytes = file_with(ihdr(7, unk_c), &[enum_colr(16)], &[]);
+        assert_eq!(colour_of(&bytes), ColourSpace::Srgb, "UnkC {unk_c}");
+    }
     let bytes = file_with(ihdr(7, 1), &[colr(2, &[1, 2, 3, 4])], &[]);
+    assert_eq!(
+        colour_of(&bytes),
+        ColourSpace::RestrictedIcc(vec![1, 2, 3, 4])
+    );
+    let bytes = file_with(ihdr(7, 1), &[], &[]);
     assert_eq!(colour_of(&bytes), ColourSpace::Unknown);
-    // Only 1 means unknown; OpenJPEG reads other values like 0.
-    let bytes = file_with(ihdr(7, 2), &[enum_colr(16)], &[]);
-    assert_eq!(colour_of(&bytes), ColourSpace::Srgb);
     // A malformed box is still refused.
     refused(&file_with(ihdr(7, 1), &[bx(b"colr", &[])], &[]), "`colr`");
 }

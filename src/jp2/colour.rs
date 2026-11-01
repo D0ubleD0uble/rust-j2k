@@ -55,7 +55,9 @@ pub(crate) fn check_bpcc(header: &Jp2Header<'_>) -> Result<()> {
 }
 
 /// The colour space the file declares: the first usable `colr`, or
-/// [`ColourSpace::Unknown`] if there is none or `ihdr.UnkC` is 1. Every `colr`
+/// [`ColourSpace::Unknown`] if there is none. `ihdr.UnkC` is not consulted, as
+/// in OpenJPEG: Kakadu writes `UnkC` 1 beside a `colr` it means (I.5.3.1 says
+/// to treat the image as if the methods reproduce it accurately). Every `colr`
 /// is still held to its size rules, so a malformed box is refused even when it
 /// would not have been used.
 pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColourSpace> {
@@ -70,9 +72,6 @@ pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColourSpace> {
         if first.is_none() {
             first = parse_usable(payload)?;
         }
-    }
-    if header.ihdr.unknown_colourspace == 1 {
-        return Ok(ColourSpace::Unknown);
     }
     Ok(first.unwrap_or(ColourSpace::Unknown))
 }

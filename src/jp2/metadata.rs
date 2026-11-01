@@ -42,9 +42,8 @@ pub enum ColourSpace {
     /// Another enumerated colour space value from the first usable box,
     /// reported but not interpreted.
     Enumerated(u32),
-    /// The file gives no colour space: no usable `colr` box, or the image
-    /// header says the colour space is unknown (`UnkC` 1), which wins over any
-    /// `colr` box.
+    /// The file gives no colour space: no usable `colr` box. The image
+    /// header's unknown-colour-space flag does not change this.
     Unknown,
 }
 
