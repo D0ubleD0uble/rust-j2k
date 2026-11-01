@@ -306,14 +306,15 @@ the way P2.0 stood up the Part 1 harness.
   Extend `regenerate.py` to fetch them from the pinned commit and to convert
   each `jp2_N.tif` reference into 8-bit `.pgx` planes the existing PGX reader
   consumes: three planes for colour files, one for the greyscale files 4, 6, 8
-  (their three TIFF channels are identical; measured). About 8.6 MB of PGX.
+  (their three TIFF channels are identical; measured). About 7.4 MB of PGX.
 - A manifest section per entry: boxes present, colour method, codestream
   features, graded channel count, `bit_exact` (files 1, 4, 6, 9), bounds PAE 4 /
   MSE 1 otherwise, and the **output depth scaling** the reference needs
   (`shift_right`: 4 for file6, 8 for file7; the ISO reference is OpenJPEG's
   `-p 8S`, which is a plain right shift, verified bit-exact on file6).
 - `tests/conformance_jp2.rs`: decode each file with
-  `DecodeOptions { colour: ColourOutput::Srgb, .. }`, shift, grade with
+  `DecodeOptions::default()` (entries marked `needs_srgb` report *needs sRGB
+  output* until P3.6 switches them to the sRGB option), shift, grade with
   `support::part4`'s comparator and ratchet. `IN_CLASS` starts empty; all nine
   report *not yet decoded* because `decode` still rejects the wrapper.
 
@@ -516,7 +517,7 @@ gates green.
 
 | Set | Where | Size | License | Role |
 | --- | ----- | ---- | ------- | ---- |
-| ISO/IEC 15444-4 JP2 reader files `file1..9.jp2` + references as PGX | `tests/fixtures/conformance/jp2/` | 4.4 MB + ~8.6 MB | the conformance grant already in `tests/fixtures/conformance/COPYRIGHT`; excluded from the crate | the phase gate |
+| ISO/IEC 15444-4 JP2 reader files `file1..9.jp2` + references as PGX | `tests/fixtures/conformance/jp2/` | 4.4 MB + ~7.4 MB | the conformance grant already in `tests/fixtures/conformance/COPYRIGHT`; excluded from the crate | the phase gate |
 | Synthetic JP2 wrappers from `scripts/gen-jp2-fixtures.py` | `tests/fixtures/jp2_*.jp2` + `.expected.json` | tens of KB | ours (wraps existing Apache-2.0 / public-domain codestreams) | isolate each box: palette variants, cdef variants, bpcc, res, xml/uuid, XLBox, LBox 0, second colr, JPX brand + compat, unknown boxes |
 | Real-world encoder zoo from GDAL `autotest/gdrivers/data/jpeg2000/` | `tests/fixtures/jp2_real/` | < 100 KB total | rights unconfirmed (GDAL is "in general" MIT; test data not covered; accepted, see Decisions); nine small files, per-file GDAL path, commit SHA and encoder recorded | structure from Kakadu, ECW SDK, OpenJPEG, GDAL: `cdef` alpha, `Typ 65535`, `bpcc` 13+1-bit, `resc`/`resd`, GeoJP2 `uuid`, GML `asoc`, `UnkC = 1`, signed 16-bit |
 

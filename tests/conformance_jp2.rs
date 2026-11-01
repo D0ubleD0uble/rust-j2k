@@ -19,7 +19,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use support::jp2::{Jp2Manifest, load_manifest, run_ratchet, shifted};
+use support::jp2::{Jp2Manifest, load_manifest, run_ratchet, sha256_hex, shifted};
 use support::pgx::parse_pgx;
 
 /// The entries that decode within their compliance class today. Grow it as the
@@ -92,6 +92,13 @@ fn the_manifest_pins_the_grading_bar() {
     assert_eq!(pick(|e| e.shift_right != 0), [6, 7]);
 
     for entry in &manifest.entries {
+        // Each entry points at its own file and its own channel planes, in order.
+        assert_eq!(entry.file, format!("files/file{}.jp2", entry.index));
+        assert_eq!(entry.references.len(), entry.graded_components);
+        for (k, path) in entry.references.iter().enumerate() {
+            assert_eq!(*path, format!("references/jp2_{}_{k}.pgx", entry.index));
+        }
+
         // Part 4 Table G.1 as OpenJPEG runs it: PAE 4, MSE 1 on every channel.
         assert_eq!(entry.bounds.pae, vec![4.0; entry.graded_components]);
         assert_eq!(entry.bounds.mse, vec![1.0; entry.graded_components]);
@@ -145,4 +152,49 @@ fn shifting_scales_samples_and_depth() {
     assert_eq!(out.samples, [0, 0, 255]);
     assert_eq!(out.bit_depth, 8);
     assert_eq!(shifted(&component, 0), component);
+}
+
+/// Grey files grade one channel, colour files three; more or fewer fails.
+#[test]
+fn the_decoded_component_count_must_equal_the_graded_count() {
+    use support::jp2::check_component_count;
+    assert!(check_component_count(1, 1).is_ok());
+    assert!(check_component_count(3, 3).is_ok());
+    assert!(check_component_count(4, 3).is_err());
+    assert!(check_component_count(3, 1).is_err());
+    assert!(check_component_count(1, 3).is_err());
+}
+
+/// Every committed file matches the size and SHA-256 the manifest records, so a
+/// truncated, swapped, or edited file fails here.
+#[test]
+fn committed_bytes_match_the_manifest_digests() {
+    let dir = jp2_dir();
+    for entry in load_manifest(&dir).entries {
+        assert_eq!(entry.reference_digests.len(), entry.references.len());
+        let files = std::iter::once((&entry.file, &entry.file_digest))
+            .chain(entry.references.iter().zip(&entry.reference_digests));
+        for (path, digest) in files {
+            let bytes = std::fs::read(dir.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
+            assert_eq!(bytes.len() as u64, digest.size, "{path}: size");
+            assert_eq!(sha256_hex(&bytes), digest.sha256, "{path}: sha256");
+        }
+    }
+}
+
+/// The inline SHA-256 against the FIPS 180-4 / NIST test vectors.
+#[test]
+fn sha256_matches_the_standard_vectors() {
+    assert_eq!(
+        sha256_hex(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        sha256_hex(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(
+        sha256_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    );
 }

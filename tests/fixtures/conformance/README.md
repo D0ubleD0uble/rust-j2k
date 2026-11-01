@@ -170,7 +170,7 @@ of the six colour files, one for each greyscale file.
 
 | File | Size | Channels | Depth | Boxes beyond `ihdr` + `colr` | Colour | Grade |
 | ---- | ---- | -------- | ----- | ---------------------------- | ------ | ----- |
-| `file1.jp2` | 768×512 | 3 | 8 | `xml ` | sRGB | exact |
+| `file1.jp2` | 768×512 | 3 | 8 | two `xml ` (before and after `jp2h`) | sRGB | exact |
 | `file2.jp2` | 480×640 | 3 | 8 | `cdef` | sYCC | PAE 4 / MSE 1 |
 | `file3.jp2` | 480×640 | 3 | 8 | none (chroma subsampled 2×2) | sYCC | PAE 4 / MSE 1 |
 | `file4.jp2` | 768×512 | 1 | 8 | none | greyscale | exact |
@@ -198,9 +198,9 @@ object denies unknown fields. Per entry: `file`, `index`, `graded_components`,
 `bit_exact`, `shift_right`, `needs_srgb`, `boxes` (`top` and `jp2h` box types in
 file order), `colour` (the first `colr`: `method` with `enum_cs` or
 `icc_bytes`), `features` (the Part 1 `features` object for the `jp2c` payload),
-`references`, and `bounds`.
+`references`, `file_digest` and `reference_digests` (byte size and SHA-256 of each committed file, re-checked by the tests), and `bounds`.
 
-Provenance is the same pinned `uclouvain/openjpeg-data` commit (`39524bd3`):
+The re-grade was run with OpenJPEG 2.5.0 (the system build). Provenance is the same pinned `uclouvain/openjpeg-data` commit (`39524bd3`):
 `input/conformance/file{1..9}.jp2` and `baseline/conformance/jp2_{1..9}.tif`.
 
 ## Regenerating

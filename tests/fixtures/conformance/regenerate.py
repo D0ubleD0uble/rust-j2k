@@ -26,6 +26,7 @@ recorded for reference, not used as the bar. See README.md and ./COPYRIGHT.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -219,14 +220,29 @@ def bound_cell(profile: int, idx: int, cls: int, kind: str):
     return out
 
 
+def sha256_file(path: str) -> str:
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def download(rel_path: str, dest: str):
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
-        return
+    """Fetch `rel_path` from the pinned commit to `dest`.
+
+    A file already at `dest` is not trusted: the pinned bytes are fetched again
+    and compared, and a mismatch (a truncated or edited copy) raises. Delete the
+    file to refresh it deliberately.
+    """
     url = RAW % rel_path
     # Download to a temp path and rename on success, so an interrupted curl
     # never leaves a truncated file that later runs would skip as "present".
     tmp = dest + ".part"
     subprocess.run(["curl", "-fsSL", "-o", tmp, url], check=True)
+    if os.path.exists(dest):
+        same = sha256_file(tmp) == sha256_file(dest)
+        os.remove(tmp)
+        if not same:
+            raise ValueError(f"{dest} differs from {rel_path} at {DATA_COMMIT[:8]}")
+        return
     os.replace(tmp, dest)
 
 
@@ -572,6 +588,11 @@ def regrade_with_opj(n: int, jp2_path: str, planes: list, bit_exact: bool) -> li
     return results
 
 
+def digest(path: str) -> dict:
+    """Size and SHA-256 of a committed file, as the manifest records them."""
+    return {"size": os.path.getsize(path), "sha256": sha256_file(path)}
+
+
 def build_jp2_entry(n: int) -> dict:
     name = f"file{n}.jp2"
     jp2_path = os.path.join(JP2_FILES_DIR, name)
@@ -630,6 +651,9 @@ def build_jp2_entry(n: int) -> dict:
         "colour": info["colour"],
         "features": features,
         "references": refs,
+        # Pins the committed bytes; tests/conformance_jp2.rs re-hashes them.
+        "file_digest": digest(jp2_path),
+        "reference_digests": [digest(os.path.join(JP2_DIR, r)) for r in refs],
         "bounds": {"pae": [JP2_PAE] * graded, "mse": [JP2_MSE] * graded},
     }
 
