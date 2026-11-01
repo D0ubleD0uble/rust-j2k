@@ -493,11 +493,27 @@ fn a_reduced_decode_applies_the_palette() {
     }
 }
 
-/// The palette is applied, but `cdef` is still refused.
+/// A `cdef` after a palette describes the palette's channels: reversing
+/// them reverses the looked-up columns (measured with `opj_decompress` 2.5.0,
+/// also with the `cdef` placed before the `pclr`).
 #[test]
-fn a_palette_with_channel_definitions_is_still_unsupported() {
-    unsupported(
-        &with_children(&[pclr_box(), cmap_box(), bx(b"cdef", &[0, 0])]),
-        "`cdef`",
-    );
+fn channel_definitions_apply_to_the_palette_channels() {
+    let reversed = super::channels::reversed();
+    for children in [
+        [pclr_box(), cmap_box(), reversed.clone()],
+        [reversed.clone(), pclr_box(), cmap_box()],
+    ] {
+        let image = decode(&one_component_with(&children)).expect("decodes");
+        let index = decode(ONE_COMPONENT).unwrap().components[0].clone();
+        for (k, channel) in image.components.iter().enumerate() {
+            assert_eq!(
+                channel.samples,
+                looked_up(&index.samples, 2 - k, 256),
+                "channel {k}"
+            );
+        }
+        let jp2 = image.jp2.expect("metadata");
+        assert!(jp2.palette_applied);
+        assert_eq!(jp2.channels, super::channels::colours(3));
+    }
 }

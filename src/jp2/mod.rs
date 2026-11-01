@@ -13,9 +13,9 @@
 //! and hands back the codestream slice with the header boxes; the codestream
 //! stage decodes the slice as it would a raw codestream. [`check_against_siz`]
 //! then holds `ihdr` to the codestream's SIZ, [`plan_palette`] plans the
-//! palette (see [`palette`]), [`check_supported`] refuses the header boxes not
-//! applied yet, and [`present`] builds the [`Jp2Metadata`] that rides on the
-//! [`Image`](crate::Image).
+//! palette (see [`palette`]), [`plan_channels`] plans the channel definitions
+//! (see [`channels`]), and [`present`] builds the [`Jp2Metadata`] that rides
+//! on the [`Image`](crate::Image).
 //!
 //! For these ways a file can bend Annex I, the walk does what OpenJPEG 2.5.0
 //! does: `ihdr` may sit anywhere in `jp2h`, a second `jp2h` before the
@@ -29,10 +29,11 @@
 //!
 //! Every length is checked before use and nothing is allocated from one (see
 //! [`boxes`]). Box-layer faults are [`Error::FileFormat`]; a file this decoder
-//! does not read (no `jp2 ` compatibility, or a box it cannot yet apply) is
-//! [`Error::Unsupported`].
+//! does not read (no `jp2 ` compatibility, or a palette mapping or column depth
+//! it does not decode) is [`Error::Unsupported`].
 
 mod boxes;
+mod channels;
 mod colour;
 mod header;
 mod metadata;
@@ -43,6 +44,7 @@ mod colour_tests;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use channels::plan as plan_channels;
 pub use metadata::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
 pub(crate) use palette::plan as plan_palette;
 
@@ -163,19 +165,6 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
     }))
 }
 
-/// Reject a file with a header box the decoder cannot yet apply, so a file is
-/// never decoded into channels it would present wrongly. `header` holds the
-/// boxes inside every `jp2h` and those misplaced at the top level after it, so
-/// this one check covers both places OpenJPEG applies them from.
-pub(crate) fn check_supported(header: &Jp2Header<'_>) -> Result<()> {
-    if !header.cdef().is_empty() {
-        return Err(Error::Unsupported(
-            "the file has a `cdef` box, which this decoder does not apply".into(),
-        ));
-    }
-    Ok(())
-}
-
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image
 /// area and `NC` must equal `Csiz` (I.5.3.1). OpenJPEG checks the area but not
 /// `NC`; palette and channel definitions index components by `NC`, so a file
@@ -200,7 +189,8 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
 }
 
 /// Describe the file's output channels: the decoded components, after the
-/// palette when one was applied. Every channel is colour `i + 1`.
+/// palette and channel definitions. Every channel starts as colour `i + 1`;
+/// the palette and channel plans relabel them (`describe`).
 pub(crate) fn present(
     file: Jp2File<'_>,
     components: Vec<Component>,
