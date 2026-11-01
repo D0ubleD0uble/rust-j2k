@@ -115,7 +115,7 @@ fn every_validation_row_is_a_file_format_error() {
         // OpenJPEG: "Need to read a PCLR box before the CMAP box."
         (
             "cmap without pclr",
-            with_children(&[cmap.clone()]),
+            with_children(std::slice::from_ref(&cmap)),
             "`cmap` box but no `pclr`",
         ),
         (
@@ -418,8 +418,10 @@ fn a_column_deeper_than_the_sample_container_is_unsupported() {
 /// codestream's decode, and labels the index plane as such.
 #[test]
 fn raw_channels_returns_the_index_plane() {
-    let mut options = DecodeOptions::default();
-    options.raw_channels = true;
+    let options = DecodeOptions {
+        raw_channels: true,
+        ..DecodeOptions::default()
+    };
     let image = decode_with(&with_children(&[pclr_box(), cmap_box()]), options).expect("decodes");
     assert_eq!(image.components, raw().components);
     let jp2 = image.jp2.expect("JP2 metadata");
@@ -448,8 +450,10 @@ fn raw_channels_returns_the_index_plane() {
 /// codestream (OpenJPEG skips `opj_jp2_check_color` when ignoring the palette).
 #[test]
 fn raw_channels_checks_the_boxes_but_not_the_mapping() {
-    let mut options = DecodeOptions::default();
-    options.raw_channels = true;
+    let options = DecodeOptions {
+        raw_channels: true,
+        ..DecodeOptions::default()
+    };
     let bad_mapping = with_children(&[pclr_box(), cmap_of(&[(9, 3, 7), (0, 1, 1), (0, 1, 2)])]);
     let image = decode_with(&bad_mapping, options).expect("decodes raw");
     assert_eq!(image.components, raw().components);
