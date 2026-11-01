@@ -367,9 +367,11 @@ fn walk_tiles<'a>(
         let data_start = cur.pos;
 
         // Psot counts from the SOT marker's first byte to the end of the
-        // tile-part. Psot == 0 marks the *last* tile-part: it runs to the
-        // closing EOC (A.4.2), anchored to the last two bytes of the buffer —
-        // everything after SOD is the tile, which is also OpenJPEG's reading.
+        // tile-part. Psot == 0 marks the *last* tile-part (A.4.2). Like
+        // OpenJPEG, give it everything up to the last two bytes of the buffer,
+        // the room for an EOC, without checking that those bytes are FF D9. A
+        // stream with no EOC therefore loses its last two data bytes, as it
+        // does in OpenJPEG, and fails later when the tile's packets run short.
         // Scanning for the first FF D9 instead would be unsound: bit stuffing
         // keeps packet data and headers clear of it, but an SOP segment's Nsop
         // counter is two raw bytes and can spell FF D9 (packet 65497, or a 0xFF
@@ -381,9 +383,11 @@ fn walk_tiles<'a>(
             bytes
                 .len()
                 .checked_sub(2)
-                .filter(|&end| end >= data_start && read_u16(bytes, end) == Some(marker::EOC))
+                .filter(|&end| end >= data_start)
                 .ok_or_else(|| {
-                    Error::Codestream("Psot=0 tile-part is not terminated by EOC".into())
+                    Error::Codestream(
+                        "Psot=0 tile-part has fewer than two bytes after its header".into(),
+                    )
                 })?
         } else {
             let end = part_offset
@@ -398,6 +402,12 @@ fn walk_tiles<'a>(
             end
         };
         tiles[index].parts.push(&bytes[data_start..data_end]);
+
+        // A Psot = 0 tile-part is the last one: the walk ends there, whatever
+        // the two bytes after its data are.
+        if sot.psot == 0 {
+            break;
+        }
 
         // Another SOT continues the walk; EOC ends it. Anything else — or
         // nothing at all — means the tile-part chain does not close.

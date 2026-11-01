@@ -1351,10 +1351,19 @@ fn missing_eoc_is_codestream() {
 }
 
 #[test]
-fn psot_zero_without_eoc_is_codestream() {
+fn psot_zero_without_eoc_loses_two_bytes_but_parses() {
     let data = [1, 2, 3];
     let sot = sot_seg(0, 0, 0, 1);
     let bytes = assemble(&default_header(), &sot, &data, false);
+    // The last two bytes are taken for the EOC, as in OpenJPEG.
+    let cs = parse(&bytes).expect("parse");
+    assert_eq!(cs.tiles[0].data.as_ref(), &data[..1]);
+}
+
+#[test]
+fn psot_zero_with_one_byte_after_sod_is_codestream() {
+    let sot = sot_seg(0, 0, 0, 1);
+    let bytes = assemble(&default_header(), &sot, &[7], false);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
 
