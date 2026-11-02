@@ -15,6 +15,7 @@ mod after;
 mod channels;
 mod matrix;
 mod palette;
+mod uuid_info;
 
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
 const WIDTH: u32 = 24;
@@ -188,6 +189,8 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
             resolution: Resolution::default(),
             xml: Vec::new(),
             uuid: Vec::new(),
+            ipr: Vec::new(),
+            uuid_info: Vec::new(),
         })
     );
 }
