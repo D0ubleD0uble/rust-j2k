@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rust_j2k::{ColourSpace, Error, Header, Image, Jp2Metadata, Ratio, Res, read_header};
+use rust_j2k::{ColourSpace, Error, Header, Image, Jp2Metadata, Ratio, read_header};
 
 /// Files where `decode` fails on tile data while `read_header` succeeds, and
 /// why. `rgb16_ecwsdk.jp2`'s codestream has no EOC: `decode` fails on its

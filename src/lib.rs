@@ -182,7 +182,7 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 pub fn read_header(bytes: &[u8]) -> Result<Header> {
     let options = DecodeOptions::default();
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
-        let prefix = read_jp2_prefix(bytes, options)?;
+        let prefix = read_jp2_prefix(bytes, &options)?;
         let siz = &prefix.parsed.header.siz;
         let (width, height) = siz.image_extent_at(0);
         return Ok(Header {
@@ -205,7 +205,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 
 /// What colour space a JP2 file's colour channels come out in: the
 /// [`DecodeOptions::colour`] option.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ColourOutput {
     /// The samples as the codestream coded them, after the palette and the
@@ -254,7 +254,7 @@ pub enum ColourOutput {
 /// Start from [`DecodeOptions::default`] and set what differs, with a
 /// `with_*` method where one exists or the field directly. The struct is `#[non_exhaustive]`,
 /// so a new option is not a breaking change.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct DecodeOptions {
     /// How many of the finest resolution levels to discard. Each level halves
@@ -345,7 +345,7 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     // as a box fault. The rest falls to the codestream parser, which reports
     // the missing SOC.
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
-        return decode_jp2(bytes, options);
+        return decode_jp2(bytes, &options);
     }
     let cs = codestream::parse(bytes)?;
     // A raw codestream declares no colour space. Like OpenJPEG, one or two
@@ -358,7 +358,7 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
              no colour space"
         )));
     }
-    decode_codestream(cs, options)
+    decode_codestream(cs, &options)
 }
 
 /// A JP2 file read up to its tile data: the boxes, the codestream's main
@@ -379,7 +379,7 @@ struct Jp2Prefix<'a> {
 /// The header boxes after the codestream, which OpenJPEG reads again once it
 /// has decoded, are checked next, then the sRGB step is planned; all of it
 /// before any tile is read.
-fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>> {
+fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Prefix<'a>> {
     let file = jp2::parse(bytes)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
@@ -413,7 +413,7 @@ fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>
 
 /// Decode a JP2 file: read it up to its tile data, decode the codestream,
 /// and apply the channel plans, then any sRGB step, to the samples.
-fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
+fn decode_jp2(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
     let cs = codestream::parse_tiles(prefix.codestream, prefix.parsed)?;
     let image = decode_codestream(cs, options)?;
@@ -429,7 +429,7 @@ fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
 }
 
 /// Decode a parsed codestream into its components.
-fn decode_codestream(cs: codestream::Codestream<'_>, options: DecodeOptions) -> Result<Image> {
+fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) -> Result<Image> {
     let reduction = options.resolution_reduction;
 
     // Each tile is a whole decode of its own: its own header, its own packets,

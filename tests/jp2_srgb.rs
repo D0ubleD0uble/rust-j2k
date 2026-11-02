@@ -101,13 +101,11 @@ fn raw_channels_with_srgb_is_invalid_options() {
 #[test]
 fn the_builders_set_one_field_each() {
     let base = DecodeOptions::default();
-    let raw = base.with_raw_channels(true);
+    let raw = base.clone().with_raw_channels(true);
     assert!(raw.raw_channels);
-    assert_eq!(
-        (raw.colour, raw.resolution_reduction),
-        (ColourOutput::AsCoded, 0)
-    );
-    assert!(!raw.with_raw_channels(false).raw_channels);
+    assert_eq!(raw.colour, ColourOutput::AsCoded);
+    assert_eq!(raw.resolution_reduction, 0);
+    assert!(!raw.clone().with_raw_channels(false).raw_channels);
 
     let both = base
         .with_colour(ColourOutput::Srgb)

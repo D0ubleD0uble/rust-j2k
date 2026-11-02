@@ -850,7 +850,7 @@ fn raw_channels_with_srgb_output_is_invalid() {
         b"junk".to_vec(),
     ] {
         expect_err(
-            decode_with(&bytes, options),
+            decode_with(&bytes, options.clone()),
             |e| matches!(e, Error::InvalidOptions(_)),
             "raw channels means no colour conversion",
         );

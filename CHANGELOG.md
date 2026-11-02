@@ -110,6 +110,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Breaking: `DecodeOptions` and `ColourOutput` are no longer `Copy`, so a
+  later option can carry data (an output ICC profile). Both stay `Clone`;
+  clone them where you reuse one.
 - A JP2 file used to be `Unsupported`; it now decodes, or fails with
   `FileFormat` when its boxes are malformed.
 - A JP2 file whose `ihdr` component count differs from its codestream's

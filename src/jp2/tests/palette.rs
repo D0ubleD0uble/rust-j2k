@@ -456,13 +456,13 @@ fn raw_channels_checks_the_boxes_but_not_the_mapping() {
         ..DecodeOptions::default()
     };
     let bad_mapping = with_children(&[pclr_box(), cmap_of(&[(9, 3, 7), (0, 1, 1), (0, 1, 2)])]);
-    let image = decode_with(&bad_mapping, options).expect("decodes raw");
+    let image = decode_with(&bad_mapping, options.clone()).expect("decodes raw");
     assert_eq!(image.components, raw().components);
     assert!(matches!(decode(&bad_mapping), Err(Error::FileFormat(_))));
 
     let bad_box = with_children(&[bx(b"pclr", &[0, 0, 3, 7, 7, 7]), cmap_box()]);
     assert!(matches!(
-        decode_with(&bad_box, options),
+        decode_with(&bad_box, options.clone()),
         Err(Error::FileFormat(_))
     ));
 
@@ -477,7 +477,7 @@ fn raw_channels_checks_the_boxes_but_not_the_mapping() {
     }
     let deep = with_children(&[bx(b"pclr", &deep), cmap_box()]);
     unsupported(&deep, "exceeds the i32");
-    let image = decode_with(&deep, options).expect("decodes raw");
+    let image = decode_with(&deep, options.clone()).expect("decodes raw");
     assert_eq!(image.components, raw().components);
 }
 
@@ -485,8 +485,9 @@ fn raw_channels_checks_the_boxes_but_not_the_mapping() {
 #[test]
 fn a_reduced_decode_applies_the_palette() {
     let options = DecodeOptions::default().with_resolution_reduction(1);
-    let image = decode_with(&with_children(&[pclr_box(), cmap_box()]), options).expect("decodes");
-    let index = decode_with(CODESTREAM, options).unwrap().components[0].clone();
+    let image =
+        decode_with(&with_children(&[pclr_box(), cmap_box()]), options.clone()).expect("decodes");
+    let index = decode_with(CODESTREAM, options.clone()).unwrap().components[0].clone();
     for (i, channel) in image.components.iter().enumerate() {
         assert_eq!((channel.width, channel.height), (index.width, index.height));
         assert_eq!(channel.samples, looked_up(&index.samples, i, 256));
