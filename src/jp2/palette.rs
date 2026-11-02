@@ -190,6 +190,10 @@ impl Palette {
     #[must_use]
     pub fn entry(&self, index: usize) -> Option<&[i32]> {
         let width = self.columns.len();
+        if index >= self.entry_count() {
+            return None;
+        }
+        // `index < NE <= 65535`, so this cannot overflow.
         self.values.get(index * width..(index + 1) * width)
     }
 
