@@ -344,7 +344,8 @@ pub struct DecodeOptions {
     /// plane is reported on [`Jp2Metadata::channels`] as
     /// [`ChannelType::Unspecified`] with [`Association::None`], since it is
     /// not a colour until it goes through the palette; every other channel
-    /// `i` is reported as colour `i + 1`, whatever the `cdef` box says. The
+    /// is labelled as a file without a `cdef` is (see
+    /// [`Jp2Metadata::channels`]), whatever the `cdef` box says. The
     /// boxes' layout is still checked, so a malformed `pclr`, `cmap` or
     /// `cdef` is still [`Error::FileFormat`]; the palette mapping and column
     /// depths, and the channel definitions' entries, are not.

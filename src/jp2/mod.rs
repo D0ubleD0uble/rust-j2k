@@ -311,13 +311,14 @@ impl ChannelPlans {
 }
 
 /// The file's metadata, from its boxes and the channel plans alone: no
-/// sample is needed. Every channel starts as colour `i + 1`; the palette and
-/// channel plans relabel them. `siz` is the codestream's.
+/// sample is needed. Without a `cdef`, the colour space's channels start as
+/// colours `1..=N` and the rest as unspecified; the palette and channel plans
+/// relabel them. `siz` is the codestream's.
 pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> Result<Jp2Metadata> {
     let passed = passthrough(file);
     let mut metadata = Jp2Metadata {
         colour: file.colour.clone(),
-        channels: colour_channels(plans.outputs(siz, 0)?.len())?,
+        channels: colour_channels(plans.outputs(siz, 0)?.len(), &file.colour)?,
         palette_applied: false,
         palette: None,
         channel_mapping: None,
@@ -368,11 +369,56 @@ fn passthrough(file: &Jp2File<'_>) -> Passthrough {
     out
 }
 
-/// The channel definitions of a file without `cdef`: channel `i` is colour
-/// `i + 1`.
-fn colour_channels(count: usize) -> Result<Vec<ChannelDefinition>> {
+/// The number of colours in a colour space: what I.5.3.6 means by the colours
+/// a channel can be associated with. Enumerated values are those of Table I.10
+/// of Annex I. `None` when the space is unknown or the ICC profile is too
+/// short to name its colour space, so the count cannot be given.
+fn colour_count(colour: &ColourSpace) -> Option<usize> {
+    match colour {
+        ColourSpace::Greyscale => Some(1),
+        ColourSpace::Srgb | ColourSpace::Sycc => Some(3),
+        ColourSpace::Enumerated(value) => match value {
+            // Bi-level, greyscale.
+            0 | 15 | 17 => Some(1),
+            // YCbCr, PhotoYCC, CMY, CIELab, sRGB-like, CIEJab, e-sRGB,
+            // ROMM-RGB, YPbPr and e-sYCC.
+            1 | 3 | 4 | 9 | 11 | 14 | 16 | 18..=24 => Some(3),
+            // CMYK, YCCK.
+            12 | 13 => Some(4),
+            _ => None,
+        },
+        ColourSpace::RestrictedIcc(profile) => {
+            // The data colour space is the signature at byte 16 of the header.
+            match profile.get(16..20)? {
+                b"GRAY" => Some(1),
+                b"RGB " | b"YCbr" | b"Lab " | b"Luv " | b"XYZ " | b"Yxy " | b"HSV " | b"HLS "
+                | b"CMY " => Some(3),
+                b"CMYK" => Some(4),
+                // `nCLR`: n colours, as one hex digit.
+                [d, b'C', b'L', b'R'] => char::from(*d).to_digit(16).map(|n| n as usize),
+                _ => None,
+            }
+        }
+        ColourSpace::Unknown => None,
+    }
+}
+
+/// The channel definitions of a file without `cdef`. I.5.3.6 gives a channel
+/// a colour only through a channel definition; without one, the first
+/// [`colour_count`] channels are the colour space's colours in order (channel
+/// `i` is colour `i + 1`) and any channel past them has no defined meaning, so
+/// it is `Unspecified` with no association. When the count is unknown every
+/// channel is labelled a colour.
+fn colour_channels(count: usize, colour: &ColourSpace) -> Result<Vec<ChannelDefinition>> {
+    let colours = colour_count(colour).unwrap_or(count);
     (0..count)
         .map(|i| {
+            if i >= colours {
+                return Ok(ChannelDefinition {
+                    kind: ChannelType::Unspecified,
+                    association: Association::None,
+                });
+            }
             let colour = u16::try_from(i + 1).map_err(|_| {
                 Error::Inconsistent(format!("{count} channels exceed the `u16` colour index"))
             })?;
@@ -397,6 +443,7 @@ pub(crate) fn plan_srgb(
         &metadata.colour,
         &metadata.channels,
         &plans.outputs(siz, reduction)?,
+        metadata.channel_definitions.is_none(),
         siz,
         reduction,
     )

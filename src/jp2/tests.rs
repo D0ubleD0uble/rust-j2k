@@ -1182,3 +1182,53 @@ fn read_header_reads_no_tile_data() {
         Err(Error::Codestream(_))
     ));
 }
+
+/// Without a `cdef`, the first N channels are colours 1..=N, N from the
+/// colour space, and every channel past them is unspecified (I.5.3.6).
+#[test]
+fn default_labels_stop_at_the_colour_spaces_count() {
+    let icc = |space: &[u8; 4]| {
+        let mut profile = vec![0u8; 128];
+        profile[16..20].copy_from_slice(space);
+        ColourSpace::RestrictedIcc(profile)
+    };
+    let cases = [
+        (ColourSpace::Srgb, 3),
+        (ColourSpace::Sycc, 3),
+        (ColourSpace::Greyscale, 1),
+        (ColourSpace::Enumerated(17), 1),
+        (ColourSpace::Enumerated(12), 4),
+        (ColourSpace::Enumerated(24), 3),
+        (icc(b"GRAY"), 1),
+        (icc(b"RGB "), 3),
+        (icc(b"CMYK"), 4),
+        (icc(b"5CLR"), 5),
+    ];
+    for (space, colours) in cases {
+        let labels = super::colour_channels(6, &space).unwrap();
+        for (i, label) in labels.iter().enumerate() {
+            let want = if i < colours {
+                (ChannelType::Colour, Association::Colour(i as u16 + 1))
+            } else {
+                (ChannelType::Unspecified, Association::None)
+            };
+            assert_eq!(
+                (label.kind, label.association),
+                want,
+                "{space:?} channel {i}"
+            );
+        }
+    }
+    // A space whose colour count is not known keeps every channel a colour.
+    for space in [
+        ColourSpace::Unknown,
+        ColourSpace::Enumerated(99),
+        ColourSpace::RestrictedIcc(Vec::new()),
+    ] {
+        let labels = super::colour_channels(6, &space).unwrap();
+        assert!(
+            labels.iter().all(|l| l.kind == ChannelType::Colour),
+            "{space:?}"
+        );
+    }
+}

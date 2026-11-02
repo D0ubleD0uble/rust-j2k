@@ -106,18 +106,29 @@ pub(crate) enum ChromaLayout {
 }
 
 /// Plan the sRGB step for a JP2 file's output channels: their formats
-/// (`outputs`), what each one is (`channels`), and the colour space the file
+/// (`outputs`), what each one is (`channels`), whether the file has no `cdef`
+/// (`no_cdef`), and the colour space the file
 /// declares. `siz` and `reduction` size the output for the sample budget.
 pub(crate) fn plan(
     colour: &ColourSpace,
     channels: &[ChannelDefinition],
     outputs: &[ComponentInfo],
+    no_cdef: bool,
     siz: &Siz,
     reduction: u8,
 ) -> Result<SrgbPlan> {
     match colour {
         ColourSpace::Srgb | ColourSpace::Greyscale => {
-            uniform(&colour_channels(channels, outputs, 0), outputs)?;
+            // OpenJPEG reads three components with sub-sampled chroma as sYCC
+            // whatever the file declares, so a file declared grey, on three
+            // components and without a `cdef`, is checked on all three. Any
+            // other channel past the colour space's colours is left as coded.
+            let colours = if no_cdef && *colour == ColourSpace::Greyscale && outputs.len() == 3 {
+                (0..outputs.len()).collect()
+            } else {
+                colour_channels(channels, outputs, 0)
+            };
+            uniform(&colours, outputs)?;
             Ok(SrgbPlan::PassThrough)
         }
         // OpenJPEG converts sYCC and an RGB profile only on three or more

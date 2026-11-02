@@ -290,10 +290,7 @@ fn wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
 /// space. Where LittleCMS refuses the profile and this step can tell, the
 /// samples pass through as in OpenJPEG.
 const REFUSED_BY_US: &[(&str, &str)] = &[
-    (
-        "bad_gray_on_rgb",
-        "monochrome ICC profile needs one colour channel",
-    ),
+    ("bad_gray_on_rgb", "monochrome ICC profile on 3 channels"),
     ("lut16", "`A2B0` lookup table"),
     ("lut16_grid_0", "`A2B0` lookup table"),
     ("lut8", "`A2B0` lookup table"),
@@ -463,5 +460,66 @@ fn a_tinted_grey_profile_gives_three_colour_channels() {
             colours,
             [1, 2, 3].map(|n| (ChannelType::Colour, Association::Colour(n)))
         );
+    }
+}
+
+/// Two components, a monochrome ICC profile and no `cdef`: OpenJPEG reads the
+/// second component as opacity, converts the first, and writes RGBA. The
+/// second component is not a colour channel (I.5.3.6 gives a channel past the
+/// colour space's count no meaning), so the sRGB step converts the first and
+/// returns the second as coded, as OpenJPEG does.
+///
+/// The file is `cblksty_bypass_lossless.j2k` (24x16, 8-bit, two components)
+/// under the `grey_gamma18` (neutral output) and `grey_white_d65` (tinted
+/// output) profiles from `icc/profiles.json`. The hashes are the planes of
+/// `opj_decompress -force-rgb` on it (OpenJPEG 2.5.0, LittleCMS 2.14), made
+/// as `scripts/gen-icc-oracles.py` makes its own.
+#[test]
+fn a_grey_profile_on_two_channels_without_cdef_is_grey_plus_opacity() {
+    const OPACITY: &str = "db57ea4486e47a9ac7d8efd8e7e1d3e0f47e7595abca5d06f6b1d1febe95d39f";
+    let codestream = read("cblksty_bypass_lossless.j2k");
+    let text = String::from_utf8(read("icc/profiles.json")).unwrap();
+    let profiles: Profiles = serde_json::from_str(&text).expect("profiles.json");
+    let cases: [(&str, &[&str]); 2] = [
+        (
+            "grey_gamma18",
+            &["e11e2a6e7b6302d7e67b0617d5df678c2318fe0fffb97f91e684c8fab377ac48"],
+        ),
+        (
+            "grey_white_d65",
+            &[
+                "7df53cf1559167d5f754b7694f3a8bbc25558f007a54e30d447decd1f4a59175",
+                "a9b13cb5073c0b8fe73cef96492fa3c13bf8341789d15554edca8a0c747b7605",
+                "d6641bf952c5f0a3b3af487eaeb0a7ed4451a655d673968b868eeed8e1a04c61",
+            ],
+        ),
+    ];
+    let coded = decode(&codestream).unwrap();
+    assert_eq!(coded.components.len(), 2);
+    assert_eq!(plane_hash(&coded.components[1]), OPACITY, "the opacity");
+    for (name, colours) in cases {
+        let case = profiles.cases.iter().find(|c| c.name == name).unwrap();
+        let bytes = wrap(&codestream, &hex(&case.profile));
+        let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let got: Vec<String> = image.components.iter().map(plane_hash).collect();
+        let mut want: Vec<String> = colours.iter().map(|h| h.to_string()).collect();
+        want.push(OPACITY.to_string());
+        assert_eq!(got, want, "{name}");
+        let header = rust_j2k::read_header_with(&bytes, &srgb()).unwrap();
+        assert_eq!(header.components.len(), want.len(), "{name}: header");
+        let labels: Vec<_> = image
+            .jp2
+            .as_ref()
+            .unwrap()
+            .channels
+            .iter()
+            .map(|c| (c.kind, c.association))
+            .collect();
+        let mut expect: Vec<_> = (1..=colours.len() as u16)
+            .map(|n| (ChannelType::Colour, Association::Colour(n)))
+            .collect();
+        expect.push((ChannelType::Unspecified, Association::None));
+        assert_eq!(labels, expect, "{name}: labels");
+        assert_eq!(header.jp2.unwrap(), image.jp2.unwrap(), "{name}");
     }
 }

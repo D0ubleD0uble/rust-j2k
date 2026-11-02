@@ -14,7 +14,12 @@ pub struct Jp2Metadata {
     /// One entry per [`Image::components`](crate::Image::components) entry,
     /// saying what that channel is: its entry in the file's channel
     /// definition (`cdef`) box, or, without one, colour `i + 1` for channel
-    /// `i`.
+    /// `i` while `i` is below the colour space's number of colours (3 for
+    /// sRGB and sYCC, 1 for greyscale, the profile's for an ICC profile). A
+    /// channel past that has no meaning in I.5.3.6 and is
+    /// [`ChannelType::Unspecified`] with [`Association::None`]. When the file
+    /// gives no colour space the count is unknown and every channel is a
+    /// colour.
     pub channels: Vec<ChannelDefinition>,
     /// Whether the samples went through the file's palette. `false` when the
     /// file has no palette (or a `pclr` without a `cmap`), or the caller set

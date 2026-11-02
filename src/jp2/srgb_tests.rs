@@ -688,7 +688,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "grey profile, three colours",
             file(THREE, &icc_colr(&grey_profile()), &[]),
             is_unsupported,
-            "monochrome ICC profile needs one colour channel; the file has 3",
+            "monochrome ICC profile on 3 channels",
         ),
         (
             "RGB profile on 12-bit samples",
@@ -1713,7 +1713,7 @@ fn refusals_are_ordered_as_in_openjpeg() {
         &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0],
     );
     for (children, fragment) in [
-        (vec![], "monochrome ICC profile needs one colour channel"),
+        (vec![], "monochrome ICC profile on 3 channels"),
         (vec![colour_first], "monochrome ICC profile on 3 channels"),
     ] {
         let mut grey = grey_profile();

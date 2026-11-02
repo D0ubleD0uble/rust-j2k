@@ -191,6 +191,22 @@ wrong channel (an ARGB layout loses its opacity flag). Here each channel
 carries the entry that names it, so the label moves with the samples, as
 I.5.3.6 defines `Cn`.
 
+Without a `cdef`, OpenJPEG labels nothing (every `comps[].alpha` is 0), so
+the default labels have no oracle either. Here the first N channels are
+colours 1 to N, N being the colour space's number of colours, and each
+channel past N is unspecified, since I.5.3.6 gives it no meaning. This
+decides one `ColourOutput::Srgb` case: two components with a greyscale ICC
+profile and no `cdef` convert as grey plus opacity, and match
+`opj_decompress -force-rgb` sample for sample (test
+`a_grey_profile_on_two_channels_without_cdef_is_grey_plus_opacity`).
+It decides a second case: an enumerated sRGB file of four components and no
+`cdef`, whose fourth differs in format from the colours (signed 8-bit, say),
+passes through as coded, as with a `cdef` and as in OpenJPEG (test
+`an_srgb_file_with_a_differently_formatted_fourth_channel_passes_through`).
+One check stays on every channel: a file declared greyscale on three
+components with no `cdef` must have all three alike, because OpenJPEG reads
+sub-sampled chroma on three components as sYCC whatever the file declares.
+
 Looser here, where OpenJPEG fails: a malformed header box after the
 codestream (a second signature or `ftyp` box, a `jp2h` without `ihdr`, a
 `colr` running past the end of the file, a bad `cdef`). OpenJPEG runs its box
