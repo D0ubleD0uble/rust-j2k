@@ -204,10 +204,12 @@ pub enum ColourOutput {
     /// 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc); the
     /// output depends on the C library's `powf`, so other LittleCMS versions
     /// or platforms can differ in the last bit. sRGB and greyscale pass
-    /// through. A monochrome profile gives one grey channel, or R, G and B
-    /// in its place when its output is not neutral (absolute colorimetric
-    /// with a tinted white point). No conversion changes a channel's bit
-    /// depth. Non-colour channels (opacity, say) are untouched. When the
+    /// through. A monochrome profile gives one grey channel. A monochrome
+    /// profile whose output is not neutral (absolute colorimetric with a
+    /// tinted white point) gives three sRGB channels in its place, as
+    /// OpenJPEG does, so the channel count can't be predicted from the
+    /// header. No conversion changes a channel's bit depth. Non-colour
+    /// channels (opacity, say) are untouched. When the
     /// samples are converted, [`Jp2Metadata::colour`] says what they now
     /// are: [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for one
     /// grey channel, with no ICC profile. [`read_header`] and the default

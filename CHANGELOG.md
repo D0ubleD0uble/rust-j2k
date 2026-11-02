@@ -74,7 +74,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or another enumerated space). After a conversion `Jp2Metadata::colour`
   says sRGB, or greyscale for a monochrome profile whose output is neutral.
   A monochrome profile whose output is not neutral (absolute colorimetric
-  with a tinted white point) gives three channels, R, G and B. Other colour
+  with a tinted white point) gives three sRGB channels, as OpenJPEG does, so
+  the channel count can't be predicted from the header. Other colour
   spaces, other profiles, and colour channels that differ in depth, sign or
   sub-sampling are `Unsupported`; `Srgb` with `raw_channels` is
   `InvalidOptions`.

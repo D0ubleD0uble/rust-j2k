@@ -662,9 +662,15 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
         ),
         (
             "tag table past the end",
-            rgb_profile(&|p| p[128..132].copy_from_slice(&1000u32.to_be_bytes())),
+            rgb_profile(&|p| p[128..132].copy_from_slice(&100u32.to_be_bytes())),
             is_file_format,
-            "declares 1000 tags, past its end",
+            "declares 100 tags, past its end",
+        ),
+        (
+            "more tags than LittleCMS reads",
+            rgb_profile(&|p| p[128..132].copy_from_slice(&101u32.to_be_bytes())),
+            is_file_format,
+            "declares 101 tags, more than 100",
         ),
         (
             "LUT-based",
@@ -685,7 +691,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
                 p[at..at + 4].copy_from_slice(&5000u32.to_be_bytes())
             }),
             is_file_format,
-            "`rXYZ` tag (20 bytes at 5000) runs past",
+            "`rXYZ` tag has a zero offset or size, or ends past the profile's declared size",
         ),
         (
             "XYZ tag of another type",
