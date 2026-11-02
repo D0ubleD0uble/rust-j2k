@@ -25,11 +25,14 @@
 //!   as OpenJPEG applies them, through a port of LittleCMS 2.14
 //!   ([`super::lcms`]): a monochrome input profile (`kTRC`) and a
 //!   three-component matrix/TRC input profile (`rXYZ`, `gXYZ`, `bXYZ`,
-//!   `rTRC`, `gTRC`, `bTRC`), at every rendering intent from 0 to 3. The
-//!   output matches `opj_decompress -force-rgb` sample for sample. A
-//!   monochrome profile gives one grey channel when its output is neutral,
-//!   as it usually is; if its sRGB output is not neutral, it gives R, G and B
-//!   in place of the grey channel.
+//!   `rTRC`, `gTRC`, `bTRC`), at every rendering intent from 0 to 3. On
+//!   three colour channels (RGB profile), on one grey channel, or on one
+//!   grey channel plus opacity, the output matches
+//!   `opj_decompress -force-rgb` sample for sample. A monochrome profile
+//!   gives one grey channel when its output is neutral, as it usually is; if
+//!   its sRGB output is not neutral, it gives R, G and B in place of the grey
+//!   channel. A monochrome profile on more than two channels is refused:
+//!   OpenJPEG passes the planes to a grey transform as if they were RGB.
 //!
 //! sYCC or an RGB profile on one or two colour channels passes through, as
 //! OpenJPEG leaves them, and so do one or two channels with no colour space
@@ -300,6 +303,15 @@ fn plan_icc(
                     colours.len()
                 )));
             };
+            // OpenJPEG feeds three or more channels to a grey transform as if
+            // they were RGB, so there is no real conversion to match.
+            if outputs.len() > 2 {
+                return Err(Error::Unsupported(format!(
+                    "sRGB output from a monochrome ICC profile on {} channels; only one \
+                     channel, or one plus opacity, is converted",
+                    outputs.len()
+                )));
+            }
             check_icc_format(outputs[channel], &[8], "monochrome")?;
             let input = InputProfile {
                 intent,

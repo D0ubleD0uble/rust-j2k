@@ -10,6 +10,7 @@ use super::SIGNATURE;
 use super::srgb::{ChromaLayout, replicate, sycc_sample};
 use crate::{
     ColourOutput, ColourSpace, DecodeOptions, Error, Image, decode, decode_with, read_header,
+    read_header_with,
 };
 
 /// Three 8-bit components at full resolution, 24x16.
@@ -572,6 +573,66 @@ fn a_non_colour_channel_is_untouched() {
         "opacity untouched"
     );
     assert_ne!(image.components[0], coded.components[0], "grey converted");
+}
+
+/// A grey ICC profile on more than two channels is refused, whichever channel
+/// is the colour one: OpenJPEG would feed the planes to a grey transform as
+/// if they were RGB. The refusal is the same from `read_header_with`. One
+/// colour channel, or one plus opacity, still converts.
+#[test]
+fn a_grey_profile_on_more_than_two_channels_is_unsupported() {
+    // cdef: channel 0 is colour 1, channels 1 and 2 are opacity.
+    let cdef = bx(
+        b"cdef",
+        &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0],
+    );
+    let from_palette = palette(&[7, 7, 7], 256, |j, _| u32::from(j));
+    let three_columns = [
+        from_palette[0].clone(),
+        from_palette[1].clone(),
+        cdef.clone(),
+    ];
+    let two_columns = {
+        let boxes = palette(&[7, 7], 256, |j, _| u32::from(j));
+        let cdef = bx(b"cdef", &[0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0]);
+        [boxes[0].clone(), boxes[1].clone(), cdef]
+    };
+    // The colour channel last, after two opacity channels.
+    let colour_last = bx(
+        b"cdef",
+        &[0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1],
+    );
+    let refused = [
+        file(THREE, &icc_colr(&grey_profile()), &[colour_last]),
+        file(THREE, &icc_colr(&grey_profile()), &[cdef]),
+        file(ONE, &icc_colr(&grey_profile()), &three_columns),
+    ];
+    for bytes in &refused {
+        expect_err(
+            decode_srgb(bytes),
+            is_unsupported,
+            "monochrome ICC profile on 3 channels",
+        );
+        match read_header_with(bytes, &srgb()) {
+            Err(Error::Unsupported(what)) => {
+                assert!(
+                    what.contains("monochrome ICC profile on 3 channels"),
+                    "{what}"
+                )
+            }
+            other => panic!("read_header_with: expected Unsupported, got {other:?}"),
+        }
+    }
+    // The same shapes at one and two channels convert.
+    for (bytes, channels) in [
+        (file(ONE, &icc_colr(&grey_profile()), &[]), 1),
+        (file(ONE, &icc_colr(&grey_profile()), &two_columns), 2),
+    ] {
+        let image = decode_srgb(&bytes).expect("sRGB");
+        let header = read_header_with(&bytes, &srgb()).expect("header");
+        assert_eq!(image.components.len(), channels);
+        assert_eq!(header.components.len(), channels);
+    }
 }
 
 /// Every input the sRGB step refuses, and the error it gets. `AsCoded`
