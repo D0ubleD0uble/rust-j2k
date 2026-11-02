@@ -84,6 +84,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
   sub-sampled chroma, whatever colour space it declares; `Srgb` refuses it
   instead.
+- `DecodeOptions::with_raw_channels` and `DecodeOptions::with_colour` set
+  those options like `with_resolution_reduction` does; the fields stay public.
 - `ColourSpace`, `ColourOutput`, `Resolution`, `Res`, `Ratio` and `UuidBox` are
   `#[non_exhaustive]`, so later variants and fields (a JPX colour method, an
   output ICC profile) are not breaking changes. Match them with a `_` arm, and

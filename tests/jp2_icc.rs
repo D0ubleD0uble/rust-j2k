@@ -32,9 +32,7 @@ fn read(path: &str) -> Vec<u8> {
 }
 
 fn srgb() -> DecodeOptions {
-    let mut options = DecodeOptions::default();
-    options.colour = ColourOutput::Srgb;
-    options
+    DecodeOptions::default().with_colour(ColourOutput::Srgb)
 }
 
 /// The hash the oracle script records: samples in raster order, each a

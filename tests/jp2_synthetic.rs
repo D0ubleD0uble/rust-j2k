@@ -180,8 +180,7 @@ fn every_cdef_fixture_labels_its_channels_from_the_box() {
 /// `raw_channels` gives exactly the decode of the bare codestream.
 #[test]
 fn raw_channels_returns_the_codestream_as_coded() {
-    let mut options = DecodeOptions::default();
-    options.raw_channels = true;
+    let options = DecodeOptions::default().with_raw_channels(true);
     for path in fixtures() {
         let name = path.display();
         let bytes = std::fs::read(&path).unwrap();

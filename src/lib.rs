@@ -287,9 +287,44 @@ pub struct DecodeOptions {
 impl DecodeOptions {
     /// These options with
     /// [`resolution_reduction`](Self::resolution_reduction) set to `levels`.
+    ///
+    /// ```
+    /// use rust_j2k::DecodeOptions;
+    ///
+    /// let options = DecodeOptions::default().with_resolution_reduction(1);
+    /// assert_eq!(options.resolution_reduction, 1);
+    /// ```
     #[must_use]
     pub fn with_resolution_reduction(mut self, levels: u8) -> Self {
         self.resolution_reduction = levels;
+        self
+    }
+
+    /// These options with [`raw_channels`](Self::raw_channels) set to `raw`.
+    ///
+    /// ```
+    /// use rust_j2k::DecodeOptions;
+    ///
+    /// let options = DecodeOptions::default().with_raw_channels(true);
+    /// assert!(options.raw_channels);
+    /// ```
+    #[must_use]
+    pub fn with_raw_channels(mut self, raw: bool) -> Self {
+        self.raw_channels = raw;
+        self
+    }
+
+    /// These options with [`colour`](Self::colour) set to `colour`.
+    ///
+    /// ```
+    /// use rust_j2k::{ColourOutput, DecodeOptions};
+    ///
+    /// let options = DecodeOptions::default().with_colour(ColourOutput::Srgb);
+    /// assert_eq!(options.colour, ColourOutput::Srgb);
+    /// ```
+    #[must_use]
+    pub fn with_colour(mut self, colour: ColourOutput) -> Self {
+        self.colour = colour;
         self
     }
 }

@@ -23,9 +23,7 @@ fn conformance(n: u32) -> Vec<u8> {
 }
 
 fn srgb() -> DecodeOptions {
-    let mut options = DecodeOptions::default();
-    options.colour = ColourOutput::Srgb;
-    options
+    DecodeOptions::default().with_colour(ColourOutput::Srgb)
 }
 
 /// Each sYCC fixture converts to within 1 of `opj_decompress` (OpenJPEG's
@@ -91,10 +89,30 @@ fn the_default_is_as_coded() {
 /// output is refused.
 #[test]
 fn raw_channels_with_srgb_is_invalid_options() {
-    let mut options = srgb();
-    options.raw_channels = true;
+    let options = srgb().with_raw_channels(true);
     assert!(matches!(
         decode_with(&conformance(1), options),
         Err(Error::InvalidOptions(_))
     ));
+}
+
+/// The builders set their own field and leave the others alone, and they
+/// chain.
+#[test]
+fn the_builders_set_one_field_each() {
+    let base = DecodeOptions::default();
+    let raw = base.with_raw_channels(true);
+    assert!(raw.raw_channels);
+    assert_eq!(
+        (raw.colour, raw.resolution_reduction),
+        (ColourOutput::AsCoded, 0)
+    );
+    assert!(!raw.with_raw_channels(false).raw_channels);
+
+    let both = base
+        .with_colour(ColourOutput::Srgb)
+        .with_resolution_reduction(2);
+    assert_eq!(both.colour, ColourOutput::Srgb);
+    assert_eq!(both.resolution_reduction, 2);
+    assert!(!both.raw_channels);
 }
