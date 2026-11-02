@@ -322,8 +322,9 @@ pub struct DecodeOptions {
     ///    reads its last entry, a negative one its first). Without a palette
     ///    the raw channels are used as they are.
     /// 2. Put the channels in colour order with
-    ///    [`Jp2Metadata::channel_definitions`], by the rule documented there.
-    ///    Without a `cdef` the order from step 1 stands.
+    ///    [`Jp2Metadata::channel_definitions`], by the rule documented there
+    ///    (each swap looks up where the entry's channel has moved to, not its
+    ///    original position). Without a `cdef` the order from step 1 stands.
     ///
     /// The result is the channels of the default decode. No effect on a raw
     /// codestream. Default `false`.

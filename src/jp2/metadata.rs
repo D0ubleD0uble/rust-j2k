@@ -30,11 +30,23 @@ pub struct Jp2Metadata {
     /// counts are the file's components after the palette is expanded, in the
     /// order [`channel_mapping`](Self::channel_mapping) gives (the components
     /// as coded for a file without a palette). The decode puts them in colour
-    /// order like this: take the channels in that order; for each entry in
-    /// file order whose type is [`ChannelType::Colour`] and whose association
-    /// is [`Association::Colour`]`(n)`, swap its channel with the channel now
-    /// at position `n - 1`. Every other entry moves nothing. A channel's label
-    /// on [`channels`](Self::channels) is that of the last entry naming it.
+    /// order like this. Start with the channels in that order, so channel `c`
+    /// is at position `c`. For each entry in file order whose type is
+    /// [`ChannelType::Colour`] and whose association is
+    /// [`Association::Colour`]`(n)`, find where its channel is now (earlier
+    /// swaps may have moved it) and swap it with whatever is at position
+    /// `n - 1`. Every other entry moves nothing. The channel a swap moves out
+    /// of the way keeps its place in later lookups: it is found where it went.
+    ///
+    /// For example, three colour entries `(channel 0, colour 3)`,
+    /// `(channel 1, colour 2)`, `(channel 2, colour 1)` give the order
+    /// `[2, 1, 0]`: the first swap gives `[2, 1, 0]`, the second finds channel
+    /// 1 already at position 1, and the third finds channel 2 already at
+    /// position 0. Reading `Cn` as a position instead would swap 0 and 2, then
+    /// 1 with itself, then 2 and 0 back, and give `[0, 1, 2]`, which is wrong.
+    ///
+    /// A channel's label on [`channels`](Self::channels) is that of the last
+    /// entry naming it.
     ///
     /// [`channels`](Self::channels) itself is only relabelled when the `cdef`
     /// applies: under `raw_channels` every channel keeps its default label.
@@ -150,7 +162,7 @@ impl Ratio {
     /// let bytes = jp2_with_resolution(&codestream)?;
     /// let jp2 = read_header(&bytes)?.jp2.expect("a JP2 file");
     /// let capture = jp2.resolution.capture.expect("a capture resolution");
-    /// // 10000 / 254 points per metre is one per 25.4 mm: 393.7... per millimetre.
+    /// // 10000 / 254 is about 39.37 grid points per metre.
     /// let per_metre = capture.horizontal.grid_points_per_metre().unwrap();
     /// assert!((per_metre - 10000.0 / 254.0).abs() < 1e-9);
     /// # Ok(())

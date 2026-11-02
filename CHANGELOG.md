@@ -140,6 +140,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Breaking: `DecodeOptions` and `ColourOutput` are no longer `Copy`, so a
   later option can carry data (an output ICC profile). Both stay `Clone`;
   clone them where you reuse one.
+- A code-block size past the limit in a main-header COD is now refused when
+  the header is read, even when a COC overrides it, as OpenJPEG does. `p0_02.j2k`
+  with byte 55 set to 56 decoded in 0.3.0 and is now `Error::Marker`. Likewise a
+  resolution reduction past the main header's decomposition levels is checked
+  before the tile data, so a truncated file with an impossible reduction
+  reports the reduction rather than the truncation.
 - Breaking: `decode_with` takes `&DecodeOptions` instead of `DecodeOptions`,
   so one set of options serves many calls: `decode_with(bytes, &options)`.
 - A JP2 file used to be `Unsupported`; it now decodes, or fails with
