@@ -242,6 +242,27 @@ JP2 files with an RGB ICC profile: a sub-sampled fourth channel makes
 OpenJPEG skip the conversion, a sub-sampled fifth does not. The expected
 planes are hashes of `opj_decompress` output on those JP2 files.
 
+Six more use the same planes at 8x8 for three components, coded with
+`opj_compress -i in.raw -o <name>.j2k -F 8,8,3,8,u@<sampling> -n 2 -mct 0`
+(OpenJPEG 2.5.0) and checked lossless against the planes:
+
+| File | Bytes | Sampling |
+|------|-------|----------|
+| `channels/second_2x1.j2k` | 317 | `1x1:2x1:1x1` |
+| `channels/second_2x2.j2k` | 301 | `1x1:2x2:1x1` |
+| `channels/chroma_2x1_2x2.j2k` | 275 | `1x1:2x1:2x2` |
+| `channels/luma_2x2_chroma_2x1.j2k` | 246 | `2x2:2x1:2x1` |
+| `channels/chroma_1x2.j2k` | 288 | `1x1:1x2:1x2` |
+| `channels/all_2x2.j2k` | 217 | `2x2:2x2:2x2` |
+
+All but `chroma_1x2` have the shape `opj_decompress` guesses sYCC from, and
+none is 4:2:0 or 4:2:2, so OpenJPEG cannot convert them as sYCC and writes
+them as coded. `src/jp2/srgb_tests.rs` wraps them declared greyscale and
+requires `ColourOutput::Srgb` to pass them through. `tests/jp2_icc.rs`
+wraps them with the `gamma22` profile from `icc/profiles.json`: all but
+`all_2x2` fail OpenJPEG's AFL test and pass through, `all_2x2` converts. The
+expected planes are hashes of `opj_decompress` output on those JP2 files.
+
 ### Budget fixture
 
 `budget/flat_1024_lossless.j2k` (328 bytes) is a flat 1024x1024 8-bit

@@ -869,3 +869,58 @@ fn the_afl_test_covers_only_rgb_profiles_and_four_channels() {
         other => panic!("expected the YCbCr refusal, got {other:?}"),
     }
 }
+
+/// `opj_decompress` guesses sYCC for three components whose second is
+/// sub-sampled in x and whose first has equal x and y sampling
+/// (`opj_decompress.c:1620-1623`), but `color_sycc_to_rgb` converts only
+/// 4:2:0 and 4:2:2 (`color.c:403-436`). Any other layout of that shape stays
+/// as coded ("CAN NOT CONVERT"), and the AFL test then applies under an RGB
+/// profile: differing channels pass through, matching ones convert. Luma
+/// 1x1 with chroma 1x2 is outside the guess and passes through the same way.
+///
+/// The files are `tests/fixtures/channels/` under the `gamma22` profile; the
+/// hashes are the planes of `opj_decompress -i <file>.jp2 -o out.pgx`
+/// (OpenJPEG 2.5.0, LittleCMS 2.14).
+#[test]
+fn the_afl_test_applies_where_openjpeg_cannot_convert_as_sycc() {
+    let gamma22 = named_profile("gamma22");
+    let chroma_2x1 = "793eaf33d2401874f1374fcb9c202a779b9bb7f6c7161e7282d471fd11f65837";
+    let chroma_2x2 = "dbeefc0ddd114a693ba6780d1dabbf6b896fa54f8635c73781d5e1f11e49fd3c";
+    let third_2x1 = "8b2d6903d906f83dd922d6155e51a8e1bdff5fd3a849624e7250b21fadcec780";
+    let luma = SUB_FIRST_TWO[0];
+    let passes: [(&str, [&str; 3]); 5] = [
+        ("second_2x1", [luma, chroma_2x1, SUB_THIRD_FULL]),
+        ("second_2x2", [luma, chroma_2x2, SUB_THIRD_FULL]),
+        ("chroma_2x1_2x2", [luma, chroma_2x1, SUB_THIRD_2X2]),
+        (
+            "luma_2x2_chroma_2x1",
+            [
+                "3758e20c68c36e6f709428bd5035be88cbdef35b271b390b87af88f9d2ca8fec",
+                chroma_2x1,
+                third_2x1,
+            ],
+        ),
+        (
+            "chroma_1x2",
+            [
+                luma,
+                "2ed6fe30a075b5df385a56fa3bdf5d86004780afa7e61bb3c5d1ef664302bd8a",
+                "0091f5217fa8e0132918d579655b396a92fdd3bc5ffa0422e7f00192c32bea48",
+            ],
+        ),
+    ];
+    for (name, want) in passes {
+        let bytes = wrap_with(&read(&format!("channels/{name}.j2k")), &gamma22, &[]);
+        check_afl(name, &bytes, &want, false);
+    }
+    check_afl(
+        "all_2x2",
+        &wrap_with(&read("channels/all_2x2.j2k"), &gamma22, &[]),
+        &[
+            "8387e5c6cf63767228725b93753e558326450bf7bf261a1a475be7d247174fcb",
+            "453b53b1beaad85b3d7d8f1bae1c43a59109921a490b794b0280c7de07c22477",
+            "86c6b642679e2be8a9ce5370e1fe49e60b120aa9291d5b182174b4ef69f15ead",
+        ],
+        true,
+    );
+}

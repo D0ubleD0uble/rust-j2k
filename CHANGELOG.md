@@ -49,7 +49,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   components whose fourth differs in format from the colours passes through
   as coded, as OpenJPEG does. A file declared greyscale on three components
   is still refused, with or without a `cdef`, where `opj_decompress` would
-  read it as sYCC (sub-sampled chroma).
+  convert it as sYCC (4:2:0 or 4:2:2).
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
   coded, without the palette or channel definitions. The index plane is then
   labelled `ChannelType::Unspecified`, and only the boxes' layout is checked.
@@ -114,8 +114,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   YCbCr, as OpenJPEG leaves them; the metadata then keeps the profile. So
   does an RGB profile when any of the first four channels (all of them, if
   fewer) differs from the first in depth, sign or sub-sampling, an opacity
-  channel included, as OpenJPEG's check before it builds the transform
-  skips the conversion. These, and a profile on one or two channels, pass
+  channel included, since OpenJPEG then skips the conversion. These, and a profile on one or two channels, pass
   through before any check on the samples, as in OpenJPEG.
   Display, output and colour space profiles convert as input ones do. After a conversion `Jp2Metadata::colour`
   says sRGB, or greyscale for a monochrome profile whose output is neutral.
@@ -125,10 +124,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spaces, a YCbCr profile, a profile LittleCMS would apply through a lookup
   table or the Lab connection space, a monochrome profile on more than two
   channels, and colour channels that differ in depth, sign or sub-sampling
-  (under an RGB profile, only where OpenJPEG guesses sYCC, below) are
-  `Unsupported`; `Srgb` with `raw_channels` is `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
-  sub-sampled chroma, whatever colour space it declares; `Srgb` refuses it
-  instead.
+  (under an RGB profile, only 4:2:0 and 4:2:2, below) are `Unsupported`;
+  `Srgb` with `raw_channels` is `InvalidOptions`. OpenJPEG converts any
+  three-component 4:2:0 or 4:2:2 file as sYCC, whatever colour space it
+  declares; `Srgb` refuses it instead.
 - `DecodeOptions::with_raw_channels` and `DecodeOptions::with_colour` set
   those options like `with_resolution_reduction` does; the fields stay public.
 - `ColourSpace`, `ColourOutput`, `Resolution`, `Res`, `Ratio` and `UuidBox` are
