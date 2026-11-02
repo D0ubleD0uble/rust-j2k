@@ -35,6 +35,9 @@ here (variant 0x0C | codestream << 4, body one `colr`):
   0-4 (type 3 with the sRGB parameters).
 - `icc_grey_*`: a monochrome profile (`kTRC`, `wtpt`) with the same curve
   kinds, on the 8-bit single-component codestream.
+- `icc_grey_tinted`: the monochrome profile at absolute colorimetric intent
+  with a D65 media white. Its sRGB output has three channels for the one coded
+  channel.
 - `icc_rgb_subsampled`: the RGB profile on the three-component codestream
   sub-sampled 2x2 in all three components. The channels agree, so it converts.
 - `icc_grey_16bit`: the monochrome profile on the 16-bit single-component
@@ -149,6 +152,15 @@ def icc(space, tags):
     return bytes(header) + table + data
 
 
+def icc_grey_tinted(curve):
+    """A monochrome profile at absolute colorimetric intent with a D65 media
+    white, so the sRGB output is not neutral and has three channels."""
+    d65 = (0.9505, 1.0, 1.089)
+    profile = bytearray(icc(b"GRAY", [(b"wtpt", xyz_tag(*d65)), (b"kTRC", curve)]))
+    profile[64:68] = be32(3)
+    return bytes(profile)
+
+
 def icc_rgb(curve):
     return icc(b"RGB ", [
         (b"wtpt", xyz_tag(*D50)),
@@ -218,6 +230,7 @@ def main():
     for name, curve in CURVES.items():
         write(f"icc_rgb_{name}", 0x0C | THREE_8, colr(2, icc_rgb(curve)))
         write(f"icc_grey_{name}", 0x0C | ONE_8, colr(2, icc_grey(curve)))
+    write("icc_grey_tinted", 0x0C | ONE_8, colr(2, icc_grey_tinted(CURVES["gamma"])))
     write("icc_rgb_subsampled", 0x0C | THREE_SUB, colr(2, icc_rgb(CURVES["gamma"])))
     write("icc_grey_16bit", 0x0C | ONE_16, colr(2, icc_grey(CURVES["gamma"])))
     write("icc_rgb_mixed", 0x0C | SYCC_420, colr(2, icc_rgb(CURVES["gamma"])))
