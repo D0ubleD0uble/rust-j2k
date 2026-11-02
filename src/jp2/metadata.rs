@@ -20,18 +20,26 @@ pub struct Jp2Metadata {
     /// file has no palette (or a `pclr` without a `cmap`), or the caller set
     /// [`DecodeOptions::raw_channels`](crate::DecodeOptions::raw_channels).
     pub palette_applied: bool,
-    /// The file's palette, from its `pclr` box, whatever the options: present
-    /// whenever the palette applies, and also when
+    /// The file's palette, from its `pclr` box. Present when the palette
+    /// applies, and also when
     /// [`raw_channels`](crate::DecodeOptions::raw_channels) left it unapplied
     /// (then [`palette_applied`](Self::palette_applied) is `false`). `None`
-    /// without a `pclr`, and for a `pclr` without a `cmap`, which the decoder
-    /// ignores.
+    /// without a `pclr`. `None` too for a `pclr` without a `cmap`: the
+    /// standard requires both or neither, so the file is invalid, and OpenJPEG
+    /// ignores the palette in that case, as this decoder does.
     pub palette: Option<Palette>,
-    /// The file's component mapping, from its `cmap` box, whatever the
-    /// options: one entry per palette column, in the order of the output
-    /// channels of a palettised decode. `None` without a `cmap`. With
-    /// `raw_channels`, a caller can expand the index plane through
-    /// [`palette`](Self::palette) and this mapping.
+    /// The file's component mapping, set whenever [`palette`](Self::palette)
+    /// is. One entry per `cmap` entry, and a `cmap` has one per palette
+    /// column. An entry is [`Direct`](crate::MappingKind::Direct) for a component
+    /// used as coded.
+    ///
+    /// When the palette applies, these are the channels of the decode, in
+    /// order before any `cdef` reordering, and the mapping is the one the
+    /// decoder used: OpenJPEG's correction for a single-component file turns
+    /// every entry into a lookup in its own column, so it can differ from the
+    /// box. Under `raw_channels` it is the box as written, unchecked, and an
+    /// `MTYP` other than 0 or 1 is [`Reserved`](crate::MappingKind::Reserved); expand
+    /// the index planes through [`palette`](Self::palette) with it.
     pub channel_mapping: Option<Vec<ChannelMapping>>,
     /// The capture and default display resolutions from the header's `res `
     /// box, each `None` when the file does not give it.
@@ -90,17 +98,45 @@ impl Ratio {
     /// The resolution in grid points per metre, or `None` when the
     /// denominator is 0.
     ///
-    /// ```no_run
+    /// ```
     /// use rust_j2k::read_header;
     ///
-    /// let bytes = std::fs::read("scan.jp2")?;
+    /// # fn jp2_with_resolution(codestream: &[u8]) -> Result<Vec<u8>, rust_j2k::Error> {
+    /// #     fn boxed(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    /// #         let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
+    /// #         out.extend_from_slice(kind);
+    /// #         out.extend_from_slice(payload);
+    /// #         out
+    /// #     }
+    /// #     let header = read_header(codestream)?;
+    /// #     let mut ihdr = header.height.to_be_bytes().to_vec();
+    /// #     ihdr.extend_from_slice(&header.width.to_be_bytes());
+    /// #     ihdr.extend_from_slice(&(header.components.len() as u16).to_be_bytes());
+    /// #     ihdr.extend_from_slice(&[header.components[0].bit_depth - 1, 7, 0, 0]);
+    /// #     // Capture resolution 10000 / 254 points per metre, both ways.
+    /// #     let mut resc = Vec::new();
+    /// #     for value in [10000u16, 254, 10000, 254] {
+    /// #         resc.extend_from_slice(&value.to_be_bytes());
+    /// #     }
+    /// #     resc.extend_from_slice(&[0, 0]);
+    /// #     let mut file = boxed(b"jP  ", &[0x0D, 0x0A, 0x87, 0x0A]);
+    /// #     file.extend(boxed(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    /// #     let colr = boxed(b"colr", &[1, 0, 0, 0, 0, 0, 17]);
+    /// #     let res = boxed(b"res ", &boxed(b"resc", &resc));
+    /// #     file.extend(boxed(b"jp2h", &[boxed(b"ihdr", &ihdr), colr, res].concat()));
+    /// #     file.extend(boxed(b"jp2c", codestream));
+    /// #     Ok(file)
+    /// # }
+    /// # fn main() -> Result<(), rust_j2k::Error> {
+    /// # let codestream = std::fs::read("tests/fixtures/derived_quant_lossy.j2k").unwrap();
+    /// let bytes = jp2_with_resolution(&codestream)?;
     /// let jp2 = read_header(&bytes)?.jp2.expect("a JP2 file");
-    /// if let Some(capture) = jp2.resolution.capture {
-    ///     // 10000 / 254 points per metre is one per inch.
-    ///     let per_metre = capture.horizontal.grid_points_per_metre();
-    ///     println!("{per_metre:?} grid points per metre");
-    /// }
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// let capture = jp2.resolution.capture.expect("a capture resolution");
+    /// // 10000 / 254 points per metre is one per 25.4 mm: 393.7... per millimetre.
+    /// let per_metre = capture.horizontal.grid_points_per_metre().unwrap();
+    /// assert!((per_metre - 10000.0 / 254.0).abs() < 1e-9);
+    /// # Ok(())
+    /// # }
     /// ```
     #[must_use]
     pub fn grid_points_per_metre(self) -> Option<f64> {

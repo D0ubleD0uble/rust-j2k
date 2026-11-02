@@ -175,16 +175,19 @@ impl Palette {
     }
 
     /// Each column's depth and sign (`NPC` of them), in column order.
+    #[must_use]
     pub fn columns(&self) -> &[PaletteColumn] {
         &self.columns
     }
 
     /// The number of entries, `NE`.
+    #[must_use]
     pub fn entry_count(&self) -> usize {
         usize::from(self.entries)
     }
 
     /// Entry `index`: one value per column, or `None` past the last entry.
+    #[must_use]
     pub fn entry(&self, index: usize) -> Option<&[i32]> {
         let width = self.columns.len();
         self.values.get(index * width..(index + 1) * width)
@@ -225,6 +228,7 @@ pub struct ChannelMapping {
 
 /// How a mapped channel is made from its component (`MTYP`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MappingKind {
     /// `MTYP` 0: the component's samples as coded.
     Direct,

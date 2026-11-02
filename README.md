@@ -99,7 +99,7 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 | Raw codestream (Annex A) and JP2 files (Annex I), detected from the first bytes | JPX, JPM and MJ2 files that do not claim `jp2 ` compatibility |
 | JP2 palettes (`pclr`, `cmap`), channel definitions (`cdef`), colour specification (`colr`), `res `, `xml ` and `uuid` boxes, reported on `Image::jp2` | — |
 | Opt-in sRGB output (`DecodeOptions::colour`): sYCC and restricted ICC profiles | Other colour spaces and profiles under that option |
-| Integer components, signed or unsigned, up to 32 bits, with sub-sampling | Depths past the `i32` container (33–38 bits) |
+| Integer components, unsigned up to 31 bits or signed up to 32 bits, with sub-sampling | Unsigned 32-bit components, and depths past the `i32` container (33–38 bits) |
 | Both color transforms: reversible (RCT) and irreversible (ICT) | Part 2 extensions (array MCT, …) |
 | Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | HTJ2K (Part 15) block coding |
 | Multiple tiles and tile-parts | — |
