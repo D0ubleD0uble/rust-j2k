@@ -1116,9 +1116,10 @@ fn check_sample_budget(siz: &Siz) -> Result<()> {
 /// Refuse a component whose sample range does not fit the `i32` container
 /// (unsigned 32 bits, or more than 32), from SIZ alone. It is a header fault,
 /// so it is found before any tile is read. OpenJPEG 2.5.0 is stricter: it
-/// refuses every depth over 31 bits at SIZ, signed 32 included, where this
-/// decoder accepts signed 32 on purpose. `image::assemble` repeats the check
-/// for headers built by hand.
+/// refuses every depth over 31 bits at SIZ, signed 32 included. This decoder
+/// accepts signed 32 on purpose, since it fits `i32` (owner-approved
+/// deviation, see `docs/correctness.md`); unsigned 32 and anything above 32
+/// are refused. `image::assemble` repeats the check for headers built by hand.
 fn check_sample_container(siz: &Siz) -> Result<()> {
     for (index, comp) in siz.components.iter().enumerate() {
         let fits = if comp.signed {

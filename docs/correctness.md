@@ -201,6 +201,21 @@ under OpenJPEG and rejects here. No corpus or conformance file trips any of
 these today. If one ever does, relax that check to match the oracle — the
 protective argument loses to a demonstrated real file.
 
+### Signed 32-bit components
+
+**Looser than OpenJPEG, approved by the owner (2026-11-01).** OpenJPEG 2.5.0
+refuses every precision over 31 bits when it reads SIZ (`j2k.c`, around lines
+2289 and 6618). This decoder accepts a signed 32-bit component, because
+ISO/IEC 15444-1 allows `Ssiz` up to 38 bits and a signed 32-bit sample fits
+the `i32` container exactly. It refuses what the container cannot hold, as
+`Unsupported`, from SIZ and before any tile is read: an unsigned component of
+32 bits or more, and any component over 32 bits. A palette column follows the
+same rule. No oracle decodes such a file, so `tests/signed_32bit.rs` derives the
+expected samples by hand: a signed 8-bit lossless codestream with only `Ssiz`
+patched to 32 bits must decode to the same samples. That shows the depth is
+accepted and the sign, level shift and clamp are right for small values; it
+does not exercise coefficients near 2^31.
+
 ### sRGB output
 
 `ColourOutput::Srgb` converts sYCC and the two restricted ICC profile forms
