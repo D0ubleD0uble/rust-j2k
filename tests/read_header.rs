@@ -11,7 +11,10 @@
 
 use std::path::{Path, PathBuf};
 
-use rust_j2k::{ColourSpace, Error, Header, Image, Jp2Metadata, Ratio, read_header};
+use rust_j2k::{
+    ColourSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, decode_with, read_header,
+    read_header_with,
+};
 
 /// Files where `decode` fails on tile data while `read_header` succeeds, and
 /// why. `rgb16_ecwsdk.jp2`'s codestream has no EOC: `decode` fails on its
@@ -52,14 +55,28 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// What `read_header` and `decode` must agree on: the image area, each
-/// channel's depth, sign and sub-sampling, and the JP2 metadata.
-type Shape<'a> = (u32, u32, Vec<(u8, bool, u8, u8)>, Option<&'a Jp2Metadata>);
+/// channel's depth, sign, sub-sampling and size, and the JP2 metadata.
+type Shape<'a> = (
+    u32,
+    u32,
+    Vec<(u8, bool, u8, u8, u32, u32)>,
+    Option<&'a Jp2Metadata>,
+);
 
 fn shape_of_image(image: &Image) -> Shape<'_> {
     let channels = image
         .components
         .iter()
-        .map(|c| (c.bit_depth, c.signed, c.x_sampling, c.y_sampling))
+        .map(|c| {
+            (
+                c.bit_depth,
+                c.signed,
+                c.x_sampling,
+                c.y_sampling,
+                c.width,
+                c.height,
+            )
+        })
         .collect();
     (image.width, image.height, channels, image.jp2.as_ref())
 }
@@ -68,7 +85,16 @@ fn shape_of_header(header: &Header) -> Shape<'_> {
     let channels = header
         .components
         .iter()
-        .map(|c| (c.bit_depth, c.signed, c.x_sampling, c.y_sampling))
+        .map(|c| {
+            (
+                c.bit_depth,
+                c.signed,
+                c.x_sampling,
+                c.y_sampling,
+                c.width,
+                c.height,
+            )
+        })
         .collect();
     (header.width, header.height, channels, header.jp2.as_ref())
 }
@@ -80,6 +106,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     files(&root, &mut all);
     all.sort();
     let mut seen = [0usize; 4];
+    let mut compared = [0usize; 2];
     let mut differing = Vec::new();
     let mut names = Vec::new();
     for path in &all {
@@ -99,23 +126,49 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
         seen[3] += 1;
         names.push(name.clone());
         let bytes = std::fs::read(path).unwrap();
-        let header = read_header(&bytes);
-        let decoded = rust_j2k::decode(&bytes);
-        match (&header, &decoded) {
-            (Ok(header), Ok(image)) => {
-                assert_eq!(shape_of_header(header), shape_of_image(image), "{name}");
-            }
-            (Err(h), Err(d)) => assert_eq!(h, d, "{name}: the same error"),
-            (Ok(_), Err(Error::Codestream(_))) => {
-                assert!(
-                    TILE_FAULTS.iter().any(|(listed, _)| *listed == name),
-                    "{name}: decode failed on tile data but read_header succeeded: {decoded:?}"
+        // At the default options, and at one level of resolution reduction:
+        // each decoded component is as large as its header entry says.
+        for reduction in [0, 1] {
+            let options = DecodeOptions::default().with_resolution_reduction(reduction);
+            let header = read_header_with(&bytes, &options);
+            let decoded = decode_with(&bytes, &options);
+            if reduction == 0 {
+                assert_eq!(
+                    header,
+                    read_header(&bytes),
+                    "{name}: read_header is the default"
                 );
-                differing.push(name.clone());
             }
-            _ => panic!("{name}: read_header {header:?} but decode {decoded:?}"),
+            match (&header, &decoded) {
+                (Ok(header), Ok(image)) => {
+                    assert_eq!(
+                        shape_of_header(header),
+                        shape_of_image(image),
+                        "{name} at reduction {reduction}"
+                    );
+                    compared[reduction as usize] += 1;
+                }
+                (Err(h), Err(d)) => assert_eq!(h, d, "{name}: the same error"),
+                (Ok(_), Err(Error::Codestream(_))) => {
+                    assert!(
+                        TILE_FAULTS.iter().any(|(listed, _)| *listed == name),
+                        "{name}: decode failed on tile data but read_header succeeded: {decoded:?}"
+                    );
+                    if reduction == 0 {
+                        differing.push(name.clone());
+                    }
+                }
+                // A reduction that consumes a whole wavelet pyramid is found
+                // by decoding, not in the header.
+                (Ok(_), Err(Error::InvalidOptions(_))) if reduction > 0 => {}
+                _ => panic!("{name}: read_header {header:?} but decode {decoded:?}"),
+            }
         }
     }
+    assert!(
+        compared[0] > 100 && compared[1] > 50,
+        "{compared:?} files compared"
+    );
     assert_eq!(seen[0], 9, "the nine Part 4 JP2 files");
     assert_eq!(seen[1], 9, "the nine jp2_real files");
     assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
@@ -255,5 +308,35 @@ fn byte_with_xmp_has_two_uuid_boxes_and_no_top_level_xml() {
     assert_eq!(
         jp2.uuid.iter().map(|u| u.payload.len()).collect::<Vec<_>>(),
         [348, 3578]
+    );
+}
+
+/// A component's width is `ceil(x1 / dx) - ceil(x0 / dx)`, so it needs the
+/// image origin: with x0 = 1, x1 = 4 and dx = 2 it is 1 sample wide, where
+/// `ceil(width / dx)` with width = 3 would say 2 (the #181 review case).
+#[test]
+fn a_component_s_size_follows_the_image_origin() {
+    let mut bytes =
+        std::fs::read(fixtures().join("multicomponent_subsampled_lossless.j2k")).unwrap();
+    // SIZ: Xsiz at 8, Ysiz 12, XOsiz 16, YOsiz 20, XTsiz 24, YTsiz 28.
+    assert_eq!((bytes[43], bytes[44]), (2, 2), "sub-sampled 2x2");
+    for (at, value) in [(8, 4u32), (12, 4), (16, 1), (20, 1), (24, 4), (28, 4)] {
+        bytes[at..at + 4].copy_from_slice(&value.to_be_bytes());
+    }
+    let header = read_header(&bytes).unwrap();
+    assert_eq!((header.width, header.height), (3, 3));
+    for info in &header.components {
+        assert_eq!((info.x_sampling, info.y_sampling), (2, 2));
+        assert_eq!((info.width, info.height), (1, 1), "ceil(4/2) - ceil(1/2)");
+        assert_ne!(info.width, header.width.div_ceil(2), "not ceil(width / dx)");
+    }
+    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    let header = read_header_with(&bytes, &reduced).unwrap();
+    // ceil(4/2) - ceil(1/2) = 1 on the image; the component, halved again,
+    // has ceil(2/2) - ceil(1/2) = 0 columns left.
+    assert_eq!((header.width, header.height), (1, 1));
+    assert_eq!(
+        (header.components[0].width, header.components[0].height),
+        (0, 0)
     );
 }

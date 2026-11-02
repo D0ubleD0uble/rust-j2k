@@ -288,15 +288,16 @@ impl ChannelPlans {
         raw_channels: bool,
     ) -> Result<Self> {
         let palette = palette::plan(header, siz, reduction, raw_channels)?;
-        let count = palette.output_channels(siz).len();
+        let count = palette.output_channels(siz, reduction).len();
         let channels = channels::plan(header, count, raw_channels)?;
         Ok(ChannelPlans { palette, channels })
     }
 
     /// The output channels' formats, in output order: the palette's output,
     /// then placed by the channel definitions.
-    pub(crate) fn outputs(&self, siz: &Siz) -> Result<Vec<ComponentInfo>> {
-        self.channels.apply(self.palette.output_channels(siz))
+    pub(crate) fn outputs(&self, siz: &Siz, reduction: u8) -> Result<Vec<ComponentInfo>> {
+        self.channels
+            .apply(self.palette.output_channels(siz, reduction))
     }
 
     /// Build the output channels from the decoded components.
@@ -312,7 +313,7 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
     let (xml, uuid) = passthrough(file);
     let mut metadata = Jp2Metadata {
         colour: file.colour.clone(),
-        channels: colour_channels(plans.outputs(siz)?.len())?,
+        channels: colour_channels(plans.outputs(siz, 0)?.len())?,
         palette_applied: false,
         resolution: resolution::read(&file.header),
         xml,
@@ -374,7 +375,7 @@ pub(crate) fn plan_srgb(
     srgb::plan(
         &metadata.colour,
         &metadata.channels,
-        &plans.outputs(siz)?,
+        &plans.outputs(siz, reduction)?,
         siz,
         reduction,
     )

@@ -700,6 +700,35 @@ impl SrgbPlan {
         }
     }
 
+    /// Describe the converted output channels' formats and sizes, from the
+    /// formats before the conversion: sYCC chroma grows to the luma grid, and
+    /// a monochrome profile whose output is not neutral gains two channels.
+    pub(crate) fn describe_outputs(&self, outputs: &mut Vec<ComponentInfo>) {
+        match self {
+            SrgbPlan::PassThrough | SrgbPlan::IccRgb { .. } => {}
+            SrgbPlan::Sycc { channels, .. } => {
+                let luma = outputs[channels[0]];
+                for &at in channels {
+                    let own = outputs[at];
+                    outputs[at] = ComponentInfo {
+                        bit_depth: own.bit_depth,
+                        signed: own.signed,
+                        ..luma
+                    };
+                }
+            }
+            SrgbPlan::IccGrey {
+                channel, neutral, ..
+            } => {
+                if !neutral {
+                    let grey = outputs[*channel];
+                    outputs.insert(*channel + 1, grey);
+                    outputs.insert(*channel + 1, grey);
+                }
+            }
+        }
+    }
+
     /// Convert the decoded output channels.
     pub(crate) fn apply(&self, mut components: Vec<Component>) -> Result<Vec<Component>> {
         match self {

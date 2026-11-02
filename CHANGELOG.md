@@ -49,6 +49,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the sample budget once the resolution is reduced), and its `width` and
   `height` follow the resolution reduction. `read_header` is the same at the
   default options.
+- `ComponentInfo::width` and `ComponentInfo::height` give each output
+  channel's size in samples, equal to the decoded `Component`'s under the same
+  options: they follow the image origin (`ceil(x1/dx) - ceil(x0/dx)`, not
+  `ceil(width/dx)`), the resolution reduction, the palette and channel
+  definitions, and the sRGB conversion (sYCC chroma on the luma grid).
 - `Association` has three cases: `WholeImage` (`Asoc` 0), `Colour(n)` (1 to
   65534) and `None` (65535). Every `Asoc` value maps to one of them.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about

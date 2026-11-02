@@ -1,7 +1,7 @@
 //! What [`read_header`](crate::read_header) returns: an image's shape and
 //! metadata, read without decoding any tile data.
 
-use crate::codestream::markers::SizComponent;
+use crate::codestream::markers::Siz;
 use crate::jp2::Jp2Metadata;
 
 /// An image's header: what [`decode`](crate::decode) would return, without
@@ -26,7 +26,7 @@ pub struct Header {
     pub jp2: Option<Jp2Metadata>,
 }
 
-/// One output channel's sample format, as on the
+/// One output channel's sample format and size, as on the
 /// [`Component`](crate::Component) that [`decode`](crate::decode) would
 /// return.
 ///
@@ -43,15 +43,58 @@ pub struct ComponentInfo {
     pub x_sampling: u8,
     /// Vertical sub-sampling factor on the reference grid; `1` is none.
     pub y_sampling: u8,
+    /// The channel's width in samples, as
+    /// [`Component::width`](crate::Component::width): `ceil(x1 / dx) -
+    /// ceil(x0 / dx)` for the image area `x0..x1` and the sub-sampling `dx`,
+    /// then halved (rounding up) once per level of resolution reduction. It
+    /// is not `ceil(width / dx)`: that is off by one when the image area
+    /// starts at an odd offset.
+    pub width: u32,
+    /// The channel's height in samples, as
+    /// [`Component::height`](crate::Component::height); see
+    /// [`width`](Self::width).
+    pub height: u32,
 }
 
-impl From<&SizComponent> for ComponentInfo {
-    fn from(component: &SizComponent) -> Self {
+impl ComponentInfo {
+    /// A channel of this format and sub-sampling, sized from `siz` at a
+    /// resolution reduction. A zero sub-sampling factor, which the parser
+    /// rejects, gives an empty channel.
+    pub(crate) fn on_grid(
+        siz: &Siz,
+        bit_depth: u8,
+        signed: bool,
+        x_sampling: u8,
+        y_sampling: u8,
+        reduction: u8,
+    ) -> Self {
+        let (width, height) = siz
+            .sampled_extent_at(x_sampling, y_sampling, reduction)
+            .unwrap_or((0, 0));
         ComponentInfo {
-            bit_depth: component.bit_depth,
-            signed: component.signed,
-            x_sampling: component.x_sampling,
-            y_sampling: component.y_sampling,
+            bit_depth,
+            signed,
+            x_sampling,
+            y_sampling,
+            width,
+            height,
         }
+    }
+
+    /// The codestream's components as coded, sized at a resolution reduction.
+    pub(crate) fn of_siz(siz: &Siz, reduction: u8) -> Vec<Self> {
+        siz.components
+            .iter()
+            .map(|c| {
+                Self::on_grid(
+                    siz,
+                    c.bit_depth,
+                    c.signed,
+                    c.x_sampling,
+                    c.y_sampling,
+                    reduction,
+                )
+            })
+            .collect()
     }
 }

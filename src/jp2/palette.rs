@@ -464,19 +464,23 @@ impl PalettePlan {
     /// The format of each output channel, from the plan and SIZ alone: the
     /// palette's channels when it applies, otherwise the codestream's
     /// components as coded.
-    pub(crate) fn output_channels(&self, siz: &Siz) -> Vec<ComponentInfo> {
+    pub(crate) fn output_channels(&self, siz: &Siz, reduction: u8) -> Vec<ComponentInfo> {
         match self {
             PalettePlan::Apply { channels, .. } => channels
                 .iter()
-                .map(|c| ComponentInfo {
-                    bit_depth: c.bit_depth,
-                    signed: c.signed,
-                    x_sampling: c.x_sampling,
-                    y_sampling: c.y_sampling,
+                .map(|c| {
+                    ComponentInfo::on_grid(
+                        siz,
+                        c.bit_depth,
+                        c.signed,
+                        c.x_sampling,
+                        c.y_sampling,
+                        reduction,
+                    )
                 })
                 .collect(),
             PalettePlan::None | PalettePlan::Skipped { .. } => {
-                siz.components.iter().map(ComponentInfo::from).collect()
+                ComponentInfo::of_siz(siz, reduction)
             }
         }
     }

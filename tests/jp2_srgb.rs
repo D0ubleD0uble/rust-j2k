@@ -10,7 +10,9 @@ mod support;
 
 use std::path::PathBuf;
 
-use rust_j2k::{ColourOutput, ColourSpace, DecodeOptions, Error, decode, decode_with};
+use rust_j2k::{
+    ColourOutput, ColourSpace, DecodeOptions, Error, decode, decode_with, read_header_with,
+};
 use support::{Expected, Tolerance, compare};
 
 fn fixtures() -> PathBuf {
@@ -113,4 +115,32 @@ fn the_builders_set_one_field_each() {
     assert_eq!(both.colour, ColourOutput::Srgb);
     assert_eq!(both.resolution_reduction, 2);
     assert!(!both.raw_channels);
+}
+
+/// The header describes the converted output: sYCC chroma is already on the
+/// luma grid, at default options and reduced.
+#[test]
+fn the_header_describes_the_converted_channels() {
+    for name in ["jp2_sycc_420_odd", "jp2_sycc_422_odd"] {
+        let bytes = std::fs::read(fixtures().join(format!("{name}.jp2"))).unwrap();
+        for reduction in [0, 1] {
+            let options = srgb().with_resolution_reduction(reduction);
+            let header = read_header_with(&bytes, &options).unwrap();
+            let image = decode_with(&bytes, &options).unwrap();
+            assert_eq!(header.components.len(), image.components.len());
+            for (info, component) in header.components.iter().zip(&image.components) {
+                assert_eq!(
+                    (info.x_sampling, info.y_sampling, info.width, info.height),
+                    (
+                        component.x_sampling,
+                        component.y_sampling,
+                        component.width,
+                        component.height
+                    ),
+                    "{name} at reduction {reduction}"
+                );
+            }
+            assert_eq!(header.jp2, image.jp2);
+        }
+    }
 }

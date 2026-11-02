@@ -57,13 +57,17 @@ fuzz_target!(|input: &[u8]| {
                         info.bit_depth,
                         info.signed,
                         info.x_sampling,
-                        info.y_sampling
+                        info.y_sampling,
+                        info.width,
+                        info.height
                     ),
                     (
                         component.bit_depth,
                         component.signed,
                         component.x_sampling,
-                        component.y_sampling
+                        component.y_sampling,
+                        component.width,
+                        component.height
                     )
                 );
             }

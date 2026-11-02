@@ -211,10 +211,14 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
         let prefix = read_jp2_prefix(bytes, options)?;
         let siz = &prefix.parsed.header.siz;
         let (width, height) = siz.image_extent_at(reduction);
+        let mut components = prefix.plans.outputs(siz, reduction)?;
+        if let Some(srgb) = &prefix.srgb {
+            srgb.describe_outputs(&mut components);
+        }
         return Ok(Header {
             width,
             height,
-            components: prefix.plans.outputs(siz)?,
+            components,
             jp2: Some(prefix.metadata),
         });
     }
@@ -225,7 +229,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     Ok(Header {
         width,
         height,
-        components: siz.components.iter().map(ComponentInfo::from).collect(),
+        components: ComponentInfo::of_siz(siz, reduction),
         jp2: None,
     })
 }
