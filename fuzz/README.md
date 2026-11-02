@@ -85,7 +85,10 @@ seeds `header` from the committed fixtures.
 
 `header` drives the header-only entry point, `read_header_with`, and checks it
 against `decode_with` on the same input, under five fixed option sets
-(defaults, `raw_channels`, reduction 1, sRGB, reduction 1 with sRGB): a
+(defaults, `raw_channels`, reduction 1, sRGB, reduction 1 with sRGB). The
+header is read under all five; a header that reads is compared with a full
+decode under one of them, picked by a hash of the whole input, since a decode
+costs far more than the header: a
 `read_header_with` error must be `decode_with`'s error too, and a successful
 decode must match the header field for field.
 A decode costs far more than the header, so once the header reads, inputs

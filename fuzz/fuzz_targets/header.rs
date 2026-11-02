@@ -5,7 +5,9 @@
 //! an allocation sized from an unchecked field, or a hang. Every input is run
 //! under a fixed list of option sets (the defaults, `raw_channels`, a
 //! resolution reduction of 1, sRGB output, and reduction 1 with sRGB), so a
-//! plain `.j2k` or `.jp2` seed is used as it is. For each set it checks that
+//! plain `.j2k` or `.jp2` seed is used as it is. The header is read under all
+//! five; the full decode that follows a header that reads runs under one,
+//! picked by a hash of the input, to keep the target fast. For each set it checks that
 //! `read_header_with` and `decode_with` agree, since `decode_with` runs the
 //! same header checks before it reads any tile data:
 //!
@@ -37,14 +39,30 @@ fuzz_target!(|data: &[u8]| {
         srgb(),
         srgb().with_resolution_reduction(1),
     ];
-    for options in &option_sets {
-        check(data, options);
+    // A full decode costs far more than a header read. A header that fails
+    // is compared with a decode that stops just as early, so every set gets
+    // that check; a header that reads is compared with a full decode under
+    // one set only, picked by a hash of the whole input so that seeds (which
+    // share their first and last bytes) still spread over all five.
+    let picked = fnv1a(data) as usize % option_sets.len();
+    for (i, options) in option_sets.iter().enumerate() {
+        check(data, options, i == picked);
     }
 });
 
-fn check(data: &[u8], options: &rust_j2k::DecodeOptions) {
+/// FNV-1a over `bytes`.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+fn check(data: &[u8], options: &rust_j2k::DecodeOptions, decode_when_read: bool) {
     let header = rust_j2k::read_header_with(data, options);
     if let Ok(header) = &header {
+        if !decode_when_read {
+            return;
+        }
         let samples = (u64::from(header.width) * u64::from(header.height))
             .saturating_mul(header.components.len() as u64);
         if data.len() > MAX_DECODED_INPUT || samples > MAX_DECODED_SAMPLES {
