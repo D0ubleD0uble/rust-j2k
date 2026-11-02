@@ -57,40 +57,53 @@ const MAX_ENTRIES: u16 = 1024;
 
 /// One palette column's sample format, from its `Bi` byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Column {
-    /// Bit depth, `(Bi & 0x7F) + 1`: 1..=128.
-    depth: u8,
+#[non_exhaustive]
+pub struct PaletteColumn {
+    /// Bit depth, `(Bi & 0x7F) + 1`: 1 to 128.
+    pub bit_depth: u8,
     /// Whether the column's values are signed (`Bi & 0x80`).
-    signed: bool,
+    pub signed: bool,
 }
 
-impl Column {
+impl PaletteColumn {
     /// Bytes per stored entry as OpenJPEG reads the table: the depth rounded
     /// up to whole bytes, but at most 4. A column deeper than 32 bits is
     /// therefore read at a 4-byte stride; such a column is never applied (see
-    /// [`Column::fits_i32`]), so this only decides how long the table must be.
+    /// [`PaletteColumn::fits_i32`]), so this only decides how long the table must be.
     fn entry_bytes(self) -> usize {
-        usize::from(self.depth).div_ceil(8).min(4)
+        usize::from(self.bit_depth).div_ceil(8).min(4)
     }
 
     /// Whether the column's range fits the `i32` sample container (signed up
     /// to 32 bits, unsigned up to 31), as the codestream's components must.
     fn fits_i32(self) -> bool {
         if self.signed {
-            self.depth <= 32
+            self.bit_depth <= 32
         } else {
-            self.depth <= 31
+            self.bit_depth <= 31
         }
     }
 }
 
-/// A parsed `pclr` box.
+/// A JP2 file's palette, from its `pclr` box: a table of `NE` entries (1 to
+/// 1024), each a row of one value per column (1 to 255 columns).
+///
+/// Entry `j`, column `i` is `entry(j)[i]`. A value is the entry's stored
+/// bytes (the column's depth rounded up to whole bytes, at most 4) read as a
+/// big-endian unsigned number and cast to `i32`, as OpenJPEG does: a signed
+/// column's values are not sign-extended. A lookup clamps its index to
+/// `0..entry_count()`, as the decoder does.
+///
+/// The table is at most 1024 entries by 255 columns of `i32`, about 1 MiB, and
+/// is bounded by the bytes the `pclr` box holds. It is `#[non_exhaustive]` and
+/// built only by the decoder.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Palette {
+#[non_exhaustive]
+pub struct Palette {
     /// `NE`, 1..=1024.
     entries: u16,
     /// One per column (`NPC`, 1..=255).
-    columns: Vec<Column>,
+    columns: Vec<PaletteColumn>,
     /// `NE * NPC` values, entry-major: entry `j` column `i` at
     /// `j * NPC + i`.
     values: Vec<i32>,
@@ -98,7 +111,7 @@ pub(crate) struct Palette {
 
 impl Palette {
     /// Parse a `pclr` box: `NE` (2 bytes), `NPC` (1 byte), `NPC` `Bi` bytes,
-    /// then `NE` rows of `NPC` entries (see [`Column::entry_bytes`]).
+    /// then `NE` rows of `NPC` entries (see [`PaletteColumn::entry_bytes`]).
     pub(super) fn parse(payload: &[u8]) -> Result<Self> {
         let &[ne0, ne1, npc, ref rest @ ..] = payload else {
             return Err(Error::FileFormat(format!(
@@ -122,10 +135,10 @@ impl Palette {
                 "the `pclr` box declares {npc} columns but ends inside their `Bi` bytes"
             )));
         };
-        let columns: Vec<Column> = bi
+        let columns: Vec<PaletteColumn> = bi
             .iter()
-            .map(|&b| Column {
-                depth: (b & 0x7F) + 1,
+            .map(|&b| PaletteColumn {
+                bit_depth: (b & 0x7F) + 1,
                 signed: b & 0x80 != 0,
             })
             .collect();
@@ -161,9 +174,20 @@ impl Palette {
         })
     }
 
-    /// `NPC`, the number of palette columns.
-    pub(super) fn columns(&self) -> usize {
-        self.columns.len()
+    /// Each column's depth and sign (`NPC` of them), in column order.
+    pub fn columns(&self) -> &[PaletteColumn] {
+        &self.columns
+    }
+
+    /// The number of entries, `NE`.
+    pub fn entry_count(&self) -> usize {
+        usize::from(self.entries)
+    }
+
+    /// Entry `index`: one value per column, or `None` past the last entry.
+    pub fn entry(&self, index: usize) -> Option<&[i32]> {
+        let width = self.columns.len();
+        self.values.get(index * width..(index + 1) * width)
     }
 
     /// The value of entry `index` (clamped to `0..NE`) in `column`.
@@ -179,6 +203,61 @@ impl Palette {
 fn entry_value(bytes: &[u8]) -> i32 {
     let value = bytes.iter().fold(0u32, |acc, &b| (acc << 8) | u32::from(b));
     value as i32
+}
+
+/// One channel of a file's component mapping (`cmap` box): where an output
+/// channel's samples come from.
+///
+/// The decoder's output channels follow these entries in order, with one
+/// exception: for a one-component file whose `cmap` leaves a palette column
+/// unused, OpenJPEG reads the mapping as every channel looking up its own
+/// column, and so does this decoder. Under
+/// [`raw_channels`](crate::DecodeOptions::raw_channels) the entries are
+/// reported as the box has them, unchecked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ChannelMapping {
+    /// `CMP`: the codestream component this channel reads.
+    pub component: u16,
+    /// `MTYP` and `PCOL`: how the component becomes the channel.
+    pub kind: MappingKind,
+}
+
+/// How a mapped channel is made from its component (`MTYP`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappingKind {
+    /// `MTYP` 0: the component's samples as coded.
+    Direct,
+    /// `MTYP` 1: the component's samples are indexes into this palette
+    /// column (`PCOL`).
+    Palette {
+        /// The column to look up, counting from 0.
+        column: u8,
+    },
+    /// An `MTYP` other than 0 and 1, which the standard reserves. Only
+    /// reported under [`raw_channels`](crate::DecodeOptions::raw_channels),
+    /// which does not check the mapping; a normal decode refuses such a file.
+    Reserved {
+        /// The `MTYP` value.
+        mtyp: u8,
+        /// The `PCOL` value.
+        pcol: u8,
+    },
+}
+
+/// `cmap` entries as public data, in order.
+fn public_mapping(entries: &[(u16, u8, u8)]) -> Vec<ChannelMapping> {
+    entries
+        .iter()
+        .map(|&(component, mtyp, pcol)| ChannelMapping {
+            component,
+            kind: match mtyp {
+                0 => MappingKind::Direct,
+                1 => MappingKind::Palette { column: pcol },
+                mtyp => MappingKind::Reserved { mtyp, pcol },
+            },
+        })
+        .collect()
 }
 
 /// Where one output channel's samples come from.
@@ -223,7 +302,11 @@ pub(crate) enum PalettePlan {
     /// have applied. `index_components[k]` is set for each component a
     /// palette channel would have looked up, so it can be labelled as an
     /// index plane rather than a colour.
-    Skipped { index_components: Vec<bool> },
+    Skipped {
+        index_components: Vec<bool>,
+        palette: Palette,
+        mapping: Vec<ChannelMapping>,
+    },
     /// The palette applies: one output channel per palette column.
     Apply {
         palette: Palette,
@@ -277,7 +360,11 @@ pub(crate) fn plan(
                 *slot = true;
             }
         }
-        return Ok(PalettePlan::Skipped { index_components });
+        return Ok(PalettePlan::Skipped {
+            index_components,
+            palette,
+            mapping: public_mapping(&entries),
+        });
     }
     let sources = map_channels(&entries, palette.columns.len(), siz.components.len())?;
     let channels: Vec<PlannedChannel> = sources
@@ -419,7 +506,7 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
     if !column.fits_i32() {
         return Err(Error::Unsupported(format!(
             "palette channel {i} has depth {} ({}), which exceeds the i32 sample container",
-            column.depth,
+            column.bit_depth,
             if column.signed { "signed" } else { "unsigned" }
         )));
     }
@@ -429,7 +516,7 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
         .ok_or_else(|| Error::Inconsistent("`cmap` component past SIZ".into()))?;
     Ok(PlannedChannel {
         source,
-        bit_depth: column.depth,
+        bit_depth: column.bit_depth,
         signed: column.signed,
         x_sampling: component.x_sampling,
         y_sampling: component.y_sampling,
@@ -538,7 +625,37 @@ impl PalettePlan {
     /// a colour until it goes through the palette.
     pub(crate) fn describe(&self, metadata: &mut Jp2Metadata) {
         metadata.palette_applied = matches!(self, PalettePlan::Apply { .. });
-        if let PalettePlan::Skipped { index_components } = self {
+        match self {
+            PalettePlan::None => {}
+            PalettePlan::Apply { palette, channels } => {
+                metadata.palette = Some(palette.clone());
+                metadata.channel_mapping = Some(
+                    channels
+                        .iter()
+                        .map(|c| match c.source {
+                            Source::Direct { component } => ChannelMapping {
+                                component,
+                                kind: MappingKind::Direct,
+                            },
+                            Source::Palette { component, column } => ChannelMapping {
+                                component,
+                                kind: MappingKind::Palette { column },
+                            },
+                        })
+                        .collect(),
+                );
+            }
+            PalettePlan::Skipped {
+                palette, mapping, ..
+            } => {
+                metadata.palette = Some(palette.clone());
+                metadata.channel_mapping = Some(mapping.clone());
+            }
+        }
+        if let PalettePlan::Skipped {
+            index_components, ..
+        } = self
+        {
             for (channel, &index) in metadata.channels.iter_mut().zip(index_components) {
                 if index {
                     *channel = ChannelDefinition {
@@ -573,16 +690,16 @@ mod tests {
         assert_eq!(
             palette.columns,
             [
-                Column {
-                    depth: 8,
+                PaletteColumn {
+                    bit_depth: 8,
                     signed: false
                 },
-                Column {
-                    depth: 12,
+                PaletteColumn {
+                    bit_depth: 12,
                     signed: false
                 },
-                Column {
-                    depth: 1,
+                PaletteColumn {
+                    bit_depth: 1,
                     signed: false
                 },
             ]

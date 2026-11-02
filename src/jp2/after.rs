@@ -175,7 +175,10 @@ impl State {
                 if self.palette.is_some() {
                     return Err(fault("a second `pclr` box".into()));
                 }
-                let columns = palette::Palette::parse(payload).map_err(context)?.columns();
+                let columns = palette::Palette::parse(payload)
+                    .map_err(context)?
+                    .columns()
+                    .len();
                 self.palette = Some(columns);
                 self.mapped = false;
             }

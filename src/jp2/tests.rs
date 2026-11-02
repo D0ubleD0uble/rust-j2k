@@ -182,6 +182,8 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
             colour: ColourSpace::Srgb,
             channels: vec![colour(1), colour(2), colour(3)],
             palette_applied: false,
+            palette: None,
+            channel_mapping: None,
             resolution: Resolution::default(),
             xml: Vec::new(),
             uuid: Vec::new(),

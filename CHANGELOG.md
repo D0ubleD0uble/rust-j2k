@@ -103,6 +103,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `#[non_exhaustive]`, so later variants and fields (a JPX colour method, an
   output ICC profile) are not breaking changes. Match them with a `_` arm, and
   read the structs' fields rather than building them.
+- `Jp2Metadata::palette` and `Jp2Metadata::channel_mapping` give the file's
+  palette table (`Palette`, `PaletteColumn`) and component mapping
+  (`ChannelMapping`, `MappingKind`). They are set whenever a palette and a
+  `cmap` are present, also under `raw_channels`, so a caller can expand the
+  index planes itself. Under `raw_channels` the mapping is the box as written;
+  otherwise it is the mapping the decoder used, which differs from the box only
+  for OpenJPEG's single-component correction.
 - `src/jp2/lcms.rs` is a Rust port of parts of LittleCMS 2.14 (MIT). Its
   notice is at the top of the file and in the README.
 

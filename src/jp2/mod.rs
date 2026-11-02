@@ -67,6 +67,7 @@ pub use metadata::{
     Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata, Ratio, Res, Resolution,
     UuidBox,
 };
+pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 
 use crate::codestream::markers::Siz;
 use crate::{Component, ComponentInfo, Error, Result};
@@ -315,6 +316,8 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
         colour: file.colour.clone(),
         channels: colour_channels(plans.outputs(siz, 0)?.len())?,
         palette_applied: false,
+        palette: None,
+        channel_mapping: None,
         resolution: resolution::read(&file.header),
         xml,
         uuid,

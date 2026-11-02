@@ -20,6 +20,19 @@ pub struct Jp2Metadata {
     /// file has no palette (or a `pclr` without a `cmap`), or the caller set
     /// [`DecodeOptions::raw_channels`](crate::DecodeOptions::raw_channels).
     pub palette_applied: bool,
+    /// The file's palette, from its `pclr` box, whatever the options: present
+    /// whenever the palette applies, and also when
+    /// [`raw_channels`](crate::DecodeOptions::raw_channels) left it unapplied
+    /// (then [`palette_applied`](Self::palette_applied) is `false`). `None`
+    /// without a `pclr`, and for a `pclr` without a `cmap`, which the decoder
+    /// ignores.
+    pub palette: Option<Palette>,
+    /// The file's component mapping, from its `cmap` box, whatever the
+    /// options: one entry per palette column, in the order of the output
+    /// channels of a palettised decode. `None` without a `cmap`. With
+    /// `raw_channels`, a caller can expand the index plane through
+    /// [`palette`](Self::palette) and this mapping.
+    pub channel_mapping: Option<Vec<ChannelMapping>>,
     /// The capture and default display resolutions from the header's `res `
     /// box, each `None` when the file does not give it.
     pub resolution: Resolution,
@@ -30,6 +43,8 @@ pub struct Jp2Metadata {
     /// codestream. Not interpreted.
     pub uuid: Vec<UuidBox>,
 }
+
+use super::palette::{ChannelMapping, Palette};
 
 /// The resolutions a JP2 file's `res ` box gives, in grid points per metre.
 ///
