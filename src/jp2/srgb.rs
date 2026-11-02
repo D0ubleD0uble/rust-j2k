@@ -380,6 +380,13 @@ fn check_grey_budget(
     Ok(())
 }
 
+/// `_validatedVersion` (cmsio0.c): the header version with each BCD digit
+/// capped at 9 and the reserved bytes cleared, as a big-endian word.
+fn validated_version([major, minor, _, _]: [u8; 4]) -> u32 {
+    let minor = (minor & 0xf0).min(0x90) | (minor & 0x0f).min(0x09);
+    u32::from_be_bytes([major.min(9), minor, 0, 0])
+}
+
 /// The depths a profile is applied at: those where OpenJPEG + lcms read the
 /// samples at their own depth (8-bit and 16-bit RGB, 8-bit grey). At other
 /// depths OpenJPEG hands lcms the samples as 8- or 16-bit values and the
@@ -395,6 +402,9 @@ fn check_icc_format(info: ComponentInfo, depths: &[u8], form: &str) -> Result<()
     Ok(())
 }
 
+/// LittleCMS's limit on the tag count (`MAX_TABLE_TAG`).
+const MAX_TAGS: u32 = 100;
+
 /// A restricted ICC profile (ICC.1, as Annex I restricts it): the header
 /// fields that matter and the tag table.
 struct Profile<'a> {
@@ -402,7 +412,11 @@ struct Profile<'a> {
     space: [u8; 4],
     /// The header's rendering intent, 0 to 3.
     intent: u32,
+    /// The raw tag table.
     table: &'a [u8],
+    /// The entries LittleCMS keeps: signature, offset and size. At most
+    /// [`MAX_TAGS`].
+    tags: Vec<([u8; 4], u32, u32)>,
 }
 
 impl<'a> Profile<'a> {
@@ -425,6 +439,19 @@ impl<'a> Profile<'a> {
             out.copy_from_slice(&bytes[at..at + 4]);
             out
         };
+        // The checks of LittleCMS's `_cmsReadHeader` (cmsio0.c): a profile it
+        // refuses to open, OpenJPEG does not convert.
+        if &four(36) != b"acsp" {
+            return Err(malformed("has no `acsp` signature".to_owned()));
+        }
+        let version = validated_version(four(8));
+        if version > 0x0500_0000 {
+            return Err(malformed(format!(
+                "has version {}.{}, above 5.0",
+                version >> 24,
+                (version >> 16) & 0xff
+            )));
+        }
         let class = four(12);
         if &class != b"scnr" {
             return Err(unsupported(format!(
@@ -451,16 +478,43 @@ impl<'a> Profile<'a> {
             return Err(unsupported(format!("with rendering intent {intent}")));
         }
         let count = u32::from_be_bytes(four(128));
+        if count > MAX_TAGS {
+            return Err(malformed(format!(
+                "declares {count} tags, more than {MAX_TAGS}"
+            )));
+        }
         let table = usize::try_from(count)
             .ok()
             .and_then(|n| n.checked_mul(12))
             .and_then(|len| bytes.get(PROFILE_HEADER..PROFILE_HEADER.checked_add(len)?))
             .ok_or_else(|| malformed(format!("declares {count} tags, past its end")))?;
+        // LittleCMS skips an entry with a zero offset or size, or one that
+        // ends past the declared size (capped at the profile's length).
+        let declared = u32::from_be_bytes(four(0));
+        let declared = u32::try_from(bytes.len()).map_or(declared, |len| declared.min(len));
+        let mut tags = Vec::new();
+        for e in table.chunks_exact(12) {
+            let word = |at: usize| u32::from_be_bytes([e[at], e[at + 1], e[at + 2], e[at + 3]]);
+            let (offset, size) = (word(4), word(8));
+            if offset == 0 || size == 0 || offset.checked_add(size).is_none_or(|end| end > declared)
+            {
+                continue;
+            }
+            let signature = [e[0], e[1], e[2], e[3]];
+            if tags.iter().any(|&(s, _, _)| s == signature) {
+                return Err(malformed(format!(
+                    "has two `{}` tags",
+                    String::from_utf8_lossy(&signature)
+                )));
+            }
+            tags.push((signature, offset, size));
+        }
         let profile = Profile {
             bytes,
             space,
             intent,
             table,
+            tags,
         };
         for lut in [
             b"A2B0", b"A2B1", b"A2B2", b"D2B0", b"D2B1", b"D2B2", b"D2B3",
@@ -475,21 +529,27 @@ impl<'a> Profile<'a> {
         Ok(profile)
     }
 
-    /// The first tag table entry for `signature`: its offset and size.
+    /// The tag table entry LittleCMS keeps for `signature`: its offset and
+    /// size.
     fn entry(&self, signature: &[u8; 4]) -> Option<(u32, u32)> {
-        self.table.chunks_exact(12).find_map(|e| {
-            (&e[..4] == signature).then(|| {
-                let word = |at: usize| u32::from_be_bytes([e[at], e[at + 1], e[at + 2], e[at + 3]]);
-                (word(4), word(8))
-            })
-        })
+        self.tags
+            .iter()
+            .find(|(s, _, _)| s == signature)
+            .map(|&(_, offset, size)| (offset, size))
     }
 
     /// The bytes of tag `signature`, which must be present and inside the
     /// profile.
     fn tag(&self, signature: &[u8; 4]) -> Result<&'a [u8]> {
         let name = String::from_utf8_lossy(signature);
+        let skipped = self.table.chunks_exact(12).any(|e| &e[..4] == signature);
         let (offset, size) = self.entry(signature).ok_or_else(|| {
+            if skipped {
+                return Error::FileFormat(format!(
+                    "the ICC profile's `{name}` tag has a zero offset or size, or ends past \
+                     the profile's declared size"
+                ));
+            }
             Error::Unsupported(format!(
                 "sRGB output through an ICC profile without a `{name}` tag; only the \
                  monochrome and three-component matrix/TRC input profiles of Annex I are \

@@ -64,14 +64,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to
   full resolution first), and a restricted ICC profile (monochrome or
   three-component matrix/TRC) applied at its rendering intent, with the
-  same output as OpenJPEG with LittleCMS, sample for sample. sRGB and
-  greyscale pass through, and so do sYCC or an RGB profile on one or two
-  channels, and one or two channels with no colour space to convert from (a
-  raw codestream, or a file with no `colr` or another enumerated space). After a
-  conversion `Jp2Metadata::colour` says sRGB, or greyscale for a monochrome
-  profile whose output is neutral. Other colour spaces, other profiles, and colour channels that
-  differ in depth, sign or sub-sampling are `Unsupported`; `Srgb` with
-  `raw_channels` is `InvalidOptions`.
+  same output as OpenJPEG with LittleCMS, sample for sample. The reference
+  is OpenJPEG 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc);
+  the output depends on the C library's `powf`, so other LittleCMS versions
+  or platforms can differ in the last bit. A profile LittleCMS will not open
+  is a `FileFormat` error. sRGB and greyscale pass through, and so do sYCC
+  or an RGB profile on one or two channels, and one or two channels with no
+  colour space to convert from (a raw codestream, or a file with no `colr`
+  or another enumerated space). After a conversion `Jp2Metadata::colour`
+  says sRGB, or greyscale for a monochrome profile whose output is neutral.
+  A monochrome profile whose output is not neutral (absolute colorimetric
+  with a tinted white point) gives three channels, R, G and B. Other colour
+  spaces, other profiles, and colour channels that differ in depth, sign or
+  sub-sampling are `Unsupported`; `Srgb` with `raw_channels` is
+  `InvalidOptions`.
 
 ### Fixed
 

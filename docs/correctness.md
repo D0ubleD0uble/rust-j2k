@@ -253,8 +253,17 @@ inverse sRGB matrix and curves), the optimisation it picks for that pipeline
 (the 8-bit matrix-shaper in 1.14 fixed point, prelinearisation curves with a
 33-point table, or resampling into a 33-point table, with the white fix-up;
 for 16-bit RGB on a profile of gamma below 1.6, no optimisation), and its
-16-bit interpolation, step for step at lcms's precision. The output matches
-`opj_decompress -force-rgb` sample for sample (`tests/jp2_icc.rs`):
+16-bit interpolation, step for step at lcms's precision. It also applies
+the checks lcms makes when it opens a profile (`_cmsReadHeader`): the `acsp`
+signature, a version of at most 5.0, at most 100 tags, no two tags with the
+same signature. Like lcms, it skips a tag entry with a zero offset or size,
+or one that ends past the size the header declares (capped at the profile's
+length), so a tag it needs is then missing. A profile lcms will not open is
+a `FileFormat` error. The output matches `opj_decompress -force-rgb` sample
+for sample (`tests/jp2_icc.rs`). The reference is OpenJPEG 2.5.0 linked
+against LittleCMS 2.14 on x86-64 Linux (glibc). The output depends on the C
+library's `powf`, so other LittleCMS versions or platforms can differ in the
+last bit. The cases:
 
 - files 5, 7 and 8 at rendering intents 0 to 3, and at intent 3 with the
   media white point set to D65, (1.2, 1.1, 1.0) and (0.9, 0.95, 0.7): 21
@@ -263,7 +272,13 @@ for 16-bit RGB on a profile of gamma below 1.6, no optimisation), and its
   cases (degenerate, descending and noisy curves, every parametric type,
   extreme matrices and white points, nonzero black points, both sides of
   the gamma 1.6 threshold) and the 24 malformed profiles of the PR #184
-  review. Where lcms refuses a profile, the decode is a typed error.
+  review;
+- 15 RGB profiles at 8 and 16 bits on either side of each header check
+  above (a bad signature; versions 5.0, 5.1, 4.F and FF; 100 and 101 tags;
+  duplicate `rTRC` and `rXYZ`, and a duplicate lcms skips; declared sizes of
+  0, 140 and 0xFFFFFFFF, and ones that cut off `wtpt` or an `A2B0` table).
+
+Where lcms refuses a profile, the decode is a typed error.
 
 During development the port also matched lcms 2.14 itself on every 8-bit
 RGB input (2^24) and a million random 16-bit pixels for each of these

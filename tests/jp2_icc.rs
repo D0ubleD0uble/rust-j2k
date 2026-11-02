@@ -90,7 +90,7 @@ fn check_planes(image: &Image, want: &[String], depth: u8, what: &str) {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Variants {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     provenance: serde_json::Value,
     variants: Vec<Variant>,
 }
@@ -228,7 +228,7 @@ fn the_white_point_variants_differ_from_intent_3() {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Profiles {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     provenance: serde_json::Value,
     codestreams: std::collections::BTreeMap<String, CodestreamSource>,
     cases: Vec<ProfileCase>,
@@ -238,7 +238,7 @@ struct Profiles {
 #[serde(deny_unknown_fields)]
 struct CodestreamSource {
     file: String,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     command: String,
 }
 
@@ -332,6 +332,11 @@ fn icc_profiles_match_openjpeg_or_are_refused() {
                     matches!(e, Error::Unsupported(_) | Error::FileFormat(_)),
                     "{what}: {e:?}"
                 );
+                // A profile LittleCMS will not open (`_cmsReadHeader`) is
+                // malformed.
+                if case.name.starts_with("hdr_") {
+                    assert!(matches!(e, Error::FileFormat(_)), "{what}: {e:?}");
+                }
                 refused += 1;
             }
             ("unconverted", Ok(_)) => {
@@ -340,9 +345,10 @@ fn icc_profiles_match_openjpeg_or_are_refused() {
             (other, _) => panic!("{what}: unknown outcome {other}"),
         }
     }
-    // 24 malformed and 39 edge-case RGB profiles at 8 and 16 bits, 10 grey.
-    assert_eq!(profiles.cases.len(), 2 * (24 + 39) + 10);
-    assert_eq!(refused, 2 * (13 + REFUSED_BY_US.len()));
+    // 24 malformed, 39 edge-case and 15 header RGB profiles at 8 and 16 bits,
+    // 10 grey. LittleCMS refuses 13 of the malformed and 8 of the header ones.
+    assert_eq!(profiles.cases.len(), 2 * (24 + 39 + 15) + 10);
+    assert_eq!(refused, 2 * (13 + 8 + REFUSED_BY_US.len()));
     assert_eq!(converted, profiles.cases.len() - refused);
 }
 

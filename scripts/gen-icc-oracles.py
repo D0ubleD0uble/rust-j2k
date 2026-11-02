@@ -20,11 +20,11 @@ Two snapshot files:
   lossless codestreams this script makes with `opj_compress` and writes to
   `tests/fixtures/icc/`: 256x256 RGB at 8 bits (every R and G level), 64x64
   RGB at 16 bits (random), and 64x64 grey at 8 bits (every level), each
-  holding black and white. The profiles are edge
-  cases (degenerate and descending curves, every parametric type, extreme
-  matrices and white points, black point compensation, the gamma 1.6
-  threshold of LittleCMS's 16-bit shortcut) and a set of malformed ones. For
-  each, OpenJPEG either converts (the hashes are recorded) or leaves the
+  holding black and white. The profiles are edge cases (degenerate and
+  descending curves, every parametric type, extreme matrices and white
+  points, black point compensation, the gamma 1.6 threshold of LittleCMS's
+  16-bit shortcut), a set of malformed ones, and cases on either side of
+  LittleCMS's header checks (`_cmsReadHeader`). For each, OpenJPEG either converts (the hashes are recorded) or leaves the
   image unconverted (LittleCMS refused the profile), which the decoder must
   answer with a typed error.
 
@@ -319,6 +319,42 @@ def edge_rgb() -> dict[str, bytes]:
     }
 
 
+def with_size(icc: bytes, size: int) -> bytes:
+    """`icc` with the header's profile size set to `size`."""
+    return struct.pack(">I", size) + icc[4:]
+
+
+def header() -> dict[str, bytes]:
+    """The checks of LittleCMS's `_cmsReadHeader` (cmsio0.c): the `acsp`
+    signature, the version, the tag count, entries it skips (zero offset or
+    size, or past the header's declared size) and duplicate signatures."""
+    base = rgb_tags(rc=curv([563]), m=WIDE)
+    filler = [(b"z%03d" % i, b"\0" * 4) for i in range(100 - len(base))]
+    plain = profile(base)
+    wtpt_last = profile(rgb_tags(rc=curv([563]), m=WIDE, white=(0.9, 0.95, 0.7)), intent=3)
+    lut_last = profile(base + [(b"A2B0", b"mft2" + b"\0" * 40)])
+    zero_dup = bytearray(profile(base + [(b"rTRC", curv([256]))]))
+    # The second rTRC entry is the eighth: give it a zero offset.
+    zero_dup[132 + 7 * 12 + 4:132 + 7 * 12 + 8] = bytes(4)
+    return {
+        "hdr_bad_magic": plain[:36] + b"acsP" + plain[40:],
+        "hdr_version_5_0": profile(base, version=bytes([5, 0, 0xFF, 0xFF])),
+        "hdr_version_5_1": profile(base, version=bytes([5, 0x10, 0, 0])),
+        "hdr_version_4_ff": profile(base, version=bytes([4, 0xFF, 0, 0])),
+        "hdr_version_ff": profile(base, version=bytes([0xFF, 0, 0, 0])),
+        "hdr_tags_100": profile(base + filler),
+        "hdr_tags_101": profile(base + filler + [(b"zzzz", b"\0" * 4)]),
+        "hdr_dup_rtrc": profile(base + [(b"rTRC", curv([256]))]),
+        "hdr_dup_rxyz": profile(base + [(b"rXYZ", xyz(*WIDE[1]))]),
+        "hdr_dup_skipped": bytes(zero_dup),
+        "hdr_size_0": with_size(plain, 0),
+        "hdr_size_140": with_size(plain, 140),
+        "hdr_size_huge": with_size(plain, 0xFFFFFFFF),
+        "hdr_size_drops_wtpt": with_size(wtpt_last, len(wtpt_last) - 20),
+        "hdr_size_drops_lut": with_size(lut_last, len(lut_last) - 48),
+    }
+
+
 def edge_grey() -> dict[str, bytes]:
     ramp17 = [min(65535, int(65535 * (i / 16) ** 2.2)) for i in range(17)]
     return {
@@ -421,7 +457,8 @@ def wrap(cs: dict, icc: bytes) -> bytes:
 
 def synthetic() -> None:
     codestreams = make_codestreams()
-    groups = [("rgb8", {**malformed(), **edge_rgb()}), ("rgb16", {**malformed(), **edge_rgb()}),
+    groups = [("rgb8", {**malformed(), **edge_rgb(), **header()}),
+              ("rgb16", {**malformed(), **edge_rgb(), **header()}),
               ("grey8", edge_grey())]
     cases = []
     for key, profiles in groups:
