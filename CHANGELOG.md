@@ -49,6 +49,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the sample budget once the resolution is reduced), and its `width` and
   `height` follow the resolution reduction. `read_header` is the same at the
   default options.
+- `Association` has three cases: `WholeImage` (`Asoc` 0), `Colour(n)` (1 to
+  65534) and `None` (65535). Every `Asoc` value maps to one of them.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
   the samples (`None` for a raw codestream), with `ColourSpace`,
   `ChannelDefinition`, `ChannelType`, and `Association`. The colour space

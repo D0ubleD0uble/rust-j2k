@@ -181,6 +181,4 @@ pub enum Association {
     Colour(u16),
     /// No association (`Asoc` 65535).
     None,
-    /// An `Asoc` value this decoder does not interpret, reported as is.
-    Other(u16),
 }

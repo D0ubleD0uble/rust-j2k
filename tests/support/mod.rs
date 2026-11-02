@@ -115,7 +115,6 @@ impl Jp2Snapshot {
             Association::WholeImage => "whole".to_string(),
             Association::Colour(n) => n.to_string(),
             Association::None => "none".to_string(),
-            Association::Other(n) => format!("other({n})"),
         };
         let res = |r: Option<Res>| {
             r.map(|r| {
