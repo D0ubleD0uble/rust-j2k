@@ -198,17 +198,27 @@ pub enum ColourOutput {
     AsCoded,
     /// sRGB. sYCC is converted to RGB, with sub-sampled chroma (2x1 or 2x2)
     /// replicated to full resolution first, and a restricted ICC profile (a
-    /// monochrome or a three-component matrix/TRC input profile) is applied;
-    /// sRGB and greyscale pass through. A monochrome profile gives one grey
-    /// channel, and no conversion changes a channel's bit depth.
-    /// Non-colour channels (opacity, say) are untouched. When the samples
-    /// are converted, [`Jp2Metadata::colour`] says what they now are:
-    /// [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for a monochrome
-    /// profile, with no ICC profile. [`read_header`] and the default
+    /// monochrome or a three-component matrix/TRC input profile) is applied
+    /// at its rendering intent, as OpenJPEG applies it with LittleCMS: the
+    /// samples match `opj_decompress -force-rgb`. The reference is OpenJPEG
+    /// 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc); the
+    /// output depends on the C library's `powf`, so other LittleCMS versions
+    /// or platforms can differ in the last bit. sRGB and greyscale pass
+    /// through. A monochrome profile gives one grey channel. A monochrome
+    /// profile whose output is not neutral (absolute colorimetric with a
+    /// tinted white point) gives three sRGB channels in its place, as
+    /// OpenJPEG does, so the channel count can't be predicted from the
+    /// header. No conversion changes a channel's bit depth. Non-colour
+    /// channels (opacity, say) are untouched. When the
+    /// samples are converted, [`Jp2Metadata::colour`] says what they now
+    /// are: [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for one
+    /// grey channel, with no ICC profile. [`read_header`] and the default
     /// [`ColourOutput::AsCoded`] report the colour space the file declares.
-    /// One or two channels with no colour space to convert from (a raw
-    /// codestream, a file with no `colr`, or another enumerated colour
-    /// space) are read as grey, or grey and opacity, and pass through.
+    /// sYCC or an RGB profile on one or two colour channels passes through,
+    /// as OpenJPEG leaves it, and so do one or two channels with no colour
+    /// space to convert from (a raw codestream, a file with no `colr`, or
+    /// another enumerated colour space), read as grey, or grey and opacity;
+    /// their metadata stays as declared.
     ///
     /// Anything else is [`Error::Unsupported`]: three or more channels in
     /// another colour space or with no colour specification (a raw
@@ -336,9 +346,7 @@ fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>
             let plan = jp2::plan_srgb(&metadata, &plans, siz, options.resolution_reduction)?;
             // A converted image is sRGB (or grey) and carries no profile, as
             // OpenJPEG reports it.
-            if let Some(colour) = plan.converted_colour() {
-                metadata.colour = colour;
-            }
+            plan.describe(&mut metadata);
             Some(plan)
         }
     };

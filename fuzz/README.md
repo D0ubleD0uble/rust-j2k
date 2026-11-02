@@ -34,6 +34,8 @@ fuzz/
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
   fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream, also decoded as sRGB
   fuzz_targets/header.rs        # rust_j2k::read_header(&[u8]), checked against decode
+  fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColourOutput::Srgb
+  icc.dict                      # ICC tag and type signatures for icc_srgb
 ```
 
 `decode` must mutate its way through a byte-perfect main header before anything
@@ -88,6 +90,12 @@ with a successful decode field by field. Seed it with the
 small synthetic codestreams and JP2 files, and give it the JP2 box
 dictionary.
 
+`icc_srgb` pins a small codestream (RGB at 8 or 16 bits, or grey, by the
+first input byte) and its boxes, and the rest of the input is the ICC profile
+in the `colr` box, decoded with `ColourOutput::Srgb`. Every execution reaches
+the profile parser, and an accepted profile builds and runs the LittleCMS
+port. Seed it with the profiles in `tests/fixtures/icc/profiles.json`.
+
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
 `tile_body`): mutation almost never synthesizes a two-byte marker code, and
@@ -126,6 +134,11 @@ mkdir -p fuzz/corpus/header
 cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 fuzz/corpus/header/
 cargo +nightly fuzz run header -- -dict=fuzz/jp2.dict -max_total_time=300
 
+# The ICC target, seeded with the profiles of the ICC oracle cases (the
+# first byte picks the codestream: 0 RGB 8-bit, 1 RGB 16-bit, 2 grey).
+python3 scripts/gen-icc-oracles.py --fuzz-seeds
+cargo +nightly fuzz run icc_srgb -- -dict=fuzz/icc.dict -max_total_time=300
+
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
 cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
@@ -138,6 +151,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-01 | `jp2_boxes` | `gen-jp2-fuzz-seeds.py` (46 seeds), `jp2.dict` | 61 s, 785 605 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `jp2_boxes` with the `Srgb` decode | `gen-jp2-fuzz-seeds.py` (72 seeds), `jp2.dict` | 61 s, 86 856 runs (1 423 exec/s), under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
+| 2026-11-01 | `icc_srgb` | `gen-icc-oracles.py --fuzz-seeds` (136 seeds), `icc.dict` | 61 s, 11 137 runs, under `nice` | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

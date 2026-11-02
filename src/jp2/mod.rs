@@ -49,6 +49,7 @@ mod boxes;
 mod channels;
 mod colour;
 mod header;
+mod lcms;
 mod metadata;
 mod palette;
 mod resolution;

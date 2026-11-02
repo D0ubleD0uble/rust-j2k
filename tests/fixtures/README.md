@@ -208,6 +208,23 @@ source codestream and the oracle command.
 
 They are ours, built over the Apache-2.0 / synthetic codestreams above.
 
+### ICC to sRGB oracles
+
+`scripts/gen-icc-oracles.py` records what `opj_decompress -force-rgb`
+(OpenJPEG 2.5.0 with LittleCMS 2.14; `-p 8S` for 8-bit input) gives for
+ICC-tagged files, as one SHA-256 per output plane (the samples in raster
+order, each a 4-byte big-endian signed integer). `tests/jp2_icc.rs` rebuilds
+each file and requires the same hashes from `ColourOutput::Srgb`.
+
+| Snapshot | Files | Cases |
+| -------- | ----- | ----- |
+| `conformance/jp2/icc_variants.json` | ISO/IEC 15444-4 files 5, 7 and 8, the ICC profile patched in place | rendering intents 0 to 3; intent 3 with `wtpt` D65, (1.2, 1.1, 1.0) and (0.9, 0.95, 0.7). 8-bit output for files 5 and 8, 16-bit for file7 |
+| `icc/profiles.json` | `icc/rgb8_lossless.j2k` (256x256, R = x, G = y, B = (37x + 91y) mod 256), `icc/rgb16_lossless.j2k` (64x64 random), `icc/grey8_lossless.j2k` (64x64, every grey level then random), each holding black and white, coded by the script with `opj_compress -F <size>,<size>,<n>,<depth>,u -n 3` and checked lossless against its source samples | profiles built by the script, each in its own `colr` box: 39 edge cases (degenerate, descending and noisy curves, every parametric type, extreme matrices and white points, black point compensation, the gamma 1.6 threshold) the PR #184 review's 24 malformed profiles, and 15 on either side of LittleCMS's header checks (signature, version, tag count, duplicate and skipped tags, declared size), at 8 and 16 bits; 10 monochrome profiles. A case LittleCMS refuses is recorded as `unconverted` |
+
+The snapshots hold hashes only, so a mismatch names the plane but not the
+samples; regenerate the converted output with the script's command to see
+them.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
