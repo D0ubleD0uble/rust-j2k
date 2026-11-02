@@ -158,9 +158,9 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                         differing.push(name.clone());
                     }
                 }
-                // A reduction that consumes a whole wavelet pyramid is found
-                // by decoding, not in the header.
-                (Ok(_), Err(Error::InvalidOptions(_))) if reduction > 0 => {}
+                // A reduction the main header's levels cannot take is refused
+                // by `read_header_with` too; only a tile-part COD or COC with
+                // fewer levels is found by decoding, and no fixture has one.
                 _ => panic!("{name}: read_header {header:?} but decode {decoded:?}"),
             }
         }
@@ -338,5 +338,35 @@ fn a_component_s_size_follows_the_image_origin() {
     assert_eq!(
         (header.components[0].width, header.components[0].height),
         (0, 0)
+    );
+}
+
+/// An oversized code-block size in the main-header COD is a header fault, as
+/// OpenJPEG has it ("Invalid cblkw/cblkh combination"): `read_header` refuses
+/// it, with the error `decode` gives.
+#[test]
+fn an_oversized_code_block_in_the_main_header_is_refused_by_both() {
+    let mut bytes = std::fs::read(fixtures().join("roi_maxshift_lossless.j2k")).unwrap();
+    assert!(read_header(&bytes).is_ok() && rust_j2k::decode(&bytes).is_ok());
+    bytes[59] = 119;
+    let header = read_header(&bytes);
+    assert!(matches!(header, Err(Error::Marker(_))), "{header:?}");
+    assert_eq!(header.map(|_| ()), rust_j2k::decode(&bytes).map(|_| ()));
+}
+
+/// A reduction past the main header's decomposition levels is refused by
+/// `read_header_with` with the error `decode_with` gives.
+#[test]
+fn a_reduction_past_the_main_header_levels_is_refused_by_both() {
+    let bytes = std::fs::read(fixtures().join("roi_maxshift_lossless.j2k")).unwrap();
+    let options = DecodeOptions::default().with_resolution_reduction(7);
+    let header = read_header_with(&bytes, &options);
+    assert!(
+        matches!(header, Err(Error::InvalidOptions(_))),
+        "{header:?}"
+    );
+    assert_eq!(
+        header.map(|_| ()),
+        decode_with(&bytes, &options).map(|_| ())
     );
 }

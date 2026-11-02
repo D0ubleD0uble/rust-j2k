@@ -194,8 +194,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// [`resolution_reduction`](DecodeOptions::resolution_reduction) halves the
 /// image, is a fault under some options and not others. A fault in the tile
 /// data (a broken tile-part, a tile header that changes a component's
-/// wavelet, a reduction that consumes a whole wavelet pyramid) is only found
-/// by decoding.
+/// wavelet, a reduction that a tile-part COD or COC with fewer levels cannot
+/// take) is only found by decoding. A reduction that the main header's own
+/// levels cannot take is [`Error::InvalidOptions`] here, as OpenJPEG has it.
 ///
 /// ```
 /// use rust_j2k::{read_header_with, DecodeOptions};
@@ -225,6 +226,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
     check_raw_colour(options, siz.components.len())?;
+    check_reduction(&parsed, reduction)?;
     let (width, height) = siz.image_extent_at(reduction);
     Ok(Header {
         width,
@@ -377,6 +379,7 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     // The header checks come before the tile walk, as `read_header_with` has it.
     let parsed = codestream::parse_header(bytes)?;
     check_raw_colour(options, parsed.header.siz.components.len())?;
+    check_reduction(&parsed, options.resolution_reduction)?;
     let cs = codestream::parse_tiles(bytes, parsed)?;
     decode_codestream(cs, options)
 }
@@ -389,6 +392,24 @@ fn check_options(options: &DecodeOptions) -> Result<()> {
              output"
                 .into(),
         ));
+    }
+    Ok(())
+}
+
+/// A reduction must leave every component a resolution to decode. This is the
+/// check against the main header's coding parameters (COD and COC), which
+/// `decode_with` and `read_header_with` both make before any tile is read; a
+/// tile-part COD or COC with fewer levels is only found while decoding, where
+/// the same test runs per tile.
+fn check_reduction(parsed: &codestream::ParsedHeader, reduction: u8) -> Result<()> {
+    for (component, params) in parsed.header.components.iter().enumerate() {
+        let resolutions = u32::from(params.coding.decomposition_levels) + 1;
+        if u32::from(reduction) >= resolutions {
+            return Err(Error::InvalidOptions(format!(
+                "resolution reduction {reduction} discards all {resolutions} resolutions \
+                 of component {component}"
+            )));
+        }
     }
     Ok(())
 }
@@ -447,6 +468,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
             Some(plan)
         }
     };
+    check_reduction(&parsed, options.resolution_reduction)?;
     Ok(Jp2Prefix {
         codestream: file.codestream,
         parsed,

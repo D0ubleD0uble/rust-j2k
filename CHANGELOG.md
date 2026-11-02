@@ -46,7 +46,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `read_header_with` reads the header for a given `DecodeOptions`: it fails
   exactly when `decode_with` does for a fault in the boxes or the main header
   (a palette `cmap` that `raw_channels` leaves unchecked, a palette that fits
-  the sample budget once the resolution is reduced), and its `width` and
+  the sample budget once the resolution is reduced, a code-block size past
+  the limit in the main-header COD or COC, a reduction past the main header's
+  decomposition levels), and its `width` and
   `height` follow the resolution reduction. `read_header` is the same at the
   default options.
 - `ComponentInfo::width` and `ComponentInfo::height` give each output

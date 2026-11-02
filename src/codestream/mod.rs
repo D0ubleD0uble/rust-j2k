@@ -1519,6 +1519,19 @@ fn decode_coding(b: &mut Cursor<'_>, origin: &str, explicit_precincts: bool) -> 
         Vec::new()
     };
 
+    // The standard bounds each code-block exponent at 2^10 and their sum at
+    // 2^12 (Table A-18). OpenJPEG refuses the field when it reads the header
+    // ("Invalid cblkw/cblkh combination"), so a header-only read does too.
+    let (xcb, ycb) = (
+        u32::from(code_block_width) + 2,
+        u32::from(code_block_height) + 2,
+    );
+    if xcb > 10 || ycb > 10 || xcb + ycb > 12 {
+        return Err(Error::Marker(format!(
+            "code-block size 2^{xcb}×2^{ycb} exceeds the 2^10 / xcb+ycb≤12 limit"
+        )));
+    }
+
     Ok(Coding {
         decomposition_levels,
         code_block_width,
