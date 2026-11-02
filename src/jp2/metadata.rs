@@ -80,6 +80,17 @@ pub struct Jp2Metadata {
     /// Every top-level `uuid` box, in file order, including those after the
     /// codestream. Not interpreted.
     pub uuid: Vec<UuidBox>,
+    /// The contents of every top-level intellectual property box (`jp2i`),
+    /// verbatim and in file order, including those after the codestream. The
+    /// standard leaves the format of these bytes open, so they are not parsed.
+    /// `jp2i` boxes inside other superboxes are not collected.
+    pub ipr: Vec<Vec<u8>>,
+    /// Every well-formed top-level UUID info box (`uinf`), in file order,
+    /// including those after the codestream: a list of UUIDs and a URL where
+    /// more about them can be found. The URL is not fetched. A malformed
+    /// `uinf` is left out and never fails a decode, as OpenJPEG skips the box
+    /// (see [`UuidInfo`]).
+    pub uuid_info: Vec<UuidInfo>,
 }
 
 use super::palette::{ChannelMapping, Palette};
@@ -191,6 +202,86 @@ pub struct UuidBox {
     pub id: [u8; 16],
     /// The box contents after the identifier, verbatim.
     pub payload: Vec<u8>,
+}
+
+/// A UUID info box (`uinf`): the UUIDs its UUID list box (`ulst`) names and
+/// its data entry URL box (`url `), which says where more about them can be
+/// found.
+///
+/// A `uinf` is reported when it is well formed: its contents are whole boxes,
+/// exactly one `ulst` and exactly one `url ` in either order (other boxes
+/// inside it are ignored), the `ulst` holds exactly the `NU` UUIDs its count
+/// gives, and the `url ` holds at least its 4-byte version and flags. A `uinf`
+/// that breaks any of these is left out of
+/// [`Jp2Metadata::uuid_info`] as a whole; the decode goes on. The version,
+/// flags and location are reported as stored, so a version or flags other
+/// than 0 and a location that is not valid UTF-8 or lacks its terminating NUL
+/// are kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UuidInfo {
+    /// The UUIDs from the `ulst` box (`ID0` to `ID(NU-1)`), in box order.
+    pub ids: Vec<[u8; 16]>,
+    /// `VERS` from the `url ` box; the standard requires 0.
+    pub version: u8,
+    /// `FLAG` from the `url ` box, as stored (big-endian); the standard
+    /// requires 0.
+    pub flags: [u8; 3],
+    /// `LOC` from the `url ` box: the bytes after the version and flags,
+    /// verbatim, including any terminating NUL. See
+    /// [`location_str`](Self::location_str) for the URL as text.
+    pub location: Vec<u8>,
+}
+
+impl UuidInfo {
+    /// The location as a UTF-8 string, without its terminating NUL: `None`
+    /// when the bytes are not valid UTF-8 or hold a NUL before the last byte.
+    /// A location with no terminating NUL is read to its end.
+    ///
+    /// ```
+    /// use rust_j2k::read_header;
+    ///
+    /// # fn jp2_with_uuid_info(codestream: &[u8]) -> Result<Vec<u8>, rust_j2k::Error> {
+    /// #     fn boxed(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    /// #         let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
+    /// #         out.extend_from_slice(kind);
+    /// #         out.extend_from_slice(payload);
+    /// #         out
+    /// #     }
+    /// #     let header = read_header(codestream)?;
+    /// #     let mut ihdr = header.height.to_be_bytes().to_vec();
+    /// #     ihdr.extend_from_slice(&header.width.to_be_bytes());
+    /// #     ihdr.extend_from_slice(&(header.components.len() as u16).to_be_bytes());
+    /// #     ihdr.extend_from_slice(&[header.components[0].bit_depth - 1, 7, 0, 0]);
+    /// #     let mut file = boxed(b"jP  ", &[0x0D, 0x0A, 0x87, 0x0A]);
+    /// #     file.extend(boxed(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    /// #     let colr = boxed(b"colr", &[1, 0, 0, 0, 0, 0, 17]);
+    /// #     file.extend(boxed(b"jp2h", &[boxed(b"ihdr", &ihdr), colr].concat()));
+    /// #     // One UUID, and a URL with its terminating NUL.
+    /// #     let ulst = boxed(b"ulst", &[&[0, 1][..], &[0x42; 16]].concat());
+    /// #     let url = boxed(b"url ", b"\0\0\0\0https://example.com/ids\0");
+    /// #     file.extend(boxed(b"uinf", &[ulst, url].concat()));
+    /// #     file.extend(boxed(b"jp2c", codestream));
+    /// #     Ok(file)
+    /// # }
+    /// # fn main() -> Result<(), rust_j2k::Error> {
+    /// # let codestream = std::fs::read("tests/fixtures/derived_quant_lossy.j2k").unwrap();
+    /// let bytes = jp2_with_uuid_info(&codestream)?;
+    /// let jp2 = read_header(&bytes)?.jp2.expect("a JP2 file");
+    /// let info = &jp2.uuid_info[0];
+    /// assert_eq!(info.ids, [[0x42; 16]]);
+    /// assert_eq!(info.location_str(), Some("https://example.com/ids"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn location_str(&self) -> Option<&str> {
+        let text = self.location.strip_suffix(&[0]).unwrap_or(&self.location);
+        if text.contains(&0) {
+            return None;
+        }
+        std::str::from_utf8(text).ok()
+    }
 }
 
 /// The colour space a JP2 file declares for its colour channels.

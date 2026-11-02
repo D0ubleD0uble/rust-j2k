@@ -55,6 +55,11 @@ fn children(extra: &[Vec<u8>]) -> Vec<u8> {
     file(&[jp2_ftyp(), jp2h(&all), jp2c()])
 }
 
+/// A `uinf` box holding a `ulst` with these contents and an empty `url `.
+fn uuid_info(ulst: &[u8]) -> Vec<u8> {
+    bx(b"uinf", &[bx(b"ulst", ulst), bx(b"url ", &[0; 4])].concat())
+}
+
 /// A `cmap` box from `(CMP, MTYP, PCOL)` triples.
 fn cmap(entries: &[(u16, u8, u8)]) -> Vec<u8> {
     let payload: Vec<u8> = entries
@@ -719,6 +724,32 @@ fn every_robustness_table_row_has_its_outcome() {
         (
             "xml/uuid after jp2c",
             after(&[bx(b"xml ", b"<a/>"), bx(b"uuid", &[0; 20])]),
+            Default,
+            Decodes,
+        ),
+        (
+            "jp2i and uinf before and after jp2c",
+            file(&[
+                jp2_ftyp(),
+                bx(b"jp2i", b"rights"),
+                good_jp2h(),
+                uuid_info(&[0, 0]),
+                jp2c(),
+                bx(b"jp2i", b""),
+                uuid_info(&[0, 1, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]),
+            ]),
+            Default,
+            Decodes,
+        ),
+        (
+            "uinf malformed: not one ulst and one url, NU not the ulst length, url under 4 bytes, a bad child box",
+            file(&[jp2_ftyp(), good_jp2h(), uuid_info(&[0, 1]), jp2c()]),
+            Default,
+            Decodes,
+        ),
+        (
+            "malformed uinf after jp2c (skipped)",
+            after(&[bx(b"uinf", &bx(b"url ", &[0; 4]))]),
             Default,
             Decodes,
         ),
