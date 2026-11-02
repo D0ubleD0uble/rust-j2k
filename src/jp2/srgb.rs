@@ -23,9 +23,10 @@
 //!   does not have.
 //! - **Restricted ICC** profiles of the two forms Annex I allows are applied
 //!   as OpenJPEG applies them, through a port of LittleCMS 2.14
-//!   ([`super::lcms`]): a monochrome input profile (`kTRC`) and a
-//!   three-component matrix/TRC input profile (`rXYZ`, `gXYZ`, `bXYZ`,
-//!   `rTRC`, `gTRC`, `bTRC`), at every rendering intent from 0 to 3. On
+//!   ([`super::lcms`]): a monochrome profile (`kTRC`) and a three-component
+//!   matrix/TRC profile (`rXYZ`, `gXYZ`, `bXYZ`, `rTRC`, `gTRC`, `bTRC`) with
+//!   the XYZ connection space, of the input, display, output or colour space
+//!   class (or class 0), at every rendering intent LittleCMS accepts. On
 //!   three colour channels (RGB profile), on one grey channel, or on one
 //!   grey channel plus opacity, the output matches
 //!   `opj_decompress -force-rgb` sample for sample. A monochrome profile
@@ -38,15 +39,19 @@
 //! OpenJPEG leaves them, and so do one or two channels with no colour space
 //! this step converts (no `colr`, or another enumerated colour space). So
 //! does a profile LittleCMS refuses to open or to build a transform from
-//! (its header checks, an intent it does not know, a tag it can't read):
-//! OpenJPEG then skips the conversion. The profile reader follows
-//! LittleCMS's, including where it reads past a tag's size.
+//! (its header checks, a class or intent it does not know, a missing or
+//! unreadable tag, a lookup table it can't read), and a profile in a colour
+//! space other than RGB, grey or YCbCr: OpenJPEG then skips the conversion.
+//! These come first, before any check on the samples, as in OpenJPEG. The
+//! profile reader follows LittleCMS's, including where it reads past a
+//! tag's size.
 //!
-//! Everything else is [`Error::Unsupported`]: another enumerated colour
-//! space, no colour space, a profile of another class or form, and colour
-//! channels that differ in depth, sign or sub-sampling (except the sYCC
-//! layouts above). OpenJPEG converts some of those anyway and gets them
-//! wrong; `docs/correctness.md` lists each case.
+//! Everything else is [`Error::Unsupported`]: three or more channels in
+//! another enumerated colour space or with no colour space, a YCbCr
+//! profile, a profile LittleCMS would apply through a lookup table or the
+//! Lab connection space, and colour channels that differ in depth, sign or
+//! sub-sampling (except the sYCC layouts above). OpenJPEG converts some of
+//! those anyway and gets them wrong; `docs/correctness.md` lists each case.
 
 use super::lcms::{Format, InputProfile, ToneCurve, Transform};
 use super::metadata::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
@@ -300,11 +305,12 @@ fn plan_icc(
     }
 }
 
-/// [`plan_icc`], with a profile LittleCMS refuses as [`Icc::Refused`]. The
-/// order follows OpenJPEG's: a profile LittleCMS will not open is refused
-/// first; then come this step's own checks on the profile and the channels;
-/// then what LittleCMS reads to build the transform (the rendering intent and
-/// the tags).
+/// [`plan_icc`], with a profile OpenJPEG does not convert as
+/// [`Icc::Refused`]. The order follows OpenJPEG's: LittleCMS opens the
+/// profile, OpenJPEG picks the transform by colour space, and LittleCMS
+/// builds it. Every refusal of those three steps comes before this step's
+/// own checks on the profile and the channels, so a profile OpenJPEG leaves
+/// as coded passes through whatever the channels are.
 fn plan_icc_or_refuse(
     profile: &[u8],
     channels: &[ChannelDefinition],
@@ -315,6 +321,7 @@ fn plan_icc_or_refuse(
     let icc = Profile::parse(profile)?;
     match &icc.space {
         b"GRAY" => {
+            let input = icc.input_profile(Form::Grey)?;
             let colours = colour_channels(channels, outputs, 0);
             let [channel] = colours[..] else {
                 return Err(Error::Unsupported(format!(
@@ -335,14 +342,6 @@ fn plan_icc_or_refuse(
                 .into());
             }
             check_icc_format(outputs[channel], &[8], "monochrome")?;
-            icc.require(&[b"kTRC"])?;
-            let intent = icc.intent()?;
-            let input = InputProfile {
-                intent,
-                white: icc.media_white(intent),
-                curves: vec![icc.curve(b"kTRC")?],
-                colorants: [[0.0; 3]; 3],
-            };
             let transform = Transform::new(&input, Format::Grey8);
             let mut table = Box::new([[0u8; 3]; 256]);
             for (grey, rgb) in (0..=255u8).zip(table.iter_mut()) {
@@ -359,27 +358,13 @@ fn plan_icc_or_refuse(
             })
         }
         // OpenJPEG applies an RGB profile only to three or more components.
-        _ if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
-        _ => {
+        b"RGB " if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
+        b"RGB " => {
+            let input = icc.input_profile(Form::Rgb)?;
             let colours = three_colours(channels, outputs, "an RGB ICC profile")?;
             uniform(&colours, outputs)?;
             let info = outputs[colours[0]];
             check_icc_format(info, &[8, 16], "RGB")?;
-            icc.require(&[b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC"])?;
-            let intent = icc.intent()?;
-            let curves = vec![
-                icc.curve(b"rTRC")?,
-                icc.curve(b"gTRC")?,
-                icc.curve(b"bTRC")?,
-            ];
-            let columns = [icc.xyz(b"rXYZ")?, icc.xyz(b"gXYZ")?, icc.xyz(b"bXYZ")?];
-            let colorants = [0, 1, 2].map(|row| columns.map(|column| column[row]));
-            let input = InputProfile {
-                intent,
-                white: icc.media_white(intent),
-                curves,
-                colorants,
-            };
             let format = if info.bit_depth == 8 {
                 Format::Rgb8
             } else {
@@ -390,6 +375,11 @@ fn plan_icc_or_refuse(
                 transform: Box::new(Transform::new(&input, format)),
             })
         }
+        // OpenJPEG runs a YCbCr profile as 16-bit YCbCr over samples of any
+        // depth, which reads past its buffers; there is nothing to match.
+        b"YCbr" => Err(unsupported_profile("for the `YCbr` colour space")),
+        // OpenJPEG converts no other colour space.
+        _ => Err(Icc::Refused),
     }
 }
 
@@ -455,8 +445,9 @@ const MONACO_CURVE: [u8; 4] = 0x9478_EE00u32.to_be_bytes();
 /// Why a profile is not applied.
 #[derive(Debug)]
 enum Icc {
-    /// LittleCMS refuses to open the profile or to build a transform from
-    /// it, so OpenJPEG writes the samples as coded.
+    /// OpenJPEG writes the samples as coded: LittleCMS refuses to open the
+    /// profile or to build a transform from it, or OpenJPEG has no transform
+    /// for its colour space.
     Refused,
     /// This step refuses the input.
     Error(Error),
@@ -468,33 +459,50 @@ impl From<Error> for Icc {
     }
 }
 
+/// A profile of a form this step does not apply.
+fn unsupported_profile(what: &str) -> Icc {
+    Icc::Error(Error::Unsupported(format!(
+        "sRGB output through an ICC profile {what}; only the monochrome and \
+         three-component matrix/TRC input profiles of Annex I are applied"
+    )))
+}
+
+/// The colour space of a profile this step applies.
+#[derive(Clone, Copy, PartialEq)]
+enum Form {
+    Grey,
+    Rgb,
+}
+
+/// The tags LittleCMS reads a lookup table from, by rendering intent 0 to 3
+/// (`Device2PCS16`, `Device2PCSFloat` in cmsio1.c). Absolute colorimetric
+/// reads the relative colorimetric `A2B1`.
+const A2B: [&[u8; 4]; 4] = [b"A2B0", b"A2B1", b"A2B2", b"A2B1"];
+const D2B: [&[u8; 4]; 4] = [b"D2B0", b"D2B1", b"D2B2", b"D2B3"];
+
 /// A restricted ICC profile (ICC.1, as Annex I restricts it): the header
 /// fields that matter and the tag table.
 struct Profile<'a> {
     bytes: &'a [u8],
+    class: [u8; 4],
     space: [u8; 4],
+    pcs: [u8; 4],
+    /// The header version, as `_validatedVersion` reads it.
+    version: u32,
     /// The header's rendering intent, as stored.
     intent: u32,
-    /// The raw tag table.
-    table: &'a [u8],
     /// The entries LittleCMS keeps: signature, offset and size. At most
     /// [`MAX_TAGS`].
     tags: Vec<([u8; 4], u32, u32)>,
 }
 
 impl<'a> Profile<'a> {
-    /// The checks LittleCMS makes when it opens a profile, then the forms
-    /// this step applies.
+    /// The checks LittleCMS makes when it opens a profile
+    /// (`_cmsReadHeader`, cmsio0.c): the 128-byte header and the tag count,
+    /// the `acsp` signature, a device class it knows, a version of at most
+    /// 5.0, at most 100 tags, the table inside the profile, and no two kept
+    /// entries with one signature.
     fn parse(bytes: &'a [u8]) -> std::result::Result<Self, Icc> {
-        let unsupported = |what: String| {
-            Icc::Error(Error::Unsupported(format!(
-                "sRGB output through an ICC profile {what}; only the monochrome and \
-                 three-component matrix/TRC input profiles of Annex I are applied"
-            )))
-        };
-        // `_cmsReadHeader` (cmsio0.c): the 128-byte header and the tag count,
-        // the `acsp` signature, a version of at most 5.0, at most 100 tags,
-        // the table inside the profile, and no two tags with one signature.
         if bytes.len() < PROFILE_HEADER {
             return Err(Icc::Refused);
         }
@@ -503,7 +511,15 @@ impl<'a> Profile<'a> {
             out.copy_from_slice(&bytes[at..at + 4]);
             out
         };
-        if &four(36) != b"acsp" || validated_version(four(8)) > 0x0500_0000 {
+        let class = four(12);
+        // `validDeviceClass` takes a zero class too, as older LittleCMS
+        // versions wrote it.
+        let known = matches!(
+            &class,
+            b"scnr" | b"mntr" | b"prtr" | b"link" | b"abst" | b"spac" | b"nmcl" | [0, 0, 0, 0]
+        );
+        let version = validated_version(four(8));
+        if &four(36) != b"acsp" || !known || version > 0x0500_0000 {
             return Err(Icc::Refused);
         }
         let count = u32::from_be_bytes(four(128));
@@ -516,7 +532,8 @@ impl<'a> Profile<'a> {
             .and_then(|len| bytes.get(PROFILE_HEADER..PROFILE_HEADER.checked_add(len)?))
             .ok_or(Icc::Refused)?;
         // LittleCMS skips an entry with a zero offset or size, or one that
-        // ends past the declared size (capped at the profile's length).
+        // ends past the declared size (capped at the profile's length). Only
+        // the entries it keeps count as duplicates.
         let declared = u32::from_be_bytes(four(0));
         let declared = u32::try_from(bytes.len()).map_or(declared, |len| declared.min(len));
         let mut tags = Vec::new();
@@ -533,75 +550,155 @@ impl<'a> Profile<'a> {
             }
             tags.push((signature, offset, size));
         }
-        let class = four(12);
-        if &class != b"scnr" {
-            return Err(unsupported(format!(
-                "of class `{}`, not an input profile",
-                String::from_utf8_lossy(&class)
-            )));
-        }
-        let space = four(16);
-        if &space != b"RGB " && &space != b"GRAY" {
-            return Err(unsupported(format!(
-                "for the `{}` colour space",
-                String::from_utf8_lossy(&space)
-            )));
-        }
-        let pcs = four(20);
-        if &pcs != b"XYZ " {
-            return Err(unsupported(format!(
-                "with the `{}` connection space",
-                String::from_utf8_lossy(&pcs)
-            )));
-        }
-        let profile = Profile {
+        Ok(Profile {
             bytes,
-            space,
+            class,
+            space: four(16),
+            pcs: four(20),
+            version,
             intent: u32::from_be_bytes(four(64)),
-            table,
             tags,
+        })
+    }
+
+    /// What `cmsCreateTransform` reads to build OpenJPEG's transform from
+    /// this profile to sRGB, as the input of this step's port. Every way
+    /// LittleCMS refuses comes first, as [`Icc::Refused`]; then the forms the
+    /// port does not apply, as [`Error::Unsupported`].
+    fn input_profile(&self, form: Form) -> std::result::Result<InputProfile, Icc> {
+        // A named colour profile takes one index channel, not RGB or grey
+        // samples (`GetXFormColorSpaces`, `IsProperColorSpace`).
+        if &self.class == b"nmcl" {
+            return Err(Icc::Refused);
+        }
+        let (intent, table_intent) = self.intent()?;
+        // The connection space must lead on to the sRGB profile's
+        // (`ColorSpaceIsCompatible`).
+        if &self.pcs != b"XYZ " && &self.pcs != b"Lab " {
+            return Err(Icc::Refused);
+        }
+        // A device link or abstract profile is only a lookup table; any
+        // other class reads one when it has one, and is a matrix/TRC
+        // profile otherwise (`DefaultICCintents`, `_cmsReadInputLUT`,
+        // `_cmsReadDevicelinkLUT`).
+        let link = &self.class == b"link" || &self.class == b"abst";
+        if let Some(lut) = self.lut_tag(table_intent, link) {
+            self.check_lut(lut, form)?;
+            return Err(unsupported_profile(&format!(
+                "with a `{}` lookup table",
+                String::from_utf8_lossy(lut)
+            )));
+        }
+        if link {
+            return Err(Icc::Refused);
+        }
+        let (curves, colorants) = match form {
+            Form::Grey => (vec![self.curve(b"kTRC")?], [[0.0; 3]; 3]),
+            Form::Rgb => {
+                let columns = [self.xyz(b"rXYZ")?, self.xyz(b"gXYZ")?, self.xyz(b"bXYZ")?];
+                let curves = vec![
+                    self.curve(b"rTRC")?,
+                    self.curve(b"gTRC")?,
+                    self.curve(b"bTRC")?,
+                ];
+                (
+                    curves,
+                    [0, 1, 2].map(|row| columns.map(|column| column[row])),
+                )
+            }
         };
-        for lut in [
-            b"A2B0", b"A2B1", b"A2B2", b"D2B0", b"D2B1", b"D2B2", b"D2B3",
-        ] {
-            if profile.entry(lut).is_some() {
-                return Err(unsupported(format!(
-                    "with a `{}` lookup table",
-                    String::from_utf8_lossy(lut)
-                )));
-            }
+        if &self.pcs != b"XYZ " {
+            return Err(unsupported_profile("with the `Lab ` connection space"));
         }
-        Ok(profile)
+        Ok(InputProfile {
+            intent,
+            white: self.media_white(intent),
+            curves,
+            colorants,
+        })
     }
 
-    /// The tags the profile's form needs must be in its tag table. A tag
-    /// that is there but that LittleCMS skips is left to [`Self::tag`].
-    fn require(&self, signatures: &[&[u8; 4]]) -> std::result::Result<(), Icc> {
-        for signature in signatures {
-            if !self.table.chunks_exact(12).any(|e| &e[..4] == *signature) {
-                return Err(Icc::Error(Error::Unsupported(format!(
-                    "sRGB output through an ICC profile without a `{}` tag; only the \
-                     monochrome and three-component matrix/TRC input profiles of Annex I \
-                     are applied",
-                    String::from_utf8_lossy(*signature)
-                ))));
-            }
-        }
-        Ok(())
-    }
-
-    /// The rendering intent the transform runs at. LittleCMS builds no
-    /// transform for an intent it does not know. It reads its black-preserving
-    /// intents (10 to 15) on a profile that is not CMYK as perceptual,
-    /// relative colorimetric or saturation, without the black point
-    /// compensation it forces for perceptual and saturation, which here is
-    /// relative colorimetric (1) in every case.
-    fn intent(&self) -> std::result::Result<u32, Icc> {
+    /// The rendering intent the transform runs at, and the intent whose
+    /// lookup table LittleCMS reads. LittleCMS builds no transform for an
+    /// intent it does not know. It reads its black-preserving intents (10 to
+    /// 15) on a profile that is not CMYK as perceptual, relative colorimetric
+    /// or saturation (`TranslateNonICCIntents`), without the black point
+    /// compensation it forces for perceptual and saturation, so a matrix/TRC
+    /// profile converts as relative colorimetric (1) in every case.
+    fn intent(&self) -> std::result::Result<(u32, usize), Icc> {
         match self.intent {
-            0..=3 => Ok(self.intent),
-            10..=15 => Ok(1),
+            0..=3 => Ok((self.intent, self.intent as usize)),
+            10..=15 => Ok((1, (self.intent as usize - 10) % 3)),
             _ => Err(Icc::Refused),
         }
+    }
+
+    /// The lookup table tag LittleCMS reads at `intent` (0 to 3), if any:
+    /// `D2Bx` before `A2Bx`, and `A2B0` when the intent's own is missing. A
+    /// device link also falls back to `D2B0`.
+    fn lut_tag(&self, intent: usize, link: bool) -> Option<&'static [u8; 4]> {
+        let has = |signature: &[u8; 4]| self.entry(signature).is_some();
+        let mut order = vec![D2B[intent]];
+        if link {
+            order.push(D2B[0]);
+        }
+        order.extend([A2B[intent], A2B[0]]);
+        order.into_iter().find(|&signature| has(signature))
+    }
+
+    /// The checks of `cmsReadTag` and of the lookup table readers
+    /// (`Type_LUT8_Read`, `Type_LUT16_Read`, `Type_LUTA2B_Read`,
+    /// `Type_MPE_Read`) that make LittleCMS refuse a table, and the channel
+    /// counts the transform needs: the profile's colour channels in, the
+    /// three of the connection space out. A table that passes may still not
+    /// read, but this step does not apply one.
+    fn check_lut(&self, signature: &[u8; 4], form: Form) -> std::result::Result<(), Icc> {
+        let colours = if form == Form::Grey { 1 } else { 3 };
+        if signature.starts_with(b"D2B") {
+            let (_, body) = self.tag(signature, &[*b"mpet"])?;
+            // Input and output channels (two bytes each), then the element
+            // count.
+            let channels = |at: usize| usize::from(u16::from_be_bytes([body[at], body[at + 1]]));
+            if body.len() < 8 || channels(0) != colours || channels(2) != 3 {
+                return Err(Icc::Refused);
+            }
+            return Ok(());
+        }
+        let (kind, body) = self.tag(signature, &[*b"mft1", *b"mft2", *b"mAB "])?;
+        let &[inputs, outputs, grid, ..] = body else {
+            return Err(Icc::Refused);
+        };
+        if usize::from(inputs) != colours || outputs != 3 {
+            return Err(Icc::Refused);
+        }
+        if &kind == b"mAB " {
+            // The channels, two padding bytes and five offsets.
+            return if body.len() < 24 {
+                Err(Icc::Refused)
+            } else {
+                Ok(())
+            };
+        }
+        if grid == 1 {
+            return Err(Icc::Refused);
+        }
+        // The 3x3 matrix follows the four header bytes.
+        let clut = 3 * usize::from(grid).pow(u32::from(inputs));
+        let need = if &kind == b"mft1" {
+            40 + 256 * colours + clut + 256 * 3
+        } else {
+            let entries = body.get(40..44).ok_or(Icc::Refused)?;
+            let input = usize::from(u16::from_be_bytes([entries[0], entries[1]]));
+            let output = usize::from(u16::from_be_bytes([entries[2], entries[3]]));
+            if input > 0x7fff || output > 0x7fff || input == 1 || output == 1 {
+                return Err(Icc::Refused);
+            }
+            44 + 2 * (colours * input + clut + 3 * output)
+        };
+        if body.len() < need {
+            return Err(Icc::Refused);
+        }
+        Ok(())
     }
 
     /// The tag table entry LittleCMS keeps for `signature`: its offset and
@@ -653,9 +750,10 @@ impl<'a> Profile<'a> {
 
     /// The media white point that absolute colorimetric scales by, or `None`
     /// for D50. LittleCMS takes D50 when the `wtpt` tag is missing or does
-    /// not read (`_cmsReadMediaWhitePoint`); it reads it at intent 3 only.
+    /// not read, and for a display profile before version 4
+    /// (`_cmsReadMediaWhitePoint`); it reads it at intent 3 only.
     fn media_white(&self, intent: u32) -> Option<[f64; 3]> {
-        if intent != 3 {
+        if intent != 3 || (&self.class == b"mntr" && self.version < 0x0400_0000) {
             return None;
         }
         self.xyz(b"wtpt").ok()

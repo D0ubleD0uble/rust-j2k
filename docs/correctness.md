@@ -306,10 +306,16 @@ inverse sRGB matrix and curves), the optimisation it picks for that pipeline
 for 16-bit RGB on a profile of gamma below 1.6, no optimisation), and its
 16-bit interpolation, step for step at lcms's precision. It also applies
 the checks lcms makes when it opens a profile (`_cmsReadHeader`): the `acsp`
-signature, a version of at most 5.0, at most 100 tags, no two tags with the
-same signature. Like lcms, it skips a tag entry with a zero offset or size,
-or one that ends past the size the header declares (capped at the profile's
-length), so a tag it needs is then missing. It reads tags as `cmsReadTag`
+signature, a version of at most 5.0, a device class lcms knows, at most 100
+tags, no two kept entries with the same signature. Like lcms, it first skips
+a tag entry with a zero offset or size, or one that ends past the size the
+header declares (capped at the profile's length), so a tag it needs is then
+missing, and a skipped entry does not count as a duplicate. When building
+the transform it makes lcms's checks too: a named colour profile, a device
+link or abstract profile without a lookup table, or a connection space
+other than XYZ or Lab builds none, and of the lookup tables lcms would read
+for the intent (`D2Bx`, then `A2Bx`, then `A2B0`) it checks the type, the
+channel counts, the grid and the table's length as lcms's reader does. It reads tags as `cmsReadTag`
 does: a tag under 8 bytes or of a type lcms does not allow for it fails,
 lcms's legacy types are read (an old Monaco tool's curve type for `rTRC`,
 `gTRC` and `bTRC`, an old Corbis tool's XYZ type), and a value is read
@@ -341,7 +347,10 @@ last bit. The cases:
   duplicate `rTRC` and `rXYZ`, and a duplicate lcms skips; declared sizes of
   0, 140 and 0xFFFFFFFF, and ones that cut off `wtpt` or an `A2B0` table);
 - 25 RGB profiles at 8 and 16 bits and 4 monochrome ones on how lcms reads
-  intents, legacy tag types and tags that run short (the table below).
+  intents, legacy tag types and tags that run short (the table below);
+- 58 RGB profiles at 8 and 16 bits and 13 monochrome ones on device
+  classes, connection and colour spaces, lookup tables and missing tags
+  (the table below).
 
 During development the port also matched lcms 2.14 itself on every 8-bit
 RGB input (2^24) and a million random 16-bit pixels for each of these
@@ -376,22 +385,31 @@ case of `icc/profiles.json` and a test in `src/jp2/srgb_tests.rs`:
 
 | Case | OpenJPEG + lcms 2.14 | `Srgb` here |
 | ---- | -------------------- | ----------- |
-| profile under 132 bytes, no `acsp`, version above 5.0, more than 100 tags, tag table past the end, duplicate tag | unconverted (lcms won't open it) | as coded |
+| profile under 132 bytes, no `acsp`, version above 5.0, unknown class (`zzzz`), more than 100 tags, tag table past the end, two kept entries with one signature | unconverted (lcms won't open it) | as coded |
+| a duplicate whose first copy lcms skips | converted from the second | the same |
+| class `mntr`, `prtr`, `spac` or 0 with a matrix and curves | converted as `scnr` (a version 2 `mntr` takes D50 as its white point) | the same |
+| class `nmcl`; class `link` or `abst` with no lookup table | unconverted | as coded |
 | intent 4 to 9 or above 15 | unconverted | as coded |
+| connection space other than XYZ or Lab | unconverted | as coded |
+| colour space other than RGB, grey or YCbCr | unconverted (no transform for it) | as coded |
+| lookup table lcms would read of the wrong type, wrong channel counts, a grid of 1, or cut short | unconverted | as coded |
+| lookup table for another intent only | converted from the matrix | the same |
+| lookup table lcms reads | converted through it | `Unsupported` (below) |
+| Lab connection space with a matrix and curves | converted | `Unsupported` (below) |
 | intent 10 to 15 | converted as intent 1 | converted as intent 1 |
-| needed tag skipped, under 8 bytes, of the wrong type, or with a value past the profile's end; `para` function above 4; `curv` of more than 32767 entries | unconverted | as coded |
+| needed tag missing or skipped, under 8 bytes, of the wrong type, or with a value past the profile's end; `para` function above 4; `curv` of more than 32767 entries | unconverted | as coded |
 | value past its tag but inside the profile | converted from the bytes after it | the same |
 | Monaco curve type, Corbis XYZ type | converted | converted |
 | `wtpt` unreadable at intent 3 | converted with D50 | converted with D50 |
 
-The order follows OpenJPEG's too: a profile lcms will not open passes
-through before any other check, and the checks lcms makes while building
-the transform (the intent and the tags) come after this decoder's own
-refusals below, so those refusals stand there. Two of them meet a profile
-lcms refuses, and are kept by the earlier owner decisions (#165): a class
-lcms does not know (`zzzz`, say) and a profile missing a tag its form needs
-(including one with no tags at all) are `Unsupported`, where OpenJPEG writes
-the samples as coded.
+The order follows OpenJPEG's too (owner decision, 2026-11-02, on #199):
+every refusal above, whether lcms makes it opening the profile or building
+the transform, comes before this decoder's own checks below. So a profile
+lcms refuses passes through whatever the samples are: an intent of 4 on
+12-bit RGB, 16-bit grey, or a monochrome profile on three channels gives
+the samples as coded, as `opj_decompress` does. The refusals below (#165,
+#197) apply only where lcms would build the transform. Test:
+`refusals_are_ordered_as_in_openjpeg`.
 
 **Stricter: inputs refused under `Srgb` that OpenJPEG decodes some other
 way.** Each is `Unsupported` unless noted, and each is a row of
@@ -434,12 +452,14 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   or 3) and grey plus opacity (2 to 2 or 4) match OpenJPEG and are
   unchanged. Test:
   `a_grey_profile_on_more_than_two_channels_is_unsupported`;
-- an ICC profile that is not one of the restricted forms: a class other than
-  input (`scnr`), a colour space other than RGB or grey, a connection space
-  other than XYZ, a lookup-table tag (`A2B0`..`A2B2`, `D2B0`..`D2B3`, which
-  lcms would prefer over the matrix), or a missing tag. OpenJPEG converts
-  some of these through lcms and writes others as coded, among them a class
-  lcms does not know and a missing tag (above);
+- an ICC profile lcms would apply through a lookup table (`D2Bx` or
+  `A2Bx`, which it prefers over the matrix) or the Lab connection space.
+  OpenJPEG converts these; this decoder ports only the matrix/TRC pipeline
+  into XYZ. A table whose header passes lcms's checks but whose contents
+  lcms rejects (an `mpet` with no elements, say) is refused here too, where
+  OpenJPEG writes the samples as coded;
+- a YCbCr (`YCbr`) ICC profile. OpenJPEG picks `TYPE_YCbCr_16` for it;
+  `opj_decompress` 2.5.0 crashed on the one checked;
 - an RGB profile on samples other than 8- or 16-bit unsigned, or a grey
   profile on samples other than 8-bit unsigned (owner decision, 2026-11-01,
   on #165). OpenJPEG picks an lcms format from the precision alone

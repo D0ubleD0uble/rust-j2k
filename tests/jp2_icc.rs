@@ -283,20 +283,31 @@ fn wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Where the decoder refuses a profile that OpenJPEG converts or leaves as
-/// coded, and why. LittleCMS applies a monochrome profile to the first of
-/// three channels' worth of input; the others are forms this step does not
-/// apply (a lookup table, a missing tag or no tags at all, a class that is
-/// not an input profile), which LittleCMS also refuses.
+/// Where the decoder refuses a profile, and why. OpenJPEG converts each but
+/// one. LittleCMS applies a monochrome profile to the first of three channels'
+/// worth of input; the others are forms this step does not apply: a lookup
+/// table LittleCMS reads, and a matrix/TRC profile with the Lab connection
+/// space. Where LittleCMS refuses the profile and this step can tell, the
+/// samples pass through as in OpenJPEG.
 const REFUSED_BY_US: &[(&str, &str)] = &[
     (
         "bad_gray_on_rgb",
         "monochrome ICC profile needs one colour channel",
     ),
-    ("bad_lut", "`A2B0` lookup table"),
-    ("bad_rgb_missing_tag", "without a `bTRC` tag"),
-    ("bad_exact_132", "without a `rXYZ` tag"),
-    ("lcms_unknown_class", "class `zzzz`"),
+    ("lut16", "`A2B0` lookup table"),
+    ("lut16_grid_0", "`A2B0` lookup table"),
+    ("lut8", "`A2B0` lookup table"),
+    ("class_link_lut16", "`A2B0` lookup table"),
+    ("class_abst_lut16", "`A2B0` lookup table"),
+    ("a2b1_lut16_intent_1", "`A2B1` lookup table"),
+    ("d2b0_junk_a2b1_lut16_intent_1", "`A2B1` lookup table"),
+    ("pcs_lab", "`Lab ` connection space"),
+    ("lut_mab_empty", "`A2B0` lookup table"),
+    // LittleCMS refuses this one too, on its elements, which this step
+    // does not read.
+    ("d2b0_mpet_empty", "`D2B0` lookup table"),
+    ("grey_lut16", "`A2B0` lookup table"),
+    ("grey_pcs_lab", "`Lab ` connection space"),
 ];
 
 /// Every profile OpenJPEG converts gives the same samples here. Every
@@ -353,13 +364,20 @@ fn icc_profiles_match_openjpeg() {
             (outcome, result, _) => panic!("{what}: OpenJPEG {outcome}, here {result:?}"),
         }
     }
-    // 24 malformed, 39 edge-case, 15 header and 25 LittleCMS-reading RGB
-    // profiles at 8 and 16 bits, 10 + 4 grey. LittleCMS refuses 13 of the
-    // malformed, 8 of the header and 11 of the LittleCMS-reading ones, and 3
-    // grey ones; 4 of the RGB ones are refused here.
-    assert_eq!(profiles.cases.len(), 2 * (24 + 39 + 15 + 25) + 10 + 4);
-    assert_eq!(refused, 2 * REFUSED_BY_US.len());
-    assert_eq!(as_coded, 2 * (13 + 8 + 11 - 4) + 3);
+    // RGB profiles at 8 and 16 bits: 24 malformed, 39 edge-case, 15 header,
+    // 25 LittleCMS-reading and 58 class and lookup table ones. Grey: 10
+    // edge-case, 4 LittleCMS-reading and 13 class and lookup table ones.
+    // OpenJPEG leaves 13 of the malformed, 8 of the header, 11 of the
+    // LittleCMS-reading and 37 of the class and lookup table RGB ones as
+    // coded, and 3 + 7 grey ones. 11 RGB ones (one of them left as coded by
+    // OpenJPEG) and 2 grey ones are
+    // refused here.
+    assert_eq!(
+        profiles.cases.len(),
+        2 * (24 + 39 + 15 + 25 + 58) + 10 + 4 + 13
+    );
+    assert_eq!(refused, 2 * 11 + 2);
+    assert_eq!(as_coded, 2 * (13 + 8 + 11 + 37 - 1) + 3 + 7);
     assert_eq!(converted, profiles.cases.len() - refused - as_coded);
 }
 

@@ -24,8 +24,9 @@ Two snapshot files:
   descending curves, every parametric type, extreme matrices and white
   points, black point compensation, the gamma 1.6 threshold of LittleCMS's
   16-bit shortcut), a set of malformed ones, and cases on either side of
-  LittleCMS's header checks (`_cmsReadHeader`), and how LittleCMS reads
-  intents, legacy tag types and tags that run short. For each, OpenJPEG
+  LittleCMS's header checks (`_cmsReadHeader`), how LittleCMS reads
+  intents, legacy tag types and tags that run short, and how it treats each
+  device class, connection space and lookup table. For each, OpenJPEG
   either converts (the hashes are recorded) or leaves the image unconverted
   (LittleCMS refused the profile), which the decoder must leave as coded too.
 
@@ -410,6 +411,117 @@ def lcms_reads_grey() -> dict[str, bytes]:
     }
 
 
+def with_header(icc: bytes, at: int, value: bytes) -> bytes:
+    """`icc` with four header bytes at `at` replaced."""
+    return icc[:at] + value + icc[at + 4:]
+
+
+def lut16(inputs: int, outputs: int, grid: int, entries: tuple[int, int] = (2, 2)) -> bytes:
+    """A `lut16Type` (`mft2`) table: identity matrix, two-entry ramps, and a
+    CLUT of arbitrary values."""
+    body = b"mft2" + b"\0" * 4 + bytes([inputs, outputs, grid, 0])
+    body += b"".join(s15(v) for v in (1, 0, 0, 0, 1, 0, 0, 0, 1))
+    body += struct.pack(">HH", *entries)
+    body += b"".join(struct.pack(">HH", 0, 65535) for _ in range(inputs))
+    body += b"".join(struct.pack(">H", (i * 997 + o * 4001) % 65536)
+                     for i in range(grid ** inputs) for o in range(outputs))
+    body += b"".join(struct.pack(">HH", 0, 65535) for _ in range(outputs))
+    return body
+
+
+def lut8(inputs: int, outputs: int, grid: int) -> bytes:
+    """A `lut8Type` (`mft1`) table, built like `lut16`."""
+    body = b"mft1" + b"\0" * 4 + bytes([inputs, outputs, grid, 0])
+    body += b"".join(s15(v) for v in (1, 0, 0, 0, 1, 0, 0, 0, 1))
+    body += bytes(range(256)) * inputs
+    body += bytes((i * 37) % 256 for i in range(grid ** inputs * outputs))
+    body += bytes(range(256)) * outputs
+    return body
+
+
+def classes_and_tables() -> dict[str, bytes]:
+    """How LittleCMS builds the transform from each device class, connection
+    space and lookup table (issue #199): every class it opens, the lookup
+    table tag it picks for each intent, the `lut8`/`lut16` checks that make it
+    refuse one, other connection and colour spaces, and its refusals on a
+    profile this decoder would otherwise refuse."""
+    base = rgb_tags(rc=curv([563]), m=WIDE, white=None)
+    plain = profile(base)
+    white = base + [(b"wtpt", xyz(0.9505, 1, 1.089))]
+    junk = b"xxxx" + b"\0" * 40
+    valid = lut16(3, 3, 2)
+    ncl2 = (b"ncl2" + b"\0" * 4 + struct.pack(">III", 0, 1, 3) + b"\0" * 64
+            + b"red".ljust(32, b"\0") + struct.pack(">6H", 30000, 40000, 20000, 65535, 0, 0))
+    out = {}
+    for cls in (b"mntr", b"prtr", b"spac", b"\0\0\0\0", b"link", b"abst", b"nmcl"):
+        name = cls.decode().strip("\0") or "zero"
+        out[f"class_{name}"] = with_header(plain, 12, cls)
+        out[f"class_{name}_intent3"] = with_header(profile(white, intent=3), 12, cls)
+    out.update({
+        "class_mntr_intent_4": with_header(profile(base, intent=4), 12, b"mntr"),
+        "class_nmcl_ncl2": with_header(profile(base + [(b"ncl2", ncl2)]), 12, b"nmcl"),
+        "class_link_lut16": with_header(profile(base + [(b"A2B0", valid)]), 12, b"link"),
+        "class_abst_lut16": with_header(profile(base + [(b"A2B0", valid)]), 12, b"abst"),
+        "class_link_d2b0_junk_intent_1": with_header(
+            profile(base + [(b"D2B0", junk), (b"A2B1", valid)], intent=1), 12, b"link"),
+        "missing_rxyz": profile(base[1:]),
+        "lut16": profile(base + [(b"A2B0", valid)]),
+        "lut16_grid_0": profile(base + [(b"A2B0", lut16(3, 3, 0))]),
+        "lut8": profile(base + [(b"A2B0", lut8(3, 3, 2))]),
+        "lut16_intent_4": profile(base + [(b"A2B0", valid)], intent=4),
+        "lut16_one_input": profile(base + [(b"A2B0", lut16(1, 3, 2))]),
+        "lut16_one_output": profile(base + [(b"A2B0", lut16(3, 1, 2))]),
+        "lut16_16_inputs": profile(base + [(b"A2B0", b"mft2" + b"\0" * 4 + bytes([16, 3, 2, 0]) + b"\0" * 40)]),
+        "lut16_grid_1": profile(base + [(b"A2B0", lut16(3, 3, 1))]),
+        "lut16_one_entry": profile(base + [(b"A2B0", lut16(3, 3, 2, entries=(1, 2)))]),
+        "lut16_past_end": profile(base + [(b"A2B0", valid[:60])]),
+        "lut8_no_channels": profile(base + [(b"A2B0", b"mft1" + b"\0" * 40)]),
+        "lut_wrong_type": profile(base + [(b"A2B0", junk)]),
+        "lut_size_4": profile(base + [(b"A2B0", b"mft2")]),
+        "lut_mab_no_channels": profile(base + [(b"A2B0", b"mAB " + b"\0" * 28)]),
+        "lut_mab_empty": profile(base + [(b"A2B0", b"mAB " + b"\0" * 4 + bytes([3, 3, 0, 0]) + b"\0" * 20)]),
+        "d2b0_mpet_one_input": profile(base + [(b"D2B0", b"mpet" + b"\0" * 4 + struct.pack(">HHI", 1, 3, 0))]),
+        "d2b0_mpet_empty": profile(base + [(b"D2B0", b"mpet" + b"\0" * 4 + struct.pack(">HHI", 3, 3, 0))]),
+        "a2b1_junk_intent_0": profile(base + [(b"A2B1", junk)]),
+        "a2b1_junk_intent_1": profile(base + [(b"A2B1", junk)], intent=1),
+        "a2b1_junk_intent_3": profile(base + [(b"A2B1", junk)], intent=3),
+        "a2b1_junk_intent_10": profile(base + [(b"A2B1", junk)], intent=10),
+        "a2b1_junk_intent_11": profile(base + [(b"A2B1", junk)], intent=11),
+        "a2b2_junk_intent_1": profile(base + [(b"A2B2", junk)], intent=1),
+        "a2b0_junk_intent_1": profile(base + [(b"A2B0", junk)], intent=1),
+        "a2b1_lut16_intent_1": profile(base + [(b"A2B1", valid)], intent=1),
+        "a2b1_junk_a2b0_lut16_intent_1": profile(base + [(b"A2B0", valid), (b"A2B1", junk)], intent=1),
+        "d2b0_junk": profile(base + [(b"D2B0", junk)]),
+        "d2b1_junk_intent_0": profile(base + [(b"D2B1", junk)]),
+        "d2b3_junk_intent_3": profile(base + [(b"D2B3", junk)], intent=3),
+        "d2b0_junk_a2b1_lut16_intent_1": profile(base + [(b"D2B0", junk), (b"A2B1", valid)], intent=1),
+        "pcs_lab": with_header(plain, 20, b"Lab "),
+        "pcs_lab_intent_4": with_header(profile(base, intent=4), 20, b"Lab "),
+        "pcs_zzzz": with_header(plain, 20, b"zzzz"),
+        "pcs_zero": with_header(plain, 20, b"\0\0\0\0"),
+        "space_cmyk": with_header(plain, 16, b"CMYK"),
+        "space_zzzz": with_header(plain, 16, b"zzzz"),
+        "grey_on_rgb_intent_4": profile([(b"kTRC", curv([461]))], space=b"GRAY", intent=4),
+        "grey_on_rgb_missing_ktrc": profile([(b"wtpt", xyz(*D50_WHITE))], space=b"GRAY"),
+    })
+    return out
+
+
+def classes_and_tables_grey() -> dict[str, bytes]:
+    """The grey cases of `classes_and_tables`."""
+    ktrc = [(b"kTRC", curv([461]))]
+    out = {f"grey_class_{(c.decode().strip(chr(0)) or 'zero')}": with_header(profile(ktrc, space=b"GRAY"), 12, c)
+           for c in (b"mntr", b"prtr", b"spac", b"\0\0\0\0", b"link", b"abst", b"nmcl", b"zzzz")}
+    out.update({
+        "grey_missing_ktrc": profile([(b"wtpt", xyz(*D50_WHITE))], space=b"GRAY"),
+        "grey_lut16": profile(ktrc + [(b"A2B0", lut16(1, 3, 2))], space=b"GRAY"),
+        "grey_lut16_three_inputs": profile(ktrc + [(b"A2B0", lut16(3, 3, 2))], space=b"GRAY"),
+        "grey_lut_no_channels": profile(ktrc + [(b"A2B0", b"mft2" + b"\0" * 40)], space=b"GRAY"),
+        "grey_pcs_lab": with_header(profile(ktrc, space=b"GRAY"), 20, b"Lab "),
+    })
+    return out
+
+
 def edge_grey() -> dict[str, bytes]:
     ramp17 = [min(65535, int(65535 * (i / 16) ** 2.2)) for i in range(17)]
     return {
@@ -512,9 +624,9 @@ def wrap(cs: dict, icc: bytes) -> bytes:
 
 def synthetic() -> None:
     codestreams = make_codestreams()
-    groups = [("rgb8", {**malformed(), **edge_rgb(), **header(), **lcms_reads()}),
-              ("rgb16", {**malformed(), **edge_rgb(), **header(), **lcms_reads()}),
-              ("grey8", {**edge_grey(), **lcms_reads_grey()})]
+    rgb = {**malformed(), **edge_rgb(), **header(), **lcms_reads(), **classes_and_tables()}
+    groups = [("rgb8", rgb), ("rgb16", rgb),
+              ("grey8", {**edge_grey(), **lcms_reads_grey(), **classes_and_tables_grey()})]
     cases = []
     for key, profiles in groups:
         cs = codestreams[key]
