@@ -111,9 +111,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refuses to open or to build a transform from (a bad header, a class or
   intent it does not know, a missing or unreadable tag, a lookup table it
   can't read), and a profile in a colour space other than RGB, grey or
-  YCbCr, as OpenJPEG leaves them; the metadata then keeps the profile.
-  These, and a profile on one or two channels, pass through before any
-  check on the samples, as in OpenJPEG.
+  YCbCr, as OpenJPEG leaves them; the metadata then keeps the profile. So
+  does an RGB profile when any of the first four channels (all of them, if
+  fewer) differs from the first in depth, sign or sub-sampling, an opacity
+  channel included, as OpenJPEG's check before it builds the transform
+  skips the conversion. These, and a profile on one or two channels, pass
+  through before any check on the samples, as in OpenJPEG.
   Display, output and colour space profiles convert as input ones do. After a conversion `Jp2Metadata::colour`
   says sRGB, or greyscale for a monochrome profile whose output is neutral.
   A monochrome profile whose output is not neutral (absolute colorimetric
@@ -122,8 +125,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spaces, a YCbCr profile, a profile LittleCMS would apply through a lookup
   table or the Lab connection space, a monochrome profile on more than two
   channels, and colour channels that differ in depth, sign or sub-sampling
-  are `Unsupported`; `Srgb` with `raw_channels` is
-  `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
+  (under an RGB profile, only where OpenJPEG guesses sYCC, below) are
+  `Unsupported`; `Srgb` with `raw_channels` is `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
   sub-sampled chroma, whatever colour space it declares; `Srgb` refuses it
   instead.
 - `DecodeOptions::with_raw_channels` and `DecodeOptions::with_colour` set

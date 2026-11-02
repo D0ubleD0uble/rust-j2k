@@ -1765,11 +1765,11 @@ fn refusals_are_ordered_as_in_openjpeg() {
         intent(&mut grey, 4);
         assert_passes_through(&file(THREE, &icc_colr(&grey), &children));
     }
-    // Sample formats this step does not apply a profile to: 12-bit and
-    // mixed-depth RGB, 12 and 16-bit grey.
-    let shapes: [(&[u8], Vec<u8>, &str); 4] = [
+    // Sample formats this step does not apply a profile to: 12-bit RGB, 12
+    // and 16-bit grey. (Mixed-depth RGB fails OpenJPEG's AFL test, which
+    // comes before the transform: `an_rgb_profile_passes_through_*`.)
+    let shapes: [(&[u8], Vec<u8>, &str); 3] = [
         (&[11, 11, 11], wide_gamut(), "RGB ICC profile from 12-bit"),
-        (&[7, 11, 7], wide_gamut(), "different formats"),
         (&[11], grey_profile(), "monochrome ICC profile from 12-bit"),
         (&[15], grey_profile(), "monochrome ICC profile from 16-bit"),
     ];

@@ -523,3 +523,349 @@ fn a_grey_profile_on_two_channels_without_cdef_is_grey_plus_opacity() {
         assert_eq!(header.jp2.unwrap(), image.jp2.unwrap(), "{name}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// OpenJPEG's AFL test
+// ---------------------------------------------------------------------------
+
+/// `Ssiz` for 8-bit signed and for 12-bit unsigned samples.
+const SIGNED_8: u8 = 0x87;
+const UNSIGNED_12: u8 = 0x0b;
+
+/// `codestream` with component `k`'s `Ssiz` set to `ssiz`.
+fn with_ssiz(codestream: &[u8], k: usize, ssiz: u8) -> Vec<u8> {
+    let mut out = codestream.to_vec();
+    out[42 + 3 * k] = ssiz;
+    out
+}
+
+/// The codestream of `jp2_cdef_rgba.jp2`: 16x12, four 8-bit components.
+fn rgba() -> Vec<u8> {
+    let bytes = read("jp2_cdef_rgba.jp2");
+    let (_, start, end) = boxes(&bytes, 12, bytes.len())
+        .into_iter()
+        .find(|(kind, _, _)| kind == b"jp2c")
+        .unwrap();
+    bytes[start..end].to_vec()
+}
+
+/// A `cdef` box of (`Cn`, `Typ`, `Asoc`) entries.
+fn cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
+    let mut payload = (entries.len() as u16).to_be_bytes().to_vec();
+    for &(cn, typ, asoc) in entries {
+        for v in [cn, typ, asoc] {
+            payload.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    bx(b"cdef", &payload)
+}
+
+/// Colours 1, 2, 3 and an opacity channel for the whole image.
+const RGBA_CDEF: &[(u16, u16, u16)] = &[(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 1, 0)];
+
+/// A JP2 file around `codestream` with `profile` in its `colr` and the
+/// `children` after it. Components that differ in depth or sign get `ihdr`
+/// BPC 255 and a `bpcc` box.
+fn wrap_with(codestream: &[u8], profile: &[u8], children: &[Vec<u8>]) -> Vec<u8> {
+    let header = rust_j2k::read_header(codestream).expect("codestream header");
+    let bpc: Vec<u8> = header
+        .components
+        .iter()
+        .map(|c| (c.bit_depth - 1) | if c.signed { 0x80 } else { 0 })
+        .collect();
+    let uniform = bpc.iter().all(|&b| b == bpc[0]);
+    let mut ihdr = header.height.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&header.width.to_be_bytes());
+    ihdr.extend_from_slice(&(bpc.len() as u16).to_be_bytes());
+    ihdr.extend_from_slice(&[if uniform { bpc[0] } else { 255 }, 7, 0, 0]);
+    let mut jp2h = bx(b"ihdr", &ihdr);
+    if !uniform {
+        jp2h.extend(bx(b"bpcc", &bpc));
+    }
+    let mut colr = vec![2, 0, 0];
+    colr.extend_from_slice(profile);
+    jp2h.extend(bx(b"colr", &colr));
+    jp2h.extend(children.concat());
+    let mut out = b"\x00\x00\x00\x0cjP  \r\n\x87\n".to_vec();
+    out.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    out.extend(bx(b"jp2h", &jp2h));
+    out.extend(bx(b"jp2c", codestream));
+    out
+}
+
+/// A profile from `icc/profiles.json`.
+fn named_profile(name: &str) -> Vec<u8> {
+    let text = String::from_utf8(read("icc/profiles.json")).unwrap();
+    let profiles: Profiles = serde_json::from_str(&text).expect("profiles.json");
+    let case = profiles.cases.iter().find(|c| c.name == name).unwrap();
+    hex(&case.profile)
+}
+
+/// `Srgb` gives OpenJPEG's planes (`want`): as coded, with the profile still
+/// in the metadata, or converted to sRGB. `read_header_with` describes the
+/// decode.
+#[track_caller]
+fn check_afl(what: &str, bytes: &[u8], want: &[&str], converted: bool) {
+    let image = decode_with(bytes, &srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
+    let got: Vec<String> = image.components.iter().map(plane_hash).collect();
+    assert_eq!(got, want, "{what}: OpenJPEG's planes");
+    let coded = decode(bytes).unwrap();
+    let jp2 = image.jp2.as_ref().unwrap();
+    if converted {
+        assert_ne!(image.components, coded.components, "{what}: converted");
+        assert_eq!(jp2.colour, ColourSpace::Srgb, "{what}");
+    } else {
+        assert_eq!(image.components, coded.components, "{what}: as coded");
+        assert_eq!(image.jp2, coded.jp2, "{what}: metadata as declared");
+        assert!(
+            matches!(jp2.colour, ColourSpace::RestrictedIcc(_)),
+            "{what}: the profile stays"
+        );
+    }
+    let header =
+        rust_j2k::read_header_with(bytes, &srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(header.jp2, image.jp2, "{what}: header");
+    assert_eq!(header.components.len(), image.components.len(), "{what}");
+    for (info, c) in header.components.iter().zip(&image.components) {
+        assert_eq!(
+            (info.bit_depth, info.signed, info.width, info.height),
+            (c.bit_depth, c.signed, c.width, c.height),
+            "{what}: header"
+        );
+    }
+}
+
+/// OpenJPEG's planes for the files below (`opj_decompress -i <file>.jp2 -o
+/// out.pgx`). `RGB_AS_CODED` is `jp2_cdef_rgba`'s first three planes.
+const RGB_AS_CODED: [&str; 3] = [
+    "9440fef292cd0d865bc9d98c84ef8a648e5cc79bc95bf54857f32b3fb207722a",
+    "70be7146623f03e79146c2b179778ffa52c2cabfd1674839bd9115c326450c9b",
+    "d086834ee4d5cc3b7340601f3ec141c0adae87e3fb4d340ef74955e5feb17946",
+];
+const ALPHA_SIGNED: &str = "2f2e0062b7ebc44c2b561ae57c532497543f930e791a9d5dfbd9da60d782fa0b";
+const ALPHA_12BIT: &str = "75c0a15f6593760f509b49ceadd501069525dde012326f905a88c40c8f6a0fb3";
+/// The planes of `channels/fourth_2x1.j2k`, `fourth_1x2.j2k` and
+/// `third_subsampled.j2k`: the first two are the same in all three.
+const SUB_FIRST_TWO: [&str; 2] = [
+    "163863672477216de38d1f8a5eae8c60d7935221feb4ee9f553f7de0e65be449",
+    "ecb883240d00e26c9c4fb5bfb5deb157b30ce8c0c00d4094e43b5d9018460fef",
+];
+const SUB_THIRD_FULL: &str = "ba46435cccec6c13d0c14059632e6fdfa56fdcb2d402923de4be2021b1d5ea82";
+const SUB_FOURTH_2X1: &str = "7118c7e749c7ac2aa28c95e8ac7a67ecc5be5751d1c710745acf9cd7f02ccfaf";
+const SUB_FOURTH_1X2: &str = "41042b94f4e10308a50bf2a1d64b0b95948767a7c0aec8f229bd631f994a3f20";
+const SUB_THIRD_2X2: &str = "491b6467dd9f3ae58e2482dc8ae9689dc252c52dd425c4e08f4a65a8ff3447e8";
+/// `multicomponent_lossless.j2k` with its third component signed.
+const BLUE_SIGNED: [&str; 3] = [
+    "26c630b1696c1ce4fa7163e35ab23b2d17d05e0cd47c0a5b2c7d344c3feb37be",
+    "db57ea4486e47a9ac7d8efd8e7e1d3e0f47e7595abca5d06f6b1d1febe95d39f",
+    "2b370743c4c9efdfe3a484562f3469dde33d01d7fc0efe40b0eea5d9decf97f4",
+];
+
+/// OpenJPEG's AFL test (`color.c:495-519` in 2.5.0): before it builds the
+/// transform for an RGB profile, `opj_decompress` compares the first
+/// `min(numcomps, 4)` components with the first by sub-sampling, depth and
+/// sign, and writes the samples as coded if any differs. `Srgb` does the
+/// same, with a `cdef` and without one.
+///
+/// The hashes are the planes of `opj_decompress -i <file>.jp2 -o out.pgx`
+/// (OpenJPEG 2.5.0, LittleCMS 2.14) on each file built here; on every
+/// pass-through file `-force-rgb` fails, since nothing was converted.
+#[test]
+fn an_rgb_profile_passes_through_when_the_first_four_channels_differ() {
+    let rgb = file5_profile();
+    let with_cdef = [cdef(RGBA_CDEF)];
+    let signed = with_ssiz(&rgba(), 3, SIGNED_8);
+    let twelve = with_ssiz(&rgba(), 3, UNSIGNED_12);
+    let sub_x = read("channels/fourth_2x1.j2k");
+    let sub_y = read("channels/fourth_1x2.j2k");
+    let blue = with_ssiz(&read("multicomponent_lossless.j2k"), 2, SIGNED_8);
+    let third = read("channels/third_subsampled.j2k");
+    let rgb_and = |last| [RGB_AS_CODED[0], RGB_AS_CODED[1], RGB_AS_CODED[2], last];
+    let sub_and = |last| [SUB_FIRST_TWO[0], SUB_FIRST_TWO[1], SUB_THIRD_FULL, last];
+    let cases: Vec<(&str, Vec<u8>, [&str; 4])> = vec![
+        (
+            "alpha_signed_cdef",
+            wrap_with(&signed, &rgb, &with_cdef),
+            rgb_and(ALPHA_SIGNED),
+        ),
+        (
+            "alpha_signed",
+            wrap_with(&signed, &rgb, &[]),
+            rgb_and(ALPHA_SIGNED),
+        ),
+        (
+            "alpha_12bit_cdef",
+            wrap_with(&twelve, &rgb, &with_cdef),
+            rgb_and(ALPHA_12BIT),
+        ),
+        (
+            "alpha_12bit",
+            wrap_with(&twelve, &rgb, &[]),
+            rgb_and(ALPHA_12BIT),
+        ),
+        (
+            "alpha_2x1_cdef",
+            wrap_with(&sub_x, &rgb, &with_cdef),
+            sub_and(SUB_FOURTH_2X1),
+        ),
+        (
+            "alpha_2x1",
+            wrap_with(&sub_x, &rgb, &[]),
+            sub_and(SUB_FOURTH_2X1),
+        ),
+        (
+            "alpha_1x2_cdef",
+            wrap_with(&sub_y, &rgb, &with_cdef),
+            sub_and(SUB_FOURTH_1X2),
+        ),
+        (
+            "alpha_1x2",
+            wrap_with(&sub_y, &rgb, &[]),
+            sub_and(SUB_FOURTH_1X2),
+        ),
+    ];
+    for (what, bytes, want) in cases {
+        check_afl(what, &bytes, &want, false);
+    }
+    // On three channels the test covers the colours themselves.
+    check_afl(
+        "blue_signed",
+        &wrap_with(&blue, &rgb, &[]),
+        &BLUE_SIGNED,
+        false,
+    );
+    check_afl(
+        "blue_subsampled",
+        &wrap_with(&third, &rgb, &[]),
+        &[SUB_FIRST_TWO[0], SUB_FIRST_TWO[1], SUB_THIRD_2X2],
+        false,
+    );
+}
+
+/// The AFL test comes before LittleCMS builds the transform, so before every
+/// check this decoder makes on the profile and the channels: a lookup-table
+/// or Lab profile (refused here, converted by OpenJPEG when the channels
+/// match) and a `cdef` of two colours (refused here) pass through when the
+/// fourth channel differs, as in `opj_decompress`.
+#[test]
+fn the_afl_test_comes_before_this_decoders_refusals() {
+    let signed = with_ssiz(&rgba(), 3, SIGNED_8);
+    let two_colours = [cdef(&[(0, 0, 1), (1, 0, 2), (2, 1, 0), (3, 1, 0)])];
+    let signed_planes = [
+        RGB_AS_CODED[0],
+        RGB_AS_CODED[1],
+        RGB_AS_CODED[2],
+        ALPHA_SIGNED,
+    ];
+    let cases: Vec<(&str, Vec<u8>, &[&str])> = vec![
+        (
+            "order_lut16",
+            wrap_with(&signed, &named_profile("lut16"), &[cdef(RGBA_CDEF)]),
+            &signed_planes,
+        ),
+        (
+            "order_lab",
+            wrap_with(&signed, &named_profile("pcs_lab"), &[cdef(RGBA_CDEF)]),
+            &signed_planes,
+        ),
+        (
+            "order_two_colours",
+            wrap_with(&signed, &file5_profile(), &two_colours),
+            &signed_planes,
+        ),
+    ];
+    for (what, bytes, want) in cases {
+        check_afl(what, &bytes, want, false);
+    }
+    // The same profiles and `cdef` on the unmodified file are refused.
+    let rgba = rgba();
+    for (bytes, fragment) in [
+        (
+            wrap_with(&rgba, &named_profile("lut16"), &[cdef(RGBA_CDEF)]),
+            "`A2B0` lookup table",
+        ),
+        (
+            wrap_with(&rgba, &named_profile("pcs_lab"), &[cdef(RGBA_CDEF)]),
+            "`Lab ` connection space",
+        ),
+        (
+            wrap_with(&rgba, &file5_profile(), &two_colours),
+            "needs colour channels 1, 2 and 3",
+        ),
+    ] {
+        match decode_with(&bytes, &srgb()) {
+            Err(Error::Unsupported(e)) => assert!(e.contains(fragment), "{e}"),
+            other => panic!("expected {fragment:?}, got {other:?}"),
+        }
+    }
+}
+
+/// Where the first four channels match, an RGB profile still converts, as
+/// in `opj_decompress`: a fifth channel is not compared, and a monochrome or
+/// YCbCr profile has no AFL test.
+#[test]
+fn the_afl_test_covers_only_rgb_profiles_and_four_channels() {
+    let rgb = file5_profile();
+    let fifth = read("channels/fifth_subsampled.j2k");
+    let five_cdef = [cdef(&[
+        (0, 0, 1),
+        (1, 0, 2),
+        (2, 0, 3),
+        (3, 1, 0),
+        (4, 1, 0),
+    ])];
+    let grey_alpha = with_ssiz(&read("cblksty_bypass_lossless.j2k"), 1, SIGNED_8);
+    let rgba_planes: &[&str] = &[
+        "2e04f36cb26f7c503ac424f3cbb48e2286722ef39dd47f0bf1df96c2326e8cc8",
+        "51d9b1ebd7d82216021780370e40ef2423bd76c1f402716ee712c8cde32270dc",
+        "038369c2180cfe468c41ce30b740f6e7c66d60c12347a7624f80d63e27f77cd5",
+        "f4baf2f8962309bd8a60f09e6d1805e0b5a7304204d7f5bb6be6840f1aa4f2d2",
+    ];
+    let fifth_planes: &[&str] = &[
+        "2a3416ab77f30611a65e8b770e36b931e9c8afaee64490db4621567de763ea4a",
+        "07baf36ea076eeab7dd3bd9d206f9a1a214aa08d2b5dd60043eec1153f324193",
+        "b224e86099ae1c19c22241db832778e0d96e190f915255492ea6064b22617088",
+        "b225dd0389766a26347110bf08fa34fab80c3532f2d8a69ac928ee53390ef6ff",
+        "b88be758de874868741d0e190f497b1ad9862ee3618060394fb14ef47aadcaa0",
+    ];
+    let cases: Vec<(&str, Vec<u8>, &[&str])> = vec![
+        (
+            "rgba_cdef",
+            wrap_with(&rgba(), &rgb, &[cdef(RGBA_CDEF)]),
+            rgba_planes,
+        ),
+        ("rgba", wrap_with(&rgba(), &rgb, &[]), rgba_planes),
+        (
+            "fifth_subsampled_cdef",
+            wrap_with(&fifth, &rgb, &five_cdef),
+            fifth_planes,
+        ),
+        (
+            "fifth_subsampled",
+            wrap_with(&fifth, &rgb, &[]),
+            fifth_planes,
+        ),
+        (
+            "grey_alpha_signed",
+            wrap_with(&grey_alpha, &named_profile("grey_white_d65"), &[]),
+            &[
+                "7df53cf1559167d5f754b7694f3a8bbc25558f007a54e30d447decd1f4a59175",
+                "a9b13cb5073c0b8fe73cef96492fa3c13bf8341789d15554edca8a0c747b7605",
+                "d6641bf952c5f0a3b3af487eaeb0a7ed4451a655d673968b868eeed8e1a04c61",
+                "0fb095b5690d1fbaaccc9cb421bbdf7f73cd186779e5fc642942a0e27aeef7a7",
+            ],
+        ),
+    ];
+    for (what, bytes, want) in cases {
+        check_afl(what, &bytes, want, true);
+    }
+    // A YCbCr profile is refused here whatever the fourth channel is;
+    // OpenJPEG converts it at 16 bits and crashes at 8.
+    let mut ycbr = rgb.clone();
+    ycbr[16..20].copy_from_slice(b"YCbr");
+    let signed = with_ssiz(&rgba(), 3, SIGNED_8);
+    match decode_with(&wrap_with(&signed, &ycbr, &[cdef(RGBA_CDEF)]), &srgb()) {
+        Err(Error::Unsupported(e)) => assert!(e.contains("`YCbr` colour space"), "{e}"),
+        other => panic!("expected the YCbCr refusal, got {other:?}"),
+    }
+}

@@ -42,7 +42,10 @@
 //! transform from (its header checks, a class or intent it does not know, a
 //! missing or unreadable tag, a lookup table it can't read), and a profile
 //! in a colour space other than RGB, grey or YCbCr: OpenJPEG then skips the
-//! conversion.
+//! conversion. An RGB profile passes through too when any of the first four
+//! output channels differs from the first in depth, sign or sub-sampling
+//! (OpenJPEG's "AFL test", [`first_four_differ`]), unless the three channels
+//! have the shape OpenJPEG converts as sYCC first ([`sycc_guess`]).
 //! These come first, before any check on the samples, as in OpenJPEG. The
 //! profile reader follows LittleCMS's, including where it reads past a
 //! tag's size.
@@ -51,8 +54,9 @@
 //! another enumerated colour space or with no colour space, a YCbCr
 //! profile, a profile LittleCMS would apply through a lookup table or the
 //! Lab connection space, and colour channels that differ in depth, sign or
-//! sub-sampling (except the sYCC layouts above). OpenJPEG converts some of
-//! those anyway and gets them wrong; `docs/correctness.md` lists each case.
+//! sub-sampling (except the sYCC layouts and the RGB profile case above).
+//! OpenJPEG converts some of those anyway and gets them wrong;
+//! `docs/correctness.md` lists each case.
 
 use super::lcms::{Format, InputProfile, ToneCurve, Transform};
 use super::metadata::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
@@ -123,11 +127,8 @@ pub(crate) fn plan(
             // a `cdef`, and converts it. A file declared grey with that shape
             // is therefore checked on all three channels. Any other channel
             // past the colour space's colours is left as coded.
-            let sycc_guess = *colour == ColourSpace::Greyscale
-                && outputs.len() == 3
-                && outputs[1].x_sampling != 1
-                && outputs[0].x_sampling == outputs[0].y_sampling;
-            let colours = if sycc_guess {
+            let guessed = *colour == ColourSpace::Greyscale && sycc_guess(outputs);
+            let colours = if guessed {
                 (0..outputs.len()).collect()
             } else {
                 colour_channels(channels, outputs, 0)
@@ -154,6 +155,29 @@ pub(crate) fn plan(
             "sRGB output from a file with no colour specification".into(),
         )),
     }
+}
+
+/// The shape from which `opj_decompress` guesses sYCC whatever the file
+/// declares (`opj_decompress.c:1620`): three components, the second
+/// sub-sampled in x, the first with equal x and y sampling. It converts such
+/// an image as sYCC before it looks at any ICC profile.
+fn sycc_guess(outputs: &[ComponentInfo]) -> bool {
+    outputs.len() == 3
+        && outputs[1].x_sampling != 1
+        && outputs[0].x_sampling == outputs[0].y_sampling
+}
+
+/// OpenJPEG's "AFL test" (`color.c:495-519`): before it builds a transform
+/// for an RGB profile, it compares the first `min(numcomps, 4)` components
+/// with the first, by sub-sampling, depth and sign, and skips the
+/// conversion if any differs. The positions are the output's, after the
+/// palette and the channel definitions, whatever each channel is.
+fn first_four_differ(outputs: &[ComponentInfo]) -> bool {
+    let Some((first, rest)) = outputs.split_first() else {
+        return false;
+    };
+    let format = |c: &ComponentInfo| (c.x_sampling, c.y_sampling, c.bit_depth, c.signed);
+    rest.iter().take(3).any(|c| format(c) != format(first))
 }
 
 /// The output positions of the channels labelled colour 1, 2, ... in colour
@@ -376,6 +400,14 @@ fn plan_icc_or_refuse(
         // OpenJPEG applies an RGB profile only to three or more components.
         b"RGB " if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
         b"RGB " => {
+            // OpenJPEG's AFL test sits after LittleCMS opens the profile and
+            // before it builds the transform, so it comes before this step's
+            // own checks too. In the sYCC-guess shape OpenJPEG has already
+            // converted the samples as sYCC, which this step does not do, so
+            // that shape is left to the checks below, which refuse it.
+            if first_four_differ(outputs) && !sycc_guess(outputs) {
+                return Err(Icc::Refused);
+            }
             let input = icc.input_profile(Form::Rgb)?;
             let colours = three_colours(channels, outputs, "an RGB ICC profile")?;
             uniform(&colours, outputs)?;
@@ -470,8 +502,8 @@ const MONACO_CURVE: [u8; 4] = 0x9478_EE00u32.to_be_bytes();
 #[derive(Debug)]
 enum Icc {
     /// OpenJPEG writes the samples as coded: LittleCMS refuses to open the
-    /// profile or to build a transform from it, or OpenJPEG has no transform
-    /// for its colour space.
+    /// profile or to build a transform from it, OpenJPEG has no transform
+    /// for its colour space, or its AFL test fails ([`first_four_differ`]).
     Refused,
     /// This step refuses the input.
     Error(Error),

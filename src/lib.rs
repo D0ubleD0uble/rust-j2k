@@ -277,7 +277,13 @@ pub enum ColourOutput {
     /// [`Jp2Metadata::colour`] stays [`ColourSpace::RestrictedIcc`], so a
     /// caller can tell nothing was converted. A profile whose colour space is
     /// neither RGB, grey nor YCbCr passes through the same way, since
-    /// OpenJPEG has no transform for it. LittleCMS refuses:
+    /// OpenJPEG has no transform for it. So does an RGB profile when any of
+    /// the first four output channels (all of them, if fewer) differs from
+    /// the first in depth, sign or sub-sampling, whatever the channel is
+    /// (an opacity channel too): OpenJPEG checks this after LittleCMS opens
+    /// the profile and before it builds the transform. The exception is a
+    /// three-channel image OpenJPEG reads as sYCC (below). LittleCMS
+    /// refuses:
     ///
     /// - a profile shorter than its 128-byte header and tag count;
     /// - no `acsp` signature, a version above 5.0, or a device class it does
@@ -311,7 +317,11 @@ pub enum ColourOutput {
     /// on more than two channels, an RGB profile on samples that are not 8
     /// or 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and
     /// colour channels that differ in depth, sign or sub-sampling other than
-    /// sYCC's chroma layouts. As in OpenJPEG, every refusal above, and a
+    /// sYCC's chroma layouts. Under an RGB profile, channels that differ
+    /// among the first four pass through instead (above), except three
+    /// channels whose second is sub-sampled in x and whose first has equal x
+    /// and y sampling, which OpenJPEG converts as sYCC whatever the file
+    /// declares. As in OpenJPEG, every refusal above, and a
     /// profile on one or two colour channels, passes through before these
     /// checks: a profile LittleCMS refuses passes through whatever the
     /// samples are. These errors apply only when `Srgb` is asked

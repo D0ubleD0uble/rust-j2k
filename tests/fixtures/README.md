@@ -231,6 +231,17 @@ sampling 1x2, 2x1, 2x1, coded with `opj_compress -i in.raw -o luma_1x2.j2k -F
 sampling, so a greyscale file around it passes through (OpenJPEG makes no
 sYCC guess).
 
+`channels/fourth_2x1.j2k` (393 bytes), `channels/fourth_1x2.j2k` (392
+bytes) and `channels/fifth_subsampled.j2k` (454 bytes) use the same planes
+at 8x8 for four and five components, the last sub-sampled (2x1, 1x2, 2x2),
+coded with `opj_compress -i in.raw -o <name>.j2k -F 8,8,4,8,u@1x1:1x1:1x1:2x1
+-n 2 -mct 0` (`@1x1:1x1:1x1:1x2` for `fourth_1x2`; `-F
+8,8,5,8,u@1x1:1x1:1x1:1x1:2x2` for `fifth_subsampled`) with OpenJPEG 2.5.0,
+and checked lossless against the planes. `tests/jp2_icc.rs` wraps them in
+JP2 files with an RGB ICC profile: a sub-sampled fourth channel makes
+OpenJPEG skip the conversion, a sub-sampled fifth does not. The expected
+planes are hashes of `opj_decompress` output on those JP2 files.
+
 ### Budget fixture
 
 `budget/flat_1024_lossless.j2k` (328 bytes) is a flat 1024x1024 8-bit
