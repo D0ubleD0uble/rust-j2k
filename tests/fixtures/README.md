@@ -215,6 +215,16 @@ source codestream and the oracle command.
 
 They are ours, built over the Apache-2.0 / synthetic codestreams above.
 
+### Channel fixture
+
+`channels/third_subsampled.j2k` (302 bytes) is three 8x8 8-bit components with
+the third sub-sampled 2x2 (the first two are full size), lossless, from
+planes `((x*29 + y*13 + k*71) * 7) mod 256` for component `k`, coded with
+`opj_compress -i in.raw -o third_subsampled.j2k -F 8,8,3,8,u@1x1:1x1:2x2 -n 2
+-mct 0` (OpenJPEG 2.5.0). `src/jp2/srgb_tests.rs` wraps it in a JP2 file
+declared greyscale with no `cdef` and requires `ColourOutput::Srgb` to pass it
+through as coded, as `opj_decompress` writes it.
+
 ### Budget fixture
 
 `budget/flat_1024_lossless.j2k` (328 bytes) is a flat 1024x1024 8-bit

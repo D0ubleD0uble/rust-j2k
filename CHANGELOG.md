@@ -40,10 +40,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   OpenJPEG: each colour entry moves its channel to its colour's position, and
   other channels stay where the file put them. The entries describe the
   channels after the palette. Without a `cdef` (or under `raw_channels`),
-  only the first channels the colour space has are colours (3 for sRGB and
-  sYCC, 1 for greyscale, the profile's for an ICC profile); any channel past
-  them is `Unspecified` with no association, since I.5.3.6 gives it no
-  meaning. This also lets a file of two components, a greyscale ICC profile
+  only the first N channels are colours, N being the colour space's
+  number of colours (3 for sRGB and sYCC, 1 for greyscale, the profile's for
+  an ICC profile); any channel past them is `Unspecified` with no
+  association, since I.5.3.6 gives it no meaning. This also lets a file of two components, a greyscale ICC profile
   and no `cdef` convert under `ColourOutput::Srgb` as grey plus opacity, and
   an sRGB file of four components whose fourth differs in format from the
   colours passes through as coded, as OpenJPEG does.

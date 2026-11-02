@@ -369,20 +369,24 @@ fn passthrough(file: &Jp2File<'_>) -> Passthrough {
     out
 }
 
-/// The number of colours in a colour space: what I.5.3.6 means by the colours
-/// a channel can be associated with. Enumerated values are those of Table I.10
-/// of Annex I. `None` when the space is unknown or the ICC profile is too
-/// short to name its colour space, so the count cannot be given.
+/// The number of colours in a colour space: the colours a channel can be
+/// associated with in I.5.3.6. Part 1 (Table I.10) defines enumerated values
+/// 16, 17 and 18; the others are those of ISO/IEC 15444-2 Table M.25. `None`
+/// when the space is unknown, the enumerated value is not listed, or the ICC
+/// profile is too short to name its colour space, so the count cannot be
+/// given.
 fn colour_count(colour: &ColourSpace) -> Option<usize> {
     match colour {
+        // `colour.rs` maps enumerated 17 to `Greyscale`, so it never reaches
+        // the `Enumerated` arm.
         ColourSpace::Greyscale => Some(1),
         ColourSpace::Srgb | ColourSpace::Sycc => Some(3),
         ColourSpace::Enumerated(value) => match value {
-            // Bi-level, greyscale.
-            0 | 15 | 17 => Some(1),
-            // YCbCr, PhotoYCC, CMY, CIELab, sRGB-like, CIEJab, e-sRGB,
-            // ROMM-RGB, YPbPr and e-sYCC.
-            1 | 3 | 4 | 9 | 11 | 14 | 16 | 18..=24 => Some(3),
+            // Bi-level (0, 15).
+            0 | 15 => Some(1),
+            // YCbCr (1, 3, 4), PhotoYCC, CMY, CIELab, CIEJab, e-sRGB,
+            // ROMM-RGB, YPbPr (22, 23) and e-sYCC.
+            1 | 3 | 4 | 9 | 11 | 14 | 19..=24 => Some(3),
             // CMYK, YCCK.
             12 | 13 => Some(4),
             _ => None,
@@ -394,8 +398,11 @@ fn colour_count(colour: &ColourSpace) -> Option<usize> {
                 b"RGB " | b"YCbr" | b"Lab " | b"Luv " | b"XYZ " | b"Yxy " | b"HSV " | b"HLS "
                 | b"CMY " => Some(3),
                 b"CMYK" => Some(4),
-                // `nCLR`: n colours, as one hex digit.
-                [d, b'C', b'L', b'R'] => char::from(*d).to_digit(16).map(|n| n as usize),
+                // `nCLR`: n colours for n in 2 to 15, as one upper-case hex
+                // digit (ICC.1 Table 19).
+                [d @ (b'2'..=b'9' | b'A'..=b'F'), b'C', b'L', b'R'] => {
+                    char::from(*d).to_digit(16).map(|n| n as usize)
+                }
                 _ => None,
             }
         }
@@ -403,12 +410,12 @@ fn colour_count(colour: &ColourSpace) -> Option<usize> {
     }
 }
 
-/// The channel definitions of a file without `cdef`. I.5.3.6 gives a channel
-/// a colour only through a channel definition; without one, the first
-/// [`colour_count`] channels are the colour space's colours in order (channel
-/// `i` is colour `i + 1`) and any channel past them has no defined meaning, so
-/// it is `Unspecified` with no association. When the count is unknown every
-/// channel is labelled a colour.
+/// The channel definitions of a file without `cdef`. With no `cdef`, I.5.3.6
+/// takes the channels to be the colour space's colours in order (channel `i`
+/// is colour `i + 1`). The first [`colour_count`] channels are labelled so; a
+/// file with more channels than colours breaks that, so the channels past
+/// them have no defined meaning and are `Unspecified` with no association.
+/// When the count is unknown every channel is labelled a colour.
 fn colour_channels(count: usize, colour: &ColourSpace) -> Result<Vec<ChannelDefinition>> {
     let colours = colour_count(colour).unwrap_or(count);
     (0..count)

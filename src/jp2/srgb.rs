@@ -119,11 +119,18 @@ pub(crate) fn plan(
 ) -> Result<SrgbPlan> {
     match colour {
         ColourSpace::Srgb | ColourSpace::Greyscale => {
-            // OpenJPEG reads three components with sub-sampled chroma as sYCC
-            // whatever the file declares, so a file declared grey, on three
-            // components and without a `cdef`, is checked on all three. Any
-            // other channel past the colour space's colours is left as coded.
-            let colours = if no_cdef && *colour == ColourSpace::Greyscale && outputs.len() == 3 {
+            // `opj_decompress` reads a three-component image as sYCC when the
+            // second component is sub-sampled in x and the first has equal x
+            // and y sampling, whatever the file declares, and converts it. A
+            // file declared grey with that shape and no `cdef` is therefore
+            // checked on all three channels. Any other channel past the
+            // colour space's colours is left as coded.
+            let sycc_guess = no_cdef
+                && *colour == ColourSpace::Greyscale
+                && outputs.len() == 3
+                && outputs[1].x_sampling != 1
+                && outputs[0].x_sampling == outputs[0].y_sampling;
+            let colours = if sycc_guess {
                 (0..outputs.len()).collect()
             } else {
                 colour_channels(channels, outputs, 0)
