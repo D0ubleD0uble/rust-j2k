@@ -211,12 +211,14 @@ fn entry_value(bytes: &[u8]) -> i32 {
 /// One channel of a file's component mapping (`cmap` box): where an output
 /// channel's samples come from.
 ///
-/// The decoder's output channels follow these entries in order, with one
-/// exception: for a one-component file whose `cmap` leaves a palette column
-/// unused, OpenJPEG reads the mapping as every channel looking up its own
-/// column, and so does this decoder. Under
-/// [`raw_channels`](crate::DecodeOptions::raw_channels) the entries are
-/// reported as the box has them, unchecked.
+/// The decoder's output channels follow these entries in order, before any
+/// `cdef` reordering. The mapping reported is the one the default decode
+/// applies, whatever the options: for a one-component file whose `cmap`
+/// leaves a palette column unused, OpenJPEG reads the mapping as every channel
+/// looking up its own column, and so does this decoder, so that is what is
+/// reported. Only a `cmap` the default decode refuses is reported as written
+/// (and only under [`raw_channels`](crate::DecodeOptions::raw_channels),
+/// which does not check it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ChannelMapping {
@@ -247,6 +249,19 @@ pub enum MappingKind {
         /// The `PCOL` value.
         pcol: u8,
     },
+}
+
+fn public_source(source: Source) -> ChannelMapping {
+    match source {
+        Source::Direct { component } => ChannelMapping {
+            component,
+            kind: MappingKind::Direct,
+        },
+        Source::Palette { component, column } => ChannelMapping {
+            component,
+            kind: MappingKind::Palette { column },
+        },
+    }
 }
 
 /// `cmap` entries as public data, in order.
@@ -364,10 +379,17 @@ pub(crate) fn plan(
                 *slot = true;
             }
         }
+        // The mapping the default decode would use, with OpenJPEG's
+        // correction. A `cmap` the default decode would refuse has no such
+        // mapping, so it is reported as written.
+        let mapping = match map_channels(&entries, palette.columns.len(), siz.components.len()) {
+            Ok(sources) => sources.into_iter().map(public_source).collect(),
+            Err(_) => public_mapping(&entries),
+        };
         return Ok(PalettePlan::Skipped {
             index_components,
             palette,
-            mapping: public_mapping(&entries),
+            mapping,
         });
     }
     let sources = map_channels(&entries, palette.columns.len(), siz.components.len())?;
@@ -633,21 +655,8 @@ impl PalettePlan {
             PalettePlan::None => {}
             PalettePlan::Apply { palette, channels } => {
                 metadata.palette = Some(palette.clone());
-                metadata.channel_mapping = Some(
-                    channels
-                        .iter()
-                        .map(|c| match c.source {
-                            Source::Direct { component } => ChannelMapping {
-                                component,
-                                kind: MappingKind::Direct,
-                            },
-                            Source::Palette { component, column } => ChannelMapping {
-                                component,
-                                kind: MappingKind::Palette { column },
-                            },
-                        })
-                        .collect(),
-                );
+                metadata.channel_mapping =
+                    Some(channels.iter().map(|c| public_source(c.source)).collect());
             }
             PalettePlan::Skipped {
                 palette, mapping, ..

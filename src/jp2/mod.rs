@@ -64,8 +64,8 @@ mod tests;
 
 pub(crate) use after::check as check_after_codestream;
 pub use metadata::{
-    Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata, Ratio, Res, Resolution,
-    UuidBox,
+    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, ColourSpace, Jp2Metadata,
+    Ratio, Res, Resolution, UuidBox,
 };
 pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 
@@ -318,6 +318,7 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
         palette_applied: false,
         palette: None,
         channel_mapping: None,
+        channel_definitions: channels::definitions(&file.header),
         resolution: resolution::read(&file.header),
         xml,
         uuid,

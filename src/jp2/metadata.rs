@@ -20,6 +20,25 @@ pub struct Jp2Metadata {
     /// file has no palette (or a `pclr` without a `cmap`), or the caller set
     /// [`DecodeOptions::raw_channels`](crate::DecodeOptions::raw_channels).
     pub palette_applied: bool,
+    /// The file's channel definition box (`cdef`) as written, in file order:
+    /// `Some` whenever the file has one, whatever the options, and `None`
+    /// without one. The entries are checked only when the decode applies them,
+    /// so under [`raw_channels`](crate::DecodeOptions::raw_channels) a `cn`
+    /// may name a channel the file does not have.
+    ///
+    /// The channels an entry's [`channel`](ChannelDefinitionEntry::channel)
+    /// counts are the file's components after the palette is expanded, in the
+    /// order [`channel_mapping`](Self::channel_mapping) gives (the components
+    /// as coded for a file without a palette). The decode puts them in colour
+    /// order like this: take the channels in that order; for each entry in
+    /// file order whose type is [`ChannelType::Colour`] and whose association
+    /// is [`Association::Colour`]`(n)`, swap its channel with the channel now
+    /// at position `n - 1`. Every other entry moves nothing. A channel's label
+    /// on [`channels`](Self::channels) is that of the last entry naming it.
+    ///
+    /// [`channels`](Self::channels) itself is only relabelled when the `cdef`
+    /// applies: under `raw_channels` every channel keeps its default label.
+    pub channel_definitions: Option<Vec<ChannelDefinitionEntry>>,
     /// The file's palette, from its `pclr` box. Present when the palette
     /// applies, and also when
     /// [`raw_channels`](crate::DecodeOptions::raw_channels) left it unapplied
@@ -29,17 +48,16 @@ pub struct Jp2Metadata {
     /// ignores the palette in that case, as this decoder does.
     pub palette: Option<Palette>,
     /// The file's component mapping, set whenever [`palette`](Self::palette)
-    /// is. One entry per `cmap` entry, and a `cmap` has one per palette
-    /// column. An entry is [`Direct`](crate::MappingKind::Direct) for a component
-    /// used as coded.
+    /// is: one entry per output channel of a palettised decode, in the order
+    /// before any `cdef` reordering. An entry is
+    /// [`Direct`](crate::MappingKind::Direct) for a component used as coded.
     ///
-    /// When the palette applies, these are the channels of the decode, in
-    /// order before any `cdef` reordering, and the mapping is the one the
-    /// decoder used: OpenJPEG's correction for a single-component file turns
-    /// every entry into a lookup in its own column, so it can differ from the
-    /// box. Under `raw_channels` it is the box as written, unchecked, and an
-    /// `MTYP` other than 0 or 1 is [`Reserved`](crate::MappingKind::Reserved); expand
-    /// the index planes through [`palette`](Self::palette) with it.
+    /// It is the mapping the default decode applies, in either mode, including
+    /// OpenJPEG's correction for a single-component file (which turns every
+    /// entry into a lookup in its own column, so it can differ from the box).
+    /// Only a `cmap` the default decode refuses is reported as written, and
+    /// only under `raw_channels`, which does not check it; an `MTYP` other
+    /// than 0 or 1 is then [`Reserved`](crate::MappingKind::Reserved).
     pub channel_mapping: Option<Vec<ChannelMapping>>,
     /// The capture and default display resolutions from the header's `res `
     /// box, each `None` when the file does not give it.
@@ -203,6 +221,22 @@ pub struct ChannelDefinition {
     pub kind: ChannelType,
     /// Which colour, if any, the channel is associated with.
     pub association: Association,
+}
+
+/// One entry of a file's channel definition box (`cdef`), as written: the
+/// channel it describes and that channel's definition.
+///
+/// [`Jp2Metadata::channels`] has the labels of the output channels in output
+/// order; these entries are indexed by `Cn`, the channel's position before
+/// the `cdef` box reorders anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ChannelDefinitionEntry {
+    /// `Cn`: the channel described, counting the components after palette
+    /// expansion (the codestream's components for a file without a palette).
+    pub channel: u16,
+    /// `Typ` and `Asoc`.
+    pub definition: ChannelDefinition,
 }
 
 /// A channel's type, from a channel definition (`Typ`).

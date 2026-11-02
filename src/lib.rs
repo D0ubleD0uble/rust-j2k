@@ -100,8 +100,8 @@ pub use error::{Error, Result};
 pub use header::{ComponentInfo, Header};
 pub use image::{Component, Image};
 pub use jp2::{
-    Association, ChannelDefinition, ChannelMapping, ChannelType, ColourSpace, Jp2Metadata,
-    MappingKind, Palette, PaletteColumn, Ratio, Res, Resolution, UuidBox,
+    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
+    ColourSpace, Jp2Metadata, MappingKind, Palette, PaletteColumn, Ratio, Res, Resolution, UuidBox,
 };
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
@@ -309,11 +309,24 @@ pub struct DecodeOptions {
     /// `i` is reported as colour `i + 1`, whatever the `cdef` box says. The
     /// boxes' layout is still checked, so a malformed `pclr`, `cmap` or
     /// `cdef` is still [`Error::FileFormat`]; the palette mapping and column
-    /// depths, and the channel definitions' entries, are not. The palette and
-    /// the mapping are on [`Jp2Metadata::palette`] and
-    /// [`Jp2Metadata::channel_mapping`], so a caller can expand the index
-    /// planes itself. No effect on a
-    /// raw codestream. Default `false`.
+    /// depths, and the channel definitions' entries, are not.
+    ///
+    /// The metadata carries what the decode left out, so a caller can rebuild
+    /// the default decode, in order, from the raw one:
+    ///
+    /// 1. Expand the index planes. For each entry of
+    ///    [`Jp2Metadata::channel_mapping`], in order, take the raw channel
+    ///    `component`; a [`MappingKind::Direct`] entry is used as it is, and a
+    ///    [`MappingKind::Palette`] entry looks each sample up as an index into
+    ///    that column of [`Jp2Metadata::palette`] (an index past the table
+    ///    reads its last entry, a negative one its first). Without a palette
+    ///    the raw channels are used as they are.
+    /// 2. Put the channels in colour order with
+    ///    [`Jp2Metadata::channel_definitions`], by the rule documented there.
+    ///    Without a `cdef` the order from step 1 stands.
+    ///
+    /// The result is the channels of the default decode. No effect on a raw
+    /// codestream. Default `false`.
     pub raw_channels: bool,
     /// What colour space the colour channels come out in. Default
     /// [`ColourOutput::AsCoded`].

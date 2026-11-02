@@ -109,9 +109,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   palette table (`Palette`, `PaletteColumn`) and component mapping
   (`ChannelMapping`, `MappingKind`). They are set whenever a palette and a
   `cmap` are present, also under `raw_channels`, so a caller can expand the
-  index planes itself. Under `raw_channels` the mapping is the box as written;
-  otherwise it is the mapping the decoder used, which differs from the box only
-  for OpenJPEG's single-component correction.
+  index planes itself.
+- `Jp2Metadata::channel_definitions` gives the `cdef` entries as written
+  (`ChannelDefinitionEntry`), and `channel_mapping` is the mapping the default
+  decode applies in both modes, OpenJPEG's single-component correction
+  included. With `raw_channels`, a caller can rebuild the default decode in
+  order from the raw one: expand the index planes through `palette` with
+  `channel_mapping`, then order them by the rule on `channel_definitions`. The
+  `raw_channels` documentation gives the recipe.
 - `src/jp2/lcms.rs` is a Rust port of parts of LittleCMS 2.14 (MIT). Its
   notice is at the top of the file and in the README.
 

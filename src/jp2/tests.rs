@@ -184,6 +184,7 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
             palette_applied: false,
             palette: None,
             channel_mapping: None,
+            channel_definitions: None,
             resolution: Resolution::default(),
             xml: Vec::new(),
             uuid: Vec::new(),
