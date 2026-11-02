@@ -197,6 +197,10 @@ at your option.
 `src/jp2/lcms.rs` is a Rust port of parts of LittleCMS 2.14, which is MIT
 licensed. Its copyright and license notice is at the top of that file.
 
+`src/jp2/math.rs` and `src/jp2/math_data.rs` are a Rust port of `pow` and
+`log` from Arm's optimized-routines (commit `2ee4b0d`), used under the MIT
+license. Its copyright and license notice is at the top of `math.rs`.
+
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
 be dual-licensed as above, without any additional terms or conditions.

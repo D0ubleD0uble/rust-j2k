@@ -103,8 +103,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   three-component matrix/TRC) applied at its rendering intent, with the
   same output as OpenJPEG with LittleCMS, sample for sample. The reference
   is OpenJPEG 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc
-  2.39), and the output is the same on every platform. sRGB and greyscale
-  pass through,
+  2.39), and the output is the same on every platform whose `fma` is
+  correctly rounded (MinGW's, on `*-pc-windows-gnu`, may not be:
+  rust-lang/rust#140515). sRGB and greyscale pass through,
   and so do sYCC or an RGB or YCbCr profile on one or two channels, one or two
   channels with no colour space to convert from (a raw codestream, or a
   file with no `colr` or another enumerated space), a profile LittleCMS

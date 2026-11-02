@@ -1,4 +1,5 @@
-//! `pow` and `log` for the ICC transform, the same on every platform.
+//! `pow` and `log` for the ICC transform, the same on every platform with a
+//! correctly rounded `fma`.
 //!
 //! LittleCMS calls the C library's `pow` and `log`, and the reference output
 //! comes from glibc 2.39 on x86-64. A platform's own `f64::powf` and `f64::ln`
@@ -15,8 +16,9 @@
 //! instructions. This port follows the machine code of that variant in
 //! Ubuntu's `libm.so.6` (2.39-0ubuntu8.7): each `mul_add` below is a fused
 //! multiply-add there, and every other operation is a plain IEEE 754 one.
-//! `f64::mul_add` rounds once on every platform, so the results are the same
-//! everywhere.
+//! `f64::mul_add` rounds once wherever the platform's `fma` is correctly
+//! rounded, so the results are the same there. MinGW's (`*-pc-windows-gnu`)
+//! may round twice (rust-lang/rust#140515).
 //!
 //! The SSE2 variant differs from the FMA one in the last bit on fewer than one
 //! input in a thousand, so glibc on an x86-64 CPU without FMA can disagree with

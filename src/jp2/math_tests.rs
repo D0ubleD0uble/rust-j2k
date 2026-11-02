@@ -1,14 +1,13 @@
 //! `math::pow` and `math::log` against glibc.
 //!
-//! The sweep compares them bit for bit with `f64::powf` and `f64::ln` where
-//! those are glibc 2.39's FMA variant: x86-64 Linux with glibc, on a CPU with
-//! FMA and AVX2 (the variant glibc picks there). Elsewhere the platform
-//! functions are what may differ, so the comparison is skipped, and a digest
-//! of the same sweep, recorded from glibc, checks the port on its own.
+//! The default test runs the port on a sweep of inputs and checks digests of
+//! its results, recorded from glibc 2.39's FMA variant, on every platform.
 //!
-//! The default sweep runs about 5.2 million `log` and 3.7 million `pow`
-//! inputs. A larger one is `#[ignore]`d; run it with
-//! `cargo test --release --lib math_tests -- --ignored`.
+//! An `#[ignore]`d test compares the port bit for bit with `f64::powf` and
+//! `f64::ln` where those are that variant: x86-64 Linux with glibc, on a CPU
+//! with FMA and AVX2. It runs the default sweep and one 100 times larger.
+//! It is kept out of the default run so a different host glibc can't fail
+//! it. Run it with `cargo test --release --lib math_tests -- --ignored`.
 
 use std::hint::black_box;
 
@@ -229,6 +228,22 @@ fn pow_inputs(scale: usize, mut each: impl FnMut(f64, f64)) {
         each(x, y);
         each(x, y + 0.5);
     }
+    for _ in 0..20_000 * scale {
+        // Negative bases with |y| in [2^52, 2^54), where `checkint` reads the
+        // lowest mantissa bit (odd) or finds y even. Bases within a few ulps of
+        // -1 keep the result finite; the others overflow or underflow to a
+        // signed infinity or zero.
+        let odd = f64::from_bits(0x4330_0000_0000_0000 | (rng.next() & 0x000f_ffff_ffff_ffff) | 1);
+        let even = f64::from_bits(0x4340_0000_0000_0000 | (rng.next() & 0x000f_ffff_ffff_ffff));
+        let near = -f64::from_bits(0x3ff0_0000_0000_0000 + (rng.next() % 9));
+        let below = -f64::from_bits(0x3ff0_0000_0000_0000 - (rng.next() % 9));
+        let far = -rng.range(0.0, 3.0);
+        for x in [-1.0, near, below, far] {
+            for y in [odd, -odd, odd - 1.0, -(odd - 1.0), even, -even] {
+                each(x, y);
+            }
+        }
+    }
 }
 
 /// Equal bits, or both NaN (a NaN's sign and payload are not specified).
@@ -307,33 +322,39 @@ fn sweep(scale: usize, compare: bool) -> ((u64, u64), (u64, u64)) {
 }
 
 /// The digests of the default sweep's results, recorded from glibc 2.39's
-/// FMA variant (the bit-equality test checks that the port gives them).
-const DIGESTS: (u64, u64) = (0xef5a_be59_dd0e_f2ce, 0xfa11_790e_4762_49f2);
+/// FMA variant (`matches_glibc_bit_for_bit` checks that glibc gives them).
+const DIGESTS: (u64, u64) = (0xef5a_be59_dd0e_f2ce, 0x0ee2_0b44_6760_73bf);
+/// The default sweep's `log` and `pow` input counts.
+const COUNTS: (u64, u64) = (5_204_157, 4_209_591);
 
+/// The port's results on the default sweep, by digest. This pins them on
+/// every platform without depending on the host's libm.
 #[test]
-fn matches_glibc_on_the_default_sweep() {
-    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
-    let compare = platform_is_reference();
-    #[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
-    let compare = false;
-    let (counts, digests) = sweep(1, compare);
-    assert_eq!(counts, (5_204_157, 3_729_591));
+fn matches_the_glibc_digests() {
+    let (counts, digests) = sweep(1, false);
+    assert_eq!(counts, COUNTS);
     assert_eq!(
         digests, DIGESTS,
         "digests {digests:#x?} for {counts:?} inputs"
     );
 }
 
-/// 100 times the default sweep, about a minute in release. Run it with
+/// The port against `f64::ln` and `f64::powf` bit for bit, on the default
+/// sweep (which also shows the recorded digests are glibc's) and on one 100
+/// times larger. It needs glibc 2.39's FMA variant: x86-64 Linux with glibc,
+/// on a CPU with FMA and AVX2, and no `GLIBC_TUNABLES` that turns them off.
+/// About a minute in release:
 /// `cargo test --release --lib math_tests -- --ignored`.
 #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
 #[test]
-#[ignore = "slow: a larger sweep against glibc"]
-fn matches_glibc_on_a_large_sweep() {
+#[ignore = "slow, and needs the host's glibc to be 2.39's FMA variant"]
+fn matches_glibc_bit_for_bit() {
     assert!(
         platform_is_reference(),
         "needs glibc's FMA variant (FMA and AVX2)"
     );
+    let (counts, digests) = sweep(1, true);
+    assert_eq!((counts, digests), (COUNTS, DIGESTS));
     let (counts, _) = sweep(100, true);
     eprintln!("compared {} log and {} pow inputs", counts.0, counts.1);
 }
