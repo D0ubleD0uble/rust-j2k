@@ -33,7 +33,7 @@ fuzz/
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
   fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream, also decoded as sRGB
-  fuzz_targets/header.rs        # rust_j2k::read_header(&[u8]), checked against decode
+  fuzz_targets/header.rs        # rust_j2k::read_header_with, checked against decode_with
   fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColourOutput::Srgb
   icc.dict                      # ICC tag and type signatures for icc_srgb
 ```
@@ -83,9 +83,11 @@ and is refused from the sampling alone. The CI smoke generates these seeds befor
 seeds `header` from the committed fixtures.
 `gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds.
 
-`header` drives the header-only entry point, `read_header`, and checks it
-against `decode` on the same input: a `read_header` error must be `decode`'s
-error too, and a successful decode must match the header field for field.
+`header` drives the header-only entry point, `read_header_with`, and checks it
+against `decode_with` on the same input, under five fixed option sets
+(defaults, `raw_channels`, reduction 1, sRGB, reduction 1 with sRGB): a
+`read_header_with` error must be `decode_with`'s error too, and a successful
+decode must match the header field for field.
 A decode costs far more than the header, so once the header reads, inputs
 over 64 KiB or images over 2^16 samples are not decoded. For those inputs the
 target checks `read_header` alone: it does not compare a successful header

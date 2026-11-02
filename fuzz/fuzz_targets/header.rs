@@ -2,12 +2,12 @@
 //! Fuzz target over the public [`rust_j2k::read_header_with`] entry point.
 //!
 //! Same contract as `decode`: a typed result for every input, never a panic,
-//! an allocation sized from an unchecked field, or a hang. The last input
-//! byte picks the options (`raw_channels`, sRGB output, a resolution
-//! reduction of 0 to 3); the rest is the file. (The last byte, not the first, so a plain
-//! `.j2k` or `.jp2` seed still opens with its own signature.) It also checks that
-//! `read_header_with` and `decode_with` agree under those options, since
-//! `decode_with` runs the same header checks before it reads any tile data:
+//! an allocation sized from an unchecked field, or a hang. Every input is run
+//! under a fixed list of option sets (the defaults, `raw_channels`, a
+//! resolution reduction of 1, sRGB output, and reduction 1 with sRGB), so a
+//! plain `.j2k` or `.jp2` seed is used as it is. For each set it checks that
+//! `read_header_with` and `decode_with` agree, since `decode_with` runs the
+//! same header checks before it reads any tile data:
 //!
 //! - when `read_header_with` fails, `decode_with` fails with the same error;
 //! - when `decode_with` succeeds, `read_header_with` reports the decoded
@@ -27,17 +27,23 @@ const MAX_DECODED_INPUT: usize = 1 << 16;
 /// Images above this many samples, over all channels, are not decoded.
 const MAX_DECODED_SAMPLES: u64 = 1 << 16;
 
-fuzz_target!(|input: &[u8]| {
-    let Some((&selector, data)) = input.split_last() else {
-        return;
-    };
-    let mut options = rust_j2k::DecodeOptions::default()
-        .with_raw_channels(selector & 1 != 0)
-        .with_resolution_reduction((selector >> 2) & 3);
-    if selector & 2 != 0 {
-        options = options.with_colour(rust_j2k::ColourOutput::Srgb);
+fuzz_target!(|data: &[u8]| {
+    let default = rust_j2k::DecodeOptions::default();
+    let srgb = || default.clone().with_colour(rust_j2k::ColourOutput::Srgb);
+    let option_sets = [
+        default.clone(),
+        default.clone().with_raw_channels(true),
+        default.clone().with_resolution_reduction(1),
+        srgb(),
+        srgb().with_resolution_reduction(1),
+    ];
+    for options in &option_sets {
+        check(data, options);
     }
-    let header = rust_j2k::read_header_with(data, &options);
+});
+
+fn check(data: &[u8], options: &rust_j2k::DecodeOptions) {
+    let header = rust_j2k::read_header_with(data, options);
     if let Ok(header) = &header {
         let samples = (u64::from(header.width) * u64::from(header.height))
             .saturating_mul(header.components.len() as u64);
@@ -45,7 +51,7 @@ fuzz_target!(|input: &[u8]| {
             return;
         }
     }
-    let decoded = rust_j2k::decode_with(data, &options);
+    let decoded = rust_j2k::decode_with(data, options);
     match (&header, &decoded) {
         (Err(h), _) => assert_eq!(decoded.as_ref().err(), Some(h), "the same error"),
         (Ok(header), Ok(image)) => {
@@ -75,4 +81,4 @@ fuzz_target!(|input: &[u8]| {
         }
         (Ok(_), Err(_)) => {}
     }
-});
+}
