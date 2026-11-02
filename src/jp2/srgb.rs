@@ -35,13 +35,14 @@
 //!   channel. A monochrome profile on more than two channels is refused:
 //!   OpenJPEG passes the planes to a grey transform as if they were RGB.
 //!
-//! sYCC or an RGB profile on one or two colour channels passes through, as
-//! OpenJPEG leaves them, and so do one or two channels with no colour space
-//! this step converts (no `colr`, or another enumerated colour space). So
-//! does a profile LittleCMS refuses to open or to build a transform from
-//! (its header checks, a class or intent it does not know, a missing or
-//! unreadable tag, a lookup table it can't read), and a profile in a colour
-//! space other than RGB, grey or YCbCr: OpenJPEG then skips the conversion.
+//! sYCC or an RGB or YCbCr profile on one or two colour channels passes
+//! through, as OpenJPEG leaves them, and so do one or two channels with no
+//! colour space this step converts (no `colr`, or another enumerated colour
+//! space). So does a profile LittleCMS refuses to open or to build a
+//! transform from (its header checks, a class or intent it does not know, a
+//! missing or unreadable tag, a lookup table it can't read), and a profile
+//! in a colour space other than RGB, grey or YCbCr: OpenJPEG then skips the
+//! conversion.
 //! These come first, before any check on the samples, as in OpenJPEG. The
 //! profile reader follows LittleCMS's, including where it reads past a
 //! tag's size.
@@ -375,9 +376,17 @@ fn plan_icc_or_refuse(
                 transform: Box::new(Transform::new(&input, format)),
             })
         }
-        // OpenJPEG runs a YCbCr profile as 16-bit YCbCr over samples of any
-        // depth, which reads past its buffers; there is nothing to match.
-        b"YCbr" => Err(unsupported_profile("for the `YCbr` colour space")),
+        // OpenJPEG applies a YCbCr profile only to three or more components,
+        // and LittleCMS refuses first, as for RGB.
+        b"YCbr" if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
+        b"YCbr" => {
+            icc.input_profile(Form::Rgb)?;
+            // OpenJPEG runs the transform as 16-bit YCbCr whatever the
+            // depth: it converts 16-bit samples and crashes on 8-bit ones.
+            // YCbCr is not one of Annex I's restricted forms, so this step
+            // does not apply it at any depth.
+            Err(unsupported_profile("for the `YCbr` colour space"))
+        }
         // OpenJPEG converts no other colour space.
         _ => Err(Icc::Refused),
     }

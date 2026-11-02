@@ -458,8 +458,14 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   into XYZ. A table whose header passes lcms's checks but whose contents
   lcms rejects (an `mpet` with no elements, say) is refused here too, where
   OpenJPEG writes the samples as coded;
-- a YCbCr (`YCbr`) ICC profile. OpenJPEG picks `TYPE_YCbCr_16` for it;
-  `opj_decompress` 2.5.0 crashed on the one checked;
+- a YCbCr (`YCbr`) ICC profile on three or more channels that LittleCMS
+  would build a transform from (orchestrator decision, 2026-11-02, on
+  #199). OpenJPEG runs it as 16-bit YCbCr whatever the depth:
+  `opj_decompress` 2.5.0 converts 16-bit samples and crashes on 8-bit ones.
+  The refusal is a deviation at 16 bits, kept because YCbCr is not one of
+  Annex I's restricted forms. On one or two channels, or where LittleCMS
+  refuses the profile (intent 4, a missing tag), it passes through as in
+  OpenJPEG (`refusals_are_ordered_as_in_openjpeg`);
 - an RGB profile on samples other than 8- or 16-bit unsigned, or a grey
   profile on samples other than 8-bit unsigned (owner decision, 2026-11-01,
   on #165). OpenJPEG picks an lcms format from the precision alone

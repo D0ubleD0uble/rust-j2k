@@ -265,7 +265,8 @@ pub enum ColourOutput {
     /// are: [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for one
     /// grey channel, with no ICC profile. [`read_header`] and the default
     /// [`ColourOutput::AsCoded`] report the colour space the file declares.
-    /// sYCC or an RGB profile on one or two colour channels passes through,
+    /// sYCC or an RGB or YCbCr profile on one or two colour channels passes
+    /// through,
     /// as OpenJPEG leaves it, and so do one or two channels with no colour
     /// space to convert from (a raw codestream, a file with no `colr`, or
     /// another enumerated colour space), read as grey, or grey and opacity;
@@ -310,9 +311,10 @@ pub enum ColourOutput {
     /// on more than two channels, an RGB profile on samples that are not 8
     /// or 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and
     /// colour channels that differ in depth, sign or sub-sampling other than
-    /// sYCC's chroma layouts. As in OpenJPEG, every refusal above comes
-    /// before these checks: a profile LittleCMS refuses passes through
-    /// whatever the samples are. These errors apply only when `Srgb` is asked
+    /// sYCC's chroma layouts. As in OpenJPEG, every refusal above, and a
+    /// profile on one or two colour channels, passes through before these
+    /// checks: a profile LittleCMS refuses passes through whatever the
+    /// samples are. These errors apply only when `Srgb` is asked
     /// for: [`ColourOutput::AsCoded`] decodes the same files.
     Srgb,
 }

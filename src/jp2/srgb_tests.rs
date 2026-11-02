@@ -1683,6 +1683,29 @@ fn refusals_are_ordered_as_in_openjpeg() {
         is_unsupported,
         "`A2B0` lookup table",
     );
+    // A YCbCr profile: as coded on one channel, and on three, 8 or 16-bit,
+    // with an intent LittleCMS does not know or a missing tag. Where
+    // LittleCMS would build the transform it is refused.
+    let ycbr = |p: &mut Vec<u8>| p[16..20].copy_from_slice(b"YCbr");
+    let wide16 = palette(&[15, 15, 15], 4, |j, _| u32::from(j));
+    for value in [0, 4] {
+        let mut icc = wide_gamut();
+        ycbr(&mut icc);
+        intent(&mut icc, value);
+        assert_passes_through(&file(ONE, &icc_colr(&icc), &[]));
+        for (coded, children) in [(THREE, vec![]), (ONE, wide16.clone())] {
+            let decoded = decode_srgb(&file(coded, &icc_colr(&icc), &children));
+            if value == 0 {
+                expect_err(decoded, is_unsupported, "`YCbr` colour space");
+            } else {
+                assert_passes_through(&file(coded, &icc_colr(&icc), &children));
+            }
+        }
+    }
+    let mut missing = wide_gamut();
+    ycbr(&mut missing);
+    missing[128..132].copy_from_slice(&0u32.to_be_bytes());
+    assert_passes_through(&file(THREE, &icc_colr(&missing), &[]));
     // The monochrome profile on three channels, or on one colour channel of
     // three: refused at intent 0, passed through at intent 4.
     let colour_first = bx(
