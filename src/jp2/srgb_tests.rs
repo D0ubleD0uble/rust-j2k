@@ -226,9 +226,6 @@ fn expect_err(result: crate::Result<Image>, want: fn(&Error) -> bool, fragment: 
 fn is_unsupported(e: &Error) -> bool {
     matches!(e, Error::Unsupported(_))
 }
-fn is_file_format(e: &Error) -> bool {
-    matches!(e, Error::FileFormat(_))
-}
 
 // ---------------------------------------------------------------------------
 // sYCC
@@ -651,21 +648,9 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             &[],
         )
     };
-    let replace_tag = |name: &[u8; 4], data: Vec<u8>| {
-        let tags = wide_gamut_tags()
-            .into_iter()
-            .map(|(n, d)| if n == name { (n, data.clone()) } else { (n, d) })
-            .collect();
-        with_tags(tags)
-    };
     let sycc_jp2c = top_box(SYCC_420, b"jp2c");
     let mut lut_tags = wide_gamut_tags();
     lut_tags.push((b"A2B0", vec![0; 32]));
-    let white = |value: Vec<u8>| {
-        let mut tags = wide_gamut_tags();
-        tags.push((b"wtpt", value));
-        intent_3(tags)
-    };
     let missing_rtrc: Vec<_> = wide_gamut_tags()
         .into_iter()
         .filter(|(n, _)| *n != b"rTRC")
@@ -686,12 +671,6 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "no colour specification",
         ),
         (
-            "profile shorter than its header",
-            file(THREE, &icc_colr(&[0; 100]), &[]),
-            is_file_format,
-            "100 bytes, shorter than its 128-byte header",
-        ),
-        (
             "display class",
             rgb_profile(&|p| p[12..16].copy_from_slice(b"mntr")),
             is_unsupported,
@@ -710,30 +689,6 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "`Lab ` connection space",
         ),
         (
-            "absolute colorimetric, white point not XYZ",
-            white(curv(&[1])),
-            is_file_format,
-            "`wtpt` tag is not an `XYZ ` value",
-        ),
-        (
-            "rendering intent 4",
-            rgb_profile(&|p| p[64..68].copy_from_slice(&4u32.to_be_bytes())),
-            is_unsupported,
-            "rendering intent 4",
-        ),
-        (
-            "tag table past the end",
-            rgb_profile(&|p| p[128..132].copy_from_slice(&100u32.to_be_bytes())),
-            is_file_format,
-            "declares 100 tags, past its end",
-        ),
-        (
-            "more tags than LittleCMS reads",
-            rgb_profile(&|p| p[128..132].copy_from_slice(&101u32.to_be_bytes())),
-            is_file_format,
-            "declares 101 tags, more than 100",
-        ),
-        (
             "LUT-based",
             with_tags(lut_tags),
             is_unsupported,
@@ -744,49 +699,6 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             with_tags(missing_rtrc),
             is_unsupported,
             "without a `rTRC` tag",
-        ),
-        (
-            "tag past the end",
-            rgb_profile(&|p| {
-                let at = 132 + 4;
-                p[at..at + 4].copy_from_slice(&5000u32.to_be_bytes())
-            }),
-            is_file_format,
-            "`rXYZ` tag has a zero offset or size, or ends past the profile's declared size",
-        ),
-        (
-            "XYZ tag of another type",
-            replace_tag(b"gXYZ", curv(&[1])),
-            is_file_format,
-            "`gXYZ` tag is not an `XYZ ` value",
-        ),
-        (
-            "curve of another type",
-            replace_tag(b"bTRC", xyz([0, 0, 0])),
-            is_unsupported,
-            "`bTRC` curve of type `XYZ `",
-        ),
-        (
-            "para function 5",
-            replace_tag(b"rTRC", para(5, &[1.0])),
-            is_unsupported,
-            "parametric function type 5",
-        ),
-        (
-            "para cut short",
-            replace_tag(b"rTRC", para(4, &[1.0, 1.0])),
-            is_file_format,
-            "`rTRC` curve is cut short",
-        ),
-        (
-            "curv cut short",
-            replace_tag(b"gTRC", {
-                let mut c = curv(&[0, 1, 2]);
-                c.truncate(14);
-                c
-            }),
-            is_file_format,
-            "`gTRC` curve is cut short",
         ),
         (
             "grey profile, three colours",
@@ -1082,4 +994,368 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
     // As coded, the same file is under the guard and fails only later, on
     // its (now too short) tile data.
     assert!(!matches!(decode(&bytes), Err(Error::Limit(_)) | Ok(_)));
+}
+
+// ---------------------------------------------------------------------------
+// Profiles LittleCMS refuses
+// ---------------------------------------------------------------------------
+//
+// OpenJPEG skips the ICC step when LittleCMS will not open the profile or
+// build a transform from it, and writes the samples as coded. Each case here
+// was run through `opj_decompress` 2.5.0 (LittleCMS 2.14) on the same file:
+// the pass-through cases came out byte-identical to the file with its `colr`
+// set to enumerated sRGB (or greyscale), and the converted ones matched this
+// decoder's output sample for sample.
+
+/// `Srgb` leaves the samples as coded: the channels, samples and metadata of
+/// the default decode, with the profile still in `Jp2Metadata::colour`, and
+/// `read_header_with` describes exactly that.
+#[track_caller]
+fn assert_passes_through(bytes: &[u8]) {
+    let coded = decode(bytes).expect("as coded");
+    let image = decode_srgb(bytes).expect("sRGB passes through");
+    assert_eq!(image.components, coded.components, "samples as coded");
+    assert_eq!(image.jp2, coded.jp2, "metadata as declared");
+    assert!(
+        matches!(
+            image.jp2.as_ref().unwrap().colour,
+            ColourSpace::RestrictedIcc(_)
+        ),
+        "the profile stays in the metadata"
+    );
+    let header = read_header_with(bytes, &srgb()).expect("header");
+    assert_eq!(header, read_header(bytes).expect("header"));
+    assert_eq!(header.jp2, image.jp2, "the header describes the decode");
+    assert_eq!(header.components.len(), image.components.len());
+    for (info, c) in header.components.iter().zip(&image.components) {
+        assert_eq!(
+            (info.bit_depth, info.signed, info.width, info.height),
+            (c.bit_depth, c.signed, c.width, c.height)
+        );
+    }
+}
+
+/// `Srgb` converts `bytes` to the same samples and metadata as `like`, and
+/// `read_header_with` describes the result.
+#[track_caller]
+fn assert_converts_like(bytes: &[u8], like: &[u8]) {
+    let image = decode_srgb(bytes).expect("sRGB");
+    let want = decode_srgb(like).expect("sRGB");
+    assert_ne!(
+        image.components,
+        decode(bytes).expect("as coded").components,
+        "converted"
+    );
+    assert_eq!(image.components, want.components);
+    assert_eq!(image.jp2, want.jp2);
+    let header = read_header_with(bytes, &srgb()).expect("header");
+    assert_eq!(header.jp2, image.jp2, "the header describes the decode");
+    assert_eq!(header.components.len(), image.components.len());
+}
+
+/// The wide-gamut RGB profile on three channels, edited by `edit`.
+fn edited(edit: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
+    let mut icc = wide_gamut();
+    edit(&mut icc);
+    file(THREE, &icc_colr(&icc), &[])
+}
+
+fn put_u32(at: usize, value: u32) -> impl Fn(&mut Vec<u8>) {
+    move |p: &mut Vec<u8>| p[at..at + 4].copy_from_slice(&value.to_be_bytes())
+}
+
+/// An RGB profile with these tags on three channels.
+fn rgb_with(tags: &[(&[u8; 4], Vec<u8>)], intent: u32) -> Vec<u8> {
+    file(
+        THREE,
+        &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", intent, tags)),
+        &[],
+    )
+}
+
+/// The wide-gamut tags with `name` replaced by `data`.
+fn replaced(name: &[u8; 4], data: Vec<u8>) -> Vec<(&'static [u8; 4], Vec<u8>)> {
+    wide_gamut_tags()
+        .into_iter()
+        .map(|(n, d)| if n == name { (n, data.clone()) } else { (n, d) })
+        .collect()
+}
+
+/// A monochrome profile with these tags on one channel.
+fn grey_with(tags: &[(&[u8; 4], Vec<u8>)], intent: u32) -> Vec<u8> {
+    file(
+        ONE,
+        &icc_colr(&profile(b"scnr", b"GRAY", b"XYZ ", intent, tags)),
+        &[],
+    )
+}
+
+/// `data` with its type signature replaced.
+fn retyped(mut data: Vec<u8>, kind: [u8; 4]) -> Vec<u8> {
+    data[..4].copy_from_slice(&kind);
+    data
+}
+
+const MONACO_CURVE: [u8; 4] = [0x94, 0x78, 0xEE, 0x00];
+const CORBIS_XYZ: [u8; 4] = [0x17, 0xA5, 0x05, 0xB8];
+
+#[test]
+fn a_profile_shorter_than_its_header_passes_through() {
+    assert_passes_through(&file(THREE, &icc_colr(&[0; 100]), &[]));
+    assert_passes_through(&file(ONE, &icc_colr(&[0; 100]), &[]));
+    // The 128-byte header, but no tag count.
+    assert_passes_through(&file(THREE, &icc_colr(&wide_gamut()[..130]), &[]));
+}
+
+#[test]
+fn a_profile_without_the_acsp_signature_passes_through() {
+    assert_passes_through(&edited(|p| p[36..40].copy_from_slice(b"acsP")));
+}
+
+#[test]
+fn a_profile_version_above_5_0_passes_through() {
+    assert_passes_through(&edited(put_u32(8, 0x0510_0000)));
+    // 5.0 itself converts.
+    assert_converts_like(&edited(put_u32(8, 0x0500_0000)), &edited(|_| {}));
+}
+
+#[test]
+fn a_profile_of_more_than_100_tags_passes_through() {
+    let names: Vec<[u8; 4]> = (0..95u8)
+        .map(|i| [b'z', b'0' + i / 10, b'0' + i % 10, b' '])
+        .collect();
+    let mut tags = wide_gamut_tags();
+    for name in &names {
+        tags.push((name, vec![0; 4]));
+    }
+    // 100 tags convert; 101 pass through.
+    assert_converts_like(&rgb_with(&tags[..100], 0), &edited(|_| {}));
+    assert_passes_through(&rgb_with(&tags, 0));
+    // A count above 100 is refused before the table is read.
+    assert_passes_through(&edited(put_u32(128, 101)));
+}
+
+#[test]
+fn a_tag_table_past_the_profile_end_passes_through() {
+    assert_passes_through(&edited(put_u32(128, 99)));
+}
+
+#[test]
+fn a_duplicate_tag_passes_through() {
+    let mut tags = wide_gamut_tags();
+    tags.push((b"rTRC", curv(&[300])));
+    assert_passes_through(&rgb_with(&tags, 0));
+}
+
+/// LittleCMS skips an entry with a zero offset or size, or one that ends
+/// past the declared size, so the tag is then missing.
+#[test]
+fn a_tag_entry_littlecms_skips_passes_through() {
+    // The first entry is rXYZ: its offset at 136, its size at 140.
+    assert_passes_through(&edited(put_u32(136, 5000)));
+    assert_passes_through(&edited(put_u32(136, 0)));
+    assert_passes_through(&edited(put_u32(140, 0)));
+    assert_passes_through(&grey_with(&[(b"kTRC", vec![])], 0));
+}
+
+#[test]
+fn a_tag_shorter_than_its_type_header_passes_through() {
+    assert_passes_through(&rgb_with(&replaced(b"rTRC", b"curv".to_vec()), 0));
+}
+
+#[test]
+fn a_colorant_tag_of_another_type_passes_through() {
+    assert_passes_through(&rgb_with(&replaced(b"gXYZ", curv(&[1])), 0));
+}
+
+#[test]
+fn a_curve_tag_of_another_type_passes_through() {
+    assert_passes_through(&rgb_with(&replaced(b"bTRC", xyz([0, 0, 0])), 0));
+    // LittleCMS reads an old Monaco tool's curve type for `rTRC`, `gTRC`
+    // and `bTRC` only.
+    let monaco = retyped(curv(&[GAMMA_18]), MONACO_CURVE);
+    assert_passes_through(&grey_with(&[(b"kTRC", monaco)], 0));
+}
+
+#[test]
+fn a_parametric_curve_of_an_unknown_function_passes_through() {
+    assert_passes_through(&rgb_with(&replaced(b"rTRC", para(5, &[1.0])), 0));
+}
+
+/// A value that runs past the end of the profile is a read LittleCMS fails.
+#[test]
+fn a_tag_value_past_the_profile_end_passes_through() {
+    let last = |name: &'static [u8; 4], data: Vec<u8>| {
+        let mut tags: Vec<_> = wide_gamut_tags()
+            .into_iter()
+            .filter(|(n, _)| *n != name)
+            .collect();
+        tags.push((name, data));
+        rgb_with(&tags, 0)
+    };
+    let mut short = curv(&[0, 30000, 65535]);
+    short.truncate(14);
+    assert_passes_through(&last(b"bTRC", short));
+    assert_passes_through(&last(b"bTRC", para(4, &[1.0, 1.0])));
+    let mut short = xyz([2051, 7, 54061]);
+    short.truncate(16);
+    assert_passes_through(&last(b"bXYZ", short));
+}
+
+#[test]
+fn a_rendering_intent_littlecms_does_not_know_passes_through() {
+    for intent in [4, 9, 16, u32::MAX] {
+        assert_passes_through(&edited(put_u32(64, intent)));
+        assert_passes_through(&grey_with(&[(b"kTRC", curv(&[GAMMA_18]))], intent));
+    }
+}
+
+#[test]
+fn a_curve_of_more_than_32767_entries_passes_through() {
+    let table = |n: u32| {
+        let mut out = b"curv\0\0\0\0".to_vec();
+        out.extend_from_slice(&n.to_be_bytes());
+        out.extend((0..n).flat_map(|i| ((i * 2) as u16).to_be_bytes()));
+        out
+    };
+    assert_passes_through(&rgb_with(&replaced(b"gTRC", table(32768)), 0));
+    // 32767 entries convert.
+    let image = decode_srgb(&rgb_with(&replaced(b"gTRC", table(32767)), 0)).expect("sRGB");
+    assert_eq!(image.jp2.unwrap().colour, ColourSpace::Srgb);
+}
+
+/// LittleCMS reads its black-preserving intents (10 to 15) on an RGB or
+/// grey profile as perceptual, relative colorimetric or saturation, without
+/// the black point compensation it forces for perceptual and saturation, so
+/// each converts as relative colorimetric (1). The curve's nonzero black
+/// makes perceptual (0) differ.
+#[test]
+fn black_preserving_intents_convert_as_relative_colorimetric() {
+    let black = para(2, &[2.2, 1.0, 0.1, 0.05]);
+    let tags: Vec<(&[u8; 4], Vec<u8>)> = wide_gamut_tags()
+        .into_iter()
+        .map(|(n, d)| {
+            if n.ends_with(b"TRC") {
+                (n, black.clone())
+            } else {
+                (n, d)
+            }
+        })
+        .collect();
+    let rgb = |intent| rgb_with(&tags, intent);
+    let grey = |intent| grey_with(&[(b"kTRC", black.clone())], intent);
+    let shapes: [&dyn Fn(u32) -> Vec<u8>; 2] = [&rgb, &grey];
+    for bytes in shapes {
+        assert_ne!(
+            decode_srgb(&bytes(0)).unwrap().components,
+            decode_srgb(&bytes(1)).unwrap().components
+        );
+        for intent in 10..=15 {
+            assert_converts_like(&bytes(intent), &bytes(1));
+        }
+    }
+}
+
+/// LittleCMS reads an old Monaco tool's curve type as `curv` and an old
+/// Corbis tool's XYZ type as `XYZ `.
+#[test]
+fn legacy_curve_and_xyz_types_convert() {
+    assert_converts_like(
+        &rgb_with(&replaced(b"rTRC", retyped(curv(&[300]), MONACO_CURVE)), 0),
+        &rgb_with(&replaced(b"rTRC", curv(&[300])), 0),
+    );
+    let colorant = xyz([52000, 18000, 0]);
+    assert_converts_like(
+        &rgb_with(&replaced(b"rXYZ", retyped(colorant.clone(), CORBIS_XYZ)), 0),
+        &rgb_with(&replaced(b"rXYZ", colorant), 0),
+    );
+}
+
+/// Absolute colorimetric with a media white point LittleCMS can't read
+/// takes D50, as with no `wtpt` at all.
+#[test]
+fn an_unreadable_white_point_converts_as_d50() {
+    let no_white = intent_3(wide_gamut_tags());
+    let with_white = |data: Vec<u8>| {
+        let mut tags = wide_gamut_tags();
+        tags.push((b"wtpt", data));
+        intent_3(tags)
+    };
+    // A readable white point other than D50 changes the output.
+    assert_ne!(
+        decode_srgb(&with_white(xyz(D65))).unwrap().components,
+        decode_srgb(&no_white).unwrap().components
+    );
+    assert_converts_like(&with_white(curv(&[1])), &no_white);
+    assert_converts_like(&with_white(b"XYZ ".to_vec()), &no_white);
+    // The last tag, cut short: the read runs past the profile's end.
+    let mut short = xyz(D65);
+    short.truncate(12);
+    assert_converts_like(&with_white(short), &no_white);
+}
+
+/// LittleCMS reads a tag's value without checking the tag's size, so a value
+/// that runs past its tag takes the bytes after it: here the next tag's.
+#[test]
+fn a_value_past_its_tag_reads_the_bytes_after_it() {
+    // gTRC declares three entries but holds one. bTRC follows, and starts
+    // with "curv".
+    let mut short = curv(&[1000, 0, 0]);
+    short.truncate(14);
+    let entries = [1000, u16::from_be_bytes(*b"cu"), u16::from_be_bytes(*b"rv")];
+    assert_converts_like(
+        &rgb_with(&replaced(b"gTRC", short), 0),
+        &rgb_with(&replaced(b"gTRC", curv(&entries)), 0),
+    );
+    // bXYZ holds two of its three values. rTRC follows.
+    let mut short = xyz([2051, 7, 0]);
+    short.truncate(16);
+    let value = [2051, 7, i32::from_be_bytes(*b"curv")];
+    assert_converts_like(
+        &rgb_with(&replaced(b"bXYZ", short), 0),
+        &rgb_with(&replaced(b"bXYZ", xyz(value)), 0),
+    );
+}
+
+/// A profile LittleCMS will not open passes through before this step's own
+/// checks. Those come before what LittleCMS reads to build the transform,
+/// so there the earlier refusals stand.
+#[test]
+fn refusals_are_ordered_as_in_openjpeg() {
+    // Not openable, and of a class this step refuses.
+    assert_passes_through(&edited(|p| {
+        p[12..16].copy_from_slice(b"mntr");
+        p[36..40].copy_from_slice(b"acsP");
+    }));
+    // Not openable, and a monochrome profile on three channels.
+    let mut grey = grey_profile();
+    grey[8..12].copy_from_slice(&0x0510_0000u32.to_be_bytes());
+    assert_passes_through(&file(THREE, &icc_colr(&grey), &[]));
+    // A class this step refuses, with an intent LittleCMS does not know.
+    expect_err(
+        decode_srgb(&edited(|p| {
+            p[12..16].copy_from_slice(b"mntr");
+            p[64..68].copy_from_slice(&4u32.to_be_bytes());
+        })),
+        is_unsupported,
+        "class `mntr`",
+    );
+    // A monochrome profile on three channels with that intent.
+    let mut grey = grey_profile();
+    grey[64..68].copy_from_slice(&4u32.to_be_bytes());
+    expect_err(
+        decode_srgb(&file(THREE, &icc_colr(&grey), &[])),
+        is_unsupported,
+        "monochrome ICC profile needs one colour channel",
+    );
+    // A missing tag is a form this step doesn't apply, whatever the intent.
+    let missing: Vec<_> = wide_gamut_tags()
+        .into_iter()
+        .filter(|(n, _)| *n != b"rTRC")
+        .collect();
+    expect_err(
+        decode_srgb(&rgb_with(&missing, 4)),
+        is_unsupported,
+        "without a `rTRC` tag",
+    );
 }

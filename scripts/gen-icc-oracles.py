@@ -24,9 +24,10 @@ Two snapshot files:
   descending curves, every parametric type, extreme matrices and white
   points, black point compensation, the gamma 1.6 threshold of LittleCMS's
   16-bit shortcut), a set of malformed ones, and cases on either side of
-  LittleCMS's header checks (`_cmsReadHeader`). For each, OpenJPEG either converts (the hashes are recorded) or leaves the
-  image unconverted (LittleCMS refused the profile), which the decoder must
-  answer with a typed error.
+  LittleCMS's header checks (`_cmsReadHeader`), and how LittleCMS reads
+  intents, legacy tag types and tags that run short. For each, OpenJPEG
+  either converts (the hashes are recorded) or leaves the image unconverted
+  (LittleCMS refused the profile), which the decoder must leave as coded too.
 
 OpenJPEG 2.5.0 with LittleCMS 2.14 (Ubuntu 24.04's packages) was used.
 
@@ -355,6 +356,60 @@ def header() -> dict[str, bytes]:
     }
 
 
+MONACO_CURVE = bytes([0x94, 0x78, 0xEE, 0x00])
+CORBIS_XYZ = bytes([0x17, 0xA5, 0x05, 0xB8])
+
+
+def lcms_reads() -> dict[str, bytes]:
+    """What LittleCMS does with a profile it reads differently from the ICC
+    text (issue #199): intents it does not know, or reads as another, legacy
+    tag types, a media white point it can't read, a value that runs past its
+    tag or past the profile, and the curve length limit."""
+    gamma = curv([563])
+    black = para(2, [2.2, 1.0, 0.1, 0.05])
+
+    def tags(**replace: bytes):
+        out = rgb_tags(rc=gamma, m=WIDE, white=None)
+        return [(sig, replace.get(sig.decode(), body)) for sig, body in out]
+
+    def last(sig: bytes, body: bytes):
+        return [t for t in tags() if t[0] != sig] + [(sig, body)]
+
+    unknown_class = bytearray(profile(tags()))
+    unknown_class[12:16] = b"zzzz"
+    out = {f"lcms_intent_{i}": profile(tags(), intent=i) for i in (4, 9, 16)}
+    out.update({f"lcms_black_intent_{i}": rgb(rc=black, m=WIDE, intent=i) for i in range(10, 16)})
+    out.update({
+        "lcms_monaco_curve": profile(tags(rTRC=MONACO_CURVE + gamma[4:])),
+        "lcms_corbis_xyz": profile(tags(rXYZ=CORBIS_XYZ + xyz(*WIDE[0])[4:])),
+        "lcms_wtpt_curv": profile(tags() + [(b"wtpt", gamma)], intent=3),
+        "lcms_wtpt_short": profile(tags() + [(b"wtpt", xyz(0.9505, 1, 1.089)[:12])], intent=3),
+        "lcms_curv_read_on": profile(tags(gTRC=curv([1000, 0, 0])[:14])),
+        "lcms_para_read_on": profile(tags(rTRC=para(4, [2.2, 0.9]))),
+        "lcms_xyz_read_on": profile(tags(bXYZ=xyz(*WIDE[2])[:16])),
+        "lcms_curv_past_end": profile(last(b"bTRC", curv([0, 30000, 65535])[:14])),
+        "lcms_para_past_end": profile(last(b"bTRC", para(4, [2.2, 0.9]))),
+        "lcms_xyz_past_end": profile(last(b"bXYZ", xyz(*WIDE[2])[:16])),
+        "lcms_xyz_wrong_type": profile(tags(gXYZ=gamma)),
+        "lcms_curve_wrong_type": profile(tags(bTRC=xyz(*WIDE[2]))),
+        "lcms_tag_size_4": profile(tags(rTRC=b"curv")),
+        "lcms_curv_32767": profile(tags(gTRC=curv([2 * i for i in range(32767)]))),
+        "lcms_curv_32768": profile(tags(gTRC=curv([2 * i for i in range(32768)]))),
+        "lcms_unknown_class": bytes(unknown_class),
+    })
+    return out
+
+
+def lcms_reads_grey() -> dict[str, bytes]:
+    """The grey cases of `lcms_reads`: `kTRC` takes no Monaco curve."""
+    return {
+        "grey_lcms_intent_4": grey(curv([461]), white=None, intent=4),
+        "grey_lcms_black_intent_10": grey(para(2, [2.2, 1.0, 0.1, 0.05]), white=None, intent=10),
+        "grey_lcms_monaco_ktrc": grey(MONACO_CURVE + curv([461])[4:], white=None),
+        "grey_lcms_ktrc_xyz": grey(xyz(0.5, 0.5, 0.5), white=None),
+    }
+
+
 def edge_grey() -> dict[str, bytes]:
     ramp17 = [min(65535, int(65535 * (i / 16) ** 2.2)) for i in range(17)]
     return {
@@ -457,9 +512,9 @@ def wrap(cs: dict, icc: bytes) -> bytes:
 
 def synthetic() -> None:
     codestreams = make_codestreams()
-    groups = [("rgb8", {**malformed(), **edge_rgb(), **header()}),
-              ("rgb16", {**malformed(), **edge_rgb(), **header()}),
-              ("grey8", edge_grey())]
+    groups = [("rgb8", {**malformed(), **edge_rgb(), **header(), **lcms_reads()}),
+              ("rgb16", {**malformed(), **edge_rgb(), **header(), **lcms_reads()}),
+              ("grey8", {**edge_grey(), **lcms_reads_grey()})]
     cases = []
     for key, profiles in groups:
         cs = codestreams[key]

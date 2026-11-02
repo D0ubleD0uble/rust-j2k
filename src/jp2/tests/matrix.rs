@@ -42,6 +42,7 @@ fn outcome(result: crate::Result<Image>) -> Outcome {
 enum Mode {
     Default,
     Raw,
+    Srgb,
 }
 
 const SUBSAMPLED_PALETTE: &[u8] =
@@ -193,9 +194,21 @@ fn nested_asoc(depth: usize) -> Vec<u8> {
     (0..depth).fold(bx(b"xml ", b"<deep/>"), |inner, _| bx(b"asoc", &inner))
 }
 
+/// A `colr` payload (`METH` 2) whose ICC profile LittleCMS refuses to open:
+/// a header with the `acsp` signature, version 5.1, and no tags.
+fn unopenable_profile() -> Vec<u8> {
+    let mut icc = vec![0u8; 132];
+    icc[..4].copy_from_slice(&132u32.to_be_bytes());
+    icc[8..12].copy_from_slice(&0x0510_0000u32.to_be_bytes());
+    icc[12..24].copy_from_slice(b"scnrRGB XYZ ");
+    icc[36..40].copy_from_slice(b"acsp");
+    [vec![2, 0, 0], icc].concat()
+}
+
 #[test]
 fn every_robustness_table_row_has_its_outcome() {
-    use Mode::{Default, Raw};
+    use crate::{ColourOutput, DecodeOptions, decode_with};
+    use Mode::{Default, Raw, Srgb};
     use Outcome::*;
 
     let ihdr_payload = good_ihdr()[8..].to_vec();
@@ -515,6 +528,26 @@ fn every_robustness_table_row_has_its_outcome() {
                 jp2c(),
             ]),
             Default,
+            Decodes,
+        ),
+        (
+            "colr METH 2 with too few bytes for a profile header, sRGB output",
+            file(&[
+                jp2_ftyp(),
+                jp2h(&[good_ihdr(), bx(b"colr", &[2, 0, 0, 1, 2, 3])]),
+                jp2c(),
+            ]),
+            Srgb,
+            Decodes,
+        ),
+        (
+            "an ICC profile lcms will not open, sRGB output",
+            file(&[
+                jp2_ftyp(),
+                jp2h(&[good_ihdr(), bx(b"colr", &unopenable_profile())]),
+                jp2c(),
+            ]),
+            Srgb,
             Decodes,
         ),
         (
@@ -903,6 +936,10 @@ fn every_robustness_table_row_has_its_outcome() {
         let got = outcome(match mode {
             Mode::Default => decode(bytes),
             Mode::Raw => decode_raw(bytes),
+            Mode::Srgb => decode_with(
+                bytes,
+                &DecodeOptions::default().with_colour(ColourOutput::Srgb),
+            ),
         });
         if got != *want {
             wrong.push(format!("{what} ({mode:?}): expected {want:?}, got {got:?}"));

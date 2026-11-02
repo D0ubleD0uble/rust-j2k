@@ -36,7 +36,11 @@
 //!
 //! sYCC or an RGB profile on one or two colour channels passes through, as
 //! OpenJPEG leaves them, and so do one or two channels with no colour space
-//! this step converts (no `colr`, or another enumerated colour space).
+//! this step converts (no `colr`, or another enumerated colour space). So
+//! does a profile LittleCMS refuses to open or to build a transform from
+//! (its header checks, an intent it does not know, a tag it can't read):
+//! OpenJPEG then skips the conversion. The profile reader follows
+//! LittleCMS's, including where it reads past a tag's size.
 //!
 //! Everything else is [`Error::Unsupported`]: another enumerated colour
 //! space, no colour space, a profile of another class or form, and colour
@@ -286,13 +290,29 @@ fn plan_icc(
     siz: &Siz,
     reduction: u8,
 ) -> Result<SrgbPlan> {
+    match plan_icc_or_refuse(profile, channels, outputs, siz, reduction) {
+        Ok(plan) => Ok(plan),
+        // OpenJPEG skips the conversion when LittleCMS refuses the profile
+        // and writes the samples as coded, and so does this step. The
+        // metadata keeps the profile, so a caller can tell.
+        Err(Icc::Refused) => Ok(SrgbPlan::PassThrough),
+        Err(Icc::Error(e)) => Err(e),
+    }
+}
+
+/// [`plan_icc`], with a profile LittleCMS refuses as [`Icc::Refused`]. The
+/// order follows OpenJPEG's: a profile LittleCMS will not open is refused
+/// first; then come this step's own checks on the profile and the channels;
+/// then what LittleCMS reads to build the transform (the rendering intent and
+/// the tags).
+fn plan_icc_or_refuse(
+    profile: &[u8],
+    channels: &[ChannelDefinition],
+    outputs: &[ComponentInfo],
+    siz: &Siz,
+    reduction: u8,
+) -> std::result::Result<SrgbPlan, Icc> {
     let icc = Profile::parse(profile)?;
-    let intent = icc.intent;
-    let white = if intent == 3 && icc.entry(b"wtpt").is_some() {
-        Some(icc.xyz(b"wtpt")?)
-    } else {
-        None
-    };
     match &icc.space {
         b"GRAY" => {
             let colours = colour_channels(channels, outputs, 0);
@@ -301,7 +321,8 @@ fn plan_icc(
                     "sRGB output from a monochrome ICC profile needs one colour channel; \
                      the file has {}",
                     colours.len()
-                )));
+                ))
+                .into());
             };
             // OpenJPEG feeds three or more channels to a grey transform as if
             // they were RGB, so there is no real conversion to match.
@@ -310,12 +331,15 @@ fn plan_icc(
                     "sRGB output from a monochrome ICC profile on {} channels; only one \
                      channel, or one plus opacity, is converted",
                     outputs.len()
-                )));
+                ))
+                .into());
             }
             check_icc_format(outputs[channel], &[8], "monochrome")?;
+            icc.require(&[b"kTRC"])?;
+            let intent = icc.intent()?;
             let input = InputProfile {
                 intent,
-                white,
+                white: icc.media_white(intent),
                 curves: vec![icc.curve(b"kTRC")?],
                 colorants: [[0.0; 3]; 3],
             };
@@ -341,6 +365,8 @@ fn plan_icc(
             uniform(&colours, outputs)?;
             let info = outputs[colours[0]];
             check_icc_format(info, &[8, 16], "RGB")?;
+            icc.require(&[b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC"])?;
+            let intent = icc.intent()?;
             let curves = vec![
                 icc.curve(b"rTRC")?,
                 icc.curve(b"gTRC")?,
@@ -350,7 +376,7 @@ fn plan_icc(
             let colorants = [0, 1, 2].map(|row| columns.map(|column| column[row]));
             let input = InputProfile {
                 intent,
-                white,
+                white: icc.media_white(intent),
                 curves,
                 colorants,
             };
@@ -417,12 +443,37 @@ fn check_icc_format(info: ComponentInfo, depths: &[u8], form: &str) -> Result<()
 /// LittleCMS's limit on the tag count (`MAX_TABLE_TAG`).
 const MAX_TAGS: u32 = 100;
 
+/// The longest `curv` table LittleCMS reads (`Type_Curve_Read`).
+const MAX_CURVE_ENTRIES: u32 = 0x7fff;
+
+/// Tag types LittleCMS reads as another type: `XYZ ` written by an old Corbis
+/// tool (`cmsCorbisBrokenXYZtype`), and `curv` written by an old Monaco tool
+/// (`cmsMonacoBrokenCurveType`, allowed for `rTRC`, `gTRC` and `bTRC` only).
+const CORBIS_XYZ: [u8; 4] = 0x17A5_05B8u32.to_be_bytes();
+const MONACO_CURVE: [u8; 4] = 0x9478_EE00u32.to_be_bytes();
+
+/// Why a profile is not applied.
+#[derive(Debug)]
+enum Icc {
+    /// LittleCMS refuses to open the profile or to build a transform from
+    /// it, so OpenJPEG writes the samples as coded.
+    Refused,
+    /// This step refuses the input.
+    Error(Error),
+}
+
+impl From<Error> for Icc {
+    fn from(e: Error) -> Self {
+        Icc::Error(e)
+    }
+}
+
 /// A restricted ICC profile (ICC.1, as Annex I restricts it): the header
 /// fields that matter and the tag table.
 struct Profile<'a> {
     bytes: &'a [u8],
     space: [u8; 4],
-    /// The header's rendering intent, 0 to 3.
+    /// The header's rendering intent, as stored.
     intent: u32,
     /// The raw tag table.
     table: &'a [u8],
@@ -432,38 +483,55 @@ struct Profile<'a> {
 }
 
 impl<'a> Profile<'a> {
-    fn parse(bytes: &'a [u8]) -> Result<Self> {
-        let malformed = |what: String| Error::FileFormat(format!("the ICC profile {what}"));
+    /// The checks LittleCMS makes when it opens a profile, then the forms
+    /// this step applies.
+    fn parse(bytes: &'a [u8]) -> std::result::Result<Self, Icc> {
         let unsupported = |what: String| {
-            Error::Unsupported(format!(
+            Icc::Error(Error::Unsupported(format!(
                 "sRGB output through an ICC profile {what}; only the monochrome and \
                  three-component matrix/TRC input profiles of Annex I are applied"
-            ))
+            )))
         };
+        // `_cmsReadHeader` (cmsio0.c): the 128-byte header and the tag count,
+        // the `acsp` signature, a version of at most 5.0, at most 100 tags,
+        // the table inside the profile, and no two tags with one signature.
         if bytes.len() < PROFILE_HEADER {
-            return Err(malformed(format!(
-                "is {} bytes, shorter than its 128-byte header and tag count",
-                bytes.len()
-            )));
+            return Err(Icc::Refused);
         }
         let four = |at: usize| -> [u8; 4] {
             let mut out = [0; 4];
             out.copy_from_slice(&bytes[at..at + 4]);
             out
         };
-        // The checks of LittleCMS's `_cmsReadHeader` (cmsio0.c): a profile it
-        // refuses to open, OpenJPEG does not convert.
-        if &four(36) != b"acsp" {
-            return Err(malformed("has no `acsp` signature".to_owned()));
+        if &four(36) != b"acsp" || validated_version(four(8)) > 0x0500_0000 {
+            return Err(Icc::Refused);
         }
-        let version = validated_version(four(8));
-        if version > 0x0500_0000 {
-            return Err(malformed(format!(
-                "has version {}.{}.{}, above 5.0",
-                version >> 24,
-                (version >> 20) & 0x0f,
-                (version >> 16) & 0x0f
-            )));
+        let count = u32::from_be_bytes(four(128));
+        if count > MAX_TAGS {
+            return Err(Icc::Refused);
+        }
+        let table = usize::try_from(count)
+            .ok()
+            .and_then(|n| n.checked_mul(12))
+            .and_then(|len| bytes.get(PROFILE_HEADER..PROFILE_HEADER.checked_add(len)?))
+            .ok_or(Icc::Refused)?;
+        // LittleCMS skips an entry with a zero offset or size, or one that
+        // ends past the declared size (capped at the profile's length).
+        let declared = u32::from_be_bytes(four(0));
+        let declared = u32::try_from(bytes.len()).map_or(declared, |len| declared.min(len));
+        let mut tags = Vec::new();
+        for e in table.chunks_exact(12) {
+            let word = |at: usize| u32::from_be_bytes([e[at], e[at + 1], e[at + 2], e[at + 3]]);
+            let (offset, size) = (word(4), word(8));
+            if offset == 0 || size == 0 || offset.checked_add(size).is_none_or(|end| end > declared)
+            {
+                continue;
+            }
+            let signature = [e[0], e[1], e[2], e[3]];
+            if tags.iter().any(|&(s, _, _)| s == signature) {
+                return Err(Icc::Refused);
+            }
+            tags.push((signature, offset, size));
         }
         let class = four(12);
         if &class != b"scnr" {
@@ -486,46 +554,10 @@ impl<'a> Profile<'a> {
                 String::from_utf8_lossy(&pcs)
             )));
         }
-        let intent = u32::from_be_bytes(four(64));
-        if intent > 3 {
-            return Err(unsupported(format!("with rendering intent {intent}")));
-        }
-        let count = u32::from_be_bytes(four(128));
-        if count > MAX_TAGS {
-            return Err(malformed(format!(
-                "declares {count} tags, more than {MAX_TAGS}"
-            )));
-        }
-        let table = usize::try_from(count)
-            .ok()
-            .and_then(|n| n.checked_mul(12))
-            .and_then(|len| bytes.get(PROFILE_HEADER..PROFILE_HEADER.checked_add(len)?))
-            .ok_or_else(|| malformed(format!("declares {count} tags, past its end")))?;
-        // LittleCMS skips an entry with a zero offset or size, or one that
-        // ends past the declared size (capped at the profile's length).
-        let declared = u32::from_be_bytes(four(0));
-        let declared = u32::try_from(bytes.len()).map_or(declared, |len| declared.min(len));
-        let mut tags = Vec::new();
-        for e in table.chunks_exact(12) {
-            let word = |at: usize| u32::from_be_bytes([e[at], e[at + 1], e[at + 2], e[at + 3]]);
-            let (offset, size) = (word(4), word(8));
-            if offset == 0 || size == 0 || offset.checked_add(size).is_none_or(|end| end > declared)
-            {
-                continue;
-            }
-            let signature = [e[0], e[1], e[2], e[3]];
-            if tags.iter().any(|&(s, _, _)| s == signature) {
-                return Err(malformed(format!(
-                    "has two `{}` tags",
-                    String::from_utf8_lossy(&signature)
-                )));
-            }
-            tags.push((signature, offset, size));
-        }
         let profile = Profile {
             bytes,
             space,
-            intent,
+            intent: u32::from_be_bytes(four(64)),
             table,
             tags,
         };
@@ -542,6 +574,36 @@ impl<'a> Profile<'a> {
         Ok(profile)
     }
 
+    /// The tags the profile's form needs must be in its tag table. A tag
+    /// that is there but that LittleCMS skips is left to [`Self::tag`].
+    fn require(&self, signatures: &[&[u8; 4]]) -> std::result::Result<(), Icc> {
+        for signature in signatures {
+            if !self.table.chunks_exact(12).any(|e| &e[..4] == *signature) {
+                return Err(Icc::Error(Error::Unsupported(format!(
+                    "sRGB output through an ICC profile without a `{}` tag; only the \
+                     monochrome and three-component matrix/TRC input profiles of Annex I \
+                     are applied",
+                    String::from_utf8_lossy(*signature)
+                ))));
+            }
+        }
+        Ok(())
+    }
+
+    /// The rendering intent the transform runs at. LittleCMS builds no
+    /// transform for an intent it does not know. It reads its black-preserving
+    /// intents (10 to 15) on a profile that is not CMYK as perceptual,
+    /// relative colorimetric or saturation, without the black point
+    /// compensation it forces for perceptual and saturation, which here is
+    /// relative colorimetric (1) in every case.
+    fn intent(&self) -> std::result::Result<u32, Icc> {
+        match self.intent {
+            0..=3 => Ok(self.intent),
+            10..=15 => Ok(1),
+            _ => Err(Icc::Refused),
+        }
+    }
+
     /// The tag table entry LittleCMS keeps for `signature`: its offset and
     /// size.
     fn entry(&self, signature: &[u8; 4]) -> Option<(u32, u32)> {
@@ -551,124 +613,107 @@ impl<'a> Profile<'a> {
             .map(|&(_, offset, size)| (offset, size))
     }
 
-    /// The bytes of tag `signature`, which must be present and inside the
-    /// profile.
-    fn tag(&self, signature: &[u8; 4]) -> Result<&'a [u8]> {
-        let name = String::from_utf8_lossy(signature);
-        let skipped = self.table.chunks_exact(12).any(|e| &e[..4] == signature);
-        let (offset, size) = self.entry(signature).ok_or_else(|| {
-            if skipped {
-                return Error::FileFormat(format!(
-                    "the ICC profile's `{name}` tag has a zero offset or size, or ends past \
-                     the profile's declared size"
-                ));
-            }
-            Error::Unsupported(format!(
-                "sRGB output through an ICC profile without a `{name}` tag; only the \
-                 monochrome and three-component matrix/TRC input profiles of Annex I are \
-                 applied"
-            ))
-        })?;
-        let start = usize::try_from(offset).ok();
-        let end = start
-            .zip(usize::try_from(size).ok())
-            .and_then(|(s, n)| s.checked_add(n));
-        start
-            .zip(end)
-            .and_then(|(start, end)| self.bytes.get(start..end))
-            .ok_or_else(|| {
-                Error::FileFormat(format!(
-                    "the ICC profile's `{name}` tag ({size} bytes at {offset}) runs past its \
-                     end"
-                ))
-            })
+    /// Tag `signature` as `cmsReadTag` reads it: its type, which must be one
+    /// of `types`, and the bytes after the 8-byte type header up to the end
+    /// of the profile. LittleCMS reads a value from there without checking
+    /// the tag's size, so a value that runs past its tag takes the bytes
+    /// that follow it.
+    fn tag(
+        &self,
+        signature: &[u8; 4],
+        types: &[[u8; 4]],
+    ) -> std::result::Result<([u8; 4], &'a [u8]), Icc> {
+        let (offset, size) = self.entry(signature).ok_or(Icc::Refused)?;
+        if size < 8 {
+            return Err(Icc::Refused);
+        }
+        let at = usize::try_from(offset).map_err(|_| Icc::Refused)?;
+        let data = self.bytes.get(at..).ok_or(Icc::Refused)?;
+        let kind: [u8; 4] = data
+            .get(..4)
+            .and_then(|k| k.try_into().ok())
+            .ok_or(Icc::Refused)?;
+        let body = data.get(8..).ok_or(Icc::Refused)?;
+        if !types.contains(&kind) {
+            return Err(Icc::Refused);
+        }
+        Ok((kind, body))
     }
 
-    /// An `XYZType` tag's one XYZ value.
-    fn xyz(&self, signature: &[u8; 4]) -> Result<[f64; 3]> {
-        let data = self.tag(signature)?;
-        if data.len() < 20 || &data[..4] != b"XYZ " {
-            return Err(Error::FileFormat(format!(
-                "the ICC profile's `{}` tag is not an `XYZ ` value",
-                String::from_utf8_lossy(signature)
-            )));
+    /// An `XYZType` tag's one XYZ value (`Type_XYZ_Read`).
+    fn xyz(&self, signature: &[u8; 4]) -> std::result::Result<[f64; 3], Icc> {
+        let (_, body) = self.tag(signature, &[*b"XYZ ", CORBIS_XYZ])?;
+        let value = body.get(..12).ok_or(Icc::Refused)?;
+        Ok([
+            s15_16(&value[0..]),
+            s15_16(&value[4..]),
+            s15_16(&value[8..]),
+        ])
+    }
+
+    /// The media white point that absolute colorimetric scales by, or `None`
+    /// for D50. LittleCMS takes D50 when the `wtpt` tag is missing or does
+    /// not read (`_cmsReadMediaWhitePoint`); it reads it at intent 3 only.
+    fn media_white(&self, intent: u32) -> Option<[f64; 3]> {
+        if intent != 3 {
+            return None;
         }
-        Ok([s15_16(&data[8..]), s15_16(&data[12..]), s15_16(&data[16..])])
+        self.xyz(b"wtpt").ok()
     }
 
     /// A `curveType` or `parametricCurveType` tag, as LittleCMS reads it
     /// (`Type_Curve_Read`, `Type_ParametricCurve_Read`).
-    fn curve(&self, signature: &[u8; 4]) -> Result<ToneCurve> {
-        let data = self.tag(signature)?;
-        let name = String::from_utf8_lossy(signature);
-        let short = || {
-            Error::FileFormat(format!(
-                "the ICC profile's `{name}` curve is cut short ({} bytes)",
-                data.len()
-            ))
+    fn curve(&self, signature: &[u8; 4]) -> std::result::Result<ToneCurve, Icc> {
+        let types: &[[u8; 4]] = if signature == b"kTRC" {
+            &[*b"curv", *b"para"]
+        } else {
+            &[*b"curv", *b"para", MONACO_CURVE]
         };
-        let kind = data.get(..4).ok_or_else(short)?;
+        let (kind, body) = self.tag(signature, types)?;
+        let word = |at: usize| -> std::result::Result<u32, Icc> {
+            let b = body.get(at..at + 4).ok_or(Icc::Refused)?;
+            Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+        };
         let mut params = [0.0; 10];
-        match kind {
-            b"curv" => {
-                let count = data.get(8..12).ok_or_else(short)?;
-                let count = u32::from_be_bytes([count[0], count[1], count[2], count[3]]);
-                // LittleCMS refuses a longer table, so OpenJPEG converts
-                // nothing.
-                if count > 0x7fff {
-                    return Err(Error::Unsupported(format!(
-                        "sRGB output through an ICC `{name}` curve of {count} entries; \
-                         LittleCMS reads at most 32767"
-                    )));
-                }
-                let entries = usize::try_from(count)
-                    .ok()
-                    .and_then(|n| n.checked_mul(2))
-                    .and_then(|len| data.get(12..12usize.checked_add(len)?))
-                    .ok_or_else(short)?;
-                let values: Vec<u16> = entries
-                    .chunks_exact(2)
-                    .map(|v| u16::from_be_bytes([v[0], v[1]]))
-                    .collect();
-                Ok(match values[..] {
-                    [] => {
-                        params[0] = 1.0;
-                        ToneCurve::parametric(1, params)
-                    }
-                    [gamma] => {
-                        params[0] = f64::from(gamma) / 256.0;
-                        ToneCurve::parametric(1, params)
-                    }
-                    _ => ToneCurve::tabulated(values),
-                })
+        if &kind == b"para" {
+            // The function type and a reserved word, then its parameters.
+            let (function, used) = match word(0)? >> 16 {
+                0 => (1, 1),
+                1 => (2, 3),
+                2 => (3, 4),
+                3 => (4, 5),
+                4 => (5, 7),
+                _ => return Err(Icc::Refused),
+            };
+            let raw = body.get(4..4 + 4 * used).ok_or(Icc::Refused)?;
+            for (param, bytes) in params.iter_mut().zip(raw.chunks_exact(4)) {
+                *param = s15_16(bytes);
             }
-            b"para" => {
-                let function = data.get(8..10).ok_or_else(short)?;
-                let function = u16::from_be_bytes([function[0], function[1]]);
-                let used = match function {
-                    0 => 1,
-                    1 => 3,
-                    2 => 4,
-                    3 => 5,
-                    4 => 7,
-                    _ => {
-                        return Err(Error::Unsupported(format!(
-                            "sRGB output through an ICC `{name}` curve of parametric \
-                             function type {function}"
-                        )));
-                    }
-                };
-                let raw = data.get(12..12 + 4 * used).ok_or_else(short)?;
-                for (param, bytes) in params.iter_mut().zip(raw.chunks_exact(4)) {
-                    *param = s15_16(bytes);
-                }
-                Ok(ToneCurve::parametric(i32::from(function) + 1, params))
-            }
-            other => Err(Error::Unsupported(format!(
-                "sRGB output through an ICC `{name}` curve of type `{}`",
-                String::from_utf8_lossy(other)
-            ))),
+            return Ok(ToneCurve::parametric(function, params));
         }
+        let count = word(0)?;
+        if count > MAX_CURVE_ENTRIES {
+            return Err(Icc::Refused);
+        }
+        let entries = usize::try_from(count)
+            .ok()
+            .and_then(|n| body.get(4..4 + 2 * n))
+            .ok_or(Icc::Refused)?;
+        let values: Vec<u16> = entries
+            .chunks_exact(2)
+            .map(|v| u16::from_be_bytes([v[0], v[1]]))
+            .collect();
+        Ok(match values[..] {
+            [] => {
+                params[0] = 1.0;
+                ToneCurve::parametric(1, params)
+            }
+            [gamma] => {
+                params[0] = f64::from(gamma) / 256.0;
+                ToneCurve::parametric(1, params)
+            }
+            _ => ToneCurve::tabulated(values),
+        })
     }
 }
 

@@ -271,14 +271,38 @@ pub enum ColourOutput {
     /// another enumerated colour space), read as grey, or grey and opacity;
     /// their metadata stays as declared.
     ///
+    /// An ICC profile that LittleCMS refuses also passes through, as
+    /// OpenJPEG leaves it: the samples come out as coded, and
+    /// [`Jp2Metadata::colour`] stays [`ColourSpace::RestrictedIcc`], so a
+    /// caller can tell nothing was converted. LittleCMS refuses:
+    ///
+    /// - a profile shorter than its 128-byte header and tag count;
+    /// - no `acsp` signature, or a version above 5.0;
+    /// - more than 100 tags, a tag table past the profile's end, or two tags
+    ///   with the same signature;
+    /// - a rendering intent other than 0 to 3 and 10 to 15 (10 to 15, its
+    ///   black-preserving intents, convert as relative colorimetric);
+    /// - a tag it needs that has a zero offset or size, ends past the
+    ///   profile's declared size, is under 8 bytes, is of the wrong type, or
+    ///   has a value that runs past the end of the profile;
+    /// - a parametric curve of an unknown function, or a `curv` of more than
+    ///   32767 entries.
+    ///
+    /// As in LittleCMS, a value that runs past its tag is read from the bytes
+    /// after it, and a media white point that can't be read is taken as D50.
+    ///
     /// Anything else is [`Error::Unsupported`]: three or more channels in
     /// another colour space or with no colour specification (a raw
-    /// codestream included), another kind of ICC profile, a monochrome
-    /// profile on more than two channels, an RGB profile on samples that are
-    /// not 8 or 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and colour
-    /// channels that differ in depth, sign or sub-sampling other than sYCC's
-    /// chroma layouts. An ICC profile too short for its header or with a tag
-    /// past its end is [`Error::FileFormat`].
+    /// codestream included), another kind of ICC profile (a class other than
+    /// input, a colour space other than RGB or grey, a connection space other
+    /// than XYZ, a lookup table, or a missing tag), a monochrome profile on
+    /// more than two channels, an RGB profile on samples that are not 8 or
+    /// 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and
+    /// colour channels that differ in depth, sign or sub-sampling other than
+    /// sYCC's chroma layouts. A profile LittleCMS won't open passes through
+    /// before these checks; the rest of the list above is checked after
+    /// them. These errors apply only when `Srgb` is asked for:
+    /// [`ColourOutput::AsCoded`] decodes the same files.
     Srgb,
 }
 

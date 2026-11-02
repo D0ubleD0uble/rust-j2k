@@ -94,11 +94,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same output as OpenJPEG with LittleCMS, sample for sample. The reference
   is OpenJPEG 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc);
   the output depends on the C library's `powf`, so other LittleCMS versions
-  or platforms can differ in the last bit. A profile LittleCMS will not open
-  is a `FileFormat` error. sRGB and greyscale pass through, and so do sYCC
-  or an RGB profile on one or two channels, and one or two channels with no
-  colour space to convert from (a raw codestream, or a file with no `colr`
-  or another enumerated space). After a conversion `Jp2Metadata::colour`
+  or platforms can differ in the last bit. sRGB and greyscale pass through,
+  and so do sYCC or an RGB profile on one or two channels, one or two
+  channels with no colour space to convert from (a raw codestream, or a
+  file with no `colr` or another enumerated space), and a profile LittleCMS
+  refuses to open or to build a transform from (a bad header, an intent it
+  does not know, a tag it can't read), as OpenJPEG leaves them; the
+  metadata then keeps the profile. After a conversion `Jp2Metadata::colour`
   says sRGB, or greyscale for a monochrome profile whose output is neutral.
   A monochrome profile whose output is not neutral (absolute colorimetric
   with a tinted white point) gives three sRGB channels, as OpenJPEG does, so

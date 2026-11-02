@@ -309,10 +309,22 @@ the checks lcms makes when it opens a profile (`_cmsReadHeader`): the `acsp`
 signature, a version of at most 5.0, at most 100 tags, no two tags with the
 same signature. Like lcms, it skips a tag entry with a zero offset or size,
 or one that ends past the size the header declares (capped at the profile's
-length), so a tag it needs is then missing. A profile lcms will not open is
-a `FileFormat` error. The output matches `opj_decompress -force-rgb` sample
-for sample (`tests/jp2_icc.rs`). The reference is OpenJPEG 2.5.0 linked
-against LittleCMS 2.14 on x86-64 Linux (glibc). The output depends on the C
+length), so a tag it needs is then missing. It reads tags as `cmsReadTag`
+does: a tag under 8 bytes or of a type lcms does not allow for it fails,
+lcms's legacy types are read (an old Monaco tool's curve type for `rTRC`,
+`gTRC` and `bTRC`, an old Corbis tool's XYZ type), and a value is read
+without checking the tag's size, so one that runs past its tag takes the
+bytes after it and fails only past the end of the profile. A media white
+point lcms can't read is D50 (`_cmsReadMediaWhitePoint`). lcms's
+black-preserving intents 10 to 15 on a profile that is not CMYK become
+perceptual, relative colorimetric or saturation without the black point
+compensation lcms forces for intents 0 and 2, which for these profiles is
+relative colorimetric in every case; other intents above 3 build no
+transform.
+
+The output matches `opj_decompress -force-rgb` sample for sample
+(`tests/jp2_icc.rs`). The reference is OpenJPEG 2.5.0 linked against
+LittleCMS 2.14 on x86-64 Linux (glibc). The output depends on the C
 library's `powf`, so other LittleCMS versions or platforms can differ in the
 last bit. The cases:
 
@@ -327,9 +339,9 @@ last bit. The cases:
 - 15 RGB profiles at 8 and 16 bits on either side of each header check
   above (a bad signature; versions 5.0, 5.1, 4.F and FF; 100 and 101 tags;
   duplicate `rTRC` and `rXYZ`, and a duplicate lcms skips; declared sizes of
-  0, 140 and 0xFFFFFFFF, and ones that cut off `wtpt` or an `A2B0` table).
-
-Where lcms refuses a profile, the decode is a typed error.
+  0, 140 and 0xFFFFFFFF, and ones that cut off `wtpt` or an `A2B0` table);
+- 25 RGB profiles at 8 and 16 bits and 4 monochrome ones on how lcms reads
+  intents, legacy tag types and tags that run short (the table below).
 
 During development the port also matched lcms 2.14 itself on every 8-bit
 RGB input (2^24) and a million random 16-bit pixels for each of these
@@ -353,6 +365,33 @@ harness and not of the samples: file7 stays 16-bit, and the harness shifts
 it down by 8 to compare with the 8-bit reference (its `shift_right`, as for
 the as-coded grade), and file8 stays one grey channel where OpenJPEG writes
 three identical ones (graded on that one channel).
+
+**A profile lcms refuses passes through, as in OpenJPEG (owner decision,
+2026-11-01, on #199).** When lcms will not open the profile or build a
+transform from it, `color_apply_icc_profile` returns without converting and
+`opj_decompress` writes the samples as coded. `Srgb` does the same, and
+`Jp2Metadata::colour` stays `RestrictedIcc`, so a caller can tell. Each
+case was checked with `opj_decompress` 2.5.0 on a crafted file, and is a
+case of `icc/profiles.json` and a test in `src/jp2/srgb_tests.rs`:
+
+| Case | OpenJPEG + lcms 2.14 | `Srgb` here |
+| ---- | -------------------- | ----------- |
+| profile under 132 bytes, no `acsp`, version above 5.0, more than 100 tags, tag table past the end, duplicate tag | unconverted (lcms won't open it) | as coded |
+| intent 4 to 9 or above 15 | unconverted | as coded |
+| intent 10 to 15 | converted as intent 1 | converted as intent 1 |
+| needed tag skipped, under 8 bytes, of the wrong type, or with a value past the profile's end; `para` function above 4; `curv` of more than 32767 entries | unconverted | as coded |
+| value past its tag but inside the profile | converted from the bytes after it | the same |
+| Monaco curve type, Corbis XYZ type | converted | converted |
+| `wtpt` unreadable at intent 3 | converted with D50 | converted with D50 |
+
+The order follows OpenJPEG's too: a profile lcms will not open passes
+through before any other check, and the checks lcms makes while building
+the transform (the intent and the tags) come after this decoder's own
+refusals below, so those refusals stand there. Two of them meet a profile
+lcms refuses, and are kept by the earlier owner decisions (#165): a class
+lcms does not know (`zzzz`, say) and a profile missing a tag its form needs
+(including one with no tags at all) are `Unsupported`, where OpenJPEG writes
+the samples as coded.
 
 **Stricter: inputs refused under `Srgb` that OpenJPEG decodes some other
 way.** Each is `Unsupported` unless noted, and each is a row of
@@ -398,15 +437,9 @@ way.** Each is `Unsupported` unless noted, and each is a row of
 - an ICC profile that is not one of the restricted forms: a class other than
   input (`scnr`), a colour space other than RGB or grey, a connection space
   other than XYZ, a lookup-table tag (`A2B0`..`A2B2`, `D2B0`..`D2B3`, which
-  lcms would prefer over the matrix), a missing tag, or a curve type other
-  than `curv` and `para` 0 to 4. lcms converts most of these;
-- a rendering intent above 3. lcms refuses to build the transform and
-  OpenJPEG writes the samples unconverted while reporting them converted;
-  for that and for every refusal in this list the owner's rule from the
-  2026-11-01 decisions on #165 applies: an error beats a silently wrong
-  image;
-- a `curv` tone curve of more than 32767 entries, which lcms does not read
-  (OpenJPEG then converts nothing);
+  lcms would prefer over the matrix), or a missing tag. OpenJPEG converts
+  some of these through lcms and writes others as coded, among them a class
+  lcms does not know and a missing tag (above);
 - an RGB profile on samples other than 8- or 16-bit unsigned, or a grey
   profile on samples other than 8-bit unsigned (owner decision, 2026-11-01,
   on #165). OpenJPEG picks an lcms format from the precision alone
@@ -415,10 +448,6 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   review measured a 12-bit 4095 coming out 7413. With file5's profile on a
   4-bit RGB image, measured here, grey 15 comes out 18, grey 12 comes out
   13, and (15, 0, 0) comes out with red 29, all written into 4-bit planes;
-- a profile shorter than its header, a tag table or tag past its end, or a
-  tag cut short or of the wrong type: `FileFormat`. lcms reads some of these
-  anyway: an `XYZ ` tag too short for its value is read on into the next
-  tag;
 - `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.
 
 Chroma replication grows the output, so it is checked against the decode's
