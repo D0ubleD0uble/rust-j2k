@@ -348,7 +348,7 @@ fn raw_channels_skips_the_channel_definitions() {
         cdef_of(&[(0, 0, 1), (1, 0, 2)]),
         cdef_of(&[(5, 0, 9)]),
     ] {
-        let image = decode_with(&with_children(&[cdef]), options.clone()).expect("decodes");
+        let image = decode_with(&with_children(&[cdef]), &options).expect("decodes");
         assert_eq!(image.components, raw.components);
         assert_eq!(image.jp2.unwrap().channels, colours(3));
     }
@@ -362,7 +362,7 @@ fn raw_channels_skips_the_channel_definitions() {
             "more than one `cdef`",
         ),
     ] {
-        match decode_with(&bytes, options.clone()) {
+        match decode_with(&bytes, &options) {
             Err(Error::FileFormat(message)) => assert!(message.contains(fragment), "{message}"),
             other => panic!("expected FileFormat, got {other:?}"),
         }
@@ -380,7 +380,7 @@ fn raw_channels_keeps_the_index_plane_label_with_a_cdef() {
     };
     let image = decode_with(
         &with_children(&[pclr_box(), cmap_box(), reversed()]),
-        options,
+        &options,
     )
     .expect("decodes");
     let channels = image.jp2.unwrap().channels;
@@ -395,8 +395,8 @@ fn raw_channels_keeps_the_index_plane_label_with_a_cdef() {
 #[test]
 fn a_reduced_decode_applies_the_channel_definitions() {
     let options = DecodeOptions::default().with_resolution_reduction(1);
-    let image = decode_with(&with_children(&[reversed()]), options.clone()).expect("decodes");
-    let raw = decode_with(CODESTREAM, options.clone()).unwrap();
+    let image = decode_with(&with_children(&[reversed()]), &options).expect("decodes");
+    let raw = decode_with(CODESTREAM, &options).unwrap();
     let want: Vec<_> = raw.components.iter().rev().cloned().collect();
     assert_eq!(image.components, want);
 }

@@ -148,7 +148,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let options = rust_j2k::DecodeOptions::default().with_colour(rust_j2k::ColourOutput::Srgb);
-    let Ok(srgb) = rust_j2k::decode_with(&file, options) else {
+    let Ok(srgb) = rust_j2k::decode_with(&file, &options) else {
         return;
     };
     assert_eq!(

@@ -366,7 +366,7 @@ pub fn grade_entry(dir: &Path, entry: &Entry) -> Grade {
     // at, so grading decodes there too (`-r` in OpenJPEG's conformance runs).
     let options = rust_j2k::DecodeOptions::default().with_resolution_reduction(entry.reduction);
     let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        rust_j2k::decode_with(&bytes, options)
+        rust_j2k::decode_with(&bytes, &options)
     }));
     let image = match decoded {
         Err(_) => return Grade::Failed("panicked (decode must return a typed error)".into()),

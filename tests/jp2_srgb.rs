@@ -41,7 +41,7 @@ fn sycc_fixtures_match_openjpeg_within_one() {
             Tolerance::Absolute { max_abs_error: 1.0 },
             "{name}"
         );
-        let image = decode_with(&bytes, srgb()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{name}: {e}"));
         if let Err(mismatch) = compare(&image, &want) {
             panic!("{name}: {mismatch}");
         }
@@ -66,7 +66,7 @@ fn srgb_and_grey_files_pass_through() {
     for n in [1, 4, 6, 9] {
         let bytes = conformance(n);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
-        let image = decode_with(&bytes, srgb()).unwrap_or_else(|e| panic!("file{n}: {e}"));
+        let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("file{n}: {e}"));
         assert_eq!(image.components, coded.components, "file{n}");
     }
 }
@@ -80,7 +80,7 @@ fn the_default_is_as_coded() {
     for n in [2, 3, 5, 7, 8] {
         let bytes = conformance(n);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
-        let image = decode_with(&bytes, srgb()).unwrap_or_else(|e| panic!("file{n}: {e}"));
+        let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("file{n}: {e}"));
         assert_ne!(image.components, coded.components, "file{n}");
     }
 }
@@ -91,7 +91,7 @@ fn the_default_is_as_coded() {
 fn raw_channels_with_srgb_is_invalid_options() {
     let options = srgb().with_raw_channels(true);
     assert!(matches!(
-        decode_with(&conformance(1), options),
+        decode_with(&conformance(1), &options),
         Err(Error::InvalidOptions(_))
     ));
 }

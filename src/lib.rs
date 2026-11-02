@@ -150,7 +150,7 @@ pub use jp2::{
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 pub fn decode(bytes: &[u8]) -> Result<Image> {
-    decode_with(bytes, DecodeOptions::default())
+    decode_with(bytes, &DecodeOptions::default())
 }
 
 /// Read a JPEG 2000 codestream's or JP2 file's [`Header`] without decoding any
@@ -331,7 +331,7 @@ impl DecodeOptions {
 
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
 /// `options`.
-pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
+pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     let srgb = options.colour == ColourOutput::Srgb;
     if srgb && options.raw_channels {
         return Err(Error::InvalidOptions(
@@ -345,7 +345,7 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     // as a box fault. The rest falls to the codestream parser, which reports
     // the missing SOC.
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
-        return decode_jp2(bytes, &options);
+        return decode_jp2(bytes, options);
     }
     let cs = codestream::parse(bytes)?;
     // A raw codestream declares no colour space. Like OpenJPEG, one or two
@@ -358,7 +358,7 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
              no colour space"
         )));
     }
-    decode_codestream(cs, &options)
+    decode_codestream(cs, options)
 }
 
 /// A JP2 file read up to its tile data: the boxes, the codestream's main

@@ -96,7 +96,7 @@ fn srgb() -> DecodeOptions {
 }
 
 fn decode_srgb(bytes: &[u8]) -> crate::Result<Image> {
-    decode_with(bytes, srgb())
+    decode_with(bytes, &srgb())
 }
 
 /// An `XYZ ` tag.
@@ -850,17 +850,17 @@ fn raw_channels_with_srgb_output_is_invalid() {
         b"junk".to_vec(),
     ] {
         expect_err(
-            decode_with(&bytes, options.clone()),
+            decode_with(&bytes, &options),
             |e| matches!(e, Error::InvalidOptions(_)),
             "raw channels means no colour conversion",
         );
     }
     // Each option alone is fine.
     let file = file(THREE, &enumerated(16), &[]);
-    decode_with(&file, srgb()).expect("sRGB alone");
+    decode_with(&file, &srgb()).expect("sRGB alone");
     decode_with(
         &file,
-        DecodeOptions {
+        &DecodeOptions {
             raw_channels: true,
             ..DecodeOptions::default()
         },

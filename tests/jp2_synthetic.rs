@@ -184,7 +184,7 @@ fn raw_channels_returns_the_codestream_as_coded() {
     for path in fixtures() {
         let name = path.display();
         let bytes = std::fs::read(&path).unwrap();
-        let image = decode_with(&bytes, options.clone()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let image = decode_with(&bytes, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
         let raw = decode(first_jp2c(&bytes)).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(
             (image.width, image.height),

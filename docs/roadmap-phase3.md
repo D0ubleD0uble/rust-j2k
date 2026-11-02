@@ -109,7 +109,7 @@ Two consequences shape the plan:
 
 ### Entry point: `decode` auto-detects the container
 
-`decode(bytes)` and `decode_with(bytes, options)` accept either a raw codestream
+`decode(bytes)` and `decode_with(bytes, &options)` accept either a raw codestream
 or a JP2 file. Input that opens with `FF4F` (`SOC`) is a codestream; otherwise
 input whose bytes 4..8 are `jP  ` (the signature box's type) is a JP2 file, so a
 damaged signature box is a `FileFormat` error rather than a missing `SOC`.

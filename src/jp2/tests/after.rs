@@ -69,7 +69,7 @@ pub(super) fn decode_raw(bytes: &[u8]) -> crate::Result<Image> {
         raw_channels: true,
         ..DecodeOptions::default()
     };
-    decode_with(bytes, options)
+    decode_with(bytes, &options)
 }
 
 /// A `jp2c` whose `LBox` is 2..=7 or whose `XLBox` is below 16 decodes:
