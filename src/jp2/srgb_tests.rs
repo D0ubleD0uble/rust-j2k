@@ -805,6 +805,68 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
     }
 }
 
+/// `opj_decompress` guesses sYCC and converts a 4:2:0 or 4:2:2 image before it
+/// reads the ICC profile, so it converts one whatever the profile is, even one
+/// LittleCMS refuses (the output equals the sYCC file's). Checked on the
+/// fixtures' codestreams with `lcms_intent_4` (an intent LittleCMS does not
+/// know), a refused grey profile, a header too short to read and a CMYK
+/// profile: all five give the planes of the sYCC original. Here every one is
+/// refused, by `decode_with` and by `read_header_with`.
+#[test]
+fn an_lcms_refused_profile_on_4_2_0_or_4_2_2_is_refused() {
+    let intent_4 = |mut icc: Vec<u8>| {
+        icc[64..68].copy_from_slice(&4u32.to_be_bytes());
+        icc
+    };
+    let cmyk = {
+        let mut icc = wide_gamut();
+        icc[16..20].copy_from_slice(b"CMYK");
+        icc
+    };
+    let profiles = [
+        ("intent 4", intent_4(wide_gamut())),
+        ("grey intent 4", intent_4(grey_profile())),
+        ("short header", vec![0; 10]),
+        ("CMYK", cmyk),
+    ];
+    for (layout, jp2, fragment) in [
+        ("4:2:0", SYCC_420, "different sub-sampling (1x1 and 2x2)"),
+        ("4:2:2", SYCC_422, "different sub-sampling (1x1 and 2x1)"),
+    ] {
+        let codestream = top_box(jp2, b"jp2c");
+        for (name, icc) in &profiles {
+            let what = format!("{layout}, {name}");
+            let bytes = file(codestream, &icc_colr(icc), &[]);
+            decode(&bytes).unwrap_or_else(|e| panic!("{what}: AsCoded must decode, got {e}"));
+            expect_err(decode_srgb(&bytes), is_unsupported, fragment);
+            match read_header_with(&bytes, &srgb()) {
+                Err(Error::Unsupported(e)) => assert!(e.contains(fragment), "{what}: {e}"),
+                other => panic!("{what}: read_header_with gave {other:?}"),
+            }
+        }
+    }
+}
+
+/// Outside 4:2:0 and 4:2:2 `opj_decompress` does not convert as sYCC, and a
+/// profile LittleCMS refuses leaves the samples as coded, so they pass through
+/// here too.
+#[test]
+fn an_lcms_refused_profile_passes_through_outside_the_sycc_layouts() {
+    let mut icc = wide_gamut();
+    icc[64..68].copy_from_slice(&4u32.to_be_bytes());
+    for (name, codestream) in [("full", THREE), ("all 2x2", ALL_SUBSAMPLED)] {
+        let bytes = file(codestream, &icc_colr(&icc), &[]);
+        let image = decode_srgb(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            image.components,
+            decode(&bytes).unwrap().components,
+            "{name}"
+        );
+        let header = read_header_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(header.components.len(), 3, "{name}");
+    }
+}
+
 /// `raw_channels` means no colour conversion: asking for sRGB too is refused
 /// before anything is read, for a JP2 file and a raw codestream alike.
 #[test]

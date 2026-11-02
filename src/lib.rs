@@ -273,7 +273,9 @@ pub enum ColourOutput {
     /// their metadata stays as declared.
     ///
     /// An ICC profile that LittleCMS refuses also passes through, as
-    /// OpenJPEG leaves it: the samples come out as coded, and
+    /// OpenJPEG leaves it (except on a three-channel 4:2:0 or 4:2:2 image,
+    /// refused below, which OpenJPEG converts as sYCC before it reads the
+    /// profile): the samples come out as coded, and
     /// [`Jp2Metadata::colour`] stays [`ColourSpace::RestrictedIcc`], so a
     /// caller can tell nothing was converted. A profile whose colour space is
     /// neither RGB, grey nor YCbCr passes through the same way, since
@@ -324,7 +326,8 @@ pub enum ColourOutput {
     /// whatever the file declares. As in OpenJPEG, every refusal above, and
     /// a profile on one or two colour channels, passes through before these
     /// checks: a profile LittleCMS refuses passes through whatever the
-    /// samples are. These errors apply only when `Srgb` is asked for:
+    /// samples are, except on a three-channel 4:2:0 or 4:2:2 image, which is
+    /// refused before the profile is read. These errors apply only when `Srgb` is asked for:
     /// [`ColourOutput::AsCoded`] decodes the same files.
     Srgb,
 }

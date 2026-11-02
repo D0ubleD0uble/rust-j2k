@@ -440,11 +440,25 @@ case of `icc/profiles.json` and a test in `src/jp2/srgb_tests.rs`:
 The order follows OpenJPEG's too (owner decision, 2026-11-02, on #199):
 every refusal above, whether lcms makes it opening the profile or building
 the transform, comes before this decoder's own checks below. So a profile
-lcms refuses passes through whatever the samples are: an intent of 4 on
+lcms refuses passes through whatever the samples are (bar the 4:2:0 and
+4:2:2 exception below): an intent of 4 on
 12-bit RGB, 16-bit grey, or a monochrome profile on three channels gives
 the samples as coded, as `opj_decompress` does. The refusals below (#165,
 #197) apply only where lcms would build the transform. Test:
 `refusals_are_ordered_as_in_openjpeg`.
+
+One exception comes before all of it: a three-channel 4:2:0 or 4:2:2 file.
+`opj_decompress` guesses sYCC and converts it before `color_apply_icc_profile`
+runs (`opj_decompress.c:1620-1635`), so a profile lcms refuses does not
+leave it as coded. Checked on `jp2_sycc_420_odd` and `jp2_sycc_422_odd`
+under `lcms_intent_4`, a refused grey profile (`grey_lcms_intent_4`), a
+profile cut short (`bad_short_header`) and a CMYK profile (`space_cmyk`):
+`-force-rgb` writes the sYCC original's planes each time. `Srgb` makes no
+sYCC guess, so it refuses all of them, before the profile is read, with the
+sub-sampling message of the other sYCC rows. Tests:
+`an_lcms_refused_profile_on_4_2_0_or_4_2_2_is_refused`, and
+`an_lcms_refused_profile_passes_through_outside_the_sycc_layouts` for the
+layouts that stay as coded.
 
 **An RGB profile is skipped when the first four channels differ, as in
 OpenJPEG (owner decision, 2026-11-02, on #206).** In
@@ -462,8 +476,8 @@ counts and a fifth channel does not.
 `Srgb` runs the same test in the same place: after the profile is opened
 and before the transform is built, so before every check of this
 decoder's own (a lookup table, the Lab connection space, a `cdef` without
-colours 1 to 3, an unsupported depth). One case is left to those checks,
-which refuse it: a 4:2:0 or 4:2:2 image, which `opj_decompress` converts
+colours 1 to 3, an unsupported depth). One case is refused before the
+test: a 4:2:0 or 4:2:2 image, which `opj_decompress` converts
 as sYCC before it reads the profile (`opj_decompress.c:1620-1630`). Other
 layouts in its sYCC-guess shape stay as coded there, so the test applies
 to them: 1x1:2x1:1x1 and 1x1:2x2:1x1 pass through, and 2x2:2x2:2x2
