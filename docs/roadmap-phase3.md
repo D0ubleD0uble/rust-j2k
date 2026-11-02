@@ -602,11 +602,12 @@ so and why we differ (or do not).
 | `bpcc` not `NC` bytes | error, on every `bpcc` before the codestream, whatever `ihdr.BPC` is; a `bpcc` before `ihdr` sees `NC` as 0 | reject | `FileFormat`; the same shapes after `jp2c`: see the row on boxes after `jp2c` |
 | `ihdr.UnkC = 1` with a `colr` | `UnkC` read, never used | `colr` value reported | none (match oracle; I.5.3.1) |
 | No `colr` at all | decodes, colour unknown | decodes, `Unknown` | none (samples are unaffected) |
-| `colr METH 2` with too few bytes for a profile header | reads what is there | reject | applies only to the later sRGB conversion: `FileFormat` under `Srgb` only; the colour space and bytes are passed through as they are |
+| `colr METH 2` with too few bytes for a profile header | reads what is there; lcms won't open it, so no ICC conversion | accept | none; the colour space and bytes are passed through as they are, and `Srgb` leaves the samples as coded (owner decision 2026-11-01, #199) |
+| Under `Srgb`: an ICC profile lcms refuses to open or build a transform from (bad header, intent 4-9 or above 15, a needed tag skipped, under 8 bytes, of the wrong type or read past the profile's end, `para` above 4, `curv` above 32767 entries) | conversion skipped, samples as coded | conversion skipped, samples as coded, `RestrictedIcc` kept | none (owner decision 2026-11-01, #199); `docs/correctness.md`, sRGB output |
 | Under `Srgb`: colour channels of different depth, sign or sub-sampling (other than sYCC chroma at 2x1 or 2x2) | ICC: conversion skipped, samples as coded; three components with sub-sampled chroma and an sRGB or absent `colr`: converted as if sYCC | reject | `Unsupported` (owner decision 2026-11-01); `AsCoded` decodes them; row of `srgb_reject_matrix_maps_each_input_to_its_typed_error` |
 | Under `Srgb`: sYCC with sub-sampled luma or another chroma layout | "CAN NOT CONVERT", samples as coded | reject | `Unsupported` |
 | Under `Srgb`: signed sYCC | converted silently as if unsigned, then clamped (R `[-7,-62,61,114]` → `[0,0,15,0]`) | reject | `Unsupported` (owner decision 2026-11-01) |
-| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, a non-restricted ICC profile (class not `scnr`, space not RGB/GRAY, PCS not XYZ, a LUT tag, an intent above 3, a missing tag, a curve other than `curv`/`para` 0-4 or a `curv` of more than 32767 entries), or ICC on samples other than 8/16-bit (RGB) or 8-bit (grey) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit grey 15 → 18 | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as grey, metadata as declared; a tag table or tag past the profile's end, or a tag cut short or of the wrong type, is `FileFormat` (`docs/correctness.md`, sRGB output) |
+| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, an ICC profile lcms would apply through a LUT or the Lab PCS, a `YCbr` profile, or ICC lcms would apply on samples other than 8/16-bit (RGB) or 8-bit (grey) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit grey 15 → 18 | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as grey, metadata as declared (`docs/correctness.md`, sRGB output) |
 | `raw_channels` with `Srgb` | n/a | reject before reading | `InvalidOptions` |
 | sYCC chroma replication past the sample budget | allocates | reject before any tile | `Limit` |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |
@@ -699,7 +700,7 @@ part of the gate.
 Rejected cleanly, never attempted: JPX-only features (fragment tables `ftbl`
 and fragmented codestreams, compositing layers, `rreq` requirements, multiple
 codestreams, any `colr METH 3/4`, Part 2 enumerated colour spaces as anything
-but a reported number); applying non-restricted ICC profiles (LUT-based, output
-or display classes); CMYK / e-sYCC / CIELab conversion; JPM, MJ2; writing JP2.
+but a reported number); applying ICC profiles through a lookup table or the
+Lab connection space; CMYK / e-sYCC / CIELab conversion; JPM, MJ2; writing JP2.
 HTJ2K stays Phase 4, the encoder Phase 5, Part 2 Phase 6. See
 [roadmap.md](roadmap.md) and [scope.md](scope.md).

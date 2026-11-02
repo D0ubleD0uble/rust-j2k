@@ -283,22 +283,39 @@ fn wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Where the decoder refuses a profile that LittleCMS converts, and why. Both
-/// are malformed: LittleCMS reads past the end of the tag, or applies a
-/// monochrome profile to the first of three channels' worth of input.
+/// Where the decoder refuses a profile, and why. OpenJPEG converts each but
+/// one. LittleCMS applies a monochrome profile to the first of three channels'
+/// worth of input; the others are forms this step does not apply: a lookup
+/// table LittleCMS reads, and a matrix/TRC profile with the Lab connection
+/// space. Where LittleCMS refuses the profile and this step can tell, the
+/// samples pass through as in OpenJPEG.
 const REFUSED_BY_US: &[(&str, &str)] = &[
-    ("bad_xyz_short", "tag is not an `XYZ ` value"),
     (
         "bad_gray_on_rgb",
         "monochrome ICC profile needs one colour channel",
     ),
+    ("lut16", "`A2B0` lookup table"),
+    ("lut16_grid_0", "`A2B0` lookup table"),
+    ("lut8", "`A2B0` lookup table"),
+    ("class_link_lut16", "`A2B0` lookup table"),
+    ("class_abst_lut16", "`A2B0` lookup table"),
+    ("a2b1_lut16_intent_1", "`A2B1` lookup table"),
+    ("d2b0_junk_a2b1_lut16_intent_1", "`A2B1` lookup table"),
+    ("pcs_lab", "`Lab ` connection space"),
+    ("lut_mab_empty", "`A2B0` lookup table"),
+    // LittleCMS refuses this one too, on its elements, which this step
+    // does not read.
+    ("d2b0_mpet_empty", "`D2B0` lookup table"),
+    ("grey_lut16", "`A2B0` lookup table"),
+    ("grey_pcs_lab", "`Lab ` connection space"),
 ];
 
-/// Every profile OpenJPEG converts gives the same samples here; every profile
-/// LittleCMS refuses gives a typed error, never a panic. The decoder refuses
-/// two malformed profiles that LittleCMS reads anyway ([`REFUSED_BY_US`]).
+/// Every profile OpenJPEG converts gives the same samples here. Every
+/// profile LittleCMS refuses, which OpenJPEG then leaves as coded, gives the
+/// samples as coded with the profile still in the metadata, and
+/// `read_header_with` says so. The exceptions are [`REFUSED_BY_US`].
 #[test]
-fn icc_profiles_match_openjpeg_or_are_refused() {
+fn icc_profiles_match_openjpeg() {
     let text = String::from_utf8(read("icc/profiles.json")).unwrap();
     let profiles: Profiles = serde_json::from_str(&text).expect("icc/profiles.json");
     let codestreams: std::collections::BTreeMap<&str, Vec<u8>> = profiles
@@ -306,7 +323,7 @@ fn icc_profiles_match_openjpeg_or_are_refused() {
         .iter()
         .map(|(k, v)| (k.as_str(), read(&v.file)))
         .collect();
-    let (mut converted, mut refused) = (0, 0);
+    let (mut converted, mut as_coded, mut refused) = (0, 0, 0);
     for case in &profiles.cases {
         let what = format!("{} {}", case.codestream, case.name);
         let codestream = &codestreams[case.codestream.as_str()];
@@ -314,61 +331,54 @@ fn icc_profiles_match_openjpeg_or_are_refused() {
         let bytes = wrap(codestream, &hex(&case.profile));
         let result = decode_with(&bytes, &srgb());
         let ours_refused = REFUSED_BY_US.iter().find(|(name, _)| *name == case.name);
-        match (case.openjpeg.as_str(), result) {
-            ("converted", Ok(image)) => {
-                assert!(ours_refused.is_none(), "{what}: expected a refusal");
+        match (case.openjpeg.as_str(), result, ours_refused) {
+            ("converted", Ok(image), None) => {
                 check_planes(&image, &case.planes, depth, &what);
                 converted += 1;
             }
-            ("converted", Err(e)) => {
-                let (_, fragment) = ours_refused.unwrap_or_else(|| panic!("{what}: {e}"));
+            ("unconverted", Ok(image), None) => {
+                let coded = decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!(image.components, coded.components, "{what}: as coded");
+                assert_eq!(image.jp2, coded.jp2, "{what}: metadata as declared");
+                assert!(
+                    matches!(
+                        image.jp2.as_ref().unwrap().colour,
+                        ColourSpace::RestrictedIcc(_)
+                    ),
+                    "{what}"
+                );
+                let header = rust_j2k::read_header_with(&bytes, &srgb())
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!(
+                    header,
+                    rust_j2k::read_header(&bytes).unwrap(),
+                    "{what}: header"
+                );
+                as_coded += 1;
+            }
+            (_, Err(e), Some((_, fragment))) => {
+                assert!(matches!(e, Error::Unsupported(_)), "{what}: {e:?}");
                 assert!(e.to_string().contains(fragment), "{what}: {e}");
                 refused += 1;
             }
-            ("unconverted", Err(e)) => {
-                assert!(
-                    matches!(e, Error::Unsupported(_) | Error::FileFormat(_)),
-                    "{what}: {e:?}"
-                );
-                // A profile LittleCMS will not open (`_cmsReadHeader`) is
-                // malformed.
-                if case.name.starts_with("hdr_") {
-                    assert!(matches!(e, Error::FileFormat(_)), "{what}: {e:?}");
-                }
-                refused += 1;
-            }
-            ("unconverted", Ok(_)) => {
-                panic!("{what}: LittleCMS refuses this profile, but it converted")
-            }
-            (other, _) => panic!("{what}: unknown outcome {other}"),
+            (outcome, result, _) => panic!("{what}: OpenJPEG {outcome}, here {result:?}"),
         }
     }
-    // 24 malformed, 39 edge-case and 15 header RGB profiles at 8 and 16 bits,
-    // 10 grey. LittleCMS refuses 13 of the malformed and 8 of the header ones.
-    assert_eq!(profiles.cases.len(), 2 * (24 + 39 + 15) + 10);
-    assert_eq!(refused, 2 * (13 + 8 + REFUSED_BY_US.len()));
-    assert_eq!(converted, profiles.cases.len() - refused);
-}
-
-/// The version in the refusal reads as major.minor.bugfix from the BCD
-/// nibbles: byte 0x10 is minor 1, not 16.
-#[test]
-fn a_version_above_5_0_is_named_in_bcd() {
-    let text = String::from_utf8(read("icc/profiles.json")).unwrap();
-    let profiles: Profiles = serde_json::from_str(&text).expect("icc/profiles.json");
-    let case = profiles
-        .cases
-        .iter()
-        .find(|c| c.name == "hdr_version_5_1" && c.codestream == "rgb8")
-        .expect("hdr_version_5_1");
-    let codestream = read(&profiles.codestreams["rgb8"].file);
-    let err = decode_with(&wrap(&codestream, &hex(&case.profile)), &srgb()).unwrap_err();
-    match err {
-        Error::FileFormat(message) => {
-            assert_eq!(message, "the ICC profile has version 5.1.0, above 5.0");
-        }
-        other => panic!("expected a FileFormat error, got {other:?}"),
-    }
+    // RGB profiles at 8 and 16 bits: 24 malformed, 39 edge-case, 15 header,
+    // 25 LittleCMS-reading and 58 class and lookup table ones. Grey: 10
+    // edge-case, 4 LittleCMS-reading and 13 class and lookup table ones.
+    // OpenJPEG leaves 13 of the malformed, 8 of the header, 11 of the
+    // LittleCMS-reading and 37 of the class and lookup table RGB ones as
+    // coded, and 3 + 7 grey ones. 11 RGB ones (one of them left as coded by
+    // OpenJPEG) and 2 grey ones are
+    // refused here.
+    assert_eq!(
+        profiles.cases.len(),
+        2 * (24 + 39 + 15 + 25 + 58) + 10 + 4 + 13
+    );
+    assert_eq!(refused, 2 * 11 + 2);
+    assert_eq!(as_coded, 2 * (13 + 8 + 11 + 37 - 1) + 3 + 7);
+    assert_eq!(converted, profiles.cases.len() - refused - as_coded);
 }
 
 // ---------------------------------------------------------------------------

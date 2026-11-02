@@ -94,18 +94,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same output as OpenJPEG with LittleCMS, sample for sample. The reference
   is OpenJPEG 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc);
   the output depends on the C library's `powf`, so other LittleCMS versions
-  or platforms can differ in the last bit. A profile LittleCMS will not open
-  is a `FileFormat` error. sRGB and greyscale pass through, and so do sYCC
-  or an RGB profile on one or two channels, and one or two channels with no
-  colour space to convert from (a raw codestream, or a file with no `colr`
-  or another enumerated space). After a conversion `Jp2Metadata::colour`
+  or platforms can differ in the last bit. sRGB and greyscale pass through,
+  and so do sYCC or an RGB or YCbCr profile on one or two channels, one or two
+  channels with no colour space to convert from (a raw codestream, or a
+  file with no `colr` or another enumerated space), a profile LittleCMS
+  refuses to open or to build a transform from (a bad header, a class or
+  intent it does not know, a missing or unreadable tag, a lookup table it
+  can't read), and a profile in a colour space other than RGB, grey or
+  YCbCr, as OpenJPEG leaves them; the metadata then keeps the profile.
+  These, and a profile on one or two channels, pass through before any
+  check on the samples, as in OpenJPEG.
+  Display, output and colour space profiles convert as input ones do. After a conversion `Jp2Metadata::colour`
   says sRGB, or greyscale for a monochrome profile whose output is neutral.
   A monochrome profile whose output is not neutral (absolute colorimetric
   with a tinted white point) gives three sRGB channels, as OpenJPEG does, so
   the channel count can't be predicted from the header. Other colour
-  spaces, other profiles, a monochrome profile on more than two channels,
-  and colour channels that differ in depth, sign or sub-sampling are
-  `Unsupported`; `Srgb` with `raw_channels` is
+  spaces, a YCbCr profile, a profile LittleCMS would apply through a lookup
+  table or the Lab connection space, a monochrome profile on more than two
+  channels, and colour channels that differ in depth, sign or sub-sampling
+  are `Unsupported`; `Srgb` with `raw_channels` is
   `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
   sub-sampled chroma, whatever colour space it declares; `Srgb` refuses it
   instead.

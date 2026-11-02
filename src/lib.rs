@@ -265,20 +265,57 @@ pub enum ColourOutput {
     /// are: [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for one
     /// grey channel, with no ICC profile. [`read_header`] and the default
     /// [`ColourOutput::AsCoded`] report the colour space the file declares.
-    /// sYCC or an RGB profile on one or two colour channels passes through,
+    /// sYCC or an RGB or YCbCr profile on one or two colour channels passes
+    /// through,
     /// as OpenJPEG leaves it, and so do one or two channels with no colour
     /// space to convert from (a raw codestream, a file with no `colr`, or
     /// another enumerated colour space), read as grey, or grey and opacity;
     /// their metadata stays as declared.
     ///
+    /// An ICC profile that LittleCMS refuses also passes through, as
+    /// OpenJPEG leaves it: the samples come out as coded, and
+    /// [`Jp2Metadata::colour`] stays [`ColourSpace::RestrictedIcc`], so a
+    /// caller can tell nothing was converted. A profile whose colour space is
+    /// neither RGB, grey nor YCbCr passes through the same way, since
+    /// OpenJPEG has no transform for it. LittleCMS refuses:
+    ///
+    /// - a profile shorter than its 128-byte header and tag count;
+    /// - no `acsp` signature, a version above 5.0, or a device class it does
+    ///   not know;
+    /// - more than 100 tags, a tag table past the profile's end, or two
+    ///   entries with the same signature among those it keeps (it skips an
+    ///   entry with a zero offset or size, or one that ends past the
+    ///   profile's declared size);
+    /// - a named colour profile, or a device link or abstract profile with no
+    ///   lookup table;
+    /// - a rendering intent other than 0 to 3 and 10 to 15 (10 to 15, its
+    ///   black-preserving intents, convert as relative colorimetric);
+    /// - a connection space other than XYZ or Lab;
+    /// - a lookup table it would read that is of the wrong type, has the
+    ///   wrong number of input or output channels, a grid of one point, or
+    ///   runs past the end of the profile;
+    /// - a tag it needs that is missing, under 8 bytes, of the wrong type, or
+    ///   has a value that runs past the end of the profile;
+    /// - a parametric curve of an unknown function, or a `curv` of more than
+    ///   32767 entries.
+    ///
+    /// As in LittleCMS, a value that runs past its tag is read from the bytes
+    /// after it, and a media white point that can't be read is taken as D50,
+    /// as it is for a version 2 display profile. Input, display, output,
+    /// colour space and class 0 profiles convert alike.
+    ///
     /// Anything else is [`Error::Unsupported`]: three or more channels in
     /// another colour space or with no colour specification (a raw
-    /// codestream included), another kind of ICC profile, a monochrome
-    /// profile on more than two channels, an RGB profile on samples that are
-    /// not 8 or 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and colour
-    /// channels that differ in depth, sign or sub-sampling other than sYCC's
-    /// chroma layouts. An ICC profile too short for its header or with a tag
-    /// past its end is [`Error::FileFormat`].
+    /// codestream included), a YCbCr profile, a profile LittleCMS would apply
+    /// through a lookup table or a Lab connection space, a monochrome profile
+    /// on more than two channels, an RGB profile on samples that are not 8
+    /// or 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and
+    /// colour channels that differ in depth, sign or sub-sampling other than
+    /// sYCC's chroma layouts. As in OpenJPEG, every refusal above, and a
+    /// profile on one or two colour channels, passes through before these
+    /// checks: a profile LittleCMS refuses passes through whatever the
+    /// samples are. These errors apply only when `Srgb` is asked
+    /// for: [`ColourOutput::AsCoded`] decodes the same files.
     Srgb,
 }
 
