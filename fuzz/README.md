@@ -159,6 +159,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | ---- | ------ | ----- | ------ | ------ |
 | 2026-11-01 | `jp2_boxes` | `gen-jp2-fuzz-seeds.py` (46 seeds), `jp2.dict` | 61 s, 785 605 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `jp2_boxes` with the `Srgb` decode | `gen-jp2-fuzz-seeds.py` (72 seeds), `jp2.dict` | 61 s, 86 856 runs (1 423 exec/s), under `nice` | no crash, leak, or timeout |
+| 2026-11-01 | `jp2_boxes` with `jp2i` and `uinf` seeds | `gen-jp2-fuzz-seeds.py` (75 seeds), `jp2.dict` | 61 s, 35 821 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `icc_srgb` | `gen-icc-oracles.py --fuzz-seeds` (136 seeds), `icc.dict` | 61 s, 11 137 runs, under `nice` | no crash, leak, or timeout |
 

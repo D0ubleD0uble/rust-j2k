@@ -115,9 +115,9 @@ pub(crate) struct Jp2File<'a> {
     pub(crate) after_codestream: Vec<Jp2Box<'a>>,
     /// The whole boxes after both the codestream and the `jp2c` box, walked
     /// the same way. Their `xml `, `uuid`, `jp2i` and `uinf` boxes are
-    /// reported, like those in `other`. This
-    /// differs from `after_codestream` when the box is longer than its
-    /// codestream: padding inside the box is skipped by its length here.
+    /// reported, like those in `other`. This differs from `after_codestream`
+    /// when the box is longer than its codestream: padding inside the box is
+    /// skipped by its length here.
     pub(crate) after_box: Vec<Jp2Box<'a>>,
     /// Whether OpenJPEG reads the boxes after the codestream: true when the
     /// codestream's end was found from its tile-part lengths. When the last
