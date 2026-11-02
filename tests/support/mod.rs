@@ -101,6 +101,8 @@ impl Jp2Snapshot {
             ColourSpace::RestrictedIcc(profile) => format!("icc:{}", profile.len()),
             ColourSpace::Enumerated(n) => format!("enumerated:{n}"),
             ColourSpace::Unknown => "unknown".to_string(),
+            // `ColourSpace` is non-exhaustive: a new variant needs a snapshot name.
+            other => panic!("no snapshot name for {other:?}"),
         };
         let kind = |k: ChannelType| match k {
             ChannelType::Colour => "colour".to_string(),

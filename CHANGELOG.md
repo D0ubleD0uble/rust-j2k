@@ -84,6 +84,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
   sub-sampled chroma, whatever colour space it declares; `Srgb` refuses it
   instead.
+- `ColourSpace`, `ColourOutput`, `Resolution`, `Res`, `Ratio` and `UuidBox` are
+  `#[non_exhaustive]`, so later variants and fields (a JPX colour method, an
+  output ICC profile) are not breaking changes. Match them with a `_` arm, and
+  read the structs' fields rather than building them.
 - `src/jp2/lcms.rs` is a Rust port of parts of LittleCMS 2.14 (MIT). Its
   notice is at the top of the file and in the README.
 

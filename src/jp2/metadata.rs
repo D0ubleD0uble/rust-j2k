@@ -39,6 +39,7 @@ pub struct Jp2Metadata {
 /// its field `None`: OpenJPEG does not read `res ` at all, so a malformed one
 /// never fails a decode. When more than one is present, the first counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Resolution {
     /// The capture resolution (`resc`).
     pub capture: Option<Res>,
@@ -48,6 +49,7 @@ pub struct Resolution {
 
 /// One resolution: grid points per metre in each direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Res {
     /// Vertical grid points per metre (`VRN`, `VRD`, `VRE`).
     pub vertical: Ratio,
@@ -59,6 +61,7 @@ pub struct Res {
 /// grid points per metre. Kept as integers, so the value is exact;
 /// [`Ratio::grid_points_per_metre`] gives it as a float.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Ratio {
     /// `N`.
     pub numerator: u16,
@@ -72,13 +75,17 @@ impl Ratio {
     /// The resolution in grid points per metre, or `None` when the
     /// denominator is 0.
     ///
-    /// ```
-    /// use rust_j2k::Ratio;
+    /// ```no_run
+    /// use rust_j2k::read_header;
     ///
-    /// // 10000 / 254 points per metre is one per inch.
-    /// let dpi = Ratio { numerator: 10000, denominator: 254, exponent: 0 };
-    /// let per_inch = dpi.grid_points_per_metre().unwrap() * 0.0254;
-    /// assert!((per_inch - 1.0).abs() < 1e-12);
+    /// let bytes = std::fs::read("scan.jp2")?;
+    /// let jp2 = read_header(&bytes)?.jp2.expect("a JP2 file");
+    /// if let Some(capture) = jp2.resolution.capture {
+    ///     // 10000 / 254 points per metre is one per inch.
+    ///     let per_metre = capture.horizontal.grid_points_per_metre();
+    ///     println!("{per_metre:?} grid points per metre");
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn grid_points_per_metre(self) -> Option<f64> {
@@ -97,6 +104,7 @@ impl Ratio {
 /// GeoJP2 georeferencing and XMP are carried this way. A `uuid` box shorter
 /// than its 16-byte identifier is skipped.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UuidBox {
     /// The identifier, as stored.
     pub id: [u8; 16],
@@ -115,6 +123,7 @@ pub struct UuidBox {
 /// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb); then the colour channels
 /// are converted and [`Jp2Metadata::colour`] reports the converted space.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColourSpace {
     /// sRGB (enumerated colour space 16).
     Srgb,

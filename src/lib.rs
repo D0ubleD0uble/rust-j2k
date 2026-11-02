@@ -206,6 +206,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// What colour space a JP2 file's colour channels come out in: the
 /// [`DecodeOptions::colour`] option.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColourOutput {
     /// The samples as the codestream coded them, after the palette and the
     /// channel definitions. [`Jp2Metadata::colour`] says how to read them;

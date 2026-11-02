@@ -189,22 +189,14 @@ fn the_jpx_compatible_files_report_their_metadata() {
 /// read them: `resc 10000/254 e0` and `resd 12901/32768 e4`.
 #[test]
 fn the_gdal_samples_report_their_resolution() {
-    let ratio = |numerator, denominator, exponent| Ratio {
-        numerator,
-        denominator,
-        exponent,
-    };
+    // `Resolution`, `Res` and `Ratio` are non-exhaustive, so compare fields.
+    let fields = |r: Ratio| (r.numerator, r.denominator, r.exponent);
     let tlm = read_header(&real("byte_tlm_plt.jp2")).unwrap().jp2.unwrap();
-    let dpi = ratio(10000, 254, 0);
-    assert_eq!(
-        tlm.resolution.capture,
-        Some(Res {
-            vertical: dpi,
-            horizontal: dpi,
-        })
-    );
+    let dpi = tlm.resolution.capture.unwrap();
+    assert_eq!(fields(dpi.vertical), (10000, 254, 0));
+    assert_eq!(fields(dpi.horizontal), (10000, 254, 0));
     assert_eq!(tlm.resolution.display, None);
-    let per_inch = dpi.grid_points_per_metre().unwrap() * 0.0254;
+    let per_inch = dpi.vertical.grid_points_per_metre().unwrap() * 0.0254;
     assert!(
         (per_inch - 1.0).abs() < 1e-12,
         "one point per inch: {per_inch}"
@@ -214,15 +206,10 @@ fn the_gdal_samples_report_their_resolution() {
         .unwrap()
         .jp2
         .unwrap();
-    let display = ratio(12901, 32768, 4);
     assert_eq!(kakadu.resolution.capture, None);
-    assert_eq!(
-        kakadu.resolution.display,
-        Some(Res {
-            vertical: display,
-            horizontal: display,
-        })
-    );
+    let display = kakadu.resolution.display.unwrap();
+    assert_eq!(fields(display.vertical), (12901, 32768, 4));
+    assert_eq!(fields(display.horizontal), (12901, 32768, 4));
 }
 
 /// A component too deep for the `i32` sample container is a header fault:
