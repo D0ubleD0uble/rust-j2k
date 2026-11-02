@@ -21,7 +21,7 @@
 //! header is parsed, [`check_against_siz`] holds `ihdr` to its SIZ,
 //! [`ChannelPlans::plan`] plans the output channels (the palette, see
 //! [`palette`], then the channel definitions, see [`channels`]), and
-//! [`metadata`] builds the [`Jp2Metadata`] that rides on the
+//! [`metadata()`] builds the [`Jp2Metadata`] that rides on the
 //! [`Image`](crate::Image). When the caller asks for sRGB output,
 //! [`plan_srgb`] plans that conversion too (see [`srgb`]). Only then are the
 //! tiles decoded and the plans applied to their samples.

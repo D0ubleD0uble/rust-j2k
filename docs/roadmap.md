@@ -68,7 +68,7 @@ that gates it, is in [roadmap-phase2.md](roadmap-phase2.md); in brief:
 within their compliance-class error bounds, with a clean fuzzing run on malformed
 input (no panics, no `unsafe`, bounded memory).
 
-## Phase 3 — JP2 file format decode
+## Phase 3 — JP2 file format decode *(done; release pending)*
 
 **Goal:** open `.jp2` files, not just bare codestreams.
 
@@ -86,6 +86,11 @@ it, is in [roadmap-phase3.md](roadmap-phase3.md); in brief:
 **Gate:** all nine ISO/IEC 15444-4 JP2 reader files decode within their
 compliance bounds against the Part 4 references, and a set of real `.jp2`
 files matches OpenJPEG's output. Ships as one release.
+
+**Gate (met):** all nine JP2 reader files grade in class (`IN_CLASS` in
+`tests/conformance_jp2.rs`), the 23 Part 1 entries are unchanged, and the
+real-world set decodes with its recorded metadata. The pre-release review in
+`RELEASING.md` is what remains before the release.
 
 ## Phase 4 — HTJ2K decode (Part 15)
 

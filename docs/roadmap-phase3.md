@@ -1,8 +1,10 @@
 # Phase 3 roadmap — JP2 file format decode
 
-> **Status: in progress.** P3.0 (the harness), P3.1 (the box reader) and
-> P3.3 (the palette) have landed; the rest is planned. The milestones are the build order to follow,
-> each with the oracle that gates it.
+> **Status: implemented on `main`, release pending.** P3.0 to P3.7 have landed
+> and P3.8's docs pass is done. All nine Part 4 JP2 reader files decode in
+> class. What remains is the owner's public-API decisions and the pre-release
+> review in `RELEASING.md`. The milestones below are the build order that was
+> followed, each with the oracle that gated it.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file
 zooms into Phase 3 alone. It breaks the line item "JP2 file format decode" into
@@ -325,7 +327,7 @@ the way P2.0 stood up the Part 1 harness.
 **Oracle:** the Part 4 JP2 references are the authority; this milestone is the
 machinery.
 
-**Done:** the harness runs, every reference parses, all nine entries report
+**Done (#169):** the harness runs, every reference parses, all nine entries report
 *not yet decoded*, `cargo deny` and the packaged crate are unaffected
 (`cargo publish --dry-run` shows no conformance file).
 
@@ -363,7 +365,7 @@ the GDAL sample set (P3.0's `real-world` fixtures, below) must
 decode to exactly what `decode` gives for its extracted `jp2c` payload, or be
 `Unsupported` while it carries `pclr`/`cmap`/`cdef`.
 
-**Done:** `file1`, `file4`, `file6` in class; the real-world set decodes equal
+**Done (#170):** `file1`, `file4`, `file6` in class; the real-world set decodes equal
 to its raw payloads (or is `Unsupported` per the guard); a JPX without `jp2 ` compatibility is `Unsupported`;
 openreadout's `jp2_boxes_are_unwrapped` shape (signature + ftyp + jp2c, no
 `jp2h`) is `FileFormat`. OpenJPEG 2.5.0 rejects that shape too ("bad placed
@@ -386,7 +388,7 @@ in the box, file5's 546, file7's 13332; files 1 and 9 are `Srgb`, 2 and 3
 shape (`METH 3`) comes out `Unknown`. No new conformance entry turns green
 here; this milestone is metadata.
 
-**Done:** every fixture's `colour` matches its box dump; `bpcc` length faults
+**Done (#176):** every fixture's `colour` matches its box dump; `bpcc` length faults
 are `FileFormat`.
 
 ### P3.3 — Palette expansion: `pclr` + `cmap` (`src/jp2/palette.rs`)
@@ -412,7 +414,7 @@ OpenJPEG refuses (graded by table lookup over OpenJPEG's raw index-plane
 decode, since the oracle rejects the file). The rest grade against
 `opj_decompress` on the `.jp2`.
 
-**Done:** `file9` in class; the synthetic palette fixtures bit-exact;
+**Done (#178):** `file9` in class; the synthetic palette fixtures bit-exact;
 `raw_channels: true` returns the index plane.
 
 ### P3.4 — Channel definitions: `cdef` (`src/jp2/channels.rs`)
@@ -434,7 +436,7 @@ GDAL's `rgb16_ecwsdk.jp2`), and a 1-bit alpha with `bpcc` (GDAL's
 `3_13bit_and_1bit.jp2`, 13-bit colour + 1-bit alpha). `file2` itself grades
 only after P3.6.
 
-**Done:** every `cdef` fixture matches the oracle's channel order and depth,
+**Done (#180):** every `cdef` fixture matches the oracle's channel order and depth,
 and `jp2.channels` matches the box dump. `rgb16_ecwsdk.jp2` does not decode in
 either decoder (its codestream has no `EOC`), so its all-unspecified layout is
 checked on the synthetic `jp2_cdef_unspecified` instead.
@@ -455,7 +457,7 @@ Guard: metadata copies are bounded by the input length, and only `jp2h` and
 `byte_tlm_plt.jp2`, `resd 12901/32768 e4` in `rgbwcmyk01_YeGeo_kakadu.jp2`,
 GeoJP2 `uuid` payloads, GML `asoc` trees) and the Part 4 files' `xml ` boxes.
 
-**Done:** metadata matches the dumps; files 5 and 7 (`jpx ` brand, `rreq`,
+**Done (#181):** metadata matches the dumps; files 5 and 7 (`jpx ` brand, `rreq`,
 `jp2 `-compatible) decode; `is_jpx`-style 64-bit `XLBox` on `jp2c` decodes.
 
 ### P3.6 — sRGB output: sYCC and restricted ICC (`src/jp2/srgb.rs`)
@@ -491,7 +493,7 @@ links), which lands within PAE 1 of the references on all five. If we land
 within the ISO bound but off OpenJPEG, correctness.md's rule applies: the
 conformance image wins, and the ICC arithmetic is documented against ICC.1.
 
-**Done:** all nine Part 4 JP2 entries in class.
+**Done (#184, #190):** all nine Part 4 JP2 entries in class.
 
 ### P3.7 — Fuzz target and the reject matrix (`fuzz/`, `src/jp2/tests.rs`)
 
@@ -508,7 +510,7 @@ reject matrix in `src/jp2/tests.rs` pins each row of the table below.
 **Oracle:** no panic, bounded allocation, every reject a typed `Error`; the
 60-second CI smoke stays green.
 
-**Done:** a documented `cargo fuzz` run over `jp2_boxes` and `decode` finds
+**Done (#186, #188):** a documented `cargo fuzz` run over `jp2_boxes` and `decode` finds
 nothing; the reject matrix passes.
 
 ### P3.8 — Integration and the phase gate
@@ -519,6 +521,12 @@ nothing; the reject matrix passes.
 `scope.md` Phase 3 rows ticked; `correctness.md` gains the JP2 corpus and the
 "reference is display output" note; `CHANGELOG.md` for 0.4.0; the pre-release
 review in `RELEASING.md`.
+
+**Status:** the docs pass is done (`lib.rs`, `README.md`, `scope.md`,
+`roadmap.md`, `correctness.md`, `tests/fixtures/README.md`, `CHANGELOG.md`
+under Unreleased). The Part 4 JP2 gate is met: nine of nine in `IN_CLASS`, and
+the 23 Part 1 entries are unchanged. Left: the owner's public-API decisions
+and the `RELEASING.md` pre-release review.
 
 **Gate (the Phase 3 exit):** all nine ISO/IEC 15444-4 JP2 reader files decode
 within PAE 4 / MSE 1 against their references (bit-exact where the manifest

@@ -110,8 +110,10 @@ pub struct UuidBox {
 /// OpenJPEG reads it: a box whose method is neither 1 (enumerated) nor 2
 /// (restricted ICC) is skipped and does not count as the first, and every
 /// later usable box is ignored. Boxes placed after `jp2h` at the top level
-/// count in file order with the ones inside `jp2h`. The samples are never converted, whatever
-/// the value.
+/// count in file order with the ones inside `jp2h`. This is what the file
+/// declares. Decoding returns the samples as coded unless the caller asks for
+/// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb); then the colour channels
+/// are converted and [`Jp2Metadata::colour`] reports the converted space.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColourSpace {
     /// sRGB (enumerated colour space 16).

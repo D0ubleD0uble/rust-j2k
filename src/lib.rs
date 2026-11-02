@@ -106,8 +106,9 @@ pub use jp2::{
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
-/// output channel, each on its own sample grid. That is one per SIZ component,
-/// in SIZ order, except for a palettised JP2 file (below).
+/// output channel, each on its own sample grid. For a raw codestream that is
+/// one per SIZ component, in SIZ order. A JP2 file can change the channels:
+/// its palette and channel definitions (below), and the sRGB output option.
 ///
 /// The input kind is detected from its first bytes. Input that opens with the
 /// `SOC` marker (`FF 4F`) is a codestream. Otherwise, input whose bytes 4..8
@@ -123,6 +124,21 @@ pub use jp2::{
 /// (colour 1 first) and labels every channel on [`Jp2Metadata::channels`].
 /// [`DecodeOptions::raw_channels`] skips both and returns the codestream's
 /// components as coded.
+///
+/// ```no_run
+/// use rust_j2k::{decode, ColourSpace};
+///
+/// // A `.jp2` file decodes the same way as a raw codestream; the format is
+/// // detected from the first bytes.
+/// let bytes = std::fs::read("photo.jp2")?;
+/// let image = decode(&bytes)?;
+/// if let Some(jp2) = &image.jp2 {
+///     if jp2.colour == ColourSpace::Srgb {
+///         println!("{} sRGB channels", image.components.len());
+///     }
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 ///
 /// This is the whole public surface for the GRIB2 use case: the §7 data
 /// section of a `grid_jpeg` message is a raw codestream. That subset is

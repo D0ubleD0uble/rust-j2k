@@ -7,6 +7,13 @@ snapshot is what a trusted reference decoder (OpenJPEG's `opj_decompress`, or
 eccodes for GRIB2-sourced files) produced, committed so the corpus is graded
 offline without the reference decoder installed.
 
+The JP2 corpora sit beside this one. The synthetic JP2 files and the ICC
+oracles are below. The real-world `.jp2` files are in
+[`jp2_real/`](jp2_real/README.md), each with its source, commit, SHA-256 and
+oracle; they are excluded from the published crate, because their rights are
+not confirmed. The ISO/IEC 15444-4 JP2 reader files and their references are
+in [`conformance/`](conformance/README.md).
+
 ## The corpus
 
 Every fixture is the exact subset Phase 1 decodes: one component, one tile, one

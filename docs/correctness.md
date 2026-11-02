@@ -311,9 +311,12 @@ way.** Each is `Unsupported` unless noted, and each is a row of
 - colour channels that differ in depth, sign or sub-sampling, other than
   the sYCC chroma layouts below (owner decision, 2026-11-01). OpenJPEG
   skips the ICC conversion silently and writes the samples as coded. For a
-  three-component file with sub-sampled chroma and an sRGB or absent `colr`
-  (or a raw codestream), `opj_decompress` guesses sYCC and converts it; that
-  guess is not made here;
+  three-component file with sub-sampled chroma, whatever `colr` declares
+  (sRGB, greyscale, another space, a profile, or none) or a raw codestream,
+  `opj_decompress` guesses sYCC and converts it; that guess is not made here.
+  Checked: `jp2_sycc_420_odd.jp2` with its `EnumCS` patched to 17
+  (greyscale) gives byte-identical `opj_decompress` output to the sYCC
+  original, while `Srgb` here refuses it (a row of the reject matrix);
 - sYCC other than full-resolution luma with chroma at 1x1, 2x1 or 2x2.
   OpenJPEG prints "CAN NOT CONVERT" and writes the samples as coded;
 - signed sYCC (owner decision, 2026-11-01, on #165). OpenJPEG converts it
@@ -405,6 +408,34 @@ Two rules keep the grading honest:
   `IN_CLASS` list names the entries that decode in class today, so a milestone
   that turns one green — or a regression that turns one red — fails the test
   until the list is updated.
+
+### The JP2 corpus
+
+`tests/conformance_jp2.rs` grades the nine ISO/IEC 15444-4 JP2 reader files
+(`file1.jp2` to `file9.jp2`, in `tests/fixtures/conformance/jp2/`) the same
+way, at class 1, with the same ratchet: `IN_CLASS` lists all nine. Files 1, 4,
+6 and 9 are bit-exact; the others are held to PAE 4 / MSE 1. Two more corpora
+back it, neither needing a reference decoder at test time:
+
+- the synthetic `jp2_*.jp2` files (`tests/jp2_synthetic.rs`), each graded
+  bit-exactly against `opj_decompress` on the same file, or, where OpenJPEG
+  fails, against a table lookup over its decode of the bare codestream;
+- nine real-world files from GDAL's test data (`tests/jp2_real.rs`), written
+  by Kakadu, the ECW JPEG 2000 SDK and OpenJPEG, decoded and compared with
+  `opj_decompress` or with their own extracted codestream, with the box
+  metadata checked against the box dumps.
+
+**The Part 4 JP2 references are display output.** `jp2_N.tif` is what a
+viewer shows: sYCC and ICC-tagged files are already converted to sRGB, and
+files 4, 6 and 8 are greyscale written as three identical channels. Files 2,
+3, 5, 7 and 8 therefore can't be graded on the samples as coded. They are
+decoded with `ColourOutput::Srgb` and graded against the references, and
+their default decode is graded bit-exactly against `opj_decompress` output
+for the same file (`as_coded` references). Files 6 (12-bit) and 7 (16-bit) have
+8-bit references, so the harness shifts their decode right by 4 and 8 (the
+references were made with `opj_decompress -p 8S`, a plain right shift). Beyond the references,
+`opj_decompress -force-rgb` is the oracle for the conversion arithmetic
+(see "sRGB output" above).
 
 ## A passing entry is not proof the feature works
 
@@ -523,7 +554,9 @@ Seed it from:
   is CCSDS), so OpenJPEG's irreversible mode re-encodes a real grid;
 - the ISO/IEC 15444-4 conformance codestreams, which gated Phase 2 (all 23
   entries now decode in class);
-- real `.jp2` files for Phase 3, HTJ2K codestreams for Phase 4.
+- the ISO/IEC 15444-4 JP2 reader files, synthetic `.jp2` files built over the
+  codestreams above, and real `.jp2` files from GDAL's test data, which gated
+  Phase 3 (see "The JP2 corpus" above); HTJ2K codestreams for Phase 4.
 
 ## Robustness (the input is untrusted)
 

@@ -31,17 +31,23 @@ supported Rust version is **1.87**.
 
 ## Usage
 
-The public surface is small: bytes of a raw JPEG 2000 codestream in, a decoded
-`Image` out — `decode`, or `decode_with` to set options such as a resolution
-reduction. An `Image` is the image area on the reference grid plus one
-`Component` per codestream component, each on its own sample grid.
+The public surface is small: the bytes of a JPEG 2000 codestream or JP2 file in
+(detected from the first bytes), a decoded `Image` out — `decode`, or
+`decode_with` to set options such as a resolution reduction. `read_header`
+reads the image area, the channel formats and a JP2 file's metadata without
+decoding any tile data. An `Image` is the image area on the reference grid plus
+one `Component` per output channel, each on its own sample grid: per codestream
+component, or per palette column for a palettised JP2 file. For a JP2 file,
+`image.jp2` holds what its boxes say (colour space, channel types, resolution,
+`xml ` and `uuid` boxes).
 
 ```rust
 use rust_j2k::decode;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // A raw JPEG 2000 codestream (Annex A): the bytes of a `.j2k` file, or the
-    // §7 data section of a GRIB2 template 5.40 (`grid_jpeg`) message.
+    // A JPEG 2000 codestream (Annex A) or JP2 file (Annex I): the bytes of a
+    // `.j2k` or `.jp2` file, or the §7 data section of a GRIB2 template 5.40
+    // (`grid_jpeg`) message.
     let bytes = std::fs::read("grid.j2k")?;
 
     let image = decode(&bytes)?;
@@ -90,7 +96,9 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 
 | Decoded | Not yet (returns `Error::Unsupported`) |
 | --- | --- |
-| Raw codestream (Annex A) and JP2 files (Annex I), detected from the first bytes; JP2 palettes (`pclr`, `cmap`) and channel definitions (`cdef`) | — |
+| Raw codestream (Annex A) and JP2 files (Annex I), detected from the first bytes | JPX, JPM and MJ2 files that do not claim `jp2 ` compatibility |
+| JP2 palettes (`pclr`, `cmap`), channel definitions (`cdef`), colour specification (`colr`), `res `, `xml ` and `uuid` boxes, reported on `Image::jp2` | — |
+| Opt-in sRGB output (`DecodeOptions::colour`): sYCC and restricted ICC profiles | Other colour spaces and profiles under that option |
 | Integer components, signed or unsigned, up to 32 bits, with sub-sampling | Depths past the `i32` container (33–38 bits) |
 | Both color transforms: reversible (RCT) and irreversible (ICT) | Part 2 extensions (array MCT, …) |
 | Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | HTJ2K (Part 15) block coding |
@@ -101,16 +109,15 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 | Resolution-reduced decode (each level halves the output) | — |
 
 Anything outside the decoded set is rejected cleanly, not half-decoded. The
-long-run target is OpenJPEG-level coverage (full Part 1, the JP2 file format,
-HTJ2K, an encoder, and the later parts); we get there by widening this same
+long-run target is OpenJPEG-level coverage (HTJ2K, an encoder, and the later parts); we get there by widening this same
 engine outward. See [docs/roadmap.md](docs/roadmap.md) and
 [docs/scope.md](docs/scope.md).
 
 ## Pipeline
 
 ```text
-bytes -> codestream -> tier-2 -> tier-1 -> dequant -> inverse DWT -> Image
-        (markers)     (packets)  (MQ+EBCOT) (quant)    (5/3 | 9/7)
+bytes -> [jp2 boxes] -> codestream -> tier-2 -> tier-1 -> dequant -> inverse DWT -> Image
+         (Annex I)       (markers)     (packets)  (MQ+EBCOT) (quant)    (5/3 | 9/7)
 ```
 
 Each stage is a module under `src/`, and each module's docs cite the ISO section
@@ -123,8 +130,10 @@ class-1 error bounds, gated in CI against committed reference images. The GRIB2
 §5.40 (`grid_jpeg`) path — the crate's original target — is gated bit-exact
 against the OpenJPEG/eccodes oracle.
 
-Next comes the JP2 file format, then HTJ2K and an encoder, widening this same
-engine. The plan is in [docs/roadmap.md](docs/roadmap.md).
+The nine ISO/IEC 15444-4 JP2 reader files decode within their reference bounds
+too, and a set of real `.jp2` files matches OpenJPEG.
+
+Next come HTJ2K and an encoder, widening this same engine. The plan is in [docs/roadmap.md](docs/roadmap.md).
 
 ## Correctness
 

@@ -4,7 +4,7 @@ The JPEG 2000 family is large. This document inventories the capabilities a
 full codec carries, maps each to its part of the standard, and records two
 things per feature: whether the **GRIB2** decode path needs it, and which
 project **phase** delivers it. Phases are defined in [roadmap.md](roadmap.md);
-Phases 1 and 2 have shipped, so their rows decode today.
+Phases 1 to 3 are implemented, so their rows decode today.
 
 Legend: ✓ required · — not needed · ○ optional/rare. "GRIB2" is the column for
 template 5.40 (`grid_jpeg`) decode.
@@ -103,6 +103,10 @@ quality-progressive read — is a decode-control feature deferred past Phase 2.
 | Resolution (res), capture/display metadata | — | 3 |
 | xml / uuid boxes passed through as bytes | — | 3 |
 | Header-only read (`read_header`) without decoding pixels | — | 3 |
+
+All nine rows decode on `main`: the ISO/IEC 15444-4 JP2 reader files grade in
+class, and the real-world set matches OpenJPEG. A file that does not claim
+`jp2 ` compatibility (pure JPX, JPM, MJ2) is refused as `Unsupported`.
 
 ## Part 15 — High Throughput JPEG 2000 / HTJ2K (ISO/IEC 15444-15)
 

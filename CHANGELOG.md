@@ -30,7 +30,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   differences: a palette column too deep for an `i32` sample is
   `Unsupported`, and channels from components of different sub-sampling each
   keep their own grid, where OpenJPEG fails.
-  `Jp2Metadata::palette_applied` says whether the palette was applied.
+  `Jp2Metadata::palette_applied` says whether the palette was applied. The
+  expanded channels count against the same sample budget as the codestream
+  (`Error::Limit`), so while the decoded components are still held a palette
+  can briefly take about twice the budget (~512 MiB of `i32`).
 - A JP2 file with channel definitions (`cdef`) puts its colour channels in
   colour order and labels every channel on `Jp2Metadata::channels` with its
   type and association. What is accepted and the output order follow
@@ -78,7 +81,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the channel count can't be predicted from the header. Other colour
   spaces, other profiles, and colour channels that differ in depth, sign or
   sub-sampling are `Unsupported`; `Srgb` with `raw_channels` is
-  `InvalidOptions`.
+  `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
+  sub-sampled chroma, whatever colour space it declares; `Srgb` refuses it
+  instead.
+- `src/jp2/lcms.rs` is a Rust port of parts of LittleCMS 2.14 (MIT). Its
+  notice is at the top of the file and in the README.
 
 ### Fixed
 

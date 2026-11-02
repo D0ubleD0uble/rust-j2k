@@ -17,8 +17,9 @@ unblocks a real downstream consumer (the fieldglass GRIB2 reader) and forces the
 hardest core (the EBCOT block coder and the wavelet transform) to be correct
 before any breadth work begins. Everything after that widens the same engine
 outward: the general Part 1 codestream decoder is done (all 23 ISO/IEC 15444-4
-conformance entries decode in class), and the JP2 file format, HTJ2K, an
-encoder, and the later parts of the standard follow.
+conformance entries decode in class), and so is JP2 file decoding (the nine
+Part 4 JP2 reader files decode in class). HTJ2K, an encoder, and the later
+parts of the standard follow.
 
 This is a real gap to fill: as of 2026 there is no production-grade pure-Rust
 JPEG 2000 codec. The usable options (`jp2k`, `openjpeg-sys`, `grokj2k-sys`) all

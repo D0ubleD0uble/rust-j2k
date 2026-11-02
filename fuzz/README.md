@@ -72,11 +72,14 @@ be `Ok` or a typed error. The codestreams are chosen so each conversion path
 is reachable: an 8-bit single-component one (the monochrome profile, `kTRC`),
 an 8-bit three-component one without sub-sampling (the RGB profile, `rXYZ`,
 `rTRC`, ... with `curv` and `para` curves), the sYCC 4:2:0 and 4:2:2
-codestreams of `jp2_sycc_*_odd.jp2` (chroma replication). The 16-bit
-one-component codestream (monochrome profiles need 8 bits), the 2x2
-sub-sampled three-component one (sYCC wants luma at full size), and an RGB
-profile on the 4:2:0 codestream (mixed sub-sampling) are refused after the
-profile is read. The CI smoke generates these seeds before it runs `jp2_boxes` for 30 s, and
+codestreams of `jp2_sycc_*_odd.jp2` (chroma replication). The RGB profile
+on the three-component codestream sub-sampled 2x2 in every component
+(`icc_rgb_subsampled`) converts, since its channels agree. Three seeds are
+refused: the 16-bit one-component codestream (monochrome profiles need 8
+bits) and an RGB profile on the 4:2:0 codestream (mixed sub-sampling) after
+the profile is read, and sYCC on the all-2x2 codestream
+(`sycc_subsampled_all`, sYCC wants luma at full size), which has no profile
+and is refused from the sampling alone. The CI smoke generates these seeds before it runs `jp2_boxes` for 30 s, and
 seeds `header` from the committed fixtures.
 `gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds.
 
