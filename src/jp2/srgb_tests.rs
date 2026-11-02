@@ -649,6 +649,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
         )
     };
     let sycc_jp2c = top_box(SYCC_420, b"jp2c");
+    let sycc_422_jp2c = top_box(SYCC_422, b"jp2c");
     let mut lut_tags = wide_gamut_tags();
     lut_tags.push((b"A2B0", lut16(3, 3, 2, [2, 2])));
 
@@ -747,7 +748,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "different sub-sampling (1x1 and 2x2)",
         ),
         (
-            // OpenJPEG guesses sYCC from sub-sampled chroma whatever colour
+            // OpenJPEG converts 4:2:0 and 4:2:2 as sYCC whatever colour
             // space the file declares, so greyscale here converts there.
             "greyscale-declared 4:2:0 on three channels",
             file(sycc_jp2c, &enumerated(17), &[]),
@@ -759,6 +760,18 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             file(sycc_jp2c, &icc_colr(&wide_gamut()), &[]),
             is_unsupported,
             "different sub-sampling (1x1 and 2x2)",
+        ),
+        (
+            "RGB profile on 4:2:2",
+            file(sycc_422_jp2c, &icc_colr(&wide_gamut()), &[]),
+            is_unsupported,
+            "different sub-sampling (1x1 and 2x1)",
+        ),
+        (
+            "greyscale-declared 4:2:2 on three channels",
+            file(sycc_422_jp2c, &enumerated(17), &[]),
+            is_unsupported,
+            "different sub-sampling (1x1 and 2x1)",
         ),
         (
             "sYCC with sub-sampled luma",
@@ -838,15 +851,17 @@ fn srgb_output_from_a_raw_codestream_is_unsupported() {
 }
 
 /// A file declared grey on three components is refused only where
-/// `opj_decompress` would read it as sYCC, with or without a `cdef`: the
-/// second component is sub-sampled in x and the first has equal x and y
-/// sampling (the 4:2:0 row of the reject matrix). Otherwise the extra
-/// channels are past grey's one colour and pass through as coded, as OpenJPEG
-/// writes them: a signed third channel, a third that is the only one
-/// sub-sampled (`tests/fixtures/channels/third_subsampled.j2k`), or luma
-/// sampled 1x2 with chroma 2x1 (`luma_1x2.j2k`).
+/// `opj_decompress` would convert it as sYCC, with or without a `cdef`: luma
+/// at 1x1 and both chroma channels at 2x2 or both at 2x1 (the 4:2:0 and
+/// 4:2:2 rows of the reject matrix). Otherwise the extra channels are past
+/// grey's one colour and pass through as coded, as OpenJPEG writes them: a
+/// signed third channel, a third that is the only one sub-sampled
+/// (`tests/fixtures/channels/third_subsampled.j2k`), luma sampled 1x2 with
+/// chroma 2x1 (`luma_1x2.j2k`), and the layouts OpenJPEG guesses sYCC for
+/// but cannot convert (`second_2x1.j2k` and the others below, checked with
+/// `opj_decompress`).
 #[test]
-fn grey_on_three_channels_is_refused_only_where_openjpeg_guesses_sycc() {
+fn grey_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
     let mut signed_third = THREE.to_vec();
     signed_third[42 + 3 * 2] = 0x87;
     let sub_third = include_bytes!("../../tests/fixtures/channels/third_subsampled.j2k");
@@ -856,12 +871,37 @@ fn grey_on_three_channels_is_refused_only_where_openjpeg_guesses_sycc() {
         b"cdef",
         &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0],
     );
-    let cases = [
-        ("third signed", file(&signed_third, &enumerated(17), &[])),
-        ("third sub-sampled", file(sub_third, &enumerated(17), &[])),
-        ("luma 1x2", file(luma_1x2, &enumerated(17), &[])),
+    let codestreams: [(&str, &[u8]); 9] = [
+        ("third signed", &signed_third),
+        ("third sub-sampled", sub_third),
+        ("luma 1x2", luma_1x2),
+        (
+            "1x1:2x1:1x1",
+            include_bytes!("../../tests/fixtures/channels/second_2x1.j2k"),
+        ),
+        (
+            "1x1:2x2:1x1",
+            include_bytes!("../../tests/fixtures/channels/second_2x2.j2k"),
+        ),
+        (
+            "1x1:2x1:2x2",
+            include_bytes!("../../tests/fixtures/channels/chroma_2x1_2x2.j2k"),
+        ),
+        (
+            "2x2:2x1:2x1",
+            include_bytes!("../../tests/fixtures/channels/luma_2x2_chroma_2x1.j2k"),
+        ),
+        (
+            "1x1:1x2:1x2",
+            include_bytes!("../../tests/fixtures/channels/chroma_1x2.j2k"),
+        ),
+        (
+            "2x2:2x2:2x2",
+            include_bytes!("../../tests/fixtures/channels/all_2x2.j2k"),
+        ),
     ];
-    for (what, bytes) in cases {
+    for (what, codestream) in codestreams {
+        let bytes = file(codestream, &enumerated(17), &[]);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("{what}: as coded: {e}"));
         let image = decode_srgb(&bytes).unwrap_or_else(|e| panic!("{what}: sRGB: {e}"));
         assert_eq!(image.components, coded.components, "{what}");
@@ -1765,11 +1805,18 @@ fn refusals_are_ordered_as_in_openjpeg() {
         intent(&mut grey, 4);
         assert_passes_through(&file(THREE, &icc_colr(&grey), &children));
     }
-    // Sample formats this step does not apply a profile to: 12-bit and
-    // mixed-depth RGB, 12 and 16-bit grey.
-    let shapes: [(&[u8], Vec<u8>, &str); 4] = [
+    // Palette columns of mixed depth fail OpenJPEG's AFL test, which comes
+    // before the transform, so they pass through under an RGB profile
+    // whatever the profile is (`pal_mixed_8_12_8` in `opj_decompress`).
+    assert_passes_through(&file(
+        ONE,
+        &icc_colr(&wide_gamut()),
+        &palette(&[7, 11, 7], 4, |j, _| u32::from(j)),
+    ));
+    // Sample formats this step does not apply a profile to: 12-bit RGB, 12
+    // and 16-bit grey.
+    let shapes: [(&[u8], Vec<u8>, &str); 3] = [
         (&[11, 11, 11], wide_gamut(), "RGB ICC profile from 12-bit"),
-        (&[7, 11, 7], wide_gamut(), "different formats"),
         (&[11], grey_profile(), "monochrome ICC profile from 12-bit"),
         (&[15], grey_profile(), "monochrome ICC profile from 16-bit"),
     ];
