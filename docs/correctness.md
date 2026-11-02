@@ -384,6 +384,17 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   `colr` or such an enumerated space, pass through as grey (and grey plus
   opacity), as OpenJPEG reads any image of two or fewer components; their
   metadata stays as declared, since nothing was converted;
+- a monochrome (`GRAY`) ICC profile on more than two channels (owner
+  decision, 2026-11-01, on #197), for example one colour channel and two
+  opacity channels in `cdef`, or a palette of three columns. OpenJPEG takes
+  its `numcomps > 2` branch, which passes the planes interleaved to a grey
+  transform as if they were RGB, so its three-channel output is not a
+  conversion. Checked on a 24x16 file with a tinted grey profile and a
+  `cdef` of (colour 1, opacity, opacity): `opj_decompress` writes an RGB
+  PNG; the earlier output here was five channels. One grey channel (1 to 1
+  or 3) and grey plus opacity (2 to 2 or 4) match OpenJPEG and are
+  unchanged. Test:
+  `a_grey_profile_on_more_than_two_channels_is_unsupported`;
 - an ICC profile that is not one of the restricted forms: a class other than
   input (`scnr`), a colour space other than RGB or grey, a connection space
   other than XYZ, a lookup-table tag (`A2B0`..`A2B2`, `D2B0`..`D2B3`, which

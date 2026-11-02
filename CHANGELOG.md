@@ -146,6 +146,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `ColourOutput::Srgb` refuses a monochrome ICC profile on more than two
+  channels with `Unsupported`, from `decode_with` and `read_header_with`. It
+  gave five channels; OpenJPEG gives three that are not a real conversion.
+  One grey channel, or grey plus opacity, converts as before.
 - Breaking: `DecodeOptions` and `ColourOutput` are no longer `Copy`, so a
   later option can carry data (an output ICC profile). Both stay `Clone`;
   clone them where you reuse one.
