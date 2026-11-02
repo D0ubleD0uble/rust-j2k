@@ -179,3 +179,22 @@ fn a_file_without_a_palette_has_no_palette_or_mapping() {
         assert!(meta.channel_definitions.is_some(), "{name}");
     }
 }
+
+#[test]
+fn a_palette_entry_past_the_end_is_none_without_overflow() {
+    let raw = decode_with(
+        &read("jp2_palette_mixed"),
+        &DecodeOptions::default().with_raw_channels(true),
+    )
+    .unwrap();
+    let palette = raw.jp2.as_ref().unwrap().palette.as_ref().unwrap();
+    let count = palette.entry_count();
+    let width = palette.columns().len();
+    assert!(width > 1, "the wrap case needs more than one column");
+
+    assert!(palette.entry(count - 1).is_some());
+    assert_eq!(palette.entry(count), None);
+    assert_eq!(palette.entry(usize::MAX), None);
+    assert_eq!(palette.entry(usize::MAX / width + 1), None);
+    assert_eq!(palette.entry(usize::MAX / width), None);
+}
