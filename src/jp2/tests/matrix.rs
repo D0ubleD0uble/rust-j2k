@@ -93,6 +93,12 @@ fn big_one_component() -> Vec<u8> {
 /// A file whose palette expands a 1024x1024 index plane into 255 channels:
 /// 255 * 2^20 samples, over the 2^26 sample budget.
 fn palette_over_budget() -> Vec<u8> {
+    palette_255_over(&big_one_component())
+}
+
+/// A JP2 file around this 1024x1024 one-component codestream, with a palette
+/// of 255 columns mapped to 255 channels.
+fn palette_255_over(codestream: &[u8]) -> Vec<u8> {
     let columns: Vec<u8> = (0..=254).collect();
     let mapping: Vec<(u16, u8, u8)> = columns.iter().map(|&i| (0, 1, i)).collect();
     file(&[
@@ -103,7 +109,7 @@ fn palette_over_budget() -> Vec<u8> {
             one_entry_pclr(&[7; 255]),
             cmap(&mapping),
         ]),
-        bx(b"jp2c", &big_one_component()),
+        bx(b"jp2c", codestream),
     ])
 }
 
@@ -896,4 +902,86 @@ fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
         decode(&two_parts).expect("decodes").components,
         raw().components
     );
+}
+
+/// `read_header_with` fails exactly when `decode_with` does, under the same
+/// options. Two shapes where the options decide (the #182 critique): a
+/// palette channel that looks up another column is checked unless
+/// `raw_channels` asks for the index plane, and a palette's expansion fits the
+/// sample budget only once a resolution reduction halves the image.
+#[test]
+fn read_header_with_agrees_with_decode_with_under_the_same_options() {
+    use crate::{DecodeOptions, read_header, read_header_with};
+
+    // Palette channel 0 looks up column 1.
+    let other_column = children(&[pclr_box(), cmap(&[(0, 1, 1), (0, 1, 0), (0, 1, 2)])]);
+    let raw = DecodeOptions::default().with_raw_channels(true);
+    assert!(matches!(
+        read_header(&other_column),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(decode(&other_column), Err(Error::Unsupported(_))));
+    let header = read_header_with(&other_column, &raw).expect("raw channels skips the mapping");
+    let image = decode_with(&other_column, &raw).expect("decodes raw");
+    assert_eq!((header.width, header.height), (image.width, image.height));
+    assert_eq!(header.components.len(), image.components.len());
+    assert_eq!(header.jp2, image.jp2);
+
+    // A real 1024x1024 flat image behind a 255-column palette: 255 * 2^20
+    // samples over the 2^26 budget, 255 * 2^18 under it at reduction 1.
+    let flat = include_bytes!("../../../tests/fixtures/budget/flat_1024_lossless.j2k");
+    let big = palette_255_over(flat);
+    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    assert!(matches!(read_header(&big), Err(Error::Limit(_))));
+    assert!(matches!(decode(&big), Err(Error::Limit(_))));
+    let header = read_header_with(&big, &reduced).expect("fits once reduced");
+    assert_eq!((header.width, header.height), (512, 512));
+    assert_eq!(header.components.len(), 255);
+    let image = decode_with(&big, &reduced).expect("decodes reduced");
+    assert_eq!((image.width, image.height), (512, 512));
+    assert_eq!(image.components.len(), 255);
+    assert_eq!(header.jp2, image.jp2);
+}
+
+/// Options that contradict each other, and an sRGB request on a raw
+/// codestream with no colour space, fail in `read_header_with` as in
+/// `decode_with`.
+#[test]
+fn read_header_with_refuses_the_options_decode_with_refuses() {
+    use crate::{ColourOutput, DecodeOptions, read_header_with};
+
+    let both = DecodeOptions::default()
+        .with_raw_channels(true)
+        .with_colour(ColourOutput::Srgb);
+    let srgb = DecodeOptions::default().with_colour(ColourOutput::Srgb);
+    let three = include_bytes!("../../../tests/fixtures/multicomponent_lossless.j2k");
+    for bytes in [&minimal(), &three[..]] {
+        assert!(matches!(
+            read_header_with(bytes, &both),
+            Err(Error::InvalidOptions(_))
+        ));
+        assert!(matches!(
+            decode_with(bytes, &both),
+            Err(Error::InvalidOptions(_))
+        ));
+    }
+    assert!(matches!(
+        read_header_with(three, &srgb),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(
+        decode_with(three, &srgb),
+        Err(Error::Unsupported(_))
+    ));
+    // The refusal is a header fault, so a cut tile does not hide it (found by
+    // the `header` fuzz target).
+    let cut = &three[..three.len() - 40];
+    assert!(matches!(
+        read_header_with(cut, &srgb),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(
+        decode_with(cut, &srgb),
+        Err(Error::Unsupported(_))
+    ));
 }

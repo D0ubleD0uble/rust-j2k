@@ -158,15 +158,9 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// JP2 file, the same [`Jp2Metadata`] that [`decode`] would put on
 /// [`Image::jp2`].
 ///
-/// The input is detected as [`decode`] detects it. The read covers a JP2
-/// file's boxes and the codestream's main header, up to the first tile-part
-/// (`SOT` marker), and stops there, so a file whose tile data is cut short or
-/// missing still has a readable header. Nothing is allocated for the samples.
-///
-/// A fault in what it reads is the same [`Error`] that [`decode`] returns for
-/// that input, since `decode` runs the same checks first. A fault in the tile
-/// data (a broken tile-part, a tile header that changes a component's
-/// wavelet) is only found by `decode`.
+/// This is [`read_header_with`] at the default [`DecodeOptions`], so a fault in
+/// what it reads is the same [`Error`] that [`decode`] returns for that input.
+/// Use [`read_header_with`] to read the header for other options.
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -180,11 +174,43 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// }
 /// ```
 pub fn read_header(bytes: &[u8]) -> Result<Header> {
-    let options = DecodeOptions::default();
+    read_header_with(bytes, &DecodeOptions::default())
+}
+
+/// Read a JPEG 2000 codestream's or JP2 file's [`Header`] without decoding any
+/// tile data, for the same `options` as [`decode_with`]: the header describes
+/// the [`Image`] that `decode_with(bytes, options)` would return.
+///
+/// The input is detected as [`decode`] detects it. The read covers a JP2
+/// file's boxes and the codestream's main header, up to the first tile-part
+/// (`SOT` marker), and stops there, so a file whose tile data is cut short or
+/// missing still has a readable header. Nothing is allocated for the samples.
+///
+/// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
+/// options)` returns for that input, since `decode_with` runs the same checks
+/// first. The options matter: a `cmap` that
+/// [`raw_channels`](DecodeOptions::raw_channels) does not check, or a palette
+/// that fits the sample budget once
+/// [`resolution_reduction`](DecodeOptions::resolution_reduction) halves the
+/// image, is a fault under some options and not others. A fault in the tile
+/// data (a broken tile-part, a tile header that changes a component's
+/// wavelet, a reduction that consumes a whole wavelet pyramid) is only found
+/// by decoding.
+///
+/// ```
+/// use rust_j2k::{read_header_with, DecodeOptions};
+///
+/// let options = DecodeOptions::default().with_resolution_reduction(1);
+/// // In real use these are a codestream's or JP2 file's bytes.
+/// assert!(read_header_with(b"not a codestream", &options).is_err());
+/// ```
+pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header> {
+    check_options(options)?;
+    let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
-        let prefix = read_jp2_prefix(bytes, &options)?;
+        let prefix = read_jp2_prefix(bytes, options)?;
         let siz = &prefix.parsed.header.siz;
-        let (width, height) = siz.image_extent_at(0);
+        let (width, height) = siz.image_extent_at(reduction);
         return Ok(Header {
             width,
             height,
@@ -194,7 +220,8 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
     }
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
-    let (width, height) = siz.image_extent_at(0);
+    check_raw_colour(options, siz.components.len())?;
+    let (width, height) = siz.image_extent_at(reduction);
     Ok(Header {
         width,
         height,
@@ -332,14 +359,7 @@ impl DecodeOptions {
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
 /// `options`.
 pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
-    let srgb = options.colour == ColourOutput::Srgb;
-    if srgb && options.raw_channels {
-        return Err(Error::InvalidOptions(
-            "raw channels means no colour conversion, so it cannot be combined with sRGB \
-             output"
-                .into(),
-        ));
-    }
+    check_options(options)?;
     // A codestream opens with SOC; anything else that carries the signature
     // box's type is read as a JP2 file, so a damaged signature box is reported
     // as a box fault. The rest falls to the codestream parser, which reports
@@ -347,18 +367,36 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         return decode_jp2(bytes, options);
     }
-    let cs = codestream::parse(bytes)?;
-    // A raw codestream declares no colour space. Like OpenJPEG, one or two
-    // components are read as grey (and grey plus opacity) and pass through;
-    // three or more have nothing to convert from.
-    let components = cs.header.siz.components.len();
-    if srgb && components > 2 {
+    // The header checks come before the tile walk, as `read_header_with` has it.
+    let parsed = codestream::parse_header(bytes)?;
+    check_raw_colour(options, parsed.header.siz.components.len())?;
+    let cs = codestream::parse_tiles(bytes, parsed)?;
+    decode_codestream(cs, options)
+}
+
+/// Options that contradict each other, whatever the input.
+fn check_options(options: &DecodeOptions) -> Result<()> {
+    if options.colour == ColourOutput::Srgb && options.raw_channels {
+        return Err(Error::InvalidOptions(
+            "raw channels means no colour conversion, so it cannot be combined with sRGB \
+             output"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// A raw codestream declares no colour space. Like OpenJPEG, one or two
+/// components are read as grey (and grey plus opacity) and pass through; three
+/// or more have nothing to convert from, so sRGB output refuses them.
+fn check_raw_colour(options: &DecodeOptions, components: usize) -> Result<()> {
+    if options.colour == ColourOutput::Srgb && components > 2 {
         return Err(Error::Unsupported(format!(
             "sRGB output from a raw codestream of {components} components, which declares \
              no colour space"
         )));
     }
-    decode_codestream(cs, options)
+    Ok(())
 }
 
 /// A JP2 file read up to its tile data: the boxes, the codestream's main

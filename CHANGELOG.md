@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
   coded, without the palette or channel definitions. The index plane is then
   labelled `ChannelType::Unspecified`, and only the boxes' layout is checked.
+- `read_header_with` reads the header for a given `DecodeOptions`: it fails
+  exactly when `decode_with` does for a fault in the boxes or the main header
+  (a palette `cmap` that `raw_channels` leaves unchecked, a palette that fits
+  the sample budget once the resolution is reduced), and its `width` and
+  `height` follow the resolution reduction. `read_header` is the same at the
+  default options.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
   the samples (`None` for a raw codestream), with `ColourSpace`,
   `ChannelDefinition`, `ChannelType`, and `Association`. The colour space

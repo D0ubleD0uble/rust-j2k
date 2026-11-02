@@ -215,6 +215,15 @@ source codestream and the oracle command.
 
 They are ours, built over the Apache-2.0 / synthetic codestreams above.
 
+### Budget fixture
+
+`budget/flat_1024_lossless.j2k` (328 bytes) is a flat 1024x1024 8-bit
+one-component lossless codestream, made with `head -c 1048576 /dev/zero >
+flat.raw` and `opj_compress -i flat.raw -o flat_1024_lossless.j2k -F
+1024,1024,1,8,u -n 3` (OpenJPEG 2.5.0). `src/jp2/tests/matrix.rs` wraps it in a
+JP2 file with a 255-column palette to test the sample budget at full size and
+at resolution reduction 1.
+
 ### ICC to sRGB oracles
 
 `scripts/gen-icc-oracles.py` records what `opj_decompress -force-rgb`

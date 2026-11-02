@@ -143,6 +143,7 @@ impl Codestream<'_> {
 /// unwrapped before it gets here (see `crate::jp2`).
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
+#[cfg(test)]
 pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
     parse_tiles(bytes, parse_header(bytes)?)
 }
