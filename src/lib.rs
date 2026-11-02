@@ -273,9 +273,9 @@ pub enum ColourOutput {
     ///
     /// Anything else is [`Error::Unsupported`]: three or more channels in
     /// another colour space or with no colour specification (a raw
-    /// codestream included), another kind
-    /// of ICC profile, a monochrome profile on more than two channels, an RGB profile on samples that are not 8 or 16-bit
-    /// unsigned (8-bit for a monochrome profile), signed sYCC, and colour
+    /// codestream included), another kind of ICC profile, a monochrome
+    /// profile on more than two channels, an RGB profile on samples that are
+    /// not 8 or 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and colour
     /// channels that differ in depth, sign or sub-sampling other than sYCC's
     /// chroma layouts. An ICC profile too short for its header or with a tag
     /// past its end is [`Error::FileFormat`].

@@ -419,9 +419,6 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   tag cut short or of the wrong type: `FileFormat`. lcms reads some of these
   anyway: an `XYZ ` tag too short for its value is read on into the next
   tag;
-- a monochrome profile on three colour channels. OpenJPEG runs its grey
-  transform over the interleaved RGB samples, one byte per pixel, so the
-  output is scrambled.
 - `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.
 
 Chroma replication grows the output, so it is checked against the decode's

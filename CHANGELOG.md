@@ -103,8 +103,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A monochrome profile whose output is not neutral (absolute colorimetric
   with a tinted white point) gives three sRGB channels, as OpenJPEG does, so
   the channel count can't be predicted from the header. Other colour
-  spaces, other profiles, and colour channels that differ in depth, sign or
-  sub-sampling are `Unsupported`; `Srgb` with `raw_channels` is
+  spaces, other profiles, a monochrome profile on more than two channels,
+  and colour channels that differ in depth, sign or sub-sampling are
+  `Unsupported`; `Srgb` with `raw_channels` is
   `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
   sub-sampled chroma, whatever colour space it declares; `Srgb` refuses it
   instead.
@@ -146,10 +147,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `ColourOutput::Srgb` refuses a monochrome ICC profile on more than two
-  channels with `Unsupported`, from `decode_with` and `read_header_with`. It
-  gave five channels; OpenJPEG gives three that are not a real conversion.
-  One grey channel, or grey plus opacity, converts as before.
 - Breaking: `DecodeOptions` and `ColourOutput` are no longer `Copy`, so a
   later option can carry data (an output ICC profile). Both stay `Clone`;
   clone them where you reuse one.

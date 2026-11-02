@@ -597,7 +597,13 @@ fn a_grey_profile_on_more_than_two_channels_is_unsupported() {
         let cdef = bx(b"cdef", &[0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0]);
         [boxes[0].clone(), boxes[1].clone(), cdef]
     };
+    // The colour channel last, after two opacity channels.
+    let colour_last = bx(
+        b"cdef",
+        &[0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1],
+    );
     let refused = [
+        file(THREE, &icc_colr(&grey_profile()), &[colour_last]),
         file(THREE, &icc_colr(&grey_profile()), &[cdef]),
         file(ONE, &icc_colr(&grey_profile()), &three_columns),
     ];
@@ -624,8 +630,8 @@ fn a_grey_profile_on_more_than_two_channels_is_unsupported() {
     ] {
         let image = decode_srgb(&bytes).expect("sRGB");
         let header = read_header_with(&bytes, &srgb()).expect("header");
-        assert!(image.components.len() >= channels);
-        assert_eq!(header.components.len(), image.components.len());
+        assert_eq!(image.components.len(), channels);
+        assert_eq!(header.components.len(), channels);
     }
 }
 
