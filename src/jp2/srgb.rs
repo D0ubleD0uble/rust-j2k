@@ -44,9 +44,10 @@
 //! in a colour space other than RGB, grey or YCbCr: OpenJPEG then skips the
 //! conversion. An RGB profile passes through too when any of the first four
 //! output channels differs from the first in depth, sign or sub-sampling
-//! (OpenJPEG's "AFL test", [`first_four_differ`]), unless the three channels
-//! are 4:2:0 or 4:2:2, which `opj_decompress` converts as sYCC first
-//! ([`converted_as_sycc`]).
+//! (OpenJPEG's "AFL test", [`first_four_differ`]). None of these holds for
+//! three channels that are 4:2:0 or 4:2:2, which `opj_decompress` converts
+//! as sYCC before it reads any profile ([`converted_as_sycc`]), so those are
+//! refused whatever the profile is.
 //! These come first, before any check on the samples, as in OpenJPEG. The
 //! profile reader follows LittleCMS's, including where it reads past a
 //! tag's size.
@@ -340,6 +341,15 @@ fn plan_icc(
     siz: &Siz,
     reduction: u8,
 ) -> Result<SrgbPlan> {
+    // OpenJPEG converts a 4:2:0 or 4:2:2 image as sYCC before it opens the
+    // profile, so this holds whatever the profile is, even one LittleCMS
+    // refuses. That guess is not made here, so the file is refused.
+    if converted_as_sycc(outputs) {
+        uniform(&[0, 1, 2], outputs)?;
+        return Err(Error::Unsupported(
+            "sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC".into(),
+        ));
+    }
     match plan_icc_or_refuse(profile, channels, outputs, siz, reduction) {
         Ok(plan) => Ok(plan),
         // OpenJPEG skips the conversion when LittleCMS refuses the profile
@@ -407,10 +417,9 @@ fn plan_icc_or_refuse(
         b"RGB " => {
             // OpenJPEG's AFL test sits after LittleCMS opens the profile and
             // before it builds the transform, so it comes before this step's
-            // own checks too. A 4:2:0 or 4:2:2 image OpenJPEG has already
-            // converted as sYCC, which this step does not do, so it is left
-            // to the checks below, which refuse it.
-            if first_four_differ(outputs) && !converted_as_sycc(outputs) {
+            // own checks too. A 4:2:0 or 4:2:2 image never gets here:
+            // `plan_icc` refused it first.
+            if first_four_differ(outputs) {
                 return Err(Icc::Refused);
             }
             let input = icc.input_profile(Form::Rgb)?;

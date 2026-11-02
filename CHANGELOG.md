@@ -127,7 +127,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (under an RGB profile, only 4:2:0 and 4:2:2, below) are `Unsupported`;
   `Srgb` with `raw_channels` is `InvalidOptions`. OpenJPEG converts any
   three-component 4:2:0 or 4:2:2 file as sYCC, whatever colour space it
-  declares; `Srgb` refuses it instead.
+  declares, even under an ICC profile LittleCMS refuses; `Srgb` refuses it
+  instead.
 - `DecodeOptions::with_raw_channels` and `DecodeOptions::with_colour` set
   those options like `with_resolution_reduction` does; the fields stay public.
 - `ColourSpace`, `ColourOutput`, `Resolution`, `Res`, `Ratio` and `UuidBox` are
