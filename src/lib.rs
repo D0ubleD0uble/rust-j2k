@@ -252,9 +252,8 @@ pub enum ColourOutput {
     /// monochrome or a three-component matrix/TRC input profile) is applied
     /// at its rendering intent, as OpenJPEG applies it with LittleCMS: the
     /// samples match `opj_decompress -force-rgb`. The reference is OpenJPEG
-    /// 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc); the
-    /// output depends on the C library's `powf`, so other LittleCMS versions
-    /// or platforms can differ in the last bit. sRGB and greyscale pass
+    /// 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc 2.39), and
+    /// the output is the same on every platform. sRGB and greyscale pass
     /// through. A monochrome profile gives one grey channel. A monochrome
     /// profile whose output is not neutral (absolute colorimetric with a
     /// tinted white point) gives three sRGB channels in its place, as
