@@ -447,9 +447,10 @@ impl<'a> Profile<'a> {
         let version = validated_version(four(8));
         if version > 0x0500_0000 {
             return Err(malformed(format!(
-                "has version {}.{}, above 5.0",
+                "has version {}.{}.{}, above 5.0",
                 version >> 24,
-                (version >> 16) & 0xff
+                (version >> 20) & 0x0f,
+                (version >> 16) & 0x0f
             )));
         }
         let class = four(12);

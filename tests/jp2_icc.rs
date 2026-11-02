@@ -352,6 +352,27 @@ fn icc_profiles_match_openjpeg_or_are_refused() {
     assert_eq!(converted, profiles.cases.len() - refused);
 }
 
+/// The version in the refusal reads as major.minor.bugfix from the BCD
+/// nibbles: byte 0x10 is minor 1, not 16.
+#[test]
+fn a_version_above_5_0_is_named_in_bcd() {
+    let text = String::from_utf8(read("icc/profiles.json")).unwrap();
+    let profiles: Profiles = serde_json::from_str(&text).expect("icc/profiles.json");
+    let case = profiles
+        .cases
+        .iter()
+        .find(|c| c.name == "hdr_version_5_1" && c.codestream == "rgb8")
+        .expect("hdr_version_5_1");
+    let codestream = read(&profiles.codestreams["rgb8"].file);
+    let err = decode_with(&wrap(&codestream, &hex(&case.profile)), srgb()).unwrap_err();
+    match err {
+        Error::FileFormat(message) => {
+            assert_eq!(message, "the ICC profile has version 5.1.0, above 5.0");
+        }
+        other => panic!("expected a FileFormat error, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Fewer than three channels
 // ---------------------------------------------------------------------------
