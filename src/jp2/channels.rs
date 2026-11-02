@@ -31,7 +31,9 @@
 //! and [`ChannelPlan::describe`] labels them.
 
 use super::header::Jp2Header;
-use super::metadata::{Association, ChannelDefinition, ChannelType, Jp2Metadata};
+use super::metadata::{
+    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, Jp2Metadata,
+};
 use crate::{Error, Result};
 
 /// The bytes of one `cdef` entry: `Cn`, `Typ`, `Asoc`.
@@ -109,6 +111,22 @@ fn parse(payload: &[u8]) -> Result<Vec<Entry>> {
             association: u16::from_be_bytes([e[4], e[5]]),
         })
         .collect())
+}
+
+/// The file's `cdef` entries as written, or `None` without a `cdef` box (or
+/// with one that does not parse, which planning has already refused).
+pub(super) fn definitions(header: &Jp2Header<'_>) -> Option<Vec<ChannelDefinitionEntry>> {
+    let payload = header.cdef().first().copied()?;
+    let entries = parse(payload).ok()?;
+    Some(
+        entries
+            .into_iter()
+            .map(|e| ChannelDefinitionEntry {
+                channel: e.channel,
+                definition: e.definition(),
+            })
+            .collect(),
+    )
 }
 
 /// Check a `cdef` payload's layout only, as OpenJPEG reads the box.

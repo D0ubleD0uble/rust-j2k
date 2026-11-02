@@ -10,7 +10,9 @@ mod support;
 
 use std::path::PathBuf;
 
-use rust_j2k::{ColourOutput, ColourSpace, DecodeOptions, Error, decode, decode_with};
+use rust_j2k::{
+    ColourOutput, ColourSpace, DecodeOptions, Error, decode, decode_with, read_header_with,
+};
 use support::{Expected, Tolerance, compare};
 
 fn fixtures() -> PathBuf {
@@ -23,9 +25,7 @@ fn conformance(n: u32) -> Vec<u8> {
 }
 
 fn srgb() -> DecodeOptions {
-    let mut options = DecodeOptions::default();
-    options.colour = ColourOutput::Srgb;
-    options
+    DecodeOptions::default().with_colour(ColourOutput::Srgb)
 }
 
 /// Each sYCC fixture converts to within 1 of `opj_decompress` (OpenJPEG's
@@ -43,7 +43,7 @@ fn sycc_fixtures_match_openjpeg_within_one() {
             Tolerance::Absolute { max_abs_error: 1.0 },
             "{name}"
         );
-        let image = decode_with(&bytes, srgb()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{name}: {e}"));
         if let Err(mismatch) = compare(&image, &want) {
             panic!("{name}: {mismatch}");
         }
@@ -68,7 +68,7 @@ fn srgb_and_grey_files_pass_through() {
     for n in [1, 4, 6, 9] {
         let bytes = conformance(n);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
-        let image = decode_with(&bytes, srgb()).unwrap_or_else(|e| panic!("file{n}: {e}"));
+        let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("file{n}: {e}"));
         assert_eq!(image.components, coded.components, "file{n}");
     }
 }
@@ -82,7 +82,7 @@ fn the_default_is_as_coded() {
     for n in [2, 3, 5, 7, 8] {
         let bytes = conformance(n);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
-        let image = decode_with(&bytes, srgb()).unwrap_or_else(|e| panic!("file{n}: {e}"));
+        let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("file{n}: {e}"));
         assert_ne!(image.components, coded.components, "file{n}");
     }
 }
@@ -91,10 +91,56 @@ fn the_default_is_as_coded() {
 /// output is refused.
 #[test]
 fn raw_channels_with_srgb_is_invalid_options() {
-    let mut options = srgb();
-    options.raw_channels = true;
+    let options = srgb().with_raw_channels(true);
     assert!(matches!(
-        decode_with(&conformance(1), options),
+        decode_with(&conformance(1), &options),
         Err(Error::InvalidOptions(_))
     ));
+}
+
+/// The builders set their own field and leave the others alone, and they
+/// chain.
+#[test]
+fn the_builders_set_one_field_each() {
+    let base = DecodeOptions::default();
+    let raw = base.clone().with_raw_channels(true);
+    assert!(raw.raw_channels);
+    assert_eq!(raw.colour, ColourOutput::AsCoded);
+    assert_eq!(raw.resolution_reduction, 0);
+    assert!(!raw.clone().with_raw_channels(false).raw_channels);
+
+    let both = base
+        .with_colour(ColourOutput::Srgb)
+        .with_resolution_reduction(2);
+    assert_eq!(both.colour, ColourOutput::Srgb);
+    assert_eq!(both.resolution_reduction, 2);
+    assert!(!both.raw_channels);
+}
+
+/// The header describes the converted output: sYCC chroma is already on the
+/// luma grid, at default options and reduced.
+#[test]
+fn the_header_describes_the_converted_channels() {
+    for name in ["jp2_sycc_420_odd", "jp2_sycc_422_odd"] {
+        let bytes = std::fs::read(fixtures().join(format!("{name}.jp2"))).unwrap();
+        for reduction in [0, 1] {
+            let options = srgb().with_resolution_reduction(reduction);
+            let header = read_header_with(&bytes, &options).unwrap();
+            let image = decode_with(&bytes, &options).unwrap();
+            assert_eq!(header.components.len(), image.components.len());
+            for (info, component) in header.components.iter().zip(&image.components) {
+                assert_eq!(
+                    (info.x_sampling, info.y_sampling, info.width, info.height),
+                    (
+                        component.x_sampling,
+                        component.y_sampling,
+                        component.width,
+                        component.height
+                    ),
+                    "{name} at reduction {reduction}"
+                );
+            }
+            assert_eq!(header.jp2, image.jp2);
+        }
+    }
 }

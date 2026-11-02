@@ -21,7 +21,7 @@
 //! header is parsed, [`check_against_siz`] holds `ihdr` to its SIZ,
 //! [`ChannelPlans::plan`] plans the output channels (the palette, see
 //! [`palette`], then the channel definitions, see [`channels`]), and
-//! [`metadata`] builds the [`Jp2Metadata`] that rides on the
+//! [`metadata()`] builds the [`Jp2Metadata`] that rides on the
 //! [`Image`](crate::Image). When the caller asks for sRGB output,
 //! [`plan_srgb`] plans that conversion too (see [`srgb`]). Only then are the
 //! tiles decoded and the plans applied to their samples.
@@ -64,9 +64,10 @@ mod tests;
 
 pub(crate) use after::check as check_after_codestream;
 pub use metadata::{
-    Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata, Ratio, Res, Resolution,
-    UuidBox,
+    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, ColourSpace, Jp2Metadata,
+    Ratio, Res, Resolution, UuidBox,
 };
+pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 
 use crate::codestream::markers::Siz;
 use crate::{Component, ComponentInfo, Error, Result};
@@ -288,15 +289,16 @@ impl ChannelPlans {
         raw_channels: bool,
     ) -> Result<Self> {
         let palette = palette::plan(header, siz, reduction, raw_channels)?;
-        let count = palette.output_channels(siz).len();
+        let count = palette.output_channels(siz, reduction).len();
         let channels = channels::plan(header, count, raw_channels)?;
         Ok(ChannelPlans { palette, channels })
     }
 
     /// The output channels' formats, in output order: the palette's output,
     /// then placed by the channel definitions.
-    pub(crate) fn outputs(&self, siz: &Siz) -> Result<Vec<ComponentInfo>> {
-        self.channels.apply(self.palette.output_channels(siz))
+    pub(crate) fn outputs(&self, siz: &Siz, reduction: u8) -> Result<Vec<ComponentInfo>> {
+        self.channels
+            .apply(self.palette.output_channels(siz, reduction))
     }
 
     /// Build the output channels from the decoded components.
@@ -312,8 +314,11 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
     let (xml, uuid) = passthrough(file);
     let mut metadata = Jp2Metadata {
         colour: file.colour.clone(),
-        channels: colour_channels(plans.outputs(siz)?.len())?,
+        channels: colour_channels(plans.outputs(siz, 0)?.len())?,
         palette_applied: false,
+        palette: None,
+        channel_mapping: None,
+        channel_definitions: channels::definitions(&file.header),
         resolution: resolution::read(&file.header),
         xml,
         uuid,
@@ -374,7 +379,7 @@ pub(crate) fn plan_srgb(
     srgb::plan(
         &metadata.colour,
         &metadata.channels,
-        &plans.outputs(siz)?,
+        &plans.outputs(siz, reduction)?,
         siz,
         reduction,
     )

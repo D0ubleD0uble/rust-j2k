@@ -33,7 +33,7 @@ fuzz/
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
   fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream, also decoded as sRGB
-  fuzz_targets/header.rs        # rust_j2k::read_header(&[u8]), checked against decode
+  fuzz_targets/header.rs        # rust_j2k::read_header_with, checked against decode_with
   fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColourOutput::Srgb
   icc.dict                      # ICC tag and type signatures for icc_srgb
 ```
@@ -72,17 +72,25 @@ be `Ok` or a typed error. The codestreams are chosen so each conversion path
 is reachable: an 8-bit single-component one (the monochrome profile, `kTRC`),
 an 8-bit three-component one without sub-sampling (the RGB profile, `rXYZ`,
 `rTRC`, ... with `curv` and `para` curves), the sYCC 4:2:0 and 4:2:2
-codestreams of `jp2_sycc_*_odd.jp2` (chroma replication). The 16-bit
-one-component codestream (monochrome profiles need 8 bits), the 2x2
-sub-sampled three-component one (sYCC wants luma at full size), and an RGB
-profile on the 4:2:0 codestream (mixed sub-sampling) are refused after the
-profile is read. The CI smoke generates these seeds before it runs `jp2_boxes` for 30 s, and
+codestreams of `jp2_sycc_*_odd.jp2` (chroma replication). The RGB profile
+on the three-component codestream sub-sampled 2x2 in every component
+(`icc_rgb_subsampled`) converts, since its channels agree. Three seeds are
+refused: the 16-bit one-component codestream (monochrome profiles need 8
+bits) and an RGB profile on the 4:2:0 codestream (mixed sub-sampling) after
+the profile is read, and sYCC on the all-2x2 codestream
+(`sycc_subsampled_all`, sYCC wants luma at full size), which has no profile
+and is refused from the sampling alone. The CI smoke generates these seeds before it runs `jp2_boxes` for 30 s, and
 seeds `header` from the committed fixtures.
 `gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds.
 
-`header` drives the header-only entry point, `read_header`, and checks it
-against `decode` on the same input: a `read_header` error must be `decode`'s
-error too, and a successful decode must match the header field for field.
+`header` drives the header-only entry point, `read_header_with`, and checks it
+against `decode_with` on the same input, under five fixed option sets
+(defaults, `raw_channels`, reduction 1, sRGB, reduction 1 with sRGB). The
+header is read under all five; a header that reads is compared with a full
+decode under one of them, picked by a hash of the whole input, since a decode
+costs far more than the header: a
+`read_header_with` error must be `decode_with`'s error too, and a successful
+decode must match the header field for field.
 A decode costs far more than the header, so once the header reads, inputs
 over 64 KiB or images over 2^16 samples are not decoded. For those inputs the
 target checks `read_header` alone: it does not compare a successful header

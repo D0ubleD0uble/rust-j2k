@@ -182,6 +182,9 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
             colour: ColourSpace::Srgb,
             channels: vec![colour(1), colour(2), colour(3)],
             palette_applied: false,
+            palette: None,
+            channel_mapping: None,
+            channel_definitions: None,
             resolution: Resolution::default(),
             xml: Vec::new(),
             uuid: Vec::new(),
@@ -203,8 +206,8 @@ fn a_jp2c_with_a_64_bit_length_decodes() {
 #[test]
 fn a_reduced_decode_of_a_jp2_matches_its_codestream() {
     let options = DecodeOptions::default().with_resolution_reduction(1);
-    let file = decode_with(&minimal(), options).expect("reduced JP2 decode");
-    let raw = decode_with(CODESTREAM, options).expect("reduced codestream decode");
+    let file = decode_with(&minimal(), &options).expect("reduced JP2 decode");
+    let raw = decode_with(CODESTREAM, &options).expect("reduced codestream decode");
     assert_eq!((file.width, file.height), (raw.width, raw.height));
     assert_eq!((file.width, file.height), (WIDTH / 2, HEIGHT / 2));
     assert_eq!(file.components, raw.components);

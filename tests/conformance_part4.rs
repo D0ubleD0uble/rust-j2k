@@ -80,7 +80,7 @@ fn every_reference_image_parses() {
 fn decode_with_no_reduction_equals_decode() {
     let bytes = std::fs::read(corpus_dir().join("codestreams/p0_01.j2k")).expect("read p0_01");
     let full = rust_j2k::decode(&bytes).expect("p0_01 decodes");
-    let with = rust_j2k::decode_with(&bytes, rust_j2k::DecodeOptions::default())
+    let with = rust_j2k::decode_with(&bytes, &rust_j2k::DecodeOptions::default())
         .expect("p0_01 decodes with default options");
     assert_eq!(full, with);
 }
@@ -95,7 +95,7 @@ fn reduction_is_bounded_by_the_resolution_count() {
 
     let reduced = rust_j2k::decode_with(
         &bytes,
-        rust_j2k::DecodeOptions::default().with_resolution_reduction(1),
+        &rust_j2k::DecodeOptions::default().with_resolution_reduction(1),
     )
     .expect("one level fewer still decodes");
     assert_eq!(reduced.width, full.width.div_ceil(2));
@@ -112,7 +112,7 @@ fn reduction_is_bounded_by_the_resolution_count() {
     // p0_01 has 3 decomposition levels: 4 resolutions, so 4 is one too many.
     let err = rust_j2k::decode_with(
         &bytes,
-        rust_j2k::DecodeOptions::default().with_resolution_reduction(4),
+        &rust_j2k::DecodeOptions::default().with_resolution_reduction(4),
     )
     .expect_err("a reduction past the coarsest resolution is rejected");
     assert!(matches!(err, rust_j2k::Error::InvalidOptions(_)), "{err:?}");

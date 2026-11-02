@@ -7,6 +7,13 @@ snapshot is what a trusted reference decoder (OpenJPEG's `opj_decompress`, or
 eccodes for GRIB2-sourced files) produced, committed so the corpus is graded
 offline without the reference decoder installed.
 
+The JP2 corpora sit beside this one. The synthetic JP2 files and the ICC
+oracles are below. The real-world `.jp2` files are in
+[`jp2_real/`](jp2_real/README.md), each with its source, commit, SHA-256 and
+oracle; they are excluded from the published crate, because their rights are
+not confirmed. The ISO/IEC 15444-4 JP2 reader files and their references are
+in [`conformance/`](conformance/README.md).
+
 ## The corpus
 
 Every fixture is the exact subset Phase 1 decodes: one component, one tile, one
@@ -207,6 +214,15 @@ source codestream and the oracle command.
 | `jp2_sycc_420_odd`, `jp2_sycc_422_odd` | three planes coded by the script (`opj_compress -i sycc.raw -o sycc.j2k -F <w>,<h>,3,8,u@1x1:<d>:<d> -d 5,3 -mct 0 -n 2`, `<d>` 2x2 for a 14x12 image, 2x1 for 13x5): luma full resolution, chroma sub-sampled, origin (5, 3) | `colr` sYCC; for `ColourOutput::Srgb`, chroma replication at an odd origin | as coded: `opj_decompress -c K` on the bare codestream, one component at a time, so its sYCC heuristic stays out. A second snapshot, `<name>.srgb.json`, is `opj_decompress` on the `.jp2` (sYCC converted); `tests/jp2_srgb.rs` grades the sRGB output within 1 of it (OpenJPEG's formula differs, owner-approved deviation) and `src/jp2/srgb_tests.rs` matches it exactly with OpenJPEG's formula |
 
 They are ours, built over the Apache-2.0 / synthetic codestreams above.
+
+### Budget fixture
+
+`budget/flat_1024_lossless.j2k` (328 bytes) is a flat 1024x1024 8-bit
+one-component lossless codestream, made with `head -c 1048576 /dev/zero >
+flat.raw` and `opj_compress -i flat.raw -o flat_1024_lossless.j2k -F
+1024,1024,1,8,u -n 3` (OpenJPEG 2.5.0). `src/jp2/tests/matrix.rs` wraps it in a
+JP2 file with a 255-column palette to test the sample budget at full size and
+at resolution reduction 1.
 
 ### ICC to sRGB oracles
 

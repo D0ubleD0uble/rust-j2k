@@ -20,6 +20,57 @@ pub struct Jp2Metadata {
     /// file has no palette (or a `pclr` without a `cmap`), or the caller set
     /// [`DecodeOptions::raw_channels`](crate::DecodeOptions::raw_channels).
     pub palette_applied: bool,
+    /// The file's channel definition box (`cdef`) as written, in file order:
+    /// `Some` whenever the file has one, whatever the options, and `None`
+    /// without one. The entries are checked only when the decode applies them,
+    /// so under [`raw_channels`](crate::DecodeOptions::raw_channels) a `cn`
+    /// may name a channel the file does not have.
+    ///
+    /// The channels an entry's [`channel`](ChannelDefinitionEntry::channel)
+    /// counts are the file's components after the palette is expanded, in the
+    /// order [`channel_mapping`](Self::channel_mapping) gives (the components
+    /// as coded for a file without a palette). The decode puts them in colour
+    /// order like this. Start with the channels in that order, so channel `c`
+    /// is at position `c`. For each entry in file order whose type is
+    /// [`ChannelType::Colour`] and whose association is
+    /// [`Association::Colour`]`(n)`, find where its channel is now (earlier
+    /// swaps may have moved it) and swap it with whatever is at position
+    /// `n - 1`. Every other entry moves nothing. The channel a swap moves out
+    /// of the way keeps its place in later lookups: it is found where it went.
+    ///
+    /// For example, three colour entries `(channel 0, colour 3)`,
+    /// `(channel 1, colour 2)`, `(channel 2, colour 1)` give the order
+    /// `[2, 1, 0]`: the first swap gives `[2, 1, 0]`, the second finds channel
+    /// 1 already at position 1, and the third finds channel 2 already at
+    /// position 0. Reading `Cn` as a position instead would swap 0 and 2, then
+    /// 1 with itself, then 2 and 0 back, and give `[0, 1, 2]`, which is wrong.
+    ///
+    /// A channel's label on [`channels`](Self::channels) is that of the last
+    /// entry naming it.
+    ///
+    /// [`channels`](Self::channels) itself is only relabelled when the `cdef`
+    /// applies: under `raw_channels` every channel keeps its default label.
+    pub channel_definitions: Option<Vec<ChannelDefinitionEntry>>,
+    /// The file's palette, from its `pclr` box. Present when the palette
+    /// applies, and also when
+    /// [`raw_channels`](crate::DecodeOptions::raw_channels) left it unapplied
+    /// (then [`palette_applied`](Self::palette_applied) is `false`). `None`
+    /// without a `pclr`. `None` too for a `pclr` without a `cmap`: the
+    /// standard requires both or neither, so the file is invalid, and OpenJPEG
+    /// ignores the palette in that case, as this decoder does.
+    pub palette: Option<Palette>,
+    /// The file's component mapping, set whenever [`palette`](Self::palette)
+    /// is: one entry per output channel of a palettised decode, in the order
+    /// before any `cdef` reordering. An entry is
+    /// [`Direct`](crate::MappingKind::Direct) for a component used as coded.
+    ///
+    /// It is the mapping the default decode applies, in either mode, including
+    /// OpenJPEG's correction for a single-component file (which turns every
+    /// entry into a lookup in its own column, so it can differ from the box).
+    /// Only a `cmap` the default decode refuses is reported as written, and
+    /// only under `raw_channels`, which does not check it; an `MTYP` other
+    /// than 0 or 1 is then [`Reserved`](crate::MappingKind::Reserved).
+    pub channel_mapping: Option<Vec<ChannelMapping>>,
     /// The capture and default display resolutions from the header's `res `
     /// box, each `None` when the file does not give it.
     pub resolution: Resolution,
@@ -31,6 +82,8 @@ pub struct Jp2Metadata {
     pub uuid: Vec<UuidBox>,
 }
 
+use super::palette::{ChannelMapping, Palette};
+
 /// The resolutions a JP2 file's `res ` box gives, in grid points per metre.
 ///
 /// The capture resolution (`resc`) is the one the image was digitised at; the
@@ -39,6 +92,7 @@ pub struct Jp2Metadata {
 /// its field `None`: OpenJPEG does not read `res ` at all, so a malformed one
 /// never fails a decode. When more than one is present, the first counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Resolution {
     /// The capture resolution (`resc`).
     pub capture: Option<Res>,
@@ -48,6 +102,7 @@ pub struct Resolution {
 
 /// One resolution: grid points per metre in each direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Res {
     /// Vertical grid points per metre (`VRN`, `VRD`, `VRE`).
     pub vertical: Ratio,
@@ -59,6 +114,7 @@ pub struct Res {
 /// grid points per metre. Kept as integers, so the value is exact;
 /// [`Ratio::grid_points_per_metre`] gives it as a float.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Ratio {
     /// `N`.
     pub numerator: u16,
@@ -73,12 +129,44 @@ impl Ratio {
     /// denominator is 0.
     ///
     /// ```
-    /// use rust_j2k::Ratio;
+    /// use rust_j2k::read_header;
     ///
-    /// // 10000 / 254 points per metre is one per inch.
-    /// let dpi = Ratio { numerator: 10000, denominator: 254, exponent: 0 };
-    /// let per_inch = dpi.grid_points_per_metre().unwrap() * 0.0254;
-    /// assert!((per_inch - 1.0).abs() < 1e-12);
+    /// # fn jp2_with_resolution(codestream: &[u8]) -> Result<Vec<u8>, rust_j2k::Error> {
+    /// #     fn boxed(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    /// #         let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
+    /// #         out.extend_from_slice(kind);
+    /// #         out.extend_from_slice(payload);
+    /// #         out
+    /// #     }
+    /// #     let header = read_header(codestream)?;
+    /// #     let mut ihdr = header.height.to_be_bytes().to_vec();
+    /// #     ihdr.extend_from_slice(&header.width.to_be_bytes());
+    /// #     ihdr.extend_from_slice(&(header.components.len() as u16).to_be_bytes());
+    /// #     ihdr.extend_from_slice(&[header.components[0].bit_depth - 1, 7, 0, 0]);
+    /// #     // Capture resolution 10000 / 254 points per metre, both ways.
+    /// #     let mut resc = Vec::new();
+    /// #     for value in [10000u16, 254, 10000, 254] {
+    /// #         resc.extend_from_slice(&value.to_be_bytes());
+    /// #     }
+    /// #     resc.extend_from_slice(&[0, 0]);
+    /// #     let mut file = boxed(b"jP  ", &[0x0D, 0x0A, 0x87, 0x0A]);
+    /// #     file.extend(boxed(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    /// #     let colr = boxed(b"colr", &[1, 0, 0, 0, 0, 0, 17]);
+    /// #     let res = boxed(b"res ", &boxed(b"resc", &resc));
+    /// #     file.extend(boxed(b"jp2h", &[boxed(b"ihdr", &ihdr), colr, res].concat()));
+    /// #     file.extend(boxed(b"jp2c", codestream));
+    /// #     Ok(file)
+    /// # }
+    /// # fn main() -> Result<(), rust_j2k::Error> {
+    /// # let codestream = std::fs::read("tests/fixtures/derived_quant_lossy.j2k").unwrap();
+    /// let bytes = jp2_with_resolution(&codestream)?;
+    /// let jp2 = read_header(&bytes)?.jp2.expect("a JP2 file");
+    /// let capture = jp2.resolution.capture.expect("a capture resolution");
+    /// // 10000 / 254 is about 39.37 grid points per metre.
+    /// let per_metre = capture.horizontal.grid_points_per_metre().unwrap();
+    /// assert!((per_metre - 10000.0 / 254.0).abs() < 1e-9);
+    /// # Ok(())
+    /// # }
     /// ```
     #[must_use]
     pub fn grid_points_per_metre(self) -> Option<f64> {
@@ -97,6 +185,7 @@ impl Ratio {
 /// GeoJP2 georeferencing and XMP are carried this way. A `uuid` box shorter
 /// than its 16-byte identifier is skipped.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UuidBox {
     /// The identifier, as stored.
     pub id: [u8; 16],
@@ -110,9 +199,12 @@ pub struct UuidBox {
 /// OpenJPEG reads it: a box whose method is neither 1 (enumerated) nor 2
 /// (restricted ICC) is skipped and does not count as the first, and every
 /// later usable box is ignored. Boxes placed after `jp2h` at the top level
-/// count in file order with the ones inside `jp2h`. The samples are never converted, whatever
-/// the value.
+/// count in file order with the ones inside `jp2h`. This is what the file
+/// declares. Decoding returns the samples as coded unless the caller asks for
+/// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb); then the colour channels
+/// are converted and [`Jp2Metadata::colour`] reports the converted space.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColourSpace {
     /// sRGB (enumerated colour space 16).
     Srgb,
@@ -143,6 +235,22 @@ pub struct ChannelDefinition {
     pub association: Association,
 }
 
+/// One entry of a file's channel definition box (`cdef`), as written: the
+/// channel it describes and that channel's definition.
+///
+/// [`Jp2Metadata::channels`] has the labels of the output channels in output
+/// order; these entries are indexed by `Cn`, the channel's position before
+/// the `cdef` box reorders anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ChannelDefinitionEntry {
+    /// `Cn`: the channel described, counting the components after palette
+    /// expansion (the codestream's components for a file without a palette).
+    pub channel: u16,
+    /// `Typ` and `Asoc`.
+    pub definition: ChannelDefinition,
+}
+
 /// A channel's type, from a channel definition (`Typ`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelType {
@@ -170,6 +278,4 @@ pub enum Association {
     Colour(u16),
     /// No association (`Asoc` 65535).
     None,
-    /// An `Asoc` value this decoder does not interpret, reported as is.
-    Other(u16),
 }

@@ -96,7 +96,7 @@ fn srgb() -> DecodeOptions {
 }
 
 fn decode_srgb(bytes: &[u8]) -> crate::Result<Image> {
-    decode_with(bytes, srgb())
+    decode_with(bytes, &srgb())
 }
 
 /// An `XYZ ` tag.
@@ -790,6 +790,14 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "different sub-sampling (1x1 and 2x2)",
         ),
         (
+            // OpenJPEG guesses sYCC from sub-sampled chroma whatever colour
+            // space the file declares, so greyscale here converts there.
+            "greyscale-declared 4:2:0 on three channels",
+            file(sycc_jp2c, &enumerated(17), &[]),
+            is_unsupported,
+            "different sub-sampling (1x1 and 2x2)",
+        ),
+        (
             "RGB profile on 4:2:0",
             file(sycc_jp2c, &icc_colr(&wide_gamut()), &[]),
             is_unsupported,
@@ -842,17 +850,17 @@ fn raw_channels_with_srgb_output_is_invalid() {
         b"junk".to_vec(),
     ] {
         expect_err(
-            decode_with(&bytes, options),
+            decode_with(&bytes, &options),
             |e| matches!(e, Error::InvalidOptions(_)),
             "raw channels means no colour conversion",
         );
     }
     // Each option alone is fine.
     let file = file(THREE, &enumerated(16), &[]);
-    decode_with(&file, srgb()).expect("sRGB alone");
+    decode_with(&file, &srgb()).expect("sRGB alone");
     decode_with(
         &file,
-        DecodeOptions {
+        &DecodeOptions {
             raw_channels: true,
             ..DecodeOptions::default()
         },

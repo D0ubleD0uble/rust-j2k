@@ -100,14 +100,15 @@ pub use error::{Error, Result};
 pub use header::{ComponentInfo, Header};
 pub use image::{Component, Image};
 pub use jp2::{
-    Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata, Ratio, Res, Resolution,
-    UuidBox,
+    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
+    ColourSpace, Jp2Metadata, MappingKind, Palette, PaletteColumn, Ratio, Res, Resolution, UuidBox,
 };
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
-/// output channel, each on its own sample grid. That is one per SIZ component,
-/// in SIZ order, except for a palettised JP2 file (below).
+/// output channel, each on its own sample grid. For a raw codestream that is
+/// one per SIZ component, in SIZ order. A JP2 file can change the channels:
+/// its palette and channel definitions (below), and the sRGB output option.
 ///
 /// The input kind is detected from its first bytes. Input that opens with the
 /// `SOC` marker (`FF 4F`) is a codestream. Otherwise, input whose bytes 4..8
@@ -124,6 +125,21 @@ pub use jp2::{
 /// [`DecodeOptions::raw_channels`] skips both and returns the codestream's
 /// components as coded.
 ///
+/// ```no_run
+/// use rust_j2k::{decode, ColourSpace};
+///
+/// // A `.jp2` file decodes the same way as a raw codestream; the format is
+/// // detected from the first bytes.
+/// let bytes = std::fs::read("photo.jp2")?;
+/// let image = decode(&bytes)?;
+/// if let Some(jp2) = &image.jp2 {
+///     if jp2.colour == ColourSpace::Srgb {
+///         println!("{} sRGB channels", image.components.len());
+///     }
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
 /// This is the whole public surface for the GRIB2 use case: the §7 data
 /// section of a `grid_jpeg` message is a raw codestream. That subset is
 /// single-component, so its images carry one component; a codestream declaring
@@ -134,7 +150,7 @@ pub use jp2::{
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 pub fn decode(bytes: &[u8]) -> Result<Image> {
-    decode_with(bytes, DecodeOptions::default())
+    decode_with(bytes, &DecodeOptions::default())
 }
 
 /// Read a JPEG 2000 codestream's or JP2 file's [`Header`] without decoding any
@@ -142,15 +158,9 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// JP2 file, the same [`Jp2Metadata`] that [`decode`] would put on
 /// [`Image::jp2`].
 ///
-/// The input is detected as [`decode`] detects it. The read covers a JP2
-/// file's boxes and the codestream's main header, up to the first tile-part
-/// (`SOT` marker), and stops there, so a file whose tile data is cut short or
-/// missing still has a readable header. Nothing is allocated for the samples.
-///
-/// A fault in what it reads is the same [`Error`] that [`decode`] returns for
-/// that input, since `decode` runs the same checks first. A fault in the tile
-/// data (a broken tile-part, a tile header that changes a component's
-/// wavelet) is only found by `decode`.
+/// This is [`read_header_with`] at the default [`DecodeOptions`], so a fault in
+/// what it reads is the same [`Error`] that [`decode`] returns for that input.
+/// Use [`read_header_with`] to read the header for other options.
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -164,32 +174,72 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// }
 /// ```
 pub fn read_header(bytes: &[u8]) -> Result<Header> {
-    let options = DecodeOptions::default();
+    read_header_with(bytes, &DecodeOptions::default())
+}
+
+/// Read a JPEG 2000 codestream's or JP2 file's [`Header`] without decoding any
+/// tile data, for the same `options` as [`decode_with`]: the header describes
+/// the [`Image`] that `decode_with(bytes, options)` would return.
+///
+/// The input is detected as [`decode`] detects it. The read covers a JP2
+/// file's boxes and the codestream's main header, up to the first tile-part
+/// (`SOT` marker), and stops there, so a file whose tile data is cut short or
+/// missing still has a readable header. Nothing is allocated for the samples.
+///
+/// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
+/// options)` returns for that input, since `decode_with` runs the same checks
+/// first. The options matter: a `cmap` that
+/// [`raw_channels`](DecodeOptions::raw_channels) does not check, or a palette
+/// that fits the sample budget once
+/// [`resolution_reduction`](DecodeOptions::resolution_reduction) halves the
+/// image, is a fault under some options and not others. A fault in the tile
+/// data (a broken tile-part, a tile header that changes a component's
+/// wavelet, a reduction that a tile-part COD or COC with fewer levels cannot
+/// take) is only found by decoding. A reduction that the main header's own
+/// levels cannot take is [`Error::InvalidOptions`] here, as OpenJPEG has it.
+///
+/// ```
+/// use rust_j2k::{read_header_with, DecodeOptions};
+///
+/// let options = DecodeOptions::default().with_resolution_reduction(1);
+/// // In real use these are a codestream's or JP2 file's bytes.
+/// assert!(read_header_with(b"not a codestream", &options).is_err());
+/// ```
+pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header> {
+    check_options(options)?;
+    let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         let prefix = read_jp2_prefix(bytes, options)?;
         let siz = &prefix.parsed.header.siz;
-        let (width, height) = siz.image_extent_at(0);
+        let (width, height) = siz.image_extent_at(reduction);
+        let mut components = prefix.plans.outputs(siz, reduction)?;
+        if let Some(srgb) = &prefix.srgb {
+            srgb.describe_outputs(&mut components);
+        }
         return Ok(Header {
             width,
             height,
-            components: prefix.plans.outputs(siz)?,
+            components,
             jp2: Some(prefix.metadata),
         });
     }
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
-    let (width, height) = siz.image_extent_at(0);
+    check_raw_colour(options, siz.components.len())?;
+    check_reduction(&parsed, reduction)?;
+    let (width, height) = siz.image_extent_at(reduction);
     Ok(Header {
         width,
         height,
-        components: siz.components.iter().map(ComponentInfo::from).collect(),
+        components: ComponentInfo::of_siz(siz, reduction),
         jp2: None,
     })
 }
 
 /// What colour space a JP2 file's colour channels come out in: the
 /// [`DecodeOptions::colour`] option.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColourOutput {
     /// The samples as the codestream coded them, after the palette and the
     /// channel definitions. [`Jp2Metadata::colour`] says how to read them;
@@ -237,7 +287,7 @@ pub enum ColourOutput {
 /// Start from [`DecodeOptions::default`] and set what differs, with a
 /// `with_*` method where one exists or the field directly. The struct is `#[non_exhaustive]`,
 /// so a new option is not a breaking change.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct DecodeOptions {
     /// How many of the finest resolution levels to discard. Each level halves
@@ -259,8 +309,25 @@ pub struct DecodeOptions {
     /// `i` is reported as colour `i + 1`, whatever the `cdef` box says. The
     /// boxes' layout is still checked, so a malformed `pclr`, `cmap` or
     /// `cdef` is still [`Error::FileFormat`]; the palette mapping and column
-    /// depths, and the channel definitions' entries, are not. No effect on a
-    /// raw codestream. Default `false`.
+    /// depths, and the channel definitions' entries, are not.
+    ///
+    /// The metadata carries what the decode left out, so a caller can rebuild
+    /// the default decode, in order, from the raw one:
+    ///
+    /// 1. Expand the index planes. For each entry of
+    ///    [`Jp2Metadata::channel_mapping`], in order, take the raw channel
+    ///    `component`; a [`MappingKind::Direct`] entry is used as it is, and a
+    ///    [`MappingKind::Palette`] entry looks each sample up as an index into
+    ///    that column of [`Jp2Metadata::palette`] (an index past the table
+    ///    reads its last entry, a negative one its first). Without a palette
+    ///    the raw channels are used as they are.
+    /// 2. Put the channels in colour order with
+    ///    [`Jp2Metadata::channel_definitions`], by the rule documented there
+    ///    (each swap looks up where the entry's channel has moved to, not its
+    ///    original position). Without a `cdef` the order from step 1 stands.
+    ///
+    /// The result is the channels of the default decode. No effect on a raw
+    /// codestream. Default `false`.
     pub raw_channels: bool,
     /// What colour space the colour channels come out in. Default
     /// [`ColourOutput::AsCoded`].
@@ -270,24 +337,52 @@ pub struct DecodeOptions {
 impl DecodeOptions {
     /// These options with
     /// [`resolution_reduction`](Self::resolution_reduction) set to `levels`.
+    ///
+    /// ```
+    /// use rust_j2k::DecodeOptions;
+    ///
+    /// let options = DecodeOptions::default().with_resolution_reduction(1);
+    /// assert_eq!(options.resolution_reduction, 1);
+    /// ```
     #[must_use]
     pub fn with_resolution_reduction(mut self, levels: u8) -> Self {
         self.resolution_reduction = levels;
+        self
+    }
+
+    /// These options with [`raw_channels`](Self::raw_channels) set to `raw`.
+    ///
+    /// ```
+    /// use rust_j2k::DecodeOptions;
+    ///
+    /// let options = DecodeOptions::default().with_raw_channels(true);
+    /// assert!(options.raw_channels);
+    /// ```
+    #[must_use]
+    pub fn with_raw_channels(mut self, raw: bool) -> Self {
+        self.raw_channels = raw;
+        self
+    }
+
+    /// These options with [`colour`](Self::colour) set to `colour`.
+    ///
+    /// ```
+    /// use rust_j2k::{ColourOutput, DecodeOptions};
+    ///
+    /// let options = DecodeOptions::default().with_colour(ColourOutput::Srgb);
+    /// assert_eq!(options.colour, ColourOutput::Srgb);
+    /// ```
+    #[must_use]
+    pub fn with_colour(mut self, colour: ColourOutput) -> Self {
+        self.colour = colour;
         self
     }
 }
 
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
 /// `options`.
-pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
-    let srgb = options.colour == ColourOutput::Srgb;
-    if srgb && options.raw_channels {
-        return Err(Error::InvalidOptions(
-            "raw channels means no colour conversion, so it cannot be combined with sRGB \
-             output"
-                .into(),
-        ));
-    }
+pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
+    check_options(options)?;
     // A codestream opens with SOC; anything else that carries the signature
     // box's type is read as a JP2 file, so a damaged signature box is reported
     // as a box fault. The rest falls to the codestream parser, which reports
@@ -295,18 +390,55 @@ pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         return decode_jp2(bytes, options);
     }
-    let cs = codestream::parse(bytes)?;
-    // A raw codestream declares no colour space. Like OpenJPEG, one or two
-    // components are read as grey (and grey plus opacity) and pass through;
-    // three or more have nothing to convert from.
-    let components = cs.header.siz.components.len();
-    if srgb && components > 2 {
+    // The header checks come before the tile walk, as `read_header_with` has it.
+    let parsed = codestream::parse_header(bytes)?;
+    check_raw_colour(options, parsed.header.siz.components.len())?;
+    check_reduction(&parsed, options.resolution_reduction)?;
+    let cs = codestream::parse_tiles(bytes, parsed)?;
+    decode_codestream(cs, options)
+}
+
+/// Options that contradict each other, whatever the input.
+fn check_options(options: &DecodeOptions) -> Result<()> {
+    if options.colour == ColourOutput::Srgb && options.raw_channels {
+        return Err(Error::InvalidOptions(
+            "raw channels means no colour conversion, so it cannot be combined with sRGB \
+             output"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// A reduction must leave every component a resolution to decode. This is the
+/// check against the main header's coding parameters (COD and COC), which
+/// `decode_with` and `read_header_with` both make before any tile is read; a
+/// tile-part COD or COC with fewer levels is only found while decoding, where
+/// the same test runs per tile.
+fn check_reduction(parsed: &codestream::ParsedHeader, reduction: u8) -> Result<()> {
+    for (component, params) in parsed.header.components.iter().enumerate() {
+        let resolutions = u32::from(params.coding.decomposition_levels) + 1;
+        if u32::from(reduction) >= resolutions {
+            return Err(Error::InvalidOptions(format!(
+                "resolution reduction {reduction} discards all {resolutions} resolutions \
+                 of component {component}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A raw codestream declares no colour space. Like OpenJPEG, one or two
+/// components are read as grey (and grey plus opacity) and pass through; three
+/// or more have nothing to convert from, so sRGB output refuses them.
+fn check_raw_colour(options: &DecodeOptions, components: usize) -> Result<()> {
+    if options.colour == ColourOutput::Srgb && components > 2 {
         return Err(Error::Unsupported(format!(
             "sRGB output from a raw codestream of {components} components, which declares \
              no colour space"
         )));
     }
-    decode_codestream(cs, options)
+    Ok(())
 }
 
 /// A JP2 file read up to its tile data: the boxes, the codestream's main
@@ -327,7 +459,7 @@ struct Jp2Prefix<'a> {
 /// The header boxes after the codestream, which OpenJPEG reads again once it
 /// has decoded, are checked next, then the sRGB step is planned; all of it
 /// before any tile is read.
-fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>> {
+fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Prefix<'a>> {
     let file = jp2::parse(bytes)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
@@ -350,6 +482,7 @@ fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>
             Some(plan)
         }
     };
+    check_reduction(&parsed, options.resolution_reduction)?;
     Ok(Jp2Prefix {
         codestream: file.codestream,
         parsed,
@@ -361,7 +494,7 @@ fn read_jp2_prefix(bytes: &[u8], options: DecodeOptions) -> Result<Jp2Prefix<'_>
 
 /// Decode a JP2 file: read it up to its tile data, decode the codestream,
 /// and apply the channel plans, then any sRGB step, to the samples.
-fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
+fn decode_jp2(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
     let cs = codestream::parse_tiles(prefix.codestream, prefix.parsed)?;
     let image = decode_codestream(cs, options)?;
@@ -377,7 +510,7 @@ fn decode_jp2(bytes: &[u8], options: DecodeOptions) -> Result<Image> {
 }
 
 /// Decode a parsed codestream into its components.
-fn decode_codestream(cs: codestream::Codestream<'_>, options: DecodeOptions) -> Result<Image> {
+fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) -> Result<Image> {
     let reduction = options.resolution_reduction;
 
     // Each tile is a whole decode of its own: its own header, its own packets,

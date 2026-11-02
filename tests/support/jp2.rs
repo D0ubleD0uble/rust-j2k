@@ -176,7 +176,7 @@ pub fn grade_entry(dir: &Path, entry: &Jp2Entry) -> Grade {
 
     // A panic is a contract violation, not a not-yet-implemented feature.
     let decode = |options: DecodeOptions| match panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        rust_j2k::decode_with(&bytes, options)
+        rust_j2k::decode_with(&bytes, &options)
     })) {
         Err(_) => Err(Grade::Failed(
             "panicked (decode must return a typed error)".into(),

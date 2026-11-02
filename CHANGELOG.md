@@ -30,7 +30,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   differences: a palette column too deep for an `i32` sample is
   `Unsupported`, and channels from components of different sub-sampling each
   keep their own grid, where OpenJPEG fails.
-  `Jp2Metadata::palette_applied` says whether the palette was applied.
+  `Jp2Metadata::palette_applied` says whether the palette was applied. The
+  expanded channels count against the same sample budget as the codestream
+  (`Error::Limit`), so while the decoded components are still held a palette
+  can briefly take about twice the budget (~512 MiB of `i32`).
 - A JP2 file with channel definitions (`cdef`) puts its colour channels in
   colour order and labels every channel on `Jp2Metadata::channels` with its
   type and association. What is accepted and the output order follow
@@ -40,6 +43,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
   coded, without the palette or channel definitions. The index plane is then
   labelled `ChannelType::Unspecified`, and only the boxes' layout is checked.
+- `read_header_with` reads the header for a given `DecodeOptions`: it fails
+  exactly when `decode_with` does for a fault in the boxes or the main header
+  (a palette `cmap` that `raw_channels` leaves unchecked, a palette that fits
+  the sample budget once the resolution is reduced, a code-block size past
+  the limit in the main-header COD or COC, a reduction past the main header's
+  decomposition levels), and its `width` and
+  `height` follow the resolution reduction. `read_header` is the same at the
+  default options.
+- `ComponentInfo::width` and `ComponentInfo::height` give each output
+  channel's size in samples, equal to the decoded `Component`'s under the same
+  options: they follow the image origin (`ceil(x1/dx) - ceil(x0/dx)`, not
+  `ceil(width/dx)`), the resolution reduction, the palette and channel
+  definitions, and the sRGB conversion (sYCC chroma on the luma grid).
+- `Association` has three cases: `WholeImage` (`Asoc` 0), `Colour(n)` (1 to
+  65534) and `None` (65535). Every `Asoc` value maps to one of them.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
   the samples (`None` for a raw codestream), with `ColourSpace`,
   `ChannelDefinition`, `ChannelType`, and `Association`. The colour space
@@ -78,7 +96,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the channel count can't be predicted from the header. Other colour
   spaces, other profiles, and colour channels that differ in depth, sign or
   sub-sampling are `Unsupported`; `Srgb` with `raw_channels` is
-  `InvalidOptions`.
+  `InvalidOptions`. OpenJPEG guesses sYCC for any three-component file with
+  sub-sampled chroma, whatever colour space it declares; `Srgb` refuses it
+  instead.
+- `DecodeOptions::with_raw_channels` and `DecodeOptions::with_colour` set
+  those options like `with_resolution_reduction` does; the fields stay public.
+- `ColourSpace`, `ColourOutput`, `Resolution`, `Res`, `Ratio` and `UuidBox` are
+  `#[non_exhaustive]`, so later variants and fields (a JPX colour method, an
+  output ICC profile) are not breaking changes. Match them with a `_` arm, and
+  read the structs' fields rather than building them.
+- `Jp2Metadata::palette` and `Jp2Metadata::channel_mapping` give the file's
+  palette table (`Palette`, `PaletteColumn`) and component mapping
+  (`ChannelMapping`, `MappingKind`). They are set whenever a palette and a
+  `cmap` are present, also under `raw_channels`, so a caller can expand the
+  index planes itself.
+- `Jp2Metadata::channel_definitions` gives the `cdef` entries as written
+  (`ChannelDefinitionEntry`), and `channel_mapping` is the mapping the default
+  decode applies in both modes, OpenJPEG's single-component correction
+  included. With `raw_channels`, a caller can rebuild the default decode in
+  order from the raw one: expand the index planes through `palette` with
+  `channel_mapping`, then order them by the rule on `channel_definitions`. The
+  `raw_channels` documentation gives the recipe.
+- `src/jp2/lcms.rs` is a Rust port of parts of LittleCMS 2.14 (MIT). Its
+  notice is at the top of the file and in the README.
 
 ### Fixed
 
@@ -97,6 +137,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Breaking: `DecodeOptions` and `ColourOutput` are no longer `Copy`, so a
+  later option can carry data (an output ICC profile). Both stay `Clone`;
+  clone them where you reuse one.
+- A code-block size past the limit in a main-header COD is now refused when
+  the header is read, even when a COC overrides it, as OpenJPEG does. `p0_02.j2k`
+  with byte 55 set to 56 decoded in 0.3.0 and is now `Error::Marker`. Likewise a
+  resolution reduction past the main header's decomposition levels is checked
+  before the tile data, so a truncated file with an impossible reduction
+  reports the reduction rather than the truncation.
+- Breaking: `decode_with` takes `&DecodeOptions` instead of `DecodeOptions`,
+  so one set of options serves many calls: `decode_with(bytes, &options)`.
 - A JP2 file used to be `Unsupported`; it now decodes, or fails with
   `FileFormat` when its boxes are malformed.
 - A JP2 file whose `ihdr` component count differs from its codestream's

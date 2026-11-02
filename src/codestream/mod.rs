@@ -143,6 +143,7 @@ impl Codestream<'_> {
 /// unwrapped before it gets here (see `crate::jp2`).
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
+#[cfg(test)]
 pub fn parse(bytes: &[u8]) -> Result<Codestream<'_>> {
     parse_tiles(bytes, parse_header(bytes)?)
 }
@@ -159,7 +160,7 @@ pub struct ParsedHeader {
 }
 
 /// Parse a codestream's main header, from `SOC` up to the first `SOT` marker,
-/// and stop there: no tile-part header or packet byte is read. [`parse`] is
+/// and stop there: no tile-part header or packet byte is read. `parse` is
 /// this followed by [`parse_tiles`].
 pub fn parse_header(bytes: &[u8]) -> Result<ParsedHeader> {
     let (header, sot_offset, ppm) = parse_main_header(bytes)?;
@@ -1083,6 +1084,11 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
 /// today: 2^26 samples is 256 MiB as `i32`, well above operational grids (HRRR
 /// ~1.9M, MRMS ~24.5M) and below anything that threatens the decode. Not a
 /// format limit — raise it as larger imagery comes into scope.
+///
+/// A palettised JP2 file expands its index plane into one channel per palette
+/// column, and the budget bounds those channels too. While the decoded
+/// components are still held, the peak is about twice the budget (~512 MiB of
+/// `i32`).
 pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
 
 /// Bound the samples a codestream can ask the decoder to allocate.
@@ -1109,9 +1115,11 @@ fn check_sample_budget(siz: &Siz) -> Result<()> {
 
 /// Refuse a component whose sample range does not fit the `i32` container
 /// (unsigned 32 bits, or more than 32), from SIZ alone. It is a header fault,
-/// so it is found before any tile is read, as OpenJPEG finds a depth over 31
-/// bits when it reads SIZ. `image::assemble` repeats the check for headers
-/// built by hand.
+/// so it is found before any tile is read. OpenJPEG 2.5.0 is stricter: it
+/// refuses every depth over 31 bits at SIZ, signed 32 included. This decoder
+/// accepts signed 32 on purpose, since it fits `i32` (owner-approved
+/// deviation, see `docs/correctness.md`); unsigned 32 and anything above 32
+/// are refused. `image::assemble` repeats the check for headers built by hand.
 fn check_sample_container(siz: &Siz) -> Result<()> {
     for (index, comp) in siz.components.iter().enumerate() {
         let fits = if comp.signed {
@@ -1510,6 +1518,19 @@ fn decode_coding(b: &mut Cursor<'_>, origin: &str, explicit_precincts: bool) -> 
     } else {
         Vec::new()
     };
+
+    // The standard bounds each code-block exponent at 2^10 and their sum at
+    // 2^12 (Table A-18). OpenJPEG refuses the field when it reads the header
+    // ("Invalid cblkw/cblkh combination"), so a header-only read does too.
+    let (xcb, ycb) = (
+        u32::from(code_block_width) + 2,
+        u32::from(code_block_height) + 2,
+    );
+    if xcb > 10 || ycb > 10 || xcb + ycb > 12 {
+        return Err(Error::Marker(format!(
+            "code-block size 2^{xcb}×2^{ycb} exceeds the 2^10 / xcb+ycb≤12 limit"
+        )));
+    }
 
     Ok(Coding {
         decomposition_levels,

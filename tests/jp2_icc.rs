@@ -32,9 +32,7 @@ fn read(path: &str) -> Vec<u8> {
 }
 
 fn srgb() -> DecodeOptions {
-    let mut options = DecodeOptions::default();
-    options.colour = ColourOutput::Srgb;
-    options
+    DecodeOptions::default().with_colour(ColourOutput::Srgb)
 }
 
 /// The hash the oracle script records: samples in raster order, each a
@@ -174,7 +172,7 @@ fn icc_conformance_variants_match_openjpeg_exactly() {
         let mut bytes = read(&format!("conformance/jp2/{}", v.file));
         let (start, end) = profile_span(&bytes);
         patch(&mut bytes[start..end], v.intent, v.white);
-        let image = decode_with(&bytes, srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert_eq!(
             (image.width, image.height),
             (v.width, v.height),
@@ -197,7 +195,7 @@ fn the_intent_0_variants_are_the_files_as_shipped() {
             "{}",
             v.file
         );
-        let image = decode_with(&bytes, srgb()).unwrap();
+        let image = decode_with(&bytes, &srgb()).unwrap();
         check_planes(&image, &v.planes, v.bit_depth, &v.file);
     }
 }
@@ -314,7 +312,7 @@ fn icc_profiles_match_openjpeg_or_are_refused() {
         let codestream = &codestreams[case.codestream.as_str()];
         let depth = rust_j2k::read_header(codestream).unwrap().components[0].bit_depth;
         let bytes = wrap(codestream, &hex(&case.profile));
-        let result = decode_with(&bytes, srgb());
+        let result = decode_with(&bytes, &srgb());
         let ours_refused = REFUSED_BY_US.iter().find(|(name, _)| *name == case.name);
         match (case.openjpeg.as_str(), result) {
             ("converted", Ok(image)) => {
@@ -364,7 +362,7 @@ fn a_version_above_5_0_is_named_in_bcd() {
         .find(|c| c.name == "hdr_version_5_1" && c.codestream == "rgb8")
         .expect("hdr_version_5_1");
     let codestream = read(&profiles.codestreams["rgb8"].file);
-    let err = decode_with(&wrap(&codestream, &hex(&case.profile)), srgb()).unwrap_err();
+    let err = decode_with(&wrap(&codestream, &hex(&case.profile)), &srgb()).unwrap_err();
     match err {
         Error::FileFormat(message) => {
             assert_eq!(message, "the ICC profile has version 5.1.0, above 5.0");
@@ -419,7 +417,7 @@ fn sycc_and_rgb_profiles_on_fewer_than_three_channels_pass_through() {
             let what = format!("{channels} channels, {declared:?}");
             let what = &what[..what.len().min(60)];
             let coded = decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let image = decode_with(&bytes, srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
             assert_eq!(image.components.len(), channels, "{what}");
             assert_eq!(image.components, coded.components, "{what}");
             let jp2 = image.jp2.as_ref().unwrap();
@@ -441,7 +439,7 @@ fn a_tinted_grey_profile_gives_three_colour_channels() {
     let mut bytes = read("conformance/jp2/files/file8.jp2");
     let (start, end) = profile_span(&bytes);
     patch(&mut bytes[start..end], v.intent, v.white);
-    let image = decode_with(&bytes, srgb()).unwrap();
+    let image = decode_with(&bytes, &srgb()).unwrap();
     assert_eq!(image.components.len(), 3);
     let jp2 = image.jp2.as_ref().unwrap();
     assert_eq!(jp2.colour, ColourSpace::Srgb);

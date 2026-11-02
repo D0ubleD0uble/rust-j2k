@@ -60,7 +60,9 @@ fuzz_target!(|data: &[u8]| {
         2 => (GREY8, (64, 64), 1, 8),
         _ => (RGB8, (24, 16), 3, 8),
     };
-    let mut options = DecodeOptions::default();
-    options.colour = ColourOutput::Srgb;
-    let _ = rust_j2k::decode_with(&wrap(codestream, size, components, depth, profile), options);
+    let options = DecodeOptions::default().with_colour(ColourOutput::Srgb);
+    let _ = rust_j2k::decode_with(
+        &wrap(codestream, size, components, depth, profile),
+        &options,
+    );
 });
