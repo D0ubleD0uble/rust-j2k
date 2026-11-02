@@ -160,7 +160,7 @@ pub struct ParsedHeader {
 }
 
 /// Parse a codestream's main header, from `SOC` up to the first `SOT` marker,
-/// and stop there: no tile-part header or packet byte is read. [`parse`] is
+/// and stop there: no tile-part header or packet byte is read. `parse` is
 /// this followed by [`parse_tiles`].
 pub fn parse_header(bytes: &[u8]) -> Result<ParsedHeader> {
     let (header, sot_offset, ppm) = parse_main_header(bytes)?;
