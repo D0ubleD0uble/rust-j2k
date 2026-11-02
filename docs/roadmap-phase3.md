@@ -448,10 +448,11 @@ JP2-compatible JPX decodes.
 
 **Work:** `res ` superbox with `resc`/`resd` (four `u16` and two `i8` each)
 into `Resolution`; `xml ` and `uuid` boxes collected verbatim in file order,
-including boxes after `jp2c` (file8); `uinf`, `jp2i`, and every JPX box
-(`rreq`, `jpch`, `jplh`, `asoc`, `lbl `, `ftbl`) skipped without descending.
-Guard: metadata copies are bounded by the input length, and only `jp2h` and
-`res ` are descended into, so there is no nesting to bomb.
+including boxes after `jp2c` (file8); `jp2i` collected the same way and
+`uinf` read into its UUIDs and URL (#192); every JPX box (`rreq`, `jpch`,
+`jplh`, `asoc`, `lbl `, `ftbl`) skipped without descending. Guard: metadata
+copies are bounded by the input length, and only `jp2h`, `res ` and `uinf`
+are descended into, one level each, so there is no nesting to bomb.
 
 **Oracle:** box dumps of the real-world set (`resc 10000/254 e0` in GDAL's
 `byte_tlm_plt.jp2`, `resd 12901/32768 e4` in `rgbwcmyk01_YeGeo_kakadu.jp2`,
@@ -633,12 +634,14 @@ so and why we differ (or do not).
 | `resc`/`resd` with a zero denominator | never read | reported as stored | none; `Ratio::grid_points_per_metre` is `None` |
 | `uuid` shorter than its 16-byte identifier | never read | skipped, not reported | none (match oracle) |
 | `xml `/`uuid` after `jp2c` | never read | collected as far as the after-`jp2c` walk goes | none; collecting them never fails a decode |
+| `jp2i` anywhere at the top level | never read | contents returned verbatim, in file order, including after `jp2c` | none |
+| `uinf` without exactly one `ulst` then one `url `, a `ulst` whose `NU` does not match its length, a `url ` under 4 bytes | never read | reject, before or after `jp2c` | `FileFormat` (stricter than the oracle; ISO/IEC 15444-1 I.7.3, `docs/correctness.md`) |
 | `ihdr` W/H wrong and the codestream truncated | error at SIZ ("IHDR w(769) … vs. SIZ w(768)") | `FileFormat` | none (match oracle): the header is checked before any tile-part is read |
 | `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none (applied) |
 | The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |
 | Boxes after `jp2c` | walked after decoding, from just after `EOC` (any padding inside the `jp2c` box is walked too), or not at all when the last tile-part has `Psot = 0`: a box shorter than its header is an error; a header box past the end of the file is an error, any other box there ends the walk; fewer than 8 bytes, `LBox` 0 (the box runs to the end), an `XLBox` it cannot read, or a second `jp2c` end it; header boxes are read again and can fail | the same walk and the same reads | `FileFormat` (match oracle): a second signature or `ftyp`, a `jp2h` without `ihdr`, a `colr` under 3 bytes, a `bpcc` not `NC` bytes, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a second `pclr` while one is held, a `cmap` without a held `pclr` or a second one, a short `cmap`, a second `cdef` while one is held, or a malformed `pclr`/`cdef`. What is held depends on the mode, as in OpenJPEG: a header `pclr` without `cmap` is dropped, and a header `cdef` is dropped once applied but kept under `raw_channels`. Nothing read here is applied; a valid `colr` does not change the colour space. One difference remains: a `Psot = 0` last tile-part followed by more bytes in the slice (no `EOC`, `LBox` 0, or a wrong length). The tile-part runs to the end of the file in both decoders, so any boxes after it become tile data. OpenJPEG ignores those bytes; the codestream parser rejects them as `Codestream` ("left after the last packet"). A known difference, policy pending #183 |
 | Second `jp2c` | never read | ignored | none (I.5.4) |
-| Deeply nested superboxes | n/a | only `jp2h` and `res ` are entered | no recursion, so no depth bomb |
+| Deeply nested superboxes | n/a | only `jp2h`, `res ` and `uinf` are entered | no recursion, so no depth bomb |
 | 10 000 unknown boxes before `jp2h` and after `jp2c` | skipped | skipped | none; each box is one step of a linear walk: about 1.2 ms more per `decode` + `read_header` than the bare file (release build), linear up to 100 000 boxes |
 | Palette expansion over the sample budget (`NPC` planes totalling more than 2^26 samples) | decodes if it can allocate | reject before any tile is decoded | `Limit` |
 | Metadata boxes totalling more than the file | impossible by construction | copies bounded by input length | none |

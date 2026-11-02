@@ -102,6 +102,7 @@ pub use image::{Component, Image};
 pub use jp2::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
     ColourSpace, Jp2Metadata, MappingKind, Palette, PaletteColumn, Ratio, Res, Resolution, UuidBox,
+    UuidInfo,
 };
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)

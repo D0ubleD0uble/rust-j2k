@@ -58,3 +58,8 @@ hdr_jp2h="\x00\x00\x00\x2djp2h"
 hdr_ihdr="\x00\x00\x00\x16ihdr"
 hdr_colr="\x00\x00\x00\x0fcolr"
 hdr_jp2c_open="\x00\x00\x00\x00jp2c"
+
+# The UUID info box's children: a `ulst` header with NU = 1 (one UUID
+# follows), and a whole `url ` with VERS and FLAG 0 and an empty location.
+hdr_ulst_one="\x00\x00\x00\x1aulst\x00\x01"
+url_empty="\x00\x00\x00\x0curl \x00\x00\x00\x00"

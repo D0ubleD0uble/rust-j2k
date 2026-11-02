@@ -77,6 +77,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every top-level `xml ` and `uuid` box verbatim (`UuidBox`), including those
   after the codestream. A malformed `res ` never fails a decode, as in
   OpenJPEG.
+- `Jp2Metadata::ipr` returns every top-level intellectual property box
+  (`jp2i`) verbatim, and `Jp2Metadata::uuid_info` every top-level UUID info
+  box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst` box and the version,
+  flags and location of its `url ` box, with `UuidInfo::location_str` for the
+  location as text. Both are collected before and after the codestream, like
+  `xml ` and `uuid`. A `uinf` that does not hold one `ulst` then one `url `,
+  a `ulst` whose count does not match its length, or a `url ` under 4 bytes
+  is `FileFormat`, where OpenJPEG skips the box.
 - `DecodeOptions::colour` takes a `ColourOutput`. The default, `AsCoded`,
   returns the samples as the file codes them. `Srgb` converts a JP2 file's
   colour channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to

@@ -62,7 +62,9 @@ pub struct Expected {
 ///   "palette_applied": false,
 ///   "resolution": { "capture": [10000, 254, 10000, 254, 0, 0], "display": null },
 ///   "xml": [431, 741],
-///   "uuid": [["b14bf8bd083d4b43a5ae8cd7d5a6ce03", 300]]
+///   "uuid": [["b14bf8bd083d4b43a5ae8cd7d5a6ce03", 300]],
+///   "ipr": [120],
+///   "uuid_info": [[["2b0d7e97aa2e317d9133e53161a2f7d0"], 24]]
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +83,14 @@ pub struct Jp2Snapshot {
     /// Each top-level `uuid` box's identifier (lowercase hex) and payload
     /// length, in file order.
     pub uuid: Vec<(String, usize)>,
+    /// The byte length of each top-level `jp2i` box, in file order. Absent
+    /// in a record means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ipr: Vec<usize>,
+    /// Each top-level `uinf` box: its UUIDs (lowercase hex) and its `url `
+    /// location's byte length, in file order. Absent in a record means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uuid_info: Vec<(Vec<String>, usize)>,
 }
 
 /// `resc` and `resd` as the box stores them: `VRN, VRD, HRN, HRD, VRE, HRE`.
@@ -116,6 +126,7 @@ impl Jp2Snapshot {
             Association::Colour(n) => n.to_string(),
             Association::None => "none".to_string(),
         };
+        let hex = |id: &[u8; 16]| id.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let res = |r: Option<Res>| {
             r.map(|r| {
                 let (v, h) = (r.vertical, r.horizontal);
@@ -145,10 +156,13 @@ impl Jp2Snapshot {
             uuid: metadata
                 .uuid
                 .iter()
-                .map(|u| {
-                    let hex: String = u.id.iter().map(|b| format!("{b:02x}")).collect();
-                    (hex, u.payload.len())
-                })
+                .map(|u| (hex(&u.id), u.payload.len()))
+                .collect(),
+            ipr: metadata.ipr.iter().map(Vec::len).collect(),
+            uuid_info: metadata
+                .uuid_info
+                .iter()
+                .map(|u| (u.ids.iter().map(hex).collect(), u.location.len()))
                 .collect(),
         }
     }

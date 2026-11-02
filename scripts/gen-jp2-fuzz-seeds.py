@@ -46,6 +46,17 @@ here (variant 0x0C | codestream << 4, body one `colr`):
   size, chroma 2x2 and 2x1 sub-sampled), as the committed jp2_sycc_*.jp2
   fixtures. `sycc_subsampled_all` is sYCC on the 2x2 three-component one.
 
+Plus seeds for the metadata boxes, on the 8-bit single-component codestream
+with a pinned prefix (variant 0x04 | codestream << 4, body a `jp2h` holding a
+matching `ihdr` and a greyscale `colr`, then the boxes):
+
+- `ipr_uinf_before`: a `jp2i` and a `uinf` (a `ulst` of two UUIDs and a
+  NUL-terminated `url `) before the codestream;
+- `ipr_uinf_after`: the same body with `jp2c` form 3, so the boxes come again
+  after the codestream;
+- `uinf_unterminated`: a `uinf` with one UUID, an unknown box, and a `url `
+  with no NUL.
+
 The profiles are built from the ICC.1 layout, not copied from a file, so the
 seeds are reproducible from this script alone. The corpus directory is
 git-ignored; seeds are regenerated, not committed.
@@ -167,6 +178,17 @@ def colr(meth, payload):
     return be32(8 + len(body)) + b"colr" + body
 
 
+def box(kind, payload):
+    return be32(8 + len(payload)) + kind + payload
+
+
+def uinf(ids, location, extra=b""):
+    """A `uinf` box: a `ulst` of `ids`, `extra` boxes, then a `url ` (VERS 0,
+    FLAG 0) holding `location`."""
+    ulst = box(b"ulst", struct.pack(">H", len(ids)) + b"".join(ids))
+    return box(b"uinf", ulst + extra + box(b"url ", b"\0\0\0\0" + location))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     pinned = {}
@@ -224,6 +246,16 @@ def main():
     write("sycc_420", 0x0C | SYCC_420, colr(1, be32(18)))
     write("sycc_422", 0x0C | SYCC_422, colr(1, be32(18)))
     write("sycc_subsampled_all", 0x0C | THREE_SUB, colr(1, be32(18)))
+
+    (height, width, nc), _ = pinned[1]
+    ihdr = box(b"ihdr", struct.pack(">IIH", height, width, nc) + bytes([7, 7, 0, 0]))
+    header = box(b"jp2h", ihdr + colr(1, be32(17)))
+    ipr = box(b"jp2i", b"<rights>none</rights>")
+    two = uinf([bytes(range(16)), b"\xab" * 16], b"http://example.com/ids\0")
+    write("ipr_uinf_before", 0x04 | ONE_8, header + ipr + two)
+    write("ipr_uinf_after", 0x07 | ONE_8, header + ipr + two)
+    one = uinf([b"\x42" * 16], b"file:label.lbl", box(b"free", b""))
+    write("uinf_unterminated", 0x04 | ONE_8, header + one)
     print(f"wrote {written} seeds to {OUT}", file=sys.stderr)
 
 

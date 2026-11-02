@@ -81,7 +81,8 @@ the profile is read, and sYCC on the all-2x2 codestream
 (`sycc_subsampled_all`, sYCC wants luma at full size), which has no profile
 and is refused from the sampling alone. The CI smoke generates these seeds before it runs `jp2_boxes` for 30 s, and
 seeds `header` from the committed fixtures.
-`gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds.
+`gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds, and
+seeds with `jp2i` and `uinf` boxes before and after the codestream.
 
 `header` drives the header-only entry point, `read_header_with`, and checks it
 against `decode_with` on the same input, under five fixed option sets

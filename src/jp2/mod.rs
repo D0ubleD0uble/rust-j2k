@@ -9,11 +9,11 @@
 //! jp2c the codestream (the first one; later ones are ignored, I.5.4)
 //! ```
 //!
-//! Other boxes are skipped without being descended into: `uinf`, `jp2i`, the
-//! JPX boxes (`rreq`, `jpch`, `jplh`, `asoc`, `lbl `, `ftbl`) and anything
-//! unknown. Only `jp2h` and `res ` are entered. The top-level `xml ` and
-//! `uuid` boxes are passed through verbatim, including those after the
-//! codestream.
+//! Other boxes are skipped without being descended into: the JPX boxes
+//! (`rreq`, `jpch`, `jplh`, `asoc`, `lbl `, `ftbl`) and anything unknown.
+//! Only `jp2h`, `res ` and `uinf` are entered. The top-level `xml `, `uuid`
+//! and `jp2i` boxes are passed through verbatim, and the top-level `uinf`
+//! boxes are read (see [`uuid_info`]), including those after the codestream.
 //!
 //! [`parse`] walks the boxes up to the first `jp2c` and hands back the
 //! codestream slice with the header boxes. The rest runs before any tile data
@@ -54,6 +54,7 @@ mod metadata;
 mod palette;
 mod resolution;
 mod srgb;
+mod uuid_info;
 
 #[cfg(test)]
 mod colour_tests;
@@ -65,7 +66,7 @@ mod tests;
 pub(crate) use after::check as check_after_codestream;
 pub use metadata::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, ColourSpace, Jp2Metadata,
-    Ratio, Res, Resolution, UuidBox,
+    Ratio, Res, Resolution, UuidBox, UuidInfo,
 };
 pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 
@@ -113,7 +114,8 @@ pub(crate) struct Jp2File<'a> {
     /// [`after::check`] reads the header boxes among them.
     pub(crate) after_codestream: Vec<Jp2Box<'a>>,
     /// The whole boxes after both the codestream and the `jp2c` box, walked
-    /// the same way. Their `xml ` and `uuid` boxes are passed through. This
+    /// the same way. Their `xml `, `uuid`, `jp2i` and `uinf` boxes are
+    /// reported, like those in `other`. This
     /// differs from `after_codestream` when the box is longer than its
     /// codestream: padding inside the box is skipped by its length here.
     pub(crate) after_box: Vec<Jp2Box<'a>>,
@@ -311,7 +313,7 @@ impl ChannelPlans {
 /// sample is needed. Every channel starts as colour `i + 1`; the palette and
 /// channel plans relabel them. `siz` is the codestream's.
 pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> Result<Jp2Metadata> {
-    let (xml, uuid) = passthrough(file);
+    let passed = passthrough(file)?;
     let mut metadata = Jp2Metadata {
         colour: file.colour.clone(),
         channels: colour_channels(plans.outputs(siz, 0)?.len())?,
@@ -320,35 +322,49 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
         channel_mapping: None,
         channel_definitions: channels::definitions(&file.header),
         resolution: resolution::read(&file.header),
-        xml,
-        uuid,
+        xml: passed.xml,
+        uuid: passed.uuid,
+        ipr: passed.ipr,
+        uuid_info: passed.uuid_info,
     };
     plans.palette.describe(&mut metadata);
     plans.channels.describe(&mut metadata);
     Ok(metadata)
 }
 
-/// The top-level `xml ` and `uuid` boxes in file order: those before the
-/// codestream, then those after it. A `uuid` box too short for its 16-byte
-/// identifier is skipped. Every copy is of bytes in the input, so together
+/// The metadata boxes [`passthrough`] collects.
+#[derive(Default)]
+struct Passthrough {
+    xml: Vec<Vec<u8>>,
+    uuid: Vec<UuidBox>,
+    ipr: Vec<Vec<u8>>,
+    uuid_info: Vec<UuidInfo>,
+}
+
+/// The top-level `xml `, `uuid`, `jp2i` and `uinf` boxes, each kind in file
+/// order: those before the codestream, then those after it. A `uuid` box too
+/// short for its 16-byte identifier is skipped; a malformed `uinf` is an
+/// [`Error::FileFormat`]. Every copy is of bytes in the input, so together
 /// they are bounded by its length.
-fn passthrough(file: &Jp2File<'_>) -> (Vec<Vec<u8>>, Vec<UuidBox>) {
-    let (mut xml, mut uuid) = (Vec::new(), Vec::new());
+fn passthrough(file: &Jp2File<'_>) -> Result<Passthrough> {
+    let mut out = Passthrough::default();
     for item in file.other.iter().chain(&file.after_box) {
         match &item.kind {
-            b"xml " => xml.push(item.payload.to_vec()),
+            b"xml " => out.xml.push(item.payload.to_vec()),
             b"uuid" => {
                 if let Some((id, payload)) = item.payload.split_first_chunk::<16>() {
-                    uuid.push(UuidBox {
+                    out.uuid.push(UuidBox {
                         id: *id,
                         payload: payload.to_vec(),
                     });
                 }
             }
+            b"jp2i" => out.ipr.push(item.payload.to_vec()),
+            b"uinf" => out.uuid_info.push(uuid_info::parse(item.payload)?),
             _ => {}
         }
     }
-    (xml, uuid)
+    Ok(out)
 }
 
 /// The channel definitions of a file without `cdef`: channel `i` is colour
