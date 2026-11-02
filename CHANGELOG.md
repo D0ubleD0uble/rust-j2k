@@ -82,9 +82,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst` box and the version,
   flags and location of its `url ` box, with `UuidInfo::location_str` for the
   location as text. Both are collected before and after the codestream, like
-  `xml ` and `uuid`. A `uinf` that does not hold one `ulst` then one `url `,
-  a `ulst` whose count does not match its length, or a `url ` under 4 bytes
-  is `FileFormat`, where OpenJPEG skips the box.
+  `xml ` and `uuid`. A malformed `uinf` (not exactly one `ulst` and one
+  `url `, a `ulst` whose count does not match its length, a `url ` under 4
+  bytes, or a bad box inside it) is left out and never fails a decode, as
+  OpenJPEG skips the box.
 - `DecodeOptions::colour` takes a `ColourOutput`. The default, `AsCoded`,
   returns the samples as the file codes them. `Srgb` converts a JP2 file's
   colour channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to

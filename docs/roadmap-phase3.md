@@ -635,7 +635,7 @@ so and why we differ (or do not).
 | `uuid` shorter than its 16-byte identifier | never read | skipped, not reported | none (match oracle) |
 | `xml `/`uuid` after `jp2c` | never read | collected as far as the after-`jp2c` walk goes | none; collecting them never fails a decode |
 | `jp2i` anywhere at the top level | never read | contents returned verbatim, in file order, including after `jp2c` | none |
-| `uinf` without exactly one `ulst` then one `url `, a `ulst` whose `NU` does not match its length, a `url ` under 4 bytes | never read | reject, before or after `jp2c` | `FileFormat` (stricter than the oracle; ISO/IEC 15444-1 I.7.3, `docs/correctness.md`) |
+| `uinf` without exactly one `ulst` and one `url `, a `ulst` whose `NU` does not match its length, a `url ` under 4 bytes, a malformed box inside it | never read | the whole `uinf` skipped, before or after `jp2c`; a well-formed one is reported | none (match oracle, owner decision 2026-11-01; `docs/correctness.md`) |
 | `ihdr` W/H wrong and the codestream truncated | error at SIZ ("IHDR w(769) … vs. SIZ w(768)") | `FileFormat` | none (match oracle): the header is checked before any tile-part is read |
 | `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none (applied) |
 | The same boxes at the top level before `jp2h` | ignored | ignored | none (match oracle) |

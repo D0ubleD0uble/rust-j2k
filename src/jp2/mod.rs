@@ -12,8 +12,9 @@
 //! Other boxes are skipped without being descended into: the JPX boxes
 //! (`rreq`, `jpch`, `jplh`, `asoc`, `lbl `, `ftbl`) and anything unknown.
 //! Only `jp2h`, `res ` and `uinf` are entered. The top-level `xml `, `uuid`
-//! and `jp2i` boxes are passed through verbatim, and the top-level `uinf`
-//! boxes are read (see [`uuid_info`]), including those after the codestream.
+//! and `jp2i` boxes are passed through verbatim, and the well-formed top-level
+//! `uinf` boxes are read (see [`uuid_info`]), including those after the
+//! codestream.
 //!
 //! [`parse`] walks the boxes up to the first `jp2c` and hands back the
 //! codestream slice with the header boxes. The rest runs before any tile data
@@ -313,7 +314,7 @@ impl ChannelPlans {
 /// sample is needed. Every channel starts as colour `i + 1`; the palette and
 /// channel plans relabel them. `siz` is the codestream's.
 pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> Result<Jp2Metadata> {
-    let passed = passthrough(file)?;
+    let passed = passthrough(file);
     let mut metadata = Jp2Metadata {
         colour: file.colour.clone(),
         channels: colour_channels(plans.outputs(siz, 0)?.len())?,
@@ -343,10 +344,10 @@ struct Passthrough {
 
 /// The top-level `xml `, `uuid`, `jp2i` and `uinf` boxes, each kind in file
 /// order: those before the codestream, then those after it. A `uuid` box too
-/// short for its 16-byte identifier is skipped; a malformed `uinf` is an
-/// [`Error::FileFormat`]. Every copy is of bytes in the input, so together
-/// they are bounded by its length.
-fn passthrough(file: &Jp2File<'_>) -> Result<Passthrough> {
+/// short for its 16-byte identifier is skipped, and so is a malformed `uinf`
+/// (see [`uuid_info`]). Every copy is of bytes in the input, so together they
+/// are bounded by its length.
+fn passthrough(file: &Jp2File<'_>) -> Passthrough {
     let mut out = Passthrough::default();
     for item in file.other.iter().chain(&file.after_box) {
         match &item.kind {
@@ -360,11 +361,11 @@ fn passthrough(file: &Jp2File<'_>) -> Result<Passthrough> {
                 }
             }
             b"jp2i" => out.ipr.push(item.payload.to_vec()),
-            b"uinf" => out.uuid_info.push(uuid_info::parse(item.payload)?),
+            b"uinf" => out.uuid_info.extend(uuid_info::parse(item.payload)),
             _ => {}
         }
     }
-    Ok(out)
+    out
 }
 
 /// The channel definitions of a file without `cdef`: channel `i` is colour

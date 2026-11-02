@@ -742,16 +742,16 @@ fn every_robustness_table_row_has_its_outcome() {
             Decodes,
         ),
         (
-            "uinf without one ulst then one url, ulst NU not its length, url under 4 bytes",
+            "uinf malformed: not one ulst and one url, NU not the ulst length, url under 4 bytes, a bad child box",
             file(&[jp2_ftyp(), good_jp2h(), uuid_info(&[0, 1]), jp2c()]),
             Default,
-            FileFormat,
+            Decodes,
         ),
         (
-            "malformed uinf after jp2c",
+            "malformed uinf after jp2c (skipped)",
             after(&[bx(b"uinf", &bx(b"url ", &[0; 4]))]),
             Default,
-            FileFormat,
+            Decodes,
         ),
         (
             "ihdr W/H wrong and the codestream truncated",

@@ -204,33 +204,38 @@ protective argument loses to a demonstrated real file.
 ### The `jp2i` and `uinf` boxes
 
 OpenJPEG 2.5.0 skips both box types, so ISO/IEC 15444-1 (I.6, I.7.3) is the
-reference. Neither affects the samples. `jp2i` contents are returned as
-bytes: their format is reserved for ISO, so nothing about them is checked,
-and the `ihdr` `IPR` flag is not held to their presence. `uinf` is read, and
-where Annex I leaves a malformed box open this decoder takes the strictest
-reading, as `FileFormat`:
+reference for their contents. Neither affects the samples. `jp2i` contents
+are returned as bytes: their format is reserved for ISO, so nothing about
+them is checked, and the `ihdr` `IPR` flag is not held to their presence.
 
-- Figure I.20 shows one `ulst` followed by one `url `. A `uinf` with no
-  `ulst`, no `url `, more than one of either, or its `url ` before its `ulst`
-  is rejected. Other boxes inside it are skipped (I.8).
-- A `ulst` must hold its 2-byte `NU` and exactly `NU` UUIDs ("the number of
-  UUIDi fields shall be the same as the value of the NU field"). Too short
-  for `NU`, or more or fewer bytes than `NU` UUIDs, is rejected.
-- A `url ` shorter than its `VERS` and `FLAG` (4 bytes) is rejected.
+A `uinf` is reported only when it is well formed, and a malformed one is
+left out of `Jp2Metadata::uuid_info` as a whole: the decode goes on, as it
+does in OpenJPEG, whose `opj_decompress` decodes every malformed variant
+(owner decision, 2026-11-01). Nothing partial is reported. Well formed means:
+
+- Its contents are whole boxes that fill it exactly. A child box that
+  overruns the `uinf`, has length 0, a length of 2..7, an `XLBox` below 16
+  or past the `uinf`, or 1..7 bytes left after the last child make it
+  malformed. A `uinf` whose own length is bad is a top-level fault, handled
+  like any other box's.
+- One `ulst` and one `url `, in either order. Figure I.20 shows `ulst`
+  first, but I.7.3 does not require it, so the order is not checked. A
+  missing or second `ulst` or `url ` makes it malformed. Other boxes inside
+  are ignored (I.8).
+- The `ulst` holds its 2-byte `NU` and exactly `NU` UUIDs ("the number of
+  UUIDi fields shall be the same as the value of the NU field").
+- The `url ` holds at least its `VERS` and `FLAG` (4 bytes).
 
 Three requirements are reported rather than checked: `VERS` and `FLAG`
 "shall be 0", and `LOC` is "a null terminated string of UTF-8 characters".
 `UuidInfo` keeps the version, flags and location bytes as stored, and
 `UuidInfo::location_str` returns `None` for a location that is not such a
-string. A later version of the box may use them, and none of them stops the
-box from being read.
+string.
 
-Rejecting a malformed `uinf` is stricter than OpenJPEG, which decodes such a
-file. The box is read wherever `xml ` and `uuid` are collected: at the top
-level before the codestream, and after it as far as OpenJPEG's walk there
-goes. A `uinf` or `jp2i` inside `jp2h` or another superbox is not read.
-These rules come from the issue that added the boxes (#192); no real file in
-the corpus carries either box.
+The boxes are read wherever `xml ` and `uuid` are collected: at the top level
+before the codestream, and after it as far as OpenJPEG's walk there goes. A
+`uinf` or `jp2i` inside `jp2h` or another superbox is not read. No real file
+in the corpus carries either box.
 
 ### Signed 32-bit components
 

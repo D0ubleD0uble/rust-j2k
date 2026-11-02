@@ -85,11 +85,11 @@ pub struct Jp2Metadata {
     /// standard leaves the format of these bytes open, so they are not parsed.
     /// `jp2i` boxes inside other superboxes are not collected.
     pub ipr: Vec<Vec<u8>>,
-    /// Every top-level UUID info box (`uinf`), in file order, including those
-    /// after the codestream: a list of UUIDs and a URL where more about them
-    /// can be found. The URL is not fetched. A malformed `uinf` fails the
-    /// decode with [`Error::FileFormat`](crate::Error::FileFormat) (see
-    /// [`UuidInfo`]).
+    /// Every well-formed top-level UUID info box (`uinf`), in file order,
+    /// including those after the codestream: a list of UUIDs and a URL where
+    /// more about them can be found. The URL is not fetched. A malformed
+    /// `uinf` is left out and never fails a decode, as OpenJPEG skips the box
+    /// (see [`UuidInfo`]).
     pub uuid_info: Vec<UuidInfo>,
 }
 
@@ -208,13 +208,15 @@ pub struct UuidBox {
 /// its data entry URL box (`url `), which says where more about them can be
 /// found.
 ///
-/// A `uinf` must hold exactly one `ulst` followed by exactly one `url `; other
-/// boxes inside it are skipped. A `ulst` must hold exactly the `NU` UUIDs its
-/// count gives, and a `url ` at least its 4-byte version and flags. A box
-/// that breaks any of these fails the decode with
-/// [`Error::FileFormat`](crate::Error::FileFormat). The version, flags and
-/// location are reported as stored, so a version or flags other than 0 and a
-/// location that is not valid UTF-8 or lacks its terminating NUL are kept.
+/// A `uinf` is reported when it is well formed: its contents are whole boxes,
+/// exactly one `ulst` and exactly one `url ` in either order (other boxes
+/// inside it are ignored), the `ulst` holds exactly the `NU` UUIDs its count
+/// gives, and the `url ` holds at least its 4-byte version and flags. A `uinf`
+/// that breaks any of these is left out of
+/// [`Jp2Metadata::uuid_info`] as a whole; the decode goes on. The version,
+/// flags and location are reported as stored, so a version or flags other
+/// than 0 and a location that is not valid UTF-8 or lacks its terminating NUL
+/// are kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct UuidInfo {
