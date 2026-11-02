@@ -151,11 +151,24 @@ fuzz_target!(|data: &[u8]| {
     let Ok(srgb) = rust_j2k::decode_with(&file, &options) else {
         return;
     };
-    assert_eq!(
-        srgb.components.len(),
-        coded.components.len(),
-        "channel count"
-    );
+    let colour = |i: &rust_j2k::Image| i.jp2.as_ref().map(|m| m.colour.clone());
+    // One exception to equal channel counts: a grey ICC profile whose sRGB
+    // output is not neutral gives R, G and B in place of the grey channel,
+    // two more channels, reported as sRGB, as OpenJPEG does.
+    let grey_profile = coded.jp2.as_ref().is_some_and(|m| match &m.colour {
+        rust_j2k::ColourSpace::RestrictedIcc(p) => p.get(16..20) == Some(b"GRAY"),
+        _ => false,
+    });
+    let non_neutral_grey = grey_profile
+        && colour(&srgb) == Some(rust_j2k::ColourSpace::Srgb)
+        && srgb.components.len() == coded.components.len() + 2;
+    if !non_neutral_grey {
+        assert_eq!(
+            srgb.components.len(),
+            coded.components.len(),
+            "channel count"
+        );
+    }
     let palette = srgb.jp2.as_ref().is_some_and(|m| m.palette_applied);
     for c in &srgb.components {
         assert_eq!(
@@ -172,7 +185,6 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     // Colour left as declared means the samples were passed through.
-    let colour = |i: &rust_j2k::Image| i.jp2.as_ref().map(|m| m.colour.clone());
     if colour(&srgb) == colour(&coded) {
         assert_eq!(
             srgb.components, coded.components,

@@ -28,8 +28,8 @@
 //!   `rTRC`, `gTRC`, `bTRC`), at every rendering intent from 0 to 3. The
 //!   output matches `opj_decompress -force-rgb` sample for sample. A
 //!   monochrome profile gives one grey channel when its output is neutral,
-//!   as it is unless absolute colorimetric scales by a tinted white point;
-//!   then it gives R, G and B in place of the grey channel.
+//!   as it usually is; if its sRGB output is not neutral, it gives R, G and B
+//!   in place of the grey channel.
 //!
 //! sYCC or an RGB profile on one or two colour channels passes through, as
 //! OpenJPEG leaves them, and so do one or two channels with no colour space
