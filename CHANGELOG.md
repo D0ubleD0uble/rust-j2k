@@ -39,7 +39,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   type and association. What is accepted and the output order follow
   OpenJPEG: each colour entry moves its channel to its colour's position, and
   other channels stay where the file put them. The entries describe the
-  channels after the palette.
+  channels after the palette. Without a `cdef` (or under `raw_channels`),
+  only the first N channels are colours, N being the colour space's
+  number of colours (3 for sRGB and sYCC, 1 for greyscale, the profile's for
+  an ICC profile); any channel past them is `Unspecified` with no
+  association, since I.5.3.6 gives it no meaning. This also lets a file of
+  two components, a greyscale ICC profile and no `cdef` convert under
+  `ColourOutput::Srgb` as grey plus opacity, and an sRGB file of four
+  components whose fourth differs in format from the colours passes through
+  as coded, as OpenJPEG does. A file declared greyscale on three components
+  is still refused, with or without a `cdef`, where `opj_decompress` would
+  read it as sYCC (sub-sampled chroma).
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
   coded, without the palette or channel definitions. The index plane is then
   labelled `ChannelType::Unspecified`, and only the boxes' layout is checked.

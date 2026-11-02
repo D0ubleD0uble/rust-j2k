@@ -1182,3 +1182,105 @@ fn read_header_reads_no_tile_data() {
         Err(Error::Codestream(_))
     ));
 }
+
+/// Without a `cdef`, the first N channels are colours 1..=N, N from the
+/// colour space, and every channel past them is unspecified (I.5.3.6).
+#[test]
+fn default_labels_stop_at_the_colour_spaces_count() {
+    let icc = |space: &[u8; 4]| {
+        let mut profile = vec![0u8; 128];
+        profile[16..20].copy_from_slice(space);
+        ColourSpace::RestrictedIcc(profile)
+    };
+    // Every enumerated value with a colour count (ISO/IEC 15444-2 Table M.25),
+    // so dropping one arm fails here; 16, 17 and 18 arrive as their own
+    // `ColourSpace` variants.
+    let enumerated = [
+        (0, 1),
+        (1, 3),
+        (3, 3),
+        (4, 3),
+        (9, 3),
+        (11, 3),
+        (12, 4),
+        (13, 4),
+        (14, 3),
+        (15, 1),
+        (19, 3),
+        (20, 3),
+        (21, 3),
+        (22, 3),
+        (23, 3),
+        (24, 3),
+    ];
+    let mut cases = vec![
+        (ColourSpace::Srgb, 3),
+        (ColourSpace::Sycc, 3),
+        (ColourSpace::Greyscale, 1),
+        (icc(b"GRAY"), 1),
+        (icc(b"RGB "), 3),
+        (icc(b"YCbr"), 3),
+        (icc(b"CMYK"), 4),
+        (icc(b"2CLR"), 2),
+        (icc(b"5CLR"), 5),
+        (icc(b"9CLR"), 9),
+        (icc(b"ACLR"), 10),
+        (icc(b"FCLR"), 15),
+    ];
+    cases.extend(
+        enumerated
+            .iter()
+            .map(|&(value, n)| (ColourSpace::Enumerated(value), n)),
+    );
+    for (space, colours) in cases {
+        let labels = super::colour_channels(6, &space).unwrap();
+        for (i, label) in labels.iter().enumerate() {
+            let want = if i < colours {
+                (ChannelType::Colour, Association::Colour(i as u16 + 1))
+            } else {
+                (ChannelType::Unspecified, Association::None)
+            };
+            assert_eq!(
+                (label.kind, label.association),
+                want,
+                "{space:?} channel {i}"
+            );
+        }
+    }
+    // The counts themselves, where a count of six or more would look like
+    // `None` through six labels.
+    for (space, want) in [
+        (icc(b"9CLR"), Some(9)),
+        (icc(b"ACLR"), Some(10)),
+        (icc(b"FCLR"), Some(15)),
+        (icc(b"aCLR"), None),
+        (icc(b"fCLR"), None),
+        (icc(b"GCLR"), None),
+        (icc(b"0CLR"), None),
+        (icc(b"1CLR"), None),
+    ] {
+        assert_eq!(super::colour_count(&space), want, "{space:?}");
+    }
+    // A space whose colour count is not known keeps every channel a colour.
+    for space in [
+        ColourSpace::Unknown,
+        ColourSpace::Enumerated(2),
+        ColourSpace::Enumerated(5),
+        ColourSpace::Enumerated(10),
+        ColourSpace::Enumerated(25),
+        ColourSpace::Enumerated(99),
+        ColourSpace::RestrictedIcc(Vec::new()),
+        // `nCLR` is 2 to 15 colours, upper-case: these are not signatures.
+        icc(b"0CLR"),
+        icc(b"1CLR"),
+        icc(b"aCLR"),
+        icc(b"fCLR"),
+        icc(b"GCLR"),
+    ] {
+        let labels = super::colour_channels(6, &space).unwrap();
+        assert!(
+            labels.iter().all(|l| l.kind == ChannelType::Colour),
+            "{space:?}"
+        );
+    }
+}
