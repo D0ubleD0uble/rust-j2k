@@ -115,7 +115,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   does an RGB profile when any of the first four channels (all of them, if
   fewer) differs from the first in depth, sign or sub-sampling, an opacity
   channel included, since OpenJPEG then skips the conversion. These, and a profile on one or two channels, pass
-  through before any check on the samples, as in OpenJPEG.
+  through before any check on the samples, as in OpenJPEG, except on a
+  three-channel 4:2:0 or 4:2:2 image, which is refused first.
   Display, output and colour space profiles convert as input ones do. After a conversion `Jp2Metadata::colour`
   says sRGB, or greyscale for a monochrome profile whose output is neutral.
   A monochrome profile whose output is not neutral (absolute colorimetric

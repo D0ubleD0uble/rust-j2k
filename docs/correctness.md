@@ -440,7 +440,8 @@ case of `icc/profiles.json` and a test in `src/jp2/srgb_tests.rs`:
 The order follows OpenJPEG's too (owner decision, 2026-11-02, on #199):
 every refusal above, whether lcms makes it opening the profile or building
 the transform, comes before this decoder's own checks below. So a profile
-lcms refuses passes through whatever the samples are: an intent of 4 on
+lcms refuses passes through whatever the samples are (bar the 4:2:0 and
+4:2:2 exception below): an intent of 4 on
 12-bit RGB, 16-bit grey, or a monochrome profile on three channels gives
 the samples as coded, as `opj_decompress` does. The refusals below (#165,
 #197) apply only where lcms would build the transform. Test:

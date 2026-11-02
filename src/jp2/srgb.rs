@@ -345,6 +345,8 @@ fn plan_icc(
     // profile, so this holds whatever the profile is, even one LittleCMS
     // refuses. That guess is not made here, so the file is refused.
     if converted_as_sycc(outputs) {
+        // `uniform` always fails here, since the chroma sampling differs
+        // from the luma's; the error below is a backstop that cannot run.
         uniform(&[0, 1, 2], outputs)?;
         return Err(Error::Unsupported(
             "sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC".into(),
