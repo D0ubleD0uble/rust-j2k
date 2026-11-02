@@ -225,6 +225,12 @@ planes `((x*29 + y*13 + k*71) * 7) mod 256` for component `k`, coded with
 declared greyscale with no `cdef` and requires `ColourOutput::Srgb` to pass it
 through as coded, as `opj_decompress` writes it.
 
+`channels/luma_1x2.j2k` (264 bytes) is the same planes at 8x8 with component
+sampling 1x2, 2x1, 2x1, coded with `opj_compress -i in.raw -o luma_1x2.j2k -F
+8,8,3,8,u@1x2:2x1:2x1 -n 2 -mct 0`. Its first component has unequal x and y
+sampling, so a greyscale file around it passes through (OpenJPEG makes no
+sYCC guess).
+
 ### Budget fixture
 
 `budget/flat_1024_lossless.j2k` (328 bytes) is a flat 1024x1024 8-bit

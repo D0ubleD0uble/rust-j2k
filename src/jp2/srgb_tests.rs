@@ -837,20 +837,21 @@ fn srgb_output_from_a_raw_codestream_is_unsupported() {
     assert!(matches!(decode_srgb(b"junk"), Err(Error::Codestream(_))));
 }
 
-/// A file declared grey on three components, with no `cdef`, is refused only
-/// where `opj_decompress` would read it as sYCC: the second component is
-/// sub-sampled in x and the first has equal x and y sampling (the 4:2:0 row
-/// of the reject matrix). Otherwise the extra channels are past grey's one
-/// colour and pass through as coded, as OpenJPEG writes them: a signed third
-/// channel, or a third that is the only one sub-sampled
-/// (`tests/fixtures/channels/third_subsampled.j2k`). A `cdef` that labels
-/// only colour 1 decides instead, so the 4:2:0 shape passes with one.
+/// A file declared grey on three components is refused only where
+/// `opj_decompress` would read it as sYCC, with or without a `cdef`: the
+/// second component is sub-sampled in x and the first has equal x and y
+/// sampling (the 4:2:0 row of the reject matrix). Otherwise the extra
+/// channels are past grey's one colour and pass through as coded, as OpenJPEG
+/// writes them: a signed third channel, a third that is the only one
+/// sub-sampled (`tests/fixtures/channels/third_subsampled.j2k`), or luma
+/// sampled 1x2 with chroma 2x1 (`luma_1x2.j2k`).
 #[test]
 fn grey_on_three_channels_is_refused_only_where_openjpeg_guesses_sycc() {
     let mut signed_third = THREE.to_vec();
     signed_third[42 + 3 * 2] = 0x87;
     let sub_third = include_bytes!("../../tests/fixtures/channels/third_subsampled.j2k");
     let sycc_jp2c = top_box(SYCC_420, b"jp2c");
+    let luma_1x2 = include_bytes!("../../tests/fixtures/channels/luma_1x2.j2k");
     let cdef = bx(
         b"cdef",
         &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0],
@@ -858,10 +859,7 @@ fn grey_on_three_channels_is_refused_only_where_openjpeg_guesses_sycc() {
     let cases = [
         ("third signed", file(&signed_third, &enumerated(17), &[])),
         ("third sub-sampled", file(sub_third, &enumerated(17), &[])),
-        (
-            "4:2:0 with a cdef",
-            file(sycc_jp2c, &enumerated(17), &[cdef]),
-        ),
+        ("luma 1x2", file(luma_1x2, &enumerated(17), &[])),
     ];
     for (what, bytes) in cases {
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("{what}: as coded: {e}"));
@@ -870,6 +868,13 @@ fn grey_on_three_channels_is_refused_only_where_openjpeg_guesses_sycc() {
         let header = read_header_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert_eq!(header.components.len(), 3, "{what}");
     }
+    // The sYCC guess does not depend on a `cdef`: the 4:2:0 file is refused
+    // with one that labels only colour 1, as without.
+    expect_err(
+        decode_srgb(&file(sycc_jp2c, &enumerated(17), &[cdef])),
+        is_unsupported,
+        "different sub-sampling (1x1 and 2x2)",
+    );
 }
 
 /// One or two components in a raw codestream are grey (and grey plus

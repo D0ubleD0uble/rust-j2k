@@ -194,10 +194,10 @@ I.5.3.6 defines `Cn`.
 Without a `cdef`, libopenjp2 labels nothing (every `comps[].alpha` is 0),
 so the default labels have no oracle either. `opj_decompress` decides by
 component count, not by a label: its writers (`convertpng.c`, `convert.c`)
-and `color.c` take the last component of an even count as alpha, and read two
-components as grey plus alpha. That is why the grey ICC case below matches.
-Here the first N channels are
-colours 1 to N, N being the colour space's number of colours, and each
+and `color.c` take the last component of two or four as alpha (PNG caps at
+four; PGX and raw output have no alpha), and read two components as grey plus
+alpha. That is why the grey ICC case below matches. Here the first N channels
+are colours 1 to N, N being the colour space's number of colours, and each
 channel past N is unspecified, since I.5.3.6 gives it no meaning. This
 decides one `ColourOutput::Srgb` case: two components with a greyscale ICC
 profile and no `cdef` convert as grey plus opacity, and match
@@ -208,12 +208,13 @@ It decides a second case: an enumerated sRGB file of four components and no
 passes through as coded, as with a `cdef` and as in OpenJPEG (test
 `an_srgb_file_with_a_differently_formatted_fourth_channel_passes_through`).
 One check stays on every channel: a file declared greyscale on three
-components with no `cdef`, whose second component is sub-sampled in x and
-whose first has equal x and y sampling, must have all three alike, because
-`opj_decompress` guesses sYCC from exactly that shape whatever the file
-declares and converts it (`opj_decompress.c`). Any other three-component
-greyscale file passes through as coded, including one whose third channel is
-signed or the only one sub-sampled, as OpenJPEG writes it.
+components, with or without a `cdef`, whose second component is sub-sampled
+in x and whose first has equal x and y sampling, must have all three alike,
+because `opj_decompress` guesses sYCC from exactly that shape whatever the
+file declares and converts it (`opj_decompress.c`); that guess is not made
+here, so the file is refused. Any other three-component greyscale file passes
+through as coded, as OpenJPEG writes it: one whose third channel is signed
+or the only one sub-sampled, or whose luma is sampled 1x2 with chroma 2x1.
 
 Looser here, where OpenJPEG fails: a malformed header box after the
 codestream (a second signature or `ftyp` box, a `jp2h` without `ihdr`, a

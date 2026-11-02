@@ -106,14 +106,12 @@ pub(crate) enum ChromaLayout {
 }
 
 /// Plan the sRGB step for a JP2 file's output channels: their formats
-/// (`outputs`), what each one is (`channels`), whether the file has no `cdef`
-/// (`no_cdef`), and the colour space the file
+/// (`outputs`), what each one is (`channels`), and the colour space the file
 /// declares. `siz` and `reduction` size the output for the sample budget.
 pub(crate) fn plan(
     colour: &ColourSpace,
     channels: &[ChannelDefinition],
     outputs: &[ComponentInfo],
-    no_cdef: bool,
     siz: &Siz,
     reduction: u8,
 ) -> Result<SrgbPlan> {
@@ -121,12 +119,11 @@ pub(crate) fn plan(
         ColourSpace::Srgb | ColourSpace::Greyscale => {
             // `opj_decompress` reads a three-component image as sYCC when the
             // second component is sub-sampled in x and the first has equal x
-            // and y sampling, whatever the file declares, and converts it. A
-            // file declared grey with that shape and no `cdef` is therefore
-            // checked on all three channels. Any other channel past the
-            // colour space's colours is left as coded.
-            let sycc_guess = no_cdef
-                && *colour == ColourSpace::Greyscale
+            // and y sampling, whatever the file declares and with or without
+            // a `cdef`, and converts it. A file declared grey with that shape
+            // is therefore checked on all three channels. Any other channel
+            // past the colour space's colours is left as coded.
+            let sycc_guess = *colour == ColourSpace::Greyscale
                 && outputs.len() == 3
                 && outputs[1].x_sampling != 1
                 && outputs[0].x_sampling == outputs[0].y_sampling;

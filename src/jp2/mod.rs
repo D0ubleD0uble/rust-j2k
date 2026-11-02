@@ -377,8 +377,8 @@ fn passthrough(file: &Jp2File<'_>) -> Passthrough {
 /// given.
 fn colour_count(colour: &ColourSpace) -> Option<usize> {
     match colour {
-        // `colour.rs` maps enumerated 17 to `Greyscale`, so it never reaches
-        // the `Enumerated` arm.
+        // `colour.rs` maps enumerated 16, 17 and 18 to `Srgb`, `Greyscale`
+        // and `Sycc`, so they never reach the `Enumerated` arm.
         ColourSpace::Greyscale => Some(1),
         ColourSpace::Srgb | ColourSpace::Sycc => Some(3),
         ColourSpace::Enumerated(value) => match value {
@@ -450,7 +450,6 @@ pub(crate) fn plan_srgb(
         &metadata.colour,
         &metadata.channels,
         &plans.outputs(siz, reduction)?,
-        metadata.channel_definitions.is_none(),
         siz,
         reduction,
     )

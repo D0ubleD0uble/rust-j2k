@@ -1247,6 +1247,20 @@ fn default_labels_stop_at_the_colour_spaces_count() {
             );
         }
     }
+    // The counts themselves, where a count of six or more would look like
+    // `None` through six labels.
+    for (space, want) in [
+        (icc(b"9CLR"), Some(9)),
+        (icc(b"ACLR"), Some(10)),
+        (icc(b"FCLR"), Some(15)),
+        (icc(b"aCLR"), None),
+        (icc(b"fCLR"), None),
+        (icc(b"GCLR"), None),
+        (icc(b"0CLR"), None),
+        (icc(b"1CLR"), None),
+    ] {
+        assert_eq!(super::colour_count(&space), want, "{space:?}");
+    }
     // A space whose colour count is not known keeps every channel a colour.
     for space in [
         ColourSpace::Unknown,
