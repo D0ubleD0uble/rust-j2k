@@ -36,8 +36,14 @@ here (variant 0x0C | codestream << 4, body one `colr`):
 - `icc_grey_*`: a monochrome profile (`kTRC`, `wtpt`) with the same curve
   kinds, on the 8-bit single-component codestream.
 - `icc_grey_tinted`: the monochrome profile at absolute colorimetric intent
-  with a D65 media white. Its sRGB output has three channels for the one coded
-  channel.
+  with a D65 media white. Its sRGB output is not neutral, so it has three
+  channels for the one coded channel.
+- `icc_grey_palette_opacity`: that profile with a two-column palette and a
+  `cdef` of grey plus opacity: two coded channels, four after conversion, as
+  OpenJPEG gives.
+- `ci_crash_grey_icc`: the input that failed the CI fuzz smoke, a grey profile
+  with an exact D50 white point and a `para` type 4 curve, at intent 0. The
+  curve and rounding make its output non-neutral.
 - `icc_rgb_subsampled`: the RGB profile on the three-component codestream
   sub-sampled 2x2 in all three components. The channels agree, so it converts.
 - `icc_grey_16bit`: the monochrome profile on the 16-bit single-component
@@ -153,12 +159,42 @@ def icc(space, tags):
 
 
 def icc_grey_tinted(curve):
-    """A monochrome profile at absolute colorimetric intent with a D65 media
-    white, so the sRGB output is not neutral and has three channels."""
+    """A monochrome profile whose sRGB output is not neutral (absolute
+    colorimetric intent with a D65 media white) and so has three channels."""
     d65 = (0.9505, 1.0, 1.089)
     profile = bytearray(icc(b"GRAY", [(b"wtpt", xyz_tag(*d65)), (b"kTRC", curve)]))
     profile[64:68] = be32(3)
     return bytes(profile)
+
+
+def box(kind, payload):
+    return be32(8 + len(payload)) + kind + payload
+
+
+def grey_palette_opacity():
+    """The monochrome profile, a two-column palette (entry i is (i, i)), a
+    `cmap` using both columns of component 0, and a `cdef` giving the first
+    column as the grey colour channel and the second as opacity. The sRGB
+    conversion applies the palette, gives two channels, and returns four."""
+    pclr = struct.pack(">HBBB", 256, 2, 7, 7) + b"".join(bytes([i, i]) for i in range(256))
+    cmap = struct.pack(">HBBHBB", 0, 1, 0, 0, 1, 1)
+    cdef = struct.pack(">HHHHHHH", 2, 0, 0, 1, 1, 1, 0)
+    return (colr(2, icc_grey_tinted(CURVES["gamma"])) + box(b"pclr", pclr)
+            + box(b"cmap", cmap) + box(b"cdef", cdef))
+
+
+# The input that failed the CI fuzz smoke (variant byte, then body): a grey
+# profile whose sRGB output is not neutral.
+CI_CRASH_HEX = (
+    "2c000000e3636f6c72020002000000d8000000000240000073636e7247524159"
+    "58595a2000000000000000000000000061637370000000000000000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "00000000000000000000000000000002777470740000009c000000146b545243"
+    "000000b00000002858595a20000000000000f6d6000100000000d32d70617261"
+    "0000000000040010020066660000f2a7009d0d59000013d000000a5b00000000"
+    "00000000"
+)
 
 
 def icc_rgb(curve):
@@ -231,6 +267,9 @@ def main():
         write(f"icc_rgb_{name}", 0x0C | THREE_8, colr(2, icc_rgb(curve)))
         write(f"icc_grey_{name}", 0x0C | ONE_8, colr(2, icc_grey(curve)))
     write("icc_grey_tinted", 0x0C | ONE_8, colr(2, icc_grey_tinted(CURVES["gamma"])))
+    write("icc_grey_palette_opacity", 0x0C | ONE_8, grey_palette_opacity())
+    ci = bytes.fromhex(CI_CRASH_HEX)
+    write("ci_crash_grey_icc", ci[0], ci[1:])
     write("icc_rgb_subsampled", 0x0C | THREE_SUB, colr(2, icc_rgb(CURVES["gamma"])))
     write("icc_grey_16bit", 0x0C | ONE_16, colr(2, icc_grey(CURVES["gamma"])))
     write("icc_rgb_mixed", 0x0C | SYCC_420, colr(2, icc_rgb(CURVES["gamma"])))

@@ -152,18 +152,17 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let colour = |i: &rust_j2k::Image| i.jp2.as_ref().map(|m| m.colour.clone());
-    // One exception to equal channel counts: a grey ICC profile whose output
-    // is not neutral (a tinted white point) gives R, G and B for the one
-    // coded channel, reported as sRGB, as OpenJPEG does.
+    // One exception to equal channel counts: a grey ICC profile whose sRGB
+    // output is not neutral gives R, G and B in place of the grey channel,
+    // two more channels, reported as sRGB, as OpenJPEG does.
     let grey_profile = coded.jp2.as_ref().is_some_and(|m| match &m.colour {
         rust_j2k::ColourSpace::RestrictedIcc(p) => p.get(16..20) == Some(b"GRAY"),
         _ => false,
     });
-    let tinted_grey = coded.components.len() == 1
-        && grey_profile
-        && srgb.components.len() == 3
-        && colour(&srgb) == Some(rust_j2k::ColourSpace::Srgb);
-    if !tinted_grey {
+    let non_neutral_grey = grey_profile
+        && colour(&srgb) == Some(rust_j2k::ColourSpace::Srgb)
+        && srgb.components.len() == coded.components.len() + 2;
+    if !non_neutral_grey {
         assert_eq!(
             srgb.components.len(),
             coded.components.len(),
