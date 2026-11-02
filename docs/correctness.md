@@ -365,9 +365,28 @@ transform.
 
 The output matches `opj_decompress -force-rgb` sample for sample
 (`tests/jp2_icc.rs`). The reference is OpenJPEG 2.5.0 linked against
-LittleCMS 2.14 on x86-64 Linux (glibc). The output depends on the C
-library's `powf`, so other LittleCMS versions or platforms can differ in the
-last bit. The cases:
+LittleCMS 2.14 on x86-64 Linux (glibc 2.39, on a CPU with FMA and AVX2).
+
+LittleCMS calls the C library's `pow` and `log`, and a platform's own can
+differ in the last bit, which moves an output level. So `src/jp2/math.rs`
+ports glibc 2.39's `pow` and `log` (Arm's optimized-routines code), and the
+output is the same on every platform whose `fma` is correctly rounded.
+MinGW's (`*-pc-windows-gnu`) may round twice (rust-lang/rust#140515), so
+the output there can differ. On x86-64, glibc picks a variant built with
+FMA when the CPU has FMA and AVX2, and a plain SSE2 one otherwise. The port
+follows the FMA variant, the one the reference machine runs: each
+multiply-add GCC fused there is a `mul_add` in the port. The two variants differ
+in the last bit on 296 of 5.2 million `log` inputs and 3,251 of 3.7 million
+`pow` inputs of an earlier test sweep, so oracles regenerated on an x86-64 CPU
+without FMA could differ. The current ones do not: regenerating them with
+glibc held to its SSE2 variant (`GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX2,-FMA`)
+gives the same hashes. The default test (`src/jp2/math_tests.rs`) checks
+the port's results on a sweep of inputs against digests recorded from
+glibc, on every platform. An ignored, larger sweep compares the port bit
+for bit with the platform's `f64::ln` and `f64::powf` on x86-64 Linux with
+glibc and FMA.
+
+The cases:
 
 - files 5, 7 and 8 at rendering intents 0 to 3, and at intent 3 with the
   media white point set to D65, (1.2, 1.1, 1.0) and (0.9, 0.95, 0.7): 21

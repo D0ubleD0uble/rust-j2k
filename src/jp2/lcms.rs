@@ -26,7 +26,9 @@
 //! The arithmetic follows the C source step for step, in the same order and
 //! at the same precision (`f32` where lcms uses `cmsFloat32Number`, wrapping
 //! integer arithmetic for its fixed point), since a single rounding
-//! difference moves an output level.
+//! difference moves an output level. The C library's `pow` and `log` are the
+//! ports of glibc's in `math.rs`, so the output does not depend on the
+//! platform.
 //!
 //! Ported from Little CMS 2.14 (tag `lcms2.14` of github.com/mm2/Little-CMS,
 //! the version Ubuntu's OpenJPEG 2.5.0-2ubuntu0.5 links). Its licence, from
@@ -53,6 +55,8 @@
 //! > CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 //! > TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 //! > SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+use super::math::{log, pow};
 
 // ---------------------------------------------------------------------------
 // Numbers (lcms2_internal.h)
@@ -442,7 +446,7 @@ fn eval_parametric(kind: i32, p: &[f64; 10], r: f64) -> f64 {
                     0.0
                 }
             } else {
-                r.powf(p[0])
+                pow(r, p[0])
             }
         }
         2 => {
@@ -452,7 +456,7 @@ fn eval_parametric(kind: i32, p: &[f64; 10], r: f64) -> f64 {
             let disc = -p[2] / p[1];
             if r >= disc {
                 let e = p[1] * r + p[2];
-                if e > 0.0 { e.powf(p[0]) } else { 0.0 }
+                if e > 0.0 { pow(e, p[0]) } else { 0.0 }
             } else {
                 0.0
             }
@@ -467,7 +471,7 @@ fn eval_parametric(kind: i32, p: &[f64; 10], r: f64) -> f64 {
             }
             if r >= disc {
                 let e = p[1] * r + p[2];
-                if e > 0.0 { e.powf(p[0]) + p[3] } else { 0.0 }
+                if e > 0.0 { pow(e, p[0]) + p[3] } else { 0.0 }
             } else {
                 p[3]
             }
@@ -475,19 +479,19 @@ fn eval_parametric(kind: i32, p: &[f64; 10], r: f64) -> f64 {
         4 => {
             if r >= p[4] {
                 let e = p[1] * r + p[2];
-                if e > 0.0 { e.powf(p[0]) } else { 0.0 }
+                if e > 0.0 { pow(e, p[0]) } else { 0.0 }
             } else {
                 r * p[3]
             }
         }
         -4 => {
             let e = p[1] * p[4] + p[2];
-            let disc = if e < 0.0 { 0.0 } else { e.powf(p[0]) };
+            let disc = if e < 0.0 { 0.0 } else { pow(e, p[0]) };
             if r >= disc {
                 if p[0].abs() < MATRIX_DET_TOLERANCE || p[1].abs() < MATRIX_DET_TOLERANCE {
                     0.0
                 } else {
-                    (r.powf(1.0 / p[0]) - p[2]) / p[1]
+                    (pow(r, 1.0 / p[0]) - p[2]) / p[1]
                 }
             } else if p[3].abs() < MATRIX_DET_TOLERANCE {
                 0.0
@@ -498,7 +502,7 @@ fn eval_parametric(kind: i32, p: &[f64; 10], r: f64) -> f64 {
         5 => {
             if r >= p[4] {
                 let e = p[1] * r + p[2];
-                if e > 0.0 { e.powf(p[0]) + p[5] } else { p[5] }
+                if e > 0.0 { pow(e, p[0]) + p[5] } else { p[5] }
             } else {
                 r * p[3] + p[6]
             }
@@ -1364,7 +1368,7 @@ fn lab_f(t: f64) -> f64 {
     if t <= limit {
         (841.0 / 108.0) * t + (16.0 / 116.0)
     } else {
-        t.powf(1.0 / 3.0)
+        pow(t, 1.0 / 3.0)
     }
 }
 
@@ -1437,7 +1441,7 @@ fn estimate_gamma(ys: &[f32], precision: f64) -> f64 {
         let x = i as f64 / (NODES - 1) as f64;
         let y = f64::from(eval(((x as f32) as f64 / 1.0) as f32));
         if y > 0.0 && y < 1.0 && x > 0.07 {
-            let gamma = y.ln() / x.ln();
+            let gamma = log(y) / log(x);
             sum += gamma;
             sum2 += gamma * gamma;
             n += 1.0;

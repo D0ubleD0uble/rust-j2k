@@ -51,6 +51,8 @@ mod channels;
 mod colour;
 mod header;
 mod lcms;
+mod math;
+mod math_data;
 mod metadata;
 mod palette;
 mod resolution;
@@ -59,6 +61,8 @@ mod uuid_info;
 
 #[cfg(test)]
 mod colour_tests;
+#[cfg(test)]
+mod math_tests;
 #[cfg(test)]
 mod srgb_tests;
 #[cfg(test)]
