@@ -453,6 +453,11 @@ def srgb_branch_seeds(write):
     write("icc_grey_no_colour", hdr | ONE_8, colr(2, grey) + cdef_box((1, 0)))
     write("icc_grey_tinted_reduced", REDUCE | hdr | ONE_8,
           colr(2, icc_grey_tinted(CURVES["gamma"])))
+    # Regression: a one-column `pclr` with no `cmap`, the body repeated after
+    # `jp2c` (variant bits 0-1 = 3). The default decode drops the palette;
+    # `raw_channels` keeps it and refuses the second `pclr`.
+    no_cmap = struct.pack(">HB", 256, 1) + bytes([7]) + bytes(range(256))
+    write("pclr_no_cmap_twice", 0x03 | hdr | ONE_8, GREY + box(b"pclr", no_cmap))
 
 
 def main():
