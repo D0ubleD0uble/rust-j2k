@@ -147,7 +147,7 @@ jobs:
   # Apple Silicon (aarch64) as well.
   test-macos:
     name: test (macos aarch64)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
