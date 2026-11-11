@@ -696,8 +696,11 @@ def fuzz_seeds() -> None:
     """Write the profiles of icc/profiles.json as seeds for the icc_srgb fuzz
     target: one byte for the codestream (0 RGB 8-bit, 1 RGB 16-bit, 2 grey),
     then the profile. The target builds the transform for only one profile in
-    BUILD_EVERY, so each distinct profile of 128 bytes or more also gets a
-    copy with a nonce that selects it (see build_copy), named `*_build`."""
+    BUILD_EVERY, and hashes the profile without the first byte, so each distinct
+    (codestream, profile) pair with a profile of 128 bytes or more also gets a
+    copy with a nonce that selects it (see build_copy), named `*_build`. Each
+    codestream needs its own copy: it is the first byte that picks the 8-bit,
+    16-bit or grey transform path."""
     out = ROOT / "fuzz" / "corpus" / "icc_srgb"
     out.mkdir(parents=True, exist_ok=True)
     selector = {"rgb8": 0, "rgb16": 1, "grey8": 2}
@@ -711,8 +714,9 @@ def fuzz_seeds() -> None:
     seen = set()
     for case in cases:
         profile = bytes.fromhex(case["profile"])
-        copy = None if profile in seen else build_copy(profile)
-        seen.add(profile)
+        key = (case["codestream"], profile)
+        copy = None if key in seen else build_copy(profile)
+        seen.add(key)
         if copy is not None:
             first = bytes([selector[case["codestream"]]])
             (out / f"{case['codestream']}_{case['name']}_build").write_bytes(first + copy)

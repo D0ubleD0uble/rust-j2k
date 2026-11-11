@@ -120,10 +120,12 @@ milliseconds, far more than reading, so only one profile in 16, chosen by a
 hash of the profile, is also decoded with `ColourOutput::Srgb`, which builds
 and runs the LittleCMS port. That took the target from about 21 to about 560
 exec/s. Seed it with the profiles in `tests/fixtures/icc/profiles.json`;
-`gen-icc-oracles.py --fuzz-seeds` also writes, for each distinct profile, a
-`*_build` copy with a 2-byte nonce in the reserved header bytes 100 to 101
-that makes the hash select it, so the smoke reaches the transform builders
-for every profile.
+`gen-icc-oracles.py --fuzz-seeds` also writes, for each distinct codestream
+and profile pair with a profile of 128 bytes or more, a `*_build` copy with a
+2-byte nonce in the reserved header bytes 100 to 101 that makes the hash
+select it (the hash skips the first byte, so each codestream needs its own
+copy), so the smoke reaches the 8-bit, 16-bit and grey transform builders for
+every such profile.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
