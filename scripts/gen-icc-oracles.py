@@ -45,6 +45,7 @@ import importlib.util
 import json
 import platform
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -666,15 +667,43 @@ def synthetic(oracle_version: str) -> None:
     print(f"wrote {ICC_DIR / 'profiles.json'}")
 
 
+FNV_OFFSET = 0xCBF29CE484222325
+FNV_PRIME = 0x100000001B3
+
+
 def fnv1a(data: bytes) -> int:
     """FNV-1a, 64 bits, as fuzz/fuzz_targets/icc_srgb.rs computes it."""
-    h = 0xCBF29CE484222325
+    h = FNV_OFFSET
     for byte in data:
-        h = ((h ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        h = ((h ^ byte) * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
     return h
 
 
 BUILD_EVERY = 16  # as in icc_srgb.rs
+
+
+TARGET = ROOT / "fuzz" / "fuzz_targets" / "icc_srgb.rs"
+
+
+def check_target_hash(target: Path = TARGET) -> None:
+    """Exit unless the hash constants in the icc_srgb target are the ones this
+    script uses, so the build copies cannot drift from the gate."""
+    text = target.read_text()
+    patterns = {
+        "BUILD_EVERY": r"^const BUILD_EVERY: u64 = (\d+);",
+        "FNV offset": r"^\s*bytes\.iter\(\)\.fold\((0x[0-9a-fA-F_]+),",
+        "FNV prime": r"^\s*\(hash \^ u64::from\(byte\)\)\.wrapping_mul\((0x[0-9a-fA-F_]+)\)",
+    }
+    values = {}
+    for key, pattern in patterns.items():
+        hits = re.findall(pattern, text, re.M)
+        if len(hits) != 1:
+            sys.exit(f"{target}: expected one {key}, found {len(hits)}")
+        values[key] = int(hits[0].replace("_", ""), 0)
+    mine = {"BUILD_EVERY": BUILD_EVERY, "FNV offset": FNV_OFFSET, "FNV prime": FNV_PRIME}
+    for key, want in mine.items():
+        if values[key] != want:
+            sys.exit(f"{target}: {key} is {values[key]:#x}, this script uses {want:#x}")
 
 
 def build_copy(profile: bytes) -> bytes | None:
@@ -696,8 +725,12 @@ def fuzz_seeds() -> None:
     """Write the profiles of icc/profiles.json as seeds for the icc_srgb fuzz
     target: one byte for the codestream (0 RGB 8-bit, 1 RGB 16-bit, 2 grey),
     then the profile. The target builds the transform for only one profile in
-    BUILD_EVERY, so each distinct profile of 128 bytes or more also gets a
-    copy with a nonce that selects it (see build_copy), named `*_build`."""
+    BUILD_EVERY, and hashes the profile without the first byte, so each distinct
+    (codestream, profile) pair with a profile of 128 bytes or more also gets a
+    copy with a nonce that selects it (see build_copy), named `*_build`. Each
+    codestream needs its own copy: it is the first byte that picks the 8-bit,
+    16-bit or grey transform path."""
+    check_target_hash()
     out = ROOT / "fuzz" / "corpus" / "icc_srgb"
     out.mkdir(parents=True, exist_ok=True)
     selector = {"rgb8": 0, "rgb16": 1, "grey8": 2}
@@ -711,12 +744,18 @@ def fuzz_seeds() -> None:
     seen = set()
     for case in cases:
         profile = bytes.fromhex(case["profile"])
-        copy = None if profile in seen else build_copy(profile)
-        seen.add(profile)
+        key = (case["codestream"], profile)
+        copy = None if key in seen else build_copy(profile)
+        seen.add(key)
         if copy is not None:
             first = bytes([selector[case["codestream"]]])
             (out / f"{case['codestream']}_{case['name']}_build").write_bytes(first + copy)
             builds += 1
+            if fnv1a(copy) % BUILD_EVERY != 0:
+                sys.exit(f"{case['name']}: build copy is not selected by the hash")
+    wanted = len({(c["codestream"], c["profile"]) for c in cases if len(c["profile"]) >= 256})
+    if builds != wanted:
+        sys.exit(f"wrote {builds} build copies for {wanted} distinct (codestream, profile) pairs")
     print(f"wrote {written} seeds and {builds} build copies to {out}")
 
 
