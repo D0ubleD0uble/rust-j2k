@@ -11,7 +11,7 @@
 //! broken is rejected with the same error as the raw codestream.
 //!
 //! Every file's header, including the broken one's, must also match its record
-//! in `metadata.json` (taken from a box dump) through `read_header`, and
+//! in `metadata.json` (written by the box walker) through `read_header`, and
 //! through `decode` for each file that decodes.
 
 mod support;
