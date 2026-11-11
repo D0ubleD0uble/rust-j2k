@@ -26,6 +26,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from oracle_tools import require_openjpeg
 
 DIR = pathlib.Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "psot0"
 
@@ -324,6 +325,7 @@ def main() -> None:
     for name, data in SWEEPS.items():
         (DIR / name).write_bytes(data)
     if "--check" in sys.argv:
+        require_openjpeg("opj_decompress")
         for name, (_, base) in FILES.items():
             print(f"{name}: {check(name, base)}")
         for name, (_, width, height) in BOMBS.items():
