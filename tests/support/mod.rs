@@ -68,7 +68,12 @@ pub struct Expected {
 ///   "xml": [431, 741],
 ///   "uuid": [["b14bf8bd083d4b43a5ae8cd7d5a6ce03", 300]],
 ///   "ipr": [120],
-///   "uuid_info": [[["2b0d7e97aa2e317d9133e53161a2f7d0"], 24]]
+///   "uuid_info": [[["2b0d7e97aa2e317d9133e53161a2f7d0"], 24]],
+///   "file_type": { "brand": "jp2 ", "minor_version": 0, "compatibility": ["jp2 "] },
+///   "image_header": { "compression": 7, "unknown_colour_space": 0, "ipr": 0 },
+///   "colour_specifications": [{ "method": 1, "precedence": 0, "approximation": 0,
+///     "data_len": 4, "data_sha256": "<hex>", "enum_cs": 16 }],
+///   "reader_requirements": null
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

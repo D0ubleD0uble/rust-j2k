@@ -6,8 +6,8 @@ box layer and writes what it finds into the fixture snapshots, so the tests
 check `Jp2Metadata::{file_type, image_header, colour_specifications,
 reader_requirements}` against a dump that is independent of the decoder.
 Nothing here uses the crate or its output. The walker was cross-checked
-against `opj_dump` (ftyp brand, version and compatibility list; the colr
-METH, PREC, APPROX and EnumCS; the ihdr flags) on the conformance files.
+by hand on files 5 and 7 against `xxd` of the box bytes and `sha256sum` of
+the profile (`opj_dump` prints none of these fields).
 
 What it reads, from the JP2 box layer alone:
 
@@ -117,6 +117,8 @@ def rreq(payload: bytes):
 
 
 def colr(payload: bytes) -> dict:
+    if len(payload) < 3:
+        sys.exit("malformed colr")
     method, precedence, approximation = payload[0], payload[1], payload[2]
     data = payload[3:]
     record = {
@@ -136,6 +138,7 @@ def walk(data: bytes) -> dict:
     image_header = None
     colours = []
     reader = None
+    seen_rreq = False
     seen_jp2h = False
     seen_jp2c = False
     for kind, payload in boxes(data):
@@ -147,7 +150,8 @@ def walk(data: bytes) -> dict:
                 "minor_version": struct.unpack(">I", payload[4:8])[0],
                 "compatibility": [code(payload[i : i + 4]) for i in range(8, len(payload), 4)],
             }
-        elif kind == b"rreq" and reader is None:
+        elif kind == b"rreq" and not seen_rreq:
+            seen_rreq = True
             reader = rreq(payload)
         elif kind == b"jp2c":
             seen_jp2c = True

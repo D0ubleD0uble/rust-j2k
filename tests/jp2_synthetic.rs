@@ -87,9 +87,24 @@ fn every_fixture_matches_its_oracle_bit_exactly() {
         let bytes = std::fs::read(&path).unwrap();
         let want = expected(&path);
         assert_eq!(want.tolerance, support::Tolerance::Exact, "{name}");
+        assert!(
+            want.jp2.is_some() || want.jp2_boxes.is_some(),
+            "{name}: no box snapshot"
+        );
         let image = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         if let Err(mismatch) = compare(&image, &want) {
             panic!("{name}: {mismatch}");
+        }
+        // `read_header` reports the same metadata, checked the same way.
+        let header = rust_j2k::read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(header.jp2, image.jp2, "{name}: read_header");
+        if let Some(want) = &want.jp2 {
+            let got = header.jp2.as_ref().map(support::Jp2Snapshot::of);
+            assert_eq!(got.as_ref(), Some(want), "{name}: read_header snapshot");
+        }
+        if let Some(want) = &want.jp2_boxes {
+            let got = header.jp2.as_ref().map(support::Jp2Boxes::of);
+            assert_eq!(got.as_ref(), Some(want), "{name}: read_header boxes");
         }
         let jp2 = image.jp2.as_ref().expect("JP2 metadata");
         let stem = path.file_stem().unwrap().to_string_lossy();

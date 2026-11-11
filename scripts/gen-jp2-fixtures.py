@@ -580,6 +580,10 @@ def main() -> None:
     cdef_fixtures(one, one_geometry, three, three_geometry)
     sycc_fixtures()
 
+    # The snapshots above carry no ftyp/ihdr/colr/rreq fields; add them.
+    box_script = Path(__file__).resolve().parent / "gen-jp2-box-snapshots.py"
+    subprocess.run([sys.executable, "-I", str(box_script)], check=True)
+
 
 if __name__ == "__main__":
     main()

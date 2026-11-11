@@ -433,12 +433,12 @@ Source of truth: `scripts/gen-jp2-box-snapshots.py`, a standalone box walker
 reads the JP2 box layer of each file and never uses the crate. It counts the
 `colr` boxes of every `jp2h` and those misplaced at the top level after the
 first `jp2h`, before the codestream, and the first top-level `rreq`
-(`docs/correctness.md`). Run it after `scripts/gen-jp2-fixtures.py`, which
+(`docs/correctness.md`). `scripts/gen-jp2-fixtures.py` runs it as its last step, because it
 rewrites the synthetic snapshots without these fields. It was cross-checked
 by hand on `file5.jp2` and `file7.jp2` against `xxd` of the box bytes and
 `sha256sum` of the profile (`opj_dump` does not print `colr` or `rreq`
 fields): `ftyp` `jpx `, version 0, compatibility `00000003`, `jp2 `, `jpx `,
-`jpxb`; `ihdr` flags 0, 0, 7; `rreq` `ML` 1, `FUAM` a0, `DCM` c0; `colr`
+`jpxb`; `ihdr` `C` 7, `UnkC` 0, `IPR` 0; `rreq` `ML` 1, `FUAM` a0, `DCM` c0; `colr`
 `METH` 2 (546 and 13332 profile bytes) then `METH` 1 `EnumCS` 21 and 20.
 No fixture has a vendor feature in its `rreq`, so `vendor_features` is
 always empty here.
