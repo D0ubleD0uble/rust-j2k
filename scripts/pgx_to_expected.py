@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 
 
@@ -95,7 +96,13 @@ def build_snapshot(
     if tolerance == "exact":
         tol = {"mode": "exact"}
     else:
-        tol = {"mode": "absolute", "max_abs_error": float(tolerance)}
+        try:
+            bound = float(tolerance)
+        except ValueError:
+            raise ValueError(f"tolerance must be 'exact' or a number, got {tolerance!r}")
+        if not math.isfinite(bound) or bound < 0:
+            raise ValueError(f"tolerance must be finite and >= 0, got {tolerance!r}")
+        tol = {"mode": "absolute", "max_abs_error": bound}
 
     provenance = {"source": source, "oracle_command": oracle_command}
     if notes:
@@ -132,6 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--notes", default=None, help="optional free-form note")
     parser.add_argument(
+        "--siz-image-area",
+        default=None,
+        metavar="WxH",
+        help="SIZ image area (x1-x0)x(y1-y0); refuse if the .pgx is not this size",
+    )
+    parser.add_argument(
         "-o", "--output", default=None, help="output path (default: stdout)"
     )
     args = parser.parse_args(argv)
@@ -139,14 +152,25 @@ def main(argv: list[str] | None = None) -> int:
     with open(args.pgx, "rb") as f:
         geometry, samples = parse_pgx(f.read())
 
-    snapshot = build_snapshot(
+    if args.siz_image_area is not None:
+        want = f"{geometry['width']}x{geometry['height']}"
+        if args.siz_image_area != want:
+            sys.exit(
+                f"pgx_to_expected: the .pgx is {want} but SIZ says the image area is "
+                f"{args.siz_image_area}: sub-sampled or offset input is not supported"
+            )
+
+    try:
+        snapshot = build_snapshot(
         geometry,
         samples,
         args.tolerance,
         args.source,
         args.oracle_command,
         args.notes,
-    )
+        )
+    except ValueError as err:
+        sys.exit(f"pgx_to_expected: {err}")
     text = json.dumps(snapshot, indent=2) + "\n"
 
     if args.output:
