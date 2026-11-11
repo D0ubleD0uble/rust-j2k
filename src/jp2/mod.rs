@@ -273,12 +273,10 @@ fn locate_codestream<'a>(
         // box, the slice runs two bytes past it, so the tile-part ends at the
         // box's end. OpenJPEG's tile-part runs on into the boxes after it, past
         // its last packet, so the image is the same.
-        End::OpenLastPart if ends_at_box(payload, rest) => {
-            match tail.get(..payload.len() + 2) {
-                Some(codestream) => (codestream, rest, false),
-                None => (tail, &[], false),
-            }
-        }
+        End::OpenLastPart if ends_at_box(payload, rest) => match tail.get(..payload.len() + 2) {
+            Some(codestream) => (codestream, rest, false),
+            None => (tail, &[], false),
+        },
         End::OpenLastPart => (tail, &[], false),
         End::Unknown => (payload, rest, false),
     }

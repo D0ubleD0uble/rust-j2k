@@ -40,7 +40,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "psot0/jp2_p0noeoc_xml_junk.jp2",
         "bytes after the jp2c that are not whole boxes",
     ),
-    ("psot0/jp2_short108_p0eoc_xml.jp2", "jp2c LBox 108, then xml"),
+    (
+        "psot0/jp2_short108_p0eoc_xml.jp2",
+        "jp2c LBox 108, then xml",
+    ),
     ("psot0/jp2_t2_last0_short.jp2", "jp2c LBox 200, then a colr"),
     ("psot0/single_psot0_no_eoc.j2k", "no EOC"),
     (

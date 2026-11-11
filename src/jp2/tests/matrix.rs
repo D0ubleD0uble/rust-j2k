@@ -991,7 +991,11 @@ fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
     assert_eq!(image.components, raw().components, "{what}");
     let metadata = image.jp2.expect("a JP2 file");
     assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()], "{what}");
-    assert_eq!(read_header(&right_sized).unwrap().jp2, Some(metadata), "{what}");
+    assert_eq!(
+        read_header(&right_sized).unwrap().jp2,
+        Some(metadata),
+        "{what}"
+    );
 }
 
 /// `read_header_with` fails exactly when `decode_with` does, under the same
