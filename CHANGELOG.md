@@ -47,9 +47,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   two components, a greyscale ICC profile and no `cdef` convert under
   `ColourOutput::Srgb` as grey plus opacity, and an sRGB file of four
   components whose fourth differs in format from the colours passes through
-  as coded, as OpenJPEG does. A file declared greyscale on three components
-  is still refused, with or without a `cdef`, where `opj_decompress` would
-  convert it as sYCC (4:2:0 or 4:2:2).
+  as coded, as OpenJPEG does. A file declared sRGB or greyscale on three
+  components is still refused, whatever its `cdef` labels or without one,
+  where `opj_decompress` would convert it as sYCC (4:2:0 or 4:2:2).
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
   coded, without the palette or channel definitions. The index plane is then
   labelled `ChannelType::Unspecified`, and only the boxes' layout is checked.
@@ -115,10 +115,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is OpenJPEG 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc
   2.39), and the output is the same on every platform whose `fma` is
   correctly rounded (MinGW's, on `*-pc-windows-gnu`, may not be:
-  rust-lang/rust#140515). sRGB and greyscale pass through,
-  and so do sYCC or an RGB or YCbCr profile on one or two channels, one or two
-  channels with no colour space to convert from (a raw codestream, or a
-  file with no `colr` or another enumerated space), a profile LittleCMS
+  rust-lang/rust#140515). sRGB and greyscale pass through. One or two
+  channels pass through as coded whatever the colour space (sRGB with two
+  channels of different depth or sign included), as OpenJPEG reads them as
+  grey, unless a monochrome profile converts them (8-bit unsigned only).
+  So do a profile LittleCMS
   refuses to open or to build a transform from (a bad header, a class or
   intent it does not know, a missing or unreadable tag, a lookup table it
   can't read), and a profile in a colour space other than RGB, grey or

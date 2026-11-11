@@ -7,7 +7,8 @@
 //! everything from the header before any tile is decoded; [`SrgbPlan::apply`]
 //! converts the decoded samples. No conversion changes a channel's depth.
 //!
-//! - **sRGB and greyscale** (`EnumCS` 16, 17) pass through.
+//! - **sRGB and greyscale** (`EnumCS` 16, 17) pass through, except on a
+//!   three-channel 4:2:0 or 4:2:2 image ([`converted_as_sycc`]).
 //! - **sYCC** (`EnumCS` 18) is converted with the IEC 61966-2-1 Amd 1 inverse
 //!   matrix (1.402, 0.344136, 0.714136, 1.772) after taking `2^(depth-1)` off
 //!   the chroma, rounded to the nearest integer and clamped to the depth.
@@ -35,10 +36,11 @@
 //!   channel. A monochrome profile on more than two channels is refused:
 //!   OpenJPEG passes the planes to a grey transform as if they were RGB.
 //!
-//! sYCC or an RGB or YCbCr profile on one or two colour channels passes
-//! through, as OpenJPEG leaves them, and so do one or two channels with no
-//! colour space this step converts (no `colr`, or another enumerated colour
-//! space). So does a profile LittleCMS refuses to open or to build a
+//! One or two channels pass through as coded whatever the colour space
+//! (sRGB, greyscale, sYCC, no `colr`, another enumerated colour space, an
+//! RGB or YCbCr profile), as OpenJPEG reads them as grey; only a monochrome
+//! profile converts them, and it refuses samples that are not 8-bit
+//! unsigned. So do a profile LittleCMS refuses to open or to build a
 //! transform from (its header checks, a class or intent it does not know, a
 //! missing or unreadable tag, a lookup table it can't read), and a profile
 //! in a colour space other than RGB, grey or YCbCr: OpenJPEG then skips the
@@ -122,19 +124,22 @@ pub(crate) fn plan(
     reduction: u8,
 ) -> Result<SrgbPlan> {
     match colour {
+        // OpenJPEG reads any image of two or fewer components as grey (and
+        // grey plus opacity) and passes it through, whatever the file
+        // declares, so this does too.
+        ColourSpace::Srgb | ColourSpace::Greyscale if outputs.len() <= 2 => {
+            Ok(SrgbPlan::PassThrough)
+        }
         ColourSpace::Srgb | ColourSpace::Greyscale => {
             // `opj_decompress` converts a three-component 4:2:0 or 4:2:2
-            // image as sYCC whatever the file declares, with or without a
-            // `cdef`. A file declared grey with that layout is therefore
-            // checked on all three channels, and refused. Any other channel
-            // past the colour space's colours is left as coded.
-            let guessed = *colour == ColourSpace::Greyscale && converted_as_sycc(outputs);
-            let colours = if guessed {
-                (0..outputs.len()).collect()
-            } else {
-                colour_channels(channels, outputs, 0)
-            };
-            uniform(&colours, outputs)?;
+            // image as sYCC whatever the file declares and whatever its
+            // `cdef` labels, so a file declared sRGB or grey with that
+            // layout is refused. Otherwise any channel past the colour
+            // space's colours is left as coded.
+            if converted_as_sycc(outputs) {
+                return Err(converted_as_sycc_error());
+            }
+            uniform(&colour_channels(channels, outputs, 0), outputs)?;
             Ok(SrgbPlan::PassThrough)
         }
         // OpenJPEG converts sYCC and an RGB profile only on three or more
@@ -171,6 +176,13 @@ fn converted_as_sycc(outputs: &[ComponentInfo]) -> bool {
     };
     let sampling = |c: &ComponentInfo| (c.x_sampling, c.y_sampling);
     sampling(y) == (1, 1) && sampling(cb) == sampling(cr) && matches!(sampling(cb), (2, 1) | (2, 2))
+}
+
+/// The refusal of a file [`converted_as_sycc`] holds for.
+fn converted_as_sycc_error() -> Error {
+    Error::Unsupported(
+        "sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC".into(),
+    )
 }
 
 /// OpenJPEG's "AFL test" (`color.c:495-519`): before it builds a transform
@@ -348,9 +360,7 @@ fn plan_icc(
         // `uniform` always fails here, since the chroma sampling differs
         // from the luma's; the error below is a backstop that cannot run.
         uniform(&[0, 1, 2], outputs)?;
-        return Err(Error::Unsupported(
-            "sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC".into(),
-        ));
+        return Err(converted_as_sycc_error());
     }
     match plan_icc_or_refuse(profile, channels, outputs, siz, reduction) {
         Ok(plan) => Ok(plan),

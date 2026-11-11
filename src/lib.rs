@@ -267,12 +267,12 @@ pub enum ColourOutput {
     /// are: [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for one
     /// grey channel, with no ICC profile. [`read_header`] and the default
     /// [`ColourOutput::AsCoded`] report the colour space the file declares.
-    /// sYCC or an RGB or YCbCr profile on one or two colour channels passes
-    /// through,
-    /// as OpenJPEG leaves it, and so do one or two channels with no colour
-    /// space to convert from (a raw codestream, a file with no `colr`, or
-    /// another enumerated colour space), read as grey, or grey and opacity;
-    /// their metadata stays as declared.
+    /// One or two channels pass through as coded whatever the colour space
+    /// (a raw codestream, a file with no `colr`, any enumerated colour
+    /// space, sRGB included, or an RGB or YCbCr profile), as OpenJPEG reads
+    /// them as grey, or grey and opacity; only a monochrome profile converts
+    /// them, and it refuses samples that are not 8-bit unsigned. Their
+    /// metadata stays as declared.
     ///
     /// An ICC profile that LittleCMS refuses also passes through, as
     /// OpenJPEG leaves it (except on a three-channel 4:2:0 or 4:2:2 image,
@@ -325,11 +325,12 @@ pub enum ColourOutput {
     /// among the first four pass through instead (above), except a
     /// three-channel 4:2:0 or 4:2:2 image (luma at 1x1, both chroma
     /// channels at 2x2 or both at 2x1), which OpenJPEG converts as sYCC
-    /// whatever the file declares. As in OpenJPEG, every refusal above, and
-    /// a profile on one or two colour channels, passes through before these
-    /// checks: a profile LittleCMS refuses passes through whatever the
-    /// samples are, except on a three-channel 4:2:0 or 4:2:2 image, which is
-    /// refused before the profile is read. These errors apply only when `Srgb` is asked for:
+    /// whatever the file declares and whatever its `cdef` labels. As in
+    /// OpenJPEG, every refusal above, and a profile on one or two colour
+    /// channels, passes through before these checks: a profile LittleCMS
+    /// refuses passes through whatever the samples are, except on a
+    /// three-channel 4:2:0 or 4:2:2 image, which is refused before the
+    /// profile is read. These errors apply only when `Srgb` is asked for:
     /// [`ColourOutput::AsCoded`] decodes the same files.
     Srgb,
 }
