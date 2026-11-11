@@ -1003,7 +1003,7 @@ fn srgb_4_2_0_or_4_2_2_with_only_colour_1_in_cdef_is_refused() {
         let codestream = top_box(jp2, b"jp2c");
         for (name, cdef) in [("opacity", &opacity), ("unspecified", &unspecified)] {
             let what = format!("{layout}, {name}");
-            let bytes = file(codestream, &enumerated(16), &[cdef.clone()]);
+            let bytes = file(codestream, &enumerated(16), std::slice::from_ref(cdef));
             decode(&bytes).unwrap_or_else(|e| panic!("{what}: AsCoded must decode, got {e}"));
             expect_err(decode_srgb(&bytes), is_unsupported, fragment);
             match read_header_with(&bytes, &srgb()) {
