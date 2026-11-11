@@ -98,10 +98,11 @@ seeds with `jp2i` and `uinf` boxes before and after the codestream.
 
 `header` drives the header-only entry point, `read_header_with`, and checks it
 against `decode_with` on the same input, under five fixed option sets
-(defaults, `raw_channels`, reduction 1, sRGB, reduction 1 with sRGB). The
-header is read under all five; a header that reads is compared with a full
-decode under one of them, picked by a hash of the whole input, since a decode
-costs far more than the header: a
+(defaults, `raw_channels`, reduction 1, sRGB, reduction 1 with sRGB). A raw
+codestream leaves out `raw_channels`, which repeats the defaults there. The
+header is read under every set; a header that reads is compared with a full
+decode under one of the sets that read, picked by a hash of the whole input,
+since a decode costs far more than the header: a
 `read_header_with` error must be `decode_with`'s error too, and a successful
 decode must match the header field for field.
 A decode costs far more than the header, so once the header reads, inputs
@@ -113,9 +114,16 @@ dictionary.
 
 `icc_srgb` pins a small codestream (RGB at 8 or 16 bits, or grey, by the
 first input byte) and its boxes, and the rest of the input is the ICC profile
-in the `colr` box, decoded with `ColourOutput::Srgb`. Every execution reaches
-the profile parser, and an accepted profile builds and runs the LittleCMS
-port. Seed it with the profiles in `tests/fixtures/icc/profiles.json`.
+in the `colr` box. Every execution reads the profile with
+`rust_j2k::fuzz::icc_profile`. Building the transform to sRGB costs
+milliseconds, far more than reading, so only one profile in 16, chosen by a
+hash of the profile, is also decoded with `ColourOutput::Srgb`, which builds
+and runs the LittleCMS port. That took the target from about 21 to about 560
+exec/s. Seed it with the profiles in `tests/fixtures/icc/profiles.json`;
+`gen-icc-oracles.py --fuzz-seeds` also writes, for each distinct profile, a
+`*_build` copy with a 2-byte nonce in the reserved header bytes 100 to 101
+that makes the hash select it, so the smoke reaches the transform builders
+for every profile.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
@@ -156,7 +164,8 @@ cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 fuzz/corpus/header/
 cargo +nightly fuzz run header -- -dict=fuzz/jp2.dict -max_total_time=300
 
 # The ICC target, seeded with the profiles of the ICC oracle cases (the
-# first byte picks the codestream: 0 RGB 8-bit, 1 RGB 16-bit, 2 grey).
+# first byte picks the codestream: 0 RGB 8-bit, 1 RGB 16-bit, 2 grey). The CI
+# smoke runs it for 30 s with the same seeds.
 python3 scripts/gen-icc-oracles.py --fuzz-seeds
 cargo +nightly fuzz run icc_srgb -- -dict=fuzz/icc.dict -max_total_time=300
 
@@ -175,6 +184,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-10 | `jp2_boxes` with the `raw_channels` decode, reduction (bit 7), and the `srgb.rs` branch seeds | `gen-jp2-fuzz-seeds.py` (154 seeds), `jp2.dict` | 61 s, 24 058 runs (394 exec/s), `nice -n 19`, one job | no crash, leak, or timeout |
 | 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `icc_srgb` | `gen-icc-oracles.py --fuzz-seeds` (136 seeds), `icc.dict` | 61 s, 11 137 runs, under `nice` | no crash, leak, or timeout |
+| 2026-11-11 | `icc_srgb`, profile read on every input and the transform built for one in 16 | `gen-icc-oracles.py --fuzz-seeds` (349 seeds and 185 `_build` copies), `icc.dict` | 31 s, 17 471 runs (563 exec/s, coverage 3344; `main` on its 349 seeds: 21 exec/s, coverage 3278), `nice -n 19`, one job | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

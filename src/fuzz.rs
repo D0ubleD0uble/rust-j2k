@@ -73,9 +73,17 @@ pub fn tier1_block(data: &[u8]) {
     );
 }
 
+/// Open `data` as an ICC profile and read it as a monochrome and as an RGB
+/// input profile, without building the transform to sRGB. The transform is
+/// far costlier than the reading, so the `icc_srgb` target builds it for
+/// only some inputs.
+pub fn icc_profile(data: &[u8]) {
+    crate::jp2::SrgbPlan::read_profile(data);
+}
+
 #[cfg(test)]
 mod tests {
-    /// Smoke-run both hooks so the fuzz surface builds and stays panic-free in
+    /// Smoke-run every hook so the fuzz surface builds and stays panic-free in
     /// CI, where `--cfg fuzzing` never is set.
     #[test]
     fn fuzz_hooks_run_on_sample_inputs() {
@@ -89,6 +97,7 @@ mod tests {
         for sample in samples {
             super::mq_stream(sample);
             super::tier1_block(sample);
+            super::icc_profile(sample);
         }
     }
 }
