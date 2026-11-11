@@ -195,7 +195,7 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
             uuid_info: Vec::new(),
             image_header: ImageHeader {
                 compression: 7,
-                unknown_colourspace: 0,
+                unknown_colour_space: 0,
                 ipr: 0,
             },
             colour_specifications: vec![ColourSpecification {

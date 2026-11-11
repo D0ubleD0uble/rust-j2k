@@ -97,14 +97,21 @@ pub struct Jp2Metadata {
     /// `uinf` is left out and never fails a decode, as OpenJPEG skips the box
     /// (see [`UuidInfo`]).
     pub uuid_info: Vec<UuidInfo>,
-    /// The Image Header box's fields that the codestream does not repeat
-    /// (I.5.3.1).
+    /// The Image Header box's (I.5.3.1) fields that are not taken from the
+    /// codestream.
     pub image_header: ImageHeader,
     /// Every Colour Specification box (`colr`, I.5.3.3) in file order, the
     /// ignored ones too: those in every `jp2h` box and those misplaced at the
-    /// top level after the first `jp2h`, before the codestream. Only the first
-    /// whose method is 1 or 2 sets [`colour`](Self::colour); the others are
-    /// reported here and not applied.
+    /// top level after the first `jp2h`, before the codestream. A `colr` after
+    /// the codestream is not reported. Only the first whose method is 1 or 2
+    /// sets [`colour`](Self::colour); the others are reported here and not
+    /// applied.
+    ///
+    /// The boxes are reported as stored in the file, whatever
+    /// [`DecodeOptions::colour`](crate::DecodeOptions::colour) is. Under
+    /// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb) the first may still
+    /// hold the original ICC profile while [`colour`](Self::colour) is
+    /// [`ColourSpace::Srgb`].
     pub colour_specifications: Vec<ColourSpecification>,
     /// The File Type box (`ftyp`, I.5.2).
     pub file_type: FileType,
@@ -114,8 +121,8 @@ pub struct Jp2Metadata {
     pub reader_requirements: Option<ReaderRequirements>,
 }
 
-/// The Image Header box's (`ihdr`, I.5.3.1) fields that the codestream does
-/// not repeat, as stored. None of them changes the decode.
+/// The Image Header box's (`ihdr`, I.5.3.1) fields that are not taken from
+/// the codestream, as stored. None of them changes the decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ImageHeader {
@@ -124,7 +131,7 @@ pub struct ImageHeader {
     /// `UnkC`: 1 when the file does not know the colour space, 0 when its
     /// colour specification boxes give it accurately. Not consulted for
     /// [`Jp2Metadata::colour`].
-    pub unknown_colourspace: u8,
+    pub unknown_colour_space: u8,
     /// `IPR`: 1 when the file holds intellectual property rights information
     /// (see [`Jp2Metadata::ipr`]), 0 when it does not. Not checked against
     /// the boxes present.
@@ -182,8 +189,8 @@ pub struct ReaderRequirements {
     pub mask_length: u8,
     /// `FUAM`: the fully-understand-aspects mask.
     pub fully_understand: Vec<u8>,
-    /// `DCM`: the display-contents mask.
-    pub display_completely: Vec<u8>,
+    /// `DCM`: the decode-completely mask.
+    pub decode_completely: Vec<u8>,
     /// The `NSF` standard features (`SF` and `SM`), in box order.
     pub standard_features: Vec<StandardFeature>,
     /// The `NVF` vendor features (`VF` and `VM`), in box order.
@@ -433,7 +440,7 @@ pub enum ColourSpace {
     Enumerated(u32),
     /// The file gives no colour space: no usable `colr` box. The image
     /// header's unknown-colour-space flag
-    /// ([`ImageHeader::unknown_colourspace`]) does not change this.
+    /// ([`ImageHeader::unknown_colour_space`]) does not change this.
     Unknown,
 }
 

@@ -24,7 +24,7 @@ pub(crate) fn parse(payload: &[u8]) -> Option<ReaderRequirements> {
     let mask_length = reader.take::<1>()?[0];
     let mask = |reader: &mut Reader<'_>| reader.bytes(usize::from(mask_length));
     let fully_understand = mask(&mut reader)?;
-    let display_completely = mask(&mut reader)?;
+    let decode_completely = mask(&mut reader)?;
     let mut standard_features = Vec::new();
     for _ in 0..u16::from_be_bytes(*reader.take::<2>()?) {
         let feature = u16::from_be_bytes(*reader.take::<2>()?);
@@ -44,7 +44,7 @@ pub(crate) fn parse(payload: &[u8]) -> Option<ReaderRequirements> {
     reader.0.is_empty().then_some(ReaderRequirements {
         mask_length,
         fully_understand,
-        display_completely,
+        decode_completely,
         standard_features,
         vendor_features,
     })

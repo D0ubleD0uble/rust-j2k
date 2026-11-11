@@ -340,7 +340,7 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
         uuid_info: passed.uuid_info,
         image_header: ImageHeader {
             compression: ihdr.compression,
-            unknown_colourspace: ihdr.unknown_colourspace,
+            unknown_colour_space: ihdr.unknown_colourspace,
             ipr: ihdr.ipr,
         },
         colour_specifications: colour_specifications(&file.header),

@@ -30,7 +30,7 @@ fn expected(ml: u8) -> ReaderRequirements {
     ReaderRequirements {
         mask_length: ml,
         fully_understand: mask(0xA0),
-        display_completely: mask(0xC0),
+        decode_completely: mask(0xC0),
         standard_features: vec![
             StandardFeature {
                 feature: 5,

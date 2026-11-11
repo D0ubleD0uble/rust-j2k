@@ -13,7 +13,7 @@ use rust_j2k::{ColourSpace, Jp2Metadata, decode, read_header};
 
 /// `file5.jp2` with `ftyp`'s `MinV` set to 0x0102_0304 and `ihdr`'s `UnkC`
 /// and `IPR` set to these values.
-fn file5_with(unknown_colourspace: u8, ipr: u8) -> Vec<u8> {
+fn file5_with(unknown_colour_space: u8, ipr: u8) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/conformance/jp2/files/file5.jp2");
     let mut bytes = std::fs::read(path).unwrap();
@@ -25,7 +25,7 @@ fn file5_with(unknown_colourspace: u8, ipr: u8) -> Vec<u8> {
     // `ihdr` payload starts at 84, and `BPC`, `C`, `UnkC`, `IPR` end it.
     assert_eq!(&bytes[80..84], b"ihdr");
     assert_eq!(&bytes[94..98], &[7, 7, 0, 0]);
-    bytes[96] = unknown_colourspace;
+    bytes[96] = unknown_colour_space;
     bytes[97] = ipr;
     bytes
 }
@@ -33,7 +33,7 @@ fn file5_with(unknown_colourspace: u8, ipr: u8) -> Vec<u8> {
 /// Check every field the box dump gives, and the `ihdr` flags set by
 /// [`file5_with`].
 #[track_caller]
-fn check(jp2: &Jp2Metadata, unknown_colourspace: u8, ipr: u8) {
+fn check(jp2: &Jp2Metadata, unknown_colour_space: u8, ipr: u8) {
     assert_eq!(jp2.file_type.brand, *b"jpx ");
     assert_eq!(jp2.file_type.minor_version, 0x0102_0304);
     // The encoder wrote `00 00 00 03` after `MinV`; by I.5.2's layout it is
@@ -45,8 +45,8 @@ fn check(jp2: &Jp2Metadata, unknown_colourspace: u8, ipr: u8) {
 
     let header = jp2.image_header;
     assert_eq!(
-        (header.compression, header.unknown_colourspace, header.ipr),
-        (7, unknown_colourspace, ipr)
+        (header.compression, header.unknown_colour_space, header.ipr),
+        (7, unknown_colour_space, ipr)
     );
 
     // `rreq`: ML 1, FUAM A0, DCM C0, standard features 5, 61 and 43 with
@@ -54,7 +54,7 @@ fn check(jp2: &Jp2Metadata, unknown_colourspace: u8, ipr: u8) {
     let rreq = jp2.reader_requirements.as_ref().expect("an rreq");
     assert_eq!(rreq.mask_length, 1);
     assert_eq!(rreq.fully_understand, [0xA0]);
-    assert_eq!(rreq.display_completely, [0xC0]);
+    assert_eq!(rreq.decode_completely, [0xC0]);
     let features: Vec<_> = rreq
         .standard_features
         .iter()
@@ -87,18 +87,18 @@ fn check(jp2: &Jp2Metadata, unknown_colourspace: u8, ipr: u8) {
 
 #[test]
 fn read_header_reports_the_ftyp_ihdr_colr_and_rreq_fields() {
-    for (unknown_colourspace, ipr) in [(1, 0), (0, 1)] {
-        let bytes = file5_with(unknown_colourspace, ipr);
+    for (unknown_colour_space, ipr) in [(1, 0), (0, 1)] {
+        let bytes = file5_with(unknown_colour_space, ipr);
         let jp2 = read_header(&bytes).unwrap().jp2.unwrap();
-        check(&jp2, unknown_colourspace, ipr);
+        check(&jp2, unknown_colour_space, ipr);
     }
 }
 
 #[test]
 fn decode_reports_the_ftyp_ihdr_colr_and_rreq_fields() {
-    for (unknown_colourspace, ipr) in [(1, 0), (0, 1)] {
-        let bytes = file5_with(unknown_colourspace, ipr);
+    for (unknown_colour_space, ipr) in [(1, 0), (0, 1)] {
+        let bytes = file5_with(unknown_colour_space, ipr);
         let jp2 = decode(&bytes).unwrap().jp2.unwrap();
-        check(&jp2, unknown_colourspace, ipr);
+        check(&jp2, unknown_colour_space, ipr);
     }
 }
