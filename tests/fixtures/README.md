@@ -219,6 +219,8 @@ source codestream and the oracle command.
 | `jp2_palette_subsampled_big_first`, `jp2_palette_subsampled_small_first` | a two-component pair coded by the script (`opj_compress -i sub.raw -o sub.j2k -F 24,16,2,8,u@1x1:2x2 -n 2`): component 0 full resolution, component 1 sub-sampled 2x2 | one palette and one direct channel from components of different sub-sampling, in both orders | OpenJPEG crashes on the first (`free(): invalid pointer`) and leaves 287 of 384 direct-channel samples unset on the second, so: `opj_decompress` on the bare codestream, then the palette applied by table lookup in the script. Each channel keeps its own grid (owner-approved deviation) |
 | `jp2_sycc_420_odd`, `jp2_sycc_422_odd` | three planes coded by the script (`opj_compress -i sycc.raw -o sycc.j2k -F <w>,<h>,3,8,u@1x1:<d>:<d> -d 5,3 -mct 0 -n 2`, `<d>` 2x2 for a 14x12 image, 2x1 for 13x5): luma full resolution, chroma sub-sampled, origin (5, 3) | `colr` sYCC; for `ColourOutput::Srgb`, chroma replication at an odd origin | as coded: `opj_decompress -c K` on the bare codestream, one component at a time, so its sYCC heuristic stays out. A second snapshot, `<name>.srgb.json`, is `opj_decompress` on the `.jp2` (sYCC converted); `tests/jp2_srgb.rs` grades the sRGB output within 1 of it (OpenJPEG's formula differs, owner-approved deviation) and `src/jp2/srgb_tests.rs` matches it exactly with OpenJPEG's formula. A third, `<name>.srgb_r1.json`, is `opj_decompress -r 1` on the `.jp2`; `tests/jp2_sycc_replication.rs` grades the sRGB output at `with_resolution_reduction(1)` within 1 of it |
 | `jp2_sycc_420_even`, `jp2_sycc_422_even` | the same script and command with `-d 6,2`, for a 13x11 (4:2:0) and an 11x5 (4:2:2) image | `colr` sYCC; chroma replication at an even origin. The `jp2_boxes` fuzz target pins the 4:2:0 codestream | as for the odd ones: `.expected.json` as coded, `.srgb.json` and `.srgb_r1.json` from `opj_decompress` on the `.jp2` (without and with `-r 1`), graded within 1 by `tests/jp2_sycc_replication.rs` |
+| `jp2_metadata_boxes` | the `jp2c` of `jp2_cdef_rgba` | the metadata boxes no other file has: `colr` sRGB, then `METH` 3 (ignored), then a misplaced sYCC `colr` at the top level after `jp2h` (counted); `cdef` with channel 3 premultiplied opacity for color 2 (nothing moves); `res ` with `resc` `[300, 7, 254, 3, -1, 3]` and `resd` `[72, 1, 96, 5, 2, -128]`; `ihdr` `IPR` 1, a `jp2i` before and after the codestream, and a `uinf` with two UUIDs and a `url `. Its whole `jp2` section is written by `scripts/gen-jp2-box-snapshots.py` | `opj_decompress` on the `.jp2` |
+| `jp2_signed16` | a signed 16-bit plane coded by the script (`opj_compress -i signed16.raw -o signed16.j2k -F 24,16,1,16,s -n 3`), samples from -30000 to 29967 | `colr` gray (`EnumCS` 17); negative 16-bit samples | `opj_decompress` on the `.jp2` |
 
 They are ours, built over the Apache-2.0 / synthetic codestreams above.
 
@@ -473,8 +475,32 @@ by hand on `file5.jp2` and `file7.jp2` against `xxd` of the box bytes and
 fields): `ftyp` `jpx `, version 0, compatibility `00000003`, `jp2 `, `jpx `,
 `jpxb`; `ihdr` `C` 7, `UnkC` 0, `IPR` 0; `rreq` `ML` 1, `FUAM` a0, `DCM` c0; `colr`
 `METH` 2 (546 and 13332 profile bytes) then `METH` 1 `EnumCS` 21 and 20.
-No fixture has a vendor feature in its `rreq`, so `vendor_features` is
-always empty here.
+For `jp2_metadata_boxes` it writes the whole `jp2` section, with the checks
+it makes for `jp2_real/metadata.json`.
+
+### Box-layer edge cases (`conformance/jp2/edge_cases.json`)
+
+Cases no committed file has, each made by patching `file5.jp2` (a vendor
+feature in `rreq`; a top-level `colr` before the `jp2h`, between the `jp2h`
+and the `jp2c`, and after the `jp2c`; a second `jp2h`; a malformed first
+`rreq` before a well-formed one). The walker defines each case's edits in
+`edge_cases()` and writes them with the four box fields it reads from the
+patched bytes: `{"cases": {"<name>": {"note", "edits": [{"at", "remove",
+"insert" (hex)}], "boxes": {...}}}}`. `tests/jp2_header_fields.rs` applies
+the same edits to `file5.jp2` and checks `read_header` and `decode` against
+`boxes`. OpenJPEG 2.5.0 decodes every patched file to the same samples as
+`file5.jp2`, and ignores the early `colr` ("JPEG2000 Header box not read
+yet"). The early `colr` sits directly after the `ftyp` on purpose: that is
+the only place before the `jp2h` where OpenJPEG 2.5.0 ignores a header box.
+It ORs its unknown-box state (0x7fffffff, which includes the header-read bit)
+into its state both after a box it has no handler for (`jp2.c` around line
+2396, such as `rreq`) and after a misplaced header box it ignores (around line
+2335). So any later top-level header box before the `jp2h` is read as if the
+`jp2h` had been: a `colr` after file5's `rreq`, or the second of two `colr`
+boxes after the `ftyp`, becomes its color space and changes its output. This
+decoder ignores those boxes; those cases are not pinned. The edits hold only bytes written by
+the walker (the second `jp2h` copies file5's 14-byte `ihdr`); the cases need
+`file5.jp2`, so they live beside it and are left out of the crate with it.
 
 ## Example
 

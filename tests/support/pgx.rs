@@ -188,6 +188,11 @@ mod tests {
         // 12-bit signed occupies two bytes; -1 is 0xFFFF, not 0x0FFF.
         let image = parse_pgx(&pgx("PG ML -12 2 1", &[0xFF, 0xFF, 0x07, 0xFF])).unwrap();
         assert_eq!(image.samples, vec![-1, 2047]);
+
+        // 16-bit signed fills its two bytes: the whole range reads back.
+        let body = [0x80, 0x00, 0xFF, 0xFE, 0x8A, 0xD0, 0x7F, 0xFF];
+        let image = parse_pgx(&pgx("PG ML -16 4 1", &body)).unwrap();
+        assert_eq!(image.samples, vec![-32768, -2, -30000, 32767]);
     }
 
     /// Samples land in `i32`. An unsigned 32-bit sample past `i32::MAX` has no

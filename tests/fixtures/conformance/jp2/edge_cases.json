@@ -1,0 +1,387 @@
+{
+  "_comment": "Box-layer edge cases made by patching ISO/IEC 15444-4 file5.jp2. Each case lists its edits (remove `remove` bytes at offset `at` and insert the `insert` hex there, in order) and the ftyp, ihdr, colr and rreq fields that the box walker in scripts/gen-jp2-box-snapshots.py reads from the patched bytes (not the decoder). tests/jp2_header_fields.rs applies the same edits; see tests/fixtures/README.md.",
+  "cases": {
+    "rreq_vendor_features": {
+      "note": "file5's rreq replaced by one with ML 2, one standard feature and two vendor features",
+      "edits": [
+        {
+          "at": 44,
+          "remove": 24,
+          "insert": "000000397272657102a000c0000001000580000002000102030405060708090a0b0c0d0e0f2000f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff1000"
+        }
+      ],
+      "boxes": {
+        "file_type": {
+          "brand": "jpx ",
+          "minor_version": 0,
+          "compatibility": [
+            "\\x00\\x00\\x00\\x03",
+            "jp2 ",
+            "jpx ",
+            "jpxb"
+          ]
+        },
+        "image_header": {
+          "compression": 7,
+          "unknown_colour_space": 0,
+          "ipr": 0
+        },
+        "colour_specifications": [
+          {
+            "method": 2,
+            "precedence": 0,
+            "approximation": 1,
+            "data_len": 546,
+            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+          },
+          {
+            "method": 1,
+            "precedence": 1,
+            "approximation": 1,
+            "data_len": 4,
+            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "enum_cs": 21
+          }
+        ],
+        "reader_requirements": {
+          "mask_length": 2,
+          "fully_understand": "a000",
+          "decode_completely": "c000",
+          "standard_features": [
+            [
+              5,
+              "8000"
+            ]
+          ],
+          "vendor_features": [
+            [
+              "000102030405060708090a0b0c0d0e0f",
+              "2000"
+            ],
+            [
+              "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+              "1000"
+            ]
+          ]
+        }
+      }
+    },
+    "colr_before_jp2h": {
+      "note": "an sRGB colr at the top level before the first jp2h, just after the ftyp: not counted",
+      "edits": [
+        {
+          "at": 44,
+          "remove": 0,
+          "insert": "0000000f636f6c7201000000000010"
+        }
+      ],
+      "boxes": {
+        "file_type": {
+          "brand": "jpx ",
+          "minor_version": 0,
+          "compatibility": [
+            "\\x00\\x00\\x00\\x03",
+            "jp2 ",
+            "jpx ",
+            "jpxb"
+          ]
+        },
+        "image_header": {
+          "compression": 7,
+          "unknown_colour_space": 0,
+          "ipr": 0
+        },
+        "colour_specifications": [
+          {
+            "method": 2,
+            "precedence": 0,
+            "approximation": 1,
+            "data_len": 546,
+            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+          },
+          {
+            "method": 1,
+            "precedence": 1,
+            "approximation": 1,
+            "data_len": 4,
+            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "enum_cs": 21
+          }
+        ],
+        "reader_requirements": {
+          "mask_length": 1,
+          "fully_understand": "a0",
+          "decode_completely": "c0",
+          "standard_features": [
+            [
+              5,
+              "80"
+            ],
+            [
+              61,
+              "60"
+            ],
+            [
+              43,
+              "40"
+            ]
+          ],
+          "vendor_features": []
+        }
+      }
+    },
+    "colr_after_jp2c": {
+      "note": "an sRGB colr at the top level after the jp2c: not counted",
+      "edits": [
+        {
+          "at": 586560,
+          "remove": 0,
+          "insert": "0000000f636f6c7201000000000010"
+        }
+      ],
+      "boxes": {
+        "file_type": {
+          "brand": "jpx ",
+          "minor_version": 0,
+          "compatibility": [
+            "\\x00\\x00\\x00\\x03",
+            "jp2 ",
+            "jpx ",
+            "jpxb"
+          ]
+        },
+        "image_header": {
+          "compression": 7,
+          "unknown_colour_space": 0,
+          "ipr": 0
+        },
+        "colour_specifications": [
+          {
+            "method": 2,
+            "precedence": 0,
+            "approximation": 1,
+            "data_len": 546,
+            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+          },
+          {
+            "method": 1,
+            "precedence": 1,
+            "approximation": 1,
+            "data_len": 4,
+            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "enum_cs": 21
+          }
+        ],
+        "reader_requirements": {
+          "mask_length": 1,
+          "fully_understand": "a0",
+          "decode_completely": "c0",
+          "standard_features": [
+            [
+              5,
+              "80"
+            ],
+            [
+              61,
+              "60"
+            ],
+            [
+              43,
+              "40"
+            ]
+          ],
+          "vendor_features": []
+        }
+      }
+    },
+    "colr_between_jp2h_and_jp2c": {
+      "note": "an sRGB colr at the top level after the jp2h and before the jp2c: counted, after the jp2h's two",
+      "edits": [
+        {
+          "at": 670,
+          "remove": 0,
+          "insert": "0000000f636f6c7201000000000010"
+        }
+      ],
+      "boxes": {
+        "file_type": {
+          "brand": "jpx ",
+          "minor_version": 0,
+          "compatibility": [
+            "\\x00\\x00\\x00\\x03",
+            "jp2 ",
+            "jpx ",
+            "jpxb"
+          ]
+        },
+        "image_header": {
+          "compression": 7,
+          "unknown_colour_space": 0,
+          "ipr": 0
+        },
+        "colour_specifications": [
+          {
+            "method": 2,
+            "precedence": 0,
+            "approximation": 1,
+            "data_len": 546,
+            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+          },
+          {
+            "method": 1,
+            "precedence": 1,
+            "approximation": 1,
+            "data_len": 4,
+            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "enum_cs": 21
+          },
+          {
+            "method": 1,
+            "precedence": 0,
+            "approximation": 0,
+            "data_len": 4,
+            "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+            "enum_cs": 16
+          }
+        ],
+        "reader_requirements": {
+          "mask_length": 1,
+          "fully_understand": "a0",
+          "decode_completely": "c0",
+          "standard_features": [
+            [
+              5,
+              "80"
+            ],
+            [
+              61,
+              "60"
+            ],
+            [
+              43,
+              "40"
+            ]
+          ],
+          "vendor_features": []
+        }
+      }
+    },
+    "second_jp2h": {
+      "note": "a second jp2h before the jp2c: its ihdr (UnkC 1, IPR 1) is ignored and its colr is counted after the first jp2h's two",
+      "edits": [
+        {
+          "at": 670,
+          "remove": 0,
+          "insert": "0000002d6a703268000000166968647200000200000003000003070701010000000f636f6c7201020000000011"
+        }
+      ],
+      "boxes": {
+        "file_type": {
+          "brand": "jpx ",
+          "minor_version": 0,
+          "compatibility": [
+            "\\x00\\x00\\x00\\x03",
+            "jp2 ",
+            "jpx ",
+            "jpxb"
+          ]
+        },
+        "image_header": {
+          "compression": 7,
+          "unknown_colour_space": 0,
+          "ipr": 0
+        },
+        "colour_specifications": [
+          {
+            "method": 2,
+            "precedence": 0,
+            "approximation": 1,
+            "data_len": 546,
+            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+          },
+          {
+            "method": 1,
+            "precedence": 1,
+            "approximation": 1,
+            "data_len": 4,
+            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "enum_cs": 21
+          },
+          {
+            "method": 1,
+            "precedence": 2,
+            "approximation": 0,
+            "data_len": 4,
+            "data_sha256": "8e00d1c0c8ffe94540e534e256d4589be3e3865dc0559a732697aef38a364e83",
+            "enum_cs": 17
+          }
+        ],
+        "reader_requirements": {
+          "mask_length": 1,
+          "fully_understand": "a0",
+          "decode_completely": "c0",
+          "standard_features": [
+            [
+              5,
+              "80"
+            ],
+            [
+              61,
+              "60"
+            ],
+            [
+              43,
+              "40"
+            ]
+          ],
+          "vendor_features": []
+        }
+      }
+    },
+    "malformed_rreq_first": {
+      "note": "a cut-short rreq (ML 1, FUAM a0, then nothing) before file5's well-formed one: the first rreq counts, so there is none",
+      "edits": [
+        {
+          "at": 44,
+          "remove": 0,
+          "insert": "0000000a7272657101a0"
+        }
+      ],
+      "boxes": {
+        "file_type": {
+          "brand": "jpx ",
+          "minor_version": 0,
+          "compatibility": [
+            "\\x00\\x00\\x00\\x03",
+            "jp2 ",
+            "jpx ",
+            "jpxb"
+          ]
+        },
+        "image_header": {
+          "compression": 7,
+          "unknown_colour_space": 0,
+          "ipr": 0
+        },
+        "colour_specifications": [
+          {
+            "method": 2,
+            "precedence": 0,
+            "approximation": 1,
+            "data_len": 546,
+            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+          },
+          {
+            "method": 1,
+            "precedence": 1,
+            "approximation": 1,
+            "data_len": 4,
+            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "enum_cs": 21
+          }
+        ],
+        "reader_requirements": null
+      }
+    }
+  }
+}
