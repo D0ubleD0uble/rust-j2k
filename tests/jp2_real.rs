@@ -27,8 +27,10 @@ use support::pgx::parse_pgx;
 
 /// What a fixture must do.
 enum Outcome {
-    /// Decode equal to its extracted codestream.
-    Decodes,
+    /// Decode equal to its extracted codestream, and bit-exactly equal to the
+    /// committed OpenJPEG references `references/<stem>_<k>.pgx`, one per
+    /// component.
+    Decodes { components: usize },
     /// Decode to the committed OpenJPEG references
     /// `references/<stem>_<k>.pgx`, every sample within `max_abs` of them,
     /// with these channel labels (the file's `cdef` entries, in output order).
@@ -56,12 +58,12 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "byte.jp2",
         "ef330c025133f062b4cca8c8171f8aef4f245be975c5e534dc9ce463689c3aa0",
-        Outcome::Decodes,
+        Outcome::Decodes { components: 1 },
     ),
     (
         "byte_tlm_plt.jp2",
         "c2bccd9839cd4cb24ac6bc84fd888d707bbf1d873af07616fa020e05ab491a49",
-        Outcome::Decodes,
+        Outcome::Decodes { components: 1 },
     ),
     (
         "byte_with_xmp.jp2",
@@ -75,7 +77,7 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "int16.jp2",
         "62fef13b5f49de6302a86fe1f18663626c0b7e5f2470893d32136bc16af690e3",
-        Outcome::Decodes,
+        Outcome::Decodes { components: 1 },
     ),
     (
         "rgb16_ecwsdk.jp2",
@@ -90,12 +92,12 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "rgbwcmyk01_YeGeo_kakadu.jp2",
         "85a6382b972a5f5b39edf70282235663c3be596c430e4d2b208b5570611cbdfe",
-        Outcome::Decodes,
+        Outcome::Decodes { components: 3 },
     ),
     (
         "small_200ppcm.jp2",
         "27a1cc037485e8e575ee57cf0f85e66146d9bc88420d49afcd874c5db6839838",
-        Outcome::Decodes,
+        Outcome::Decodes { components: 3 },
     ),
     (
         "stefan_full_rgba.jp2",
@@ -170,6 +172,31 @@ fn first_jp2c(bytes: &[u8]) -> &[u8] {
     panic!("no jp2c box");
 }
 
+/// Every component of `file` against `references/<stem>_<k>.pgx`: same
+/// geometry, depth and signedness, every sample within `max_abs`.
+fn check_references(name: &str, file: &rust_j2k::Image, max_abs: i32) {
+    let stem = name.trim_end_matches(".jp2");
+    for (k, got) in file.components.iter().enumerate() {
+        let path = dir().join(format!("references/{stem}_{k}.pgx"));
+        let raw = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let want = parse_pgx(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            (got.width, got.height, got.bit_depth, got.signed),
+            (want.width, want.height, want.bit_depth, want.signed),
+            "{name} channel {k}"
+        );
+        assert_eq!(got.samples.len(), want.samples.len(), "{name} channel {k}");
+        let pae = got
+            .samples
+            .iter()
+            .zip(&want.samples)
+            .map(|(a, b)| (a - b).abs())
+            .max()
+            .unwrap_or(0);
+        assert!(pae <= max_abs, "{name} channel {k}: PAE {pae} > {max_abs}");
+    }
+}
+
 #[test]
 fn every_fixture_decodes_like_its_oracle() {
     let recorded = metadata();
@@ -193,7 +220,7 @@ fn every_fixture_decodes_like_its_oracle() {
             assert_eq!(image.jp2.as_ref(), Some(header_jp2), "{name}: decode");
         }
         match outcome {
-            Outcome::Decodes => {
+            Outcome::Decodes { components } => {
                 let file = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
                 let raw = decode(first_jp2c(&bytes))
                     .unwrap_or_else(|e| panic!("{name}: raw codestream: {e}"));
@@ -201,31 +228,13 @@ fn every_fixture_decodes_like_its_oracle() {
                 assert_eq!(file.components, raw.components, "{name}");
                 assert!(file.jp2.is_some(), "{name}: JP2 metadata");
                 assert!(raw.jp2.is_none(), "{name}: raw codestream metadata");
+                assert_eq!(file.components.len(), *components, "{name}");
+                check_references(name, &file, 0);
                 decoded += 1;
             }
             Outcome::Reference { channels, max_abs } => {
                 let file = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
-                let stem = name.trim_end_matches(".jp2");
-                assert_eq!(file.components.len(), channels.len(), "{name}");
-                for (k, got) in file.components.iter().enumerate() {
-                    let path = dir().join(format!("references/{stem}_{k}.pgx"));
-                    let raw = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
-                    let want = parse_pgx(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
-                    assert_eq!(
-                        (got.width, got.height, got.bit_depth, got.signed),
-                        (want.width, want.height, want.bit_depth, want.signed),
-                        "{name} channel {k}"
-                    );
-                    assert_eq!(got.samples.len(), want.samples.len(), "{name} channel {k}");
-                    let pae = got
-                        .samples
-                        .iter()
-                        .zip(&want.samples)
-                        .map(|(a, b)| (a - b).abs())
-                        .max()
-                        .unwrap_or(0);
-                    assert!(pae <= *max_abs, "{name} channel {k}: PAE {pae} > {max_abs}");
-                }
+                check_references(name, &file, *max_abs);
                 let jp2 = file.jp2.expect("JP2 metadata");
                 assert_eq!(jp2.channels, *channels, "{name}");
                 decoded += 1;
@@ -278,7 +287,8 @@ fn the_ecw_unspecified_cdef_is_read() {
     assert_eq!(&bytes[at..at + 20], want.as_slice());
 }
 
-/// Every committed reference belongs to a `Reference` fixture.
+/// Every committed reference belongs to a graded fixture, and every graded
+/// component has one.
 #[test]
 fn every_reference_is_used() {
     let mut on_disk: Vec<String> = std::fs::read_dir(dir().join("references"))
@@ -293,6 +303,7 @@ fn every_reference_is_used() {
             Outcome::Reference { channels, .. } => {
                 Some((name.trim_end_matches(".jp2"), channels.len()))
             }
+            Outcome::Decodes { components } => Some((name.trim_end_matches(".jp2"), *components)),
             _ => None,
         })
         .flat_map(|(stem, n)| (0..n).map(move |k| format!("{stem}_{k}.pgx")))
