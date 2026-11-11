@@ -12,10 +12,11 @@ Exit status is non-zero, with a message on stderr, when a tool is missing or
 is not the expected version.
 """
 
+# Scripts that import this module cannot run under `python3 -I`: isolated mode
+# leaves the script's own directory off sys.path.
 from __future__ import annotations
 
 import ctypes
-import ctypes.util
 import re
 import shutil
 import subprocess
@@ -28,14 +29,22 @@ _COMPILED_AGAINST = re.compile(r"compiled against openjp2 library v(\S+?)\.?\s*$
 
 
 def opj_version(tool: str) -> str | None:
-    """The openjp2 version `tool -h` says it was compiled against, or None."""
+    """The openjp2 version `tool -h` says it was compiled against.
+
+    None when the tool is not on PATH, "" when `-h` shows no version banner.
+    """
     path = shutil.which(tool)
     if path is None:
         return None
-    # `-h` exits 1 in OpenJPEG 2.5; the banner is what matters.
-    result = subprocess.run([path, "-h"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    found = _COMPILED_AGAINST.search(result.stdout + result.stderr)
-    return found.group(1) if found else "unknown"
+    try:
+        # `-h` exits 1 in OpenJPEG 2.5; the banner is what matters.
+        result = subprocess.run([path, "-h"], capture_output=True, stdin=subprocess.DEVNULL,
+                                timeout=10)
+    except subprocess.TimeoutExpired:
+        sys.exit(f"`{tool} -h` did not finish in 10 s: cannot tell which OpenJPEG it is")
+    text = (result.stdout + result.stderr).decode("utf-8", errors="replace")
+    found = _COMPILED_AGAINST.search(text)
+    return found.group(1) if found else ""
 
 
 def require_openjpeg(*tools: str) -> str:
@@ -45,6 +54,8 @@ def require_openjpeg(*tools: str) -> str:
         if version is None:
             sys.exit(f"{tool} not found on PATH; run scripts/install-oracle-tools.sh "
                      f"(OpenJPEG {OPENJPEG_VERSION} is the oracle)")
+        if version == "":
+            sys.exit(f"no OpenJPEG version banner in `{tool} -h`: refusing to generate oracles")
         if version != OPENJPEG_VERSION:
             sys.exit(f"{tool} is OpenJPEG {version}, not {OPENJPEG_VERSION}: refusing to "
                      f"generate oracles with it (see docs/development.md)")
@@ -59,16 +70,22 @@ def lcms_version_text(encoded: int) -> str:
 def lcms_encoded_version() -> int:
     """`cmsGetEncodedCMMversion()` of the liblcms2 that `opj_decompress` links against.
 
-    Falls back to the library `ctypes` finds when `ldd` does not name one.
+    Exits when `ldd` names no liblcms2 (no LittleCMS, or one linked statically,
+    such as the bundled copy of a -DBUILD_THIRDPARTY=ON build): the version of
+    some other copy on the machine says nothing about what the tool uses.
     """
-    path = None
     tool = shutil.which("opj_decompress")
-    if tool is not None:
-        ldd = subprocess.run(["ldd", tool], capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        found = re.search(r"liblcms2\S*\s+=>\s+(\S+)", ldd.stdout)
-        path = found.group(1) if found else None
-    path = path or ctypes.util.find_library("lcms2") or "liblcms2.so.2"
-    lib = ctypes.CDLL(path)
+    if tool is None:
+        sys.exit("opj_decompress not found on PATH; run scripts/install-oracle-tools.sh")
+    if shutil.which("ldd") is None:
+        sys.exit("ldd not found: cannot tell which LittleCMS opj_decompress uses")
+    ldd = subprocess.run(["ldd", tool], capture_output=True, text=True, errors="replace",
+                         stdin=subprocess.DEVNULL, timeout=30)
+    found = re.search(r"liblcms2\S*\s+=>\s+(\S+)", ldd.stdout)
+    if found is None:
+        sys.exit("opj_decompress is not dynamically linked against liblcms2 (built without "
+                 "LittleCMS, or with its bundled copy): cannot check the LittleCMS version")
+    lib = ctypes.CDLL(found.group(1))
     lib.cmsGetEncodedCMMversion.restype = ctypes.c_int
     return lib.cmsGetEncodedCMMversion()
 
@@ -77,7 +94,7 @@ def require_lcms(encoded: int | None = None) -> str:
     """Exit unless LittleCMS is 2.14; return the version text.
 
     Pass the encoded version of a library already loaded, or leave it out to
-    read the one `opj_decompress` uses.
+    read the one `opj_decompress` links against (never a fallback copy).
     """
     if encoded is None:
         try:

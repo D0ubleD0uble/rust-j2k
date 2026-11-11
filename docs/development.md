@@ -53,6 +53,7 @@ For a reproducible oracle independent of the distro package, build from a
 pinned release tag:
 
 ```sh
+sudo apt-get install liblcms2-dev   # LittleCMS 2.14 (Ubuntu 24.04), linked dynamically
 git clone --depth 1 --branch v2.5.0 https://github.com/uclouvain/openjpeg
 cmake -S openjpeg -B openjpeg/build -DCMAKE_BUILD_TYPE=Release
 cmake --build openjpeg/build --target install
@@ -61,6 +62,9 @@ cmake --build openjpeg/build --target install
 The generators in `scripts/` check the version (`scripts/oracle_tools.py`) and
 exit on anything but OpenJPEG 2.5.0 (and, for the ICC oracles, LittleCMS 2.14),
 so install exactly 2.5.0. To build it from source, use the `v2.5.0` tag.
+A source build must link the system LittleCMS (`liblcms2-dev` installed, and
+`-DBUILD_THIRDPARTY=ON` left off, which would bundle an older, static copy that
+the version check cannot see).
 
 ### eccodes
 

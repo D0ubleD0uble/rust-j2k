@@ -43,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import platform
 import random
 import struct
 import subprocess
@@ -719,10 +720,24 @@ def fuzz_seeds() -> None:
     print(f"wrote {written} seeds and {builds} build copies to {out}")
 
 
+def require_platform() -> None:
+    """Exit unless this is the reference platform: x86-64 with glibc 2.39.
+
+    docs/correctness.md says LittleCMS's `pow` and `log` follow the C library,
+    so other platforms can change the ICC output bytes.
+    """
+    machine = platform.machine()
+    libc, libc_version = platform.libc_ver()
+    if machine != "x86_64" or libc != "glibc" or libc_version != "2.39":
+        sys.exit(f"this is {machine} with {libc} {libc_version}, not x86_64 with glibc 2.39: "
+                 "refusing to generate ICC oracles (see docs/correctness.md)")
+
+
 def main() -> None:
     if sys.argv[1:] == ["--fuzz-seeds"]:
         fuzz_seeds()
         return
+    require_platform()
     opj = require_openjpeg("opj_compress", "opj_decompress")
     lcms = require_lcms()
     conformance_variants(f"OpenJPEG {opj} with LittleCMS {lcms}")
