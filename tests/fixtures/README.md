@@ -356,12 +356,7 @@ scripts/gen-oracle.sh tests/fixtures/regular_latlon_lossy.j2k \
 
 # 4. irreversible 9/7: no GRIB2 producer ships lossy 9/7, so re-encode the Eta
 #    grid's samples (from step 2) with OpenJPEG's irreversible transform.
-opj_decompress -i tests/fixtures/eta_lambert_lossless.j2k -o /tmp/eta.pgx
-opj_compress -i /tmp/eta_0.pgx -o tests/fixtures/eta_lambert_irreversible.j2k -I
-scripts/gen-oracle.sh tests/fixtures/eta_lambert_irreversible.j2k \
-    --tolerance 2.0 \
-    --source "9/7 irreversible re-encode of the committed eta_lambert_lossless.j2k (NOAA Eta, Lambert 93x65, 13-bit) via opj_compress -I" \
-    --notes "Synthetic 9/7: no operational producer ships lossy 9/7 JPEG2000 (HRRR/NDFD are complex-packed, ECMWF is CCSDS), so the irreversible codestream is produced by OpenJPEG from a real grid. Bound is our-vs-OpenJPEG reconstruction tolerance, not the lossy compression error."
+scripts/gen-irreversible-fixture.sh   # checks the OpenJPEG version first
 ```
 
 Each `gen-oracle.sh` run records the exact `opj_decompress` command it ran into the

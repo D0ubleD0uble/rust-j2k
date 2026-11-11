@@ -11,8 +11,9 @@ where ``ML``/``LM`` is byte order (most/least significant first), ``+``/``-`` is
 unsigned/signed, ``depth`` is bits per sample, and each sample occupies
 ``ceil(depth/8)`` bytes. This script parses that and emits the snapshot schema
 the conformance harness reads (see ``tests/support/mod.rs`` and
-``tests/fixtures/README.md``): ``geometry``, ``tolerance``, ``samples``,
-``provenance``.
+``tests/fixtures/README.md``): ``image``, ``tolerance``, ``components``,
+``provenance``. The ``.pgx`` carries no sub-sampling, so the one component is
+written at factors 1 and the image area is its size.
 
 It is a developer/oracle tool — never run at ``cargo test`` time. Pure Python 3
 standard library, no third-party packages.
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 
 
@@ -94,16 +96,27 @@ def build_snapshot(
     if tolerance == "exact":
         tol = {"mode": "exact"}
     else:
-        tol = {"mode": "absolute", "max_abs_error": float(tolerance)}
+        try:
+            bound = float(tolerance)
+        except ValueError:
+            raise ValueError(f"tolerance must be 'exact' or a number, got {tolerance!r}")
+        if not math.isfinite(bound) or bound < 0:
+            raise ValueError(f"tolerance must be finite and >= 0, got {tolerance!r}")
+        tol = {"mode": "absolute", "max_abs_error": bound}
 
     provenance = {"source": source, "oracle_command": oracle_command}
     if notes:
         provenance["notes"] = notes
 
+    component = dict(geometry)
+    component["x_sampling"] = 1
+    component["y_sampling"] = 1
+    component["samples"] = samples
+
     return {
-        "geometry": geometry,
+        "image": {"width": geometry["width"], "height": geometry["height"]},
         "tolerance": tol,
-        "samples": samples,
+        "components": [component],
         "provenance": provenance,
     }
 
@@ -126,6 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--notes", default=None, help="optional free-form note")
     parser.add_argument(
+        "--siz-image-area",
+        default=None,
+        metavar="WxH",
+        help="SIZ image area (x1-x0)x(y1-y0); refuse if the .pgx is not this size",
+    )
+    parser.add_argument(
         "-o", "--output", default=None, help="output path (default: stdout)"
     )
     args = parser.parse_args(argv)
@@ -133,14 +152,25 @@ def main(argv: list[str] | None = None) -> int:
     with open(args.pgx, "rb") as f:
         geometry, samples = parse_pgx(f.read())
 
-    snapshot = build_snapshot(
-        geometry,
-        samples,
-        args.tolerance,
-        args.source,
-        args.oracle_command,
-        args.notes,
-    )
+    if args.siz_image_area is not None:
+        want = f"{geometry['width']}x{geometry['height']}"
+        if args.siz_image_area != want:
+            sys.exit(
+                f"pgx_to_expected: the .pgx is {want} but SIZ says the image area is "
+                f"{args.siz_image_area}: sub-sampled input is not supported"
+            )
+
+    try:
+        snapshot = build_snapshot(
+            geometry,
+            samples,
+            args.tolerance,
+            args.source,
+            args.oracle_command,
+            args.notes,
+        )
+    except ValueError as err:
+        sys.exit(f"pgx_to_expected: {err}")
     text = json.dumps(snapshot, indent=2) + "\n"
 
     if args.output:

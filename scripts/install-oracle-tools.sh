@@ -84,7 +84,7 @@ install_cargo_tools
 
 log "verifying the toolchain is on PATH:"
 missing=0
-for tool in opj_dump opj_decompress grib_dump cargo-deny cargo-fuzz; do
+for tool in opj_dump opj_decompress opj_compress grib_dump cargo-deny cargo-fuzz; do
 	if have "$tool"; then
 		printf '  %-16s ok\n' "$tool"
 	else
@@ -96,5 +96,17 @@ done
 if [[ $missing -ne 0 ]]; then
 	log "some tools are still missing; see docs/development.md"
 	exit 1
+fi
+
+# The package manager may ship another OpenJPEG; the generators refuse that.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! python3 "$script_dir/oracle_tools.py" opj_decompress opj_compress opj_dump; then
+	log "the installed OpenJPEG is missing or is not 2.5.0: build 2.5.0 from source as"
+	log "described in docs/development.md"
+	exit 1
+fi
+# The LittleCMS check reads ldd, which macOS lacks; only the ICC oracles need it.
+if [[ "$(uname -s)" == Linux ]] && ! python3 "$script_dir/oracle_tools.py" --lcms opj_decompress; then
+	log "warning: LittleCMS is not 2.14: ICC oracles (gen-icc-oracles.py) cannot be regenerated here"
 fi
 log "all oracle tools present"
