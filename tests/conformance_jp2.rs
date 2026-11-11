@@ -72,7 +72,10 @@ fn every_jp2_file_header_matches_its_box_dump() {
     }
     // File 7: the rreq, and both colr boxes.
     let file7 = &dumps.files["file7.jp2"];
-    let rreq = file7.reader_requirements.as_ref().expect("file7 has an rreq");
+    let rreq = file7
+        .reader_requirements
+        .as_ref()
+        .expect("file7 has an rreq");
     assert_eq!(rreq.standard_features.len(), 3);
     assert_eq!(file7.colour_specifications.len(), 2);
 }
