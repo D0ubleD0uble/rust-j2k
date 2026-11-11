@@ -71,9 +71,16 @@ which rewrites the synthetic snapshots without these fields):
 
 - `tests/fixtures/jp2_real/metadata.json`: every `*.jp2` there, written
   from scratch.
-- `tests/fixtures/jp2_*.expected.json`: the `jp2` section when the snapshot
-  has one, else a `jp2_boxes` section.
+- `tests/fixtures/jp2_*.expected.json`: for a fixture in `FULL_RECORD`, the
+  whole `jp2` section, as for `metadata.json` and with its checks; for the
+  others, the four box fields in the `jp2` section when the snapshot has
+  one, else a `jp2_boxes` section.
 - `tests/fixtures/conformance/jp2/boxes.json`: file1..file9 (created).
+- `tests/fixtures/conformance/jp2/edge_cases.json` (created): box-layer edge
+  cases no committed file has, each made by patching `file5.jp2` with the
+  edits `edge_cases` lists. It records each case's edits, which
+  tests/jp2_header_fields.rs applies to the same bytes, and the four box
+  fields this walker reads from the patched bytes.
 
 Usage: python3 -I scripts/gen-jp2-box-snapshots.py
 """
@@ -88,6 +95,106 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"
+
+
+# The synthetic fixtures whose whole `jp2` record this walker writes.
+FULL_RECORD = {"jp2_metadata_boxes.jp2"}
+
+
+def jp2box(kind: bytes, payload: bytes) -> bytes:
+    return struct.pack(">I", 8 + len(payload)) + kind + payload
+
+
+# file5.jp2's top-level boxes: jP (at 0, 12 bytes), ftyp (12, 32), rreq (44,
+# 24), jp2h (68, 602), jp2c (670, 585890), then the end of the file (586560).
+FILE5_RREQ, FILE5_JP2H, FILE5_JP2C, FILE5_END = 44, 68, 670, 586560
+COLR_SRGB = jp2box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 16))
+
+
+def file5_second_jp2h(file5: bytes) -> bytes:
+    """A second `jp2h`: file5's `ihdr` with `UnkC` 1 and `IPR` 1, which is
+    ignored, then an enumerated greyscale `colr` with `PREC` 2."""
+    ihdr = bytearray(file5[84:98])
+    ihdr[12:14] = bytes([1, 1])
+    colr = jp2box(b"colr", bytes([1, 2, 0]) + struct.pack(">I", 17))
+    return jp2box(b"jp2h", jp2box(b"ihdr", bytes(ihdr)) + colr)
+
+
+def rreq_with_vendor_features() -> bytes:
+    """An `rreq` with `ML` 2, one standard feature and two vendor features."""
+    payload = bytes([2]) + bytes.fromhex("a000") + bytes.fromhex("c000")
+    payload += struct.pack(">HH", 1, 5) + bytes.fromhex("8000")
+    payload += struct.pack(">H", 2)
+    payload += bytes(range(16)) + bytes.fromhex("2000")
+    payload += bytes(range(0xF0, 0x100)) + bytes.fromhex("1000")
+    return jp2box(b"rreq", payload)
+
+
+def edge_cases(file5: bytes) -> list[tuple[str, str, list[tuple[int, int, bytes]]]]:
+    """(name, note, edits) per case. Each edit is (at, remove, insert): remove
+    `remove` bytes at offset `at` and insert `insert` there, applied in order
+    to the bytes the edits before it left.
+
+    The `colr` before the first `jp2h` goes before file5's `rreq`, where
+    OpenJPEG 2.5.0 ignores it too ("JPEG2000 Header box not read yet"). After
+    a box OpenJPEG has no handler for, such as `rreq`, it reads the `colr`
+    instead: its unknown-box state (0x7fffffff) sets the header-read bit.
+    That case is not pinned here."""
+    return [
+        (
+            "rreq_vendor_features",
+            "file5's rreq replaced by one with ML 2, one standard feature and two "
+            "vendor features",
+            [(FILE5_RREQ, 24, rreq_with_vendor_features())],
+        ),
+        (
+            "colr_before_jp2h",
+            "an sRGB colr at the top level before the first jp2h, just after the ftyp: "
+            "not counted",
+            [(FILE5_RREQ, 0, COLR_SRGB)],
+        ),
+        (
+            "colr_after_jp2c",
+            "an sRGB colr at the top level after the jp2c: not counted",
+            [(FILE5_END, 0, COLR_SRGB)],
+        ),
+        (
+            "colr_between_jp2h_and_jp2c",
+            "an sRGB colr at the top level after the jp2h and before the jp2c: counted, "
+            "after the jp2h's two",
+            [(FILE5_JP2C, 0, COLR_SRGB)],
+        ),
+        (
+            "second_jp2h",
+            "a second jp2h before the jp2c: its ihdr (UnkC 1, IPR 1) is ignored and its "
+            "colr is counted after the first jp2h's two",
+            [(FILE5_JP2C, 0, file5_second_jp2h(file5))],
+        ),
+        (
+            "malformed_rreq_first",
+            "a cut-short rreq (ML 1, FUAM a0, then nothing) before file5's well-formed "
+            "one: the first rreq counts, so there is none",
+            [(FILE5_RREQ, 0, jp2box(b"rreq", bytes.fromhex("01a0")))],
+        ),
+    ]
+
+
+def apply_edits(data: bytes, edits: list[tuple[int, int, bytes]]) -> bytes:
+    out = bytearray(data)
+    for at, remove, insert in edits:
+        if at + remove > len(out):
+            sys.exit(f"an edit at {at} runs past the end of the file")
+        out[at : at + remove] = insert
+    return bytes(out)
+
+
+EDGE_COMMENT = (
+    "Box-layer edge cases made by patching ISO/IEC 15444-4 file5.jp2. Each case lists its "
+    "edits (remove `remove` bytes at offset `at` and insert the `insert` hex there, in "
+    "order) and the ftyp, ihdr, colr and rreq fields that the box walker in "
+    "scripts/gen-jp2-box-snapshots.py reads from the patched bytes (not the decoder). "
+    "tests/jp2_header_fields.rs applies the same edits; see tests/fixtures/README.md."
+)
 
 
 REAL_COMMENT = (
@@ -415,10 +522,13 @@ def rewrite(path: Path, edit) -> None:
 
 def main() -> None:
     for jp2 in sorted(FIXTURES.glob("jp2_*.jp2")):
-        found = dump(jp2)
+        full = jp2.name in FULL_RECORD
+        found = record(jp2) if full else dump(jp2)
 
-        def edit(value: dict, found=found) -> None:
-            if "jp2" in value:
+        def edit(value: dict, found=found, full=full) -> None:
+            if full:
+                value["jp2"] = found
+            elif "jp2" in value:
                 value["jp2"].update(found)
             else:
                 value["jp2_boxes"] = found
@@ -434,6 +544,24 @@ def main() -> None:
     )
     (conformance / "boxes.json").write_text(
         json.dumps({"_comment": comment, "files": files}, indent=2) + "\n"
+    )
+
+    file5 = (conformance / "files" / "file5.jp2").read_bytes()
+    if len(file5) != FILE5_END or file5[FILE5_JP2C + 4 : FILE5_JP2C + 8] != b"jp2c":
+        sys.exit("file5.jp2 is not the file the edge cases were written for")
+    cases = {}
+    for name, note, edits in edge_cases(file5):
+        try:
+            found = walk(apply_edits(file5, edits))[0]
+        except SystemExit as refusal:
+            sys.exit(f"edge case {name}: {refusal}")
+        cases[name] = {
+            "note": note,
+            "edits": [{"at": at, "remove": n, "insert": data.hex()} for at, n, data in edits],
+            "boxes": found,
+        }
+    (conformance / "edge_cases.json").write_text(
+        json.dumps({"_comment": EDGE_COMMENT, "cases": cases}, indent=2) + "\n"
     )
 
     # Last, so a refusal here does not stop the targets above. The record is
