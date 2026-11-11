@@ -47,20 +47,24 @@ edited or swapped file fails there.
 
 ## Oracle
 
-For the five files without a `cdef` box the oracle is the file's own
-codestream: `decode` of the `.jp2` must equal `decode` of its first `jp2c`
-box's contents. They were also checked by hand against `opj_decompress` 2.5.0
-(`-i <file>.jp2 -o <file>.pgx`, one PGX per component): every sample matched.
+Every file that decodes is graded against `references/<stem>_<k>.pgx`, `opj_decompress`
+2.5.0's output for the `.jp2` (`opj_decompress -i <file>.jp2 -o <stem>.pgx`,
+one PGX per component). `scripts/gen-jp2-references.sh` regenerates all of
+them; it stops first unless `opj_decompress` is the pinned version.
 
-The three files with a `cdef` box (`3_13bit_and_1bit.jp2`,
-`byte_with_xmp.jp2`, `stefan_full_rgba.jp2`) are graded against
-`references/<stem>_<k>.pgx`, `opj_decompress` 2.5.0's output for the `.jp2`
-(`opj_decompress -i <file>.jp2 -o <stem>.pgx`), and their channel labels
-against their `cdef` boxes. Two match bit-exactly. `stefan_full_rgba.jp2` is
-9/7 and is graded within 1: 10 of its 97200 samples differ from OpenJPEG's by
-1, from 9/7 float rounding, mostly OpenJPEG's 2/K constant (see
-`docs/correctness.md`). The references are OpenJPEG output for files whose
-rights are not confirmed, so they share the status in Rights above.
+- The five files without a `cdef` box (`byte`, `byte_tlm_plt`, `int16`,
+  `rgbwcmyk01_YeGeo_kakadu`, `small_200ppcm`) match their references
+  bit-exactly. `decode` of each must also equal `decode` of its first `jp2c`
+  box's contents.
+- The three files with a `cdef` box (`3_13bit_and_1bit.jp2`,
+  `byte_with_xmp.jp2`, `stefan_full_rgba.jp2`) are also graded on their
+  channel labels against their `cdef` boxes. Two match bit-exactly.
+  `stefan_full_rgba.jp2` is 9/7 and is graded within 1: 10 of its 97200
+  samples differ from OpenJPEG's by 1, from 9/7 float rounding, mostly
+  OpenJPEG's 2/K constant (see `docs/correctness.md`).
+
+The references are OpenJPEG output for files whose rights are not confirmed,
+so they share the status in Rights above.
 
 `metadata.json` records what each file's header says (colour, channels,
 resolution, top-level `xml ` and `uuid` boxes, and the `ftyp`, `ihdr`, `colr`
