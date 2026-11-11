@@ -745,7 +745,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "sRGB-declared 4:2:0",
             file(sycc_jp2c, &enumerated(16), &[]),
             is_unsupported,
-            "different sub-sampling (1x1 and 2x2)",
+            "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
         ),
         (
             // OpenJPEG converts 4:2:0 and 4:2:2 as sYCC whatever colour
@@ -753,7 +753,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "greyscale-declared 4:2:0 on three channels",
             file(sycc_jp2c, &enumerated(17), &[]),
             is_unsupported,
-            "different sub-sampling (1x1 and 2x2)",
+            "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
         ),
         (
             "RGB profile on 4:2:0",
@@ -771,7 +771,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "greyscale-declared 4:2:2 on three channels",
             file(sycc_422_jp2c, &enumerated(17), &[]),
             is_unsupported,
-            "different sub-sampling (1x1 and 2x1)",
+            "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
         ),
         (
             "sYCC with sub-sampled luma",
@@ -975,33 +975,42 @@ fn grey_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
     expect_err(
         decode_srgb(&file(sycc_jp2c, &enumerated(17), &[cdef])),
         is_unsupported,
-        "different sub-sampling (1x1 and 2x2)",
+        "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
     );
 }
 
+/// A `cdef` box of these (channel, type, association) entries.
+fn cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
+    let mut payload = (entries.len() as u16).to_be_bytes().to_vec();
+    for &(channel, kind, association) in entries {
+        for field in [channel, kind, association] {
+            payload.extend_from_slice(&field.to_be_bytes());
+        }
+    }
+    bx(b"cdef", &payload)
+}
+
 /// The sYCC guess holds for a file declared sRGB too: a 4:2:0 or 4:2:2 file
-/// whose `cdef` labels only channel 0 as colour 1 (the others opacity, or
-/// unspecified) is refused, as without a `cdef`. `opj_decompress` 2.5.0, with
-/// and without `-force-rgb`, writes three full-size planes for each, the same
-/// as for the file with no `cdef`.
+/// is refused whatever its `cdef` labels, as without one: only colour 1 (the
+/// others opacity, or unspecified), no colour at all, or colours 2 and 3
+/// only. `opj_decompress` 2.5.0, with and without `-force-rgb`, writes three
+/// full-size planes for each, byte-identical to the file with no `cdef`.
 #[test]
-fn srgb_4_2_0_or_4_2_2_with_only_colour_1_in_cdef_is_refused() {
-    let opacity = bx(
-        b"cdef",
-        &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0],
-    );
-    let unspecified = bx(
-        b"cdef",
-        &[
-            0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 2, 0xFF, 0xFF, 0xFF, 0xFF,
-        ],
-    );
-    for (layout, jp2, fragment) in [
-        ("4:2:0", SYCC_420, "different sub-sampling (1x1 and 2x2)"),
-        ("4:2:2", SYCC_422, "different sub-sampling (1x1 and 2x1)"),
-    ] {
+fn srgb_4_2_0_or_4_2_2_is_refused_whatever_cdef_labels() {
+    const NONE: u16 = 0xFFFF;
+    let cdefs = [
+        ("colour 1, opacity", cdef(&[(0, 0, 1), (1, 1, 0), (2, 1, 0)])),
+        (
+            "colour 1, unspecified",
+            cdef(&[(0, 0, 1), (1, NONE, NONE), (2, NONE, NONE)]),
+        ),
+        ("no colour", cdef(&[(0, 1, 0), (1, 1, 0), (2, 1, 0)])),
+        ("colours 2 and 3", cdef(&[(0, 1, 0), (1, 0, 2), (2, 0, 3)])),
+    ];
+    let fragment = "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC";
+    for (layout, jp2) in [("4:2:0", SYCC_420), ("4:2:2", SYCC_422)] {
         let codestream = top_box(jp2, b"jp2c");
-        for (name, cdef) in [("opacity", &opacity), ("unspecified", &unspecified)] {
+        for (name, cdef) in &cdefs {
             let what = format!("{layout}, {name}");
             let bytes = file(codestream, &enumerated(16), std::slice::from_ref(cdef));
             decode(&bytes).unwrap_or_else(|e| panic!("{what}: AsCoded must decode, got {e}"));
@@ -1014,38 +1023,49 @@ fn srgb_4_2_0_or_4_2_2_with_only_colour_1_in_cdef_is_refused() {
     }
 }
 
-/// A file declared sRGB on one or two channels passes through as coded, as
-/// for every other colour space: OpenJPEG reads any image of two or fewer
-/// components as grey (and grey plus opacity). Two channels of different
-/// sign or depth (here from a palette) are not refused; `opj_decompress`
-/// writes them as coded (8-bit unsigned and 8-bit signed, 8-bit and
-/// 12-bit). The metadata stays as declared.
+/// A file declared sRGB or greyscale on one or two channels passes through
+/// as coded, as for every other colour space: OpenJPEG reads any image of
+/// two or fewer components as grey (and grey plus opacity). Two channels of
+/// different sign or depth (here from a palette) are not refused, even when
+/// a `cdef` labels both as colours (1 and 2) under greyscale;
+/// `opj_decompress` writes them as coded (8-bit unsigned and 8-bit signed,
+/// 8-bit and 12-bit). The metadata stays as declared.
 #[test]
 fn srgb_on_one_or_two_channels_passes_through() {
+    let two = |space: u32, bi: &[u8], extra: &[Vec<u8>]| {
+        let mut boxes = palette(bi, 4, |j, _| u32::from(j));
+        boxes.extend_from_slice(extra);
+        file(ONE, &enumerated(space), &boxes)
+    };
+    let colours_1_2 = cdef(&[(0, 0, 1), (1, 0, 2)]);
     let rows = [
-        ("one channel", file(ONE, &enumerated(16), &[])),
+        ("one channel", ColourSpace::Srgb, file(ONE, &enumerated(16), &[])),
         (
             "two channels, different sign",
-            file(
-                ONE,
-                &enumerated(16),
-                &palette(&[7, 0x87], 4, |j, _| u32::from(j)),
-            ),
+            ColourSpace::Srgb,
+            two(16, &[7, 0x87], &[]),
         ),
         (
             "two channels, different depth",
-            file(
-                ONE,
-                &enumerated(16),
-                &palette(&[7, 11], 4, |j, _| u32::from(j)),
-            ),
+            ColourSpace::Srgb,
+            two(16, &[7, 11], &[]),
+        ),
+        (
+            "grey, colours 1 and 2, different sign",
+            ColourSpace::Greyscale,
+            two(17, &[7, 0x87], std::slice::from_ref(&colours_1_2)),
+        ),
+        (
+            "grey, colours 1 and 2, different depth",
+            ColourSpace::Greyscale,
+            two(17, &[7, 11], std::slice::from_ref(&colours_1_2)),
         ),
     ];
-    for (what, bytes) in rows {
+    for (what, declared, bytes) in rows {
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("{what}: as coded: {e}"));
         let image = decode_srgb(&bytes).unwrap_or_else(|e| panic!("{what}: sRGB: {e}"));
         assert_eq!(image.components, coded.components, "{what}");
-        assert_eq!(image.jp2.unwrap().colour, ColourSpace::Srgb, "{what}");
+        assert_eq!(image.jp2.unwrap().colour, declared, "{what}");
         let header = read_header_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
         let formats: Vec<_> = header
             .components
