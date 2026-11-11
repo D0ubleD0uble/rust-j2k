@@ -207,9 +207,13 @@ It decides a second case: an enumerated sRGB file of four components and no
 `cdef`, whose fourth differs in format from the colours (signed 8-bit, say),
 passes through as coded, as with a `cdef` and as in OpenJPEG (test
 `an_srgb_file_with_a_differently_formatted_fourth_channel_passes_through`).
-One check stays on every channel: a file declared greyscale on three
-components, with or without a `cdef`, laid out 4:2:0 or 4:2:2 (luma at 1x1,
-both chroma channels at 2x2 or both at 2x1) is refused. `opj_decompress`
+One check stays on every channel: a file declared sRGB or greyscale on
+three components, with or without a `cdef`, laid out 4:2:0 or 4:2:2 (luma
+at 1x1, both chroma channels at 2x2 or both at 2x1) is refused, even when
+its `cdef` labels only channel 0 as colour 1 (the others opacity or
+unspecified). `opj_decompress` 2.5.0 writes three full-size planes for
+such an sRGB file, with and without `-force-rgb`, the same as with no
+`cdef` (test `srgb_4_2_0_or_4_2_2_with_only_colour_1_in_cdef_is_refused`). `opj_decompress`
 guesses sYCC whenever the second component is sub-sampled in x and the
 first has equal x and y sampling, whatever the file declares
 (`opj_decompress.c:1620-1623`), but `color_sycc_to_rgb` converts only those
@@ -524,8 +528,9 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   profile they pass through as in OpenJPEG instead (the AFL test above),
   except for 4:2:0 and 4:2:2. For a three-component 4:2:0 or 4:2:2 file,
   whatever `colr` declares (sRGB, greyscale, another space, a profile, or
-  none) or a raw codestream, `opj_decompress` guesses sYCC and converts it;
-  that guess is not made here.
+  none) and whatever its `cdef` labels, or a raw codestream,
+  `opj_decompress` guesses sYCC and converts it; that guess is not made
+  here.
   Checked: `jp2_sycc_420_odd.jp2` with its `EnumCS` patched to 17
   (greyscale) gives byte-identical `opj_decompress` output to the sYCC
   original, while `Srgb` here refuses it (a row of the reject matrix);
@@ -541,10 +546,15 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   more components, which declares no colour space. For three components at
   the same sampling `opj_decompress -force-rgb` fails too; at 4:2:0 or
   4:2:2 it converts them as sYCC, which owner decision (2) above
-  refuses. One or two channels, from a raw codestream or a JP2 file with no
-  `colr` or such an enumerated space, pass through as grey (and grey plus
-  opacity), as OpenJPEG reads any image of two or fewer components; their
-  metadata stays as declared, since nothing was converted;
+  refuses. One or two channels pass through as grey (and grey plus
+  opacity) whatever the colour space, as OpenJPEG reads any image of two
+  or fewer components: from a raw codestream, or a JP2 file with no
+  `colr`, any enumerated space (sRGB included, owner decision, 2026-11-02,
+  on #211, even when the two channels differ in depth or sign), or an RGB
+  or YCbCr profile. Only a monochrome profile converts them. Their
+  metadata stays as declared, since nothing was converted (tests
+  `a_grey_jp2_without_a_converted_colour_space_passes_through`,
+  `srgb_on_one_or_two_channels_passes_through`);
 - a monochrome (`GRAY`) ICC profile on more than two channels (owner
   decision, 2026-11-01, on #197), for example one colour channel and two
   opacity channels in `cdef`, or a palette of three columns. OpenJPEG takes

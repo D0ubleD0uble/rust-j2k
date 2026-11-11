@@ -7,7 +7,8 @@
 //! everything from the header before any tile is decoded; [`SrgbPlan::apply`]
 //! converts the decoded samples. No conversion changes a channel's depth.
 //!
-//! - **sRGB and greyscale** (`EnumCS` 16, 17) pass through.
+//! - **sRGB and greyscale** (`EnumCS` 16, 17) pass through, except on a
+//!   three-channel 4:2:0 or 4:2:2 image ([`converted_as_sycc`]).
 //! - **sYCC** (`EnumCS` 18) is converted with the IEC 61966-2-1 Amd 1 inverse
 //!   matrix (1.402, 0.344136, 0.714136, 1.772) after taking `2^(depth-1)` off
 //!   the chroma, rounded to the nearest integer and clamped to the depth.
@@ -35,14 +36,14 @@
 //!   channel. A monochrome profile on more than two channels is refused:
 //!   OpenJPEG passes the planes to a grey transform as if they were RGB.
 //!
-//! sYCC or an RGB or YCbCr profile on one or two colour channels passes
-//! through, as OpenJPEG leaves them, and so do one or two channels with no
-//! colour space this step converts (no `colr`, or another enumerated colour
-//! space). So does a profile LittleCMS refuses to open or to build a
-//! transform from (its header checks, a class or intent it does not know, a
-//! missing or unreadable tag, a lookup table it can't read), and a profile
-//! in a colour space other than RGB, grey or YCbCr: OpenJPEG then skips the
-//! conversion. An RGB profile passes through too when any of the first four
+//! One or two channels pass through as coded whatever the colour space
+//! (sRGB, greyscale, sYCC, no `colr`, another enumerated colour space, an
+//! RGB or YCbCr profile), as OpenJPEG reads them as grey; only a monochrome
+//! profile converts them. So do a profile LittleCMS refuses to open or to
+//! build a transform from (its header checks, a class or intent it does not
+//! know, a missing or unreadable tag, a lookup table it can't read), and a
+//! profile in a colour space other than RGB, grey or YCbCr: OpenJPEG then
+//! skips the conversion. An RGB profile passes through too when any of the first four
 //! output channels differs from the first in depth, sign or sub-sampling
 //! (OpenJPEG's "AFL test", [`first_four_differ`]). None of these holds for
 //! three channels that are 4:2:0 or 4:2:2, which `opj_decompress` converts
