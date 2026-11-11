@@ -33,7 +33,10 @@ guessing, wherever its rules could differ from the decoder's: a `pclr` or
 `cmap` box; a top-level `bpcc`, `pclr`, `cmap` or `cdef` box; more than one
 `cdef`; a `cdef` out of channel order; no `cdef` with a colour space other
 than enumerated sRGB, greyscale or sYCC; `LBox` 0 inside a superbox; a short
-`uuid` box; an `ihdr` `NC` that differs from `Csiz`; a `colr` that is not
+`uuid` box; a `jp2h` without an `ihdr`; a `bpcc` whose length is not `NC`;
+a `cdef` that associates a colour channel with a colour other than its
+own number, or any channel with a colour above `NC`; an `ihdr` `NC` that
+differs from `Csiz`; a `colr` that is not
 `METH` 1 with a 4-byte `EnumCS` or `METH` 2. The other targets are not
 subject to these checks.
 
@@ -214,6 +217,11 @@ def channels(cdef: bytes | None, spec: dict, nc: int) -> list:
         entries = [struct.unpack(">HHH", cdef[i : i + 6]) for i in range(2, len(cdef), 6)]
         if [e[0] for e in entries] != list(range(nc)):
             sys.exit("cdef entries are not channels 0 to NC-1 in order")
+        for cn, typ, asoc in entries:
+            if asoc not in (0, 0xFFFF) and asoc > nc:
+                sys.exit(f"cdef channel {cn} is associated with colour {asoc} in a {nc}-channel file")
+            if typ == 0 and asoc not in (0, 0xFFFF) and asoc != cn + 1:
+                sys.exit(f"cdef colour channel {cn} is associated with colour {asoc}, not {cn + 1}")
         return [channel_label(t, a) for _, t, a in entries]
     colours = {16: 3, 17: 1, 18: 3}.get(spec.get("enum_cs")) if spec["method"] == 1 else None
     if colours is None:
@@ -262,6 +270,7 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
     xml, uuid, ipr, uuid_info = [], [], [], []
     colours = []
     palette = False
+    bpcc = []
     reader = None
     seen_rreq = False
     seen_jp2h = False
@@ -299,6 +308,8 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
             seen_jp2c = True
         elif kind == b"jp2h" and not seen_jp2c:
             seen_jp2h = True
+            if strict and not any(k == b"ihdr" for k, _ in boxes(payload, no_zero_length=True)):
+                sys.exit("a jp2h box without an ihdr box")
             for child, body in boxes(payload, no_zero_length=strict):
                 if child == b"ihdr" and image_header is None:
                     if len(body) != 14:
@@ -315,6 +326,8 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
                     if cdef is not None:
                         sys.exit("more than one cdef box")
                     cdef = body
+                elif strict and child == b"bpcc":
+                    bpcc.append(len(body))
                 elif strict and child in (b"pclr", b"cmap"):
                     palette = True
                 elif strict and child == b"res ":
@@ -338,6 +351,7 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
         "csiz": csiz,
         "cdef": cdef,
         "palette": palette,
+        "bpcc": bpcc,
         "capture": capture,
         "display": display,
         "xml": xml,
@@ -358,6 +372,8 @@ def snapshot(data: bytes) -> dict:
         sys.exit("a palette box is not supported")
     if extra["csiz"] is None:
         sys.exit("no codestream, or one that does not start with SOC and SIZ")
+    if any(n != extra["nc"] for n in extra["bpcc"]):
+        sys.exit(f"a bpcc box whose length is not NC ({extra['nc']})")
     if extra["nc"] != extra["csiz"]:
         sys.exit(f"ihdr NC {extra['nc']} differs from SIZ Csiz {extra['csiz']}")
     colour = colour_name(colours[0])

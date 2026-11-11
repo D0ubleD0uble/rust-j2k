@@ -445,7 +445,7 @@ checked against it by hand.
 | `resolution`      | object   | `capture` and `display`: `[VRN, VRD, HRN, HRD, VRE, HRE]` in box order, or `null`. |
 | `xml`             | int[]    | Length of the contents of each top-level `xml ` box, in file order. |
 | `uuid`            | array[]  | `[id as lowercase hex, payload length]` per top-level `uuid` box.    |
-| `ipr`             | int[], optional | Byte length of each top-level `jp2i` box; left out when none. |
+| `ipr`             | int[], optional | Length of the contents of each top-level `jp2i` box; left out when none. |
 | `uuid_info`       | array[], optional | `[[ids as lowercase hex], LOC length (the `url ` payload minus 4 bytes for VERS and FLAG)]` per well-formed top-level `uinf` box; left out when none. |
 | `file_type`, `image_header`, `colour_specifications`, `reader_requirements` | objects | The box fields below. |
 
