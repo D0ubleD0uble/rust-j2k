@@ -34,9 +34,10 @@
 //! Every input is decoded with `raw_channels` (no palette, no channel
 //! definitions), and every input that decodes as coded is decoded again with
 //! `ColourOutput::Srgb`, which reads the `colr` profile bytes. Without a
-//! `pclr`, `cmap` or `cdef` the `raw_channels` image, when it decodes, must
-//! equal the default one. The `Srgb` results are only checked for being a result: they may
-//! differ from the first, and most end in a typed `Unsupported`.
+//! `pclr`, `cmap` or `cdef` the `raw_channels` image must equal the default
+//! one, or the raw decode may refuse only the boxes after the codestream.
+//! The `Srgb` results are only checked for being a result: they may differ
+//! from the first, and most end in a typed `Unsupported`.
 //!
 //! `scripts/gen-jp2-fuzz-seeds.py` writes seeds in both shapes from the
 //! ISO/IEC 15444-4 JP2 reader files, plus built ICC and sYCC `colr` seeds.
@@ -172,16 +173,21 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     // With no `pclr`, `cmap` or `cdef`, the default decode's channels are the
-    // codestream's own, so a raw decode that succeeds gives the same image.
-    // The raw decode may still refuse the file: the default decode drops a
-    // `pclr` that has no `cmap`, but `raw_channels` keeps it, so a second
-    // `pclr` after the codestream is an error only there.
+    // codestream's own, so the raw decode gives the same image. Its one
+    // legitimate raw-only refusal is the check on the boxes after the
+    // codestream: the default decode drops a `pclr` that has no `cmap`, but
+    // `raw_channels` keeps it, so a second `pclr` after the codestream is an
+    // error only there. Any other raw-only error is a bug.
     let boxes = coded.jp2.as_ref().is_some_and(|m| {
         m.palette.is_some() || m.channel_mapping.is_some() || m.channel_definitions.is_some()
     });
     if !boxes {
-        if let Ok(raw) = &raw {
-            assert_eq!(raw.components, coded.components, "raw channels");
+        match &raw {
+            Ok(raw) => assert_eq!(raw.components, coded.components, "raw channels"),
+            Err(e) => assert!(
+                matches!(e, rust_j2k::Error::FileFormat(m) if m.starts_with("after the codestream")),
+                "raw-only error: {e:?}"
+            ),
         }
     }
     let options = options.with_colour(rust_j2k::ColourOutput::Srgb);
