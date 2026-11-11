@@ -5,9 +5,11 @@
 //! an allocation sized from an unchecked field, or a hang. Every input is run
 //! under a fixed list of option sets (the defaults, `raw_channels`, a
 //! resolution reduction of 1, sRGB output, and reduction 1 with sRGB), so a
-//! plain `.j2k` or `.jp2` seed is used as it is. The header is read under all
-//! five; the full decode that follows a header that reads runs under one,
-//! picked by a hash of the input, to keep the target fast. For each set it checks that
+//! plain `.j2k` or `.jp2` seed is used as it is. `raw_channels` is left out
+//! for a raw codestream, where it repeats the defaults. The header is read
+//! under every set; the full decode that follows a header that reads runs
+//! under one of the sets whose header read, picked by a hash of the input, to
+//! keep the target fast. For each set it checks that
 //! `read_header_with` and `decode_with` agree, since `decode_with` runs the
 //! same header checks before it reads any tile data:
 //!
@@ -32,23 +34,41 @@ const MAX_DECODED_SAMPLES: u64 = 1 << 16;
 fuzz_target!(|data: &[u8]| {
     let default = rust_j2k::DecodeOptions::default();
     let srgb = || default.clone().with_colour(rust_j2k::ColourOutput::Srgb);
-    let option_sets = [
+    let mut option_sets = vec![
         default.clone(),
-        default.clone().with_raw_channels(true),
         default.clone().with_resolution_reduction(1),
         srgb(),
         srgb().with_resolution_reduction(1),
     ];
+    // `raw_channels` skips the palette and the channel definitions, which a
+    // raw codestream does not have, so there it repeats the defaults.
+    if !is_raw_codestream(data) {
+        option_sets.insert(1, default.clone().with_raw_channels(true));
+    }
     // A full decode costs far more than a header read. A header that fails
     // is compared with a decode that stops just as early, so every set gets
     // that check; a header that reads is compared with a full decode under
-    // one set only, picked by a hash of the whole input so that seeds (which
-    // share their first and last bytes) still spread over all five.
-    let picked = fnv1a(data) as usize % option_sets.len();
-    for (i, options) in option_sets.iter().enumerate() {
-        check(data, options, i == picked);
+    // one set only. That set is picked by a hash of the whole input, so that
+    // seeds (which share their first and last bytes) still spread over the
+    // sets, from among those whose header read, so that the input always
+    // gets a full-decode comparison when any set reads.
+    let headers: Vec<_> = option_sets
+        .iter()
+        .map(|options| rust_j2k::read_header_with(data, options))
+        .collect();
+    let readable: Vec<usize> = (0..headers.len()).filter(|&i| headers[i].is_ok()).collect();
+    let picked = (!readable.is_empty())
+        .then(|| readable[(fnv1a(data) % readable.len() as u64) as usize]);
+    for (i, (options, header)) in option_sets.iter().zip(headers).enumerate() {
+        check(data, options, header, picked == Some(i));
     }
 });
+
+/// Whether `rust_j2k` reads `data` as a raw codestream: a JP2 file opens
+/// with the signature box, and anything else goes to the codestream parser.
+fn is_raw_codestream(data: &[u8]) -> bool {
+    data.starts_with(&[0xFF, 0x4F]) || data.get(4..8) != Some(b"jP  ")
+}
 
 /// FNV-1a over `bytes`.
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -57,8 +77,12 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-fn check(data: &[u8], options: &rust_j2k::DecodeOptions, decode_when_read: bool) {
-    let header = rust_j2k::read_header_with(data, options);
+fn check(
+    data: &[u8],
+    options: &rust_j2k::DecodeOptions,
+    header: rust_j2k::Result<rust_j2k::Header>,
+    decode_when_read: bool,
+) {
     if let Ok(header) = &header {
         if !decode_when_read {
             return;
