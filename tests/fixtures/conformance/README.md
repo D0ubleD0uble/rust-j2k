@@ -158,6 +158,8 @@ jp2/
   files/        fileN.jp2          — the nine reader files
   references/   jp2_N_K.pgx        — channel K of the reference for file N
   manifest.json                    — boxes, colour, features, bounds, flags
+  boxes.json                       — ftyp, ihdr, colr, rreq fields (box walker)
+  edge_cases.json                  — file5 patched into box-layer edge cases
 ```
 
 The references are **display output**, not codestream samples. OpenJPEG's

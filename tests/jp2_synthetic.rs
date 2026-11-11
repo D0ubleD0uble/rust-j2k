@@ -67,6 +67,7 @@ fn the_fixture_set_is_complete() {
             "jp2_cdef_reversed",
             "jp2_cdef_rgba",
             "jp2_cdef_unspecified",
+            "jp2_metadata_boxes",
             "jp2_palette_12bit",
             "jp2_palette_8bit",
             "jp2_palette_clamp",
@@ -74,6 +75,7 @@ fn the_fixture_set_is_complete() {
             "jp2_palette_mixed",
             "jp2_palette_subsampled_big_first",
             "jp2_palette_subsampled_small_first",
+            "jp2_signed16",
             "jp2_sycc_420_even",
             "jp2_sycc_420_odd",
             "jp2_sycc_422_even",
@@ -192,6 +194,40 @@ fn every_cdef_fixture_labels_its_channels_from_the_box() {
         let image = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(image.jp2.unwrap().channels, *want, "{name}");
     }
+}
+
+/// `jp2_metadata_boxes`'s snapshot, written whole by the box walker, holds
+/// the boxes the fixture is for, so a regenerated snapshot cannot lose them
+/// and still pass: negative `res ` exponents, three counted `colr` boxes,
+/// a `cdef` channel that is not a colour, and `jp2i` and `uinf` boxes. The
+/// decoder's match with it is checked above.
+#[test]
+fn the_metadata_fixture_carries_its_boxes() {
+    let want = expected(&dir().join("jp2_metadata_boxes.jp2"));
+    let jp2 = want.jp2.expect("a jp2 snapshot");
+    let exponents = |res: Option<[i32; 6]>| res.map(|r| (r[4], r[5]));
+    assert_eq!(exponents(jp2.resolution.capture), Some((-1, 3)));
+    assert_eq!(exponents(jp2.resolution.display), Some((2, -128)));
+    let methods: Vec<u8> = jp2.colour_specifications.iter().map(|c| c.method).collect();
+    assert_eq!(methods, [1, 3, 1]);
+    assert_eq!(
+        jp2.channels.last().map(String::as_str),
+        Some("premultiplied/2")
+    );
+    assert_eq!(jp2.ipr, [13, 7]);
+    assert_eq!(jp2.uuid_info.len(), 1);
+}
+
+/// `jp2_signed16`'s oracle has negative 16-bit samples, which the fixture is
+/// for; the decoder's match with it is checked above.
+#[test]
+fn the_signed_16_bit_oracle_has_negative_samples() {
+    let want = expected(&dir().join("jp2_signed16.jp2"));
+    let [plane] = &want.components[..] else {
+        panic!("{} planes", want.components.len());
+    };
+    assert_eq!((plane.bit_depth, plane.signed), (16, true));
+    assert!(plane.samples.iter().any(|&v| v < -(1 << 14)));
 }
 
 /// `raw_channels` gives exactly the decode of the bare codestream.

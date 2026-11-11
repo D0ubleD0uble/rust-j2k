@@ -544,6 +544,15 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         let (ends, visits) = probe_packets(cut, 0);
         assert!(!ends);
         assert!(visits <= PROBE_VISITS_MIN, "{visits} visits");
+        // The visit bound is what stopped the walk, not the geometry bound
+        // (which spends none): it stopped on a charge larger than what was
+        // left, and one charge in these files is at most a precinct's
+        // code-blocks (held to `PROBE_GEOMETRY` by the geometry bound) or a
+        // sweep step over a few components and resolutions.
+        assert!(
+            visits > PROBE_VISITS_MIN - PROBE_GEOMETRY as u64,
+            "{visits} visits"
+        );
     }
 
     for file in [T2BOMB_BLOCKS, T2_SWEEP_CPRL] {

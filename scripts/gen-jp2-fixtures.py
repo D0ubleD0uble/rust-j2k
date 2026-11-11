@@ -46,6 +46,21 @@ Every `cdef` fixture is three or four components at full resolution with an
 sRGB `colr`, so `opj_decompress` does not convert sYCC by its sub-sampling
 heuristic, and the oracle is its decode of the `.jp2` itself.
 
+Metadata fixture:
+
+- `jp2_metadata_boxes`: the `jp2_cdef_rgba` codestream with the metadata
+  boxes no other fixture has: three counted `colr` boxes (sRGB, `METH` 3, and
+  a misplaced sYCC one at the top level after `jp2h`), a `cdef` whose last
+  channel is premultiplied opacity for colour 2, a `res ` with negative
+  exponents, `ihdr` `IPR` 1 with a `jp2i` before and after the codestream,
+  and a `uinf`. Its whole `jp2` snapshot comes from
+  scripts/gen-jp2-box-snapshots.py, not from this script.
+
+Signed fixture:
+
+- `jp2_signed16`: a signed 16-bit greyscale plane (generated here) with
+  samples from -30000 to 30000, so the oracle has negative 16-bit samples.
+
 sYCC fixtures (`colr` 18), for sRGB output's chroma replication:
 
 - `jp2_sycc_420_odd`: a 14x12 image at origin (5, 3), luma at full
@@ -101,6 +116,7 @@ def ihdr(height: int, width: int, components: int, depth: int, signed: bool) -> 
 FTYP = box(b"ftyp", b"jp2 " + b"\0\0\0\0" + b"jp2 ")
 COLR_SRGB = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 16))
 COLR_SYCC = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 18))
+COLR_GREY = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 17))
 
 
 def pclr(entries: int, bi: list[int], value) -> bytes:
@@ -390,6 +406,75 @@ def cdef_fixtures(one: bytes, one_geometry: dict, three: bytes, three_geometry: 
         f"the 8-bit palette with the identity cmap, then cdef {reversed_}, which applies "
         "to the palette's three channels: the output is columns 2, 1, 0",
     )
+    metadata_boxes_fixture(codestream, rgba_geometry, f"the jp2c codestream of {png}")
+
+
+METADATA_CDEF = [(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 2, 2)]
+
+
+def metadata_boxes_fixture(codestream: bytes, geometry: dict, source: str) -> None:
+    """`jp2_metadata_boxes`: the metadata boxes no other fixture carries. In
+    `jp2h`: `ihdr` with `IPR` 1, an sRGB `colr`, a `METH` 3 `colr` (ignored),
+    a `cdef` whose last channel is premultiplied opacity for colour 2 (only
+    colour entries move a channel, so nothing moves), and a `res ` whose
+    `resc` and `resd` have negative exponents. At the top level: a misplaced
+    sYCC `colr` after `jp2h` (counted, but not the first), a `jp2i` and a
+    `uinf` before the codestream, and a second `jp2i` after it."""
+    header = box(b"ihdr", struct.pack(
+        ">IIHBBBB", geometry["height"], geometry["width"], geometry["components"], 7, 7, 0, 1,
+    ))
+    colr_other = box(b"colr", bytes([3, 1, 2]) + bytes(range(6)))
+    resolution = box(
+        b"res ",
+        box(b"resc", struct.pack(">HHHHbb", 300, 7, 254, 3, -1, 3))
+        + box(b"resd", struct.pack(">HHHHbb", 72, 1, 96, 5, 2, -128)),
+    )
+    jp2h = box(b"jp2h", header + COLR_SRGB + colr_other + cdef(METADATA_CDEF) + resolution)
+    misplaced = box(b"colr", bytes([1, 0, 1]) + struct.pack(">I", 18))
+    uinf = box(
+        b"uinf",
+        box(b"ulst", struct.pack(">H", 2) + bytes(range(16)) + bytes(range(0x80, 0x90)))
+        + box(b"url ", b"\0\0\0\0" + b"https://example.com/info\0"),
+    )
+    data = (
+        SIGNATURE + FTYP + jp2h + misplaced + box(b"jp2i", b"rights: none\n") + uinf
+        + box(b"jp2c", codestream) + box(b"jp2i", b"second\n")
+    )
+    oracle(
+        "jp2_metadata_boxes",
+        data,
+        geometry,
+        source,
+        f"ihdr IPR 1; colr sRGB, then METH 3 (ignored); cdef {METADATA_CDEF} (nothing "
+        "moves); res with resc [300, 7, 254, 3, -1, 3] and resd [72, 1, 96, 5, 2, -128]; "
+        "then at the top level a misplaced sYCC colr, a jp2i, a uinf with two UUIDs and "
+        "a url, the jp2c, and a second jp2i. Its jp2 snapshot is written whole by "
+        "scripts/gen-jp2-box-snapshots.py",
+    )
+
+
+def signed16_fixture(tmp: Path) -> None:
+    """`jp2_signed16`: a 24x16 signed 16-bit plane running over -30000..30000,
+    coded losslessly and wrapped with a greyscale `colr`."""
+    width, height = 24, 16
+    values = [((x * 2711 + y * 4099) % 60001) - 30000 for y in range(height) for x in range(width)]
+    (tmp / "signed16.raw").write_bytes(b"".join(struct.pack(">h", v) for v in values))
+    flags = ["-F", f"{width},{height},1,16,s", "-n", "3"]
+    run("opj_compress", "-i", str(tmp / "signed16.raw"), "-o", str(tmp / "signed16.j2k"), *flags)
+    codestream = (tmp / "signed16.j2k").read_bytes()
+    decoded, _ = opj_decode(codestream, ".j2k")
+    if decoded[0]["samples"] != values:
+        sys.exit("the signed 16-bit plane did not round-trip losslessly")
+    geometry = {"width": width, "height": height, "components": 1, "depth": 16, "signed": True}
+    command = "opj_compress -i signed16.raw -o signed16.j2k " + " ".join(flags)
+    oracle(
+        "jp2_signed16",
+        jp2(codestream, geometry, [], colr=COLR_GREY),
+        geometry,
+        f"a synthetic signed 16-bit plane, coded with `{command}`",
+        f"{sum(v < 0 for v in values)} of {len(values)} samples negative, down to "
+        f"{min(values)}; none on the PGX container bounds",
+    )
 
 
 def subsampled_codestream(tmp: Path) -> tuple[bytes, str]:
@@ -610,6 +695,8 @@ def main() -> None:
     subsampled_fixtures()
     cdef_fixtures(one, one_geometry, three, three_geometry)
     sycc_fixtures()
+    with tempfile.TemporaryDirectory() as tmp:
+        signed16_fixture(Path(tmp))
 
     # The snapshots above carry no ftyp/ihdr/colr/rreq fields; add them.
     box_script = Path(__file__).resolve().parent / "gen-jp2-box-snapshots.py"
