@@ -46,8 +46,9 @@ pub(crate) enum End {
     /// Just after the `EOC` marker at this offset minus 2: every tile-part
     /// has a length, and the last is followed by `EOC`.
     At(usize),
-    /// A tile-part with `Psot = 0` runs to the end of the file.
-    OpenLastPart,
+    /// A tile-part with `Psot = 0`, of the tile with this index (`Isot`),
+    /// runs to the end of the file.
+    OpenLastPart(u16),
     /// The main header or the tile-part chain is broken or cut short: the
     /// codestream parser rejects it, or `read_header` reads only its header.
     Unknown,
@@ -86,7 +87,8 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
         };
         let psot = u32::from_be_bytes([p0, p1, p2, p3]);
         if psot == 0 {
-            return End::OpenLastPart;
+            let isot = u16::from_be_bytes([bytes[at + 4], bytes[at + 5]]);
+            return End::OpenLastPart(isot);
         }
         if psot < MIN_TILE_PART {
             return End::Unknown;

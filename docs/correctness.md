@@ -158,18 +158,22 @@ Stricter here, where OpenJPEG decodes:
 
 A `Psot = 0` last tile-part ends at the end of its `jp2c` box, with or
 without an `EOC`, when the box declares a length that ends at least two
-bytes before the end of the file and holds every tile-part's `SOT`, and the
-codestream decodes there. Tier-2 refuses bytes left after the last packet and
-a tile-part that ends before its last packet, so a codestream that decodes
-to the box's end has its packets end exactly there, and OpenJPEG, which
-reads the tile-part on to the end of the file, reads the same packets. When
-it does not decode there (a fault in the tile data, or a box that ends inside
-the codestream), the codestream is read to the end of the file instead, with
-the result above. The boxes after the `jp2c` box are walked by the rules for
-the boxes after the codestream and reported as metadata (`xml `, `uuid` and
-the like), the same whichever way the codestream is read, so `read_header`
-and `decode` agree. Neither decoder reads header boxes there: OpenJPEG's
-walk after the decode starts at the end of the file.
+bytes before the end of the file and holds every tile-part's `SOT`, and
+tier-2 walks the packets of that tile-part's tile to exactly the box's end.
+Tier-2 refuses bytes left after the last packet and a tile-part that ends
+before its last packet, so this holds only when the packets end there, and
+OpenJPEG, which reads the tile-part on to the end of the file, reads the same
+packets. Read to the end of the file, those packets are followed by bytes
+left after them, which are refused, so a fault in tier-1 is the same fault
+either way. When tier-2 does not reach the box's end (the box ends inside the
+codestream), the codestream is read to the end of the file instead, with the
+result above. The check is part of reading the file's structure, so
+`read_header` makes it too: it walks that one tile's packet headers, without
+decoding any samples. When the box's end is used, the boxes after it are
+walked by the rules for the boxes after the codestream and reported as
+metadata (`xml `, `uuid` and the like); otherwise the bytes after the box are
+tile data and nothing is reported from them. Neither decoder reads header
+boxes there: OpenJPEG's walk after the decode starts at the end of the file.
 
 A `jp2c` whose length is wrong (`LBox` 2..7, `XLBox` below 16, or shorter
 than its codestream) decodes as in OpenJPEG, which ignores the length: the

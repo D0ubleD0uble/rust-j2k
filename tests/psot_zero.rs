@@ -178,13 +178,28 @@ fn a_psot_zero_codestream_box_followed_by_broken_boxes_decodes() {
 
 /// A box that ends inside the last tile-part's header (at a COM whose text
 /// reads as a box), or inside its tile data (the BYPASS codestream, where the
-/// 510 bytes after the box happen to read as boxes). The codestream cut at
-/// the box end does not decode, so it runs to the end of the file instead,
-/// and decodes as in OpenJPEG 2.5.0.
+/// 510 bytes after the box happen to read as boxes). Tier-2 does not reach
+/// the box end, so the codestream runs to the end of the file instead, and
+/// decodes as in OpenJPEG 2.5.0.
 #[test]
 fn a_codestream_box_that_ends_inside_the_last_tile_part_reads_to_the_end() {
     assert_decodes("jp2_p0eoc_cut_in_tile_part_com.jp2", "single.expected.pgm");
     assert_decodes("jp2_bypass_short989.jp2", "bypass.expected.pgm");
+}
+
+/// The same cut in the tile-part header, with the COM text spelling an
+/// `xml `, `uuid` or `rreq` box header. The bytes after the box read as that
+/// box, but they are the rest of the codestream: the file decodes as in
+/// OpenJPEG 2.5.0, and neither call reports them as metadata.
+#[test]
+fn codestream_bytes_after_a_short_box_are_not_metadata() {
+    for kind in ["xml", "uuid", "rreq"] {
+        let name = format!("jp2_p0eoc_cut_in_com_{kind}.jp2");
+        let metadata = assert_jp2_decodes(&name, "single.expected.pgm");
+        assert!(metadata.xml.is_empty(), "{name}");
+        assert!(metadata.uuid.is_empty(), "{name}");
+        assert_eq!(metadata.reader_requirements, None, "{name}");
+    }
 }
 
 /// The signature, `ftyp` and `jp2h` boxes the `jp2_*.jp2` fixtures share.

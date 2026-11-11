@@ -37,7 +37,7 @@
 //! are walked and read as OpenJPEG reads them once it has decoded the
 //! codestream ([`boxes::walk_after_codestream`], [`after::check`]). When the
 //! last tile-part has `Psot = 0`, its length does not say where it ends, and
-//! the box's end is used unless the codestream does not decode there
+//! the box's end is used when that tile's packets end exactly there
 //! ([`locate_codestream`]). The two
 //! decoders still differ on some files, in both directions;
 //! `docs/correctness.md` and the reject matrix in `docs/roadmap-phase3.md`
@@ -117,13 +117,6 @@ pub(crate) struct Jp2File<'a> {
     /// cannot be found from the tile-part lengths (see [`after::codestream_end`]
     /// and [`locate_codestream`]).
     pub(crate) codestream: &'a [u8],
-    /// The codestream to decode instead when `codestream` fails on its tile
-    /// data with [`Error::Codestream`]: the bytes from the start of the box to
-    /// the end of the file. Set when `codestream` ends at the `jp2c` box's
-    /// end and its last tile-part has `Psot = 0`, so its end was taken from
-    /// the box's length, which can be wrong. The header boxes, the main header
-    /// and the metadata are the same either way.
-    pub(crate) fallback: Option<&'a [u8]>,
     /// The other top-level boxes before the codestream (`xml `, `uuid`, `rreq`
     /// and the like, and header boxes misplaced before `jp2h`, which OpenJPEG
     /// ignores), in file order.
@@ -200,12 +193,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                 };
                 colour::check_bpcc(&header)?;
                 let colour = colour::read(&header)?;
-                let Located {
-                    codestream,
-                    rest,
-                    after_read,
-                    fallback,
-                } = locate_codestream(bytes, item.payload, boxes.rest());
+                let (codestream, rest, after_read) =
+                    locate_codestream(bytes, item.payload, boxes.rest());
                 let after = walk_after_codestream(rest);
                 // Both are ends of the file; the shorter starts later.
                 let past_box = boxes.rest();
@@ -219,7 +208,6 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                     header,
                     colour,
                     codestream,
-                    fallback,
                     other,
                     after_codestream: after.boxes,
                     after_box,
@@ -248,77 +236,87 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
     }))
 }
 
-/// Where the codestream of a JP2 file is: see [`locate_codestream`].
-struct Located<'a> {
-    codestream: &'a [u8],
-    /// The bytes after the codestream.
-    rest: &'a [u8],
-    /// Whether OpenJPEG reads `rest` as boxes once it has decoded.
-    after_read: bool,
-    /// The codestream to decode instead when `codestream` fails on its tile
-    /// data (see [`Jp2File::fallback`]).
-    fallback: Option<&'a [u8]>,
-}
-
 /// Find the codestream that starts with the `jp2c` box's contents `payload`,
-/// the box being followed by `rest` in `file`.
+/// the box being followed by `rest` in `file`. Returns the codestream, the
+/// bytes after it, and whether OpenJPEG reads those bytes as boxes.
 ///
 /// OpenJPEG reads the codestream from the start of the box to wherever its
 /// tile-parts end, whatever the box's length says. When every tile-part has a
 /// length, that is just after `EOC`, and the boxes from there on are walked.
 /// A last tile-part of `Psot = 0` runs to the end of the file and nothing
 /// after it is walked. Its length does not say where the codestream ends, so
-/// the box's end is used when the box says so:
+/// the box's end is used when the box shows it is the end:
 ///
 /// - The box's contents end in `EOC`: they are the codestream.
-/// - The box declares a length that ends at least two bytes before the end
-///   of the file, and holds every tile-part's `SOT` (so the main header and
-///   the tile-part chain read the same either way). The codestream ends at
-///   the box's end, and the boxes after it are walked for their metadata.
-///   If it fails on its tile data, the box ended inside the codestream, and
-///   the codestream runs to the end of the file instead ([`Jp2File::fallback`]).
+/// - The box ends at least two bytes before the end of the file, it holds
+///   every tile-part's `SOT`, and the packets of the `Psot = 0` tile-part's
+///   tile end exactly at the box's end ([`packets_end_at`]). The boxes after
+///   the box are walked for their metadata.
 ///
 /// Otherwise the codestream runs to the end of the file, and any bytes after
 /// its last packet are refused as for a raw codestream. When the tile-part
 /// chain is broken, the box's contents go to the codestream parser to be
 /// rejected (or to `read_header`, which reads only the main header).
-fn locate_codestream<'a>(file: &'a [u8], payload: &'a [u8], rest: &'a [u8]) -> Located<'a> {
-    let located = |codestream, rest, after_read| Located {
-        codestream,
-        rest,
-        after_read,
-        fallback: None,
-    };
+fn locate_codestream<'a>(
+    file: &'a [u8],
+    payload: &'a [u8],
+    rest: &'a [u8],
+) -> (&'a [u8], &'a [u8], bool) {
     // `payload` and `rest` are the end of `file`, back to back.
     let tail = file
         .len()
         .checked_sub(rest.len() + payload.len())
         .and_then(|start| file.get(start..));
     let Some(tail) = tail else {
-        return located(payload, rest, false);
+        return (payload, rest, false);
     };
     match after::codestream_end(tail) {
-        End::At(end) => located(&tail[..end], &tail[end..], true),
-        End::OpenLastPart if payload.ends_with(&[0xFF, 0xD9]) => located(payload, rest, false),
-        End::OpenLastPart if after::codestream_end(payload) == End::OpenLastPart => {
-            // The codestream parser gives a `Psot = 0` tile-part all but the
-            // last two bytes of its slice, the room for an `EOC`. The slice
-            // runs two bytes past the box, so the tile-part ends at the box's
-            // end. OpenJPEG's tile-part runs on past it, to the end of the
-            // file; tier-2 refuses bytes left after the last packet, so when
-            // this slice decodes, its packets end exactly at the box's end and
-            // OpenJPEG reads the same packets. `rest` under two bytes is no
-            // room for the slice.
+        End::At(end) => (&tail[..end], &tail[end..], true),
+        End::OpenLastPart(_) if payload.ends_with(&[0xFF, 0xD9]) => (payload, rest, false),
+        // The codestream parser gives a `Psot = 0` tile-part all but the last
+        // two bytes of its slice, the room for an `EOC`, so a slice two bytes
+        // past the box ends the tile-part at the box's end. `rest` under two
+        // bytes leaves no room for it.
+        End::OpenLastPart(tile)
+            if matches!(after::codestream_end(payload), End::OpenLastPart(_)) =>
+        {
             match tail.get(..payload.len() + 2) {
-                Some(codestream) => Located {
-                    fallback: Some(tail),
-                    ..located(codestream, rest, false)
-                },
-                None => located(tail, &[], false),
+                Some(cut) if packets_end_at(cut, tile) => (cut, rest, false),
+                _ => (tail, &[], false),
             }
         }
-        End::OpenLastPart => located(tail, &[], false),
-        End::Unknown => located(payload, rest, false),
+        End::OpenLastPart(_) => (tail, &[], false),
+        End::Unknown => (payload, rest, false),
+    }
+}
+
+/// Whether the packets of `tile`, the tile of the `Psot = 0` tile-part, end
+/// exactly at the end of `codestream`: its main header and tile-parts parse
+/// and tier-2 walks the tile's packets (no tier-1). Tier-2 refuses bytes left
+/// after the last packet and a tile-part that ends before its last packet, so
+/// this holds only when the packets end exactly at the box's end.
+///
+/// That makes the box's end safe to use. OpenJPEG reads the tile-part on to
+/// the end of the file, past the box: the same packets, then bytes it
+/// ignores. Read that way here, the same packets are followed by bytes left
+/// after the last packet, which are refused, so reading to the end of the file
+/// could never decode instead; a fault in tier-1 would be the same fault
+/// either way. When the packets do not end there, the box ends inside the
+/// codestream, and the bytes after it are tile data, not boxes.
+///
+/// This walks one tile's packet headers, which costs a small part of decoding
+/// the tile, and only for this shape.
+fn packets_end_at(codestream: &[u8], tile: u16) -> bool {
+    let Ok(parsed) = crate::codestream::parse_header(codestream) else {
+        return false;
+    };
+    let Ok(cs) = crate::codestream::parse_tiles(codestream, parsed) else {
+        return false;
+    };
+    let index = usize::from(tile);
+    match (cs.tiles.get(index), cs.tile_header(index)) {
+        (Some(data), Ok(header)) => crate::tier2::decode_packets(&header, data).is_ok(),
+        _ => false,
     }
 }
 

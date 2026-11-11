@@ -55,6 +55,9 @@ read as whole boxes (from the PR #227 review).
 | `jp2_t2_last0_short` | `tileparts_psot0_eoc` | `LBox` 200 | 2-byte `colr` | decodes, equals `tileparts` | `Codestream` (left after the last packet) |
 | `jp2_p0eoc_cut_in_com` | `single_psot0_eoc` with a COM after SIZ | ends inside the COM, whose text is a box header | one whole `free` box (the rest of the codestream) | decodes, equals `single` | the same |
 | `jp2_p0eoc_cut_in_tile_part_com` | `single_psot0_eoc` with a COM before SOD | ends inside the COM, whose text is a box header | one whole `free` box (the rest of the codestream) | decodes, equals `single` | the same |
+| `jp2_p0eoc_cut_in_com_xml` | `single_psot0_eoc` with a COM before SOD | ends inside the COM, whose text is an `xml ` box header | nothing (the rest of the codestream is not metadata) | decodes, equals `single` | the same, no `xml ` reported |
+| `jp2_p0eoc_cut_in_com_uuid` | the same, with a `uuid` box header | ends inside the COM | nothing | decodes, equals `single` | the same, no `uuid` reported |
+| `jp2_p0eoc_cut_in_com_rreq` | the same, with an `rreq` box header | ends inside the COM | nothing | decodes, equals `single` | the same, no reader requirements reported |
 | `jp2_bypass_short989` | `bypass_psot0_eoc` | `LBox` 8 + 989, 510 bytes short | nothing (the rest of the codestream reads as boxes) | decodes, equals `bypass` | the same |
 | `jp2_lbox0_p0eoc_xml` | `single_psot0_eoc` | `LBox` 0 | `xml ` (inside the box) | decodes, equals `single` | `Codestream` (left after the last packet) |
 

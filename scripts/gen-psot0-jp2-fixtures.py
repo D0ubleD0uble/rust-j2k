@@ -72,16 +72,16 @@ def psot_zero(base: bytes) -> bytes:
     return base[: sot + 6] + b"\0\0\0\0" + base[sot + 10 :]
 
 
-def cut_in_tile_part_com() -> bytes:
+def cut_in_tile_part_com(kind: bytes = b"free") -> bytes:
     """`single_psot0_eoc` with a COM segment in its tile-part header, just
-    before SOD, whose text is a box header (`free`) as long as the rest of the
+    before SOD, whose text is a box header (`kind`) as long as the rest of the
     codestream, in a `jp2c` box that ends just before that text. The box holds
     the tile-part's SOT, but ends inside its header."""
     base = cs("single_psot0_eoc.j2k")
     sod = base.index(b"\xff\x93")
     cut = sod + 6
     rest = len(base) + 14 - cut
-    com = b"\xff\x64" + struct.pack(">H", 12) + b"\x00\x01" + struct.pack(">I", rest) + b"free"
+    com = b"\xff\x64" + struct.pack(">H", 12) + b"\x00\x01" + struct.pack(">I", rest) + kind
     codestream = base[:sod] + com + base[sod:]
     return PREFIX + header(8 + cut, b"jp2c") + codestream
 
@@ -125,6 +125,12 @@ FILES = {
     ),
     "jp2_p0eoc_cut_in_com.jp2": (cut_in_com(), "single"),
     "jp2_p0eoc_cut_in_tile_part_com.jp2": (cut_in_tile_part_com(), "single"),
+    # The same with the COM text spelling an `xml `, `uuid` or `rreq` box
+    # header: the bytes after the box read as one of those, but they are the
+    # rest of the codestream, not metadata.
+    "jp2_p0eoc_cut_in_com_xml.jp2": (cut_in_tile_part_com(b"xml "), "single"),
+    "jp2_p0eoc_cut_in_com_uuid.jp2": (cut_in_tile_part_com(b"uuid"), "single"),
+    "jp2_p0eoc_cut_in_com_rreq.jp2": (cut_in_tile_part_com(b"rreq"), "single"),
     # A box that ends 510 bytes before the end of the BYPASS codestream, where
     # the tile data happens to read as whole boxes; nothing follows.
     "jp2_bypass_short989.jp2": (
