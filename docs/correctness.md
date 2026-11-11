@@ -208,12 +208,13 @@ It decides a second case: an enumerated sRGB file of four components and no
 passes through as coded, as with a `cdef` and as in OpenJPEG (test
 `an_srgb_file_with_a_differently_formatted_fourth_channel_passes_through`).
 One check stays on every channel: a file declared sRGB or greyscale on
-three components, with or without a `cdef`, laid out 4:2:0 or 4:2:2 (luma
-at 1x1, both chroma channels at 2x2 or both at 2x1) is refused, even when
-its `cdef` labels only channel 0 as colour 1 (the others opacity or
-unspecified). `opj_decompress` 2.5.0 writes three full-size planes for
-such an sRGB file, with and without `-force-rgb`, the same as with no
-`cdef` (test `srgb_4_2_0_or_4_2_2_with_only_colour_1_in_cdef_is_refused`). `opj_decompress`
+three components laid out 4:2:0 or 4:2:2 (luma at 1x1, both chroma
+channels at 2x2 or both at 2x1) is refused, whatever its `cdef` labels or
+without one. Checked on such sRGB files with a `cdef` of colour 1 and two
+opacity or unspecified channels, of no colour, and of colours 2 and 3
+only: `opj_decompress` 2.5.0, with and without `-force-rgb`, writes three
+full-size planes byte-identical to those of the file with no `cdef` (test
+`srgb_4_2_0_or_4_2_2_is_refused_whatever_cdef_labels`). `opj_decompress`
 guesses sYCC whenever the second component is sub-sampled in x and the
 first has equal x and y sampling, whatever the file declares
 (`opj_decompress.c:1620-1623`), but `color_sycc_to_rgb` converts only those
@@ -478,7 +479,7 @@ under `lcms_intent_4`, a refused grey profile (`grey_lcms_intent_4`), a
 profile cut short (`bad_short_header`) and a CMYK profile (`space_cmyk`):
 `-force-rgb` writes the sYCC original's planes each time. `Srgb` makes no
 sYCC guess, so it refuses all of them, before the profile is read, with the
-sub-sampling message of the other sYCC rows. Tests:
+sub-sampling message. Tests:
 `an_lcms_refused_profile_on_4_2_0_or_4_2_2_is_refused`, and
 `an_lcms_refused_profile_passes_through_outside_the_sycc_layouts` for the
 layouts that stay as coded.
@@ -551,7 +552,8 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   or fewer components: from a raw codestream, or a JP2 file with no
   `colr`, any enumerated space (sRGB included, owner decision, 2026-11-02,
   on #211, even when the two channels differ in depth or sign), or an RGB
-  or YCbCr profile. Only a monochrome profile converts them. Their
+  or YCbCr profile. Only a monochrome profile converts them, on 8-bit
+  unsigned samples only (other depths are refused, below). Their
   metadata stays as declared, since nothing was converted (tests
   `a_grey_jp2_without_a_converted_colour_space_passes_through`,
   `srgb_on_one_or_two_channels_passes_through`);

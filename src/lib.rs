@@ -270,7 +270,8 @@ pub enum ColourOutput {
     /// (a raw codestream, a file with no `colr`, any enumerated colour
     /// space, sRGB included, or an RGB or YCbCr profile), as OpenJPEG reads
     /// them as grey, or grey and opacity; only a monochrome profile converts
-    /// them. Their metadata stays as declared.
+    /// them, and it refuses samples that are not 8-bit unsigned. Their
+    /// metadata stays as declared.
     ///
     /// An ICC profile that LittleCMS refuses also passes through, as
     /// OpenJPEG leaves it (except on a three-channel 4:2:0 or 4:2:2 image,
@@ -325,10 +326,10 @@ pub enum ColourOutput {
     /// channels at 2x2 or both at 2x1), which OpenJPEG converts as sYCC
     /// whatever the file declares and whatever its `cdef` labels. As in
     /// OpenJPEG, every refusal above, and a profile on one or two colour
-    /// channels, passes through before these
-    /// checks: a profile LittleCMS refuses passes through whatever the
-    /// samples are, except on a three-channel 4:2:0 or 4:2:2 image, which is
-    /// refused before the profile is read. These errors apply only when `Srgb` is asked for:
+    /// channels, passes through before these checks: a profile LittleCMS
+    /// refuses passes through whatever the samples are, except on a
+    /// three-channel 4:2:0 or 4:2:2 image, which is refused before the
+    /// profile is read. These errors apply only when `Srgb` is asked for:
     /// [`ColourOutput::AsCoded`] decodes the same files.
     Srgb,
 }
