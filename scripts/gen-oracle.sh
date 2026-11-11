@@ -4,7 +4,7 @@
 #
 # Decodes <input>.j2k with OpenJPEG's opj_decompress (the reference decoder) and
 # writes the sibling <input>.expected.json the conformance harness compares
-# against (samples + geometry + tolerance + provenance). It echoes the exact
+# against (image + tolerance + components + provenance). It echoes the exact
 # command it ran so the snapshot's provenance is captured, per docs/correctness.md.
 #
 # This is a developer/oracle tool. It is NOT run at `cargo test` time — the
@@ -104,7 +104,7 @@ command -v opj_decompress >/dev/null 2>&1 ||
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Refuse any OpenJPEG other than the pinned version (one check, shared with the
 # Python generators).
-python3 "$script_dir/oracle_tools.py" opj_decompress || exit 1
+python3 "$script_dir/oracle_tools.py" opj_decompress opj_dump || exit 1
 converter="$script_dir/pgx_to_expected.py"
 [[ -f "$converter" ]] || die "missing converter: $converter"
 
@@ -127,7 +127,20 @@ mapfile -t pgx_files < <(ls "$workdir"/oracle_*.pgx 2>/dev/null || true)
 [[ ${#pgx_files[@]} -eq 1 ]] ||
 	die "expected a single component, got ${#pgx_files[@]} .pgx files (multi-component is out of subset)"
 
+# The .pgx holds raw component samples with no sub-sampling. Refuse
+# unless SIZ says the one component is 1x1 and the image area is the .pgx size.
+command -v opj_dump >/dev/null 2>&1 || die "opj_dump not found (see docs/development.md)"
+siz="$(opj_dump -i "$input" 2>/dev/null)" || die "opj_dump could not read $input"
+siz_field() { sed -n "s/.*\b$1=\(-\?[0-9]\+\).*/\1/p" <<<"$siz" | head -n1; }
+x0="$(siz_field x0)" y0="$(siz_field y0)" x1="$(siz_field x1)" y1="$(siz_field y1)"
+dx="$(sed -n 's/.*\bdx=\([0-9]\+\), dy=\([0-9]\+\).*/\1x\2/p' <<<"$siz" | sort -u)"
+[[ -n "$x0" && -n "$y0" && -n "$x1" && -n "$y1" ]] || die "no SIZ image area in the opj_dump output"
+[[ "$dx" == "1x1" ]] ||
+	die "component sub-sampling is '${dx:-unknown}', not 1x1: the snapshot cannot describe it"
+siz_area="$((x1 - x0))x$((y1 - y0))"
+
 converter_args=(
+	--siz-image-area "$siz_area"
 	--pgx "${pgx_files[0]}"
 	--tolerance "$tolerance"
 	--source "$source"

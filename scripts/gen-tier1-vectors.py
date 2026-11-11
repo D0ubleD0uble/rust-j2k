@@ -470,6 +470,12 @@ def emit_rust(vectors: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def format_rust(source: str) -> str:
+    """Run `source` through rustfmt (the crate's edition) so the output is fmt-clean."""
+    return subprocess.run(["rustfmt", "--edition", "2024"], input=source, text=True,
+                          capture_output=True, check=True).stdout
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -487,7 +493,7 @@ def main() -> None:
         make_vector("small_4x4", 4, 4, small_4x4(),
                     "small magnitudes: few bit-planes, low num_passes"),
     ] + make_dwt_vectors("dwt1", 8, 8, textured_8x8())
-    rust = emit_rust(vectors)
+    rust = format_rust(emit_rust(vectors))
     if args.output == "-":
         sys.stdout.write(rust)
     else:

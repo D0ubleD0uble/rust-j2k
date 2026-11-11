@@ -52,13 +52,14 @@ def require_openjpeg(*tools: str) -> str:
     for tool in tools:
         version = opj_version(tool)
         if version is None:
-            sys.exit(f"{tool} not found on PATH; run scripts/install-oracle-tools.sh "
-                     f"(OpenJPEG {OPENJPEG_VERSION} is the oracle)")
+            sys.exit(f"{tool} not found on PATH; install OpenJPEG {OPENJPEG_VERSION} "
+                     f"(scripts/install-oracle-tools.sh, or the source build in docs/development.md)")
         if version == "":
             sys.exit(f"no OpenJPEG version banner in `{tool} -h`: refusing to generate oracles")
         if version != OPENJPEG_VERSION:
             sys.exit(f"{tool} is OpenJPEG {version}, not {OPENJPEG_VERSION}: refusing to "
-                     f"generate oracles with it (see docs/development.md)")
+                     f"generate oracles with it (build {OPENJPEG_VERSION} from source, "
+                     f"see docs/development.md)")
     return OPENJPEG_VERSION
 
 
@@ -79,8 +80,11 @@ def lcms_encoded_version() -> int:
         sys.exit("opj_decompress not found on PATH; run scripts/install-oracle-tools.sh")
     if shutil.which("ldd") is None:
         sys.exit("ldd not found: cannot tell which LittleCMS opj_decompress uses")
-    ldd = subprocess.run(["ldd", tool], capture_output=True, text=True, errors="replace",
-                         stdin=subprocess.DEVNULL, timeout=30)
+    try:
+        ldd = subprocess.run(["ldd", tool], capture_output=True, text=True, errors="replace",
+                             stdin=subprocess.DEVNULL, timeout=30)
+    except subprocess.TimeoutExpired:
+        sys.exit("`ldd` did not finish in 30 s: cannot tell which LittleCMS opj_decompress uses")
     found = re.search(r"liblcms2\S*\s+=>\s+(\S+)", ldd.stdout)
     if found is None:
         sys.exit("opj_decompress is not dynamically linked against liblcms2 (built without "

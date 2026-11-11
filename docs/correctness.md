@@ -800,7 +800,7 @@ never to run the tests. For each fixture, record provenance — source file, and
 the exact command that produced its oracle — so the corpus is reproducible.
 
 Layout: a fixture `tests/fixtures/<name>.j2k` with a sibling
-`<name>.expected.json` (decoded samples + geometry + tolerance + provenance).
+`<name>.expected.json` (image area, tolerance, per-component samples, provenance).
 
 Seed it from:
 
