@@ -180,6 +180,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-10 | `jp2_boxes` with the `raw_channels` decode, reduction (bit 7), and the `srgb.rs` branch seeds | `gen-jp2-fuzz-seeds.py` (154 seeds), `jp2.dict` | 61 s, 24 058 runs (394 exec/s), `nice -n 19`, one job | no crash, leak, or timeout |
 | 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `icc_srgb` | `gen-icc-oracles.py --fuzz-seeds` (136 seeds), `icc.dict` | 61 s, 11 137 runs, under `nice` | no crash, leak, or timeout |
+| 2026-11-11 | `icc_srgb`, profile read on every input and the transform built for one in 16 | `gen-icc-oracles.py --fuzz-seeds` (349 seeds), `icc.dict` | 41 s, 15 718 runs (383 exec/s; 21 exec/s before the change, same seeds), `nice -n 19`, one job | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

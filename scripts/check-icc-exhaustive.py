@@ -26,7 +26,11 @@ Two kinds of case are not compared pixel by pixel. If LittleCMS refuses the
 profile or the transform, OpenJPEG leaves the samples as coded, and
 `tests/jp2_icc.rs` already checks that the decoder does the same. If the
 decoder declines the profile with `Error::Unsupported` (a lookup table
-profile, say), there is nothing to compare. Both are counted and listed.
+profile, say), there is nothing to compare. Both are counted and listed. As a
+cross-check, LittleCMS should refuse exactly the profiles that
+`icc/profiles.json` records as unconverted by OpenJPEG; the cases where it
+does not are listed (`bad_gray_on_rgb`, where OpenJPEG feeds three channels to
+a monochrome transform, is the known one).
 
 Assumes the platform of the oracles: LittleCMS 2.14 (Ubuntu 24.04's
 `liblcms2-2`), x86-64. Needs `opj_compress` on PATH, the Rust toolchain, and
@@ -209,10 +213,13 @@ def patch(profile: bytearray, intent: int, white) -> None:
 
 
 def cases(only: str | None):
-    """(name, kind, profile bytes) for every committed case."""
+    """(name, kind, profile bytes, OpenJPEG's outcome) for every committed
+    case. The outcome is "converted" or "unconverted" for a profiles.json
+    case, and None for a conformance variant."""
     profiles = json.loads((FIXTURES / "icc" / "profiles.json").read_text())["cases"]
     for case in profiles:
-        yield f"{case['codestream']}/{case['name']}", case["codestream"], bytes.fromhex(case["profile"])
+        yield (f"{case['codestream']}/{case['name']}", case["codestream"],
+               bytes.fromhex(case["profile"]), case["openjpeg"])
     variants = json.loads((FIXTURES / "conformance" / "jp2" / "icc_variants.json").read_text())["variants"]
     for v in variants:
         path = FIXTURES / "conformance" / "jp2" / v["file"]
@@ -222,7 +229,7 @@ def cases(only: str | None):
         patch(profile, v["intent"], v["white"])
         space = bytes(profile[16:20])
         kind = "grey8" if space == b"GRAY" else ("rgb8" if v["bit_depth"] == 8 else "rgb16")
-        yield f"{v['file'].split('/')[-1]}/{v['variant']}", kind, bytes(profile)
+        yield f"{v['file'].split('/')[-1]}/{v['variant']}", kind, bytes(profile), None
 
 
 # ---------------------------------------------------------------------------
@@ -312,12 +319,18 @@ def main() -> None:
         total, bad, notes = 0, 0, []
         tally = {"compared": 0, "lcms refuses": 0, "declined": 0}
         started = time.time()
-        for name, kind_name, profile in cases(args.only):
+        disagree = []
+        for name, kind_name, profile, openjpeg in cases(args.only):
             if args.only and args.only not in name:
                 continue
             kind = kinds[kind_name]
             outcome, mismatches, detail = compare(lcms, kind, profile, tmp)
             tally[outcome] += 1
+            # LittleCMS should refuse exactly the profiles OpenJPEG leaves as
+            # coded (a case the decoder declines is not checked).
+            if (openjpeg and outcome != "declined"
+                    and (openjpeg == "unconverted") != (outcome == "lcms refuses")):
+                disagree.append(f"{name}: OpenJPEG {openjpeg}, here {outcome}")
             if outcome == "compared":
                 total += kind.count
                 bad += mismatches
@@ -328,9 +341,12 @@ def main() -> None:
         print()
         for note in notes:
             print("not compared:", note)
+        for note in disagree:
+            print("differs from icc/profiles.json:", note)
         print(f"\n{tally['compared']} cases compared ({total} pixels), "
               f"{tally['lcms refuses']} refused by LittleCMS, "
               f"{tally['declined']} declined by the decoder; "
+              f"{len(disagree)} differ from icc/profiles.json on whether OpenJPEG converts; "
               f"{bad} mismatches in {time.time() - started:.0f} s")
         sys.exit(1 if bad else 0)
 
