@@ -1276,13 +1276,25 @@ fn assert_passes_through(bytes: &[u8]) {
 fn assert_converts_like(bytes: &[u8], like: &[u8]) {
     let image = decode_srgb(bytes).expect("sRGB");
     let want = decode_srgb(like).expect("sRGB");
-    assert_ne!(
-        image.components,
-        decode(bytes).expect("as coded").components,
-        "converted"
-    );
+    let coded = decode(bytes).expect("as coded");
+    assert_ne!(image.components, coded.components, "converted");
     assert_eq!(image.components, want.components);
-    assert_eq!(image.jp2, want.jp2);
+    // The `colr` boxes are reported as stored, whatever the colour output:
+    // the converted decode keeps the as-coded ones, profile included.
+    let stored = |jp2: &Option<crate::Jp2Metadata>| {
+        jp2.as_ref()
+            .expect("a JP2 file")
+            .colour_specifications
+            .clone()
+    };
+    assert_eq!(stored(&image.jp2), stored(&coded.jp2), "colr as stored");
+    // The two files' profiles differ, so their stored boxes do too.
+    let declared = |jp2: &Option<crate::Jp2Metadata>| {
+        let mut jp2 = jp2.clone().expect("a JP2 file");
+        jp2.colour_specifications.clear();
+        jp2
+    };
+    assert_eq!(declared(&image.jp2), declared(&want.jp2));
     let header = read_header_with(bytes, &srgb()).expect("header");
     assert_eq!(header.jp2, image.jp2, "the header describes the decode");
     assert_eq!(header.components.len(), image.components.len());
