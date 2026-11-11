@@ -19,14 +19,24 @@ What it reads, from the JP2 box layer alone:
   or 18 is `srgb`, `greyscale` or `sycc`; another `EnumCS` is
   `enumerated:<n>`; `METH` 2 is `icc:<profile bytes>`.
 - `channels`: one `<type>/<association>` per channel. With a `cdef` box, its
-  entries placed by channel index `Cn`: `Typ` 0, 1, 2, 65535 is `colour`,
-  `opacity`, `premultiplied`, `unspecified`, else `other(<Typ>)`; `Asoc` 0 is
-  `whole`, 65535 is `none`, else the colour number. Without one, channel `i`
-  is `colour/<i+1>` while `i` is below the colour space's colour count
-  (greyscale 1, sRGB and sYCC 3, another space `NC`) and `unspecified/none`
-  after (ISO/IEC 15444-1 I.5.3.6). `NC` of `ihdr` must equal `Csiz` of the
-  codestream's SIZ.
-- `palette_applied`: false. A `pclr` or `cmap` box is refused.
+  entries in box order, which must be channels 0 to `NC`-1 in order: `Typ`
+  0, 1, 2, 65535 is `colour`, `opacity`, `premultiplied`, `unspecified`, else
+  `other(<Typ>)`; `Asoc` 0 is `whole`, 65535 is `none`, else the colour
+  number. Without one, channel `i` is `colour/<i+1>` while `i` is below the
+  colour count (enumerated sRGB 3, greyscale 1, sYCC 3) and
+  `unspecified/none` after (ISO/IEC 15444-1 I.5.3.6). `NC` of `ihdr` must
+  equal `Csiz` of the codestream's SIZ.
+- `palette_applied`: false.
+
+For `metadata.json` the walker refuses (exits, naming the file) instead of
+guessing, wherever its rules could differ from the decoder's: a `pclr` or
+`cmap` box; a top-level `bpcc`, `pclr`, `cmap` or `cdef` box; more than one
+`cdef`; a `cdef` out of channel order; no `cdef` with a colour space other
+than enumerated sRGB, greyscale or sYCC; `LBox` 0 inside a superbox; a short
+`uuid` box; an `ihdr` `NC` that differs from `Csiz`; a `colr` that is not
+`METH` 1 with a 4-byte `EnumCS` or `METH` 2. The other targets are not
+subject to these checks.
+
 - `resolution`: the first 10-byte `resc` and the first 10-byte `resd` in any
   `res ` box of a header, as `[VRN, VRD, HRN, HRD, VRE, HRE]` (`VRE` and
   `HRE` signed), else `null`.
@@ -80,13 +90,18 @@ FIXTURES = ROOT / "tests" / "fixtures"
 REAL_COMMENT = (
     "What each decodable file's header says, in the `jp2` snapshot schema of "
     "tests/support/mod.rs (Jp2Snapshot). Every field is written from the file's box layer by "
-    "scripts/gen-jp2-box-snapshots.py, not from this decoder. Channels follow each file's "
-    "cdef entries, in output order."
+    "scripts/gen-jp2-box-snapshots.py, not from this decoder. Channels are the cdef entries "
+    "in box order (which must be channels 0 to NC-1), or colour/n for an enumerated "
+    "sRGB, greyscale or sYCC file without one."
 )
 
 
-def boxes(data: bytes):
-    """Yield (type, payload) for each box in data."""
+def boxes(data: bytes, no_zero_length: bool = False):
+    """Yield (type, payload) for each box in data.
+
+    `no_zero_length` refuses an `LBox` of 0 (to the end of the data), which is
+    only legal for a top-level box; it is set for the children of a superbox.
+    """
     at = 0
     end = len(data)
     while at + 8 <= end:
@@ -97,6 +112,8 @@ def boxes(data: bytes):
             (lbox,) = struct.unpack(">Q", data[at + 8 : at + 16])
             header = 16
         elif lbox == 0:
+            if no_zero_length:
+                sys.exit(f"a box at {at} inside a superbox has LBox 0")
             lbox = end - at
         if lbox < header or at + lbox > end:
             sys.exit(f"a box at {at} runs outside its parent")
@@ -177,7 +194,9 @@ def colour_name(spec: dict) -> str:
         )
     if spec["method"] == 2:
         return f"icc:{spec['data_len']}"
-    sys.exit(f"unsupported colr method {spec['method']}")
+    if spec["method"] == 1:
+        sys.exit(f"colr METH 1 with {spec['data_len']} bytes of data instead of a 4-byte EnumCS")
+    sys.exit(f"colr METH {spec['method']} is not recorded")
 
 
 def channel_label(typ: int, asoc: int) -> str:
@@ -188,15 +207,17 @@ def channel_label(typ: int, asoc: int) -> str:
     return f"{kind}/{assoc}"
 
 
-def channels(cdef: bytes | None, colour: str, nc: int) -> list:
+def channels(cdef: bytes | None, spec: dict, nc: int) -> list:
     if cdef is not None:
         if len(cdef) < 2 or len(cdef) != 2 + 6 * struct.unpack(">H", cdef[:2])[0]:
             sys.exit("malformed cdef")
         entries = [struct.unpack(">HHH", cdef[i : i + 6]) for i in range(2, len(cdef), 6)]
-        if sorted(e[0] for e in entries) != list(range(nc)):
-            sys.exit("cdef does not define each channel once")
-        return [channel_label(t, a) for _, t, a in sorted(entries)]
-    colours = {"greyscale": 1, "srgb": 3, "sycc": 3}.get(colour, nc)
+        if [e[0] for e in entries] != list(range(nc)):
+            sys.exit("cdef entries are not channels 0 to NC-1 in order")
+        return [channel_label(t, a) for _, t, a in entries]
+    colours = {16: 3, 17: 1, 18: 3}.get(spec.get("enum_cs")) if spec["method"] == 1 else None
+    if colours is None:
+        sys.exit("no cdef, and the colour space is not enumerated sRGB, greyscale or sYCC")
     return [f"colour/{i + 1}" if i < colours else "unspecified/none" for i in range(nc)]
 
 
@@ -209,7 +230,7 @@ def res(payload: bytes):
 
 def uinf(payload: bytes):
     ulst = url = None
-    for kind, body in boxes(payload):
+    for kind, body in boxes(payload, no_zero_length=True):
         if kind == b"ulst":
             if ulst is not None:
                 return None
@@ -225,8 +246,14 @@ def uinf(payload: bytes):
     return [[ulst[i : i + 16].hex() for i in range(2, len(ulst), 16)], len(url) - 4]
 
 
-def walk(data: bytes) -> tuple[dict, dict]:
-    """The ftyp, ihdr, colr and rreq fields, and what `snapshot` adds to them."""
+def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
+    """The ftyp, ihdr, colr and rreq fields, and what `snapshot` adds to them.
+
+    Without `strict` only the four box fields are gathered, with the checks
+    they always had. `strict` (used by `snapshot`) also reads the other fields
+    and refuses a file in any case where this walker's rules could differ from
+    the decoder's.
+    """
     file_type = None
     image_header = None
     nc = csiz = None
@@ -251,18 +278,20 @@ def walk(data: bytes) -> tuple[dict, dict]:
         elif kind == b"rreq" and not seen_rreq:
             seen_rreq = True
             reader = rreq(payload)
-        elif kind == b"xml ":
+        elif strict and kind == b"xml ":
             xml.append(len(payload))
-        elif kind == b"uuid":
+        elif strict and kind == b"uuid":
             if len(payload) < 16:
                 sys.exit("malformed uuid")
             uuid.append([payload[:16].hex(), len(payload) - 16])
-        elif kind == b"jp2i":
+        elif strict and kind == b"jp2i":
             ipr.append(len(payload))
-        elif kind == b"uinf":
+        elif strict and kind == b"uinf":
             info = uinf(payload)
             if info is not None:
                 uuid_info.append(info)
+        elif strict and kind in (b"bpcc", b"pclr", b"cmap", b"cdef"):
+            sys.exit(f"a top-level {code(kind)} box (a misplaced header box)")
         elif kind == b"jp2c":
             if not seen_jp2c and payload[:4] == b"\xff\x4f\xff\x51" and len(payload) >= 42:
                 # SOC, SIZ marker, Lsiz, Rsiz, eight 4-byte fields, then Csiz.
@@ -270,7 +299,7 @@ def walk(data: bytes) -> tuple[dict, dict]:
             seen_jp2c = True
         elif kind == b"jp2h" and not seen_jp2c:
             seen_jp2h = True
-            for child, body in boxes(payload):
+            for child, body in boxes(payload, no_zero_length=strict):
                 if child == b"ihdr" and image_header is None:
                     if len(body) != 14:
                         sys.exit("malformed ihdr")
@@ -282,12 +311,14 @@ def walk(data: bytes) -> tuple[dict, dict]:
                     }
                 elif child == b"colr":
                     colours.append(colr(body))
-                elif child == b"cdef" and cdef is None:
+                elif strict and child == b"cdef":
+                    if cdef is not None:
+                        sys.exit("more than one cdef box")
                     cdef = body
-                elif child in (b"pclr", b"cmap"):
+                elif strict and child in (b"pclr", b"cmap"):
                     palette = True
-                elif child == b"res ":
-                    for grand, rbody in boxes(body):
+                elif strict and child == b"res ":
+                    for grand, rbody in boxes(body, no_zero_length=True):
                         if grand == b"resc" and capture is None:
                             capture = res(rbody)
                         elif grand == b"resd" and display is None:
@@ -319,7 +350,7 @@ def walk(data: bytes) -> tuple[dict, dict]:
 
 def snapshot(data: bytes) -> dict:
     """The whole `jp2` snapshot record, in the field order of `Jp2Snapshot`."""
-    found, extra = walk(data)
+    found, extra = walk(data, strict=True)
     colours = found["colour_specifications"]
     if not colours:
         sys.exit("no colr before the codestream")
@@ -332,7 +363,7 @@ def snapshot(data: bytes) -> dict:
     colour = colour_name(colours[0])
     record = {
         "colour": colour,
-        "channels": channels(extra["cdef"], colour, extra["nc"]),
+        "channels": channels(extra["cdef"], colours[0], extra["nc"]),
         "palette_applied": False,
         "resolution": {"capture": extra["capture"], "display": extra["display"]},
         "xml": extra["xml"],
@@ -349,6 +380,14 @@ def dump(path: Path) -> dict:
     return walk(path.read_bytes())[0]
 
 
+def record(path: Path) -> dict:
+    """`snapshot` of a file, with the file's name in any refusal."""
+    try:
+        return snapshot(path.read_bytes())
+    except SystemExit as refusal:
+        sys.exit(f"{path.name}: {refusal}")
+
+
 def rewrite(path: Path, edit) -> None:
     text = path.read_text()
     value = json.loads(text)
@@ -359,13 +398,6 @@ def rewrite(path: Path, edit) -> None:
 
 
 def main() -> None:
-    real = FIXTURES / "jp2_real"
-    metadata = {
-        "_comment": REAL_COMMENT,
-        "files": {f.name: snapshot(f.read_bytes()) for f in sorted(real.glob("*.jp2"))},
-    }
-    (real / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-
     for jp2 in sorted(FIXTURES.glob("jp2_*.jp2")):
         found = dump(jp2)
 
@@ -387,6 +419,15 @@ def main() -> None:
     (conformance / "boxes.json").write_text(
         json.dumps({"_comment": comment, "files": files}, indent=2) + "\n"
     )
+
+    # Last, so a refusal here does not stop the targets above. The record is
+    # built whole before the file is touched.
+    real = FIXTURES / "jp2_real"
+    metadata = {
+        "_comment": REAL_COMMENT,
+        "files": {f.name: record(f) for f in sorted(real.glob("*.jp2"))},
+    }
+    (real / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
 if __name__ == "__main__":
