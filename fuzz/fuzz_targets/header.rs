@@ -57,8 +57,8 @@ fuzz_target!(|data: &[u8]| {
         .map(|options| rust_j2k::read_header_with(data, options))
         .collect();
     let readable: Vec<usize> = (0..headers.len()).filter(|&i| headers[i].is_ok()).collect();
-    let picked = (!readable.is_empty())
-        .then(|| readable[(fnv1a(data) % readable.len() as u64) as usize]);
+    let picked =
+        (!readable.is_empty()).then(|| readable[(fnv1a(data) % readable.len() as u64) as usize]);
     for (i, (options, header)) in option_sets.iter().zip(headers).enumerate() {
         check(data, options, header, picked == Some(i));
     }
