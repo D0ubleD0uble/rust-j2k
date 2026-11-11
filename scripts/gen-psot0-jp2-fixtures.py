@@ -186,6 +186,48 @@ def sweep(size: int, components: int, order: int) -> bytes:
     return prefix + box(b"jp2c", codestream) + box(b"free", b"")
 
 
+CPRL = 4
+
+
+def cprl_sweep(size: int) -> bytes:
+    """A JP2 of one `size` x `size` 8-bit component in CPRL order, one layer
+    and no wavelet levels, under 1 x 1 user precincts, whose packets are all
+    empty (the byte 0x00). CPRL sweeps each component on its own, at that
+    component's own finest precinct step, so --- unlike PCRL --- its positions
+    cannot be multiplied across components: they equal that component's
+    precinct columns times its rows. A 1 x 1 precinct makes the step 1 on both
+    axes, so the sweep visits `size`^2 positions, one per precinct. That is
+    `size`^2 precincts, so any CPRL sweep past the visit bound is already past
+    the geometry bound; this file (16900 precincts) is refused there, like
+    `jp2_t2bomb_blocks`. The tile-part has `Psot = 0` and no EOC, and its
+    `jp2c` box ends where the packets end; an empty `free` box follows."""
+
+    def seg(code: int, body: bytes) -> bytes:
+        return struct.pack(">HH", code, 2 + len(body)) + body
+
+    siz = seg(
+        0xFF51,
+        struct.pack(">HIIIIIIIIH", 0, size, size, 0, 0, size, size, 0, 0, 1) + bytes([7, 1, 1]),
+    )
+    # User precincts, CPRL, one layer, no MCT; no levels, 16x16 code-blocks
+    # (clamped to the 1 x 1 precinct), 5/3, 1 x 1 precincts (one per sample).
+    cod = seg(0xFF52, bytes([1, CPRL]) + struct.pack(">H", 1) + bytes([0, 0, 2, 2, 0, 1, 0x00]))
+    qcd = seg(0xFF5C, bytes([0x20, 0x40]))
+    packets = size * size
+    sot = struct.pack(">HHHIBB", 0xFF90, 10, 0, 0, 0, 1)
+    codestream = b"\xff\x4f" + siz + cod + qcd + sot + b"\xff\x93" + b"\x00" * packets
+    prefix = (
+        box(b"jP  ", b"\x0d\x0a\x87\x0a")
+        + box(b"ftyp", b"jp2 " + b"\0\0\0\0" + b"jp2 ")
+        + box(
+            b"jp2h",
+            box(b"ihdr", struct.pack(">IIHBBBB", size, size, 1, 7, 7, 0, 0))
+            + box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 17)),
+        )
+    )
+    return prefix + box(b"jp2c", codestream) + box(b"free", b"")
+
+
 # name -> (bytes, width, height); `--check` prints opj's outcome.
 BOMBS = {
     # 128 x 128 = 2^14 code-blocks, within the geometry bound, and 300 layers:
@@ -198,15 +240,16 @@ BOMBS = {
     "jp2_t2_many_layers.jp2": (t2bomb(32, 28, 19000), 32, 28),
 }
 
-# name -> bytes; `--check` prints opj's outcome. 256^2 sweep points, each
-# checking 2 resolutions of 64 components: 8.4 million visits, past the 2^22
-# work bound, for 1148 empty packets. CPRL has no such file: it sweeps each
-# component on its own, at that component's finest step, so its positions
-# grow with the component's precincts and code-blocks, which the geometry
-# bound already caps.
+# name -> bytes; `--check` prints opj's outcome. The RPCL and PCRL files
+# sweep 256^2 positions, each checking 2 resolutions of 64 components: 8.4
+# million visits, past the 2^22 work bound, for 1148 empty packets. The CPRL
+# file cannot work that way --- each component sweeps alone --- so its sweep
+# is one fine-stepped component of 16900 positions; that is 16900 precincts,
+# past the geometry bound, so it is refused there, not at the visit bound.
 SWEEPS = {
     "jp2_t2_sweep_rpcl.jp2": sweep(512, 64, RPCL),
     "jp2_t2_sweep_pcrl.jp2": sweep(512, 64, PCRL),
+    "jp2_t2_sweep_cprl.jp2": cprl_sweep(130),
 }
 
 # name -> (bytes, base whose opj output it is compared with)

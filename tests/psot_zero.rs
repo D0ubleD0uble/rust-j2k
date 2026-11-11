@@ -274,16 +274,19 @@ fn a_raw_psot_zero_codestream_with_bytes_after_its_packets_is_refused() {
 /// Codestreams too costly to walk to check where they end: two whose one-byte
 /// packet headers each visit every code-block of a large precinct (`t2bomb` in
 /// the generator), one past the visit bound and one past the geometry bound,
-/// and two whose RPCL or PCRL sweep checks 64 components at each of 256^2
-/// positions for 1148 empty packets (`sweep`), past the visit bound. Past a
-/// bound the walk answers no, so the codestream runs to the end of the file
-/// and the bytes after its packets are refused, as on a codestream the check
-/// does not apply to. OpenJPEG 2.5.0 decodes all four to a flat 128.
+/// two whose RPCL or PCRL sweep checks 64 components at each of 256^2
+/// positions for 1148 empty packets (`sweep`), past the visit bound; and one
+/// whose CPRL sweep of a single 130x130 component visits 16900 positions
+/// (`cprl_sweep`), past the geometry bound. Past a bound the walk answers no,
+/// so the codestream runs to the end of the file and the bytes after its
+/// packets are refused, as on a codestream the check does not apply to.
+/// OpenJPEG 2.5.0 decodes all five to a flat 128.
 #[test]
 fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
     for name in [
         "jp2_t2bomb_visits.jp2",
         "jp2_t2bomb_blocks.jp2",
+        "jp2_t2_sweep_cprl.jp2",
         "jp2_t2_sweep_pcrl.jp2",
         "jp2_t2_sweep_rpcl.jp2",
     ] {

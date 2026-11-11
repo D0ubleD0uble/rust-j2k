@@ -488,6 +488,11 @@ const T2_MANY_LAYERS: &[u8] =
 /// for 1148 empty packets, from `sweep` in the same script.
 const T2_SWEEP_RPCL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_rpcl.jp2");
 const T2_SWEEP_PCRL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_pcrl.jp2");
+/// A CPRL sweep of one 130x130 component under 1x1 precincts: 16900 sweep
+/// positions, one per precinct, from `cprl_sweep`. CPRL sweeps each component
+/// alone at its own precinct step, so its positions equal that component's
+/// precinct count; this one is past the geometry bound, not the visit bound.
+const T2_SWEEP_CPRL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_cprl.jp2");
 
 /// The codestream of `file` cut two bytes past its `jp2c` box's end, the slice
 /// the walk is run on.
@@ -529,9 +534,11 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         assert!(visits <= PROBE_VISITS_MIN, "{visits} visits");
     }
 
-    let cut = box_end_cut(T2BOMB_BLOCKS);
-    assert!(unbounded(cut).1 > PROBE_GEOMETRY);
-    assert_eq!(probe_packets(cut, 0), (false, 0));
+    for file in [T2BOMB_BLOCKS, T2_SWEEP_CPRL] {
+        let cut = box_end_cut(file);
+        assert!(unbounded(cut).1 > PROBE_GEOMETRY);
+        assert_eq!(probe_packets(cut, 0), (false, 0));
+    }
 
     let cut = box_end_cut(T2_MANY_LAYERS);
     assert!(probe_packets(cut, 0).0);
