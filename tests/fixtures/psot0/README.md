@@ -30,6 +30,33 @@ of the last tile-part is set to 0, then:
 `*.expected.pgm` are `opj_decompress` outputs of the bases. Each shape that
 decodes gives exactly that output.
 
+## JP2 files
+
+The `jp2_*.jp2` files wrap these codestreams in JP2 boxes:
+`scripts/gen-psot0-jp2-fixtures.py` writes them, and with `--check` runs each
+through `opj_decompress` 2.5.0 and compares the output with the base's
+`*.expected.pgm`. Each is a signature, `ftyp`, a `jp2h` (`ihdr` 48x40, one
+8-bit component, grayscale `colr`), a `jp2c` box, then the boxes listed. A
+"right" length ends the box where the codestream bytes end; `LBox` 108 and
+200 end it inside the codestream (the PR #186 shapes).
+
+| File | Codestream | `jp2c` length | After it | OpenJPEG 2.5.0 | This crate |
+| ---- | ---------- | ------------- | -------- | -------------- | ---------- |
+| `jp2_p0noeoc_xml` | `single_psot0_no_eoc` | right | `xml ` | decodes, equals `single` | the same, `xml ` reported |
+| `jp2_p0noeoc_badcolr` | `single_psot0_no_eoc` | right | 2-byte `colr` | decodes, equals `single` | the same |
+| `jp2_p0noeoc_tileparts_xml_uuid` | `tileparts_psot0_no_eoc` | right | `xml `, `uuid` | decodes, equals `tileparts` | the same, both reported |
+| `jp2_p0noeoc_xml_junk` | `single_psot0_no_eoc` | right | `xml `, then `abc` | decodes, equals `single` | `Codestream` (left after the last packet) |
+| `jp2_short108_p0eoc_xml` | `single_psot0_eoc` | `LBox` 108 | `xml ` | decodes, equals `single` | `Codestream` (left after the last packet) |
+| `jp2_p0eoc_short_badcolr` | `single_psot0_eoc` | `LBox` 108 | 2-byte `colr` | decodes, equals `single` | `Codestream` (left after the last packet) |
+| `jp2_t2_last0_short` | `tileparts_psot0_eoc` | `LBox` 200 | 2-byte `colr` | decodes, equals `tileparts` | `Codestream` (left after the last packet) |
+| `jp2_p0eoc_cut_in_com` | `single_psot0_eoc` with a COM after SIZ | ends inside the COM, whose text is a box header | one whole `free` box (the rest of the codestream) | decodes, equals `single` | the same |
+| `jp2_lbox0_p0eoc_xml` | `single_psot0_eoc` | `LBox` 0 | `xml ` (inside the box) | decodes, equals `single` | `Codestream` (left after the last packet) |
+
+The `Codestream` rows are a known difference, recorded in
+`docs/correctness.md`: the box's end is not where the codestream ends, so the
+tile-part runs to the end of the file and the bytes after its last packet are
+refused, as for a raw codestream.
+
 Not covered, because they hit other tile-part rules: a `Psot = 0` that is not
 on the last tile of the grid, or on a tile-part before the tile's last
 declared one. OpenJPEG decodes those with missing tiles or missing parts; this

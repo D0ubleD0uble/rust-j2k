@@ -147,13 +147,25 @@ Stricter here, where OpenJPEG decodes:
   extensions, `rreq` features), so its first codestream can be the wrong
   image with no error. Refusing it lets a later JPX reader produce the right
   image without silently changing output that already "worked";
-- a last tile-part with `Psot = 0` followed by more bytes in the slice it
-  runs to: no `EOC`, a `jp2c` with `LBox` 0, or a `jp2c` length that does not
-  end at the `EOC`. In both decoders the tile-part runs to the end of the
-  file, so the bytes after it are tile data. OpenJPEG ignores them; the
-  codestream parser rejects them as `Codestream` ("left after the last
-  packet"). This is a known difference, not the tier-2 rule above: the
-  packets themselves decode. The policy is pending owner issue #183.
+- a last tile-part with `Psot = 0` followed by more bytes, when the `jp2c`
+  box's end is not where its codestream ends: `LBox` 0, a length that ends
+  inside the codestream, or a box followed by bytes that are not whole boxes
+  to the end of the file. The tile-part then runs to the end of the file in
+  both decoders, so the bytes after it are tile data. OpenJPEG ignores them;
+  the codestream parser rejects them as `Codestream` ("left after the last
+  packet"), as it does for a raw codestream (owner decision on #183,
+  2026-11-10). The packets themselves decode, so this is not the tier-2 rule
+  above.
+
+A `Psot = 0` last tile-part in a `jp2c` box whose length is right ends at
+the box's end, with or without an `EOC`. The length is right when the box
+declares one that ends before the end of the file, the box holds the last
+tile-part's header, and the bytes after it are whole boxes to the end of the
+file. The boxes after it are reported as metadata (`xml `, `uuid` and the
+like) and are not tile data. OpenJPEG reads the tile-part on into those
+boxes and ignores the bytes past its last packet, so the image is the same.
+Neither decoder reads header boxes there: OpenJPEG's walk after the decode
+starts at the end of the file.
 
 A `jp2c` whose length is wrong (`LBox` 2..7, `XLBox` below 16, or shorter
 than its codestream) decodes as in OpenJPEG, which ignores the length: the

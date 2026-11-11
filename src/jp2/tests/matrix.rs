@@ -151,11 +151,18 @@ fn two_parts_last_open() -> Vec<u8> {
 }
 
 /// A `Psot = 0` last tile-part followed by more bytes in the slice it runs
-/// to: the `jp2c` box does not end at its `EOC` (no `EOC`, `LBox` 0, or a
-/// wrong length). OpenJPEG 2.5.0 decodes each, ignoring the bytes past the
-/// last packet; the codestream parser rejects them. The policy is pending
-/// (#183), so these rows pin today's `Codestream`.
+/// to: the `jp2c` box does not end at its `EOC` (`LBox` 0, or a length that
+/// ends inside the codestream). OpenJPEG 2.5.0 decodes each, ignoring the
+/// bytes past the last packet; the codestream parser rejects them.
 fn open_last_part_then_more() -> Vec<(&'static str, Vec<u8>)> {
+    open_last_part_shapes().split_off(1)
+}
+
+/// The shapes of [`open_last_part_then_more`], led by one whose `jp2c`
+/// length is right but whose codestream has no `EOC`, then an `xml ` box.
+/// That box ends where its codestream does, so it decodes, as in
+/// OpenJPEG 2.5.0.
+fn open_last_part_shapes() -> Vec<(&'static str, Vec<u8>)> {
     let with_eoc = psot_zero_codestream();
     let without_eoc = &with_eoc[..with_eoc.len() - 2];
     let xml = bx(b"xml ", b"<a>hello</a>");
@@ -926,10 +933,16 @@ fn every_robustness_table_row_has_its_outcome() {
     let rows: Vec<(String, Vec<u8>, Mode, Outcome)> = rows
         .into_iter()
         .map(|(what, bytes, mode, want)| (what.to_string(), bytes, mode, want))
-        .chain(open_last_part_then_more().into_iter().map(|(what, bytes)| {
-            let what = format!("Psot = 0 then more bytes: {what}");
-            (what, bytes, Default, Codestream)
-        }))
+        .chain(
+            open_last_part_shapes()
+                .into_iter()
+                .enumerate()
+                .map(|(index, (what, bytes))| {
+                    let what = format!("Psot = 0 then more bytes: {what}");
+                    let want = if index == 0 { Decodes } else { Codestream };
+                    (what, bytes, Default, want)
+                }),
+        )
         .collect();
     let mut wrong = Vec::new();
     for (what, bytes, mode, want) in &rows {
@@ -953,7 +966,8 @@ fn every_robustness_table_row_has_its_outcome() {
 }
 
 /// The `Psot = 0` rows fail on the bytes past the last packet, and without
-/// the trailing bytes the split codestream decodes.
+/// the trailing bytes the split codestream decodes. So does the codestream
+/// with no `EOC` in a right-sized box.
 #[test]
 fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
     for (what, bytes) in open_last_part_then_more() {
@@ -970,6 +984,14 @@ fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
         decode(&two_parts).expect("decodes").components,
         raw().components
     );
+    // A right-sized box: the codestream ends at its end, and the `xml ` box
+    // after it is reported by both calls.
+    let (what, right_sized) = open_last_part_shapes().swap_remove(0);
+    let image = decode(&right_sized).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(image.components, raw().components, "{what}");
+    let metadata = image.jp2.expect("a JP2 file");
+    assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()], "{what}");
+    assert_eq!(read_header(&right_sized).unwrap().jp2, Some(metadata), "{what}");
 }
 
 /// `read_header_with` fails exactly when `decode_with` does, under the same

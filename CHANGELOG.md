@@ -177,6 +177,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with no `EOC` loses its last two data bytes and fails in the tile
   ("overruns the tile-part"); it used to be rejected as not terminated by
   `EOC`.
+- In a JP2 file, a `Psot = 0` last tile-part now ends at the end of its
+  `jp2c` box when the box's length is right and whole boxes follow it to the
+  end of the file, with or without `EOC`. Such a file decodes as in OpenJPEG
+  where it was refused for bytes left after the last packet, and its `xml `
+  and `uuid` boxes after the codestream are reported again. A raw codestream,
+  a `jp2c` with `LBox` 0, or one whose length ends inside the codestream is
+  still refused for those bytes.
 
 ### Changed
 
