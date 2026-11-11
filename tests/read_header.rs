@@ -21,13 +21,27 @@ use rust_j2k::{
 /// packets ("overruns the tile-part"; OpenJPEG fails there too), while its
 /// header, `cdef` included, reads cleanly. The `psot0/` files are the same
 /// shape (a `Psot = 0` last tile-part with no EOC or too little data), made
-/// from OpenJPEG codestreams.
+/// from OpenJPEG codestreams. The `psot0/jp2_*` files listed wrap a `Psot = 0`
+/// codestream in a `jp2c` box whose end is not where the codestream ends, so
+/// the boxes after it are tile data past the last packet, which `decode`
+/// refuses.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
     ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
+    ("psot0/jp2_lbox0_p0eoc_xml.jp2", "jp2c LBox 0, then xml"),
+    (
+        "psot0/jp2_p0eoc_short_badcolr.jp2",
+        "jp2c LBox 108, then a colr",
+    ),
+    (
+        "psot0/jp2_p0noeoc_xml_junk.jp2",
+        "bytes after the jp2c that are not whole boxes",
+    ),
+    ("psot0/jp2_short108_p0eoc_xml.jp2", "jp2c LBox 108, then xml"),
+    ("psot0/jp2_t2_last0_short.jp2", "jp2c LBox 200, then a colr"),
     ("psot0/single_psot0_no_eoc.j2k", "no EOC"),
     (
         "psot0/single_psot0_no_eoc_trunc100.j2k",
