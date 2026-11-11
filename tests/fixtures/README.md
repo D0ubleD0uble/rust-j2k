@@ -445,6 +445,8 @@ checked against it by hand.
 | `resolution`      | object   | `capture` and `display`: `[VRN, VRD, HRN, HRD, VRE, HRE]` in box order, or `null`. |
 | `xml`             | int[]    | Byte length of each top-level `xml ` box, in file order.             |
 | `uuid`            | array[]  | `[id as lowercase hex, payload length]` per top-level `uuid` box.    |
+| `ipr`             | int[], optional | Byte length of each top-level `jp2i` box; left out when none. |
+| `uuid_info`       | array[], optional | `[[ids as lowercase hex], url payload length]` per well-formed top-level `uinf` box; left out when none. |
 | `file_type`, `image_header`, `colour_specifications`, `reader_requirements` | objects | The box fields below. |
 
 ### `jp2_boxes` and the box fields
@@ -464,7 +466,9 @@ fixtures without a `jp2` section carry. The same four fields, for ISO/IEC
 
 Source of truth: `scripts/gen-jp2-box-snapshots.py`, a standalone box walker
 (standard library only; `python3 -I scripts/gen-jp2-box-snapshots.py`). It
-reads the JP2 box layer of each file and never uses the crate. It counts the
+reads the JP2 box layer of each file and never uses the crate. It writes every
+field of `jp2_real/metadata.json` (from scratch) and the four box fields of the
+other snapshots. It counts the
 `colr` boxes of every `jp2h` and those misplaced at the top level after the
 first `jp2h`, before the codestream, and the first top-level `rreq`
 (`docs/correctness.md`). `scripts/gen-jp2-fixtures.py` runs it as its last step, because it

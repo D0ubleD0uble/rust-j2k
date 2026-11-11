@@ -1,5 +1,5 @@
 {
-  "_comment": "What each decodable file's header says, in the `jp2` snapshot schema of tests/support/mod.rs (Jp2Snapshot). Recorded from a box dump of each file (colr EnumCS, the resc/resd fields in box order VRN VRD HRN HRD VRE HRE, the top-level xml and uuid boxes; ftyp, ihdr, colr and rreq from scripts/gen-jp2-box-snapshots.py), not from this decoder. Channels follow each file's cdef entries, in output order.",
+  "_comment": "What each decodable file's header says, in the `jp2` snapshot schema of tests/support/mod.rs (Jp2Snapshot). Every field is written from the file's box layer by scripts/gen-jp2-box-snapshots.py, not from this decoder. Channels follow each file's cdef entries, in output order.",
   "files": {
     "3_13bit_and_1bit.jp2": {
       "colour": "srgb",

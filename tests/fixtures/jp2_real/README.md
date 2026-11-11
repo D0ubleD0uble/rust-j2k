@@ -63,9 +63,13 @@ against their `cdef` boxes. Two match bit-exactly. `stefan_full_rgba.jp2` is
 rights are not confirmed, so they share the status in Rights above.
 
 `metadata.json` records what each file's header says (colour, channels,
-resolution, top-level `xml ` and `uuid` boxes), in the `jp2` snapshot schema of
-`tests/fixtures/README.md`, for every file whose header reads cleanly. The
-values come from a box dump of each file (the `colr` `EnumCS`, the
-`cdef` entries, the `resc`/`resd` fields, the top-level `xml ` and `uuid` box
-sizes and identifiers), not from this decoder. `read_header` must report them,
-and so must `decode` for each file it decodes.
+resolution, top-level `xml ` and `uuid` boxes, and the `ftyp`, `ihdr`, `colr`
+and `rreq` fields), in the `jp2` snapshot schema of `tests/fixtures/README.md`,
+for every file whose header reads cleanly. Every value, and the file itself, is
+written by `scripts/gen-jp2-box-snapshots.py`, a standalone box walker that
+never uses the decoder (`python3 -I scripts/gen-jp2-box-snapshots.py`). The
+script writes the file from scratch: it reads every `*.jp2` here, builds each
+record, and overwrites `metadata.json`, so nothing is carried over from an
+earlier copy. A file the walker cannot read exits with an error and leaves
+`metadata.json` as it was. `read_header` must report the values, and so must
+`decode` for each file it decodes.
