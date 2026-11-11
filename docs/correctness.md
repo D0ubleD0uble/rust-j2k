@@ -178,7 +178,7 @@ precincts, and the walk stops after max(2^22, 8 × the tile's data bytes)
 visits, counting packets read, code-block entries visited in their headers,
 and sweep positions once for each (component, resolution) checked there.
 Past a bound the check answers no, and the codestream is read to the end of
-the file as above (`jp2_t2bomb_*` and `jp2_t2_sweep` in
+the file as above (`jp2_t2bomb_*` and `jp2_t2_sweep_*` in
 `tests/fixtures/psot0/`). When the box's end is used, the boxes after it are
 walked by the rules for the boxes after the codestream and reported as
 metadata (`xml `, `uuid` and the like); otherwise the bytes after the box are

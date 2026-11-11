@@ -484,9 +484,10 @@ const T2BOMB_BLOCKS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t
 /// visits, within the bound.
 const T2_MANY_LAYERS: &[u8] =
     include_bytes!("../../../tests/fixtures/psot0/jp2_t2_many_layers.jp2");
-/// A PCRL sweep of 256^2 positions that checks 64 components at each, for 1148
-/// empty packets, from `sweep` in the same script.
-const T2_SWEEP: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep.jp2");
+/// RPCL and PCRL sweeps of 256^2 positions that check 64 components at each,
+/// for 1148 empty packets, from `sweep` in the same script.
+const T2_SWEEP_RPCL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_rpcl.jp2");
+const T2_SWEEP_PCRL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_pcrl.jp2");
 
 /// The codestream of `file` cut two bytes past its `jp2c` box's end, the slice
 /// the walk is run on.
@@ -520,7 +521,7 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         (u64::MAX - budget.visits, MAX_CODE_BLOCKS - budget.blocks)
     };
 
-    for file in [T2BOMB_VISITS, T2_SWEEP] {
+    for file in [T2BOMB_VISITS, T2_SWEEP_RPCL, T2_SWEEP_PCRL] {
         let cut = box_end_cut(file);
         assert!(unbounded(cut).0 > PROBE_VISITS_MIN);
         let (ends, visits) = probe_packets(cut, 0);

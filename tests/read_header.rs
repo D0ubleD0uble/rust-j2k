@@ -24,7 +24,7 @@ use rust_j2k::{
 /// from OpenJPEG codestreams. The `psot0/jp2_*` files listed wrap a `Psot = 0`
 /// codestream in a `jp2c` box whose end is not where the codestream ends, so
 /// the boxes after it are tile data past the last packet, which `decode`
-/// refuses. The `psot0/jp2_t2bomb_*` and `psot0/jp2_t2_sweep` files are too
+/// refuses. The `psot0/jp2_t2bomb_*` and `psot0/jp2_t2_sweep_*` files are too
 /// costly to check where their codestream ends, so it runs to the end of the
 /// file, with the same result.
 ///
@@ -44,7 +44,11 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     ),
     ("psot0/jp2_t2_last0_short.jp2", "jp2c LBox 200, then a colr"),
     (
-        "psot0/jp2_t2_sweep.jp2",
+        "psot0/jp2_t2_sweep_pcrl.jp2",
+        "too many sweep positions to check",
+    ),
+    (
+        "psot0/jp2_t2_sweep_rpcl.jp2",
         "too many sweep positions to check",
     ),
     (

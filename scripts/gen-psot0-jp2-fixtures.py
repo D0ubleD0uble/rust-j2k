@@ -126,9 +126,13 @@ def t2bomb(width: int, height: int, layers: int) -> bytes:
     return prefix + box(b"jp2c", codestream) + box(b"free", b"")
 
 
-def sweep(size: int, components: int) -> bytes:
-    """A JP2 of one `size` x `size` tile in PCRL order, one layer and one
-    wavelet level, whose packets are all empty (the byte 0x00). Two thin
+RPCL, PCRL = 2, 3
+
+
+def sweep(size: int, components: int, order: int) -> bytes:
+    """A JP2 of one `size` x `size` tile in progression `order` (RPCL or
+    PCRL), one layer and one wavelet level, whose packets are all empty (the
+    byte 0x00). Two thin
     components set the precinct grid's step to 2 on both axes: the first is
     subsampled 255 times vertically under 1 x 2^15 precincts, the second 255
     times horizontally under 2^15 x 1 precincts. The other components, each
@@ -154,9 +158,11 @@ def sweep(size: int, components: int) -> bytes:
         struct.pack(">HIIIIIIIIH", 0, size, size, 0, 0, size, size, 0, 0, components)
         + b"".join(bytes(c) for c in comps),
     )
-    # User precincts, PCRL, one layer, no MCT; one level, 64x64 code-blocks,
-    # 5/3, 2^15 precincts.
-    cod = seg(0xFF52, bytes([1, 2]) + struct.pack(">H", 1) + bytes([0, 1, 4, 4, 0, 1, 0xFF, 0xFF]))
+    # User precincts, `order`, one layer, no MCT; one level, 64x64
+    # code-blocks, 5/3, 2^15 precincts.
+    cod = seg(
+        0xFF52, bytes([1, order]) + struct.pack(">H", 1) + bytes([0, 1, 4, 4, 0, 1, 0xFF, 0xFF])
+    )
     coc = seg(0xFF53, bytes([0, 1, 1, 4, 4, 0, 1, 0xF0, 0xF1])) + seg(
         0xFF53, bytes([1, 1, 1, 4, 4, 0, 1, 0x0F, 0x1F])
     )
@@ -193,9 +199,13 @@ BOMBS = {
 
 # name -> bytes; `--check` prints opj's outcome. 256^2 sweep points, each
 # checking 2 resolutions of 64 components: 8.4 million visits, past the 2^22
-# work bound, for 1.7 thousand empty packets.
+# work bound, for 1148 empty packets. CPRL has no such file: it sweeps each
+# component on its own, at that component's finest step, so its positions
+# grow with the component's precincts and code-blocks, which the geometry
+# bound already caps.
 SWEEPS = {
-    "jp2_t2_sweep.jp2": sweep(512, 64),
+    "jp2_t2_sweep_rpcl.jp2": sweep(512, 64, RPCL),
+    "jp2_t2_sweep_pcrl.jp2": sweep(512, 64, PCRL),
 }
 
 # name -> (bytes, base whose opj output it is compared with)
