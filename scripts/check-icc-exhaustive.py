@@ -63,6 +63,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from oracle_tools import require_lcms, require_openjpeg
+
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"
 EXAMPLE = ROOT / "target" / "release" / "examples" / "icc_convert"
@@ -368,9 +370,9 @@ def main() -> None:
     for tool in ("opj_compress", "cargo"):
         if shutil.which(tool) is None:
             sys.exit(f"{tool} not found on PATH")
+    opj = require_openjpeg("opj_compress")
     lcms = Lcms()
-    print(f"LittleCMS {lcms.version // 1000}.{lcms.version % 1000 // 10} "
-          f"(encoded {lcms.version}); OpenJPEG 2.5.0 and LittleCMS 2.14 are the oracle versions")
+    print(f"LittleCMS {require_lcms(lcms.version)} (encoded {lcms.version}) and OpenJPEG {opj}")
     build = run("cargo", "build", "--release", "--example", "icc_convert", cwd=ROOT)
     if build.returncode != 0:
         sys.exit(build.stderr)

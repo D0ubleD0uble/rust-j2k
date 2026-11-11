@@ -28,7 +28,7 @@ the cargo gates track their current release (they do not affect oracle output).
 
 | Tool | Version | Provides | Used by |
 | ---- | ------- | -------- | ------- |
-| OpenJPEG | 2.5.0 (apt) / 2.5.4 (source) | `opj_decompress`, `opj_dump`, `opj_compress` | oracle snapshots, header checks, Tier-1 vectors, synthetic fixtures |
+| OpenJPEG | 2.5.0 | `opj_decompress`, `opj_dump`, `opj_compress` | oracle snapshots, header checks, Tier-1 vectors, synthetic fixtures |
 | eccodes | 2.34.1 | `grib_dump`, `grib_get_data` | GRIB2-sourced fixtures |
 | cargo-deny | current release | `cargo deny` | license/advisory quality gate |
 | cargo-fuzz | current release (+ nightly) | `cargo fuzz` | robustness fuzzing |
@@ -46,21 +46,25 @@ synthesizes the codestreams behind the isolated Tier-1 golden vectors and the
 sudo apt-get install libopenjp2-tools
 
 # macOS
-brew install openjpeg
+brew install openjpeg   # may be newer than 2.5.0: build from source then
 ```
 
 For a reproducible oracle independent of the distro package, build from a
-pinned release tag (latest stable is `v2.5.4`):
+pinned release tag:
 
 ```sh
-git clone --depth 1 --branch v2.5.4 https://github.com/uclouvain/openjpeg
+sudo apt-get install liblcms2-dev   # LittleCMS 2.14 (Ubuntu 24.04), linked dynamically
+git clone --depth 1 --branch v2.5.0 https://github.com/uclouvain/openjpeg
 cmake -S openjpeg -B openjpeg/build -DCMAKE_BUILD_TYPE=Release
 cmake --build openjpeg/build --target install
 ```
 
-The reversible 5/3 path is bit-exact across these patch releases, so the apt
-2.5.0 build is fine for lossless fixtures. Pin the source build when an
-irreversible 9/7 oracle must be reproduced exactly.
+The generators in `scripts/` check the version (`scripts/oracle_tools.py`) and
+exit on anything but OpenJPEG 2.5.0 (and, for the ICC oracles, LittleCMS 2.14),
+so install exactly 2.5.0. To build it from source, use the `v2.5.0` tag.
+A source build must link the system LittleCMS (`liblcms2-dev` installed, and
+`-DBUILD_THIRDPARTY=ON` left off, which would bundle an older, static copy that
+the version check cannot see).
 
 ### eccodes
 

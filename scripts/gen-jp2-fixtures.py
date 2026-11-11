@@ -75,13 +75,13 @@ Requires `opj_compress` and `opj_decompress` on PATH (OpenJPEG 2.5.0 was used).
 from __future__ import annotations
 
 import json
-import shutil
 import zlib
 import struct
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from oracle_tools import OPENJPEG_VERSION, require_openjpeg
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 SCRIPT = f"scripts/{Path(__file__).name}"
@@ -441,7 +441,7 @@ def subsampled_fixtures() -> None:
                 "oracle_command": f"opj_decompress -i sub.j2k -o out.pgx, then cmap "
                 f"{mapping} applied by table lookup in Python",
                 "notes": "component 0 is full resolution, component 1 sub-sampled 2x2. "
-                "OpenJPEG 2.5.0 sizes every palette channel by the first channel's grid and "
+                f"OpenJPEG {OPENJPEG_VERSION} sizes every palette channel by the first channel's grid and "
                 "crashes or emits uninitialised memory on this file, so it is graded by "
                 "table lookup over OpenJPEG's decode of the bare codestream; each channel "
                 "keeps its source component's grid (owner-approved deviation, 2026-11-01)",
@@ -525,7 +525,7 @@ def sycc_fixture(
                 "source": f"{name}.jp2",
                 "oracle_command": " ".join(
                     ["opj_decompress", "-i", f"{name}.jp2", "-o", "out.pgx", *flags]),
-                "notes": "OpenJPEG 2.5.0's sYCC to RGB, with its replication of sub-sampled "
+                "notes": f"OpenJPEG {OPENJPEG_VERSION}'s sYCC to RGB, with its replication of sub-sampled "
                 f"chroma {rule}. Its formula uses 0.344 and 0.714 and truncates each "
                 "product; the decoder uses the IEC constants and rounds (owner-approved "
                 "deviation, 2026-11-01), hence the tolerance of 1",
@@ -547,9 +547,7 @@ def sycc_fixtures() -> None:
 
 
 def main() -> None:
-    for tool in ("opj_compress", "opj_decompress"):
-        if shutil.which(tool) is None:
-            sys.exit(f"{tool} not found on PATH; install OpenJPEG to regenerate the fixtures")
+    require_openjpeg("opj_compress", "opj_decompress")
 
     one = (FIXTURES / "multilayer_lossless.j2k").read_bytes()
     one_geometry = {"width": 32, "height": 24, "components": 1, "depth": 8, "signed": False}

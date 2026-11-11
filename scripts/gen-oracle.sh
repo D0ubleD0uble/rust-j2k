@@ -102,6 +102,9 @@ command -v opj_decompress >/dev/null 2>&1 ||
 	die "opj_decompress not found — run scripts/install-oracle-tools.sh (see docs/development.md)"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Refuse any OpenJPEG other than the pinned version (one check, shared with the
+# Python generators).
+python3 "$script_dir/oracle_tools.py" opj_decompress || exit 1
 converter="$script_dir/pgx_to_expected.py"
 [[ -f "$converter" ]] || die "missing converter: $converter"
 
