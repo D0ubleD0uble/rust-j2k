@@ -269,5 +269,30 @@
     "source": "synthetic three-component sYCC planes, coded with `opj_compress -i sycc.raw -o sycc.j2k -F 13,11,3,8,u@1x1:2x2:2x2 -d 6,2 -mct 0 -n 2`, wrapped by scripts/gen-jp2-fixtures.py",
     "oracle_command": "opj_decompress -i sycc.j2k -o c<K>.pgx -c <K> for K = 0, 1, 2",
     "notes": "image origin (6, 2), chroma sub-sampled 2x2, colr sYCC; decoded as coded, one component at a time (mct 0)"
+  },
+  "jp2_boxes": {
+    "file_type": {
+      "brand": "jp2 ",
+      "minor_version": 0,
+      "compatibility": [
+        "jp2 "
+      ]
+    },
+    "image_header": {
+      "compression": 7,
+      "unknown_colour_space": 0,
+      "ipr": 0
+    },
+    "colour_specifications": [
+      {
+        "method": 1,
+        "precedence": 0,
+        "approximation": 0,
+        "data_len": 4,
+        "data_sha256": "e9f3440e5518839aa600db07b5400f8ec287ce0321fad602afd103ce447a1c98",
+        "enum_cs": 18
+      }
+    ],
+    "reader_requirements": null
   }
 }
