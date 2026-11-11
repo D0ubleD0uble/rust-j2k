@@ -17,9 +17,10 @@ fn file5_with(unknown_colourspace: u8, ipr: u8) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/conformance/jp2/files/file5.jp2");
     let mut bytes = std::fs::read(path).unwrap();
-    // `ftyp` follows the 12-byte signature: its `MinV` is at 20.
-    assert_eq!(&bytes[16..24], b"jpx \0\0\0\0");
-    bytes[20..24].copy_from_slice(&0x0102_0304u32.to_be_bytes());
+    // `ftyp` follows the 12-byte signature: its type at 16, `BR` at 20, then
+    // `MinV` at 24.
+    assert_eq!(&bytes[16..28], b"ftypjpx \0\0\0\0");
+    bytes[24..28].copy_from_slice(&0x0102_0304u32.to_be_bytes());
     // jP (12), ftyp (32), rreq (24), then jp2h's header and ihdr's: the
     // `ihdr` payload starts at 84, and `BPC`, `C`, `UnkC`, `IPR` end it.
     assert_eq!(&bytes[80..84], b"ihdr");
