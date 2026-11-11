@@ -130,7 +130,8 @@ copy). So every such profile is selected and decoded with
 `ColourOutput::Srgb` under each codestream kind, and the profiles the
 converter accepts reach the transform builders: 82 of 160 for RGB 8-bit, 82
 of 160 for RGB 16-bit and 15 of 27 for grey. The script exits if the target's
-`BUILD_EVERY` or hash constants differ from its own.
+`BUILD_EVERY` or hash constants differ from its own, or if the target no
+longer gates on `fnv1a(profile) % BUILD_EVERY != 0`.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,

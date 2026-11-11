@@ -687,7 +687,9 @@ TARGET = ROOT / "fuzz" / "fuzz_targets" / "icc_srgb.rs"
 
 def check_target_hash(target: Path = TARGET) -> None:
     """Exit unless the hash constants in the icc_srgb target are the ones this
-    script uses, so the build copies cannot drift from the gate."""
+    script uses, and the target still gates the transform build on
+    `fnv1a(profile) % BUILD_EVERY != 0`, so the build copies cannot drift from
+    the gate."""
     text = target.read_text()
     patterns = {
         "BUILD_EVERY": r"^const BUILD_EVERY: u64 = (\d+);",
@@ -700,6 +702,13 @@ def check_target_hash(target: Path = TARGET) -> None:
         if len(hits) != 1:
             sys.exit(f"{target}: expected one {key}, found {len(hits)}")
         values[key] = int(hits[0].replace("_", ""), 0)
+    gate = r"^\s*if fnv1a\(profile\) % BUILD_EVERY != 0 \{$"
+    hits = re.findall(gate, text, re.M)
+    if len(hits) != 1:
+        sys.exit(
+            f"{target}: expected one line `if fnv1a(profile) % BUILD_EVERY != 0 {{`"
+            f" (the build-seed selection), found {len(hits)}"
+        )
     mine = {"BUILD_EVERY": BUILD_EVERY, "FNV offset": FNV_OFFSET, "FNV prime": FNV_PRIME}
     for key, want in mine.items():
         if values[key] != want:
@@ -751,8 +760,6 @@ def fuzz_seeds() -> None:
             first = bytes([selector[case["codestream"]]])
             (out / f"{case['codestream']}_{case['name']}_build").write_bytes(first + copy)
             builds += 1
-            if fnv1a(copy) % BUILD_EVERY != 0:
-                sys.exit(f"{case['name']}: build copy is not selected by the hash")
     wanted = len({(c["codestream"], c["profile"]) for c in cases if len(c["profile"]) >= 256})
     if builds != wanted:
         sys.exit(f"wrote {builds} build copies for {wanted} distinct (codestream, profile) pairs")
