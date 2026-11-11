@@ -118,12 +118,19 @@ in the `colr` box. Every execution reads the profile with
 `rust_j2k::fuzz::icc_profile`. Building the transform to sRGB costs
 milliseconds, far more than reading, so only one profile in 16, chosen by a
 hash of the profile, is also decoded with `ColourOutput::Srgb`, which builds
-and runs the LittleCMS port. That took the target from about 21 to about 560
-exec/s. Seed it with the profiles in `tests/fixtures/icc/profiles.json`;
-`gen-icc-oracles.py --fuzz-seeds` also writes, for each distinct profile, a
-`*_build` copy with a 2-byte nonce in the reserved header bytes 100 to 101
-that makes the hash select it, so the smoke reaches the transform builders
-for every profile.
+and runs the LittleCMS port. On the old corpus that gate took the target from
+about 21 to about 560 exec/s (the gate's speeds, not this smoke run's); the 696
+seeds of the current corpus take about 8 s to initialize on CI. Seed it with
+the profiles in `tests/fixtures/icc/profiles.json`;
+`gen-icc-oracles.py --fuzz-seeds` also writes, for each distinct codestream
+and profile pair with a profile of 128 bytes or more, a `*_build` copy with a
+2-byte nonce in the reserved header bytes 100 to 101 that makes the hash
+select it (the hash skips the first byte, so each codestream needs its own
+copy). So every such profile is selected and decoded with
+`ColourOutput::Srgb` under each codestream kind, and the profiles the
+converter accepts reach the transform builders: 82 of 160 for RGB 8-bit, 82
+of 160 for RGB 16-bit and 15 of 27 for grey. The script exits if the target's
+`BUILD_EVERY` or hash constants differ from its own.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
