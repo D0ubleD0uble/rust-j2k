@@ -979,6 +979,88 @@ fn grey_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
     );
 }
 
+/// The sYCC guess holds for a file declared sRGB too: a 4:2:0 or 4:2:2 file
+/// whose `cdef` labels only channel 0 as colour 1 (the others opacity, or
+/// unspecified) is refused, as without a `cdef`. `opj_decompress` 2.5.0, with
+/// and without `-force-rgb`, writes three full-size planes for each, the same
+/// as for the file with no `cdef`.
+#[test]
+fn srgb_4_2_0_or_4_2_2_with_only_colour_1_in_cdef_is_refused() {
+    let opacity = bx(
+        b"cdef",
+        &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0],
+    );
+    let unspecified = bx(
+        b"cdef",
+        &[
+            0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 2, 0xFF, 0xFF, 0xFF, 0xFF,
+        ],
+    );
+    for (layout, jp2, fragment) in [
+        ("4:2:0", SYCC_420, "different sub-sampling (1x1 and 2x2)"),
+        ("4:2:2", SYCC_422, "different sub-sampling (1x1 and 2x1)"),
+    ] {
+        let codestream = top_box(jp2, b"jp2c");
+        for (name, cdef) in [("opacity", &opacity), ("unspecified", &unspecified)] {
+            let what = format!("{layout}, {name}");
+            let bytes = file(codestream, &enumerated(16), &[cdef.clone()]);
+            decode(&bytes).unwrap_or_else(|e| panic!("{what}: AsCoded must decode, got {e}"));
+            expect_err(decode_srgb(&bytes), is_unsupported, fragment);
+            match read_header_with(&bytes, &srgb()) {
+                Err(Error::Unsupported(e)) => assert!(e.contains(fragment), "{what}: {e}"),
+                other => panic!("{what}: read_header_with gave {other:?}"),
+            }
+        }
+    }
+}
+
+/// A file declared sRGB on one or two channels passes through as coded, as
+/// for every other colour space: OpenJPEG reads any image of two or fewer
+/// components as grey (and grey plus opacity). Two channels of different
+/// sign or depth (here from a palette) are not refused; `opj_decompress`
+/// writes them as coded (8-bit unsigned and 8-bit signed, 8-bit and
+/// 12-bit). The metadata stays as declared.
+#[test]
+fn srgb_on_one_or_two_channels_passes_through() {
+    let rows = [
+        ("one channel", file(ONE, &enumerated(16), &[])),
+        (
+            "two channels, different sign",
+            file(
+                ONE,
+                &enumerated(16),
+                &palette(&[7, 0x87], 4, |j, _| u32::from(j)),
+            ),
+        ),
+        (
+            "two channels, different depth",
+            file(
+                ONE,
+                &enumerated(16),
+                &palette(&[7, 11], 4, |j, _| u32::from(j)),
+            ),
+        ),
+    ];
+    for (what, bytes) in rows {
+        let coded = decode(&bytes).unwrap_or_else(|e| panic!("{what}: as coded: {e}"));
+        let image = decode_srgb(&bytes).unwrap_or_else(|e| panic!("{what}: sRGB: {e}"));
+        assert_eq!(image.components, coded.components, "{what}");
+        assert_eq!(image.jp2.unwrap().colour, ColourSpace::Srgb, "{what}");
+        let header = read_header_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let formats: Vec<_> = header
+            .components
+            .iter()
+            .map(|c| (c.bit_depth, c.signed, c.width, c.height))
+            .collect();
+        let decoded: Vec<_> = image
+            .components
+            .iter()
+            .map(|c| (c.bit_depth, c.signed, c.width, c.height))
+            .collect();
+        assert_eq!(formats, decoded, "{what}");
+    }
+}
+
 /// One or two components in a raw codestream are grey (and grey plus
 /// opacity), as OpenJPEG reads them, and pass through.
 #[test]

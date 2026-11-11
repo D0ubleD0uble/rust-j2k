@@ -122,13 +122,20 @@ pub(crate) fn plan(
     reduction: u8,
 ) -> Result<SrgbPlan> {
     match colour {
+        // OpenJPEG reads any image of two or fewer components as grey (and
+        // grey plus opacity) and passes it through, whatever the file
+        // declares, so this does too.
+        ColourSpace::Srgb | ColourSpace::Greyscale if outputs.len() <= 2 => {
+            Ok(SrgbPlan::PassThrough)
+        }
         ColourSpace::Srgb | ColourSpace::Greyscale => {
             // `opj_decompress` converts a three-component 4:2:0 or 4:2:2
             // image as sYCC whatever the file declares, with or without a
-            // `cdef`. A file declared grey with that layout is therefore
-            // checked on all three channels, and refused. Any other channel
-            // past the colour space's colours is left as coded.
-            let guessed = *colour == ColourSpace::Greyscale && converted_as_sycc(outputs);
+            // `cdef`. A file declared sRGB or grey with that layout is
+            // therefore checked on all three channels, and refused, even
+            // when its `cdef` labels only colour 1. Any other channel past
+            // the colour space's colours is left as coded.
+            let guessed = converted_as_sycc(outputs);
             let colours = if guessed {
                 (0..outputs.len()).collect()
             } else {
