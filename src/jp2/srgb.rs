@@ -903,6 +903,17 @@ fn s15_16(bytes: &[u8]) -> f64 {
 }
 
 impl SrgbPlan {
+    /// Open `profile` and read the input profile for both forms, as planning
+    /// does, but build no transform. The fuzz target for the ICC reader
+    /// calls this for every input; building the transform costs far more.
+    pub(crate) fn read_profile(profile: &[u8]) {
+        if let Ok(icc) = Profile::parse(profile) {
+            for form in [Form::Grey, Form::Rgb] {
+                let _ = icc.input_profile(form);
+            }
+        }
+    }
+
     /// Describe the converted output in `metadata`: sRGB, or grey for a
     /// monochrome profile that keeps grey, with no ICC profile. A grey
     /// channel that becomes R, G, B gains two channel definitions, colours 2
