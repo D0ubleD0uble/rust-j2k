@@ -211,8 +211,8 @@ fn the_part4_files_report_their_xml_boxes() {
 }
 
 /// Files 5 and 7 are JP2-compatible JPX files (`jpx ` brand, `jp2 ` in the
-/// compatibility list, an `rreq` box). The `rreq` is skipped, and the
-/// metadata is read: the first `colr` (a restricted ICC profile of 546 and
+/// compatibility list, an `rreq` box, read in `tests/jp2_header_fields.rs`).
+/// The metadata is read: the first `colr` (a restricted ICC profile of 546 and
 /// 13332 bytes, which is what each profile's own size field says) and three
 /// colour channels.
 #[test]

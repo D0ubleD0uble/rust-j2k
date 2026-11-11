@@ -277,6 +277,20 @@ before the codestream, and after it as far as OpenJPEG's walk there goes. A
 `uinf` or `jp2i` inside `jp2h` or another superbox is not read. No real file
 in the corpus carries either box.
 
+### The `rreq` box
+
+OpenJPEG 2.5.0 has no handler for the Reader Requirements box, so ISO/IEC
+15444-2 M.11.1 is the reference for its layout: `ML`, then `FUAM` and `DCM`
+of `ML` bytes each, `NSF` standard features (`SF` and an `ML`-byte `SM`), and
+`NVF` vendor features (a 16-byte `VF` and an `ML`-byte `VM`). The first
+top-level `rreq`, before or after the codestream, is reported as
+`Jp2Metadata::reader_requirements` when it holds exactly those fields. One
+that is cut short or has bytes left over gives `None` and the decode goes on,
+as in OpenJPEG: `opj_decompress` decodes `file5.jp2` with its `NSF` raised to
+65535, or its `ML` to 255, to the same samples as the unmodified file. The
+values (an `ML` outside 1, 2, 4 and 8, an unknown feature) are reported, not
+checked. Files 5 and 7 of the Part 4 set carry an `rreq`.
+
 ### Signed 32-bit components
 
 **Looser than OpenJPEG, approved by the owner (2026-11-01).** OpenJPEG 2.5.0

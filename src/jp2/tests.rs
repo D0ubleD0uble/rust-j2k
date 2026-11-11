@@ -7,14 +7,16 @@
 
 use super::SIGNATURE;
 use crate::{
-    Association, ChannelDefinition, ChannelType, ColourSpace, DecodeOptions, Error, Image,
-    Jp2Metadata, Ratio, Res, Resolution, UuidBox, decode, decode_with, read_header,
+    Association, ChannelDefinition, ChannelType, ColourSpace, ColourSpecification, DecodeOptions,
+    Error, FileType, Image, ImageHeader, Jp2Metadata, Ratio, Res, Resolution, UuidBox, decode,
+    decode_with, read_header,
 };
 
 mod after;
 mod channels;
 mod matrix;
 mod palette;
+mod rreq;
 mod uuid_info;
 
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
@@ -191,6 +193,23 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
             uuid: Vec::new(),
             ipr: Vec::new(),
             uuid_info: Vec::new(),
+            image_header: ImageHeader {
+                compression: 7,
+                unknown_colour_space: 0,
+                ipr: 0,
+            },
+            colour_specifications: vec![ColourSpecification {
+                method: 1,
+                precedence: 0,
+                approximation: 0,
+                data: vec![0, 0, 0, 16],
+            }],
+            file_type: FileType {
+                brand: *b"jp2 ",
+                minor_version: 0,
+                compatibility: vec![*b"jp2 "],
+            },
+            reader_requirements: None,
         })
     );
 }
@@ -552,6 +571,47 @@ fn header_boxes_misplaced_before_jp2h_are_ignored() {
     let parsed = super::parse(&bytes).expect("parses");
     assert_eq!(parsed.header.colr(), vec![&colr()[8..]]);
     assert_eq!(parsed.other.len(), 4);
+}
+
+/// `colour_specifications` holds every `colr` the header reads, in file
+/// order: an ignored `METH` 3 box, the first usable one (which alone sets
+/// `colour`), one in a second `jp2h` and one misplaced after `jp2h`. A `colr`
+/// before `jp2h` or after the codestream is not a header box and is left out.
+#[test]
+fn every_header_colr_is_reported_in_file_order() {
+    let colr_with = |head: [u8; 3], data: &[u8]| bx(b"colr", &[&head[..], data].concat());
+    let bytes = file(&[
+        jp2_ftyp(),
+        colr_with([1, 9, 9], &[0, 0, 0, 18]),
+        jp2h(&[
+            colr_with([3, 1, 2], &[0xAB]),
+            good_ihdr(),
+            colr_with([1, 0, 0], &[0, 0, 0, 17]),
+        ]),
+        jp2h(&[good_ihdr(), colr_with([2, 4, 5], b"icc")]),
+        colr_with([1, 6, 7], &[0, 0, 0, 21, 0xFF]),
+        jp2c(),
+        colr_with([1, 8, 8], &[0, 0, 0, 16]),
+    ]);
+    assert_decodes_like_raw(&bytes);
+    let jp2 = decode(&bytes).unwrap().jp2.unwrap();
+    assert_eq!(read_header(&bytes).unwrap().jp2.as_ref(), Some(&jp2));
+    assert_eq!(jp2.colour, ColourSpace::Greyscale);
+    let spec = |[method, precedence, approximation]: [u8; 3], data: &[u8]| ColourSpecification {
+        method,
+        precedence,
+        approximation,
+        data: data.to_vec(),
+    };
+    assert_eq!(
+        jp2.colour_specifications,
+        [
+            spec([3, 1, 2], &[0xAB]),
+            spec([1, 0, 0], &[0, 0, 0, 17]),
+            spec([2, 4, 5], b"icc"),
+            spec([1, 6, 7], &[0, 0, 0, 21, 0xFF]),
+        ]
+    );
 }
 
 /// A file with a header or codestream fault and a malformed `cdef` reports

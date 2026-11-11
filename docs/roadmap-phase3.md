@@ -449,8 +449,9 @@ JP2-compatible JPX decodes.
 **Work:** `res ` superbox with `resc`/`resd` (four `u16` and two `i8` each)
 into `Resolution`; `xml ` and `uuid` boxes collected verbatim in file order,
 including boxes after `jp2c` (file8); `jp2i` collected the same way and
-`uinf` read into its UUIDs and URL (#192); every JPX box (`rreq`, `jpch`,
-`jplh`, `asoc`, `lbl `, `ftbl`) skipped without descending. Guard: metadata
+`uinf` read into its UUIDs and URL (#192); the first `rreq` read into its
+masks and features (#200); every other JPX box (`jpch`, `jplh`, `asoc`,
+`lbl `, `ftbl`) skipped without descending. Guard: metadata
 copies are bounded by the input length, and only `jp2h`, `res ` and `uinf`
 are descended into, one level each, so there is no nesting to bomb.
 

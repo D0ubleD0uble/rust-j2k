@@ -10,11 +10,11 @@
 //! ```
 //!
 //! Other boxes are skipped without being descended into: the JPX boxes
-//! (`rreq`, `jpch`, `jplh`, `asoc`, `lbl `, `ftbl`) and anything unknown.
-//! Only `jp2h`, `res ` and `uinf` are entered. The top-level `xml `, `uuid`
-//! and `jp2i` boxes are passed through verbatim, and the well-formed top-level
+//! (`jpch`, `jplh`, `asoc`, `lbl `, `ftbl`) and anything unknown. Only
+//! `jp2h`, `res ` and `uinf` are entered. The top-level `xml `, `uuid` and
+//! `jp2i` boxes are passed through verbatim, and the well-formed top-level
 //! `uinf` boxes are read (see [`uuid_info`]), including those after the
-//! codestream.
+//! codestream, as is the first top-level `rreq` (see [`rreq`]).
 //!
 //! [`parse`] walks the boxes up to the first `jp2c` and hands back the
 //! codestream slice with the header boxes. The rest runs before any tile data
@@ -56,6 +56,7 @@ mod math_data;
 mod metadata;
 mod palette;
 mod resolution;
+mod rreq;
 mod srgb;
 mod uuid_info;
 
@@ -70,8 +71,9 @@ mod tests;
 
 pub(crate) use after::check as check_after_codestream;
 pub use metadata::{
-    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, ColourSpace, Jp2Metadata,
-    Ratio, Res, Resolution, UuidBox, UuidInfo,
+    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, ColourSpace,
+    ColourSpecification, FileType, ImageHeader, Jp2Metadata, Ratio, ReaderRequirements, Res,
+    Resolution, StandardFeature, UuidBox, UuidInfo, VendorFeature,
 };
 pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 
@@ -100,6 +102,8 @@ pub(crate) fn looks_like_jp2(bytes: &[u8]) -> bool {
 /// A JP2 file's boxes up to and including its first `jp2c`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Jp2File<'a> {
+    /// The `ftyp` box's fields.
+    pub(crate) file_type: FileType,
     /// The `jp2h` contents, merged over every `jp2h` box and every header box
     /// misplaced at the top level after the first `jp2h`.
     pub(crate) header: Jp2Header<'a>,
@@ -146,7 +150,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
     }
 
     let mut boxes = Boxes::top_level(bytes, SIGNATURE.len());
-    match boxes.next().transpose()? {
+    let file_type = match boxes.next().transpose()? {
         Some(ftyp) if &ftyp.kind == b"ftyp" => check_file_type(&ftyp)?,
         Some(other) => {
             return Err(Error::FileFormat(format!(
@@ -159,7 +163,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                 "the file ends after the signature box".into(),
             ));
         }
-    }
+    };
 
     let mut header: Option<Jp2Header<'_>> = None;
     let mut other = Vec::new();
@@ -195,6 +199,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                     after.boxes.clone()
                 };
                 return Ok(Jp2File {
+                    file_type,
                     header,
                     colour,
                     codestream,
@@ -320,6 +325,7 @@ impl ChannelPlans {
 /// relabel them. `siz` is the codestream's.
 pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> Result<Jp2Metadata> {
     let passed = passthrough(file);
+    let ihdr = &file.header.ihdr;
     let mut metadata = Jp2Metadata {
         colour: file.colour.clone(),
         channels: colour_channels(plans.outputs(siz, 0)?.len(), &file.colour)?,
@@ -332,6 +338,14 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
         uuid: passed.uuid,
         ipr: passed.ipr,
         uuid_info: passed.uuid_info,
+        image_header: ImageHeader {
+            compression: ihdr.compression,
+            unknown_colour_space: ihdr.unknown_colourspace,
+            ipr: ihdr.ipr,
+        },
+        colour_specifications: colour_specifications(&file.header),
+        file_type: file.file_type.clone(),
+        reader_requirements: passed.reader_requirements,
     };
     plans.palette.describe(&mut metadata);
     plans.channels.describe(&mut metadata);
@@ -345,15 +359,18 @@ struct Passthrough {
     uuid: Vec<UuidBox>,
     ipr: Vec<Vec<u8>>,
     uuid_info: Vec<UuidInfo>,
+    reader_requirements: Option<ReaderRequirements>,
 }
 
 /// The top-level `xml `, `uuid`, `jp2i` and `uinf` boxes, each kind in file
-/// order: those before the codestream, then those after it. A `uuid` box too
-/// short for its 16-byte identifier is skipped, and so is a malformed `uinf`
-/// (see [`uuid_info`]). Every copy is of bytes in the input, so together they
-/// are bounded by its length.
+/// order: those before the codestream, then those after it, and the first
+/// top-level `rreq`. A `uuid` box too short for its 16-byte identifier is
+/// skipped, and so is a malformed `uinf` (see [`uuid_info`]); a malformed
+/// first `rreq` gives `None` (see [`rreq`]). Every copy is of bytes in the
+/// input, so together they are bounded by its length.
 fn passthrough(file: &Jp2File<'_>) -> Passthrough {
     let mut out = Passthrough::default();
+    let mut rreq_seen = false;
     for item in file.other.iter().chain(&file.after_box) {
         match &item.kind {
             b"xml " => out.xml.push(item.payload.to_vec()),
@@ -367,10 +384,33 @@ fn passthrough(file: &Jp2File<'_>) -> Passthrough {
             }
             b"jp2i" => out.ipr.push(item.payload.to_vec()),
             b"uinf" => out.uuid_info.extend(uuid_info::parse(item.payload)),
+            b"rreq" if !rreq_seen => {
+                rreq_seen = true;
+                out.reader_requirements = rreq::parse(item.payload);
+            }
             _ => {}
         }
     }
     out
+}
+
+/// Every `colr` the header holds, in read order, split into its three header
+/// bytes and the rest. [`colour::read`] has refused a box under 3 bytes, so
+/// none is dropped.
+fn colour_specifications(header: &Jp2Header<'_>) -> Vec<ColourSpecification> {
+    header
+        .colr()
+        .into_iter()
+        .filter_map(|payload| {
+            let (&[method, precedence, approximation], data) = payload.split_first_chunk()?;
+            Some(ColourSpecification {
+                method,
+                precedence,
+                approximation,
+                data: data.to_vec(),
+            })
+        })
+        .collect()
 }
 
 /// The number of colours in a colour space: the colours a channel can be
