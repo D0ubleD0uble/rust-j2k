@@ -664,18 +664,58 @@ def synthetic() -> None:
     print(f"wrote {ICC_DIR / 'profiles.json'}")
 
 
+def fnv1a(data: bytes) -> int:
+    """FNV-1a, 64 bits, as fuzz/fuzz_targets/icc_srgb.rs computes it."""
+    h = 0xCBF29CE484222325
+    for byte in data:
+        h = ((h ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+BUILD_EVERY = 16  # as in icc_srgb.rs
+
+
+def build_copy(profile: bytes) -> bytes | None:
+    """The profile with a 2-byte nonce in the reserved header bytes 100..102
+    that makes the icc_srgb target build the transform for it (its hash is a
+    multiple of BUILD_EVERY). Nothing reads those bytes, and no byte is added,
+    so the profile parses and converts as before. None for a profile too short
+    to have them."""
+    if len(profile) < 128:
+        return None
+    for nonce in range(1 << 16):
+        copy = profile[:100] + nonce.to_bytes(2, "big") + profile[102:]
+        if fnv1a(copy) % BUILD_EVERY == 0:
+            return copy
+    raise AssertionError("no nonce found")
+
+
 def fuzz_seeds() -> None:
     """Write the profiles of icc/profiles.json as seeds for the icc_srgb fuzz
     target: one byte for the codestream (0 RGB 8-bit, 1 RGB 16-bit, 2 grey),
-    then the profile."""
+    then the profile. The target builds the transform for only one profile in
+    BUILD_EVERY, so each distinct profile of 128 bytes or more also gets a
+    copy with a nonce that selects it (see build_copy), named `*_build`."""
     out = ROOT / "fuzz" / "corpus" / "icc_srgb"
     out.mkdir(parents=True, exist_ok=True)
     selector = {"rgb8": 0, "rgb16": 1, "grey8": 2}
     cases = json.loads((ICC_DIR / "profiles.json").read_text())["cases"]
+    written = builds = 0
     for case in cases:
-        seed = bytes([selector[case["codestream"]]]) + bytes.fromhex(case["profile"])
-        (out / f"{case['codestream']}_{case['name']}").write_bytes(seed)
-    print(f"wrote {len(cases)} seeds to {out}")
+        profile = bytes.fromhex(case["profile"])
+        first = bytes([selector[case["codestream"]]])
+        (out / f"{case['codestream']}_{case['name']}").write_bytes(first + profile)
+        written += 1
+    seen = set()
+    for case in cases:
+        profile = bytes.fromhex(case["profile"])
+        copy = None if profile in seen else build_copy(profile)
+        seen.add(profile)
+        if copy is not None:
+            first = bytes([selector[case["codestream"]]])
+            (out / f"{case['codestream']}_{case['name']}_build").write_bytes(first + copy)
+            builds += 1
+    print(f"wrote {written} seeds and {builds} build copies to {out}")
 
 
 def main() -> None:

@@ -57,8 +57,8 @@ pub struct Jp2Metadata {
     /// ```
     /// use rust_j2k::{Association, ChannelType, DecodeOptions, decode_with};
     ///
-    /// let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/jp2_cdef_reversed.jp2");
-    /// let bytes = std::fs::read(path)?;
+    /// # let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/jp2_cdef_reversed.jp2");
+    /// # let bytes = std::fs::read(path)?;
     /// let decoded = decode_with(&bytes, &DecodeOptions::default())?;
     /// let coded = decode_with(&bytes, &DecodeOptions::default().with_raw_channels(true))?;
     /// let entries = decoded.jp2.as_ref().unwrap().channel_definitions.as_ref().unwrap();

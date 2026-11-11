@@ -22,15 +22,20 @@ pixels go through the decoder as a lossless codestream made with
 `examples/icc_convert.rs`. For each case it prints the number of pixels where
 the two differ. The bar is 0 on every case.
 
-Two kinds of case are not compared pixel by pixel. If LittleCMS refuses the
-profile or the transform, OpenJPEG leaves the samples as coded, and
-`tests/jp2_icc.rs` already checks that the decoder does the same. If the
-decoder declines the profile with `Error::Unsupported` (a lookup table
-profile, say), there is nothing to compare. Both are counted and listed. As a
-cross-check, LittleCMS should refuse exactly the profiles that
-`icc/profiles.json` records as unconverted by OpenJPEG; the cases where it
-does not are listed (`bad_gray_on_rgb`, where OpenJPEG feeds three channels to
-a monochrome transform, is the known one).
+The input format follows OpenJPEG's `color_apply_icc_profile` (color.c): a
+monochrome profile always uses `TYPE_GRAY_8` to `TYPE_RGB_8`, an RGB profile
+uses the sample depth and needs three or more components, and any other color
+space leaves the image alone (see `openjpeg_route`).
+
+Two kinds of case are not compared pixel by pixel, and the script checks them
+instead. Where OpenJPEG leaves the samples as coded (LittleCMS refuses the
+profile or the transform, or OpenJPEG returns before it calls LittleCMS), the
+decoder must give back the samples unchanged. Where the decoder declines the
+profile with `Error::Unsupported` (a lookup table profile, say), the case must
+be one that `REFUSED_BY_US` in `tests/jp2_icc.rs` lists, and every listed case
+must be declined. LittleCMS must also refuse exactly the profiles that
+`icc/profiles.json` records as unconverted by OpenJPEG. Any other result is
+printed as a SURPRISE and makes the script exit non-zero, as does any mismatch.
 
 Assumes the platform of the oracles: LittleCMS 2.14 (Ubuntu 24.04's
 `liblcms2-2`), x86-64. Needs `opj_compress` on PATH, the Rust toolchain, and
@@ -49,6 +54,7 @@ import array
 import ctypes
 import ctypes.util
 import json
+import re
 import random
 import shutil
 import subprocess
@@ -264,36 +270,94 @@ def port_convert(kind: Kind, profile_path: Path, out_path: Path):
     return "ok", channels, out_path.read_bytes()
 
 
-def compare(lcms: Lcms, kind: Kind, profile: bytes, tmp: Path):
-    """("compared", mismatches, detail), ("lcms refuses", ...) or
-    ("declined", ...)."""
-    expected = lcms.convert(profile, kind.in_type, kind.out_type, kind.pixels,
-                            kind.count, kind.out_size)
-    if expected is None:
-        return "lcms refuses", 0, ""
+TYPE_YCBCR_16 = 0x7001A
+
+
+def declined_by_design() -> set[str]:
+    """The case names `tests/jp2_icc.rs` lists in `REFUSED_BY_US`: the
+    profiles the decoder declines with `Error::Unsupported`."""
+    text = (ROOT / "tests" / "jp2_icc.rs").read_text()
+    block = text[text.index("const REFUSED_BY_US"):]
+    block = block[:block.index("];")]
+    return set(re.findall(r'\("([a-z0-9_]+)", "', block))
+
+
+def openjpeg_route(kinds: dict[str, Kind], kind: Kind, profile: bytes):
+    """What OpenJPEG 2.5.0's `color_apply_icc_profile` (color.c) does with this
+    profile on this image: (source kind, in_type, out_type), or None when it
+    returns before it calls LittleCMS and leaves the samples as coded. The
+    input format follows the profile's color space (header bytes 16..20) and
+    the component count, not the codestream:
+
+    - GRAY: `TYPE_GRAY_8` to `TYPE_RGB_8`, whatever the image;
+    - RGB with three or more components: `TYPE_RGB_8` or `TYPE_RGB_16` by the
+      sample depth; with fewer, nothing is done;
+    - YCbCr: `TYPE_YCbCr_16` to `TYPE_RGB_16` (the same component rule);
+    - any other space: nothing is done.
+    """
+    space = profile[16:20]
+    components = 1 if kind.name == "grey8" else 3
+    if space == b"GRAY":
+        grey = kinds["grey8"]
+        return grey, TYPE_GRAY_8, TYPE_RGB_8
+    if space == b"RGB " and components >= 3:
+        return kind, kind.in_type, kind.out_type
+    if space == b"YCbr" and components >= 3:
+        return kinds["rgb16"], TYPE_YCBCR_16, TYPE_RGB_16
+    return None
+
+
+def compare(lcms: Lcms, kinds: dict[str, Kind], kind: Kind, name: str,
+            profile: bytes, tmp: Path, declined: set[str]):
+    """(outcome, mismatches, detail, surprises, converted). The outcome is "compared",
+    "as coded" (OpenJPEG leaves the samples, and the decoder must give them
+    back unchanged) or "declined" (the decoder says Unsupported, as
+    `REFUSED_BY_US` lists). `surprises` are the ways the case broke those
+    expectations; any is a failure."""
+    surprises: list[str] = []
+    route = openjpeg_route(kinds, kind, profile)
+    expected = None
+    if route is not None:
+        src, in_type, out_type = route
+        out_size = src.count * (6 if out_type == TYPE_RGB_16 else 3)
+        expected = lcms.convert(profile, in_type, out_type, src.pixels, src.count, out_size)
     profile_path = tmp / "profile.icc"
     profile_path.write_bytes(profile)
     status, channels, got = port_convert(kind, profile_path, tmp / "out.raw")
+    listed = name.split("/")[-1] in declined
     if status == "declined":
-        return "declined", 0, got
+        if not listed:
+            surprises.append(f"{name}: the decoder declines a profile `REFUSED_BY_US` does not list: {got[:100]}")
+        return "declined", 0, got, surprises, expected is not None
+    if listed:
+        surprises.append(f"{name}: listed in `REFUSED_BY_US`, but the decoder gave {status}")
     if status == "error":
-        return "compared", kind.count, f"decoder failed: {got}"
+        return "compared", kind.count, f"decoder failed: {got}", surprises, expected is not None
+    if expected is None:
+        # OpenJPEG leaves the samples as coded.
+        want = 3 if kind.name != "grey8" else 1
+        if channels != want or got != kind.pixels:
+            surprises.append(f"{name}: OpenJPEG leaves the samples as coded, but the decoder changed them")
+        return "as coded", 0, "", surprises, False
+    if route[0] is not kind or route[1] != kind.in_type:
+        surprises.append(f"{name}: LittleCMS converts a different input than the image, and the decoder converts it")
+        return "compared", kind.count, "not comparable", surprises, True
     if kind.name == "grey8" and channels == 1:
         # A neutral monochrome profile gives one grey channel: LittleCMS's
         # three must agree and equal it.
         if not (expected[0::3] == expected[1::3] == expected[2::3]):
-            return "compared", kind.count, "decoder gives one channel; LittleCMS's three differ"
+            return "compared", kind.count, "decoder gives one channel; LittleCMS's three differ", surprises, True
         count, first = differing(expected[0::3], got, 1)
     else:
         if channels != 3:
-            return "compared", kind.count, f"decoder gives {channels} channels"
+            return "compared", kind.count, f"decoder gives {channels} channels", surprises, True
         count, first = differing(expected, got, kind.stride)
     detail = ""
     if count:
         n = kind.in_stride
         detail = "first at pixel " + ", ".join(
             f"{i} (in {kind.pixels[i * n:(i + 1) * n].hex()})" for i in first)
-    return "compared", count, detail
+    return "compared", count, detail, surprises, True
 
 
 def main() -> None:
@@ -317,38 +381,43 @@ def main() -> None:
         tmp = Path(scratch)
         kinds = make_kinds(work)
         total, bad, notes = 0, 0, []
-        tally = {"compared": 0, "lcms refuses": 0, "declined": 0}
+        tally = {"compared": 0, "as coded": 0, "declined": 0}
         started = time.time()
-        disagree = []
+        surprises: list[str] = []
+        declined = declined_by_design()
         for name, kind_name, profile, openjpeg in cases(args.only):
             if args.only and args.only not in name:
                 continue
             kind = kinds[kind_name]
-            outcome, mismatches, detail = compare(lcms, kind, profile, tmp)
+            outcome, mismatches, detail, extra, converted = compare(
+                lcms, kinds, kind, name, profile, tmp, declined)
             tally[outcome] += 1
-            # LittleCMS should refuse exactly the profiles OpenJPEG leaves as
-            # coded (a case the decoder declines is not checked).
-            if (openjpeg and outcome != "declined"
-                    and (openjpeg == "unconverted") != (outcome == "lcms refuses")):
-                disagree.append(f"{name}: OpenJPEG {openjpeg}, here {outcome}")
+            surprises += extra
+            # OpenJPEG converts exactly when it gets as far as a LittleCMS
+            # transform that builds. A declined case is checked too: the
+            # decoder still must not decline a profile OpenJPEG leaves as coded
+            # unless `REFUSED_BY_US` says so, and `compare` checks that.
+            if openjpeg and (openjpeg == "converted") != converted:
+                surprises.append(f"{name}: icc/profiles.json says OpenJPEG {openjpeg}, "
+                                 f"LittleCMS {'converts' if converted else 'refuses'}")
             if outcome == "compared":
                 total += kind.count
                 bad += mismatches
                 print(f"{name:60} {kind.count:>9} pixels  {mismatches} mismatches {detail}".rstrip(), flush=True)
             else:
-                notes.append(f"{name}: {outcome}" + (f" ({detail})" if detail else ""))
+                notes.append(f"{name}: {outcome}" + (f" ({detail[:100]})" if detail else ""))
                 print(f"{name:60} {outcome}", flush=True)
         print()
         for note in notes:
             print("not compared:", note)
-        for note in disagree:
-            print("differs from icc/profiles.json:", note)
+        for note in surprises:
+            print("SURPRISE:", note)
         print(f"\n{tally['compared']} cases compared ({total} pixels), "
-              f"{tally['lcms refuses']} refused by LittleCMS, "
-              f"{tally['declined']} declined by the decoder; "
-              f"{len(disagree)} differ from icc/profiles.json on whether OpenJPEG converts; "
+              f"{tally['as coded']} left as coded by OpenJPEG and by the decoder, "
+              f"{tally['declined']} declined by the decoder as listed; "
+              f"{len(surprises)} surprises; "
               f"{bad} mismatches in {time.time() - started:.0f} s")
-        sys.exit(1 if bad else 0)
+        sys.exit(1 if bad or surprises else 0)
 
 
 if __name__ == "__main__":
