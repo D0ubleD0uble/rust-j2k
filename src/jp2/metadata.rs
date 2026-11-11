@@ -432,7 +432,8 @@ pub enum ColourSpace {
     /// reported but not interpreted.
     Enumerated(u32),
     /// The file gives no colour space: no usable `colr` box. The image
-    /// header's unknown-colour-space flag does not change this.
+    /// header's unknown-colour-space flag
+    /// ([`ImageHeader::unknown_colourspace`]) does not change this.
     Unknown,
 }
 
