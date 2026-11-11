@@ -35,12 +35,12 @@ Requires `opj_compress` and `opj_decompress` on PATH.
 from __future__ import annotations
 
 import json
-import shutil
 import struct
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from oracle_tools import require_openjpeg
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 
@@ -195,9 +195,7 @@ def build(variant: str) -> None:
 
 
 def main() -> None:
-    for tool in ("opj_compress", "opj_decompress"):
-        if shutil.which(tool) is None:
-            sys.exit(f"{tool} not found on PATH; install OpenJPEG to regenerate the fixtures")
+    require_openjpeg("opj_compress", "opj_decompress")
     for variant in VARIANTS:
         build(variant)
 

@@ -30,7 +30,8 @@ Two snapshot files:
   either converts (the hashes are recorded) or leaves the image unconverted
   (LittleCMS refused the profile), which the decoder must leave as coded too.
 
-OpenJPEG 2.5.0 with LittleCMS 2.14 (Ubuntu 24.04's packages) was used.
+OpenJPEG 2.5.0 with LittleCMS 2.14 (Ubuntu 24.04's packages) is required: the script
+exits on any other version, and records the detected one in the snapshots.
 
 Usage: python3 scripts/gen-icc-oracles.py [--fuzz-seeds]
 (`--fuzz-seeds` only writes the icc_srgb fuzz seeds from icc/profiles.json.)
@@ -43,12 +44,12 @@ import hashlib
 import importlib.util
 import json
 import random
-import shutil
 import struct
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from oracle_tools import require_lcms, require_openjpeg
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -126,7 +127,7 @@ VARIANTS = [
 ]
 
 
-def conformance_variants() -> None:
+def conformance_variants(oracle_version: str) -> None:
     entries = []
     for n in (5, 7, 8):
         original = (JP2_DIR / "files" / f"file{n}.jp2").read_bytes()
@@ -160,7 +161,7 @@ def conformance_variants() -> None:
             f"wtpt XYZ (s15Fixed16) patched in place, by {SCRIPT}",
             "oracle_command": "opj_decompress -i <variant>.jp2 -o out.pgx -force-rgb "
             "[-p 8S for 8-bit files]",
-            "oracle_version": "OpenJPEG 2.5.0 with LittleCMS 2.14",
+            "oracle_version": oracle_version,
             "hash": "SHA-256 of each output plane's samples in raster order, each a "
             "4-byte big-endian signed integer",
         },
@@ -622,7 +623,7 @@ def wrap(cs: dict, icc: bytes) -> bytes:
     return gen.jp2(cs["codestream"], geometry, [], colr=colr)
 
 
-def synthetic() -> None:
+def synthetic(oracle_version: str) -> None:
     codestreams = make_codestreams()
     rgb = {**malformed(), **edge_rgb(), **header(), **lcms_reads(), **classes_and_tables()}
     groups = [("rgb8", rgb), ("rgb16", rgb),
@@ -651,7 +652,7 @@ def synthetic() -> None:
             "around one of the codestreams below",
             "oracle_command": "opj_decompress -i <case>.jp2 -o out.pgx -force-rgb "
             "[-p 8S for 8-bit codestreams]",
-            "oracle_version": "OpenJPEG 2.5.0 with LittleCMS 2.14",
+            "oracle_version": oracle_version,
             "hash": "SHA-256 of each output plane's samples in raster order, each a "
             "4-byte big-endian signed integer",
             "unconverted": "opj_decompress failed or gave the samples as coded: LittleCMS "
@@ -722,11 +723,10 @@ def main() -> None:
     if sys.argv[1:] == ["--fuzz-seeds"]:
         fuzz_seeds()
         return
-    for tool in ("opj_compress", "opj_decompress"):
-        if shutil.which(tool) is None:
-            sys.exit(f"{tool} not found on PATH; install OpenJPEG to regenerate the oracles")
-    conformance_variants()
-    synthetic()
+    opj = require_openjpeg("opj_compress", "opj_decompress")
+    lcms = require_lcms()
+    conformance_variants(f"OpenJPEG {opj} with LittleCMS {lcms}")
+    synthetic(f"OpenJPEG {opj} with LittleCMS {lcms}")
 
 
 if __name__ == "__main__":

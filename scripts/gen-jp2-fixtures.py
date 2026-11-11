@@ -75,13 +75,13 @@ Requires `opj_compress` and `opj_decompress` on PATH (OpenJPEG 2.5.0 was used).
 from __future__ import annotations
 
 import json
-import shutil
 import zlib
 import struct
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from oracle_tools import require_openjpeg
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 SCRIPT = f"scripts/{Path(__file__).name}"
@@ -547,9 +547,7 @@ def sycc_fixtures() -> None:
 
 
 def main() -> None:
-    for tool in ("opj_compress", "opj_decompress"):
-        if shutil.which(tool) is None:
-            sys.exit(f"{tool} not found on PATH; install OpenJPEG to regenerate the fixtures")
+    require_openjpeg("opj_compress", "opj_decompress")
 
     one = (FIXTURES / "multilayer_lossless.j2k").read_bytes()
     one_geometry = {"width": 32, "height": 24, "components": 1, "depth": 8, "signed": False}
