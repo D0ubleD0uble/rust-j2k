@@ -53,6 +53,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from oracle_tools import require_openjpeg
+
 DC_SHIFT = 128  # 8-bit unsigned samples -> signed via -2^(bitdepth-1)
 
 
@@ -475,6 +477,7 @@ def main() -> None:
         help="output path, or - for stdout (default: src/tier1/golden_vectors.rs)",
     )
     args = parser.parse_args()
+    require_openjpeg("opj_compress", "opj_decompress")
 
     vectors = [
         make_vector("gradient_8x8", 8, 8, gradient_8x8(),
