@@ -135,11 +135,14 @@ def edge_cases(file5: bytes) -> list[tuple[str, str, list[tuple[int, int, bytes]
     `remove` bytes at offset `at` and insert `insert` there, applied in order
     to the bytes the edits before it left.
 
-    The `colr` before the first `jp2h` goes before file5's `rreq`, where
-    OpenJPEG 2.5.0 ignores it too ("JPEG2000 Header box not read yet"). After
-    a box OpenJPEG has no handler for, such as `rreq`, it reads the `colr`
-    instead: its unknown-box state (0x7fffffff) sets the header-read bit.
-    That case is not pinned here."""
+    The `colr` before the first `jp2h` goes directly after the `ftyp`, the
+    one place OpenJPEG 2.5.0 ignores it too ("JPEG2000 Header box not read
+    yet"). OpenJPEG ORs its unknown-box state (0x7fffffff), which includes
+    the header-read bit, into its state both for a box it has no handler for
+    (such as `rreq`) and for a misplaced header box it ignores. So any later
+    top-level header box before `jp2h` is read as if `jp2h` had been: a
+    `colr` after file5's `rreq`, or the second of two `colr` boxes after the
+    `ftyp`, becomes its color space. Those cases are not pinned here."""
     return [
         (
             "rreq_vendor_features",
@@ -546,8 +549,25 @@ def main() -> None:
         json.dumps({"_comment": comment, "files": files}, indent=2) + "\n"
     )
 
+    # After the targets above, so a refusal here does not stop them. The
+    # record is built whole before the file is touched.
+    real = FIXTURES / "jp2_real"
+    metadata = {
+        "_comment": REAL_COMMENT,
+        "files": {f.name: record(f) for f in sorted(real.glob("*.jp2"))},
+    }
+    (real / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+
+    # Last, for the same reason: file5's guard and a refused case exit.
     file5 = (conformance / "files" / "file5.jp2").read_bytes()
-    if len(file5) != FILE5_END or file5[FILE5_JP2C + 4 : FILE5_JP2C + 8] != b"jp2c":
+    # The box at every offset the edits use, and the 22-byte `ihdr` box at 76
+    # whose payload (84..98) file5_second_jp2h copies.
+    tags = {FILE5_RREQ: b"rreq", FILE5_JP2H: b"jp2h", 76: b"ihdr", FILE5_JP2C: b"jp2c"}
+    if (
+        len(file5) != FILE5_END
+        or any(file5[at + 4 : at + 8] != tag for at, tag in tags.items())
+        or file5[76:80] != struct.pack(">I", 22)
+    ):
         sys.exit("file5.jp2 is not the file the edge cases were written for")
     cases = {}
     for name, note, edits in edge_cases(file5):
@@ -563,15 +583,6 @@ def main() -> None:
     (conformance / "edge_cases.json").write_text(
         json.dumps({"_comment": EDGE_COMMENT, "cases": cases}, indent=2) + "\n"
     )
-
-    # Last, so a refusal here does not stop the targets above. The record is
-    # built whole before the file is touched.
-    real = FIXTURES / "jp2_real"
-    metadata = {
-        "_comment": REAL_COMMENT,
-        "files": {f.name: record(f) for f in sorted(real.glob("*.jp2"))},
-    }
-    (real / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
 if __name__ == "__main__":

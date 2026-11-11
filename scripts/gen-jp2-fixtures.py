@@ -59,7 +59,7 @@ Metadata fixture:
 Signed fixture:
 
 - `jp2_signed16`: a signed 16-bit gray plane (generated here) with
-  samples from -30000 to 30000, so the oracle has negative 16-bit samples.
+  samples from -30000 to 29967, so the oracle has negative 16-bit samples.
 
 sYCC fixtures (`colr` 18), for sRGB output's chroma replication:
 
@@ -454,7 +454,7 @@ def metadata_boxes_fixture(codestream: bytes, geometry: dict, source: str) -> No
 
 
 def signed16_fixture(tmp: Path) -> None:
-    """`jp2_signed16`: a 24x16 signed 16-bit plane running over -30000..30000,
+    """`jp2_signed16`: a 24x16 signed 16-bit plane running over -30000..29967,
     coded losslessly and wrapped with a gray `colr`."""
     width, height = 24, 16
     values = [((x * 2711 + y * 4099) % 60001) - 30000 for y in range(height) for x in range(width)]
