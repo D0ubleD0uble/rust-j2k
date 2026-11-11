@@ -34,6 +34,11 @@ import json
 import sys
 import tempfile
 
+# oracle_tools.py lives in scripts/, three levels up from this directory; put
+# that directory on sys.path so the version check can be imported.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "scripts"))
+from oracle_tools import require_lcms, require_openjpeg  # noqa: E402
+
 # openjpeg-data commit the corpus is pinned to (master @ 2026-06).
 DATA_COMMIT = "39524bd3a601d90ed8e0177559400d23945f96a9"
 RAW = "https://raw.githubusercontent.com/uclouvain/openjpeg-data/" + DATA_COMMIT + "/%s"
@@ -376,6 +381,7 @@ def build_entry(profile: int, idx: int) -> dict:
 
 
 def main_part1():
+    require_openjpeg("opj_dump", "opj_decompress")
     os.makedirs(CS_DIR, exist_ok=True)
     os.makedirs(REF_DIR, exist_ok=True)
 
@@ -801,6 +807,8 @@ def build_jp2_entry(n: int) -> dict:
 
 
 def main_jp2():
+    require_openjpeg("opj_dump", "opj_decompress")
+    require_lcms()  # the -force-rgb regrade goes through LittleCMS
     os.makedirs(JP2_FILES_DIR, exist_ok=True)
     os.makedirs(JP2_REF_DIR, exist_ok=True)
     print("re-grading opj_decompress -p 8S -force-rgb against the converted references:")
