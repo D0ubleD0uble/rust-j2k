@@ -532,3 +532,99 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
     assert!(ends);
     assert!(visits > PROBE_VISITS_MIN, "{visits} visits");
 }
+
+/// The walk resolves only the walked tile's header, not every tile's (which
+/// costs `tiles × components`, seconds for a file of 100 KB). A fault in
+/// another tile's header (here tile 0's, a COD pairing the 9/7 wavelet with
+/// no quantization) fails the codestream once every tile's header is
+/// resolved, but not the walk of the last tile; the decode refuses that file
+/// either way.
+#[test]
+fn the_packet_walk_resolves_only_its_own_tile() {
+    let mut codestream =
+        include_bytes!("../../../tests/fixtures/psot0/tiled_psot0_no_eoc.j2k").to_vec();
+    let at = |bytes: &[u8], code: [u8; 2]| bytes.windows(2).position(|w| w == code).unwrap();
+    let cod = at(&codestream, [0xFF, 0x52]);
+    let length = usize::from(u16::from_be_bytes([
+        codestream[cod + 2],
+        codestream[cod + 3],
+    ]));
+    let mut other = codestream[cod..cod + 2 + length].to_vec();
+    other[13] ^= 1;
+    // Tile 0's tile-part comes first: put the COD before its SOD and grow its
+    // `Psot` to match.
+    let sot = at(&codestream, [0xFF, 0x90]);
+    let psot = u32::from_be_bytes(codestream[sot + 6..sot + 10].try_into().unwrap());
+    let grown = psot + u32::try_from(other.len()).unwrap();
+    codestream[sot + 6..sot + 10].copy_from_slice(&grown.to_be_bytes());
+    codestream.splice(sot + 12..sot + 12, other);
+    // Room for an EOC, as in the cut two bytes past the box's end.
+    codestream.extend_from_slice(&[0, 0]);
+
+    let parsed = crate::codestream::parse_header(&codestream).unwrap();
+    let whole = crate::codestream::parse_tiles(&codestream, parsed).map(|_| ());
+    assert!(matches!(whole, Err(Error::Marker(_))), "{whole:?}");
+    assert!(crate::jp2::probe_packets(&codestream, 3).0);
+}
+
+/// A codestream of `tiles` 1x1 tiles in a row and `components` 8-bit
+/// components, no wavelet levels and one layer, each packet empty (one zero
+/// byte). Every tile-part has its length but the last, which has `Psot = 0`,
+/// and two bytes of room for an `EOC` follow, as in the cut past a box's end.
+fn empty_packets(tiles: u32, components: u16) -> Vec<u8> {
+    let segment = |code: u16, body: &[u8]| {
+        let mut out = code.to_be_bytes().to_vec();
+        out.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    };
+    let mut siz = vec![0, 0];
+    for value in [tiles, 1, 0, 0, 1, 1, 0, 0] {
+        siz.extend_from_slice(&value.to_be_bytes());
+    }
+    siz.extend_from_slice(&components.to_be_bytes());
+    for _ in 0..components {
+        siz.extend_from_slice(&[7, 1, 1]);
+    }
+    let mut out = vec![0xFF, 0x4F];
+    out.extend(segment(0xFF51, &siz));
+    out.extend(segment(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0, 1]));
+    out.extend(segment(0xFF5C, &[0x40, 0x40]));
+    let packets = usize::from(components);
+    for tile in 0..tiles {
+        let psot = if tile + 1 == tiles {
+            0
+        } else {
+            14 + packets as u32
+        };
+        out.extend_from_slice(&[0xFF, 0x90, 0, 10]);
+        out.extend_from_slice(&u16::try_from(tile).unwrap().to_be_bytes());
+        out.extend_from_slice(&psot.to_be_bytes());
+        out.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+        out.extend(std::iter::repeat_n(0, packets));
+    }
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// A codestream of more than [`PROBE_TILES`] tiles or [`PROBE_COMPONENTS`]
+/// components is not walked, since its tile list and the walked tile's
+/// header grow with them; at the bound it is.
+#[test]
+fn the_packet_walk_skips_a_codestream_of_too_many_tiles_or_components() {
+    use crate::jp2::{PROBE_COMPONENTS, PROBE_TILES, probe_packets};
+
+    let tiles = u32::try_from(PROBE_TILES).unwrap();
+    assert!(probe_packets(&empty_packets(tiles, 1), (tiles - 1) as u16).0);
+    assert_eq!(
+        probe_packets(&empty_packets(tiles + 1, 1), tiles as u16),
+        (false, 0)
+    );
+
+    let components = u16::try_from(PROBE_COMPONENTS).unwrap();
+    assert!(probe_packets(&empty_packets(1, components), 0).0);
+    assert_eq!(
+        probe_packets(&empty_packets(1, components + 1), 0),
+        (false, 0)
+    );
+}

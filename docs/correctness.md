@@ -170,8 +170,9 @@ codestream), the codestream is read to the end of the file instead, with the
 result above. The check is part of reading the file's structure, so
 `read_header` makes it too: it walks that one tile's packet headers, without
 decoding any samples. The walk is bounded, since a one-byte packet header can
-visit every code-block of its precinct: a tile of more than 2^14 code-blocks
-or precincts is not walked, and the walk stops after max(2^20, 64 × the
+visit every code-block of its precinct: a codestream of more than 4096 tiles
+or 1024 components, or a tile of more than 2^14 code-blocks or precincts, is
+not walked, and the walk stops after max(2^20, 64 × the
 tile's data bytes) code-block visits. Past a bound the check answers no, and
 the codestream is read to the end of the file as above (`jp2_t2bomb_*` in
 `tests/fixtures/psot0/`). When the box's end is used, the boxes after it are

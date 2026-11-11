@@ -191,9 +191,10 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// (no length) and whose `jp2c` box ends before the file does, the packet
 /// headers of that tile-part's tile are walked to see whether the codestream
 /// ends at the box's end. No samples are decoded, and the walk is bounded: a
-/// tile of more than 16384 code-blocks or precincts is not walked, and the
-/// walk stops after 2^20 code-block visits, or 64 per byte of the tile's data
-/// when that is more. Past a bound the codestream is taken to run to the end
+/// codestream of more than 4096 tiles or 1024 components, or a tile of more
+/// than 16384 code-blocks or precincts, is not walked, and the walk stops
+/// after 2^20 code-block visits, or 64 per byte of the tile's data when that
+/// is more. Past a bound the codestream is taken to run to the end
 /// of the file, and [`decode_with`] takes it the same way.
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,

@@ -295,6 +295,13 @@ fn locate_codestream<'a>(
 /// state, so the walk holds a few MB at most. A larger tile is not walked.
 const PROBE_GEOMETRY: usize = 1 << 14;
 
+/// The most tiles, and the most components, a codestream may have for
+/// [`packets_end_at`] to walk it. The tile list and the walked tile's header
+/// cost a few hundred bytes per tile and per component, so these keep them
+/// to about 2 MB.
+const PROBE_TILES: usize = 1 << 12;
+const PROBE_COMPONENTS: usize = 1 << 10;
+
 /// The fewest visits [`packets_end_at`] may spend (packets read plus code-block
 /// entries visited in their headers; see [`crate::tier2::Budget`]).
 const PROBE_VISITS_MIN: u64 = 1 << 20;
@@ -317,11 +324,15 @@ const PROBE_VISITS_PER_BYTE: u64 = 64;
 /// either way. When the packets do not end there, the box ends inside the
 /// codestream, and the bytes after it are tile data, not boxes.
 ///
-/// The walk is bounded, because `read_header` runs it too: a tile of more than
-/// [`PROBE_GEOMETRY`] code-blocks or precincts is not walked, and the walk stops
+/// The walk is bounded, because `read_header` runs it too: a codestream of more
+/// than [`PROBE_TILES`] tiles or [`PROBE_COMPONENTS`] components, or a tile of
+/// more than [`PROBE_GEOMETRY`] code-blocks or precincts, is not walked, and
+/// the walk stops
 /// after `max(2^20, 64 × the tile's data bytes)` visits. A packet header of one
 /// byte can visit every code-block of its precinct, so without the bound a
-/// small file could make this walk run for minutes. A tile past either bound
+/// small file could make this walk run for minutes. Only that tile's header is
+/// resolved, not every tile's, which would cost `tiles × components`. A tile
+/// past either bound
 /// answers `false`, so the codestream runs to the end of the file, the rule
 /// for a `Psot = 0` tile-part that this check does not apply to.
 fn packets_end_at(codestream: &[u8], tile: u16) -> bool {
@@ -333,7 +344,19 @@ fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
     let Ok(parsed) = crate::codestream::parse_header(codestream) else {
         return (false, 0);
     };
-    let Ok(cs) = crate::codestream::parse_tiles(codestream, parsed) else {
+    // Every tile needs a tile-part, of at least an SOT segment and an SOD
+    // (14 bytes), so a codestream shorter than that is missing tiles and
+    // fails either way. Only the walked tile's header is resolved: a fault in
+    // another one is found by the decode, the same whichever end is used.
+    let siz = &parsed.header.siz;
+    let tiles = siz.num_tiles() as usize;
+    if tiles > PROBE_TILES
+        || siz.components.len() > PROBE_COMPONENTS
+        || tiles.saturating_mul(14) > codestream.len()
+    {
+        return (false, 0);
+    }
+    let Ok(cs) = crate::codestream::split_tiles(codestream, parsed) else {
         return (false, 0);
     };
     let index = usize::from(tile);
