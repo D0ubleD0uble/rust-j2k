@@ -10,6 +10,10 @@ or 200, as in the PR #186 shapes), or 0 (to the end of the file).
 `bypass_psot0_eoc.j2k` is written too: `bypass_base.j2k` with its only
 tile-part's `Psot` set to 0.
 
+The `jp2_t2bomb_*` files are written from scratch (see `t2bomb`): codestreams
+whose packet headers are one byte each yet visit every code-block of a large
+precinct, to test the bounds on the check that walks the packets.
+
 With `--check`, each file is run through `opj_decompress` and its output is
 compared with the base codestream's `*.expected.pgm`; the result is printed.
 The outcomes are recorded in tests/fixtures/psot0/README.md.
@@ -89,6 +93,48 @@ def cut_in_tile_part_com(kind: bytes = b"free") -> bytes:
 # The BYPASS codestream (`opj_compress -M 1`) with `Psot = 0`, ending in EOC.
 BYPASS_PSOT0 = psot_zero(cs("bypass_base.j2k"))
 
+
+def t2bomb(width: int, height: int, layers: int) -> bytes:
+    """A JP2 of one tile, one 8-bit component and one resolution (no wavelet
+    levels) under 4x4 code-blocks and one precinct, with `layers` quality
+    layers. Each packet is the single byte 0x80, whose header visits every
+    code-block of the precinct and includes none. The tile-part has
+    `Psot = 0` and no EOC, and its `jp2c` box ends where the packets end; an
+    empty `free` box follows, so the box ends before the file does."""
+
+    def seg(code: int, body: bytes) -> bytes:
+        return struct.pack(">HH", code, 2 + len(body)) + body
+
+    siz = seg(
+        0xFF51,
+        struct.pack(">HIIIIIIIIH", 0, width, height, 0, 0, width, height, 0, 0, 1)
+        + bytes([7, 1, 1]),
+    )
+    cod = seg(0xFF52, bytes([0, 0]) + struct.pack(">H", layers) + bytes([0, 0, 0, 0, 0, 1]))
+    qcd = seg(0xFF5C, bytes([0x40, 0x40]))
+    sot = struct.pack(">HHHIBB", 0xFF90, 10, 0, 0, 0, 1)
+    codestream = b"\xff\x4f" + siz + cod + qcd + sot + b"\xff\x93" + b"\x80" * layers
+    prefix = (
+        box(b"jP  ", b"\x0d\x0a\x87\x0a")
+        + box(b"ftyp", b"jp2 " + b"\0\0\0\0" + b"jp2 ")
+        + box(
+            b"jp2h",
+            box(b"ihdr", struct.pack(">IIHBBBB", height, width, 1, 7, 7, 0, 0))
+            + box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 17)),
+        )
+    )
+    return prefix + box(b"jp2c", codestream) + box(b"free", b"")
+
+
+# name -> (bytes, width, height); `--check` prints opj's outcome.
+BOMBS = {
+    # 128 x 128 = 2^14 code-blocks, within the geometry bound, and 100 layers:
+    # 1.6 million visits, past the 2^20 work bound.
+    "jp2_t2bomb_visits.jp2": (t2bomb(512, 512, 100), 512, 512),
+    # 130 x 130 = 16900 code-blocks, past the 2^14 geometry bound.
+    "jp2_t2bomb_blocks.jp2": (t2bomb(520, 520, 1), 520, 520),
+}
+
 # name -> (bytes, base whose opj output it is compared with)
 FILES = {
     # The `jp2c` length is right; the codestream has no EOC.
@@ -161,13 +207,32 @@ def check(name: str, base: str) -> str:
         return f"decodes, {'equal to' if same else 'DIFFERS from'} {base}.expected.pgm"
 
 
+def check_bomb(name: str, width: int, height: int) -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        out = pathlib.Path(tmp) / "out.pgm"
+        run = subprocess.run(
+            ["opj_decompress", "-i", str(DIR / name), "-o", str(out)],
+            capture_output=True,
+            text=True,
+        )
+        if not out.exists():
+            last = [l for l in (run.stdout + run.stderr).splitlines() if "ERROR" in l]
+            return f"no output ({last[-1] if last else run.returncode})"
+        samples = sorted(set(out.read_bytes()[-width * height :]))
+        return f"decodes, sample values {samples}"
+
+
 def main() -> None:
     (DIR / "bypass_psot0_eoc.j2k").write_bytes(BYPASS_PSOT0)
     for name, (data, _) in FILES.items():
         (DIR / name).write_bytes(data)
+    for name, (data, _, _) in BOMBS.items():
+        (DIR / name).write_bytes(data)
     if "--check" in sys.argv:
         for name, (_, base) in FILES.items():
             print(f"{name}: {check(name, base)}")
+        for name, (_, width, height) in BOMBS.items():
+            print(f"{name}: {check_bomb(name, width, height)}")
 
 
 if __name__ == "__main__":

@@ -290,6 +290,19 @@ fn locate_codestream<'a>(
     }
 }
 
+/// The most code-blocks, and the most precincts, [`packets_end_at`] builds the
+/// packet geometry for. Each costs a few hundred bytes of geometry and decode
+/// state, so the walk holds a few MB at most. A larger tile is not walked.
+const PROBE_GEOMETRY: usize = 1 << 14;
+
+/// The fewest visits [`packets_end_at`] may spend (packets read plus code-block
+/// entries visited in their headers; see [`crate::tier2::Budget`]).
+const PROBE_VISITS_MIN: u64 = 1 << 20;
+
+/// The visits [`packets_end_at`] may spend per byte of the tile's data, when
+/// that comes to more than [`PROBE_VISITS_MIN`].
+const PROBE_VISITS_PER_BYTE: u64 = 64;
+
 /// Whether the packets of `tile`, the tile of the `Psot = 0` tile-part, end
 /// exactly at the end of `codestream`: its main header and tile-parts parse
 /// and tier-2 walks the tile's packets (no tier-1). Tier-2 refuses bytes left
@@ -304,20 +317,38 @@ fn locate_codestream<'a>(
 /// either way. When the packets do not end there, the box ends inside the
 /// codestream, and the bytes after it are tile data, not boxes.
 ///
-/// This walks one tile's packet headers, which costs a small part of decoding
-/// the tile, and only for this shape.
+/// The walk is bounded, because `read_header` runs it too: a tile of more than
+/// [`PROBE_GEOMETRY`] code-blocks or precincts is not walked, and the walk stops
+/// after `max(2^20, 64 × the tile's data bytes)` visits. A packet header of one
+/// byte can visit every code-block of its precinct, so without the bound a
+/// small file could make this walk run for minutes. A tile past either bound
+/// answers `false`, so the codestream runs to the end of the file, the rule
+/// for a `Psot = 0` tile-part that this check does not apply to.
 fn packets_end_at(codestream: &[u8], tile: u16) -> bool {
+    probe_packets(codestream, tile).0
+}
+
+/// [`packets_end_at`], and the visits the walk spent.
+fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
     let Ok(parsed) = crate::codestream::parse_header(codestream) else {
-        return false;
+        return (false, 0);
     };
     let Ok(cs) = crate::codestream::parse_tiles(codestream, parsed) else {
-        return false;
+        return (false, 0);
     };
     let index = usize::from(tile);
-    match (cs.tiles.get(index), cs.tile_header(index)) {
-        (Some(data), Ok(header)) => crate::tier2::decode_packets(&header, data).is_ok(),
-        _ => false,
-    }
+    let (Some(data), Ok(header)) = (cs.tiles.get(index), cs.tile_header(index)) else {
+        return (false, 0);
+    };
+    let bytes = (data.data.len() + data.packed_headers.len()) as u64;
+    let visits = PROBE_VISITS_MIN.max(bytes.saturating_mul(PROBE_VISITS_PER_BYTE));
+    let mut budget = crate::tier2::Budget {
+        precincts: PROBE_GEOMETRY,
+        blocks: PROBE_GEOMETRY,
+        visits,
+    };
+    let ends = crate::tier2::decode_packets_within(&header, data, &mut budget).is_ok();
+    (ends, visits - budget.visits)
 }
 
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image

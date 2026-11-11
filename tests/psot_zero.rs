@@ -270,3 +270,19 @@ fn a_raw_psot_zero_codestream_with_bytes_after_its_packets_is_refused() {
         other => panic!("expected a codestream error, got {other:?}"),
     }
 }
+
+/// Codestreams whose one-byte packet headers each visit every code-block of a
+/// large precinct (`t2bomb` in the generator), one past the visit bound and
+/// one past the geometry bound of the walk that checks where the codestream
+/// ends. Past a bound the walk answers no, so the codestream runs to the end of
+/// the file and the bytes after its packets are refused, as on a codestream
+/// the check does not apply to. OpenJPEG 2.5.0 decodes both to a flat image.
+#[test]
+fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
+    for name in ["jp2_t2bomb_visits.jp2", "jp2_t2bomb_blocks.jp2"] {
+        let bytes = std::fs::read(dir().join(name)).unwrap();
+        let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(header.jp2.is_some_and(|m| m.xml.is_empty()), "{name}");
+        assert_leftover(name);
+    }
+}

@@ -24,7 +24,9 @@ use rust_j2k::{
 /// from OpenJPEG codestreams. The `psot0/jp2_*` files listed wrap a `Psot = 0`
 /// codestream in a `jp2c` box whose end is not where the codestream ends, so
 /// the boxes after it are tile data past the last packet, which `decode`
-/// refuses.
+/// refuses. The `psot0/jp2_t2bomb_*` files are too costly to check where
+/// their codestream ends, so it runs to the end of the file, with the same
+/// result.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
@@ -41,6 +43,11 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "jp2c LBox 108, then xml",
     ),
     ("psot0/jp2_t2_last0_short.jp2", "jp2c LBox 200, then a colr"),
+    (
+        "psot0/jp2_t2bomb_blocks.jp2",
+        "too many code-blocks to check",
+    ),
+    ("psot0/jp2_t2bomb_visits.jp2", "too many visits to check"),
     ("psot0/single_psot0_no_eoc.j2k", "no EOC"),
     (
         "psot0/single_psot0_no_eoc_trunc100.j2k",

@@ -183,9 +183,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read to the end of the file as before. Such a file decodes as in OpenJPEG
   where it was refused for bytes left after the last packet, and its `xml `
   and `uuid` boxes after the codestream are reported again. Bytes after a box
-  that ends inside the codestream are not reported as metadata. A raw codestream, or
-  a `jp2c` with `LBox` 0 or a length that ends inside the codestream, is
-  still refused when bytes follow the last packet.
+  that ends inside the codestream are not reported as metadata. `read_header`
+  makes the same check, walking that tile's packet headers within a fixed
+  bound; a tile past the bound is read to the end of the file. A raw
+  codestream, or a `jp2c` with `LBox` 0 or a length that ends inside the
+  codestream, is still refused when bytes follow the last packet.
 
 ### Changed
 

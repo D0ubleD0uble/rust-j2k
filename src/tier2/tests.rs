@@ -72,6 +72,7 @@ fn parse_layers_styled<'a>(
         data,
         body_pos: 0,
         packed: false,
+        visits_left: u64::MAX,
     };
     for layer in 0..layers {
         parse_packet(
@@ -1481,6 +1482,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
         data: &data,
         body_pos: 0,
         packed: false,
+        visits_left: u64::MAX,
     };
     // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
     parse_packet(&mut streams, 0, 65536, SOP, 0, &bands, 0, &mut states).expect("wraps to zero");

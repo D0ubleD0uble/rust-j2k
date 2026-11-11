@@ -60,10 +60,17 @@ read as whole boxes (from the PR #227 review).
 | `jp2_p0eoc_cut_in_com_rreq` | the same, with an `rreq` box header | ends inside the COM | nothing | decodes, equals `single` | the same, no reader requirements reported |
 | `jp2_bypass_short989` | `bypass_psot0_eoc` | `LBox` 8 + 989, 510 bytes short | nothing (the rest of the codestream reads as boxes) | decodes, equals `bypass` | the same |
 | `jp2_lbox0_p0eoc_xml` | `single_psot0_eoc` | `LBox` 0 | `xml ` (inside the box) | decodes, equals `single` | `Codestream` (left after the last packet) |
+| `jp2_t2bomb_visits` | `t2bomb(512, 512, 100)`: 2^14 code-blocks, 100 layers | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); the walk stops at its visit bound |
+| `jp2_t2bomb_blocks` | `t2bomb(520, 520, 1)`: 16900 code-blocks, 1 layer | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); the tile is past the geometry bound and not walked |
 
 When the box ends at least two bytes before the end of the file and holds
-the tile-part's `SOT`, the codestream is decoded to the box's end first, and
-read to the end of the file only if that fails. The `Codestream` rows are a
+the tile-part's `SOT`, the codestream ends at the box's end if tier-2 walks
+that tile's packets to exactly there, and runs to the end of the file
+otherwise. The `jp2_t2bomb_*` files are written by `t2bomb` in the same script
+(one tile, one resolution, 4x4 code-blocks, each packet the byte 0x80, which
+visits every code-block and includes none; their `ihdr` matches their size).
+The walk is bounded, and past a bound it answers no, so they run to the end of
+the file, as they do without the check. The `Codestream` rows are a
 known difference, recorded in `docs/correctness.md`: the box's end is not
 where the codestream ends, so the tile-part runs to the end of the file and
 the bytes after its last packet are refused, as for a raw codestream.

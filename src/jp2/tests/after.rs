@@ -473,3 +473,52 @@ fn padding_inside_the_codestream_box_does_not_hide_later_metadata() {
     let metadata = decode(&short).expect("decodes").jp2.expect("a JP2 file");
     assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
 }
+
+/// Codestreams whose one-byte packet headers each visit every code-block of the
+/// tile, from `t2bomb` in `scripts/gen-psot0-jp2-fixtures.py`: one past the
+/// visit bound on the walk that checks where a `Psot = 0` codestream ends, and
+/// one past its geometry bound.
+const T2BOMB_VISITS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_visits.jp2");
+const T2BOMB_BLOCKS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_blocks.jp2");
+
+/// The codestream of `file` cut two bytes past its `jp2c` box's end, the slice
+/// the walk is run on.
+fn box_end_cut(file: &[u8]) -> &[u8] {
+    let mut at = 0;
+    loop {
+        let length = u32::from_be_bytes(file[at..at + 4].try_into().unwrap()) as usize;
+        if &file[at + 4..at + 8] == b"jp2c" {
+            return &file[at + 8..at + length + 2];
+        }
+        at += length;
+    }
+}
+
+/// The walk stops at its bounds and answers that the codestream does not end
+/// at the box's end, after at most [`PROBE_VISITS_MIN`] visits for a tile this
+/// small, and none for a tile past the geometry bound. Unbounded, the same
+/// walks go past both.
+#[test]
+fn the_packet_walk_at_the_box_end_is_bounded() {
+    use crate::jp2::{PROBE_GEOMETRY, PROBE_VISITS_MIN, probe_packets};
+    use crate::tier2::{Budget, MAX_CODE_BLOCKS, decode_packets_within};
+
+    let unbounded = |cut: &[u8]| {
+        let parsed = crate::codestream::parse_header(cut).unwrap();
+        let cs = crate::codestream::parse_tiles(cut, parsed).unwrap();
+        let header = cs.tile_header(0).unwrap();
+        let mut budget = Budget::DECODE;
+        decode_packets_within(&header, &cs.tiles[0], &mut budget).expect("ends at the cut");
+        (u64::MAX - budget.visits, MAX_CODE_BLOCKS - budget.blocks)
+    };
+
+    let cut = box_end_cut(T2BOMB_VISITS);
+    assert!(unbounded(cut).0 > PROBE_VISITS_MIN);
+    let (ends, visits) = probe_packets(cut, 0);
+    assert!(!ends);
+    assert!(visits <= PROBE_VISITS_MIN, "{visits} visits");
+
+    let cut = box_end_cut(T2BOMB_BLOCKS);
+    assert!(unbounded(cut).1 > PROBE_GEOMETRY);
+    assert_eq!(probe_packets(cut, 0), (false, 0));
+}
