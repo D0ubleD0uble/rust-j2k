@@ -45,6 +45,7 @@ import importlib.util
 import json
 import platform
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -677,6 +678,28 @@ def fnv1a(data: bytes) -> int:
 BUILD_EVERY = 16  # as in icc_srgb.rs
 
 
+TARGET = ROOT / "fuzz" / "fuzz_targets" / "icc_srgb.rs"
+
+
+def check_target_hash(target: Path = TARGET) -> None:
+    """Exit unless the hash constants in the icc_srgb target are the ones this
+    script uses, so the build copies cannot drift from the gate."""
+    text = target.read_text()
+    found = {
+        "BUILD_EVERY": re.search(r"const BUILD_EVERY: u64 = (\d+);", text),
+        "FNV offset": re.search(r"fold\((0x[0-9a-fA-F_]+),", text),
+        "FNV prime": re.search(r"wrapping_mul\((0x[0-9a-fA-F_]+)\)", text),
+    }
+    missing = [k for k, m in found.items() if m is None]
+    if missing:
+        sys.exit(f"{target}: cannot find {', '.join(missing)}")
+    values = {k: int(m.group(1).replace("_", ""), 0) for k, m in found.items()}
+    mine = {"BUILD_EVERY": BUILD_EVERY, "FNV offset": 0xCBF29CE484222325, "FNV prime": 0x100000001B3}
+    for key, want in mine.items():
+        if values[key] != want:
+            sys.exit(f"{target}: {key} is {values[key]:#x}, this script uses {want:#x}")
+
+
 def build_copy(profile: bytes) -> bytes | None:
     """The profile with a 2-byte nonce in the reserved header bytes 100..102
     that makes the icc_srgb target build the transform for it (its hash is a
@@ -701,6 +724,7 @@ def fuzz_seeds() -> None:
     copy with a nonce that selects it (see build_copy), named `*_build`. Each
     codestream needs its own copy: it is the first byte that picks the 8-bit,
     16-bit or grey transform path."""
+    check_target_hash()
     out = ROOT / "fuzz" / "corpus" / "icc_srgb"
     out.mkdir(parents=True, exist_ok=True)
     selector = {"rgb8": 0, "rgb16": 1, "grey8": 2}
