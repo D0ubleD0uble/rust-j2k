@@ -192,13 +192,9 @@ CPRL = 4
 def cprl_sweep(size: int) -> bytes:
     """A JP2 of one `size` x `size` 8-bit component in CPRL order, one layer
     and no wavelet levels, under 1 x 1 user precincts, whose packets are all
-    empty (the byte 0x00). CPRL sweeps each component on its own, at that
-    component's own finest precinct step, so --- unlike PCRL --- its positions
-    cannot be multiplied across components: they equal that component's
-    precinct columns times its rows. A 1 x 1 precinct makes the step 1 on both
-    axes, so the sweep visits `size`^2 positions, one per precinct. That is
-    `size`^2 precincts, so any CPRL sweep past the visit bound is already past
-    the geometry bound; this file (16900 precincts) is refused there, like
+    empty (the byte 0x00). With one resolution and a 1 x 1 precinct the sweep
+    visits `size`^2 positions, one per precinct, so this file (16900
+    precincts) is past the geometry bound and refused there, like
     `jp2_t2bomb_blocks`. The tile-part has `Psot = 0` and no EOC, and its
     `jp2c` box ends where the packets end; an empty `free` box follows."""
 
@@ -228,6 +224,70 @@ def cprl_sweep(size: int) -> bytes:
     return prefix + box(b"jp2c", codestream) + box(b"free", b"")
 
 
+def cprl_steps(
+    x0: int, width: int, height: int, levels: int, precincts: list[int], cb: int, volumes: int
+) -> bytes:
+    """A JP2 of one 8-bit component on the image area `[x0, x0 + width) x
+    [0, height)`, one tile, in CPRL order with one layer, `levels` wavelet
+    levels and the user precinct byte `precincts[r]` (PPx low nibble, PPy high)
+    for each resolution `r`. `cb` is the SPcod code-block byte pair. When
+    `volumes` is not 0, a POC marker repeats the whole CPRL volume that many
+    times. Every packet is empty (the byte 0x00).
+
+    The CPRL sweep's step on each axis is the finest precinct span over all of
+    the component's resolutions, empty ones included, and the two axes can
+    take it from different resolutions. So the sweep can visit far more
+    positions than there are precincts. The tile-part has `Psot = 0` and no
+    EOC, and its `jp2c` box ends where the packets end; an empty `free` box
+    follows."""
+
+    def seg(code: int, body: bytes) -> bytes:
+        return struct.pack(">HH", code, 2 + len(body)) + body
+
+    def ceil(a: int, b: int) -> int:
+        return -(-a // b)
+
+    x1 = x0 + width
+    siz = seg(
+        0xFF51,
+        struct.pack(">HIIIIIIIIH", 0, x1, height, x0, 0, x1, height, 0, 0, 1) + bytes([7, 1, 1]),
+    )
+    # User precincts, CPRL, one layer, no MCT; `levels` levels, 5/3.
+    cod = seg(
+        0xFF52,
+        bytes([1, CPRL]) + struct.pack(">H", 1) + bytes([0, levels]) + cb + bytes([0, 1])
+        + bytes(precincts),
+    )
+    qcd = seg(0xFF5C, bytes([0x20]) + bytes([0x48] * (3 * levels + 1)))
+    # RSpoc, CSpoc, LYEpoc, REpoc, CEpoc, Ppoc: every resolution, layer and
+    # component, in CPRL order.
+    entry = bytes([0, 0]) + struct.pack(">H", 1) + bytes([levels + 1, 1, CPRL])
+    poc = seg(0xFF5F, entry * volumes) if volumes else b""
+    # One packet per non-empty precinct (B.6): a resolution's precincts span
+    # floor(tr0 / 2^PP) .. ceil(tr1 / 2^PP) on each axis, none when it is empty.
+    packets = 0
+    for r, pp in enumerate(precincts):
+        ppx, ppy = pp & 15, pp >> 4
+        scale = 1 << (levels - r)
+        trx0, trx1 = ceil(x0, scale), ceil(x1, scale)
+        try0, try1 = 0, ceil(height, scale)
+        if trx0 == trx1 or try0 == try1:
+            continue
+        packets += (ceil(trx1, 1 << ppx) - (trx0 >> ppx)) * (ceil(try1, 1 << ppy) - (try0 >> ppy))
+    sot = struct.pack(">HHHIBB", 0xFF90, 10, 0, 0, 0, 1)
+    codestream = b"\xff\x4f" + siz + cod + qcd + poc + sot + b"\xff\x93" + b"\x00" * packets
+    prefix = (
+        box(b"jP  ", b"\x0d\x0a\x87\x0a")
+        + box(b"ftyp", b"jp2 " + b"\0\0\0\0" + b"jp2 ")
+        + box(
+            b"jp2h",
+            box(b"ihdr", struct.pack(">IIHBBBB", height, width, 1, 7, 7, 0, 0))
+            + box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 17)),
+        )
+    )
+    return prefix + box(b"jp2c", codestream) + box(b"free", b"")
+
+
 # name -> (bytes, width, height); `--check` prints opj's outcome.
 BOMBS = {
     # 128 x 128 = 2^14 code-blocks, within the geometry bound, and 300 layers:
@@ -242,14 +302,25 @@ BOMBS = {
 
 # name -> bytes; `--check` prints opj's outcome. The RPCL and PCRL files
 # sweep 256^2 positions, each checking 2 resolutions of 64 components: 8.4
-# million visits, past the 2^22 work bound, for 1148 empty packets. The CPRL
-# file cannot work that way --- each component sweeps alone --- so its sweep
-# is one fine-stepped component of 16900 positions; that is 16900 precincts,
-# past the geometry bound, so it is refused there, not at the visit bound.
+# million visits, past the 2^22 work bound, for 1148 empty packets.
 SWEEPS = {
     "jp2_t2_sweep_rpcl.jp2": sweep(512, 64, RPCL),
     "jp2_t2_sweep_pcrl.jp2": sweep(512, 64, PCRL),
+    # 16900 precincts, past the geometry bound.
     "jp2_t2_sweep_cprl.jp2": cprl_sweep(130),
+    # One column of 2^24 rows on x in [1, 2), one level, 4 x 1024 code-blocks.
+    # Resolution 0 is empty in x but its PPy = 0 sets the y step to 2;
+    # resolution 1's PPx = 1 sets the x step to 2. 512 precincts, 2^14
+    # code-blocks (at the geometry bound), 512 empty packets, and a sweep of
+    # 2^23 positions, 3 visits each: about 25 million visits.
+    "jp2_t2_sweep_cprl_tall.jp2": cprl_steps(1, 1, 1 << 24, 1, [0x0F, 0xF1], bytes([0, 8]), 0),
+    # 128 x 128, 32 levels, PP = 1 on the top resolution and 15 below it,
+    # and 31 POC volumes repeating the whole CPRL order. Each volume sweeps
+    # 64^2 positions at 34 visits each (139264); the packets are emitted by
+    # the first. About 4.3 million visits for 4128 empty packets.
+    "jp2_t2_sweep_cprl_poc.jp2": cprl_steps(
+        0, 128, 128, 32, [0xFF] * 32 + [0x11], bytes([4, 4]), 31
+    ),
 }
 
 # name -> (bytes, base whose opj output it is compared with)

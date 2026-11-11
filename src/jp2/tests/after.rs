@@ -488,11 +488,17 @@ const T2_MANY_LAYERS: &[u8] =
 /// for 1148 empty packets, from `sweep` in the same script.
 const T2_SWEEP_RPCL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_rpcl.jp2");
 const T2_SWEEP_PCRL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_pcrl.jp2");
-/// A CPRL sweep of one 130x130 component under 1x1 precincts: 16900 sweep
-/// positions, one per precinct, from `cprl_sweep`. CPRL sweeps each component
-/// alone at its own precinct step, so its positions equal that component's
-/// precinct count; this one is past the geometry bound, not the visit bound.
+/// A CPRL sweep of one 130x130 component under 1x1 precincts, from
+/// `cprl_sweep`: 16900 precincts, past the geometry bound.
 const T2_SWEEP_CPRL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_cprl.jp2");
+/// CPRL sweeps whose step comes from different resolutions on each axis, from
+/// `cprl_steps`. The tall one has 512 precincts and sweeps 2^23 positions; the
+/// POC one repeats a 64^2-position sweep over 33 resolutions in 31 volumes.
+/// Both stay within the geometry bound and pass the visit bound.
+const T2_SWEEP_CPRL_TALL: &[u8] =
+    include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_cprl_tall.jp2");
+const T2_SWEEP_CPRL_POC: &[u8] =
+    include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_cprl_poc.jp2");
 
 /// The codestream of `file` cut two bytes past its `jp2c` box's end, the slice
 /// the walk is run on.
@@ -526,7 +532,13 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         (u64::MAX - budget.visits, MAX_CODE_BLOCKS - budget.blocks)
     };
 
-    for file in [T2BOMB_VISITS, T2_SWEEP_RPCL, T2_SWEEP_PCRL] {
+    for file in [
+        T2BOMB_VISITS,
+        T2_SWEEP_RPCL,
+        T2_SWEEP_PCRL,
+        T2_SWEEP_CPRL_TALL,
+        T2_SWEEP_CPRL_POC,
+    ] {
         let cut = box_end_cut(file);
         assert!(unbounded(cut).0 > PROBE_VISITS_MIN);
         let (ends, visits) = probe_packets(cut, 0);

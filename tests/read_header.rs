@@ -43,8 +43,13 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "jp2c LBox 108, then xml",
     ),
     ("psot0/jp2_t2_last0_short.jp2", "jp2c LBox 200, then a colr"),
+    ("psot0/jp2_t2_sweep_cprl.jp2", "too many precincts to check"),
     (
-        "psot0/jp2_t2_sweep_cprl.jp2",
+        "psot0/jp2_t2_sweep_cprl_poc.jp2",
+        "too many sweep positions to check",
+    ),
+    (
+        "psot0/jp2_t2_sweep_cprl_tall.jp2",
         "too many sweep positions to check",
     ),
     (

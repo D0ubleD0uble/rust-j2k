@@ -64,7 +64,9 @@ read as whole boxes (from the PR #227 review).
 | `jp2_t2bomb_blocks` | `t2bomb(520, 520, 1)`: 16900 code-blocks, 1 layer | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); the tile is past the geometry bound and not walked |
 | `jp2_t2_many_layers` | `t2bomb(32, 28, 19000)`: 56 code-blocks, 19000 layers | right, no EOC | an empty `free` box | decodes, all 128 | the same; the walk spends about 1.08 million visits, within its 2^22 bound |
 | `jp2_t2_sweep_rpcl`, `jp2_t2_sweep_pcrl` | `sweep(512, 64, RPCL)` and `sweep(512, 64, PCRL)`: 64 components, 1148 empty packets | right, no EOC | an empty `free` box | decodes, all 128 (64 components) | `Codestream` (left after the last packet); the sweep's 256^2 positions, each checking 64 components at 2 resolutions, pass the visit bound |
-| `jp2_t2_sweep_cprl` | `cprl_sweep(130)`: one component, 1x1 precincts, 16900 empty packets | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); the sweep's 16900 positions are 16900 precincts, past the geometry bound |
+| `jp2_t2_sweep_cprl` | `cprl_sweep(130)`: one component, 1x1 precincts, 16900 empty packets | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); 16900 precincts, past the geometry bound |
+| `jp2_t2_sweep_cprl_tall` | `cprl_steps(1, 1, 2^24, 1, [0x0F, 0xF1], 4 x 1024 code-blocks, 0)`: one 1-wide column, 512 precincts, 2^14 code-blocks, 512 empty packets | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); resolution 0 (empty in x) sets the y step to 2 and resolution 1 the x step to 2, so the sweep's 2^23 positions (about 25 million visits) pass the visit bound |
+| `jp2_t2_sweep_cprl_poc` | `cprl_steps(0, 128, 128, 32, PP 15 then 1 on top, 64 x 64 code-blocks, 31)`: 31 POC volumes, 4128 empty packets | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); each volume sweeps 64^2 positions at 34 visits each, about 4.3 million visits in all, past the visit bound |
 
 When the box ends at least two bytes before the end of the file and holds
 the tile-part's `SOT`, the codestream ends at the box's end if tier-2 walks
@@ -75,10 +77,12 @@ packet the byte 0x80, which visits every code-block and includes none; their
 `ihdr` matches their size). The `jp2_t2_sweep_rpcl` and `jp2_t2_sweep_pcrl`
 files are written by `sweep`: two thin components set the sweep's step to 2 on
 both axes, and 62 more are checked at every position but hold two packets
-each. `jp2_t2_sweep_cprl` is written by `cprl_sweep`: CPRL sweeps each
-component alone at its own step, so one component cannot be amplified by
-another, and the sweep's position count equals that component's precinct
-count --- past the geometry bound before it could pass the visit bound.
+each. `jp2_t2_sweep_cprl` is written by `cprl_sweep` and the other
+`jp2_t2_sweep_cprl_*` files by `cprl_steps`. A CPRL sweep's step on each axis
+is the finest precinct span over all of the component's resolutions, empty
+ones included, and each axis can take it from a different resolution, so the
+sweep can visit many more positions than there are precincts. A POC marker
+repeats the sweep once per volume.
 The walk is bounded, and past a bound it answers no, so they run to the end of
 the file, as they do without the check. The `Codestream` rows are a
 known difference, recorded in `docs/correctness.md`: the box's end is not
