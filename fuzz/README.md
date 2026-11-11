@@ -119,7 +119,7 @@ in the `colr` box. Every execution reads the profile with
 milliseconds, far more than reading, so only one profile in 16, chosen by a
 hash of the profile, is also decoded with `ColourOutput::Srgb`, which builds
 and runs the LittleCMS port. On the old corpus that gate took the target from
-about 21 to about 560 exec/s (the gate's speeds, not this smoke run's); the 697
+about 21 to about 560 exec/s (the gate's speeds, not this smoke run's); the 696
 seeds of the current corpus take about 8 s to initialize on CI. Seed it with
 the profiles in `tests/fixtures/icc/profiles.json`;
 `gen-icc-oracles.py --fuzz-seeds` also writes, for each distinct codestream

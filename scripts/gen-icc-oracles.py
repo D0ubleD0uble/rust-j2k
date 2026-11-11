@@ -667,11 +667,15 @@ def synthetic(oracle_version: str) -> None:
     print(f"wrote {ICC_DIR / 'profiles.json'}")
 
 
+FNV_OFFSET = 0xCBF29CE484222325
+FNV_PRIME = 0x100000001B3
+
+
 def fnv1a(data: bytes) -> int:
     """FNV-1a, 64 bits, as fuzz/fuzz_targets/icc_srgb.rs computes it."""
-    h = 0xCBF29CE484222325
+    h = FNV_OFFSET
     for byte in data:
-        h = ((h ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        h = ((h ^ byte) * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
     return h
 
 
@@ -685,16 +689,18 @@ def check_target_hash(target: Path = TARGET) -> None:
     """Exit unless the hash constants in the icc_srgb target are the ones this
     script uses, so the build copies cannot drift from the gate."""
     text = target.read_text()
-    found = {
-        "BUILD_EVERY": re.search(r"const BUILD_EVERY: u64 = (\d+);", text),
-        "FNV offset": re.search(r"fold\((0x[0-9a-fA-F_]+),", text),
-        "FNV prime": re.search(r"wrapping_mul\((0x[0-9a-fA-F_]+)\)", text),
+    patterns = {
+        "BUILD_EVERY": r"^const BUILD_EVERY: u64 = (\d+);",
+        "FNV offset": r"^\s*bytes\.iter\(\)\.fold\((0x[0-9a-fA-F_]+),",
+        "FNV prime": r"^\s*\(hash \^ u64::from\(byte\)\)\.wrapping_mul\((0x[0-9a-fA-F_]+)\)",
     }
-    missing = [k for k, m in found.items() if m is None]
-    if missing:
-        sys.exit(f"{target}: cannot find {', '.join(missing)}")
-    values = {k: int(m.group(1).replace("_", ""), 0) for k, m in found.items()}
-    mine = {"BUILD_EVERY": BUILD_EVERY, "FNV offset": 0xCBF29CE484222325, "FNV prime": 0x100000001B3}
+    values = {}
+    for key, pattern in patterns.items():
+        hits = re.findall(pattern, text, re.M)
+        if len(hits) != 1:
+            sys.exit(f"{target}: expected one {key}, found {len(hits)}")
+        values[key] = int(hits[0].replace("_", ""), 0)
+    mine = {"BUILD_EVERY": BUILD_EVERY, "FNV offset": FNV_OFFSET, "FNV prime": FNV_PRIME}
     for key, want in mine.items():
         if values[key] != want:
             sys.exit(f"{target}: {key} is {values[key]:#x}, this script uses {want:#x}")
