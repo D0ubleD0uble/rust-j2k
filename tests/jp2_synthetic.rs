@@ -199,7 +199,7 @@ fn every_cdef_fixture_labels_its_channels_from_the_box() {
 /// `jp2_metadata_boxes`'s snapshot, written whole by the box walker, holds
 /// the boxes the fixture is for, so a regenerated snapshot cannot lose them
 /// and still pass: negative `res ` exponents, three counted `colr` boxes,
-/// a `cdef` channel that is not a colour, and `jp2i` and `uinf` boxes. The
+/// a `cdef` channel that is not a color, and `jp2i` and `uinf` boxes. The
 /// decoder's match with it is checked above.
 #[test]
 fn the_metadata_fixture_carries_its_boxes() {

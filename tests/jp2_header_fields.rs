@@ -193,7 +193,7 @@ fn every_edge_case_has_a_test() {
 }
 
 /// The `METH` and `PREC` of each counted `colr`, in order.
-fn colours(boxes: &support::Jp2Boxes) -> Vec<(u8, u8)> {
+fn colors(boxes: &support::Jp2Boxes) -> Vec<(u8, u8)> {
     boxes
         .colour_specifications
         .iter()
@@ -222,14 +222,14 @@ fn an_rreq_vendor_feature_is_reported() {
 #[test]
 fn a_colr_before_the_first_jp2h_is_not_counted() {
     let boxes = edge_case("colr_before_jp2h");
-    assert_eq!(colours(&boxes), [(2, 0), (1, 1)]);
+    assert_eq!(colors(&boxes), [(2, 0), (1, 1)]);
 }
 
 /// A top-level `colr` after the `jp2c` is not counted.
 #[test]
 fn a_colr_after_the_jp2c_is_not_counted() {
     let boxes = edge_case("colr_after_jp2c");
-    assert_eq!(colours(&boxes), [(2, 0), (1, 1)]);
+    assert_eq!(colors(&boxes), [(2, 0), (1, 1)]);
 }
 
 /// A top-level `colr` between the `jp2h` and the `jp2c` is read as if it were
@@ -237,7 +237,7 @@ fn a_colr_after_the_jp2c_is_not_counted() {
 #[test]
 fn a_colr_between_the_jp2h_and_the_jp2c_is_counted() {
     let boxes = edge_case("colr_between_jp2h_and_jp2c");
-    assert_eq!(colours(&boxes), [(2, 0), (1, 1), (1, 0)]);
+    assert_eq!(colors(&boxes), [(2, 0), (1, 1), (1, 0)]);
 }
 
 /// A second `jp2h` is merged into the first: its `colr` is counted after the
@@ -245,7 +245,7 @@ fn a_colr_between_the_jp2h_and_the_jp2c_is_counted() {
 #[test]
 fn a_second_jp2h_adds_its_colr_and_not_its_ihdr() {
     let boxes = edge_case("second_jp2h");
-    assert_eq!(colours(&boxes), [(2, 0), (1, 1), (1, 2)]);
+    assert_eq!(colors(&boxes), [(2, 0), (1, 1), (1, 2)]);
     let header = &boxes.image_header;
     assert_eq!((header.unknown_colour_space, header.ipr), (0, 0));
 }

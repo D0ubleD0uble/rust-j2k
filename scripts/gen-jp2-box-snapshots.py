@@ -113,7 +113,7 @@ COLR_SRGB = jp2box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 16))
 
 def file5_second_jp2h(file5: bytes) -> bytes:
     """A second `jp2h`: file5's `ihdr` with `UnkC` 1 and `IPR` 1, which is
-    ignored, then an enumerated greyscale `colr` with `PREC` 2."""
+    ignored, then an enumerated gray `colr` with `PREC` 2."""
     ihdr = bytearray(file5[84:98])
     ihdr[12:14] = bytes([1, 1])
     colr = jp2box(b"colr", bytes([1, 2, 0]) + struct.pack(">I", 17))

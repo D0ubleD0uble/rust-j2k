@@ -51,14 +51,14 @@ Metadata fixture:
 - `jp2_metadata_boxes`: the `jp2_cdef_rgba` codestream with the metadata
   boxes no other fixture has: three counted `colr` boxes (sRGB, `METH` 3, and
   a misplaced sYCC one at the top level after `jp2h`), a `cdef` whose last
-  channel is premultiplied opacity for colour 2, a `res ` with negative
+  channel is premultiplied opacity for color 2, a `res ` with negative
   exponents, `ihdr` `IPR` 1 with a `jp2i` before and after the codestream,
   and a `uinf`. Its whole `jp2` snapshot comes from
   scripts/gen-jp2-box-snapshots.py, not from this script.
 
 Signed fixture:
 
-- `jp2_signed16`: a signed 16-bit greyscale plane (generated here) with
+- `jp2_signed16`: a signed 16-bit gray plane (generated here) with
   samples from -30000 to 30000, so the oracle has negative 16-bit samples.
 
 sYCC fixtures (`colr` 18), for sRGB output's chroma replication:
@@ -116,7 +116,7 @@ def ihdr(height: int, width: int, components: int, depth: int, signed: bool) -> 
 FTYP = box(b"ftyp", b"jp2 " + b"\0\0\0\0" + b"jp2 ")
 COLR_SRGB = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 16))
 COLR_SYCC = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 18))
-COLR_GREY = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 17))
+COLR_GRAY = box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 17))
 
 
 def pclr(entries: int, bi: list[int], value) -> bytes:
@@ -415,8 +415,8 @@ METADATA_CDEF = [(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 2, 2)]
 def metadata_boxes_fixture(codestream: bytes, geometry: dict, source: str) -> None:
     """`jp2_metadata_boxes`: the metadata boxes no other fixture carries. In
     `jp2h`: `ihdr` with `IPR` 1, an sRGB `colr`, a `METH` 3 `colr` (ignored),
-    a `cdef` whose last channel is premultiplied opacity for colour 2 (only
-    colour entries move a channel, so nothing moves), and a `res ` whose
+    a `cdef` whose last channel is premultiplied opacity for color 2 (only
+    color entries move a channel, so nothing moves), and a `res ` whose
     `resc` and `resd` have negative exponents. At the top level: a misplaced
     sYCC `colr` after `jp2h` (counted, but not the first), a `jp2i` and a
     `uinf` before the codestream, and a second `jp2i` after it."""
@@ -455,7 +455,7 @@ def metadata_boxes_fixture(codestream: bytes, geometry: dict, source: str) -> No
 
 def signed16_fixture(tmp: Path) -> None:
     """`jp2_signed16`: a 24x16 signed 16-bit plane running over -30000..30000,
-    coded losslessly and wrapped with a greyscale `colr`."""
+    coded losslessly and wrapped with a gray `colr`."""
     width, height = 24, 16
     values = [((x * 2711 + y * 4099) % 60001) - 30000 for y in range(height) for x in range(width)]
     (tmp / "signed16.raw").write_bytes(b"".join(struct.pack(">h", v) for v in values))
@@ -469,7 +469,7 @@ def signed16_fixture(tmp: Path) -> None:
     command = "opj_compress -i signed16.raw -o signed16.j2k " + " ".join(flags)
     oracle(
         "jp2_signed16",
-        jp2(codestream, geometry, [], colr=COLR_GREY),
+        jp2(codestream, geometry, [], colr=COLR_GRAY),
         geometry,
         f"a synthetic signed 16-bit plane, coded with `{command}`",
         f"{sum(v < 0 for v in values)} of {len(values)} samples negative, down to "
