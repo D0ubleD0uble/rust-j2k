@@ -1,5 +1,5 @@
 {
-  "_comment": "What each decodable file's header says, in the `jp2` snapshot schema of tests/support/mod.rs (Jp2Snapshot). Recorded from a box dump of each file (colr EnumCS, the resc/resd fields in box order VRN VRD HRN HRD VRE HRE, the top-level xml and uuid boxes), not from this decoder. Channels follow each file's cdef entries, in output order.",
+  "_comment": "What each decodable file's header says, in the `jp2` snapshot schema of tests/support/mod.rs (Jp2Snapshot). Recorded from a box dump of each file (colr EnumCS, the resc/resd fields in box order VRN VRD HRN HRD VRE HRE, the top-level xml and uuid boxes; ftyp, ihdr, colr and rreq from scripts/gen-jp2-box-snapshots.py), not from this decoder. Channels follow each file's cdef entries, in output order.",
   "files": {
     "3_13bit_and_1bit.jp2": {
       "colour": "srgb",
@@ -22,7 +22,31 @@
           "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
           671
         ]
-      ]
+      ],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 ",
+          "J2P1"
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 0,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+          "enum_cs": 16
+        }
+      ],
+      "reader_requirements": null
     },
     "byte.jp2": {
       "colour": "greyscale",
@@ -40,7 +64,30 @@
           "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
           300
         ]
-      ]
+      ],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 "
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 1,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "8e00d1c0c8ffe94540e534e256d4589be3e3865dc0559a732697aef38a364e83",
+          "enum_cs": 17
+        }
+      ],
+      "reader_requirements": null
     },
     "byte_tlm_plt.jp2": {
       "colour": "greyscale",
@@ -65,7 +112,30 @@
           "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
           365
         ]
-      ]
+      ],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 "
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 1,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "8e00d1c0c8ffe94540e534e256d4589be3e3865dc0559a732697aef38a364e83",
+          "enum_cs": 17
+        }
+      ],
+      "reader_requirements": null
     },
     "byte_with_xmp.jp2": {
       "colour": "greyscale",
@@ -87,7 +157,31 @@
           "be7acfcb97a942e89c71999491e3afac",
           3578
         ]
-      ]
+      ],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 ",
+          "J2P1"
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 0,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "8e00d1c0c8ffe94540e534e256d4589be3e3865dc0559a732697aef38a364e83",
+          "enum_cs": 17
+        }
+      ],
+      "reader_requirements": null
     },
     "int16.jp2": {
       "colour": "greyscale",
@@ -105,7 +199,30 @@
           "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
           300
         ]
-      ]
+      ],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 "
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 1,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "8e00d1c0c8ffe94540e534e256d4589be3e3865dc0559a732697aef38a364e83",
+          "enum_cs": 17
+        }
+      ],
+      "reader_requirements": null
     },
     "rgb16_ecwsdk.jp2": {
       "colour": "srgb",
@@ -127,7 +244,31 @@
           "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
           706
         ]
-      ]
+      ],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 ",
+          "J2P1"
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 0,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+          "enum_cs": 16
+        }
+      ],
+      "reader_requirements": null
     },
     "rgbwcmyk01_YeGeo_kakadu.jp2": {
       "colour": "srgb",
@@ -154,7 +295,30 @@
           "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
           792
         ]
-      ]
+      ],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 "
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 1,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+          "enum_cs": 16
+        }
+      ],
+      "reader_requirements": null
     },
     "small_200ppcm.jp2": {
       "colour": "srgb",
@@ -181,7 +345,30 @@
           "b14bf8bd083d4b43a5ae8cd7d5a6ce03",
           348
         ]
-      ]
+      ],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 "
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 1,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+          "enum_cs": 16
+        }
+      ],
+      "reader_requirements": null
     },
     "stefan_full_rgba.jp2": {
       "colour": "srgb",
@@ -197,7 +384,30 @@
         "display": null
       },
       "xml": [],
-      "uuid": []
+      "uuid": [],
+      "file_type": {
+        "brand": "jp2 ",
+        "minor_version": 0,
+        "compatibility": [
+          "jp2 "
+        ]
+      },
+      "image_header": {
+        "compression": 7,
+        "unknown_colour_space": 0,
+        "ipr": 0
+      },
+      "colour_specifications": [
+        {
+          "method": 1,
+          "precedence": 0,
+          "approximation": 0,
+          "data_len": 4,
+          "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+          "enum_cs": 16
+        }
+      ],
+      "reader_requirements": null
     }
   }
 }
