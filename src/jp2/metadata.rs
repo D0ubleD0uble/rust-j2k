@@ -51,6 +51,39 @@ pub struct Jp2Metadata {
     /// position 0. Reading `Cn` as a position instead would swap 0 and 2, then
     /// 1 with itself, then 2 and 0 back, and give `[0, 1, 2]`, which is wrong.
     ///
+    /// The committed `jp2_cdef_reversed.jp2` has exactly those entries. This
+    /// applies the rule above to them and checks it against the decoder:
+    ///
+    /// ```
+    /// use rust_j2k::{Association, ChannelType, DecodeOptions, decode_with};
+    ///
+    /// let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/jp2_cdef_reversed.jp2");
+    /// let bytes = std::fs::read(path)?;
+    /// let decoded = decode_with(&bytes, &DecodeOptions::default())?;
+    /// let coded = decode_with(&bytes, &DecodeOptions::default().with_raw_channels(true))?;
+    /// let entries = decoded.jp2.as_ref().unwrap().channel_definitions.as_ref().unwrap();
+    ///
+    /// // The rule: swap each colour entry's channel into position `n - 1`.
+    /// let mut order: Vec<usize> = (0..coded.components.len()).collect();
+    /// for entry in entries {
+    ///     if let (ChannelType::Colour, Association::Colour(n)) =
+    ///         (entry.definition.kind, entry.definition.association)
+    ///     {
+    ///         let at = order.iter().position(|&c| c == usize::from(entry.channel)).unwrap();
+    ///         order.swap(at, usize::from(n) - 1);
+    ///     }
+    /// }
+    /// assert_eq!(order, [2, 1, 0]);
+    ///
+    /// // Output position `p` holds the coded channel `order[p]`, and the
+    /// // coded channels differ, so the check is not vacuous.
+    /// assert_ne!(coded.components[0].samples, coded.components[2].samples);
+    /// for (p, &c) in order.iter().enumerate() {
+    ///     assert_eq!(decoded.components[p].samples, coded.components[c].samples);
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
     /// A channel's label on [`channels`](Self::channels) is that of the last
     /// entry naming it.
     ///
