@@ -133,6 +133,9 @@ BOMBS = {
     "jp2_t2bomb_visits.jp2": (t2bomb(512, 512, 100), 512, 512),
     # 130 x 130 = 16900 code-blocks, past the 2^14 geometry bound.
     "jp2_t2bomb_blocks.jp2": (t2bomb(520, 520, 1), 520, 520),
+    # 8 x 7 code-blocks and 19000 layers: about 1.08 million visits, past
+    # 2^20 but within 64 per byte of the tile's data, so the walk finishes.
+    "jp2_t2_many_layers.jp2": (t2bomb(32, 28, 19000), 32, 28),
 }
 
 # name -> (bytes, base whose opj output it is compared with)

@@ -286,3 +286,16 @@ fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
         assert_leftover(name);
     }
 }
+
+/// The same shape with 56 code-blocks and 19000 layers: the walk spends more
+/// than 2^20 visits, but within 64 per byte of the tile's data, so it finishes,
+/// and the codestream ends at its box's end. OpenJPEG 2.5.0 decodes it to a
+/// flat 128.
+#[test]
+fn a_psot_zero_tile_within_its_walk_bound_ends_at_its_box() {
+    let name = "jp2_t2_many_layers.jp2";
+    let bytes = std::fs::read(dir().join(name)).unwrap();
+    let image = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(image.components[0].samples, vec![128; 32 * 28]);
+    assert_eq!(read_header(&bytes).unwrap().jp2, image.jp2);
+}

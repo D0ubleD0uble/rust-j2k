@@ -62,6 +62,7 @@ read as whole boxes (from the PR #227 review).
 | `jp2_lbox0_p0eoc_xml` | `single_psot0_eoc` | `LBox` 0 | `xml ` (inside the box) | decodes, equals `single` | `Codestream` (left after the last packet) |
 | `jp2_t2bomb_visits` | `t2bomb(512, 512, 100)`: 2^14 code-blocks, 100 layers | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); the walk stops at its visit bound |
 | `jp2_t2bomb_blocks` | `t2bomb(520, 520, 1)`: 16900 code-blocks, 1 layer | right, no EOC | an empty `free` box | decodes, all 128 | `Codestream` (left after the last packet); the tile is past the geometry bound and not walked |
+| `jp2_t2_many_layers` | `t2bomb(32, 28, 19000)`: 56 code-blocks, 19000 layers | right, no EOC | an empty `free` box | decodes, all 128 | the same; the walk spends about 1.08 million visits, within 64 per byte |
 
 When the box ends at least two bytes before the end of the file and holds
 the tile-part's `SOT`, the codestream ends at the box's end if tier-2 walks

@@ -480,6 +480,10 @@ fn padding_inside_the_codestream_box_does_not_hide_later_metadata() {
 /// one past its geometry bound.
 const T2BOMB_VISITS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_visits.jp2");
 const T2BOMB_BLOCKS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_blocks.jp2");
+/// The same shape with 56 code-blocks and 19000 layers: past 2^20 visits, but
+/// within 64 per byte of the tile's data.
+const T2_MANY_LAYERS: &[u8] =
+    include_bytes!("../../../tests/fixtures/psot0/jp2_t2_many_layers.jp2");
 
 /// The codestream of `file` cut two bytes past its `jp2c` box's end, the slice
 /// the walk is run on.
@@ -497,7 +501,8 @@ fn box_end_cut(file: &[u8]) -> &[u8] {
 /// The walk stops at its bounds and answers that the codestream does not end
 /// at the box's end, after at most [`PROBE_VISITS_MIN`] visits for a tile this
 /// small, and none for a tile past the geometry bound. Unbounded, the same
-/// walks go past both.
+/// walks go past both. A tile with more data may spend more: 64 visits per
+/// byte.
 #[test]
 fn the_packet_walk_at_the_box_end_is_bounded() {
     use crate::jp2::{PROBE_GEOMETRY, PROBE_VISITS_MIN, probe_packets};
@@ -521,4 +526,9 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
     let cut = box_end_cut(T2BOMB_BLOCKS);
     assert!(unbounded(cut).1 > PROBE_GEOMETRY);
     assert_eq!(probe_packets(cut, 0), (false, 0));
+
+    let cut = box_end_cut(T2_MANY_LAYERS);
+    let (ends, visits) = probe_packets(cut, 0);
+    assert!(ends);
+    assert!(visits > PROBE_VISITS_MIN, "{visits} visits");
 }
