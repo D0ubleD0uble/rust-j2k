@@ -4,7 +4,7 @@
 #
 # Decodes <input>.j2k with OpenJPEG's opj_decompress (the reference decoder) and
 # writes the sibling <input>.expected.json the conformance harness compares
-# against (samples + geometry + tolerance + provenance). It echoes the exact
+# against (image + tolerance + components + provenance). It echoes the exact
 # command it ran so the snapshot's provenance is captured, per docs/correctness.md.
 #
 # This is a developer/oracle tool. It is NOT run at `cargo test` time — the

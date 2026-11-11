@@ -11,8 +11,9 @@ where ``ML``/``LM`` is byte order (most/least significant first), ``+``/``-`` is
 unsigned/signed, ``depth`` is bits per sample, and each sample occupies
 ``ceil(depth/8)`` bytes. This script parses that and emits the snapshot schema
 the conformance harness reads (see ``tests/support/mod.rs`` and
-``tests/fixtures/README.md``): ``geometry``, ``tolerance``, ``samples``,
-``provenance``.
+``tests/fixtures/README.md``): ``image``, ``tolerance``, ``components``,
+``provenance``. The ``.pgx`` carries no sub-sampling, so the one component is
+written at factors 1 and the image area is its size.
 
 It is a developer/oracle tool — never run at ``cargo test`` time. Pure Python 3
 standard library, no third-party packages.
@@ -100,10 +101,15 @@ def build_snapshot(
     if notes:
         provenance["notes"] = notes
 
+    component = dict(geometry)
+    component["x_sampling"] = 1
+    component["y_sampling"] = 1
+    component["samples"] = samples
+
     return {
-        "geometry": geometry,
+        "image": {"width": geometry["width"], "height": geometry["height"]},
         "tolerance": tol,
-        "samples": samples,
+        "components": [component],
         "provenance": provenance,
     }
 

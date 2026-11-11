@@ -356,6 +356,7 @@ scripts/gen-oracle.sh tests/fixtures/regular_latlon_lossy.j2k \
 
 # 4. irreversible 9/7: no GRIB2 producer ships lossy 9/7, so re-encode the Eta
 #    grid's samples (from step 2) with OpenJPEG's irreversible transform.
+python3 scripts/oracle_tools.py opj_decompress opj_compress   # refuse any OpenJPEG but 2.5.0
 opj_decompress -i tests/fixtures/eta_lambert_lossless.j2k -o /tmp/eta.pgx
 opj_compress -i /tmp/eta_0.pgx -o tests/fixtures/eta_lambert_irreversible.j2k -I
 scripts/gen-oracle.sh tests/fixtures/eta_lambert_irreversible.j2k \

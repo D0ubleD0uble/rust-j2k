@@ -79,8 +79,11 @@ def lcms_encoded_version() -> int:
         sys.exit("opj_decompress not found on PATH; run scripts/install-oracle-tools.sh")
     if shutil.which("ldd") is None:
         sys.exit("ldd not found: cannot tell which LittleCMS opj_decompress uses")
-    ldd = subprocess.run(["ldd", tool], capture_output=True, text=True, errors="replace",
-                         stdin=subprocess.DEVNULL, timeout=30)
+    try:
+        ldd = subprocess.run(["ldd", tool], capture_output=True, text=True, errors="replace",
+                             stdin=subprocess.DEVNULL, timeout=30)
+    except subprocess.TimeoutExpired:
+        sys.exit("`ldd` did not finish in 30 s: cannot tell which LittleCMS opj_decompress uses")
     found = re.search(r"liblcms2\S*\s+=>\s+(\S+)", ldd.stdout)
     if found is None:
         sys.exit("opj_decompress is not dynamically linked against liblcms2 (built without "
