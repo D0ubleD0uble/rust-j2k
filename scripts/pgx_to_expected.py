@@ -157,17 +157,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.siz_image_area != want:
             sys.exit(
                 f"pgx_to_expected: the .pgx is {want} but SIZ says the image area is "
-                f"{args.siz_image_area}: sub-sampled or offset input is not supported"
+                f"{args.siz_image_area}: sub-sampled input is not supported"
             )
 
     try:
         snapshot = build_snapshot(
-        geometry,
-        samples,
-        args.tolerance,
-        args.source,
-        args.oracle_command,
-        args.notes,
+            geometry,
+            samples,
+            args.tolerance,
+            args.source,
+            args.oracle_command,
+            args.notes,
         )
     except ValueError as err:
         sys.exit(f"pgx_to_expected: {err}")

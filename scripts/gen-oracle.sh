@@ -104,7 +104,7 @@ command -v opj_decompress >/dev/null 2>&1 ||
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Refuse any OpenJPEG other than the pinned version (one check, shared with the
 # Python generators).
-python3 "$script_dir/oracle_tools.py" opj_decompress || exit 1
+python3 "$script_dir/oracle_tools.py" opj_decompress opj_dump || exit 1
 converter="$script_dir/pgx_to_expected.py"
 [[ -f "$converter" ]] || die "missing converter: $converter"
 
@@ -127,7 +127,7 @@ mapfile -t pgx_files < <(ls "$workdir"/oracle_*.pgx 2>/dev/null || true)
 [[ ${#pgx_files[@]} -eq 1 ]] ||
 	die "expected a single component, got ${#pgx_files[@]} .pgx files (multi-component is out of subset)"
 
-# The .pgx holds raw component samples with no sub-sampling or offset. Refuse
+# The .pgx holds raw component samples with no sub-sampling. Refuse
 # unless SIZ says the one component is 1x1 and the image area is the .pgx size.
 command -v opj_dump >/dev/null 2>&1 || die "opj_dump not found (see docs/development.md)"
 siz="$(opj_dump -i "$input" 2>/dev/null)" || die "opj_dump could not read $input"
