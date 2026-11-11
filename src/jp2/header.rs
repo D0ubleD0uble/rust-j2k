@@ -6,6 +6,7 @@
 //! order, for the code that interprets them.
 
 use super::boxes::{Boxes, Jp2Box, type_name};
+use super::metadata::FileType;
 use crate::{Error, Result};
 
 /// The brand and compatibility code of a JP2 file.
@@ -15,7 +16,8 @@ const JP2_BRAND: [u8; 4] = *b"jp2 ";
 /// 4-byte compatibility codes. A file is read only if `jp2 ` is its brand or
 /// in its compatibility list (I.5.2); anything else is a JPX, JPM or MJ2 file
 /// that does not claim JP2 compatibility, and is [`Error::Unsupported`].
-pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<()> {
+/// Returns the box's fields.
+pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<FileType> {
     let payload = ftyp.payload;
     if payload.len() < 8 || !payload.len().is_multiple_of(4) {
         return Err(Error::FileFormat(format!(
@@ -25,10 +27,13 @@ pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<()> {
         )));
     }
     let brand = [payload[0], payload[1], payload[2], payload[3]];
-    let compatible = brand == JP2_BRAND
-        || payload[8..]
-            .chunks_exact(4)
-            .any(|code| code == JP2_BRAND.as_slice());
+    let minor_version = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+    // Whole 4-byte codes, as checked above, so nothing is dropped.
+    let compatibility: Vec<[u8; 4]> = payload[8..]
+        .chunks_exact(4)
+        .map(|code| [code[0], code[1], code[2], code[3]])
+        .collect();
+    let compatible = brand == JP2_BRAND || compatibility.contains(&JP2_BRAND);
     if !compatible {
         return Err(Error::Unsupported(format!(
             "file brand `{}` without `jp2 ` compatibility (a JPX, JPM or MJ2 file that \
@@ -36,7 +41,11 @@ pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<()> {
             type_name(brand)
         )));
     }
-    Ok(())
+    Ok(FileType {
+        brand,
+        minor_version,
+        compatibility,
+    })
 }
 
 /// The most components `ihdr` may declare: `NC` is 1..=16384 (I.5.3.1), the

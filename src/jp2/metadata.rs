@@ -97,6 +97,117 @@ pub struct Jp2Metadata {
     /// `uinf` is left out and never fails a decode, as OpenJPEG skips the box
     /// (see [`UuidInfo`]).
     pub uuid_info: Vec<UuidInfo>,
+    /// The Image Header box's fields that the codestream does not repeat
+    /// (I.5.3.1).
+    pub image_header: ImageHeader,
+    /// Every Colour Specification box (`colr`, I.5.3.3) in file order, the
+    /// ignored ones too: those in every `jp2h` box and those misplaced at the
+    /// top level after the first `jp2h`, before the codestream. Only the first
+    /// whose method is 1 or 2 sets [`colour`](Self::colour); the others are
+    /// reported here and not applied.
+    pub colour_specifications: Vec<ColourSpecification>,
+    /// The File Type box (`ftyp`, I.5.2).
+    pub file_type: FileType,
+    /// The first top-level Reader Requirements box (`rreq`, ISO/IEC 15444-2
+    /// M.11.1), before or after the codestream. `None` without one, and when
+    /// the first is malformed (see [`ReaderRequirements`]).
+    pub reader_requirements: Option<ReaderRequirements>,
+}
+
+/// The Image Header box's (`ihdr`, I.5.3.1) fields that the codestream does
+/// not repeat, as stored. None of them changes the decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ImageHeader {
+    /// `C`: the compression type. The standard requires 7 (JPEG 2000).
+    pub compression: u8,
+    /// `UnkC`: 1 when the file does not know the colour space, 0 when its
+    /// colour specification boxes give it accurately. Not consulted for
+    /// [`Jp2Metadata::colour`].
+    pub unknown_colourspace: u8,
+    /// `IPR`: 1 when the file holds intellectual property rights information
+    /// (see [`Jp2Metadata::ipr`]), 0 when it does not. Not checked against
+    /// the boxes present.
+    pub ipr: u8,
+}
+
+/// One Colour Specification box (`colr`, I.5.3.3), as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ColourSpecification {
+    /// `METH`: 1 for an enumerated colour space, 2 for a restricted ICC
+    /// profile. Other values are reserved by this standard (ISO/IEC 15444-2
+    /// defines more), and such a box is ignored.
+    pub method: u8,
+    /// `PREC`: the precedence. The standard reserves it and requires 0, and
+    /// a reader ignores it. ISO/IEC 15444-2 reads the byte as a signed value.
+    pub precedence: u8,
+    /// `APPROX`: the colour space approximation. The standard requires 0, and
+    /// a reader ignores it.
+    pub approximation: u8,
+    /// The bytes after `APPROX`, verbatim: `EnumCS` (four bytes, big-endian)
+    /// for `METH` 1, the ICC profile for `METH` 2.
+    pub data: Vec<u8>,
+}
+
+/// The File Type box (`ftyp`, I.5.2), as stored. A file is read when `jp2 `
+/// is its brand or in its compatibility list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FileType {
+    /// `BR`: the brand, `jp2 ` for a JP2 file.
+    pub brand: [u8; 4],
+    /// `MinV`: the minor version. The standard requires 0, and a reader
+    /// ignores it.
+    pub minor_version: u32,
+    /// `CLi`: the compatibility list, in box order.
+    pub compatibility: Vec<[u8; 4]>,
+}
+
+/// A Reader Requirements box (`rreq`, ISO/IEC 15444-2 M.11.1): the features
+/// a reader must support to use the file, each with a mask saying which of
+/// the file's requirement expressions it belongs to.
+///
+/// Every mask is `ML` bytes, as stored (big-endian). A box is reported when it
+/// holds exactly the fields its counts give: `ML`, the two masks, `NSF` and
+/// its standard features, `NVF` and its vendor features, and nothing after.
+/// One that is cut short or has bytes left over is malformed: it is left out
+/// of [`Jp2Metadata::reader_requirements`] and never fails a decode, as
+/// OpenJPEG skips the box. The values are not checked (ISO/IEC 15444-2 allows
+/// `ML` of 1, 2, 4 or 8) and nothing in the box changes the decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ReaderRequirements {
+    /// `ML`: the length of each mask in bytes.
+    pub mask_length: u8,
+    /// `FUAM`: the fully-understand-aspects mask.
+    pub fully_understand: Vec<u8>,
+    /// `DCM`: the display-contents mask.
+    pub display_completely: Vec<u8>,
+    /// The `NSF` standard features (`SF` and `SM`), in box order.
+    pub standard_features: Vec<StandardFeature>,
+    /// The `NVF` vendor features (`VF` and `VM`), in box order.
+    pub vendor_features: Vec<VendorFeature>,
+}
+
+/// One standard feature of a Reader Requirements box: `SF` and its `SM`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StandardFeature {
+    /// `SF`: the feature, numbered as in ISO/IEC 15444-2.
+    pub feature: u16,
+    /// `SM`: the feature's mask.
+    pub mask: Vec<u8>,
+}
+
+/// One vendor feature of a Reader Requirements box: `VF` and its `VM`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct VendorFeature {
+    /// `VF`: the feature's UUID.
+    pub id: [u8; 16],
+    /// `VM`: the feature's mask.
+    pub mask: Vec<u8>,
 }
 
 use super::palette::{ChannelMapping, Palette};
@@ -309,8 +420,10 @@ pub enum ColourSpace {
     Greyscale,
     /// sYCC (enumerated colour space 18).
     Sycc,
-    /// A restricted ICC profile (a monochrome or three-component matrix/TRC
-    /// input profile), the box's bytes after its three header bytes, verbatim.
+    /// A `METH` 2 box's ICC profile: the box's bytes after its three header
+    /// bytes, verbatim. The standard restricts it to a monochrome or
+    /// three-component matrix/TRC input profile, but that is not checked
+    /// here: it holds whatever the box contains.
     /// Applied to the samples only under
     /// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb), which then reports
     /// the converted colour space instead.

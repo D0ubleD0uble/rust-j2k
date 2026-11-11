@@ -96,6 +96,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `url `, a `ulst` whose count does not match its length, a `url ` under 4
   bytes, or a bad box inside it) is left out and never fails a decode, as
   OpenJPEG skips the box.
+- `Jp2Metadata` reports the rest of the JP2 header: `image_header`
+  (`ImageHeader`: the `ihdr` compression type, unknown-colour-space flag and
+  `IPR` flag), `colour_specifications` (every `colr` box in file order as a
+  `ColourSpecification`, with its method, precedence, approximation and
+  contents; the first usable one still sets `colour`), `file_type`
+  (`FileType`: the `ftyp` brand, minor version and compatibility list) and
+  `reader_requirements` (`ReaderRequirements`, with `StandardFeature` and
+  `VendorFeature`: the first top-level `rreq` box's masks and features). A
+  malformed `rreq` is left out and never fails a decode, as OpenJPEG skips
+  the box.
 - `DecodeOptions::colour` takes a `ColourOutput`. The default, `AsCoded`,
   returns the samples as the file codes them. `Srgb` converts a JP2 file's
   colour channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to
