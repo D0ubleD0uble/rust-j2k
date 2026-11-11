@@ -49,6 +49,10 @@ pub struct Expected {
     /// [`Image::jp2`] when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jp2: Option<Jp2Snapshot>,
+    /// For a JP2 fixture with no `jp2` section, its `ftyp`, `ihdr`, `colr`
+    /// and `rreq` fields; checked against [`Image::jp2`] when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jp2_boxes: Option<Jp2Boxes>,
 }
 
 /// What a JP2 file's header says, in a form a box dump can be checked against
@@ -91,6 +95,137 @@ pub struct Jp2Snapshot {
     /// location's byte length, in file order. Absent in a record means none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uuid_info: Vec<(Vec<String>, usize)>,
+    /// The `ftyp` box.
+    pub file_type: FileTypeSnapshot,
+    /// The `ihdr` fields that are not taken from the codestream.
+    pub image_header: ImageHeaderSnapshot,
+    /// Every counted `colr` box, in file order.
+    pub colour_specifications: Vec<ColourSpecSnapshot>,
+    /// The first well-formed top-level `rreq` box, if any.
+    pub reader_requirements: Option<ReaderRequirementsSnapshot>,
+}
+
+/// The `ftyp`, `ihdr`, `colr` and `rreq` fields of a JP2 file, from a box dump
+/// (`scripts/gen-jp2-box-snapshots.py`). The same four fields sit in
+/// [`Jp2Snapshot`]; this is the record for a file that has no other snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Jp2Boxes {
+    pub file_type: FileTypeSnapshot,
+    pub image_header: ImageHeaderSnapshot,
+    pub colour_specifications: Vec<ColourSpecSnapshot>,
+    pub reader_requirements: Option<ReaderRequirementsSnapshot>,
+}
+
+/// `ftyp`: each 4-byte code as text, `\xNN` for a byte outside printable ASCII.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileTypeSnapshot {
+    pub brand: String,
+    pub minor_version: u32,
+    pub compatibility: Vec<String>,
+}
+
+/// `ihdr`'s `C`, `UnkC` and `IPR`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageHeaderSnapshot {
+    pub compression: u8,
+    pub unknown_colour_space: u8,
+    pub ipr: u8,
+}
+
+/// One `colr` box: `METH`, `PREC`, `APPROX`, the data's length and SHA-256,
+/// and `EnumCS` when `METH` is 1 with a 4-byte value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColourSpecSnapshot {
+    pub method: u8,
+    pub precedence: u8,
+    pub approximation: u8,
+    pub data_len: usize,
+    pub data_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enum_cs: Option<u32>,
+}
+
+/// `rreq`: `ML`, the masks as lowercase hex, `(SF, SM)` and `(VF, VM)` pairs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReaderRequirementsSnapshot {
+    pub mask_length: u8,
+    pub fully_understand: String,
+    pub decode_completely: String,
+    pub standard_features: Vec<(u16, String)>,
+    pub vendor_features: Vec<(String, String)>,
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn code_text(code: &[u8; 4]) -> String {
+    code.iter()
+        .map(|&b| {
+            if (0x20..=0x7e).contains(&b) {
+                char::from(b).to_string()
+            } else {
+                format!("\\x{b:02x}")
+            }
+        })
+        .collect()
+}
+
+impl Jp2Boxes {
+    /// The snapshot of decoded metadata, to compare against a recorded one.
+    pub fn of(metadata: &Jp2Metadata) -> Self {
+        let file_type = &metadata.file_type;
+        let header = metadata.image_header;
+        Jp2Boxes {
+            file_type: FileTypeSnapshot {
+                brand: code_text(&file_type.brand),
+                minor_version: file_type.minor_version,
+                compatibility: file_type.compatibility.iter().map(code_text).collect(),
+            },
+            image_header: ImageHeaderSnapshot {
+                compression: header.compression,
+                unknown_colour_space: header.unknown_colour_space,
+                ipr: header.ipr,
+            },
+            colour_specifications: metadata
+                .colour_specifications
+                .iter()
+                .map(|c| ColourSpecSnapshot {
+                    method: c.method,
+                    precedence: c.precedence,
+                    approximation: c.approximation,
+                    data_len: c.data.len(),
+                    data_sha256: jp2::sha256_hex(&c.data),
+                    enum_cs: <[u8; 4]>::try_from(c.data.as_slice())
+                        .ok()
+                        .filter(|_| c.method == 1)
+                        .map(u32::from_be_bytes),
+                })
+                .collect(),
+            reader_requirements: metadata.reader_requirements.as_ref().map(|r| {
+                ReaderRequirementsSnapshot {
+                    mask_length: r.mask_length,
+                    fully_understand: hex_bytes(&r.fully_understand),
+                    decode_completely: hex_bytes(&r.decode_completely),
+                    standard_features: r
+                        .standard_features
+                        .iter()
+                        .map(|f| (f.feature, hex_bytes(&f.mask)))
+                        .collect(),
+                    vendor_features: r
+                        .vendor_features
+                        .iter()
+                        .map(|f| (hex_bytes(&f.id), hex_bytes(&f.mask)))
+                        .collect(),
+                }
+            }),
+        }
+    }
 }
 
 /// `resc` and `resd` as the box stores them: `VRN, VRD, HRN, HRD, VRE, HRE`.
@@ -140,7 +275,12 @@ impl Jp2Snapshot {
                 ]
             })
         };
+        let boxes = Jp2Boxes::of(metadata);
         Jp2Snapshot {
+            file_type: boxes.file_type,
+            image_header: boxes.image_header,
+            colour_specifications: boxes.colour_specifications,
+            reader_requirements: boxes.reader_requirements,
             colour,
             channels: metadata
                 .channels
@@ -465,6 +605,15 @@ pub fn compare(actual: &Image, expected: &Expected) -> Result<(), Mismatch> {
         if got.as_ref() != Some(want) {
             return Err(Mismatch::DecodeError(format!(
                 "JP2 metadata is {got:?} but the snapshot says {want:?}"
+            )));
+        }
+    }
+
+    if let Some(want) = &expected.jp2_boxes {
+        let got = actual.jp2.as_ref().map(Jp2Boxes::of);
+        if got.as_ref() != Some(want) {
+            return Err(Mismatch::DecodeError(format!(
+                "JP2 box fields are {got:?} but the snapshot says {want:?}"
             )));
         }
     }

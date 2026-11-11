@@ -117,6 +117,7 @@ mod harness {
                 notes: None,
             },
             jp2: None,
+            jp2_boxes: None,
         }
     }
 

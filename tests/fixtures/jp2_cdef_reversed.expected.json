@@ -1194,5 +1194,30 @@
     "source": "tests/fixtures/multicomponent_lossless.j2k, wrapped by scripts/gen-jp2-fixtures.py",
     "oracle_command": "opj_decompress -i jp2_cdef_reversed.jp2 -o out.pgx",
     "notes": "cdef [(0, 0, 3), (1, 0, 2), (2, 0, 1)] (the layout of the ISO/IEC 15444-4 file2), so the output is components 2, 1, 0"
+  },
+  "jp2_boxes": {
+    "file_type": {
+      "brand": "jp2 ",
+      "minor_version": 0,
+      "compatibility": [
+        "jp2 "
+      ]
+    },
+    "image_header": {
+      "compression": 7,
+      "unknown_colour_space": 0,
+      "ipr": 0
+    },
+    "colour_specifications": [
+      {
+        "method": 1,
+        "precedence": 0,
+        "approximation": 0,
+        "data_len": 4,
+        "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+        "enum_cs": 16
+      }
+    ],
+    "reader_requirements": null
   }
 }
