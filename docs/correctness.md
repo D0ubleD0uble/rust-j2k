@@ -345,8 +345,13 @@ or the first row and the first column of the upper row of each pair and of
 a last unpaired row (4:2:0), chroma of zero, which comes out tinted. A last
 odd column whose pair index reaches the chroma width also takes zero
 (`comp12w`). `jp2_sycc_420_odd` and `jp2_sycc_422_odd` pin this against
-`opj_decompress` sample for sample. The only change is where OpenJPEG would
-read past the chroma plane: that sample takes chroma zero here.
+`opj_decompress` sample for sample, and `tests/jp2_sycc_replication.rs`
+grades them and the even-origin `jp2_sycc_420_even` and `jp2_sycc_422_even`
+against `opj_decompress -r 1` too: there the reduced origin's parity
+differs from the full one's in y (and in x for the even fixtures), so a
+replication keyed on the reduced origin fails. The only change is where
+OpenJPEG would read past the chroma plane: that sample takes chroma zero
+here.
 
 **ICC profiles are converted as LittleCMS converts them.** OpenJPEG hands
 the profile to LittleCMS 2 (2.14 in the oracle build) with the profile's
@@ -541,7 +546,14 @@ way.** Each is `Unsupported` unless noted, and each is a row of
 - colour channels that differ in depth, sign or sub-sampling, other than
   the sYCC chroma layouts below (owner decision, 2026-11-01). Under an RGB
   profile they pass through as in OpenJPEG instead (the AFL test above),
-  except for 4:2:0 and 4:2:2. For a three-component 4:2:0 or 4:2:2 file,
+  except for 4:2:0 and 4:2:2, and except where a `cdef` leaves a differing
+  colour past the first four positions. There the AFL test passes and
+  OpenJPEG converts whatever sits at positions 0 to 2, colour or not, so
+  this decoder refuses the file rather than give a wrong image. Checked: the
+  fuzz seed `icc_rgb_uniform_after_afl` (five palette channels, the 4-bit
+  colour 3 moved to position 4 by a second colour-3 entry) comes out of
+  `opj_decompress` with positions 0 to 2 converted and the 4-bit channel as
+  coded. For a three-component 4:2:0 or 4:2:2 file,
   whatever `colr` declares (sRGB, greyscale, another space, a profile, or
   none) and whatever its `cdef` labels, or a raw codestream,
   `opj_decompress` guesses sYCC and converts it; that guess is not made
