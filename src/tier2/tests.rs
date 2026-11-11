@@ -72,11 +72,11 @@ fn parse_layers_styled<'a>(
         data,
         body_pos: 0,
         packed: false,
-        visits_left: u64::MAX,
     };
     for layer in 0..layers {
         parse_packet(
             &mut streams,
+            &std::cell::Cell::new(u64::MAX),
             layer,
             layer,
             delimiters,
@@ -1122,10 +1122,15 @@ fn order_of_header(header: &MainHeader) -> Vec<(u32, usize, usize, usize)> {
         geoms: &geoms,
     };
     let mut seen = Vec::new();
-    for_each_packet(header, &walk, |l, r, c, p| {
-        seen.push((l, r, c, p));
-        Ok(())
-    })
+    for_each_packet(
+        header,
+        &walk,
+        &std::cell::Cell::new(u64::MAX),
+        |l, r, c, p| {
+            seen.push((l, r, c, p));
+            Ok(())
+        },
+    )
     .unwrap();
     seen
 }
@@ -1482,10 +1487,20 @@ fn the_sop_sequence_number_wraps_at_65536() {
         data: &data,
         body_pos: 0,
         packed: false,
-        visits_left: u64::MAX,
     };
     // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
-    parse_packet(&mut streams, 0, 65536, SOP, 0, &bands, 0, &mut states).expect("wraps to zero");
+    parse_packet(
+        &mut streams,
+        &std::cell::Cell::new(u64::MAX),
+        0,
+        65536,
+        SOP,
+        0,
+        &bands,
+        0,
+        &mut states,
+    )
+    .expect("wraps to zero");
 }
 
 /// EPH sits between the packet header and its body, and `Scod` makes it

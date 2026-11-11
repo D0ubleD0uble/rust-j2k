@@ -6,6 +6,7 @@
 //! the reference grid rather than counting, so this module needs the canvas
 //! coordinates the per-component [`ResolutionGeom`] has already divided away.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 
 use crate::Result;
@@ -13,6 +14,7 @@ use crate::codestream::MainHeader;
 use crate::codestream::markers::{Progression, Rect, Siz};
 
 use super::geometry::ResolutionGeom;
+use super::visit;
 
 /// Everything the packet walk needs beyond the geometry itself: the tile's
 /// rectangle on the **reference grid** and the components' sub-sampling.
@@ -166,7 +168,16 @@ struct Volume {
 /// Each volume is enumerated by [`run_order`]. The five orders are permutations
 /// of the four axes — layer, resolution, component, position — and the three
 /// positional ones sweep the reference grid; see that function.
-pub(crate) fn for_each_packet<F>(header: &MainHeader, walk: &PacketWalk<'_>, mut f: F) -> Result<()>
+///
+/// The loops spend `visits` (see [`super::Budget::visits`]) as they go, the
+/// points that hold no packet included, so a walk under a bound stops however
+/// sparse its packets are.
+pub(crate) fn for_each_packet<F>(
+    header: &MainHeader,
+    walk: &PacketWalk<'_>,
+    visits: &Cell<u64>,
+    mut f: F,
+) -> Result<()>
 where
     F: FnMut(u32, usize, usize, usize) -> Result<()>,
 {
@@ -200,11 +211,11 @@ where
     // With one volume every tuple is visited once, so the dedup is pure overhead
     // and skipped; a `POC` sequence needs it, because volumes may overlap.
     if volumes.len() == 1 {
-        return run_order(&volumes[0], walk, &mut f);
+        return run_order(&volumes[0], walk, visits, &mut f);
     }
     let mut seen: HashSet<(u32, usize, usize, usize)> = HashSet::new();
     for volume in &volumes {
-        run_order(volume, walk, &mut |layer, res, comp, precinct| {
+        run_order(volume, walk, visits, &mut |layer, res, comp, precinct| {
             if seen.insert((layer, res, comp, precinct)) {
                 f(layer, res, comp, precinct)
             } else {
@@ -237,7 +248,12 @@ where
 /// does the same in its `first` block), so a `POC` sub-range cannot coarsen it
 /// and skip a corner; only which packets are *emitted* is restricted to the
 /// range.
-fn run_order<F>(volume: &Volume, walk: &PacketWalk<'_>, emit: &mut F) -> Result<()>
+fn run_order<F>(
+    volume: &Volume,
+    walk: &PacketWalk<'_>,
+    visits: &Cell<u64>,
+    emit: &mut F,
+) -> Result<()>
 where
     F: FnMut(u32, usize, usize, usize) -> Result<()>,
 {
@@ -261,6 +277,7 @@ where
         Progression::Lrcp => {
             for layer in 0..layers {
                 for res in res_range.clone() {
+                    visit(visits, 1 + comp_range.len())?;
                     for comp in comp_range.clone() {
                         if !has(comp, res) {
                             continue;
@@ -275,6 +292,7 @@ where
         Progression::Rlcp => {
             for res in res_range.clone() {
                 for layer in 0..layers {
+                    visit(visits, 1 + comp_range.len())?;
                     for comp in comp_range.clone() {
                         if !has(comp, res) {
                             continue;
@@ -297,6 +315,7 @@ where
                 while y < ty1 {
                     let mut x = tx0;
                     while x < tx1 {
+                        visit(visits, 1 + comp_range.len())?;
                         for comp in comp_range.clone() {
                             if !has(comp, res) {
                                 continue;
@@ -323,6 +342,7 @@ where
             while y < ty1 {
                 let mut x = tx0;
                 while x < tx1 {
+                    visit(visits, 1 + comp_range.len() * res_range.len())?;
                     for comp in comp_range.clone() {
                         for res in res_range.clone() {
                             if !has(comp, res) {
@@ -354,6 +374,7 @@ where
                 while y < ty1 {
                     let mut x = tx0;
                     while x < tx1 {
+                        visit(visits, 1 + res_range.len())?;
                         for res in res_range.clone() {
                             if !has(comp, res) {
                                 continue;

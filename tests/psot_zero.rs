@@ -271,15 +271,21 @@ fn a_raw_psot_zero_codestream_with_bytes_after_its_packets_is_refused() {
     }
 }
 
-/// Codestreams whose one-byte packet headers each visit every code-block of a
-/// large precinct (`t2bomb` in the generator), one past the visit bound and
-/// one past the geometry bound of the walk that checks where the codestream
-/// ends. Past a bound the walk answers no, so the codestream runs to the end of
-/// the file and the bytes after its packets are refused, as on a codestream
-/// the check does not apply to. OpenJPEG 2.5.0 decodes both to a flat image.
+/// Codestreams too costly to walk to check where they end: two whose one-byte
+/// packet headers each visit every code-block of a large precinct (`t2bomb` in
+/// the generator), one past the visit bound and one past the geometry bound,
+/// and one whose PCRL sweep checks 64 components at each of 256^2 positions
+/// for 1148 empty packets (`sweep`), past the visit bound. Past a bound the
+/// walk answers no, so the codestream runs to the end of the file and the
+/// bytes after its packets are refused, as on a codestream the check does not
+/// apply to. OpenJPEG 2.5.0 decodes all three to a flat 128.
 #[test]
 fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
-    for name in ["jp2_t2bomb_visits.jp2", "jp2_t2bomb_blocks.jp2"] {
+    for name in [
+        "jp2_t2bomb_visits.jp2",
+        "jp2_t2bomb_blocks.jp2",
+        "jp2_t2_sweep.jp2",
+    ] {
         let bytes = std::fs::read(dir().join(name)).unwrap();
         let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(header.jp2.is_some_and(|m| m.xml.is_empty()), "{name}");
@@ -287,9 +293,9 @@ fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
     }
 }
 
-/// The same shape with 56 code-blocks and 19000 layers: the walk spends more
-/// than 2^20 visits, but within 64 per byte of the tile's data, so it finishes,
-/// and the codestream ends at its box's end. OpenJPEG 2.5.0 decodes it to a
+/// The same shape with 56 code-blocks and 19000 layers: the walk spends about
+/// a million visits, within its bound, so it finishes, and the codestream ends
+/// at its box's end. OpenJPEG 2.5.0 decodes it to a
 /// flat 128.
 #[test]
 fn a_psot_zero_tile_within_its_walk_bound_ends_at_its_box() {

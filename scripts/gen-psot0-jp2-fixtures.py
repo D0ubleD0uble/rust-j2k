@@ -126,16 +126,76 @@ def t2bomb(width: int, height: int, layers: int) -> bytes:
     return prefix + box(b"jp2c", codestream) + box(b"free", b"")
 
 
+def sweep(size: int, components: int) -> bytes:
+    """A JP2 of one `size` x `size` tile in PCRL order, one layer and one
+    wavelet level, whose packets are all empty (the byte 0x00). Two thin
+    components set the precinct grid's step to 2 on both axes: the first is
+    subsampled 255 times vertically under 1 x 2^15 precincts, the second 255
+    times horizontally under 2^15 x 1 precincts. The other components, each
+    subsampled 255 times both ways, hold two packets each but are checked at
+    every point of the sweep, (size / 2)^2 points for each of their two
+    resolutions. The tile-part has `Psot = 0` and no EOC, and its `jp2c` box
+    ends where the packets end; an empty `free` box follows."""
+
+    def seg(code: int, body: bytes) -> bytes:
+        return struct.pack(">HH", code, 2 + len(body)) + body
+
+    def ceil(a: int, b: int) -> int:
+        return -(-a // b)
+
+    def precincts(w: int, h: int, ppx: int, ppy: int) -> int:
+        return (ceil(w, 1 << ppx) if w else 0) * (ceil(h, 1 << ppy) if h else 0)
+
+    comps = [(7, 1, 255), (7, 255, 1)] + [(7, 255, 255)] * (components - 2)
+    # (PPx, PPy) at resolution 0, then 1.
+    sizes = [((0, 15), (1, 15)), ((15, 0), (15, 1))] + [((15, 15), (15, 15))] * (components - 2)
+    siz = seg(
+        0xFF51,
+        struct.pack(">HIIIIIIIIH", 0, size, size, 0, 0, size, size, 0, 0, components)
+        + b"".join(bytes(c) for c in comps),
+    )
+    # User precincts, PCRL, one layer, no MCT; one level, 64x64 code-blocks,
+    # 5/3, 2^15 precincts.
+    cod = seg(0xFF52, bytes([1, 2]) + struct.pack(">H", 1) + bytes([0, 1, 4, 4, 0, 1, 0xFF, 0xFF]))
+    coc = seg(0xFF53, bytes([0, 1, 1, 4, 4, 0, 1, 0xF0, 0xF1])) + seg(
+        0xFF53, bytes([1, 1, 1, 4, 4, 0, 1, 0x0F, 0x1F])
+    )
+    qcd = seg(0xFF5C, bytes([0x40, 0x40, 0x48, 0x48, 0x50]))
+    packets = 0
+    for (_, dx, dy), (low, high) in zip(comps, sizes):
+        w, h = ceil(size, dx), ceil(size, dy)
+        packets += precincts(ceil(w, 2), ceil(h, 2), *low) + precincts(w, h, *high)
+    sot = struct.pack(">HHHIBB", 0xFF90, 10, 0, 0, 0, 1)
+    codestream = b"\xff\x4f" + siz + cod + coc + qcd + sot + b"\xff\x93" + b"\x00" * packets
+    prefix = (
+        box(b"jP  ", b"\x0d\x0a\x87\x0a")
+        + box(b"ftyp", b"jp2 " + b"\0\0\0\0" + b"jp2 ")
+        + box(
+            b"jp2h",
+            box(b"ihdr", struct.pack(">IIHBBBB", size, size, components, 7, 7, 0, 0))
+            + box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 17)),
+        )
+    )
+    return prefix + box(b"jp2c", codestream) + box(b"free", b"")
+
+
 # name -> (bytes, width, height); `--check` prints opj's outcome.
 BOMBS = {
-    # 128 x 128 = 2^14 code-blocks, within the geometry bound, and 100 layers:
-    # 1.6 million visits, past the 2^20 work bound.
-    "jp2_t2bomb_visits.jp2": (t2bomb(512, 512, 100), 512, 512),
+    # 128 x 128 = 2^14 code-blocks, within the geometry bound, and 300 layers:
+    # 4.9 million visits, past the 2^22 work bound.
+    "jp2_t2bomb_visits.jp2": (t2bomb(512, 512, 300), 512, 512),
     # 130 x 130 = 16900 code-blocks, past the 2^14 geometry bound.
     "jp2_t2bomb_blocks.jp2": (t2bomb(520, 520, 1), 520, 520),
-    # 8 x 7 code-blocks and 19000 layers: about 1.08 million visits, past
-    # 2^20 but within 64 per byte of the tile's data, so the walk finishes.
+    # 8 x 7 code-blocks and 19000 layers: about 1.08 million visits, within
+    # the 2^22 work bound, so the walk finishes.
     "jp2_t2_many_layers.jp2": (t2bomb(32, 28, 19000), 32, 28),
+}
+
+# name -> bytes; `--check` prints opj's outcome. 256^2 sweep points, each
+# checking 2 resolutions of 64 components: 8.4 million visits, past the 2^22
+# work bound, for 1.7 thousand empty packets.
+SWEEPS = {
+    "jp2_t2_sweep.jp2": sweep(512, 64),
 }
 
 # name -> (bytes, base whose opj output it is compared with)
@@ -225,17 +285,41 @@ def check_bomb(name: str, width: int, height: int) -> str:
         return f"decodes, sample values {samples}"
 
 
+def check_sweep(name: str) -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        run = subprocess.run(
+            ["opj_decompress", "-i", str(DIR / name), "-o", str(pathlib.Path(tmp) / "out.pgx")],
+            capture_output=True,
+            text=True,
+        )
+        outs = sorted(pathlib.Path(tmp).glob("out*.pgx"))
+        if not outs:
+            last = [l for l in (run.stdout + run.stderr).splitlines() if "ERROR" in l]
+            return f"no output ({last[-1] if last else run.returncode})"
+        samples = set()
+        for out in outs:
+            # One PGX per component: a "PG ML + 8 W H" line, then the samples.
+            head, data = out.read_bytes().split(b"\n", 1)
+            w, h = map(int, head.split()[-2:])
+            samples |= set(data[: w * h])
+        return f"decodes, {len(outs)} components, sample values {sorted(samples)}"
+
+
 def main() -> None:
     (DIR / "bypass_psot0_eoc.j2k").write_bytes(BYPASS_PSOT0)
     for name, (data, _) in FILES.items():
         (DIR / name).write_bytes(data)
     for name, (data, _, _) in BOMBS.items():
         (DIR / name).write_bytes(data)
+    for name, data in SWEEPS.items():
+        (DIR / name).write_bytes(data)
     if "--check" in sys.argv:
         for name, (_, base) in FILES.items():
             print(f"{name}: {check(name, base)}")
         for name, (_, width, height) in BOMBS.items():
             print(f"{name}: {check_bomb(name, width, height)}")
+        for name in SWEEPS:
+            print(f"{name}: {check_sweep(name)}")
 
 
 if __name__ == "__main__":

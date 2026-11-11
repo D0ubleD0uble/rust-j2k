@@ -190,12 +190,16 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// One case reads further: in a JP2 file whose last tile-part has `Psot = 0`
 /// (no length) and whose `jp2c` box ends before the file does, the packet
 /// headers of that tile-part's tile are walked to see whether the codestream
-/// ends at the box's end. No samples are decoded, and the walk is bounded: a
-/// codestream of more than 4096 tiles or 1024 components, or a tile of more
-/// than 16384 code-blocks or precincts, is not walked, and the walk stops
-/// after 2^20 code-block visits, or 64 per byte of the tile's data when that
-/// is more. Past a bound the codestream is taken to run to the end
-/// of the file, and [`decode_with`] takes it the same way.
+/// ends at the box's end. No samples are decoded, and every step of the walk
+/// is bounded. A codestream of more than 4096 tiles or 1024 components, or of
+/// fewer than 14 bytes per tile, is not walked, nor is a tile of more than
+/// 16384 code-blocks or precincts. The walk stops after 2^22 visits, or 8 per
+/// byte of the tile's data when that is more, counting packets read,
+/// code-block entries visited in their headers, and the positions a
+/// positional progression order sweeps, once for each (component,
+/// resolution) checked there. Past a bound the codestream is taken to run to
+/// the end of the file, the rule for a `Psot = 0` tile-part the check does
+/// not apply to, and [`decode_with`] takes it the same way.
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks

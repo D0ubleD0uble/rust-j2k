@@ -169,12 +169,16 @@ either way. When tier-2 does not reach the box's end (the box ends inside the
 codestream), the codestream is read to the end of the file instead, with the
 result above. The check is part of reading the file's structure, so
 `read_header` makes it too: it walks that one tile's packet headers, without
-decoding any samples. The walk is bounded, since a one-byte packet header can
-visit every code-block of its precinct: a codestream of more than 4096 tiles
-or 1024 components, or a tile of more than 2^14 code-blocks or precincts, is
-not walked, and the walk stops after max(2^20, 64 × the
-tile's data bytes) code-block visits. Past a bound the check answers no, and
-the codestream is read to the end of the file as above (`jp2_t2bomb_*` in
+decoding any samples. Every step of the walk is bounded, since a one-byte
+packet header can visit every code-block of its precinct and a positional
+progression order can sweep millions of positions that hold no packet: a
+codestream of more than 4096 tiles or 1024 components, or of fewer than 14
+bytes per tile, is not walked, nor is a tile of more than 2^14 code-blocks or
+precincts, and the walk stops after max(2^22, 8 × the tile's data bytes)
+visits, counting packets read, code-block entries visited in their headers,
+and sweep positions once for each (component, resolution) checked there.
+Past a bound the check answers no, and the codestream is read to the end of
+the file as above (`jp2_t2bomb_*` and `jp2_t2_sweep` in
 `tests/fixtures/psot0/`). When the box's end is used, the boxes after it are
 walked by the rules for the boxes after the codestream and reported as
 metadata (`xml `, `uuid` and the like); otherwise the bytes after the box are

@@ -480,10 +480,13 @@ fn padding_inside_the_codestream_box_does_not_hide_later_metadata() {
 /// one past its geometry bound.
 const T2BOMB_VISITS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_visits.jp2");
 const T2BOMB_BLOCKS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_blocks.jp2");
-/// The same shape with 56 code-blocks and 19000 layers: past 2^20 visits, but
-/// within 64 per byte of the tile's data.
+/// The same shape with 56 code-blocks and 19000 layers: about a million
+/// visits, within the bound.
 const T2_MANY_LAYERS: &[u8] =
     include_bytes!("../../../tests/fixtures/psot0/jp2_t2_many_layers.jp2");
+/// A PCRL sweep of 256^2 positions that checks 64 components at each, for 1148
+/// empty packets, from `sweep` in the same script.
+const T2_SWEEP: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep.jp2");
 
 /// The codestream of `file` cut two bytes past its `jp2c` box's end, the slice
 /// the walk is run on.
@@ -500,9 +503,9 @@ fn box_end_cut(file: &[u8]) -> &[u8] {
 
 /// The walk stops at its bounds and answers that the codestream does not end
 /// at the box's end, after at most [`PROBE_VISITS_MIN`] visits for a tile this
-/// small, and none for a tile past the geometry bound. Unbounded, the same
-/// walks go past both. A tile with more data may spend more: 64 visits per
-/// byte.
+/// small, whether the visits are code-block entries or sweep positions, and
+/// after none for a tile past the geometry bound. Unbounded, the same walks go
+/// past both.
 #[test]
 fn the_packet_walk_at_the_box_end_is_bounded() {
     use crate::jp2::{PROBE_GEOMETRY, PROBE_VISITS_MIN, probe_packets};
@@ -517,20 +520,31 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         (u64::MAX - budget.visits, MAX_CODE_BLOCKS - budget.blocks)
     };
 
-    let cut = box_end_cut(T2BOMB_VISITS);
-    assert!(unbounded(cut).0 > PROBE_VISITS_MIN);
-    let (ends, visits) = probe_packets(cut, 0);
-    assert!(!ends);
-    assert!(visits <= PROBE_VISITS_MIN, "{visits} visits");
+    for file in [T2BOMB_VISITS, T2_SWEEP] {
+        let cut = box_end_cut(file);
+        assert!(unbounded(cut).0 > PROBE_VISITS_MIN);
+        let (ends, visits) = probe_packets(cut, 0);
+        assert!(!ends);
+        assert!(visits <= PROBE_VISITS_MIN, "{visits} visits");
+    }
 
     let cut = box_end_cut(T2BOMB_BLOCKS);
     assert!(unbounded(cut).1 > PROBE_GEOMETRY);
     assert_eq!(probe_packets(cut, 0), (false, 0));
 
     let cut = box_end_cut(T2_MANY_LAYERS);
-    let (ends, visits) = probe_packets(cut, 0);
-    assert!(ends);
-    assert!(visits > PROBE_VISITS_MIN, "{visits} visits");
+    assert!(probe_packets(cut, 0).0);
+}
+
+/// A tile with more data may spend more: 8 visits per byte past 2^19 bytes.
+#[test]
+fn the_packet_walk_bound_grows_with_the_tile_data() {
+    use crate::jp2::probe_visits;
+    assert_eq!(probe_visits(0), 1 << 22);
+    assert_eq!(probe_visits(1 << 19), 1 << 22);
+    assert_eq!(probe_visits((1 << 19) + 1), (1 << 22) + 8);
+    assert_eq!(probe_visits(1 << 24), 1 << 27);
+    assert_eq!(probe_visits(u64::MAX), u64::MAX);
 }
 
 /// The walk resolves only the walked tile's header, not every tile's (which

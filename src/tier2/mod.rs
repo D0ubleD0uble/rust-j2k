@@ -33,6 +33,7 @@ use crate::codestream::markers::marker;
 use crate::codestream::{MainHeader, Tile};
 use crate::{Error, Result};
 use bio::BitReader;
+use std::cell::Cell;
 use tagtree::TagTree;
 
 pub(crate) use geometry::{
@@ -159,9 +160,12 @@ pub(crate) struct Budget {
     pub(crate) precincts: usize,
     /// Code-blocks across the tile's components (see [`resolution_geoms`]).
     pub(crate) blocks: usize,
-    /// Packets read plus code-block entries visited in their headers. A packet
-    /// header can be a single byte and still visit every code-block of its
-    /// precinct, so this bounds the work where the other two cannot.
+    /// Steps of the walk: packets read, code-block entries visited in their
+    /// headers, and the points of the progression order's loops, such as each
+    /// position of a positional sweep for each (component, resolution) it
+    /// checks. A packet header can be a single byte and still visit every
+    /// code-block of its precinct, and a sweep can check millions of points
+    /// that hold no packet, so this bounds the work where the other two cannot.
     pub(crate) visits: u64,
 }
 
@@ -246,25 +250,31 @@ pub(crate) fn decode_packets_within<'a>(
         data,
         body_pos: 0,
         packed,
-        visits_left: budget.visits,
     };
+    let visits = Cell::new(budget.visits);
     let mut packet_index = 0u32;
-    let walked = for_each_packet(header, &walk, |layer, resolution, component, precinct| {
-        let geom = &geoms[component][resolution];
-        parse_packet(
-            &mut streams,
-            layer,
-            packet_index,
-            delimiters,
-            header.components[component].coding.code_block_style,
-            &geom.bands,
-            precinct,
-            &mut states[component][resolution],
-        )?;
-        packet_index += 1;
-        Ok(())
-    });
-    budget.visits = streams.visits_left;
+    let walked = for_each_packet(
+        header,
+        &walk,
+        &visits,
+        |layer, resolution, component, precinct| {
+            let geom = &geoms[component][resolution];
+            parse_packet(
+                &mut streams,
+                &visits,
+                layer,
+                packet_index,
+                delimiters,
+                header.components[component].coding.code_block_style,
+                &geom.bands,
+                precinct,
+                &mut states[component][resolution],
+            )?;
+            packet_index += 1;
+            Ok(())
+        },
+    );
+    budget.visits = visits.get();
     walked?;
 
     let components: Vec<ComponentCoded<'a>> = states
@@ -378,15 +388,13 @@ struct PacketStreams<'a> {
     body_pos: usize,
     /// Whether the header stream is separate from the body stream.
     packed: bool,
-    /// What is left of [`Budget::visits`].
-    visits_left: u64,
 }
 
-/// Spend `n` of the visit budget `left`, or fail once it is gone.
-fn visit(left: &mut u64, n: usize) -> Result<()> {
-    match left.checked_sub(n as u64) {
+/// Spend `n` of what is left of [`Budget::visits`], or fail once it is gone.
+pub(crate) fn visit(left: &Cell<u64>, n: usize) -> Result<()> {
+    match left.get().checked_sub(n as u64) {
         Some(rest) => {
-            *left = rest;
+            left.set(rest);
             Ok(())
         }
         None => Err(Error::Limit(
@@ -539,6 +547,7 @@ struct Contribution {
 #[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
     streams: &mut PacketStreams<'a>,
+    visits: &Cell<u64>,
     layer: u32,
     packet_index: u32,
     delimiters: Delimiters,
@@ -547,7 +556,7 @@ fn parse_packet<'a>(
     precinct: usize,
     states: &mut [BandState<'a>],
 ) -> Result<()> {
-    visit(&mut streams.visits_left, 1)?;
+    visit(visits, 1)?;
     // SOP precedes the packet in the *body* stream when COD allows it — but only
     // *may* (A.8.1), so its absence is not an error, and it stays inline even
     // when the headers are packed. OpenJPEG warns and carries on.
@@ -583,10 +592,7 @@ fn parse_packet<'a>(
     let mut contributions: Vec<Contribution> = Vec::new();
     if present {
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
-            visit(
-                &mut streams.visits_left,
-                band.precincts[precinct].blocks.len(),
-            )?;
+            visit(visits, band.precincts[precinct].blocks.len())?;
             parse_band_header(
                 band_index,
                 &band.precincts[precinct],

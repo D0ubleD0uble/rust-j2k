@@ -302,13 +302,19 @@ const PROBE_GEOMETRY: usize = 1 << 14;
 const PROBE_TILES: usize = 1 << 12;
 const PROBE_COMPONENTS: usize = 1 << 10;
 
-/// The fewest visits [`packets_end_at`] may spend (packets read plus code-block
-/// entries visited in their headers; see [`crate::tier2::Budget`]).
-const PROBE_VISITS_MIN: u64 = 1 << 20;
+/// The fewest visits [`packets_end_at`] may spend: packets read, code-block
+/// entries visited in their headers, and points of the progression order's
+/// loops (see [`crate::tier2::Budget::visits`]).
+const PROBE_VISITS_MIN: u64 = 1 << 22;
 
 /// The visits [`packets_end_at`] may spend per byte of the tile's data, when
 /// that comes to more than [`PROBE_VISITS_MIN`].
-const PROBE_VISITS_PER_BYTE: u64 = 64;
+const PROBE_VISITS_PER_BYTE: u64 = 8;
+
+/// The visits [`packets_end_at`] may spend on a tile of `bytes` bytes of data.
+fn probe_visits(bytes: u64) -> u64 {
+    PROBE_VISITS_MIN.max(bytes.saturating_mul(PROBE_VISITS_PER_BYTE))
+}
 
 /// Whether the packets of `tile`, the tile of the `Psot = 0` tile-part, end
 /// exactly at the end of `codestream`: its main header and tile-parts parse
@@ -324,17 +330,21 @@ const PROBE_VISITS_PER_BYTE: u64 = 64;
 /// either way. When the packets do not end there, the box ends inside the
 /// codestream, and the bytes after it are tile data, not boxes.
 ///
-/// The walk is bounded, because `read_header` runs it too: a codestream of more
-/// than [`PROBE_TILES`] tiles or [`PROBE_COMPONENTS`] components, or a tile of
-/// more than [`PROBE_GEOMETRY`] code-blocks or precincts, is not walked, and
-/// the walk stops
-/// after `max(2^20, 64 × the tile's data bytes)` visits. A packet header of one
-/// byte can visit every code-block of its precinct, so without the bound a
-/// small file could make this walk run for minutes. Only that tile's header is
-/// resolved, not every tile's, which would cost `tiles × components`. A tile
-/// past either bound
-/// answers `false`, so the codestream runs to the end of the file, the rule
-/// for a `Psot = 0` tile-part that this check does not apply to.
+/// The walk is bounded in every step, because `read_header` runs it too. A
+/// codestream of more than [`PROBE_TILES`] (4096) tiles or
+/// [`PROBE_COMPONENTS`] (1024) components, or of fewer than 14 bytes per
+/// tile, is not walked, nor is a tile of more than [`PROBE_GEOMETRY`] (16384)
+/// code-blocks or precincts. The walk stops after `max(2^22, 8 × the tile's
+/// data bytes)` visits, counting packets read, code-block entries visited in
+/// their headers, and the positions a positional progression order sweeps,
+/// for each (component, resolution) it checks there. A packet header of one
+/// byte can visit every code-block of its precinct, and a sweep can check
+/// millions of positions that hold no packet, so without the bound a small
+/// file could make this walk run for minutes. Only that tile's header is
+/// resolved, not every tile's, which would cost `tiles × components`. Past
+/// any bound the answer is `false`, so the codestream runs to the end of the
+/// file, the rule for a `Psot = 0` tile-part that this check does not apply
+/// to.
 fn packets_end_at(codestream: &[u8], tile: u16) -> bool {
     probe_packets(codestream, tile).0
 }
@@ -364,7 +374,7 @@ fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
         return (false, 0);
     };
     let bytes = (data.data.len() + data.packed_headers.len()) as u64;
-    let visits = PROBE_VISITS_MIN.max(bytes.saturating_mul(PROBE_VISITS_PER_BYTE));
+    let visits = probe_visits(bytes);
     let mut budget = crate::tier2::Budget {
         precincts: PROBE_GEOMETRY,
         blocks: PROBE_GEOMETRY,
