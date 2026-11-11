@@ -4,15 +4,15 @@
 //! A code-block is decoded bit-plane by bit-plane, MSB→LSB. Each plane runs, in
 //! order, the passes that apply: significance propagation (D.3.1), magnitude
 //! refinement (D.3.2), and cleanup (D.3.3) with its run-length mode. Contexts
-//! come from the significance state of the 3×3 neighbourhood (D.3.* tables),
-//! and sign coding uses the neighbour-sign context (D.3.4). The cleanup pass
+//! come from the significance state of the 3×3 neighborhood (D.3.* tables),
+//! and sign coding uses the neighbor-sign context (D.3.4). The cleanup pass
 //! of the top plane runs first.
 //!
 //! The optional code-block style flags act at three points. `segmentation
 //! symbols` appends a four-symbol marker to every cleanup pass (D.5).
 //! `vertically causal context` narrows the significance context so a stripe's
 //! bottom row ignores the row below it, and `reset context probabilities`
-//! reinitialises the MQ context model after every pass — both change which
+//! reinitializes the MQ context model after every pass — both change which
 //! context a decision is coded under, threaded through [`BlockState`] and
 //! [`decode_block`]. `restart` and `predictable termination` modulate
 //! termination. `bypass` (lazy) codes the significance and refinement passes of
@@ -54,7 +54,7 @@ pub const MAX_BIT_PLANES: u32 = 30;
 
 /// Subband orientation, which selects the zero-coding context table (D.3.1).
 /// Per Table D-1, `LL` and `LH` share one table, `HL` swaps the horizontal and
-/// vertical neighbour roles, and `HH` keys off the diagonal count instead.
+/// vertical neighbor roles, and `HH` keys off the diagonal count instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
     Ll,
@@ -84,7 +84,7 @@ pub struct BlockState {
     /// Vertically causal context (the `VCAUSAL` style): the context of a sample
     /// on a stripe's bottom row (`y % 4 == 3`) excludes the row below it, which
     /// belongs to the next stripe. `false` for the default style, where the full
-    /// 3×3 neighbourhood is used. Set by [`decode_block`] from the style byte.
+    /// 3×3 neighborhood is used. Set by [`decode_block`] from the style byte.
     vcausal: bool,
 }
 
@@ -114,13 +114,13 @@ impl BlockState {
     }
 
     /// Significance at a possibly out-of-range position; positions outside the
-    /// block read as insignificant, which clamps the 3×3 neighbourhood at the
+    /// block read as insignificant, which clamps the 3×3 neighborhood at the
     /// block edges (D.3: out-of-block samples contribute 0).
     fn sig_at(&self, x: i64, y: i64) -> bool {
         self.in_bounds(x, y) && self.significant[self.idx(x as u32, y as u32)]
     }
 
-    /// A single neighbour's signed contribution to the sign context (Table D-2):
+    /// A single neighbor's signed contribution to the sign context (Table D-2):
     /// `0` if insignificant, `+1` if significant and positive, `-1` if negative.
     fn contrib_at(&self, x: i64, y: i64) -> i32 {
         if !self.sig_at(x, y) {
@@ -153,7 +153,7 @@ impl BlockState {
     /// Set a coefficient's magnitude when it first becomes significant at plane
     /// `bpno`, to the mid-point reconstruction value `2^bpno + 2^(bpno−1)`
     /// (ISO E.1.1.2 / OpenJPEG `oneplushalf`): the significant bit plus half the
-    /// next plane's weight, placing it at the centre of its interval.
+    /// next plane's weight, placing it at the center of its interval.
     fn set_significant_magnitude(&mut self, x: u32, y: u32, bpno: u32) {
         let one = 1i32 << bpno;
         let i = self.idx(x, y);
@@ -199,16 +199,16 @@ impl BlockState {
     /// Whether the row below `(·, y)` lies in the next stripe and so is excluded
     /// from the context under vertically causal coding: it is the stripe's bottom
     /// row (`y % 4 == 3`) and the flag is set. Off, or on an interior row, the
-    /// full neighbourhood is used (D.3).
+    /// full neighborhood is used (D.3).
     fn excludes_south(&self, y: u32) -> bool {
         self.vcausal && y % 4 == 3
     }
 
     /// (ΣH, ΣV, ΣD): the significance sums of the two horizontal, two vertical,
-    /// and four diagonal neighbours of `(x, y)` — the inputs to every D.3 table.
-    /// Under vertically causal coding the south neighbours of a stripe's bottom
+    /// and four diagonal neighbors of `(x, y)` — the inputs to every D.3 table.
+    /// Under vertically causal coding the south neighbors of a stripe's bottom
     /// row read as insignificant.
-    fn neighbour_sums(&self, x: u32, y: u32) -> (u8, u8, u8) {
+    fn neighbor_sums(&self, x: u32, y: u32) -> (u8, u8, u8) {
         let south = !self.excludes_south(y);
         let (x, y) = (x as i64, y as i64);
         let sig_south = |dx: i64| (south && self.sig_at(x + dx, y + 1)) as u8;
@@ -226,7 +226,7 @@ impl BlockState {
     /// `HL` swaps the horizontal and vertical sums, and `HH` keys off the
     /// diagonal count.
     pub fn zc_context(&self, x: u32, y: u32, orient: Orientation) -> u8 {
-        let (h, v, d) = self.neighbour_sums(x, y);
+        let (h, v, d) = self.neighbor_sums(x, y);
         let label = match orient {
             Orientation::Ll | Orientation::Lh => zc_label_lh(h, v, d),
             Orientation::Hl => zc_label_lh(v, h, d),
@@ -264,12 +264,12 @@ impl BlockState {
 
     /// Magnitude-refinement context (`CTX_MR..CTX_RUN`) for `(x, y)` (ISO
     /// Table D-4 / D.3.2). After the first refinement the context is always 16;
-    /// on the first refinement it is 15 if any neighbour is significant, else 14.
+    /// on the first refinement it is 15 if any neighbor is significant, else 14.
     pub fn mr_context(&self, x: u32, y: u32) -> u8 {
         if self.is_refined(x, y) {
             CTX_MR + 2
         } else {
-            let (h, v, d) = self.neighbour_sums(x, y);
+            let (h, v, d) = self.neighbor_sums(x, y);
             let label = if h + v + d > 0 { 1 } else { 0 };
             CTX_MR + label
         }
@@ -321,7 +321,7 @@ pub(crate) fn init_contexts() -> [Context; NUM_CONTEXTS] {
 }
 
 /// Decode the sign of a coefficient that has just become significant (D.3.4):
-/// the MQ decision under the neighbour-sign context is XORed with the context's
+/// the MQ decision under the neighbor-sign context is XORed with the context's
 /// predicted sign. Records the sign in `state` (`true` = negative).
 fn decode_sign(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Context], x: u32, y: u32) {
     let (ctx, xor) = state.sc_context(x, y);
@@ -338,7 +338,7 @@ fn stripes(width: u32, height: u32) -> impl Iterator<Item = (u32, u32)> {
 }
 
 /// Significance-propagation pass (D.3.1): visit each still-insignificant sample
-/// that has at least one significant neighbour, zero-code it, and on a 1 decode
+/// that has at least one significant neighbor, zero-code it, and on a 1 decode
 /// its sign. `bpno` is the current bit-plane; `1 << bpno` is its weight.
 fn sig_prop_pass(
     mq: &mut MqDecoder<'_>,
@@ -355,7 +355,7 @@ fn sig_prop_pass(
             }
             let ctx = state.zc_context(x, y, orient);
             if ctx == CTX_ZC {
-                continue; // no significant neighbour: deferred to cleanup
+                continue; // no significant neighbor: deferred to cleanup
             }
             if mq.decode(&mut cx[ctx as usize]) == 1 {
                 state.set_significant_magnitude(x, y, bpno);
@@ -389,8 +389,8 @@ fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Contex
 /// same sample selection as [`sig_prop_pass`], but the significance decision and
 /// the sign are read as raw bits instead of MQ-coded ones. The zero-coding
 /// context still decides *which* samples are visited (a non-zero context means a
-/// significant neighbour), it just no longer codes the bit — so the sign is the
-/// raw bit itself, without the neighbour-sign context or its XOR.
+/// significant neighbor), it just no longer codes the bit — so the sign is the
+/// raw bit itself, without the neighbor-sign context or its XOR.
 fn sig_prop_pass_raw(
     raw: &mut RawDecoder<'_>,
     state: &mut BlockState,
@@ -404,7 +404,7 @@ fn sig_prop_pass_raw(
                 continue;
             }
             if state.zc_context(x, y, orient) == CTX_ZC {
-                continue; // no significant neighbour: deferred to cleanup
+                continue; // no significant neighbor: deferred to cleanup
             }
             if raw.decode() == 1 {
                 state.set_significant_magnitude(x, y, bpno);
@@ -434,7 +434,7 @@ fn mag_ref_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32)
 }
 
 /// Cleanup pass (D.3.3): code every sample not yet handled this plane. A full
-/// column of four insignificant samples with no significant neighbours is
+/// column of four insignificant samples with no significant neighbors is
 /// aggregated through the run-length context — a 0 leaves all four
 /// insignificant, a 1 reads the first significant sample's position as two
 /// uniform bits — after which the column finishes with ordinary zero coding.
@@ -499,7 +499,7 @@ fn cleanup_pass(
 /// first, spelling `1010`.
 ///
 /// The four decisions are part of the codeword whether or not anyone looks at
-/// the value, so a decoder that skips them desynchronises the MQ coder for every
+/// the value, so a decoder that skips them desynchronizes the MQ coder for every
 /// later pass. That is why this runs before the value is judged.
 ///
 /// A wrong value means the coded data is corrupt. OpenJPEG decodes the symbol
@@ -564,7 +564,7 @@ fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
 /// The most significant coded bit-plane of a code-block, one-based: OpenJPEG's
 /// `bpno_plus_one = roishift + cblk->numbps`, zero when nothing is coded.
 ///
-/// The zero bit-planes signalled in the packet header count against the
+/// The zero bit-planes signaled in the packet header count against the
 /// *raised* plane count `Mb + roi_shift` (ISO H.2 sets Kmax = Mb + s), so under
 /// a maxshift a background-only block can carry more of them than the band has
 /// magnitude planes — the shift must be added before the subtraction, or such
@@ -630,7 +630,7 @@ enum PassCoder<'a> {
 /// per-layer contributions into the single MQ codeword decoded here.
 ///
 /// `segments` carries the block's codeword segments in order, each with the
-/// coding passes it codes. The MQ decoder is re-initialised at every segment —
+/// coding passes it codes. The MQ decoder is re-initialized at every segment —
 /// under `restart` that is once per pass — while the context states, the
 /// significance map, and the bit-plane counter carry straight through, exactly
 /// as `opj_t1_decode_cblk` does. Without termination there is one segment and
@@ -777,7 +777,7 @@ pub fn decode_block(
         // Every codeword segment is separately terminated, so under `predictable
         // termination` each one must account for its own bytes. OpenJPEG checks
         // only the last segment of a block and warns; checking each one costs
-        // nothing and localises the damage. The check is the MQ flush's, so it
+        // nothing and localizes the damage. The check is the MQ flush's, so it
         // applies to MQ segments only — a raw `bypass` segment ends on a byte
         // boundary with no such guarantee.
         if let PassCoder::Mq(mq) = &coder {
@@ -855,49 +855,49 @@ mod tests {
     }
 
     /// Vertically causal context excludes the next stripe from the 3×3
-    /// neighbourhood of a stripe's bottom row (`y % 4 == 3`), and only there. The
+    /// neighborhood of a stripe's bottom row (`y % 4 == 3`), and only there. The
     /// three context types must all see the reduction — significance
-    /// (`neighbour_sums`/`zc_context`), sign (`sc_context`), and refinement
+    /// (`neighbor_sums`/`zc_context`), sign (`sc_context`), and refinement
     /// (`mr_context`) — because OpenJPEG forms them from the same flags.
     #[test]
     fn vertically_causal_context_excludes_the_next_stripe() {
         // Two stripes of a 3-wide block. Make the whole row below (1, 3) — the
         // top of the second stripe — significant and negative, so the vertical
-        // and both diagonal south neighbours of (1, 3) are set.
+        // and both diagonal south neighbors of (1, 3) are set.
         let mut state = BlockState::new(3, 8);
         for x in 0..3 {
             state.set_significant(x, 4);
             state.set_negative(x, 4, true);
         }
 
-        // Default: (1, 3) sees one vertical and two diagonal south neighbours.
-        let (h, v, d) = state.neighbour_sums(1, 3);
-        assert_eq!((h, v, d), (0, 1, 2), "default neighbourhood");
+        // Default: (1, 3) sees one vertical and two diagonal south neighbors.
+        let (h, v, d) = state.neighbor_sums(1, 3);
+        assert_eq!((h, v, d), (0, 1, 2), "default neighborhood");
         assert_ne!(state.zc_context(1, 3, Orientation::Ll), CTX_ZC);
-        // Sign: the south neighbours are negative, so v < 0.
+        // Sign: the south neighbors are negative, so v < 0.
         let (_, xor_default) = state.sc_context(1, 3);
-        assert_eq!(xor_default, 1, "negative south neighbours flip the sign");
-        // First refinement: a significant neighbour selects context 15, not 14.
+        assert_eq!(xor_default, 1, "negative south neighbors flip the sign");
+        // First refinement: a significant neighbor selects context 15, not 14.
         assert_eq!(state.mr_context(1, 3), CTX_MR + 1);
 
         // Vertically causal: the next stripe vanishes from (1, 3)'s context.
         state.vcausal = true;
         assert_eq!(
-            state.neighbour_sums(1, 3),
+            state.neighbor_sums(1, 3),
             (0, 0, 0),
             "south excluded at ci==3"
         );
         assert_eq!(state.zc_context(1, 3, Orientation::Ll), CTX_ZC);
         let (sc, xor_causal) = state.sc_context(1, 3);
-        assert_eq!((sc, xor_causal), (CTX_SC, 0), "no neighbour, neutral sign");
-        assert_eq!(state.mr_context(1, 3), CTX_MR, "no significant neighbour");
+        assert_eq!((sc, xor_causal), (CTX_SC, 0), "no neighbor, neutral sign");
+        assert_eq!(state.mr_context(1, 3), CTX_MR, "no significant neighbor");
 
-        // An interior row (ci == 2) keeps its south neighbour even under vcausal:
+        // An interior row (ci == 2) keeps its south neighbor even under vcausal:
         // (1, 2)'s south row (y = 3) is inside the same stripe.
         for x in 0..3 {
             state.set_significant(x, 3);
         }
-        let (_, v_interior, _) = state.neighbour_sums(1, 2);
+        let (_, v_interior, _) = state.neighbor_sums(1, 2);
         assert_eq!(v_interior, 1, "an interior row is unaffected by vcausal");
     }
 
@@ -1182,7 +1182,7 @@ mod tests {
     }
 
     /// Build a block and mark the listed `(x, y)` offsets significant, optionally
-    /// negative. Centre tests on `(2, 2)` of a 5×5 block so all eight neighbours
+    /// negative. Center tests on `(2, 2)` of a 5×5 block so all eight neighbors
     /// are in range unless a test deliberately probes an edge.
     fn block_with(sig: &[(u32, u32)]) -> BlockState {
         let mut b = BlockState::new(5, 5);
@@ -1215,7 +1215,7 @@ mod tests {
 
     // --- Zero coding (ISO Table D-1) -------------------------------------
 
-    /// Each `LL`/`LH` context label, hit by a hand-built neighbourhood whose
+    /// Each `LL`/`LH` context label, hit by a hand-built neighborhood whose
     /// (ΣH, ΣV, ΣD) lands in that row of the table.
     #[test]
     fn zc_ll_lh_all_labels() {
@@ -1246,16 +1246,16 @@ mod tests {
     }
 
     /// `HL` is the `LL`/`LH` table with horizontal and vertical roles swapped:
-    /// a purely horizontal neighbourhood (ΣH=2) that scores 8 for LL must follow
+    /// a purely horizontal neighborhood (ΣH=2) that scores 8 for LL must follow
     /// the ΣV=2 row for HL, and vice versa.
     #[test]
     fn zc_hl_swaps_h_and_v() {
-        // Two horizontal neighbours: LL → 8 (h2), HL reads it as v2 → 4.
+        // Two horizontal neighbors: LL → 8 (h2), HL reads it as v2 → 4.
         let horiz = block_with(&[(1, 2), (3, 2)]);
         assert_eq!(horiz.zc_context(2, 2, Orientation::Ll), CTX_ZC + 8);
         assert_eq!(horiz.zc_context(2, 2, Orientation::Hl), CTX_ZC + 4);
 
-        // Two vertical neighbours: LL → 4 (v2), HL reads it as h2 → 8.
+        // Two vertical neighbors: LL → 4 (v2), HL reads it as h2 → 8.
         let vert = block_with(&[(2, 1), (2, 3)]);
         assert_eq!(vert.zc_context(2, 2, Orientation::Ll), CTX_ZC + 4);
         assert_eq!(vert.zc_context(2, 2, Orientation::Hl), CTX_ZC + 8);
@@ -1292,7 +1292,7 @@ mod tests {
     // --- Sign coding (ISO Tables D-2, D-3) ------------------------------
 
     /// Build a block whose horizontal pair sums to `h` and vertical pair to `v`
-    /// (each in -1..=1), by signing one neighbour per axis.
+    /// (each in -1..=1), by signing one neighbor per axis.
     fn block_for_sign(h: i32, v: i32) -> BlockState {
         let mut b = BlockState::new(5, 5);
         let mut sign = |x: u32, y: u32, neg: bool| {
@@ -1331,13 +1331,13 @@ mod tests {
         }
     }
 
-    /// Two like-signed neighbours on one axis clamp to a single contribution
+    /// Two like-signed neighbors on one axis clamp to a single contribution
     /// (ISO Table D-2: H, V are bounded to -1..=1).
     #[test]
     fn sc_contributions_clamp() {
         let mut b = BlockState::new(5, 5);
         for x in [1, 3] {
-            b.set_significant(x, 2); // both horizontal neighbours positive
+            b.set_significant(x, 2); // both horizontal neighbors positive
         }
         // H would be +2 unclamped; clamped to +1 → label 3, xorbit 0.
         assert_eq!(b.sc_context(2, 2), (CTX_SC + 3, 0));
@@ -1346,19 +1346,19 @@ mod tests {
     // --- Magnitude refinement (ISO Table D-4) ---------------------------
 
     #[test]
-    fn mr_first_refinement_with_no_significant_neighbours() {
+    fn mr_first_refinement_with_no_significant_neighbors() {
         let b = BlockState::new(5, 5);
         assert_eq!(b.mr_context(2, 2), CTX_MR);
     }
 
     #[test]
-    fn mr_first_refinement_with_a_significant_neighbour() {
+    fn mr_first_refinement_with_a_significant_neighbor() {
         let b = block_with(&[(2, 1)]);
         assert_eq!(b.mr_context(2, 2), CTX_MR + 1);
     }
 
     #[test]
-    fn mr_after_first_refinement_ignores_neighbours() {
+    fn mr_after_first_refinement_ignores_neighbors() {
         let mut b = block_with(&[(2, 1)]);
         b.set_refined(2, 2);
         assert_eq!(b.mr_context(2, 2), CTX_MR + 2);
@@ -1366,22 +1366,22 @@ mod tests {
 
     // --- Edge clamping --------------------------------------------------
 
-    /// At a corner the off-block neighbours read as insignificant, so a lone
-    /// significant in-block neighbour is counted and nothing indexes out of
+    /// At a corner the off-block neighbors read as insignificant, so a lone
+    /// significant in-block neighbor is counted and nothing indexes out of
     /// bounds.
     #[test]
-    fn neighbours_clamp_at_corners() {
+    fn neighbors_clamp_at_corners() {
         let mut b = BlockState::new(3, 3);
-        // Corner (0,0): only (1,0), (0,1), (1,1) exist as neighbours.
-        b.set_significant(1, 0); // horizontal neighbour of (0,0)
+        // Corner (0,0): only (1,0), (0,1), (1,1) exist as neighbors.
+        b.set_significant(1, 0); // horizontal neighbor of (0,0)
         assert_eq!(b.zc_context(0, 0, Orientation::Ll), CTX_ZC + 5); // h1 v0 d0
 
-        // The opposite corner with a diagonal-only neighbour → label 1.
+        // The opposite corner with a diagonal-only neighbor → label 1.
         let mut c = BlockState::new(3, 3);
-        c.set_significant(1, 1); // diagonal neighbour of (2,2)
+        c.set_significant(1, 1); // diagonal neighbor of (2,2)
         assert_eq!(c.zc_context(2, 2, Orientation::Ll), CTX_ZC + 1);
 
-        // Sign and MR at a corner must not panic and read clamped neighbours.
+        // Sign and MR at a corner must not panic and read clamped neighbors.
         let _ = b.sc_context(0, 0);
         let _ = b.mr_context(0, 0);
     }

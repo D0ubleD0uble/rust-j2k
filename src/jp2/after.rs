@@ -18,7 +18,7 @@
 //!   been read (in the header or after the codestream), later ones are
 //!   ignored; before that, a `METH` 1 box under 7 bytes or a `METH` 2 box
 //!   with no profile is an error. A `colr` read here never changes the
-//!   decoded image's colour space: OpenJPEG has set it already.
+//!   decoded image's color space: OpenJPEG has set it already.
 //! - A `bpcc` must hold `ihdr.NC` bytes.
 //! - A `pclr` is an error if a palette is still held, and is otherwise
 //!   checked like one in the header. OpenJPEG drops a header palette with no
@@ -32,7 +32,7 @@
 
 use super::Jp2File;
 use super::boxes::{Boxes, Jp2Box};
-use super::{channels, colour, palette};
+use super::{channels, color, palette};
 use crate::codestream::markers::marker::{EOC, SOC, SOT};
 use crate::{Error, Result};
 
@@ -113,7 +113,7 @@ struct State {
     /// `ihdr.NC`, which a `bpcc` must match.
     components: usize,
     /// Whether a `colr` with `METH` 1 or 2 has been read.
-    has_colour: bool,
+    has_color: bool,
     /// The held palette's column count (`NPC`), if one is held.
     palette: Option<usize>,
     /// Whether the held palette has its `cmap`.
@@ -138,7 +138,7 @@ impl State {
             .map(|&npc| usize::from(npc));
         State {
             components: usize::from(header.ihdr.components),
-            has_colour: header
+            has_color: header
                 .colr()
                 .iter()
                 .any(|colr| matches!(colr.first(), Some(1 | 2))),
@@ -160,8 +160,8 @@ impl State {
                         payload.len()
                     )));
                 }
-                if !self.has_colour {
-                    self.has_colour = colour::parse_usable(payload).map_err(context)?.is_some();
+                if !self.has_color {
+                    self.has_color = color::parse_usable(payload).map_err(context)?.is_some();
                 }
             }
             b"bpcc" => {

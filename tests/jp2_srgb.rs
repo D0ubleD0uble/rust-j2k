@@ -1,5 +1,5 @@
-//! `ColourOutput::Srgb` through the public API: the sYCC fixtures against
-//! `opj_decompress`'s converted output, files that are already sRGB or grey
+//! `ColorOutput::Srgb` through the public API: the sYCC fixtures against
+//! `opj_decompress`'s converted output, files that are already sRGB or gray
 //! coming out as coded, and the default staying as coded.
 //!
 //! The conversions themselves (the ICC files, the measured error against the
@@ -11,7 +11,7 @@ mod support;
 use std::path::PathBuf;
 
 use rust_j2k::{
-    ColourOutput, ColourSpace, DecodeOptions, Error, decode, decode_with, read_header_with,
+    ColorOutput, ColorSpace, DecodeOptions, Error, decode, decode_with, read_header_with,
 };
 use support::{Expected, Tolerance, compare};
 
@@ -25,7 +25,7 @@ fn conformance(n: u32) -> Vec<u8> {
 }
 
 fn srgb() -> DecodeOptions {
-    DecodeOptions::default().with_colour(ColourOutput::Srgb)
+    DecodeOptions::default().with_color(ColorOutput::Srgb)
 }
 
 /// Each sYCC fixture converts to within 1 of `opj_decompress` (OpenJPEG's
@@ -54,17 +54,17 @@ fn sycc_fixtures_match_openjpeg_within_one() {
             "{name}"
         );
         let jp2 = image.jp2.as_ref().expect("JP2 metadata");
-        assert_eq!(jp2.colour, ColourSpace::Srgb, "{name}: converted to sRGB");
+        assert_eq!(jp2.color, ColorSpace::Srgb, "{name}: converted to sRGB");
         let declared = coded.jp2.as_ref().expect("JP2 metadata");
-        assert_eq!(declared.colour, ColourSpace::Sycc, "{name}: as declared");
+        assert_eq!(declared.color, ColorSpace::Sycc, "{name}: as declared");
     }
 }
 
-/// sRGB and greyscale files, and an ICC-free default decode, come out as
+/// sRGB and grayscale files, and an ICC-free default decode, come out as
 /// coded: the conformance files 1, 4, 6 and 9 under `Srgb` equal their
 /// default decode sample for sample.
 #[test]
-fn srgb_and_grey_files_pass_through() {
+fn srgb_and_gray_files_pass_through() {
     for n in [1, 4, 6, 9] {
         let bytes = conformance(n);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
@@ -78,7 +78,7 @@ fn srgb_and_grey_files_pass_through() {
 /// default decode differs from the `Srgb` one.
 #[test]
 fn the_default_is_as_coded() {
-    assert_eq!(DecodeOptions::default().colour, ColourOutput::AsCoded);
+    assert_eq!(DecodeOptions::default().color, ColorOutput::AsCoded);
     for n in [2, 3, 5, 7, 8] {
         let bytes = conformance(n);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
@@ -87,7 +87,7 @@ fn the_default_is_as_coded() {
     }
 }
 
-/// `raw_channels` means no colour conversion, so combining it with sRGB
+/// `raw_channels` means no color conversion, so combining it with sRGB
 /// output is refused.
 #[test]
 fn raw_channels_with_srgb_is_invalid_options() {
@@ -105,14 +105,14 @@ fn the_builders_set_one_field_each() {
     let base = DecodeOptions::default();
     let raw = base.clone().with_raw_channels(true);
     assert!(raw.raw_channels);
-    assert_eq!(raw.colour, ColourOutput::AsCoded);
+    assert_eq!(raw.color, ColorOutput::AsCoded);
     assert_eq!(raw.resolution_reduction, 0);
     assert!(!raw.clone().with_raw_channels(false).raw_channels);
 
     let both = base
-        .with_colour(ColourOutput::Srgb)
+        .with_color(ColorOutput::Srgb)
         .with_resolution_reduction(2);
-    assert_eq!(both.colour, ColourOutput::Srgb);
+    assert_eq!(both.color, ColorOutput::Srgb);
     assert_eq!(both.resolution_reduction, 2);
     assert!(!both.raw_channels);
 }

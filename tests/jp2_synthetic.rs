@@ -151,11 +151,11 @@ fn cdef_entries(bytes: &[u8]) -> Vec<(u16, u16, u16)> {
 /// checked against the oracle above.
 #[test]
 fn every_cdef_fixture_labels_its_channels_from_the_box() {
-    use Association::{Colour, None as Unassociated, WholeImage};
-    use ChannelType::{Colour as C, Opacity, Unspecified};
+    use Association::{Color, None as Unassociated, WholeImage};
+    use ChannelType::{Color as C, Opacity, Unspecified};
     let def = |kind, association| ChannelDefinition { kind, association };
-    let colours = |n: u16| (1..=n).map(|c| def(C, Colour(c))).collect::<Vec<_>>();
-    let rgba = [colours(3), vec![def(Opacity, WholeImage)]].concat();
+    let colors = |n: u16| (1..=n).map(|c| def(C, Color(c))).collect::<Vec<_>>();
+    let rgba = [colors(3), vec![def(Opacity, WholeImage)]].concat();
     type Case = (
         &'static str,
         &'static [(u16, u16, u16)],
@@ -175,12 +175,12 @@ fn every_cdef_fixture_labels_its_channels_from_the_box() {
         (
             "jp2_cdef_reversed",
             &[(0, 0, 3), (1, 0, 2), (2, 0, 1)],
-            colours(3),
+            colors(3),
         ),
         (
             "jp2_cdef_palette",
             &[(0, 0, 3), (1, 0, 2), (2, 0, 1)],
-            colours(3),
+            colors(3),
         ),
         (
             "jp2_cdef_unspecified",
@@ -208,7 +208,7 @@ fn the_metadata_fixture_carries_its_boxes() {
     let exponents = |res: Option<[i32; 6]>| res.map(|r| (r[4], r[5]));
     assert_eq!(exponents(jp2.resolution.capture), Some((-1, 3)));
     assert_eq!(exponents(jp2.resolution.display), Some((2, -128)));
-    let methods: Vec<u8> = jp2.colour_specifications.iter().map(|c| c.method).collect();
+    let methods: Vec<u8> = jp2.color_specifications.iter().map(|c| c.method).collect();
     assert_eq!(methods, [1, 3, 1]);
     assert_eq!(
         jp2.channels.last().map(String::as_str),

@@ -51,7 +51,7 @@
 mod after;
 mod boxes;
 mod channels;
-mod colour;
+mod color;
 mod header;
 mod lcms;
 mod math;
@@ -64,7 +64,7 @@ mod srgb;
 mod uuid_info;
 
 #[cfg(test)]
-mod colour_tests;
+mod color_tests;
 #[cfg(test)]
 mod math_tests;
 #[cfg(test)]
@@ -74,8 +74,8 @@ mod tests;
 
 pub(crate) use after::check as check_after_codestream;
 pub use metadata::{
-    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, ColourSpace,
-    ColourSpecification, FileType, ImageHeader, Jp2Metadata, Ratio, ReaderRequirements, Res,
+    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, ColorSpace,
+    ColorSpecification, FileType, ImageHeader, Jp2Metadata, Ratio, ReaderRequirements, Res,
     Resolution, StandardFeature, UuidBox, UuidInfo, VendorFeature,
 };
 pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
@@ -110,8 +110,8 @@ pub(crate) struct Jp2File<'a> {
     /// The `jp2h` contents, merged over every `jp2h` box and every header box
     /// misplaced at the top level after the first `jp2h`.
     pub(crate) header: Jp2Header<'a>,
-    /// The colour space the header declares (see [`colour::read`]).
-    pub(crate) colour: ColourSpace,
+    /// The color space the header declares (see [`color::read`]).
+    pub(crate) color: ColorSpace,
     /// The codestream: from the start of the first `jp2c` box's contents to
     /// the end of its last tile-part, or the box's contents when that end
     /// cannot be found from the tile-part lengths (see [`after::codestream_end`]
@@ -191,8 +191,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                         "the file has no `jp2h` header box before its `jp2c` codestream box".into(),
                     ));
                 };
-                colour::check_bpcc(&header)?;
-                let colour = colour::read(&header)?;
+                color::check_bpcc(&header)?;
+                let color = color::read(&header)?;
                 let (codestream, rest, after_read) =
                     locate_codestream(bytes, item.payload, boxes.rest());
                 let after = walk_after_codestream(rest);
@@ -206,7 +206,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                 return Ok(Jp2File {
                     file_type,
                     header,
-                    colour,
+                    color,
                     codestream,
                     other,
                     after_codestream: after.boxes,
@@ -439,15 +439,15 @@ impl ChannelPlans {
 }
 
 /// The file's metadata, from its boxes and the channel plans alone: no
-/// sample is needed. Without a `cdef`, the colour space's channels start as
-/// colours `1..=N` and the rest as unspecified; the palette and channel plans
+/// sample is needed. Without a `cdef`, the color space's channels start as
+/// colors `1..=N` and the rest as unspecified; the palette and channel plans
 /// relabel them. `siz` is the codestream's.
 pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> Result<Jp2Metadata> {
     let passed = passthrough(file);
     let ihdr = &file.header.ihdr;
     let mut metadata = Jp2Metadata {
-        colour: file.colour.clone(),
-        channels: colour_channels(plans.outputs(siz, 0)?.len(), &file.colour)?,
+        color: file.color.clone(),
+        channels: color_channels(plans.outputs(siz, 0)?.len(), &file.color)?,
         palette_applied: false,
         palette: None,
         channel_mapping: None,
@@ -459,10 +459,10 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
         uuid_info: passed.uuid_info,
         image_header: ImageHeader {
             compression: ihdr.compression,
-            unknown_colour_space: ihdr.unknown_colourspace,
-            ipr: ihdr.ipr,
+            unknown_color_space: ihdr.unknown_colorspace,
+            ipr_flag: ihdr.ipr,
         },
-        colour_specifications: colour_specifications(&file.header),
+        color_specifications: color_specifications(&file.header),
         file_type: file.file_type.clone(),
         reader_requirements: passed.reader_requirements,
     };
@@ -514,37 +514,37 @@ fn passthrough(file: &Jp2File<'_>) -> Passthrough {
 }
 
 /// Every `colr` the header holds, in read order, split into its three header
-/// bytes and the rest. [`colour::read`] has refused a box under 3 bytes, so
+/// bytes and the rest. [`color::read`] has refused a box under 3 bytes, so
 /// none is dropped.
-fn colour_specifications(header: &Jp2Header<'_>) -> Vec<ColourSpecification> {
+fn color_specifications(header: &Jp2Header<'_>) -> Vec<ColorSpecification> {
     header
         .colr()
         .into_iter()
-        .filter_map(|payload| {
-            let (&[method, precedence, approximation], data) = payload.split_first_chunk()?;
-            Some(ColourSpecification {
+        .filter_map(|body| {
+            let (&[method, precedence, approximation], payload) = body.split_first_chunk()?;
+            Some(ColorSpecification {
                 method,
                 precedence,
                 approximation,
-                data: data.to_vec(),
+                payload: payload.to_vec(),
             })
         })
         .collect()
 }
 
-/// The number of colours in a colour space: the colours a channel can be
+/// The number of colors in a color space: the colors a channel can be
 /// associated with in I.5.3.6. Part 1 (Table I.10) defines enumerated values
 /// 16, 17 and 18; the others are those of ISO/IEC 15444-2 Table M.25. `None`
 /// when the space is unknown, the enumerated value is not listed, or the ICC
-/// profile is too short to name its colour space, so the count cannot be
+/// profile is too short to name its color space, so the count cannot be
 /// given.
-fn colour_count(colour: &ColourSpace) -> Option<usize> {
-    match colour {
-        // `colour.rs` maps enumerated 16, 17 and 18 to `Srgb`, `Greyscale`
+fn color_count(color: &ColorSpace) -> Option<usize> {
+    match color {
+        // `color.rs` maps enumerated 16, 17 and 18 to `Srgb`, `Grayscale`
         // and `Sycc`, so they never reach the `Enumerated` arm.
-        ColourSpace::Greyscale => Some(1),
-        ColourSpace::Srgb | ColourSpace::Sycc => Some(3),
-        ColourSpace::Enumerated(value) => match value {
+        ColorSpace::Grayscale => Some(1),
+        ColorSpace::Srgb | ColorSpace::Sycc => Some(3),
+        ColorSpace::Enumerated(value) => match value {
             // Bi-level (0, 15).
             0 | 15 => Some(1),
             // YCbCr (1, 3, 4), PhotoYCC, CMY, CIELab, CIEJab, e-sRGB,
@@ -554,14 +554,14 @@ fn colour_count(colour: &ColourSpace) -> Option<usize> {
             12 | 13 => Some(4),
             _ => None,
         },
-        ColourSpace::RestrictedIcc(profile) => {
-            // The data colour space is the signature at byte 16 of the header.
+        ColorSpace::RestrictedIcc(profile) => {
+            // The data color space is the signature at byte 16 of the header.
             match profile.get(16..20)? {
                 b"GRAY" => Some(1),
                 b"RGB " | b"YCbr" | b"Lab " | b"Luv " | b"XYZ " | b"Yxy " | b"HSV " | b"HLS "
                 | b"CMY " => Some(3),
                 b"CMYK" => Some(4),
-                // `nCLR`: n colours for n in 2 to 15, as one upper-case hex
+                // `nCLR`: n colors for n in 2 to 15, as one upper-case hex
                 // digit (ICC.1 Table 19).
                 [d @ (b'2'..=b'9' | b'A'..=b'F'), b'C', b'L', b'R'] => {
                     char::from(*d).to_digit(16).map(|n| n as usize)
@@ -569,39 +569,39 @@ fn colour_count(colour: &ColourSpace) -> Option<usize> {
                 _ => None,
             }
         }
-        ColourSpace::Unknown => None,
+        ColorSpace::Unknown => None,
     }
 }
 
 /// The channel definitions of a file without `cdef`. With no `cdef`, I.5.3.6
-/// takes the channels to be the colour space's colours in order (channel `i`
-/// is colour `i + 1`). The first [`colour_count`] channels are labelled so; a
-/// file with more channels than colours breaks that, so the channels past
+/// takes the channels to be the color space's colors in order (channel `i`
+/// is color `i + 1`). The first [`color_count`] channels are labeled so; a
+/// file with more channels than colors breaks that, so the channels past
 /// them have no defined meaning and are `Unspecified` with no association.
-/// When the count is unknown every channel is labelled a colour.
-fn colour_channels(count: usize, colour: &ColourSpace) -> Result<Vec<ChannelDefinition>> {
-    let colours = colour_count(colour).unwrap_or(count);
+/// When the count is unknown every channel is labeled a color.
+fn color_channels(count: usize, color: &ColorSpace) -> Result<Vec<ChannelDefinition>> {
+    let colors = color_count(color).unwrap_or(count);
     (0..count)
         .map(|i| {
-            if i >= colours {
+            if i >= colors {
                 return Ok(ChannelDefinition {
                     kind: ChannelType::Unspecified,
                     association: Association::None,
                 });
             }
-            let colour = u16::try_from(i + 1).map_err(|_| {
-                Error::Inconsistent(format!("{count} channels exceed the `u16` colour index"))
+            let color = u16::try_from(i + 1).map_err(|_| {
+                Error::Inconsistent(format!("{count} channels exceed the `u16` color index"))
             })?;
             Ok(ChannelDefinition {
-                kind: ChannelType::Colour,
-                association: Association::Colour(colour),
+                kind: ChannelType::Color,
+                association: Association::Color(color),
             })
         })
         .collect()
 }
 
-/// Plan the sRGB output step ([`ColourOutput::Srgb`](crate::ColourOutput::Srgb))
-/// from the file's colour space and the planned output channels, before any
+/// Plan the sRGB output step ([`ColorOutput::Srgb`](crate::ColorOutput::Srgb))
+/// from the file's color space and the planned output channels, before any
 /// tile is decoded.
 pub(crate) fn plan_srgb(
     metadata: &Jp2Metadata,
@@ -610,7 +610,7 @@ pub(crate) fn plan_srgb(
     reduction: u8,
 ) -> Result<SrgbPlan> {
     srgb::plan(
-        &metadata.colour,
+        &metadata.color,
         &metadata.channels,
         &plans.outputs(siz, reduction)?,
         siz,

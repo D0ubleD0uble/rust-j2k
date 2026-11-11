@@ -19,11 +19,11 @@ mod support;
 
 use std::path::PathBuf;
 
-use rust_j2k::{ColourSpace, Jp2Metadata, decode, read_header};
+use rust_j2k::{ColorSpace, Jp2Metadata, decode, read_header};
 
 /// `file5.jp2` with `ftyp`'s `MinV` set to 0x0102_0304 and `ihdr`'s `UnkC`
 /// and `IPR` set to these values.
-fn file5_with(unknown_colour_space: u8, ipr: u8) -> Vec<u8> {
+fn file5_with(unknown_color_space: u8, ipr: u8) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/conformance/jp2/files/file5.jp2");
     let mut bytes = std::fs::read(path).unwrap();
@@ -35,7 +35,7 @@ fn file5_with(unknown_colour_space: u8, ipr: u8) -> Vec<u8> {
     // `ihdr` payload starts at 84, and `BPC`, `C`, `UnkC`, `IPR` end it.
     assert_eq!(&bytes[80..84], b"ihdr");
     assert_eq!(&bytes[94..98], &[7, 7, 0, 0]);
-    bytes[96] = unknown_colour_space;
+    bytes[96] = unknown_color_space;
     bytes[97] = ipr;
     bytes
 }
@@ -43,7 +43,7 @@ fn file5_with(unknown_colour_space: u8, ipr: u8) -> Vec<u8> {
 /// Check every field the box dump gives, and the `ihdr` flags set by
 /// [`file5_with`].
 #[track_caller]
-fn check(jp2: &Jp2Metadata, unknown_colour_space: u8, ipr: u8) {
+fn check(jp2: &Jp2Metadata, unknown_color_space: u8, ipr: u8) {
     assert_eq!(jp2.file_type.brand, *b"jpx ");
     assert_eq!(jp2.file_type.minor_version, 0x0102_0304);
     // The encoder wrote `00 00 00 03` after `MinV`; by I.5.2's layout it is
@@ -55,8 +55,12 @@ fn check(jp2: &Jp2Metadata, unknown_colour_space: u8, ipr: u8) {
 
     let header = jp2.image_header;
     assert_eq!(
-        (header.compression, header.unknown_colour_space, header.ipr),
-        (7, unknown_colour_space, ipr)
+        (
+            header.compression,
+            header.unknown_color_space,
+            header.ipr_flag
+        ),
+        (7, unknown_color_space, ipr)
     );
 
     // `rreq`: ML 1, FUAM A0, DCM C0, standard features 5, 61 and 43 with
@@ -77,39 +81,39 @@ fn check(jp2: &Jp2Metadata, unknown_colour_space: u8, ipr: u8) {
     assert!(rreq.vendor_features.is_empty());
 
     // The first `colr` is a 546-byte restricted ICC profile with `APPROX` 1,
-    // and it is the one that sets the colour space. The second, enumerated
+    // and it is the one that sets the color space. The second, enumerated
     // ROMM-RGB (21) with `PREC` 1 and `APPROX` 1, is reported and ignored.
-    let [first, second] = &jp2.colour_specifications[..] else {
-        panic!("{} colr boxes", jp2.colour_specifications.len());
+    let [first, second] = &jp2.color_specifications[..] else {
+        panic!("{} colr boxes", jp2.color_specifications.len());
     };
     assert_eq!(
         (first.method, first.precedence, first.approximation),
         (2, 0, 1)
     );
-    assert_eq!(first.data.len(), 546);
-    assert_eq!(jp2.colour, ColourSpace::RestrictedIcc(first.data.clone()));
+    assert_eq!(first.payload.len(), 546);
+    assert_eq!(jp2.color, ColorSpace::RestrictedIcc(first.payload.clone()));
     assert_eq!(
         (second.method, second.precedence, second.approximation),
         (1, 1, 1)
     );
-    assert_eq!(second.data, [0, 0, 0, 21]);
+    assert_eq!(second.payload, [0, 0, 0, 21]);
 }
 
 #[test]
 fn read_header_reports_the_ftyp_ihdr_colr_and_rreq_fields() {
-    for (unknown_colour_space, ipr) in [(1, 0), (0, 1)] {
-        let bytes = file5_with(unknown_colour_space, ipr);
+    for (unknown_color_space, ipr) in [(1, 0), (0, 1)] {
+        let bytes = file5_with(unknown_color_space, ipr);
         let jp2 = read_header(&bytes).unwrap().jp2.unwrap();
-        check(&jp2, unknown_colour_space, ipr);
+        check(&jp2, unknown_color_space, ipr);
     }
 }
 
 #[test]
 fn decode_reports_the_ftyp_ihdr_colr_and_rreq_fields() {
-    for (unknown_colour_space, ipr) in [(1, 0), (0, 1)] {
-        let bytes = file5_with(unknown_colour_space, ipr);
+    for (unknown_color_space, ipr) in [(1, 0), (0, 1)] {
+        let bytes = file5_with(unknown_color_space, ipr);
         let jp2 = decode(&bytes).unwrap().jp2.unwrap();
-        check(&jp2, unknown_colour_space, ipr);
+        check(&jp2, unknown_color_space, ipr);
     }
 }
 
@@ -195,7 +199,7 @@ fn every_edge_case_has_a_test() {
 /// The `METH` and `PREC` of each counted `colr`, in order.
 fn colors(boxes: &support::Jp2Boxes) -> Vec<(u8, u8)> {
     boxes
-        .colour_specifications
+        .color_specifications
         .iter()
         .map(|c| (c.method, c.precedence))
         .collect()
@@ -247,7 +251,7 @@ fn a_second_jp2h_adds_its_colr_and_not_its_ihdr() {
     let boxes = edge_case("second_jp2h");
     assert_eq!(colors(&boxes), [(2, 0), (1, 1), (1, 2)]);
     let header = &boxes.image_header;
-    assert_eq!((header.unknown_colour_space, header.ipr), (0, 0));
+    assert_eq!((header.unknown_color_space, header.ipr), (0, 0));
 }
 
 /// The first top-level `rreq` is the one that counts, even when it is cut

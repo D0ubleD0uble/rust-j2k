@@ -9,7 +9,7 @@
 use super::SIGNATURE;
 use super::srgb::{ChromaLayout, replicate, sycc_sample};
 use crate::{
-    ColourOutput, ColourSpace, DecodeOptions, Error, Image, decode, decode_with, read_header,
+    ColorOutput, ColorSpace, DecodeOptions, Error, Image, decode, decode_with, read_header,
     read_header_with,
 };
 
@@ -101,7 +101,7 @@ fn icc_colr(profile: &[u8]) -> Vec<u8> {
 
 fn srgb() -> DecodeOptions {
     DecodeOptions {
-        colour: ColourOutput::Srgb,
+        color: ColorOutput::Srgb,
         ..DecodeOptions::default()
     }
 }
@@ -192,7 +192,7 @@ fn wide_gamut() -> Vec<u8> {
     profile(b"scnr", b"RGB ", b"XYZ ", 0, &wide_gamut_tags())
 }
 
-fn grey_profile() -> Vec<u8> {
+fn gray_profile() -> Vec<u8> {
     profile(
         b"scnr",
         b"GRAY",
@@ -246,7 +246,7 @@ fn is_unsupported(e: &Error) -> bool {
 /// rounded and clamped.
 #[test]
 fn sycc_matches_hand_computed_values() {
-    // Neutral chroma is grey.
+    // Neutral chroma is gray.
     assert_eq!(sycc_sample(100, 128, 128, 128, 255), [100, 100, 100]);
     // Cb = +10, Cr = -10: 85.98, 103.7, 117.72.
     assert_eq!(sycc_sample(100, 138, 118, 128, 255), [86, 104, 118]);
@@ -508,27 +508,27 @@ fn an_rgb_profile_matches_hand_computed_values() {
         let which = pixels
             .iter()
             .position(|p| p.iter().zip(&input).all(|(&a, &b)| a as i32 == b))
-            .expect("a palette colour");
+            .expect("a palette color");
         seen[which] = true;
         let output: Vec<i32> = (0..3).map(|k| image.components[k].samples[at]).collect();
         assert_eq!(output, want[which], "pixel {input:?}");
     }
-    assert_eq!(seen, [true; 4], "the image holds every palette colour");
+    assert_eq!(seen, [true; 4], "the image holds every palette color");
     for c in &image.components {
         assert_eq!((c.bit_depth, c.signed), (8, false), "the depth is kept");
     }
 }
 
-/// A grey ramp through a `kTRC` gamma-1.8 profile: the tone curve, then the
+/// A gray ramp through a `kTRC` gamma-1.8 profile: the tone curve, then the
 /// sRGB curve, as one channel.
 #[test]
-fn a_grey_profile_matches_hand_computed_values() {
+fn a_gray_profile_matches_hand_computed_values() {
     let ramp = [0u32, 64, 128, 192, 255];
     let boxes = palette(&[7], 256, |j, _| ramp[usize::from(j) % 5]);
-    let bytes = file(ONE, &icc_colr(&grey_profile()), &boxes);
+    let bytes = file(ONE, &icc_colr(&gray_profile()), &boxes);
     let coded = decode(&bytes).expect("as coded");
     let image = decode_srgb(&bytes).expect("sRGB");
-    assert_eq!(image.components.len(), 1, "one grey channel");
+    assert_eq!(image.components.len(), 1, "one gray channel");
     let want = [0, 81, 146, 203, 255];
     for (input, output) in coded.components[0]
         .samples
@@ -536,12 +536,12 @@ fn a_grey_profile_matches_hand_computed_values() {
         .zip(&image.components[0].samples)
     {
         let at = ramp.iter().position(|&r| r as i32 == *input).expect("ramp");
-        assert_eq!(*output, want[at], "grey {input}");
+        assert_eq!(*output, want[at], "gray {input}");
     }
 }
 
 /// A profile that is the identity in all but the matrix (the sRGB primaries
-/// themselves, linear curves) leaves a mid grey where the sRGB curve puts it,
+/// themselves, linear curves) leaves a mid gray where the sRGB curve puts it,
 /// and `para` curves are read.
 #[test]
 fn a_parametric_curve_profile_is_applied() {
@@ -570,9 +570,9 @@ fn a_parametric_curve_profile_is_applied() {
 // What passes through, and what is refused
 // ---------------------------------------------------------------------------
 
-/// sRGB and greyscale files come out as coded.
+/// sRGB and grayscale files come out as coded.
 #[test]
-fn srgb_and_greyscale_pass_through() {
+fn srgb_and_grayscale_pass_through() {
     for (codestream, colr) in [(THREE, enumerated(16)), (ONE, enumerated(17))] {
         let bytes = file(codestream, &colr, &[]);
         assert_eq!(
@@ -582,11 +582,11 @@ fn srgb_and_greyscale_pass_through() {
     }
 }
 
-/// An opacity channel is left alone; the colour channels are converted.
+/// An opacity channel is left alone; the color channels are converted.
 #[test]
-fn a_non_colour_channel_is_untouched() {
-    // cdef: channels 0, 1 are colours 1, 2 ... make channel 2 opacity and
-    // add no third colour: an RGB profile then has too few colour channels.
+fn a_non_color_channel_is_untouched() {
+    // cdef: channels 0, 1 are colors 1, 2 ... make channel 2 opacity and
+    // add no third color: an RGB profile then has too few color channels.
     let cdef = bx(
         b"cdef",
         &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 2, 0, 1, 0, 0],
@@ -594,9 +594,9 @@ fn a_non_colour_channel_is_untouched() {
     expect_err(
         decode_srgb(&file(THREE, &icc_colr(&wide_gamut()), &[cdef])),
         is_unsupported,
-        "needs colour channels 1, 2 and 3; the file has 2",
+        "needs color channels 1, 2 and 3; the file has 2",
     );
-    // Grey plus opacity through a grey profile: the opacity is kept as coded.
+    // Gray plus opacity through a gray profile: the opacity is kept as coded.
     let boxes = palette(&[7, 7], 256, |j, i| {
         if i == 0 {
             u32::from(j)
@@ -607,7 +607,7 @@ fn a_non_colour_channel_is_untouched() {
     let cdef = bx(b"cdef", &[0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0]);
     let bytes = file(
         ONE,
-        &icc_colr(&grey_profile()),
+        &icc_colr(&gray_profile()),
         &[boxes[0].clone(), boxes[1].clone(), cdef],
     );
     let coded = decode(&bytes).expect("as coded");
@@ -616,16 +616,16 @@ fn a_non_colour_channel_is_untouched() {
         image.components[1], coded.components[1],
         "opacity untouched"
     );
-    assert_ne!(image.components[0], coded.components[0], "grey converted");
+    assert_ne!(image.components[0], coded.components[0], "gray converted");
 }
 
-/// A grey ICC profile on more than two channels is refused, whichever channel
-/// is the colour one: OpenJPEG would feed the planes to a grey transform as
+/// A gray ICC profile on more than two channels is refused, whichever channel
+/// is the color one: OpenJPEG would feed the planes to a gray transform as
 /// if they were RGB. The refusal is the same from `read_header_with`. One
-/// colour channel, or one plus opacity, still converts.
+/// color channel, or one plus opacity, still converts.
 #[test]
-fn a_grey_profile_on_more_than_two_channels_is_unsupported() {
-    // cdef: channel 0 is colour 1, channels 1 and 2 are opacity.
+fn a_gray_profile_on_more_than_two_channels_is_unsupported() {
+    // cdef: channel 0 is color 1, channels 1 and 2 are opacity.
     let cdef = bx(
         b"cdef",
         &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0],
@@ -641,15 +641,15 @@ fn a_grey_profile_on_more_than_two_channels_is_unsupported() {
         let cdef = bx(b"cdef", &[0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0]);
         [boxes[0].clone(), boxes[1].clone(), cdef]
     };
-    // The colour channel last, after two opacity channels.
-    let colour_last = bx(
+    // The color channel last, after two opacity channels.
+    let color_last = bx(
         b"cdef",
         &[0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1],
     );
     let refused = [
-        file(THREE, &icc_colr(&grey_profile()), &[colour_last]),
-        file(THREE, &icc_colr(&grey_profile()), &[cdef]),
-        file(ONE, &icc_colr(&grey_profile()), &three_columns),
+        file(THREE, &icc_colr(&gray_profile()), &[color_last]),
+        file(THREE, &icc_colr(&gray_profile()), &[cdef]),
+        file(ONE, &icc_colr(&gray_profile()), &three_columns),
     ];
     for bytes in &refused {
         expect_err(
@@ -669,8 +669,8 @@ fn a_grey_profile_on_more_than_two_channels_is_unsupported() {
     }
     // The same shapes at one and two channels convert.
     for (bytes, channels) in [
-        (file(ONE, &icc_colr(&grey_profile()), &[]), 1),
-        (file(ONE, &icc_colr(&grey_profile()), &two_columns), 2),
+        (file(ONE, &icc_colr(&gray_profile()), &[]), 1),
+        (file(ONE, &icc_colr(&gray_profile()), &two_columns), 2),
     ] {
         let image = decode_srgb(&bytes).expect("sRGB");
         let header = read_header_with(&bytes, &srgb()).expect("header");
@@ -706,19 +706,19 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "enumerated e-sRGB",
             file(THREE, &enumerated(20), &[]),
             is_unsupported,
-            "enumerated colour space 20",
+            "enumerated color space 20",
         ),
         (
             "no colr",
             file(THREE, &[], &[]),
             is_unsupported,
-            "no colour specification",
+            "no color specification",
         ),
         (
             "YCbCr space",
             rgb_profile(&|p| p[16..20].copy_from_slice(b"YCbr")),
             is_unsupported,
-            "`YCbr` colour space",
+            "`YCbr` color space",
         ),
         (
             "Lab connection space",
@@ -733,8 +733,8 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "`A2B0` lookup table",
         ),
         (
-            "grey profile, three colours",
-            file(THREE, &icc_colr(&grey_profile()), &[]),
+            "gray profile, three colors",
+            file(THREE, &icc_colr(&gray_profile()), &[]),
             is_unsupported,
             "monochrome ICC profile on 3 channels",
         ),
@@ -749,10 +749,10 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "RGB ICC profile from 12-bit unsigned",
         ),
         (
-            "grey profile on 12-bit samples",
+            "gray profile on 12-bit samples",
             file(
                 ONE,
-                &icc_colr(&grey_profile()),
+                &icc_colr(&gray_profile()),
                 &palette(&[11], 4, |j, _| u32::from(j)),
             ),
             is_unsupported,
@@ -779,11 +779,11 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "different formats (8-bit unsigned and 8-bit signed)",
         ),
         (
-            // A second colour-3 `cdef` entry swaps channel 4 into position 2
-            // and relabels it opacity, so the 4-bit colour 3 sits at
+            // A second color-3 `cdef` entry swaps channel 4 into position 2
+            // and relabels it opacity, so the 4-bit color 3 sits at
             // position 4: OpenJPEG's AFL test sees four 8-bit channels and
             // converts positions 0 to 2, opacity included.
-            "RGB profile, a differing colour past the first four channels",
+            "RGB profile, a differing color past the first four channels",
             file(
                 ONE,
                 &icc_colr(&wide_gamut()),
@@ -820,9 +820,9 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
         ),
         (
-            // OpenJPEG converts 4:2:0 and 4:2:2 as sYCC whatever colour
-            // space the file declares, so greyscale here converts there.
-            "greyscale-declared 4:2:0 on three channels",
+            // OpenJPEG converts 4:2:0 and 4:2:2 as sYCC whatever color
+            // space the file declares, so grayscale here converts there.
+            "grayscale-declared 4:2:0 on three channels",
             file(sycc_jp2c, &enumerated(17), &[]),
             is_unsupported,
             "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
@@ -840,7 +840,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "different sub-sampling (1x1 and 2x1)",
         ),
         (
-            "greyscale-declared 4:2:2 on three channels",
+            "grayscale-declared 4:2:2 on three channels",
             file(sycc_422_jp2c, &enumerated(17), &[]),
             is_unsupported,
             "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
@@ -852,7 +852,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "sYCC sampled 2x2, 2x2, 2x2",
         ),
         (
-            "sYCC with two colour channels",
+            "sYCC with two color channels",
             file(
                 THREE,
                 &enumerated(18),
@@ -862,7 +862,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
                 )],
             ),
             is_unsupported,
-            "sYCC needs colour channels 1, 2 and 3",
+            "sYCC needs color channels 1, 2 and 3",
         ),
     ];
     for (name, bytes, want, fragment) in rows {
@@ -881,7 +881,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
 /// reads the ICC profile, so it converts one whatever the profile is, even one
 /// LittleCMS refuses (the output equals the sYCC file's). Checked on the
 /// fixtures' codestreams with `lcms_intent_4` (an intent LittleCMS does not
-/// know), a refused grey profile, a header too short to read and a CMYK
+/// know), a refused gray profile, a header too short to read and a CMYK
 /// profile: all five give the planes of the sYCC original. Here every one is
 /// refused, by `decode_with` and by `read_header_with`.
 #[test]
@@ -897,7 +897,7 @@ fn an_lcms_refused_profile_on_4_2_0_or_4_2_2_is_refused() {
     };
     let profiles = [
         ("intent 4", intent_4(wide_gamut())),
-        ("grey intent 4", intent_4(grey_profile())),
+        ("gray intent 4", intent_4(gray_profile())),
         ("short header", vec![0; 10]),
         ("CMYK", cmyk),
     ];
@@ -939,13 +939,13 @@ fn an_lcms_refused_profile_passes_through_outside_the_sycc_layouts() {
     }
 }
 
-/// `raw_channels` means no colour conversion: asking for sRGB too is refused
+/// `raw_channels` means no color conversion: asking for sRGB too is refused
 /// before anything is read, for a JP2 file and a raw codestream alike.
 #[test]
 fn raw_channels_with_srgb_output_is_invalid() {
     let options = DecodeOptions {
         raw_channels: true,
-        colour: ColourOutput::Srgb,
+        color: ColorOutput::Srgb,
         ..DecodeOptions::default()
     };
     for bytes in [
@@ -956,7 +956,7 @@ fn raw_channels_with_srgb_output_is_invalid() {
         expect_err(
             decode_with(&bytes, &options),
             |e| matches!(e, Error::InvalidOptions(_)),
-            "raw channels means no colour conversion",
+            "raw channels means no color conversion",
         );
     }
     // Each option alone is fine.
@@ -972,7 +972,7 @@ fn raw_channels_with_srgb_output_is_invalid() {
     .expect("raw channels alone");
 }
 
-/// A raw codestream declares no colour space, so there is nothing to convert
+/// A raw codestream declares no color space, so there is nothing to convert
 /// from; a malformed one still reports its own fault.
 #[test]
 fn srgb_output_from_a_raw_codestream_is_unsupported() {
@@ -984,18 +984,18 @@ fn srgb_output_from_a_raw_codestream_is_unsupported() {
     assert!(matches!(decode_srgb(b"junk"), Err(Error::Codestream(_))));
 }
 
-/// A file declared grey on three components is refused only where
+/// A file declared gray on three components is refused only where
 /// `opj_decompress` would convert it as sYCC, with or without a `cdef`: luma
 /// at 1x1 and both chroma channels at 2x2 or both at 2x1 (the 4:2:0 and
 /// 4:2:2 rows of the reject matrix). Otherwise the extra channels are past
-/// grey's one colour and pass through as coded, as OpenJPEG writes them: a
+/// gray's one color and pass through as coded, as OpenJPEG writes them: a
 /// signed third channel, a third that is the only one sub-sampled
 /// (`tests/fixtures/channels/third_subsampled.j2k`), luma sampled 1x2 with
 /// chroma 2x1 (`luma_1x2.j2k`), and the layouts OpenJPEG guesses sYCC for
 /// but cannot convert (`second_2x1.j2k` and the others below, checked with
 /// `opj_decompress`).
 #[test]
-fn grey_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
+fn gray_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
     let mut signed_third = THREE.to_vec();
     signed_third[42 + 3 * 2] = 0x87;
     let sub_third = include_bytes!("../../tests/fixtures/channels/third_subsampled.j2k");
@@ -1043,7 +1043,7 @@ fn grey_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
         assert_eq!(header.components.len(), 3, "{what}");
     }
     // The sYCC guess does not depend on a `cdef`: the 4:2:0 file is refused
-    // with one that labels only colour 1, as without.
+    // with one that labels only color 1, as without.
     expect_err(
         decode_srgb(&file(sycc_jp2c, &enumerated(17), &[cdef])),
         is_unsupported,
@@ -1063,24 +1063,21 @@ fn cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
 }
 
 /// The sYCC guess holds for a file declared sRGB too: a 4:2:0 or 4:2:2 file
-/// is refused whatever its `cdef` labels, as without one: only colour 1 (the
-/// others opacity, or unspecified), no colour at all, or colours 2 and 3
+/// is refused whatever its `cdef` labels, as without one: only color 1 (the
+/// others opacity, or unspecified), no color at all, or colors 2 and 3
 /// only. `opj_decompress` 2.5.0, with and without `-force-rgb`, writes three
 /// full-size planes for each, byte-identical to the file with no `cdef`.
 #[test]
 fn srgb_4_2_0_or_4_2_2_is_refused_whatever_cdef_labels() {
     const NONE: u16 = 0xFFFF;
     let cdefs = [
+        ("color 1, opacity", cdef(&[(0, 0, 1), (1, 1, 0), (2, 1, 0)])),
         (
-            "colour 1, opacity",
-            cdef(&[(0, 0, 1), (1, 1, 0), (2, 1, 0)]),
-        ),
-        (
-            "colour 1, unspecified",
+            "color 1, unspecified",
             cdef(&[(0, 0, 1), (1, NONE, NONE), (2, NONE, NONE)]),
         ),
-        ("no colour", cdef(&[(0, 1, 0), (1, 1, 0), (2, 1, 0)])),
-        ("colours 2 and 3", cdef(&[(0, 1, 0), (1, 0, 2), (2, 0, 3)])),
+        ("no color", cdef(&[(0, 1, 0), (1, 1, 0), (2, 1, 0)])),
+        ("colors 2 and 3", cdef(&[(0, 1, 0), (1, 0, 2), (2, 0, 3)])),
     ];
     let fragment = "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC";
     for (layout, jp2) in [("4:2:0", SYCC_420), ("4:2:2", SYCC_422)] {
@@ -1098,11 +1095,11 @@ fn srgb_4_2_0_or_4_2_2_is_refused_whatever_cdef_labels() {
     }
 }
 
-/// A file declared sRGB or greyscale on one or two channels passes through
-/// as coded, as for every other colour space: OpenJPEG reads any image of
-/// two or fewer components as grey (and grey plus opacity). Two channels of
+/// A file declared sRGB or grayscale on one or two channels passes through
+/// as coded, as for every other color space: OpenJPEG reads any image of
+/// two or fewer components as gray (and gray plus opacity). Two channels of
 /// different sign or depth (here from a palette) are not refused, even when
-/// a `cdef` labels both as colours (1 and 2) under greyscale;
+/// a `cdef` labels both as colors (1 and 2) under grayscale;
 /// `opj_decompress` writes them as coded (8-bit unsigned and 8-bit signed,
 /// 8-bit and 12-bit). The metadata stays as declared.
 #[test]
@@ -1112,39 +1109,39 @@ fn srgb_on_one_or_two_channels_passes_through() {
         boxes.extend_from_slice(extra);
         file(ONE, &enumerated(space), &boxes)
     };
-    let colours_1_2 = cdef(&[(0, 0, 1), (1, 0, 2)]);
+    let colors_1_2 = cdef(&[(0, 0, 1), (1, 0, 2)]);
     let rows = [
         (
             "one channel",
-            ColourSpace::Srgb,
+            ColorSpace::Srgb,
             file(ONE, &enumerated(16), &[]),
         ),
         (
             "two channels, different sign",
-            ColourSpace::Srgb,
+            ColorSpace::Srgb,
             two(16, &[7, 0x87], &[]),
         ),
         (
             "two channels, different depth",
-            ColourSpace::Srgb,
+            ColorSpace::Srgb,
             two(16, &[7, 11], &[]),
         ),
         (
-            "grey, colours 1 and 2, different sign",
-            ColourSpace::Greyscale,
-            two(17, &[7, 0x87], std::slice::from_ref(&colours_1_2)),
+            "gray, colors 1 and 2, different sign",
+            ColorSpace::Grayscale,
+            two(17, &[7, 0x87], std::slice::from_ref(&colors_1_2)),
         ),
         (
-            "grey, colours 1 and 2, different depth",
-            ColourSpace::Greyscale,
-            two(17, &[7, 11], std::slice::from_ref(&colours_1_2)),
+            "gray, colors 1 and 2, different depth",
+            ColorSpace::Grayscale,
+            two(17, &[7, 11], std::slice::from_ref(&colors_1_2)),
         ),
     ];
     for (what, declared, bytes) in rows {
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("{what}: as coded: {e}"));
         let image = decode_srgb(&bytes).unwrap_or_else(|e| panic!("{what}: sRGB: {e}"));
         assert_eq!(image.components, coded.components, "{what}");
-        assert_eq!(image.jp2.unwrap().colour, declared, "{what}");
+        assert_eq!(image.jp2.unwrap().color, declared, "{what}");
         let header = read_header_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{what}: {e}"));
         let formats: Vec<_> = header
             .components
@@ -1160,10 +1157,10 @@ fn srgb_on_one_or_two_channels_passes_through() {
     }
 }
 
-/// One or two components in a raw codestream are grey (and grey plus
+/// One or two components in a raw codestream are gray (and gray plus
 /// opacity), as OpenJPEG reads them, and pass through.
 #[test]
-fn a_raw_grey_codestream_passes_through() {
+fn a_raw_gray_codestream_passes_through() {
     for codestream in [ONE, TWO] {
         let coded = decode(codestream).expect("as coded");
         let image = decode_srgb(codestream).expect("sRGB");
@@ -1173,28 +1170,28 @@ fn a_raw_grey_codestream_passes_through() {
 }
 
 /// A JP2 file of one or two channels with no `colr`, or an enumerated
-/// colour space this step does not convert, passes through as grey (and
-/// grey plus opacity), as OpenJPEG reads it, with the metadata as declared.
+/// color space this step does not convert, passes through as gray (and
+/// gray plus opacity), as OpenJPEG reads it, with the metadata as declared.
 /// Three channels (here from a palette) are still refused.
 #[test]
-fn a_grey_jp2_without_a_converted_colour_space_passes_through() {
+fn a_gray_jp2_without_a_converted_color_space_passes_through() {
     for (codestream, colr, declared) in [
-        (ONE, vec![], ColourSpace::Unknown),
-        (TWO, vec![], ColourSpace::Unknown),
-        (ONE, enumerated(12), ColourSpace::Enumerated(12)),
-        (TWO, enumerated(20), ColourSpace::Enumerated(20)),
+        (ONE, vec![], ColorSpace::Unknown),
+        (TWO, vec![], ColorSpace::Unknown),
+        (ONE, enumerated(12), ColorSpace::Enumerated(12)),
+        (TWO, enumerated(20), ColorSpace::Enumerated(20)),
     ] {
         let bytes = file(codestream, &colr, &[]);
         let coded = decode(&bytes).expect("as coded");
         let image = decode_srgb(&bytes).expect("sRGB");
         assert_eq!(image.components, coded.components);
-        assert_eq!(image.jp2.unwrap().colour, declared);
+        assert_eq!(image.jp2.unwrap().color, declared);
     }
     let boxes = palette(&[7, 7, 7], 4, |j, _| u32::from(j));
     expect_err(
         decode_srgb(&file(ONE, &[], &boxes)),
         is_unsupported,
-        "no colour specification",
+        "no color specification",
     );
 }
 
@@ -1251,29 +1248,29 @@ fn absolute_colorimetric_with_a_d65_white_point_scales_by_it() {
 }
 
 /// Once converted, the metadata says what the samples are: sRGB with no
-/// profile, or grey for a monochrome profile. `read_header` and the default
+/// profile, or gray for a monochrome profile. `read_header` and the default
 /// decode report what the file declares; a pass-through keeps it too.
 #[test]
-fn converted_output_reports_its_colour_space() {
+fn converted_output_reports_its_color_space() {
     let rgb = file(THREE, &icc_colr(&wide_gamut()), &[]);
     let boxes = palette(&[7], 256, |j, _| u32::from(j));
-    let grey = file(ONE, &icc_colr(&grey_profile()), &boxes);
+    let gray = file(ONE, &icc_colr(&gray_profile()), &boxes);
     let sycc = SYCC_420.to_vec();
     for (bytes, want) in [
-        (&rgb, ColourSpace::Srgb),
-        (&grey, ColourSpace::Greyscale),
-        (&sycc, ColourSpace::Srgb),
+        (&rgb, ColorSpace::Srgb),
+        (&gray, ColorSpace::Grayscale),
+        (&sycc, ColorSpace::Srgb),
     ] {
-        let declared = read_header(bytes).unwrap().jp2.unwrap().colour;
+        let declared = read_header(bytes).unwrap().jp2.unwrap().color;
         assert_ne!(declared, want);
-        assert_eq!(decode(bytes).unwrap().jp2.unwrap().colour, declared);
-        assert_eq!(decode_srgb(bytes).unwrap().jp2.unwrap().colour, want);
+        assert_eq!(decode(bytes).unwrap().jp2.unwrap().color, declared);
+        assert_eq!(decode_srgb(bytes).unwrap().jp2.unwrap().color, want);
     }
     for (bytes, want) in [
-        (file(THREE, &enumerated(16), &[]), ColourSpace::Srgb),
-        (file(ONE, &enumerated(17), &[]), ColourSpace::Greyscale),
+        (file(THREE, &enumerated(16), &[]), ColorSpace::Srgb),
+        (file(ONE, &enumerated(17), &[]), ColorSpace::Grayscale),
     ] {
-        assert_eq!(decode_srgb(&bytes).unwrap().jp2.unwrap().colour, want);
+        assert_eq!(decode_srgb(&bytes).unwrap().jp2.unwrap().color, want);
     }
 }
 
@@ -1311,11 +1308,11 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
 // build a transform from it, and writes the samples as coded. Each case here
 // was run through `opj_decompress` 2.5.0 (LittleCMS 2.14) on the same file:
 // the pass-through cases came out byte-identical to the file with its `colr`
-// set to enumerated sRGB (or greyscale), and the converted ones matched this
+// set to enumerated sRGB (or grayscale), and the converted ones matched this
 // decoder's output sample for sample.
 
 /// `Srgb` leaves the samples as coded: the channels, samples and metadata of
-/// the default decode, with the profile still in `Jp2Metadata::colour`, and
+/// the default decode, with the profile still in `Jp2Metadata::color`, and
 /// `read_header_with` describes exactly that.
 #[track_caller]
 fn assert_passes_through(bytes: &[u8]) {
@@ -1325,8 +1322,8 @@ fn assert_passes_through(bytes: &[u8]) {
     assert_eq!(image.jp2, coded.jp2, "metadata as declared");
     assert!(
         matches!(
-            image.jp2.as_ref().unwrap().colour,
-            ColourSpace::RestrictedIcc(_)
+            image.jp2.as_ref().unwrap().color,
+            ColorSpace::RestrictedIcc(_)
         ),
         "the profile stays in the metadata"
     );
@@ -1351,19 +1348,19 @@ fn assert_converts_like(bytes: &[u8], like: &[u8]) {
     let coded = decode(bytes).expect("as coded");
     assert_ne!(image.components, coded.components, "converted");
     assert_eq!(image.components, want.components);
-    // The `colr` boxes are reported as stored, whatever the colour output:
+    // The `colr` boxes are reported as stored, whatever the color output:
     // the converted decode keeps the as-coded ones, profile included.
     let stored = |jp2: &Option<crate::Jp2Metadata>| {
         jp2.as_ref()
             .expect("a JP2 file")
-            .colour_specifications
+            .color_specifications
             .clone()
     };
     assert_eq!(stored(&image.jp2), stored(&coded.jp2), "colr as stored");
     // The two files' profiles differ, so their stored boxes do too.
     let declared = |jp2: &Option<crate::Jp2Metadata>| {
         let mut jp2 = jp2.clone().expect("a JP2 file");
-        jp2.colour_specifications.clear();
+        jp2.color_specifications.clear();
         jp2
     };
     assert_eq!(declared(&image.jp2), declared(&want.jp2));
@@ -1401,7 +1398,7 @@ fn replaced(name: &[u8; 4], data: Vec<u8>) -> Vec<(&'static [u8; 4], Vec<u8>)> {
 }
 
 /// A monochrome profile with these tags on one channel.
-fn grey_with(tags: &[(&[u8; 4], Vec<u8>)], intent: u32) -> Vec<u8> {
+fn gray_with(tags: &[(&[u8; 4], Vec<u8>)], intent: u32) -> Vec<u8> {
     file(
         ONE,
         &icc_colr(&profile(b"scnr", b"GRAY", b"XYZ ", intent, tags)),
@@ -1474,7 +1471,7 @@ fn a_tag_entry_littlecms_skips_passes_through() {
     assert_passes_through(&edited(put_u32(136, 5000)));
     assert_passes_through(&edited(put_u32(136, 0)));
     assert_passes_through(&edited(put_u32(140, 0)));
-    assert_passes_through(&grey_with(&[(b"kTRC", vec![])], 0));
+    assert_passes_through(&gray_with(&[(b"kTRC", vec![])], 0));
 }
 
 #[test]
@@ -1493,7 +1490,7 @@ fn a_curve_tag_of_another_type_passes_through() {
     // LittleCMS reads an old Monaco tool's curve type for `rTRC`, `gTRC`
     // and `bTRC` only.
     let monaco = retyped(curv(&[GAMMA_18]), MONACO_CURVE);
-    assert_passes_through(&grey_with(&[(b"kTRC", monaco)], 0));
+    assert_passes_through(&gray_with(&[(b"kTRC", monaco)], 0));
 }
 
 #[test]
@@ -1525,7 +1522,7 @@ fn a_tag_value_past_the_profile_end_passes_through() {
 fn a_rendering_intent_littlecms_does_not_know_passes_through() {
     for intent in [4, 9, 16, u32::MAX] {
         assert_passes_through(&edited(put_u32(64, intent)));
-        assert_passes_through(&grey_with(&[(b"kTRC", curv(&[GAMMA_18]))], intent));
+        assert_passes_through(&gray_with(&[(b"kTRC", curv(&[GAMMA_18]))], intent));
     }
 }
 
@@ -1540,11 +1537,11 @@ fn a_curve_of_more_than_32767_entries_passes_through() {
     assert_passes_through(&rgb_with(&replaced(b"gTRC", table(32768)), 0));
     // 32767 entries convert.
     let image = decode_srgb(&rgb_with(&replaced(b"gTRC", table(32767)), 0)).expect("sRGB");
-    assert_eq!(image.jp2.unwrap().colour, ColourSpace::Srgb);
+    assert_eq!(image.jp2.unwrap().color, ColorSpace::Srgb);
 }
 
 /// LittleCMS reads its black-preserving intents (10 to 15) on an RGB or
-/// grey profile as perceptual, relative colorimetric or saturation, without
+/// gray profile as perceptual, relative colorimetric or saturation, without
 /// the black point compensation it forces for perceptual and saturation, so
 /// each converts as relative colorimetric (1). The curve's nonzero black
 /// makes perceptual (0) differ.
@@ -1562,8 +1559,8 @@ fn black_preserving_intents_convert_as_relative_colorimetric() {
         })
         .collect();
     let rgb = |intent| rgb_with(&tags, intent);
-    let grey = |intent| grey_with(&[(b"kTRC", black.clone())], intent);
-    let shapes: [&dyn Fn(u32) -> Vec<u8>; 2] = [&rgb, &grey];
+    let gray = |intent| gray_with(&[(b"kTRC", black.clone())], intent);
+    let shapes: [&dyn Fn(u32) -> Vec<u8>; 2] = [&rgb, &gray];
     for bytes in shapes {
         assert_ne!(
             decode_srgb(&bytes(0)).unwrap().components,
@@ -1642,8 +1639,8 @@ fn put(at: usize, value: &'static [u8; 4]) -> impl Fn(&mut Vec<u8>) {
 }
 
 /// The monochrome profile on one channel, edited by `edit`.
-fn grey_edited(edit: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
-    let mut icc = grey_profile();
+fn gray_edited(edit: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
+    let mut icc = gray_profile();
     edit(&mut icc);
     file(ONE, &icc_colr(&icc), &[])
 }
@@ -1711,16 +1708,16 @@ fn rgb_plus(extra: &[(&'static [u8; 4], Vec<u8>)], intent: u32) -> Vec<u8> {
 #[test]
 fn an_unknown_device_class_passes_through() {
     assert_passes_through(&edited(put(12, b"zzzz")));
-    assert_passes_through(&grey_edited(put(12, b"zzzz")));
+    assert_passes_through(&gray_edited(put(12, b"zzzz")));
 }
 
-/// A display, output or colour space profile, or one of class zero, is a
+/// A display, output or color space profile, or one of class zero, is a
 /// matrix/TRC profile to LittleCMS like an input profile.
 #[test]
 fn other_device_classes_with_a_matrix_and_curves_convert() {
     for class in [b"mntr", b"prtr", b"spac", &[0u8; 4]] {
         assert_converts_like(&edited(put(12, class)), &edited(|_| {}));
-        assert_converts_like(&grey_edited(put(12, class)), &grey_edited(|_| {}));
+        assert_converts_like(&gray_edited(put(12, class)), &gray_edited(|_| {}));
     }
     // At absolute colorimetric the white point applies, except that
     // LittleCMS takes D50 for a display profile before version 4.
@@ -1746,15 +1743,15 @@ fn other_device_classes_with_a_matrix_and_curves_convert() {
 }
 
 /// LittleCMS builds a device link or abstract profile's transform from its
-/// lookup table only, and gives a named colour profile no RGB or grey
+/// lookup table only, and gives a named color profile no RGB or gray
 /// input.
 #[test]
-fn a_device_link_abstract_or_named_colour_profile_passes_through() {
+fn a_device_link_abstract_or_named_color_profile_passes_through() {
     for class in [b"link", b"abst", b"nmcl"] {
         assert_passes_through(&edited(put(12, class)));
-        assert_passes_through(&grey_edited(put(12, class)));
+        assert_passes_through(&gray_edited(put(12, class)));
     }
-    // A valid named colour list changes nothing.
+    // A valid named color list changes nothing.
     let mut ncl2 = b"ncl2\0\0\0\0".to_vec();
     for word in [0u32, 1, 3] {
         ncl2.extend_from_slice(&word.to_be_bytes());
@@ -1792,9 +1789,9 @@ fn a_missing_tag_passes_through() {
             .collect();
         assert_passes_through(&rgb_with(&tags, 0));
     }
-    assert_passes_through(&grey_with(&[(b"wtpt", xyz(D65))], 0));
+    assert_passes_through(&gray_with(&[(b"wtpt", xyz(D65))], 0));
     assert_passes_through(&rgb_with(&[], 0));
-    assert_passes_through(&grey_with(&[], 0));
+    assert_passes_through(&gray_with(&[], 0));
 }
 
 /// LittleCMS can't connect a profile to the sRGB profile through a
@@ -1803,13 +1800,13 @@ fn a_missing_tag_passes_through() {
 fn a_connection_space_littlecms_does_not_know_passes_through() {
     assert_passes_through(&edited(put(20, b"zzzz")));
     assert_passes_through(&edited(put(20, &[0u8; 4])));
-    assert_passes_through(&grey_edited(put(20, b"zzzz")));
+    assert_passes_through(&gray_edited(put(20, b"zzzz")));
 }
 
-/// OpenJPEG converts an RGB, grey or YCbCr profile and leaves any other as
+/// OpenJPEG converts an RGB, gray or YCbCr profile and leaves any other as
 /// coded.
 #[test]
-fn a_colour_space_openjpeg_does_not_convert_passes_through() {
+fn a_color_space_openjpeg_does_not_convert_passes_through() {
     assert_passes_through(&edited(put(16, b"CMYK")));
     assert_passes_through(&edited(put(16, b"zzzz")));
     let mut icc = wide_gamut();
@@ -1856,10 +1853,10 @@ fn a_lookup_table_littlecms_refuses_passes_through() {
     mpet.extend_from_slice(&[0, 1, 0, 3, 0, 0, 0, 0]);
     assert_passes_through(&rgb_plus(&[(b"D2B0", mpet)], 0));
     assert_passes_through(&rgb_plus(&[(b"D2B0", junk_table())], 0));
-    // A grey profile's table takes one input.
-    let grey = |table: Vec<u8>| grey_with(&[(b"kTRC", curv(&[GAMMA_18])), (b"A2B0", table)], 0);
-    assert_passes_through(&grey(lut16(3, 3, 2, [2, 2])));
-    assert_passes_through(&grey(no_channels(b"mft2", 44)));
+    // A gray profile's table takes one input.
+    let gray = |table: Vec<u8>| gray_with(&[(b"kTRC", curv(&[GAMMA_18])), (b"A2B0", table)], 0);
+    assert_passes_through(&gray(lut16(3, 3, 2, [2, 2])));
+    assert_passes_through(&gray(no_channels(b"mft2", 44)));
     // Each intent reads its own table, then `A2B0`: absolute colorimetric
     // reads `A2B1` but `D2B3`, and a black-preserving intent reads its
     // base intent's.
@@ -1950,7 +1947,7 @@ fn a_lookup_table_littlecms_reads_is_unsupported() {
         );
     }
     expect_err(
-        decode_srgb(&grey_with(
+        decode_srgb(&gray_with(
             &[
                 (b"kTRC", curv(&[GAMMA_18])),
                 (b"A2B0", lut16(1, 3, 2, [2, 2])),
@@ -1983,8 +1980,8 @@ fn a_duplicate_whose_first_copy_is_skipped_converts() {
 /// channels: this step's own checks on the profile and the channels come
 /// after LittleCMS's. Where LittleCMS builds the transform, they stand.
 /// `icc/profiles.json` holds the display class at intent 4
-/// (`class_mntr_intent_4`) and the grey profile on three channels at
-/// intent 4 (`grey_on_rgb_intent_4`), which OpenJPEG leaves as coded; each
+/// (`class_mntr_intent_4`) and the gray profile on three channels at
+/// intent 4 (`gray_on_rgb_intent_4`), which OpenJPEG leaves as coded; each
 /// file below was checked the same way with `opj_decompress`.
 #[test]
 fn refusals_are_ordered_as_in_openjpeg() {
@@ -2031,7 +2028,7 @@ fn refusals_are_ordered_as_in_openjpeg() {
         for (coded, children) in [(THREE, vec![]), (ONE, wide16.clone())] {
             let decoded = decode_srgb(&file(coded, &icc_colr(&icc), &children));
             if value == 0 {
-                expect_err(decoded, is_unsupported, "`YCbr` colour space");
+                expect_err(decoded, is_unsupported, "`YCbr` color space");
             } else {
                 assert_passes_through(&file(coded, &icc_colr(&icc), &children));
             }
@@ -2041,24 +2038,24 @@ fn refusals_are_ordered_as_in_openjpeg() {
     ycbr(&mut missing);
     missing[128..132].copy_from_slice(&0u32.to_be_bytes());
     assert_passes_through(&file(THREE, &icc_colr(&missing), &[]));
-    // The monochrome profile on three channels, or on one colour channel of
+    // The monochrome profile on three channels, or on one color channel of
     // three: refused at intent 0, passed through at intent 4.
-    let colour_first = bx(
+    let color_first = bx(
         b"cdef",
         &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0],
     );
     for (children, fragment) in [
         (vec![], "monochrome ICC profile on 3 channels"),
-        (vec![colour_first], "monochrome ICC profile on 3 channels"),
+        (vec![color_first], "monochrome ICC profile on 3 channels"),
     ] {
-        let mut grey = grey_profile();
+        let mut gray = gray_profile();
         expect_err(
-            decode_srgb(&file(THREE, &icc_colr(&grey), &children)),
+            decode_srgb(&file(THREE, &icc_colr(&gray), &children)),
             is_unsupported,
             fragment,
         );
-        intent(&mut grey, 4);
-        assert_passes_through(&file(THREE, &icc_colr(&grey), &children));
+        intent(&mut gray, 4);
+        assert_passes_through(&file(THREE, &icc_colr(&gray), &children));
     }
     // Palette columns of mixed depth fail OpenJPEG's AFL test, which comes
     // before the transform, so they pass through under an RGB profile
@@ -2069,11 +2066,11 @@ fn refusals_are_ordered_as_in_openjpeg() {
         &palette(&[7, 11, 7], 4, |j, _| u32::from(j)),
     ));
     // Sample formats this step does not apply a profile to: 12-bit RGB, 12
-    // and 16-bit grey.
+    // and 16-bit gray.
     let shapes: [(&[u8], Vec<u8>, &str); 3] = [
         (&[11, 11, 11], wide_gamut(), "RGB ICC profile from 12-bit"),
-        (&[11], grey_profile(), "monochrome ICC profile from 12-bit"),
-        (&[15], grey_profile(), "monochrome ICC profile from 16-bit"),
+        (&[11], gray_profile(), "monochrome ICC profile from 12-bit"),
+        (&[15], gray_profile(), "monochrome ICC profile from 16-bit"),
     ];
     for (depths, mut icc, fragment) in shapes {
         let columns = palette(depths, 4, |j, _| u32::from(j));

@@ -749,7 +749,7 @@ const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 ///
 /// - the reserved range `0xFF30..=0xFF3F` carries **no** length field; reading
 ///   one consumes the bytes that follow (`p0_02` has `0xFF30` after its `COM`);
-/// - a marker this decoder does not recognise still has a length, so the walk
+/// - a marker this decoder does not recognize still has a length, so the walk
 ///   can step over it. Whether the *decoder* may proceed past it is a different
 ///   question, and `parse_main_header` answers it with `Unsupported`.
 ///
@@ -902,7 +902,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
                     )));
                 }
             }
-            // Comment: recognised, carries nothing the decoder needs.
+            // Comment: recognized, carries nothing the decoder needs.
             marker::COM => {}
 
             // Length markers (A.7): pointers into the codestream, not decode
@@ -1062,11 +1062,11 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
         }
     }
 
-    // The colour transform is signalled by COD but constrains SIZ, so it can
+    // The color transform is signaled by COD but constrains SIZ, so it can
     // only be checked once both are read.
     if header.cod.multiple_component_transform {
         crate::mct::check_geometry(&header.siz.components)?;
-        // Which colour transform applies follows from the wavelet, and the
+        // Which color transform applies follows from the wavelet, and the
         // wavelet is per component once COC is in play: 5/3 is RCT (integers),
         // 9/7 is ICT (floats). The three components must share it — a mix
         // reconstructs some as integers and some as floats and describes a
@@ -1075,7 +1075,7 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
         for (index, params) in header.components.iter().take(3).enumerate() {
             if params.coding.transform != transform {
                 return Err(Error::Unsupported(format!(
-                    "COD signals the colour transform but component {index} uses a different \
+                    "COD signals the color transform but component {index} uses a different \
                      wavelet than component 0; the transform is undefined over a mix"
                 )));
             }
@@ -1092,7 +1092,7 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
 /// ~1.9M, MRMS ~24.5M) and below anything that threatens the decode. Not a
 /// format limit — raise it as larger imagery comes into scope.
 ///
-/// A palettised JP2 file expands its index plane into one channel per palette
+/// A palettized JP2 file expands its index plane into one channel per palette
 /// column, and the budget bounds those channels too. While the decoded
 /// components are still held, the peak is about twice the budget (~512 MiB of
 /// `i32`).
@@ -1301,7 +1301,7 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
 
 /// Decode COD — default coding style (A.6.1): transform, decomposition depth,
 /// progression, layers, code-block size/style, precinct sizes. All six Part 1
-/// style flags and both colour transforms are accepted; the HTJ2K style bits
+/// style flags and both color transforms are accepted; the HTJ2K style bits
 /// and Part 2's array MCT are rejected.
 fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     // Scod bit 0: user-defined precincts in SPcod. Bit 1: SOP may precede each
@@ -1335,7 +1335,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         return Err(Error::Marker("COD declares zero quality layers".into()));
     }
 
-    // SGcod multiple-component transform: 0 = none, 1 = the Part 1 colour
+    // SGcod multiple-component transform: 0 = none, 1 = the Part 1 color
     // transform over the first three components. 2 selects Part 2's array MCT,
     // which is a different feature entirely.
     let mct = b.u8()?;
@@ -1344,7 +1344,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         1 => true,
         other => {
             return Err(Error::Unsupported(format!(
-                "multiple-component transform type {other}; only the Part 1 colour transform is decoded"
+                "multiple-component transform type {other}; only the Part 1 color transform is decoded"
             )));
         }
     };
@@ -1371,13 +1371,13 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         use_eph,
         multiple_component_transform,
         transform,
-        // Maximal precincts (PPx=PPy=15) when Scod bit 0 is clear, signalled by
+        // Maximal precincts (PPx=PPy=15) when Scod bit 0 is clear, signaled by
         // an empty list; explicit precincts were rejected above.
         precinct_sizes,
     })
 }
 
-/// The most progression volumes a tile's walk will honour, matching OpenJPEG's
+/// The most progression volumes a tile's walk will honor, matching OpenJPEG's
 /// 32-entry `opj_tcp_t::pocs` array ("Too many POCs" past it). The standard sets
 /// no limit, but each volume re-enumerates the packet space and a duplicate
 /// emission consumes no bitstream bytes, so an uncapped list is a quadratic
@@ -1575,7 +1575,7 @@ fn decode_coc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Coding)> {
     let index = component_index(&mut b, siz, "COC")?;
     let scoc = b.u8()?;
     let explicit_precincts = scoc & 0x01 != 0;
-    // Only bit 0 is defined in `Scoc` (Table A-21). SOP and EPH are signalled
+    // Only bit 0 is defined in `Scoc` (Table A-21). SOP and EPH are signaled
     // once for the tile, in COD's `Scod`, and have no per-component form — so
     // unlike `Scod` there is nothing else here to read. OpenJPEG stores the byte
     // without validating it and consults only bit 0.

@@ -38,7 +38,7 @@ pub struct Manifest {
     /// The compliance class the bounds are quoted at. We grade class 1.
     pub compliance_class: u8,
     /// Corpus-level provenance (sources, licenses). Not graded, so it is kept
-    /// as opaque JSON rather than modelled field by field.
+    /// as opaque JSON rather than modeled field by field.
     pub provenance: serde_json::Value,
     pub entries: Vec<Entry>,
 }
@@ -77,7 +77,7 @@ pub struct Entry {
 /// The structural features of a corpus codestream, as recorded in the manifest.
 ///
 /// These drive the corpus integrity check's coverage matrix; grading ignores
-/// them. Every field is modelled so `deny_unknown_fields` stays exhaustive.
+/// them. Every field is modeled so `deny_unknown_fields` stays exhaustive.
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Features {

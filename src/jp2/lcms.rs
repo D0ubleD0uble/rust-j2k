@@ -1,5 +1,5 @@
 //! The ICC → sRGB transform LittleCMS builds for OpenJPEG, ported to Rust so
-//! that `ColourOutput::Srgb` matches `opj_decompress -force-rgb` sample for
+//! that `ColorOutput::Srgb` matches `opj_decompress -force-rgb` sample for
 //! sample.
 //!
 //! OpenJPEG 2.5.0 (`color_apply_icc_profile` in `src/bin/common/color.c`)
@@ -8,17 +8,17 @@
 //! and the formats `TYPE_RGB_8` → `TYPE_RGB_8`, `TYPE_RGB_16` →
 //! `TYPE_RGB_16`, or `TYPE_GRAY_8` → `TYPE_RGB_8`. This module builds the
 //! same pipeline for the restricted (matrix/TRC and monochrome) profiles and
-//! runs the same optimisation lcms picks for it:
+//! runs the same optimization lcms picks for it:
 //!
 //! - the stages: the profile's curves and matrix into encoded XYZ, a
 //!   conversion for absolute colorimetric or black point compensation, the
 //!   inverse sRGB matrix and the inverse sRGB curves (`cmsio1.c`,
 //!   `cmscnvrt.c`, `cmsvirt.c`, `cmswtpnt.c`);
-//! - the pre-optimisation that multiplies adjacent matrices, then the first
+//! - the pre-optimization that multiplies adjacent matrices, then the first
 //!   of these that applies (`cmsopt.c`): joining curves, the 8-bit
-//!   matrix-shaper in 1.14 fixed point, prelinearisation curves with a
+//!   matrix-shaper in 1.14 fixed point, prelinearization curves with a
 //!   33-point table for 8-bit RGB, and resampling into a 33-point table;
-//!   16-bit RGB on a near-linear profile is not optimised at all
+//!   16-bit RGB on a near-linear profile is not optimized at all
 //!   (`cmsxform.c`);
 //! - the 16-bit curve tables and interpolation (`cmsgamma.c`, `cmsintrp.c`),
 //!   the 8 ↔ 16 bit conversions (`cmspack.c`), and the white-point fix-up.
@@ -31,7 +31,7 @@
 //! platform.
 //!
 //! Ported from Little CMS 2.14 (tag `lcms2.14` of github.com/mm2/Little-CMS,
-//! the version Ubuntu's OpenJPEG 2.5.0-2ubuntu0.5 links). Its licence, from
+//! the version Ubuntu's OpenJPEG 2.5.0-2ubuntu0.5 links). Its license, from
 //! the `COPYING` file at that tag:
 //!
 //! > Little CMS
@@ -824,7 +824,7 @@ fn whites_equal(white: u16, obtained: &[u16; 3]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Optimised evaluators (cmsopt.c)
+// Optimized evaluators (cmsopt.c)
 
 /// `MatShaper8Data`.
 #[derive(Debug, Clone, PartialEq)]
@@ -889,7 +889,7 @@ impl MatShaper {
     }
 }
 
-/// `Prelin8Data`: prelinearisation curves folded into node indices and
+/// `Prelin8Data`: prelinearization curves folded into node indices and
 /// offsets for 8-bit input.
 #[derive(Debug, Clone, PartialEq)]
 struct Prelin8 {
@@ -983,7 +983,7 @@ enum Eval {
     MatShaper(Box<MatShaper>),
     Prelin8(Box<Prelin8>),
     Clut(Clut),
-    /// `_LUTeval16`: no optimisation, the stages in floating point.
+    /// `_LUTeval16`: no optimization, the stages in floating point.
     Float(Vec<Stage>),
 }
 
@@ -1126,7 +1126,7 @@ fn slope_limit(curve: &mut ToneCurve) {
 }
 
 /// `OptimizeByComputingLinearization` for 8-bit RGB: per-channel curves from
-/// a grey ramp, then a table sampled through their inverses.
+/// a gray ramp, then a table sampled through their inverses.
 fn linearization(stages: &[Stage], intent: u32) -> Option<Eval> {
     if let Some(Stage::Curves(last)) = stages.last() {
         if last.iter().any(ToneCurve::is_degenerated) {
@@ -1158,7 +1158,7 @@ fn linearization(stages: &[Stage], intent: u32) -> Option<Eval> {
     let clut = Clut::sample(&plus, 3);
     let mut prelin = Prelin8::new(&trans, clut);
     if intent != 3 {
-        // `FixWhiteMisalignment` over prelinearisation curves and a table.
+        // `FixWhiteMisalignment` over prelinearization curves and a table.
         let obtained = prelin.eval16(&[0xffff; 3]);
         if !whites_equal(0xffff, &obtained) {
             let white_in = trans.iter().map(|t| t.eval16(0xffff));
@@ -1206,7 +1206,7 @@ pub(crate) enum Format {
     /// `TYPE_RGB_16` to `TYPE_RGB_16`.
     Rgb16,
     /// `TYPE_GRAY_8` to `TYPE_RGB_8`.
-    Grey8,
+    Gray8,
 }
 
 /// What the transform needs from a restricted input profile.
@@ -1219,7 +1219,7 @@ pub(crate) struct InputProfile {
     /// `rTRC`, `gTRC`, `bTRC`, or `kTRC` alone.
     pub(crate) curves: Vec<ToneCurve>,
     /// The colorants `rXYZ`, `gXYZ`, `bXYZ` as rows X, Y, Z; unused for
-    /// grey.
+    /// gray.
     pub(crate) colorants: Mat3,
 }
 
@@ -1236,7 +1236,7 @@ impl Transform {
         let intent = profile.intent;
         let mut stages = Vec::new();
         // `_cmsReadInputLUT` for a matrix/TRC or monochrome profile.
-        if format == Format::Grey8 {
+        if format == Format::Gray8 {
             stages.push(Stage::Curves(profile.curves[..1].to_vec()));
             stages.push(Stage::Matrix {
                 rows: 3,
@@ -1320,11 +1320,11 @@ impl Transform {
         self.eval.eval16(&rgb)
     }
 
-    /// One 8-bit grey sample to 8-bit RGB (`Unroll1Byte` copies it to all
+    /// One 8-bit gray sample to 8-bit RGB (`Unroll1Byte` copies it to all
     /// three inputs).
-    pub(crate) fn grey8(&self, grey: u8) -> [u8; 3] {
-        debug_assert_eq!(self.format, Format::Grey8);
-        self.eval.eval16(&[from_8_to_16(grey); 3]).map(from_16_to_8)
+    pub(crate) fn gray8(&self, gray: u8) -> [u8; 3] {
+        debug_assert_eq!(self.format, Format::Gray8);
+        self.eval.eval16(&[from_8_to_16(gray); 3]).map(from_16_to_8)
     }
 }
 
@@ -1396,7 +1396,7 @@ fn black_point_compensation(black_in: [f64; 3], black_out: [f64; 3]) -> (Mat3, [
 }
 
 /// `cmsDetectRGBProfileGamma(profile, 0.1)`: lcms leaves a 16-bit transform
-/// unoptimised when the profile's grey ramp fits a gamma below 1.6. The ramp
+/// unoptimized when the profile's gray ramp fits a gamma below 1.6. The ramp
 /// is the profile's Y for R = G = B, as the `TYPE_XYZ_DBL` transform lcms
 /// runs gives it.
 fn detect_gamma(profile: &InputProfile) -> f64 {

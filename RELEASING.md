@@ -78,5 +78,5 @@ whole-crate look happens.
 
 Semantic Versioning. While the public API is a single `decode` function and the
 decoder's coverage is still widening (see `docs/roadmap.md`), expect `0.x` minor
-bumps to carry behavioural and possibly API changes. `1.0.0` is reserved for
+bumps to carry behavioral and possibly API changes. `1.0.0` is reserved for
 when Part 1 decode coverage is general rather than the GRIB2 subset.

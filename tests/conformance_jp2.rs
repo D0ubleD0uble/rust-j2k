@@ -12,7 +12,7 @@
 //! outcome fails: a decode that errors differently or misses its reference is
 //! a failure, and an entry that starts to pass must be added to [`IN_CLASS`].
 //! Entries marked `needs_srgb` (files 2, 3, 5, 7, 8) are decoded with
-//! `ColourOutput::Srgb`, since their references are display output; their
+//! `ColorOutput::Srgb`, since their references are display output; their
 //! default decode is also graded bit-exactly against their `as_coded`
 //! references.
 
@@ -42,7 +42,7 @@ fn grades_the_jp2_reader_files_by_compliance_class() {
 /// The `ftyp`, `ihdr`, `colr` and `rreq` fields of each file match the box
 /// dump in `boxes.json` (`scripts/gen-jp2-box-snapshots.py`), through both
 /// `read_header` and `decode`. File 7 carries an `rreq` and two `colr` boxes
-/// (an ICC profile, then an enumerated colour space that is ignored).
+/// (an ICC profile, then an enumerated color space that is ignored).
 #[test]
 fn every_jp2_file_header_matches_its_box_dump() {
     #[derive(serde::Deserialize)]
@@ -77,7 +77,7 @@ fn every_jp2_file_header_matches_its_box_dump() {
         .as_ref()
         .expect("file7 has an rreq");
     assert_eq!(rreq.standard_features.len(), 3);
-    assert_eq!(file7.colour_specifications.len(), 2);
+    assert_eq!(file7.color_specifications.len(), 2);
 }
 
 /// Every reference plane parses as an 8-bit unsigned PGX of the file's size.
@@ -99,10 +99,7 @@ fn every_jp2_reference_parses() {
             parsed += 1;
         }
     }
-    assert_eq!(
-        parsed, 21,
-        "six colour files x3 planes, three grey files x1"
-    );
+    assert_eq!(parsed, 21, "six color files x3 planes, three gray files x1");
 }
 
 /// The as-coded references exist for files 2, 3, 5, 7 and 8, one per
@@ -242,8 +239,8 @@ fn the_manifest_rejects_unknown_keys() {
     reject(&|v| v["surprise"] = 1.into(), "at the top level");
     reject(&|v| v["entries"][0]["surprise"] = 1.into(), "on an entry");
     reject(
-        &|v| v["entries"][0]["colour"]["surprise"] = 1.into(),
-        "in colour",
+        &|v| v["entries"][0]["color"]["surprise"] = 1.into(),
+        "in color",
     );
     reject(
         &|v| v["entries"][0]["boxes"]["surprise"] = 1.into(),
@@ -269,7 +266,7 @@ fn shifting_scales_samples_and_depth() {
     assert_eq!(shifted(&component, 0), component);
 }
 
-/// Grey files grade one channel, colour files three; more or fewer fails.
+/// Gray files grade one channel, color files three; more or fewer fails.
 #[test]
 fn the_decoded_component_count_must_equal_the_graded_count() {
     use support::jp2::check_component_count;

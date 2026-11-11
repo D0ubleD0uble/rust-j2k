@@ -13,7 +13,7 @@ synthetic JP2 fixture (tests/fixtures/jp2_*.jp2) gives two seeds, each paired
 with the pinned 8-bit single-component codestream if the file has one
 component, the 16-bit four-component one if it has four, else the 8-bit
 un-sub-sampled three-component one, so that a file's ICC profile and its
-`cdef` reach the `ColourOutput::Srgb` conversion:
+`cdef` reach the `ColorOutput::Srgb` conversion:
 
 - `NAME_prefix`: variant 0x20, 0x60 or 0x30, and the file's bytes before its first
   `jp2c` box, signature included, with the `ihdr` rewritten to the pinned
@@ -26,7 +26,7 @@ un-sub-sampled three-component one, so that a file's ICC profile and its
 Plus `minimal_jp2c_formK`: variant 0x0C | K with an empty body, a minimal file
 that decodes as is, once per `jp2c` length form.
 
-Plus seeds for the `ColourOutput::Srgb` conversions, each a `colr` box built
+Plus seeds for the `ColorOutput::Srgb` conversions, each a `colr` box built
 here (variant 0x0C | codestream << 4, body one `colr`):
 
 - `icc_rgb_*`: METH 2 with a three-component matrix/TRC profile (`rXYZ`,
@@ -34,20 +34,20 @@ here (variant 0x0C | codestream << 4, body one `colr`):
   on the 8-bit three-component codestream. The TRCs are `curv` gamma 2.2,
   a 256-entry `curv` table, an identity `curv`, and `para` function types
   0-4 (type 3 with the sRGB parameters).
-- `icc_grey_*`: a monochrome profile (`kTRC`, `wtpt`) with the same curve
+- `icc_gray_*`: a monochrome profile (`kTRC`, `wtpt`) with the same curve
   kinds, on the 8-bit single-component codestream.
-- `icc_grey_tinted`: the monochrome profile at absolute colorimetric intent
+- `icc_gray_tinted`: the monochrome profile at absolute colorimetric intent
   with a D65 media white. Its sRGB output is not neutral, so it has three
   channels for the one coded channel.
-- `icc_grey_palette_opacity`: that profile with a two-column palette and a
-  `cdef` of grey plus opacity: two coded channels, four after conversion, as
+- `icc_gray_palette_opacity`: that profile with a two-column palette and a
+  `cdef` of gray plus opacity: two coded channels, four after conversion, as
   OpenJPEG gives.
-- `ci_crash_grey_icc`: the input that failed the CI fuzz smoke, a grey profile
+- `ci_crash_gray_icc`: the input that failed the CI fuzz smoke, a gray profile
   with an exact D50 white point and a `para` type 4 curve, at intent 0. The
   curve and rounding make its output non-neutral.
 - `icc_rgb_subsampled`: the RGB profile on the three-component codestream
   sub-sampled 2x2 in all three components. The channels agree, so it converts.
-- `icc_grey_16bit`: the monochrome profile on the 16-bit single-component
+- `icc_gray_16bit`: the monochrome profile on the 16-bit single-component
   codestream, which the conversion refuses after reading the profile (8-bit
   only).
 - `icc_rgb_mixed`: the RGB profile on the sYCC 4:2:0 codestream (luma full
@@ -58,7 +58,7 @@ here (variant 0x0C | codestream << 4, body one `colr`):
 
 Plus seeds for the metadata boxes, on the 8-bit single-component codestream
 with a pinned prefix (variant 0x04 | codestream << 4, body a `jp2h` holding a
-matching `ihdr` and a greyscale `colr`, then the boxes):
+matching `ihdr` and a grayscale `colr`, then the boxes):
 
 - `ipr_uinf_before`: a `jp2i` and a `uinf` (a `ulst` of two UUIDs and a
   NUL-terminated `url `) before the codestream;
@@ -71,27 +71,27 @@ Plus one seed per refusal and pass-through of `src/jp2/srgb.rs` that a
 pinned codestream reaches (`srgb_branch_seeds`, variant 0x0C | codestream
 << 4, 0x80 added for the `_reduced` ones):
 
-- sRGB and greyscale: declared over a 4:2:0 or 4:2:2 codestream at either
-  origin, even with a `cdef` naming colour 1 only (`*_as_sycc`,
-  `srgb_420_colour1_cdef`, refused); channels of mixed depth or sub-sampling
+- sRGB and grayscale: declared over a 4:2:0 or 4:2:2 codestream at either
+  origin, even with a `cdef` naming color 1 only (`*_as_sycc`,
+  `srgb_420_color1_cdef`, refused); channels of mixed depth or sub-sampling
   from a `pclr` (`srgb_mixed_*`, refused); RGBA on the 16-bit codestream
   (`srgb_rgba_16bit`, passes through).
 - sYCC: one channel (passes through), 4:4:4, the even-origin 4:2:0, RGBA on
   the 16-bit codestream, and the 4:2:0 and 4:2:2 ones reduced (convert); two
-  colours from a `cdef`, mixed depth and signed channels from a `pclr`
+  colors from a `cdef`, mixed depth and signed channels from a `pclr`
   (refused).
 - CMYK (`enum_cmyk_*`) and no `colr` (`no_colr_three`): refused on three
   channels, passed through on one.
 - `icc_*`: the RGB profile with one header field, tag or curve changed, so
   each refusal of the profile reader and of LittleCMS's checks has a seed
   (short, no `acsp`, class, version, tag count, table, duplicate and
-  out-of-range tags, named colour and link classes, intent, connection
+  out-of-range tags, named color and link classes, intent, connection
   space, each lookup table type, XYZ and curve tags of the wrong type or
   cut short, `para` above type 4, and the Corbis and Monaco types); the
-  CMYK and YCbCr colour spaces; an RGB profile on one channel, two colours,
+  CMYK and YCbCr color spaces; an RGB profile on one channel, two colors,
   channels of mixed depth (OpenJPEG's "AFL test"), 12-bit or signed
   channels, and the 16-bit codestream; a refused profile on a 4:2:0 or
-  4:2:2 codestream; a monochrome profile on three channels or on no colour
+  4:2:2 codestream; a monochrome profile on three channels or on no color
   channel.
 
 The profiles are built from the ICC.1 layout, not copied from a file, so the
@@ -202,7 +202,7 @@ def icc(space, tags):
     return bytes(header) + table + data
 
 
-def icc_grey_tinted(curve):
+def icc_gray_tinted(curve):
     """A monochrome profile whose sRGB output is not neutral (absolute
     colorimetric intent with a D65 media white) and so has three channels."""
     d65 = (0.9505, 1.0, 1.089)
@@ -215,19 +215,19 @@ def box(kind, payload):
     return be32(8 + len(payload)) + kind + payload
 
 
-def grey_palette_opacity():
+def gray_palette_opacity():
     """The monochrome profile, a two-column palette (entry i is (i, i)), a
     `cmap` using both columns of component 0, and a `cdef` giving the first
-    column as the grey colour channel and the second as opacity. The sRGB
+    column as the gray color channel and the second as opacity. The sRGB
     conversion applies the palette, gives two channels, and returns four."""
     pclr = struct.pack(">HBBB", 256, 2, 7, 7) + b"".join(bytes([i, i]) for i in range(256))
     cmap = struct.pack(">HBBHBB", 0, 1, 0, 0, 1, 1)
     cdef = struct.pack(">HHHHHHH", 2, 0, 0, 1, 1, 1, 0)
-    return (colr(2, icc_grey_tinted(CURVES["gamma"])) + box(b"pclr", pclr)
+    return (colr(2, icc_gray_tinted(CURVES["gamma"])) + box(b"pclr", pclr)
             + box(b"cmap", cmap) + box(b"cdef", cdef))
 
 
-# The input that failed the CI fuzz smoke (variant byte, then body): a grey
+# The input that failed the CI fuzz smoke (variant byte, then body): a gray
 # profile whose sRGB output is not neutral.
 CI_CRASH_HEX = (
     "2c000000e3636f6c72020002000000d8000000000240000073636e7247524159"
@@ -249,7 +249,7 @@ def icc_rgb(curve):
     ])
 
 
-def icc_grey(curve):
+def icc_gray(curve):
     return icc(b"GRAY", [(b"wtpt", xyz_tag(*D50)), (b"kTRC", curve)])
 
 
@@ -334,9 +334,9 @@ def cdef_box(*entries):
     return box(b"cdef", body)
 
 
-SRGB, GREY, SYCC = (colr(1, be32(n)) for n in (16, 17, 18))
+SRGB, GRAY, SYCC = (colr(1, be32(n)) for n in (16, 17, 18))
 RGBA = cdef_box((0, 1), (0, 2), (0, 3), (1, 0))
-TWO_COLOURS = cdef_box((0, 1), (0, 2), (65535, 65535))
+TWO_COLORS = cdef_box((0, 1), (0, 2), (65535, 65535))
 
 
 def srgb_branch_seeds(write):
@@ -345,11 +345,11 @@ def srgb_branch_seeds(write):
     children after the pinned `ihdr`)."""
     hdr = 0x0C
     rgb = icc_rgb(CURVES["gamma"])
-    # sRGB and greyscale.
+    # sRGB and grayscale.
     write("srgb_420_as_sycc", hdr | SYCC_420, SRGB)
-    write("grey_422_as_sycc", hdr | SYCC_422, GREY)
+    write("gray_422_as_sycc", hdr | SYCC_422, GRAY)
     write("srgb_420_even_as_sycc", hdr | SYCC_420_EVEN, SRGB)
-    write("srgb_420_colour1_cdef", hdr | SYCC_420,
+    write("srgb_420_color1_cdef", hdr | SYCC_420,
           SRGB + cdef_box((0, 1), (65535, 65535), (65535, 65535)))
     write("srgb_mixed_depth", hdr | ONE_8, SRGB + pclr_box([7, 7, 3]))
     # Channels 0 and 2 from component 0 (1x1), channel 1 from component 1
@@ -364,14 +364,14 @@ def srgb_branch_seeds(write):
     # sYCC.
     write("sycc_one_channel", hdr | ONE_8, SYCC)
     write("sycc_444", hdr | THREE_8, SYCC)
-    write("sycc_two_colours", hdr | THREE_8, SYCC + TWO_COLOURS)
+    write("sycc_two_colors", hdr | THREE_8, SYCC + TWO_COLORS)
     write("sycc_mixed_depth", hdr | ONE_8, SYCC + pclr_box([7, 7, 3]))
     write("sycc_signed", hdr | ONE_8, SYCC + pclr_box([0x87, 0x87, 0x87]))
     write("sycc_420_even", hdr | SYCC_420_EVEN, SYCC)
     write("sycc_rgba_16bit", hdr | FOUR_16, SYCC + RGBA)
     for name, cs in [("420", SYCC_420), ("422", SYCC_422), ("420_even", SYCC_420_EVEN)]:
         write(f"sycc_{name}_reduced", REDUCE | hdr | cs, SYCC)
-    # Another enumerated colour space, and none.
+    # Another enumerated color space, and none.
     write("enum_cmyk_three", hdr | THREE_8, colr(1, be32(12)))
     write("enum_cmyk_one", hdr | ONE_8, colr(1, be32(12)))
     write("no_colr_three", hdr | THREE_8, b"")
@@ -386,7 +386,7 @@ def srgb_branch_seeds(write):
     write("icc_duplicate_tag", hdr | THREE_8, colr(2, patch(rgb, at, b"rTRC")))
     write("icc_tag_past_end", hdr | THREE_8, colr(2, patch(rgb, at + 8, be32(1 << 20))))
     # `input_profile`: class, intent, connection space, lookup tables.
-    write("icc_named_colour", hdr | THREE_8, colr(2, patch(rgb, 12, b"nmcl")))
+    write("icc_named_color", hdr | THREE_8, colr(2, patch(rgb, 12, b"nmcl")))
     write("icc_link_no_lut", hdr | THREE_8, colr(2, patch(rgb, 12, b"link")))
     write("icc_zero_class", hdr | THREE_8, colr(2, patch(rgb, 12, b"\0\0\0\0")))
     write("icc_intent_5", hdr | THREE_8, colr(2, patch(rgb, 64, be32(5))))
@@ -400,8 +400,8 @@ def srgb_branch_seeds(write):
         name = kind.decode().strip()
         profile = icc(b"RGB ", rgb_tags(**{tag: lut(kind)}))
         write(f"icc_lut_{name}", hdr | THREE_8, colr(2, profile))
-    grey_lut = icc(b"GRAY", [(b"wtpt", xyz_tag(*D50)), (b"A2B0", lut(b"mft2", inputs=1))])
-    write("icc_grey_lut_mft2", hdr | ONE_8, colr(2, grey_lut))
+    gray_lut = icc(b"GRAY", [(b"wtpt", xyz_tag(*D50)), (b"A2B0", lut(b"mft2", inputs=1))])
+    write("icc_gray_lut_mft2", hdr | ONE_8, colr(2, gray_lut))
     write("icc_lut_grid_1", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(A2B0=lut(b"mft2", grid=1)))))
     write("icc_lut_short", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(A2B0=lut(b"mft2")[:60]))))
     write("icc_lut_wrong_inputs",
@@ -425,17 +425,17 @@ def srgb_branch_seeds(write):
     write("icc_para_short", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(bTRC=para(4, 2.2)))))
     unknown = b"xxxx\0\0\0\0" + be32(0)
     write("icc_curve_unknown_type", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(rTRC=unknown))))
-    # Colour spaces, and the channels each form needs.
+    # Color spaces, and the channels each form needs.
     write("icc_cmyk_space", hdr | THREE_8, colr(2, patch(rgb, 16, b"CMYK")))
     write("icc_ycbr_three", hdr | THREE_8, colr(2, patch(rgb, 16, b"YCbr")))
     write("icc_ycbr_one", hdr | ONE_8, colr(2, patch(rgb, 16, b"YCbr")))
     write("icc_rgb_one", hdr | ONE_8, colr(2, rgb))
-    write("icc_rgb_two_colours", hdr | THREE_8, colr(2, rgb) + TWO_COLOURS)
+    write("icc_rgb_two_colors", hdr | THREE_8, colr(2, rgb) + TWO_COLORS)
     write("icc_rgb_first_four_differ", hdr | ONE_8, colr(2, rgb) + pclr_box([7, 7, 3]))
     # Five palette channels, channel 2 at 4 bits. A second `cdef` entry for
-    # colour 3 swaps channel 4 into position 2 and relabels it opacity, which
-    # leaves colour 3 (4-bit) at position 4: the first four positions agree,
-    # so the AFL test passes, and the colours' formats differ.
+    # color 3 swaps channel 4 into position 2 and relabels it opacity, which
+    # leaves color 3 (4-bit) at position 4: the first four positions agree,
+    # so the AFL test passes, and the colors' formats differ.
     after_afl = [(0, 0, 1), (1, 0, 2), (2, 0, 3), (4, 0, 3), (4, 1, 0), (3, 65535, 65535)]
     after_afl = struct.pack(">H", len(after_afl)) + b"".join(
         struct.pack(">HHH", *e) for e in after_afl)
@@ -448,16 +448,16 @@ def srgb_branch_seeds(write):
     write("icc_rgb_reduced", REDUCE | hdr | THREE_8, colr(2, rgb))
     write("icc_refused_420", hdr | SYCC_420, colr(2, rgb[:100]))
     write("icc_cmyk_422", hdr | SYCC_422, colr(2, patch(rgb, 16, b"CMYK")))
-    grey = icc_grey(CURVES["gamma"])
-    write("icc_grey_three", hdr | THREE_8, colr(2, grey))
-    write("icc_grey_no_colour", hdr | ONE_8, colr(2, grey) + cdef_box((1, 0)))
-    write("icc_grey_tinted_reduced", REDUCE | hdr | ONE_8,
-          colr(2, icc_grey_tinted(CURVES["gamma"])))
+    gray = icc_gray(CURVES["gamma"])
+    write("icc_gray_three", hdr | THREE_8, colr(2, gray))
+    write("icc_gray_no_color", hdr | ONE_8, colr(2, gray) + cdef_box((1, 0)))
+    write("icc_gray_tinted_reduced", REDUCE | hdr | ONE_8,
+          colr(2, icc_gray_tinted(CURVES["gamma"])))
     # Regression: a one-column `pclr` with no `cmap`, the body repeated after
     # `jp2c` (variant bits 0-1 = 3). The default decode drops the palette;
     # `raw_channels` keeps it and refuses the second `pclr`.
     no_cmap = struct.pack(">HB", 256, 1) + bytes([7]) + bytes(range(256))
-    write("pclr_no_cmap_twice", 0x03 | hdr | ONE_8, GREY + box(b"pclr", no_cmap))
+    write("pclr_no_cmap_twice", 0x03 | hdr | ONE_8, GRAY + box(b"pclr", no_cmap))
 
 
 def main():
@@ -510,13 +510,13 @@ def main():
 
     for name, curve in CURVES.items():
         write(f"icc_rgb_{name}", 0x0C | THREE_8, colr(2, icc_rgb(curve)))
-        write(f"icc_grey_{name}", 0x0C | ONE_8, colr(2, icc_grey(curve)))
-    write("icc_grey_tinted", 0x0C | ONE_8, colr(2, icc_grey_tinted(CURVES["gamma"])))
-    write("icc_grey_palette_opacity", 0x0C | ONE_8, grey_palette_opacity())
+        write(f"icc_gray_{name}", 0x0C | ONE_8, colr(2, icc_gray(curve)))
+    write("icc_gray_tinted", 0x0C | ONE_8, colr(2, icc_gray_tinted(CURVES["gamma"])))
+    write("icc_gray_palette_opacity", 0x0C | ONE_8, gray_palette_opacity())
     ci = bytes.fromhex(CI_CRASH_HEX)
-    write("ci_crash_grey_icc", ci[0], ci[1:])
+    write("ci_crash_gray_icc", ci[0], ci[1:])
     write("icc_rgb_subsampled", 0x0C | THREE_SUB, colr(2, icc_rgb(CURVES["gamma"])))
-    write("icc_grey_16bit", 0x0C | ONE_16, colr(2, icc_grey(CURVES["gamma"])))
+    write("icc_gray_16bit", 0x0C | ONE_16, colr(2, icc_gray(CURVES["gamma"])))
     write("icc_rgb_mixed", 0x0C | SYCC_420, colr(2, icc_rgb(CURVES["gamma"])))
     write("sycc_420", 0x0C | SYCC_420, colr(1, be32(18)))
     write("sycc_422", 0x0C | SYCC_422, colr(1, be32(18)))

@@ -2,7 +2,7 @@
 """Generate the ICC to sRGB oracles: what `opj_decompress -force-rgb` gives.
 
 OpenJPEG converts an ICC-tagged JP2 file to sRGB with LittleCMS, and the
-decoder's `ColourOutput::Srgb` must match it sample for sample. This script
+decoder's `ColorOutput::Srgb` must match it sample for sample. This script
 records OpenJPEG's output as a SHA-256 per plane, so the tests need neither
 tool and the snapshots stay small. Each plane is hashed as its samples in
 raster order, each a 4-byte big-endian signed integer.
@@ -19,7 +19,7 @@ Two snapshot files:
 - `tests/fixtures/icc/profiles.json`: synthetic profiles over three small
   lossless codestreams this script makes with `opj_compress` and writes to
   `tests/fixtures/icc/`: 256x256 RGB at 8 bits (every R and G level), 64x64
-  RGB at 16 bits (random), and 64x64 grey at 8 bits (every level), each
+  RGB at 16 bits (random), and 64x64 gray at 8 bits (every level), each
   holding black and white. The profiles are edge cases (degenerate and
   descending curves, every parametric type, extreme matrices and white
   points, black point compensation, the gamma 1.6 threshold of LittleCMS's
@@ -233,7 +233,7 @@ def rgb(intent=0, **kw) -> bytes:
     return profile(rgb_tags(**kw), intent=intent)
 
 
-def grey(kc, white=D50_WHITE, intent=0) -> bytes:
+def gray(kc, white=D50_WHITE, intent=0) -> bytes:
     tags = [(b"kTRC", kc)]
     if white is not None:
         tags.append((b"wtpt", xyz(*white)))
@@ -404,13 +404,13 @@ def lcms_reads() -> dict[str, bytes]:
     return out
 
 
-def lcms_reads_grey() -> dict[str, bytes]:
-    """The grey cases of `lcms_reads`: `kTRC` takes no Monaco curve."""
+def lcms_reads_gray() -> dict[str, bytes]:
+    """The gray cases of `lcms_reads`: `kTRC` takes no Monaco curve."""
     return {
-        "grey_lcms_intent_4": grey(curv([461]), white=None, intent=4),
-        "grey_lcms_black_intent_10": grey(para(2, [2.2, 1.0, 0.1, 0.05]), white=None, intent=10),
-        "grey_lcms_monaco_ktrc": grey(MONACO_CURVE + curv([461])[4:], white=None),
-        "grey_lcms_ktrc_xyz": grey(xyz(0.5, 0.5, 0.5), white=None),
+        "gray_lcms_intent_4": gray(curv([461]), white=None, intent=4),
+        "gray_lcms_black_intent_10": gray(para(2, [2.2, 1.0, 0.1, 0.05]), white=None, intent=10),
+        "gray_lcms_monaco_ktrc": gray(MONACO_CURVE + curv([461])[4:], white=None),
+        "gray_lcms_ktrc_xyz": gray(xyz(0.5, 0.5, 0.5), white=None),
     }
 
 
@@ -446,7 +446,7 @@ def classes_and_tables() -> dict[str, bytes]:
     """How LittleCMS builds the transform from each device class, connection
     space and lookup table (issue #199): every class it opens, the lookup
     table tag it picks for each intent, the `lut8`/`lut16` checks that make it
-    refuse one, other connection and colour spaces, and its refusals on a
+    refuse one, other connection and color spaces, and its refusals on a
     profile this decoder would otherwise refuse."""
     base = rgb_tags(rc=curv([563]), m=WIDE, white=None)
     plain = profile(base)
@@ -504,40 +504,40 @@ def classes_and_tables() -> dict[str, bytes]:
         "pcs_zero": with_header(plain, 20, b"\0\0\0\0"),
         "space_cmyk": with_header(plain, 16, b"CMYK"),
         "space_zzzz": with_header(plain, 16, b"zzzz"),
-        "grey_on_rgb_intent_4": profile([(b"kTRC", curv([461]))], space=b"GRAY", intent=4),
-        "grey_on_rgb_missing_ktrc": profile([(b"wtpt", xyz(*D50_WHITE))], space=b"GRAY"),
+        "gray_on_rgb_intent_4": profile([(b"kTRC", curv([461]))], space=b"GRAY", intent=4),
+        "gray_on_rgb_missing_ktrc": profile([(b"wtpt", xyz(*D50_WHITE))], space=b"GRAY"),
     })
     return out
 
 
-def classes_and_tables_grey() -> dict[str, bytes]:
-    """The grey cases of `classes_and_tables`."""
+def classes_and_tables_gray() -> dict[str, bytes]:
+    """The gray cases of `classes_and_tables`."""
     ktrc = [(b"kTRC", curv([461]))]
-    out = {f"grey_class_{(c.decode().strip(chr(0)) or 'zero')}": with_header(profile(ktrc, space=b"GRAY"), 12, c)
+    out = {f"gray_class_{(c.decode().strip(chr(0)) or 'zero')}": with_header(profile(ktrc, space=b"GRAY"), 12, c)
            for c in (b"mntr", b"prtr", b"spac", b"\0\0\0\0", b"link", b"abst", b"nmcl", b"zzzz")}
     out.update({
-        "grey_missing_ktrc": profile([(b"wtpt", xyz(*D50_WHITE))], space=b"GRAY"),
-        "grey_lut16": profile(ktrc + [(b"A2B0", lut16(1, 3, 2))], space=b"GRAY"),
-        "grey_lut16_three_inputs": profile(ktrc + [(b"A2B0", lut16(3, 3, 2))], space=b"GRAY"),
-        "grey_lut_no_channels": profile(ktrc + [(b"A2B0", b"mft2" + b"\0" * 40)], space=b"GRAY"),
-        "grey_pcs_lab": with_header(profile(ktrc, space=b"GRAY"), 20, b"Lab "),
+        "gray_missing_ktrc": profile([(b"wtpt", xyz(*D50_WHITE))], space=b"GRAY"),
+        "gray_lut16": profile(ktrc + [(b"A2B0", lut16(1, 3, 2))], space=b"GRAY"),
+        "gray_lut16_three_inputs": profile(ktrc + [(b"A2B0", lut16(3, 3, 2))], space=b"GRAY"),
+        "gray_lut_no_channels": profile(ktrc + [(b"A2B0", b"mft2" + b"\0" * 40)], space=b"GRAY"),
+        "gray_pcs_lab": with_header(profile(ktrc, space=b"GRAY"), 20, b"Lab "),
     })
     return out
 
 
-def edge_grey() -> dict[str, bytes]:
+def edge_gray() -> dict[str, bytes]:
     ramp17 = [min(65535, int(65535 * (i / 16) ** 2.2)) for i in range(17)]
     return {
-        "grey_gamma18": grey(curv([461])),
-        "grey_table": grey(curv(ramp17)),
-        "grey_descending": grey(curv([65535, 0])),
-        "grey_gamma0": grey(curv([0])),
-        "grey_para4_negative": grey(para(4, [-32768] * 7)),
-        "grey_black_intent0": grey(para(2, [2.2, 1.0, 0.1, 0.05]), intent=0),
-        "grey_white_zero": grey(curv([563]), white=(0, 0, 0), intent=3),
-        "grey_white_huge": grey(curv([563]), white=(32767, 1, -32768), intent=3),
-        "grey_white_d65": grey(curv([256]), white=(0.9505, 1, 1.089), intent=3),
-        "grey_white_2": grey(curv([461]), white=(0.9, 0.95, 0.7), intent=3),
+        "gray_gamma18": gray(curv([461])),
+        "gray_table": gray(curv(ramp17)),
+        "gray_descending": gray(curv([65535, 0])),
+        "gray_gamma0": gray(curv([0])),
+        "gray_para4_negative": gray(para(4, [-32768] * 7)),
+        "gray_black_intent0": gray(para(2, [2.2, 1.0, 0.1, 0.05]), intent=0),
+        "gray_white_zero": gray(curv([563]), white=(0, 0, 0), intent=3),
+        "gray_white_huge": gray(curv([563]), white=(32767, 1, -32768), intent=3),
+        "gray_white_d65": gray(curv([256]), white=(0.9505, 1, 1.089), intent=3),
+        "gray_white_2": gray(curv([461]), white=(0.9, 0.95, 0.7), intent=3),
     }
 
 
@@ -549,13 +549,13 @@ CORNERS = [(0, 0, 0), (255, 255, 255), (255, 0, 0), (0, 255, 0), (0, 0, 255),
 def rgb8_planes() -> tuple[int, list[list[int]], str]:
     """256x256: R = x, G = y, B = (37x + 91y) mod 256, so every R and G level
     meets a spread of B; the first pixels are black, white, the primaries,
-    the secondaries and mid grey."""
+    the secondaries and mid gray."""
     size = 256
     pixels = [(x, y, (37 * x + 91 * y) % 256) for y in range(size) for x in range(size)]
     pixels[: len(CORNERS)] = CORNERS
     return size, [[p[c] for p in pixels] for c in range(3)], (
         "R = x, G = y, B = (37x + 91y) mod 256, the first nine pixels black, white, "
-        "R, G, B, C, M, Y and grey 128")
+        "R, G, B, C, M, Y and gray 128")
 
 
 def rgb16_planes() -> tuple[int, list[list[int]], str]:
@@ -568,18 +568,18 @@ def rgb16_planes() -> tuple[int, list[list[int]], str]:
         "random.Random(187) samples, the first nine pixels the 8-bit corners times 257")
 
 
-def grey8_planes() -> tuple[int, list[list[int]], str]:
-    """64x64: the first 256 samples every grey level, then random ones."""
+def gray8_planes() -> tuple[int, list[list[int]], str]:
+    """64x64: the first 256 samples every gray level, then random ones."""
     size = 64
     rng = random.Random(188)
     values = list(range(256)) + [rng.randrange(256) for _ in range(size * size - 256)]
-    return size, [values], "grey 0..255, then random.Random(188) samples"
+    return size, [values], "gray 0..255, then random.Random(188) samples"
 
 
 CODESTREAMS = {
     "rgb8": ("rgb8_lossless.j2k", 8, rgb8_planes),
     "rgb16": ("rgb16_lossless.j2k", 16, rgb16_planes),
-    "grey8": ("grey8_lossless.j2k", 8, grey8_planes),
+    "gray8": ("gray8_lossless.j2k", 8, gray8_planes),
 }
 
 
@@ -629,7 +629,7 @@ def synthetic(oracle_version: str) -> None:
     codestreams = make_codestreams()
     rgb = {**malformed(), **edge_rgb(), **header(), **lcms_reads(), **classes_and_tables()}
     groups = [("rgb8", rgb), ("rgb16", rgb),
-              ("grey8", {**edge_grey(), **lcms_reads_grey(), **classes_and_tables_grey()})]
+              ("gray8", {**edge_gray(), **lcms_reads_gray(), **classes_and_tables_gray()})]
     cases = []
     for key, profiles in groups:
         cs = codestreams[key]
@@ -734,17 +734,17 @@ def build_copy(profile: bytes) -> bytes | None:
 
 def fuzz_seeds() -> None:
     """Write the profiles of icc/profiles.json as seeds for the icc_srgb fuzz
-    target: one byte for the codestream (0 RGB 8-bit, 1 RGB 16-bit, 2 grey),
+    target: one byte for the codestream (0 RGB 8-bit, 1 RGB 16-bit, 2 gray),
     then the profile. The target builds the transform for only one profile in
     BUILD_EVERY, and hashes the profile without the first byte, so each distinct
     (codestream, profile) pair with a profile of 128 bytes or more also gets a
     copy with a nonce that selects it (see build_copy), named `*_build`. Each
     codestream needs its own copy: it is the first byte that picks the 8-bit,
-    16-bit or grey transform path."""
+    16-bit or gray transform path."""
     check_target_hash()
     out = ROOT / "fuzz" / "corpus" / "icc_srgb"
     out.mkdir(parents=True, exist_ok=True)
-    selector = {"rgb8": 0, "rgb16": 1, "grey8": 2}
+    selector = {"rgb8": 0, "rgb16": 1, "gray8": 2}
     cases = json.loads((ICC_DIR / "profiles.json").read_text())["cases"]
     written = builds = 0
     for case in cases:

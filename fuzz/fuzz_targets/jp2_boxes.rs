@@ -26,14 +26,14 @@
 //!   sYCC 4:2:0 and 4:2:2 codestreams at the odd origin (5, 3), 6 an 11x9
 //!   four-component 16-bit one, 7 the sYCC 4:2:0 codestream at the even
 //!   origin (6, 2). The 8-bit ones are what the ICC profile paths of
-//!   `ColourOutput::Srgb` need: a monochrome profile applies at 8 bits and an
+//!   `ColorOutput::Srgb` need: a monochrome profile applies at 8 bits and an
 //!   RGB one at 8 or 16 bits with three channels of one format;
 //! - bit 7, every decode is one resolution level down
 //!   (`resolution_reduction = 1`).
 //!
 //! Every input is decoded with `raw_channels` (no palette, no channel
 //! definitions), and every input that decodes as coded is decoded again with
-//! `ColourOutput::Srgb`, which reads the `colr` profile bytes. Without a
+//! `ColorOutput::Srgb`, which reads the `colr` profile bytes. Without a
 //! `pclr`, `cmap` or `cdef` the `raw_channels` image must equal the default
 //! one, or the raw decode may refuse only the boxes after the codestream.
 //! The `Srgb` results are only checked for being a result: they may differ
@@ -164,7 +164,7 @@ fuzz_target!(|data: &[u8]| {
             );
         }
     }
-    // A file that fails as coded fails before any colour conversion, so only
+    // A file that fails as coded fails before any color conversion, so only
     // one that decodes goes through the profile reader and the sYCC and ICC
     // conversions. The sRGB result may be a typed error, and its samples
     // differ from the first decode's when converted; these checks hold either
@@ -190,24 +190,24 @@ fuzz_target!(|data: &[u8]| {
             ),
         }
     }
-    let options = options.with_colour(rust_j2k::ColourOutput::Srgb);
+    let options = options.with_color(rust_j2k::ColorOutput::Srgb);
     let Ok(srgb) = rust_j2k::decode_with(&file, &options) else {
         return;
     };
-    let colour = |i: &rust_j2k::Image| i.jp2.as_ref().map(|m| m.colour.clone());
-    // One exception to equal channel counts: a grey ICC profile whose sRGB
-    // output is not neutral gives R, G and B in place of the grey channel,
+    let color = |i: &rust_j2k::Image| i.jp2.as_ref().map(|m| m.color.clone());
+    // One exception to equal channel counts: a gray ICC profile whose sRGB
+    // output is not neutral gives R, G and B in place of the gray channel,
     // two more channels, reported as sRGB, as OpenJPEG does. Only on one or
-    // two coded channels: a grey profile on more is refused.
-    let grey_profile = coded.jp2.as_ref().is_some_and(|m| match &m.colour {
-        rust_j2k::ColourSpace::RestrictedIcc(p) => p.get(16..20) == Some(b"GRAY"),
+    // two coded channels: a gray profile on more is refused.
+    let gray_profile = coded.jp2.as_ref().is_some_and(|m| match &m.color {
+        rust_j2k::ColorSpace::RestrictedIcc(p) => p.get(16..20) == Some(b"GRAY"),
         _ => false,
     });
-    let non_neutral_grey = grey_profile
-        && colour(&srgb) == Some(rust_j2k::ColourSpace::Srgb)
+    let non_neutral_gray = gray_profile
+        && color(&srgb) == Some(rust_j2k::ColorSpace::Srgb)
         && coded.components.len() <= 2
         && srgb.components.len() == coded.components.len() + 2;
-    if !non_neutral_grey {
+    if !non_neutral_gray {
         assert_eq!(
             srgb.components.len(),
             coded.components.len(),
@@ -229,8 +229,8 @@ fuzz_target!(|data: &[u8]| {
             );
         }
     }
-    // Colour left as declared means the samples were passed through.
-    if colour(&srgb) == colour(&coded) {
+    // Color left as declared means the samples were passed through.
+    if color(&srgb) == color(&coded) {
         assert_eq!(
             srgb.components, coded.components,
             "pass-through changed samples"

@@ -21,30 +21,30 @@ fn cdef_payload(count: u16, entries: &[(u16, u16, u16)]) -> Vec<u8> {
     out
 }
 
-/// file2's layout: components 0, 1, 2 are colours 3, 2, 1.
+/// file2's layout: components 0, 1, 2 are colors 3, 2, 1.
 pub(super) fn reversed() -> Vec<u8> {
     cdef_of(&[(0, 0, 3), (1, 0, 2), (2, 0, 1)])
 }
 
-/// Channels `1..=n` labelled as colours in order.
-pub(super) fn colours(n: u16) -> Vec<ChannelDefinition> {
+/// Channels `1..=n` labeled as colors in order.
+pub(super) fn colors(n: u16) -> Vec<ChannelDefinition> {
     (1..=n)
         .map(|c| ChannelDefinition {
-            kind: ChannelType::Colour,
-            association: Association::Colour(c),
+            kind: ChannelType::Color,
+            association: Association::Color(c),
         })
         .collect()
 }
 
 /// The three-component fixture decoded with its channels reversed and
-/// labelled as colours 1, 2, 3.
+/// labeled as colors 1, 2, 3.
 #[track_caller]
 pub(super) fn assert_reversed(image: &Image) {
     let raw = raw();
     let want: Vec<&Component> = raw.components.iter().rev().collect();
     let got: Vec<&Component> = image.components.iter().collect();
     assert_eq!(got, want, "channels reversed");
-    assert_eq!(image.jp2.as_ref().expect("metadata").channels, colours(3));
+    assert_eq!(image.jp2.as_ref().expect("metadata").channels, colors(3));
 }
 
 /// A file over the three-component fixture with these `jp2h` children after
@@ -96,27 +96,27 @@ fn accepted_layouts_come_out_in_openjpeg_order() {
             [2, 0, 1],
         ),
         (
-            "two entries claim colour 2",
+            "two entries claim color 2",
             cdef_of(&[(0, 0, 2), (1, 0, 2), (2, 0, 3)]),
             [0, 1, 2],
         ),
         (
-            "an opacity channel displaced by a colour",
+            "an opacity channel displaced by a color",
             cdef_of(&[(1, 1, 0), (0, 0, 2), (2, 0, 3)]),
             [1, 0, 2],
         ),
         (
-            "an opacity entry with a colour association moves nothing",
+            "an opacity entry with a color association moves nothing",
             cdef_of(&[(0, 1, 3), (1, 0, 2), (2, 0, 1)]),
             [2, 1, 0],
         ),
         (
-            "unspecified entries with colour associations move nothing",
+            "unspecified entries with color associations move nothing",
             cdef_of(&[(0, 65535, 3), (1, 65535, 2), (2, 65535, 1)]),
             [0, 1, 2],
         ),
         (
-            "Asoc 0 and 65535 on colour channels",
+            "Asoc 0 and 65535 on color channels",
             cdef_of(&[(0, 0, 0), (1, 0, 65535), (2, 0, 3)]),
             [0, 1, 2],
         ),
@@ -154,17 +154,17 @@ fn accepted_layouts_come_out_in_openjpeg_order() {
 
 /// Each channel carries its own entry; the label moves with the samples.
 #[test]
-fn every_channel_is_labelled_with_its_entry() {
+fn every_channel_is_labeled_with_its_entry() {
     use Association as A;
     use ChannelType as T;
     let cases: &[(&str, Vec<u8>, [ChannelDefinition; 3])] = &[
         (
-            "an opacity channel displaced by a colour",
+            "an opacity channel displaced by a color",
             cdef_of(&[(1, 1, 0), (0, 0, 2), (2, 0, 3)]),
             [
                 definition(T::Opacity, A::WholeImage),
-                definition(T::Colour, A::Colour(2)),
-                definition(T::Colour, A::Colour(3)),
+                definition(T::Color, A::Color(2)),
+                definition(T::Color, A::Color(3)),
             ],
         ),
         (
@@ -173,20 +173,20 @@ fn every_channel_is_labelled_with_its_entry() {
             [definition(T::Unspecified, A::None); 3],
         ),
         (
-            "premultiplied, reserved and colour",
+            "premultiplied, reserved and color",
             cdef_of(&[(0, 2, 0), (1, 9, 65535), (2, 0, 3)]),
             [
                 definition(T::PremultipliedOpacity, A::WholeImage),
                 definition(T::Other(9), A::None),
-                definition(T::Colour, A::Colour(3)),
+                definition(T::Color, A::Color(3)),
             ],
         ),
         (
             "a channel named twice keeps its last entry",
             cdef_of(&[(0, 0, 1), (1, 0, 2), (2, 0, 3), (2, 1, 0)]),
             [
-                definition(T::Colour, A::Colour(1)),
-                definition(T::Colour, A::Colour(2)),
+                definition(T::Color, A::Color(1)),
+                definition(T::Color, A::Color(2)),
                 definition(T::Opacity, A::WholeImage),
             ],
         ),
@@ -238,12 +238,12 @@ fn malformed_channel_definitions_are_file_format_errors() {
         (
             "Asoc - 1 past the last channel",
             with_children(&[cdef_of(&[(0, 0, 1), (1, 0, 2), (2, 0, 4)])]),
-            "with colour 4, but the file has 3 channels",
+            "with color 4, but the file has 3 channels",
         ),
         (
             "Asoc - 1 past the last channel, type unspecified",
             with_children(&[cdef_of(&[(0, 0, 1), (1, 0, 2), (2, 65535, 4)])]),
-            "with colour 4, but the file has 3 channels",
+            "with color 4, but the file has 3 channels",
         ),
         // "Incomplete channel definitions."
         (
@@ -324,7 +324,7 @@ fn entries_are_checked_against_the_channels_after_the_palette() {
     );
     file_format(
         &one(&[pclr_box(), reversed()]),
-        "with colour 3, but the file has 1 channels",
+        "with color 3, but the file has 1 channels",
     );
     let image = decode(&one(&[pclr_box(), cdef_of(&[(0, 1, 0)])])).expect("decodes");
     assert_eq!(
@@ -350,7 +350,7 @@ fn raw_channels_skips_the_channel_definitions() {
     ] {
         let image = decode_with(&with_children(&[cdef]), &options).expect("decodes");
         assert_eq!(image.components, raw.components);
-        assert_eq!(image.jp2.unwrap().channels, colours(3));
+        assert_eq!(image.jp2.unwrap().channels, colors(3));
     }
     for (bytes, fragment) in [
         (
@@ -369,7 +369,7 @@ fn raw_channels_skips_the_channel_definitions() {
     }
 }
 
-/// A palette's index planes stay labelled as index planes under
+/// A palette's index planes stay labeled as index planes under
 /// `raw_channels`, with a `cdef` present too.
 #[test]
 fn raw_channels_keeps_the_index_plane_label_with_a_cdef() {
@@ -388,7 +388,7 @@ fn raw_channels_keeps_the_index_plane_label_with_a_cdef() {
         channels[0],
         definition(ChannelType::Unspecified, Association::None)
     );
-    assert_eq!(channels[1..], colours(3)[1..]);
+    assert_eq!(channels[1..], colors(3)[1..]);
 }
 
 /// A reduced decode reorders the reduced channels the same way.

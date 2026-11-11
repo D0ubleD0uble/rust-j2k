@@ -81,7 +81,7 @@ fn rebuild(raw: &rust_j2k::Image) -> Vec<Rebuilt> {
     let mut order: Vec<usize> = (0..count).collect();
     let mut labels = vec![
         ChannelDefinition {
-            kind: ChannelType::Colour,
+            kind: ChannelType::Color,
             association: Association::None,
         };
         count
@@ -90,7 +90,7 @@ fn rebuild(raw: &rust_j2k::Image) -> Vec<Rebuilt> {
         for entry in entries {
             let channel = usize::from(entry.channel);
             labels[channel] = entry.definition;
-            if let (ChannelType::Colour, Association::Colour(n)) =
+            if let (ChannelType::Color, Association::Color(n)) =
                 (entry.definition.kind, entry.definition.association)
             {
                 let target = usize::from(n) - 1;

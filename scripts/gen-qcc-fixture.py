@@ -11,7 +11,7 @@ QCC may override it for every component, and then QCD's own values are never
 read. So take `multicomponent_lossless.j2k` (three reversible components, no
 COC/QCC), corrupt QCD's guard bits and exponents, and give every component a QCC
 holding the values QCD used to have. The codestream stays valid and decodes to
-exactly the same image -- but only for a decoder that honours QCC. One that
+exactly the same image -- but only for a decoder that honors QCC. One that
 ignores it reads the corrupted defaults, gets the wrong `Mb` for every subband,
 and reconstructs garbage.
 

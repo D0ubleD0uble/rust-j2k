@@ -9,18 +9,18 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Jp2Metadata {
-    /// The colour space of the colour channels.
-    pub colour: ColourSpace,
+    /// The color space of the color channels.
+    pub color: ColorSpace,
     /// One entry per [`Image::components`](crate::Image::components) entry,
     /// saying what that channel is: its entry in the file's channel
-    /// definition (`cdef`) box, or, without one, colour `i + 1` for channel
-    /// `i` while `i` is below the colour space's number of colours (3 for
-    /// sRGB and sYCC, 1 for greyscale, the profile's for an ICC profile). A
+    /// definition (`cdef`) box, or, without one, color `i + 1` for channel
+    /// `i` while `i` is below the color space's number of colors (3 for
+    /// sRGB and sYCC, 1 for grayscale, the profile's for an ICC profile). A
     /// channel past that has no meaning in I.5.3.6 and is
     /// [`ChannelType::Unspecified`] with [`Association::None`]. When the count is
-    /// unknown (the file gives no colour space, the enumerated value is not
+    /// unknown (the file gives no color space, the enumerated value is not
     /// one this decoder knows, or an ICC profile is too short to name its
-    /// colour space) every channel is a colour.
+    /// color space) every channel is a color.
     pub channels: Vec<ChannelDefinition>,
     /// Whether the samples went through the file's palette. `false` when the
     /// file has no palette (or a `pclr` without a `cmap`), or the caller set
@@ -35,17 +35,17 @@ pub struct Jp2Metadata {
     /// The channels an entry's [`channel`](ChannelDefinitionEntry::channel)
     /// counts are the file's components after the palette is expanded, in the
     /// order [`channel_mapping`](Self::channel_mapping) gives (the components
-    /// as coded for a file without a palette). The decode puts them in colour
+    /// as coded for a file without a palette). The decode puts them in color
     /// order like this. Start with the channels in that order, so channel `c`
     /// is at position `c`. For each entry in file order whose type is
-    /// [`ChannelType::Colour`] and whose association is
-    /// [`Association::Colour`]`(n)`, find where its channel is now (earlier
+    /// [`ChannelType::Color`] and whose association is
+    /// [`Association::Color`]`(n)`, find where its channel is now (earlier
     /// swaps may have moved it) and swap it with whatever is at position
     /// `n - 1`. Every other entry moves nothing. The channel a swap moves out
     /// of the way keeps its place in later lookups: it is found where it went.
     ///
-    /// For example, three colour entries `(channel 0, colour 3)`,
-    /// `(channel 1, colour 2)`, `(channel 2, colour 1)` give the order
+    /// For example, three color entries `(channel 0, color 3)`,
+    /// `(channel 1, color 2)`, `(channel 2, color 1)` give the order
     /// `[2, 1, 0]`: the first swap gives `[2, 1, 0]`, the second finds channel
     /// 1 already at position 1, and the third finds channel 2 already at
     /// position 0. Reading `Cn` as a position instead would swap 0 and 2, then
@@ -63,10 +63,10 @@ pub struct Jp2Metadata {
     /// let coded = decode_with(&bytes, &DecodeOptions::default().with_raw_channels(true))?;
     /// let entries = decoded.jp2.as_ref().unwrap().channel_definitions.as_ref().unwrap();
     ///
-    /// // The rule: swap each colour entry's channel into position `n - 1`.
+    /// // The rule: swap each color entry's channel into position `n - 1`.
     /// let mut order: Vec<usize> = (0..coded.components.len()).collect();
     /// for entry in entries {
-    ///     if let (ChannelType::Colour, Association::Colour(n)) =
+    ///     if let (ChannelType::Color, Association::Color(n)) =
     ///         (entry.definition.kind, entry.definition.association)
     ///     {
     ///         let at = order.iter().position(|&c| c == usize::from(entry.channel)).unwrap();
@@ -87,7 +87,7 @@ pub struct Jp2Metadata {
     /// A channel's label on [`channels`](Self::channels) is that of the last
     /// entry naming it.
     ///
-    /// [`channels`](Self::channels) itself is only relabelled when the `cdef`
+    /// [`channels`](Self::channels) itself is only relabeled when the `cdef`
     /// applies: under `raw_channels` every channel keeps its default label.
     pub channel_definitions: Option<Vec<ChannelDefinitionEntry>>,
     /// The file's palette, from its `pclr` box. Present when the palette
@@ -99,7 +99,7 @@ pub struct Jp2Metadata {
     /// ignores the palette in that case, as this decoder does.
     pub palette: Option<Palette>,
     /// The file's component mapping, set whenever [`palette`](Self::palette)
-    /// is: one entry per output channel of a palettised decode, in the order
+    /// is: one entry per output channel of a palettized decode, in the order
     /// before any `cdef` reordering. An entry is
     /// [`Direct`](crate::MappingKind::Direct) for a component used as coded.
     ///
@@ -137,15 +137,15 @@ pub struct Jp2Metadata {
     /// ignored ones too: those in every `jp2h` box and those misplaced at the
     /// top level after the first `jp2h`, before the codestream. A `colr` after
     /// the codestream is not reported. Only the first whose method is 1 or 2
-    /// sets [`colour`](Self::colour); the others are reported here and not
+    /// sets [`color`](Self::color); the others are reported here and not
     /// applied.
     ///
     /// The boxes are reported as stored in the file, whatever
-    /// [`DecodeOptions::colour`](crate::DecodeOptions::colour) is. Under
-    /// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb) the first may still
-    /// hold the original ICC profile while [`colour`](Self::colour) is
-    /// [`ColourSpace::Srgb`].
-    pub colour_specifications: Vec<ColourSpecification>,
+    /// [`DecodeOptions::color`](crate::DecodeOptions::color) is. Under
+    /// [`ColorOutput::Srgb`](crate::ColorOutput::Srgb) the first may still
+    /// hold the original ICC profile while [`color`](Self::color) is
+    /// [`ColorSpace::Srgb`].
+    pub color_specifications: Vec<ColorSpecification>,
     /// The File Type box (`ftyp`, I.5.2).
     pub file_type: FileType,
     /// The first top-level Reader Requirements box (`rreq`, ISO/IEC 15444-2
@@ -161,33 +161,34 @@ pub struct Jp2Metadata {
 pub struct ImageHeader {
     /// `C`: the compression type. The standard requires 7 (JPEG 2000).
     pub compression: u8,
-    /// `UnkC`: 1 when the file does not know the colour space, 0 when its
-    /// colour specification boxes give it accurately. Not consulted for
-    /// [`Jp2Metadata::colour`].
-    pub unknown_colour_space: u8,
-    /// `IPR`: 1 when the file holds intellectual property rights information
-    /// (see [`Jp2Metadata::ipr`]), 0 when it does not. Not checked against
-    /// the boxes present.
-    pub ipr: u8,
+    /// `UnkC`: 1 when the file does not know the color space, 0 when its
+    /// color specification boxes give it accurately. Not consulted for
+    /// [`Jp2Metadata::color`].
+    pub unknown_color_space: u8,
+    /// `IPR`: 1 when the file claims to hold intellectual property rights
+    /// boxes, 0 when it does not. This is only the flag as stored: it is not
+    /// checked against the boxes present, so it may disagree with
+    /// [`Jp2Metadata::ipr`], which holds the `jp2i` boxes actually found.
+    pub ipr_flag: u8,
 }
 
 /// One Colour Specification box (`colr`, I.5.3.3), as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ColourSpecification {
-    /// `METH`: 1 for an enumerated colour space, 2 for a restricted ICC
+pub struct ColorSpecification {
+    /// `METH`: 1 for an enumerated color space, 2 for a restricted ICC
     /// profile. Other values are reserved by this standard (ISO/IEC 15444-2
     /// defines more), and such a box is ignored.
     pub method: u8,
     /// `PREC`: the precedence. The standard reserves it and requires 0, and
     /// a reader ignores it. ISO/IEC 15444-2 reads the byte as a signed value.
     pub precedence: u8,
-    /// `APPROX`: the colour space approximation. The standard requires 0, and
+    /// `APPROX`: the color space approximation. The standard requires 0, and
     /// a reader ignores it.
     pub approximation: u8,
     /// The bytes after `APPROX`, verbatim: `EnumCS` (four bytes, big-endian)
     /// for `METH` 1, the ICC profile for `METH` 2.
-    pub data: Vec<u8>,
+    pub payload: Vec<u8>,
 }
 
 /// The File Type box (`ftyp`, I.5.2), as stored. A file is read when `jp2 `
@@ -252,9 +253,9 @@ pub struct VendorFeature {
 
 use super::palette::{ChannelMapping, Palette};
 
-/// The resolutions a JP2 file's `res ` box gives, in grid points per metre.
+/// The resolutions a JP2 file's `res ` box gives, in grid points per meter.
 ///
-/// The capture resolution (`resc`) is the one the image was digitised at; the
+/// The capture resolution (`resc`) is the one the image was digitized at; the
 /// default display resolution (`resd`) is the one it should be shown at. A
 /// box that is missing, or that does not hold exactly its ten bytes, leaves
 /// its field `None`: OpenJPEG does not read `res ` at all, so a malformed one
@@ -268,19 +269,19 @@ pub struct Resolution {
     pub display: Option<Res>,
 }
 
-/// One resolution: grid points per metre in each direction.
+/// One resolution: grid points per meter in each direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Res {
-    /// Vertical grid points per metre (`VRN`, `VRD`, `VRE`).
+    /// Vertical grid points per meter (`VRN`, `VRD`, `VRE`).
     pub vertical: Ratio,
-    /// Horizontal grid points per metre (`HRN`, `HRD`, `HRE`).
+    /// Horizontal grid points per meter (`HRN`, `HRD`, `HRE`).
     pub horizontal: Ratio,
 }
 
 /// A resolution as the file stores it: `numerator / denominator × 10^exponent`
-/// grid points per metre. Kept as integers, so the value is exact;
-/// [`Ratio::grid_points_per_metre`] gives it as a float.
+/// grid points per meter. Kept as integers, so the value is exact;
+/// [`Ratio::grid_points_per_meter`] gives it as a float.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Ratio {
@@ -293,7 +294,7 @@ pub struct Ratio {
 }
 
 impl Ratio {
-    /// The resolution in grid points per metre, or `None` when the
+    /// The resolution in grid points per meter, or `None` when the
     /// denominator is 0.
     ///
     /// ```
@@ -311,7 +312,7 @@ impl Ratio {
     /// #     ihdr.extend_from_slice(&header.width.to_be_bytes());
     /// #     ihdr.extend_from_slice(&(header.components.len() as u16).to_be_bytes());
     /// #     ihdr.extend_from_slice(&[header.components[0].bit_depth - 1, 7, 0, 0]);
-    /// #     // Capture resolution 10000 / 254 points per metre, both ways.
+    /// #     // Capture resolution 10000 / 254 points per meter, both ways.
     /// #     let mut resc = Vec::new();
     /// #     for value in [10000u16, 254, 10000, 254] {
     /// #         resc.extend_from_slice(&value.to_be_bytes());
@@ -330,14 +331,14 @@ impl Ratio {
     /// let bytes = jp2_with_resolution(&codestream)?;
     /// let jp2 = read_header(&bytes)?.jp2.expect("a JP2 file");
     /// let capture = jp2.resolution.capture.expect("a capture resolution");
-    /// // 10000 / 254 is about 39.37 grid points per metre.
-    /// let per_metre = capture.horizontal.grid_points_per_metre().unwrap();
-    /// assert!((per_metre - 10000.0 / 254.0).abs() < 1e-9);
+    /// // 10000 / 254 is about 39.37 grid points per meter.
+    /// let per_meter = capture.horizontal.grid_points_per_meter().unwrap();
+    /// assert!((per_meter - 10000.0 / 254.0).abs() < 1e-9);
     /// # Ok(())
     /// # }
     /// ```
     #[must_use]
-    pub fn grid_points_per_metre(self) -> Option<f64> {
+    pub fn grid_points_per_meter(self) -> Option<f64> {
         if self.denominator == 0 {
             return None;
         }
@@ -441,7 +442,7 @@ impl UuidInfo {
     }
 }
 
-/// The colour space a JP2 file declares for its colour channels.
+/// The color space a JP2 file declares for its color channels.
 ///
 /// It comes from the first usable Colour Specification (`colr`) box, the way
 /// OpenJPEG reads it: a box whose method is neither 1 (enumerated) nor 2
@@ -449,40 +450,40 @@ impl UuidInfo {
 /// later usable box is ignored. Boxes placed after `jp2h` at the top level
 /// count in file order with the ones inside `jp2h`. This is what the file
 /// declares. Decoding returns the samples as coded unless the caller asks for
-/// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb); then the colour channels
-/// are converted and [`Jp2Metadata::colour`] reports the converted space.
+/// [`ColorOutput::Srgb`](crate::ColorOutput::Srgb); then the color channels
+/// are converted and [`Jp2Metadata::color`] reports the converted space.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum ColourSpace {
-    /// sRGB (enumerated colour space 16).
+pub enum ColorSpace {
+    /// sRGB (enumerated color space 16).
     Srgb,
-    /// Greyscale (enumerated colour space 17).
-    Greyscale,
-    /// sYCC (enumerated colour space 18).
+    /// Grayscale (enumerated color space 17).
+    Grayscale,
+    /// sYCC (enumerated color space 18).
     Sycc,
     /// A `METH` 2 box's ICC profile: the box's bytes after its three header
     /// bytes, verbatim. The standard restricts it to a monochrome or
     /// three-component matrix/TRC input profile, but that is not checked
     /// here: it holds whatever the box contains.
     /// Applied to the samples only under
-    /// [`ColourOutput::Srgb`](crate::ColourOutput::Srgb), which then reports
-    /// the converted colour space instead.
+    /// [`ColorOutput::Srgb`](crate::ColorOutput::Srgb), which then reports
+    /// the converted color space instead.
     RestrictedIcc(Vec<u8>),
-    /// Another enumerated colour space value from the first usable box,
+    /// Another enumerated color space value from the first usable box,
     /// reported but not interpreted.
     Enumerated(u32),
-    /// The file gives no colour space: no usable `colr` box. The image
-    /// header's unknown-colour-space flag
-    /// ([`ImageHeader::unknown_colour_space`]) does not change this.
+    /// The file gives no color space: no usable `colr` box. The image
+    /// header's unknown-color-space flag
+    /// ([`ImageHeader::unknown_color_space`]) does not change this.
     Unknown,
 }
 
-/// What one output channel is: its type and the colour it belongs to.
+/// What one output channel is: its type and the color it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelDefinition {
     /// The channel's type.
     pub kind: ChannelType,
-    /// Which colour, if any, the channel is associated with.
+    /// Which color, if any, the channel is associated with.
     pub association: Association,
 }
 
@@ -505,8 +506,8 @@ pub struct ChannelDefinitionEntry {
 /// A channel's type, from a channel definition (`Typ`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelType {
-    /// A colour channel (`Typ` 0).
-    Colour,
+    /// A color channel (`Typ` 0).
+    Color,
     /// An opacity channel (`Typ` 1).
     Opacity,
     /// A premultiplied opacity channel (`Typ` 2).
@@ -517,16 +518,16 @@ pub enum ChannelType {
     Other(u16),
 }
 
-/// The colour a channel is associated with, from a channel definition
+/// The color a channel is associated with, from a channel definition
 /// (`Asoc`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Association {
     /// The channel applies to the whole image (`Asoc` 0), as an opacity
     /// channel usually does.
     WholeImage,
-    /// The channel is colour `n` of the colour space, counting from 1 (for
+    /// The channel is color `n` of the color space, counting from 1 (for
     /// sRGB, 1 is red, 2 green, 3 blue).
-    Colour(u16),
+    Color(u16),
     /// No association (`Asoc` 65535).
     None,
 }

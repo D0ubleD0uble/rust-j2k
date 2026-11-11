@@ -1,12 +1,12 @@
 {
-  "_comment": "What each decodable file's header says, in the `jp2` snapshot schema of tests/support/mod.rs (Jp2Snapshot). Every field is written from the file's box layer by scripts/gen-jp2-box-snapshots.py, not from this decoder. Channels are the cdef entries in box order (which must be channels 0 to NC-1), or colour/n for an enumerated sRGB, greyscale or sYCC file without one.",
+  "_comment": "What each decodable file's header says, in the `jp2` snapshot schema of tests/support/mod.rs (Jp2Snapshot). Every field is written from the file's box layer by scripts/gen-jp2-box-snapshots.py, not from this decoder. Channels are the cdef entries in box order (which must be channels 0 to NC-1), or color/n for an enumerated sRGB, grayscale or sYCC file without one.",
   "files": {
     "3_13bit_and_1bit.jp2": {
-      "colour": "srgb",
+      "color": "srgb",
       "channels": [
-        "colour/1",
-        "colour/2",
-        "colour/3",
+        "color/1",
+        "color/2",
+        "color/3",
         "opacity/whole"
       ],
       "palette_applied": false,
@@ -33,10 +33,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 0,
+        "unknown_color_space": 0,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,
@@ -49,9 +49,9 @@
       "reader_requirements": null
     },
     "byte.jp2": {
-      "colour": "greyscale",
+      "color": "grayscale",
       "channels": [
-        "colour/1"
+        "color/1"
       ],
       "palette_applied": false,
       "resolution": {
@@ -74,10 +74,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 1,
+        "unknown_color_space": 1,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,
@@ -90,9 +90,9 @@
       "reader_requirements": null
     },
     "byte_tlm_plt.jp2": {
-      "colour": "greyscale",
+      "color": "grayscale",
       "channels": [
-        "colour/1"
+        "color/1"
       ],
       "palette_applied": false,
       "resolution": {
@@ -122,10 +122,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 1,
+        "unknown_color_space": 1,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,
@@ -138,9 +138,9 @@
       "reader_requirements": null
     },
     "byte_with_xmp.jp2": {
-      "colour": "greyscale",
+      "color": "grayscale",
       "channels": [
-        "colour/1"
+        "color/1"
       ],
       "palette_applied": false,
       "resolution": {
@@ -168,10 +168,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 0,
+        "unknown_color_space": 0,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,
@@ -184,9 +184,9 @@
       "reader_requirements": null
     },
     "int16.jp2": {
-      "colour": "greyscale",
+      "color": "grayscale",
       "channels": [
-        "colour/1"
+        "color/1"
       ],
       "palette_applied": false,
       "resolution": {
@@ -209,10 +209,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 1,
+        "unknown_color_space": 1,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,
@@ -225,7 +225,7 @@
       "reader_requirements": null
     },
     "rgb16_ecwsdk.jp2": {
-      "colour": "srgb",
+      "color": "srgb",
       "channels": [
         "unspecified/none",
         "unspecified/none",
@@ -255,10 +255,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 0,
+        "unknown_color_space": 0,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,
@@ -271,11 +271,11 @@
       "reader_requirements": null
     },
     "rgbwcmyk01_YeGeo_kakadu.jp2": {
-      "colour": "srgb",
+      "color": "srgb",
       "channels": [
-        "colour/1",
-        "colour/2",
-        "colour/3"
+        "color/1",
+        "color/2",
+        "color/3"
       ],
       "palette_applied": false,
       "resolution": {
@@ -305,10 +305,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 1,
+        "unknown_color_space": 1,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,
@@ -321,11 +321,11 @@
       "reader_requirements": null
     },
     "small_200ppcm.jp2": {
-      "colour": "srgb",
+      "color": "srgb",
       "channels": [
-        "colour/1",
-        "colour/2",
-        "colour/3"
+        "color/1",
+        "color/2",
+        "color/3"
       ],
       "palette_applied": false,
       "resolution": {
@@ -355,10 +355,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 1,
+        "unknown_color_space": 1,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,
@@ -371,11 +371,11 @@
       "reader_requirements": null
     },
     "stefan_full_rgba.jp2": {
-      "colour": "srgb",
+      "color": "srgb",
       "channels": [
-        "colour/1",
-        "colour/2",
-        "colour/3",
+        "color/1",
+        "color/2",
+        "color/3",
         "opacity/whole"
       ],
       "palette_applied": false,
@@ -394,10 +394,10 @@
       },
       "image_header": {
         "compression": 7,
-        "unknown_colour_space": 0,
+        "unknown_color_space": 0,
         "ipr": 0
       },
-      "colour_specifications": [
+      "color_specifications": [
         {
           "method": 1,
           "precedence": 0,

@@ -77,7 +77,7 @@ it, is in [roadmap-phase3.md](roadmap-phase3.md); in brief:
 
 - Box parser: signature, ftyp, jp2h (ihdr, bpcc, colr, pclr, cmap, cdef, res),
   jp2c contiguous codestream. `decode` accepts a JP2 file or a raw codestream.
-- Colour metadata: enumerated sRGB, greyscale and sYCC, and restricted ICC
+- Color metadata: enumerated sRGB, grayscale and sYCC, and restricted ICC
   profiles passed through as bytes. Palette and channel mapping applied.
 - Opt-in sRGB output: sYCC to RGB and restricted ICC to sRGB. The default
   output stays the samples as coded, plus the metadata to interpret them.
@@ -96,7 +96,7 @@ real-world set decodes with its recorded metadata. The pre-release review in
 
 **Goal:** decode High Throughput codestreams, the modern high-value extension.
 
-- CAP marker and HTJ2K capability signalling.
+- CAP marker and HTJ2K capability signaling.
 - FBCOT block decoder (MEL + VLC + MagSgn) as an alternative Tier-1; the rest of
   the pipeline is shared with Part 1.
 

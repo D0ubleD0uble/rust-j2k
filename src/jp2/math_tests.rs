@@ -125,12 +125,12 @@ fn log_inputs(scale: usize, mut each: impl FnMut(f64)) {
     for _ in 0..200_000 * scale {
         each(f64::from_bits(rng.next() & 0x000f_ffff_ffff_ffff));
     }
-    // The 4095 grey-ramp nodes `estimate_gamma` evaluates.
+    // The 4095 gray-ramp nodes `estimate_gamma` evaluates.
     for i in 1..4096 {
         each(f64::from(i) / 4096.0);
     }
     for i in 0..500_000 * scale {
-        // Neighbours of 1, a step of one ulp at a time.
+        // Neighbors of 1, a step of one ulp at a time.
         let d = i as u64;
         each(f64::from_bits(0x3ff0_0000_0000_0000 + d));
         each(f64::from_bits(0x3ff0_0000_0000_0000 - d));

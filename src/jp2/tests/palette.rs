@@ -435,12 +435,12 @@ fn raw_channels_returns_the_index_plane() {
                 association: Association::None,
             },
             ChannelDefinition {
-                kind: ChannelType::Colour,
-                association: Association::Colour(2),
+                kind: ChannelType::Color,
+                association: Association::Color(2),
             },
             ChannelDefinition {
-                kind: ChannelType::Colour,
-                association: Association::Colour(3),
+                kind: ChannelType::Color,
+                association: Association::Color(3),
             },
         ]
     );
@@ -514,7 +514,7 @@ fn channel_definitions_apply_to_the_palette_channels() {
         }
         let jp2 = image.jp2.expect("metadata");
         assert!(jp2.palette_applied);
-        assert_eq!(jp2.channels, super::channels::colours(3));
+        assert_eq!(jp2.channels, super::channels::colors(3));
     }
 }
 

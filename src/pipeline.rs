@@ -6,7 +6,7 @@
 //! and consumed by dequant and the inverse DWT; keeping it here lets a future
 //! HT block decoder produce it without depending on the EBCOT module purely for
 //! its types. [`Samples`] carries one component's reconstructed values from the
-//! inverse DWT through the colour transform to image assembly.
+//! inverse DWT through the color transform to image assembly.
 
 /// One subband (or the coarsest LL): a row-major coefficient grid plus its
 /// tile-component origin. `data.len() == width * height`, addressed as
@@ -63,7 +63,7 @@ pub enum SubbandCoeffs {
 /// reconstructs in `f32` and is *not* rounded here.
 ///
 /// The rounding is deferred to [`crate::image::assemble`] so that it happens
-/// exactly once, after the inverse colour transform. ICT mixes the first three
+/// exactly once, after the inverse color transform. ICT mixes the first three
 /// components arithmetically (Annex G.3), and rounding each of them beforehand
 /// would inject up to half a unit of error into that mix. OpenJPEG defers it the
 /// same way: `opj_tcd_mct_decode` runs on `OPJ_FLOAT32*`, and

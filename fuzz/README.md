@@ -34,7 +34,7 @@ fuzz/
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
   fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream, also decoded as sRGB
   fuzz_targets/header.rs        # rust_j2k::read_header_with, checked against decode_with
-  fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColourOutput::Srgb
+  fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColorOutput::Srgb
   icc.dict                      # ICC tag and type signatures for icc_srgb
 ```
 
@@ -47,7 +47,7 @@ not public API) to drive the EBCOT block decoder and MQ coder directly.
 
 `tile_body`'s first input byte also steers the codestream shape, so one run
 reaches the widened tier-2 paths, not only the single-component single-layer
-default: three components with the colour transform, three quality layers, an
+default: three components with the color transform, three quality layers, an
 explicit precinct partition, the bypass (lazy) code-block style combined with
 the other style flags, fuzzed POC progression volumes over the widened
 geometry, a 2×2 tile grid with interleaved tile-parts, and PPM/PPT packed
@@ -68,7 +68,7 @@ decode is one resolution level down. `jp2.dict` holds the signature and every
 box type.
 
 Every input is decoded with `raw_channels`, and a file that decodes as coded
-is decoded again with `ColourOutput::Srgb`, which reads the `colr` ICC
+is decoded again with `ColorOutput::Srgb`, which reads the `colr` ICC
 profile and converts sYCC. Without a `pclr`, `cmap` or `cdef` the
 `raw_channels` image must equal the default one, or the raw decode may fail
 only on the boxes after the codestream (a `cmap`-less `pclr` that the
@@ -85,12 +85,12 @@ in every component (`icc_rgb_subsampled`) converts, since its channels
 agree. `gen-jp2-fuzz-seeds.py` adds one seed for each refusal and
 pass-through of `src/jp2/srgb.rs` a pinned codestream reaches: a `pclr`
 gives channels of mixed depth, sign or sub-sampling, a `cdef` too few
-colours, and a profile built with one header field, tag or curve changed
+colors, and a profile built with one header field, tag or curve changed
 reaches each of the profile reader's refusals. Not reached: the sample
 budget refusals (the pinned images are tiny), an even-origin 4:2:2
 conversion (no pinned codestream; `tests/jp2_sycc_replication.rs` grades one
 against OpenJPEG). The RGB profile's `uniform` refusal after the "AFL test"
-needs a `cdef` that moves a differing colour past the first four channels
+needs a `cdef` that moves a differing color past the first four channels
 (`icc_rgb_uniform_after_afl`). The CI smoke generates these seeds before it
 runs `jp2_boxes` for 30 s, and seeds `header` from the committed fixtures.
 `gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds, and
@@ -112,12 +112,12 @@ with a successful decode field by field. Seed it with the
 small synthetic codestreams and JP2 files, and give it the JP2 box
 dictionary.
 
-`icc_srgb` pins a small codestream (RGB at 8 or 16 bits, or grey, by the
+`icc_srgb` pins a small codestream (RGB at 8 or 16 bits, or gray, by the
 first input byte) and its boxes, and the rest of the input is the ICC profile
 in the `colr` box. Every execution reads the profile with
 `rust_j2k::fuzz::icc_profile`. Building the transform to sRGB costs
 milliseconds, far more than reading, so only one profile in 16, chosen by a
-hash of the profile, is also decoded with `ColourOutput::Srgb`, which builds
+hash of the profile, is also decoded with `ColorOutput::Srgb`, which builds
 and runs the LittleCMS port. On the old corpus that gate took the target from
 about 21 to about 560 exec/s (the gate's speeds, not this smoke run's); the 696
 seeds of the current corpus take about 8 s to initialize on CI. Seed it with
@@ -127,9 +127,9 @@ and profile pair with a profile of 128 bytes or more, a `*_build` copy with a
 2-byte nonce in the reserved header bytes 100 to 101 that makes the hash
 select it (the hash skips the first byte, so each codestream needs its own
 copy). So every such profile is selected and decoded with
-`ColourOutput::Srgb` under each codestream kind, and the profiles the
+`ColorOutput::Srgb` under each codestream kind, and the profiles the
 converter accepts reach the transform builders: 82 of 160 for RGB 8-bit, 82
-of 160 for RGB 16-bit and 15 of 27 for grey. The script exits if the target's
+of 160 for RGB 16-bit and 15 of 27 for gray. The script exits if the target's
 `BUILD_EVERY` or hash constants differ from its own, or if the target no
 longer has the lines `let Some((&variant, profile)) = data.split_first()` and
 `if fnv1a(profile) % BUILD_EVERY != 0 {`.
@@ -173,7 +173,7 @@ cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 fuzz/corpus/header/
 cargo +nightly fuzz run header -- -dict=fuzz/jp2.dict -max_total_time=300
 
 # The ICC target, seeded with the profiles of the ICC oracle cases (the
-# first byte picks the codestream: 0 RGB 8-bit, 1 RGB 16-bit, 2 grey). The CI
+# first byte picks the codestream: 0 RGB 8-bit, 1 RGB 16-bit, 2 gray). The CI
 # smoke runs it for 30 s with the same seeds.
 python3 scripts/gen-icc-oracles.py --fuzz-seeds
 cargo +nightly fuzz run icc_srgb -- -dict=fuzz/icc.dict -max_total_time=300

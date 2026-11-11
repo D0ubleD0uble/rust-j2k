@@ -35,7 +35,7 @@
 //! - Each channel is built on its own source component's grid, so palette and
 //!   direct channels from components of different sub-sampling decode
 //!   correctly. OpenJPEG sizes every channel by the first one's grid and
-//!   crashes or reads uninitialised memory.
+//!   crashes or reads uninitialized memory.
 //!
 //! [`plan`] reads the boxes and the main header into a [`PalettePlan`] before
 //! any tile is decoded; [`PalettePlan::apply`] then builds the channels from
@@ -301,7 +301,7 @@ impl Source {
     }
 }
 
-/// One output channel of a palettised file, known from the boxes and the main
+/// One output channel of a palettized file, known from the boxes and the main
 /// header alone: its source and its sample format. The grid size comes from
 /// the source component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -323,8 +323,8 @@ pub(crate) enum PalettePlan {
     None,
     /// The caller asked for the raw channels of a file whose palette would
     /// have applied. `index_components[k]` is set for each component a
-    /// palette channel would have looked up, so it can be labelled as an
-    /// index plane rather than a colour.
+    /// palette channel would have looked up, so it can be labeled as an
+    /// index plane rather than a color.
     Skipped {
         index_components: Vec<bool>,
         palette: Palette,
@@ -652,7 +652,7 @@ impl PalettePlan {
     /// Record the plan on the file's metadata: whether the palette was
     /// applied, and, when the caller skipped it, which raw channels are index
     /// planes. An index plane is `Unspecified` with no association: it is not
-    /// a colour until it goes through the palette.
+    /// a color until it goes through the palette.
     pub(crate) fn describe(&self, metadata: &mut Jp2Metadata) {
         metadata.palette_applied = matches!(self, PalettePlan::Apply { .. });
         match self {

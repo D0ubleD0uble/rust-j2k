@@ -33,7 +33,7 @@ panic, an abort, an out-of-bounds access, unbounded allocation, or a hang.
 A few things that back this up:
 
 - **No `unsafe`.** The decode path contains no `unsafe` code, so a malformed
-  input cannot cause undefined behaviour or memory unsafety; the worst a bug can
+  input cannot cause undefined behavior or memory unsafety; the worst a bug can
   do is an incorrect value or a panic.
 - **No C dependency.** The crate is pure Rust with no native/C codec, removing
   that class of memory-safety risk entirely.

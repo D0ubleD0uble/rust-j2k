@@ -1,7 +1,7 @@
 //! Channel definitions: the Channel Definition box (I.5.3.6, `cdef`).
 //!
-//! A `cdef` box says, for each output channel, what it is (`Typ`: colour,
-//! opacity, premultiplied opacity, unspecified) and which colour it belongs to
+//! A `cdef` box says, for each output channel, what it is (`Typ`: color,
+//! opacity, premultiplied opacity, unspecified) and which color it belongs to
 //! (`Asoc`). It describes the channels after the palette, when one applies.
 //! OpenJPEG 2.5.0 (`opj_jp2_read_cdef`, `opj_jp2_check_color`,
 //! `opj_jp2_apply_cdef`) is the reference, and this module follows it on what
@@ -15,13 +15,13 @@
 //!   last channel, an `Asoc` other than 0 and 65535 whose `Asoc - 1` is past
 //!   the last channel, or a channel no entry names is an error. An entry may
 //!   repeat a channel, as long as every channel is named.
-//! - The entries are applied in order. An entry of type colour (`Typ 0`)
+//! - The entries are applied in order. An entry of type color (`Typ 0`)
 //!   whose channel is not yet at position `Asoc - 1` swaps it there, and the
 //!   later entries follow their channels through the swap. Nothing else
-//!   moves a channel. For the usual layouts this puts colour `n` at position
+//!   moves a channel. For the usual layouts this puts color `n` at position
 //!   `n - 1` and leaves opacity channels where the file put them.
 //!
-//! Each output channel is labelled with its own entry (the last one that
+//! Each output channel is labeled with its own entry (the last one that
 //! names it), so the label moves with the samples. OpenJPEG keeps only the
 //! type, in a field its tools never write out, and can leave it on the wrong
 //! channel after a swap; that field is not an output, so it is not followed.
@@ -51,8 +51,8 @@ struct Entry {
 }
 
 impl Entry {
-    /// The colour position this entry moves its channel to: `Asoc - 1` for a
-    /// colour channel associated with a colour. `None` when the entry moves
+    /// The color position this entry moves its channel to: `Asoc - 1` for a
+    /// color channel associated with a color. `None` when the entry moves
     /// nothing (another type, `Asoc` 0 or 65535).
     fn target(self) -> Option<usize> {
         match (self.kind, self.association) {
@@ -64,7 +64,7 @@ impl Entry {
     fn definition(self) -> ChannelDefinition {
         ChannelDefinition {
             kind: match self.kind {
-                0 => ChannelType::Colour,
+                0 => ChannelType::Color,
                 1 => ChannelType::Opacity,
                 2 => ChannelType::PremultipliedOpacity,
                 65535 => ChannelType::Unspecified,
@@ -73,7 +73,7 @@ impl Entry {
             association: match self.association {
                 0 => Association::WholeImage,
                 65535 => Association::None,
-                n => Association::Colour(n),
+                n => Association::Color(n),
             },
         }
     }
@@ -190,7 +190,7 @@ fn check(entries: &[Entry], channels: usize) -> Result<()> {
         }
         if !matches!(entry.association, 0 | 65535) && usize::from(entry.association) > channels {
             return Err(Error::FileFormat(format!(
-                "`cdef` entry {i} associates channel {} with colour {}, but the file has \
+                "`cdef` entry {i} associates channel {} with color {}, but the file has \
                  {channels} channels",
                 entry.channel, entry.association
             )));
@@ -211,7 +211,7 @@ fn check(entries: &[Entry], channels: usize) -> Result<()> {
     Ok(())
 }
 
-/// Run OpenJPEG's placement over checked entries: each colour entry swaps its
+/// Run OpenJPEG's placement over checked entries: each color entry swaps its
 /// channel to `Asoc - 1`, and later entries follow their channels.
 fn place(entries: &[Entry], channels: usize) -> ChannelPlan {
     // `order[p]` is the input channel at position `p`; `position[c]` is where
@@ -313,9 +313,9 @@ mod tests {
             (&[(0, 0, 3), (1, 0, 2), (2, 0, 1)], [2, 1, 0]),
             (&[(2, 0, 1), (1, 0, 2), (0, 0, 3)], [2, 1, 0]),
             (&[(0, 0, 2), (1, 0, 3), (2, 0, 1)], [2, 0, 1]),
-            // Two entries claim colour 2: the second swaps the first back.
+            // Two entries claim color 2: the second swaps the first back.
             (&[(0, 0, 2), (1, 0, 2), (2, 0, 3)], [0, 1, 2]),
-            // An opacity channel moves only when a colour channel takes its
+            // An opacity channel moves only when a color channel takes its
             // place.
             (&[(1, 1, 0), (0, 0, 2), (2, 0, 3)], [1, 0, 2]),
             (&[(0, 1, 3), (1, 0, 2), (2, 0, 1)], [2, 1, 0]),
@@ -334,7 +334,7 @@ mod tests {
         }
     }
 
-    /// Opacity first (an ARGB layout): every colour entry swaps, and the
+    /// Opacity first (an ARGB layout): every color entry swaps, and the
     /// opacity channel is pushed to the end. Its label goes with it.
     #[test]
     fn an_opacity_channel_pushed_along_keeps_its_label() {
@@ -344,16 +344,16 @@ mod tests {
             unreachable!()
         };
         assert_eq!(order, [1, 2, 3, 0]);
-        let colour = |n| ChannelDefinition {
-            kind: ChannelType::Colour,
-            association: Association::Colour(n),
+        let color = |n| ChannelDefinition {
+            kind: ChannelType::Color,
+            association: Association::Color(n),
         };
         assert_eq!(
             definitions,
             [
-                colour(1),
-                colour(2),
-                colour(3),
+                color(1),
+                color(2),
+                color(3),
                 ChannelDefinition {
                     kind: ChannelType::Opacity,
                     association: Association::WholeImage,
@@ -382,7 +382,7 @@ mod tests {
             }
             .definition()
         };
-        assert_eq!(label(0, 2).kind, ChannelType::Colour);
+        assert_eq!(label(0, 2).kind, ChannelType::Color);
         assert_eq!(label(1, 0).kind, ChannelType::Opacity);
         assert_eq!(label(2, 0).kind, ChannelType::PremultipliedOpacity);
         assert_eq!(label(65535, 0).kind, ChannelType::Unspecified);
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(label(65534, 0).kind, ChannelType::Other(65534));
         assert_eq!(label(0, 0).association, Association::WholeImage);
         assert_eq!(label(0, 65535).association, Association::None);
-        assert_eq!(label(0, 7).association, Association::Colour(7));
+        assert_eq!(label(0, 7).association, Association::Color(7));
     }
 
     #[test]

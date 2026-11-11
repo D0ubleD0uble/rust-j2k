@@ -285,7 +285,7 @@ fn inverse_9_7(signal: &mut [f32], cas: usize) {
     for i in (high..n).step_by(2) {
         signal[i] *= two_inv_k;
     }
-    // Each lifting step adjusts one parity using its two immediate neighbours of
+    // Each lifting step adjusts one parity using its two immediate neighbors of
     // the other parity, swept across the whole row before the next step runs.
     lift_step(signal, n, low, -DELTA); // s'_n = s_n - δ(d_{n-1} + d_n)
     lift_step(signal, n, high, -GAMMA); // d'_n = d_n - γ(s'_n + s'_{n+1})
@@ -293,7 +293,7 @@ fn inverse_9_7(signal: &mut [f32], cas: usize) {
     lift_step(signal, n, high, -ALPHA); // x_2n+1 = d'_n - α(x_2n + x_2n+2)
 }
 
-/// One 9/7 lifting sweep: add `coeff * (neighbour_left + neighbour_right)` to
+/// One 9/7 lifting sweep: add `coeff * (neighbor_left + neighbor_right)` to
 /// every sample of the parity `start` selects.
 fn lift_step(signal: &mut [f32], n: usize, start: usize, coeff: f32) {
     for i in (start..n).step_by(2) {
@@ -868,7 +868,7 @@ mod tests {
     }
 
     /// The irreversible path hands `assemble` unrounded samples. A decoder that
-    /// rounded here would destroy the precision the inverse colour transform
+    /// rounded here would destroy the precision the inverse color transform
     /// needs (issue #76).
     #[test]
     fn the_irreversible_path_is_not_rounded_by_the_dwt() {

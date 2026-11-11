@@ -2348,11 +2348,11 @@
     "notes": "one component, cmap channel 1 direct, so column 1 is unused: OpenJPEG warns 'Component mapping seems wrong. Trying to correct.' and applies the identity mapping"
   },
   "jp2": {
-    "colour": "srgb",
+    "color": "srgb",
     "channels": [
-      "colour/1",
-      "colour/2",
-      "colour/3"
+      "color/1",
+      "color/2",
+      "color/3"
     ],
     "palette_applied": true,
     "resolution": {
@@ -2370,10 +2370,10 @@
     },
     "image_header": {
       "compression": 7,
-      "unknown_colour_space": 0,
+      "unknown_color_space": 0,
       "ipr": 0
     },
-    "colour_specifications": [
+    "color_specifications": [
       {
         "method": 1,
         "precedence": 0,

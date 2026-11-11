@@ -20,10 +20,10 @@
 //!   not used: SIZ is the truth for depth and sign.
 
 use super::header::Jp2Header;
-use super::metadata::ColourSpace;
+use super::metadata::ColorSpace;
 use crate::{Error, Result};
 
-/// `METH` for an enumerated colour space.
+/// `METH` for an enumerated color space.
 const ENUMERATED: u8 = 1;
 /// `METH` for a restricted ICC profile.
 const RESTRICTED_ICC: u8 = 2;
@@ -57,13 +57,13 @@ pub(crate) fn check_bpcc(header: &Jp2Header<'_>) -> Result<()> {
     Ok(())
 }
 
-/// The colour space the file declares: the first usable `colr`, or
-/// [`ColourSpace::Unknown`] if there is none. `ihdr.UnkC` is not consulted, as
+/// The color space the file declares: the first usable `colr`, or
+/// [`ColorSpace::Unknown`] if there is none. `ihdr.UnkC` is not consulted, as
 /// in OpenJPEG: Kakadu writes `UnkC` 1 beside a `colr` it means (I.5.3.1 says
 /// to treat the image as if the methods reproduce it accurately). Every `colr`
 /// is still held to its size rules, so a malformed box is refused even when it
 /// would not have been used.
-pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColourSpace> {
+pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColorSpace> {
     let mut first = None;
     for payload in header.colr() {
         if payload.len() < 3 {
@@ -76,12 +76,12 @@ pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColourSpace> {
             first = parse_usable(payload)?;
         }
     }
-    Ok(first.unwrap_or(ColourSpace::Unknown))
+    Ok(first.unwrap_or(ColorSpace::Unknown))
 }
 
 /// Read one `colr` of at least 3 bytes. `None` for a `METH` that is neither 1
 /// nor 2: the box is ignored and does not count as the first.
-pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColourSpace>> {
+pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColorSpace>> {
     let method = payload[0];
     let rest = &payload[3..];
     match method {
@@ -89,15 +89,15 @@ pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColourSpace>> {
             let Some(&[a, b, c, d]) = rest.first_chunk::<4>() else {
                 return Err(Error::FileFormat(format!(
                     "a `colr` box with `METH` 1 holds {} bytes; it needs 7 for the \
-                     enumerated colour space",
+                     enumerated color space",
                     payload.len()
                 )));
             };
             Ok(Some(match u32::from_be_bytes([a, b, c, d]) {
-                16 => ColourSpace::Srgb,
-                17 => ColourSpace::Greyscale,
-                18 => ColourSpace::Sycc,
-                other => ColourSpace::Enumerated(other),
+                16 => ColorSpace::Srgb,
+                17 => ColorSpace::Grayscale,
+                18 => ColorSpace::Sycc,
+                other => ColorSpace::Enumerated(other),
             }))
         }
         RESTRICTED_ICC => {
@@ -106,7 +106,7 @@ pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColourSpace>> {
                     "a `colr` box with `METH` 2 holds no ICC profile".into(),
                 ));
             }
-            Ok(Some(ColourSpace::RestrictedIcc(rest.to_vec())))
+            Ok(Some(ColorSpace::RestrictedIcc(rest.to_vec())))
         }
         _ => Ok(None),
     }

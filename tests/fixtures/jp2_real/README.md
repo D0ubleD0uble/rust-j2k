@@ -14,7 +14,7 @@ tile decoding, "segment too long").
 **The redistribution rights of these files are not confirmed.** GDAL's
 `LICENSE.TXT` says the project is "in general" under the MIT license and does
 not mention its test data, and several files are output of third-party
-encoders. They are not labelled MIT here, and the crate's own `MIT OR
+encoders. They are not labeled MIT here, and the crate's own `MIT OR
 Apache-2.0` license does not cover them. The directory is excluded from the
 published crate (`exclude` in `Cargo.toml`). Committing them was an owner
 decision (Decision 2 in `docs/roadmap-phase3.md`); if a rights holder objects,
@@ -33,7 +33,7 @@ comment does not name an encoder says so.
 | File | GDAL path | Encoder (`COM` marker) | Bytes | SHA-256 | Notable boxes |
 | ---- | --------- | ---------------------- | ----: | ------- | ------------- |
 | `3_13bit_and_1bit.jp2` | `autotest/gdrivers/data/jpeg2000/3_13bit_and_1bit.jp2` | ECW JPEG 2000 SDK v3.3.0.160 | 27029 | `f67d0b8fa68634659a74e0c7e1768348ed64b588e835bb8efbf6f8308acc72f7` | `bpcc` (13, 13, 13, 1 bit), `cdef` with alpha, `xml `, `uuid` |
-| `byte.jp2` | `autotest/gdrivers/data/jpeg2000/byte.jp2` | Kakadu-v3.4 | 10247 | `ef330c025133f062b4cca8c8171f8aef4f245be975c5e534dc9ce463689c3aa0` | greyscale `colr`, `uuid` (GeoJP2) |
+| `byte.jp2` | `autotest/gdrivers/data/jpeg2000/byte.jp2` | Kakadu-v3.4 | 10247 | `ef330c025133f062b4cca8c8171f8aef4f245be975c5e534dc9ce463689c3aa0` | grayscale `colr`, `uuid` (GeoJP2) |
 | `byte_tlm_plt.jp2` | `autotest/gdrivers/data/jpeg2000/byte_tlm_plt.jp2` | not named (`COM` reads `my_comment`) | 1267 | `c2bccd9839cd4cb24ac6bc84fd888d707bbf1d873af07616fa020e05ab491a49` | `res ` with `resc`, `uuid`; TLM and PLT markers |
 | `byte_with_xmp.jp2` | `autotest/gdrivers/data/jpeg2000/byte_with_xmp.jp2` | ECW JPEG 2000 SDK v3.3.0.161 | 6114 | `cda36211b536322d28b96f17123ee2154e14826b69533e44ade7242906cc0b7d` | `cdef`, `asoc`/`lbl `/`xml `, two `uuid` |
 | `int16.jp2` | `autotest/gdrivers/data/jpeg2000/int16.jp2` | Kakadu-v3.4 | 1282 | `62fef13b5f49de6302a86fe1f18663626c0b7e5f2470893d32136bc16af690e3` | signed 16-bit, `uuid` |
@@ -66,7 +66,7 @@ them; it stops first unless `opj_decompress` is the pinned version.
 The references are OpenJPEG output for files whose rights are not confirmed,
 so they share the status in Rights above.
 
-`metadata.json` records what each file's header says (colour, channels,
+`metadata.json` records what each file's header says (color, channels,
 resolution, top-level `xml ` and `uuid` boxes, and the `ftyp`, `ihdr`, `colr`
 and `rreq` fields), in the `jp2` snapshot schema of `tests/fixtures/README.md`,
 for every file. Every value, and the file itself, is

@@ -1,12 +1,12 @@
-//! `colr` and `bpcc` tests: the colour space the file declares and the box
+//! `colr` and `bpcc` tests: the color space the file declares and the box
 //! shapes that are refused. Each goes through the public [`decode`].
 //!
 //! The accept/reject answers were measured with `opj_decompress` 2.5.0 on
-//! the same box shapes (see the module docs of `colour`). The codestream is
+//! the same box shapes (see the module docs of `color`). The codestream is
 //! the committed three-component 24x16 fixture; the boxes are built here.
 
 use super::SIGNATURE;
-use crate::{ColourSpace, Error, decode};
+use crate::{ColorSpace, Error, decode};
 
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
 
@@ -26,7 +26,7 @@ fn ihdr(bpc: u8, unk_c: u8) -> Vec<u8> {
     bx(b"ihdr", &payload)
 }
 
-/// A `colr` with an enumerated colour space.
+/// A `colr` with an enumerated color space.
 fn enum_colr(enum_cs: u32) -> Vec<u8> {
     let mut payload = vec![1, 0, 0];
     payload.extend_from_slice(&enum_cs.to_be_bytes());
@@ -58,12 +58,12 @@ fn with(children: &[Vec<u8>]) -> Vec<u8> {
 }
 
 #[track_caller]
-fn colour_of(bytes: &[u8]) -> ColourSpace {
+fn color_of(bytes: &[u8]) -> ColorSpace {
     decode(bytes)
         .unwrap_or_else(|e| panic!("decode failed: {e}"))
         .jp2
         .expect("a JP2 file carries metadata")
-        .colour
+        .color
 }
 
 #[track_caller]
@@ -78,81 +78,81 @@ fn refused(bytes: &[u8], fragment: &str) {
 }
 
 #[test]
-fn enumerated_colour_spaces_map_to_their_variants() {
-    assert_eq!(colour_of(&with(&[enum_colr(16)])), ColourSpace::Srgb);
-    assert_eq!(colour_of(&with(&[enum_colr(17)])), ColourSpace::Greyscale);
-    assert_eq!(colour_of(&with(&[enum_colr(18)])), ColourSpace::Sycc);
+fn enumerated_color_spaces_map_to_their_variants() {
+    assert_eq!(color_of(&with(&[enum_colr(16)])), ColorSpace::Srgb);
+    assert_eq!(color_of(&with(&[enum_colr(17)])), ColorSpace::Grayscale);
+    assert_eq!(color_of(&with(&[enum_colr(18)])), ColorSpace::Sycc);
     for other in [0, 12, 14, 15, 19, 20, 21, 24, u32::MAX] {
         assert_eq!(
-            colour_of(&with(&[enum_colr(other)])),
-            ColourSpace::Enumerated(other)
+            color_of(&with(&[enum_colr(other)])),
+            ColorSpace::Enumerated(other)
         );
     }
 }
 
 #[test]
-fn a_file_without_colr_has_an_unknown_colour_space() {
-    assert_eq!(colour_of(&with(&[])), ColourSpace::Unknown);
+fn a_file_without_colr_has_an_unknown_color_space() {
+    assert_eq!(color_of(&with(&[])), ColorSpace::Unknown);
 }
 
 #[test]
 fn prec_approx_and_extra_bytes_do_not_change_the_enumerated_value() {
     let long = bx(b"colr", &[1, 5, 3, 0, 0, 0, 17, 9, 9, 9, 9]);
-    assert_eq!(colour_of(&with(&[long])), ColourSpace::Greyscale);
+    assert_eq!(color_of(&with(&[long])), ColorSpace::Grayscale);
 }
 
 #[test]
 fn the_icc_profile_is_the_bytes_after_the_three_header_bytes() {
     let profile: Vec<u8> = (0..=255).collect();
     assert_eq!(
-        colour_of(&with(&[colr(2, &profile)])),
-        ColourSpace::RestrictedIcc(profile)
+        color_of(&with(&[colr(2, &profile)])),
+        ColorSpace::RestrictedIcc(profile)
     );
     // A profile too short to be one is passed through, as OpenJPEG does.
     assert_eq!(
-        colour_of(&with(&[colr(2, &[1, 2, 3, 4, 5])])),
-        ColourSpace::RestrictedIcc(vec![1, 2, 3, 4, 5])
+        color_of(&with(&[colr(2, &[1, 2, 3, 4, 5])])),
+        ColorSpace::RestrictedIcc(vec![1, 2, 3, 4, 5])
     );
 }
 
 #[test]
 fn the_first_usable_colr_wins() {
     assert_eq!(
-        colour_of(&with(&[enum_colr(17), enum_colr(16)])),
-        ColourSpace::Greyscale
+        color_of(&with(&[enum_colr(17), enum_colr(16)])),
+        ColorSpace::Grayscale
     );
     assert_eq!(
-        colour_of(&with(&[colr(2, &[7, 7, 7]), enum_colr(16)])),
-        ColourSpace::RestrictedIcc(vec![7, 7, 7])
+        color_of(&with(&[colr(2, &[7, 7, 7]), enum_colr(16)])),
+        ColorSpace::RestrictedIcc(vec![7, 7, 7])
     );
 }
 
 #[test]
 fn a_method_other_than_1_or_2_is_ignored_and_does_not_count_as_the_first() {
-    assert_eq!(colour_of(&with(&[colr(3, b"abcd")])), ColourSpace::Unknown);
+    assert_eq!(color_of(&with(&[colr(3, b"abcd")])), ColorSpace::Unknown);
     for method in [0, 3, 4, 255] {
         assert_eq!(
-            colour_of(&with(&[colr(method, &[0, 0, 0, 16]), enum_colr(18)])),
-            ColourSpace::Sycc,
+            color_of(&with(&[colr(method, &[0, 0, 0, 16]), enum_colr(18)])),
+            ColorSpace::Sycc,
             "METH {method} then a usable box"
         );
     }
 }
 
 #[test]
-fn the_unknown_colourspace_flag_in_ihdr_does_not_change_the_colr_value() {
+fn the_unknown_colorspace_flag_in_ihdr_does_not_change_the_colr_value() {
     // OpenJPEG never uses `UnkC`, and Kakadu writes 1 beside a real `colr`.
     for unk_c in [0, 1, 2] {
         let bytes = file_with(ihdr(7, unk_c), &[enum_colr(16)], &[]);
-        assert_eq!(colour_of(&bytes), ColourSpace::Srgb, "UnkC {unk_c}");
+        assert_eq!(color_of(&bytes), ColorSpace::Srgb, "UnkC {unk_c}");
     }
     let bytes = file_with(ihdr(7, 1), &[colr(2, &[1, 2, 3, 4])], &[]);
     assert_eq!(
-        colour_of(&bytes),
-        ColourSpace::RestrictedIcc(vec![1, 2, 3, 4])
+        color_of(&bytes),
+        ColorSpace::RestrictedIcc(vec![1, 2, 3, 4])
     );
     let bytes = file_with(ihdr(7, 1), &[], &[]);
-    assert_eq!(colour_of(&bytes), ColourSpace::Unknown);
+    assert_eq!(color_of(&bytes), ColorSpace::Unknown);
     // A malformed box is still refused.
     refused(&file_with(ihdr(7, 1), &[bx(b"colr", &[])], &[]), "`colr`");
 }
@@ -172,21 +172,21 @@ fn every_colr_needs_three_bytes_even_one_that_is_ignored() {
     // Three bytes pass the size rule: a later `METH 1` box with no `EnumCS`
     // is ignored whole.
     assert_eq!(
-        colour_of(&with(&[enum_colr(16), bx(b"colr", &[1, 0, 0])])),
-        ColourSpace::Srgb
+        color_of(&with(&[enum_colr(16), bx(b"colr", &[1, 0, 0])])),
+        ColorSpace::Srgb
     );
 }
 
 #[test]
 fn the_first_usable_colr_can_be_a_misplaced_one() {
     let bytes = file_with(ihdr(7, 0), &[], &[enum_colr(17)]);
-    assert_eq!(colour_of(&bytes), ColourSpace::Greyscale);
+    assert_eq!(color_of(&bytes), ColorSpace::Grayscale);
     // Inside `jp2h` first, then the misplaced one is a later box.
     let bytes = file_with(ihdr(7, 0), &[enum_colr(16)], &[enum_colr(17)]);
-    assert_eq!(colour_of(&bytes), ColourSpace::Srgb);
+    assert_eq!(color_of(&bytes), ColorSpace::Srgb);
     // A skipped `METH 3` inside, so the misplaced one is the first usable.
     let bytes = file_with(ihdr(7, 0), &[colr(3, &[0])], &[enum_colr(17)]);
-    assert_eq!(colour_of(&bytes), ColourSpace::Greyscale);
+    assert_eq!(color_of(&bytes), ColorSpace::Grayscale);
 }
 
 #[test]
@@ -199,12 +199,12 @@ fn a_first_colr_too_short_for_its_method_is_refused() {
     // A box that is ignored because an earlier one counted is never parsed
     // past its size.
     assert_eq!(
-        colour_of(&with(&[enum_colr(17), colr(2, &[])])),
-        ColourSpace::Greyscale
+        color_of(&with(&[enum_colr(17), colr(2, &[])])),
+        ColorSpace::Grayscale
     );
     assert_eq!(
-        colour_of(&with(&[enum_colr(17), bx(b"colr", &[1, 0, 0, 0, 0])])),
-        ColourSpace::Greyscale
+        color_of(&with(&[enum_colr(17), bx(b"colr", &[1, 0, 0, 0, 0])])),
+        ColorSpace::Grayscale
     );
 }
 
@@ -257,21 +257,21 @@ fn a_malformed_colr_is_refused_before_an_unsupported_box() {
 }
 
 /// The nine ISO/IEC 15444-4 JP2 reader files, read through the same box walk
-/// `decode` uses; `tests/jp2_colour.rs` checks what `decode` reports.
+/// `decode` uses; `tests/jp2_color.rs` checks what `decode` reports.
 #[test]
-fn the_conformance_files_declare_the_expected_colour_spaces() {
+fn the_conformance_files_declare_the_expected_color_spaces() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/conformance/jp2/files");
     let expected = [
-        ColourSpace::Srgb,
-        ColourSpace::Sycc,
-        ColourSpace::Sycc,
-        ColourSpace::Greyscale,
-        ColourSpace::Unknown, // file5: ICC, checked below
-        ColourSpace::Greyscale,
-        ColourSpace::Unknown, // file7
-        ColourSpace::Unknown, // file8
-        ColourSpace::Srgb,
+        ColorSpace::Srgb,
+        ColorSpace::Sycc,
+        ColorSpace::Sycc,
+        ColorSpace::Grayscale,
+        ColorSpace::Unknown, // file5: ICC, checked below
+        ColorSpace::Grayscale,
+        ColorSpace::Unknown, // file7
+        ColorSpace::Unknown, // file8
+        ColorSpace::Srgb,
     ];
     let icc_lengths = [(5, 546), (7, 13332), (8, 414)];
     for (i, want) in expected.iter().enumerate() {
@@ -280,8 +280,8 @@ fn the_conformance_files_declare_the_expected_colour_spaces() {
             .unwrap_or_else(|e| panic!("file{n}: {e}"));
         let parsed = super::parse(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
         match icc_lengths.iter().find(|(file, _)| *file == n) {
-            Some((_, len)) => match &parsed.colour {
-                ColourSpace::RestrictedIcc(profile) => {
+            Some((_, len)) => match &parsed.color {
+                ColorSpace::RestrictedIcc(profile) => {
                     assert_eq!(profile.len(), *len, "file{n}");
                     // The profile is the first `colr` box's payload less its
                     // three header bytes.
@@ -289,7 +289,7 @@ fn the_conformance_files_declare_the_expected_colour_spaces() {
                 }
                 other => panic!("file{n}: expected RestrictedIcc, got {other:?}"),
             },
-            None => assert_eq!(&parsed.colour, want, "file{n}"),
+            None => assert_eq!(&parsed.color, want, "file{n}"),
         }
     }
 }
@@ -329,12 +329,12 @@ fn a_bpcc_before_ihdr_must_be_empty() {
         "`ihdr` has not been read",
     );
     assert_eq!(
-        colour_of(&with_jp2h_boxes(&[vec![
+        color_of(&with_jp2h_boxes(&[vec![
             bpcc(&[]),
             ihdr(255, 0),
             enum_colr(16)
         ]])),
-        ColourSpace::Srgb
+        ColorSpace::Srgb
     );
     // After `ihdr` in the same box the length must be NC.
     refused(
@@ -345,25 +345,25 @@ fn a_bpcc_before_ihdr_must_be_empty() {
     // `bpcc` before it is still fine, and so is a one-per-component `bpcc`
     // after it.
     assert_eq!(
-        colour_of(&with_jp2h_boxes(&[
+        color_of(&with_jp2h_boxes(&[
             vec![bpcc(&[]), ihdr(255, 0), enum_colr(16)],
             vec![ihdr(255, 0)],
         ])),
-        ColourSpace::Srgb
+        ColorSpace::Srgb
     );
     assert_eq!(
-        colour_of(&with_jp2h_boxes(&[
+        color_of(&with_jp2h_boxes(&[
             vec![bpcc(&[]), ihdr(255, 0)],
             vec![bpcc(&[7, 7, 7]), ihdr(255, 0), enum_colr(16)],
         ])),
-        ColourSpace::Srgb
+        ColorSpace::Srgb
     );
     // A second `jp2h` sees the first one's `ihdr`, even before its own.
     assert_eq!(
-        colour_of(&with_jp2h_boxes(&[
+        color_of(&with_jp2h_boxes(&[
             vec![ihdr(255, 0), enum_colr(17)],
             vec![bpcc(&[7, 7, 7]), ihdr(255, 0)],
         ])),
-        ColourSpace::Greyscale
+        ColorSpace::Grayscale
     );
 }

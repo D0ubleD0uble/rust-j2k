@@ -226,7 +226,7 @@ mod tests {
 
     /// Depths above 8 bits pack big-endian by default (`ML`); `LM` is little-endian.
     #[test]
-    fn pgx_honours_byte_order() {
+    fn pgx_honors_byte_order() {
         let big = parse_pgx(&pgx("PG ML 12 2 1", &[0x0F, 0xFF, 0x00, 0x01])).unwrap();
         assert_eq!(big.samples, vec![4095, 1]);
 

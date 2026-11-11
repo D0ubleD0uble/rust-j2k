@@ -15,15 +15,15 @@ targets keep the fields this script does not own.
 
 What it reads, from the JP2 box layer alone:
 
-- `colour`: the first counted `colr` (below). `METH` 1 with `EnumCS` 16, 17
-  or 18 is `srgb`, `greyscale` or `sycc`; another `EnumCS` is
+- `color`: the first counted `colr` (below). `METH` 1 with `EnumCS` 16, 17
+  or 18 is `srgb`, `grayscale` or `sycc`; another `EnumCS` is
   `enumerated:<n>`; `METH` 2 is `icc:<profile bytes>`.
 - `channels`: one `<type>/<association>` per channel. With a `cdef` box, its
   entries in box order, which must be channels 0 to `NC`-1 in order: `Typ`
-  0, 1, 2, 65535 is `colour`, `opacity`, `premultiplied`, `unspecified`, else
-  `other(<Typ>)`; `Asoc` 0 is `whole`, 65535 is `none`, else the colour
-  number. Without one, channel `i` is `colour/<i+1>` while `i` is below the
-  colour count (enumerated sRGB 3, greyscale 1, sYCC 3) and
+  0, 1, 2, 65535 is `color`, `opacity`, `premultiplied`, `unspecified`, else
+  `other(<Typ>)`; `Asoc` 0 is `whole`, 65535 is `none`, else the color
+  number. Without one, channel `i` is `color/<i+1>` while `i` is below the
+  color count (enumerated sRGB 3, grayscale 1, sYCC 3) and
   `unspecified/none` after (ISO/IEC 15444-1 I.5.3.6). `NC` of `ihdr` must
   equal `Csiz` of the codestream's SIZ.
 - `palette_applied`: false.
@@ -31,11 +31,11 @@ What it reads, from the JP2 box layer alone:
 For `metadata.json` the walker refuses (exits, naming the file) instead of
 guessing, wherever its rules could differ from the decoder's: a `pclr` or
 `cmap` box; a top-level `bpcc`, `pclr`, `cmap` or `cdef` box; more than one
-`cdef`; a `cdef` out of channel order; no `cdef` with a colour space other
-than enumerated sRGB, greyscale or sYCC; `LBox` 0 inside a superbox; a short
+`cdef`; a `cdef` out of channel order; no `cdef` with a color space other
+than enumerated sRGB, grayscale or sYCC; `LBox` 0 inside a superbox; a short
 `uuid` box; a `jp2h` without an `ihdr`; a `bpcc` whose length is not `NC`;
-a `cdef` that associates a colour channel with a colour other than its
-own number, or any channel with a colour above `NC`; an `ihdr` `NC` that
+a `cdef` that associates a color channel with a color other than its
+own number, or any channel with a color above `NC`; an `ihdr` `NC` that
 differs from `Csiz`; a `colr` that is not
 `METH` 1 with a 4-byte `EnumCS` or `METH` 2. The other targets are not
 subject to these checks.
@@ -55,7 +55,7 @@ subject to these checks.
 - `file_type`: the first top-level `ftyp` box.
 - `image_header`: `C`, `UnkC` and `IPR` of the first `ihdr` in the first
   `jp2h` box.
-- `colour_specifications`: every `colr` box before the codestream, in file
+- `color_specifications`: every `colr` box before the codestream, in file
   order: those inside any `jp2h` box, and those misplaced at the top level
   after the first `jp2h`. A `colr` before the first `jp2h` or after the
   first `jp2c` is not counted (docs/correctness.md, "The JP2 box layer").
@@ -204,8 +204,8 @@ REAL_COMMENT = (
     "What each decodable file's header says, in the `jp2` snapshot schema of "
     "tests/support/mod.rs (Jp2Snapshot). Every field is written from the file's box layer by "
     "scripts/gen-jp2-box-snapshots.py, not from this decoder. Channels are the cdef entries "
-    "in box order (which must be channels 0 to NC-1), or colour/n for an enumerated "
-    "sRGB, greyscale or sYCC file without one."
+    "in box order (which must be channels 0 to NC-1), or color/n for an enumerated "
+    "sRGB, grayscale or sYCC file without one."
 )
 
 
@@ -300,9 +300,9 @@ def colr(payload: bytes) -> dict:
     return record
 
 
-def colour_name(spec: dict) -> str:
+def color_name(spec: dict) -> str:
     if spec["method"] == 1 and "enum_cs" in spec:
-        return {16: "srgb", 17: "greyscale", 18: "sycc"}.get(
+        return {16: "srgb", 17: "grayscale", 18: "sycc"}.get(
             spec["enum_cs"], f"enumerated:{spec['enum_cs']}"
         )
     if spec["method"] == 2:
@@ -313,7 +313,7 @@ def colour_name(spec: dict) -> str:
 
 
 def channel_label(typ: int, asoc: int) -> str:
-    kind = {0: "colour", 1: "opacity", 2: "premultiplied", 0xFFFF: "unspecified"}.get(
+    kind = {0: "color", 1: "opacity", 2: "premultiplied", 0xFFFF: "unspecified"}.get(
         typ, f"other({typ})"
     )
     assoc = "whole" if asoc == 0 else "none" if asoc == 0xFFFF else str(asoc)
@@ -329,14 +329,14 @@ def channels(cdef: bytes | None, spec: dict, nc: int) -> list:
             sys.exit("cdef entries are not channels 0 to NC-1 in order")
         for cn, typ, asoc in entries:
             if asoc not in (0, 0xFFFF) and asoc > nc:
-                sys.exit(f"cdef channel {cn} is associated with colour {asoc} in a {nc}-channel file")
+                sys.exit(f"cdef channel {cn} is associated with color {asoc} in a {nc}-channel file")
             if typ == 0 and asoc not in (0, 0xFFFF) and asoc != cn + 1:
-                sys.exit(f"cdef colour channel {cn} is associated with colour {asoc}, not {cn + 1}")
+                sys.exit(f"cdef color channel {cn} is associated with color {asoc}, not {cn + 1}")
         return [channel_label(t, a) for _, t, a in entries]
-    colours = {16: 3, 17: 1, 18: 3}.get(spec.get("enum_cs")) if spec["method"] == 1 else None
-    if colours is None:
-        sys.exit("no cdef, and the colour space is not enumerated sRGB, greyscale or sYCC")
-    return [f"colour/{i + 1}" if i < colours else "unspecified/none" for i in range(nc)]
+    colors = {16: 3, 17: 1, 18: 3}.get(spec.get("enum_cs")) if spec["method"] == 1 else None
+    if colors is None:
+        sys.exit("no cdef, and the color space is not enumerated sRGB, grayscale or sYCC")
+    return [f"color/{i + 1}" if i < colors else "unspecified/none" for i in range(nc)]
 
 
 def res(payload: bytes):
@@ -378,7 +378,7 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
     cdef = None
     capture = display = None
     xml, uuid, ipr, uuid_info = [], [], [], []
-    colours = []
+    colors = []
     palette = False
     bpcc = []
     reader = None
@@ -427,11 +427,11 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
                     (nc,) = struct.unpack(">H", body[8:10])
                     image_header = {
                         "compression": body[11],
-                        "unknown_colour_space": body[12],
+                        "unknown_color_space": body[12],
                         "ipr": body[13],
                     }
                 elif child == b"colr":
-                    colours.append(colr(body))
+                    colors.append(colr(body))
                 elif strict and child == b"cdef":
                     if cdef is not None:
                         sys.exit("more than one cdef box")
@@ -447,13 +447,13 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
                         elif grand == b"resd" and display is None:
                             display = res(rbody)
         elif kind == b"colr" and seen_jp2h and not seen_jp2c:
-            colours.append(colr(payload))
+            colors.append(colr(payload))
     if file_type is None or image_header is None:
         sys.exit("no ftyp or ihdr")
     boxes_found = {
         "file_type": file_type,
         "image_header": image_header,
-        "colour_specifications": colours,
+        "color_specifications": colors,
         "reader_requirements": reader,
     }
     extra = {
@@ -475,8 +475,8 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
 def snapshot(data: bytes) -> dict:
     """The whole `jp2` snapshot record, in the field order of `Jp2Snapshot`."""
     found, extra = walk(data, strict=True)
-    colours = found["colour_specifications"]
-    if not colours:
+    colors = found["color_specifications"]
+    if not colors:
         sys.exit("no colr before the codestream")
     if extra["palette"]:
         sys.exit("a palette box is not supported")
@@ -486,10 +486,10 @@ def snapshot(data: bytes) -> dict:
         sys.exit(f"a bpcc box whose length is not NC ({extra['nc']})")
     if extra["nc"] != extra["csiz"]:
         sys.exit(f"ihdr NC {extra['nc']} differs from SIZ Csiz {extra['csiz']}")
-    colour = colour_name(colours[0])
+    color = color_name(colors[0])
     record = {
-        "colour": colour,
-        "channels": channels(extra["cdef"], colours[0], extra["nc"]),
+        "color": color,
+        "channels": channels(extra["cdef"], colors[0], extra["nc"]),
         "palette_applied": False,
         "resolution": {"capture": extra["capture"], "display": extra["display"]},
         "xml": extra["xml"],

@@ -33,7 +33,7 @@ const MAX_DECODED_SAMPLES: u64 = 1 << 16;
 
 fuzz_target!(|data: &[u8]| {
     let default = rust_j2k::DecodeOptions::default();
-    let srgb = || default.clone().with_colour(rust_j2k::ColourOutput::Srgb);
+    let srgb = || default.clone().with_color(rust_j2k::ColorOutput::Srgb);
     let mut option_sets = vec![
         default.clone(),
         default.clone().with_resolution_reduction(1),

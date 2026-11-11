@@ -58,7 +58,7 @@ impl PacketWalk<'_> {
     /// uses — OpenJPEG guards the step at 32 bits but scales the emission span in
     /// 64, and a coarse resolution of a deep pyramid (span past `2^32`) is a
     /// packet it emits. Gating emission on `shl32` would drop that packet and
-    /// desynchronise the tile.
+    /// desynchronize the tile.
     fn precinct_at(&self, comp: usize, res: usize, x: u64, y: u64) -> Option<usize> {
         let geom = &self.geoms[comp][res];
         if geom.precinct_count() == 0 {
@@ -131,7 +131,7 @@ impl PacketWalk<'_> {
 
 /// `value << shift`, or `None` when the result leaves the 32-bit reference grid.
 ///
-/// Used only to derive the sweep *step*: OpenJPEG minimises `pi->dx` under a
+/// Used only to derive the sweep *step*: OpenJPEG minimizes `pi->dx` under a
 /// 32-bit guard (`opj_pi_next_rpcl`'s `first` block), skipping a
 /// `(component, resolution)` pair whose span overflows 32 bits. A pair skipped
 /// here only widens the step past that pair's own precincts, which the corner
@@ -243,7 +243,7 @@ where
 /// its precinct sits on the canvas, and components with different sub-sampling or
 /// precinct sizes interleave — so they sweep the reference grid in steps of the
 /// finest precinct and ask each (component, resolution) whether a precinct of its
-/// own starts at that point. The sweep step is minimised over *every* component
+/// own starts at that point. The sweep step is minimized over *every* component
 /// and resolution, not just the volume's range (OpenJPEG's `opj_pi_next_rpcl`
 /// does the same in its `first` block), so a `POC` sub-range cannot coarsen it
 /// and skip a corner; only which packets are *emitted* is restricted to the

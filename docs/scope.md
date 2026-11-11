@@ -44,7 +44,7 @@ that the later phases widen is correct end-to-end before breadth work starts.
 | TLM (tile-part-length marker) | ○ | 2 |
 | CRG (component registration) | — | 2 |
 | SOP / EPH (start-of-packet / end-of-packet-header, error resilience) | ✓ | 2 |
-| COM (comment) — recognise and skip | ✓ | 1 |
+| COM (comment) — recognize and skip | ✓ | 1 |
 | Multiple tiles and multiple tile-parts per tile | — | 2 |
 | Non-zero image offset (XOsiz/YOsiz) | — | 2 |
 | Non-zero tile offset (XTOsiz/YTOsiz) | — | 2 |
@@ -68,7 +68,7 @@ that the later phases widen is correct end-to-end before breadth work starts.
 |---|---|---|
 | MQ arithmetic decoder | ✓ | 1 |
 | Significance-propagation / magnitude-refinement / cleanup passes | ✓ | 1 |
-| Context formation from the 3×3 neighbourhood | ✓ | 1 |
+| Context formation from the 3×3 neighborhood | ✓ | 1 |
 | Code-block styles: selective arithmetic-coding bypass (lazy) | ○ | 2 |
 | Code-block styles: termination on each pass (restart) | ✓ | 2 |
 | Code-block styles: reset context probabilities | ○ | 2 |
@@ -96,7 +96,7 @@ quality-progressive read — is a decode-control feature deferred past Phase 2.
 |---|---|---|
 | Box parsing: signature, ftyp, jp2h, jp2c (contiguous codestream) | — | 3 |
 | Image header (ihdr), bits-per-component (bpcc) | — | 3 |
-| Enumerated colorspaces (sRGB, greyscale, sYCC), reported as metadata | — | 3 |
+| Enumerated colorspaces (sRGB, grayscale, sYCC), reported as metadata | — | 3 |
 | Restricted ICC profile (colr), passed through as bytes | — | 3 |
 | Opt-in sRGB output: sYCC to RGB, restricted ICC to sRGB | — | 3 |
 | Palette (pclr), component mapping (cmap), channel definition (cdef) | — | 3 |
@@ -118,7 +118,7 @@ shared with Part 1.
 
 | Feature | GRIB2 | Phase |
 |---|---|---|
-| CAP marker + HTJ2K capability signalling | — | 4 |
+| CAP marker + HTJ2K capability signaling | — | 4 |
 | FBCOT block **decoder** (MEL + VLC + MagSgn) | — | 4 |
 | FBCOT block **encoder** | — | 6 |
 
@@ -145,7 +145,7 @@ shared with Part 1.
 ## Explicit non-goals (for now)
 
 - Performance parity with OpenJPEG/Grok before correctness parity. Correct
-  first, then profile and optimise the measured hot paths.
+  first, then profile and optimize the measured hot paths.
 - `unsafe` and SIMD before a benchmark justifies them. See conventions.
 
 These are "not yet," not "never": the aim is OpenJPEG-level coverage. They are

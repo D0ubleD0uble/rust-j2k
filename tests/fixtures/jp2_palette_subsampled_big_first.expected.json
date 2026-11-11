@@ -511,13 +511,13 @@
   "provenance": {
     "source": "synthetic two-component plane pair, coded with `opj_compress -i sub.raw -o sub.j2k -F 24,16,2,8,u@1x1:2x2 -n 2`, wrapped by scripts/gen-jp2-fixtures.py",
     "oracle_command": "opj_decompress -i sub.j2k -o out.pgx, then cmap [(0, 1, 0), (1, 0, 0)] applied by table lookup in Python",
-    "notes": "component 0 is full resolution, component 1 sub-sampled 2x2. OpenJPEG 2.5.0 sizes every palette channel by the first channel's grid and crashes or emits uninitialised memory on this file, so it is graded by table lookup over OpenJPEG's decode of the bare codestream; each channel keeps its source component's grid (owner-approved deviation, 2026-11-01)"
+    "notes": "component 0 is full resolution, component 1 sub-sampled 2x2. OpenJPEG 2.5.0 sizes every palette channel by the first channel's grid and crashes or emits uninitialized memory on this file, so it is graded by table lookup over OpenJPEG's decode of the bare codestream; each channel keeps its source component's grid (owner-approved deviation, 2026-11-01)"
   },
   "jp2": {
-    "colour": "srgb",
+    "color": "srgb",
     "channels": [
-      "colour/1",
-      "colour/2"
+      "color/1",
+      "color/2"
     ],
     "palette_applied": true,
     "resolution": {
@@ -535,10 +535,10 @@
     },
     "image_header": {
       "compression": 7,
-      "unknown_colour_space": 0,
+      "unknown_color_space": 0,
       "ipr": 0
     },
-    "colour_specifications": [
+    "color_specifications": [
       {
         "method": 1,
         "precedence": 0,

@@ -92,7 +92,7 @@ pub struct MqDecoder<'a> {
 }
 
 impl<'a> MqDecoder<'a> {
-    /// Initialise the decoder (INITDEC, ISO C.3.5) over a code-block segment.
+    /// Initialize the decoder (INITDEC, ISO C.3.5) over a code-block segment.
     pub fn new(data: &'a [u8]) -> Self {
         let mut d = MqDecoder {
             data,
@@ -128,7 +128,7 @@ impl<'a> MqDecoder<'a> {
     /// This checks only the *unconsumed* side — a segment padded with bytes the
     /// codeword never reaches, which signals a wrong segment length. It does not
     /// check the other direction OpenJPEG's `check_pterm` warns on (the decoder
-    /// synthesising `0xFF` markers past a short segment): a rate-truncated or
+    /// synthesizing `0xFF` markers past a short segment): a rate-truncated or
     /// `bypass` segment routinely runs a few bytes past its end and OpenJPEG
     /// decodes it anyway, so rejecting there would refuse a valid codestream
     /// (`p1_05`). OpenJPEG only warns either way; this crate keeps the one half
@@ -154,7 +154,7 @@ impl<'a> MqDecoder<'a> {
     /// The adds wrap: with `chigh` steered to `0xFFFF` by hostile bytes, the
     /// stuffed-byte add (`<< 9`) can carry past bit 31. The C reference does
     /// this in `OPJ_UINT32` arithmetic, where the carry silently drops, so
-    /// wrapping is the oracle-faithful behaviour — spelled out here so debug
+    /// wrapping is the oracle-faithful behavior — spelled out here so debug
     /// and release builds agree instead of the checked add panicking.
     fn bytein(&mut self) {
         if self.byte(self.pos) == 0xFF {
@@ -368,7 +368,7 @@ mod tests {
         }
     }
 
-    /// A tiny and an empty segment must initialise and decode without panicking
+    /// A tiny and an empty segment must initialize and decode without panicking
     /// (every read falls through to the `0xFF` marker convention).
     #[test]
     fn tiny_and_empty_segments_do_not_panic() {
@@ -419,7 +419,7 @@ mod tests {
 
     /// A `0xFF` followed by a byte above `0x8F` is a marker: the reader stops
     /// advancing and feeds 1-bits forever, which is also what happens past the
-    /// end of the segment (every synthesised byte is `0xFF`).
+    /// end of the segment (every synthesized byte is `0xFF`).
     #[test]
     fn raw_past_the_marker_is_all_ones_and_bounded() {
         for data in [[0xFFu8, 0x90].as_slice(), [].as_slice(), [0x00].as_slice()] {
@@ -435,7 +435,7 @@ mod tests {
             assert_eq!(raw.decode(), 1); // the 0xFF byte
         }
         for _ in 0..64 {
-            assert_eq!(raw.decode(), 1); // the synthesised marker tail
+            assert_eq!(raw.decode(), 1); // the synthesized marker tail
         }
     }
 
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn anchor_state_zero() {
-        // The fixed start state every context is initialised to (ISO C.3.4).
+        // The fixed start state every context is initialized to (ISO C.3.4).
         let e = QE_TABLE[0];
         assert_eq!(e.qe, 0x5601);
         assert_eq!(e.next_mps, 1);

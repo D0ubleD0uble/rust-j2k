@@ -1,7 +1,7 @@
 //! JPEG 2000 codestream marker codes and the segment structs we parse.
 //!
 //! ISO/IEC 15444-1 Annex A. The markers the decoded feature set needs are
-//! parsed in full; the rest are recognised so they can be skipped or rejected
+//! parsed in full; the rest are recognized so they can be skipped or rejected
 //! cleanly.
 
 /// Delimiting and fixed-information markers (ISO Table A-1).
@@ -130,7 +130,7 @@ pub mod code_block_style {
     /// bottom row treats the row below it (which belongs to the following stripe)
     /// as insignificant. This *is* part of the codeword: it changes which context
     /// every affected decision is coded under, so a decoder that ignores the flag
-    /// desynchronises the MQ coder (D.3).
+    /// desynchronizes the MQ coder (D.3).
     pub const VCAUSAL: u8 = 0x08;
 
     /// Bit 1: reset the MQ context probability estimates to their initial states
@@ -344,7 +344,7 @@ impl Rect {
     /// The same rectangle on the grid `reduction` resolution levels coarser:
     /// **each bound** divided by `2^reduction`, rounding up (ISO B.5's
     /// `trx0 = ceil(tcx0 / 2^r)`). Rounding the bounds rather than the extent is
-    /// what keeps neighbouring tiles abutting exactly: a shared edge rounds the
+    /// what keeps neighboring tiles abutting exactly: a shared edge rounds the
     /// same way from both sides, so the reduced tiles still partition the
     /// reduced canvas.
     pub fn reduced(&self, reduction: u8) -> Rect {
@@ -536,7 +536,7 @@ impl Siz {
 ///
 /// `COD` supplies the default for every component and `COC` replaces it for one,
 /// so these fields live here rather than on [`Cod`] — the fields that stay on
-/// `Cod` are the ones no `COC` can touch (progression, layer count, the colour
+/// `Cod` are the ones no `COC` can touch (progression, layer count, the color
 /// transform, and the SOP/EPH flags, all of which are properties of the
 /// codestream rather than of a component).
 #[derive(Debug, Clone, PartialEq, Eq)]

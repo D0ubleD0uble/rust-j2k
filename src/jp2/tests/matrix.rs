@@ -8,7 +8,7 @@
 //! probe linked to `libopenjp2` 2.5.0 with its ignore flag set).
 
 use super::after::{
-    ONE_COMPONENT, after, decode_raw, identity_cdef, no_colour_then, one_component,
+    ONE_COMPONENT, after, decode_raw, identity_cdef, no_color_then, one_component,
     psot_zero_codestream, with_jp2c_length,
 };
 use super::channels::cdef_of as cdef;
@@ -214,7 +214,7 @@ fn unopenable_profile() -> Vec<u8> {
 
 #[test]
 fn every_robustness_table_row_has_its_outcome() {
-    use crate::{ColourOutput, DecodeOptions, decode_with};
+    use crate::{ColorOutput, DecodeOptions, decode_with};
     use Mode::{Default, Raw, Srgb};
     use Outcome::*;
 
@@ -705,7 +705,7 @@ fn every_robustness_table_row_has_its_outcome() {
             Decodes,
         ),
         (
-            "cdef colour entry not at Asoc - 1",
+            "cdef color entry not at Asoc - 1",
             children(&[cdef(&[(0, 0, 3), (1, 0, 2), (2, 0, 1)])]),
             Default,
             Decodes,
@@ -865,7 +865,7 @@ fn every_robustness_table_row_has_its_outcome() {
         ),
         (
             "boxes after jp2c: a short METH 1 with no usable colr before it",
-            no_colour_then(&[bx(b"colr", &[1, 0, 0])]),
+            no_color_then(&[bx(b"colr", &[1, 0, 0])]),
             Default,
             FileFormat,
         ),
@@ -951,7 +951,7 @@ fn every_robustness_table_row_has_its_outcome() {
             Mode::Raw => decode_raw(bytes),
             Mode::Srgb => decode_with(
                 bytes,
-                &DecodeOptions::default().with_colour(ColourOutput::Srgb),
+                &DecodeOptions::default().with_color(ColorOutput::Srgb),
             ),
         });
         if got != *want {
@@ -1038,16 +1038,16 @@ fn read_header_with_agrees_with_decode_with_under_the_same_options() {
 }
 
 /// Options that contradict each other, and an sRGB request on a raw
-/// codestream with no colour space, fail in `read_header_with` as in
+/// codestream with no color space, fail in `read_header_with` as in
 /// `decode_with`.
 #[test]
 fn read_header_with_refuses_the_options_decode_with_refuses() {
-    use crate::{ColourOutput, DecodeOptions, read_header_with};
+    use crate::{ColorOutput, DecodeOptions, read_header_with};
 
     let both = DecodeOptions::default()
         .with_raw_channels(true)
-        .with_colour(ColourOutput::Srgb);
-    let srgb = DecodeOptions::default().with_colour(ColourOutput::Srgb);
+        .with_color(ColorOutput::Srgb);
+    let srgb = DecodeOptions::default().with_color(ColorOutput::Srgb);
     let three = include_bytes!("../../../tests/fixtures/multicomponent_lossless.j2k");
     for bytes in [&minimal(), &three[..]] {
         assert!(matches!(
