@@ -7,6 +7,9 @@ component, and a grayscale `colr`), a `jp2c` box holding one of the committed
 either right (it ends where the codestream bytes end), too short (`LBox` 108
 or 200, as in the PR #186 shapes), or 0 (to the end of the file).
 
+`bypass_psot0_eoc.j2k` is written too: `bypass_base.j2k` with its only
+tile-part's `Psot` set to 0.
+
 With `--check`, each file is run through `opj_decompress` and its output is
 compared with the base codestream's `*.expected.pgm`; the result is printed.
 The outcomes are recorded in tests/fixtures/psot0/README.md.
@@ -63,6 +66,29 @@ def cut_in_com() -> bytes:
     return PREFIX + header(8 + cut, b"jp2c") + codestream
 
 
+def psot_zero(base: bytes) -> bytes:
+    """The codestream with its only tile-part's `Psot` set to 0."""
+    sot = base.index(b"\xff\x90")
+    return base[: sot + 6] + b"\0\0\0\0" + base[sot + 10 :]
+
+
+def cut_in_tile_part_com() -> bytes:
+    """`single_psot0_eoc` with a COM segment in its tile-part header, just
+    before SOD, whose text is a box header (`free`) as long as the rest of the
+    codestream, in a `jp2c` box that ends just before that text. The box holds
+    the tile-part's SOT, but ends inside its header."""
+    base = cs("single_psot0_eoc.j2k")
+    sod = base.index(b"\xff\x93")
+    cut = sod + 6
+    rest = len(base) + 14 - cut
+    com = b"\xff\x64" + struct.pack(">H", 12) + b"\x00\x01" + struct.pack(">I", rest) + b"free"
+    codestream = base[:sod] + com + base[sod:]
+    return PREFIX + header(8 + cut, b"jp2c") + codestream
+
+
+# The BYPASS codestream (`opj_compress -M 1`) with `Psot = 0`, ending in EOC.
+BYPASS_PSOT0 = psot_zero(cs("bypass_base.j2k"))
+
 # name -> (bytes, base whose opj output it is compared with)
 FILES = {
     # The `jp2c` length is right; the codestream has no EOC.
@@ -98,6 +124,13 @@ FILES = {
         "tileparts",
     ),
     "jp2_p0eoc_cut_in_com.jp2": (cut_in_com(), "single"),
+    "jp2_p0eoc_cut_in_tile_part_com.jp2": (cut_in_tile_part_com(), "single"),
+    # A box that ends 510 bytes before the end of the BYPASS codestream, where
+    # the tile data happens to read as whole boxes; nothing follows.
+    "jp2_bypass_short989.jp2": (
+        PREFIX + header(8 + 989, b"jp2c") + BYPASS_PSOT0,
+        "bypass",
+    ),
     # `LBox` 0: the box holds the codestream and the `xml ` box.
     "jp2_lbox0_p0eoc_xml.jp2": (
         PREFIX + header(0, b"jp2c") + cs("single_psot0_eoc.j2k") + XML,
@@ -123,6 +156,7 @@ def check(name: str, base: str) -> str:
 
 
 def main() -> None:
+    (DIR / "bypass_psot0_eoc.j2k").write_bytes(BYPASS_PSOT0)
     for name, (data, _) in FILES.items():
         (DIR / name).write_bytes(data)
     if "--check" in sys.argv:

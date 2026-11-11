@@ -167,11 +167,80 @@ fn a_codestream_box_that_ends_before_the_last_tile_part_is_not_trusted() {
 }
 
 /// A right-sized `jp2c`, but the boxes after it do not reach the end of the
-/// file (three bytes follow the `xml ` box): the box end is not trusted, and
-/// the file is refused as before. OpenJPEG 2.5.0 decodes it.
+/// file (three bytes follow the `xml `). The codestream still ends at the end
+/// of the box, and the `xml ` is reported; the three bytes end the walk after
+/// it. OpenJPEG 2.5.0 decodes it too.
 #[test]
-fn a_psot_zero_codestream_box_followed_by_broken_boxes_is_refused() {
-    assert_leftover("jp2_p0noeoc_xml_junk.jp2");
+fn a_psot_zero_codestream_box_followed_by_broken_boxes_decodes() {
+    let metadata = assert_jp2_decodes("jp2_p0noeoc_xml_junk.jp2", "single.expected.pgm");
+    assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
+}
+
+/// A box that ends inside the last tile-part's header (at a COM whose text
+/// reads as a box), or inside its tile data (the BYPASS codestream, where the
+/// 510 bytes after the box happen to read as boxes). The codestream cut at
+/// the box end does not decode, so it runs to the end of the file instead,
+/// and decodes as in OpenJPEG 2.5.0.
+#[test]
+fn a_codestream_box_that_ends_inside_the_last_tile_part_reads_to_the_end() {
+    assert_decodes("jp2_p0eoc_cut_in_tile_part_com.jp2", "single.expected.pgm");
+    assert_decodes("jp2_bypass_short989.jp2", "bypass.expected.pgm");
+}
+
+/// The signature, `ftyp` and `jp2h` boxes the `jp2_*.jp2` fixtures share.
+fn jp2_prefix() -> Vec<u8> {
+    let bytes = std::fs::read(dir().join("jp2_p0noeoc_xml.jp2")).unwrap();
+    let jp2c = bytes.windows(4).position(|w| w == b"jp2c").unwrap();
+    bytes[..jp2c - 4].to_vec()
+}
+
+/// Every `jp2c` length over a `Psot = 0` codestream, with `tail` after it.
+/// Each file either decodes to the OpenJPEG image or is refused as
+/// `Codestream`: a box end that cuts the codestream never yields another
+/// image. Returns how many lengths decode.
+fn sweep(codestream: &[u8], tail: &[u8], expected: &str) -> usize {
+    let prefix = jp2_prefix();
+    let want = pgm_samples(expected);
+    let mut decoded = 0;
+    for cut in 0..=codestream.len() {
+        let lbox = u32::try_from(8 + cut).unwrap();
+        let bytes = [&prefix[..], &lbox.to_be_bytes(), b"jp2c", codestream, tail].concat();
+        match decode(&bytes) {
+            Ok(image) => {
+                assert_eq!(image.components[0].samples, want, "{expected}, cut {cut}");
+                decoded += 1;
+            }
+            Err(Error::Codestream(_)) => {}
+            Err(other) => panic!("{expected}, cut {cut}: {other:?}"),
+        }
+    }
+    decoded
+}
+
+/// With an `xml ` box after the codestream, only the box that ends where the
+/// codestream does decodes: every shorter box leaves tile data past the last
+/// packet. With nothing after a codestream that ends in EOC, every length
+/// decodes, to the same image.
+#[test]
+fn no_codestream_box_length_yields_another_image() {
+    let xml = b"\x00\x00\x00\x14xml <a>hello</a>";
+    for (name, expected) in [
+        ("single_psot0_eoc.j2k", "single.expected.pgm"),
+        ("bypass_psot0_eoc.j2k", "bypass.expected.pgm"),
+    ] {
+        let with_eoc = std::fs::read(dir().join(name)).unwrap();
+        let without_eoc = &with_eoc[..with_eoc.len() - 2];
+        assert_eq!(
+            sweep(without_eoc, xml, expected),
+            1,
+            "{name}, no EOC, then xml"
+        );
+        assert_eq!(
+            sweep(&with_eoc, &[], expected),
+            with_eoc.len() + 1,
+            "{name}, EOC, nothing after"
+        );
+    }
 }
 
 /// A raw codestream has no box to end at: an `xml ` box appended to a

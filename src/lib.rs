@@ -502,6 +502,9 @@ fn check_raw_colour(options: &DecodeOptions, components: usize) -> Result<()> {
 /// report a header fault the same way.
 struct Jp2Prefix<'a> {
     codestream: &'a [u8],
+    /// The codestream to decode when `codestream` fails on its tile data (see
+    /// `jp2::Jp2File::fallback`).
+    fallback: Option<&'a [u8]>,
     parsed: codestream::ParsedHeader,
     plans: jp2::ChannelPlans,
     metadata: Jp2Metadata,
@@ -540,6 +543,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     check_reduction(&parsed, options.resolution_reduction)?;
     Ok(Jp2Prefix {
         codestream: file.codestream,
+        fallback: file.fallback,
         parsed,
         plans,
         metadata,
@@ -551,8 +555,18 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
 /// and apply the channel plans, then any sRGB step, to the samples.
 fn decode_jp2(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
-    let cs = codestream::parse_tiles(prefix.codestream, prefix.parsed)?;
-    let image = decode_codestream(cs, options)?;
+    let decoded = codestream::parse_tiles(prefix.codestream, prefix.parsed)
+        .and_then(|cs| decode_codestream(cs, options));
+    let image = match (decoded, prefix.fallback) {
+        // The codestream was cut at the `jp2c` box's end, and does not decode
+        // there: the box ends inside it, so read on to the end of the file.
+        // Its main header is the same bytes.
+        (Err(Error::Codestream(_)), Some(tail)) => {
+            let parsed = codestream::parse_header(tail)?;
+            decode_codestream(codestream::parse_tiles(tail, parsed)?, options)?
+        }
+        (decoded, _) => decoded?,
+    };
     let mut components = prefix.plans.apply(image.components)?;
     if let Some(srgb) = &prefix.srgb {
         components = srgb.apply(components)?;
