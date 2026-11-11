@@ -721,6 +721,11 @@ def fuzz_seeds() -> None:
             first = bytes([selector[case["codestream"]]])
             (out / f"{case['codestream']}_{case['name']}_build").write_bytes(first + copy)
             builds += 1
+            if fnv1a(copy) % BUILD_EVERY != 0:
+                sys.exit(f"{case['name']}: build copy is not selected by the hash")
+    wanted = len({(c["codestream"], c["profile"]) for c in cases if len(c["profile"]) >= 256})
+    if builds != wanted:
+        sys.exit(f"wrote {builds} build copies for {wanted} distinct (codestream, profile) pairs")
     print(f"wrote {written} seeds and {builds} build copies to {out}")
 
 
