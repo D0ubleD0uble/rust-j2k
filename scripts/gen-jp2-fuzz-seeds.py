@@ -432,6 +432,15 @@ def srgb_branch_seeds(write):
     write("icc_rgb_one", hdr | ONE_8, colr(2, rgb))
     write("icc_rgb_two_colours", hdr | THREE_8, colr(2, rgb) + TWO_COLOURS)
     write("icc_rgb_first_four_differ", hdr | ONE_8, colr(2, rgb) + pclr_box([7, 7, 3]))
+    # Five palette channels, channel 2 at 4 bits. A second `cdef` entry for
+    # colour 3 swaps channel 4 into position 2 and relabels it opacity, which
+    # leaves colour 3 (4-bit) at position 4: the first four positions agree,
+    # so the AFL test passes, and the colours' formats differ.
+    after_afl = [(0, 0, 1), (1, 0, 2), (2, 0, 3), (4, 0, 3), (4, 1, 0), (3, 65535, 65535)]
+    after_afl = struct.pack(">H", len(after_afl)) + b"".join(
+        struct.pack(">HHH", *e) for e in after_afl)
+    write("icc_rgb_uniform_after_afl", hdr | ONE_8,
+          colr(2, rgb) + pclr_box([7, 7, 3, 7, 7]) + box(b"cdef", after_afl))
     write("icc_rgb_12bit", hdr | ONE_8, colr(2, rgb) + pclr_box([11, 11, 11]))
     write("icc_rgb_signed", hdr | ONE_8, colr(2, rgb) + pclr_box([0x87, 0x87, 0x87]))
     write("icc_rgb_16bit", hdr | FOUR_16, colr(2, rgb))

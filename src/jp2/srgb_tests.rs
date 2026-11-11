@@ -27,6 +27,16 @@ const SYCC_420: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_420_odd.jp
 const SYCC_420_SRGB: &str = include_str!("../../tests/fixtures/jp2_sycc_420_odd.srgb.json");
 const SYCC_422: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_422_odd.jp2");
 const SYCC_422_SRGB: &str = include_str!("../../tests/fixtures/jp2_sycc_422_odd.srgb.json");
+/// The same layouts at the even origin (6, 2), and every fixture's
+/// `opj_decompress -r 1` output.
+const SYCC_420_EVEN: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_420_even.jp2");
+const SYCC_422_EVEN: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_422_even.jp2");
+const SYCC_420_EVEN_SRGB: &str = include_str!("../../tests/fixtures/jp2_sycc_420_even.srgb.json");
+const SYCC_422_EVEN_SRGB: &str = include_str!("../../tests/fixtures/jp2_sycc_422_even.srgb.json");
+const SYCC_420_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_420_odd.srgb_r1.json");
+const SYCC_422_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_422_odd.srgb_r1.json");
+const SYCC_420_EVEN_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_420_even.srgb_r1.json");
+const SYCC_422_EVEN_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_422_even.srgb_r1.json");
 
 fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
@@ -393,14 +403,51 @@ fn sycc_sample_openjpeg(y: i32, cb: i32, cr: i32) -> [i32; 3] {
 /// The committed `opj_decompress` output for each sYCC fixture, rebuilt from
 /// our as-coded decode with OpenJPEG's own formula through [`replicate`]:
 /// every sample must match, so the replication, odd origin included, is
-/// OpenJPEG's.
+/// OpenJPEG's. One level down (`opj_decompress -r 1`) it still keys on the
+/// full-resolution origin's parity: odd for (5, 3), even for (6, 2).
 #[test]
 fn replication_reproduces_openjpeg_on_the_sycc_fixtures() {
-    for (bytes, oracle, layout) in [
-        (SYCC_420, SYCC_420_SRGB, ChromaLayout::Both),
-        (SYCC_422, SYCC_422_SRGB, ChromaLayout::Horizontal),
+    use ChromaLayout::{Both, Horizontal};
+    for (name, bytes, oracle, layout, reduction, odd) in [
+        ("420 odd", SYCC_420, SYCC_420_SRGB, Both, 0, true),
+        ("422 odd", SYCC_422, SYCC_422_SRGB, Horizontal, 0, true),
+        (
+            "420 even",
+            SYCC_420_EVEN,
+            SYCC_420_EVEN_SRGB,
+            Both,
+            0,
+            false,
+        ),
+        (
+            "422 even",
+            SYCC_422_EVEN,
+            SYCC_422_EVEN_SRGB,
+            Horizontal,
+            0,
+            false,
+        ),
+        ("420 odd r1", SYCC_420, SYCC_420_R1, Both, 1, true),
+        ("422 odd r1", SYCC_422, SYCC_422_R1, Horizontal, 1, true),
+        (
+            "420 even r1",
+            SYCC_420_EVEN,
+            SYCC_420_EVEN_R1,
+            Both,
+            1,
+            false,
+        ),
+        (
+            "422 even r1",
+            SYCC_422_EVEN,
+            SYCC_422_EVEN_R1,
+            Horizontal,
+            1,
+            false,
+        ),
     ] {
-        let coded = decode(bytes).expect("as coded");
+        let options = DecodeOptions::default().with_resolution_reduction(reduction);
+        let coded = decode_with(bytes, &options).expect("as coded");
         let oracle: serde_json::Value = serde_json::from_str(oracle).expect("json");
         let [y, cb, cr] = [0, 1, 2].map(|k| &coded.components[k]);
         let mut rebuilt = [
@@ -413,8 +460,8 @@ fn replication_reproduces_openjpeg_on_the_sycc_fixtures() {
             y.height as usize,
             cb.width as usize,
             layout,
-            true,
-            true,
+            odd,
+            odd,
             &mut |luma, chroma| {
                 let (b, r) = chroma.map_or((0, 0), |c| (cb.samples[c], cr.samples[c]));
                 let rgb = sycc_sample_openjpeg(y.samples[luma], b, r);
@@ -430,7 +477,7 @@ fn replication_reproduces_openjpeg_on_the_sycc_fixtures() {
                 .iter()
                 .map(|v| v.as_i64().expect("int") as i32)
                 .collect();
-            assert_eq!(plane, &want, "channel {k}");
+            assert_eq!(plane, &want, "{name}: channel {k}");
         }
     }
 }
@@ -730,6 +777,31 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             ),
             is_unsupported,
             "different formats (8-bit unsigned and 8-bit signed)",
+        ),
+        (
+            // A second colour-3 `cdef` entry swaps channel 4 into position 2
+            // and relabels it opacity, so the 4-bit colour 3 sits at
+            // position 4: OpenJPEG's AFL test sees four 8-bit channels and
+            // converts positions 0 to 2, opacity included.
+            "RGB profile, a differing colour past the first four channels",
+            file(
+                ONE,
+                &icc_colr(&wide_gamut()),
+                &[
+                    palette(&[7, 7, 3, 7, 7], 4, |j, _| u32::from(j)),
+                    vec![cdef(&[
+                        (0, 0, 1),
+                        (1, 0, 2),
+                        (2, 0, 3),
+                        (4, 0, 3),
+                        (4, 1, 0),
+                        (3, 65535, 65535),
+                    ])],
+                ]
+                .concat(),
+            ),
+            is_unsupported,
+            "different formats (8-bit unsigned and 4-bit unsigned)",
         ),
         (
             "signed sYCC",

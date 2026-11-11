@@ -69,8 +69,9 @@ box type.
 
 Every input is decoded with `raw_channels`, and a file that decodes as coded
 is decoded again with `ColourOutput::Srgb`, which reads the `colr` ICC
-profile and converts sYCC. The results are only checked to be `Ok` or a
-typed error. The codestreams are chosen so each conversion path is
+profile and converts sYCC. Without a `pclr`, `cmap` or `cdef` the
+`raw_channels` image must equal the default one; otherwise the results are
+only checked to be `Ok` or a typed error. The codestreams are chosen so each conversion path is
 reachable: an 8-bit single-component one (the monochrome profile, `kTRC`),
 an 8-bit three-component one without sub-sampling (the RGB profile, `rXYZ`,
 `rTRC`, ... with `curv` and `para` curves), a 16-bit four-component one (the
@@ -85,10 +86,10 @@ mixed depth, sign or sub-sampling, a `cdef` too few colours, and a profile
 built with one header field, tag or curve changed reaches each of the
 profile reader's refusals. Not reached: the sample budget refusals (the
 pinned images are tiny), an even-origin 4:2:2 conversion (no pinned
-codestream; `tests/jp2_sycc_replication.rs` grades one against OpenJPEG),
-and the RGB profile's `uniform` refusal: after the `cdef` reorder colours 1
-to 3 are normally the first three channels, which the "AFL test" before it
-has already compared. The CI smoke generates these seeds before it runs
+codestream; `tests/jp2_sycc_replication.rs` grades one against OpenJPEG).
+The RGB profile's `uniform` refusal after the "AFL test" needs a `cdef` that
+moves a differing colour past the first four channels
+(`icc_rgb_uniform_after_afl`). The CI smoke generates these seeds before it runs
 `jp2_boxes` for 30 s, and seeds `header` from the committed fixtures.
 `gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds, and
 seeds with `jp2i` and `uinf` boxes before and after the codestream.
