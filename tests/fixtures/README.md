@@ -354,6 +354,7 @@ than silently dropping data. Keep this document and that type in step.
 | `components` | object[] | One entry per component, in SIZ order (below).                |
 | `provenance` | object   | Where the fixture came from and how to regenerate (below).    |
 | `jp2`        | object, optional | For a JP2 fixture, what its header says (below).      |
+| `jp2_boxes`  | object, optional | For a JP2 fixture without `jp2`, its `ftyp`, `ihdr`, `colr` and `rreq` fields (below). |
 
 ### `image`
 
@@ -417,6 +418,37 @@ checked against it by hand.
 | `resolution`      | object   | `capture` and `display`: `[VRN, VRD, HRN, HRD, VRE, HRE]` in box order, or `null`. |
 | `xml`             | int[]    | Byte length of each top-level `xml ` box, in file order.             |
 | `uuid`            | array[]  | `[id as lowercase hex, payload length]` per top-level `uuid` box.    |
+| `file_type`, `image_header`, `colour_specifications`, `reader_requirements` | objects | The box fields below. |
+
+### `jp2_boxes` and the box fields
+
+The `ftyp`, `ihdr`, `colr` and `rreq` fields of a JP2 file. They are the last
+four fields of `jp2`, and the whole of `jp2_boxes`, which the synthetic
+fixtures without a `jp2` section carry. The same four fields, for ISO/IEC
+15444-4 files 1 to 9, are in `conformance/jp2/boxes.json`
+(`{"files": {"file1.jp2": {...}}}`).
+
+| Field | Content |
+| ----- | ------- |
+| `file_type` | `brand`, `minor_version`, `compatibility[]`. Each 4-byte code is text, with `\xNN` for a byte outside printable ASCII. |
+| `image_header` | `compression` (`C`), `unknown_colour_space` (`UnkC`), `ipr` (`IPR`). |
+| `colour_specifications[]` | One per `colr` box before the codestream, in file order: `method`, `precedence`, `approximation`, `data_len`, `data_sha256` (SHA-256 of the bytes after `APPROX`, so a profile is pinned), and `enum_cs` for `METH` 1 with a 4-byte value. |
+| `reader_requirements` | `null`, or `mask_length` (`ML`), `fully_understand`, `decode_completely` (hex), `standard_features[]` as `[SF, SM hex]`, `vendor_features[]` as `[VF hex, VM hex]`. |
+
+Source of truth: `scripts/gen-jp2-box-snapshots.py`, a standalone box walker
+(standard library only; `python3 -I scripts/gen-jp2-box-snapshots.py`). It
+reads the JP2 box layer of each file and never uses the crate. It counts the
+`colr` boxes of every `jp2h` and those misplaced at the top level after the
+first `jp2h`, before the codestream, and the first top-level `rreq`
+(`docs/correctness.md`). `scripts/gen-jp2-fixtures.py` runs it as its last step, because it
+rewrites the synthetic snapshots without these fields. It was cross-checked
+by hand on `file5.jp2` and `file7.jp2` against `xxd` of the box bytes and
+`sha256sum` of the profile (`opj_dump` does not print `colr` or `rreq`
+fields): `ftyp` `jpx `, version 0, compatibility `00000003`, `jp2 `, `jpx `,
+`jpxb`; `ihdr` `C` 7, `UnkC` 0, `IPR` 0; `rreq` `ML` 1, `FUAM` a0, `DCM` c0; `colr`
+`METH` 2 (546 and 13332 profile bytes) then `METH` 1 `EnumCS` 21 and 20.
+No fixture has a vendor feature in its `rreq`, so `vendor_features` is
+always empty here.
 
 ## Example
 

@@ -141,3 +141,41 @@ jobs:
       # The header target checks read_header against decode on the same input.
       - name: Fuzz header (30s)
         run: cargo fuzz run header --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096
+
+  # The ICC output is documented as identical on every platform where fma is
+  # correctly rounded. Every job above is x86-64, so run the full suite on
+  # Apple Silicon (aarch64) as well.
+  test-macos:
+    name: test (macos aarch64)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+      - run: cargo test
+
+  # wasm32 does fma in software, so this covers the other side of the claim.
+  # The runner maps the repo directory so the fixtures are readable.
+  test-wasm:
+    name: test (wasm32-wasip1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime run --dir=${{ github.workspace }}::${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
+        with:
+          tool: wasmtime
+      - name: math_tests
+        run: cargo test --target wasm32-wasip1 --lib math_tests
+      - name: jp2_icc
+        run: cargo test --target wasm32-wasip1 --test jp2_icc

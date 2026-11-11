@@ -39,6 +39,47 @@ fn grades_the_jp2_reader_files_by_compliance_class() {
     run_ratchet(&jp2_dir(), IN_CLASS);
 }
 
+/// The `ftyp`, `ihdr`, `colr` and `rreq` fields of each file match the box
+/// dump in `boxes.json` (`scripts/gen-jp2-box-snapshots.py`), through both
+/// `read_header` and `decode`. File 7 carries an `rreq` and two `colr` boxes
+/// (an ICC profile, then an enumerated colour space that is ignored).
+#[test]
+fn every_jp2_file_header_matches_its_box_dump() {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct BoxDumps {
+        #[serde(rename = "_comment")]
+        _comment: String,
+        files: std::collections::BTreeMap<String, support::Jp2Boxes>,
+    }
+    let dir = jp2_dir();
+    let text = std::fs::read_to_string(dir.join("boxes.json")).expect("read boxes.json");
+    let dumps: BoxDumps = serde_json::from_str(&text).expect("parse boxes.json");
+    assert_eq!(dumps.files.len(), 9);
+    for entry in load_manifest(&dir).entries {
+        let name = format!("{}.jp2", entry.name());
+        let want = dumps
+            .files
+            .get(&name)
+            .unwrap_or_else(|| panic!("{name}: no record in boxes.json"));
+        let bytes = std::fs::read(dir.join(&entry.file)).expect("read jp2");
+        let header = rust_j2k::read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let from_header = support::Jp2Boxes::of(header.jp2.as_ref().expect("JP2 metadata"));
+        assert_eq!(&from_header, want, "{name}: read_header");
+        let image = rust_j2k::decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let from_decode = support::Jp2Boxes::of(image.jp2.as_ref().expect("JP2 metadata"));
+        assert_eq!(&from_decode, want, "{name}: decode");
+    }
+    // File 7: the rreq, and both colr boxes.
+    let file7 = &dumps.files["file7.jp2"];
+    let rreq = file7
+        .reader_requirements
+        .as_ref()
+        .expect("file7 has an rreq");
+    assert_eq!(rreq.standard_features.len(), 3);
+    assert_eq!(file7.colour_specifications.len(), 2);
+}
+
 /// Every reference plane parses as an 8-bit unsigned PGX of the file's size.
 #[test]
 fn every_jp2_reference_parses() {
