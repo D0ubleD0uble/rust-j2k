@@ -3,19 +3,23 @@
 //!
 //! The file is the Part 4 `file5.jp2` (a `jpx `-branded file with `jp2 ` in
 //! its compatibility list, an `rreq` box and two `colr` boxes), with its
-//! `ihdr` flags patched here so they differ from the defaults. The expected
-//! values are read off a box dump of the committed file. None of these fields
-//! changes the samples.
+//! `ftyp` minor version and `ihdr` flags patched here so they differ from the
+//! defaults. The expected values are read off a box dump of the committed
+//! file. None of these fields changes the samples.
 
 use std::path::PathBuf;
 
 use rust_j2k::{ColourSpace, Jp2Metadata, decode, read_header};
 
-/// `file5.jp2` with `ihdr`'s `UnkC` and `IPR` set to these values.
+/// `file5.jp2` with `ftyp`'s `MinV` set to 0x0102_0304 and `ihdr`'s `UnkC`
+/// and `IPR` set to these values.
 fn file5_with(unknown_colourspace: u8, ipr: u8) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/conformance/jp2/files/file5.jp2");
     let mut bytes = std::fs::read(path).unwrap();
+    // `ftyp` follows the 12-byte signature: its `MinV` is at 20.
+    assert_eq!(&bytes[16..24], b"jpx \0\0\0\0");
+    bytes[20..24].copy_from_slice(&0x0102_0304u32.to_be_bytes());
     // jP (12), ftyp (32), rreq (24), then jp2h's header and ihdr's: the
     // `ihdr` payload starts at 84, and `BPC`, `C`, `UnkC`, `IPR` end it.
     assert_eq!(&bytes[80..84], b"ihdr");
@@ -30,7 +34,7 @@ fn file5_with(unknown_colourspace: u8, ipr: u8) -> Vec<u8> {
 #[track_caller]
 fn check(jp2: &Jp2Metadata, unknown_colourspace: u8, ipr: u8) {
     assert_eq!(jp2.file_type.brand, *b"jpx ");
-    assert_eq!(jp2.file_type.minor_version, 0);
+    assert_eq!(jp2.file_type.minor_version, 0x0102_0304);
     // The encoder wrote `00 00 00 03` after `MinV`; by I.5.2's layout it is
     // the first compatibility code, and it is reported as stored.
     assert_eq!(
