@@ -52,13 +52,14 @@ def require_openjpeg(*tools: str) -> str:
     for tool in tools:
         version = opj_version(tool)
         if version is None:
-            sys.exit(f"{tool} not found on PATH; run scripts/install-oracle-tools.sh "
-                     f"(OpenJPEG {OPENJPEG_VERSION} is the oracle)")
+            sys.exit(f"{tool} not found on PATH; install OpenJPEG {OPENJPEG_VERSION} "
+                     f"(scripts/install-oracle-tools.sh, or the source build in docs/development.md)")
         if version == "":
             sys.exit(f"no OpenJPEG version banner in `{tool} -h`: refusing to generate oracles")
         if version != OPENJPEG_VERSION:
             sys.exit(f"{tool} is OpenJPEG {version}, not {OPENJPEG_VERSION}: refusing to "
-                     f"generate oracles with it (see docs/development.md)")
+                     f"generate oracles with it (build {OPENJPEG_VERSION} from source, "
+                     f"see docs/development.md)")
     return OPENJPEG_VERSION
 
 

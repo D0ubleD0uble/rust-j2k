@@ -97,4 +97,12 @@ if [[ $missing -ne 0 ]]; then
 	log "some tools are still missing; see docs/development.md"
 	exit 1
 fi
+
+# The package manager may ship another OpenJPEG; the generators refuse that.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! python3 "$script_dir/oracle_tools.py" opj_decompress opj_compress opj_dump --lcms; then
+	log "the installed OpenJPEG or LittleCMS is not the pinned version: build OpenJPEG 2.5.0"
+	log "from source as described in docs/development.md"
+	exit 1
+fi
 log "all oracle tools present"
