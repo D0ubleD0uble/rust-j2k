@@ -999,7 +999,10 @@ fn cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
 fn srgb_4_2_0_or_4_2_2_is_refused_whatever_cdef_labels() {
     const NONE: u16 = 0xFFFF;
     let cdefs = [
-        ("colour 1, opacity", cdef(&[(0, 0, 1), (1, 1, 0), (2, 1, 0)])),
+        (
+            "colour 1, opacity",
+            cdef(&[(0, 0, 1), (1, 1, 0), (2, 1, 0)]),
+        ),
         (
             "colour 1, unspecified",
             cdef(&[(0, 0, 1), (1, NONE, NONE), (2, NONE, NONE)]),
@@ -1039,7 +1042,11 @@ fn srgb_on_one_or_two_channels_passes_through() {
     };
     let colours_1_2 = cdef(&[(0, 0, 1), (1, 0, 2)]);
     let rows = [
-        ("one channel", ColourSpace::Srgb, file(ONE, &enumerated(16), &[])),
+        (
+            "one channel",
+            ColourSpace::Srgb,
+            file(ONE, &enumerated(16), &[]),
+        ),
         (
             "two channels, different sign",
             ColourSpace::Srgb,
