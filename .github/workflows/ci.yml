@@ -141,6 +141,11 @@ jobs:
       # The header target checks read_header against decode on the same input.
       - name: Fuzz header (30s)
         run: cargo fuzz run header --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096
+      # The ICC target reads a fuzzed profile; the oracle cases' profiles seed it.
+      - name: Seed the ICC fuzz corpus
+        run: python3 scripts/gen-icc-oracles.py --fuzz-seeds
+      - name: Fuzz icc_srgb (30s)
+        run: cargo fuzz run icc_srgb --target x86_64-unknown-linux-gnu -- -dict=fuzz/icc.dict -max_total_time=30 -rss_limit_mb=4096
 
   # The ICC output is documented as identical on every platform where fma is
   # correctly rounded. Every job above is x86-64, so run the full suite on

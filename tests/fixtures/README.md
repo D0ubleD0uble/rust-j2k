@@ -296,6 +296,33 @@ The snapshots hold hashes only, so a mismatch names the plane but not the
 samples; regenerate the converted output with the script's command to see
 them.
 
+#### Exhaustive check against LittleCMS
+
+`scripts/check-icc-exhaustive.py` is an optional check that is not part of
+`cargo test`. It runs the same cases as the snapshots through the decoder and
+through the system LittleCMS (`liblcms2.so.2`, by ctypes), with the arguments
+OpenJPEG passes, and counts the pixels where they differ: the full 8-bit RGB
+cube (2^24 colors) for each RGB profile on an 8-bit codestream, a fixed-seed
+sample of 2^20 pixels for each on a 16-bit one, and all 256 levels for each
+monochrome profile, in the format OpenJPEG picks from the profile's color
+space. The bar is 0 mismatches on every case. Where OpenJPEG leaves the
+samples as coded, the script checks the decoder gives them back unchanged;
+where the decoder declines with `Error::Unsupported`, the case must be one of
+`REFUSED_BY_US` in `tests/jp2_icc.rs`. Any other result is a SURPRISE and the
+script exits non-zero.
+
+```sh
+nice -n 19 python3 scripts/check-icc-exhaustive.py [--only SUBSTRING] [--work DIR]
+```
+
+It builds `examples/icc_convert.rs` with `cargo build --release`, makes its
+three input codestreams with `opj_compress`, and needs the conformance corpus
+for the `icc_variants.json` cases. A full run decodes a 16-million-pixel image
+for each 8-bit case, so expect around twenty minutes of one core; `--work`
+keeps the generated codestreams between runs. The oracles assume LittleCMS
+2.14 (Ubuntu 24.04's `liblcms2-2`) and OpenJPEG 2.5.0 on x86-64; the script
+prints the library version it loaded.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
