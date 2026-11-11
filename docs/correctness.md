@@ -147,13 +147,43 @@ Stricter here, where OpenJPEG decodes:
   extensions, `rreq` features), so its first codestream can be the wrong
   image with no error. Refusing it lets a later JPX reader produce the right
   image without silently changing output that already "worked";
-- a last tile-part with `Psot = 0` followed by more bytes in the slice it
-  runs to: no `EOC`, a `jp2c` with `LBox` 0, or a `jp2c` length that does not
-  end at the `EOC`. In both decoders the tile-part runs to the end of the
-  file, so the bytes after it are tile data. OpenJPEG ignores them; the
-  codestream parser rejects them as `Codestream` ("left after the last
-  packet"). This is a known difference, not the tier-2 rule above: the
-  packets themselves decode. The policy is pending owner issue #183.
+- a last tile-part with `Psot = 0` followed by more bytes, when the `jp2c`
+  box does not end where its codestream does: `LBox` 0, or a length that
+  ends inside the codestream with more bytes after the codestream. The
+  tile-part then runs to the end of the file in both decoders, so the bytes
+  after its last packet are tile data. OpenJPEG ignores them; the codestream
+  parser rejects them as `Codestream` ("left after the last packet"), as it
+  does for a raw codestream (owner decision on #183, 2026-11-10). The
+  packets themselves decode, so this is not the tier-2 rule above.
+
+A `Psot = 0` last tile-part ends at the end of its `jp2c` box, with or
+without an `EOC`, when the box declares a length that ends at least two
+bytes before the end of the file and holds every tile-part's `SOT`, and
+tier-2 walks the packets of that tile-part's tile to exactly the box's end.
+Tier-2 refuses bytes left after the last packet and a tile-part that ends
+before its last packet, so this holds only when the packets end there, and
+OpenJPEG, which reads the tile-part on to the end of the file, reads the same
+packets. Read to the end of the file, those packets are followed by bytes
+left after them, which are refused, so a fault in tier-1 is the same fault
+either way. When tier-2 does not reach the box's end (the box ends inside the
+codestream), the codestream is read to the end of the file instead, with the
+result above. The check is part of reading the file's structure, so
+`read_header` makes it too: it walks that one tile's packet headers, without
+decoding any samples. Every step of the walk is bounded, since a one-byte
+packet header can visit every code-block of its precinct and a positional
+progression order can sweep millions of positions that hold no packet: a
+codestream of more than 4096 tiles or 1024 components, or of fewer than 14
+bytes per tile, is not walked, nor is a tile of more than 2^14 code-blocks or
+precincts, and the walk stops after max(2^22, 8 × the tile's data bytes)
+visits, counting packets read, code-block entries visited in their headers,
+and sweep positions once for each (component, resolution) checked there.
+Past a bound the check answers no, and the codestream is read to the end of
+the file as above (`jp2_t2bomb_*` and `jp2_t2_sweep_*` in
+`tests/fixtures/psot0/`). When the box's end is used, the boxes after it are
+walked by the rules for the boxes after the codestream and reported as
+metadata (`xml `, `uuid` and the like); otherwise the bytes after the box are
+tile data and nothing is reported from them. Neither decoder reads header
+boxes there: OpenJPEG's walk after the decode starts at the end of the file.
 
 A `jp2c` whose length is wrong (`LBox` 2..7, `XLBox` below 16, or shorter
 than its codestream) decodes as in OpenJPEG, which ignores the length: the

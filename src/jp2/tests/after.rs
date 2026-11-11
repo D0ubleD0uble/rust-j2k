@@ -473,3 +473,192 @@ fn padding_inside_the_codestream_box_does_not_hide_later_metadata() {
     let metadata = decode(&short).expect("decodes").jp2.expect("a JP2 file");
     assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
 }
+
+/// Codestreams whose one-byte packet headers each visit every code-block of the
+/// tile, from `t2bomb` in `scripts/gen-psot0-jp2-fixtures.py`: one past the
+/// visit bound on the walk that checks where a `Psot = 0` codestream ends, and
+/// one past its geometry bound.
+const T2BOMB_VISITS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_visits.jp2");
+const T2BOMB_BLOCKS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_blocks.jp2");
+/// The same shape with 56 code-blocks and 19000 layers: about a million
+/// visits, within the bound.
+const T2_MANY_LAYERS: &[u8] =
+    include_bytes!("../../../tests/fixtures/psot0/jp2_t2_many_layers.jp2");
+/// RPCL and PCRL sweeps of 256^2 positions that check 64 components at each,
+/// for 1148 empty packets, from `sweep` in the same script.
+const T2_SWEEP_RPCL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_rpcl.jp2");
+const T2_SWEEP_PCRL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_pcrl.jp2");
+/// A CPRL sweep of one 130x130 component under 1x1 precincts, from
+/// `cprl_sweep`: 16900 precincts, past the geometry bound.
+const T2_SWEEP_CPRL: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_cprl.jp2");
+/// CPRL sweeps whose step comes from different resolutions on each axis, from
+/// `cprl_steps`. The tall one has 512 precincts and sweeps 2^23 positions; the
+/// POC one repeats a 64^2-position sweep over 33 resolutions in 31 volumes.
+/// Both stay within the geometry bound and pass the visit bound.
+const T2_SWEEP_CPRL_TALL: &[u8] =
+    include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_cprl_tall.jp2");
+const T2_SWEEP_CPRL_POC: &[u8] =
+    include_bytes!("../../../tests/fixtures/psot0/jp2_t2_sweep_cprl_poc.jp2");
+
+/// The codestream of `file` cut two bytes past its `jp2c` box's end, the slice
+/// the walk is run on.
+fn box_end_cut(file: &[u8]) -> &[u8] {
+    let mut at = 0;
+    loop {
+        let length = u32::from_be_bytes(file[at..at + 4].try_into().unwrap()) as usize;
+        if &file[at + 4..at + 8] == b"jp2c" {
+            return &file[at + 8..at + length + 2];
+        }
+        at += length;
+    }
+}
+
+/// The walk stops at its bounds and answers that the codestream does not end
+/// at the box's end, after at most [`PROBE_VISITS_MIN`] visits for a tile this
+/// small, whether the visits are code-block entries or sweep positions, and
+/// after none for a tile past the geometry bound. Unbounded, the same walks go
+/// past both.
+#[test]
+fn the_packet_walk_at_the_box_end_is_bounded() {
+    use crate::jp2::{PROBE_GEOMETRY, PROBE_VISITS_MIN, probe_packets};
+    use crate::tier2::{Budget, MAX_CODE_BLOCKS, decode_packets_within};
+
+    let unbounded = |cut: &[u8]| {
+        let parsed = crate::codestream::parse_header(cut).unwrap();
+        let cs = crate::codestream::parse_tiles(cut, parsed).unwrap();
+        let header = cs.tile_header(0).unwrap();
+        let mut budget = Budget::DECODE;
+        decode_packets_within(&header, &cs.tiles[0], &mut budget).expect("ends at the cut");
+        (u64::MAX - budget.visits, MAX_CODE_BLOCKS - budget.blocks)
+    };
+
+    for file in [
+        T2BOMB_VISITS,
+        T2_SWEEP_RPCL,
+        T2_SWEEP_PCRL,
+        T2_SWEEP_CPRL_TALL,
+        T2_SWEEP_CPRL_POC,
+    ] {
+        let cut = box_end_cut(file);
+        assert!(unbounded(cut).0 > PROBE_VISITS_MIN);
+        let (ends, visits) = probe_packets(cut, 0);
+        assert!(!ends);
+        assert!(visits <= PROBE_VISITS_MIN, "{visits} visits");
+    }
+
+    for file in [T2BOMB_BLOCKS, T2_SWEEP_CPRL] {
+        let cut = box_end_cut(file);
+        assert!(unbounded(cut).1 > PROBE_GEOMETRY);
+        assert_eq!(probe_packets(cut, 0), (false, 0));
+    }
+
+    let cut = box_end_cut(T2_MANY_LAYERS);
+    assert!(probe_packets(cut, 0).0);
+}
+
+/// A tile with more data may spend more: 8 visits per byte past 2^19 bytes.
+#[test]
+fn the_packet_walk_bound_grows_with_the_tile_data() {
+    use crate::jp2::probe_visits;
+    assert_eq!(probe_visits(0), 1 << 22);
+    assert_eq!(probe_visits(1 << 19), 1 << 22);
+    assert_eq!(probe_visits((1 << 19) + 1), (1 << 22) + 8);
+    assert_eq!(probe_visits(1 << 24), 1 << 27);
+    assert_eq!(probe_visits(u64::MAX), u64::MAX);
+}
+
+/// The walk resolves only the walked tile's header, not every tile's (which
+/// costs `tiles × components`, seconds for a file of 100 KB). A fault in
+/// another tile's header (here tile 0's, a COD pairing the 9/7 wavelet with
+/// no quantization) fails the codestream once every tile's header is
+/// resolved, but not the walk of the last tile; the decode refuses that file
+/// either way.
+#[test]
+fn the_packet_walk_resolves_only_its_own_tile() {
+    let mut codestream =
+        include_bytes!("../../../tests/fixtures/psot0/tiled_psot0_no_eoc.j2k").to_vec();
+    let at = |bytes: &[u8], code: [u8; 2]| bytes.windows(2).position(|w| w == code).unwrap();
+    let cod = at(&codestream, [0xFF, 0x52]);
+    let length = usize::from(u16::from_be_bytes([
+        codestream[cod + 2],
+        codestream[cod + 3],
+    ]));
+    let mut other = codestream[cod..cod + 2 + length].to_vec();
+    other[13] ^= 1;
+    // Tile 0's tile-part comes first: put the COD before its SOD and grow its
+    // `Psot` to match.
+    let sot = at(&codestream, [0xFF, 0x90]);
+    let psot = u32::from_be_bytes(codestream[sot + 6..sot + 10].try_into().unwrap());
+    let grown = psot + u32::try_from(other.len()).unwrap();
+    codestream[sot + 6..sot + 10].copy_from_slice(&grown.to_be_bytes());
+    codestream.splice(sot + 12..sot + 12, other);
+    // Room for an EOC, as in the cut two bytes past the box's end.
+    codestream.extend_from_slice(&[0, 0]);
+
+    let parsed = crate::codestream::parse_header(&codestream).unwrap();
+    let whole = crate::codestream::parse_tiles(&codestream, parsed).map(|_| ());
+    assert!(matches!(whole, Err(Error::Marker(_))), "{whole:?}");
+    assert!(crate::jp2::probe_packets(&codestream, 3).0);
+}
+
+/// A codestream of `tiles` 1x1 tiles in a row and `components` 8-bit
+/// components, no wavelet levels and one layer, each packet empty (one zero
+/// byte). Every tile-part has its length but the last, which has `Psot = 0`,
+/// and two bytes of room for an `EOC` follow, as in the cut past a box's end.
+fn empty_packets(tiles: u32, components: u16) -> Vec<u8> {
+    let segment = |code: u16, body: &[u8]| {
+        let mut out = code.to_be_bytes().to_vec();
+        out.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    };
+    let mut siz = vec![0, 0];
+    for value in [tiles, 1, 0, 0, 1, 1, 0, 0] {
+        siz.extend_from_slice(&value.to_be_bytes());
+    }
+    siz.extend_from_slice(&components.to_be_bytes());
+    for _ in 0..components {
+        siz.extend_from_slice(&[7, 1, 1]);
+    }
+    let mut out = vec![0xFF, 0x4F];
+    out.extend(segment(0xFF51, &siz));
+    out.extend(segment(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0, 1]));
+    out.extend(segment(0xFF5C, &[0x40, 0x40]));
+    let packets = usize::from(components);
+    for tile in 0..tiles {
+        let psot = if tile + 1 == tiles {
+            0
+        } else {
+            14 + packets as u32
+        };
+        out.extend_from_slice(&[0xFF, 0x90, 0, 10]);
+        out.extend_from_slice(&u16::try_from(tile).unwrap().to_be_bytes());
+        out.extend_from_slice(&psot.to_be_bytes());
+        out.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+        out.extend(std::iter::repeat_n(0, packets));
+    }
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// A codestream of more than [`PROBE_TILES`] tiles or [`PROBE_COMPONENTS`]
+/// components is not walked, since its tile list and the walked tile's
+/// header grow with them; at the bound it is.
+#[test]
+fn the_packet_walk_skips_a_codestream_of_too_many_tiles_or_components() {
+    use crate::jp2::{PROBE_COMPONENTS, PROBE_TILES, probe_packets};
+
+    let tiles = u32::try_from(PROBE_TILES).unwrap();
+    assert!(probe_packets(&empty_packets(tiles, 1), (tiles - 1) as u16).0);
+    assert_eq!(
+        probe_packets(&empty_packets(tiles + 1, 1), tiles as u16),
+        (false, 0)
+    );
+
+    let components = u16::try_from(PROBE_COMPONENTS).unwrap();
+    assert!(probe_packets(&empty_packets(1, components), 0).0);
+    assert_eq!(
+        probe_packets(&empty_packets(1, components + 1), 0),
+        (false, 0)
+    );
+}

@@ -35,7 +35,10 @@
 //! `jp2c`. OpenJPEG does not use that box's length: the codestream ends where
 //! its tile-parts end ([`after::codestream_end`]), and the boxes from there on
 //! are walked and read as OpenJPEG reads them once it has decoded the
-//! codestream ([`boxes::walk_after_codestream`], [`after::check`]). The two
+//! codestream ([`boxes::walk_after_codestream`], [`after::check`]). When the
+//! last tile-part has `Psot = 0`, its length does not say where it ends, and
+//! the box's end is used when that tile's packets end exactly there
+//! ([`locate_codestream`]). The two
 //! decoders still differ on some files, in both directions;
 //! `docs/correctness.md` and the reject matrix in `docs/roadmap-phase3.md`
 //! list where.
@@ -111,7 +114,8 @@ pub(crate) struct Jp2File<'a> {
     pub(crate) colour: ColourSpace,
     /// The codestream: from the start of the first `jp2c` box's contents to
     /// the end of its last tile-part, or the box's contents when that end
-    /// cannot be found from the tile-part lengths (see [`after::codestream_end`]).
+    /// cannot be found from the tile-part lengths (see [`after::codestream_end`]
+    /// and [`locate_codestream`]).
     pub(crate) codestream: &'a [u8],
     /// The other top-level boxes before the codestream (`xml `, `uuid`, `rreq`
     /// and the like, and header boxes misplaced before `jp2h`, which OpenJPEG
@@ -130,9 +134,10 @@ pub(crate) struct Jp2File<'a> {
     pub(crate) after_box: Vec<Jp2Box<'a>>,
     /// Whether OpenJPEG reads the boxes after the codestream: true when the
     /// codestream's end was found from its tile-part lengths. When the last
-    /// tile-part runs to the end of the file, OpenJPEG's walk starts at the
-    /// end and finds nothing; when the end cannot be found, the codestream
-    /// does not decode.
+    /// tile-part has `Psot = 0`, OpenJPEG runs it to the end of the file and
+    /// its walk there finds nothing, even when the codestream ends at the
+    /// `jp2c` box's end; when the end cannot be found, the codestream does
+    /// not decode.
     pub(crate) after_read: bool,
     /// The length fault that ended the walk after the codestream, reported by
     /// [`after::check`] after the boxes before it.
@@ -239,12 +244,19 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
 /// tile-parts end, whatever the box's length says. When every tile-part has a
 /// length, that is just after `EOC`, and the boxes from there on are walked.
 /// A last tile-part of `Psot = 0` runs to the end of the file and nothing
-/// after it is walked. The box's contents are kept when they end in `EOC`:
-/// anything after them would be tile data past the last packet, which
-/// OpenJPEG ignores. Otherwise the codestream runs to the end of the file.
-/// When the tile-part chain is broken, the box's contents go to the
-/// codestream parser to be rejected (or to `read_header`, which reads only
-/// the main header).
+/// after it is walked. Its length does not say where the codestream ends, so
+/// the box's end is used when the box shows it is the end:
+///
+/// - The box's contents end in `EOC`: they are the codestream.
+/// - The box ends at least two bytes before the end of the file, it holds
+///   every tile-part's `SOT`, and the packets of the `Psot = 0` tile-part's
+///   tile end exactly at the box's end ([`packets_end_at`]). The boxes after
+///   the box are walked for their metadata.
+///
+/// Otherwise the codestream runs to the end of the file, and any bytes after
+/// its last packet are refused as for a raw codestream. When the tile-part
+/// chain is broken, the box's contents go to the codestream parser to be
+/// rejected (or to `read_header`, which reads only the main header).
 fn locate_codestream<'a>(
     file: &'a [u8],
     payload: &'a [u8],
@@ -260,9 +272,116 @@ fn locate_codestream<'a>(
     };
     match after::codestream_end(tail) {
         End::At(end) => (&tail[..end], &tail[end..], true),
-        End::OpenLastPart if !payload.ends_with(&[0xFF, 0xD9]) => (tail, &[], false),
-        End::OpenLastPart | End::Unknown => (payload, rest, false),
+        End::OpenLastPart(_) if payload.ends_with(&[0xFF, 0xD9]) => (payload, rest, false),
+        // The codestream parser gives a `Psot = 0` tile-part all but the last
+        // two bytes of its slice, the room for an `EOC`, so a slice two bytes
+        // past the box ends the tile-part at the box's end. `rest` under two
+        // bytes leaves no room for it.
+        End::OpenLastPart(tile)
+            if matches!(after::codestream_end(payload), End::OpenLastPart(_)) =>
+        {
+            match tail.get(..payload.len() + 2) {
+                Some(cut) if packets_end_at(cut, tile) => (cut, rest, false),
+                _ => (tail, &[], false),
+            }
+        }
+        End::OpenLastPart(_) => (tail, &[], false),
+        End::Unknown => (payload, rest, false),
     }
+}
+
+/// The most code-blocks, and the most precincts, [`packets_end_at`] builds the
+/// packet geometry for. Each costs a few hundred bytes of geometry and decode
+/// state, so the walk holds a few MB at most. A larger tile is not walked.
+const PROBE_GEOMETRY: usize = 1 << 14;
+
+/// The most tiles, and the most components, a codestream may have for
+/// [`packets_end_at`] to walk it. The tile list and the walked tile's header
+/// cost a few hundred bytes per tile and per component, so these keep them
+/// to about 2 MB.
+const PROBE_TILES: usize = 1 << 12;
+const PROBE_COMPONENTS: usize = 1 << 10;
+
+/// The fewest visits [`packets_end_at`] may spend: packets read, code-block
+/// entries visited in their headers, and points of the progression order's
+/// loops (see [`crate::tier2::Budget::visits`]).
+const PROBE_VISITS_MIN: u64 = 1 << 22;
+
+/// The visits [`packets_end_at`] may spend per byte of the tile's data, when
+/// that comes to more than [`PROBE_VISITS_MIN`].
+const PROBE_VISITS_PER_BYTE: u64 = 8;
+
+/// The visits [`packets_end_at`] may spend on a tile of `bytes` bytes of data.
+fn probe_visits(bytes: u64) -> u64 {
+    PROBE_VISITS_MIN.max(bytes.saturating_mul(PROBE_VISITS_PER_BYTE))
+}
+
+/// Whether the packets of `tile`, the tile of the `Psot = 0` tile-part, end
+/// exactly at the end of `codestream`: its main header and tile-parts parse
+/// and tier-2 walks the tile's packets (no tier-1). Tier-2 refuses bytes left
+/// after the last packet and a tile-part that ends before its last packet, so
+/// this holds only when the packets end exactly at the box's end.
+///
+/// That makes the box's end safe to use. OpenJPEG reads the tile-part on to
+/// the end of the file, past the box: the same packets, then bytes it
+/// ignores. Read that way here, the same packets are followed by bytes left
+/// after the last packet, which are refused, so reading to the end of the file
+/// could never decode instead; a fault in tier-1 would be the same fault
+/// either way. When the packets do not end there, the box ends inside the
+/// codestream, and the bytes after it are tile data, not boxes.
+///
+/// The walk is bounded in every step, because `read_header` runs it too. A
+/// codestream of more than [`PROBE_TILES`] (4096) tiles or
+/// [`PROBE_COMPONENTS`] (1024) components, or of fewer than 14 bytes per
+/// tile, is not walked, nor is a tile of more than [`PROBE_GEOMETRY`] (16384)
+/// code-blocks or precincts. The walk stops after `max(2^22, 8 × the tile's
+/// data bytes)` visits, counting packets read, code-block entries visited in
+/// their headers, and the positions a positional progression order sweeps,
+/// for each (component, resolution) it checks there. A packet header of one
+/// byte can visit every code-block of its precinct, and a sweep can check
+/// millions of positions that hold no packet, so without the bound a small
+/// file could make this walk run for minutes. Only that tile's header is
+/// resolved, not every tile's, which would cost `tiles × components`. Past
+/// any bound the answer is `false`, so the codestream runs to the end of the
+/// file, the rule for a `Psot = 0` tile-part that this check does not apply
+/// to.
+fn packets_end_at(codestream: &[u8], tile: u16) -> bool {
+    probe_packets(codestream, tile).0
+}
+
+/// [`packets_end_at`], and the visits the walk spent.
+fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
+    let Ok(parsed) = crate::codestream::parse_header(codestream) else {
+        return (false, 0);
+    };
+    // Every tile needs a tile-part, of at least an SOT segment and an SOD
+    // (14 bytes), so a codestream shorter than that is missing tiles and
+    // fails either way. Only the walked tile's header is resolved: a fault in
+    // another one is found by the decode, the same whichever end is used.
+    let siz = &parsed.header.siz;
+    let tiles = siz.num_tiles() as usize;
+    if tiles > PROBE_TILES
+        || siz.components.len() > PROBE_COMPONENTS
+        || tiles.saturating_mul(14) > codestream.len()
+    {
+        return (false, 0);
+    }
+    let Ok(cs) = crate::codestream::split_tiles(codestream, parsed) else {
+        return (false, 0);
+    };
+    let index = usize::from(tile);
+    let (Some(data), Ok(header)) = (cs.tiles.get(index), cs.tile_header(index)) else {
+        return (false, 0);
+    };
+    let bytes = (data.data.len() + data.packed_headers.len()) as u64;
+    let visits = probe_visits(bytes);
+    let mut budget = crate::tier2::Budget {
+        precincts: PROBE_GEOMETRY,
+        blocks: PROBE_GEOMETRY,
+        visits,
+    };
+    let ends = crate::tier2::decode_packets_within(&header, data, &mut budget).is_ok();
+    (ends, visits - budget.visits)
 }
 
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image

@@ -174,13 +174,7 @@ pub fn parse_header(bytes: &[u8]) -> Result<ParsedHeader> {
 /// Walk the tile-parts of the codestream whose main header `parsed` holds, and
 /// resolve and check every tile's header.
 pub fn parse_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
-    let ParsedHeader {
-        header,
-        sot_offset,
-        ppm,
-    } = parsed;
-    let tiles = walk_tiles(bytes, sot_offset, &header, &ppm)?;
-    let codestream = Codestream { header, tiles };
+    let codestream = split_tiles(bytes, parsed)?;
 
     // Resolve every tile's header once, here, so a malformed tile-part header is
     // a parse error rather than a surprise partway through a decode. Each one is
@@ -209,6 +203,19 @@ pub fn parse_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>>
     }
 
     Ok(codestream)
+}
+
+/// [`parse_tiles`] without resolving every tile's header, for a caller that
+/// reads one tile and resolves just that one with [`Codestream::tile_header`].
+/// Resolving them all costs `tiles × components`.
+pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
+    let ParsedHeader {
+        header,
+        sot_offset,
+        ppm,
+    } = parsed;
+    let tiles = walk_tiles(bytes, sot_offset, &header, &ppm)?;
+    Ok(Codestream { header, tiles })
 }
 
 /// A tile-part header's own markers (A.4.2): the tile-level COD/QCD defaults and

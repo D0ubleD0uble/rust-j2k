@@ -33,6 +33,7 @@ use crate::codestream::markers::marker;
 use crate::codestream::{MainHeader, Tile};
 use crate::{Error, Result};
 use bio::BitReader;
+use std::cell::Cell;
 use tagtree::TagTree;
 
 pub(crate) use geometry::{
@@ -146,6 +147,44 @@ pub struct CodedData<'a> {
 /// component's subbands are smaller at the same resolution, and its precinct
 /// lattice is coarser on the reference grid.
 pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<CodedData<'a>> {
+    let mut budget = Budget::DECODE;
+    decode_packets_within(header, tile, &mut budget)
+}
+
+/// What one walk of a tile's packets may spend. Each field is spent as the
+/// walk goes, and running out of any of them fails it with [`Error::Limit`]
+/// before the work or the allocation is done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Budget {
+    /// Precincts across the tile's components (see [`resolution_geoms`]).
+    pub(crate) precincts: usize,
+    /// Code-blocks across the tile's components (see [`resolution_geoms`]).
+    pub(crate) blocks: usize,
+    /// Steps of the walk: packets read, code-block entries visited in their
+    /// headers, and the points of the progression order's loops, such as each
+    /// position of a positional sweep for each (component, resolution) it
+    /// checks. A packet header can be a single byte and still visit every
+    /// code-block of its precinct, and a sweep can check millions of points
+    /// that hold no packet, so this bounds the work where the other two cannot.
+    pub(crate) visits: u64,
+}
+
+impl Budget {
+    /// The decode's budget: the geometry guards, and no bound on the visits.
+    pub(crate) const DECODE: Budget = Budget {
+        precincts: MAX_PRECINCTS,
+        blocks: MAX_CODE_BLOCKS,
+        visits: u64::MAX,
+    };
+}
+
+/// [`decode_packets`] under `budget`, which is left holding what was not spent,
+/// also when the walk fails.
+pub(crate) fn decode_packets_within<'a>(
+    header: &MainHeader,
+    tile: &'a Tile<'a>,
+    budget: &mut Budget,
+) -> Result<CodedData<'a>> {
     let data: &'a [u8] = &tile.data;
 
     // Precincts are bounded *as the geometry is built*, not after: a precinct's
@@ -163,8 +202,6 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
     // geometry tuple, and legal 4×4 blocks push the count toward samples/16, so
     // the cap has to bite before those vectors fill rather than summing them
     // afterwards. Both running totals are threaded through `resolution_geoms`.
-    let mut precinct_budget = MAX_PRECINCTS;
-    let mut block_budget = MAX_CODE_BLOCKS;
     let component_count = header.siz.components.len();
     let geoms = (0..component_count)
         .map(|c| {
@@ -172,8 +209,8 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
                 header,
                 tile.index,
                 c,
-                &mut precinct_budget,
-                &mut block_budget,
+                &mut budget.precincts,
+                &mut budget.blocks,
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -214,22 +251,31 @@ pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<Cod
         body_pos: 0,
         packed,
     };
+    let visits = Cell::new(budget.visits);
     let mut packet_index = 0u32;
-    for_each_packet(header, &walk, |layer, resolution, component, precinct| {
-        let geom = &geoms[component][resolution];
-        parse_packet(
-            &mut streams,
-            layer,
-            packet_index,
-            delimiters,
-            header.components[component].coding.code_block_style,
-            &geom.bands,
-            precinct,
-            &mut states[component][resolution],
-        )?;
-        packet_index += 1;
-        Ok(())
-    })?;
+    let walked = for_each_packet(
+        header,
+        &walk,
+        &visits,
+        |layer, resolution, component, precinct| {
+            let geom = &geoms[component][resolution];
+            parse_packet(
+                &mut streams,
+                &visits,
+                layer,
+                packet_index,
+                delimiters,
+                header.components[component].coding.code_block_style,
+                &geom.bands,
+                precinct,
+                &mut states[component][resolution],
+            )?;
+            packet_index += 1;
+            Ok(())
+        },
+    );
+    budget.visits = visits.get();
+    walked?;
 
     let components: Vec<ComponentCoded<'a>> = states
         .into_iter()
@@ -342,6 +388,19 @@ struct PacketStreams<'a> {
     body_pos: usize,
     /// Whether the header stream is separate from the body stream.
     packed: bool,
+}
+
+/// Spend `n` of what is left of [`Budget::visits`], or fail once it is gone.
+pub(crate) fn visit(left: &Cell<u64>, n: usize) -> Result<()> {
+    match left.get().checked_sub(n as u64) {
+        Some(rest) => {
+            left.set(rest);
+            Ok(())
+        }
+        None => Err(Error::Limit(
+            "tile packet walk exceeds its work bound".into(),
+        )),
+    }
 }
 
 /// The two-byte marker at `pos`, or `None` if it would run past the end.
@@ -488,6 +547,7 @@ struct Contribution {
 #[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
     streams: &mut PacketStreams<'a>,
+    visits: &Cell<u64>,
     layer: u32,
     packet_index: u32,
     delimiters: Delimiters,
@@ -496,6 +556,7 @@ fn parse_packet<'a>(
     precinct: usize,
     states: &mut [BandState<'a>],
 ) -> Result<()> {
+    visit(visits, 1)?;
     // SOP precedes the packet in the *body* stream when COD allows it — but only
     // *may* (A.8.1), so its absence is not an error, and it stays inline even
     // when the headers are packed. OpenJPEG warns and carries on.
@@ -531,6 +592,7 @@ fn parse_packet<'a>(
     let mut contributions: Vec<Contribution> = Vec::new();
     if present {
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
+            visit(visits, band.precincts[precinct].blocks.len())?;
             parse_band_header(
                 band_index,
                 &band.precincts[precinct],
