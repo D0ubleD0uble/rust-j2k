@@ -687,7 +687,10 @@ TARGET = ROOT / "fuzz" / "fuzz_targets" / "icc_srgb.rs"
 
 def check_target_hash(target: Path = TARGET) -> None:
     """Exit unless the hash constants in the icc_srgb target are the ones this
-    script uses, so the build copies cannot drift from the gate."""
+    script uses and the target still has the two lines that pick what is
+    hashed (`let Some((&variant, profile)) = data.split_first()`) and gate the
+    transform build (`if fnv1a(profile) % BUILD_EVERY != 0 {`). This confirms
+    the lines exist, not how they behave."""
     text = target.read_text()
     patterns = {
         "BUILD_EVERY": r"^const BUILD_EVERY: u64 = (\d+);",
@@ -700,6 +703,14 @@ def check_target_hash(target: Path = TARGET) -> None:
         if len(hits) != 1:
             sys.exit(f"{target}: expected one {key}, found {len(hits)}")
         values[key] = int(hits[0].replace("_", ""), 0)
+    lines = {
+        "hashed-input": r"^\s*let Some\(\(&variant, profile\)\) = data\.split_first\(\) else \{$",
+        "build-seed selection": r"^\s*if fnv1a\(profile\) % BUILD_EVERY != 0 \{$",
+    }
+    for key, pattern in lines.items():
+        hits = re.findall(pattern, text, re.M)
+        if len(hits) != 1:
+            sys.exit(f"{target}: expected one {key} line matching {pattern}, found {len(hits)}")
     mine = {"BUILD_EVERY": BUILD_EVERY, "FNV offset": FNV_OFFSET, "FNV prime": FNV_PRIME}
     for key, want in mine.items():
         if values[key] != want:
@@ -751,8 +762,6 @@ def fuzz_seeds() -> None:
             first = bytes([selector[case["codestream"]]])
             (out / f"{case['codestream']}_{case['name']}_build").write_bytes(first + copy)
             builds += 1
-            if fnv1a(copy) % BUILD_EVERY != 0:
-                sys.exit(f"{case['name']}: build copy is not selected by the hash")
     wanted = len({(c["codestream"], c["profile"]) for c in cases if len(c["profile"]) >= 256})
     if builds != wanted:
         sys.exit(f"wrote {builds} build copies for {wanted} distinct (codestream, profile) pairs")
