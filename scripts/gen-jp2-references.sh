@@ -5,14 +5,15 @@
 # tests/jp2_real.rs grades against a reference.
 #
 # Refuses before it writes anything unless opj_decompress is the pinned
-# OpenJPEG version. Run from the repository root.
+# OpenJPEG version. Replaces references/ only after every decode succeeded.
+# Works from any directory.
 
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python3 "$script_dir/oracle_tools.py" opj_decompress
 
-dir=tests/fixtures/jp2_real
+dir="$script_dir/../tests/fixtures/jp2_real"
 stems=(
 	3_13bit_and_1bit
 	byte
@@ -30,5 +31,6 @@ trap 'rm -rf "$workdir"' EXIT
 for stem in "${stems[@]}"; do
 	opj_decompress -i "$dir/$stem.jp2" -o "$workdir/$stem.pgx" >/dev/null
 done
+# Every decode succeeded: swap the directory's contents.
 rm -f "$dir"/references/*.pgx
 cp "$workdir"/*.pgx "$dir/references/"

@@ -47,7 +47,7 @@ edited or swapped file fails there.
 
 ## Oracle
 
-Every file is graded against `references/<stem>_<k>.pgx`, `opj_decompress`
+Every file that decodes is graded against `references/<stem>_<k>.pgx`, `opj_decompress`
 2.5.0's output for the `.jp2` (`opj_decompress -i <file>.jp2 -o <stem>.pgx`,
 one PGX per component). `scripts/gen-jp2-references.sh` regenerates all of
 them; it stops first unless `opj_decompress` is the pinned version.

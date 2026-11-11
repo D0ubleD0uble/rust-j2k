@@ -176,6 +176,21 @@ fn first_jp2c(bytes: &[u8]) -> &[u8] {
 /// geometry, depth and signedness, every sample within `max_abs`.
 fn check_references(name: &str, file: &rust_j2k::Image, max_abs: i32) {
     let stem = name.trim_end_matches(".jp2");
+    let on_disk = std::fs::read_dir(dir().join("references"))
+        .expect("read references")
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let file = e.file_name().to_string_lossy().into_owned();
+            file.strip_prefix(&format!("{stem}_"))
+                .and_then(|rest| rest.strip_suffix(".pgx"))
+                .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .count();
+    assert_eq!(
+        file.components.len(),
+        on_disk,
+        "{name}: components vs references"
+    );
     for (k, got) in file.components.iter().enumerate() {
         let path = dir().join(format!("references/{stem}_{k}.pgx"));
         let raw = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
