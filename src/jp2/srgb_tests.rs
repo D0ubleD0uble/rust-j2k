@@ -1173,7 +1173,13 @@ fn assert_converts_like(bytes: &[u8], like: &[u8]) {
         "converted"
     );
     assert_eq!(image.components, want.components);
-    assert_eq!(image.jp2, want.jp2);
+    // The `colr` boxes are reported as stored, and the two profiles differ.
+    let declared = |jp2: &Option<crate::Jp2Metadata>| {
+        let mut jp2 = jp2.clone().expect("a JP2 file");
+        jp2.colour_specifications.clear();
+        jp2
+    };
+    assert_eq!(declared(&image.jp2), declared(&want.jp2));
     let header = read_header_with(bytes, &srgb()).expect("header");
     assert_eq!(header.jp2, image.jp2, "the header describes the decode");
     assert_eq!(header.components.len(), image.components.len());
