@@ -304,10 +304,12 @@ through the system LittleCMS (`liblcms2.so.2`, by ctypes), with the arguments
 OpenJPEG passes, and counts the pixels where they differ: the full 8-bit RGB
 cube (2^24 colors) for each RGB profile on an 8-bit codestream, a fixed-seed
 sample of 2^20 pixels for each on a 16-bit one, and all 256 levels for each
-monochrome profile. The bar is 0 mismatches on every case. A case LittleCMS
-refuses (OpenJPEG then leaves the samples as coded, which `tests/jp2_icc.rs`
-checks) or the decoder declines with `Error::Unsupported` is listed, not
-compared.
+monochrome profile, in the format OpenJPEG picks from the profile's color
+space. The bar is 0 mismatches on every case. Where OpenJPEG leaves the
+samples as coded, the script checks the decoder gives them back unchanged;
+where the decoder declines with `Error::Unsupported`, the case must be one of
+`REFUSED_BY_US` in `tests/jp2_icc.rs`. Any other result is a SURPRISE and the
+script exits non-zero.
 
 ```sh
 nice -n 19 python3 scripts/check-icc-exhaustive.py [--only SUBSTRING] [--work DIR]

@@ -118,8 +118,12 @@ in the `colr` box. Every execution reads the profile with
 `rust_j2k::fuzz::icc_profile`. Building the transform to sRGB costs
 milliseconds, far more than reading, so only one profile in 16, chosen by a
 hash of the profile, is also decoded with `ColourOutput::Srgb`, which builds
-and runs the LittleCMS port. That took the target from about 21 to about 380
-exec/s. Seed it with the profiles in `tests/fixtures/icc/profiles.json`.
+and runs the LittleCMS port. That took the target from about 21 to about 560
+exec/s. Seed it with the profiles in `tests/fixtures/icc/profiles.json`;
+`gen-icc-oracles.py --fuzz-seeds` also writes, for each distinct profile, a
+`*_build` copy with a 2-byte nonce in the reserved header bytes 100 to 101
+that makes the hash select it, so the smoke reaches the transform builders
+for every profile.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
@@ -180,7 +184,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-10 | `jp2_boxes` with the `raw_channels` decode, reduction (bit 7), and the `srgb.rs` branch seeds | `gen-jp2-fuzz-seeds.py` (154 seeds), `jp2.dict` | 61 s, 24 058 runs (394 exec/s), `nice -n 19`, one job | no crash, leak, or timeout |
 | 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `icc_srgb` | `gen-icc-oracles.py --fuzz-seeds` (136 seeds), `icc.dict` | 61 s, 11 137 runs, under `nice` | no crash, leak, or timeout |
-| 2026-11-11 | `icc_srgb`, profile read on every input and the transform built for one in 16 | `gen-icc-oracles.py --fuzz-seeds` (349 seeds), `icc.dict` | 41 s, 15 718 runs (383 exec/s; 21 exec/s before the change, same seeds), `nice -n 19`, one job | no crash, leak, or timeout |
+| 2026-11-11 | `icc_srgb`, profile read on every input and the transform built for one in 16 | `gen-icc-oracles.py --fuzz-seeds` (349 seeds and 185 `_build` copies), `icc.dict` | 31 s, 17 471 runs (563 exec/s, coverage 3344; `main` on its 349 seeds: 21 exec/s, coverage 3278), `nice -n 19`, one job | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 
