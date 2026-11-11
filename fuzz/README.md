@@ -58,29 +58,38 @@ the style byte in the pinned COD drives `decode_block` through the same split
 production decodes use instead of a hand-built one.
 
 `jp2_boxes` does for the JP2 file format what `tile_body` does for tile
-data: the codestream is pinned (one of six small committed fixtures) and the
+data: the codestream is pinned (one of eight small committed fixtures) and the
 input becomes the boxes around it, so every execution reaches the box reader.
 Its first byte picks how the `jp2c` box is written (32-bit length, 64-bit
 `XLBox`, length 0, or followed by more boxes), whether the signature,
 `ftyp`, and a matching `ihdr` are pinned, so mutations can land on the whole
-top level or only on the `jp2h` children, and which codestream. `jp2.dict`
-holds the signature and every box type.
+top level or only on the `jp2h` children, which codestream, and whether every
+decode is one resolution level down. `jp2.dict` holds the signature and every
+box type.
 
-A file that decodes as coded is decoded again with `ColourOutput::Srgb`, which
-reads the `colr` ICC profile and converts sYCC. The result is only checked to
-be `Ok` or a typed error. The codestreams are chosen so each conversion path
-is reachable: an 8-bit single-component one (the monochrome profile, `kTRC`),
+Every input is decoded with `raw_channels`, and a file that decodes as coded
+is decoded again with `ColourOutput::Srgb`, which reads the `colr` ICC
+profile and converts sYCC. The results are only checked to be `Ok` or a
+typed error. The codestreams are chosen so each conversion path is
+reachable: an 8-bit single-component one (the monochrome profile, `kTRC`),
 an 8-bit three-component one without sub-sampling (the RGB profile, `rXYZ`,
-`rTRC`, ... with `curv` and `para` curves), the sYCC 4:2:0 and 4:2:2
-codestreams of `jp2_sycc_*_odd.jp2` (chroma replication). The RGB profile
-on the three-component codestream sub-sampled 2x2 in every component
-(`icc_rgb_subsampled`) converts, since its channels agree. Three seeds are
-refused: the 16-bit one-component codestream (monochrome profiles need 8
-bits) and an RGB profile on the 4:2:0 codestream (mixed sub-sampling) after
-the profile is read, and sYCC on the all-2x2 codestream
-(`sycc_subsampled_all`, sYCC wants luma at full size), which has no profile
-and is refused from the sampling alone. The CI smoke generates these seeds before it runs `jp2_boxes` for 30 s, and
-seeds `header` from the committed fixtures.
+`rTRC`, ... with `curv` and `para` curves), a 16-bit four-component one (the
+RGB profile at 16 bits, and the four-channel `cdef` seeds), and the sYCC
+4:2:0 and 4:2:2 codestreams of `jp2_sycc_*_odd.jp2` and the 4:2:0 one of
+`jp2_sycc_420_even.jp2` (chroma replication at both origin parities). The
+RGB profile on the three-component codestream sub-sampled 2x2 in every
+component (`icc_rgb_subsampled`) converts, since its channels agree.
+`gen-jp2-fuzz-seeds.py` adds one seed for each refusal and pass-through of
+`src/jp2/srgb.rs` a pinned codestream reaches: a `pclr` gives channels of
+mixed depth, sign or sub-sampling, a `cdef` too few colours, and a profile
+built with one header field, tag or curve changed reaches each of the
+profile reader's refusals. Not reached: the sample budget refusals (the
+pinned images are tiny), an even-origin 4:2:2 conversion (no pinned
+codestream; `tests/jp2_sycc_replication.rs` grades one against OpenJPEG),
+and the RGB profile's `uniform` refusal: after the `cdef` reorder colours 1
+to 3 are normally the first three channels, which the "AFL test" before it
+has already compared. The CI smoke generates these seeds before it runs
+`jp2_boxes` for 30 s, and seeds `header` from the committed fixtures.
 `gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds, and
 seeds with `jp2i` and `uinf` boxes before and after the codestream.
 
@@ -160,6 +169,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-01 | `jp2_boxes` | `gen-jp2-fuzz-seeds.py` (46 seeds), `jp2.dict` | 61 s, 785 605 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `jp2_boxes` with the `Srgb` decode | `gen-jp2-fuzz-seeds.py` (72 seeds), `jp2.dict` | 61 s, 86 856 runs (1 423 exec/s), under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `jp2_boxes` with `jp2i` and `uinf` seeds | `gen-jp2-fuzz-seeds.py` (75 seeds), `jp2.dict` | 61 s, 35 821 runs, under `nice` | no crash, leak, or timeout |
+| 2026-11-10 | `jp2_boxes` with the `raw_channels` decode, reduction (bit 7), and the `srgb.rs` branch seeds | `gen-jp2-fuzz-seeds.py` (154 seeds), `jp2.dict` | 61 s, 24 058 runs (394 exec/s), `nice -n 19`, one job | no crash, leak, or timeout |
 | 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `icc_srgb` | `gen-icc-oracles.py --fuzz-seeds` (136 seeds), `icc.dict` | 61 s, 11 137 runs, under `nice` | no crash, leak, or timeout |
 

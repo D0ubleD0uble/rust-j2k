@@ -53,14 +53,20 @@ sYCC fixtures (`colr` 18), for sRGB output's chroma replication:
   makes OpenJPEG give the first row and column chroma of 0, and the odd
   height leaves a last unpaired row.
 - `jp2_sycc_422_odd`: a 13x5 image at origin (5, 3), chroma sub-sampled 2x1.
+- `jp2_sycc_420_even`, `jp2_sycc_422_even`: a 13x11 (2x2) and an 11x5 (2x1)
+  image at origin (6, 2), where every luma sample takes a chroma neighbour.
 
 Their `.expected.json` is the decode as coded: `opj_decompress -c K` on the
 bare codestream, one component at a time (`mct` 0), so the sub-sampling
 heuristic stays out. Their `.srgb.json` is `opj_decompress` on the `.jp2`,
-which converts sYCC to RGB. That output uses OpenJPEG's formula (0.344 and
+which converts sYCC to RGB, and their `.srgb_r1.json` the same with `-r 1`.
+At (6, 2) the reduced origin (3, 1) is odd in both axes, and at (5, 3) the
+reduced (3, 2) is even in y, so these tell a replication keyed on the
+full-resolution origin, as OpenJPEG's is, from one keyed on the reduced
+origin. That output uses OpenJPEG's formula (0.344 and
 0.714, products truncated); the decoder uses the IEC constants and rounds (an
 owner-approved deviation), so it is graded within 1 of it, and the test
-build's OpenJPEG formula must match it exactly.
+build's OpenJPEG formula must match the odd fixtures' `.srgb.json` exactly.
 
 Usage: python3 scripts/gen-jp2-fixtures.py
 Requires `opj_compress` and `opj_decompress` on PATH (OpenJPEG 2.5.0 was used).
@@ -167,9 +173,14 @@ def run(*args: str) -> subprocess.CompletedProcess:
 
 
 def opj_decode(
-    data: bytes, suffix: str, sampling: list[tuple[int, int]] | None = None, verified: bool = False
+    data: bytes,
+    suffix: str,
+    sampling: list[tuple[int, int]] | None = None,
+    verified: bool = False,
+    flags: tuple[str, ...] = (),
 ) -> tuple[list[dict], str]:
-    """Decode `data` with opj_decompress; return the PGX planes and its log.
+    """Decode `data` with opj_decompress (plus `flags`); return the PGX planes
+    and its log.
 
     PGX does not record sub-sampling, so `sampling` gives each plane's
     `(dx, dy)`; without it every plane must be the same size, and is taken to
@@ -179,7 +190,7 @@ def opj_decode(
         tmp = Path(tmp)
         source = tmp / f"in{suffix}"
         source.write_bytes(data)
-        result = run("opj_decompress", "-i", str(source), "-o", str(tmp / "out.pgx"))
+        result = run("opj_decompress", "-i", str(source), "-o", str(tmp / "out.pgx"), *flags)
         planes = sorted(tmp.glob("out*.pgx"), key=lambda p: int(p.stem.rsplit("_", 1)[1]))
         if sampling is not None and len(sampling) != len(planes):
             sys.exit(f"{len(planes)} planes decoded but {len(sampling)} samplings given")
@@ -438,10 +449,13 @@ def subsampled_fixtures() -> None:
         )
 
 
-def sycc_fixture(tmp: Path, name: str, width: int, height: int, chroma: tuple[int, int]) -> None:
-    """A three-component sYCC file at origin (5, 3) with chroma sub-sampled by `chroma`."""
+def sycc_fixture(
+    tmp: Path, name: str, width: int, height: int, chroma: tuple[int, int],
+    origin: tuple[int, int],
+) -> None:
+    """A three-component sYCC file at `origin` with chroma sub-sampled by `chroma`."""
     dx, dy = chroma
-    x0, y0 = 5, 3
+    x0, y0 = origin
     # opj_compress reads a raw component as ceil(w/dx) x ceil(h/dy) samples;
     # what it codes is taken from its own decode below.
     sizes = [(width, height)] + [(-(-width // dx), -(-height // dy))] * 2
@@ -485,32 +499,51 @@ def sycc_fixture(tmp: Path, name: str, width: int, height: int, chroma: tuple[in
         },
     )
 
-    # Converted: opj_decompress on the .jp2 itself applies its sYCC to RGB.
-    converted, _ = opj_decode(data, ".jp2")
-    if [(c["width"], c["height"]) for c in converted] != [(luma["width"], luma["height"])] * 3:
-        sys.exit(f"{name}: opj_decompress did not convert the chroma to full resolution")
-    snapshot = {
-        "image": {"width": geometry["width"], "height": geometry["height"]},
-        "tolerance": {"mode": "absolute", "max_abs_error": 1.0},
-        "components": converted,
-        "provenance": {
-            "source": f"{name}.jp2",
-            "oracle_command": f"opj_decompress -i {name}.jp2 -o out.pgx",
-            "notes": "OpenJPEG 2.5.0's sYCC to RGB, with its replication of sub-sampled chroma "
-            "and its odd-origin rule. Its formula uses 0.344 and 0.714 and truncates each "
-            "product; the decoder uses the IEC constants and rounds (owner-approved "
-            "deviation, 2026-11-01), hence the tolerance of 1",
-        },
-    }
-    (FIXTURES / f"{name}.srgb.json").write_text(json.dumps(snapshot, indent=2) + "\n")
-    print(f"wrote {name}.srgb.json")
+    def half(start: int, extent: int) -> int:
+        """One level down, the image is ceil(x1 / 2) - ceil(x0 / 2) wide on
+        the reference grid (B-15), and likewise high."""
+        return -(-(start + extent) // 2) - -(-start // 2)
+
+    # Converted: opj_decompress on the .jp2 itself applies its sYCC to RGB, at
+    # full resolution and one level down (`-r 1`).
+    for suffix, flags in [("srgb", ()), ("srgb_r1", ("-r", "1"))]:
+        converted, _ = opj_decode(data, ".jp2", flags=flags)
+        reduced = flags != ()
+        size = (half(x0, luma["width"]), half(y0, luma["height"])) if reduced else (
+            luma["width"], luma["height"])
+        if [(c["width"], c["height"]) for c in converted] != [size] * 3:
+            sys.exit(f"{name}: opj_decompress {flags} did not convert the chroma to {size}")
+        rule = (
+            "and its odd-origin rule, which keys on the full-resolution origin's parity "
+            "at -r 1 too" if reduced else "and its odd-origin rule"
+        )
+        snapshot = {
+            "image": {"width": size[0], "height": size[1]},
+            "tolerance": {"mode": "absolute", "max_abs_error": 1.0},
+            "components": converted,
+            "provenance": {
+                "source": f"{name}.jp2",
+                "oracle_command": " ".join(
+                    ["opj_decompress", "-i", f"{name}.jp2", "-o", "out.pgx", *flags]),
+                "notes": "OpenJPEG 2.5.0's sYCC to RGB, with its replication of sub-sampled "
+                f"chroma {rule}. Its formula uses 0.344 and 0.714 and truncates each "
+                "product; the decoder uses the IEC constants and rounds (owner-approved "
+                "deviation, 2026-11-01), hence the tolerance of 1",
+            },
+        }
+        (FIXTURES / f"{name}.{suffix}.json").write_text(json.dumps(snapshot, indent=2) + "\n")
+        print(f"wrote {name}.{suffix}.json")
 
 
 def sycc_fixtures() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        sycc_fixture(Path(tmp), "jp2_sycc_420_odd", 14, 12, (2, 2))
-    with tempfile.TemporaryDirectory() as tmp:
-        sycc_fixture(Path(tmp), "jp2_sycc_422_odd", 13, 5, (2, 1))
+    for name, width, height, chroma, origin in [
+        ("jp2_sycc_420_odd", 14, 12, (2, 2), (5, 3)),
+        ("jp2_sycc_422_odd", 13, 5, (2, 1), (5, 3)),
+        ("jp2_sycc_420_even", 13, 11, (2, 2), (6, 2)),
+        ("jp2_sycc_422_even", 11, 5, (2, 1), (6, 2)),
+    ]:
+        with tempfile.TemporaryDirectory() as tmp:
+            sycc_fixture(Path(tmp), name, width, height, chroma, origin)
 
 
 def main() -> None:

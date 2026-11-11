@@ -9,7 +9,7 @@ still needs RCT. So the multi-component path is graded against synthetic
 codestreams encoded by OpenJPEG, with `opj_decompress` supplying the per-component
 oracle -- the same arrangement Phase 1 uses for its GRIB2 fixtures.
 
-Both fixtures are reversible (5/3), so the decode is bit-exact and the snapshot
+Every fixture is reversible (5/3), so the decode is bit-exact and the snapshot
 records `tolerance: exact`.
 
 A trap worth recording. OpenJPEG's raw reader takes per-component sub-sampling as
@@ -50,6 +50,11 @@ def sample(component: int, x: int, y: int) -> int:
     return (37 * component + 5 * x + 11 * y + ((x * y) % 7) * 13) % 256
 
 
+def sample16(component: int, x: int, y: int) -> int:
+    """The 8-bit pattern spread over 16 bits, so the high byte varies too."""
+    return (sample(component, x, y) * 257 + 4099 * x * y + 1009 * component) % 65536
+
+
 def read_pgx(path: Path) -> tuple[int, int, int, bool, list[int]]:
     raw = path.read_bytes()
     end = raw.index(b"\n")
@@ -78,8 +83,14 @@ def run(*argv: str) -> None:
         sys.exit(f"{argv[0]} failed:\n{result.stdout}\n{result.stderr}")
 
 
-def build(name: str, width: int, height: int, components: int, subsampling: int, note: str) -> None:
+def build(
+    name: str, width: int, height: int, components: int, subsampling: int, note: str,
+    depth: int = 8,
+) -> None:
     """Encode a `components`-component image and snapshot OpenJPEG's decode of it.
+
+    `depth` is 8 (the pattern `sample`) or 16 (`sample16`, written big-endian,
+    as `opj_compress` reads a `.raw` file).
 
     `subsampling` is the factor applied to every component via `-s`. With `-s d,d`
     the reference grid becomes `(width - 1) * d + 1` wide, so the image extent and
@@ -87,16 +98,17 @@ def build(name: str, width: int, height: int, components: int, subsampling: int,
     """
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
+        pattern = sample if depth == 8 else sample16
         planes = bytearray()
         for component in range(components):
             for y in range(height):
                 for x in range(width):
-                    planes.append(sample(component, x, y))
+                    planes += pattern(component, x, y).to_bytes(depth // 8, "big")
         (tmp / "in.raw").write_bytes(bytes(planes))
 
         codestream = FIXTURES / f"{name}.j2k"
         flags = [
-            "-F", f"{width},{height},{components},8,u",
+            "-F", f"{width},{height},{components},{depth},u",
             "-mct", "0",          # components stay independent: no RCT/ICT
             "-p", "LRCP",
             "-n", "3",            # 2 decomposition levels
@@ -123,7 +135,7 @@ def build(name: str, width: int, height: int, components: int, subsampling: int,
         snapshot_components = []
         for component in range(components):
             w, h, depth, signed, values = read_pgx(tmp / f"out_{component}.pgx")
-            expected = [sample(component, x, y) for y in range(height) for x in range(width)]
+            expected = [pattern(component, x, y) for y in range(height) for x in range(width)]
             if (w, h) != (width, height) or values != expected:
                 sys.exit(
                     f"{name}: component {component} did not round-trip losslessly "
@@ -182,6 +194,17 @@ def main() -> None:
         note="three 8-bit components sub-sampled 2x2, so the 23x15 reference grid "
         "differs from each 12x8 component grid; reversible 5/3, LRCP, one layer, "
         "one tile, maximal precincts, no MCT",
+    )
+    build(
+        "multicomponent_16bit_lossless",
+        width=11,
+        height=9,
+        components=4,
+        subsampling=1,
+        depth=16,
+        note="four independent 16-bit components at unit sub-sampling, reversible 5/3, "
+        "LRCP, one layer, one tile, maximal precincts, no MCT; pinned by the jp2_boxes "
+        "fuzz target for the 16-bit RGB ICC conversion and the four-channel cdef seeds",
     )
 
 

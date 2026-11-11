@@ -7,18 +7,19 @@ Run from the repository root:
 
 The target takes `variant byte + body` and appends one of the pinned
 codestreams (see fuzz/fuzz_targets/jp2_boxes.rs): bits 4-6 of the variant pick
-it. Each ISO/IEC 15444-4 JP2 reader file
-(tests/fixtures/conformance/jp2/files/fileN.jp2) and each synthetic JP2
-fixture (tests/fixtures/jp2_*.jp2) gives two seeds, each paired with the
-pinned 8-bit single-component codestream if the file has one component, else
-the 8-bit un-sub-sampled three-component one, so that a file's ICC profile
-reaches the `ColourOutput::Srgb` conversion:
+it, and bit 7 decodes one resolution level down. Each ISO/IEC 15444-4 JP2
+reader file (tests/fixtures/conformance/jp2/files/fileN.jp2) and each
+synthetic JP2 fixture (tests/fixtures/jp2_*.jp2) gives two seeds, each paired
+with the pinned 8-bit single-component codestream if the file has one
+component, the 16-bit four-component one if it has four, else the 8-bit
+un-sub-sampled three-component one, so that a file's ICC profile and its
+`cdef` reach the `ColourOutput::Srgb` conversion:
 
-- `NAME_prefix`: variant 0x00 or 0x10, and the file's bytes before its first
+- `NAME_prefix`: variant 0x20, 0x60 or 0x30, and the file's bytes before its first
   `jp2c` box, signature included, with the `ihdr` rewritten to the pinned
   codestream's size and component count so the seed gets past the check
   against SIZ. The fuzzer starts from a real top-level layout.
-- `NAME_jp2h`: variant 0x0C or 0x1C (pinned signature, `ftyp`, and an `ihdr`
+- `NAME_jp2h`: variant 0x2C, 0x6C or 0x3C (pinned signature, `ftyp`, and an `ihdr`
   that matches the pinned codestream), and the file's other `jp2h` children,
   so the fuzzer starts from real `colr`, `pclr`, `cmap` and `cdef` boxes.
 
@@ -66,6 +67,33 @@ matching `ihdr` and a greyscale `colr`, then the boxes):
 - `uinf_unterminated`: a `uinf` with one UUID, an unknown box, and a `url `
   with no NUL.
 
+Plus one seed per refusal and pass-through of `src/jp2/srgb.rs` that a
+pinned codestream reaches (`srgb_branch_seeds`, variant 0x0C | codestream
+<< 4, 0x80 added for the `_reduced` ones):
+
+- sRGB and greyscale: declared over a 4:2:0 or 4:2:2 codestream at either
+  origin, even with a `cdef` naming colour 1 only (`*_as_sycc`,
+  `srgb_420_colour1_cdef`, refused); channels of mixed depth or sub-sampling
+  from a `pclr` (`srgb_mixed_*`, refused); RGBA on the 16-bit codestream
+  (`srgb_rgba_16bit`, passes through).
+- sYCC: one channel (passes through), 4:4:4, the even-origin 4:2:0, RGBA on
+  the 16-bit codestream, and the 4:2:0 and 4:2:2 ones reduced (convert); two
+  colours from a `cdef`, mixed depth and signed channels from a `pclr`
+  (refused).
+- CMYK (`enum_cmyk_*`) and no `colr` (`no_colr_three`): refused on three
+  channels, passed through on one.
+- `icc_*`: the RGB profile with one header field, tag or curve changed, so
+  each refusal of the profile reader and of LittleCMS's checks has a seed
+  (short, no `acsp`, class, version, tag count, table, duplicate and
+  out-of-range tags, named colour and link classes, intent, connection
+  space, each lookup table type, XYZ and curve tags of the wrong type or
+  cut short, `para` above type 4, and the Corbis and Monaco types); the
+  CMYK and YCbCr colour spaces; an RGB profile on one channel, two colours,
+  channels of mixed depth (OpenJPEG's "AFL test"), 12-bit or signed
+  channels, and the 16-bit codestream; a refused profile on a 4:2:0 or
+  4:2:2 codestream; a monochrome profile on three channels or on no colour
+  channel.
+
 The profiles are built from the ICC.1 layout, not copied from a file, so the
 seeds are reproducible from this script alone. The corpus directory is
 git-ignored; seeds are regenerated, not committed.
@@ -84,10 +112,15 @@ OUT = os.path.join(ROOT, "fuzz", "corpus", "jp2_boxes")
 PINNED = {
     1: ("derived_quant_lossy.j2k", 0x20),
     3: ("multicomponent_lossless.j2k", 0x30),
+    4: ("multicomponent_16bit_lossless.j2k", 0x60),
 }
 
-# Variant bits for each pinned codestream (see the target).
-ONE_16, THREE_SUB, ONE_8, THREE_8, SYCC_420, SYCC_422 = (n << 4 for n in range(6))
+# Variant bits for each pinned codestream (see the target), and the bit that
+# decodes one resolution level down.
+ONE_16, THREE_SUB, ONE_8, THREE_8, SYCC_420, SYCC_422, FOUR_16, SYCC_420_EVEN = (
+    n << 4 for n in range(8)
+)
+REDUCE = 0x80
 
 
 def siz_area(codestream):
@@ -237,6 +270,182 @@ def uinf(ids, location, extra=b""):
     return box(b"uinf", ulst + extra + box(b"url ", b"\0\0\0\0" + location))
 
 
+def patch(profile, at, value):
+    """`profile` with the four bytes at `at` replaced by `value`."""
+    out = bytearray(profile)
+    out[at:at + 4] = value
+    return bytes(out)
+
+
+def tag_entry(profile, signature):
+    """The tag table offset of `signature`'s entry."""
+    count = struct.unpack(">I", profile[128:132])[0]
+    for i in range(count):
+        at = 132 + 12 * i
+        if profile[at:at + 4] == signature:
+            return at
+    raise KeyError(signature)
+
+
+def rgb_tags(**override):
+    """The RGB profile's tags, with any replaced by keyword (`rTRC=...`)."""
+    tags = {
+        b"wtpt": xyz_tag(*D50),
+        b"rXYZ": xyz_tag(*RXYZ), b"gXYZ": xyz_tag(*GXYZ), b"bXYZ": xyz_tag(*BXYZ),
+        b"rTRC": CURVES["gamma"], b"gTRC": CURVES["gamma"], b"bTRC": CURVES["gamma"],
+    }
+    for name, payload in override.items():
+        tags[name.encode()] = payload
+    return [(sig, payload) for sig, payload in tags.items() if payload is not None]
+
+
+def lut(kind, inputs=3, grid=2):
+    """A lookup table tag of type `kind` (`mft1`, `mft2`, `mAB `, `mpet`) that
+    passes the checks LittleCMS makes before it reads the table: `inputs`
+    channels in, three out."""
+    if kind == b"mpet":
+        return kind + b"\0\0\0\0" + struct.pack(">HHI", inputs, 3, 0)
+    head = kind + b"\0\0\0\0" + bytes([inputs, 3, grid, 0])
+    if kind == b"mAB ":
+        return head + b"\0" * 20
+    head += s15(1) + s15(0) * 3 + s15(1) + s15(0) * 3 + s15(1)
+    clut = 3 * grid ** inputs
+    if kind == b"mft1":
+        return head + b"\0" * (256 * inputs + clut + 256 * 3)
+    return head + struct.pack(">HH", 2, 2) + b"\0" * (2 * (inputs * 2 + clut + 3 * 2))
+
+
+def pclr_box(depths, entries=256):
+    """A `pclr` with one column per `Bi` in `depths` (entry j is j, masked to the
+    column's depth) and the identity `cmap` over component 0."""
+    out = struct.pack(">HB", entries, len(depths)) + bytes(depths)
+    for j in range(entries):
+        for b in depths:
+            bits = (b & 0x7F) + 1
+            out += (j % (1 << bits)).to_bytes((bits + 7) // 8, "big")
+    cmap = b"".join(struct.pack(">HBB", 0, 1, i) for i in range(len(depths)))
+    return box(b"pclr", out) + box(b"cmap", cmap)
+
+
+def cdef_box(*entries):
+    """A `cdef` from (Typ, Asoc) pairs, one per channel in order."""
+    body = struct.pack(">H", len(entries))
+    body += b"".join(struct.pack(">HHH", n, typ, asoc) for n, (typ, asoc) in enumerate(entries))
+    return box(b"cdef", body)
+
+
+SRGB, GREY, SYCC = (colr(1, be32(n)) for n in (16, 17, 18))
+RGBA = cdef_box((0, 1), (0, 2), (0, 3), (1, 0))
+TWO_COLOURS = cdef_box((0, 1), (0, 2), (65535, 65535))
+
+
+def srgb_branch_seeds(write):
+    """One seed per refusal and pass-through of `src/jp2/srgb.rs` that a
+    pinned codestream reaches (variant 0x0C | codestream, body the `jp2h`
+    children after the pinned `ihdr`)."""
+    hdr = 0x0C
+    rgb = icc_rgb(CURVES["gamma"])
+    # sRGB and greyscale.
+    write("srgb_420_as_sycc", hdr | SYCC_420, SRGB)
+    write("grey_422_as_sycc", hdr | SYCC_422, GREY)
+    write("srgb_420_even_as_sycc", hdr | SYCC_420_EVEN, SRGB)
+    write("srgb_420_colour1_cdef", hdr | SYCC_420,
+          SRGB + cdef_box((0, 1), (65535, 65535), (65535, 65535)))
+    write("srgb_mixed_depth", hdr | ONE_8, SRGB + pclr_box([7, 7, 3]))
+    # Channels 0 and 2 from component 0 (1x1), channel 1 from component 1
+    # (2x2): not a layout OpenJPEG converts as sYCC, and the sub-sampling
+    # differs.
+    mixed = struct.pack(">HB", 256, 3) + bytes([7, 7, 7])
+    mixed += b"".join(bytes([j, j, j]) for j in range(256))
+    mixed_cmap = struct.pack(">HBBHBBHBB", 0, 0, 0, 1, 0, 0, 0, 1, 2)
+    write("srgb_mixed_sampling", hdr | SYCC_420,
+          SRGB + box(b"pclr", mixed) + box(b"cmap", mixed_cmap))
+    write("srgb_rgba_16bit", hdr | FOUR_16, SRGB + RGBA)
+    # sYCC.
+    write("sycc_one_channel", hdr | ONE_8, SYCC)
+    write("sycc_444", hdr | THREE_8, SYCC)
+    write("sycc_two_colours", hdr | THREE_8, SYCC + TWO_COLOURS)
+    write("sycc_mixed_depth", hdr | ONE_8, SYCC + pclr_box([7, 7, 3]))
+    write("sycc_signed", hdr | ONE_8, SYCC + pclr_box([0x87, 0x87, 0x87]))
+    write("sycc_420_even", hdr | SYCC_420_EVEN, SYCC)
+    write("sycc_rgba_16bit", hdr | FOUR_16, SYCC + RGBA)
+    for name, cs in [("420", SYCC_420), ("422", SYCC_422), ("420_even", SYCC_420_EVEN)]:
+        write(f"sycc_{name}_reduced", REDUCE | hdr | cs, SYCC)
+    # Another enumerated colour space, and none.
+    write("enum_cmyk_three", hdr | THREE_8, colr(1, be32(12)))
+    write("enum_cmyk_one", hdr | ONE_8, colr(1, be32(12)))
+    write("no_colr_three", hdr | THREE_8, b"")
+    # The profile reader's refusals (`Profile::parse`), on the RGB profile.
+    write("icc_short", hdr | THREE_8, colr(2, rgb[:100]))
+    write("icc_no_acsp", hdr | THREE_8, colr(2, patch(rgb, 36, b"xxxx")))
+    write("icc_bad_class", hdr | THREE_8, colr(2, patch(rgb, 12, b"xxxx")))
+    write("icc_version_6", hdr | THREE_8, colr(2, patch(rgb, 8, bytes([6, 0, 0, 0]))))
+    write("icc_101_tags", hdr | THREE_8, colr(2, patch(rgb, 128, be32(101))))
+    write("icc_table_past_end", hdr | THREE_8, colr(2, patch(rgb, 128, be32(99))))
+    at = tag_entry(rgb, b"gTRC")
+    write("icc_duplicate_tag", hdr | THREE_8, colr(2, patch(rgb, at, b"rTRC")))
+    write("icc_tag_past_end", hdr | THREE_8, colr(2, patch(rgb, at + 8, be32(1 << 20))))
+    # `input_profile`: class, intent, connection space, lookup tables.
+    write("icc_named_colour", hdr | THREE_8, colr(2, patch(rgb, 12, b"nmcl")))
+    write("icc_link_no_lut", hdr | THREE_8, colr(2, patch(rgb, 12, b"link")))
+    write("icc_zero_class", hdr | THREE_8, colr(2, patch(rgb, 12, b"\0\0\0\0")))
+    write("icc_intent_5", hdr | THREE_8, colr(2, patch(rgb, 64, be32(5))))
+    write("icc_intent_12", hdr | THREE_8, colr(2, patch(rgb, 64, be32(12))))
+    write("icc_intent_3", hdr | THREE_8, colr(2, patch(rgb, 64, be32(3))))
+    display = patch(patch(rgb, 12, b"mntr"), 64, be32(3))
+    write("icc_intent_3_display_v2", hdr | THREE_8, colr(2, display))
+    write("icc_pcs_unknown", hdr | THREE_8, colr(2, patch(rgb, 20, b"xxxx")))
+    write("icc_pcs_lab", hdr | THREE_8, colr(2, patch(rgb, 20, b"Lab ")))
+    for kind, tag in [(b"mft1", "A2B0"), (b"mft2", "A2B0"), (b"mAB ", "A2B0"), (b"mpet", "D2B0")]:
+        name = kind.decode().strip()
+        profile = icc(b"RGB ", rgb_tags(**{tag: lut(kind)}))
+        write(f"icc_lut_{name}", hdr | THREE_8, colr(2, profile))
+    grey_lut = icc(b"GRAY", [(b"wtpt", xyz_tag(*D50)), (b"A2B0", lut(b"mft2", inputs=1))])
+    write("icc_grey_lut_mft2", hdr | ONE_8, colr(2, grey_lut))
+    write("icc_lut_grid_1", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(A2B0=lut(b"mft2", grid=1)))))
+    write("icc_lut_short", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(A2B0=lut(b"mft2")[:60]))))
+    write("icc_lut_wrong_inputs",
+          hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(A2B0=lut(b"mft2", inputs=1)))))
+    abstract = patch(icc(b"RGB ", rgb_tags(A2B0=lut(b"mft2"))), 12, b"abst")
+    write("icc_abstract_lut", hdr | THREE_8, colr(2, abstract))
+    # Tags: XYZ, curves. LittleCMS reads a value past its tag's end into the
+    # bytes after it, so a tag cut short is the last one (`bTRC`).
+    write("icc_xyz_not_xyz", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(rXYZ=CURVES["gamma"]))))
+    corbis = bytes.fromhex("17a505b8") + xyz_tag(*RXYZ)[4:]
+    write("icc_xyz_corbis", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(rXYZ=corbis))))
+    write("icc_missing_tag", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(bXYZ=None))))
+    write("icc_tag_under_8", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(bTRC=b"curv"))))
+    monaco = bytes.fromhex("9478ee00") + CURVES["gamma"][4:]
+    write("icc_curve_monaco", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(rTRC=monaco))))
+    short = b"curv\0\0\0\0" + be32(10) + b"\0\x01"
+    write("icc_curve_short", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(bTRC=short))))
+    long = b"curv\0\0\0\0" + be32(0x8000)
+    write("icc_curve_too_long", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(rTRC=long))))
+    write("icc_para_5", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(rTRC=para(5, 2.2)))))
+    write("icc_para_short", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(bTRC=para(4, 2.2)))))
+    unknown = b"xxxx\0\0\0\0" + be32(0)
+    write("icc_curve_unknown_type", hdr | THREE_8, colr(2, icc(b"RGB ", rgb_tags(rTRC=unknown))))
+    # Colour spaces, and the channels each form needs.
+    write("icc_cmyk_space", hdr | THREE_8, colr(2, patch(rgb, 16, b"CMYK")))
+    write("icc_ycbr_three", hdr | THREE_8, colr(2, patch(rgb, 16, b"YCbr")))
+    write("icc_ycbr_one", hdr | ONE_8, colr(2, patch(rgb, 16, b"YCbr")))
+    write("icc_rgb_one", hdr | ONE_8, colr(2, rgb))
+    write("icc_rgb_two_colours", hdr | THREE_8, colr(2, rgb) + TWO_COLOURS)
+    write("icc_rgb_first_four_differ", hdr | ONE_8, colr(2, rgb) + pclr_box([7, 7, 3]))
+    write("icc_rgb_12bit", hdr | ONE_8, colr(2, rgb) + pclr_box([11, 11, 11]))
+    write("icc_rgb_signed", hdr | ONE_8, colr(2, rgb) + pclr_box([0x87, 0x87, 0x87]))
+    write("icc_rgb_16bit", hdr | FOUR_16, colr(2, rgb))
+    write("icc_rgb_16bit_reduced", REDUCE | hdr | FOUR_16, colr(2, rgb))
+    write("icc_rgb_reduced", REDUCE | hdr | THREE_8, colr(2, rgb))
+    write("icc_refused_420", hdr | SYCC_420, colr(2, rgb[:100]))
+    write("icc_cmyk_422", hdr | SYCC_422, colr(2, patch(rgb, 16, b"CMYK")))
+    grey = icc_grey(CURVES["gamma"])
+    write("icc_grey_three", hdr | THREE_8, colr(2, grey))
+    write("icc_grey_no_colour", hdr | ONE_8, colr(2, grey) + cdef_box((1, 0)))
+    write("icc_grey_tinted_reduced", REDUCE | hdr | ONE_8,
+          colr(2, icc_grey_tinted(CURVES["gamma"])))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     pinned = {}
@@ -270,7 +479,7 @@ def main():
         ihdr = next(c for c in children if c[3] == b"ihdr")
         ihdr_at = start + ihdr[0] + ihdr[1]
         components = struct.unpack(">H", data[ihdr_at + 8:ihdr_at + 10])[0]
-        (height, width, nc), bit = pinned[1 if components == 1 else 3]
+        (height, width, nc), bit = pinned[components if components in pinned else 3]
 
         prefix = bytearray(data[:jp2c[0]])
         prefix[ihdr_at:ihdr_at + 10] = struct.pack(">IIH", height, width, nc)
@@ -298,6 +507,7 @@ def main():
     write("sycc_420", 0x0C | SYCC_420, colr(1, be32(18)))
     write("sycc_422", 0x0C | SYCC_422, colr(1, be32(18)))
     write("sycc_subsampled_all", 0x0C | THREE_SUB, colr(1, be32(18)))
+    srgb_branch_seeds(write)
 
     (height, width, nc), _ = pinned[1]
     ihdr = box(b"ihdr", struct.pack(">IIH", height, width, nc) + bytes([7, 7, 0, 0]))

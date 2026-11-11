@@ -331,7 +331,11 @@ or the first row and the first column of the upper row of each pair and of
 a last unpaired row (4:2:0), chroma of zero, which comes out tinted. A last
 odd column whose pair index reaches the chroma width also takes zero
 (`comp12w`). `jp2_sycc_420_odd` and `jp2_sycc_422_odd` pin this against
-`opj_decompress` sample for sample. The only change is where OpenJPEG would
+`opj_decompress` sample for sample, and `tests/jp2_sycc_replication.rs`
+grades them and the even-origin `jp2_sycc_420_even` and `jp2_sycc_422_even`
+against `opj_decompress -r 1` too: there the reduced origin's parity
+differs from the full one's in y (and in x for the even fixtures), so a
+replication keyed on the reduced origin fails. The only change is where OpenJPEG would
 read past the chroma plane: that sample takes chroma zero here.
 
 **ICC profiles are converted as LittleCMS converts them.** OpenJPEG hands
