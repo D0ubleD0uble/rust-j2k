@@ -43,8 +43,8 @@
 //! build a transform from (its header checks, a class or intent it does not
 //! know, a missing or unreadable tag, a lookup table it can't read), and a
 //! profile in a colour space other than RGB, grey or YCbCr: OpenJPEG then
-//! skips the conversion. An RGB profile passes through too when any of the first four
-//! output channels differs from the first in depth, sign or sub-sampling
+//! skips the conversion. An RGB profile passes through too when any of the
+//! first four output channels differs from the first in depth, sign or sub-sampling
 //! (OpenJPEG's "AFL test", [`first_four_differ`]). None of these holds for
 //! three channels that are 4:2:0 or 4:2:2, which `opj_decompress` converts
 //! as sYCC before it reads any profile ([`converted_as_sycc`]), so those are

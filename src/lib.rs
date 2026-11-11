@@ -323,8 +323,9 @@ pub enum ColourOutput {
     /// among the first four pass through instead (above), except a
     /// three-channel 4:2:0 or 4:2:2 image (luma at 1x1, both chroma
     /// channels at 2x2 or both at 2x1), which OpenJPEG converts as sYCC
-    /// whatever the file declares and whatever its `cdef` labels. As in OpenJPEG, every refusal above, and
-    /// a profile on one or two colour channels, passes through before these
+    /// whatever the file declares and whatever its `cdef` labels. As in
+    /// OpenJPEG, every refusal above, and a profile on one or two colour
+    /// channels, passes through before these
     /// checks: a profile LittleCMS refuses passes through whatever the
     /// samples are, except on a three-channel 4:2:0 or 4:2:2 image, which is
     /// refused before the profile is read. These errors apply only when `Srgb` is asked for:
