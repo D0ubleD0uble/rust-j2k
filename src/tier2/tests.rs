@@ -46,7 +46,7 @@ fn parse_layers<'a>(
     )
 }
 
-/// As [`parse_layers`], with `COD`'s packet delimiters signalled.
+/// As [`parse_layers`], with `COD`'s packet delimiters signaled.
 fn parse_layers_with<'a>(
     data: &'a [u8],
     bands: &[BandGeom],
@@ -691,7 +691,7 @@ fn block_count_guard_rejects_before_allocating() {
 /// feature that is not decoded. So it is pinned here, at the geometry, where a
 /// decoder that reused component 0's factors for every component would show up.
 #[test]
-fn resolution_geoms_honour_each_components_sub_sampling() {
+fn resolution_geoms_honor_each_components_sub_sampling() {
     let mut h = header(64, 64, 1, 6);
     h.siz.components = vec![
         SizComponent {
@@ -791,7 +791,7 @@ fn layers_accumulate_passes_and_segments() {
 
 /// A block absent from layer 0 is resolved by the inclusion tag tree at a rising
 /// threshold: the tree keeps its partial decode between packets. Rebuilding it
-/// per packet would re-read the same bit and desynchronise the header.
+/// per packet would re-read the same bit and desynchronize the header.
 #[test]
 fn a_block_first_included_in_a_later_layer() {
     let mut l0 = PackedHeader::new();
@@ -844,8 +844,8 @@ fn an_included_block_may_skip_a_layer() {
 }
 
 /// `Lblock` grows by a unary run and carries into later layers: the width of the
-/// length field in layer 1 depends on what layer 0 signalled. A decoder that
-/// reset it would read the wrong number of bits and desynchronise.
+/// length field in layer 1 depends on what layer 0 signaled. A decoder that
+/// reset it would read the wrong number of bits and desynchronize.
 #[test]
 fn lblock_persists_across_layers() {
     let mut l0 = PackedHeader::new();
@@ -877,7 +877,7 @@ fn lblock_persists_across_layers() {
 /// The length field's width is `Lblock + floor(log2(passes))` for the passes of
 /// *this* contribution, not the running total. Layer 1 adds 3 passes to a block
 /// that already has 3: a decoder that used the accumulated 6 would read a 5-bit
-/// length where 4 were written, and desynchronise.
+/// length where 4 were written, and desynchronize.
 #[test]
 fn length_field_width_uses_this_layers_passes_not_the_total() {
     let mut l0 = PackedHeader::new();
@@ -1209,7 +1209,7 @@ fn every_order_visits_the_same_packets() {
 /// A deep pyramid pushes a coarse resolution's precinct span past 2^32 reference
 /// grid units — with maximal precincts that happens at `NL >= 17`. OpenJPEG scales
 /// that span in 64-bit arithmetic and still emits the packet; the positional
-/// sweep must do the same, or it silently drops the resolution and desynchronises
+/// sweep must do the same, or it silently drops the resolution and desynchronizes
 /// the tile. The counting orders (LRCP/RLCP) never touch the span, so they are the
 /// oracle here: every order must still visit the same set.
 #[test]

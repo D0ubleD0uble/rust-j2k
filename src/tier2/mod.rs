@@ -82,7 +82,7 @@ pub struct CodeBlock<'a> {
 /// Without per-pass termination a block has exactly one segment, and the MQ
 /// codeword runs continuously across every layer that contributed to it. Under
 /// `restart` (`termall`) each coding pass is terminated separately, so each is
-/// its own segment and Tier-1 must re-initialise the MQ decoder for it.
+/// its own segment and Tier-1 must re-initialize the MQ decoder for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodedSegment<'a> {
     pub passes: u32,
@@ -425,7 +425,7 @@ fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
 ///
 /// OpenJPEG leaves `Nsop` unchecked — `/* TODO : check the Nsop value */` — so
 /// this is stricter than the oracle. Validating the sequence number is the whole
-/// point of a resynchronisation marker.
+/// point of a resynchronization marker.
 fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
     let end = pos + 6;
     if end > data.len() {
@@ -455,7 +455,7 @@ fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
 /// once the inclusion tag tree resolves it, later layers signal a contribution
 /// with a single bit. `lblock` and `zero_bit_planes` are read once and then
 /// persist, and `num_passes` and `segments` accumulate. Rebuilding any of this
-/// per packet — which a single-layer decoder can get away with — desynchronises
+/// per packet — which a single-layer decoder can get away with — desynchronizes
 /// the header bit-reader on the second layer.
 struct BlockState<'a> {
     included: bool,

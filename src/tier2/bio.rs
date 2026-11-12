@@ -8,7 +8,7 @@
 //! the Tier-2 packet parser drives it, and the [tag tree](super::tagtree) reads
 //! one bit at a time through it.
 
-/// An MSB-first bit reader over a packet header's bytes, honouring the Annex
+/// An MSB-first bit reader over a packet header's bytes, honoring the Annex
 /// B.10.1 `0xFF` bit-stuffing. Past the end of `data` it yields `1` bits (the
 /// `0xFF` fill convention), which also bounds every read so a truncated header
 /// can never index out of range or panic.

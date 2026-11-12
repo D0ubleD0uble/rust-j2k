@@ -177,8 +177,8 @@ def make_kinds(work: Path) -> dict[str, Kind]:
     kinds["rgb16"] = Kind("rgb16", TYPE_RGB_16, TYPE_RGB_16, SAMPLE_16BIT, native, cs)
 
     levels = bytes(range(256)) * 16  # every level, 64x64
-    cs = compress(work, "grey8", b"P5", 64, 64, 255, levels)
-    kinds["grey8"] = Kind("grey8", TYPE_GRAY_8, TYPE_RGB_8, 4096, levels, cs)
+    cs = compress(work, "gray8", b"P5", 64, 64, 255, levels)
+    kinds["gray8"] = Kind("gray8", TYPE_GRAY_8, TYPE_RGB_8, 4096, levels, cs)
     return kinds
 
 
@@ -236,7 +236,7 @@ def cases(only: str | None):
         profile = bytearray(jp2_profile(path.read_bytes()))
         patch(profile, v["intent"], v["white"])
         space = bytes(profile[16:20])
-        kind = "grey8" if space == b"GRAY" else ("rgb8" if v["bit_depth"] == 8 else "rgb16")
+        kind = "gray8" if space == b"GRAY" else ("rgb8" if v["bit_depth"] == 8 else "rgb16")
         yield f"{v['file'].split('/')[-1]}/{v['variant']}", kind, bytes(profile), None
 
 
@@ -298,10 +298,10 @@ def openjpeg_route(kinds: dict[str, Kind], kind: Kind, profile: bytes):
     - any other space: nothing is done.
     """
     space = profile[16:20]
-    components = 1 if kind.name == "grey8" else 3
+    components = 1 if kind.name == "gray8" else 3
     if space == b"GRAY":
-        grey = kinds["grey8"]
-        return grey, TYPE_GRAY_8, TYPE_RGB_8
+        gray = kinds["gray8"]
+        return gray, TYPE_GRAY_8, TYPE_RGB_8
     if space == b"RGB " and components >= 3:
         return kind, kind.in_type, kind.out_type
     if space == b"YCbr" and components >= 3:
@@ -337,15 +337,15 @@ def compare(lcms: Lcms, kinds: dict[str, Kind], kind: Kind, name: str,
         return "compared", kind.count, f"decoder failed: {got}", surprises, expected is not None
     if expected is None:
         # OpenJPEG leaves the samples as coded.
-        want = 3 if kind.name != "grey8" else 1
+        want = 3 if kind.name != "gray8" else 1
         if channels != want or got != kind.pixels:
             surprises.append(f"{name}: OpenJPEG leaves the samples as coded, but the decoder changed them")
         return "as coded", 0, "", surprises, False
     if route[0] is not kind or route[1] != kind.in_type:
         surprises.append(f"{name}: LittleCMS converts a different input than the image, and the decoder converts it")
         return "compared", kind.count, "not comparable", surprises, True
-    if kind.name == "grey8" and channels == 1:
-        # A neutral monochrome profile gives one grey channel: LittleCMS's
+    if kind.name == "gray8" and channels == 1:
+        # A neutral monochrome profile gives one gray channel: LittleCMS's
         # three must agree and equal it.
         if not (expected[0::3] == expected[1::3] == expected[2::3]):
             return "compared", kind.count, "decoder gives one channel; LittleCMS's three differ", surprises, True

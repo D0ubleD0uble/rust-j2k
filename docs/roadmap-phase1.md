@@ -103,7 +103,7 @@ stage (they all read `MainHeader`).
 ### P1.2 — MQ arithmetic decoder (`src/tier1/mq.rs`)
 
 **Goal:** the binary arithmetic decoder in isolation, decoupled from context
-modelling. `decode(cx)` returns one decision bit and updates the context state
+modeling. `decode(cx)` returns one decision bit and updates the context state
 via the Annex C transition table (`QeEntry`).
 
 **Work:** the decoder registers (C, A, CT, byte pointer), INITDEC, DECODE with
@@ -121,9 +121,9 @@ deterministic vector, so the decoder is proven before any pass exists.
 **Goal:** decode one code-block's MQ stream into quantized subband coefficients.
 
 **Work:** the per-block state (magnitudes, signs, significance flags); context
-formation from the 3×3 neighbourhood (D.3 tables); the three passes in order,
+formation from the 3×3 neighborhood (D.3 tables); the three passes in order,
 significance propagation (D.3.1), magnitude refinement (D.3.2), cleanup (D.3.3)
-with run-length mode; sign coding with the neighbour-sign context (D.3.4).
+with run-length mode; sign coding with the neighbor-sign context (D.3.4).
 Bit-planes run MSB→LSB, starting from the cleanup pass of the top non-zero
 plane. Phase 1 needs only the default code-block style (no bypass, reset,
 restart, vertically-causal, or segmentation, which are Phase 2).
@@ -208,7 +208,7 @@ allocation), so malformed GRIB2-sourced input is a typed `Error`, never a crash.
 - **Critical path** is the entropy track P1.1 → P1.2 → P1.3 → P1.4. The 9/7 DWT
   (P1.5) is the other hard piece and the main parallelization win: start it
   early alongside P1.1.
-- **Highest-risk stages** are P1.3 (Tier-1 context modelling) and P1.5 (9/7
+- **Highest-risk stages** are P1.3 (Tier-1 context modeling) and P1.5 (9/7
   lifting and boundary extension). Both have small deterministic golden vectors,
   so budget for getting those vectors exactly right before the surrounding code.
 - **One reject path per stage.** Every milestone that parses input also lands its

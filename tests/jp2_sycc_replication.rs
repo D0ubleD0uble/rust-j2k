@@ -1,4 +1,4 @@
-//! sYCC chroma replication under `ColourOutput::Srgb` against `opj_decompress`,
+//! sYCC chroma replication under `ColorOutput::Srgb` against `opj_decompress`,
 //! at both origin parities and one resolution level down.
 //!
 //! OpenJPEG keys its replication on the image origin's parity. Under `-r 1`
@@ -18,7 +18,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use rust_j2k::{ColourOutput, ColourSpace, DecodeOptions, decode_with};
+use rust_j2k::{ColorOutput, ColorSpace, DecodeOptions, decode_with};
 use support::{Expected, Tolerance, compare};
 
 const ODD: [&str; 2] = ["jp2_sycc_420_odd", "jp2_sycc_422_odd"];
@@ -42,14 +42,14 @@ fn grade(name: &str, snapshot: &str, reduction: u8) {
         "{name}.{snapshot}"
     );
     let options = DecodeOptions::default()
-        .with_colour(ColourOutput::Srgb)
+        .with_color(ColorOutput::Srgb)
         .with_resolution_reduction(reduction);
     let image = decode_with(&bytes, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     if let Err(mismatch) = compare(&image, &want) {
         panic!("{name}.{snapshot}: {mismatch}");
     }
     let jp2 = image.jp2.as_ref().expect("JP2 metadata");
-    assert_eq!(jp2.colour, ColourSpace::Srgb, "{name}.{snapshot}");
+    assert_eq!(jp2.color, ColorSpace::Srgb, "{name}.{snapshot}");
 }
 
 /// At an even origin no row or column takes chroma of 0: every luma sample

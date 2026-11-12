@@ -11,7 +11,7 @@
 //! From `math/log_data.c`, `math/pow_log_data.c` and `math/exp_data.c` of
 //! Arm's optimized-routines (github.com/ARM-software/optimized-routines,
 //! commit `2ee4b0d45680a9880412c1d186224b08652c35f6`), used under the MIT
-//! licence quoted in `math.rs`.
+//! license quoted in `math.rs`.
 
 /// `__log_data.poly` (`LOG_POLY_ORDER == 6`, N = 128): `A[0..5]`.
 pub(super) const LOG_POLY: [u64; 5] = [

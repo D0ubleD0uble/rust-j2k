@@ -31,7 +31,7 @@ The hierarchy is ordered for a reason: OpenJPEG is convenient, not authoritative
 Where the two conflict, the conformance suite wins and OpenJPEG stops being the
 oracle *for that quantity* — matching it would mean importing its bug.
 
-That is a narrow licence, not a general one. **Match OpenJPEG by default.**
+That is a narrow license, not a general one. **Match OpenJPEG by default.**
 Deviating needs two things, and one is not enough:
 
 1. **Proof from a documented official source** — the ISO/IEC 15444 text, or the
@@ -80,7 +80,7 @@ worth carrying into any future disagreement:
 ### Stricter than the oracle on non-conforming streams
 
 Three tier-2 checks reject streams OpenJPEG decodes with a warning: an `Nsop`
-that does not match the packet sequence (OpenJPEG never checks it), a signalled
+that does not match the packet sequence (OpenJPEG never checks it), a signaled
 EPH that is missing (OpenJPEG continues without consuming one), and tile-part
 bytes left over after the last packet (OpenJPEG ignores them). These are
 deliberate, and they are a different axis from the numeric rule above: each
@@ -210,7 +210,7 @@ identity mapping. Two differences, both approved by the owner on 2026-11-01:
   decode of the bare codestream.
 
 Channel definitions (`cdef`) follow OpenJPEG on what it accepts and on the
-output channel order, including its sequential swap rule: each colour entry
+output channel order, including its sequential swap rule: each color entry
 swaps its channel to `Asoc - 1`, later entries follow their channels, and an
 entry may repeat a channel once every channel is named. The labels on
 `Jp2Metadata::channels` have no OpenJPEG output to match: its library keeps
@@ -225,23 +225,23 @@ Without a `cdef`, libopenjp2 labels nothing (every `comps[].alpha` is 0),
 so the default labels have no oracle either. `opj_decompress` decides by
 component count, not by a label: its writers (`convertpng.c`, `convert.c`)
 and `color.c` take the last component of two or four as alpha (PNG caps at
-four; PGX and raw output have no alpha), and read two components as grey plus
-alpha. That is why the grey ICC case below matches. Here the first N channels
-are colours 1 to N, N being the colour space's number of colours, and each
+four; PGX and raw output have no alpha), and read two components as gray plus
+alpha. That is why the gray ICC case below matches. Here the first N channels
+are colors 1 to N, N being the color space's number of colors, and each
 channel past N is unspecified, since I.5.3.6 gives it no meaning. This
-decides one `ColourOutput::Srgb` case: two components with a greyscale ICC
-profile and no `cdef` convert as grey plus opacity, and match
+decides one `ColorOutput::Srgb` case: two components with a grayscale ICC
+profile and no `cdef` convert as gray plus opacity, and match
 `opj_decompress -force-rgb` sample for sample (test
-`a_grey_profile_on_two_channels_without_cdef_is_grey_plus_opacity`).
+`a_gray_profile_on_two_channels_without_cdef_is_gray_plus_opacity`).
 It decides a second case: an enumerated sRGB file of four components and no
-`cdef`, whose fourth differs in format from the colours (signed 8-bit, say),
+`cdef`, whose fourth differs in format from the colors (signed 8-bit, say),
 passes through as coded, as with a `cdef` and as in OpenJPEG (test
 `an_srgb_file_with_a_differently_formatted_fourth_channel_passes_through`).
-One check stays on every channel: a file declared sRGB or greyscale on
+One check stays on every channel: a file declared sRGB or grayscale on
 three components laid out 4:2:0 or 4:2:2 (luma at 1x1, both chroma
 channels at 2x2 or both at 2x1) is refused, whatever its `cdef` labels or
-without one. Checked on such sRGB files with a `cdef` of colour 1 and two
-opacity or unspecified channels, of no colour, and of colours 2 and 3
+without one. Checked on such sRGB files with a `cdef` of color 1 and two
+opacity or unspecified channels, of no color, and of colors 2 and 3
 only: `opj_decompress` 2.5.0, with and without `-force-rgb`, writes three
 full-size planes byte-identical to those of the file with no `cdef` (test
 `srgb_4_2_0_or_4_2_2_is_refused_whatever_cdef_labels`). `opj_decompress`
@@ -249,16 +249,16 @@ guesses sYCC whenever the second component is sub-sampled in x and the
 first has equal x and y sampling, whatever the file declares
 (`opj_decompress.c:1620-1623`), but `color_sycc_to_rgb` converts only those
 two layouts (`color.c:403-436`); this decoder does not make the guess. Any
-other three-component greyscale file passes through as coded, as OpenJPEG
+other three-component grayscale file passes through as coded, as OpenJPEG
 writes it: one whose third channel is signed or the only one sub-sampled,
 whose luma is sampled 1x2 with chroma 2x1, or whose layout is in the guess
 shape but not one of the two (1x1, 2x1, 1x1, say), where OpenJPEG prints
 "CAN NOT CONVERT".
 
 Checked with `opj_decompress` on 1x1:2x1:1x1, 1x1:2x2:1x1, 1x1:2x1:2x2,
-1x1:2x2:2x1 and 2x2:2x2:2x2, as greyscale and under an RGB profile: each
+1x1:2x2:2x1 and 2x2:2x2:2x2, as grayscale and under an RGB profile: each
 is written as coded, except 2x2:2x2:2x2 under the profile, which the
-profile converts. A greyscale palette of three columns over a 2x2 index is
+profile converts. A grayscale palette of three columns over a 2x2 index is
 written as coded too.
 
 Looser here, where OpenJPEG fails: a malformed header box after the
@@ -338,7 +338,7 @@ does not exercise coefficients near 2^31.
 
 ### sRGB output
 
-`ColourOutput::Srgb` converts sYCC and the two restricted ICC profile forms
+`ColorOutput::Srgb` converts sYCC and the two restricted ICC profile forms
 (I.5.3.3) to sRGB. The default output is as coded and is unaffected by
 everything here. The measured error against the ISO references and against
 `opj_decompress -p 8S -force-rgb` is tabulated per channel in
@@ -389,10 +389,10 @@ rendering intent. `src/jp2/lcms.rs` ports the part of lcms these profiles
 reach: the pipeline it builds (the tone curves and matrix into XYZ, the
 white-point scaling of absolute colorimetric, black point compensation under
 perceptual and saturation, since lcms's sRGB profile is ICC v4, then the
-inverse sRGB matrix and curves), the optimisation it picks for that pipeline
-(the 8-bit matrix-shaper in 1.14 fixed point, prelinearisation curves with a
+inverse sRGB matrix and curves), the optimization it picks for that pipeline
+(the 8-bit matrix-shaper in 1.14 fixed point, prelinearization curves with a
 33-point table, or resampling into a 33-point table, with the white fix-up;
-for 16-bit RGB on a profile of gamma below 1.6, no optimisation), and its
+for 16-bit RGB on a profile of gamma below 1.6, no optimization), and its
 16-bit interpolation, step for step at lcms's precision. It also applies
 the checks lcms makes when it opens a profile (`_cmsReadHeader`): the `acsp`
 signature, a version of at most 5.0, a device class lcms knows, at most 100
@@ -400,7 +400,7 @@ tags, no two kept entries with the same signature. Like lcms, it first skips
 a tag entry with a zero offset or size, or one that ends past the size the
 header declares (capped at the profile's length), so a tag it needs is then
 missing, and a skipped entry does not count as a duplicate. When building
-the transform it makes lcms's checks too: a named colour profile, a device
+the transform it makes lcms's checks too: a named color profile, a device
 link or abstract profile without a lookup table, or a connection space
 other than XYZ or Lab builds none, and of the lookup tables lcms would read
 for the intent (`D2Bx`, then `A2Bx`, then `A2B0`) it checks the type, the
@@ -457,7 +457,7 @@ The cases:
 - 25 RGB profiles at 8 and 16 bits and 4 monochrome ones on how lcms reads
   intents, legacy tag types and tags that run short (the table below);
 - 58 RGB profiles at 8 and 16 bits and 13 monochrome ones on device
-  classes, connection and colour spaces, lookup tables and missing tags
+  classes, connection and color spaces, lookup tables and missing tags
   (the table below).
 
 During development the port also matched lcms 2.14 itself on every 8-bit
@@ -469,7 +469,7 @@ class bounds (PAE 4, MSE 1):
 | ---- | ----------------- | ---------------- |
 | file5 (RGB, gamma 1.8) | 0.0897 / 0.1750 / 0.2050 | identical |
 | file7 (RGB, 16-bit, 2048-entry curves; after `>> 8`) | 0.1442 / 0.1770 / 0.1900 | identical at 16 bits |
-| file8 (grey, `kTRC`) | 0.2739 | identical |
+| file8 (gray, `kTRC`) | 0.2739 | identical |
 
 Peak error against ISO is 1 everywhere. The floating-point evaluation this
 replaced was slightly closer to ISO on files 5 and 8 (MSE 0.0846 / 0.1723 /
@@ -480,14 +480,14 @@ evidence rule above keeps OpenJPEG's output.
 Two output shapes differ from `opj_decompress`, by choice of the grading
 harness and not of the samples: file7 stays 16-bit, and the harness shifts
 it down by 8 to compare with the 8-bit reference (its `shift_right`, as for
-the as-coded grade), and file8 stays one grey channel where OpenJPEG writes
+the as-coded grade), and file8 stays one gray channel where OpenJPEG writes
 three identical ones (graded on that one channel).
 
 **A profile lcms refuses passes through, as in OpenJPEG (owner decision,
 2026-11-01, on #199).** When lcms will not open the profile or build a
 transform from it, `color_apply_icc_profile` returns without converting and
 `opj_decompress` writes the samples as coded. `Srgb` does the same, and
-`Jp2Metadata::colour` stays `RestrictedIcc`, so a caller can tell. Each
+`Jp2Metadata::color` stays `RestrictedIcc`, so a caller can tell. Each
 case was checked with `opj_decompress` 2.5.0 on a crafted file, and is a
 case of `icc/profiles.json` and a test in `src/jp2/srgb_tests.rs`:
 
@@ -499,7 +499,7 @@ case of `icc/profiles.json` and a test in `src/jp2/srgb_tests.rs`:
 | class `nmcl`; class `link` or `abst` with no lookup table | unconverted | as coded |
 | intent 4 to 9 or above 15 | unconverted | as coded |
 | connection space other than XYZ or Lab | unconverted | as coded |
-| colour space other than RGB, grey or YCbCr | unconverted (no transform for it) | as coded |
+| color space other than RGB, gray or YCbCr | unconverted (no transform for it) | as coded |
 | lookup table lcms would read of the wrong type, wrong channel counts, a grid of 1, or cut short | unconverted | as coded |
 | lookup table for another intent only | converted from the matrix | the same |
 | lookup table lcms reads | converted through it | `Unsupported` (below) |
@@ -515,7 +515,7 @@ every refusal above, whether lcms makes it opening the profile or building
 the transform, comes before this decoder's own checks below. So a profile
 lcms refuses passes through whatever the samples are (bar the 4:2:0 and
 4:2:2 exception below): an intent of 4 on
-12-bit RGB, 16-bit grey, or a monochrome profile on three channels gives
+12-bit RGB, 16-bit gray, or a monochrome profile on three channels gives
 the samples as coded, as `opj_decompress` does. The refusals below (#165,
 #197) apply only where lcms would build the transform. Test:
 `refusals_are_ordered_as_in_openjpeg`.
@@ -524,7 +524,7 @@ One exception comes before all of it: a three-channel 4:2:0 or 4:2:2 file.
 `opj_decompress` guesses sYCC and converts it before `color_apply_icc_profile`
 runs (`opj_decompress.c:1620-1635`), so a profile lcms refuses does not
 leave it as coded. Checked on `jp2_sycc_420_odd` and `jp2_sycc_422_odd`
-under `lcms_intent_4`, a refused grey profile (`grey_lcms_intent_4`), a
+under `lcms_intent_4`, a refused gray profile (`gray_lcms_intent_4`), a
 profile cut short (`bad_short_header`) and a CMYK profile (`space_cmyk`):
 `-force-rgb` writes the sYCC original's planes each time. `Srgb` makes no
 sYCC guess, so it refuses all of them, before the profile is read, with the
@@ -541,7 +541,7 @@ profile OpenJPEG then returns on fewer than three components (:491-494),
 and otherwise runs its "AFL test" (:495-519): it compares
 `comps[1..min(numcomps, 4)]` with `comps[0]` by `dx`, `dy`, `prec` and
 `sgnd`, and returns without converting if any differs. Only then does lcms
-build the transform (`cmsCreateTransform`, :586). The grey (:530-534) and
+build the transform (`cmsCreateTransform`, :586). The gray (:530-534) and
 YCbCr (:535-543) branches have no such test. The components are the image
 after the palette and `cdef`, by position, so a differing opacity channel
 counts and a fifth channel does not.
@@ -549,7 +549,7 @@ counts and a fifth channel does not.
 `Srgb` runs the same test in the same place: after the profile is opened
 and before the transform is built, so before every check of this
 decoder's own (a lookup table, the Lab connection space, a `cdef` without
-colours 1 to 3, an unsupported depth). One case is refused before the
+colors 1 to 3, an unsupported depth). One case is refused before the
 test: a 4:2:0 or 4:2:2 image, which `opj_decompress` converts
 as sYCC before it reads the profile (`opj_decompress.c:1620-1630`). Other
 layouts in its sYCC-guess shape stay as coded there, so the test applies
@@ -558,10 +558,10 @@ matches and converts.
 
 Checked against `opj_decompress` 2.5.0 with lcms 2.14. With and without a
 `cdef`, a signed, a 12-bit, a 2x1 and a 1x2 sub-sampled fourth channel,
-and a signed or sub-sampled third colour, pass through as coded
+and a signed or sub-sampled third color, pass through as coded
 (`-force-rgb` fails, as nothing was converted). A lookup-table or Lab
-profile, or a `cdef` of two colours, passes through with a signed fourth
-channel. A matching fourth channel, a sub-sampled fifth, and a grey
+profile, or a `cdef` of two colors, passes through with a signed fourth
+channel. A matching fourth channel, a sub-sampled fifth, and a gray
 profile with a signed opacity channel convert. Tests (`tests/jp2_icc.rs`):
 `an_rgb_profile_passes_through_when_the_first_four_channels_differ`,
 `the_afl_test_comes_before_this_decoders_refusals`,
@@ -573,23 +573,23 @@ way.** Each is `Unsupported` unless noted, and each is a row of
 `srgb_reject_matrix_maps_each_input_to_its_typed_error` in
 `src/jp2/srgb_tests.rs`:
 
-- colour channels that differ in depth, sign or sub-sampling, other than
+- color channels that differ in depth, sign or sub-sampling, other than
   the sYCC chroma layouts below (owner decision, 2026-11-01). Under an RGB
   profile they pass through as in OpenJPEG instead (the AFL test above),
   except for 4:2:0 and 4:2:2, and except where a `cdef` leaves a differing
-  colour past the first four positions. There the AFL test passes and
-  OpenJPEG converts whatever sits at positions 0 to 2, colour or not, so
+  color past the first four positions. There the AFL test passes and
+  OpenJPEG converts whatever sits at positions 0 to 2, color or not, so
   this decoder refuses the file rather than give a wrong image. Checked: the
   fuzz seed `icc_rgb_uniform_after_afl` (five palette channels, the 4-bit
-  colour 3 moved to position 4 by a second colour-3 entry) comes out of
+  color 3 moved to position 4 by a second color-3 entry) comes out of
   `opj_decompress` with positions 0 to 2 converted and the 4-bit channel as
   coded. For a three-component 4:2:0 or 4:2:2 file,
-  whatever `colr` declares (sRGB, greyscale, another space, a profile, or
+  whatever `colr` declares (sRGB, grayscale, another space, a profile, or
   none) and whatever its `cdef` labels, or a raw codestream,
   `opj_decompress` guesses sYCC and converts it; that guess is not made
   here.
   Checked: `jp2_sycc_420_odd.jp2` with its `EnumCS` patched to 17
-  (greyscale) gives byte-identical `opj_decompress` output to the sYCC
+  (grayscale) gives byte-identical `opj_decompress` output to the sYCC
   original, while `Srgb` here refuses it (a row of the reject matrix);
 - sYCC other than full-resolution luma with chroma at 1x1, 2x1 or 2x2.
   OpenJPEG prints "CAN NOT CONVERT" and writes the samples as coded;
@@ -598,32 +598,32 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   4:4:4 file, as-coded R `[-7, -62, 61, 114, ...]` comes out
   `[0, 0, 15, 0, ...]`. sYCC is defined on unsigned samples, so there is no
   right answer to match;
-- three or more channels with an enumerated colour space other than sRGB,
-  greyscale or sYCC, or with no `colr`, and a raw codestream of three or
-  more components, which declares no colour space. For three components at
+- three or more channels with an enumerated color space other than sRGB,
+  grayscale or sYCC, or with no `colr`, and a raw codestream of three or
+  more components, which declares no color space. For three components at
   the same sampling `opj_decompress -force-rgb` fails too; at 4:2:0 or
   4:2:2 it converts them as sYCC, which owner decision (2) above
-  refuses. One or two channels pass through as grey (and grey plus
-  opacity) whatever the colour space, as OpenJPEG reads any image of two
+  refuses. One or two channels pass through as gray (and gray plus
+  opacity) whatever the color space, as OpenJPEG reads any image of two
   or fewer components: from a raw codestream, or a JP2 file with no
   `colr`, any enumerated space (sRGB included, owner decision, 2026-11-02,
   on #211, even when the two channels differ in depth or sign), or an RGB
   or YCbCr profile. Only a monochrome profile converts them, on 8-bit
   unsigned samples only (other depths are refused, below). Their
   metadata stays as declared, since nothing was converted (tests
-  `a_grey_jp2_without_a_converted_colour_space_passes_through`,
+  `a_gray_jp2_without_a_converted_color_space_passes_through`,
   `srgb_on_one_or_two_channels_passes_through`);
 - a monochrome (`GRAY`) ICC profile on more than two channels (owner
-  decision, 2026-11-01, on #197), for example one colour channel and two
+  decision, 2026-11-01, on #197), for example one color channel and two
   opacity channels in `cdef`, or a palette of three columns. OpenJPEG takes
-  its `numcomps > 2` branch, which passes the planes interleaved to a grey
+  its `numcomps > 2` branch, which passes the planes interleaved to a gray
   transform as if they were RGB, so its three-channel output is not a
-  conversion. Checked on a 24x16 file with a tinted grey profile and a
-  `cdef` of (colour 1, opacity, opacity): `opj_decompress` writes an RGB
-  PNG; the earlier output here was five channels. One grey channel (1 to 1
-  or 3) and grey plus opacity (2 to 2 or 4) match OpenJPEG and are
+  conversion. Checked on a 24x16 file with a tinted gray profile and a
+  `cdef` of (color 1, opacity, opacity): `opj_decompress` writes an RGB
+  PNG; the earlier output here was five channels. One gray channel (1 to 1
+  or 3) and gray plus opacity (2 to 2 or 4) match OpenJPEG and are
   unchanged. Test:
-  `a_grey_profile_on_more_than_two_channels_is_unsupported`;
+  `a_gray_profile_on_more_than_two_channels_is_unsupported`;
 - an ICC profile lcms would apply through a lookup table (`D2Bx` or
   `A2Bx`, which it prefers over the matrix) or the Lab connection space.
   OpenJPEG converts these; this decoder ports only the matrix/TRC pipeline
@@ -638,28 +638,28 @@ way.** Each is `Unsupported` unless noted, and each is a row of
   Annex I's restricted forms. On one or two channels, or where LittleCMS
   refuses the profile (intent 4, a missing tag), it passes through as in
   OpenJPEG (`refusals_are_ordered_as_in_openjpeg`);
-- an RGB profile on samples other than 8- or 16-bit unsigned, or a grey
+- an RGB profile on samples other than 8- or 16-bit unsigned, or a gray
   profile on samples other than 8-bit unsigned (owner decision, 2026-11-01,
   on #165). OpenJPEG picks an lcms format from the precision alone
-  (`TYPE_RGB_8` up to 8 bits, else `TYPE_RGB_16`; `TYPE_GRAY_8` for grey)
+  (`TYPE_RGB_8` up to 8 bits, else `TYPE_RGB_16`; `TYPE_GRAY_8` for gray)
   and so scales other depths wrongly, past the samples' own range. The
   review measured a 12-bit 4095 coming out 7413. With file5's profile on a
-  4-bit RGB image, measured here, grey 15 comes out 18, grey 12 comes out
+  4-bit RGB image, measured here, gray 15 comes out 18, gray 12 comes out
   13, and (15, 0, 0) comes out with red 29, all written into 4-bit planes;
 - `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.
 
 Chroma replication grows the output, so it is checked against the decode's
 sample budget before the tiles are read (`Limit`), as palette expansion is.
 After a conversion `Image::jp2` reports what the samples now are, as
-OpenJPEG does (owner decision, 2026-11-01, on #165): `ColourSpace::Srgb`,
-or `ColourSpace::Greyscale` for a monochrome profile, with no ICC profile.
+OpenJPEG does (owner decision, 2026-11-01, on #165): `ColorSpace::Srgb`,
+or `ColorSpace::Grayscale` for a monochrome profile, with no ICC profile.
 A monochrome profile whose output is not neutral (absolute colorimetric with
 a tinted media white point) gives three channels, R, G and B in place of the
-grey one, as `ColourSpace::Srgb`; this is checked against the sample budget
-too. sYCC or an RGB profile on one or two colour channels passes through, as
+gray one, as `ColorSpace::Srgb`; this is checked against the sample budget
+too. sYCC or an RGB profile on one or two color channels passes through, as
 OpenJPEG leaves it, with the metadata as declared.
 A pass-through, the default `AsCoded` decode and `read_header` report the
-colour space the file declares.
+color space the file declares.
 
 ## Agreement standard
 
@@ -713,9 +713,9 @@ back it, neither needing a reference decoder at test time:
 
 **The Part 4 JP2 references are display output.** `jp2_N.tif` is what a
 viewer shows: sYCC and ICC-tagged files are already converted to sRGB, and
-files 4, 6 and 8 are greyscale written as three identical channels. Files 2,
+files 4, 6 and 8 are grayscale written as three identical channels. Files 2,
 3, 5, 7 and 8 therefore can't be graded on the samples as coded. They are
-decoded with `ColourOutput::Srgb` and graded against the references, and
+decoded with `ColorOutput::Srgb` and graded against the references, and
 their default decode is graded bit-exactly against `opj_decompress` output
 for the same file (`as_coded` references). Files 6 (12-bit) and 7 (16-bit) have
 8-bit references, so the harness shifts their decode right by 4 and 8 (the
@@ -776,10 +776,10 @@ both.
 
 A third shape is the nastiest, because the fixture looks like it targets the
 feature by name. One feature can *mask* another. Under `restart` the MQ decoder
-is re-initialised for every coding pass, so a decoder that ignores `segmentation
+is re-initialized for every coding pass, so a decoder that ignores `segmentation
 symbols` and never reads the four decisions ending each cleanup pass still
 decodes correctly: the symbols it skipped are trailing bytes in a segment nobody
-reads again. Turn `restart` off and the same decoder desynchronises immediately.
+reads again. Turn `restart` off and the same decoder desynchronizes immediately.
 So a `restart | segsym` codestream — which is exactly what `p0_02` is — grades
 `segsym`'s *verification* but not its *consumption*, and a fixture named for both
 flags is weaker than one carrying `segsym` alone. Where features compose, the
@@ -797,7 +797,7 @@ were never testing the feature.
 
 ## Per-stage golden tests
 
-The vertical oracle proves the *whole* pipeline; it does not localise a fault.
+The vertical oracle proves the *whole* pipeline; it does not localize a fault.
 So each stage also gets isolated golden tests, which is what makes a failure
 debuggable:
 

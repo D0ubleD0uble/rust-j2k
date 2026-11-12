@@ -11,7 +11,7 @@
 //! The manifest is deserialized through the single typed schema in
 //! [`support::part4`], whose `#[serde(deny_unknown_fields)]` is the
 //! exhaustive-fields check: a manifest key with no matching struct field (a
-//! schema drift) fails [`load_manifest`] here, and every modelled field is
+//! schema drift) fails [`load_manifest`] here, and every modeled field is
 //! required, so a missing or mistyped field fails too — replacing the parallel
 //! untyped field-path assertions this test used to carry.
 //!
@@ -31,7 +31,7 @@ fn corpus_dir() -> PathBuf {
 fn manifest_and_corpus_are_consistent() {
     let dir = corpus_dir();
     // Deserializing through the typed schema is itself the field check: an
-    // unknown key, or a missing/mistyped modelled field, panics here.
+    // unknown key, or a missing/mistyped modeled field, panics here.
     let manifest = load_manifest(&dir);
     assert_eq!(
         manifest.entries.len(),

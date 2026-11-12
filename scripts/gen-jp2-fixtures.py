@@ -24,18 +24,18 @@ Palette fixtures (`pclr` + `cmap`):
   a two-component codestream (generated here; component 0 at full resolution,
   component 1 sub-sampled 2x2) with one palette and one direct channel, in
   both orders. OpenJPEG 2.5.0 sizes every channel by the first one's grid and
-  crashes or emits uninitialised memory, so the oracle is OpenJPEG's decode of
+  crashes or emits uninitialized memory, so the oracle is OpenJPEG's decode of
   the bare codestream, with the palette applied by table lookup here. Each
   channel keeps its own component's grid (an owner-approved deviation).
 
 Channel definition fixtures (`cdef`):
 
 - `jp2_cdef_rgba`: `opj_compress` output for a 16x12 RGBA PNG (generated
-  here), which writes a `cdef` of three colours and one opacity channel.
+  here), which writes a `cdef` of three colors and one opacity channel.
 - `jp2_cdef_alpha_first`: the same codestream with a `cdef` that names
-  component 0 as opacity and components 1..3 as colours 1..3, so every colour
+  component 0 as opacity and components 1..3 as colors 1..3, so every color
   entry swaps and the opacity channel ends up last.
-- `jp2_cdef_reversed`: file2's layout (components 0, 1, 2 are colours 3, 2,
+- `jp2_cdef_reversed`: file2's layout (components 0, 1, 2 are colors 3, 2,
   1) over `multicomponent_lossless.j2k`, so the channels come out reversed.
 - `jp2_cdef_unspecified`: every channel `Typ 65535`, `Asoc 65535` (the ECW
   SDK's layout), so nothing moves.
@@ -69,7 +69,7 @@ sYCC fixtures (`colr` 18), for sRGB output's chroma replication:
   height leaves a last unpaired row.
 - `jp2_sycc_422_odd`: a 13x5 image at origin (5, 3), chroma sub-sampled 2x1.
 - `jp2_sycc_420_even`, `jp2_sycc_422_even`: a 13x11 (2x2) and an 11x5 (2x1)
-  image at origin (6, 2), where every luma sample takes a chroma neighbour.
+  image at origin (6, 2), where every luma sample takes a chroma neighbor.
 
 Their `.expected.json` is the decode as coded: `opj_decompress -c K` on the
 bare codestream, one component at a time (`mct` 0), so the sub-sampling
@@ -287,12 +287,12 @@ def write(name: str, data: bytes, geometry: dict, components: list[dict], proven
     }
     if name.startswith("jp2_palette_"):
         # Each palette fixture carries COLR_SRGB and a palette that applies,
-        # with no `cdef`, `res `, `xml ` or `uuid` box: one colour channel per
+        # with no `cdef`, `res `, `xml ` or `uuid` box: one color channel per
         # palette column. The `cdef` fixtures' labels are checked by
         # tests/jp2_synthetic.rs instead.
         snapshot["jp2"] = {
-            "colour": "srgb",
-            "channels": [f"colour/{i + 1}" for i in range(len(components))],
+            "color": "srgb",
+            "channels": [f"color/{i + 1}" for i in range(len(components))],
             "palette_applied": True,
             "resolution": {"capture": None, "display": None},
             "xml": [],
@@ -368,7 +368,7 @@ def cdef_fixtures(one: bytes, one_geometry: dict, three: bytes, three_geometry: 
         rgba,
         rgba_geometry,
         png,
-        f"opj_compress's own file, unchanged: cdef {RGBA_CDEF} (three colours, then an "
+        f"opj_compress's own file, unchanged: cdef {RGBA_CDEF} (three colors, then an "
         "opacity channel for the whole image), so nothing moves",
     )
     alpha_first = [(0, 1, 0), (1, 0, 1), (2, 0, 2), (3, 0, 3)]
@@ -377,7 +377,7 @@ def cdef_fixtures(one: bytes, one_geometry: dict, three: bytes, three_geometry: 
         jp2(codestream, rgba_geometry, [cdef(alpha_first)]),
         rgba_geometry,
         f"the jp2c codestream of {png}",
-        f"cdef {alpha_first}: component 0 is opacity, 1..3 are colours 1..3; each colour "
+        f"cdef {alpha_first}: component 0 is opacity, 1..3 are colors 1..3; each color "
         "entry swaps its channel into place, so the output is components 1, 2, 3, 0",
     )
     reversed_ = [(0, 0, 3), (1, 0, 2), (2, 0, 1)]
@@ -527,7 +527,7 @@ def subsampled_fixtures() -> None:
                 f"{mapping} applied by table lookup in Python",
                 "notes": "component 0 is full resolution, component 1 sub-sampled 2x2. "
                 f"OpenJPEG {OPENJPEG_VERSION} sizes every palette channel by the first channel's grid and "
-                "crashes or emits uninitialised memory on this file, so it is graded by "
+                "crashes or emits uninitialized memory on this file, so it is graded by "
                 "table lookup over OpenJPEG's decode of the bare codestream; each channel "
                 "keeps its source component's grid (owner-approved deviation, 2026-11-01)",
             },

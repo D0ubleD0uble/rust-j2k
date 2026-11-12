@@ -13,7 +13,7 @@
 //! the widened tier-2 paths, not only the single-component single-layer
 //! default:
 //!
-//! - the multi-component + colour transform walk and the multi-layer packet
+//! - the multi-component + color transform walk and the multi-layer packet
 //!   accumulation (shapes 1 and 2);
 //! - the explicit precinct partition (shape 3);
 //! - the selective arithmetic coding bypass (lazy) segment split, alone and
@@ -63,7 +63,7 @@ fn steer(body: &mut &[u8]) -> u8 {
 ///
 /// `variant` bits: 0 wavelet (5/3 vs 9/7), 1-2 SOP/EPH delimiters (as `Scod`),
 /// 3-5 geometry shape — 0 the single-component default, 1 three components with
-/// the colour transform, 2 three quality layers, 3 an explicit precinct
+/// the color transform, 2 three quality layers, 3 an explicit precinct
 /// partition, 4 the bypass (lazy) code-block style, 5 POC volumes over the
 /// widened geometry, 6 a 2×2 tile grid with interleaved tile-parts, 7 packed
 /// packet headers (bit 6 picks PPM over PPT). Shapes 4, 5, and 7 read steering
@@ -82,7 +82,7 @@ fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
     // multi-component, multi-layer, and precinct geometry together.
     let components: u16 = if matches!(shape, 1 | 5) { 3 } else { 1 };
     let layers: u16 = if matches!(shape, 2 | 5) { 3 } else { 1 };
-    let mct = u8::from(shape == 1); // colour transform needs the three components
+    let mct = u8::from(shape == 1); // color transform needs the three components
     let precincts = matches!(shape, 3 | 5);
     if precincts {
         scod |= 0x01; // Scod bit 0: precinct sizes follow in SPcod
@@ -113,7 +113,7 @@ fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
         siz.extend_from_slice(&[7, 1, 1]); // 8-bit unsigned, unit sampling
     }
 
-    // LRCP, `layers` layer(s), colour transform per `mct`, 2 levels, 2^6 blocks,
+    // LRCP, `layers` layer(s), color transform per `mct`, 2 levels, 2^6 blocks,
     // style per `shape`. Explicit precincts append one PPx/PPy byte per
     // resolution.
     let mut cod = vec![scod, 0];

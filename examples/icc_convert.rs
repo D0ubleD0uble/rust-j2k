@@ -3,7 +3,7 @@
 //! The tool behind `scripts/check-icc-exhaustive.py`, which compares the
 //! output with the system LittleCMS. It wraps the codestream in a JP2 file
 //! whose `colr` box holds the profile, decodes it with
-//! `ColourOutput::Srgb`, and writes the samples pixel by pixel, each channel
+//! `ColorOutput::Srgb`, and writes the samples pixel by pixel, each channel
 //! as one byte for 8-bit samples or two little-endian bytes for 16-bit ones.
 //!
 //! ```text
@@ -16,7 +16,7 @@
 
 use std::process::ExitCode;
 
-use rust_j2k::{ColourOutput, DecodeOptions, Error, decode_with, read_header};
+use rust_j2k::{ColorOutput, DecodeOptions, Error, decode_with, read_header};
 
 fn jp2_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
@@ -49,7 +49,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     let codestream = std::fs::read(codestream)?;
     let profile = std::fs::read(profile)?;
-    let options = DecodeOptions::default().with_colour(ColourOutput::Srgb);
+    let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
     let image = decode_with(&wrap(&codestream, &profile)?, &options)?;
     let depth = image.components[0].bit_depth;
     let pixels = image.components[0].samples.len();

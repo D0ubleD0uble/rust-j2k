@@ -1,12 +1,12 @@
 //! The labels on `Jp2Metadata::channels` for a file without a `cdef`, or when
-//! `raw_channels` leaves the `cdef` unapplied: only the colour space's own
-//! channels are colours (I.5.3.6 gives a channel past them no meaning), and
+//! `raw_channels` leaves the `cdef` unapplied: only the color space's own
+//! channels are colors (I.5.3.6 gives a channel past them no meaning), and
 //! the rest are unspecified.
 
 mod support;
 
 use rust_j2k::{
-    Association, ChannelDefinition, ChannelType, ColourOutput, Component, DecodeOptions, decode,
+    Association, ChannelDefinition, ChannelType, ColorOutput, Component, DecodeOptions, decode,
     decode_with, read_header_with,
 };
 use support::jp2::sha256_hex;
@@ -19,7 +19,7 @@ fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
 }
 
 fn srgb() -> DecodeOptions {
-    DecodeOptions::default().with_colour(ColourOutput::Srgb)
+    DecodeOptions::default().with_color(ColorOutput::Srgb)
 }
 
 /// The hash `scripts/gen-icc-oracles.py` records: samples in raster order,
@@ -33,10 +33,10 @@ fn plane_hash(component: &Component) -> String {
     sha256_hex(&bytes)
 }
 
-fn colour(n: u16) -> ChannelDefinition {
+fn color(n: u16) -> ChannelDefinition {
     ChannelDefinition {
-        kind: ChannelType::Colour,
-        association: Association::Colour(n),
+        kind: ChannelType::Color,
+        association: Association::Color(n),
     }
 }
 
@@ -57,12 +57,12 @@ fn raw() -> DecodeOptions {
 }
 
 /// sRGB files with an opacity channel: `raw_channels` skips the `cdef`, so
-/// the fourth channel is past sRGB's three colours.
+/// the fourth channel is past sRGB's three colors.
 #[test]
 fn a_fourth_channel_of_an_srgb_file_is_unspecified_without_the_cdef() {
     for path in ["jp2_real/3_13bit_and_1bit.jp2", "jp2_cdef_rgba.jp2"] {
         let bytes = read(path);
-        let want = vec![colour(1), colour(2), colour(3), UNSPECIFIED];
+        let want = vec![color(1), color(2), color(3), UNSPECIFIED];
         let image = decode_with(&bytes, &raw()).unwrap();
         assert_eq!(image.jp2.as_ref().unwrap().channels, want, "{path}: decode");
         let header = read_header_with(&bytes, &raw()).unwrap();
@@ -78,8 +78,8 @@ fn a_fourth_channel_of_an_srgb_file_is_unspecified_without_the_cdef() {
 }
 
 /// An enumerated sRGB file of four components with no `cdef` whose fourth is
-/// signed 8-bit, unlike the three unsigned colours. The fourth channel is
-/// past sRGB's colours, so the sRGB step leaves it alone and passes the file
+/// signed 8-bit, unlike the three unsigned colors. The fourth channel is
+/// past sRGB's colors, so the sRGB step leaves it alone and passes the file
 /// through, as OpenJPEG does (`opj_decompress -force-rgb` writes the four
 /// planes as coded; the hashes are of its PGX output). Same as the file with
 /// a `cdef`.

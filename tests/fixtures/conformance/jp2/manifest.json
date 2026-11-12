@@ -11,7 +11,7 @@
       "repo": "uclouvain/openjpeg-data",
       "commit": "39524bd3a601d90ed8e0177559400d23945f96a9",
       "path": "baseline/conformance/jp2_{1..9}.tif",
-      "conversion": "8-bit RGB TIFF read with Pillow, written as one unsigned 8-bit PGX plane per channel; greyscale files (4, 6, 8) keep one plane after asserting the three channels are identical",
+      "conversion": "8-bit RGB TIFF read with Pillow, written as one unsigned 8-bit PGX plane per channel; grayscale files (4, 6, 8) keep one plane after asserting the three channels are identical",
       "oracle_command": "opj_decompress -i fileN.jp2 -o fileN.tif -p 8S -force-rgb"
     },
     "bounds": {
@@ -23,11 +23,11 @@
     "as_coded": {
       "files": "2, 3, 5, 7, 8",
       "oracle_command": "the jp2c payload as a bare codestream: opj_decompress -i cs.j2k -o out.pgx; the sub-sampled file (3) one component at a time with -c K; file2's planes put in its cdef order and checked against opj_decompress on file2.jp2 with its colr rewritten to sRGB (enum 16)",
-      "note": "codestream samples at the native component size and depth, no colour conversion and no shift. -c avoids opj_decompress's sYCC heuristic but skips the inverse MCT, so it is used only for the sub-sampled file (mct 0); the bare codestream carries no ICC"
+      "note": "codestream samples at the native component size and depth, no color conversion and no shift. -c avoids opj_decompress's sYCC heuristic but skips the inverse MCT, so it is used only for the sub-sampled file (mct 0); the bare codestream carries no ICC"
     },
     "features": {
       "tool": "opj_dump -i + direct marker-segment walk of the jp2c payload",
-      "note": "boxes and colour are read from the JP2 box layer directly"
+      "note": "boxes and color are read from the JP2 box layer directly"
     },
     "license": "Conformance-only grant; see ../COPYRIGHT. Excluded from the published crate via Cargo.toml `exclude`."
   },
@@ -53,7 +53,7 @@
           "colr"
         ]
       },
-      "colour": {
+      "color": {
         "method": 1,
         "enum_cs": 16
       },
@@ -169,7 +169,7 @@
           "cdef"
         ]
       },
-      "colour": {
+      "color": {
         "method": 1,
         "enum_cs": 18
       },
@@ -305,7 +305,7 @@
           "colr"
         ]
       },
-      "colour": {
+      "color": {
         "method": 1,
         "enum_cs": 18
       },
@@ -441,7 +441,7 @@
           "colr"
         ]
       },
-      "colour": {
+      "color": {
         "method": 1,
         "enum_cs": 17
       },
@@ -532,7 +532,7 @@
           "colr"
         ]
       },
-      "colour": {
+      "color": {
         "method": 2,
         "icc_bytes": 546
       },
@@ -668,7 +668,7 @@
           "colr"
         ]
       },
-      "colour": {
+      "color": {
         "method": 1,
         "enum_cs": 17
       },
@@ -759,7 +759,7 @@
           "colr"
         ]
       },
-      "colour": {
+      "color": {
         "method": 2,
         "icc_bytes": 13332
       },
@@ -897,7 +897,7 @@
           "colr"
         ]
       },
-      "colour": {
+      "color": {
         "method": 2,
         "icc_bytes": 414
       },
@@ -1001,7 +1001,7 @@
           "colr"
         ]
       },
-      "colour": {
+      "color": {
         "method": 1,
         "enum_cs": 16
       },

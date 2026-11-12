@@ -43,7 +43,7 @@ pub(super) fn after(tail: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// A file without a `colr`, then these boxes after the codestream.
-pub(super) fn no_colour_then(tail: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn no_color_then(tail: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = file(&[jp2_ftyp(), jp2h(&[good_ihdr()]), jp2c()]);
     bytes.extend_from_slice(&tail.concat());
     bytes
@@ -59,7 +59,7 @@ pub(super) fn one_component(children: &[Vec<u8>], tail: &[Vec<u8>]) -> Vec<u8> {
     bytes
 }
 
-/// A `cdef` labelling the three components as colours 1, 2, 3.
+/// A `cdef` labeling the three components as colors 1, 2, 3.
 pub(super) fn identity_cdef() -> Vec<u8> {
     super::channels::cdef_of(&[(0, 0, 1), (1, 0, 2), (2, 0, 3)])
 }
@@ -223,17 +223,17 @@ fn malformed_header_boxes_after_the_codestream_are_rejected() {
         ),
         (
             "a short METH 1 colr with no usable colr before it",
-            no_colour_then(&[short_meth1()]),
+            no_color_then(&[short_meth1()]),
             "`METH` 1 holds 4 bytes",
         ),
         (
             "an empty METH 2 colr with no usable colr before it",
-            no_colour_then(&[bx(b"colr", &[2, 0, 0])]),
+            no_color_then(&[bx(b"colr", &[2, 0, 0])]),
             "`METH` 2 holds no ICC profile",
         ),
         (
             "a short METH 1 colr after an ignored METH 3 one",
-            no_colour_then(&[bx(b"colr", &[3, 0, 0]), short_meth1()]),
+            no_color_then(&[bx(b"colr", &[3, 0, 0]), short_meth1()]),
             "`METH` 1 holds 4 bytes",
         ),
         (
@@ -340,7 +340,7 @@ fn header_boxes_after_the_codestream_that_openjpeg_accepts_decode() {
         ),
         (
             "a short METH 1 colr after a usable one read after jp2c",
-            no_colour_then(&[colr(), bx(b"colr", &[1, 0, 0, 0])]),
+            no_color_then(&[colr(), bx(b"colr", &[1, 0, 0, 0])]),
         ),
         (
             "a cdef after the applied cdef",
@@ -381,12 +381,12 @@ fn header_boxes_after_the_codestream_that_openjpeg_accepts_decode() {
     }
 }
 
-/// A `colr` read after the codestream does not set the colour space: OpenJPEG
-/// has set the image's colour space before it reads it.
+/// A `colr` read after the codestream does not set the color space: OpenJPEG
+/// has set the image's color space before it reads it.
 #[test]
-fn a_colr_after_the_codestream_does_not_set_the_colour_space() {
-    let image = decode(&no_colour_then(&[colr()])).unwrap();
-    assert_eq!(image.jp2.unwrap().colour, ColourSpace::Unknown);
+fn a_colr_after_the_codestream_does_not_set_the_color_space() {
+    let image = decode(&no_color_then(&[colr()])).unwrap();
+    assert_eq!(image.jp2.unwrap().color, ColorSpace::Unknown);
 }
 
 /// Under the raw channels OpenJPEG skips the palette and the channel

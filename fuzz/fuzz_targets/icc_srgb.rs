@@ -1,6 +1,6 @@
 #![no_main]
 //! Fuzz the ICC profile reader and the LittleCMS port behind
-//! `ColourOutput::Srgb`.
+//! `ColorOutput::Srgb`.
 //!
 //! The codestream and the boxes are pinned; the fuzzer writes the ICC profile
 //! in the `colr` box. Same contract as `decode`: a typed result, never a
@@ -16,15 +16,15 @@
 //! full, and a mutation moves between the two on its own.
 //!
 //! The first input byte picks the codestream: bits 0-1 choose 24x16 RGB at 8
-//! bits, 64x64 RGB at 16 bits, or 64x64 grey at 8 bits (3 is RGB at 8 bits).
+//! bits, 64x64 RGB at 16 bits, or 64x64 gray at 8 bits (3 is RGB at 8 bits).
 //! The rest is the profile.
 
 use libfuzzer_sys::fuzz_target;
-use rust_j2k::{ColourOutput, DecodeOptions};
+use rust_j2k::{ColorOutput, DecodeOptions};
 
 const RGB8: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
 const RGB16: &[u8] = include_bytes!("../../tests/fixtures/icc/rgb16_lossless.j2k");
-const GREY8: &[u8] = include_bytes!("../../tests/fixtures/icc/grey8_lossless.j2k");
+const GRAY8: &[u8] = include_bytes!("../../tests/fixtures/icc/gray8_lossless.j2k");
 
 /// One profile in this many also builds the transform and decodes.
 const BUILD_EVERY: u64 = 16;
@@ -78,10 +78,10 @@ fuzz_target!(|data: &[u8]| {
     }
     let (codestream, size, components, depth) = match variant & 0x03 {
         1 => (RGB16, (64, 64), 3, 16),
-        2 => (GREY8, (64, 64), 1, 8),
+        2 => (GRAY8, (64, 64), 1, 8),
         _ => (RGB8, (24, 16), 3, 8),
     };
-    let options = DecodeOptions::default().with_colour(ColourOutput::Srgb);
+    let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
     let _ = rust_j2k::decode_with(
         &wrap(codestream, size, components, depth, profile),
         &options,

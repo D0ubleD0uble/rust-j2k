@@ -25,7 +25,7 @@
 //! these functions.
 //!
 //! Only round-to-nearest is supported, and errno and the floating-point
-//! exception flags are not modelled. A NaN result is a NaN, but its sign and
+//! exception flags are not modeled. A NaN result is a NaN, but its sign and
 //! payload are not specified.
 //!
 //! Ported from `math/pow.c`, `math/pow_common.h`, `math/log.c` and
@@ -33,7 +33,7 @@
 //! (github.com/ARM-software/optimized-routines, commit
 //! `2ee4b0d45680a9880412c1d186224b08652c35f6`), which is
 //! `MIT OR Apache-2.0 WITH LLVM-exception`. It is used here under the MIT
-//! licence, from the `LICENSE` file at that commit:
+//! license, from the `LICENSE` file at that commit:
 //!
 //! > MIT License
 //! >
@@ -176,12 +176,12 @@ pub(crate) fn log(x: f64) -> f64 {
         if (top & 0x8000) != 0 || (top & 0x7ff0) == 0x7ff0 {
             return invalid();
         }
-        // Subnormal: normalise it.
+        // Subnormal: normalize it.
         ix = (x * TWO_52).to_bits().wrapping_sub(52 << 52);
     }
 
     // x = 2^k z, with z in [OFF, 2*OFF) and exact. The range is split into N
-    // subintervals; the ith contains z and c is near its centre.
+    // subintervals; the ith contains z and c is near its center.
     const OFF: u64 = 0x3fe6_0000_0000_0000;
     let tmp = ix.wrapping_sub(OFF);
     let i = ((tmp >> TABLE_SHIFT) % N) as usize;
@@ -232,7 +232,7 @@ fn zeroinfnan(i: u64) -> bool {
 }
 
 /// `log_inline` of `pow`: `(y, tail)` with `y + tail = log(x)`, `tail`
-/// carrying about 15 more bits. `ix` is the bit pattern of `x`, normalised in
+/// carrying about 15 more bits. `ix` is the bit pattern of `x`, normalized in
 /// the subnormal range using the sign bit for the exponent.
 fn pow_log_inline(ix: u64) -> (f64, f64) {
     let a = |i: usize| f64::from_bits(POW_LOG_POLY[i]);
@@ -431,7 +431,7 @@ pub(crate) fn pow(x: f64, y: f64) -> f64 {
             };
         }
         if topx == 0 {
-            // Normalise subnormal x so the exponent becomes negative.
+            // Normalize subnormal x so the exponent becomes negative.
             ix = (x * TWO_52).to_bits() & !SIGN_MASK;
             ix = ix.wrapping_sub(52 << 52);
         }

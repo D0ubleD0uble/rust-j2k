@@ -64,7 +64,7 @@ fn decodes_corpus_against_oracle() {
     );
 }
 
-/// Harness behaviour: discovery, the comparator, and outcome classification.
+/// Harness behavior: discovery, the comparator, and outcome classification.
 /// These exercise the harness with hand-built inputs so it is proven before
 /// the real corpus (issue #4) and a working `decode` exist.
 mod harness {

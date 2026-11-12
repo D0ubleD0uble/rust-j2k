@@ -67,8 +67,8 @@ pub(crate) struct Ihdr {
     pub(crate) bits_per_component: u8,
     /// `C`: the compression type, 7 for JPEG 2000.
     pub(crate) compression: u8,
-    /// `UnkC`: 1 when the colour space is unknown.
-    pub(crate) unknown_colourspace: u8,
+    /// `UnkC`: 1 when the color space is unknown.
+    pub(crate) unknown_colorspace: u8,
     /// `IPR`: 1 when the file holds an intellectual property box.
     pub(crate) ipr: u8,
 }
@@ -105,7 +105,7 @@ impl Ihdr {
             components,
             bits_per_component: bpc,
             compression: c,
-            unknown_colourspace: unk_c,
+            unknown_colorspace: unk_c,
             ipr,
         })
     }

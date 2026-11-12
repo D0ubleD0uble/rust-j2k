@@ -20,7 +20,7 @@ use crate::{Error, Jp2Metadata, Result};
 /// Components are in output-channel order. For a raw codestream that is SIZ
 /// order; a JP2 file's palette, channel definitions and sRGB option can change
 /// the channels (see [`components`](Self::components)). The codestream's
-/// inter-component (colour) transform is part of decoding; nothing else is
+/// inter-component (color) transform is part of decoding; nothing else is
 /// applied unless the caller asks for sRGB output.
 ///
 /// The struct is `#[non_exhaustive]`: [`decode`](crate::decode) is the normal
@@ -37,11 +37,11 @@ pub struct Image {
     /// One entry per output channel. For a raw codestream, and for a JP2 file
     /// with no palette, no channel definitions and as-coded output, that is one
     /// per SIZ component, in SIZ order. A palette makes one channel per
-    /// palette column, channel definitions put the colour channels in colour
+    /// palette column, channel definitions put the color channels in color
     /// order, and sRGB output can change the count (a monochrome profile can
     /// give three). Never empty in decoder output.
     pub components: Vec<Component>,
-    /// What the JP2 wrapper said about the samples: their colour space and
+    /// What the JP2 wrapper said about the samples: their color space and
     /// what each channel is. `None` for a raw codestream.
     pub jp2: Option<Jp2Metadata>,
 }
@@ -314,7 +314,7 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8
 /// component's reconstructed samples.
 ///
 /// This is the *only* place the irreversible path rounds. It happens after the
-/// inverse colour transform, matching `opj_tcd_dc_level_shift_decode`, which
+/// inverse color transform, matching `opj_tcd_dc_level_shift_decode`, which
 /// calls `opj_lrintf` and then adds the DC level shift and clamps:
 ///
 /// ```c
@@ -531,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn geometry_honours_sub_sampling() {
+    fn geometry_honors_sub_sampling() {
         let mut h = header(8, 8, 8, false);
         h.siz.components[0].x_sampling = 2;
         h.siz.components[0].y_sampling = 2;

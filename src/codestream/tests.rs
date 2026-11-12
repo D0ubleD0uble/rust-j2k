@@ -586,8 +586,8 @@ fn reserved_scod_bits_are_marker() {
 }
 
 #[test]
-fn reversible_colour_transform_parses() {
-    // Three matching components, 5/3 wavelet, MCT signalled: this is RCT.
+fn reversible_color_transform_parses() {
+    // Three matching components, 5/3 wavelet, MCT signaled: this is RCT.
     let bytes = codestream(&[
         seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
         seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)), // mct = 1, 5/3
@@ -599,10 +599,10 @@ fn reversible_colour_transform_parses() {
 }
 
 /// The wavelet chooses the transform, so MCT on the 9/7 path is ICT (issue #76).
-/// A well-formed three-component 9/7 codestream with the transform signalled
+/// A well-formed three-component 9/7 codestream with the transform signaled
 /// parses; the geometry check accepts three matching components on either arm.
 #[test]
-fn irreversible_colour_transform_parses() {
+fn irreversible_color_transform_parses() {
     let header = parsed(&[
         seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
         seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)), // mct = 1, 9/7
@@ -612,11 +612,11 @@ fn irreversible_colour_transform_parses() {
     assert_eq!(header.cod.transform, Transform::Irreversible97);
 }
 
-/// The three colour components must share a wavelet: a COC that moves one of the
+/// The three color components must share a wavelet: a COC that moves one of the
 /// first three to the other arm makes the transform undefined (integers on one,
 /// floats on another), and is rejected.
 #[test]
-fn a_colour_transform_over_mixed_wavelets_is_unsupported() {
+fn a_color_transform_over_mixed_wavelets_is_unsupported() {
     // All-9/7 COD with MCT; a COC drops component 1 to 5/3.
     let bytes = codestream(&[
         seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
@@ -637,11 +637,11 @@ fn array_multiple_component_transform_is_unsupported() {
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
 }
 
-/// The colour transform is defined over the first three components, so a
+/// The color transform is defined over the first three components, so a
 /// codestream that signals it with fewer is describing something the transform
 /// cannot express. Skipping it (as OpenJPEG does) would decode the wrong image.
 #[test]
-fn colour_transform_needs_three_components() {
+fn color_transform_needs_three_components() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)),
@@ -656,7 +656,7 @@ fn colour_transform_needs_three_components() {
 
 /// The three transformed components must share a depth, sign, and sub-sampling.
 #[test]
-fn colour_transform_needs_matching_components() {
+fn color_transform_needs_matching_components() {
     let bytes = codestream(&[
         seg(
             marker::SIZ,
@@ -1575,7 +1575,7 @@ fn reserved_markers_carry_no_segment() {
 fn unknown_marker_segments_are_walked_then_reported_unsupported() {
     // Codes this decoder names — the Part 2 block (0xFF74..=0xFF78) among them —
     // reject under their own message, checked in the reject matrix. These are the
-    // ones it genuinely does not recognise, which the walk must still step over.
+    // ones it genuinely does not recognize, which the walk must still step over.
     for code in [
         0xFF01u16, // no part of the standard we implement
         0xFF2F,    // just below the reserved segment-less range
@@ -1936,12 +1936,12 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with_cod(cod_body(0, 0, 0, 0, 5, 4, 4, 0, 1))),
             Variant::Marker,
         ),
-        // Both colour transforms are decoded now (RCT and ICT), so they left
+        // Both color transforms are decoded now (RCT and ICT), so they left
         // this table. What remains out of subset: Part 2's array MCT, a
         // codestream that signals the transform without the three components it
         // is defined over, and one that mixes wavelets across those components.
         (
-            "colour transform over mixed wavelets",
+            "color transform over mixed wavelets",
             err(&codestream(&[
                 seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
                 seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)),
@@ -1956,7 +1956,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             Variant::Unsupported,
         ),
         (
-            "colour transform without three components",
+            "color transform without three components",
             err(&header_with_cod(cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1))),
             Variant::Marker,
         ),
@@ -2383,14 +2383,14 @@ fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
     );
 }
 
-/// Which colour transform applies follows from the wavelet, and COC makes the
+/// Which color transform applies follows from the wavelet, and COC makes the
 /// wavelet per component. RCT is defined over three integer components, so a COC
 /// that moves one of the first three to 9/7 describes a transform that does not
 /// exist.
 #[test]
-fn a_coc_moving_a_colour_component_to_the_97_wavelet_is_unsupported() {
+fn a_coc_moving_a_color_component_to_the_97_wavelet_is_unsupported() {
     // Each 9/7 component gets a scalar QCC so the wavelet/quant pairing is
-    // sound and the failure under test is the colour transform alone.
+    // sound and the failure under test is the color transform alone.
     let scalar_qcc = |component: u8| {
         seg(marker::QCC, &{
             let mut b = vec![component];
@@ -2554,7 +2554,7 @@ fn assemble_with_tile_markers(header: &[Vec<u8>], markers: &[Vec<u8>], data: &[u
 }
 
 /// A tile-part RGN *replaces* the main header's for that tile (A.6.3), so
-/// honouring only the main-header one would decode a different image rather
+/// honoring only the main-header one would decode a different image rather
 /// than a slightly worse one. `p0_06` is exactly this codestream: maxshift 11
 /// in the main header, 9 in the tile-part header — 9 is what the tile was
 /// coded with.

@@ -6,7 +6,7 @@
 //! (§G.1), so it runs on the reconstructed sample grids, not on coefficients.
 //!
 //! Which transform to invert is **not** a separate flag. The wavelet chooses it:
-//! the reversible 5/3 path pairs with the reversible colour transform (RCT,
+//! the reversible 5/3 path pairs with the reversible color transform (RCT,
 //! §G.2), the irreversible 9/7 path with the irreversible one (ICT, §G.3).
 //! OpenJPEG makes the same choice on `qmfbid == 1` in `opj_tcd_mct_decode`,
 //! reading the wavelet off component 0. [`inverse_rct`] inverts the 5/3 arm in
@@ -17,7 +17,7 @@
 use crate::pipeline::Samples;
 use crate::{Error, Result};
 
-/// Invert the reversible colour transform over the first three components
+/// Invert the reversible color transform over the first three components
 /// (§G.2, equations G-6 to G-8):
 ///
 /// ```text
@@ -39,13 +39,13 @@ use crate::{Error, Result};
 ///
 /// `components` must hold at least three equally sized sample vectors on the
 /// reversible arm; [`check_geometry`] and `decode_cod` are what guarantee it —
-/// the colour transform is only RCT when the wavelet is 5/3, and the 5/3 path
+/// the color transform is only RCT when the wavelet is 5/3, and the 5/3 path
 /// reconstructs in integers.
 pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
     let count = components.len();
     let [c0, c1, c2, ..] = components else {
         return Err(Error::Inconsistent(format!(
-            "the colour transform needs three components, found {count}"
+            "the color transform needs three components, found {count}"
         )));
     };
     let [
@@ -55,12 +55,12 @@ pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
     ] = [c0, c1, c2]
     else {
         return Err(Error::Inconsistent(
-            "the reversible colour transform needs integer samples; the 9/7 path is ICT".into(),
+            "the reversible color transform needs integer samples; the 9/7 path is ICT".into(),
         ));
     };
     if c0.len() != c1.len() || c0.len() != c2.len() {
         return Err(Error::Inconsistent(
-            "the colour transform needs three components of equal size".into(),
+            "the color transform needs three components of equal size".into(),
         ));
     }
 
@@ -74,7 +74,7 @@ pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
     Ok(())
 }
 
-/// Invert the irreversible colour transform over the first three components
+/// Invert the irreversible color transform over the first three components
 /// (§G.3, equations G-9 to G-11):
 ///
 /// ```text
@@ -92,13 +92,13 @@ pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
 ///
 /// `components` must hold at least three equally sized float sample vectors;
 /// [`check_geometry`] and the wavelet check in `parse_main_header` guarantee it —
-/// the colour transform is ICT only when the wavelet is 9/7, and the 9/7 path
+/// the color transform is ICT only when the wavelet is 9/7, and the 9/7 path
 /// reconstructs in floats.
 pub fn inverse_ict(components: &mut [Samples]) -> Result<()> {
     let count = components.len();
     let [c0, c1, c2, ..] = components else {
         return Err(Error::Inconsistent(format!(
-            "the colour transform needs three components, found {count}"
+            "the color transform needs three components, found {count}"
         )));
     };
     let [
@@ -108,12 +108,12 @@ pub fn inverse_ict(components: &mut [Samples]) -> Result<()> {
     ] = [c0, c1, c2]
     else {
         return Err(Error::Inconsistent(
-            "the irreversible colour transform needs float samples; the 5/3 path is RCT".into(),
+            "the irreversible color transform needs float samples; the 5/3 path is RCT".into(),
         ));
     };
     if c0.len() != c1.len() || c0.len() != c2.len() {
         return Err(Error::Inconsistent(
-            "the colour transform needs three components of equal size".into(),
+            "the color transform needs three components of equal size".into(),
         ));
     }
 
@@ -148,7 +148,7 @@ pub(crate) fn saturate(v: i64) -> i32 {
 pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -> Result<()> {
     let [c0, c1, c2, ..] = components else {
         return Err(Error::Marker(format!(
-            "COD signals the colour transform but SIZ declares {} component(s); \
+            "COD signals the color transform but SIZ declares {} component(s); \
              it is defined over the first three",
             components.len()
         )));
@@ -156,7 +156,7 @@ pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -
     for (index, comp) in [c1, c2].into_iter().enumerate() {
         if (comp.bit_depth, comp.signed) != (c0.bit_depth, c0.signed) {
             return Err(Error::Marker(format!(
-                "COD signals the colour transform but component {} is {}-bit (signed {}) \
+                "COD signals the color transform but component {} is {}-bit (signed {}) \
                  against component 0's {}-bit (signed {})",
                 index + 1,
                 comp.bit_depth,
@@ -167,7 +167,7 @@ pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -
         }
         if (comp.x_sampling, comp.y_sampling) != (c0.x_sampling, c0.y_sampling) {
             return Err(Error::Marker(format!(
-                "COD signals the colour transform but component {} sub-samples ({}, {}) \
+                "COD signals the color transform but component {} sub-samples ({}, {}) \
                  against component 0's ({}, {})",
                 index + 1,
                 comp.x_sampling,
@@ -258,7 +258,7 @@ mod tests {
 
     /// `(Y1 + Y2) / 4` must floor. Truncating toward zero gives `G` one too
     /// large whenever the sum is negative and not a multiple of four, which
-    /// breaks reversibility on exactly the samples a colour image is full of.
+    /// breaks reversibility on exactly the samples a color image is full of.
     #[test]
     fn the_divide_by_four_floors_rather_than_truncates() {
         // Y1 + Y2 = -1: floor(-1/4) = -1 gives G = 1, so (R, G, B) = (1, 1, 0).

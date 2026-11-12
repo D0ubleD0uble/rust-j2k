@@ -4,7 +4,7 @@
 //! arithmetic-coded bit-plane stream. From the most significant non-zero plane
 //! down, every plane is decoded by up to three passes — significance
 //! propagation, magnitude refinement, cleanup — each forming contexts from the
-//! 3×3 neighbourhood and reading binary decisions from the [`mq`] decoder.
+//! 3×3 neighborhood and reading binary decisions from the [`mq`] decoder.
 //! The result is the quantized wavelet coefficients of one subband block.
 
 pub mod mq;
@@ -348,7 +348,7 @@ mod tests {
         decode_subband::<i32, _>(&sb, MAX_BIT_PLANES - 1, params, |q| q).expect("in range");
     }
 
-    /// More signalled zero bit-planes than the subband has magnitude planes
+    /// More signaled zero bit-planes than the subband has magnitude planes
     /// decodes the block to all zeros without an error — the exact outcome of
     /// OpenJPEG's wrapped-negative `bpno_plus_one` running zero passes.
     #[test]

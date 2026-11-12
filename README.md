@@ -37,8 +37,8 @@ The public surface is small: the bytes of a JPEG 2000 codestream or JP2 file in
 reads the image area, the channel formats and a JP2 file's metadata without
 decoding any tile data. An `Image` is the image area on the reference grid plus
 one `Component` per output channel, each on its own sample grid: per codestream
-component, or per palette column for a palettised JP2 file. For a JP2 file,
-`image.jp2` holds what its boxes say (colour space, channel types, resolution,
+component, or per palette column for a palettized JP2 file. For a JP2 file,
+`image.jp2` holds what its boxes say (color space, channel types, resolution,
 `xml ` and `uuid` boxes).
 
 ```rust
@@ -97,8 +97,8 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 | Decoded | Not yet (returns `Error::Unsupported`) |
 | --- | --- |
 | Raw codestream (Annex A) and JP2 files (Annex I), detected from the first bytes | JPX, JPM and MJ2 files that do not claim `jp2 ` compatibility |
-| JP2 palettes (`pclr`, `cmap`), channel definitions (`cdef`), colour specification (`colr`), `res `, `xml ` and `uuid` boxes, reported on `Image::jp2` | — |
-| Opt-in sRGB output (`DecodeOptions::colour`): sYCC and restricted ICC profiles | Other colour spaces and profiles under that option |
+| JP2 palettes (`pclr`, `cmap`), channel definitions (`cdef`), color specification (`colr`), `res `, `xml ` and `uuid` boxes, reported on `Image::jp2` | — |
+| Opt-in sRGB output (`DecodeOptions::color`): sYCC and restricted ICC profiles | Other color spaces and profiles under that option |
 | Integer components, unsigned up to 31 bits or signed up to 32 bits, with sub-sampling | Unsigned 32-bit components, and depths past the `i32` container (33–38 bits) |
 | Both color transforms: reversible (RCT) and irreversible (ICT) | Part 2 extensions (array MCT, …) |
 | Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | HTJ2K (Part 15) block coding |

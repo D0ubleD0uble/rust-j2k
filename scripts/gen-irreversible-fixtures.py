@@ -6,7 +6,7 @@ quantization step. `p0_09` is 9/7 and bit-exact, but its coefficients never
 exercise the case; `eta_lambert_irreversible` is graded with a tolerance wide
 enough to absorb it. So a double mid-point reconstruction bias -- Tier-1's
 `oneplushalf` plus a second `+ ½` in dequantization -- lived in the decoder,
-cancelled for odd coefficients by an integer halving that should not have been
+canceled for odd coefficients by an integer halving that should not have been
 there, and wrong for even ones (issue #101).
 
 These two fixtures close that. Both are snapshotted `tolerance: exact` against

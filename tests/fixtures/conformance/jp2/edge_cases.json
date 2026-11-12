@@ -23,10 +23,10 @@
         },
         "image_header": {
           "compression": 7,
-          "unknown_colour_space": 0,
+          "unknown_color_space": 0,
           "ipr": 0
         },
-        "colour_specifications": [
+        "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
@@ -88,10 +88,10 @@
         },
         "image_header": {
           "compression": 7,
-          "unknown_colour_space": 0,
+          "unknown_color_space": 0,
           "ipr": 0
         },
-        "colour_specifications": [
+        "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
@@ -152,10 +152,10 @@
         },
         "image_header": {
           "compression": 7,
-          "unknown_colour_space": 0,
+          "unknown_color_space": 0,
           "ipr": 0
         },
-        "colour_specifications": [
+        "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
@@ -216,10 +216,10 @@
         },
         "image_header": {
           "compression": 7,
-          "unknown_colour_space": 0,
+          "unknown_color_space": 0,
           "ipr": 0
         },
-        "colour_specifications": [
+        "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
@@ -288,10 +288,10 @@
         },
         "image_header": {
           "compression": 7,
-          "unknown_colour_space": 0,
+          "unknown_color_space": 0,
           "ipr": 0
         },
-        "colour_specifications": [
+        "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
@@ -360,10 +360,10 @@
         },
         "image_header": {
           "compression": 7,
-          "unknown_colour_space": 0,
+          "unknown_color_space": 0,
           "ipr": 0
         },
-        "colour_specifications": [
+        "color_specifications": [
           {
             "method": 2,
             "precedence": 0,

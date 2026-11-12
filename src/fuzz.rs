@@ -45,7 +45,7 @@ pub fn tier1_block(data: &[u8]) {
         _ => Orientation::Hh,
     };
     let params = BlockParams {
-        // Every decoded style flag whose contract this hook can honour. `LAZY`
+        // Every decoded style flag whose contract this hook can honor. `LAZY`
         // stays out: `decode_block` requires the lazy split's homogeneous
         // segments (raw runs never carry a cleanup pass), and this hook feeds
         // one unsplit segment — the `tile_body` target's bypass shape covers

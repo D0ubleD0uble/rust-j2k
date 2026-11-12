@@ -16,7 +16,7 @@ mod support;
 use std::path::PathBuf;
 
 use rust_j2k::{
-    Association, ChannelType, ColourOutput, ColourSpace, Component, DecodeOptions, Error, Image,
+    Association, ChannelType, ColorOutput, ColorSpace, Component, DecodeOptions, Error, Image,
     decode, decode_with,
 };
 use serde::Deserialize;
@@ -32,7 +32,7 @@ fn read(path: &str) -> Vec<u8> {
 }
 
 fn srgb() -> DecodeOptions {
-    DecodeOptions::default().with_colour(ColourOutput::Srgb)
+    DecodeOptions::default().with_color(ColorOutput::Srgb)
 }
 
 /// The hash the oracle script records: samples in raster order, each a
@@ -47,7 +47,7 @@ fn plane_hash(component: &Component) -> String {
 }
 
 /// Compare a decode with OpenJPEG's three output planes. A monochrome profile
-/// whose output is neutral comes out as one grey channel, which must then
+/// whose output is neutral comes out as one gray channel, which must then
 /// equal each of OpenJPEG's three identical planes.
 fn check_planes(image: &Image, want: &[String], depth: u8, what: &str) {
     assert_eq!(want.len(), 3, "{what}: OpenJPEG gives R, G, B");
@@ -56,11 +56,11 @@ fn check_planes(image: &Image, want: &[String], depth: u8, what: &str) {
         1 => {
             assert!(
                 want.iter().all(|w| *w == got[0]),
-                "{what}: one grey channel, but OpenJPEG's planes differ or do not match it"
+                "{what}: one gray channel, but OpenJPEG's planes differ or do not match it"
             );
             assert_eq!(
-                image.jp2.as_ref().unwrap().colour,
-                ColourSpace::Greyscale,
+                image.jp2.as_ref().unwrap().color,
+                ColorSpace::Grayscale,
                 "{what}"
             );
         }
@@ -69,8 +69,8 @@ fn check_planes(image: &Image, want: &[String], depth: u8, what: &str) {
                 assert_eq!(g, w, "{what}: channel {k} differs from OpenJPEG");
             }
             assert_eq!(
-                image.jp2.as_ref().unwrap().colour,
-                ColourSpace::Srgb,
+                image.jp2.as_ref().unwrap().color,
+                ColorSpace::Srgb,
                 "{what}"
             );
         }
@@ -201,7 +201,7 @@ fn the_intent_0_variants_are_the_files_as_shipped() {
 }
 
 /// Changing the intent or white point is not a no-op for every file: absolute
-/// colorimetric with a white other than D50 scales the colours, so the
+/// colorimetric with a white other than D50 scales the colors, so the
 /// oracle would catch an ignored `wtpt`.
 #[test]
 fn the_white_point_variants_differ_from_intent_3() {
@@ -303,8 +303,8 @@ const REFUSED_BY_US: &[(&str, &str)] = &[
     // LittleCMS refuses this one too, on its elements, which this step
     // does not read.
     ("d2b0_mpet_empty", "`D2B0` lookup table"),
-    ("grey_lut16", "`A2B0` lookup table"),
-    ("grey_pcs_lab", "`Lab ` connection space"),
+    ("gray_lut16", "`A2B0` lookup table"),
+    ("gray_pcs_lab", "`Lab ` connection space"),
 ];
 
 /// Every profile OpenJPEG converts gives the same samples here. Every
@@ -339,8 +339,8 @@ fn icc_profiles_match_openjpeg() {
                 assert_eq!(image.jp2, coded.jp2, "{what}: metadata as declared");
                 assert!(
                     matches!(
-                        image.jp2.as_ref().unwrap().colour,
-                        ColourSpace::RestrictedIcc(_)
+                        image.jp2.as_ref().unwrap().color,
+                        ColorSpace::RestrictedIcc(_)
                     ),
                     "{what}"
                 );
@@ -362,12 +362,12 @@ fn icc_profiles_match_openjpeg() {
         }
     }
     // RGB profiles at 8 and 16 bits: 24 malformed, 39 edge-case, 15 header,
-    // 25 LittleCMS-reading and 58 class and lookup table ones. Grey: 10
+    // 25 LittleCMS-reading and 58 class and lookup table ones. Gray: 10
     // edge-case, 4 LittleCMS-reading and 13 class and lookup table ones.
     // OpenJPEG leaves 13 of the malformed, 8 of the header, 11 of the
     // LittleCMS-reading and 37 of the class and lookup table RGB ones as
-    // coded, and 3 + 7 grey ones. 11 RGB ones (one of them left as coded by
-    // OpenJPEG) and 2 grey ones are
+    // coded, and 3 + 7 gray ones. 11 RGB ones (one of them left as coded by
+    // OpenJPEG) and 2 gray ones are
     // refused here.
     assert_eq!(
         profiles.cases.len(),
@@ -415,10 +415,10 @@ fn sycc_and_rgb_profiles_on_fewer_than_three_channels_pass_through() {
     let two = read("cblksty_bypass_lossless.j2k");
     for (codestream, channels) in [(&one, 1), (&two, 2)] {
         for (bytes, declared) in [
-            (wrap_sycc(codestream), ColourSpace::Sycc),
+            (wrap_sycc(codestream), ColorSpace::Sycc),
             (
                 wrap(codestream, &file5_profile()),
-                ColourSpace::RestrictedIcc(file5_profile()),
+                ColorSpace::RestrictedIcc(file5_profile()),
             ),
         ] {
             let what = format!("{channels} channels, {declared:?}");
@@ -428,17 +428,17 @@ fn sycc_and_rgb_profiles_on_fewer_than_three_channels_pass_through() {
             assert_eq!(image.components.len(), channels, "{what}");
             assert_eq!(image.components, coded.components, "{what}");
             let jp2 = image.jp2.as_ref().unwrap();
-            assert_eq!(jp2.colour, declared, "{what}");
+            assert_eq!(jp2.color, declared, "{what}");
             assert_eq!(jp2, coded.jp2.as_ref().unwrap(), "{what}");
         }
     }
 }
 
 /// A monochrome profile whose output is not neutral (absolute colorimetric
-/// with a tinted white point) gives R, G and B in place of the grey channel,
-/// and the metadata says so: three colour channels, sRGB.
+/// with a tinted white point) gives R, G and B in place of the gray channel,
+/// and the metadata says so: three color channels, sRGB.
 #[test]
-fn a_tinted_grey_profile_gives_three_colour_channels() {
+fn a_tinted_gray_profile_gives_three_color_channels() {
     let v = variants()
         .into_iter()
         .find(|v| v.file == "files/file8.jp2" && v.variant == "intent3_d65")
@@ -449,44 +449,44 @@ fn a_tinted_grey_profile_gives_three_colour_channels() {
     let image = decode_with(&bytes, &srgb()).unwrap();
     assert_eq!(image.components.len(), 3);
     let jp2 = image.jp2.as_ref().unwrap();
-    assert_eq!(jp2.colour, ColourSpace::Srgb);
+    assert_eq!(jp2.color, ColorSpace::Srgb);
     if !jp2.channels.is_empty() {
-        let colours: Vec<_> = jp2
+        let colors: Vec<_> = jp2
             .channels
             .iter()
             .map(|c| (c.kind, c.association))
             .collect();
         assert_eq!(
-            colours,
-            [1, 2, 3].map(|n| (ChannelType::Colour, Association::Colour(n)))
+            colors,
+            [1, 2, 3].map(|n| (ChannelType::Color, Association::Color(n)))
         );
     }
 }
 
 /// Two components, a monochrome ICC profile and no `cdef`: OpenJPEG reads the
 /// second component as opacity, converts the first, and writes RGBA. The
-/// second component is not a colour channel (I.5.3.6 gives a channel past the
-/// colour space's count no meaning), so the sRGB step converts the first and
+/// second component is not a color channel (I.5.3.6 gives a channel past the
+/// color space's count no meaning), so the sRGB step converts the first and
 /// returns the second as coded, as OpenJPEG does.
 ///
 /// The file is `cblksty_bypass_lossless.j2k` (24x16, 8-bit, two components)
-/// under the `grey_gamma18` (neutral output) and `grey_white_d65` (tinted
+/// under the `gray_gamma18` (neutral output) and `gray_white_d65` (tinted
 /// output) profiles from `icc/profiles.json`. The hashes are the planes of
 /// `opj_decompress -force-rgb` on it (OpenJPEG 2.5.0, LittleCMS 2.14), made
 /// as `scripts/gen-icc-oracles.py` makes its own.
 #[test]
-fn a_grey_profile_on_two_channels_without_cdef_is_grey_plus_opacity() {
+fn a_gray_profile_on_two_channels_without_cdef_is_gray_plus_opacity() {
     const OPACITY: &str = "db57ea4486e47a9ac7d8efd8e7e1d3e0f47e7595abca5d06f6b1d1febe95d39f";
     let codestream = read("cblksty_bypass_lossless.j2k");
     let text = String::from_utf8(read("icc/profiles.json")).unwrap();
     let profiles: Profiles = serde_json::from_str(&text).expect("profiles.json");
     let cases: [(&str, &[&str]); 2] = [
         (
-            "grey_gamma18",
+            "gray_gamma18",
             &["e11e2a6e7b6302d7e67b0617d5df678c2318fe0fffb97f91e684c8fab377ac48"],
         ),
         (
-            "grey_white_d65",
+            "gray_white_d65",
             &[
                 "7df53cf1559167d5f754b7694f3a8bbc25558f007a54e30d447decd1f4a59175",
                 "a9b13cb5073c0b8fe73cef96492fa3c13bf8341789d15554edca8a0c747b7605",
@@ -497,12 +497,12 @@ fn a_grey_profile_on_two_channels_without_cdef_is_grey_plus_opacity() {
     let coded = decode(&codestream).unwrap();
     assert_eq!(coded.components.len(), 2);
     assert_eq!(plane_hash(&coded.components[1]), OPACITY, "the opacity");
-    for (name, colours) in cases {
+    for (name, colors) in cases {
         let case = profiles.cases.iter().find(|c| c.name == name).unwrap();
         let bytes = wrap(&codestream, &hex(&case.profile));
         let image = decode_with(&bytes, &srgb()).unwrap_or_else(|e| panic!("{name}: {e}"));
         let got: Vec<String> = image.components.iter().map(plane_hash).collect();
-        let mut want: Vec<String> = colours.iter().map(|h| h.to_string()).collect();
+        let mut want: Vec<String> = colors.iter().map(|h| h.to_string()).collect();
         want.push(OPACITY.to_string());
         assert_eq!(got, want, "{name}");
         let header = rust_j2k::read_header_with(&bytes, &srgb()).unwrap();
@@ -515,8 +515,8 @@ fn a_grey_profile_on_two_channels_without_cdef_is_grey_plus_opacity() {
             .iter()
             .map(|c| (c.kind, c.association))
             .collect();
-        let mut expect: Vec<_> = (1..=colours.len() as u16)
-            .map(|n| (ChannelType::Colour, Association::Colour(n)))
+        let mut expect: Vec<_> = (1..=colors.len() as u16)
+            .map(|n| (ChannelType::Color, Association::Color(n)))
             .collect();
         expect.push((ChannelType::Unspecified, Association::None));
         assert_eq!(labels, expect, "{name}: labels");
@@ -560,7 +560,7 @@ fn cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
     bx(b"cdef", &payload)
 }
 
-/// Colours 1, 2, 3 and an opacity channel for the whole image.
+/// Colors 1, 2, 3 and an opacity channel for the whole image.
 const RGBA_CDEF: &[(u16, u16, u16)] = &[(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 1, 0)];
 
 /// A JP2 file around `codestream` with `profile` in its `colr` and the
@@ -613,12 +613,12 @@ fn check_afl(what: &str, bytes: &[u8], want: &[&str], converted: bool) {
     let jp2 = image.jp2.as_ref().unwrap();
     if converted {
         assert_ne!(image.components, coded.components, "{what}: converted");
-        assert_eq!(jp2.colour, ColourSpace::Srgb, "{what}");
+        assert_eq!(jp2.color, ColorSpace::Srgb, "{what}");
     } else {
         assert_eq!(image.components, coded.components, "{what}: as coded");
         assert_eq!(image.jp2, coded.jp2, "{what}: metadata as declared");
         assert!(
-            matches!(jp2.colour, ColourSpace::RestrictedIcc(_)),
+            matches!(jp2.color, ColorSpace::RestrictedIcc(_)),
             "{what}: the profile stays"
         );
     }
@@ -727,7 +727,7 @@ fn an_rgb_profile_passes_through_when_the_first_four_channels_differ() {
     for (what, bytes, want) in cases {
         check_afl(what, &bytes, &want, false);
     }
-    // On three channels the test covers the colours themselves.
+    // On three channels the test covers the colors themselves.
     check_afl(
         "blue_signed",
         &wrap_with(&blue, &rgb, &[]),
@@ -745,12 +745,12 @@ fn an_rgb_profile_passes_through_when_the_first_four_channels_differ() {
 /// The AFL test comes before LittleCMS builds the transform, so before every
 /// check this decoder makes on the profile and the channels: a lookup-table
 /// or Lab profile (refused here, converted by OpenJPEG when the channels
-/// match) and a `cdef` of two colours (refused here) pass through when the
+/// match) and a `cdef` of two colors (refused here) pass through when the
 /// fourth channel differs, as in `opj_decompress`.
 #[test]
 fn the_afl_test_comes_before_this_decoders_refusals() {
     let signed = with_ssiz(&rgba(), 3, SIGNED_8);
-    let two_colours = [cdef(&[(0, 0, 1), (1, 0, 2), (2, 1, 0), (3, 1, 0)])];
+    let two_colors = [cdef(&[(0, 0, 1), (1, 0, 2), (2, 1, 0), (3, 1, 0)])];
     let signed_planes = [
         RGB_AS_CODED[0],
         RGB_AS_CODED[1],
@@ -769,8 +769,8 @@ fn the_afl_test_comes_before_this_decoders_refusals() {
             &signed_planes,
         ),
         (
-            "order_two_colours",
-            wrap_with(&signed, &file5_profile(), &two_colours),
+            "order_two_colors",
+            wrap_with(&signed, &file5_profile(), &two_colors),
             &signed_planes,
         ),
     ];
@@ -789,8 +789,8 @@ fn the_afl_test_comes_before_this_decoders_refusals() {
             "`Lab ` connection space",
         ),
         (
-            wrap_with(&rgba, &file5_profile(), &two_colours),
-            "needs colour channels 1, 2 and 3",
+            wrap_with(&rgba, &file5_profile(), &two_colors),
+            "needs color channels 1, 2 and 3",
         ),
     ] {
         match decode_with(&bytes, &srgb()) {
@@ -814,7 +814,7 @@ fn the_afl_test_covers_only_rgb_profiles_and_four_channels() {
         (3, 1, 0),
         (4, 1, 0),
     ])];
-    let grey_alpha = with_ssiz(&read("cblksty_bypass_lossless.j2k"), 1, SIGNED_8);
+    let gray_alpha = with_ssiz(&read("cblksty_bypass_lossless.j2k"), 1, SIGNED_8);
     let rgba_planes: &[&str] = &[
         "2e04f36cb26f7c503ac424f3cbb48e2286722ef39dd47f0bf1df96c2326e8cc8",
         "51d9b1ebd7d82216021780370e40ef2423bd76c1f402716ee712c8cde32270dc",
@@ -846,8 +846,8 @@ fn the_afl_test_covers_only_rgb_profiles_and_four_channels() {
             fifth_planes,
         ),
         (
-            "grey_alpha_signed",
-            wrap_with(&grey_alpha, &named_profile("grey_white_d65"), &[]),
+            "gray_alpha_signed",
+            wrap_with(&gray_alpha, &named_profile("gray_white_d65"), &[]),
             &[
                 "7df53cf1559167d5f754b7694f3a8bbc25558f007a54e30d447decd1f4a59175",
                 "a9b13cb5073c0b8fe73cef96492fa3c13bf8341789d15554edca8a0c747b7605",
@@ -865,7 +865,7 @@ fn the_afl_test_covers_only_rgb_profiles_and_four_channels() {
     ycbr[16..20].copy_from_slice(b"YCbr");
     let signed = with_ssiz(&rgba(), 3, SIGNED_8);
     match decode_with(&wrap_with(&signed, &ycbr, &[cdef(RGBA_CDEF)]), &srgb()) {
-        Err(Error::Unsupported(e)) => assert!(e.contains("`YCbr` colour space"), "{e}"),
+        Err(Error::Unsupported(e)) => assert!(e.contains("`YCbr` color space"), "{e}"),
         other => panic!("expected the YCbCr refusal, got {other:?}"),
     }
 }

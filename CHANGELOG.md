@@ -34,25 +34,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expanded channels count against the same sample budget as the codestream
   (`Error::Limit`), so while the decoded components are still held a palette
   can briefly take about twice the budget (~512 MiB of `i32`).
-- A JP2 file with channel definitions (`cdef`) puts its colour channels in
-  colour order and labels every channel on `Jp2Metadata::channels` with its
+- A JP2 file with channel definitions (`cdef`) puts its color channels in
+  color order and labels every channel on `Jp2Metadata::channels` with its
   type and association. What is accepted and the output order follow
-  OpenJPEG: each colour entry moves its channel to its colour's position, and
+  OpenJPEG: each color entry moves its channel to its color's position, and
   other channels stay where the file put them. The entries describe the
   channels after the palette. Without a `cdef` (or under `raw_channels`),
-  only the first N channels are colours, N being the colour space's
-  number of colours (3 for sRGB and sYCC, 1 for greyscale, the profile's for
+  only the first N channels are colors, N being the color space's
+  number of colors (3 for sRGB and sYCC, 1 for grayscale, the profile's for
   an ICC profile); any channel past them is `Unspecified` with no
   association, since I.5.3.6 gives it no meaning. This also lets a file of
-  two components, a greyscale ICC profile and no `cdef` convert under
-  `ColourOutput::Srgb` as grey plus opacity, and an sRGB file of four
-  components whose fourth differs in format from the colours passes through
-  as coded, as OpenJPEG does. A file declared sRGB or greyscale on three
+  two components, a grayscale ICC profile and no `cdef` convert under
+  `ColorOutput::Srgb` as gray plus opacity, and an sRGB file of four
+  components whose fourth differs in format from the colors passes through
+  as coded, as OpenJPEG does. A file declared sRGB or grayscale on three
   components is still refused, whatever its `cdef` labels or without one,
   where `opj_decompress` would convert it as sYCC (4:2:0 or 4:2:2).
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
   coded, without the palette or channel definitions. The index plane is then
-  labelled `ChannelType::Unspecified`, and only the boxes' layout is checked.
+  labeled `ChannelType::Unspecified`, and only the boxes' layout is checked.
 - `read_header_with` reads the header for a given `DecodeOptions`: it fails
   exactly when `decode_with` does for a fault in the boxes or the main header
   (a palette `cmap` that `raw_channels` leaves unchecked, a palette that fits
@@ -66,11 +66,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   options: they follow the image origin (`ceil(x1/dx) - ceil(x0/dx)`, not
   `ceil(width/dx)`), the resolution reduction, the palette and channel
   definitions, and the sRGB conversion (sYCC chroma on the luma grid).
-- `Association` has three cases: `WholeImage` (`Asoc` 0), `Colour(n)` (1 to
+- `Association` has three cases: `WholeImage` (`Asoc` 0), `Color(n)` (1 to
   65534) and `None` (65535). Every `Asoc` value maps to one of them.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
-  the samples (`None` for a raw codestream), with `ColourSpace`,
-  `ChannelDefinition`, `ChannelType`, and `Association`. The colour space
+  the samples (`None` for a raw codestream), with `ColorSpace`,
+  `ChannelDefinition`, `ChannelType`, and `Association`. The color space
   comes from the first usable `colr` box (`METH` 1 or 2); the ICC profile
   bytes of a `METH` 2 box are returned as they are, not applied. A `colr`
   shorter than 3 bytes, a `METH` 1 box without its `EnumCS`, a `METH` 2 box
@@ -83,7 +83,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   short still has a readable header. A header fault is the same error
   `decode` returns.
 - `Jp2Metadata` reports the `res ` box's capture and display resolutions
-  (`Resolution`, `Res`, `Ratio`, with `Ratio::grid_points_per_metre`), and
+  (`Resolution`, `Res`, `Ratio`, with `Ratio::grid_points_per_meter`), and
   every top-level `xml ` and `uuid` box verbatim (`UuidBox`), including those
   after the codestream. A malformed `res ` never fails a decode, as in
   OpenJPEG.
@@ -97,55 +97,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bytes, or a bad box inside it) is left out and never fails a decode, as
   OpenJPEG skips the box.
 - `Jp2Metadata` reports the rest of the JP2 header: `image_header`
-  (`ImageHeader`: the `ihdr` compression type, unknown-colour-space flag and
-  `IPR` flag), `colour_specifications` (every `colr` box in file order as a
-  `ColourSpecification`, with its method, precedence, approximation and
-  contents; the first usable one still sets `colour`), `file_type`
+  (`ImageHeader`: the `ihdr` compression type, unknown-color-space flag and
+  `IPR` flag as `ipr_flag`), `color_specifications` (every `colr` box in file
+  order as a `ColorSpecification`, with its method, precedence, approximation
+  and the bytes after them as `payload`; the first usable one still sets
+  `color`), `file_type`
   (`FileType`: the `ftyp` brand, minor version and compatibility list) and
   `reader_requirements` (`ReaderRequirements`, with `StandardFeature` and
   `VendorFeature`: the first top-level `rreq` box's masks and features). A
   malformed `rreq` is left out and never fails a decode, as OpenJPEG skips
   the box.
-- `DecodeOptions::colour` takes a `ColourOutput`. The default, `AsCoded`,
+- `DecodeOptions::color` takes a `ColorOutput`. The default, `AsCoded`,
   returns the samples as the file codes them. `Srgb` converts a JP2 file's
-  colour channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to
+  color channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to
   full resolution first), and a restricted ICC profile (monochrome or
   three-component matrix/TRC) applied at its rendering intent, with the
   same output as OpenJPEG with LittleCMS, sample for sample. The reference
   is OpenJPEG 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc
   2.39), and the output is the same on every platform whose `fma` is
   correctly rounded (MinGW's, on `*-pc-windows-gnu`, may not be:
-  rust-lang/rust#140515). sRGB and greyscale pass through. One or two
-  channels pass through as coded whatever the colour space (sRGB with two
+  rust-lang/rust#140515). sRGB and grayscale pass through. One or two
+  channels pass through as coded whatever the color space (sRGB with two
   channels of different depth or sign included), as OpenJPEG reads them as
-  grey, unless a monochrome profile converts them (8-bit unsigned only).
+  gray, unless a monochrome profile converts them (8-bit unsigned only).
   So do a profile LittleCMS
   refuses to open or to build a transform from (a bad header, a class or
   intent it does not know, a missing or unreadable tag, a lookup table it
-  can't read), and a profile in a colour space other than RGB, grey or
+  can't read), and a profile in a color space other than RGB, gray or
   YCbCr, as OpenJPEG leaves them; the metadata then keeps the profile. So
   does an RGB profile when any of the first four channels (all of them, if
   fewer) differs from the first in depth, sign or sub-sampling, an opacity
   channel included, since OpenJPEG then skips the conversion. These, and a profile on one or two channels, pass
   through before any check on the samples, as in OpenJPEG, except on a
   three-channel 4:2:0 or 4:2:2 image, which is refused first.
-  Display, output and colour space profiles convert as input ones do. After a conversion `Jp2Metadata::colour`
-  says sRGB, or greyscale for a monochrome profile whose output is neutral.
+  Display, output and color space profiles convert as input ones do. After a conversion `Jp2Metadata::color`
+  says sRGB, or grayscale for a monochrome profile whose output is neutral.
   A monochrome profile whose output is not neutral (absolute colorimetric
   with a tinted white point) gives three sRGB channels, as OpenJPEG does, so
-  the channel count can't be predicted from the header. Other colour
+  the channel count can't be predicted from the header. Other color
   spaces, a YCbCr profile, a profile LittleCMS would apply through a lookup
   table or the Lab connection space, a monochrome profile on more than two
-  channels, and colour channels that differ in depth, sign or sub-sampling
+  channels, and color channels that differ in depth, sign or sub-sampling
   (under an RGB profile, only 4:2:0 and 4:2:2, below) are `Unsupported`;
   `Srgb` with `raw_channels` is `InvalidOptions`. OpenJPEG converts any
-  three-component 4:2:0 or 4:2:2 file as sYCC, whatever colour space it
+  three-component 4:2:0 or 4:2:2 file as sYCC, whatever color space it
   declares, even under an ICC profile LittleCMS refuses; `Srgb` refuses it
   instead.
-- `DecodeOptions::with_raw_channels` and `DecodeOptions::with_colour` set
+- `DecodeOptions::with_raw_channels` and `DecodeOptions::with_color` set
   those options like `with_resolution_reduction` does; the fields stay public.
-- `ColourSpace`, `ColourOutput`, `Resolution`, `Res`, `Ratio` and `UuidBox` are
-  `#[non_exhaustive]`, so later variants and fields (a JPX colour method, an
+- `ColorSpace`, `ColorOutput`, `Resolution`, `Res`, `Ratio` and `UuidBox` are
+  `#[non_exhaustive]`, so later variants and fields (a JPX color method, an
   output ICC profile) are not breaking changes. Match them with a `_` arm, and
   read the structs' fields rather than building them.
 - `Jp2Metadata::palette` and `Jp2Metadata::channel_mapping` give the file's
@@ -191,7 +192,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Breaking: `DecodeOptions` and `ColourOutput` are no longer `Copy`, so a
+- The crate uses American spellings: color, gray, grayscale, -ize, behavior,
+  center. Every public name added in this release is spelled that way
+  (`ColorSpace`, `ColorSpace::Grayscale`, `ColorOutput`,
+  `ColorSpecification`, `DecodeOptions::color` and `with_color`,
+  `Jp2Metadata::color` and `color_specifications`,
+  `ImageHeader::unknown_color_space`, `ChannelType::Color`,
+  `Association::Color`, `Ratio::grid_points_per_meter`); none of these
+  existed in 0.3.0. Error messages use the same spellings, so text such as
+  "the color transform needs three components" changed from 0.3.0's
+  "colour". Box types, field names and spec titles stay as ISO writes them
+  (`colr`, `EnumCS`, "Colour Specification box").
+- Breaking: `DecodeOptions` and `ColorOutput` are no longer `Copy`, so a
   later option can carry data (an output ICC profile). Both stay `Clone`;
   clone them where you reuse one.
 - A code-block size past the limit in a main-header COD is now refused when

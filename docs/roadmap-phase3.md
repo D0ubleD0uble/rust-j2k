@@ -21,7 +21,7 @@ Phase 2 built. The day-to-day oracle stays `opj_decompress`.
 
 Settled while planning, on 2026-10-31:
 
-1. **Colour conversion is in this phase, and the phase ships as one release.**
+1. **Color conversion is in this phase, and the phase ships as one release.**
    The opt-in sRGB output (P3.6: sYCC to RGB, restricted ICC to sRGB) ships
    with the rest of JP2 support in 0.4.0, and the phase gate is all nine Part 4
    JP2 files. There is no interim JP2 release.
@@ -56,12 +56,12 @@ exposes what the wrapper says about the samples:
   64-bit `XLBox` lengths; a last box of unknown length; unknown boxes skipped;
 - the **image header** (`ihdr`) and per-component depths (`bpcc`), cross-checked
   against SIZ;
-- the **colour specification** (`colr`): enumerated sRGB / greyscale / sYCC, and
+- the **color specification** (`colr`): enumerated sRGB / grayscale / sYCC, and
   a restricted ICC profile carried through as bytes;
 - **palette expansion** (`pclr` + `cmap`): a one-component index plane becomes
   the palette's channels, the way every JP2 reader (and OpenJPEG) presents it;
-- **channel definitions** (`cdef`): colour channels put into colour order, and
-  opacity / premultiplied-opacity channels labelled;
+- **channel definitions** (`cdef`): color channels put into color order, and
+  opacity / premultiplied-opacity channels labeled;
 - **resolution** (`res`: `resc`, `resd`), and the `xml ` / `uuid` metadata boxes
   passed through as bytes;
 - an opt-in **sRGB output** step: sYCC → RGB with chroma replication, and the
@@ -83,20 +83,20 @@ vendored Part 1 corpus; their references are `baseline/conformance/jp2_N.tif`,
 
 | File | Boxes beyond the minimum | Codestream | What it grades | Raw jp2c decode vs reference |
 | ---- | ------------------------ | ---------- | -------------- | ---------------------------- |
-| file1 | `colr` sRGB (16); `xml ` before and after `jp2h` | 3×8-bit, RCT | box walk, enumerated colour, unknown-box skip | bit-exact |
-| file2 | `colr` sYCC (18); `cdef` mapping comps 0,1,2 → colours 3,2,1 | 3×8-bit, no MCT | cdef reorder (stored Cr,Cb,Y), sYCC → RGB | PAE 127–197 |
+| file1 | `colr` sRGB (16); `xml ` before and after `jp2h` | 3×8-bit, RCT | box walk, enumerated color, unknown-box skip | bit-exact |
+| file2 | `colr` sYCC (18); `cdef` mapping comps 0,1,2 → colors 3,2,1 | 3×8-bit, no MCT | cdef reorder (stored Cr,Cb,Y), sYCC → RGB | PAE 127–197 |
 | file3 | `colr` sYCC (18) | 3×8-bit, comps 1–2 sub-sampled 2×2 | chroma replication, sYCC → RGB | n/a (needs upsampling) |
-| file4 | `colr` greyscale (17) | 1×8-bit | greyscale | bit-exact (reference repeats the channel ×3) |
+| file4 | `colr` grayscale (17) | 1×8-bit | grayscale | bit-exact (reference repeats the channel ×3) |
 | file5 | brand `jpx ` with `jp2 ` in the compatibility list; `rreq`; `colr` restricted ICC (RGB, gamma 1.8, wide primaries); second `colr` enum 21 | 3×8-bit, RCT | JP2-compatible JPX brand, ICC → sRGB, ignore the second `colr` | PAE 126 |
-| file6 | `colr` greyscale | 1×12-bit | 12-bit grey; reference is `>> 4` | bit-exact after `>> 4` |
+| file6 | `colr` grayscale | 1×12-bit | 12-bit gray; reference is `>> 4` | bit-exact after `>> 4` |
 | file7 | brand `jpx ` + `jp2 `; `rreq`; `colr` restricted ICC (16-bit RGB, 2048-entry curves); second `colr` enum 20 | 3×16-bit, RCT | 16-bit ICC → sRGB, then `>> 8` | PAE 96 |
-| file8 | `colr` restricted ICC (monochrome, kTRC gamma 1.8); `xml ` after `jp2c` | 1×8-bit | grey ICC → sRGB tone curve; boxes after the codestream | n/a (1 vs 3 channels) |
+| file8 | `colr` restricted ICC (monochrome, kTRC gamma 1.8); `xml ` after `jp2c` | 1×8-bit | gray ICC → sRGB tone curve; boxes after the codestream | n/a (1 vs 3 channels) |
 | file9 | `pclr` 256×3 @ 8-bit; `cmap` three channels from component 0; `colr` sRGB | 1×8-bit index plane | palette expansion | n/a (1 vs 3 channels) |
 
 Two consequences shape the plan:
 
 - **The reference is display output, not coded samples.** Files 2, 3, 5, 7 and
-  8 can only be graded against the ISO images after a colour conversion. The
+  8 can only be graded against the ISO images after a color conversion. The
   box, palette and cdef work grades files 1, 4, 6 and 9 on its own; the sRGB
   step (P3.6) is what unlocks the other five.
 - **OpenJPEG's own bar is PAE ≤ 4, MSE ≤ 1 per channel** (its
@@ -151,8 +151,8 @@ One struct, `#[non_exhaustive]`, plain data a caller can match on:
 
 ```rust
 pub struct Jp2Metadata {
-    /// The first usable colour specification box, which is the one a JP2 reader uses.
-    pub colour: ColourSpace,
+    /// The first usable color specification box, which is the one a JP2 reader uses.
+    pub color: ColorSpace,
     /// One entry per `components` entry, after palette and cdef application.
     pub channels: Vec<ChannelDefinition>,
     /// Whether the samples went through the palette (false when the caller
@@ -163,9 +163,9 @@ pub struct Jp2Metadata {
     pub uuid: Vec<UuidBox>,              // every `uuid` box: 16-byte id + payload
 }
 
-pub enum ColourSpace {
+pub enum ColorSpace {
     Srgb,                                // EnumCS 16
-    Greyscale,                           // EnumCS 17
+    Grayscale,                           // EnumCS 17
     Sycc,                                // EnumCS 18
     /// METH 2: a restricted ICC profile (monochrome or three-component
     /// matrix/TRC input profile), bytes verbatim. Not applied unless asked.
@@ -179,17 +179,17 @@ pub enum ColourSpace {
 }
 
 pub struct ChannelDefinition { pub kind: ChannelType, pub association: Association }
-pub enum ChannelType { Colour, Opacity, PremultipliedOpacity, Unspecified, Other(u16) }
-pub enum Association { WholeImage, Colour(u16), None, Other(u16) }
+pub enum ChannelType { Color, Opacity, PremultipliedOpacity, Unspecified, Other(u16) }
+pub enum Association { WholeImage, Color(u16), None, Other(u16) }
 
 pub struct Resolution { pub capture: Option<Res>, pub display: Option<Res> }
-pub struct Res { pub vertical: Ratio, pub horizontal: Ratio }   // N/D × 10^E grid points per metre
+pub struct Res { pub vertical: Ratio, pub horizontal: Ratio }   // N/D × 10^E grid points per meter
 ```
 
 Decisions baked in, each with its reason:
 
 - **ICC is passthrough by default, conversion opt-in.** A viewer (openreadout)
-  or a PDF engine (pdfcer) wants the profile bytes to hand to its own colour
+  or a PDF engine (pdfcer) wants the profile bytes to hand to its own color
   management; forcing a conversion would destroy information they need. The
   conversion exists (P3.6) because the Part 4 references require it, and it is
   gated by a `DecodeOptions` field.
@@ -197,18 +197,18 @@ Decisions baked in, each with its reason:
   channels; the index plane is an encoding detail. OpenJPEG applies it unless
   told `OPJ_DPARAMETERS_IGNORE_PCLR_CMAP_CDEF_FLAG`; we mirror that with
   `DecodeOptions::raw_channels`.
-- **`cdef` is applied by default**, with OpenJPEG's placement rule: colour
-  channels are swapped into their `Asoc` order (so component 0 is colour 1, etc.)
-  and non-colour channels stay where the file put them. For the common RGBA
+- **`cdef` is applied by default**, with OpenJPEG's placement rule: color
+  channels are swapped into their `Asoc` order (so component 0 is color 1, etc.)
+  and non-color channels stay where the file put them. For the common RGBA
   layout this is the identity; for file2 it reverses the three channels. The
   definitions ride along in `jp2.channels`, so a caller can always tell.
 - **Only the first `colr` counts** (I.5.3.3: a conforming reader ignores the
   rest). `METH > 2` makes the whole box ignorable; if nothing usable is left,
-  `ColourSpace::Unknown`.
+  `ColorSpace::Unknown`.
 - **`ihdr.BPC` and `bpcc` are read and cross-checked but SIZ is the truth** for
   depth and sign, as in OpenJPEG. Width/height must agree with SIZ; the
   component count need not, as in OpenJPEG (below).
-- **No colour conversion changes `bit_depth`.** sRGB output of a 16-bit ICC file
+- **No color conversion changes `bit_depth`.** sRGB output of a 16-bit ICC file
   is 16-bit sRGB; the harness does the `>> 8` the ISO references need.
 
 ### `DecodeOptions` grows two fields
@@ -219,15 +219,15 @@ pub struct DecodeOptions {
     /// Skip palette expansion and cdef reorder: `components` are the SIZ
     /// components as coded. Default false.
     pub raw_channels: bool,
-    /// What colour space the colour channels come out in. Default `AsCoded`.
-    pub colour: ColourOutput,
+    /// What color space the color channels come out in. Default `AsCoded`.
+    pub color: ColorOutput,
 }
-pub enum ColourOutput {
+pub enum ColorOutput {
     /// The samples as the codestream coded them (after palette and cdef).
     AsCoded,
     /// sRGB: sYCC is converted (sub-sampled chroma replicated to full
     /// resolution first), a restricted ICC profile is applied, sRGB and
-    /// greyscale pass through. Anything else (`Enumerated`, `Unknown`) is
+    /// grayscale pass through. Anything else (`Enumerated`, `Unknown`) is
     /// `Error::Unsupported`.
     Srgb,
 }
@@ -269,7 +269,7 @@ for the same header fault. It lands in P3.5 (decision 5).
 
 Phase 3 ships as **0.4.0**. All changes are additive on `#[non_exhaustive]`
 types, but a new container decoding where it used to be refused is a
-behaviour change worth a minor bump.
+behavior change worth a minor bump.
 
 ## Build order and why
 
@@ -282,7 +282,7 @@ bytes ─▶ jp2 boxes ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequ
 
 Nothing between `codestream` and `MCT` changes. The new work is a `src/jp2/`
 module (box reader, header boxes, palette, channel definitions, metadata), a
-`src/colour.rs` (or `src/jp2/srgb.rs`) for the opt-in conversion, and the
+`src/color.rs` (or `src/jp2/srgb.rs`) for the opt-in conversion, and the
 glue in `lib.rs`. The build rule from Phases 1 and 2 holds: build in the order
 each addition can be proven against an oracle before the next sits on top.
 
@@ -297,7 +297,7 @@ P3.0 harness ─ P3.1 boxes + ihdr + jp2c + auto-detect ─┬─ P3.2 colr/bpcc
 Three tracks after P3.1: the **metadata track** (P3.2, P3.5), the **channel
 track** (P3.3, P3.4), and the **robustness track** (P3.7). They touch disjoint
 code and can run in parallel in worktrees. P3.6 waits on P3.2 (it needs the
-colour space and ICC bytes) and P3.4 (file2 needs cdef applied before sYCC).
+color space and ICC bytes) and P3.4 (file2 needs cdef applied before sYCC).
 
 ## Milestones
 
@@ -311,9 +311,9 @@ the way P2.0 stood up the Part 1 harness.
   (4.4 MB) with the same `COPYRIGHT` and the same `exclude` in `Cargo.toml`.
   Extend `regenerate.py` to fetch them from the pinned commit and to convert
   each `jp2_N.tif` reference into 8-bit `.pgx` planes the existing PGX reader
-  consumes: three planes for colour files, one for the greyscale files 4, 6, 8
+  consumes: three planes for color files, one for the grayscale files 4, 6, 8
   (their three TIFF channels are identical; measured). About 7.4 MB of PGX.
-- A manifest section per entry: boxes present, colour method, codestream
+- A manifest section per entry: boxes present, color method, codestream
   features, graded channel count, `bit_exact` (files 1, 4, 6, 9), bounds PAE 4 /
   MSE 1 otherwise, and the **output depth scaling** the reference needs
   (`shift_right`: 4 for file6, 8 for file7; the ISO reference is OpenJPEG's
@@ -348,7 +348,7 @@ machinery.
 - `jp2h`: `ihdr` must be present and first (14 bytes); `HEIGHT`/`WIDTH` must
   equal the SIZ image area, else `FileFormat` (`NC` may differ from `Csiz`,
   as in OpenJPEG; relaxed in P3.5 by owner decision, 2026-11-01). The
-  other `jp2h` boxes are recognised and parked for P3.2–P3.5.
+  other `jp2h` boxes are recognized and parked for P3.2–P3.5.
 - Until P3.3 and P3.4 land, a `jp2h` holding `pclr`, `cmap` or `cdef` is
   `Error::Unsupported` naming the box, so `main` never decodes a JP2 it would
   present wrongly (decision 3). Each of those milestones lifts its own
@@ -356,7 +356,7 @@ machinery.
 - `decode` sniffs the two magics and dispatches. The `JP2_SIGNATURE` reject in
   `codestream::parse` goes away; the reject-matrix row moves to the new
   `FileFormat`/`Unsupported` rows.
-- `Image.jp2 = Some(Jp2Metadata { colour: Unknown, channels: one Colour entry
+- `Image.jp2 = Some(Jp2Metadata { color: Unknown, channels: one Color entry
   per component, .. })` as the skeleton the later milestones fill in.
 
 **Oracle:** the Part 4 references for files 1, 4 and 6 (no conversion needed;
@@ -372,9 +372,9 @@ openreadout's `jp2_boxes_are_unwrapped` shape (signature + ftyp + jp2c, no
 jpeg codestream"), and I.5.3 requires `jp2h`, so openreadout's test fixture
 needs a `jp2h` with an `ihdr` to decode through `decode`.
 
-### P3.2 — Colour specification and `bpcc` (`src/jp2/`)
+### P3.2 — Color specification and `bpcc` (`src/jp2/`)
 
-**Goal:** `Jp2Metadata.colour` is right for every `colr` form, and ICC bytes
+**Goal:** `Jp2Metadata.color` is right for every `colr` form, and ICC bytes
 reach the caller untouched.
 
 **Work:** parse `colr` (`METH`, `PREC`, `APPROX`, then `EnumCS` or the ICC
@@ -384,16 +384,16 @@ from it beyond a consistency check against SIZ (SIZ is the truth).
 
 **Oracle:** the box bytes themselves. Assert file8's profile is the 414 bytes
 in the box, file5's 546, file7's 13332; files 1 and 9 are `Srgb`, 2 and 3
-`Sycc`, 4, 6 and 8 `Greyscale`/`RestrictedIcc`; GDAL's `jpx_disguised_as_jp2`
+`Sycc`, 4, 6 and 8 `Grayscale`/`RestrictedIcc`; GDAL's `jpx_disguised_as_jp2`
 shape (`METH 3`) comes out `Unknown`. No new conformance entry turns green
 here; this milestone is metadata.
 
-**Done (#176):** every fixture's `colour` matches its box dump; `bpcc` length faults
+**Done (#176):** every fixture's `color` matches its box dump; `bpcc` length faults
 are `FileFormat`.
 
 ### P3.3 — Palette expansion: `pclr` + `cmap` (`src/jp2/palette.rs`)
 
-**Goal:** a palettised JP2 decodes to the palette's channels.
+**Goal:** a palettized JP2 decodes to the palette's channels.
 
 **Work:** parse `pclr` (`NE` 1..=1024, `NPC` 1..=255, `Bi` depth/sign per
 column, entries at `ceil((Bi+1)/8)` bytes each) and `cmap` (`CMP`, `MTYP`,
@@ -419,21 +419,21 @@ decode, since the oracle rejects the file). The rest grade against
 
 ### P3.4 — Channel definitions: `cdef` (`src/jp2/channels.rs`)
 
-**Goal:** colour channels come out in colour order and alpha is labelled.
+**Goal:** color channels come out in color order and alpha is labeled.
 
 **Work:** parse `cdef` (`N`, then `Cn`, `Typ`, `Asoc` triples). Validate
 against the channel count *after* palette expansion: `Cn` out of range,
 `Asoc - 1` out of range, or an incomplete list (a channel with no definition;
 OpenJPEG rejects per its issue 397) are `FileFormat`. Apply OpenJPEG's
-placement: swap colour channels (`Typ 0`) into `Asoc` order, leave the rest
+placement: swap color channels (`Typ 0`) into `Asoc` order, leave the rest
 in place, fill `jp2.channels`. Without a `cdef`, every channel is
-`Colour`/`Colour(i+1)`.
+`Color`/`Color(i+1)`.
 
 **Oracle:** `opj_decompress` on synthetic fixtures: RGBA (opj_compress
 writes `cdef` for a PNG with alpha), the file2 reversed layout rebuilt over a
 lossless codestream, a `Typ 65535` "unspecified" layout (ECW SDK writes this;
 GDAL's `rgb16_ecwsdk.jp2`), and a 1-bit alpha with `bpcc` (GDAL's
-`3_13bit_and_1bit.jp2`, 13-bit colour + 1-bit alpha). `file2` itself grades
+`3_13bit_and_1bit.jp2`, 13-bit color + 1-bit alpha). `file2` itself grades
 only after P3.6.
 
 **Done (#180):** every `cdef` fixture matches the oracle's channel order and depth,
@@ -464,7 +464,7 @@ GeoJP2 `uuid` payloads, GML `asoc` trees) and the Part 4 files' `xml ` boxes.
 
 ### P3.6 — sRGB output: sYCC and restricted ICC (`src/jp2/srgb.rs`)
 
-**Goal:** `ColourOutput::Srgb` reproduces the Part 4 JP2 reader references.
+**Goal:** `ColorOutput::Srgb` reproduces the Part 4 JP2 reader references.
 
 **Work:**
 - **sYCC → RGB** (IEC 61966-2-1 Amd 1): offset `Cb`/`Cr` by `2^(depth-1)`,
@@ -476,17 +476,17 @@ GeoJP2 `uuid` payloads, GML `asoc` trees) and the Part 4 files' `xml ` boxes.
   profile forms, and both are closed-form: *monochrome* (`kTRC` only) and
   *three-component matrix/TRC* (`rXYZ gXYZ bXYZ` + `rTRC gTRC bTRC`, D50 PCS).
   Parse just those tags (a `curv` of 0 entries is identity, 1 entry is a
-  `u8.8` gamma, n entries a table; `para` for v4 parametric curves); linearise;
+  `u8.8` gamma, n entries a table; `para` for v4 parametric curves); linearize;
   matrix to XYZ(D50); multiply by the inverse of the D50-adapted sRGB matrix
   (the one lcms builds, so no separate chromatic adaptation step); encode with
   the sRGB curve; round. For monochrome, `kTRC` then the sRGB curve gives one
-  grey channel. Any other profile class or tag set is `Unsupported` (it is not a
+  gray channel. Any other profile class or tag set is `Unsupported` (it is not a
   restricted profile, so not a JP2).
   Shipped differently (#187): the closed form came within 1 of OpenJPEG but
-  not exact, so `src/jp2/lcms.rs` ports the pipeline and optimisations
+  not exact, so `src/jp2/lcms.rs` ports the pipeline and optimizations
   LittleCMS 2.14 builds for these profiles, at every intent from 0 to 3, and
   matches `opj_decompress -force-rgb` sample for sample.
-- Everything else: `Srgb` and `Greyscale` pass through; `Enumerated(_)` and
+- Everything else: `Srgb` and `Grayscale` pass through; `Enumerated(_)` and
   `Unknown` are `Unsupported` under `Srgb`.
 
 **Oracle:** the Part 4 references for files 2, 3, 5, 7, 8 (PAE 4 / MSE 1). The
@@ -504,7 +504,7 @@ pinned error.
 
 **Work:** a `jp2_boxes` fuzz target that wraps a pinned valid codestream in
 fuzzed boxes (the `tile_body` pattern: the fuzzer reaches the box reader
-without synthesising a codestream), a `jp2.dict` of box types and the
+without synthesizing a codestream), a `jp2.dict` of box types and the
 signature, a seed corpus of the nine Part 4 files plus the synthetic
 fixtures; the `decode` target's corpus gains the small real-world files. The
 reject matrix in `src/jp2/tests.rs` pins each row of the table below.
@@ -551,7 +551,7 @@ Candidates from GDAL (all under 30 KB): `byte.jp2`, `byte_tlm_plt.jp2` (`resc`),
 (`cdef` alpha), `3_13bit_and_1bit.jp2` (`bpcc`, 13-bit + 1-bit alpha),
 `int16.jp2` (signed), `byte_with_xmp.jp2` (`asoc`/`lbl `/`xml `, two `uuid`).
 Their oracle is `opj_decompress` on the `.jp2`, recorded as `.expected.json`
-with a new optional `jp2` section (colour, channels, resolution) that
+with a new optional `jp2` section (color, channels, resolution) that
 `tests/support/mod.rs`'s `Expected` gains; `deny_unknown_fields` stays.
 
 Not vendored: `openpreserve/jpylyzer-test-files` (per-file licensing is mixed
@@ -602,13 +602,13 @@ so and why we differ (or do not).
 | `colr METH 1` with bytes past `EnumCS`, or a short `METH 2` profile | accepted | accepted | none; `RestrictedIcc` holds whatever follows the 3 header bytes |
 | `bpcc` not `NC` bytes | error, on every `bpcc` before the codestream, whatever `ihdr.BPC` is; a `bpcc` before `ihdr` sees `NC` as 0 | reject | `FileFormat`; the same shapes after `jp2c`: see the row on boxes after `jp2c` |
 | `ihdr.UnkC = 1` with a `colr` | `UnkC` read, never used | `colr` value reported | none (match oracle; I.5.3.1) |
-| No `colr` at all | decodes, colour unknown | decodes, `Unknown` | none (samples are unaffected) |
-| `colr METH 2` with too few bytes for a profile header | reads what is there; lcms won't open it, so no ICC conversion | accept | none; the colour space and bytes are passed through as they are, and `Srgb` leaves the samples as coded (owner decision 2026-11-01, #199) |
+| No `colr` at all | decodes, color unknown | decodes, `Unknown` | none (samples are unaffected) |
+| `colr METH 2` with too few bytes for a profile header | reads what is there; lcms won't open it, so no ICC conversion | accept | none; the color space and bytes are passed through as they are, and `Srgb` leaves the samples as coded (owner decision 2026-11-01, #199) |
 | Under `Srgb`: an ICC profile lcms refuses to open or build a transform from (bad header, intent 4-9 or above 15, a needed tag skipped, under 8 bytes, of the wrong type or read past the profile's end, `para` above 4, `curv` above 32767 entries) | conversion skipped, samples as coded | conversion skipped, samples as coded, `RestrictedIcc` kept | none (owner decision 2026-11-01, #199); `docs/correctness.md`, sRGB output |
-| Under `Srgb`: colour channels of different depth, sign or sub-sampling (other than sYCC chroma at 2x1 or 2x2) | ICC: conversion skipped, samples as coded; three components with sub-sampled chroma and an sRGB or absent `colr`: converted as if sYCC | reject | `Unsupported` (owner decision 2026-11-01); `AsCoded` decodes them; row of `srgb_reject_matrix_maps_each_input_to_its_typed_error` |
+| Under `Srgb`: color channels of different depth, sign or sub-sampling (other than sYCC chroma at 2x1 or 2x2) | ICC: conversion skipped, samples as coded; three components with sub-sampled chroma and an sRGB or absent `colr`: converted as if sYCC | reject | `Unsupported` (owner decision 2026-11-01); `AsCoded` decodes them; row of `srgb_reject_matrix_maps_each_input_to_its_typed_error` |
 | Under `Srgb`: sYCC with sub-sampled luma or another chroma layout | "CAN NOT CONVERT", samples as coded | reject | `Unsupported` |
 | Under `Srgb`: signed sYCC | converted silently as if unsigned, then clamped (R `[-7,-62,61,114]` → `[0,0,15,0]`) | reject | `Unsupported` (owner decision 2026-11-01) |
-| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, an ICC profile lcms would apply through a LUT or the Lab PCS, a `YCbr` profile, or ICC lcms would apply on samples other than 8/16-bit (RGB) or 8-bit (grey) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit grey 15 → 18 | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as grey, metadata as declared (`docs/correctness.md`, sRGB output) |
+| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, an ICC profile lcms would apply through a LUT or the Lab PCS, a `YCbr` profile, or ICC lcms would apply on samples other than 8/16-bit (RGB) or 8-bit (gray) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit gray 15 → 18 | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as gray, metadata as declared (`docs/correctness.md`, sRGB output) |
 | `raw_channels` with `Srgb` | n/a | reject before reading | `InvalidOptions` |
 | sYCC chroma replication past the sample budget | allocates | reject before any tile | `Limit` |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |
@@ -620,7 +620,7 @@ so and why we differ (or do not).
 | `cmap` palette column mapped twice, or palette channel `i` with column `i` unmapped (a direct channel marks column 0) | error | reject | `FileFormat` |
 | `cmap` with `MTYP 1 && PCOL != i` | error (implementation limit) | reject | `Unsupported` (match oracle, owner decision 2026-11-01); after the `FileFormat` checks, before the correction below |
 | One component, `cmap` leaves a column unused | rewritten to the identity mapping ("Trying to correct") | same | none (match oracle) |
-| Direct channel `i` | labelled with column `i`'s `Bi` | same | none (match oracle) |
+| Direct channel `i` | labeled with column `i`'s `Bi` | same | none (match oracle) |
 | Palette column deeper than the `i32` container (unsigned 32, any > 32) | decodes (> 32 bits read at a 4-byte stride) | reject when applied; under `raw_channels` the index plane decodes | `Unsupported`, as for such a codestream component (owner-approved deviation) |
 | Palette and direct channels from components of different sub-sampling | sizes every channel by the first one's grid: crashes or leaves samples unset | each channel on its own component's grid | none (owner-approved deviation) |
 | Signed palette column | entries not sign-extended | same | none (match oracle, owner decision 2026-11-01) |
@@ -628,12 +628,12 @@ so and why we differ (or do not).
 | Second `pclr` / `cmap` / `cdef` | error | reject | `FileFormat` |
 | `cdef N = 0`, truncated, `Cn` or `Asoc-1` out of range, incomplete list | error | reject | `FileFormat`; `Cn` and `Asoc` are checked against the channels after the palette (`NPC` with `pclr` + `cmap`, else `Csiz`); under `raw_channels` only the box layout (`N = 0`, truncated, a second `cdef`) is checked, as OpenJPEG skips `opj_jp2_check_color` under its ignore flag |
 | `cdef` names a channel twice, every channel named | decodes; entries applied in order | same | none (match oracle); the channel keeps its last entry's label |
-| `cdef` colour entry not at `Asoc - 1` | swapped there; later entries follow their channels | same | none (match oracle) |
-| `cdef` labels after a swap | type kept in `comps[].alpha`, written to the position named before the swap, never written out by `opj_decompress` | each channel labelled with its own entry | none: OpenJPEG has no label output to match (`docs/correctness.md`) |
+| `cdef` color entry not at `Asoc - 1` | swapped there; later entries follow their channels | same | none (match oracle) |
+| `cdef` labels after a swap | type kept in `comps[].alpha`, written to the position named before the swap, never written out by `opj_decompress` | each channel labeled with its own entry | none: OpenJPEG has no label output to match (`docs/correctness.md`) |
 | `cdef Typ` not 0/1/2/65535 | passed through | `Other(n)` | none |
 | Unknown box anywhere | skipped | skipped | none |
 | `res ` malformed: a `resc`/`resd` not 10 bytes, a child with a bad length or past the end of `res `, garbage contents | `res ` never read: decodes | decodes; the malformed `resc`/`resd` is reported as absent, a fault in the child walk ends that `res ` | none (match oracle); each shape measured with `opj_decompress` |
-| `resc`/`resd` with a zero denominator | never read | reported as stored | none; `Ratio::grid_points_per_metre` is `None` |
+| `resc`/`resd` with a zero denominator | never read | reported as stored | none; `Ratio::grid_points_per_meter` is `None` |
 | `uuid` shorter than its 16-byte identifier | never read | skipped, not reported | none (match oracle) |
 | `xml `/`uuid` after `jp2c` | never read | collected as far as the after-`jp2c` walk goes | none; collecting them never fails a decode |
 | `jp2i` anywhere at the top level | never read | contents returned verbatim, in file order, including after `jp2c` | none |
@@ -641,12 +641,12 @@ so and why we differ (or do not).
 | `ihdr` W/H wrong and the codestream truncated | error at SIZ ("IHDR w(769) … vs. SIZ w(768)") | `FileFormat` | none (match oracle): the header is checked before any tile-part is read |
 | `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none (applied) |
 | The same boxes at the top level before `jp2h` | ignored only when the box comes directly after `ftyp`; after any other box (one without a handler, such as `rreq`, or a misplaced header box it has just ignored) its unknown-box state sets the header-read bit, so the box is read as if `jp2h` had been: a `colr` there becomes the color space | ignored | differs from the oracle when another box comes first (owner decision pending) |
-| Boxes after `jp2c` | walked after decoding, from just after `EOC` (any padding inside the `jp2c` box is walked too), or not at all when the last tile-part has `Psot = 0`: a box shorter than its header is an error; a header box past the end of the file is an error, any other box there ends the walk; fewer than 8 bytes, `LBox` 0 (the box runs to the end), an `XLBox` it cannot read, or a second `jp2c` end it; header boxes are read again and can fail | the same walk and the same reads | `FileFormat` (match oracle): a second signature or `ftyp`, a `jp2h` without `ihdr`, a `colr` under 3 bytes, a `bpcc` not `NC` bytes, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a second `pclr` while one is held, a `cmap` without a held `pclr` or a second one, a short `cmap`, a second `cdef` while one is held, or a malformed `pclr`/`cdef`. What is held depends on the mode, as in OpenJPEG: a header `pclr` without `cmap` is dropped, and a header `cdef` is dropped once applied but kept under `raw_channels`. Nothing read here is applied; a valid `colr` does not change the colour space. A `Psot = 0` last tile-part ends at the `jp2c` box's end, with or without `EOC`, when the box ends at least two bytes before the end of the file, holds every tile-part's `SOT`, and tier-2 walks that tile's packets to exactly the box's end, within a bound (at most 4096 tiles, 1024 components, 2^14 code-blocks and precincts, at least 14 bytes per tile, and max(2^22, 8 × the tile's bytes) visits, counting packets, code-block entries and sweep positions); otherwise it is read to the end of the file. When the box's end is used, the boxes after the box are reported as metadata by the after-codestream walk and not read; otherwise nothing after the box is reported. The image is OpenJPEG's either way. One difference remains: a `Psot = 0` last tile-part followed by more bytes when the box's end is not the codestream's (`LBox` 0, or a length that ends inside the codestream with bytes after the codestream). The tile-part runs to the end of the file in both decoders, so those bytes become tile data. OpenJPEG ignores them; the codestream parser rejects them as `Codestream` ("left after the last packet"), as for a raw codestream (owner decision on #183) |
+| Boxes after `jp2c` | walked after decoding, from just after `EOC` (any padding inside the `jp2c` box is walked too), or not at all when the last tile-part has `Psot = 0`: a box shorter than its header is an error; a header box past the end of the file is an error, any other box there ends the walk; fewer than 8 bytes, `LBox` 0 (the box runs to the end), an `XLBox` it cannot read, or a second `jp2c` end it; header boxes are read again and can fail | the same walk and the same reads | `FileFormat` (match oracle): a second signature or `ftyp`, a `jp2h` without `ihdr`, a `colr` under 3 bytes, a `bpcc` not `NC` bytes, a short `METH 1` or empty `METH 2` with no usable `colr` before it, a second `pclr` while one is held, a `cmap` without a held `pclr` or a second one, a short `cmap`, a second `cdef` while one is held, or a malformed `pclr`/`cdef`. What is held depends on the mode, as in OpenJPEG: a header `pclr` without `cmap` is dropped, and a header `cdef` is dropped once applied but kept under `raw_channels`. Nothing read here is applied; a valid `colr` does not change the color space. A `Psot = 0` last tile-part ends at the `jp2c` box's end, with or without `EOC`, when the box ends at least two bytes before the end of the file, holds every tile-part's `SOT`, and tier-2 walks that tile's packets to exactly the box's end, within a bound (at most 4096 tiles, 1024 components, 2^14 code-blocks and precincts, at least 14 bytes per tile, and max(2^22, 8 × the tile's bytes) visits, counting packets, code-block entries and sweep positions); otherwise it is read to the end of the file. When the box's end is used, the boxes after the box are reported as metadata by the after-codestream walk and not read; otherwise nothing after the box is reported. The image is OpenJPEG's either way. One difference remains: a `Psot = 0` last tile-part followed by more bytes when the box's end is not the codestream's (`LBox` 0, or a length that ends inside the codestream with bytes after the codestream). The tile-part runs to the end of the file in both decoders, so those bytes become tile data. OpenJPEG ignores them; the codestream parser rejects them as `Codestream` ("left after the last packet"), as for a raw codestream (owner decision on #183) |
 | Second `jp2c` | never read | ignored | none (I.5.4) |
 | Deeply nested superboxes | n/a | only `jp2h`, `res ` and `uinf` are entered | no recursion, so no depth bomb |
 | 10 000 unknown boxes before `jp2h` and after `jp2c` | skipped | skipped | none; each box is one step of a linear walk: about 1.2 ms more per `decode` + `read_header` than the bare file (release build), linear up to 100 000 boxes |
-| Palette expansion over the sample budget (`NPC` planes totalling more than 2^26 samples) | decodes if it can allocate | reject before any tile is decoded | `Limit` |
-| Metadata boxes totalling more than the file | impossible by construction | copies bounded by input length | none |
+| Palette expansion over the sample budget (`NPC` planes totaling more than 2^26 samples) | decodes if it can allocate | reject before any tile is decoded | `Limit` |
+| Metadata boxes totaling more than the file | impossible by construction | copies bounded by input length | none |
 
 Allocation discipline: no buffer is sized from a box field. Palette tables are
 bounded by `NE <= 1024` and `NPC <= 255` from the standard. Palette expansion
@@ -663,7 +663,7 @@ part of the gate.
 
 ## Risks
 
-- **Colour conversion is new ground for this crate.** The restricted ICC
+- **Color conversion is new ground for this crate.** The restricted ICC
   forms are closed-form and small, but the reference was produced by lcms, and
   rounding or curve interpolation differences could land outside PAE 4 on the
   16-bit file7 (2048-entry curves) once scaled to 8 bits. Mitigation: the
@@ -679,7 +679,7 @@ part of the gate.
 - **Corpus size.** About 13 MB more under `tests/fixtures/conformance/`
   (already 56 MB). Acceptable once; if it bothers, the PGX could be stored
   gzip'd with a dev-only inflate, but that is not planned.
-- **Behaviour change on `decode`.** A JP2 that used to be `Unsupported` now
+- **Behavior change on `decode`.** A JP2 that used to be `Unsupported` now
   decodes, and its channel count may differ from `Csiz` (palette, `cdef`). A
   consumer that assumed `components.len() == Csiz` after unwrapping the
   codestream themselves is unaffected (they still pass the payload), but one
@@ -700,7 +700,7 @@ part of the gate.
 
 Rejected cleanly, never attempted: JPX-only features (fragment tables `ftbl`
 and fragmented codestreams, compositing layers, `rreq` requirements, multiple
-codestreams, any `colr METH 3/4`, Part 2 enumerated colour spaces as anything
+codestreams, any `colr METH 3/4`, Part 2 enumerated color spaces as anything
 but a reported number); applying ICC profiles through a lookup table or the
 Lab connection space; CMYK / e-sYCC / CIELab conversion; JPM, MJ2; writing JP2.
 HTJ2K stays Phase 4, the encoder Phase 5, Part 2 Phase 6. See

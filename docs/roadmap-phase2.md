@@ -128,7 +128,7 @@ multi-component codestreams.
 its own depth, sign, and sub-sampling. Graded against synthetic OpenJPEG-encoded
 fixtures, bit-exact: the Part 4 corpus cannot grade this milestone on its own,
 because every one of its multi-component entries also needs a progression, a
-layer count, a tile grid, an image origin, or the colour transform that is not
+layer count, a tile grid, an image origin, or the color transform that is not
 decoded yet. `p0_14` is closest and still needs RCT. Unblocks COC/QCC, MCT, and
 the progression orders that iterate over components.
 
@@ -311,7 +311,7 @@ decodes; RCT bit-exact (reversible), ICT within the compliance-class bounds.
 
 **Done:** RCT and ICT have both landed (`src/mct.rs`). `p0_14` grades RCT
 bit-exact; `p0_04` grades ICT within the class-1 bounds. The wavelet picks the
-transform, read off component 0 (a mix across the three colour components is
+transform, read off component 0 (a mix across the three color components is
 rejected). ICT's inverse matrix and left-to-right evaluation order match
 OpenJPEG's `opj_mct_decode_real` (`0.34413f`/`0.71414f`), so its float rounding
 follows the oracle's and lands inside the tolerance.

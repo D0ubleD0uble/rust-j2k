@@ -10,14 +10,14 @@
 //! all five progression orders and POC changes between them, packed packet
 //! headers (PPM/PPT), every Part 1 code-block coding style, region of interest
 //! (maxshift), non-zero canvas offsets, resolution-reduced decoding, and the
-//! reversible (RCT) and irreversible (ICT) colour transforms.
+//! reversible (RCT) and irreversible (ICT) color transforms.
 //!
 //! A JP2 file's codestream decodes the same way, and the file's header comes
-//! back on [`Image::jp2`]. A palettised JP2 file decodes to the palette's
-//! channels, and a file with channel definitions puts its colour channels in
-//! colour order. [`read_header`] reads the same header without decoding any
+//! back on [`Image::jp2`]. A palettized JP2 file decodes to the palette's
+//! channels, and a file with channel definitions puts its color channels in
+//! color order. [`read_header`] reads the same header without decoding any
 //! tile data. Samples come out as coded by default;
-//! [`ColourOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
+//! [`ColorOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
 //! HTJ2K and an encoder are later work, not permanent non-goals.
 //! See `docs/roadmap.md` and `docs/scope.md`.
 //!
@@ -35,7 +35,7 @@
 //! The core of the public surface is [`decode`]: codestream or JP2 bytes in,
 //! an [`Image`] out. An [`Image`] is the image area on the reference grid plus
 //! one [`Component`] per output channel: per codestream component, or per
-//! palette channel for a palettised JP2 file. A sub-sampled component holds
+//! palette channel for a palettized JP2 file. A sub-sampled component holds
 //! fewer samples than that area, so size sample buffers from the component,
 //! not from the image. Malformed input never panics; it comes back as a typed
 //! [`Error`].
@@ -101,7 +101,7 @@ pub use header::{ComponentInfo, Header};
 pub use image::{Component, Image};
 pub use jp2::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
-    ColourSpace, ColourSpecification, FileType, ImageHeader, Jp2Metadata, MappingKind, Palette,
+    ColorSpace, ColorSpecification, FileType, ImageHeader, Jp2Metadata, MappingKind, Palette,
     PaletteColumn, Ratio, ReaderRequirements, Res, Resolution, StandardFeature, UuidBox, UuidInfo,
     VendorFeature,
 };
@@ -122,20 +122,20 @@ pub use jp2::{
 /// A JP2 file with a palette (`pclr` and `cmap`) decodes to the palette's
 /// channels, one per palette column, so it can have more components than its
 /// codestream. A `pclr` without a `cmap` is ignored. A file with channel
-/// definitions (`cdef`) moves each colour channel to its colour's position
-/// (colour 1 first) and labels every channel on [`Jp2Metadata::channels`].
+/// definitions (`cdef`) moves each color channel to its color's position
+/// (color 1 first) and labels every channel on [`Jp2Metadata::channels`].
 /// [`DecodeOptions::raw_channels`] skips both and returns the codestream's
 /// components as coded.
 ///
 /// ```no_run
-/// use rust_j2k::{decode, ColourSpace};
+/// use rust_j2k::{decode, ColorSpace};
 ///
 /// // A `.jp2` file decodes the same way as a raw codestream; the format is
 /// // detected from the first bytes.
 /// let bytes = std::fs::read("photo.jp2")?;
 /// let image = decode(&bytes)?;
 /// if let Some(jp2) = &image.jp2 {
-///     if jp2.colour == ColourSpace::Srgb {
+///     if jp2.color == ColorSpace::Srgb {
 ///         println!("{} sRGB channels", image.components.len());
 ///     }
 /// }
@@ -240,7 +240,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     }
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
-    check_raw_colour(options, siz.components.len())?;
+    check_raw_color(options, siz.components.len())?;
     check_reduction(&parsed, reduction)?;
     let (width, height) = siz.image_extent_at(reduction);
     Ok(Header {
@@ -251,13 +251,13 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     })
 }
 
-/// What colour space a JP2 file's colour channels come out in: the
-/// [`DecodeOptions::colour`] option.
+/// What color space a JP2 file's color channels come out in: the
+/// [`DecodeOptions::color`] option.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum ColourOutput {
+pub enum ColorOutput {
     /// The samples as the codestream coded them, after the palette and the
-    /// channel definitions. [`Jp2Metadata::colour`] says how to read them;
+    /// channel definitions. [`Jp2Metadata::color`] says how to read them;
     /// an ICC profile is passed through, not applied.
     #[default]
     AsCoded,
@@ -269,21 +269,21 @@ pub enum ColourOutput {
     /// 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc 2.39), and
     /// the output is the same on every platform whose `fma` is correctly
     /// rounded (MinGW's, on `*-pc-windows-gnu`, may not be:
-    /// rust-lang/rust#140515). sRGB and greyscale pass
-    /// through. A monochrome profile gives one grey channel. A monochrome
+    /// rust-lang/rust#140515). sRGB and grayscale pass
+    /// through. A monochrome profile gives one gray channel. A monochrome
     /// profile whose output is not neutral (absolute colorimetric with a
     /// tinted white point) gives three sRGB channels in its place, as
     /// OpenJPEG does, so the channel count can't be predicted from the
-    /// header. No conversion changes a channel's bit depth. Non-colour
+    /// header. No conversion changes a channel's bit depth. Non-color
     /// channels (opacity, say) are untouched. When the
-    /// samples are converted, [`Jp2Metadata::colour`] says what they now
-    /// are: [`ColourSpace::Srgb`], or [`ColourSpace::Greyscale`] for one
-    /// grey channel, with no ICC profile. [`read_header`] and the default
-    /// [`ColourOutput::AsCoded`] report the colour space the file declares.
-    /// One or two channels pass through as coded whatever the colour space
-    /// (a raw codestream, a file with no `colr`, any enumerated colour
+    /// samples are converted, [`Jp2Metadata::color`] says what they now
+    /// are: [`ColorSpace::Srgb`], or [`ColorSpace::Grayscale`] for one
+    /// gray channel, with no ICC profile. [`read_header`] and the default
+    /// [`ColorOutput::AsCoded`] report the color space the file declares.
+    /// One or two channels pass through as coded whatever the color space
+    /// (a raw codestream, a file with no `colr`, any enumerated color
     /// space, sRGB included, or an RGB or YCbCr profile), as OpenJPEG reads
-    /// them as grey, or grey and opacity; only a monochrome profile converts
+    /// them as gray, or gray and opacity; only a monochrome profile converts
     /// them, and it refuses samples that are not 8-bit unsigned. Their
     /// metadata stays as declared.
     ///
@@ -291,9 +291,9 @@ pub enum ColourOutput {
     /// OpenJPEG leaves it (except on a three-channel 4:2:0 or 4:2:2 image,
     /// refused below, which OpenJPEG converts as sYCC before it reads the
     /// profile): the samples come out as coded, and
-    /// [`Jp2Metadata::colour`] stays [`ColourSpace::RestrictedIcc`], so a
-    /// caller can tell nothing was converted. A profile whose colour space is
-    /// neither RGB, grey nor YCbCr passes through the same way, since
+    /// [`Jp2Metadata::color`] stays [`ColorSpace::RestrictedIcc`], so a
+    /// caller can tell nothing was converted. A profile whose color space is
+    /// neither RGB, gray nor YCbCr passes through the same way, since
     /// OpenJPEG has no transform for it. So does an RGB profile when any of
     /// the first four output channels (all of them, if fewer) differs from
     /// the first in depth, sign or sub-sampling, whatever the channel is
@@ -309,7 +309,7 @@ pub enum ColourOutput {
     ///   entries with the same signature among those it keeps (it skips an
     ///   entry with a zero offset or size, or one that ends past the
     ///   profile's declared size);
-    /// - a named colour profile, or a device link or abstract profile with no
+    /// - a named color profile, or a device link or abstract profile with no
     ///   lookup table;
     /// - a rendering intent other than 0 to 3 and 10 to 15 (10 to 15, its
     ///   black-preserving intents, convert as relative colorimetric);
@@ -325,26 +325,26 @@ pub enum ColourOutput {
     /// As in LittleCMS, a value that runs past its tag is read from the bytes
     /// after it, and a media white point that can't be read is taken as D50,
     /// as it is for a version 2 display profile. Input, display, output,
-    /// colour space and class 0 profiles convert alike.
+    /// color space and class 0 profiles convert alike.
     ///
     /// Anything else is [`Error::Unsupported`]: three or more channels in
-    /// another colour space or with no colour specification (a raw
+    /// another color space or with no color specification (a raw
     /// codestream included), a YCbCr profile, a profile LittleCMS would apply
     /// through a lookup table or a Lab connection space, a monochrome profile
     /// on more than two channels, an RGB profile on samples that are not 8
     /// or 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and
-    /// colour channels that differ in depth, sign or sub-sampling other than
+    /// color channels that differ in depth, sign or sub-sampling other than
     /// sYCC's chroma layouts. Under an RGB profile, channels that differ
     /// among the first four pass through instead (above), except a
     /// three-channel 4:2:0 or 4:2:2 image (luma at 1x1, both chroma
     /// channels at 2x2 or both at 2x1), which OpenJPEG converts as sYCC
     /// whatever the file declares and whatever its `cdef` labels. As in
-    /// OpenJPEG, every refusal above, and a profile on one or two colour
+    /// OpenJPEG, every refusal above, and a profile on one or two color
     /// channels, passes through before these checks: a profile LittleCMS
     /// refuses passes through whatever the samples are, except on a
     /// three-channel 4:2:0 or 4:2:2 image, which is refused before the
     /// profile is read. These errors apply only when `Srgb` is asked for:
-    /// [`ColourOutput::AsCoded`] decodes the same files.
+    /// [`ColorOutput::AsCoded`] decodes the same files.
     Srgb,
 }
 
@@ -368,12 +368,12 @@ pub struct DecodeOptions {
     /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
     /// the file decodes exactly as its codestream does on its own, in SIZ
     /// order, and [`Jp2Metadata::palette_applied`] is `false`. It means no
-    /// colour conversion either, so it cannot be combined with
-    /// [`ColourOutput::Srgb`] ([`Error::InvalidOptions`]). Each index
+    /// color conversion either, so it cannot be combined with
+    /// [`ColorOutput::Srgb`] ([`Error::InvalidOptions`]). Each index
     /// plane is reported on [`Jp2Metadata::channels`] as
     /// [`ChannelType::Unspecified`] with [`Association::None`], since it is
-    /// not a colour until it goes through the palette; every other channel
-    /// is labelled as a file without a `cdef` is (see
+    /// not a color until it goes through the palette; every other channel
+    /// is labeled as a file without a `cdef` is (see
     /// [`Jp2Metadata::channels`]), whatever the `cdef` box says. The
     /// boxes' layout is still checked, so a malformed `pclr`, `cmap` or
     /// `cdef` is still [`Error::FileFormat`]; the palette mapping and column
@@ -389,7 +389,7 @@ pub struct DecodeOptions {
     ///    that column of [`Jp2Metadata::palette`] (an index past the table
     ///    reads its last entry, a negative one its first). Without a palette
     ///    the raw channels are used as they are.
-    /// 2. Put the channels in colour order with
+    /// 2. Put the channels in color order with
     ///    [`Jp2Metadata::channel_definitions`], by the rule documented there
     ///    (each swap looks up where the entry's channel has moved to, not its
     ///    original position). Without a `cdef` the order from step 1 stands.
@@ -397,9 +397,9 @@ pub struct DecodeOptions {
     /// The result is the channels of the default decode. No effect on a raw
     /// codestream. Default `false`.
     pub raw_channels: bool,
-    /// What colour space the colour channels come out in. Default
-    /// [`ColourOutput::AsCoded`].
-    pub colour: ColourOutput,
+    /// What color space the color channels come out in. Default
+    /// [`ColorOutput::AsCoded`].
+    pub color: ColorOutput,
 }
 
 impl DecodeOptions {
@@ -432,17 +432,17 @@ impl DecodeOptions {
         self
     }
 
-    /// These options with [`colour`](Self::colour) set to `colour`.
+    /// These options with [`color`](Self::color) set to `color`.
     ///
     /// ```
-    /// use rust_j2k::{ColourOutput, DecodeOptions};
+    /// use rust_j2k::{ColorOutput, DecodeOptions};
     ///
-    /// let options = DecodeOptions::default().with_colour(ColourOutput::Srgb);
-    /// assert_eq!(options.colour, ColourOutput::Srgb);
+    /// let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
+    /// assert_eq!(options.color, ColorOutput::Srgb);
     /// ```
     #[must_use]
-    pub fn with_colour(mut self, colour: ColourOutput) -> Self {
-        self.colour = colour;
+    pub fn with_color(mut self, color: ColorOutput) -> Self {
+        self.color = color;
         self
     }
 }
@@ -460,7 +460,7 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     }
     // The header checks come before the tile walk, as `read_header_with` has it.
     let parsed = codestream::parse_header(bytes)?;
-    check_raw_colour(options, parsed.header.siz.components.len())?;
+    check_raw_color(options, parsed.header.siz.components.len())?;
     check_reduction(&parsed, options.resolution_reduction)?;
     let cs = codestream::parse_tiles(bytes, parsed)?;
     decode_codestream(cs, options)
@@ -468,9 +468,9 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
 
 /// Options that contradict each other, whatever the input.
 fn check_options(options: &DecodeOptions) -> Result<()> {
-    if options.colour == ColourOutput::Srgb && options.raw_channels {
+    if options.color == ColorOutput::Srgb && options.raw_channels {
         return Err(Error::InvalidOptions(
-            "raw channels means no colour conversion, so it cannot be combined with sRGB \
+            "raw channels means no color conversion, so it cannot be combined with sRGB \
              output"
                 .into(),
         ));
@@ -496,14 +496,14 @@ fn check_reduction(parsed: &codestream::ParsedHeader, reduction: u8) -> Result<(
     Ok(())
 }
 
-/// A raw codestream declares no colour space. Like OpenJPEG, one or two
-/// components are read as grey (and grey plus opacity) and pass through; three
+/// A raw codestream declares no color space. Like OpenJPEG, one or two
+/// components are read as gray (and gray plus opacity) and pass through; three
 /// or more have nothing to convert from, so sRGB output refuses them.
-fn check_raw_colour(options: &DecodeOptions, components: usize) -> Result<()> {
-    if options.colour == ColourOutput::Srgb && components > 2 {
+fn check_raw_color(options: &DecodeOptions, components: usize) -> Result<()> {
+    if options.color == ColorOutput::Srgb && components > 2 {
         return Err(Error::Unsupported(format!(
             "sRGB output from a raw codestream of {components} components, which declares \
-             no colour space"
+             no color space"
         )));
     }
     Ok(())
@@ -540,11 +540,11 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     )?;
     jp2::check_after_codestream(&file, options.raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
-    let srgb = match options.colour {
-        ColourOutput::AsCoded => None,
-        ColourOutput::Srgb => {
+    let srgb = match options.color {
+        ColorOutput::AsCoded => None,
+        ColorOutput::Srgb => {
             let plan = jp2::plan_srgb(&metadata, &plans, siz, options.resolution_reduction)?;
-            // A converted image is sRGB (or grey) and carries no profile, as
+            // A converted image is sRGB (or gray) and carries no profile, as
             // OpenJPEG reports it.
             plan.describe(&mut metadata);
             Some(plan)
@@ -635,7 +635,7 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         if header.cod.multiple_component_transform {
             // The wavelet picks the transform (G.1): 5/3 reconstructs integers
             // and inverts with the reversible RCT, 9/7 reconstructs floats and
-            // inverts with the irreversible ICT. All three colour components
+            // inverts with the irreversible ICT. All three color components
             // share the wavelet (checked at parse), so component 0's decides.
             match header.components[0].coding.transform {
                 codestream::markers::Transform::Reversible53 => mct::inverse_rct(&mut samples)?,

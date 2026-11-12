@@ -1,13 +1,13 @@
-//! sRGB output ([`ColourOutput::Srgb`](crate::ColourOutput::Srgb)): sYCC to
+//! sRGB output ([`ColorOutput::Srgb`](crate::ColorOutput::Srgb)): sYCC to
 //! RGB, and a restricted ICC profile (I.5.3.3, `METH` 2) applied to give sRGB.
 //!
-//! The step runs after the palette and the channel definitions, on the colour
-//! channels: the channels labelled colour 1, 2, 3 (one for greyscale). Other
+//! The step runs after the palette and the channel definitions, on the color
+//! channels: the channels labeled color 1, 2, 3 (one for grayscale). Other
 //! channels, such as opacity, pass through untouched. [`plan`] checks
 //! everything from the header before any tile is decoded; [`SrgbPlan::apply`]
 //! converts the decoded samples. No conversion changes a channel's depth.
 //!
-//! - **sRGB and greyscale** (`EnumCS` 16, 17) pass through, except on a
+//! - **sRGB and grayscale** (`EnumCS` 16, 17) pass through, except on a
 //!   three-channel 4:2:0 or 4:2:2 image ([`converted_as_sycc`]).
 //! - **sYCC** (`EnumCS` 18) is converted with the IEC 61966-2-1 Amd 1 inverse
 //!   matrix (1.402, 0.344136, 0.714136, 1.772) after taking `2^(depth-1)` off
@@ -19,31 +19,31 @@
 //!   replication follows `sycc422_to_rgb` and `sycc420_to_rgb` in the
 //!   oracle build, Ubuntu's OpenJPEG 2.5.0-2ubuntu0.5, sample for sample,
 //!   including the odd image origin: there the first column (and, for 4:2:0,
-//!   the first row) takes chroma samples of 0 rather than a neighbour's. That
+//!   the first row) takes chroma samples of 0 rather than a neighbor's. That
 //!   build carries the `comp12w` guard from upstream master, which tag v2.5.0
 //!   does not have.
 //! - **Restricted ICC** profiles of the two forms Annex I allows are applied
 //!   as OpenJPEG applies them, through a port of LittleCMS 2.14
 //!   ([`super::lcms`]): a monochrome profile (`kTRC`) and a three-component
 //!   matrix/TRC profile (`rXYZ`, `gXYZ`, `bXYZ`, `rTRC`, `gTRC`, `bTRC`) with
-//!   the XYZ connection space, of the input, display, output or colour space
+//!   the XYZ connection space, of the input, display, output or color space
 //!   class (or class 0), at every rendering intent LittleCMS accepts. On
-//!   three colour channels (RGB profile), on one grey channel, or on one
-//!   grey channel plus opacity, the output matches
+//!   three color channels (RGB profile), on one gray channel, or on one
+//!   gray channel plus opacity, the output matches
 //!   `opj_decompress -force-rgb` sample for sample. A monochrome profile
-//!   gives one grey channel when its output is neutral, as it usually is; if
-//!   its sRGB output is not neutral, it gives R, G and B in place of the grey
+//!   gives one gray channel when its output is neutral, as it usually is; if
+//!   its sRGB output is not neutral, it gives R, G and B in place of the gray
 //!   channel. A monochrome profile on more than two channels is refused:
-//!   OpenJPEG passes the planes to a grey transform as if they were RGB.
+//!   OpenJPEG passes the planes to a gray transform as if they were RGB.
 //!
-//! One or two channels pass through as coded whatever the colour space
-//! (sRGB, greyscale, sYCC, no `colr`, another enumerated colour space, an
-//! RGB or YCbCr profile), as OpenJPEG reads them as grey; only a monochrome
+//! One or two channels pass through as coded whatever the color space
+//! (sRGB, grayscale, sYCC, no `colr`, another enumerated color space, an
+//! RGB or YCbCr profile), as OpenJPEG reads them as gray; only a monochrome
 //! profile converts them, and it refuses samples that are not 8-bit
 //! unsigned. So do a profile LittleCMS refuses to open or to build a
 //! transform from (its header checks, a class or intent it does not know, a
 //! missing or unreadable tag, a lookup table it can't read), and a profile
-//! in a colour space other than RGB, grey or YCbCr: OpenJPEG then skips the
+//! in a color space other than RGB, gray or YCbCr: OpenJPEG then skips the
 //! conversion. An RGB profile passes through too when any of the first four
 //! output channels differs from the first in depth, sign or sub-sampling
 //! (OpenJPEG's "AFL test", [`first_four_differ`]). None of these holds for
@@ -55,15 +55,15 @@
 //! tag's size.
 //!
 //! Everything else is [`Error::Unsupported`]: three or more channels in
-//! another enumerated colour space or with no colour space, a YCbCr
+//! another enumerated color space or with no color space, a YCbCr
 //! profile, a profile LittleCMS would apply through a lookup table or the
-//! Lab connection space, and colour channels that differ in depth, sign or
+//! Lab connection space, and color channels that differ in depth, sign or
 //! sub-sampling (except the sYCC layouts and the RGB profile case above).
 //! OpenJPEG converts some of those anyway and gets them wrong;
 //! `docs/correctness.md` lists each case.
 
 use super::lcms::{Format, InputProfile, ToneCurve, Transform};
-use super::metadata::{Association, ChannelDefinition, ChannelType, ColourSpace, Jp2Metadata};
+use super::metadata::{Association, ChannelDefinition, ChannelType, ColorSpace, Jp2Metadata};
 use crate::codestream::MAX_IMAGE_SAMPLES;
 use crate::codestream::markers::Siz;
 use crate::{Component, ComponentInfo, Error, Result};
@@ -75,7 +75,7 @@ const PROFILE_HEADER: usize = 132;
 /// is decoded.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum SrgbPlan {
-    /// The colour channels already are sRGB or grey.
+    /// The color channels already are sRGB or gray.
     PassThrough,
     /// sYCC to RGB on the channels at these output positions (Y, Cb, Cr).
     Sycc {
@@ -91,11 +91,11 @@ pub(crate) enum SrgbPlan {
         channels: [usize; 3],
         transform: Box<Transform>,
     },
-    /// A monochrome profile applied to the grey channel at this position,
-    /// through the RGB each 8-bit grey level maps to. When every level maps
-    /// to a grey (`neutral`), the channel stays one grey channel; otherwise
+    /// A monochrome profile applied to the gray channel at this position,
+    /// through the RGB each 8-bit gray level maps to. When every level maps
+    /// to a gray (`neutral`), the channel stays one gray channel; otherwise
     /// it becomes R, G, B in its place.
-    IccGrey {
+    IccGray {
         channel: usize,
         table: Box<[[u8; 3]; 256]>,
         neutral: bool,
@@ -114,51 +114,49 @@ pub(crate) enum ChromaLayout {
 }
 
 /// Plan the sRGB step for a JP2 file's output channels: their formats
-/// (`outputs`), what each one is (`channels`), and the colour space the file
+/// (`outputs`), what each one is (`channels`), and the color space the file
 /// declares. `siz` and `reduction` size the output for the sample budget.
 pub(crate) fn plan(
-    colour: &ColourSpace,
+    color: &ColorSpace,
     channels: &[ChannelDefinition],
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
 ) -> Result<SrgbPlan> {
-    match colour {
-        // OpenJPEG reads any image of two or fewer components as grey (and
-        // grey plus opacity) and passes it through, whatever the file
+    match color {
+        // OpenJPEG reads any image of two or fewer components as gray (and
+        // gray plus opacity) and passes it through, whatever the file
         // declares, so this does too.
-        ColourSpace::Srgb | ColourSpace::Greyscale if outputs.len() <= 2 => {
-            Ok(SrgbPlan::PassThrough)
-        }
-        ColourSpace::Srgb | ColourSpace::Greyscale => {
+        ColorSpace::Srgb | ColorSpace::Grayscale if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
+        ColorSpace::Srgb | ColorSpace::Grayscale => {
             // `opj_decompress` converts a three-component 4:2:0 or 4:2:2
             // image as sYCC whatever the file declares and whatever its
-            // `cdef` labels, so a file declared sRGB or grey with that
-            // layout is refused. Otherwise any channel past the colour
-            // space's colours is left as coded.
+            // `cdef` labels, so a file declared sRGB or gray with that
+            // layout is refused. Otherwise any channel past the color
+            // space's colors is left as coded.
             if converted_as_sycc(outputs) {
                 return Err(converted_as_sycc_error());
             }
-            uniform(&colour_channels(channels, outputs, 0), outputs)?;
+            uniform(&color_channels(channels, outputs, 0), outputs)?;
             Ok(SrgbPlan::PassThrough)
         }
         // OpenJPEG converts sYCC and an RGB profile only on three or more
         // components; one or two pass through as declared.
-        ColourSpace::Sycc if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
-        ColourSpace::Sycc => plan_sycc(channels, outputs, siz, reduction),
-        ColourSpace::RestrictedIcc(profile) => plan_icc(profile, channels, outputs, siz, reduction),
-        // One or two channels with no colour space this step converts:
-        // OpenJPEG reads any image of two or fewer components as grey (and
-        // grey plus opacity) and passes it through, so this does too.
-        ColourSpace::Enumerated(_) | ColourSpace::Unknown if outputs.len() <= 2 => {
+        ColorSpace::Sycc if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
+        ColorSpace::Sycc => plan_sycc(channels, outputs, siz, reduction),
+        ColorSpace::RestrictedIcc(profile) => plan_icc(profile, channels, outputs, siz, reduction),
+        // One or two channels with no color space this step converts:
+        // OpenJPEG reads any image of two or fewer components as gray (and
+        // gray plus opacity) and passes it through, so this does too.
+        ColorSpace::Enumerated(_) | ColorSpace::Unknown if outputs.len() <= 2 => {
             Ok(SrgbPlan::PassThrough)
         }
-        ColourSpace::Enumerated(value) => Err(Error::Unsupported(format!(
-            "sRGB output from the enumerated colour space {value}; only sRGB, greyscale, \
+        ColorSpace::Enumerated(value) => Err(Error::Unsupported(format!(
+            "sRGB output from the enumerated color space {value}; only sRGB, grayscale, \
              sYCC and restricted ICC profiles are converted"
         ))),
-        ColourSpace::Unknown => Err(Error::Unsupported(
-            "sRGB output from a file with no colour specification".into(),
+        ColorSpace::Unknown => Err(Error::Unsupported(
+            "sRGB output from a file with no color specification".into(),
         )),
     }
 }
@@ -198,42 +196,42 @@ fn first_four_differ(outputs: &[ComponentInfo]) -> bool {
     rest.iter().take(3).any(|c| format(c) != format(first))
 }
 
-/// The output positions of the channels labelled colour 1, 2, ... in colour
-/// order, up to the first colour number with no channel. `need` colours must
+/// The output positions of the channels labeled color 1, 2, ... in color
+/// order, up to the first color number with no channel. `need` colors must
 /// be present; 0 takes whatever is there.
-fn colour_channels(
+fn color_channels(
     channels: &[ChannelDefinition],
     outputs: &[ComponentInfo],
     need: u16,
 ) -> Vec<usize> {
     let mut found = Vec::new();
-    for colour in 1..=u16::MAX {
+    for color in 1..=u16::MAX {
         let at = channels.iter().position(|c| {
-            c.kind == ChannelType::Colour && c.association == Association::Colour(colour)
+            c.kind == ChannelType::Color && c.association == Association::Color(color)
         });
         match at {
             Some(at) if at < outputs.len() => found.push(at),
             _ => break,
         }
-        if need != 0 && colour == need {
+        if need != 0 && color == need {
             break;
         }
     }
     found
 }
 
-/// The colour channels must share depth, sign and sub-sampling.
-fn uniform(colours: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
-    same_format(colours, outputs)?;
-    let Some(&first) = colours.first() else {
+/// The color channels must share depth, sign and sub-sampling.
+fn uniform(colors: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
+    same_format(colors, outputs)?;
+    let Some(&first) = colors.first() else {
         return Ok(());
     };
     let first = outputs[first];
-    for &at in &colours[1..] {
+    for &at in &colors[1..] {
         let other = outputs[at];
         if (other.x_sampling, other.y_sampling) != (first.x_sampling, first.y_sampling) {
             return Err(Error::Unsupported(format!(
-                "sRGB output from colour channels of different sub-sampling ({}x{} and {}x{})",
+                "sRGB output from color channels of different sub-sampling ({}x{} and {}x{})",
                 first.x_sampling, first.y_sampling, other.x_sampling, other.y_sampling
             )));
         }
@@ -241,17 +239,17 @@ fn uniform(colours: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
     Ok(())
 }
 
-/// The colour channels must share depth and sign.
-fn same_format(colours: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
-    let Some(&first) = colours.first() else {
+/// The color channels must share depth and sign.
+fn same_format(colors: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
+    let Some(&first) = colors.first() else {
         return Ok(());
     };
     let first = outputs[first];
-    for &at in &colours[1..] {
+    for &at in &colors[1..] {
         let other = outputs[at];
         if (other.bit_depth, other.signed) != (first.bit_depth, first.signed) {
             return Err(Error::Unsupported(format!(
-                "sRGB output from colour channels of different formats ({}-bit {} and \
+                "sRGB output from color channels of different formats ({}-bit {} and \
                  {}-bit {})",
                 first.bit_depth,
                 sign(first.signed),
@@ -267,16 +265,16 @@ fn sign(signed: bool) -> &'static str {
     if signed { "signed" } else { "unsigned" }
 }
 
-/// Exactly three colour channels for sYCC or an RGB profile.
-fn three_colours(
+/// Exactly three color channels for sYCC or an RGB profile.
+fn three_colors(
     channels: &[ChannelDefinition],
     outputs: &[ComponentInfo],
     what: &str,
 ) -> Result<[usize; 3]> {
-    let found = colour_channels(channels, outputs, 3);
+    let found = color_channels(channels, outputs, 3);
     <[usize; 3]>::try_from(found.as_slice()).map_err(|_| {
         Error::Unsupported(format!(
-            "sRGB output from {what} needs colour channels 1, 2 and 3; the file has {}",
+            "sRGB output from {what} needs color channels 1, 2 and 3; the file has {}",
             found.len()
         ))
     })
@@ -288,9 +286,9 @@ fn plan_sycc(
     siz: &Siz,
     reduction: u8,
 ) -> Result<SrgbPlan> {
-    let colours = three_colours(channels, outputs, "sYCC")?;
-    same_format(&colours, outputs)?;
-    let [y, cb, cr] = colours.map(|at| outputs[at]);
+    let colors = three_colors(channels, outputs, "sYCC")?;
+    same_format(&colors, outputs)?;
+    let [y, cb, cr] = colors.map(|at| outputs[at]);
     if y.signed {
         return Err(Error::Unsupported(
             "sRGB output from signed sYCC samples".into(),
@@ -309,9 +307,9 @@ fn plan_sycc(
             )));
         }
     };
-    check_budget(outputs, &colours, siz, reduction)?;
+    check_budget(outputs, &colors, siz, reduction)?;
     Ok(SrgbPlan::Sycc {
-        channels: colours,
+        channels: colors,
         layout,
         odd_x: siz.x_offset & 1 == 1,
         odd_y: siz.y_offset & 1 == 1,
@@ -322,14 +320,14 @@ fn plan_sycc(
 /// chroma channels grow to the luma grid. Every other channel keeps its size.
 fn check_budget(
     outputs: &[ComponentInfo],
-    colours: &[usize; 3],
+    colors: &[usize; 3],
     siz: &Siz,
     reduction: u8,
 ) -> Result<()> {
     let luma = siz.image_extent_at(reduction);
     let mut total: u64 = 0;
     for (at, info) in outputs.iter().enumerate() {
-        let (width, height) = if colours.contains(&at) {
+        let (width, height) = if colors.contains(&at) {
             luma
         } else {
             siz.sampled_extent_at(info.x_sampling, info.y_sampling, reduction)
@@ -374,7 +372,7 @@ fn plan_icc(
 
 /// [`plan_icc`], with a profile OpenJPEG does not convert as
 /// [`Icc::Refused`]. The order follows OpenJPEG's: LittleCMS opens the
-/// profile, OpenJPEG picks the transform by colour space, and LittleCMS
+/// profile, OpenJPEG picks the transform by color space, and LittleCMS
 /// builds it. Every refusal of those three steps comes before this step's
 /// own checks on the profile and the channels, so a profile OpenJPEG leaves
 /// as coded passes through whatever the channels are.
@@ -388,17 +386,17 @@ fn plan_icc_or_refuse(
     let icc = Profile::parse(profile)?;
     match &icc.space {
         b"GRAY" => {
-            let input = icc.input_profile(Form::Grey)?;
-            let colours = colour_channels(channels, outputs, 0);
-            let [channel] = colours[..] else {
+            let input = icc.input_profile(Form::Gray)?;
+            let colors = color_channels(channels, outputs, 0);
+            let [channel] = colors[..] else {
                 return Err(Error::Unsupported(format!(
-                    "sRGB output from a monochrome ICC profile needs one colour channel; \
+                    "sRGB output from a monochrome ICC profile needs one color channel; \
                      the file has {}",
-                    colours.len()
+                    colors.len()
                 ))
                 .into());
             };
-            // OpenJPEG feeds three or more channels to a grey transform as if
+            // OpenJPEG feeds three or more channels to a gray transform as if
             // they were RGB, so there is no real conversion to match.
             if outputs.len() > 2 {
                 return Err(Error::Unsupported(format!(
@@ -409,16 +407,16 @@ fn plan_icc_or_refuse(
                 .into());
             }
             check_icc_format(outputs[channel], &[8], "monochrome")?;
-            let transform = Transform::new(&input, Format::Grey8);
+            let transform = Transform::new(&input, Format::Gray8);
             let mut table = Box::new([[0u8; 3]; 256]);
-            for (grey, rgb) in (0..=255u8).zip(table.iter_mut()) {
-                *rgb = transform.grey8(grey);
+            for (gray, rgb) in (0..=255u8).zip(table.iter_mut()) {
+                *rgb = transform.gray8(gray);
             }
             let neutral = table.iter().all(|&[r, g, b]| r == g && g == b);
             if !neutral {
-                check_grey_budget(outputs, channel, siz, reduction)?;
+                check_gray_budget(outputs, channel, siz, reduction)?;
             }
-            Ok(SrgbPlan::IccGrey {
+            Ok(SrgbPlan::IccGray {
                 channel,
                 table,
                 neutral,
@@ -435,9 +433,9 @@ fn plan_icc_or_refuse(
                 return Err(Icc::Refused);
             }
             let input = icc.input_profile(Form::Rgb)?;
-            let colours = three_colours(channels, outputs, "an RGB ICC profile")?;
-            uniform(&colours, outputs)?;
-            let info = outputs[colours[0]];
+            let colors = three_colors(channels, outputs, "an RGB ICC profile")?;
+            uniform(&colors, outputs)?;
+            let info = outputs[colors[0]];
             check_icc_format(info, &[8, 16], "RGB")?;
             let format = if info.bit_depth == 8 {
                 Format::Rgb8
@@ -445,7 +443,7 @@ fn plan_icc_or_refuse(
                 Format::Rgb16
             };
             Ok(SrgbPlan::IccRgb {
-                channels: colours,
+                channels: colors,
                 transform: Box::new(Transform::new(&input, format)),
             })
         }
@@ -458,16 +456,16 @@ fn plan_icc_or_refuse(
             // depth: it converts 16-bit samples and crashes on 8-bit ones.
             // YCbCr is not one of Annex I's restricted forms, so this step
             // does not apply it at any depth.
-            Err(unsupported_profile("for the `YCbr` colour space"))
+            Err(unsupported_profile("for the `YCbr` color space"))
         }
-        // OpenJPEG converts no other colour space.
+        // OpenJPEG converts no other color space.
         _ => Err(Icc::Refused),
     }
 }
 
-/// A grey channel that becomes R, G, B grows the output by two channels of
+/// A gray channel that becomes R, G, B grows the output by two channels of
 /// its size, which must stay under the decode guard.
-fn check_grey_budget(
+fn check_gray_budget(
     outputs: &[ComponentInfo],
     channel: usize,
     siz: &Siz,
@@ -483,7 +481,7 @@ fn check_grey_budget(
     }
     if total > MAX_IMAGE_SAMPLES {
         return Err(Error::Limit(format!(
-            "a monochrome ICC profile that maps grey to colour grows the output to over \
+            "a monochrome ICC profile that maps gray to color grows the output to over \
              {MAX_IMAGE_SAMPLES} samples, above the decode guard"
         )));
     }
@@ -498,7 +496,7 @@ fn validated_version([major, minor, _, _]: [u8; 4]) -> u32 {
 }
 
 /// The depths a profile is applied at: those where OpenJPEG + lcms read the
-/// samples at their own depth (8-bit and 16-bit RGB, 8-bit grey). At other
+/// samples at their own depth (8-bit and 16-bit RGB, 8-bit gray). At other
 /// depths OpenJPEG hands lcms the samples as 8- or 16-bit values and the
 /// result is wrong, so this decoder refuses them.
 fn check_icc_format(info: ComponentInfo, depths: &[u8], form: &str) -> Result<()> {
@@ -529,7 +527,7 @@ const MONACO_CURVE: [u8; 4] = 0x9478_EE00u32.to_be_bytes();
 enum Icc {
     /// OpenJPEG writes the samples as coded: LittleCMS refuses to open the
     /// profile or to build a transform from it, OpenJPEG has no transform
-    /// for its colour space, or its AFL test fails ([`first_four_differ`]).
+    /// for its color space, or its AFL test fails ([`first_four_differ`]).
     Refused,
     /// This step refuses the input.
     Error(Error),
@@ -549,10 +547,10 @@ fn unsupported_profile(what: &str) -> Icc {
     )))
 }
 
-/// The colour space of a profile this step applies.
+/// The color space of a profile this step applies.
 #[derive(Clone, Copy, PartialEq)]
 enum Form {
-    Grey,
+    Gray,
     Rgb,
 }
 
@@ -648,7 +646,7 @@ impl<'a> Profile<'a> {
     /// LittleCMS refuses comes first, as [`Icc::Refused`]; then the forms the
     /// port does not apply, as [`Error::Unsupported`].
     fn input_profile(&self, form: Form) -> std::result::Result<InputProfile, Icc> {
-        // A named colour profile takes one index channel, not RGB or grey
+        // A named color profile takes one index channel, not RGB or gray
         // samples (`GetXFormColorSpaces`, `IsProperColorSpace`).
         if &self.class == b"nmcl" {
             return Err(Icc::Refused);
@@ -675,7 +673,7 @@ impl<'a> Profile<'a> {
             return Err(Icc::Refused);
         }
         let (curves, colorants) = match form {
-            Form::Grey => (vec![self.curve(b"kTRC")?], [[0.0; 3]; 3]),
+            Form::Gray => (vec![self.curve(b"kTRC")?], [[0.0; 3]; 3]),
             Form::Rgb => {
                 let columns = [self.xyz(b"rXYZ")?, self.xyz(b"gXYZ")?, self.xyz(b"bXYZ")?];
                 let curves = vec![
@@ -731,17 +729,17 @@ impl<'a> Profile<'a> {
     /// The checks of `cmsReadTag` and of the lookup table readers
     /// (`Type_LUT8_Read`, `Type_LUT16_Read`, `Type_LUTA2B_Read`,
     /// `Type_MPE_Read`) that make LittleCMS refuse a table, and the channel
-    /// counts the transform needs: the profile's colour channels in, the
+    /// counts the transform needs: the profile's color channels in, the
     /// three of the connection space out. A table that passes may still not
     /// read, but this step does not apply one.
     fn check_lut(&self, signature: &[u8; 4], form: Form) -> std::result::Result<(), Icc> {
-        let colours = if form == Form::Grey { 1 } else { 3 };
+        let colors = if form == Form::Gray { 1 } else { 3 };
         if signature.starts_with(b"D2B") {
             let (_, body) = self.tag(signature, &[*b"mpet"])?;
             // Input and output channels (two bytes each), then the element
             // count.
             let channels = |at: usize| usize::from(u16::from_be_bytes([body[at], body[at + 1]]));
-            if body.len() < 8 || channels(0) != colours || channels(2) != 3 {
+            if body.len() < 8 || channels(0) != colors || channels(2) != 3 {
                 return Err(Icc::Refused);
             }
             return Ok(());
@@ -750,7 +748,7 @@ impl<'a> Profile<'a> {
         let &[inputs, outputs, grid, ..] = body else {
             return Err(Icc::Refused);
         };
-        if usize::from(inputs) != colours || outputs != 3 {
+        if usize::from(inputs) != colors || outputs != 3 {
             return Err(Icc::Refused);
         }
         if &kind == b"mAB " {
@@ -767,7 +765,7 @@ impl<'a> Profile<'a> {
         // The 3x3 matrix follows the four header bytes.
         let clut = 3 * usize::from(grid).pow(u32::from(inputs));
         let need = if &kind == b"mft1" {
-            40 + 256 * colours + clut + 256 * 3
+            40 + 256 * colors + clut + 256 * 3
         } else {
             let entries = body.get(40..44).ok_or(Icc::Refused)?;
             let input = usize::from(u16::from_be_bytes([entries[0], entries[1]]));
@@ -775,7 +773,7 @@ impl<'a> Profile<'a> {
             if input > 0x7fff || output > 0x7fff || input == 1 || output == 1 {
                 return Err(Icc::Refused);
             }
-            44 + 2 * (colours * input + clut + 3 * output)
+            44 + 2 * (colors * input + clut + 3 * output)
         };
         if body.len() < need {
             return Err(Icc::Refused);
@@ -908,39 +906,39 @@ impl SrgbPlan {
     /// calls this for every input; building the transform costs far more.
     pub(crate) fn read_profile(profile: &[u8]) {
         if let Ok(icc) = Profile::parse(profile) {
-            for form in [Form::Grey, Form::Rgb] {
+            for form in [Form::Gray, Form::Rgb] {
                 let _ = icc.input_profile(form);
             }
         }
     }
 
-    /// Describe the converted output in `metadata`: sRGB, or grey for a
-    /// monochrome profile that keeps grey, with no ICC profile. A grey
-    /// channel that becomes R, G, B gains two channel definitions, colours 2
-    /// and 3, after it, and a non-colour channel associated with the grey
+    /// Describe the converted output in `metadata`: sRGB, or gray for a
+    /// monochrome profile that keeps gray, with no ICC profile. A gray
+    /// channel that becomes R, G, B gains two channel definitions, colors 2
+    /// and 3, after it, and a non-color channel associated with the gray
     /// one is now associated with the whole image. Nothing changes when the
     /// samples pass through.
     pub(crate) fn describe(&self, metadata: &mut Jp2Metadata) {
         match self {
             SrgbPlan::PassThrough => {}
-            SrgbPlan::Sycc { .. } | SrgbPlan::IccRgb { .. } => metadata.colour = ColourSpace::Srgb,
-            SrgbPlan::IccGrey { neutral: true, .. } => metadata.colour = ColourSpace::Greyscale,
-            SrgbPlan::IccGrey { channel, .. } => {
-                metadata.colour = ColourSpace::Srgb;
+            SrgbPlan::Sycc { .. } | SrgbPlan::IccRgb { .. } => metadata.color = ColorSpace::Srgb,
+            SrgbPlan::IccGray { neutral: true, .. } => metadata.color = ColorSpace::Grayscale,
+            SrgbPlan::IccGray { channel, .. } => {
+                metadata.color = ColorSpace::Srgb;
                 for definition in &mut metadata.channels {
-                    if definition.kind != ChannelType::Colour
-                        && definition.association == Association::Colour(1)
+                    if definition.kind != ChannelType::Color
+                        && definition.association == Association::Color(1)
                     {
                         definition.association = Association::WholeImage;
                     }
                 }
                 let at = (*channel + 1).min(metadata.channels.len());
-                for colour in [3, 2] {
+                for color in [3, 2] {
                     metadata.channels.insert(
                         at,
                         ChannelDefinition {
-                            kind: ChannelType::Colour,
-                            association: Association::Colour(colour),
+                            kind: ChannelType::Color,
+                            association: Association::Color(color),
                         },
                     );
                 }
@@ -965,13 +963,13 @@ impl SrgbPlan {
                     };
                 }
             }
-            SrgbPlan::IccGrey {
+            SrgbPlan::IccGray {
                 channel, neutral, ..
             } => {
                 if !neutral {
-                    let grey = outputs[*channel];
-                    outputs.insert(*channel + 1, grey);
-                    outputs.insert(*channel + 1, grey);
+                    let gray = outputs[*channel];
+                    outputs.insert(*channel + 1, gray);
+                    outputs.insert(*channel + 1, gray);
                 }
             }
         }
@@ -1003,14 +1001,14 @@ impl SrgbPlan {
                     components[*at] = out;
                 }
             }
-            SrgbPlan::IccGrey {
+            SrgbPlan::IccGray {
                 channel,
                 table,
                 neutral,
             } => {
-                let grey = &components[*channel];
-                let mut rgb = [grey.clone(), grey.clone(), grey.clone()];
-                for (i, &sample) in grey.samples.iter().enumerate() {
+                let gray = &components[*channel];
+                let mut rgb = [gray.clone(), gray.clone(), gray.clone()];
+                for (i, &sample) in gray.samples.iter().enumerate() {
                     let out = table[clamp_index(sample, 255)];
                     for (plane, value) in rgb.iter_mut().zip(out) {
                         plane.samples[i] = i32::from(value);
@@ -1068,7 +1066,7 @@ fn same_grid(channels: &[&Component]) -> Result<()> {
             || other.samples.len() != first.samples.len()
         {
             return Err(Error::Inconsistent(format!(
-                "colour channels decoded at {}x{} and {}x{}",
+                "color channels decoded at {}x{} and {}x{}",
                 first.width, first.height, other.width, other.height
             )));
         }

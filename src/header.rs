@@ -19,7 +19,7 @@ pub struct Header {
     /// [`Image::height`](crate::Image::height).
     pub height: u32,
     /// One entry per [`Image::components`](crate::Image::components) entry,
-    /// in the same order: for a palettised JP2 file, the palette's channels.
+    /// in the same order: for a palettized JP2 file, the palette's channels.
     pub components: Vec<ComponentInfo>,
     /// What [`decode`](crate::decode) would put on
     /// [`Image::jp2`](crate::Image::jp2): `None` for a raw codestream.

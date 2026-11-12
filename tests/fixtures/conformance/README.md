@@ -157,7 +157,7 @@ ratchet as the Part 1 set). The same `COPYRIGHT` governs them, and the whole
 jp2/
   files/        fileN.jp2          — the nine reader files
   references/   jp2_N_K.pgx        — channel K of the reference for file N
-  manifest.json                    — boxes, colour, features, bounds, flags
+  manifest.json                    — boxes, color, features, bounds, flags
   boxes.json                       — ftyp, ihdr, colr, rreq fields (box walker)
   edge_cases.json                  — file5 patched into box-layer edge cases
 ```
@@ -165,19 +165,19 @@ jp2/
 The references are **display output**, not codestream samples. OpenJPEG's
 `jp2_N.tif` baselines are 8-bit RGB after palette expansion, channel
 definitions, sYCC to RGB, and ICC to sRGB, then `opj_decompress -p 8S`, which
-right-shifts deeper samples to 8 bits. Greyscale files (4, 6, 8) have three
+right-shifts deeper samples to 8 bits. Grayscale files (4, 6, 8) have three
 identical TIFF channels; one `.pgx` plane is kept (the script asserts they are
 identical before dropping two). That makes 21 reference planes: three for each
-of the six colour files, one for each greyscale file.
+of the six color files, one for each grayscale file.
 
-| File | Size | Channels | Depth | Boxes beyond `ihdr` + `colr` | Colour | Grade |
+| File | Size | Channels | Depth | Boxes beyond `ihdr` + `colr` | Color | Grade |
 | ---- | ---- | -------- | ----- | ---------------------------- | ------ | ----- |
 | `file1.jp2` | 768×512 | 3 | 8 | two `xml ` (before and after `jp2h`) | sRGB | exact |
 | `file2.jp2` | 480×640 | 3 | 8 | `cdef` | sYCC | PAE 4 / MSE 1 |
 | `file3.jp2` | 480×640 | 3 | 8 | none (chroma subsampled 2×2) | sYCC | PAE 4 / MSE 1 |
-| `file4.jp2` | 768×512 | 1 | 8 | none | greyscale | exact |
+| `file4.jp2` | 768×512 | 1 | 8 | none | grayscale | exact |
 | `file5.jp2` | 768×512 | 3 | 8 | `rreq`, second `colr` | ICC (546 bytes) | PAE 4 / MSE 1 |
-| `file6.jp2` | 768×512 | 1 | 12 | none | greyscale | exact, shift right 4 |
+| `file6.jp2` | 768×512 | 1 | 12 | none | grayscale | exact, shift right 4 |
 | `file7.jp2` | 480×640 | 3 | 16 | `rreq`, second `colr` | ICC (13332 bytes) | PAE 4 / MSE 1, shift right 8 |
 | `file8.jp2` | 700×400 | 1 | 8 | `xml ` after `jp2h` and after `jp2c`, `COM` marker | ICC (414 bytes) | PAE 4 / MSE 1 |
 | `file9.jp2` | 768×512 | 1 stored, 3 out | 8 | `pclr`, `cmap` | sRGB | exact |
@@ -191,13 +191,13 @@ the same measurement.
 
 `needs_srgb` marks files 2, 3, 5, 7 and 8, whose references are sRGB display
 output (sYCC or an ICC profile converted). The harness decodes those with
-`ColourOutput::Srgb` and grades the result against the display reference,
+`ColorOutput::Srgb` and grades the result against the display reference,
 after grading the default decode as coded (below). `shift_right` is the right
 shift that takes decoded samples to the reference's 8 bits (file 6: 4, file
 7: 8); file 7's sRGB output stays 16-bit and takes the same shift. File 8's
-sRGB output is one grey channel, graded against the one kept plane.
+sRGB output is one gray channel, graded against the one kept plane.
 
-Measured on the converted files (PAE / MSE per channel, R/G/B or grey; the
+Measured on the converted files (PAE / MSE per channel, R/G/B or gray; the
 OpenJPEG column is `opj_decompress -p 8S -force-rgb` on the `.jp2`, OpenJPEG
 2.5.0 with LittleCMS 2.14; file7's ours-vs-OpenJPEG is at its native 16
 bits, the ISO columns after the shift):
@@ -218,14 +218,14 @@ at every rendering intent).
 
 Files 2, 3, 5, 7 and 8 also carry an `as_coded` section: one reference per codestream
 component (`references/jp2_N_ascoded_K.pgx`), at the component's own size and
-depth, with no colour conversion and no shift. File 2's are in the order its
+depth, with no color conversion and no shift. File 2's are in the order its
 `cdef` gives (components 2, 1, 0), and that order is checked against
 `opj_decompress` on `file2.jp2` with its `colr` rewritten to sRGB, so OpenJPEG
 applies the `cdef` without converting sYCC. The harness grades these
 bit-exactly against the default decode, so the as-coded output cannot drift
 while the sRGB output is graded. The
 references come from OpenJPEG decoding the `jp2c` payload as a bare codestream,
-which keeps ICC handling out. Two OpenJPEG behaviours shape how: it converts
+which keeps ICC handling out. Two OpenJPEG behaviors shape how: it converts
 sYCC to RGB by heuristic for any 3-component image with sub-sampled chroma
 (`opj_decompress.c:1620-1626`), so file 3 is decoded one component at a time
 with `-c K` (its chroma stays 240×320); and `-c K` skips the inverse component
@@ -234,7 +234,7 @@ transform, so files 5 and 7 (`mct` 1) are decoded whole instead.
 `jp2/manifest.json` has the same top level as the Part 1 manifest, and every
 object denies unknown fields. Per entry: `file`, `index`, `graded_components`,
 `bit_exact`, `shift_right`, `needs_srgb`, `boxes` (`top` and `jp2h` box types in
-file order), `colour` (the first `colr`: `method` with `enum_cs` or
+file order), `color` (the first `colr`: `method` with `enum_cs` or
 `icc_bytes`), `features` (the Part 1 `features` object for the `jp2c` payload),
 `references`, `file_digest` and `reference_digests` (byte size and SHA-256 of each committed file, re-checked by the tests), `bounds`, and optionally `as_coded` (`references` and `reference_digests`, as above).
 

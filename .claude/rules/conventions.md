@@ -40,6 +40,17 @@ documentation currency pass, and the extended gate (`cargo doc`,
   the authoritative bar (compliance-class error bounds). Full strategy in
   `docs/correctness.md`.
 
+## Spelling
+- American English in code, the public API, error strings, rustdoc, docs,
+  the README, the CHANGELOG, comments and test names: color, gray/grayscale,
+  -ize/-ization, license (noun and verb), center, behavior.
+- Keep what refers directly to a specification or another project verbatim:
+  box types and field mnemonics (`colr`, `METH`, `EnumCS`, `cdef`, `Typ`,
+  `Asoc`), spec titles quoted as titles ("the Colour Specification box
+  (I.5.3.3)"), and OpenJPEG, LittleCMS and GDAL identifiers, file paths and
+  quoted messages.
+- Released CHANGELOG sections stay as written.
+
 ## Stay pure-Rust
 - The reason this crate exists is to avoid a C JPEG 2000 dependency. Do not add
   a native/C-binding dependency, ever. No `unsafe` unless a measured hot path

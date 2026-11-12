@@ -18,7 +18,7 @@ use super::BandKind;
 /// tag-tree pair per subband, none of it bounded by the code-block or sample
 /// budgets — a band empty in one axis carries no blocks while its resolution
 /// still has a full column of precincts. 2^18 leaves any real encode far behind
-/// (a 4096-square image at the 64×64 precincts JPIP favours needs ~5.5k) while
+/// (a 4096-square image at the 64×64 precincts JPIP favors needs ~5.5k) while
 /// capping the allocation in the tens of megabytes. Enforced *while* the geometry
 /// is built, before the precincts are allocated — see [`resolution_geoms`].
 pub(crate) const MAX_PRECINCTS: usize = 1 << 18;
@@ -74,7 +74,7 @@ pub(crate) struct PrecinctGeom {
 /// precinct grid is what decides how many packets this resolution contributes.
 /// A resolution whose rectangle is empty — `trx0 == trx1` or `try0 == try1` —
 /// has **zero precincts** (ISO B.6) and so contributes *no* packet. Reading one
-/// anyway would consume the next resolution's bytes and desynchronise the rest
+/// anyway would consume the next resolution's bytes and desynchronize the rest
 /// of the tile.
 ///
 /// Empty resolutions are not a curiosity: a tile-component only one sample wide

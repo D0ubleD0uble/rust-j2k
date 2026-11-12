@@ -29,7 +29,7 @@ use std::fmt;
 use std::panic;
 use std::path::{Path, PathBuf};
 
-use rust_j2k::{Association, ChannelType, ColourSpace, Error, Image, Jp2Metadata, Res};
+use rust_j2k::{Association, ChannelType, ColorSpace, Error, Image, Jp2Metadata, Res};
 use serde::{Deserialize, Serialize};
 
 /// One fixture's oracle snapshot: the decode a trusted reference produced, plus
@@ -61,8 +61,8 @@ pub struct Expected {
 ///
 /// ```json
 /// "jp2": {
-///   "colour": "srgb",
-///   "channels": ["colour/1", "colour/2", "colour/3"],
+///   "color": "srgb",
+///   "channels": ["color/1", "color/2", "color/3"],
 ///   "palette_applied": false,
 ///   "resolution": { "capture": [10000, 254, 10000, 254, 0, 0], "display": null },
 ///   "xml": [431, 741],
@@ -70,8 +70,8 @@ pub struct Expected {
 ///   "ipr": [120],
 ///   "uuid_info": [[["2b0d7e97aa2e317d9133e53161a2f7d0"], 24]],
 ///   "file_type": { "brand": "jp2 ", "minor_version": 0, "compatibility": ["jp2 "] },
-///   "image_header": { "compression": 7, "unknown_colour_space": 0, "ipr": 0 },
-///   "colour_specifications": [{ "method": 1, "precedence": 0, "approximation": 0,
+///   "image_header": { "compression": 7, "unknown_color_space": 0, "ipr": 0 },
+///   "color_specifications": [{ "method": 1, "precedence": 0, "approximation": 0,
 ///     "data_len": 4, "data_sha256": "<hex>", "enum_cs": 16 }],
 ///   "reader_requirements": null
 /// }
@@ -79,10 +79,10 @@ pub struct Expected {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Jp2Snapshot {
-    /// `srgb`, `greyscale`, `sycc`, `icc:<profile bytes>`, `enumerated:<n>`
+    /// `srgb`, `grayscale`, `sycc`, `icc:<profile bytes>`, `enumerated:<n>`
     /// or `unknown`.
-    pub colour: String,
-    /// One `<type>/<association>` per output channel: `colour/1`,
+    pub color: String,
+    /// One `<type>/<association>` per output channel: `color/1`,
     /// `opacity/whole`, `unspecified/none`, `other(7)/other(9)`.
     pub channels: Vec<String>,
     pub palette_applied: bool,
@@ -105,7 +105,7 @@ pub struct Jp2Snapshot {
     /// The `ihdr` fields that are not taken from the codestream.
     pub image_header: ImageHeaderSnapshot,
     /// Every counted `colr` box, in file order.
-    pub colour_specifications: Vec<ColourSpecSnapshot>,
+    pub color_specifications: Vec<ColorSpecSnapshot>,
     /// The first well-formed top-level `rreq` box, if any.
     pub reader_requirements: Option<ReaderRequirementsSnapshot>,
 }
@@ -118,7 +118,7 @@ pub struct Jp2Snapshot {
 pub struct Jp2Boxes {
     pub file_type: FileTypeSnapshot,
     pub image_header: ImageHeaderSnapshot,
-    pub colour_specifications: Vec<ColourSpecSnapshot>,
+    pub color_specifications: Vec<ColorSpecSnapshot>,
     pub reader_requirements: Option<ReaderRequirementsSnapshot>,
 }
 
@@ -136,7 +136,7 @@ pub struct FileTypeSnapshot {
 #[serde(deny_unknown_fields)]
 pub struct ImageHeaderSnapshot {
     pub compression: u8,
-    pub unknown_colour_space: u8,
+    pub unknown_color_space: u8,
     pub ipr: u8,
 }
 
@@ -144,7 +144,7 @@ pub struct ImageHeaderSnapshot {
 /// and `EnumCS` when `METH` is 1 with a 4-byte value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ColourSpecSnapshot {
+pub struct ColorSpecSnapshot {
     pub method: u8,
     pub precedence: u8,
     pub approximation: u8,
@@ -194,19 +194,19 @@ impl Jp2Boxes {
             },
             image_header: ImageHeaderSnapshot {
                 compression: header.compression,
-                unknown_colour_space: header.unknown_colour_space,
-                ipr: header.ipr,
+                unknown_color_space: header.unknown_color_space,
+                ipr: header.ipr_flag,
             },
-            colour_specifications: metadata
-                .colour_specifications
+            color_specifications: metadata
+                .color_specifications
                 .iter()
-                .map(|c| ColourSpecSnapshot {
+                .map(|c| ColorSpecSnapshot {
                     method: c.method,
                     precedence: c.precedence,
                     approximation: c.approximation,
-                    data_len: c.data.len(),
-                    data_sha256: jp2::sha256_hex(&c.data),
-                    enum_cs: <[u8; 4]>::try_from(c.data.as_slice())
+                    data_len: c.payload.len(),
+                    data_sha256: jp2::sha256_hex(&c.payload),
+                    enum_cs: <[u8; 4]>::try_from(c.payload.as_slice())
                         .ok()
                         .filter(|_| c.method == 1)
                         .map(u32::from_be_bytes),
@@ -244,18 +244,18 @@ pub struct ResolutionSnapshot {
 impl Jp2Snapshot {
     /// The snapshot of decoded metadata, to compare against a recorded one.
     pub fn of(metadata: &Jp2Metadata) -> Self {
-        let colour = match &metadata.colour {
-            ColourSpace::Srgb => "srgb".to_string(),
-            ColourSpace::Greyscale => "greyscale".to_string(),
-            ColourSpace::Sycc => "sycc".to_string(),
-            ColourSpace::RestrictedIcc(profile) => format!("icc:{}", profile.len()),
-            ColourSpace::Enumerated(n) => format!("enumerated:{n}"),
-            ColourSpace::Unknown => "unknown".to_string(),
-            // `ColourSpace` is non-exhaustive: a new variant needs a snapshot name.
+        let color = match &metadata.color {
+            ColorSpace::Srgb => "srgb".to_string(),
+            ColorSpace::Grayscale => "grayscale".to_string(),
+            ColorSpace::Sycc => "sycc".to_string(),
+            ColorSpace::RestrictedIcc(profile) => format!("icc:{}", profile.len()),
+            ColorSpace::Enumerated(n) => format!("enumerated:{n}"),
+            ColorSpace::Unknown => "unknown".to_string(),
+            // `ColorSpace` is non-exhaustive: a new variant needs a snapshot name.
             other => panic!("no snapshot name for {other:?}"),
         };
         let kind = |k: ChannelType| match k {
-            ChannelType::Colour => "colour".to_string(),
+            ChannelType::Color => "color".to_string(),
             ChannelType::Opacity => "opacity".to_string(),
             ChannelType::PremultipliedOpacity => "premultiplied".to_string(),
             ChannelType::Unspecified => "unspecified".to_string(),
@@ -263,7 +263,7 @@ impl Jp2Snapshot {
         };
         let association = |a: Association| match a {
             Association::WholeImage => "whole".to_string(),
-            Association::Colour(n) => n.to_string(),
+            Association::Color(n) => n.to_string(),
             Association::None => "none".to_string(),
         };
         let hex = |id: &[u8; 16]| id.iter().map(|b| format!("{b:02x}")).collect::<String>();
@@ -284,9 +284,9 @@ impl Jp2Snapshot {
         Jp2Snapshot {
             file_type: boxes.file_type,
             image_header: boxes.image_header,
-            colour_specifications: boxes.colour_specifications,
+            color_specifications: boxes.color_specifications,
             reader_requirements: boxes.reader_requirements,
-            colour,
+            color,
             channels: metadata
                 .channels
                 .iter()
@@ -584,7 +584,7 @@ fn load_snapshot(path: &Path) -> Result<Expected, String> {
 /// The image area, the component count, and each component's geometry must match
 /// exactly; then each sample must agree within the snapshot's tolerance —
 /// bit-exact for [`Tolerance::Exact`], within an absolute bound for
-/// [`Tolerance::Absolute`]. Returns the first divergence so a failure localises
+/// [`Tolerance::Absolute`]. Returns the first divergence so a failure localizes
 /// to a single cause.
 pub fn compare(actual: &Image, expected: &Expected) -> Result<(), Mismatch> {
     let actual_image = ImageGeometry {

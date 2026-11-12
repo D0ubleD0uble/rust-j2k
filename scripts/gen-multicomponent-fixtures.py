@@ -4,7 +4,7 @@
 The ISO/IEC 15444-4 corpus cannot grade multi-component decoding on its own:
 every one of its multi-component entries also needs a feature that is not
 decoded yet (a progression other than LRCP, several quality layers, a tile grid,
-an image origin, or the reversible colour transform). `p0_14` comes closest and
+an image origin, or the reversible color transform). `p0_14` comes closest and
 still needs RCT. So the multi-component path is graded against synthetic
 codestreams encoded by OpenJPEG, with `opj_decompress` supplying the per-component
 oracle -- the same arrangement Phase 1 uses for its GRIB2 fixtures.
@@ -115,7 +115,7 @@ def build(
             "-b", "16,16",
             # No `-c`: passing precinct sizes sets the Scod "user-defined
             # precincts" bit even at the maximal size, which the decoder rejects.
-            # Omitting it leaves the default maximal precincts unsignalled.
+            # Omitting it leaves the default maximal precincts unsignaled.
         ]
         if subsampling != 1:
             flags += ["-s", f"{subsampling},{subsampling}"]

@@ -1,4 +1,4 @@
-//! The colour space `decode` reports for the ISO/IEC 15444-4 JP2 reader files
+//! The color space `decode` reports for the ISO/IEC 15444-4 JP2 reader files
 //! (`tests/fixtures/conformance/jp2/files/file1.jp2` .. `file9.jp2`).
 //!
 //! The oracle is each file's own `colr` box: a separate, minimal box walk here
@@ -9,20 +9,20 @@ mod support;
 
 use std::path::PathBuf;
 
-use rust_j2k::{ColourSpace, decode};
+use rust_j2k::{ColorSpace, decode};
 use support::jp2::sha256_hex;
 
 enum Want {
-    Colour(ColourSpace),
+    Color(ColorSpace),
     /// The first `colr` is an ICC profile of this length and SHA-256.
     Icc(usize, &'static str),
 }
 
 const EXPECT: &[(u32, Want)] = &[
-    (1, Want::Colour(ColourSpace::Srgb)),
-    (2, Want::Colour(ColourSpace::Sycc)),
-    (3, Want::Colour(ColourSpace::Sycc)),
-    (4, Want::Colour(ColourSpace::Greyscale)),
+    (1, Want::Color(ColorSpace::Srgb)),
+    (2, Want::Color(ColorSpace::Sycc)),
+    (3, Want::Color(ColorSpace::Sycc)),
+    (4, Want::Color(ColorSpace::Grayscale)),
     (
         5,
         Want::Icc(
@@ -30,7 +30,7 @@ const EXPECT: &[(u32, Want)] = &[
             "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581",
         ),
     ),
-    (6, Want::Colour(ColourSpace::Greyscale)),
+    (6, Want::Color(ColorSpace::Grayscale)),
     (
         7,
         Want::Icc(
@@ -45,7 +45,7 @@ const EXPECT: &[(u32, Want)] = &[
             "64ed586e213e2dd285927f0eb9cc994076b2777b9815589a532889d7703e05da",
         ),
     ),
-    (9, Want::Colour(ColourSpace::Srgb)),
+    (9, Want::Color(ColorSpace::Srgb)),
 ];
 
 fn path(n: u32) -> PathBuf {
@@ -91,34 +91,33 @@ fn first_colr(bytes: &[u8]) -> &[u8] {
 fn kakadu_files_with_unkc_1_report_their_colr_value() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jp2_real");
     let files = [
-        ("byte.jp2", ColourSpace::Greyscale),
-        ("byte_tlm_plt.jp2", ColourSpace::Greyscale),
-        ("int16.jp2", ColourSpace::Greyscale),
-        ("rgbwcmyk01_YeGeo_kakadu.jp2", ColourSpace::Srgb),
-        ("small_200ppcm.jp2", ColourSpace::Srgb),
+        ("byte.jp2", ColorSpace::Grayscale),
+        ("byte_tlm_plt.jp2", ColorSpace::Grayscale),
+        ("int16.jp2", ColorSpace::Grayscale),
+        ("rgbwcmyk01_YeGeo_kakadu.jp2", ColorSpace::Srgb),
+        ("small_200ppcm.jp2", ColorSpace::Srgb),
     ];
     for (name, want) in files {
         let bytes = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
         let ihdr = bytes.windows(4).position(|w| w == b"ihdr").unwrap() + 4;
         assert_eq!(bytes[ihdr + 12], 1, "{name}: UnkC");
         let image = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(image.jp2.expect("metadata").colour, want, "{name}");
+        assert_eq!(image.jp2.expect("metadata").color, want, "{name}");
     }
 }
 
 #[test]
-fn decode_reports_the_colour_space_of_each_conformance_file() {
+fn decode_reports_the_color_space_of_each_conformance_file() {
     for (n, want) in EXPECT {
         let bytes = std::fs::read(path(*n)).unwrap_or_else(|e| panic!("file{n}: {e}"));
         match want {
-            Want::Colour(colour) => {
+            Want::Color(color) => {
                 let image = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
-                assert_eq!(&image.jp2.expect("metadata").colour, colour, "file{n}");
+                assert_eq!(&image.jp2.expect("metadata").color, color, "file{n}");
             }
             Want::Icc(len, sha256) => {
                 let image = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
-                let ColourSpace::RestrictedIcc(profile) = image.jp2.expect("metadata").colour
-                else {
+                let ColorSpace::RestrictedIcc(profile) = image.jp2.expect("metadata").color else {
                     panic!("file{n}: expected a restricted ICC profile");
                 };
                 let payload = first_colr(&bytes);
@@ -131,12 +130,12 @@ fn decode_reports_the_colour_space_of_each_conformance_file() {
     }
 }
 
-/// File 2's `cdef` (components 0, 1, 2 are colours 3, 2, 1) puts its channels
-/// in colour order and labels them so. Its sYCC samples are converted only
-/// under `ColourOutput::Srgb`, which `tests/conformance_jp2.rs` grades after
+/// File 2's `cdef` (components 0, 1, 2 are colors 3, 2, 1) puts its channels
+/// in color order and labels them so. Its sYCC samples are converted only
+/// under `ColorOutput::Srgb`, which `tests/conformance_jp2.rs` grades after
 /// its as-coded check.
 #[test]
-fn file2_comes_out_in_colour_order() {
+fn file2_comes_out_in_color_order() {
     use rust_j2k::{Association, ChannelDefinition, ChannelType};
     let bytes = std::fs::read(path(2)).expect("file2");
     let at = bytes.windows(4).position(|w| w == b"cdef").unwrap() + 4;
@@ -147,14 +146,14 @@ fn file2_comes_out_in_colour_order() {
     );
     let image = decode(&bytes).expect("decodes");
     let jp2 = image.jp2.expect("metadata");
-    assert_eq!(jp2.colour, ColourSpace::Sycc);
-    let colours: Vec<ChannelDefinition> = (1..=3)
+    assert_eq!(jp2.color, ColorSpace::Sycc);
+    let colors: Vec<ChannelDefinition> = (1..=3)
         .map(|n| ChannelDefinition {
-            kind: ChannelType::Colour,
-            association: Association::Colour(n),
+            kind: ChannelType::Color,
+            association: Association::Color(n),
         })
         .collect();
-    assert_eq!(jp2.channels, colours);
+    assert_eq!(jp2.channels, colors);
     let jp2c = bytes.windows(4).position(|w| w == b"jp2c").unwrap() + 4;
     let raw = decode(&bytes[jp2c..]).expect("bare codestream");
     let reversed: Vec<_> = raw.components.into_iter().rev().collect();

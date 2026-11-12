@@ -7,7 +7,7 @@
 
 use super::SIGNATURE;
 use crate::{
-    Association, ChannelDefinition, ChannelType, ColourSpace, ColourSpecification, DecodeOptions,
+    Association, ChannelDefinition, ChannelType, ColorSpace, ColorSpecification, DecodeOptions,
     Error, FileType, Image, ImageHeader, Jp2Metadata, Ratio, Res, Resolution, UuidBox, decode,
     decode_with, read_header,
 };
@@ -89,7 +89,7 @@ fn good_ihdr() -> Vec<u8> {
     ihdr(HEIGHT, WIDTH, COMPONENTS)
 }
 
-/// An enumerated sRGB colour specification.
+/// An enumerated sRGB color specification.
 fn colr() -> Vec<u8> {
     bx(b"colr", &[1, 0, 0, 0, 0, 0, 16])
 }
@@ -170,20 +170,20 @@ fn a_minimal_jp2_decodes_to_its_codestream() {
     assert_decodes_like_raw(&minimal());
 }
 
-/// The skeleton every JP2 decode carries without `cdef` or `pclr`: the colour
-/// space from `colr`, one colour channel per component, no palette.
+/// The skeleton every JP2 decode carries without `cdef` or `pclr`: the color
+/// space from `colr`, one color channel per component, no palette.
 #[test]
 fn a_jp2_decode_carries_the_metadata_skeleton() {
     let image = decode(&minimal()).expect("decodes");
-    let colour = |n| ChannelDefinition {
-        kind: ChannelType::Colour,
-        association: Association::Colour(n),
+    let color = |n| ChannelDefinition {
+        kind: ChannelType::Color,
+        association: Association::Color(n),
     };
     assert_eq!(
         image.jp2,
         Some(Jp2Metadata {
-            colour: ColourSpace::Srgb,
-            channels: vec![colour(1), colour(2), colour(3)],
+            color: ColorSpace::Srgb,
+            channels: vec![color(1), color(2), color(3)],
             palette_applied: false,
             palette: None,
             channel_mapping: None,
@@ -195,14 +195,14 @@ fn a_jp2_decode_carries_the_metadata_skeleton() {
             uuid_info: Vec::new(),
             image_header: ImageHeader {
                 compression: 7,
-                unknown_colour_space: 0,
-                ipr: 0,
+                unknown_color_space: 0,
+                ipr_flag: 0,
             },
-            colour_specifications: vec![ColourSpecification {
+            color_specifications: vec![ColorSpecification {
                 method: 1,
                 precedence: 0,
                 approximation: 0,
-                data: vec![0, 0, 0, 16],
+                payload: vec![0, 0, 0, 16],
             }],
             file_type: FileType {
                 brand: *b"jp2 ",
@@ -349,7 +349,7 @@ fn a_palette_box_decodes() {
         ]),
         jp2c(),
     ]))
-    .expect("a palettised file decodes");
+    .expect("a palettized file decodes");
     palette::assert_palette_applied(&image);
 }
 
@@ -367,7 +367,7 @@ fn a_palette_box_without_a_component_mapping_box_is_ignored() {
 }
 
 /// A channel definition box is applied: file2's layout (components 0, 1, 2
-/// are colours 3, 2, 1) comes out in colour order.
+/// are colors 3, 2, 1) comes out in color order.
 #[test]
 fn a_channel_definition_box_is_applied() {
     let bytes = file(&[
@@ -573,9 +573,9 @@ fn header_boxes_misplaced_before_jp2h_are_ignored() {
     assert_eq!(parsed.other.len(), 4);
 }
 
-/// `colour_specifications` holds every `colr` the header reads, in file
+/// `color_specifications` holds every `colr` the header reads, in file
 /// order: an ignored `METH` 3 box, the first usable one (which alone sets
-/// `colour`), one in a second `jp2h` and one misplaced after `jp2h`. A `colr`
+/// `color`), one in a second `jp2h` and one misplaced after `jp2h`. A `colr`
 /// before `jp2h` or after the codestream is not a header box and is left out.
 #[test]
 fn every_header_colr_is_reported_in_file_order() {
@@ -596,15 +596,15 @@ fn every_header_colr_is_reported_in_file_order() {
     assert_decodes_like_raw(&bytes);
     let jp2 = decode(&bytes).unwrap().jp2.unwrap();
     assert_eq!(read_header(&bytes).unwrap().jp2.as_ref(), Some(&jp2));
-    assert_eq!(jp2.colour, ColourSpace::Greyscale);
-    let spec = |[method, precedence, approximation]: [u8; 3], data: &[u8]| ColourSpecification {
+    assert_eq!(jp2.color, ColorSpace::Grayscale);
+    let spec = |[method, precedence, approximation]: [u8; 3], payload: &[u8]| ColorSpecification {
         method,
         precedence,
         approximation,
-        data: data.to_vec(),
+        payload: payload.to_vec(),
     };
     assert_eq!(
-        jp2.colour_specifications,
+        jp2.color_specifications,
         [
             spec([3, 1, 2], &[0xAB]),
             spec([1, 0, 0], &[0, 0, 0, 17]),
@@ -1013,10 +1013,10 @@ fn the_resolution_box_is_read() {
 }
 
 #[test]
-fn a_ratio_converts_to_grid_points_per_metre() {
-    assert_eq!(ratio(3, 4, 2).grid_points_per_metre(), Some(75.0));
-    assert_eq!(ratio(5, 1, -1).grid_points_per_metre(), Some(0.5));
-    assert_eq!(ratio(1, 0, 0).grid_points_per_metre(), None);
+fn a_ratio_converts_to_grid_points_per_meter() {
+    assert_eq!(ratio(3, 4, 2).grid_points_per_meter(), Some(75.0));
+    assert_eq!(ratio(5, 1, -1).grid_points_per_meter(), Some(0.5));
+    assert_eq!(ratio(1, 0, 0).grid_points_per_meter(), None);
 }
 
 /// OpenJPEG 2.5.0 does not read `res `, so no shape of it fails there: every
@@ -1243,18 +1243,18 @@ fn read_header_reads_no_tile_data() {
     ));
 }
 
-/// Without a `cdef`, the first N channels are colours 1..=N, N from the
-/// colour space, and every channel past them is unspecified (I.5.3.6).
+/// Without a `cdef`, the first N channels are colors 1..=N, N from the
+/// color space, and every channel past them is unspecified (I.5.3.6).
 #[test]
-fn default_labels_stop_at_the_colour_spaces_count() {
+fn default_labels_stop_at_the_color_spaces_count() {
     let icc = |space: &[u8; 4]| {
         let mut profile = vec![0u8; 128];
         profile[16..20].copy_from_slice(space);
-        ColourSpace::RestrictedIcc(profile)
+        ColorSpace::RestrictedIcc(profile)
     };
-    // Every enumerated value with a colour count (ISO/IEC 15444-2 Table M.25),
+    // Every enumerated value with a color count (ISO/IEC 15444-2 Table M.25),
     // so dropping one arm fails here; 16, 17 and 18 arrive as their own
-    // `ColourSpace` variants.
+    // `ColorSpace` variants.
     let enumerated = [
         (0, 1),
         (1, 3),
@@ -1274,9 +1274,9 @@ fn default_labels_stop_at_the_colour_spaces_count() {
         (24, 3),
     ];
     let mut cases = vec![
-        (ColourSpace::Srgb, 3),
-        (ColourSpace::Sycc, 3),
-        (ColourSpace::Greyscale, 1),
+        (ColorSpace::Srgb, 3),
+        (ColorSpace::Sycc, 3),
+        (ColorSpace::Grayscale, 1),
         (icc(b"GRAY"), 1),
         (icc(b"RGB "), 3),
         (icc(b"YCbr"), 3),
@@ -1290,13 +1290,13 @@ fn default_labels_stop_at_the_colour_spaces_count() {
     cases.extend(
         enumerated
             .iter()
-            .map(|&(value, n)| (ColourSpace::Enumerated(value), n)),
+            .map(|&(value, n)| (ColorSpace::Enumerated(value), n)),
     );
-    for (space, colours) in cases {
-        let labels = super::colour_channels(6, &space).unwrap();
+    for (space, colors) in cases {
+        let labels = super::color_channels(6, &space).unwrap();
         for (i, label) in labels.iter().enumerate() {
-            let want = if i < colours {
-                (ChannelType::Colour, Association::Colour(i as u16 + 1))
+            let want = if i < colors {
+                (ChannelType::Color, Association::Color(i as u16 + 1))
             } else {
                 (ChannelType::Unspecified, Association::None)
             };
@@ -1319,27 +1319,27 @@ fn default_labels_stop_at_the_colour_spaces_count() {
         (icc(b"0CLR"), None),
         (icc(b"1CLR"), None),
     ] {
-        assert_eq!(super::colour_count(&space), want, "{space:?}");
+        assert_eq!(super::color_count(&space), want, "{space:?}");
     }
-    // A space whose colour count is not known keeps every channel a colour.
+    // A space whose color count is not known keeps every channel a color.
     for space in [
-        ColourSpace::Unknown,
-        ColourSpace::Enumerated(2),
-        ColourSpace::Enumerated(5),
-        ColourSpace::Enumerated(10),
-        ColourSpace::Enumerated(25),
-        ColourSpace::Enumerated(99),
-        ColourSpace::RestrictedIcc(Vec::new()),
-        // `nCLR` is 2 to 15 colours, upper-case: these are not signatures.
+        ColorSpace::Unknown,
+        ColorSpace::Enumerated(2),
+        ColorSpace::Enumerated(5),
+        ColorSpace::Enumerated(10),
+        ColorSpace::Enumerated(25),
+        ColorSpace::Enumerated(99),
+        ColorSpace::RestrictedIcc(Vec::new()),
+        // `nCLR` is 2 to 15 colors, upper-case: these are not signatures.
         icc(b"0CLR"),
         icc(b"1CLR"),
         icc(b"aCLR"),
         icc(b"fCLR"),
         icc(b"GCLR"),
     ] {
-        let labels = super::colour_channels(6, &space).unwrap();
+        let labels = super::color_channels(6, &space).unwrap();
         assert!(
-            labels.iter().all(|l| l.kind == ChannelType::Colour),
+            labels.iter().all(|l| l.kind == ChannelType::Color),
             "{space:?}"
         );
     }

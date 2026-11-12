@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    ColourSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, decode_with, read_header,
+    ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, decode_with, read_header,
     read_header_with,
 };
 
@@ -251,15 +251,15 @@ fn the_part4_files_report_their_xml_boxes() {
 /// compatibility list, an `rreq` box, read in `tests/jp2_header_fields.rs`).
 /// The metadata is read: the first `colr` (a restricted ICC profile of 546 and
 /// 13332 bytes, which is what each profile's own size field says) and three
-/// colour channels.
+/// color channels.
 #[test]
 fn the_jpx_compatible_files_report_their_metadata() {
     for (n, profile) in [(5, 546), (7, 13332)] {
         let bytes = part4(n);
         let header = read_header(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
         let jp2 = header.jp2.clone().unwrap();
-        match &jp2.colour {
-            ColourSpace::RestrictedIcc(icc) => {
+        match &jp2.color {
+            ColorSpace::RestrictedIcc(icc) => {
                 assert_eq!(icc.len(), profile, "file{n}");
                 assert_eq!(
                     u32::from_be_bytes(icc[..4].try_into().unwrap()) as usize,
@@ -286,7 +286,7 @@ fn the_gdal_samples_report_their_resolution() {
     assert_eq!(fields(dpi.vertical), (10000, 254, 0));
     assert_eq!(fields(dpi.horizontal), (10000, 254, 0));
     assert_eq!(tlm.resolution.display, None);
-    let per_inch = dpi.vertical.grid_points_per_metre().unwrap() * 0.0254;
+    let per_inch = dpi.vertical.grid_points_per_meter().unwrap() * 0.0254;
     assert!(
         (per_inch - 1.0).abs() < 1e-12,
         "one point per inch: {per_inch}"

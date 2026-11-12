@@ -451,7 +451,7 @@ def main_part1():
 # The references (`jp2_N.tif`) are what OpenJPEG's conformance run grades
 # against: 8-bit RGB *display output*, produced after palette expansion, cdef,
 # sYCC -> RGB and ICC -> sRGB, then `-p 8S` (a plain right shift to 8 bits).
-# Greyscale files carry three identical channels, of which one PGX plane is kept.
+# Grayscale files carry three identical channels, of which one PGX plane is kept.
 # ---------------------------------------------------------------------------
 
 JP2_DIR = os.path.join(HERE, "jp2")
@@ -459,8 +459,8 @@ JP2_FILES_DIR = os.path.join(JP2_DIR, "files")
 JP2_REF_DIR = os.path.join(JP2_DIR, "references")
 
 JP2_COUNT = 9
-# Greyscale: the TIFF reference has three identical channels; keep one plane.
-JP2_GREY = {4, 6, 8}
+# Grayscale: the TIFF reference has three identical channels; keep one plane.
+JP2_GRAY = {4, 6, 8}
 # Graded bit-exactly (measured: opj_decompress -p 8S matches the reference).
 JP2_BIT_EXACT = {1, 4, 6, 9}
 # Output depth scaling: `opj_decompress -p 8S` right-shifts to 8 bits.
@@ -470,7 +470,7 @@ JP2_SHIFT_RIGHT = {6: 4, 7: 8}
 JP2_NEEDS_SRGB = {2, 3, 5, 7, 8}
 # The needs-sRGB files that decode as coded today. Each gets an as-coded
 # reference per channel: the codestream samples at the native component size
-# and depth, no colour conversion, no shift, in the order the file's `cdef`
+# and depth, no color conversion, no shift, in the order the file's `cdef`
 # gives (file2's puts its components in reverse).
 JP2_AS_CODED = {2, 3, 5, 7, 8}
 # OpenJPEG tests/conformance/CMakeLists.txt, "Tests about JP2 file": Part 4
@@ -500,8 +500,8 @@ def read_boxes(data: bytes, start: int, end: int):
 
 
 def jp2_structure(data: bytes) -> dict:
-    """Box layout, colour specification, and the jp2c payload of one JP2 file."""
-    top, jp2h, colour, payload, cdef = [], [], None, None, None
+    """Box layout, color specification, and the jp2c payload of one JP2 file."""
+    top, jp2h, color, payload, cdef = [], [], None, None, None
     for tbox, s, e in read_boxes(data, 0, len(data)):
         top.append(tbox.decode("latin-1"))
         if tbox == b"jp2h":
@@ -518,20 +518,20 @@ def jp2_structure(data: bytes) -> dict:
                     ]
                     if cs + 2 + 6 * n > ce:
                         raise ValueError("truncated cdef box")
-                if ctype == b"colr" and colour is None:  # the first colr wins
+                if ctype == b"colr" and color is None:  # the first colr wins
                     meth = data[cs]
-                    colour = {"method": meth}
+                    color = {"method": meth}
                     if meth == 1:
-                        colour["enum_cs"] = int.from_bytes(data[cs + 3 : cs + 7], "big")
+                        color["enum_cs"] = int.from_bytes(data[cs + 3 : cs + 7], "big")
                     elif meth == 2:
-                        colour["icc_bytes"] = ce - (cs + 3)
+                        color["icc_bytes"] = ce - (cs + 3)
         elif tbox == b"jp2c":
             payload = data[s:e]
-    if payload is None or colour is None:
+    if payload is None or color is None:
         raise ValueError("no jp2c or no colr box")
     return {
         "boxes": {"top": top, "jp2h": jp2h},
-        "colour": colour,
+        "color": color,
         "payload": payload,
         "cdef": cdef,
     }
@@ -592,13 +592,13 @@ def regrade_with_opj(n: int, jp2_path: str, planes: list, bit_exact: bool) -> li
             capture_output=True,
         )
         got = read_tiff_planes(out)
-    # A greyscale decode may come back as one channel or three identical ones;
+    # A grayscale decode may come back as one channel or three identical ones;
     # either way it is graded against the single kept plane.
     want = planes if len(planes) == len(got) else [planes[0]] * len(got)
     if len(planes) == 1 and len(got) == 3:
         for c in (1, 2):
             if not (got[0] == got[c]).all():
-                raise ValueError(f"file{n}: opj_decompress grey channel {c} differs from 0")
+                raise ValueError(f"file{n}: opj_decompress gray channel {c} differs from 0")
     elif len(got) != len(planes):
         raise ValueError(f"file{n}: opj output has {len(got)} channels, expected {len(planes)}")
     results = []
@@ -617,12 +617,12 @@ def regrade_with_opj(n: int, jp2_path: str, planes: list, bit_exact: bool) -> li
 
 def cdef_order(n: int, cdef: list, count: int) -> list:
     """The output order a `cdef` gives: `order[p]` is the component at position
-    `p`. Only the simple form is accepted (every entry a colour, each component
-    and each colour once), where OpenJPEG's swaps put colour `a` at `a - 1`."""
+    `p`. Only the simple form is accepted (every entry a color, each component
+    and each color once), where OpenJPEG's swaps put color `a` at `a - 1`."""
     if sorted(cn for cn, _, _ in cdef) != list(range(count)) or sorted(
         asoc for _, _, asoc in cdef
     ) != list(range(1, count + 1)) or any(typ != 0 for _, typ, _ in cdef):
-        raise ValueError(f"file{n}: cdef {cdef} is not a plain colour permutation")
+        raise ValueError(f"file{n}: cdef {cdef} is not a plain color permutation")
     order = [0] * count
     for cn, _, asoc in cdef:
         order[asoc - 1] = cn
@@ -633,7 +633,7 @@ def opj_cdef_check(n: int, data: bytes, info: dict, raws: list, tmp: str) -> Non
     """Hold the permuted planes to OpenJPEG's own `cdef` handling: decode the
     `.jp2` whole with its first `colr` rewritten to sRGB (enum 16), which stops
     `opj_decompress` converting sYCC, and require the same planes."""
-    if info["colour"].get("method") != 1:
+    if info["color"].get("method") != 1:
         raise ValueError(f"file{n}: the cdef check rewrites an enumerated colr")
     at = data.index(b"colr") + 4
     patched = data[: at + 3] + (16).to_bytes(4, "big") + data[at + 7 :]
@@ -654,12 +654,12 @@ def opj_cdef_check(n: int, data: bytes, info: dict, raws: list, tmp: str) -> Non
 def as_coded_references(n: int, info: dict, features: dict, data: bytes) -> list:
     """One PGX per channel of the codestream as coded, from OpenJPEG.
 
-    The `jp2c` payload is decoded as a bare codestream, so no box-layer colour
+    The `jp2c` payload is decoded as a bare codestream, so no box-layer color
     handling (ICC, palette) can touch the samples; the file must have no
     palette. A `cdef` only reorders the channels: the planes are put in its
     order (see `cdef_order`), and that order is checked against OpenJPEG
-    decoding the file itself with its colour space rewritten to sRGB
-    (`opj_cdef_check`). Two OpenJPEG behaviours decide how:
+    decoding the file itself with its color space rewritten to sRGB
+    (`opj_cdef_check`). Two OpenJPEG behaviors decide how:
 
     - `opj_decompress` converts sYCC to RGB by heuristic whenever a
       3-component image has sub-sampled chroma (opj_decompress.c:1620-1626),
@@ -748,10 +748,10 @@ def build_jp2_entry(n: int) -> dict:
 
     if len(channels) != 3:
         raise ValueError(f"jp2_{n}.tif: expected 3 channels, got {len(channels)}")
-    if n in JP2_GREY:
+    if n in JP2_GRAY:
         for c in (1, 2):
             if not (channels[0] == channels[c]).all():
-                raise ValueError(f"jp2_{n}.tif: grey channel {c} differs from channel 0")
+                raise ValueError(f"jp2_{n}.tif: gray channel {c} differs from channel 0")
         planes = [channels[0]]
     else:
         planes = channels
@@ -789,7 +789,7 @@ def build_jp2_entry(n: int) -> dict:
         # The reference is sRGB display output the decoder must be asked for.
         "needs_srgb": n in JP2_NEEDS_SRGB,
         "boxes": info["boxes"],
-        "colour": info["colour"],
+        "color": info["color"],
         "features": features,
         "references": refs,
         # Pins the committed bytes; tests/conformance_jp2.rs re-hashes them.
@@ -831,7 +831,7 @@ def main_jp2():
                 "path": "baseline/conformance/jp2_{1..9}.tif",
                 "conversion": (
                     "8-bit RGB TIFF read with Pillow, written as one unsigned 8-bit "
-                    "PGX plane per channel; greyscale files (4, 6, 8) keep one plane "
+                    "PGX plane per channel; grayscale files (4, 6, 8) keep one plane "
                     "after asserting the three channels are identical"
                 ),
                 "oracle_command": "opj_decompress -i fileN.jp2 -o fileN.tif -p 8S -force-rgb",
@@ -855,14 +855,14 @@ def main_jp2():
                 ),
                 "note": (
                     "codestream samples at the native component size and depth, no "
-                    "colour conversion and no shift. -c avoids opj_decompress's sYCC "
+                    "color conversion and no shift. -c avoids opj_decompress's sYCC "
                     "heuristic but skips the inverse MCT, so it is used only for the "
                     "sub-sampled file (mct 0); the bare codestream carries no ICC"
                 ),
             },
             "features": {
                 "tool": "opj_dump -i + direct marker-segment walk of the jp2c payload",
-                "note": "boxes and colour are read from the JP2 box layer directly",
+                "note": "boxes and color are read from the JP2 box layer directly",
             },
             "license": (
                 "Conformance-only grant; see ../COPYRIGHT. Excluded from the "

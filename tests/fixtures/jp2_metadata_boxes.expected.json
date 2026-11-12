@@ -822,11 +822,11 @@
     "notes": "ihdr IPR 1; colr sRGB, then METH 3 (ignored); cdef [(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 2, 2)] (nothing moves); res with resc [300, 7, 254, 3, -1, 3] and resd [72, 1, 96, 5, 2, -128]; then at the top level a misplaced sYCC colr, a jp2i, a uinf with two UUIDs and a url, the jp2c, and a second jp2i. Its jp2 snapshot is written whole by scripts/gen-jp2-box-snapshots.py"
   },
   "jp2": {
-    "colour": "srgb",
+    "color": "srgb",
     "channels": [
-      "colour/1",
-      "colour/2",
-      "colour/3",
+      "color/1",
+      "color/2",
+      "color/3",
       "premultiplied/2"
     ],
     "palette_applied": false,
@@ -872,10 +872,10 @@
     },
     "image_header": {
       "compression": 7,
-      "unknown_colour_space": 0,
+      "unknown_color_space": 0,
       "ipr": 1
     },
-    "colour_specifications": [
+    "color_specifications": [
       {
         "method": 1,
         "precedence": 0,

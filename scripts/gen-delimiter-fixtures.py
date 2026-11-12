@@ -14,7 +14,7 @@ included. Both flags are exercised alone and together, because the corpus does
 too -- `p0_12` signals SOP only, `p0_11` EPH only.
 
 Two layers and two components, so the packets are numerous enough that a
-delimiter mis-consumed by even one byte desynchronises the walk. The last layer
+delimiter mis-consumed by even one byte desynchronizes the walk. The last layer
 is lossless, so a full decode is bit-exact.
 
 Usage: python3 scripts/gen-delimiter-fixtures.py

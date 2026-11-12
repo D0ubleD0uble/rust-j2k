@@ -49,7 +49,7 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "3_13bit_and_1bit.jp2",
         "f67d0b8fa68634659a74e0c7e1768348ed64b588e835bb8efbf6f8308acc72f7",
-        // cdef (0,0,1) (1,0,2) (2,0,3) (3,1,0): 13-bit colour, 1-bit opacity.
+        // cdef (0,0,1) (1,0,2) (2,0,3) (3,1,0): 13-bit color, 1-bit opacity.
         Outcome::Reference {
             channels: RGBA,
             max_abs: 0,
@@ -68,9 +68,9 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     (
         "byte_with_xmp.jp2",
         "cda36211b536322d28b96f17123ee2154e14826b69533e44ade7242906cc0b7d",
-        // cdef (0,0,1): one grey channel.
+        // cdef (0,0,1): one gray channel.
         Outcome::Reference {
-            channels: &[COLOUR_1],
+            channels: &[COLOR_1],
             max_abs: 0,
         },
     ),
@@ -113,21 +113,21 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
     ),
 ];
 
-const COLOUR_1: ChannelDefinition = colour(1);
+const COLOR_1: ChannelDefinition = color(1);
 const RGBA: &[ChannelDefinition] = &[
-    colour(1),
-    colour(2),
-    colour(3),
+    color(1),
+    color(2),
+    color(3),
     ChannelDefinition {
         kind: ChannelType::Opacity,
         association: Association::WholeImage,
     },
 ];
 
-const fn colour(n: u16) -> ChannelDefinition {
+const fn color(n: u16) -> ChannelDefinition {
     ChannelDefinition {
-        kind: ChannelType::Colour,
-        association: Association::Colour(n),
+        kind: ChannelType::Color,
+        association: Association::Color(n),
     }
 }
 

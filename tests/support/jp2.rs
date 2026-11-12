@@ -11,7 +11,7 @@
 use std::panic;
 use std::path::Path;
 
-use rust_j2k::{ColourOutput, Component, DecodeOptions, Error};
+use rust_j2k::{ColorOutput, Component, DecodeOptions, Error};
 use serde::Deserialize;
 
 use super::part4::{Bound, Bounds, Features, Grade, grade_component, ratchet};
@@ -37,7 +37,7 @@ pub struct Jp2Entry {
     pub file: String,
     /// `N` of `fileN.jp2`.
     pub index: u32,
-    /// Channels graded: three for colour files, one for the greyscale files.
+    /// Channels graded: three for color files, one for the grayscale files.
     pub graded_components: usize,
     /// Graded with zero tolerance; the recorded bounds are ignored.
     pub bit_exact: bool,
@@ -45,10 +45,10 @@ pub struct Jp2Entry {
     /// (`opj_decompress -p 8S`).
     pub shift_right: u8,
     /// The reference is sRGB display output (sYCC or an ICC profile
-    /// converted), so the entry is graded with `ColourOutput::Srgb`.
+    /// converted), so the entry is graded with `ColorOutput::Srgb`.
     pub needs_srgb: bool,
     pub boxes: Boxes,
-    pub colour: Colour,
+    pub color: Color,
     /// The codestream's parameters, in the Part 1 manifest's shape.
     pub features: Features,
     /// One `.pgx` per graded channel, in channel order.
@@ -65,7 +65,7 @@ pub struct Jp2Entry {
 }
 
 /// As-coded references: one `.pgx` per codestream component (native size and
-/// depth, no colour conversion, no shift) and the digest of each.
+/// depth, no color conversion, no shift) and the digest of each.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AsCoded {
@@ -91,11 +91,11 @@ pub struct Boxes {
     pub jp2h: Vec<String>,
 }
 
-/// The first `colr` box: `method` 1 carries `enum_cs` (16 sRGB, 17 greyscale,
+/// The first `colr` box: `method` 1 carries `enum_cs` (16 sRGB, 17 grayscale,
 /// 18 sYCC), `method` 2 an ICC profile of `icc_bytes` bytes.
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct Colour {
+pub struct Color {
     pub method: u8,
     #[serde(default)]
     pub enum_cs: Option<u32>,
@@ -127,7 +127,7 @@ impl Jp2Entry {
 pub fn options_for(entry: &Jp2Entry) -> DecodeOptions {
     let mut options = DecodeOptions::default();
     if entry.needs_srgb {
-        options.colour = ColourOutput::Srgb;
+        options.color = ColorOutput::Srgb;
     }
     options
 }
@@ -201,8 +201,8 @@ pub fn grade_entry(dir: &Path, entry: &Jp2Entry) -> Grade {
         Err(grade) => return grade,
     };
 
-    // Exactly the graded channels: greyscale files decode to one component,
-    // colour files (and the palettised file9, once expanded) to three.
+    // Exactly the graded channels: grayscale files decode to one component,
+    // color files (and the palettized file9, once expanded) to three.
     if let Err(why) = check_component_count(image.components.len(), graded) {
         return Grade::Failed(why);
     }
