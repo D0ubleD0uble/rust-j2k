@@ -432,6 +432,57 @@ under OpenJPEG and rejects here. No corpus or conformance file trips any of
 these today. If one ever does, relax that check to match the oracle — the
 protective argument loses to a demonstrated real file.
 
+### Packets a POC sequence leaves out
+
+A `POC` sequence whose volumes leave out packets of a tile is refused as
+`Codestream` before its packets are read. A.6.6 requires the volumes to
+define every packet: "In the case where a POC marker segment is used, the
+progression of every packet in the codestream (or for that tile of the
+codestream) shall be defined in one or more POC marker segments", and B.12.3
+adds that "there will never be the case where a progression order volume is
+filled and the next one is not defined". The volumes are the ones the tile
+walks: its own when its first tile-part has a POC, which replaces the main
+header's (see "A tile-part POC overrides the main header's"), and otherwise
+the main header's and then any later tile-part's. A tile has a packet for every layer, every
+resolution each component has (its own `COD` or `COC` level count) and every
+precinct of it (B.6, B.9). A precinct or resolution with no code-blocks
+still has its packets, which B.9 says must appear as empty packets, so a
+`POC` that skips it is refused. A resolution with no precincts on the tile
+has no packets and needs no volume. "The layer index always starts at zero"
+(A.6.6), so a component's resolution has all its packets only when one
+volume reaching the last layer covers it; the check costs `components ×
+(volumes + resolutions)` steps.
+
+Such a file is not out of the standard in every reading, though: B.11 lets
+"any number of whole packets (in order)" be dropped from the end of a tile,
+and B.12.3 lets "the last progression order volume in each tile" be
+incomplete. A tile whose volumes leave packets out is byte for byte a tile
+whose covering volumes had those packets dropped. So this is the strict
+decode refusing missing data, as it refuses a tile cut short; partial decode
+(#214) is where it would be accepted, with the missing packets reported.
+OpenJPEG decodes such a tile with them empty, and `opj_compress` writes such
+a file when its `-POC` volumes do not cover the tile: `-n 2 -POC
+T1=0,0,1,1,1,LRCP` leaves resolution 1 out, and OpenJPEG's decode of it has
+every sample wrong (`tests/fixtures/poc_coverage/`).
+
+The refusal holds under a `resolution_reduction` too, when the packets left
+out are only those of resolutions the reduction discards. That is stricter
+than `opj_decompress -r`, which gives the exact reduced image, and it is
+consistent with refusing a tile cut short (B.11) at a reduction of 1, which
+this decoder already does. Handling missing packets by reduction belongs
+with partial decode (#214).
+
+The check is on the volumes' axes, not on each precinct: a positional order's
+sweep can pass over a precinct with mixed sub-sampling (see "The tier-2 work
+bound"), with or without a `POC`, as OpenJPEG's encoder and decoder both do,
+and that is not refused. `read_header`'s walk of a `Psot = 0` tile does not
+make the check: the packets the volumes reach end where they end, so for
+such a tile in a JP2 file the codestream ends at its box and the boxes after
+`jp2c` are reported, as for the raw codestream, which the decode refuses.
+381 `opj_compress -POC` encodes whose volumes do cover the tile (two or three
+volumes split by resolution or component, every order, 1 to 4 components,
+some sub-sampled, 1 to 3 layers) decode as before.
+
 ### The tier-2 work bound
 
 A packet header names every code-block of its precinct, in raster order,

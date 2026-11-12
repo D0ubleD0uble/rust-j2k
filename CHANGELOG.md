@@ -283,6 +283,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ends at its box's end, so it runs to the end of the file: boxes after
   `jp2c` are not reported, and the decode refuses their bytes as left after
   the last packet, as for the other tiles too costly to walk.
+- A POC marker whose volumes leave out packets of a tile is refused as
+  `Error::Codestream`: each resolution of each component, counting the
+  component's own levels, must be in a volume that reaches every layer. The
+  main header's and every tile-part's volumes count, and a resolution with
+  no precincts needs none. These files used to decode with the missing
+  packets left empty. OpenJPEG decodes them that way, and `opj_compress`
+  writes them when its `-POC` volumes do not cover the tile. The refusal
+  holds under a resolution reduction too. `read_header` does not check
+  coverage, so for such a file in JP2 it still reports the boxes after the
+  codestream.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is

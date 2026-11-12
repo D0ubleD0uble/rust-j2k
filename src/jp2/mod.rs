@@ -334,6 +334,10 @@ fn probe_visits(bytes: u64) -> u64 {
 /// either way. When the packets do not end there, the box ends inside the
 /// codestream, and the bytes after it are tile data, not boxes.
 ///
+/// The walk does not check that a POC sequence covers the tile: packets its
+/// volumes leave out are not in the codestream, so they do not move where
+/// the others end. The decode refuses such a tile wherever it ends.
+///
 /// The walk is bounded in every step, because `read_header` runs it too. A
 /// codestream of more than [`PROBE_TILES`] (4096) tiles or
 /// [`PROBE_COMPONENTS`] (1024) components, or of fewer than 14 bytes per
@@ -386,6 +390,9 @@ fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
         // the decode's bound for the same tile data, and past it gives up
         // rather than keep a set.
         poc_bitmap: Some(crate::tier2::decode_visits(crate::tile_bytes(&cs))),
+        // Volumes that leave out packets do not move where the packets they
+        // reach end; the decode refuses them.
+        poc_coverage: false,
     };
     let ends = crate::tier2::decode_packets_within(&header, data, &mut budget).is_ok();
     (ends, visits - budget.visits)
