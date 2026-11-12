@@ -214,11 +214,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A POC in a tile's first tile-part header now replaces the main header's
   POC for that tile, as the standard requires. The tile's volumes were
   appended after the main header's, as OpenJPEG does, so a file with both
-  read its packets in the wrong order and was refused. A tile whose first POC
-  is in a later tile-part, which the standard does not allow, is still read
-  as OpenJPEG reads it. The 32-volume limit counts the volumes the tile
-  walks, so the main header's no longer count against a tile that replaces
-  them.
+  read its packets in the wrong order and was refused or decoded wrong. A
+  tile whose first POC is in a later tile-part, which the standard does not
+  allow, is still read as OpenJPEG reads it. The 32-volume limit counts the
+  volumes the tile walks, so the main header's no longer count against a
+  tile that replaces them.
 
 ### Changed
 

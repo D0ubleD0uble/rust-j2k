@@ -232,18 +232,23 @@ covers the tile and a first-tile-part POC that leaves out two resolutions; it
 is refused as `Codestream`, where OpenJPEG walks the main volume and returns
 a wrong image.
 
-**OpenJPEG's history.** The append is in the first version of the reader that
-has a tile POC, `j2k_read_poc` in OpenJPEG 0.8 (4be82998, 2004: `old_poc =
-tcp->POC ? tcp->numpocs+1 : 0`). It was carried into the v2 reader
-(1d45d751, 2008) and since then only renamed, reformatted (563bd849) and
-given the `J2K_MAX_POCS` constant (b8c4b450). No commit gives a reason. The
-append lets the POCs of a tile's tile-parts build one list, which B.12.3
-allows; the main header's volumes being in that list is a side effect of the
-copy. No upstream issue covers a main and a
-tile-part POC together. OpenJPEG's encoder writes a main-header POC only for
-the 4K cinema profile, and then writes the same volumes in the tile-part
-header, so its own files decode the same either way. The rule reads as an
-oversight, not a choice, so this crate follows the standard.
+**OpenJPEG's history.** The initial revision (2ad6a977, 2003) already read
+tile-part POCs, and it *replaced*: `j2k_read_poc` wrote from index 0 and set
+`numpocs = numpchgs`, and every SOT re-copied the default tcp. OpenJPEG 0.8
+(4be82998, 2004) added two things in one commit: a `tcp->first` guard, so the
+default tcp is copied into a tile once rather than at every SOT, and the
+append (`old_poc = tcp->POC ? tcp->numpocs+1 : 0`). The append lets the POCs
+of a tile's tile-parts build one list, which B.12.3 allows. The main header's
+volumes ending up in that list is a side effect of the copy-once seed. The
+append was carried into the v2 reader (1d45d751, 2008) and since then only
+renamed, reformatted (563bd849) and given the `J2K_MAX_POCS` constant
+(b8c4b450). No commit gives a reason, and no upstream issue covers a main and
+a tile-part POC together. OpenJPEG's encoder never writes both kinds: it
+writes a main-header POC only for the 4K cinema profile
+(`opj_j2k_write_poc`), and a tile-part POC only outside the cinema profiles
+(`opj_j2k_write_first_tile_part`). So its own files decode the same under
+either rule. The append reads as an oversight, not a choice, so this crate
+follows the standard.
 
 ### Stricter than the oracle on non-conforming streams
 

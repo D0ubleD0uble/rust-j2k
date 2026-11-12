@@ -837,6 +837,8 @@ fn read_tile_part_header(
     // Stitch this tile-part's PPT markers into one buffer, ordered by Zppt.
     ppt.sort_by_key(|&(z, _)| z);
     let packed = ppt.into_iter().flat_map(|(_, bytes)| bytes).collect();
+    // `parse_tiles` reads this flag from the first tile-part only; the
+    // `first_part` test is defensive.
     tile.poc_in_first_part = first_part && !tile.poc.is_empty();
     Ok((tile, packed))
 }
