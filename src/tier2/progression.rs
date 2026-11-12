@@ -164,9 +164,10 @@ struct Volume {
 /// that resolution, including one with no code-blocks (B.6, B.9). A
 /// resolution empty on the tile has no precincts, so no packets, and needs
 /// no volume. `header.poc` holds the main header's volumes and then every
-/// tile-part's; a packet none of them reaches is missing from the
-/// codestream, and decoding it as empty would invent its samples. OpenJPEG
-/// decodes such a tile with those packets left empty.
+/// tile-part's, and they must define every packet (A.6.6, B.12.3); a packet
+/// none of them reaches is missing from the codestream, as if dropped from
+/// the end of the tile (B.11), and decoding it as empty would invent its
+/// samples. OpenJPEG decodes such a tile with those packets left empty.
 ///
 /// A volume's layers start at 0, so a (component, resolution) has every
 /// layer's packets only when one volume reaching the last layer covers it.

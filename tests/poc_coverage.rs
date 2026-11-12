@@ -138,20 +138,19 @@ fn xml(metadata: Option<&rust_j2k::Jp2Metadata>) -> usize {
 }
 
 /// `read_header` walks a `Psot = 0` tile's packets to find where its
-/// codestream ends, and that walk makes the same check. When the volumes
-/// cover the tile, the packets end at the box and both calls report the
-/// `xml ` box after it. When they leave packets out, the walk fails as the
-/// decode does, so the codestream runs to the end of the file, as for any
-/// tile that walk cannot finish: `read_header` reports no `xml ` box, and
-/// the decode refuses the missing packets, before the bytes after them.
+/// codestream ends. That walk does not check that the volumes cover the
+/// tile: the packets they reach end at the box either way. So both files
+/// end at their box, and `read_header` reports the `xml ` box after it. The
+/// decode refuses the one whose volumes leave packets out, as it refuses
+/// the raw codestream.
 #[test]
-fn read_header_s_walk_makes_the_same_check() {
+fn read_header_reports_the_boxes_after_a_tile_with_packets_left_out() {
     let covered = jp2_psot0(&read("poc_res_covered.j2k"));
     let image = decode(&covered).unwrap();
     assert_eq!(xml(image.jp2.as_ref()), 1);
     assert_eq!(xml(read_header(&covered).unwrap().jp2.as_ref()), 1);
 
     let missing = jp2_psot0(&read("poc_res_missing.j2k"));
-    assert_eq!(xml(read_header(&missing).unwrap().jp2.as_ref()), 0);
+    assert_eq!(xml(read_header(&missing).unwrap().jp2.as_ref()), 1);
     assert_refused("poc_res_missing.j2k as JP2", &missing, 0, 1);
 }
