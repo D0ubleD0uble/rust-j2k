@@ -27,14 +27,16 @@
 pub mod bio;
 mod geometry;
 mod progression;
+pub mod spans;
 pub mod tagtree;
 
 use crate::codestream::markers::marker;
 use crate::codestream::{MainHeader, Tile};
 use crate::{Error, Result};
 use bio::BitReader;
+use spans::UnreadSpans;
 use std::cell::Cell;
-use tagtree::{TagTree, UnreadSpans};
+use tagtree::TagTree;
 
 pub(crate) use geometry::{
     BandGeom, MAX_CODE_BLOCKS, MAX_PRECINCTS, PrecinctGeom, resolution_geoms,
@@ -180,9 +182,11 @@ pub(crate) const DECODE_VISITS_PER_BYTE: u64 = 32;
 /// the header's bytes and is not counted. What is counted is the work that
 /// reads none: each packet, each step over code-blocks whose inclusion is
 /// already known to lie past the layer (see [`parse_band_header`]), and each
-/// point of the progression order's loops. Encoder output spends up to a few
-/// visits per byte; the most seen is 4.6, from `opj_compress` on a nearly
-/// empty image in 4x4 code-blocks and 64 layers. A packet header of one byte
+/// point of the progression order's loops. Encoder output spends 0.04 to 88
+/// visits per byte, the high end only in files of a few hundred bytes,
+/// under the floor; the largest share of the bound seen is 12.8%, from
+/// `opj_compress` on a sparse 2048^2 image in 4x4 code-blocks and 64
+/// layers. A packet header of one byte
 /// can still make the walk step over each row of code-blocks of its
 /// precinct, and a positional sweep can check millions of positions that
 /// hold no packet, so without a bound a small file could make the walk run

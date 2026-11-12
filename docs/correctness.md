@@ -323,17 +323,33 @@ checks each packet against those already read, at about 1 µs; that cost is
 #247.
 
 Encoder output stays far below the bound. Every conformance file spends
-under 0.5% of it (`p1_05` the most, 0.29 steps per byte; `p0_13` takes 0.76
-steps per byte, under the floor). The most seen from `opj_compress` is 4.6
-steps per byte, 12.8% of the bound: a sparse 2048^2 image in 4x4
-code-blocks with 64 layers, 469 KB. Small files of the same kind sit under
-the floor: the committed 64- and 100-layer files take about 17 steps per
-byte, under 0.1% of it.
+under 0.5% of it (`p1_05` the most, at 0.29 steps per byte; `p0_13` takes
+0.76). `opj_compress` output takes 0.04 to 88 steps per byte; the high end
+is files of a few hundred bytes with 4x4 code-blocks and 64 or 100 layers,
+which stay under the floor (the committed ones use under 0.1% of it). The
+largest share seen is 12.8%: a sparse 2048^2 image in 4x4 code-blocks with
+64 layers, 469 KB at 4.6 steps per byte.
 `every_committed_file_walks_far_below_the_work_bound` prints the table for
-the committed files and asserts each is under 1/64. What the bound can
-still refuse is a valid file whose layers mostly step over code-blocks one
-row at a time: tiny code-blocks, a resolved inclusion root, and thousands
-of layers with nothing new in them. No encoder seen writes that.
+the committed files and asserts each is under 1/64.
+
+The bound does refuse some valid files. Take one tile, no wavelet levels,
+4x4 code-blocks in one precinct, LRCP, and many layers that each include
+one new code-block at a scattered place (one pass, one byte), with the
+blocks included earlier reading a "no new passes" bit. The new blocks keep
+the inclusion tree from settling high up, so each layer steps over many
+spans narrower than the precinct, one step per row each: about W·√n steps
+a layer for a precinct W blocks wide after n layers. The steps per byte
+grow with the layer count, so no constant per byte admits the whole class.
+At 2048^2 or more it passes the bound from about 600 to 800 layers:
+
+| Image | Layers | Size | Refused after | OpenJPEG |
+| ----- | ------ | ---- | ------------- | -------- |
+| 2048^2 | 800 | 527 KB | 1.1 s | 6.9 s |
+| 2896^2 | 600 | 343 KB | 1.2 s | 10.5 s |
+| 2896^2 | 800 | 585 KB | 1.5 s | 15.4 s |
+
+OpenJPEG decodes all three. No encoder seen writes this shape; the files
+were built by hand for the review of #235.
 
 The bound covers the walk `read_header` makes for a `Psot = 0` tile-part
 (see above). That walk counts the same steps under its own bound,

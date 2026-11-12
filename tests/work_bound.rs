@@ -166,10 +166,11 @@ fn the_committed_shapes_are_refused_at_the_work_bound() {
 
 /// Packets that name every code-block and include none, under a root the
 /// header puts past each layer: the committed 1 KB file of 2^17 code-blocks
-/// and 1000 layers, and 65535 layers over 2^14 code-blocks. Each cost a
-/// visit per code-block per layer, 1.3 x 10^8 and 10^9 visits, before the
-/// decode stepped over them; now each layer is one step. OpenJPEG 2.5.0
-/// decodes both to a flat 128.
+/// and 1000 layers, and 65535 layers over 2^14 and 2^19 code-blocks. Each
+/// cost a visit per code-block per layer, up to 3.4 x 10^10 visits, before
+/// the decode stepped over them; now each layer is one step. A row at a time
+/// would be 4.7 x 10^7 steps for the last, past its bound. OpenJPEG 2.5.0
+/// decodes all three to a flat 128.
 #[test]
 fn packets_that_include_nothing_decode() {
     let name = "t2bomb_2048x1024_1000.j2k";
@@ -180,6 +181,12 @@ fn packets_that_include_nothing_decode() {
         &t2bomb(512, 512, 512, 65535),
         512,
         512,
+    );
+    assert_flat(
+        "t2bomb 2896 x 65535",
+        &t2bomb(2896, 2896, 2896, 65535),
+        2896,
+        2896,
     );
 }
 
