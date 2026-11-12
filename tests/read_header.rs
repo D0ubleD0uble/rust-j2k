@@ -90,6 +90,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     ("psot0/single_psot0_one_byte_after_sod.j2k", "no tile data"),
     ("psot0/tiled_psot0_no_eoc.j2k", "no EOC"),
     ("psot0/tileparts_psot0_no_eoc.j2k", "no EOC"),
+    (
+        "tier1_work_bound/t1bomb_1024_64_88.j2k",
+        "past the tier-1 work bound",
+    ),
     ("tile_header/tilecomp_16_256.j2k", "empty tile-component"),
     (
         "tile_header/tilecomp_heavy_16_256.j2k",
@@ -98,10 +102,6 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     (
         "tile_header/tilecomp_override_16_256.j2k",
         "empty tile-component",
-    ),
-    (
-        "tier1_work_bound/t1bomb_1024_64_88.j2k",
-        "past the tier-1 work bound",
     ),
     ("work_bound/cprl_tall.j2k", "past the work bound"),
     ("work_bound/cprl_tall_poc31.j2k", "past the work bound"),
