@@ -18,8 +18,8 @@
 //! color order. [`read_header`] and [`read_header_with`] read the same header
 //! without decoding any tile data. Samples come out as coded by default;
 //! [`ColorOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
-//! HTJ2K and an encoder are later work, not permanent non-goals. See
-//! `docs/roadmap.md` and `docs/scope.md`.
+//! HTJ2K and an encoder are later work, not permanent non-goals. See the
+//! [roadmap](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md) and the [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
 //!
 //! # Pipeline
 //!
@@ -91,7 +91,7 @@
 //! with [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. See each module's docs for the ISO §reference and what it owns;
-//! the feature map is in `docs/scope.md`.
+//! the feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`,
@@ -187,7 +187,8 @@ pub use jp2::{
 /// positions that hold no packet, so a file of a few hundred bytes could
 /// otherwise take minutes. OpenJPEG has no such bound. A valid file of many
 /// layers that each include a few scattered code-blocks can exceed it
-/// (`docs/correctness.md`). A JP2 file whose last tile-part has `Psot = 0`
+/// ([the tier-2 work bound](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound)). A
+/// JP2 file whose last tile-part has `Psot = 0`
 /// may first walk that tile as [`read_header_with`] does, under its own smaller
 /// bound, so its decode can take about 1.25 times as many steps.
 pub fn decode(bytes: &[u8]) -> Result<Image> {
@@ -301,11 +302,15 @@ pub enum ColorOutput {
     /// an ICC profile is passed through, not applied.
     #[default]
     AsCoded,
-    /// sRGB. sYCC is converted to RGB, with sub-sampled chroma (2x1 or 2x2)
-    /// replicated to full resolution first, and a restricted ICC profile (a
-    /// monochrome or a three-component matrix/TRC input profile) is applied
-    /// at its rendering intent, as OpenJPEG applies it with LittleCMS: the
-    /// samples match `opj_decompress -force-rgb`. The color channels are the
+    /// sRGB. A restricted ICC profile (a monochrome or a three-component
+    /// matrix/TRC input profile) is applied at its rendering intent, as
+    /// OpenJPEG applies it with LittleCMS: the samples match
+    /// `opj_decompress -force-rgb` sample for sample. sYCC is converted to
+    /// RGB, with sub-sampled chroma (2x1 or 2x2) replicated to full
+    /// resolution first, using the IEC 61966-2-1 constants and rounding;
+    /// OpenJPEG shortens the constants and truncates, so the two differ by an
+    /// MSE of about 0.38 to 0.49 a channel, and the ISO references match this
+    /// formula. The color channels are the
     /// ones the `cdef` box labels color 1, 2 and 3, wherever they sit. No
     /// conversion changes a channel's bit depth, and other channels (opacity,
     /// say) are untouched.
@@ -357,9 +362,9 @@ pub enum ColorOutput {
     ///
     /// Replicated chroma, or a tinted gray channel, past the sample budget is
     /// [`Error::Limit`]. These errors apply only when `Srgb` is asked for:
-    /// [`ColorOutput::AsCoded`] decodes the same files. `docs/correctness.md`
-    /// ("sRGB output") has the complete table of outcomes, each against what
-    /// OpenJPEG does, and the profiles LittleCMS refuses.
+    /// [`ColorOutput::AsCoded`] decodes the same files. The
+    /// [table of outcomes](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#outcomes) lists every case
+    /// against what OpenJPEG does, and the profiles LittleCMS refuses.
     Srgb,
 }
 
@@ -372,10 +377,11 @@ pub enum ColorOutput {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct DecodeOptions {
-    /// How many of the finest resolution levels to discard. Each level halves
-    /// the output in both axes (rounding up), so `1` decodes a half-size image,
-    /// `2` a quarter-size, and so on — the wavelet pyramid's own lower
-    /// resolutions, not a resample. Every component must keep at least one
+    /// How many of the finest resolution levels to discard. Each level about
+    /// halves the output in both axes, so `1` decodes a half-size image, `2`
+    /// a quarter-size, and so on: the wavelet pyramid's own lower
+    /// resolutions, not a resample. The exact size depends on the image
+    /// origin; [`Image`] and [`ComponentInfo::width`] give the formula. Every component must keep at least one
     /// resolution: a reduction that consumes some component's whole pyramid is
     /// rejected as [`Error::InvalidOptions`].
     pub resolution_reduction: u8,

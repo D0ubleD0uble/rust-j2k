@@ -413,8 +413,9 @@ where
                 // read is marked, and a read takes a visit and at least a byte of
                 // packet header; at most 31 later volumes can meet it again. A
                 // bitmap skip takes about 4 ns, so the skips cost at most about
-                // 0.12 µs per byte, under the 0.14 µs a byte the fastest
-                // conformance codestream takes to decode. Charging them would
+                // 0.12 µs per byte, under the 0.19 µs a byte the fastest
+                // conformance codestream past 100 KB takes to decode (best of
+                // five release builds). Charging them would
                 // refuse files OpenJPEG reads quickly, such as 31 identical volumes over
                 // 1 MB of empty packets. A skip from the set costs far more and
                 // is charged (see `SET_SKIP_VISITS`).

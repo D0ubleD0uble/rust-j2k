@@ -307,9 +307,11 @@ const PROBE_GEOMETRY: usize = 1 << 14;
 const PROBE_TILES: usize = 1 << 12;
 const PROBE_COMPONENTS: usize = 1 << 10;
 
-/// The fewest visits [`packets_end_at`] may spend: packets read, code-block
-/// entries visited in their headers, and points of the progression order's
-/// loops (see [`crate::tier2::Budget::visits`]).
+/// The fewest visits [`packets_end_at`] may spend: packets read, steps over
+/// code-blocks a packet header names no bit for, and points of the
+/// progression order's loops (see [`crate::tier2::Budget::visits`]). A
+/// code-block entry that reads a bit is paid for by the header's bytes and
+/// is not counted.
 const PROBE_VISITS_MIN: u64 = 1 << 22;
 
 /// The visits [`packets_end_at`] may spend per byte of the tile's data, when
