@@ -171,9 +171,10 @@ such a tile with the missing packets empty, and `opj_compress` writes such a
 file when its `-POC` volumes do not cover the tile: `-n 2 -POC
 T1=0,0,1,1,1,LRCP` leaves resolution 1 out, and OpenJPEG's decode of it has
 every sample wrong (`tests/fixtures/poc_coverage/`). The check is on the
-volumes' axes, not on each precinct: a positional order's sweep can pass over
-a precinct with mixed sub-sampling (see "The tier-2 work bound"), with or without
-a `POC`, as OpenJPEG's encoder and decoder both do, and that is not refused.
+volumes' axes, not on each precinct: a positional order's sweep can pass
+over a precinct with mixed sub-sampling (see "The tier-2 work bound"), with
+or without a `POC`, as OpenJPEG's encoder and decoder both do, and that is
+not refused.
 `read_header`'s walk of a `Psot = 0` tile makes the same check, so for such
 a tile in a JP2 file the codestream runs to the end of the file and the boxes
 after `jp2c` are not reported; the decode refuses the tile either way. 381

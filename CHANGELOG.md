@@ -271,9 +271,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   component's own levels, must be in a volume that reaches every layer. The
   main header's and every tile-part's volumes count, and a resolution with
   no precincts needs none. These files used to decode with the missing
-  packets left empty. OpenJPEG decodes them that
-  way, and `opj_compress` writes them when its `-POC` volumes do not cover
-  the tile.
+  packets left empty. OpenJPEG decodes them that way, and `opj_compress`
+  writes them when its `-POC` volumes do not cover the tile.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is
