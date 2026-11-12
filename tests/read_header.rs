@@ -24,9 +24,12 @@ use rust_j2k::{
 /// from OpenJPEG codestreams. The `psot0/jp2_*` files listed wrap a `Psot = 0`
 /// codestream in a `jp2c` box whose end is not where the codestream ends, so
 /// the boxes after it are tile data past the last packet, which `decode`
-/// refuses. The `psot0/jp2_t2bomb_*` and `psot0/jp2_t2_sweep_*` files are too
-/// costly to check where their codestream ends, so it runs to the end of the
-/// file, with the same result.
+/// refuses. `psot0/jp2_t2bomb_blocks`, the `psot0/jp2_t2_sweep_*` files and
+/// `work_bound/jp2_t2skip_512_20000` are too costly to check where their
+/// codestream ends, so it runs to the end of the file, with the same result.
+/// The other `work_bound/` files listed walk past the decode's tier-2 work
+/// bound, which `read_header` does not walk, so `decode` refuses them with
+/// `Limit`.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
@@ -50,7 +53,7 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     ),
     (
         "psot0/jp2_t2_sweep_cprl_tall.jp2",
-        "too many sweep positions to check",
+        "too many sweep positions to check, or to decode (`Limit`)",
     ),
     (
         "psot0/jp2_t2_sweep_pcrl.jp2",
@@ -64,7 +67,6 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "psot0/jp2_t2bomb_blocks.jp2",
         "too many code-blocks to check",
     ),
-    ("psot0/jp2_t2bomb_visits.jp2", "too many visits to check"),
     ("psot0/single_psot0_no_eoc.j2k", "no EOC"),
     (
         "psot0/single_psot0_no_eoc_trunc100.j2k",
@@ -73,6 +75,18 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     ("psot0/single_psot0_one_byte_after_sod.j2k", "no tile data"),
     ("psot0/tiled_psot0_no_eoc.j2k", "no EOC"),
     ("psot0/tileparts_psot0_no_eoc.j2k", "no EOC"),
+    ("work_bound/cprl_tall.j2k", "past the work bound"),
+    ("work_bound/cprl_tall_poc31.j2k", "past the work bound"),
+    (
+        "work_bound/jp2_t2skip_512_20000.jp2",
+        "too many steps to check",
+    ),
+    ("work_bound/sweep_pcrl_1024_64.j2k", "past the work bound"),
+    ("work_bound/sweep_rpcl_1024_64.j2k", "past the work bound"),
+    (
+        "work_bound/t2skip_2048x1024_40000.j2k",
+        "past the work bound",
+    ),
 ];
 
 fn fixtures() -> PathBuf {
@@ -186,7 +200,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     compared[reduction as usize] += 1;
                 }
                 (Err(h), Err(d)) => assert_eq!(h, d, "{name}: the same error"),
-                (Ok(_), Err(Error::Codestream(_))) => {
+                (Ok(_), Err(Error::Codestream(_) | Error::Limit(_))) => {
                     assert!(
                         TILE_FAULTS.iter().any(|(listed, _)| *listed == name),
                         "{name}: decode failed on tile data but read_header succeeded: {decoded:?}"

@@ -35,8 +35,9 @@ pub enum Error {
     Unsupported(String),
     /// The input exceeded one of the decoder's resource guards — a hostile or
     /// absurd declaration (sample area, code-block count, precinct count,
-    /// bit-plane depth, progression volumes) past a cap, not a missing
-    /// feature.
+    /// bit-plane depth, progression volumes) past a cap, or packet headers
+    /// that take more work to read than the bound for their size (see
+    /// [`decode`](crate::decode)), not a missing feature.
     Limit(String),
     /// The caller passed invalid [`DecodeOptions`](crate::DecodeOptions) for
     /// this codestream — the input itself may be fine.

@@ -271,10 +271,11 @@ fn a_raw_psot_zero_codestream_with_bytes_after_its_packets_is_refused() {
     }
 }
 
-/// Codestreams too costly to walk to check where they end: two whose one-byte
-/// packet headers each visit every code-block of a large precinct (`t2bomb` in
-/// the generator), one past the visit bound and one past the geometry bound,
-/// two whose RPCL or PCRL sweep checks 64 components at each of 256^2
+/// Codestreams too costly to walk to check where they end: one whose one-byte
+/// packet headers each make the walk step over every row of code-blocks of a
+/// large precinct (`t2skip` in `scripts/gen-work-bound-fixtures.py`), past
+/// the visit bound; one whose precinct is past the geometry bound (`t2bomb`
+/// in the generator); two whose RPCL or PCRL sweep checks 64 components at each of 256^2
 /// positions for 1148 empty packets (`sweep`), past the visit bound; one CPRL
 /// file of 16900 precincts (`cprl_sweep`), past the geometry bound; and two
 /// CPRL files whose sweep step comes from different resolutions on each axis
@@ -282,11 +283,13 @@ fn a_raw_psot_zero_codestream_with_bytes_after_its_packets_is_refused() {
 /// repeats a sweep in 31 POC volumes, both past the visit bound. Past a bound
 /// the walk answers no, so the codestream runs to the end of the file and the
 /// bytes after its packets are refused, as on a codestream the check does not
-/// apply to. OpenJPEG 2.5.0 decodes all seven to a flat 128.
+/// apply to. The tall CPRL file's 25 million visits are past the decode's own
+/// work bound too, so the decode stops there, at `Limit`, before it reaches
+/// those bytes. OpenJPEG 2.5.0 decodes all seven to a flat 128.
 #[test]
 fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
     for name in [
-        "jp2_t2bomb_visits.jp2",
+        "../work_bound/jp2_t2skip_512_20000.jp2",
         "jp2_t2bomb_blocks.jp2",
         "jp2_t2_sweep_cprl.jp2",
         "jp2_t2_sweep_cprl_poc.jp2",
@@ -297,19 +300,36 @@ fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
         let bytes = std::fs::read(dir().join(name)).unwrap();
         let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(header.jp2.is_some_and(|m| m.xml.is_empty()), "{name}");
-        assert_leftover(name);
+        if name == "jp2_t2_sweep_cprl_tall.jp2" {
+            match decode(&bytes) {
+                Err(Error::Limit(m)) => assert!(m.contains("work bound"), "{name}: {m}"),
+                other => panic!("{name}: expected the work bound, got {other:?}"),
+            }
+        } else {
+            assert_leftover(name);
+        }
     }
 }
 
-/// The same shape with 56 code-blocks and 19000 layers: the walk spends about
-/// a million visits, within its bound, so it finishes, and the codestream ends
-/// at its box's end. OpenJPEG 2.5.0 decodes it to a
-/// flat 128.
+/// One-byte packet headers that name every code-block of the precinct and
+/// put the inclusion tree's root past the layer (`t2bomb`): 2^14 code-blocks
+/// and 300 layers, and 56 code-blocks and 19000 layers. The walk steps over
+/// each precinct at once, so it finishes within its bound, and the
+/// codestream ends at its box's end. OpenJPEG 2.5.0 decodes both to a flat
+/// 128.
 #[test]
 fn a_psot_zero_tile_within_its_walk_bound_ends_at_its_box() {
-    let name = "jp2_t2_many_layers.jp2";
-    let bytes = std::fs::read(dir().join(name)).unwrap();
-    let image = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
-    assert_eq!(image.components[0].samples, vec![128; 32 * 28]);
-    assert_eq!(read_header(&bytes).unwrap().jp2, image.jp2);
+    for (name, width, height) in [
+        ("jp2_t2bomb_visits.jp2", 512, 512),
+        ("jp2_t2_many_layers.jp2", 32, 28),
+    ] {
+        let bytes = std::fs::read(dir().join(name)).unwrap();
+        let image = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            image.components[0].samples,
+            vec![128; width * height],
+            "{name}"
+        );
+        assert_eq!(read_header(&bytes).unwrap().jp2, image.jp2, "{name}");
+    }
 }

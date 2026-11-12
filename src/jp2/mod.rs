@@ -335,10 +335,9 @@ fn probe_visits(bytes: u64) -> u64 {
 /// [`PROBE_COMPONENTS`] (1024) components, or of fewer than 14 bytes per
 /// tile, is not walked, nor is a tile of more than [`PROBE_GEOMETRY`] (16384)
 /// code-blocks or precincts. The walk stops after `max(2^22, 8 × the tile's
-/// data bytes)` visits, counting packets read, code-block entries visited in
-/// their headers, and the positions a positional progression order sweeps,
-/// for each (component, resolution) it checks there. A packet header of one
-/// byte can visit every code-block of its precinct, and a sweep can check
+/// data bytes)` visits, counted as the decode's bound counts them (see
+/// `tier2::decode_visits`). A packet header of one byte can step over each
+/// row of code-blocks of its precinct, and a sweep can check
 /// millions of positions that hold no packet, so without the bound a small
 /// file could make this walk run for minutes. Only that tile's header is
 /// resolved, not every tile's, which would cost `tiles × components`. Past

@@ -224,6 +224,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fault and a broken codestream reports the header fault.
 - A codestream component too deep for an `i32` sample is refused as
   `Unsupported` when the main header is read, before any tile data.
+- Packet headers that name many code-blocks and include none read faster:
+  where the inclusion tag tree already puts a group of code-blocks past the
+  layer, the decode steps over the group instead of each code-block. A
+  1 KB file whose one-byte packet headers each name 2^17 code-blocks took
+  4.6 s and now takes 14 ms. `opj_compress` writes such headers for every
+  layer, so its output with small code-blocks and many layers gains too.
+- Reading the packet headers is bounded: `decode` may take 2^24 steps that
+  read no header bit, or 32 per byte of tile data when that is more,
+  counting packets, steps over code-blocks a header reads no bit for, and
+  the positions a positional progression order sweeps. Past it the decode
+  is `Error::Limit`. Encoder output seen spends under 13% of it, but a
+  valid file of many layers that each include a few scattered code-blocks
+  can pass it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
+  819 bytes took 6.5 s and a 9 KB PCRL sweep 29 s; both are now refused in
+  a fraction of a second. OpenJPEG has no such bound and decodes them.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is

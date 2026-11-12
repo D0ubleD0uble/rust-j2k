@@ -91,6 +91,13 @@ impl<'a> BitReader<'a> {
             self.pos.saturating_sub(1)
         }
     }
+
+    /// Where the reader stands: bytes pulled in and bits left in the last.
+    /// Two readers over the same data stand at the same bit when these agree.
+    #[cfg(test)]
+    pub fn position(&self) -> (usize, i32) {
+        (self.pos, self.ct)
+    }
 }
 
 #[cfg(test)]

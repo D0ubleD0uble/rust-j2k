@@ -474,14 +474,19 @@ fn padding_inside_the_codestream_box_does_not_hide_later_metadata() {
     assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
 }
 
-/// Codestreams whose one-byte packet headers each visit every code-block of the
-/// tile, from `t2bomb` in `scripts/gen-psot0-jp2-fixtures.py`: one past the
-/// visit bound on the walk that checks where a `Psot = 0` codestream ends, and
-/// one past its geometry bound.
+/// Codestreams whose one-byte packet headers each name every code-block of
+/// the tile, from `t2bomb` in `scripts/gen-psot0-jp2-fixtures.py`: 2^14
+/// code-blocks and 300 layers, each layer one step, so within the visit bound
+/// on the walk that checks where a `Psot = 0` codestream ends; and one past
+/// its geometry bound.
 const T2BOMB_VISITS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_visits.jp2");
 const T2BOMB_BLOCKS: &[u8] = include_bytes!("../../../tests/fixtures/psot0/jp2_t2bomb_blocks.jp2");
-/// The same shape with 56 code-blocks and 19000 layers: about a million
-/// visits, within the bound.
+/// The same shape with the inclusion tree's root resolved, from `t2skip` in
+/// `scripts/gen-work-bound-fixtures.py`: 128 x 128 code-blocks and 20000
+/// layers, two steps a row of code-blocks, 5.1 million in all, past the
+/// visit bound.
+const T2SKIP: &[u8] = include_bytes!("../../../tests/fixtures/work_bound/jp2_t2skip_512_20000.jp2");
+/// The `t2bomb` shape with 56 code-blocks and 19000 layers, within the bound.
 const T2_MANY_LAYERS: &[u8] =
     include_bytes!("../../../tests/fixtures/psot0/jp2_t2_many_layers.jp2");
 /// RPCL and PCRL sweeps of 256^2 positions that check 64 components at each,
@@ -515,7 +520,7 @@ fn box_end_cut(file: &[u8]) -> &[u8] {
 
 /// The walk stops at its bounds and answers that the codestream does not end
 /// at the box's end, after at most [`PROBE_VISITS_MIN`] visits for a tile this
-/// small, whether the visits are code-block entries or sweep positions, and
+/// small, whether the visits are steps over code-blocks or sweep positions, and
 /// after none for a tile past the geometry bound. Unbounded, the same walks go
 /// past both.
 #[test]
@@ -527,13 +532,13 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         let parsed = crate::codestream::parse_header(cut).unwrap();
         let cs = crate::codestream::parse_tiles(cut, parsed).unwrap();
         let header = cs.tile_header(0).unwrap();
-        let mut budget = Budget::DECODE;
+        let mut budget = Budget::decode(u64::MAX);
         decode_packets_within(&header, &cs.tiles[0], &mut budget).expect("ends at the cut");
         (u64::MAX - budget.visits, MAX_CODE_BLOCKS - budget.blocks)
     };
 
     for file in [
-        T2BOMB_VISITS,
+        T2SKIP,
         T2_SWEEP_RPCL,
         T2_SWEEP_PCRL,
         T2_SWEEP_CPRL_TALL,
@@ -546,9 +551,9 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         assert!(visits <= PROBE_VISITS_MIN, "{visits} visits");
         // The visit bound is what stopped the walk, not the geometry bound
         // (which spends none): it stopped on a charge larger than what was
-        // left, and one charge in these files is at most a precinct's
-        // code-blocks (held to `PROBE_GEOMETRY` by the geometry bound) or a
-        // sweep step over a few components and resolutions.
+        // left, and one charge in these files is a single step over
+        // code-blocks or a sweep step over a few components and resolutions,
+        // far less than `PROBE_GEOMETRY`.
         assert!(
             visits > PROBE_VISITS_MIN - PROBE_GEOMETRY as u64,
             "{visits} visits"
@@ -561,8 +566,9 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         assert_eq!(probe_packets(cut, 0), (false, 0));
     }
 
-    let cut = box_end_cut(T2_MANY_LAYERS);
-    assert!(probe_packets(cut, 0).0);
+    for file in [T2BOMB_VISITS, T2_MANY_LAYERS] {
+        assert!(probe_packets(box_end_cut(file), 0).0);
+    }
 }
 
 /// A tile with more data may spend more: 8 visits per byte past 2^19 bytes.
@@ -574,6 +580,27 @@ fn the_packet_walk_bound_grows_with_the_tile_data() {
     assert_eq!(probe_visits((1 << 19) + 1), (1 << 22) + 8);
     assert_eq!(probe_visits(1 << 24), 1 << 27);
     assert_eq!(probe_visits(u64::MAX), u64::MAX);
+}
+
+/// The decode's work bound is no smaller than this walk's at any size, so a
+/// single-tile codestream whose packets this walk finishes is one the
+/// decode's walk finishes too: the box's end is never chosen for a tile the
+/// decode then refuses at its work bound.
+#[test]
+fn the_decode_work_bound_covers_the_packet_walk() {
+    use crate::jp2::probe_visits;
+    use crate::tier2::decode_visits;
+    for bytes in [
+        0,
+        1 << 19,
+        1 << 21,
+        (1 << 21) + 1,
+        1 << 24,
+        1 << 40,
+        u64::MAX,
+    ] {
+        assert!(probe_visits(bytes) <= decode_visits(bytes), "{bytes} bytes");
+    }
 }
 
 /// The walk resolves only the walked tile's header, not every tile's (which
