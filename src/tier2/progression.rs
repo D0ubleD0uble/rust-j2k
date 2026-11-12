@@ -252,9 +252,10 @@ impl Plan {
 /// component has (its own `COD` or `COC` level count), and every precinct of
 /// that resolution, including one with no code-blocks (B.6, B.9). A
 /// resolution empty on the tile has no precincts, so no packets, and needs
-/// no volume. `header.poc` holds the main header's volumes and then every
-/// tile-part's, and they must define every packet (A.6.6, B.12.3); a packet
-/// none of them reaches is missing from the codestream, as if dropped from
+/// no volume. `header.poc` holds the volumes the walk uses (the tile's own
+/// when its first tile-part has a POC, else the main header's and then any
+/// later tile-part's), and they must define every packet (A.6.6, B.12.3); a
+/// packet none of them reaches is missing from the codestream, as if dropped from
 /// the end of the tile (B.11), and decoding it as empty would invent its
 /// samples. OpenJPEG decodes such a tile with those packets left empty.
 ///

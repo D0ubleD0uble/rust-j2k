@@ -45,7 +45,7 @@ Deviating needs two things, and one is not enough:
 
 Assume first that a divergence is our bug. It almost always is.
 
-There are two known cases. On the inverse 9/7, the standard scales the high-pass
+There are three known cases. On the inverse 9/7, the standard scales the high-pass
 samples by `1/K` and the subband gain (Table E-1) enters the quantization step,
 so a high-pass coefficient is scaled by `2 · (1/K) = 1.6257861…`. OpenJPEG's
 decoder instead zeroes the gain and folds the factor of two into the transform:
@@ -177,6 +177,78 @@ narrower rule, which tolerated fill on the block's last decoded pass only,
 refused one of the ten: in a two-layer encode the cut pass was followed by
 passes with no bytes of their own. `cblksty_segsym_truncated` pins one such
 encode. Its provenance is in `tests/fixtures/README.md`.
+
+### A tile-part POC overrides the main header's
+
+The third case (#269). A.6.6 orders the markers that set a tile's progression,
+"Tile-part POC > Main POC > Tile-part COD > Main COD", "where the "greater
+than" sign, >, means that the greater overrides the lessor marker segment".
+It also says a tile's POC "must appear in the first tile-part header of that
+tile". B.12.3 says the same: "The COD progression order and the main header
+POC marker segment (if there is one) are overridden." So a tile whose first
+tile-part has a POC walks only its own volumes, accumulated over all its
+tile-parts in order, and a tile without one walks the main header's. This
+crate does that (`resolve_tile_header` in `src/codestream/mod.rs`).
+
+OpenJPEG copies the main header's coding parameters into each tile, POC
+volumes included (`opj_j2k_copy_default_tcp_and_create_tcd`), and
+`opj_j2k_read_poc` then appends a tile-part's volumes after the ones already
+there (`l_old_poc_nb = l_tcp->POC ? l_tcp->numpocs + 1 : 0`). A tile with both
+walks `[main volumes, tile volumes]`, and the walk takes each packet from the
+first volume that reaches it, so the main volumes decide the order of every
+packet they cover.
+
+**Evidence.** `scripts/gen-poc-precedence-fixtures.py` encodes a 24x16,
+three-component, three-layer image losslessly with `opj_compress -POC
+T1=0,0,3,1,3,CPRL/T1=1,0,3,3,3,RLCP`, which writes the two volumes in the
+tile-part header. `opj_decompress` 2.5.0 round-trips that file exactly. The
+script then adds a main-header POC of one LRCP volume over resolution 0, every
+component and every layer. LRCP and CPRL order resolution 0's nine packets
+differently, so only the tile-part POC describes the packets as written.
+
+| Decoder | `poc_main_and_tile.j2k` and `poc_main_and_split_tile.j2k` |
+| ------- | ---------------------------------------------------------- |
+| `opj_decompress` 2.5.0 | no error; 380, 383 and 384 of 384 samples wrong per component |
+| this crate, appending | `Codestream`: "tile-part has 114 body byte(s) left after the last packet" |
+| this crate, overriding | equal to the source |
+
+The split file puts the second tile volume in its own POC in the second
+tile-part header. `tests/poc_precedence.rs` grades both against the source;
+provenance is in `tests/fixtures/poc_precedence/README.md`. No conformance
+file or other committed fixture has a POC in both the main header and a
+tile-part header, so none of them changes.
+
+**A POC first seen in a later tile-part.** A tile whose first tile-part has no
+POC, but a later one has, breaks A.6.6. Its first packets can only have
+followed the main header's order, so this crate reads it as OpenJPEG does:
+the main volumes, then the tile's. The 32-volume budget counts both.
+`poc_main_then_later_tile_part.j2k` is such a file, and both decoders return
+the source. So this crate differs from OpenJPEG only on files that follow
+A.6.6.
+
+The coverage check (see "Packets a POC sequence leaves out" below) reads the
+same list the walk does. `poc_tile_leaves_out_packets.j2k` has a main POC that
+covers the tile and a first-tile-part POC that leaves out two resolutions; it
+is refused as `Codestream`, where OpenJPEG walks the main volume and returns
+a wrong image.
+
+**OpenJPEG's history.** The initial revision (2ad6a977, 2003) already read
+tile-part POCs, and it *replaced*: `j2k_read_poc` wrote from index 0 and set
+`numpocs = numpchgs`, and every SOT re-copied the default tcp. OpenJPEG 0.8
+(4be82998, 2004) added two things in one commit: a `tcp->first` guard, so the
+default tcp is copied into a tile once rather than at every SOT, and the
+append (`old_poc = tcp->POC ? tcp->numpocs+1 : 0`). The append lets the POCs
+of a tile's tile-parts build one list, which B.12.3 allows. The main header's
+volumes ending up in that list is a side effect of the copy-once seed. The
+append was carried into the v2 reader (1d45d751, 2008) and since then only
+renamed, reformatted (563bd849) and given the `J2K_MAX_POCS` constant
+(b8c4b450). No commit gives a reason, and no upstream issue covers a main and
+a tile-part POC together. OpenJPEG's encoder never writes both kinds: it
+writes a main-header POC only for the 4K cinema profile
+(`opj_j2k_write_poc`), and a tile-part POC only outside the cinema profiles
+(`opj_j2k_write_first_tile_part`). So its own files decode the same under
+either rule. The append reads as an oversight, not a choice, so this crate
+follows the standard.
 
 ### Stricter than the oracle on non-conforming streams
 
@@ -379,8 +451,10 @@ define every packet: "In the case where a POC marker segment is used, the
 progression of every packet in the codestream (or for that tile of the
 codestream) shall be defined in one or more POC marker segments", and B.12.3
 adds that "there will never be the case where a progression order volume is
-filled and the next one is not defined". The volumes are the main header's
-and then every tile-part's. A tile has a packet for every layer, every
+filled and the next one is not defined". The volumes are the ones the tile
+walks: its own when its first tile-part has a POC, which replaces the main
+header's (see "A tile-part POC overrides the main header's"), and otherwise
+the main header's and then any later tile-part's. A tile has a packet for every layer, every
 resolution each component has (its own `COD` or `COC` level count) and every
 precinct of it (B.6, B.9). A precinct or resolution with no code-blocks
 still has its packets, which B.9 says must appear as empty packets, so a

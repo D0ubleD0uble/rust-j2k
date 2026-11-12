@@ -769,11 +769,12 @@ fn a_poc_past_the_volume_guard_is_a_limit() {
     assert!(matches!(err(&split), Error::Limit(_)));
 }
 
-/// A tile's walk runs the *combined* main-plus-tile volume list, and OpenJPEG's
-/// 32-entry array holds that combination, so the guard binds the sum: a main
-/// header at the cap leaves a tile-part POC no room.
+/// The guard bounds the list a tile walks. A tile POC replaces the main
+/// header's, so a main header at the cap leaves a tile-part POC room, and the
+/// main volumes do not count against it. The tile's own volumes still share
+/// the guard across its markers: 20 and 13 reject.
 #[test]
-fn main_and_tile_poc_volumes_share_the_guard() {
+fn the_poc_guard_binds_the_volumes_a_tile_walks() {
     let header = vec![
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
@@ -782,7 +783,15 @@ fn main_and_tile_poc_volumes_share_the_guard() {
     ];
     let tile_poc = seg(marker::POC, &poc_volumes(1));
     let bytes = assemble_with_tile_markers(&header, &[tile_poc], &[1, 2]);
-    let error = parse(&bytes).expect_err("33 combined volumes should reject");
+    let cs = parse(&bytes).expect("a tile POC replaces the 32 main volumes");
+    assert_eq!(cs.tile_header(0).expect("resolve tile 0").poc.len(), 1);
+
+    let split = [
+        seg(marker::POC, &poc_volumes(20)),
+        seg(marker::POC, &poc_volumes(13)),
+    ];
+    let bytes = assemble_with_tile_markers(&header, &split, &[1, 2]);
+    let error = parse(&bytes).expect_err("33 tile volumes should reject");
     assert!(matches!(error, Error::Limit(_)));
 }
 
@@ -2600,12 +2609,12 @@ fn a_tile_part_rgn_names_one_component() {
     );
 }
 
-/// A tile-part POC **appends** to the main header's, it does not replace it: a
-/// tile inherits the main volumes and adds its own after them (A.6.6, matching
-/// OpenJPEG's seed-then-append). Order is load-bearing — the first volume to
-/// reach a packet emits it — so the resolved sequence must be `[main, tile]`.
+/// A tile-part POC **overrides** the main header's (A.6.6: "Tile-part POC >
+/// Main POC"): the tile walks its own volumes only. OpenJPEG appends the
+/// tile's volumes after the main header's instead (docs/correctness.md). The
+/// main header keeps its own volume for any tile without a POC.
 #[test]
-fn a_tile_part_poc_appends_to_the_main_header_poc() {
+fn a_tile_part_poc_overrides_the_main_header_poc() {
     // Main POC: resolutions [0, 2), LRCP. Tile POC: resolutions [0, 3), RLCP.
     let main_poc = [0u8, 0, 0, 1, 2, 1, 0];
     let header = [
@@ -2619,17 +2628,86 @@ fn a_tile_part_poc_appends_to_the_main_header_poc() {
 
     let cs = parse(&bytes).expect("parse");
     let tile = cs.tile_header(0).expect("resolve tile 0");
-    assert_eq!(tile.poc.len(), 2, "main volume then tile volume");
+    assert_eq!(tile.poc.len(), 1, "the tile's volume alone");
     assert_eq!(
         (tile.poc[0].res_end, tile.poc[0].progression),
-        (2, markers::Progression::Lrcp),
-        "the main header's volume comes first",
+        (3, markers::Progression::Rlcp),
+        "the tile-part's volume, not the main header's",
     );
+    assert_eq!(cs.header.poc.len(), 1);
+    assert_eq!(cs.header.poc[0].progression, markers::Progression::Lrcp);
+}
+
+/// Two tile-parts of tile 0: the first with no markers, the second with
+/// `second_markers` in its header.
+fn with_later_tile_part_markers(header: &[Vec<u8>], second_markers: &[Vec<u8>]) -> Vec<u8> {
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in header {
+        bytes.extend_from_slice(part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, psot_for(&[1]), 0, 2));
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.push(1);
+    let markers: usize = second_markers.iter().map(Vec::len).sum();
+    bytes.extend_from_slice(&sot_seg(0, psot_for(&[2]) + markers as u32, 1, 2));
+    for m in second_markers {
+        bytes.extend_from_slice(m);
+    }
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.push(2);
+    bytes.extend_from_slice(&be16(marker::EOC));
+    bytes
+}
+
+/// A.6.6 puts a tile's POC in its first tile-part. When the first POC is in a
+/// later one, the first packets can only have followed the main header's
+/// order, so the tile walks the main volumes and then its own, as OpenJPEG
+/// does, and the 32-volume budget counts both.
+#[test]
+fn a_poc_first_seen_in_a_later_tile_part_appends_to_the_main_header_poc() {
+    let header = |main_volumes: usize| {
+        vec![
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_default(1)),
+            seg(marker::POC, &poc_volumes(main_volumes)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ]
+    };
+    let tile_poc = seg(marker::POC, &[0u8, 0, 0, 1, 3, 1, 1]);
+    let bytes = with_later_tile_part_markers(&header(1), std::slice::from_ref(&tile_poc));
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.poc.len(), 2, "main volume then tile volume");
+    assert_eq!(tile.poc[0], cs.header.poc[0]);
     assert_eq!(
         (tile.poc[1].res_end, tile.poc[1].progression),
         (3, markers::Progression::Rlcp),
-        "the tile-part's volume is appended",
     );
+
+    let bytes = with_later_tile_part_markers(&header(32), &[tile_poc]);
+    let error = parse(&bytes).expect_err("33 walked volumes should reject");
+    assert!(matches!(error, Error::Limit(_)));
+}
+
+/// A tile with no POC of its own keeps the main header's volumes.
+#[test]
+fn a_tile_without_a_poc_keeps_the_main_header_poc() {
+    let main_poc = [0u8, 0, 0, 1, 2, 1, 0];
+    let header = [
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::POC, &main_poc),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    // A tile COD makes the tile resolve to its own header rather than borrow
+    // the main header's.
+    let tile_cod = seg(marker::COD, &cod_default(1));
+    let bytes = assemble_with_tile_markers(&header, &[tile_cod], &[1, 2]);
+
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.poc, cs.header.poc);
+    assert_eq!(tile.poc.len(), 1);
 }
 
 /// **A tile COD outranks a main-header COC.** This is the whole reason the main
@@ -3084,9 +3162,10 @@ impl Rng {
             layer_end: 1,
             progression: Progression::Lrcp,
         };
-        // Mostly none, sometimes enough that the two lists together pass the
-        // 32-volume budget.
-        let count = if self.chance(3) { self.below(20) } else { 0 };
+        // Mostly none, sometimes past the 32-volume budget on its own. A main
+        // header past it is discarded by `main_header`; a tile list past it
+        // must be refused by both checks.
+        let count = if self.chance(3) { self.below(40) } else { 0 };
         vec![volume; count as usize]
     }
 
@@ -3140,6 +3219,7 @@ impl Rng {
     }
 
     fn tile_header(&mut self, components: usize) -> TileHeader {
+        let poc = self.poc();
         TileHeader {
             cod: self.chance(2).then(|| self.cod(components)),
             qcd: self.chance(2).then(|| self.quant()),
@@ -3152,7 +3232,10 @@ impl Rng {
             rgn: (self.named(components).into_iter())
                 .map(|i| (i, self.below(8) as u8))
                 .collect(),
-            poc: self.poc(),
+            // As the parser sets it: only a nonempty list can start in the
+            // first tile-part.
+            poc_in_first_part: !poc.is_empty() && self.chance(2),
+            poc,
         }
     }
 }
