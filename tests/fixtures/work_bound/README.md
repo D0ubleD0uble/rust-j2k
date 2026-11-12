@@ -26,6 +26,7 @@ a flat image of 128.
 | `sweep_rpcl_1024_64.j2k`, `sweep_pcrl_1024_64.j2k` | `sweep(1024, 64, RPCL)` and `PCRL`: two thin components set the sweep step to 2 on both axes; 62 more, subsampled 255 times both ways, are checked at each of the 512^2 positions | 3.4e7 | decodes, 64 components, all 128, 0.5 s | `Limit` |
 | `cprl_tall.j2k` | `cprl_tall(0)`: one column of 2^24 rows on x in [1, 2), one level; resolution 0 sets the y step to 2 and resolution 1 the x step to 2, so the CPRL sweep visits 2^23 positions for 512 packets | 2.5e7 | decodes, all 128, 0.7 s | `Limit` |
 | `cprl_tall_poc31.j2k` | `cprl_tall(31)`: the same, with a POC marker repeating the CPRL order 31 times | 7.8e8 | decodes, all 128, 20.6 s | `Limit` |
+| `pocdup_4x4_1024_31.j2k` | `pocdup(4, 4, 1, 1024, 31)`: one 4 x 4 tile, no wavelet levels, 2 x 2 precincts, 1024 LRCP layers of empty packets, and 31 identical POC volumes over all of them, so each packet is read once and skipped 30 times | 6.8e4 | decodes, all 128, 0.00 s | decodes, all 128 |
 
 The same generator functions, with other arguments, write the shapes of
 `tests/fixtures/psot0/jp2_t2bomb_*` and `jp2_t2_sweep_*` (those are JP2 files

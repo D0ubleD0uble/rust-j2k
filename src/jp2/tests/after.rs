@@ -682,6 +682,76 @@ fn empty_packets(tiles: u32, components: u16) -> Vec<u8> {
     out
 }
 
+/// `setskip` from `scripts/gen-work-bound-fixtures.py` as a `Psot = 0`
+/// codestream: one 38608 x 1 tile in RPCL, 1 x 1 precincts, `layers`
+/// layers, `volumes` identical POC volumes, one component at `XRsiz` 254 and
+/// 64 at 255. The volumes reach 9880 packets a layer and read 216.
+fn setskip(layers: u16, volumes: usize) -> Vec<u8> {
+    let segment = |code: u16, body: &[u8]| {
+        let mut out = code.to_be_bytes().to_vec();
+        out.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    };
+    let mut siz = vec![0, 0];
+    for value in [152 * 254, 1, 0, 0, 152 * 254, 1, 0, 0u32] {
+        siz.extend_from_slice(&value.to_be_bytes());
+    }
+    siz.extend_from_slice(&65u16.to_be_bytes());
+    siz.extend_from_slice(&[7, 254, 1]);
+    for _ in 0..64 {
+        siz.extend_from_slice(&[7, 255, 1]);
+    }
+    let mut cod = vec![1, 2];
+    cod.extend_from_slice(&layers.to_be_bytes());
+    cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0]);
+    let mut volume = vec![0, 0];
+    volume.extend_from_slice(&layers.to_be_bytes());
+    volume.extend_from_slice(&[1, 65, 2]);
+    let mut out = vec![0xFF, 0x4F];
+    out.extend(segment(0xFF51, &siz));
+    out.extend(segment(0xFF52, &cod));
+    out.extend(segment(0xFF5C, &[0x40, 0x40]));
+    out.extend(segment(0xFF5F, &volume.repeat(volumes)));
+    out.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0xFF, 0x93]);
+    out.resize(out.len() + 216 * usize::from(layers), 0);
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
+/// The walk holds a POC sequence's packets in a bitmap wherever the decode
+/// does: 31 volumes reaching 1.0e7 packets, under the decode's 2^24 visits,
+/// are walked. Past that, where the decode keeps a set, the walk gives up:
+/// 2 volumes reaching 2.0e7 packets are not walked, though a decode with no
+/// work bound finishes them. With one volume nothing is held, and it is
+/// walked.
+#[test]
+fn the_packet_walk_skips_a_poc_sequence_past_its_bitmap() {
+    use crate::jp2::probe_packets;
+    use crate::tier2::{Budget, decode_packets_within};
+
+    for (layers, volumes) in [(1024, 31), (2048, 1)] {
+        let (ends, _) = probe_packets(&setskip(layers, volumes), 0);
+        assert!(ends, "{layers} layers, {volumes} volumes");
+    }
+    let repeated = setskip(2048, 2);
+    assert_eq!(probe_packets(&repeated, 0), (false, 0));
+    // 1 MB of COM segments in the main header is not tile data: it does not
+    // raise the bitmap's cap past the decode's, so the tile is still not
+    // walked.
+    let mut padded = repeated.clone();
+    let sot = padded.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    let mut com = vec![0xFF, 0x64, 0xFF, 0xFF, 0, 1];
+    com.resize(2 + 0xFFFF, b'.');
+    padded.splice(sot..sot, com.repeat(16));
+    assert_eq!(probe_packets(&padded, 0), (false, 0));
+    let parsed = crate::codestream::parse_header(&repeated).unwrap();
+    let cs = crate::codestream::parse_tiles(&repeated, parsed).unwrap();
+    let header = cs.tile_header(0).unwrap();
+    decode_packets_within(&header, &cs.tiles[0], &mut Budget::decode(u64::MAX))
+        .expect("the packets end at the end");
+}
+
 /// A codestream of more than [`PROBE_TILES`] tiles or [`PROBE_COMPONENTS`]
 /// components is not walked, since its tile list and the walked tile's
 /// header grow with them; at the bound it is.

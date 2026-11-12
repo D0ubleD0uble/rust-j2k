@@ -164,8 +164,10 @@ pub fn decode_packets<'a>(
 
 /// The fewest visits (see [`Budget::visits`]) a decode may spend walking its
 /// tiles' packets. Most visits cost about 10 to 50 ns, so this is under a
-/// second. A packet a POC marker's progression checks against those already
-/// read costs about 1 µs; that is left to its own issue.
+/// second. A packet a POC marker's volumes reach again is skipped from a
+/// bitmap without a visit, in about 4 ns; skipped from the set a sequence
+/// past the bitmap keeps, it is charged 12 visits (see
+/// `progression::for_each_packet`).
 pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 
 /// The visits a decode may spend per byte of its tiles' data, when that comes
@@ -213,6 +215,10 @@ pub(crate) struct Budget {
     /// precinct, and a sweep can check millions of points that hold no
     /// packet, so this bounds the work where the other two cannot.
     pub(crate) visits: u64,
+    /// How a POC sequence's packets are held (see [`for_each_packet`]):
+    /// `None` for the decode's bitmap up to the visits left and a set past
+    /// it, `Some(bits)` for a bitmap of at most `bits` and a failure past it.
+    pub(crate) poc_bitmap: Option<u64>,
 }
 
 impl Budget {
@@ -223,6 +229,7 @@ impl Budget {
             precincts: MAX_PRECINCTS,
             blocks: MAX_CODE_BLOCKS,
             visits,
+            poc_bitmap: None,
         }
     }
 }
@@ -306,6 +313,7 @@ pub(crate) fn decode_packets_within<'a>(
         header,
         &walk,
         &visits,
+        budget.poc_bitmap,
         |layer, resolution, component, precinct| {
             let geom = &geoms[component][resolution];
             parse_packet(
