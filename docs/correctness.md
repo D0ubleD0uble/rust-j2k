@@ -1228,8 +1228,8 @@ Each is `Unsupported` unless noted, and each is a row of
   grayscale or sYCC, or with no `colr`, and a raw codestream of three or more
   components, which declares no color space (rule 3). For most such spaces at
   one sampling `opj_decompress -force-rgb` fails too; at 4:2:0 or 4:2:2 it
-  converts them as sYCC, which row 5 of the table above refuses. Three spaces
-  it does convert: CMYK (12) on four channels gives three RGB planes
+  converts them as sYCC, which rows 3 and 29 refuse. Three spaces it does
+  convert: CMYK (12) on four channels gives three RGB planes
   (`color_cmyk_to_rgb`), CIELab (14) on three gives 16-bit RGB
   (`color_cielab_to_rgb`), and e-sYCC (24) on three converts
   (`color_esycc_to_rgb`). This crate has no such conversion (they are out of

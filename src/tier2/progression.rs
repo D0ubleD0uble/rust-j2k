@@ -415,10 +415,10 @@ where
                 // bitmap skip takes about 4 ns, so the skips cost at most about
                 // 0.12 µs per byte, under the 0.19 µs a byte the fastest
                 // conformance codestream past 100 KB takes to decode (best of
-                // five release builds). Charging them would
-                // refuse files OpenJPEG reads quickly, such as 31 identical volumes over
-                // 1 MB of empty packets. A skip from the set costs far more and
-                // is charged (see `SET_SKIP_VISITS`).
+                // five release builds). Charging them would refuse files
+                // OpenJPEG reads quickly, such as 31 identical volumes over 1 MB
+                // of empty packets. A skip from the set costs far more and is
+                // charged (see `SET_SKIP_VISITS`).
                 if emitted.insert(walk, layer, res, comp, precinct)? {
                     f(layer, res, comp, precinct)
                 } else if skip_visits > 0 {

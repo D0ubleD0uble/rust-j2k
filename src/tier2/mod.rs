@@ -176,9 +176,9 @@ pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 /// 0.5 µs a byte, about what decoding a byte of real data costs: the
 /// conformance codestreams past 100 KB decode at 0.19 to 0.73 µs a byte (the
 /// best of five release-build decodes of each). So a file past the floor is
-/// refused in no more than about the time its decode would take. The cheapest visits, the layer orders' steps
-/// over resolutions with no precinct, refuse a file at about 0.02 to 0.06 µs
-/// a byte.
+/// refused in no more than about the time its decode would take. The
+/// cheapest visits, the layer orders' steps over resolutions with no
+/// precinct, refuse a file at about 0.02 to 0.06 µs a byte.
 ///
 /// Setting up a tile's geometry is not counted. A resolution with no precinct
 /// gets no band or code-block geometry, so its setup is a few small

@@ -81,5 +81,6 @@ whole-crate look happens.
 Semantic Versioning. While the decoder's coverage is still widening (see
 `docs/roadmap.md`), expect `0.x` minor bumps to carry behavioral and possibly
 API changes. The public API is `decode`, `decode_with`, `read_header` and
-`read_header_with`, their options and output types, and `Error`. `1.0.0` is reserved for
-when Part 1 decode coverage is general rather than the GRIB2 subset.
+`read_header_with`, their options and output types, and `Error`. `1.0.0` is
+reserved for when Part 1 decode coverage is general rather than the GRIB2
+subset.

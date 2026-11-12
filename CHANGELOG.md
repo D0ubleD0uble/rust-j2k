@@ -125,7 +125,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - sYCC to RGB, with sub-sampled chroma replicated to full resolution first.
     This uses the IEC 61966-2-1 constants and rounds, where OpenJPEG shortens
     the constants and truncates, so the two differ by an MSE of about 0.38 to
-    0.49 a channel; the ISO references match this formula;
+    0.49 a channel; the ISO references agree with it (MSE under 0.03);
   - a restricted ICC profile (monochrome, or three-component matrix/TRC)
     applied at its rendering intent, with the same output as OpenJPEG 2.5.0
     with LittleCMS 2.14, sample for sample. That holds on x86-64 Linux
@@ -278,8 +278,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read no header bit, or 32 per byte of tile data when that is more,
   counting packets, steps over code-blocks a header reads no bit for, and
   the positions a positional progression order sweeps, for the components
-  that hold a precinct at each resolution. Past it the decode
-  is `Error::Limit`. Encoder output seen spends under 13% of it, but a
+  that hold a precinct at each resolution. Past it the decode is
+  `Error::Limit`. Encoder output seen spends under 13% of it, but a
   valid file of many layers that each include a few scattered code-blocks
   can exceed it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
   819 bytes took 6.5 s and a 9 KB PCRL sweep 29 s; both are now refused in
@@ -313,13 +313,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Breaking: two new error variants split what `Error::Unsupported` used to
   conflate. `Error` is `#[non_exhaustive]`, so existing matches keep
   compiling, but a caller matching `Unsupported` for these inputs now gets
-  a different variant: `Error::Limit` is
-  returned when an input exceeds a decoder resource guard (image/component
-  sample budget, precinct and code-block counts, bit-plane depth, progression
-  volumes), and `Error::InvalidOptions` when the caller's `DecodeOptions` are
-  invalid for the codestream (a `resolution_reduction` that consumes a whole
-  pyramid). `Error::Unsupported` now means only a valid-but-not-decoded
-  feature.
+  a different variant: `Error::Limit` is returned when an input exceeds a
+  decoder resource guard (image/component sample budget, precinct and
+  code-block counts, bit-plane depth, progression volumes), and
+  `Error::InvalidOptions` when the caller's `DecodeOptions` are invalid for
+  the codestream (a `resolution_reduction` that consumes a whole pyramid).
+  `Error::Unsupported` now means only a valid-but-not-decoded feature.
 
 ## [0.3.0] - 2026-07-18
 

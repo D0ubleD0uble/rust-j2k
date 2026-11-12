@@ -186,11 +186,12 @@ pub use jp2::{
 /// row of code-blocks in its precinct, and a sweep can check millions of
 /// positions that hold no packet, so a file of a few hundred bytes could
 /// otherwise take minutes. OpenJPEG has no such bound. A valid file of many
-/// layers that each include a few scattered code-blocks can exceed it
-/// ([the tier-2 work bound](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound)). A
-/// JP2 file whose last tile-part has `Psot = 0`
-/// may first walk that tile as [`read_header_with`] does, under its own smaller
-/// bound, so its decode can take about 1.25 times as many steps.
+/// layers that each include a few scattered code-blocks can exceed it (see
+/// [the tier-2 work bound][work-bound]). A JP2 file whose last tile-part has
+/// `Psot = 0` may first walk that tile as [`read_header_with`] does, under its
+/// own smaller bound, so its decode can take about 1.25 times as many steps.
+///
+/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -309,11 +310,10 @@ pub enum ColorOutput {
     /// RGB, with sub-sampled chroma (2x1 or 2x2) replicated to full
     /// resolution first, using the IEC 61966-2-1 constants and rounding;
     /// OpenJPEG shortens the constants and truncates, so the two differ by an
-    /// MSE of about 0.38 to 0.49 a channel, and the ISO references match this
-    /// formula. The color channels are the
-    /// ones the `cdef` box labels color 1, 2 and 3, wherever they sit. No
-    /// conversion changes a channel's bit depth, and other channels (opacity,
-    /// say) are untouched.
+    /// MSE of about 0.38 to 0.49 a channel. The ISO references agree with it
+    /// (MSE under 0.03). The color channels are the ones the `cdef` box
+    /// labels color 1, 2 and 3, wherever they sit. No conversion changes a
+    /// channel's bit depth, and other channels (opacity, say) are untouched.
     ///
     /// The ICC reference is OpenJPEG 2.5.0 with LittleCMS 2.14 on x86-64
     /// Linux (glibc 2.39). The output is the same on every platform whose
@@ -362,9 +362,11 @@ pub enum ColorOutput {
     ///
     /// Replicated chroma, or a tinted gray channel, past the sample budget is
     /// [`Error::Limit`]. These errors apply only when `Srgb` is asked for:
-    /// [`ColorOutput::AsCoded`] decodes the same files. The
-    /// [table of outcomes](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#outcomes) lists every case
-    /// against what OpenJPEG does, and the profiles LittleCMS refuses.
+    /// [`ColorOutput::AsCoded`] decodes the same files. The [table of
+    /// outcomes][outcomes] lists every case against what OpenJPEG does, and
+    /// the profiles LittleCMS refuses.
+    ///
+    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#outcomes
     Srgb,
 }
 
@@ -381,9 +383,10 @@ pub struct DecodeOptions {
     /// halves the output in both axes, so `1` decodes a half-size image, `2`
     /// a quarter-size, and so on: the wavelet pyramid's own lower
     /// resolutions, not a resample. The exact size depends on the image
-    /// origin; [`Image`] and [`ComponentInfo::width`] give the formula. Every component must keep at least one
-    /// resolution: a reduction that consumes some component's whole pyramid is
-    /// rejected as [`Error::InvalidOptions`].
+    /// origin; [`Image`] and [`ComponentInfo::width`] give the formula. Every
+    /// component must keep at least one resolution: a reduction that consumes
+    /// some component's whole pyramid is rejected as
+    /// [`Error::InvalidOptions`].
     pub resolution_reduction: u8,
     /// Return a JP2 file's codestream components as coded, without applying
     /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
