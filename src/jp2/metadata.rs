@@ -113,15 +113,15 @@ pub struct Jp2Metadata {
     /// The capture and default display resolutions from the header's `res `
     /// box, each `None` when the file does not give it.
     pub resolution: Resolution,
-    /// The contents of every top-level `xml ` box, verbatim and in file
-    /// order, including those after the codestream. Not parsed.
+    /// Every top-level `xml ` box, verbatim and in file order, including
+    /// those after the codestream. Not parsed.
     pub xml: Vec<XmlBox>,
     /// Every top-level `uuid` box, in file order, including those after the
     /// codestream. Not interpreted.
     pub uuid: Vec<UuidBox>,
-    /// The contents of every top-level intellectual property box (`jp2i`),
-    /// verbatim and in file order, including those after the codestream. The
-    /// standard leaves the format of these bytes open, so they are not parsed.
+    /// Every top-level intellectual property box (`jp2i`), verbatim and in
+    /// file order, including those after the codestream. The standard leaves
+    /// the format of these bytes open, so they are not parsed.
     /// `jp2i` boxes inside other superboxes are not collected.
     pub ipr: Vec<IprBox>,
     /// Every well-formed top-level UUID info box (`uinf`), in file order,
@@ -350,6 +350,8 @@ impl Ratio {
 }
 
 /// An `xml ` box: XML text the file carries, which is not parsed.
+///
+/// The payload is the bytes after the box header, not checked as UTF-8 or XML.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct XmlBox {
@@ -359,6 +361,8 @@ pub struct XmlBox {
 
 /// An intellectual property box (`jp2i`). The standard leaves the format of
 /// its contents open, so they are not parsed.
+///
+/// The payload is the bytes after the box header, not checked in any way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct IprBox {

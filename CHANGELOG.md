@@ -89,9 +89,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decode, as in OpenJPEG.
 - `Jp2Metadata::ipr` returns every top-level intellectual property box
   (`jp2i`) verbatim as an `IprBox`, and `Jp2Metadata::uuid_info` every
-  top-level UUID info box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst` box and the version,
-  flags and location of its `url ` box, with `UuidInfo::location_str` for the
-  location as text. Both are collected before and after the codestream, like
+  top-level UUID info box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst`
+  box and the version, flags and location of its `url ` box, with
+  `UuidInfo::location_str` for the location as text. Both are collected before and after the codestream, like
   `xml ` and `uuid`. A malformed `uinf` (not exactly one `ulst` and one
   `url `, a `ulst` whose count does not match its length, a `url ` under 4
   bytes, or a bad box inside it) is left out and never fails a decode, as
@@ -147,8 +147,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   those options like `with_resolution_reduction` does; the fields stay public.
 - `ColorSpace`, `ColorOutput`, `Resolution`, `Res`, `Ratio`, `UuidBox`, `XmlBox`
   and `IprBox` are `#[non_exhaustive]`, so later variants and fields (a JPX
-  color method, an output ICC profile) are not breaking changes. Match them with a `_` arm, and
-  read the structs' fields rather than building them.
+  color method, an output ICC profile) are not breaking changes. `XmlBox` and
+  `IprBox` are so that a later release can record where the box sat or its
+  `asoc`/`lbl` label. Match them with a `_` arm, and read the structs' fields
+  rather than building them.
 - `Jp2Metadata::palette` and `Jp2Metadata::channel_mapping` give the file's
   palette table (`Palette`, `PaletteColumn`) and component mapping
   (`ChannelMapping`, `MappingKind`). They are set whenever a palette and a
