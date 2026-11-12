@@ -278,7 +278,8 @@ fn the_conformance_files_declare_the_expected_color_spaces() {
         let n = i + 1;
         let bytes = std::fs::read(dir.join(format!("file{n}.jp2")))
             .unwrap_or_else(|e| panic!("file{n}: {e}"));
-        let parsed = super::parse(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
+        let parsed = super::parse(&bytes, crate::WorkLimit::Default)
+            .unwrap_or_else(|e| panic!("file{n}: {e}"));
         match icc_lengths.iter().find(|(file, _)| *file == n) {
             Some((_, len)) => match &parsed.color {
                 ColorSpace::RestrictedIcc(profile) => {
@@ -301,7 +302,7 @@ fn a_real_file_with_a_bpcc_box_parses() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/jp2_real/3_13bit_and_1bit.jp2");
     let bytes = std::fs::read(path).expect("fixture");
-    let parsed = super::parse(&bytes).expect("parses");
+    let parsed = super::parse(&bytes, crate::WorkLimit::Default).expect("parses");
     assert_eq!(parsed.header.bpcc(), vec![&[12, 12, 12, 0][..]]);
     assert_eq!(parsed.header.ihdr.bits_per_component, 255);
 }

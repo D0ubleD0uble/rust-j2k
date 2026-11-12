@@ -111,6 +111,37 @@ fn in_jp2() -> Vec<u8> {
     .concat()
 }
 
+/// `pocdup(512, 512, 1, 65535, 2, 4096, RPCL)`: one 512 x 512 tile, no
+/// wavelet levels, 2 x 2 precincts (65536 of them), 65535 layers and two
+/// RPCL POC volumes over all of them, so the volumes reach 4.3e9 packets, a
+/// bitmap of 537 MB. Only the first 4096 packets are in the data (0x00
+/// each). Past the bound's 2^24 the decode holds the packets read in a set.
+fn pocwide() -> Vec<u8> {
+    let mut siz = 0u16.to_be_bytes().to_vec();
+    for v in [512u32, 512, 0, 0, 512, 512, 0, 0] {
+        siz.extend_from_slice(&v.to_be_bytes());
+    }
+    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let mut cod = vec![1, 2];
+    cod.extend_from_slice(&LAYERS.to_be_bytes());
+    cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0x11]);
+    let mut volume = vec![0, 0];
+    volume.extend_from_slice(&LAYERS.to_be_bytes());
+    volume.extend_from_slice(&[1, 1, 2]);
+    let data = vec![0u8; 4096];
+    let mut cs = vec![0xFF, 0x4F];
+    cs.extend(seg(0xFF51, &siz));
+    cs.extend(seg(0xFF52, &cod));
+    cs.extend(seg(0xFF5C, &[0x40, 0x40]));
+    cs.extend(seg(0xFF5F, &volume.repeat(2)));
+    cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
+    cs.extend_from_slice(&(14 + data.len() as u32).to_be_bytes());
+    cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+    cs.extend(data);
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
 /// The heap `run` peaks at beyond what was held before it.
 fn peak_of<T>(run: impl FnOnce() -> T) -> (T, usize) {
     let before = CURRENT.load(Ordering::SeqCst);
@@ -143,4 +174,26 @@ fn repeated_poc_volumes_decode_in_a_small_heap() {
     assert_eq!((header.width, header.height), (8, 8));
     eprintln!("read_header peaked at {peak} bytes");
     assert!(peak < LIMIT, "read_header peaked at {peak} bytes");
+
+    // Lifting the packet work limit does not lift the bitmap's cap: volumes
+    // that reach more packets than the default bound are still held in a
+    // set of the packets read, not a 537 MB bitmap: about 15 MB, the
+    // geometry of 65536 precincts.
+    let wide = pocwide();
+    let lifted =
+        rust_j2k::DecodeOptions::default().with_packet_work_limit(rust_j2k::WorkLimit::Unlimited);
+    for (what, options) in [
+        ("default", rust_j2k::DecodeOptions::default()),
+        ("lifted", lifted),
+    ] {
+        let (result, peak) = peak_of(|| rust_j2k::decode_with(&wide, &options));
+        eprintln!(
+            "pocwide, {what}: decode peaked at {peak} bytes, {:?}",
+            result.err()
+        );
+        assert!(
+            peak < 64 * LIMIT,
+            "pocwide, {what}: decode peaked at {peak} bytes"
+        );
+    }
 }

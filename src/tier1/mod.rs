@@ -87,6 +87,87 @@ pub fn decode_code_blocks(
         .collect()
 }
 
+/// The fewest sample-passes (see [`work`]) a decode may spend in the block
+/// decoder. A sample-pass costs about 3 ns where a pass finds little to
+/// code, so this is about 0.2 s.
+pub(crate) const DECODE_WORK_MIN: u64 = 1 << 26;
+
+/// The sample-passes a decode may spend per byte of its tiles' data, when
+/// that comes to more than [`DECODE_WORK_MIN`].
+///
+/// Encoder output spends up to about 3300 per byte: `opj_compress` on a
+/// flat image with a few bright specks, which includes many code-blocks
+/// with every pass for a few bytes each. Most files spend under 120. So
+/// this is about 10 times the most seen. A packet header can ask for 88
+/// passes over a 64x64 code-block in about 4 bytes, about 100000
+/// sample-passes per byte, so this cuts a file's worst case to a third,
+/// about 0.1 ms a byte, and refuses it before any of that work is done.
+pub(crate) const DECODE_WORK_PER_BYTE: u64 = 1 << 15;
+
+/// The sample-passes the block decoder may spend on tiles that hold `bytes`
+/// bytes of data in all, packed packet headers included.
+pub(crate) fn decode_work(bytes: u64) -> u64 {
+    DECODE_WORK_MIN.max(bytes.saturating_mul(DECODE_WORK_PER_BYTE))
+}
+
+/// The work [`decode_code_blocks`] will do on `coded`: for each code-block
+/// it decodes, the coding passes it runs times the block's samples. Each
+/// pass scans the whole block, however few bytes it carries, so a packet
+/// header of a few bits per code-block can ask for up to 88 passes over
+/// 4096 samples each.
+///
+/// The passes run are the block's passes, but no more than the `3 × top − 2`
+/// its coded bit-planes hold; a block of no coded plane, or one the decode
+/// refuses for too many, runs none. The code-blocks a resolution reduction
+/// drops are not decoded and not counted.
+pub(crate) fn work(header: &MainHeader, coded: &CodedData<'_>, reduction: u8) -> u64 {
+    let mut total = 0u64;
+    for (comp, component) in coded.components.iter().enumerate() {
+        let Some(params) = header.components.get(comp) else {
+            continue;
+        };
+        let kept = component
+            .resolutions
+            .len()
+            .saturating_sub(usize::from(reduction))
+            .max(1);
+        for (res, resolution) in component.resolutions.iter().take(kept).enumerate() {
+            for subband in &resolution.subbands {
+                let band = match (res, subband.kind) {
+                    (0, _) => 0,
+                    (_, BandKind::Hl) => 3 * res - 2,
+                    (_, BandKind::Lh) => 3 * res - 1,
+                    (_, _) => 3 * res,
+                };
+                // A band without a step size fails its decode; it costs nothing.
+                let Ok(numbps) = numbps(header, comp, band) else {
+                    continue;
+                };
+                for block in &subband.blocks {
+                    let passes = passes_run(numbps, block, params.roi_shift);
+                    let samples = (block.width as u64).saturating_mul(block.height as u64);
+                    total = total.saturating_add(passes.saturating_mul(samples));
+                }
+            }
+        }
+    }
+    total
+}
+
+/// The coding passes [`decode_block`] runs on `block`: its passes, but no
+/// more than its coded bit-planes hold, the first plane one pass and each
+/// later one three.
+fn passes_run(numbps: u32, block: &CodeBlock<'_>, roi_shift: u8) -> u64 {
+    if block.num_passes == 0 {
+        return 0;
+    }
+    let top = top_coded_plane(numbps, block.zero_bit_planes, roi_shift);
+    if !(1..=MAX_BIT_PLANES).contains(&top) {
+        return 0;
+    }
+    u64::from(block.num_passes.min(3 * top - 2))
+}
+
 /// Decode every subband into a [`Bands`] pyramid, converting each quantized
 /// index with `convert` (identity for the reversible path, `i32 as f32` for the
 /// irreversible one).
@@ -372,3 +453,6 @@ mod tests {
         BlockParams::default()
     }
 }
+
+#[cfg(test)]
+mod work_bound_tests;

@@ -334,32 +334,14 @@ fn mask_below(n: u32) -> u64 {
 /// points that hold no packet included, so a walk under a bound stops however
 /// sparse its packets are.
 ///
-/// `poc_bitmap` is how a `POC` sequence's packets are held (see
-/// [`Emitted`]): with `None`, in a bitmap when they are no more than the
-/// visits left and else in a set; with `Some(bits)`, in a bitmap when they
-/// are no more than `bits`, and else the walk is [`crate::Error::Limit`].
+/// `poc_bitmap` and `poc_set` are how a `POC` sequence's packets are held
+/// (see [`Emitted`]): in a bitmap when they are no more than `poc_bitmap`,
+/// and else in a set if `poc_set`, or the walk is [`crate::Error::Limit`].
 pub(crate) fn for_each_packet<F>(
     header: &MainHeader,
     walk: &PacketWalk<'_>,
     visits: &Cell<u64>,
-    poc_bitmap: Option<u64>,
-    f: F,
-) -> Result<()>
-where
-    F: FnMut(u32, usize, usize, usize) -> Result<()>,
-{
-    let dense_bits = poc_bitmap.unwrap_or(visits.get());
-    for_each_packet_holding(header, walk, visits, dense_bits, poc_bitmap.is_none(), f)
-}
-
-/// [`for_each_packet`], with a `POC` sequence's packets held in a bitmap
-/// only when its volumes reach at most `dense_bits` of them (see
-/// [`Emitted`]).
-pub(super) fn for_each_packet_holding<F>(
-    header: &MainHeader,
-    walk: &PacketWalk<'_>,
-    visits: &Cell<u64>,
-    dense_bits: u64,
+    poc_bitmap: u64,
     poc_set: bool,
     mut f: F,
 ) -> Result<()>
@@ -400,7 +382,7 @@ where
     if volumes.len() == 1 {
         return run_order(&volumes[0], walk, &plan, visits, &mut f);
     }
-    let mut emitted = Emitted::new(&volumes, walk, max_res, visits.get(), dense_bits, poc_set)?;
+    let mut emitted = Emitted::new(&volumes, walk, max_res, visits.get(), poc_bitmap, poc_set)?;
     let skip_visits = emitted.skip_visits();
     for volume in &volumes {
         run_order(
@@ -453,10 +435,11 @@ const SET_SKIP_VISITS: usize = 12;
 /// cannot finish, and it fails here with [`Error::Limit`].
 ///
 /// Otherwise they are a bitmap when they are no more than the decode's
-/// visits left. Each packet read spends a visit, so a walk that reads them
-/// all never has more. The bitmap is then at most a bit per visit: 2 MB
-/// under the decode's floor of 2^24 visits, and 4 bytes per byte of tile
-/// data above it. `read_header`'s walk takes the same cap from the
+/// visits left, and no more than its default bound when the caller raised
+/// it. Each packet read spends a visit, so a walk that reads them all
+/// never has more. The bitmap is then at most a bit per visit of the
+/// default bound: 2 MB under the decode's floor of 2^24 visits, and 4 bytes
+/// per byte of tile data above it. `read_header`'s walk takes the same cap from the
 /// decode's bound for the same tile data, so it holds a bitmap wherever
 /// the decode can.
 ///
@@ -529,7 +512,7 @@ impl Emitted {
             _ if layer_orders && reached > visits_left => {
                 return Err(Error::Limit(format!(
                     "tile packet walk exceeds its work bound: its POC volumes reach \
-                     {reached} packets"
+                     {reached} packets (see `DecodeOptions::packet_work_limit`)"
                 )));
             }
             Some(words) => Marks::Dense(vec![0; words]),

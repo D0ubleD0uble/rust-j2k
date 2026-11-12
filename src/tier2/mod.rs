@@ -151,13 +151,17 @@ pub struct CodedData<'a> {
 /// lattice is coarser on the reference grid.
 ///
 /// The walk spends `visits`, what is left of the decode's work bound (see
-/// [`decode_visits`]), and fails with [`Error::Limit`] once it is gone.
+/// [`decode_visits`]), and fails with [`Error::Limit`] once it is gone. A
+/// POC sequence's packets are held in a bitmap of at most `poc_bitmap`
+/// bits, and no more than `visits`, and past it in a set (see
+/// [`for_each_packet`]).
 pub fn decode_packets<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
     visits: &mut u64,
+    poc_bitmap: u64,
 ) -> Result<CodedData<'a>> {
-    let mut budget = Budget::decode(*visits);
+    let mut budget = Budget::decode(*visits, poc_bitmap);
     let coded = decode_packets_within(header, tile, &mut budget);
     *visits = budget.visits;
     coded
@@ -225,10 +229,13 @@ pub(crate) struct Budget {
     /// precinct, and a sweep can check millions of points that hold no
     /// packet, so this bounds the work where the other two cannot.
     pub(crate) visits: u64,
-    /// How a POC sequence's packets are held (see [`for_each_packet`]):
-    /// `None` for the decode's bitmap up to the visits left and a set past
-    /// it, `Some(bits)` for a bitmap of at most `bits` and a failure past it.
-    pub(crate) poc_bitmap: Option<u64>,
+    /// The most bits a POC sequence's packets are held in a bitmap of (see
+    /// [`for_each_packet`]).
+    pub(crate) poc_bitmap: u64,
+    /// Whether a POC sequence whose packets are more than
+    /// [`poc_bitmap`](Self::poc_bitmap) holds them in a set; if not, its
+    /// walk fails.
+    pub(crate) poc_set: bool,
     /// Whether a POC sequence that leaves out packets of the tile is refused
     /// before the walk (see `progression::check_poc_coverage`). The decode
     /// sets it. `read_header`'s walk of a `Psot = 0` tile does not: it asks
@@ -238,14 +245,23 @@ pub(crate) struct Budget {
 }
 
 impl Budget {
-    /// The decode's budget for one tile: the geometry guards, and `visits`,
-    /// what is left of the decode's work bound.
-    pub(crate) const fn decode(visits: u64) -> Budget {
+    /// The decode's budget for one tile: the geometry guards, `visits`,
+    /// what is left of the decode's work bound, and a POC bitmap of no more
+    /// bits than the visits left or `poc_bitmap`, then a set. A walk that
+    /// reads every packet takes a visit for each, so a bitmap of more bits
+    /// than the visits left would be wasted. `poc_bitmap` is the decode's
+    /// default bound, so a raised bound does not raise the bitmap's memory.
+    pub(crate) const fn decode(visits: u64, poc_bitmap: u64) -> Budget {
         Budget {
             precincts: MAX_PRECINCTS,
             blocks: MAX_CODE_BLOCKS,
             visits,
-            poc_bitmap: None,
+            poc_bitmap: if visits < poc_bitmap {
+                visits
+            } else {
+                poc_bitmap
+            },
+            poc_set: true,
             poc_coverage: true,
         }
     }
@@ -333,6 +349,7 @@ pub(crate) fn decode_packets_within<'a>(
         &walk,
         &visits,
         budget.poc_bitmap,
+        budget.poc_set,
         |layer, resolution, component, precinct| {
             let geom = &geoms[component][resolution];
             parse_packet(
@@ -479,7 +496,8 @@ pub(crate) fn visit(left: &Cell<u64>, n: usize) -> Result<()> {
             Ok(())
         }
         None => Err(Error::Limit(
-            "tile packet walk exceeds its work bound".into(),
+            "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)"
+                .into(),
         )),
     }
 }

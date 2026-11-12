@@ -81,7 +81,7 @@ pub use metadata::{
 pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 
 use crate::codestream::markers::Siz;
-use crate::{Component, ComponentInfo, Error, Result};
+use crate::{Component, ComponentInfo, Error, Result, WorkLimit};
 use after::End;
 use boxes::{Boxes, Jp2Box, walk_after_codestream};
 use channels::ChannelPlan;
@@ -144,8 +144,11 @@ pub(crate) struct Jp2File<'a> {
     pub(crate) after_fault: Option<Error>,
 }
 
-/// Walk a JP2 file's top-level boxes to the first `jp2c`.
-pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
+/// Walk a JP2 file's top-level boxes to the first `jp2c`. `packet_work` is
+/// the caller's tier-2 work limit, which also bounds the walk of a
+/// `Psot = 0` tile that finds where the codestream ends
+/// ([`packets_end_at`]).
+pub(crate) fn parse(bytes: &[u8], packet_work: WorkLimit) -> Result<Jp2File<'_>> {
     if !bytes.starts_with(&SIGNATURE) {
         return Err(Error::FileFormat(
             "the file must open with the 12-byte JP2 signature box (`jP  ` holding \
@@ -194,7 +197,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Jp2File<'_>> {
                 color::check_bpcc(&header)?;
                 let color = color::read(&header)?;
                 let (codestream, rest, after_read) =
-                    locate_codestream(bytes, item.payload, boxes.rest());
+                    locate_codestream(bytes, item.payload, boxes.rest(), packet_work);
                 let after = walk_after_codestream(rest);
                 // Both are ends of the file; the shorter starts later.
                 let past_box = boxes.rest();
@@ -261,6 +264,7 @@ fn locate_codestream<'a>(
     file: &'a [u8],
     payload: &'a [u8],
     rest: &'a [u8],
+    packet_work: WorkLimit,
 ) -> (&'a [u8], &'a [u8], bool) {
     // `payload` and `rest` are the end of `file`, back to back.
     let tail = file
@@ -281,7 +285,7 @@ fn locate_codestream<'a>(
             if matches!(after::codestream_end(payload), End::OpenLastPart(_)) =>
         {
             match tail.get(..payload.len() + 2) {
-                Some(cut) if packets_end_at(cut, tile) => (cut, rest, false),
+                Some(cut) if packets_end_at(cut, tile, packet_work) => (cut, rest, false),
                 _ => (tail, &[], false),
             }
         }
@@ -357,12 +361,12 @@ fn probe_visits(bytes: u64) -> u64 {
 /// any bound the answer is `false`, so the codestream runs to the end of the
 /// file, the rule for a `Psot = 0` tile-part that this check does not apply
 /// to.
-fn packets_end_at(codestream: &[u8], tile: u16) -> bool {
-    probe_packets(codestream, tile).0
+fn packets_end_at(codestream: &[u8], tile: u16, packet_work: WorkLimit) -> bool {
+    probe_packets(codestream, tile, packet_work).0
 }
 
 /// [`packets_end_at`], and the visits the walk spent.
-fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
+fn probe_packets(codestream: &[u8], tile: u16, packet_work: WorkLimit) -> (bool, u64) {
     let Ok(parsed) = crate::codestream::parse_header(codestream) else {
         return (false, 0);
     };
@@ -386,7 +390,7 @@ fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
         return (false, 0);
     };
     let bytes = (data.data.len() + data.packed_headers.len()) as u64;
-    let visits = probe_visits(bytes);
+    let visits = packet_work.apply(probe_visits(bytes));
     let mut budget = crate::tier2::Budget {
         precincts: PROBE_GEOMETRY,
         blocks: PROBE_GEOMETRY,
@@ -394,7 +398,8 @@ fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
         // A POC sequence holds a bitmap wherever the decode could, sized by
         // the decode's bound for the same tile data, and past it gives up
         // rather than keep a set.
-        poc_bitmap: Some(crate::tier2::decode_visits(crate::tile_bytes(&cs))),
+        poc_bitmap: crate::tier2::decode_visits(crate::tile_bytes(&cs)),
+        poc_set: false,
         // Volumes that leave out packets do not move where the packets they
         // reach end; the decode refuses them.
         poc_coverage: false,

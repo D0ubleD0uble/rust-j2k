@@ -628,7 +628,12 @@ pairs that hold a precinct are checked, and RPCL sweeps no resolution
 where none does. Code-block
 entries that read a bit are not counted, since the header's bytes already
 pay for them. Past the bound the decode is `Limit`. It is one bound for the
-whole decode, not one per tile, and there is no option to change it.
+whole decode, not one per tile. `DecodeOptions::packet_work_limit`
+raises it (`WorkLimit::Raised(n)`, n times the floor and the rate) or lifts
+it (`WorkLimit::Unlimited`), for the walk `read_header` makes too (below).
+The POC bitmap stays capped at the default bound's size, so raising the
+bound raises the time a file may take, not its memory: past that size the
+packets read go in the set.
 
 A header of one byte can still step over each row of code-blocks in its
 precinct, and a positional order can sweep millions of positions that hold
@@ -766,6 +771,57 @@ it can spend about 1.25 times the decode's bound (`jp2_t2_sweep_cprl_tall` in
 walk's geometry bound of 2^14 code-blocks: `read_header` allocates for its
 walk, and a geometry bound at the decode's 2^19 code-blocks would let
 `read_header` hold about 75 MB for a 66 KB file.
+
+### The tier-1 work bound
+
+Each coding pass of a code-block scans all of the block's samples, however
+few bytes the pass carries, and a packet header can ask for a block's 88
+passes (3 x 30 - 2, for 30 bit-planes) in about 4 bytes. The decode counts
+the work of each tile as the passes the block decoder runs times each
+block's samples, before it decodes the tile's code-blocks. A block runs its
+passes, but no more than its coded bit-planes hold (`3 × top − 2`), and the
+blocks a resolution reduction drops are not counted. The decode may spend
+max(2^26, 2^15 × the tiles' data bytes) such sample-passes, one bound for
+every tile; past it the decode is `Limit` (owner decision on #250,
+2026-11-12). `DecodeOptions::code_block_work_limit` raises or lifts it.
+
+A sample-pass costs about 3.3 ns where the pass finds little to code, so
+the floor is about 0.2 s and the rate about 0.1 ms a byte. Measured on
+release builds (`scripts/gen-tier1-work-bound-fixtures.py`; `t1bomb` is one
+tile, no wavelet levels, every 64x64 code-block included with 88 passes
+and one byte; times are this decoder before this change, then after, then
+`opj_decompress` 2.5.0):
+
+| Shape | Size | Sample-passes | Before | After | OpenJPEG |
+| ----- | ---- | ------------- | ------ | ----- | -------- |
+| `t1bomb`, 8192^2 | 76 KB | 5.9e9 | decodes, 19.3 s | `Limit`, 6 ms | decodes, 9.0 s |
+| `t1bomb`, 1024^2 (committed) | 1.3 KB | 9.2e7 | decodes, 0.29 s | `Limit`, under 1 ms | decodes, 0.14 s |
+
+With the bound lifted, the 8192^2 file decodes in the same 19 s
+(`the_issue_bomb_decodes_with_the_limit_lifted`, ignored by default).
+
+The bound is about 10 times the most encoder output was seen to spend.
+Over the committed files, the conformance corpus and the real-world files,
+most spend under 120 sample-passes per byte; `budget/flat_1024_lossless`
+spends 7100 in 202 bytes, under the floor. Encoder output that spends the
+most per byte is a flat image with sparse bright specks: each speck makes
+its code-blocks run every pass for a few bytes. `opj_compress` (lossless
+and 9/7 at ratios from 20 to 10000, 16x16 to 64x64 code-blocks) on such
+images and on smooth fields, noise and photographs spends up to about
+3300 per byte; the most was 8192^2 16-bit with 2000 specks, 427 KB, at 10%
+of the bound. The committed `opj_specks2048_16bit` (2048^2, 16-bit, 128
+specks, 28 KB) spends 3600 per byte, 11% of the bound.
+`every_committed_file_decodes_far_below_the_tier1_work_bound` prints the
+table for the committed files and asserts each is under 1/8.
+
+A crafted file can spend about 100000 per byte (88 passes over 4096
+samples for about 4 bytes of packet header and data), so the gap between
+what encoders write and what a file can ask for is only about 30 times.
+The bound cuts the worst case to a third of the unbounded one and refuses
+it before doing the work, but a file at the bound still takes about 0.1 ms
+a byte, against the 0.2 to 0.7 µs a byte real data takes; a valid file of
+dense specks a little past what was measured would be refused, and
+`code_block_work_limit` is the way to decode it.
 
 ### Tile header cost
 
