@@ -190,10 +190,14 @@ pub fn parse_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>>
     let summary = OnceCell::new();
     for (index, tile) in codestream.tiles.iter().enumerate() {
         if !tile_header_is_valid(main, &summary, &tile.header) {
-            check_tile_in_full(main, &tile.header, index)?;
-            // The two checks agree, so the full one has just failed. Were it
-            // ever to pass, its verdict stands.
-            debug_assert!(false, "tile {index}: the quick check refused a valid tile");
+            // The two checks agree, so the full one fails here. Were it ever
+            // to pass, its verdict would stand.
+            let full = check_tile_in_full(main, &tile.header, index);
+            debug_assert!(
+                full.is_err(),
+                "tile {index}: the quick check refused a valid tile"
+            );
+            full?;
         }
     }
 
@@ -383,9 +387,9 @@ fn tile_header_is_valid(
             (None, Some(qcd)) => {
                 if qcd.style != QuantStyle::ScalarDerived {
                     let most = summary.by_levels.iter().find(|&&(_, i)| !is_named(i));
-                    if most.is_some_and(|&(levels, _)| {
-                        qcd.steps.len() < 3 * usize::from(levels) + 1
-                    }) {
+                    if most
+                        .is_some_and(|&(levels, _)| qcd.steps.len() < 3 * usize::from(levels) + 1)
+                    {
                         return false;
                     }
                 }

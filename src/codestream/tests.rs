@@ -3185,5 +3185,72 @@ fn the_quick_tile_check_agrees_with_the_full_resolution() {
         }
     }
     // Both verdicts are common, so neither side of the check goes untested.
-    assert!(valid > 2000 && invalid > 2000, "{valid} valid, {invalid} invalid");
+    assert!(
+        valid > 2000 && invalid > 2000,
+        "{valid} valid, {invalid} invalid"
+    );
+}
+
+/// A tile-part COC alone, with no tile COD or QCD, still overrides the coding
+/// of the component it names: the tile decodes with 2 levels where the main
+/// header has 5. A tile with markers of its own is never the main header
+/// borrowed.
+#[test]
+fn a_tile_part_coc_alone_overrides_its_component() {
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 2, 4, 4, 0, 1));
+    let bytes = assemble_with_tile_markers(&default_header(), &[coc], &[1, 2]);
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.components[0].coding.decomposition_levels, 2);
+    assert_eq!(cs.header.components[0].coding.decomposition_levels, 5);
+}
+
+/// A tile-part QCC alone overrides the quantization of the component it
+/// names, as the COC does its coding.
+#[test]
+fn a_tile_part_qcc_alone_overrides_its_component() {
+    let qcc = seg(marker::QCC, &{
+        let mut b = vec![0u8];
+        b.extend_from_slice(&qcd_none(2, &[9; 16]));
+        b
+    });
+    let bytes = assemble_with_tile_markers(&default_header(), &[qcc], &[1, 2]);
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.components[0].quant.steps[0], (9, 0));
+    assert_eq!(cs.header.components[0].quant.steps[0], (8, 0));
+}
+
+/// A.6 allows one COC and one QCC per component in a tile-part header, as in
+/// the main header; a second one for the same component is malformed.
+#[test]
+fn a_second_tile_part_coc_or_qcc_for_one_component_is_a_codestream_error() {
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 2, 4, 4, 0, 1));
+    let qcc = seg(marker::QCC, &{
+        let mut b = vec![0u8];
+        b.extend_from_slice(&qcd_none(2, &[8; 16]));
+        b
+    });
+    for (name, marker) in [("COC", coc), ("QCC", qcc)] {
+        let bytes =
+            assemble_with_tile_markers(&default_header(), &[marker.clone(), marker], &[1, 2]);
+        match perr(&bytes) {
+            Error::Codestream(m) => assert!(m.contains("duplicate"), "{name}: {m}"),
+            other => panic!("{name}: {other}"),
+        }
+    }
+}
+
+/// `ST = 0` implies each entry's tile by its place among every TLM entry,
+/// across markers, so in a one-tile grid a second entry, even in a second
+/// marker, names tile 1, which the grid does not hold.
+#[test]
+fn tlm_implied_indices_count_across_markers() {
+    let mut segments = default_header();
+    segments.push(seg(marker::TLM, &tlm_body(0x00, &[0x12, 0x34])));
+    segments.push(seg(marker::TLM, &tlm_body(0x00, &[0x12, 0x34])));
+    match err(&codestream(&segments)) {
+        Error::Marker(m) => assert!(m.contains("names tile 1"), "{m}"),
+        other => panic!("{other}"),
+    }
 }

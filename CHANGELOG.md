@@ -189,6 +189,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bound; a tile past the bound is read to the end of the file. A raw
   codestream, or a `jp2c` with `LBox` 0 or a length that ends inside the
   codestream, is still refused when bytes follow the last packet.
+- Tile headers are checked in time proportional to their own markers. Each
+  tile's header used to be a copy of the main header, made for every tile
+  before any check, so the time grew as the tiles times the components or
+  the TLM entries. 65025 1x1 tiles over 16384 components took 46 s to be
+  refused and now take 17 ms; 65025 tiles behind 4 MB of TLM entries took
+  85 s to decode and now take 63 ms.
 
 ### Changed
 
