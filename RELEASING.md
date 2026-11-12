@@ -62,21 +62,24 @@ whole-crate look happens.
    section and refresh the compare links at the bottom. Consolidate duplicate
    Keep-a-Changelog section headers that accumulated while features landed.
 2. Bump `version` in `Cargo.toml` to match.
-3. Open a PR with those two changes; merge once CI is green.
-4. Tag the merged commit and push the tag:
+3. Update the README's install line (`rust-j2k = "X.Y"`) and the
+   supported-versions table in `SECURITY.md` to the new minor version.
+4. Open a PR with those changes; merge once CI is green.
+5. Tag the merged commit and push the tag:
    ```sh
    git checkout main && git pull
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
-5. The `release.yml` workflow runs the full gate, checks the tag matches the
+6. The `release.yml` workflow runs the full gate, checks the tag matches the
    crate version, then pauses on the `crates-io` environment. Approve the
    deployment in the GitHub UI (Actions → the run → Review deployments).
-6. On approval it publishes to crates.io and creates the GitHub Release.
+7. On approval it publishes to crates.io and creates the GitHub Release.
 
 ## Versioning
 
-Semantic Versioning. While the public API is a single `decode` function and the
-decoder's coverage is still widening (see `docs/roadmap.md`), expect `0.x` minor
-bumps to carry behavioral and possibly API changes. `1.0.0` is reserved for
+Semantic Versioning. While the decoder's coverage is still widening (see
+`docs/roadmap.md`), expect `0.x` minor bumps to carry behavioral and possibly
+API changes. The public API is `decode`, `decode_with`, `read_header` and
+`read_header_with`, their options and output types, and `Error`. `1.0.0` is reserved for
 when Part 1 decode coverage is general rather than the GRIB2 subset.

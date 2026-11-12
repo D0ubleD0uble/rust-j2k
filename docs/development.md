@@ -130,7 +130,7 @@ snapshot's `oracle_command` records the input path exactly as typed, so
 
 ```sh
 # reversible (5/3, lossless): bit-exact agreement
-scripts/gen-oracle.sh tests/fixtures/sample.j2k \
+scripts/gen-oracle.sh tests/fixtures/jpeg2000_regular_latlon.j2k \
     --source "fieldglass/jpeg2000_regular_latlon.grib2"
 ```
 

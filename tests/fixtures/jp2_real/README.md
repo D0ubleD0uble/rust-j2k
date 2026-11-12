@@ -48,9 +48,10 @@ edited or swapped file fails there.
 ## Oracle
 
 Every file that decodes is graded against `references/<stem>_<k>.pgx`,
-`opj_decompress` 2.5.0's output for the `.jp2` (`opj_decompress -i
-<file>.jp2 -o <stem>.pgx`, one PGX per component). `scripts/gen-jp2-references.sh` regenerates all of
-them; it stops first unless `opj_decompress` is the pinned version.
+`opj_decompress` 2.5.0's output for the `.jp2` (`opj_decompress -i <file>.jp2
+-o <stem>.pgx`, one PGX per component). `scripts/gen-jp2-references.sh`
+regenerates all of them; it stops first unless `opj_decompress` is the pinned
+version.
 
 - The five files without a `cdef` box (`byte`, `byte_tlm_plt`, `int16`,
   `rgbwcmyk01_YeGeo_kakadu`, `small_200ppcm`) match their references
@@ -69,13 +70,13 @@ so they share the status in Rights above.
 `metadata.json` records what each file's header says, in the `jp2` snapshot
 schema of `tests/fixtures/README.md`, for every file: color, channels,
 resolution, the top-level `xml ` and `uuid` boxes, and the four box-dump
-fields `file_type` (`ftyp`), `image_header` (`ihdr`),
-`color_specifications` (every `colr`) and `reader_requirements` (`rreq`).
-Every value, and the file itself, is written by
-`scripts/gen-jp2-box-snapshots.py`, a standalone box walker that never uses
-the decoder (`python3 -I scripts/gen-jp2-box-snapshots.py`). The script
-writes the file from scratch: it reads every `*.jp2` here, builds each
-record, and overwrites `metadata.json`, so nothing is carried over from an
-earlier copy. For a file it cannot record with certainty, the walker exits
-with an error naming it, and leaves `metadata.json` as it was. `read_header` must report the values, and so must
-`decode` for each file it decodes.
+fields `file_type` (`ftyp`), `image_header` (`ihdr`), `color_specifications`
+(every `colr`) and `reader_requirements` (`rreq`). Every value, and the file
+itself, is written by `scripts/gen-jp2-box-snapshots.py`, a standalone box
+walker that never uses the decoder (`python3 -I
+scripts/gen-jp2-box-snapshots.py`). The script writes the file from scratch:
+it reads every `*.jp2` here, builds each record, and overwrites
+`metadata.json`, so nothing is carried over from an earlier copy. For a file
+it cannot record with certainty, the walker exits with an error naming it, and
+leaves `metadata.json` as it was. `read_header` must report the values, and so
+must `decode` for each file it decodes.

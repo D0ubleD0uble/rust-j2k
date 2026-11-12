@@ -45,7 +45,8 @@ Deviating needs two things, and one is not enough:
 
 Assume first that a divergence is our bug. It almost always is.
 
-There are three known cases. On the inverse 9/7, the standard scales the high-pass
+There are several known cases; "Where the decoders differ" below lists them
+all. The first is the inverse 9/7: the standard scales the high-pass
 samples by `1/K` and the subband gain (Table E-1) enters the quantization step,
 so a high-pass coefficient is scaled by `2 · (1/K) = 1.6257861…`. OpenJPEG's
 decoder instead zeroes the gain and folds the factor of two into the transform:
@@ -116,14 +117,15 @@ Without a maxshift both counts are the same, so no other fixture changes.
 import (2ad6a977, 2003, `libopenjpeg/t1.c`: `bpno = roishift + cblk->numbps - 1`
 and `bpno <= (cblk->numbps - 1) - 4`). `git log -L` on the line shows only
 renames, reformatting and sign-conversion fixes since, with no commit that
-gives a reason. The encoder's rule is from the same import; the 2017 bypass and
-termination fixes (81c53117, upstream #674) changed the encoder's termination
-and left the decoder's raw decision alone. No upstream issue or pull request
-covers ROI with bypass. Upstream ROI has no tests (#1035, "Add unit tests for
-ROI feature", open since 2017). Its encoder shifts no coefficients: `-ROI`
-only signals `SPrgn`, so the decoder reads every nonzero coefficient of the
-component as region of interest (#1036, open). The rule reads as an
-oversight, not a choice, so this crate follows the standard. Recorded with the owner's approval on #226.
+gives a reason. The encoder's rule is from the same import; the 2017 bypass
+and termination fixes (81c53117, upstream #674) changed the encoder's
+termination and left the decoder's raw decision alone. No upstream issue or
+pull request covers ROI with bypass. Upstream ROI has no tests (#1035, "Add
+unit tests for ROI feature", open since 2017). Its encoder shifts no
+coefficients: `-ROI` only signals `SPrgn`, so the decoder reads every nonzero
+coefficient of the component as region of interest (#1036, open). The rule
+reads as an oversight, not a choice, so this crate follows the standard.
+Recorded with the owner's approval on #226.
 
 ### Segmentation symbols
 
@@ -274,12 +276,12 @@ bytes left over after the last packet (OpenJPEG ignores them). A tier-1 check
 is of the same kind: under predictable termination every MQ segment of a
 code-block must end as the termination predicts, where OpenJPEG checks only
 the last segment and only warns (`decode_block` in `src/tier1/passes.rs`; see
-also "Segmentation symbols" above). These are
-deliberate, and they are a different axis from the numeric rule above: each
-condition means the packet walk has probably desynchronized, and continuing
-risks a silently wrong image — the one outcome this crate never accepts. A
-typed error preserves the oracle-match property; warn-and-continue would bet
-the output on a parse the evidence says is broken.
+also "Segmentation symbols" above). These are deliberate, and they are a
+different axis from the numeric rule above: each condition means the packet
+walk has probably desynchronized, and continuing risks a silently wrong image
+— the one outcome this crate never accepts. A typed error preserves the
+oracle-match property; warn-and-continue would bet the output on a parse the
+evidence says is broken.
 
 `opj_compress` writes two patterns these checks refuse:
 
@@ -287,10 +289,11 @@ the output on a parse the evidence says is broken.
   OpenJPEG's encoder resets its include array for each tile-part (t2.c:248),
   so it writes the packets twice and the file doubles in size. OpenJPEG's
   decoder skips the repeats, ignores the bytes left over, and matches the
-  source. This decoder refuses it ("N body bytes left"). A partial overlap
+  source. This decoder refuses it ("tile-part has N body byte(s) left after
+  the last packet"). A partial overlap
   (`-r 4,2,1`, layer ranges 2 then 3) is refused with "tile-part ends before
   the last packet";
-- `-TP R` or `-TP C` with empty resolutions (`-F 2,99,1,1 -n 6 -t 32,64
+- `-TP R` or `-TP C` with empty resolutions (`-F 2,99,1,1,u -n 6 -t 32,64
   -d 22,14 -TP R`). The encoder writes a stray `0x80` byte into each
   tile-part of an empty resolution. This decoder refuses it; OpenJPEG decodes
   it silently to a different image (101 of 198 samples differ), so refusing
@@ -375,34 +378,34 @@ Stricter here, where OpenJPEG decodes:
   does for a raw codestream (owner decision on #183, 2026-11-10). The
   packets themselves decode, so this is not the tier-2 rule above.
 
-A `Psot = 0` last tile-part ends at the end of its `jp2c` box, with or
-without an `EOC`, when the box declares a length that ends at least two
-bytes before the end of the file and holds every tile-part's `SOT`, and
-tier-2 walks the packets of that tile-part's tile to exactly the box's end.
-Tier-2 refuses bytes left after the last packet and a tile-part that ends
-before its last packet, so this holds only when the packets end there, and
-OpenJPEG, which reads the tile-part on to the end of the file, reads the same
-packets when the tile has 999 layers or fewer (see "Where the decoders
-differ" below for more). Read to the end of the file, those packets are followed by bytes
-left after them, which are refused, so a fault in tier-1 is the same fault
-either way. When tier-2 does not reach the box's end (the box ends inside the
-codestream), the codestream is read to the end of the file instead, with the
-result above. The check is part of reading the file's structure, so
-`read_header` makes it too: it walks that one tile's packet headers, without
-decoding any samples. Every step of the walk is bounded, since a one-byte
-packet header can step over each row of code-blocks of its precinct and a positional
-progression order can sweep millions of positions that hold no packet: a
-codestream of more than 4096 tiles or 1024 components, or of fewer than 14
-bytes per tile, is not walked, nor is a tile of more than 2^14 code-blocks or
-precincts, and the walk stops after max(2^22, 8 × the tile's data bytes)
-steps, counted as the decode's bound counts them (see below).
-Past a bound the check answers no, and the codestream is read to the end of
-the file as above (`jp2_t2bomb_*` and `jp2_t2_sweep_*` in
-`tests/fixtures/psot0/`). When the box's end is used, the boxes after it are
-walked by the rules for the boxes after the codestream and reported as
-metadata (`xml `, `uuid` and the like); otherwise the bytes after the box are
-tile data and nothing is reported from them. Neither decoder reads header
-boxes there: OpenJPEG's walk after the decode starts at the end of the file.
+A `Psot = 0` last tile-part ends at the end of its `jp2c` box, with or without
+an `EOC`, when the box declares a length that ends at least two bytes before
+the end of the file and holds every tile-part's `SOT`, and tier-2 walks the
+packets of that tile-part's tile to exactly the box's end. Tier-2 refuses
+bytes left after the last packet and a tile-part that ends before its last
+packet, so this holds only when the packets end there, and OpenJPEG, which
+reads the tile-part on to the end of the file, reads the same packets when the
+tile has 999 layers or fewer (see "Where the decoders differ" below for more).
+Read to the end of the file, those packets are followed by bytes left after
+them, which are refused, so a fault in tier-1 is the same fault either way.
+When tier-2 does not reach the box's end (the box ends inside the codestream),
+the codestream is read to the end of the file instead, with the result above.
+The check is part of reading the file's structure, so `read_header` makes it
+too: it walks that one tile's packet headers, without decoding any samples.
+Every step of the walk is bounded, since a one-byte packet header can step
+over each row of code-blocks of its precinct and a positional progression
+order can sweep millions of positions that hold no packet: a codestream of
+more than 4096 tiles or 1024 components, or of fewer than 14 bytes per tile,
+is not walked, nor is a tile of more than 2^14 code-blocks or precincts, and
+the walk stops after max(2^22, 8 × the tile's data bytes) steps, counted as
+the decode's bound counts them (see below). Past a bound the check answers no,
+and the codestream is read to the end of the file as above (`jp2_t2bomb_*` and
+`jp2_t2_sweep_*` in `tests/fixtures/psot0/`). When the box's end is used, the
+boxes after it are walked by the rules for the boxes after the codestream and
+reported as metadata (`xml `, `uuid` and the like); otherwise the bytes after
+the box are tile data and nothing is reported from them. Neither decoder reads
+header boxes there: OpenJPEG's walk after the decode starts at the end of the
+file.
 
 A `jp2c` whose length is wrong (`LBox` 2..7, `XLBox` below 16, or shorter
 than its codestream) decodes as in OpenJPEG, which ignores the length: the
@@ -494,8 +497,26 @@ file.
 
 ### Where the decoders differ
 
-Files that follow the standard and that OpenJPEG 2.5.0 reads another way.
-In each case the standard wins (rule 1 under "sRGB output" below).
+Every known place where this decoder and OpenJPEG 2.5.0 give a different
+result on the same file:
+
+- the inverse 9/7's `2/K` constant ("When the oracle and the standard
+  disagree" above);
+- the bypass switch under an RGN maxshift ("Bypass under a maxshift");
+- a tile-part POC that replaces the main header's (#269; "A tile-part POC
+  overrides the main header's");
+- streams this decoder refuses where OpenJPEG warns or reads on ("Stricter
+  than the oracle on non-conforming streams"), and POC sequences that leave
+  out packets ("Packets a POC sequence leaves out");
+- signed 32-bit components, which OpenJPEG refuses ("Signed 32-bit
+  components");
+- under `ColorOutput::Srgb`: sYCC with the IEC constants, rounded, and the
+  color channels picked by their `cdef` labels, not by position ("sRGB
+  output"; the table there gives every refusal);
+- the three cases below.
+
+The three below are files that follow the standard and that OpenJPEG reads
+another way. In each case the standard wins (rule 1 under "sRGB output").
 
 - **More than 999 layers.** OpenJPEG starts every tag-tree node at the
   value 999 (`tgt.c`, `opj_tgt_reset`), so at a layer threshold of 1000 or
@@ -530,23 +551,23 @@ In each case the standard wins (rule 1 under "sRGB output" below).
 ### Packets a POC sequence leaves out
 
 A `POC` sequence whose volumes leave out packets of a tile is refused as
-`Codestream` before its packets are read. A.6.6 requires the volumes to
-define every packet: "In the case where a POC marker segment is used, the
-progression of every packet in the codestream (or for that tile of the
-codestream) shall be defined in one or more POC marker segments", and B.12.3
-adds that "there will never be the case where a progression order volume is
-filled and the next one is not defined". The volumes are the ones the tile
-walks: its own when its first tile-part has a POC, which replaces the main
-header's (see "A tile-part POC overrides the main header's"), and otherwise
-the main header's and then any later tile-part's. A tile has a packet for every layer, every
-resolution each component has (its own `COD` or `COC` level count) and every
-precinct of it (B.6, B.9). A precinct or resolution with no code-blocks
-still has its packets, which B.9 says must appear as empty packets, so a
-`POC` that skips it is refused. A resolution with no precincts on the tile
-has no packets and needs no volume. "The layer index always starts at zero"
-(A.6.6), so a component's resolution has all its packets only when one
-volume reaching the last layer covers it; the check costs `components ×
-(volumes + resolutions)` steps.
+`Codestream` before its packets are read. A.6.6 requires the volumes to define
+every packet: "In the case where a POC marker segment is used, the progression
+of every packet in the codestream (or for that tile of the codestream) shall
+be defined in one or more POC marker segments", and B.12.3 adds that "there
+will never be the case where a progression order volume is filled and the next
+one is not defined". The volumes are the ones the tile walks: its own when its
+first tile-part has a POC, which replaces the main header's (see "A tile-part
+POC overrides the main header's"), and otherwise the main header's and then
+any later tile-part's. A tile has a packet for every layer, every resolution
+each component has (its own `COD` or `COC` level count) and every precinct of
+it (B.6, B.9). A precinct or resolution with no code-blocks still has its
+packets, which B.9 says must appear as empty packets, so a `POC` that skips it
+is refused. A resolution with no precincts on the tile has no packets and
+needs no volume. "The layer index always starts at zero" (A.6.6), so a
+component's resolution has all its packets only when one volume reaching the
+last layer covers it; the check costs `components × (volumes + resolutions)`
+steps.
 
 Such a file is not out of the standard in every reading, though: B.11 lets
 "any number of whole packets (in order)" be dropped from the end of a tile,
@@ -625,15 +646,15 @@ times are this decoder before this change, then after, then
 | PCRL sweep, 1024 components, step 2 on a 2048^2 tile | 9.3 KB | 28.9 s | `Limit`, 0.3 s | 37.4 s |
 | CPRL, one 2^24-row column, 31 POC volumes | 819 B | 6.5 s | `Limit`, 0.1 s | 20.6 s |
 
-The bound scales with size, so a large file of the same shape still takes
-as long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after
-3.1 s, about what 10 MB of real data takes to decode. A step costs 2 to
-15 ns. The 23 conformance codestreams decode at 0.14 to 0.93 µs a byte, and
-those over 100 KB at 0.20 (`p1_05`) to 0.73 (`p1_04`).
-The cheapest refusals are in the layer orders over resolutions with no
-precinct, at about 2 ns a step: `layer_edge` (655 KB, 33 steps a byte) is
-refused in 0.015 to 0.04 s, 0.02 to 0.06 µs a byte, and OpenJPEG decodes
-it in 0.08 s.
+The bound scales with size, so a large file of the same shape still takes as
+long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after 3.1 s,
+about what 10 MB of real data takes to decode. A step costs 2 to 15 ns. The
+conformance codestreams over 100 KB decode at 0.19 (`p1_05`) to 0.73 (`p1_04`)
+µs a byte, the best of five release-build decodes of each. Over all 23 the
+range is wider, 0.06 to 0.75 µs a byte. The cheapest refusals are in the layer
+orders over resolutions with no precinct, at about 2 ns a step: `layer_edge`
+(655 KB, 33 steps a byte) is refused in 0.015 to 0.04 s, 0.02 to 0.06 µs a
+byte, and OpenJPEG decodes it in 0.08 s.
 
 Setting up each tile's geometry is not counted. A tile of one sample at
 an odd origin has 32 resolutions per component that hold no precinct, and
@@ -735,16 +756,16 @@ in 0.14 s or less. `setskip` in `scripts/gen-work-bound-fixtures.py`
 writes the shape, and `skips_from_the_poc_set_are_bounded` in
 `tests/work_bound.rs` builds it. It came from the review of PR #261.
 
-The bound covers the walk `read_header` makes for a `Psot = 0` tile-part
-(see above). That walk counts the same steps under its own bound,
-max(2^22, 8 × the tile's data bytes), no larger at any size, so for a
-single-tile codestream a tile that walk finishes is one the decode's walk
-finishes too. A JP2 decode makes that walk first, and then walks the tile
-again under a fresh bound, so it can spend about 1.25 times the decode's
-bound (`jp2_t2_sweep_cprl_tall` in `tests/fixtures/psot0/README.md`). The decode's bound does not replace that walk's geometry
-bound of 2^14 code-blocks: `read_header` allocates for its walk, and a
-geometry bound at the decode's 2^19 code-blocks would let `read_header`
-hold about 75 MB for a 66 KB file.
+The bound covers the walk `read_header` makes for a `Psot = 0` tile-part (see
+above). That walk counts the same steps under its own bound, max(2^22, 8 × the
+tile's data bytes), no larger at any size, so for a single-tile codestream a
+tile that walk finishes is one the decode's walk finishes too. A JP2 decode
+makes that walk first, and then walks the tile again under a fresh bound, so
+it can spend about 1.25 times the decode's bound (`jp2_t2_sweep_cprl_tall` in
+`tests/fixtures/psot0/README.md`). The decode's bound does not replace that
+walk's geometry bound of 2^14 code-blocks: `read_header` allocates for its
+walk, and a geometry bound at the decode's 2^19 code-blocks would let
+`read_header` hold about 75 MB for a 66 KB file.
 
 ### Tile header cost
 
@@ -944,9 +965,10 @@ profile and a `cdef` of (color 1, color 2, opacity) are `Unsupported`,
 where OpenJPEG converts all three planes and treats the opacity channel as
 blue.
 
-**sYCC uses the IEC constants and rounds (owner decision, 2026-11-01, on
-#165; rule 1).** OpenJPEG's `sycc_to_rgb` computes `G = Y - (int)(0.344 Cb + 0.714
-Cr)`, `R = Y + (int)(1.402 Cr)`, `B = Y + (int)(1.772 Cb)`: shortened
+**sYCC uses the IEC constants and rounds (owner decision, 2026-11-01, on #165;
+rule 1).** OpenJPEG's `sycc_to_rgb` computes
+`G = Y - (int)(0.344 Cb + 0.714 Cr)`, `R = Y + (int)(1.402 Cr)`,
+`B = Y + (int)(1.772 Cb)`: shortened
 constants and each product truncated toward zero. This decoder uses IEC
 61966-2-1 Amd 1's `0.344136` and `0.714136` and rounds to nearest. Both meet
 the evidence rule above. The proof is the conformance references for files 2
@@ -983,39 +1005,38 @@ replication keyed on the reduced origin fails. The only change is where
 OpenJPEG would read past the chroma plane: that sample takes chroma zero
 here.
 
-**ICC profiles are converted as LittleCMS converts them.** OpenJPEG hands
-the profile to LittleCMS 2 (2.14 in the oracle build) with the profile's
-rendering intent. `src/jp2/lcms.rs` ports the part of lcms these profiles
-reach: the pipeline it builds (the tone curves and matrix into XYZ, the
-white-point scaling of absolute colorimetric, black point compensation under
-perceptual and saturation, since lcms's sRGB profile is ICC v4, then the
-inverse sRGB matrix and curves), the optimization it picks for that pipeline
-(the 8-bit matrix-shaper in 1.14 fixed point, prelinearization curves with a
-33-point table, or resampling into a 33-point table, with the white fix-up;
-for 16-bit RGB on a profile of gamma below 1.6, no optimization), and its
-16-bit interpolation, step for step at lcms's precision. It also applies
-the checks lcms makes when it opens a profile (`_cmsReadHeader`): the `acsp`
-signature, a version of at most 5.0, a device class lcms knows, at most 100
-tags, no two kept entries with the same signature. Like lcms, it first skips
-a tag entry with a zero offset or size, or one that ends past the size the
-header declares (capped at the profile's length), so a tag it needs is then
-missing, and a skipped entry does not count as a duplicate. When building
-the transform it makes lcms's checks too: a named color profile, a device
-link or abstract profile without a lookup table, or a connection space
-other than XYZ or Lab builds none, and of the lookup tables lcms would read
-for the intent (`D2Bx`, then `A2Bx`, then `A2B0`) it checks the type, the
-channel counts, the grid and the table's length as lcms's reader does. It reads tags as `cmsReadTag`
-does: a tag under 8 bytes or of a type lcms does not allow for it fails,
-lcms's legacy types are read (an old Monaco tool's curve type for `rTRC`,
-`gTRC` and `bTRC`, an old Corbis tool's XYZ type), and a value is read
-without checking the tag's size, so one that runs past its tag takes the
-bytes after it and fails only past the end of the profile. A media white
-point lcms can't read is D50 (`_cmsReadMediaWhitePoint`). lcms's
-black-preserving intents 10 to 15 on a profile that is not CMYK become
-perceptual, relative colorimetric or saturation without the black point
-compensation lcms forces for intents 0 and 2, which for these profiles is
-relative colorimetric in every case; other intents above 3 build no
-transform.
+**ICC profiles are converted as LittleCMS converts them.** OpenJPEG hands the
+profile to LittleCMS 2 (2.14 in the oracle build) with the profile's rendering
+intent. `src/jp2/lcms.rs` ports the part of lcms these profiles reach: the
+pipeline it builds (the tone curves and matrix into XYZ, the white-point
+scaling of absolute colorimetric, black point compensation under perceptual
+and saturation, since lcms's sRGB profile is ICC v4, then the inverse sRGB
+matrix and curves), the optimization it picks for that pipeline (the 8-bit
+matrix-shaper in 1.14 fixed point, prelinearization curves with a 33-point
+table, or resampling into a 33-point table, with the white fix-up; for 16-bit
+RGB on a profile of gamma below 1.6, no optimization), and its 16-bit
+interpolation, step for step at lcms's precision. It also applies the checks
+lcms makes when it opens a profile (`_cmsReadHeader`): the `acsp` signature, a
+version of at most 5.0, a device class lcms knows, at most 100 tags, no two
+kept entries with the same signature. Like lcms, it first skips a tag entry
+with a zero offset or size, or one that ends past the size the header declares
+(capped at the profile's length), so a tag it needs is then missing, and a
+skipped entry does not count as a duplicate. When building the transform it
+makes lcms's checks too: a named color profile, a device link or abstract
+profile without a lookup table, or a connection space other than XYZ or Lab
+builds none, and of the lookup tables lcms would read for the intent (`D2Bx`,
+then `A2Bx`, then `A2B0`) it checks the type, the channel counts, the grid and
+the table's length as lcms's reader does. It reads tags as `cmsReadTag` does:
+a tag under 8 bytes or of a type lcms does not allow for it fails, lcms's
+legacy types are read (an old Monaco tool's curve type for `rTRC`, `gTRC` and
+`bTRC`, an old Corbis tool's XYZ type), and a value is read without checking
+the tag's size, so one that runs past its tag takes the bytes after it and
+fails only past the end of the profile. A media white point lcms can't read is
+D50 (`_cmsReadMediaWhitePoint`). lcms's black-preserving intents 10 to 15 on a
+profile that is not CMYK become perceptual, relative colorimetric or
+saturation without the black point compensation lcms forces for intents 0 and
+2, which for these profiles is relative colorimetric in every case; other
+intents above 3 build no transform.
 
 The output matches `opj_decompress -force-rgb` sample for sample
 (`tests/jp2_icc.rs`). The reference is OpenJPEG 2.5.0 linked against
@@ -1024,24 +1045,23 @@ LittleCMS 2.14 on x86-64 Linux (glibc 2.39, on a CPU with FMA and AVX2).
 LittleCMS calls the C library's `pow` and `log`, and a platform's own can
 differ in the last bit, which moves an output level. So `src/jp2/math.rs`
 ports glibc 2.39's `pow` and `log` (Arm's optimized-routines code), and the
-output is the same on every platform whose `fma` is correctly rounded.
-CI checks this on x86-64 Linux (glibc), macOS on aarch64 and
-wasm32-wasip1, which does `fma` in software; Windows is not run. MinGW's
-`fma` (`*-pc-windows-gnu`) may round twice (rust-lang/rust#140515), so the
-output there can differ. i586 targets use x87 arithmetic, which is not
-exact IEEE, so the port's own arithmetic can differ there too. On x86-64, glibc picks a variant built with
+output is the same on every platform whose `fma` is correctly rounded. CI
+checks this on x86-64 Linux (glibc), macOS on aarch64 and wasm32-wasip1, which
+does `fma` in software; Windows is not run. MinGW's `fma` (`*-pc-windows-gnu`)
+may round twice (rust-lang/rust#140515), so the output there can differ. i586
+targets use x87 arithmetic, which is not exact IEEE, so the port's own
+arithmetic can differ there too. On x86-64, glibc picks a variant built with
 FMA when the CPU has FMA and AVX2, and a plain SSE2 one otherwise. The port
-follows the FMA variant, the one the reference machine runs: each
-multiply-add GCC fused there is a `mul_add` in the port. The two variants differ
-in the last bit on 296 of 5.2 million `log` inputs and 3,251 of 3.7 million
-`pow` inputs of an earlier test sweep, so oracles regenerated on an x86-64 CPU
+follows the FMA variant, the one the reference machine runs: each multiply-add
+GCC fused there is a `mul_add` in the port. The two variants differ in the
+last bit on 296 of 5.2 million `log` inputs and 3,251 of 3.7 million `pow`
+inputs of an earlier test sweep, so oracles regenerated on an x86-64 CPU
 without FMA could differ. The current ones do not: regenerating them with
 glibc held to its SSE2 variant (`GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX2,-FMA`)
-gives the same hashes. The default test (`src/jp2/math_tests.rs`) checks
-the port's results on a sweep of inputs against digests recorded from
-glibc, on every platform. An ignored, larger sweep compares the port bit
-for bit with the platform's `f64::ln` and `f64::powf` on x86-64 Linux with
-glibc and FMA.
+gives the same hashes. The default test (`src/jp2/math_tests.rs`) checks the
+port's results on a sweep of inputs against digests recorded from glibc, on
+every platform. An ignored, larger sweep compares the port bit for bit with
+the platform's `f64::ln` and `f64::powf` on x86-64 Linux with glibc and FMA.
 
 The cases:
 
@@ -1113,13 +1133,13 @@ case of `icc/profiles.json` and a test in `src/jp2/srgb_tests.rs`:
 | Monaco curve type, Corbis XYZ type | converted | converted |
 | `wtpt` unreadable at intent 3 | converted with D50 | converted with D50 |
 
-The order follows OpenJPEG's too (owner decision, 2026-11-02, on #199):
-every refusal above, whether lcms makes it opening the profile or building
-the transform, comes before this decoder's own checks below. So a profile
-lcms refuses passes through whatever the samples are (bar the 4:2:0 and
-4:2:2 exception below): an intent of 4 on
-12-bit RGB, 16-bit gray, or a monochrome profile on three channels gives
-the samples as coded, as `opj_decompress` does. The refusals below (#165,
+The order follows OpenJPEG's too (owner decision, 2026-11-02, on #199): every
+refusal above, whether lcms makes it opening the profile or building the
+transform, comes before this decoder's own checks below. So a profile lcms
+refuses passes through whatever the samples are (bar the 4:2:0 and 4:2:2
+exception below): an intent of 4 on 12-bit RGB, 16-bit gray, or a monochrome
+profile on three channels gives the samples as coded, as `opj_decompress`
+does. The refusals below (#165,
 #197) apply only where lcms would build the transform. Test:
 `refusals_are_ordered_as_in_openjpeg`.
 
@@ -1177,25 +1197,25 @@ Each is `Unsupported` unless noted, and each is a row of
 `srgb_reject_matrix_maps_each_input_to_its_typed_error` in
 `src/jp2/srgb_tests.rs`:
 
-- color channels that differ in depth, sign or sub-sampling, other than
-  the sYCC chroma layouts below (owner decision, 2026-11-01; rule 3). For
-  an enumerated sRGB or grayscale file there is no conversion to skip:
-  `opj_decompress -force-rgb` writes the file as coded. Under an RGB
-  profile they pass through as in OpenJPEG instead (the AFL test above),
-  except for 4:2:0 and 4:2:2, and except where a `cdef` leaves a differing
-  color past the first four positions. There the AFL test passes and
-  OpenJPEG converts whatever sits at positions 0 to 2, color or not, so
-  this decoder refuses the file rather than give a wrong image. Checked: the
-  fuzz seed `icc_rgb_uniform_after_afl` (five palette channels, the 4-bit
-  color 3 moved to position 4 by a second color-3 entry) comes out of
-  `opj_decompress` with positions 0 to 2 converted and the 4-bit channel as
-  coded. For a three-component 4:2:0 or 4:2:2 file,
-  whatever `colr` declares (sRGB, grayscale, another space, a profile, or
-  none) and whatever its `cdef` labels, or a raw codestream,
-  `opj_decompress` guesses sYCC and converts it; that guess is not made
-  here (rule 3: the file does not say it is sYCC). Checked: `jp2_sycc_420_odd.jp2` with its `EnumCS` patched to 17
-  (grayscale) gives byte-identical `opj_decompress` output to the sYCC
-  original, while `Srgb` here refuses it (a row of the reject matrix);
+- color channels that differ in depth, sign or sub-sampling, other than the
+  sYCC chroma layouts below (owner decision, 2026-11-01; rule 3). For an
+  enumerated sRGB or grayscale file there is no conversion to skip:
+  `opj_decompress -force-rgb` writes the file as coded. Under an RGB profile
+  they pass through as in OpenJPEG instead (the AFL test above), except for
+  4:2:0 and 4:2:2, and except where a `cdef` leaves a differing color past the
+  first four positions. There the AFL test passes and OpenJPEG converts
+  whatever sits at positions 0 to 2, color or not, so this decoder refuses the
+  file rather than give a wrong image. Checked: the fuzz seed
+  `icc_rgb_uniform_after_afl` (five palette channels, the 4-bit color 3 moved
+  to position 4 by a second color-3 entry) comes out of `opj_decompress` with
+  positions 0 to 2 converted and the 4-bit channel as coded. For a
+  three-component 4:2:0 or 4:2:2 file, whatever `colr` declares (sRGB,
+  grayscale, another space, a profile, or none) and whatever its `cdef`
+  labels, or a raw codestream, `opj_decompress` guesses sYCC and converts it;
+  that guess is not made here (rule 3: the file does not say it is sYCC).
+  Checked: `jp2_sycc_420_odd.jp2` with its `EnumCS` patched to 17 (grayscale)
+  gives byte-identical `opj_decompress` output to the sYCC original, while
+  `Srgb` here refuses it (a row of the reject matrix);
 - sYCC other than full-resolution luma with chroma at 1x1, 2x1 or 2x2
   (rule 3). OpenJPEG prints "CAN NOT CONVERT" and writes the samples as
   coded;
@@ -1205,22 +1225,22 @@ Each is `Unsupported` unless noted, and each is a row of
   `[0, 0, 15, 0, ...]`. sYCC is defined on unsigned samples, so there is no
   right answer to match;
 - three or more channels with an enumerated color space other than sRGB,
-  grayscale or sYCC, or with no `colr`, and a raw codestream of three or
-  more components, which declares no color space (rule 3). For most such
-  spaces at one sampling `opj_decompress -force-rgb` fails too; at 4:2:0
-  or 4:2:2 it converts them as sYCC, which owner decision (2) above
-  refuses. Three spaces it does convert: CMYK (12) on four channels gives
-  three RGB planes (`color_cmyk_to_rgb`), CIELab (14) on three gives 16-bit
-  RGB (`color_cielab_to_rgb`), and e-sYCC (24) on three converts
-  (`color_esycc_to_rgb`). This crate has no such conversion (they are out
-  of scope for JP2), so it refuses them. One or two channels pass through as gray (and gray plus
-  opacity) whatever the color space, as OpenJPEG reads any image of two
-  or fewer components: from a raw codestream, or a JP2 file with no
-  `colr`, any enumerated space (sRGB included, owner decision, 2026-11-02,
-  on #211, even when the two channels differ in depth or sign), or an RGB
-  or YCbCr profile. Only a monochrome profile converts them, on 8-bit
-  unsigned samples only (other depths are refused, below). Their
-  metadata stays as declared, since nothing was converted (tests
+  grayscale or sYCC, or with no `colr`, and a raw codestream of three or more
+  components, which declares no color space (rule 3). For most such spaces at
+  one sampling `opj_decompress -force-rgb` fails too; at 4:2:0 or 4:2:2 it
+  converts them as sYCC, which row 5 of the table above refuses. Three spaces
+  it does convert: CMYK (12) on four channels gives three RGB planes
+  (`color_cmyk_to_rgb`), CIELab (14) on three gives 16-bit RGB
+  (`color_cielab_to_rgb`), and e-sYCC (24) on three converts
+  (`color_esycc_to_rgb`). This crate has no such conversion (they are out of
+  scope for JP2), so it refuses them. One or two channels pass through as gray
+  (and gray plus opacity) whatever the color space, as OpenJPEG reads any
+  image of two or fewer components: from a raw codestream, or a JP2 file with
+  no `colr`, any enumerated space (sRGB included, owner decision, 2026-11-02,
+  on #211, even when the two channels differ in depth or sign), or an RGB or
+  YCbCr profile. Only a monochrome profile converts them, on 8-bit unsigned
+  samples only (other depths are refused, below). Their metadata stays as
+  declared, since nothing was converted (tests
   `a_gray_jp2_without_a_converted_color_space_passes_through`,
   `srgb_on_one_or_two_channels_passes_through`);
 - a monochrome (`GRAY`) ICC profile on more than two channels (owner
@@ -1468,8 +1488,10 @@ Seed it from:
 A decoder parses bytes it did not produce, so malformed input is a first-class
 case, not an edge case:
 
-- **Fuzzing** — `cargo fuzz` (libFuzzer) over the public `decode` entry point,
-  in the detached [`fuzz/`](../fuzz/) workspace (run it per [`fuzz/README.md`](../fuzz/README.md)).
+- **Fuzzing** — `cargo fuzz` (libFuzzer) in the detached [`fuzz/`](../fuzz/)
+  workspace, seven targets: `decode` and `header` over the public entry
+  points, and `tile_body`, `tier1_block`, `mq`, `jp2_boxes` and `icc_srgb`
+  over the stages (run them per [`fuzz/README.md`](../fuzz/README.md)).
   The bar: no panics, no unbounded allocation, no infinite loops; every rejected
   input returns a typed `Error`, never crashes. A malformed SIZ cannot steer the
   buffers into an overflowing or out-of-memory allocation: the declared image
