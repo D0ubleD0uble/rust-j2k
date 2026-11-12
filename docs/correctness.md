@@ -125,6 +125,43 @@ only signals `SPrgn`, so the decoder reads every nonzero coefficient of the
 component as region of interest (#1036, open). The rule reads as an
 oversight, not a choice, so this crate follows the standard. Recorded with the owner's approval on #226.
 
+### Segmentation symbols
+
+Under the `segmentation symbols` style each cleanup pass ends with four
+decisions that spell `1010` (D.5). D.5 makes the symbol an error-detection
+aid, and OpenJPEG never checks it (t1.c, the comparison is commented out).
+This crate checks it, but not everywhere:
+
+- A wrong symbol is a `Codestream` error while the MQ decoder has read only
+  the segment's own bytes. Those bytes then decide the symbol, so they are
+  corrupt.
+- Once the decoder has read past the end of the segment, a wrong symbol
+  decodes. Rate control cuts a pass at an estimated length: `opj_compress`
+  uses the bytes written so far plus three (t1.c, `opj_t1_encode_cblk`),
+  which can be a few bytes short. The decoder then reads the symbol from the
+  `0xFF` fill and gets `0b1001`.
+- Under `restart` a wrong symbol is an error even past the end. Every pass is
+  terminated there, so its length is exact, and the MQ termination makes the
+  codeword decode correctly from the fill.
+
+"Past the end" is `MqDecoder::ran_past_end`: the code register has taken in a
+byte the decoder synthesized. It is set by the read that moves the byte
+pointer to the segment length, or by the marker test after a final `0xFF`.
+The flag is often set by the end of a segment even in an intact stream,
+because the MQ decoder reads ahead. So outside `restart` the check mostly
+catches damage in the earlier passes of a segment, not in its last one.
+
+**Evidence.** 459 random `opj_compress -M 32|m -r ...` encodes, with `m` from
+bypass, reset, restart, vertically causal and predictable termination, layer
+counts from one to three, and 5/3 and 9/7. Checking every symbol, the crate
+refused 10. With the rule above it refuses none, nine of the ten match
+`opj_decompress` exactly, and the tenth (9/7) is within 1. In 387 more encodes
+with `restart`, checking every symbol refused none. A narrower rule, which
+tolerated fill on the block's last decoded pass only, refused one of the ten:
+in a two-layer encode the cut pass was followed by passes with no bytes of
+their own. `cblksty_segsym_truncated` pins one such encode. Its provenance is
+in `tests/fixtures/README.md`.
+
 ### Stricter than the oracle on non-conforming streams
 
 Three tier-2 checks reject streams OpenJPEG decodes with a warning: an `Nsop`

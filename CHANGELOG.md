@@ -202,6 +202,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   standard and OpenJPEG's encoder do. It switched `SPrgn` planes late, as
   OpenJPEG's decoder does, and decoded such streams wrong or refused them.
   Streams without a maxshift decode as before.
+- A wrong segmentation symbol no longer fails the decode when the MQ decoder
+  read it from past the end of its segment, unless every pass is terminated
+  (`restart`). Rate control can cut a pass a few bytes short, and
+  `opj_compress` output with segmentation symbols and `-r` was refused about
+  once in 50 encodes. Such streams now decode as in OpenJPEG. A wrong symbol
+  read from the segment's own bytes is still a `Codestream` error.
 
 ### Changed
 

@@ -3,9 +3,9 @@
 //!
 //! A code-block is decoded bit-plane by bit-plane, MSB→LSB. Each plane runs, in
 //! order, the passes that apply: significance propagation (D.3.1), magnitude
-//! refinement (D.3.2), and cleanup (D.3.3) with its run-length mode. Contexts
+//! refinement (D.3.3), and cleanup (D.3.4) with its run-length mode. Contexts
 //! come from the significance state of the 3×3 neighborhood (D.3.* tables),
-//! and sign coding uses the neighbor-sign context (D.3.4). The cleanup pass
+//! and sign coding uses the neighbor-sign context (D.3.2). The cleanup pass
 //! of the top plane runs first.
 //!
 //! The optional code-block style flags act at three points. `segmentation
@@ -16,7 +16,7 @@
 //! context a decision is coded under, threaded through [`BlockState`] and
 //! [`decode_block`]. `restart` and `predictable termination` modulate
 //! termination. `bypass` (lazy) codes the significance and refinement passes of
-//! the low bit-planes as raw bits rather than MQ decisions (D.5); the raw reader
+//! the low bit-planes as raw bits rather than MQ decisions (D.6); the raw reader
 //! and the per-segment coder choice live in [`decode_block`].
 
 use crate::tier1::mq::{Context, MqDecoder, RawDecoder};
@@ -79,7 +79,7 @@ pub struct BlockState {
     /// Sign bit: `true` is negative. Meaningful only once significant.
     negative: Vec<bool>,
     /// The coefficient has been through at least one magnitude-refinement pass,
-    /// which selects magnitude-refinement context 16 over 14/15 (D.3.2).
+    /// which selects magnitude-refinement context 16 over 14/15 (D.3.3).
     refined: Vec<bool>,
     /// Vertically causal context (the `VCAUSAL` style): the context of a sample
     /// on a stripe's bottom row (`y % 4 == 3`) excludes the row below it, which
@@ -263,7 +263,7 @@ impl BlockState {
     }
 
     /// Magnitude-refinement context (`CTX_MR..CTX_RUN`) for `(x, y)` (ISO
-    /// Table D-4 / D.3.2). After the first refinement the context is always 16;
+    /// Table D-4 / D.3.3). After the first refinement the context is always 16;
     /// on the first refinement it is 15 if any neighbor is significant, else 14.
     pub fn mr_context(&self, x: u32, y: u32) -> u8 {
         if self.is_refined(x, y) {
@@ -320,7 +320,7 @@ pub(crate) fn init_contexts() -> [Context; NUM_CONTEXTS] {
     cx
 }
 
-/// Decode the sign of a coefficient that has just become significant (D.3.4):
+/// Decode the sign of a coefficient that has just become significant (D.3.2):
 /// the MQ decision under the neighbor-sign context is XORed with the context's
 /// predicted sign. Records the sign in `state` (`true` = negative).
 fn decode_sign(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Context], x: u32, y: u32) {
@@ -367,7 +367,7 @@ fn sig_prop_pass(
     }
 }
 
-/// Magnitude-refinement pass (D.3.2): refine every sample that was already
+/// Magnitude-refinement pass (D.3.3): refine every sample that was already
 /// significant before this plane (so not coded in this plane's significance
 /// pass) by decoding one more magnitude bit under the refinement context.
 fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Context], bpno: u32) {
@@ -385,7 +385,7 @@ fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Contex
     }
 }
 
-/// Significance-propagation pass under `bypass` (ISO D.5): the same scan and the
+/// Significance-propagation pass under `bypass` (ISO D.6): the same scan and the
 /// same sample selection as [`sig_prop_pass`], but the significance decision and
 /// the sign are read as raw bits instead of MQ-coded ones. The zero-coding
 /// context still decides *which* samples are visited (a non-zero context means a
@@ -416,7 +416,7 @@ fn sig_prop_pass_raw(
     }
 }
 
-/// Magnitude-refinement pass under `bypass` (ISO D.5): identical to
+/// Magnitude-refinement pass under `bypass` (ISO D.6): identical to
 /// [`mag_ref_pass`] except the refinement bit is a raw bit rather than an
 /// MQ-coded decision under the refinement context.
 fn mag_ref_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32) {
@@ -433,7 +433,7 @@ fn mag_ref_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32)
     }
 }
 
-/// Cleanup pass (D.3.3): code every sample not yet handled this plane. A full
+/// Cleanup pass (D.3.4): code every sample not yet handled this plane. A full
 /// column of four insignificant samples with no significant neighbors is
 /// aggregated through the run-length context — a 0 leaves all four
 /// insignificant, a 1 reads the first significant sample's position as two
@@ -449,6 +449,7 @@ fn cleanup_pass(
     bpno: u32,
     style: u8,
 ) -> Result<()> {
+    use crate::codestream::markers::code_block_style::{SEGSYM, TERMALL};
     let (w, h) = (state.width, state.height);
     for (x, y0) in stripes(w, h) {
         let rows = (y0 + 4).min(h) - y0;
@@ -488,8 +489,8 @@ fn cleanup_pass(
         }
     }
     state.clear_visited();
-    if style & crate::codestream::markers::code_block_style::SEGSYM != 0 {
-        read_segmentation_symbol(mq, cx)?;
+    if style & SEGSYM != 0 {
+        read_segmentation_symbol(mq, cx, style & TERMALL != 0)?;
     }
     Ok(())
 }
@@ -502,16 +503,30 @@ fn cleanup_pass(
 /// the value, so a decoder that skips them desynchronizes the MQ coder for every
 /// later pass. That is why this runs before the value is judged.
 ///
-/// A wrong value means the coded data is corrupt. OpenJPEG decodes the symbol
-/// and leaves the comparison commented out, so it decodes the rest of the block
-/// from data it has already established is damaged; this returns an error
-/// instead, which is what the symbol exists to let a decoder do.
-fn read_segmentation_symbol(mq: &mut MqDecoder<'_>, cx: &mut [Context]) -> Result<()> {
+/// D.5 makes the symbol an error-detection aid, not a requirement on the
+/// decoder, and a wrong value is not always corruption. Rate control can cut a
+/// pass short, and its length is then the encoder's estimate: `opj_compress`
+/// uses the bytes written so far plus three (t1.c), which can be a few bytes
+/// short. The MQ decoder then reads the symbol from the `0xFF` fill past the
+/// segment and gets a wrong value. So once the decoder has run past the
+/// segment's bytes ([`MqDecoder::ran_past_end`]), a wrong value decodes.
+/// OpenJPEG decodes every wrong value, because its comparison is commented out.
+///
+/// A wrong value is an error in two cases. Before the decoder runs past the
+/// end, the symbol depends only on the segment's bytes, so they are corrupt.
+/// And under `restart` (`terminated`) every pass is terminated: its length is
+/// exact, not estimated, and the MQ termination makes the codeword decode
+/// correctly from the fill, so a wrong value is corrupt data there too.
+fn read_segmentation_symbol(
+    mq: &mut MqDecoder<'_>,
+    cx: &mut [Context],
+    terminated: bool,
+) -> Result<()> {
     let mut symbol = 0u8;
     for _ in 0..4 {
         symbol = (symbol << 1) | mq.decode(&mut cx[CTX_UNI as usize]);
     }
-    if symbol != 0b1010 {
+    if symbol != 0b1010 && (terminated || !mq.ran_past_end()) {
         return Err(Error::Codestream(format!(
             "segmentation symbol at the end of a cleanup pass is {symbol:#06b}, expected 0b1010; \
              the coded data is corrupt"
@@ -596,7 +611,7 @@ enum PassType {
 
 /// How a codeword segment is decoded: the MQ arithmetic decoder for the
 /// context-coded passes, or a raw bit reader for the `bypass` (lazy) passes of
-/// the low bit-planes (D.5). One codeword segment uses exactly one of them.
+/// the low bit-planes (D.6). One codeword segment uses exactly one of them.
 enum PassCoder<'a> {
     Mq(MqDecoder<'a>),
     Raw(RawDecoder<'a>),
@@ -642,7 +657,7 @@ enum PassCoder<'a> {
 /// Two reach into the passes themselves: `segmentation symbols` appends four
 /// decisions to every cleanup pass, and `bypass` (lazy) switches the
 /// significance and refinement passes of the low bit-planes from MQ-coded to raw
-/// (D.5) — see the per-segment coder choice below.
+/// (D.6) — see the per-segment coder choice below.
 pub fn decode_block(
     segments: &[(Vec<u8>, u32)],
     state: &mut BlockState,
@@ -1005,6 +1020,60 @@ mod tests {
             },
         )
         .expect_err("the trailing symbol is not 1010");
+        let Error::Codestream(message) = &err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("segmentation symbol"), "{message}");
+    }
+
+    /// A wrong symbol read from the fill past the segment end decodes, because
+    /// rate control can cut a pass a few bytes short, except under `restart`,
+    /// where every pass is terminated (see [`read_segmentation_symbol`]). An
+    /// empty segment is all fill.
+    #[test]
+    fn a_wrong_segmentation_symbol_read_from_fill_decodes_unless_terminated() {
+        use crate::codestream::markers::code_block_style::{SEGSYM, TERMALL};
+        // The fill really does spell a wrong symbol, so the decode below is
+        // not vacuous.
+        let mut mq = MqDecoder::new(&[]);
+        let mut cx = init_contexts();
+        let mut state = BlockState::new(4, 4);
+        cleanup_pass(&mut mq, &mut state, &mut cx, Orientation::Ll, 8, 0).unwrap();
+        let symbol = (0..4).fold(0u8, |s, _| (s << 1) | mq.decode(&mut cx[CTX_UNI as usize]));
+        assert_ne!(symbol, 0b1010);
+        assert!(mq.ran_past_end());
+
+        let mut state = BlockState::new(4, 4);
+        decode_block(
+            &[(Vec::new(), 1)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            1,
+            0,
+            BlockParams {
+                style: SEGSYM,
+                roi_shift: 0,
+            },
+        )
+        .expect("a symbol read from fill decodes");
+
+        // Under `restart` the pass was terminated, so its length is exact and
+        // the same wrong symbol is corruption.
+        let mut state = BlockState::new(4, 4);
+        let err = decode_block(
+            &[(Vec::new(), 1)],
+            &mut state,
+            Orientation::Ll,
+            8,
+            1,
+            0,
+            BlockParams {
+                style: SEGSYM | TERMALL,
+                roi_shift: 0,
+            },
+        )
+        .expect_err("a terminated pass reads a correct symbol from fill");
         let Error::Codestream(message) = &err else {
             panic!("{err:?}")
         };
