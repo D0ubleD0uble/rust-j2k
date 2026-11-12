@@ -294,8 +294,8 @@ pub const MAX_COMPONENTS: u16 = 16384;
 /// One TLM entry (ISO A.7.1): the length in bytes of one tile-part — first
 /// byte of its SOT to the end of its data — and the tile it belongs to. TLM is
 /// informational, a pointer into the codestream rather than a decode
-/// parameter, so decoding neither needs nor uses it; the entries are recorded
-/// so callers and tests can check them against the tile-parts themselves.
+/// parameter, so decoding neither needs nor uses it; the parse checks each
+/// entry and drops it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TlmEntry {
     /// `Ttlm` — the tile index, explicit or implied by entry order (`ST = 0`).
