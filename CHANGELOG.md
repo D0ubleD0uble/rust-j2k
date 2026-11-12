@@ -234,11 +234,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read no header bit, or 32 per byte of tile data when that is more,
   counting packets, steps over code-blocks a header reads no bit for, and
   the positions a positional progression order sweeps. Past it the decode
-  is `Error::Limit`. Encoder output seen spends at most an eighth of it,
-  but a valid file of many layers that each include a few scattered
-  code-blocks can pass it (see `docs/correctness.md`), and a POC-repeated CPRL sweep of 819 bytes took 6.5 s and a 9 KB PCRL sweep
-  29 s; both are now refused in a fraction of a second. OpenJPEG has no
-  such bound and decodes them.
+  is `Error::Limit`. Encoder output seen spends under 13% of it, but a
+  valid file of many layers that each include a few scattered code-blocks
+  can pass it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
+  819 bytes took 6.5 s and a 9 KB PCRL sweep 29 s; both are now refused in
+  a fraction of a second. OpenJPEG has no such bound and decodes them.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is

@@ -159,8 +159,8 @@ pub use jp2::{
 /// or a position a positional progression order sweeps, once for each
 /// (component, resolution) checked there; code-block entries that read a bit
 /// are paid for by the header's bytes and are not counted. A codestream past
-/// the bound is refused with [`Error::Limit`]. Encoder output seen spends at
-/// most an eighth of the bound; a packet header of one byte can still skip each
+/// the bound is refused with [`Error::Limit`]. Encoder output seen spends
+/// under 13% of the bound; a packet header of one byte can still skip each
 /// row of code-blocks in its precinct, and a sweep can check millions of
 /// positions that hold no packet, so a file of a few hundred bytes could
 /// otherwise take minutes. OpenJPEG has no such bound.
