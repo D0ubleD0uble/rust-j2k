@@ -1114,14 +1114,14 @@ fn slope_limit(curve: &mut ToneCurve) {
     let val = f64::from(curve.table[at_begin]);
     let slope = (val - begin_val) / at_begin as f64;
     let beta = val - slope * at_begin as f64;
-    for i in 0..at_begin {
-        curve.table[i] = saturate_word(i as f64 * slope + beta);
+    for (i, v) in curve.table[..at_begin].iter_mut().enumerate() {
+        *v = saturate_word(i as f64 * slope + beta);
     }
     let val = f64::from(curve.table[at_end]);
     let slope = (end_val - val) / at_begin as f64;
     let beta = val - slope * at_end as f64;
-    for i in at_end..n {
-        curve.table[i] = saturate_word(i as f64 * slope + beta);
+    for (k, v) in curve.table[at_end..].iter_mut().enumerate() {
+        *v = saturate_word((at_end + k) as f64 * slope + beta);
     }
 }
 
