@@ -103,7 +103,12 @@ fn a_codestream_box_shorter_than_its_codestream_decodes() {
         assert_decodes_like_raw(&with_jp2c_length(lbox, &[]));
     }
     let bytes = with_jp2c_length(108, &bx(b"xml ", b"<a/>"));
-    assert_eq!(decode(&bytes).unwrap().jp2.unwrap().xml, [b"<a/>"]);
+    assert_eq!(
+        decode(&bytes).unwrap().jp2.unwrap().xml,
+        [XmlBox {
+            payload: b"<a/>".to_vec()
+        }]
+    );
     file_format(
         &with_jp2c_length(108, &header_only(3, b"junk")),
         "after the codestream has length 3",
@@ -465,13 +470,13 @@ fn padding_inside_the_codestream_box_does_not_hide_later_metadata() {
         .concat();
         let image = decode(&bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
         let metadata = image.jp2.expect("a JP2 file");
-        assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()], "{what}");
+        assert_eq!(xml_payloads(&metadata), [b"<a>hello</a>"], "{what}");
         assert_eq!(read_header(&bytes).unwrap().jp2, Some(metadata), "{what}");
     }
     // A `jp2c` shorter than its codestream: the boxes after `EOC` are found.
     let short = with_jp2c_length(108, &xml);
     let metadata = decode(&short).expect("decodes").jp2.expect("a JP2 file");
-    assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
+    assert_eq!(xml_payloads(&metadata), [b"<a>hello</a>"]);
 }
 
 /// Codestreams whose one-byte packet headers each name every code-block of

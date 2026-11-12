@@ -115,7 +115,7 @@ pub struct Jp2Metadata {
     pub resolution: Resolution,
     /// The contents of every top-level `xml ` box, verbatim and in file
     /// order, including those after the codestream. Not parsed.
-    pub xml: Vec<Vec<u8>>,
+    pub xml: Vec<XmlBox>,
     /// Every top-level `uuid` box, in file order, including those after the
     /// codestream. Not interpreted.
     pub uuid: Vec<UuidBox>,
@@ -123,7 +123,7 @@ pub struct Jp2Metadata {
     /// verbatim and in file order, including those after the codestream. The
     /// standard leaves the format of these bytes open, so they are not parsed.
     /// `jp2i` boxes inside other superboxes are not collected.
-    pub ipr: Vec<Vec<u8>>,
+    pub ipr: Vec<IprBox>,
     /// Every well-formed top-level UUID info box (`uinf`), in file order,
     /// including those after the codestream: a list of UUIDs and a URL where
     /// more about them can be found. The URL is not fetched. A malformed
@@ -347,6 +347,23 @@ impl Ratio {
                 * 10f64.powi(i32::from(self.exponent)),
         )
     }
+}
+
+/// An `xml ` box: XML text the file carries, which is not parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct XmlBox {
+    /// The box contents, verbatim.
+    pub payload: Vec<u8>,
+}
+
+/// An intellectual property box (`jp2i`). The standard leaves the format of
+/// its contents open, so they are not parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct IprBox {
+    /// The box contents, verbatim.
+    pub payload: Vec<u8>,
 }
 
 /// A `uuid` box: a 16-byte identifier and the data it labels.

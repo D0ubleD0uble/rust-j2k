@@ -84,12 +84,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `decode` returns.
 - `Jp2Metadata` reports the `res ` box's capture and display resolutions
   (`Resolution`, `Res`, `Ratio`, with `Ratio::grid_points_per_meter`), and
-  every top-level `xml ` and `uuid` box verbatim (`UuidBox`), including those
-  after the codestream. A malformed `res ` never fails a decode, as in
-  OpenJPEG.
+  every top-level `xml ` and `uuid` box verbatim (`XmlBox`, `UuidBox`),
+  including those after the codestream. A malformed `res ` never fails a
+  decode, as in OpenJPEG.
 - `Jp2Metadata::ipr` returns every top-level intellectual property box
-  (`jp2i`) verbatim, and `Jp2Metadata::uuid_info` every top-level UUID info
-  box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst` box and the version,
+  (`jp2i`) verbatim as an `IprBox`, and `Jp2Metadata::uuid_info` every
+  top-level UUID info box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst` box and the version,
   flags and location of its `url ` box, with `UuidInfo::location_str` for the
   location as text. Both are collected before and after the codestream, like
   `xml ` and `uuid`. A malformed `uinf` (not exactly one `ulst` and one
@@ -145,9 +145,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead.
 - `DecodeOptions::with_raw_channels` and `DecodeOptions::with_color` set
   those options like `with_resolution_reduction` does; the fields stay public.
-- `ColorSpace`, `ColorOutput`, `Resolution`, `Res`, `Ratio` and `UuidBox` are
-  `#[non_exhaustive]`, so later variants and fields (a JPX color method, an
-  output ICC profile) are not breaking changes. Match them with a `_` arm, and
+- `ColorSpace`, `ColorOutput`, `Resolution`, `Res`, `Ratio`, `UuidBox`, `XmlBox`
+  and `IprBox` are `#[non_exhaustive]`, so later variants and fields (a JPX
+  color method, an output ICC profile) are not breaking changes. Match them with a `_` arm, and
   read the structs' fields rather than building them.
 - `Jp2Metadata::palette` and `Jp2Metadata::channel_mapping` give the file's
   palette table (`Palette`, `PaletteColumn`) and component mapping
