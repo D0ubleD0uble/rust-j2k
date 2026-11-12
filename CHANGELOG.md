@@ -43,8 +43,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only the first N channels are colors, N being the color space's
   number of colors (3 for sRGB and sYCC, 1 for grayscale, the profile's for
   an ICC profile); any channel past them is `Unspecified` with no
-  association, since I.5.3.6 gives it no meaning. This also lets a file of
-  two components, a grayscale ICC profile and no `cdef` convert under
+  association, since I.5.3.6 gives it no meaning. When the count is not
+  known (no `colr`, an enumerated value without a listed count, or a
+  profile too short to name its color space), every channel is labeled a
+  color, in order. This also lets a file of two components, a grayscale
+  ICC profile and no `cdef` convert under
   `ColorOutput::Srgb` as gray plus opacity, and an sRGB file of four
   components whose fourth differs in format from the colors passes through
   as coded, as OpenJPEG does. A file declared sRGB or grayscale on three
@@ -77,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without a profile, and a `bpcc` box that is not one byte per component are
   `FileFormat` errors, as in OpenJPEG for boxes before the codestream.
 - `Error::FileFormat` for a malformed JP2 box structure.
+- All nine JP2 files of the ISO/IEC 15444-4 conformance suite decode within
+  their compliance class, alongside its 23 codestreams.
 - `read_header` returns a codestream's or JP2 file's `Header` (image area,
   each output channel's `ComponentInfo`, and the same `Jp2Metadata` as
   `decode`) without decoding any tile data, so a file whose tile data is cut
@@ -91,8 +96,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`jp2i`) verbatim as an `IprBox`, and `Jp2Metadata::uuid_info` every
   top-level UUID info box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst`
   box and the version, flags and location of its `url ` box, with
-  `UuidInfo::location_str` for the location as text. Both are collected before and after the codestream, like
-  `xml ` and `uuid`. A malformed `uinf` (not exactly one `ulst` and one
+  `UuidInfo::location_str` for the location as text. Both are collected
+  before and after the codestream, like `xml ` and `uuid`. A malformed `uinf` (not exactly one `ulst` and one
   `url `, a `ulst` whose count does not match its length, a `url ` under 4
   bytes, or a bad box inside it) is left out and never fails a decode, as
   OpenJPEG skips the box.
@@ -109,53 +114,52 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the box.
 - `DecodeOptions::color` takes a `ColorOutput`. The default, `AsCoded`,
   returns the samples as the file codes them. `Srgb` converts a JP2 file's
-  color channels to sRGB: sYCC to RGB (sub-sampled chroma replicated to
-  full resolution first), and a restricted ICC profile (monochrome or
-  three-component matrix/TRC) applied at its rendering intent, with the
-  same output as OpenJPEG with LittleCMS, sample for sample. The reference
-  is OpenJPEG 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc
-  2.39), and the output is the same on every platform whose `fma` is
-  correctly rounded (MinGW's, on `*-pc-windows-gnu`, may not be:
-  rust-lang/rust#140515). sRGB and grayscale pass through. One or two
-  channels pass through as coded whatever the color space (sRGB with two
-  channels of different depth or sign included), as OpenJPEG reads them as
-  gray, unless a monochrome profile converts them (8-bit unsigned only).
-  So do a profile LittleCMS
-  refuses to open or to build a transform from (a bad header, a class or
-  intent it does not know, a missing or unreadable tag, a lookup table it
-  can't read), and a profile in a color space other than RGB, gray or
-  YCbCr, as OpenJPEG leaves them; the metadata then keeps the profile. So
-  does an RGB profile when any of the first four channels (all of them, if
-  fewer) differs from the first in depth, sign or sub-sampling, an opacity
-  channel included, since OpenJPEG then skips the conversion. These, and a profile on one or two channels, pass
-  through before any check on the samples, as in OpenJPEG, except on a
-  three-channel 4:2:0 or 4:2:2 image, which is refused first.
-  Display, output and color space profiles convert as input ones do. After a conversion `Jp2Metadata::color`
-  says sRGB, or grayscale for a monochrome profile whose output is neutral.
-  A monochrome profile whose output is not neutral (absolute colorimetric
-  with a tinted white point) gives three sRGB channels, as OpenJPEG does, so
-  the channel count can't be predicted from the header. Other color
-  spaces, a YCbCr profile, a profile LittleCMS would apply through a lookup
-  table or the Lab connection space, a monochrome profile on more than two
-  channels, and color channels that differ in depth, sign or sub-sampling
-  (under an RGB profile, only 4:2:0 and 4:2:2, below) are `Unsupported`;
-  `Srgb` with `raw_channels` is `InvalidOptions`. OpenJPEG converts any
-  three-component 4:2:0 or 4:2:2 file as sYCC, whatever color space it
-  declares, even under an ICC profile LittleCMS refuses; `Srgb` refuses it
-  instead.
+  color channels, picked by their labels, to sRGB:
+  - sYCC to RGB, with sub-sampled chroma replicated to full resolution
+    first;
+  - a restricted ICC profile (monochrome, or three-component matrix/TRC)
+    applied at its rendering intent, with the same output as OpenJPEG 2.5.0
+    with LittleCMS 2.14, sample for sample. That holds on x86-64 Linux
+    (glibc 2.39) and on every platform whose `fma` is correctly rounded
+    (MinGW's, on `*-pc-windows-gnu`, may not be: rust-lang/rust#140515).
+
+  sRGB and grayscale pass through. So do the files OpenJPEG leaves as
+  coded: one or two channels in any color space but a monochrome profile, a
+  profile LittleCMS refuses, a profile in a color space other than RGB,
+  gray or YCbCr, and an RGB profile whose first four channels differ in
+  format. The metadata then keeps the profile. A three-channel 4:2:0 or
+  4:2:2 image in any color space but sYCC is refused, where
+  `opj_decompress` would convert it as sYCC. Other color spaces and
+  channel layouts are `Unsupported`, and `Srgb` with `raw_channels` is
+  `InvalidOptions`.
+  After a conversion `Jp2Metadata::color` says sRGB, or grayscale for a
+  monochrome profile whose output is neutral. A monochrome profile with a
+  tinted white point gives three channels; `read_header` doesn't predict
+  that, and `read_header_with` with the same options does. The table in
+  `docs/correctness.md` ("sRGB output") lists every case, what OpenJPEG
+  does with it, and why this decoder follows or differs.
 - `DecodeOptions::with_raw_channels` and `DecodeOptions::with_color` set
   those options like `with_resolution_reduction` does; the fields stay public.
-- `ColorSpace`, `ColorOutput`, `Resolution`, `Res`, `Ratio`, `UuidBox`, `XmlBox`
-  and `IprBox` are `#[non_exhaustive]`, so later variants and fields (a JPX
-  color method, an output ICC profile) are not breaking changes. `XmlBox` and
-  `IprBox` are so that a later release can record where the box sat or its
-  `asoc`/`lbl` label. Match them with a `_` arm, and read the structs' fields
-  rather than building them.
+- Every public type added in this release is `#[non_exhaustive]` except
+  three, so later variants and fields (a JPX color method, an output ICC
+  profile, where an `xml ` box sat) are not breaking changes. The enums
+  `ColorSpace`, `ColorOutput` and `MappingKind` need a `_` arm in a
+  `match`. The structs `Header`, `ComponentInfo`, `Jp2Metadata`,
+  `ImageHeader`, `ColorSpecification`, `FileType`, `ReaderRequirements`,
+  `StandardFeature`, `VendorFeature`, `Resolution`, `Res`, `Ratio`,
+  `XmlBox`, `IprBox`, `UuidBox`, `UuidInfo`, `Palette`, `PaletteColumn`,
+  `ChannelMapping` and `ChannelDefinitionEntry` can't be built outside the
+  crate, and a pattern on them needs `{ field, .. }`. `ChannelDefinition`,
+  `ChannelType` and `Association` are exhaustive: they mirror the `cdef`
+  box's `Typ` and `Asoc`, whose every 16-bit value they already hold, so a
+  caller may build a `ChannelDefinition` and match on both enums without a
+  catch-all arm.
 - `Jp2Metadata::palette` and `Jp2Metadata::channel_mapping` give the file's
   palette table (`Palette`, `PaletteColumn`) and component mapping
   (`ChannelMapping`, `MappingKind`). They are set whenever a palette and a
   `cmap` are present, also under `raw_channels`, so a caller can expand the
-  index planes itself.
+  index planes itself. `Palette::entry` returns one entry's columns, or
+  `None` past the last entry.
 - `Jp2Metadata::channel_definitions` gives the `cdef` entries as written
   (`ChannelDefinitionEntry`), and `channel_mapping` is the mapping the default
   decode applies in both modes, OpenJPEG's single-component correction
@@ -229,6 +233,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   column of 16 components and 2^17 rows. One tile of 16384 such components
   takes 0.18 s instead of 0.5 s, and 64 tiles of 1024 take 0.41 s instead
   of 1.7 s.
+- A single-tile decode no longer holds two image-sized buffers at once. The
+  image plane takes the tile's buffer instead of a copy, and the inverse
+  wavelet frees each level's subbands as it merges them. At the full sample
+  budget, one 9/7 tile peaked at about 580 MiB and now peaks at about
+  340 MiB.
 
 ### Changed
 
@@ -243,19 +252,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "the color transform needs three components" changed from 0.3.0's
   "colour". Box types, field names and spec titles stay as ISO writes them
   (`colr`, `EnumCS`, "Colour Specification box").
+- Breaking: `decode_with` takes `&DecodeOptions` instead of `DecodeOptions`,
+  so one set of options serves many calls: `decode_with(bytes, &options)`.
 - Breaking: `DecodeOptions` and `ColorOutput` are no longer `Copy`, so a
   later option can carry data (an output ICC profile). Both stay `Clone`;
   clone them where you reuse one. For the same reason the new
   `ComponentInfo`, `ChannelMapping`, `MappingKind`, `PaletteColumn` and
   `ChannelDefinitionEntry` are `Clone` but not `Copy`.
-- A code-block size past the limit in a main-header COD is now refused when
-  the header is read, even when a COC overrides it, as OpenJPEG does. `p0_02.j2k`
-  with byte 55 set to 56 decoded in 0.3.0 and is now `Error::Marker`. Likewise a
-  resolution reduction past the main header's decomposition levels is checked
-  before the tile data, so a truncated file with an impossible reduction
-  reports the reduction rather than the truncation.
-- Breaking: `decode_with` takes `&DecodeOptions` instead of `DecodeOptions`,
-  so one set of options serves many calls: `decode_with(bytes, &options)`.
+- A code-block size past the limit in any COD or COC, in the main header or
+  a tile-part header, is now refused when that header is read, even when a
+  later COC overrides it, as OpenJPEG does. `p0_02.j2k` with byte 55 set to
+  56 decoded in 0.3.0 and is now `Error::Marker`. Likewise a resolution
+  reduction past the main header's decomposition levels is checked before
+  the tile data, so a truncated file with an impossible reduction reports
+  the reduction rather than the truncation.
 - A JP2 file used to be `Unsupported`; it now decodes, or fails with
   `FileFormat` when its boxes are malformed.
 - A JP2 file whose `ihdr` component count differs from its codestream's
@@ -278,7 +288,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the positions a positional progression order sweeps. Past it the decode
   is `Error::Limit`. Encoder output seen spends under 13% of it, but a
   valid file of many layers that each include a few scattered code-blocks
-  can pass it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
+  can exceed it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
   819 bytes took 6.5 s and a 9 KB PCRL sweep 29 s; both are now refused in
   a fraction of a second. OpenJPEG has no such bound and decodes them.
 - A POC marker whose volumes reach the same packets again costs a bit per
