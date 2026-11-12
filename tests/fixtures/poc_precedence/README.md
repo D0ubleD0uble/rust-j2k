@@ -1,11 +1,11 @@
 # POC precedence fixtures
 
 Used by `tests/poc_precedence.rs`. Each codestream has a POC in the main
-header and a different one in its tile-part headers. The tile-part POC
+header and one in its tile-part headers. In the first two, the tile-part POC
 overrides the main one (A.6.6), and the packets follow it, so the decode must
 equal `source.raw`. The grading reference is `source.raw` itself:
 `opj_decompress` 2.5.0 appends the tile volumes after the main one and decodes
-both files wrong (see `docs/correctness.md`, "A tile-part POC overrides the
+those two files wrong (see `docs/correctness.md`, "A tile-part POC overrides the
 main header's").
 
 ## Source and tools
@@ -34,3 +34,12 @@ round-trips it exactly; the script checks that before it edits anything.
 
 The script also checks that the split without the main POC round-trips under
 `opj_decompress`, so the split itself is valid.
+
+`poc_main_then_later_tile_part.j2k` starts from a second encode, with
+`-POC T1=0,0,3,1,3,LRCP/T1=1,0,3,3,3,RLCP` and otherwise the same flags (it
+round-trips too). Its first volume, LRCP over resolution 0, moves to the main
+header, where it is byte for byte the main POC above. The second moves into
+its own POC in the second tile-part header. The first tile-part is left with
+no POC, which A.6.6 does not allow, so its packets can only follow the main
+POC. `opj_decompress` 2.5.0 returns the source for this file, and so does
+this crate.

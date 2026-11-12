@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Generate the POC precedence fixtures in tests/fixtures/poc_precedence/.
 
-Each codestream carries a POC in the main header *and* a different one in the
-tile-part headers. A.6.6 gives the precedence `Tile-part POC > Main POC >
-Tile-part COD > Main COD`: the tile's POC overrides the main header's, so the
-tile's packets are read in the tile-part POC's order alone. The packets were
-written in that order, so a decode under the standard equals the source image.
+Each codestream carries a POC in the main header *and* one in the tile-part
+headers. A.6.6 gives the precedence `Tile-part POC > Main POC > Tile-part COD >
+Main COD`, and requires a tile's POC to be in its first tile-part header: the
+tile's POC overrides the main header's, so the tile's packets are read in the
+tile-part POC's order alone. The packets were written in that order, so a
+decode under the standard equals the source image.
 
-`opj_decompress` 2.5.0 decodes both wrong. `opj_j2k_read_poc` appends a
+`opj_decompress` 2.5.0 decodes the first two wrong. `opj_j2k_read_poc` appends a
 tile-part's volumes to the ones the tile inherited from the main header, so it
 walks the main volume first and reads the first packets in the wrong order. So
 the grading reference is the source image, not the OpenJPEG decode. See
@@ -27,6 +28,13 @@ How each file is made:
    first tile-part header into its own POC in the second tile-part header,
    right before the packets it governs, so the tile's volumes accumulate across
    its tile-parts. Both Psot values are fixed up.
+
+`poc_main_then_later_tile_part.j2k` breaks A.6.6 on purpose: its first
+tile-part has no POC. It is a second encode whose first volume is LRCP over
+resolution 0, the same volume as the main POC above. That volume moves to the
+main header and the second to the second tile-part header, so the first
+tile-part's packets can only follow the main POC. `opj_decompress` 2.5.0
+round-trips it, and this crate reads it the same way.
 
 The source is three 24x16 8-bit components, `sample(c, x, y)` below, stored
 plane after plane in `source.raw`.
@@ -50,13 +58,14 @@ DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "poc_prece
 
 WIDTH, HEIGHT, COMPONENTS = 24, 16, 3
 TILE_POC = "T1=0,0,3,1,3,CPRL/T1=1,0,3,3,3,RLCP"
+# The first volume is the main POC below, for the later-tile-part fixture.
+LATER_POC = "T1=0,0,3,1,3,LRCP/T1=1,0,3,3,3,RLCP"
 FLAGS = [
     "-F", f"{WIDTH},{HEIGHT},{COMPONENTS},8,u",
     "-mct", "0",
     "-n", "3",
     "-b", "16,16",
     "-r", "20,10,1",
-    "-POC", TILE_POC,
 ]
 # RSpoc, CSpoc, LYEpoc, REpoc, CEpoc, Ppoc: resolution 0, components [0, 3),
 # layers [0, 3), LRCP.
@@ -119,6 +128,42 @@ def split_tile_poc(cs: bytes) -> bytes:
     return bytes(out)
 
 
+def later_part_poc(cs: bytes) -> bytes:
+    """Split the tile POC as above, then move tile-part 0's POC, now the first
+    volume alone, into the main header before the first SOT."""
+    out = bytearray(split_tile_poc(cs))
+    tp0 = tile_parts(bytes(out))[0]
+    poc = bytes(out[tp0 + 12 : tp0 + 12 + 4 + VOLUME])
+    assert poc[:2] == struct.pack(">H", POC)
+    del out[tp0 + 12 : tp0 + 12 + 4 + VOLUME]
+    set_psot(out, tp0, -len(poc))
+    out[tp0:tp0] = poc
+    return bytes(out)
+
+
+def encode(tmp: Path, poc: str, src: bytes) -> bytes:
+    """`opj_compress` with `-POC poc`, checked to round-trip and to hold both
+    volumes in one POC in the first of two tile-parts."""
+    path = tmp / "tile_only.j2k"
+    run("opj_compress", "-i", str(tmp / "in.raw"), "-o", str(path), *FLAGS, "-POC", poc)
+    if opj_decode(path, tmp) != src:
+        sys.exit(f"control: the -POC {poc} encode does not round-trip under opj_decompress")
+    cs = path.read_bytes()
+    parts = tile_parts(cs)
+    if len(parts) != 2:
+        sys.exit(f"expected two tile-parts, found {len(parts)}")
+    # The first tile-part header must be exactly SOT, POC(2 volumes), SOD.
+    first = parts[0] + 12
+    poc_len = struct.unpack(">H", cs[first + 2 : first + 4])[0]
+    if cs[first : first + 2] != struct.pack(">H", POC) or poc_len != 2 + 2 * VOLUME:
+        sys.exit("first tile-part header does not open with a two-volume POC")
+    if cs[first + 2 + poc_len : first + 4 + poc_len] != struct.pack(">H", SOD):
+        sys.exit("first tile-part header carries more than its POC")
+    if cs[parts[1] + 12 : parts[1] + 14] != struct.pack(">H", SOD):
+        sys.exit("second tile-part header is not empty")
+    return cs
+
+
 def opj_decode(path: Path, tmp: Path) -> bytes:
     for old in tmp.glob("out_*.pgx"):
         old.unlink()
@@ -150,24 +195,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         (tmp / "in.raw").write_bytes(src)
-        tile_only = tmp / "tile_only.j2k"
-        run("opj_compress", "-i", str(tmp / "in.raw"), "-o", str(tile_only), *FLAGS)
-        if opj_decode(tile_only, tmp) != src:
-            sys.exit("control: the tile-POC-only encode does not round-trip under opj_decompress")
-
-        cs = tile_only.read_bytes()
+        cs = encode(tmp, TILE_POC, src)
         parts = tile_parts(cs)
-        if len(parts) != 2:
-            sys.exit(f"expected two tile-parts, found {len(parts)}")
-        # The first tile-part header must be exactly SOT, POC(2 volumes), SOD.
-        first = parts[0] + 12
-        poc_len = struct.unpack(">H", cs[first + 2 : first + 4])[0]
-        if cs[first : first + 2] != struct.pack(">H", POC) or poc_len != 2 + 2 * VOLUME:
-            sys.exit("first tile-part header does not open with a two-volume POC")
-        if cs[first + 2 + poc_len : first + 4 + poc_len] != struct.pack(">H", SOD):
-            sys.exit("first tile-part header carries more than its POC")
-        if cs[parts[1] + 12 : parts[1] + 14] != struct.pack(">H", SOD):
-            sys.exit("second tile-part header is not empty")
 
         main_poc = struct.pack(">HH", POC, 2 + len(MAIN_POC_BODY)) + MAIN_POC_BODY
         both = cs[: parts[0]] + main_poc + cs[parts[0] :]
@@ -190,6 +219,17 @@ def main() -> None:
             if decoded == src:
                 sys.exit(f"{name}: opj_decompress reproduces the source, so the fixture shows nothing")
             print(f"wrote {name} ({len(data)} bytes); opj_decompress 2.5.0: {mismatch(decoded, src)}")
+
+        later = later_part_poc(encode(tmp, LATER_POC, src))
+        name = "poc_main_then_later_tile_part.j2k"
+        sot = later.index(struct.pack(">H", SOT))
+        if later[sot - VOLUME : sot] != MAIN_POC_BODY:
+            sys.exit(f"{name}: the main POC is not the one the other fixtures carry")
+        path = DIR / name
+        path.write_bytes(later)
+        if opj_decode(path, tmp) != src:
+            sys.exit(f"{name}: opj_decompress does not reproduce the source")
+        print(f"wrote {name} ({len(later)} bytes); opj_decompress 2.5.0: equal to the source")
 
 
 if __name__ == "__main__":

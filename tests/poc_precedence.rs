@@ -1,9 +1,10 @@
 //! A tile-part POC overrides the main header's POC (A.6.6).
 //!
 //! Each codestream is a lossless `opj_compress` encode of `source.raw` with a
-//! two-volume tile-part POC, with a different main-header POC spliced in. The
-//! packets follow the tile-part POC, so the decode must equal the source.
-//! `opj_decompress` 2.5.0 decodes both wrong: it walks the main volume first.
+//! two-volume tile-part POC, with a main-header POC spliced in. The packets
+//! follow the tile-part POC, so the decode must equal the source.
+//! `opj_decompress` 2.5.0 decodes the first two wrong: it walks the main
+//! volume first.
 //! See `tests/fixtures/poc_precedence/README.md` and docs/correctness.md.
 
 use std::path::PathBuf;
@@ -59,4 +60,12 @@ fn a_tile_part_poc_overrides_the_main_header_poc() {
 #[test]
 fn a_tile_poc_split_over_tile_parts_overrides_the_main_header_poc() {
     assert_round_trips("poc_main_and_split_tile.j2k");
+}
+
+/// The tile's first tile-part has no POC, which A.6.6 forbids, so its first
+/// packets follow the main POC. The main volume is walked first and the
+/// later tile-part's volume after it, as `opj_decompress` 2.5.0 reads the file.
+#[test]
+fn a_poc_first_seen_in_a_later_tile_part_follows_the_main_header_poc() {
+    assert_round_trips("poc_main_then_later_tile_part.j2k");
 }

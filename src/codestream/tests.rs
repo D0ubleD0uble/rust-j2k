@@ -2638,6 +2638,57 @@ fn a_tile_part_poc_overrides_the_main_header_poc() {
     assert_eq!(cs.header.poc[0].progression, markers::Progression::Lrcp);
 }
 
+/// Two tile-parts of tile 0: the first with no markers, the second with
+/// `second_markers` in its header.
+fn with_later_tile_part_markers(header: &[Vec<u8>], second_markers: &[Vec<u8>]) -> Vec<u8> {
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in header {
+        bytes.extend_from_slice(part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, psot_for(&[1]), 0, 2));
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.push(1);
+    let markers: usize = second_markers.iter().map(Vec::len).sum();
+    bytes.extend_from_slice(&sot_seg(0, psot_for(&[2]) + markers as u32, 1, 2));
+    for m in second_markers {
+        bytes.extend_from_slice(m);
+    }
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.push(2);
+    bytes.extend_from_slice(&be16(marker::EOC));
+    bytes
+}
+
+/// A.6.6 puts a tile's POC in its first tile-part. When the first POC is in a
+/// later one, the first packets can only have followed the main header's
+/// order, so the tile walks the main volumes and then its own, as OpenJPEG
+/// does, and the 32-volume budget counts both.
+#[test]
+fn a_poc_first_seen_in_a_later_tile_part_appends_to_the_main_header_poc() {
+    let header = |main_volumes: usize| {
+        vec![
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_default(1)),
+            seg(marker::POC, &poc_volumes(main_volumes)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ]
+    };
+    let tile_poc = seg(marker::POC, &[0u8, 0, 0, 1, 3, 1, 1]);
+    let bytes = with_later_tile_part_markers(&header(1), std::slice::from_ref(&tile_poc));
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.poc.len(), 2, "main volume then tile volume");
+    assert_eq!(tile.poc[0], cs.header.poc[0]);
+    assert_eq!(
+        (tile.poc[1].res_end, tile.poc[1].progression),
+        (3, markers::Progression::Rlcp),
+    );
+
+    let bytes = with_later_tile_part_markers(&header(32), &[tile_poc]);
+    let error = parse(&bytes).expect_err("33 walked volumes should reject");
+    assert!(matches!(error, Error::Limit(_)));
+}
+
 /// A tile with no POC of its own keeps the main header's volumes.
 #[test]
 fn a_tile_without_a_poc_keeps_the_main_header_poc() {
@@ -2658,7 +2709,6 @@ fn a_tile_without_a_poc_keeps_the_main_header_poc() {
     assert_eq!(tile.poc, cs.header.poc);
     assert_eq!(tile.poc.len(), 1);
 }
-
 
 /// **A tile COD outranks a main-header COC.** This is the whole reason the main
 /// header keeps its raw overrides rather than only its resolved components.
@@ -3169,6 +3219,7 @@ impl Rng {
     }
 
     fn tile_header(&mut self, components: usize) -> TileHeader {
+        let poc = self.poc();
         TileHeader {
             cod: self.chance(2).then(|| self.cod(components)),
             qcd: self.chance(2).then(|| self.quant()),
@@ -3181,7 +3232,10 @@ impl Rng {
             rgn: (self.named(components).into_iter())
                 .map(|i| (i, self.below(8) as u8))
                 .collect(),
-            poc: self.poc(),
+            // As the parser sets it: only a nonempty list can start in the
+            // first tile-part.
+            poc_in_first_part: !poc.is_empty() && self.chance(2),
+            poc,
         }
     }
 }
