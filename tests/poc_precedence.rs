@@ -69,3 +69,20 @@ fn a_tile_poc_split_over_tile_parts_overrides_the_main_header_poc() {
 fn a_poc_first_seen_in_a_later_tile_part_follows_the_main_header_poc() {
     assert_round_trips("poc_main_then_later_tile_part.j2k");
 }
+
+/// The coverage check reads the volumes the tile walks. The main POC covers
+/// every packet, but the tile's own POC replaces it and leaves out
+/// resolutions 1 and 2, so the tile is refused before any packet is read.
+/// Checking the main and tile volumes together would pass it.
+#[test]
+fn the_coverage_check_sees_only_the_tile_volumes() {
+    let name = "poc_tile_leaves_out_packets.j2k";
+    let error = decode(&std::fs::read(dir().join(name)).unwrap())
+        .expect_err("the tile's volumes leave out packets");
+    let message = error.to_string();
+    assert!(
+        matches!(error, rust_j2k::Error::Codestream(_))
+            && message.contains("leave out its packets of component 0, resolution 1"),
+        "{name}: {message}"
+    );
+}

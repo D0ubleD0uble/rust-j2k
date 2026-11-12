@@ -43,3 +43,12 @@ its own POC in the second tile-part header. The first tile-part is left with
 no POC, which A.6.6 does not allow, so its packets can only follow the main
 POC. `opj_decompress` 2.5.0 returns the source for this file, and so does
 this crate.
+
+`poc_tile_leaves_out_packets.j2k` pins which volumes the coverage check reads.
+It is the base encode with a main POC of one LRCP volume over every
+resolution, component and layer, and the first tile-part's POC cut to its
+CPRL volume over resolution 0 (its Psot fixed). The tile's own
+volumes replace the covering main one and leave out resolutions 1-2, so this
+crate refuses it as `Codestream` before reading a packet. `opj_decompress`
+2.5.0 walks the main volume first and returns 381, 384 and 384 of 384 samples
+wrong per component.

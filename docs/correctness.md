@@ -226,6 +226,12 @@ the main volumes, then the tile's. The 32-volume budget counts both.
 the source. So this crate differs from OpenJPEG only on files that follow
 A.6.6.
 
+The coverage check (see "Packets a POC sequence leaves out" below) reads the
+same list the walk does. `poc_tile_leaves_out_packets.j2k` has a main POC that
+covers the tile and a first-tile-part POC that leaves out two resolutions; it
+is refused as `Codestream`, where OpenJPEG walks the main volume and returns
+a wrong image.
+
 **OpenJPEG's history.** The append is in the first version of the reader that
 has a tile POC, `j2k_read_poc` in OpenJPEG 0.8 (4be82998, 2004: `old_poc =
 tcp->POC ? tcp->numpocs+1 : 0`). It was carried into the v2 reader

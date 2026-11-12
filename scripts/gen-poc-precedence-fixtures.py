@@ -36,6 +36,15 @@ main header and the second to the second tile-part header, so the first
 tile-part's packets can only follow the main POC. `opj_decompress` 2.5.0
 round-trips it, and this crate reads it the same way.
 
+`poc_tile_leaves_out_packets.j2k` pins which volumes the coverage check
+reads. Its main POC is one LRCP volume over every resolution, component and
+layer, which covers the tile. The first tile-part's POC keeps only the CPRL
+volume over resolution 0 (the second tile-part keeps its packets but has no
+POC), so the volumes the tile walks leave out resolutions 1-2. This crate
+refuses it as `Codestream` before any packet is read. Appending would put the
+covering main volume first, pass the check and read the packets in the wrong
+order.
+
 The source is three 24x16 8-bit components, `sample(c, x, y)` below, stored
 plane after plane in `source.raw`.
 
@@ -70,6 +79,8 @@ FLAGS = [
 # RSpoc, CSpoc, LYEpoc, REpoc, CEpoc, Ppoc: resolution 0, components [0, 3),
 # layers [0, 3), LRCP.
 MAIN_POC_BODY = bytes([0, 0]) + struct.pack(">H", 3) + bytes([1, 3, 0])
+# The same over resolutions [0, 3): every packet of the tile.
+FULL_POC_BODY = bytes([0, 0]) + struct.pack(">H", 3) + bytes([3, 3, 0])
 
 POC, SOT, SOD = 0xFF5F, 0xFF90, 0xFF93
 VOLUME = 7  # bytes per POC volume with fewer than 257 components
@@ -138,6 +149,19 @@ def later_part_poc(cs: bytes) -> bytes:
     del out[tp0 + 12 : tp0 + 12 + 4 + VOLUME]
     set_psot(out, tp0, -len(poc))
     out[tp0:tp0] = poc
+    return bytes(out)
+
+
+def leaves_out(cs: bytes) -> bytes:
+    """A covering main POC, and tile-part 0's POC cut to its first volume."""
+    tp0 = tile_parts(cs)[0]
+    out = bytearray(cs)
+    start = tp0 + 12 + 4 + VOLUME
+    del out[start : start + VOLUME]
+    out[tp0 + 14 : tp0 + 16] = struct.pack(">H", 2 + VOLUME)
+    set_psot(out, tp0, -VOLUME)
+    full = struct.pack(">HH", POC, 2 + len(FULL_POC_BODY)) + FULL_POC_BODY
+    out[tp0:tp0] = full
     return bytes(out)
 
 
@@ -230,6 +254,13 @@ def main() -> None:
         if opj_decode(path, tmp) != src:
             sys.exit(f"{name}: opj_decompress does not reproduce the source")
         print(f"wrote {name} ({len(later)} bytes); opj_decompress 2.5.0: equal to the source")
+
+        cut = leaves_out(cs)
+        name = "poc_tile_leaves_out_packets.j2k"
+        path = DIR / name
+        path.write_bytes(cut)
+        decoded = opj_decode(path, tmp)
+        print(f"wrote {name} ({len(cut)} bytes); opj_decompress 2.5.0: {mismatch(decoded, src)}")
 
 
 if __name__ == "__main__":
