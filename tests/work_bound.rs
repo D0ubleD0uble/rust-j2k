@@ -129,17 +129,17 @@ fn t2skip(width: u32, height: u32, tile: u32, layers: u16) -> Vec<u8> {
 }
 
 /// One sample column on x in [1, 2), `2 * tiles` rows in tiles of two, in
-/// `progression` (0 LRCP, 1 RLCP) with 65535 layers, 32 wavelet levels and
-/// `comps` components. Every resolution but the top one is empty in x, so it
-/// holds no packet; each tile is 65535 x `comps` empty packets (0x00). The
-/// layer-resolution loops take a step at each of 65535 x 33 points per tile,
-/// and one for each component with a precinct there.
-fn empty_resolutions(progression: u8, comps: usize, tiles: u32) -> Vec<u8> {
+/// `progression` (0 LRCP, 1 RLCP) with 65535 layers, `levels` wavelet levels
+/// and `comps` components. Every resolution but the top one is empty in x, so
+/// it holds no packet; each tile is 65535 x `comps` empty packets (0x00). The
+/// layer-resolution loops take a step at each of 65535 x (`levels` + 1)
+/// points per tile, and one for each component with a precinct there.
+fn empty_resolutions(progression: u8, comps: usize, tiles: u32, levels: u8) -> Vec<u8> {
     let mut cod = vec![0, progression];
     cod.extend_from_slice(&u16::MAX.to_be_bytes());
-    cod.extend_from_slice(&[0, 32, 0, 0, 0, 1]);
+    cod.extend_from_slice(&[0, levels, 0, 0, 0, 1]);
     let mut qcd = vec![0x40];
-    qcd.extend(std::iter::repeat_n(0x40, 3 * 32 + 1));
+    qcd.extend(std::iter::repeat_n(0x40, 3 * usize::from(levels) + 1));
     let body = vec![0; usize::from(u16::MAX) * comps];
     codestream(1, 1, 2 * tiles, 2, &vec![(1, 1); comps], &cod, &qcd, &body)
 }
@@ -405,13 +405,31 @@ fn the_tiles_share_one_work_bound() {
 #[test]
 fn the_layer_orders_are_bounded_over_empty_resolutions() {
     for (name, progression) in [("LRCP", 0), ("RLCP", 1)] {
-        let image =
-            decode(&empty_resolutions(progression, 8, 1)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let image = decode(&empty_resolutions(progression, 8, 1, 32))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(image.components.len(), 8, "{name}");
         for component in &image.components {
             assert_eq!(component.samples, [128, 128], "{name}");
         }
-        assert_limit(name, &empty_resolutions(progression, 1, 8));
+        assert_limit(name, &empty_resolutions(progression, 1, 8, 32));
+    }
+}
+
+/// The layer orders charge a step at each (layer, resolution) and one more
+/// for each component that holds a precinct there, on top of the step its
+/// packet read takes. In 10 tiles of one component and 30 levels that is 33
+/// steps for each byte of empty packets, past the bound of 32, and the decode
+/// is `Limit`; with 29 levels it is 32 and decodes, to the flat 128 OpenJPEG
+/// 2.5.0 decodes for both. Without the step for the component, 30 levels
+/// would decode too.
+#[test]
+fn the_layer_orders_charge_each_component_they_check() {
+    for (name, progression) in [("LRCP", 0), ("RLCP", 1)] {
+        assert_limit(name, &empty_resolutions(progression, 1, 10, 30));
+        let image = decode(&empty_resolutions(progression, 1, 10, 29))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(image.components.len(), 1, "{name}");
+        assert_eq!(image.components[0].samples, [128; 20], "{name}");
     }
 }
 

@@ -40,6 +40,11 @@ issue #247 and issue #265:
   every resolution but the finest, so it carries one empty packet (0x00)
   per component, yet has 33 resolutions of up to 3 bands per component to
   set up. These decode.
+- `layer_edge`: a one-sample column on x in [1, 2) in tiles of two rows,
+  one component, `levels` wavelet levels, 65535 LRCP or RLCP layers, every
+  packet 0x00. Only the finest resolution holds a precinct, so each layer
+  costs `levels` + 3 steps for its byte: 33 a byte at 30 levels, past the
+  bound of 32 and refused; 32 at 29, which decodes.
 
 The small files are written to tests/fixtures/work_bound/ (see the README
 there). With `--big DIR`, the large timing shapes from the issue are written
@@ -61,7 +66,7 @@ import time
 
 DIR = pathlib.Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "work_bound"
 
-LRCP, RPCL, PCRL, CPRL = 0, 2, 3, 4
+LRCP, RLCP, RPCL, PCRL, CPRL = 0, 1, 2, 3, 4
 
 
 def seg(code: int, body: bytes) -> bytes:
@@ -259,6 +264,19 @@ def deep(tiles: int, components: int) -> bytes:
     return codestream(main, b"\x00" * components, tiles)
 
 
+def layer_edge(order: int, levels: int, tiles: int = 10) -> bytes:
+    """`tiles` tiles of a 1 x 2 column on x in [1, 2), one component,
+    `levels` wavelet levels, 65535 layers in `order` (LRCP or RLCP), 1 x 1
+    code-blocks. Each tile is 65535 empty packets (0x00), one a layer at the
+    finest resolution; the others are empty in x."""
+    main = (
+        siz(1, 2, 2 * tiles, [(7, 1, 1)], 2)
+        + seg(0xFF52, bytes([0, order]) + struct.pack(">H", 65535) + bytes([0, levels, 0, 0, 0, 1]))
+        + seg(0xFF5C, bytes([0x40]) + bytes([0x40] * (3 * levels + 1)))
+    )
+    return codestream(main, b"\x00" * 65535, tiles)
+
+
 # Committed: name -> bytes. Each but the first and the last walks far past
 # the decode's work bound for its size and is refused with `Error::Limit`.
 FILES = {
@@ -334,6 +352,12 @@ BIG = {
     "deep_1_16384.j2k": lambda: deep(1, 16384),
     "deep_64_1024.j2k": lambda: deep(64, 1024),
     "deep_64_16384.j2k": lambda: deep(64, 16384),
+    # The layer orders' step for each component they check decides these
+    # (`the_layer_orders_charge_each_component_they_check`): 10 tiles, 655
+    # KB, refused at 30 levels and decoded at 29.
+    "layer_edge_lrcp_30.j2k": lambda: layer_edge(LRCP, 30),
+    "layer_edge_rlcp_30.j2k": lambda: layer_edge(RLCP, 30),
+    "layer_edge_lrcp_29.j2k": lambda: layer_edge(LRCP, 29),
 }
 
 

@@ -470,12 +470,16 @@ times are this decoder before this change, then after, then
 The bound scales with size, so a large file of the same shape still takes
 as long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after
 3.1 s, about what 10 MB of real data takes to decode. A step costs about
-6 to 15 ns, and the conformance files decode at 0.25 to 0.47 µs a byte.
+2 to 15 ns, and the conformance files decode at 0.25 to 0.47 µs a byte.
+The cheapest refusals are in the layer orders over resolutions with no
+precinct, at about 2 ns a step: `layer_edge` (655 KB, 33 steps a byte) is
+refused in 0.015 to 0.04 s, 0.02 to 0.06 µs a byte, and OpenJPEG decodes
+it in 0.08 s.
 
 Setting up each tile's geometry is not counted. A tile of one sample at
 an odd origin has 32 resolutions per component that hold no precinct, and
 each component of each tile costs about a byte. Those resolutions now get
-no band or code-block geometry, and the walk does not check them. Measured
+no band or code-block geometry, and the walk checks no component there. Measured
 on release builds (`deep` in `scripts/gen-work-bound-fixtures.py`, a row
 of one-sample tiles at y = 1, 32 levels, one layer, every packet 0x00;
 times are before this change, then after, then `opj_decompress` 2.5.0):

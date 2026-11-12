@@ -114,6 +114,10 @@ impl PacketWalk<'_> {
     /// An axis is `None` when every one of its pairs scales past the 32-bit
     /// reference grid. OpenJPEG skips those the same way, so the packet stream
     /// stays aligned with the oracle's.
+    ///
+    /// Resolutions that hold no precinct count here too, as in OpenJPEG:
+    /// with mixed sub-sampling a coarser step can pass over precincts and
+    /// change which packets the sweep emits.
     fn spans(&self, comp: usize) -> (Option<u64>, Option<u64>) {
         let (dx, dy) = self.sampling(comp);
         let mut spans = (None, None);
@@ -451,7 +455,7 @@ const SET_SKIP_VISITS: usize = 12;
 /// the decode can.
 ///
 /// When there are more, a positional order can pass over precincts, as
-/// OpenJPEG's does (see [`PacketWalk::step`]), so the walk might still
+/// OpenJPEG's does (see [`PacketWalk::spans`]), so the walk might still
 /// finish; the packets read are then kept in a set, at most one per visit
 /// and one per byte of packet headers, about 24 bytes each, and each packet
 /// skipped from it is charged [`SET_SKIP_VISITS`]. `read_header`'s walk
