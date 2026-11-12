@@ -28,17 +28,20 @@
 //! ## The 2-D driver
 //!
 //! [`inverse`] drives those kernels over the subband layout in [`SubbandCoeffs`].
-//! Per resolution level (coarsest first) it scatters the four subbands back into
-//! one interleaved grid by the ISO `(xob, yob)` parity — LL to the low-pass row
-//! and column, HL to the low-pass row and high-pass column, LH the reverse, HH
-//! to both high-pass — then runs the 1-D synthesis across every row and down
-//! every column. The merged grid is the next finer level's LL; after the last
-//! level it is the full-resolution raster of that tile-component (pre
-//! level-shift), which [`crate::image::Canvas`] places into the image.
+//! Per resolution level (coarsest first) it copies the four subbands into one
+//! grid as four blocks — LL top left, HL top right, LH bottom left, HH bottom
+//! right — then runs the 1-D synthesis across every row and down every column,
+//! interleaving each row or column by the ISO `(xob, yob)` parity on the way
+//! in: LL to the low-pass row and column, HL to the low-pass row and high-pass
+//! column, LH the reverse, HH to both high-pass. The merged grid is the next
+//! finer level's LL; after the last level it is the full-resolution raster of
+//! that tile-component (pre level-shift), which [`crate::image::Canvas`] places
+//! into the image.
 
 use crate::Result;
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
+use crate::image::blit;
 use crate::pipeline::{Band, Bands, DetailBands, Samples, SubbandCoeffs};
 
 /// 9/7 lifting coefficients (ISO/IEC 15444-1 Table F.4): the two predict
@@ -83,21 +86,24 @@ pub fn inverse(header: &MainHeader, comp: usize, coeffs: SubbandCoeffs) -> Resul
 /// first. Each level combines the running LL with its three detail bands via
 /// `kernel` (the 1-D synthesis for the chosen filter) and becomes the next
 /// level's LL.
+///
+/// Each level's bands are consumed as they are merged, so the coarser levels'
+/// buffers are freed before the finer levels are built.
 fn reconstruct<T, F>(bands: Bands<T>, kernel: F) -> Band<T>
 where
     T: Copy + Default,
     F: Fn(&mut [T], usize),
 {
     let mut ll = bands.ll;
-    for detail in &bands.levels {
-        ll = merge_level(&ll, detail, &kernel);
+    for detail in bands.levels {
+        ll = merge_level(ll, detail, &kernel);
     }
     ll
 }
 
-/// One resolution level: scatter `ll` and the three detail bands into an
-/// interleaved grid by their `(xob, yob)` parity, then run the 1-D inverse down
-/// each column and across each row. Returns the reconstructed (next finer) LL.
+/// One resolution level: merge `ll` and the three detail bands, interleaved by
+/// their `(xob, yob)` parity, through the 1-D inverse across each row and down
+/// each column. Returns the reconstructed (next finer) LL.
 ///
 /// The level's own coordinate frame is recovered from the band origins. For a
 /// resolution spanning `[u0, u1)` horizontally, ISO Eq. B-15 puts the low-pass
@@ -109,12 +115,21 @@ where
 ///
 /// and likewise `ll.origin.y + lh.origin.y == v0`. That is what makes each level
 /// self-describing: nothing has to thread the tile's geometry down here.
-fn merge_level<T, F>(ll: &Band<T>, detail: &DetailBands<T>, kernel: &F) -> Band<T>
+///
+/// The bands are copied into the grid as four blocks rather than interleaved,
+/// and each band is freed once it is copied. The grid starts as zeroed memory,
+/// which the operating system maps a page at a time as it is first written, so
+/// a band's block maps about as many pages as the band frees. The peak is then
+/// the level's bands plus one band, about 1.25 times the level's size, where
+/// interleaving the bands straight into the grid maps half the grid for LL
+/// alone and peaks at 1.5 times. The interleave happens a row or a column at a
+/// time instead, in `line` and `column`.
+fn merge_level<T, F>(ll: Band<T>, detail: DetailBands<T>, kernel: &F) -> Band<T>
 where
     T: Copy + Default,
     F: Fn(&mut [T], usize),
 {
-    let (hl, lh, hh) = (&detail.hl, &detail.lh, &detail.hh);
+    let DetailBands { hl, lh, hh } = detail;
     // The four bands tile the resolution: LL/LH share the low-pass column count,
     // HL/HH the high-pass count; LL/HL share the low-pass row count, LH/HH the
     // high-pass count.
@@ -132,13 +147,19 @@ where
     // sub-sampled component, puts subbands at odd origins routinely.
     let (cas_x, cas_y) = ((u0 & 1) as usize, (v0 & 1) as usize);
 
+    // Low-pass counts: the columns and rows that come from LL.
+    let (low_x, low_y) = (ll.width, ll.height);
     let width = ll.width + hl.width;
     let height = ll.height + lh.height;
     let mut grid = vec![T::default(); width * height];
-    scatter(&mut grid, width, ll, cas_x, cas_y); // LL: low-pass row, low-pass column
-    scatter(&mut grid, width, hl, 1 - cas_x, cas_y); // HL: low-pass row, high-pass column
-    scatter(&mut grid, width, lh, cas_x, 1 - cas_y); // LH: high-pass row, low-pass column
-    scatter(&mut grid, width, hh, 1 - cas_x, 1 - cas_y); // HH: high-pass both
+    for (band, left, top) in [
+        (ll, 0, 0),
+        (hl, low_x, 0),
+        (lh, 0, low_y),
+        (hh, low_x, low_y),
+    ] {
+        blit(&mut grid, width, &band.data, band.width, left, top);
+    }
 
     // Synthesis is separable, but the 5/3 integer lifting rounds, so the two
     // passes do not commute: match OpenJPEG's order — horizontal (rows) first,
@@ -150,15 +171,33 @@ where
     // coarse enough resolution collapses to zero columns. Legal input — a narrow
     // edge tile with enough decomposition levels reaches it — and unreachable
     // for a single tile at the canvas origin, which is why it only surfaces now.
+    //
+    // The row pass leaves the rows in block order: the low-pass rows on top,
+    // the high-pass rows below. The column pass interleaves them as it reads
+    // each column and writes the column back in image order.
     if width > 0 {
+        let mut line = vec![T::default(); width];
         for row in grid.chunks_exact_mut(width) {
-            kernel(row, cas_x);
+            let (low, high) = row.split_at(low_x);
+            for (i, &value) in low.iter().enumerate() {
+                line[2 * i + cas_x] = value;
+            }
+            for (i, &value) in high.iter().enumerate() {
+                line[2 * i + 1 - cas_x] = value;
+            }
+            kernel(&mut line, cas_x);
+            row.copy_from_slice(&line);
         }
     }
     let mut column = vec![T::default(); height];
     for x in 0..width {
-        for (y, slot) in column.iter_mut().enumerate() {
-            *slot = grid[y * width + x];
+        for row in 0..height {
+            let y = if row < low_y {
+                2 * row + cas_y
+            } else {
+                2 * (row - low_y) + 1 - cas_y
+            };
+            column[y] = grid[row * width + x];
         }
         kernel(&mut column, cas_y);
         for (y, &value) in column.iter().enumerate() {
@@ -171,24 +210,6 @@ where
         width,
         height,
         data: grid,
-    }
-}
-
-/// Place every sample of `band` into `grid` (row-major, `grid_width` wide) at
-/// the interleaved position `(2*by + row_off, 2*bx + col_off)`.
-fn scatter<T: Copy>(
-    grid: &mut [T],
-    grid_width: usize,
-    band: &Band<T>,
-    col_off: usize,
-    row_off: usize,
-) {
-    for by in 0..band.height {
-        for bx in 0..band.width {
-            let x = 2 * bx + col_off;
-            let y = 2 * by + row_off;
-            grid[y * grid_width + x] = band.data[by * band.width + bx];
-        }
     }
 }
 
