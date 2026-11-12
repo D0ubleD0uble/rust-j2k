@@ -440,7 +440,8 @@ fn mag_ref_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32)
 /// uniform bits — after which the column finishes with ordinary zero coding.
 ///
 /// Under `segmentation symbols` the pass ends by reading the `1010` symbol
-/// (D.5); see [`read_segmentation_symbol`].
+/// (D.5); see [`read_segmentation_symbol`], which says what `terminated`
+/// changes.
 fn cleanup_pass(
     mq: &mut MqDecoder<'_>,
     state: &mut BlockState,
@@ -448,8 +449,8 @@ fn cleanup_pass(
     orient: Orientation,
     bpno: u32,
     style: u8,
+    terminated: bool,
 ) -> Result<()> {
-    use crate::codestream::markers::code_block_style::{SEGSYM, TERMALL};
     let (w, h) = (state.width, state.height);
     for (x, y0) in stripes(w, h) {
         let rows = (y0 + 4).min(h) - y0;
@@ -489,8 +490,8 @@ fn cleanup_pass(
         }
     }
     state.clear_visited();
-    if style & SEGSYM != 0 {
-        read_segmentation_symbol(mq, cx, style & TERMALL != 0)?;
+    if style & crate::codestream::markers::code_block_style::SEGSYM != 0 {
+        read_segmentation_symbol(mq, cx, terminated)?;
     }
     Ok(())
 }
@@ -505,18 +506,19 @@ fn cleanup_pass(
 ///
 /// D.5 makes the symbol an error-detection aid, not a requirement on the
 /// decoder, and a wrong value is not always corruption. Rate control can cut a
-/// pass short, and its length is then the encoder's estimate: `opj_compress`
-/// uses the bytes written so far plus three (t1.c), which can be a few bytes
-/// short. The MQ decoder then reads the symbol from the `0xFF` fill past the
-/// segment and gets a wrong value. So once the decoder has run past the
-/// segment's bytes ([`MqDecoder::ran_past_end`]), a wrong value decodes.
-/// OpenJPEG decodes every wrong value, because its comparison is commented out.
+/// pass that the encoder did not terminate, and its length is then the
+/// encoder's estimate: `opj_compress` uses the bytes written so far plus three
+/// (t1.c), which can be a few bytes short. The MQ decoder then reads the
+/// symbol from the `0xFF` fill past the segment and gets a wrong value. So on
+/// such a pass, once the decoder has run past the segment's bytes
+/// ([`MqDecoder::ran_past_end`]), a wrong value decodes. OpenJPEG decodes every
+/// wrong value, because its comparison is commented out.
 ///
 /// A wrong value is an error in two cases. Before the decoder runs past the
 /// end, the symbol depends only on the segment's bytes, so they are corrupt.
-/// And under `restart` (`terminated`) every pass is terminated: its length is
-/// exact, not estimated, and the MQ termination makes the codeword decode
-/// correctly from the fill, so a wrong value is corrupt data there too.
+/// And on a `terminated` pass (see [`decode_block`]) the length is exact, not
+/// estimated, and the MQ termination makes the codeword decode correctly from
+/// the fill, so a wrong value is corrupt data there too.
 fn read_segmentation_symbol(
     mq: &mut MqDecoder<'_>,
     cx: &mut [Context],
@@ -760,7 +762,18 @@ pub fn decode_block(
                 }
                 (PassCoder::Mq(mq), PassType::MagRef) => mag_ref_pass(mq, state, &mut cx, bpno),
                 (PassCoder::Mq(mq), PassType::Cleanup) => {
-                    cleanup_pass(mq, state, &mut cx, orient, bpno, style)?
+                    // Whether the encoder terminated this cleanup pass, as
+                    // t1.c's `opj_t1_enc_is_term_pass` decides it. The
+                    // encoder's plane is `bpno - 1` and its first plane is
+                    // `top - 1` (the double scale), so its last cleanup is
+                    // `bpno == 1`, and under `bypass` it terminates every
+                    // cleanup from the fourth coded plane down, which is
+                    // `bpno - 1 <= raw_from`. Under `restart` every pass is
+                    // terminated.
+                    let terminated = style & TERMALL != 0
+                        || bpno == 1
+                        || (bypass && bpno as i32 - 1 <= raw_from);
+                    cleanup_pass(mq, state, &mut cx, orient, bpno, style, terminated)?
                 }
                 (PassCoder::Raw(rd), PassType::SigProp) => {
                     sig_prop_pass_raw(rd, state, orient, bpno)
@@ -1026,58 +1039,82 @@ mod tests {
         assert!(message.contains("segmentation symbol"), "{message}");
     }
 
-    /// A wrong symbol read from the fill past the segment end decodes, because
-    /// rate control can cut a pass a few bytes short, except under `restart`,
-    /// where every pass is terminated (see [`read_segmentation_symbol`]). An
-    /// empty segment is all fill.
+    /// Decode one 4x4 code-block whose only segment is empty, so every
+    /// decision comes from the fill past its end, with `passes` coding passes
+    /// from the top plane `numbps`.
+    fn decode_fill(numbps: u32, passes: u32, style: u8) -> Result<()> {
+        let mut state = BlockState::new(4, 4);
+        decode_block(
+            &[(Vec::new(), passes)],
+            &mut state,
+            Orientation::Ll,
+            numbps,
+            passes,
+            0,
+            BlockParams {
+                style,
+                roi_shift: 0,
+            },
+        )
+    }
+
+    fn assert_segmentation_symbol_error(result: Result<()>) {
+        let err = result.expect_err("a terminated pass reads a correct symbol from fill");
+        let Error::Codestream(message) = &err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("segmentation symbol"), "{message}");
+    }
+
+    /// A wrong symbol read from the fill past the segment end decodes on a
+    /// pass the encoder did not terminate, because rate control can cut such a
+    /// pass a few bytes short (see [`read_segmentation_symbol`]).
     #[test]
-    fn a_wrong_segmentation_symbol_read_from_fill_decodes_unless_terminated() {
-        use crate::codestream::markers::code_block_style::{SEGSYM, TERMALL};
+    fn a_wrong_segmentation_symbol_read_from_fill_decodes_on_an_unterminated_pass() {
+        use crate::codestream::markers::code_block_style::SEGSYM;
         // The fill really does spell a wrong symbol, so the decode below is
         // not vacuous.
         let mut mq = MqDecoder::new(&[]);
         let mut cx = init_contexts();
         let mut state = BlockState::new(4, 4);
-        cleanup_pass(&mut mq, &mut state, &mut cx, Orientation::Ll, 8, 0).unwrap();
+        cleanup_pass(&mut mq, &mut state, &mut cx, Orientation::Ll, 8, 0, false).unwrap();
         let symbol = (0..4).fold(0u8, |s, _| (s << 1) | mq.decode(&mut cx[CTX_UNI as usize]));
         assert_ne!(symbol, 0b1010);
         assert!(mq.ran_past_end());
 
-        let mut state = BlockState::new(4, 4);
-        decode_block(
-            &[(Vec::new(), 1)],
-            &mut state,
-            Orientation::Ll,
-            8,
-            1,
-            0,
-            BlockParams {
-                style: SEGSYM,
-                roi_shift: 0,
-            },
-        )
-        .expect("a symbol read from fill decodes");
+        // The cleanup of plane 8 of 8, with planes left below it.
+        decode_fill(8, 1, SEGSYM).expect("a symbol read from fill decodes");
+        // Ten passes end at the cleanup of plane 2 without `bypass`.
+        decode_fill(5, 10, SEGSYM).expect("no pass up to plane 2 is terminated");
+    }
 
-        // Under `restart` the pass was terminated, so its length is exact and
-        // the same wrong symbol is corruption.
-        let mut state = BlockState::new(4, 4);
-        let err = decode_block(
-            &[(Vec::new(), 1)],
-            &mut state,
-            Orientation::Ll,
-            8,
-            1,
-            0,
-            BlockParams {
-                style: SEGSYM | TERMALL,
-                roi_shift: 0,
-            },
-        )
-        .expect_err("a terminated pass reads a correct symbol from fill");
-        let Error::Codestream(message) = &err else {
-            panic!("{err:?}")
-        };
-        assert!(message.contains("segmentation symbol"), "{message}");
+    /// Under `restart` every pass is terminated, so its length is exact and a
+    /// wrong symbol is corruption even past the end.
+    #[test]
+    fn a_wrong_segmentation_symbol_on_a_restart_pass_is_an_error() {
+        use crate::codestream::markers::code_block_style::{SEGSYM, TERMALL};
+        assert_segmentation_symbol_error(decode_fill(8, 1, SEGSYM | TERMALL));
+    }
+
+    /// The block's last cleanup, at plane 1, is always terminated.
+    #[test]
+    fn a_wrong_segmentation_symbol_on_the_last_cleanup_is_an_error() {
+        use crate::codestream::markers::code_block_style::SEGSYM;
+        assert_segmentation_symbol_error(decode_fill(1, 1, SEGSYM));
+        // Plane 2 of 2 is not the last plane, so it decodes.
+        decode_fill(2, 1, SEGSYM).expect("the cleanup of plane 2 is not terminated");
+    }
+
+    /// Under `bypass` the encoder terminates every cleanup from the fourth
+    /// coded plane down. With five planes, the first ten passes end at the
+    /// cleanup of plane 2, the fourth coded plane, so it is terminated, and the
+    /// cleanups of planes 5, 4 and 3 before it are not.
+    #[test]
+    fn a_wrong_segmentation_symbol_on_a_bypass_terminated_cleanup_is_an_error() {
+        use crate::codestream::markers::code_block_style::{LAZY, SEGSYM};
+        assert_segmentation_symbol_error(decode_fill(5, 10, SEGSYM | LAZY));
+        // Nine passes stop before that cleanup, after the cleanup of plane 3.
+        decode_fill(5, 9, SEGSYM | LAZY).expect("the cleanup of plane 3 is not terminated");
     }
 
     /// The maxshift boundary, against the reference formula. `t1.c` reads

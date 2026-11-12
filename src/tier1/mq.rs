@@ -150,9 +150,12 @@ impl<'a> MqDecoder<'a> {
     /// may depend on fill. That is routine at the end of a rate-truncated pass,
     /// whose length the encoder estimates and can set a few bytes short.
     ///
-    /// The flag is sticky, and exact at the boundary: it is set by the
-    /// [`bytein`](Self::bytein) that moves `pos` to `data.len()`, or by the
-    /// marker test that looks at the synthesized byte after a final `0xFF`.
+    /// The flag is sticky. It is set by the [`bytein`](Self::bytein) that moves
+    /// `pos` to `data.len()`, or by the marker test that looks at the
+    /// synthesized byte after a final `0xFF`. That is the first read of fill,
+    /// not the first decision that depends on it: the register reads up to
+    /// about 16 bits ahead of the decisions, so the flag can come early, never
+    /// late.
     pub fn ran_past_end(&self) -> bool {
         self.past_end
     }
