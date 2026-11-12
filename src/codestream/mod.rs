@@ -1321,9 +1321,29 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
 /// format limit — raise it as larger imagery comes into scope.
 ///
 /// A palettized JP2 file expands its index plane into one channel per palette
-/// column, and the budget bounds those channels too. While the decoded
-/// components are still held, the peak is about twice the budget (~512 MiB of
-/// `i32`).
+/// column, and sYCC output replicates sub-sampled chroma to full size; the
+/// budget bounds those channels too.
+///
+/// The decode's peak memory is above the output's size. A full budget's output
+/// is 256 MiB (2^26 `i32` samples). Measured peak resident memory at the full
+/// budget (release build, Linux, glibc), for the empty-data files that
+/// `scripts/gen-peak-memory-shapes.py` writes and, for one tile, for an 8192 x
+/// 8192 image coded by `opj_compress` (lossless, and `-I -r 20`):
+///
+/// | Shape                           | Empty data | Coded data |
+/// |---------------------------------|------------|------------|
+/// | 1 component, one tile, 9/7      | ~340 MiB   | ~347 MiB   |
+/// | 1 component, one tile, 5/3      | ~260 MiB   | ~351 MiB   |
+/// | 3 components, 9/7 with MCT      | ~316 MiB   |            |
+/// | palette to 3 columns            | ~344 MiB   |            |
+/// | sYCC 4:2:0 to sRGB              | ~395 MiB   |            |
+///
+/// For a single tile the peak comes at the finest wavelet level, which holds
+/// that level's subbands while it builds the merged grid. Those buffers come
+/// to 1.25 times the output, as fresh zeroed memory is mapped only as it is
+/// written; the rest of the process adds about 0.1 times, so a single tile
+/// peaks at about 1.35 times the output. The empty 5/3 file is lower only
+/// because its subbands are never written.
 pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
 
 /// Bound the samples a codestream can ask the decoder to allocate.
