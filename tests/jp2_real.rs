@@ -2,13 +2,13 @@
 //! provenance in its README): Kakadu, ECW SDK and OpenJPEG output with the box
 //! layouts those encoders write.
 //!
-//! For a file without channel definitions the oracle is its own codestream:
-//! `decode` of the `.jp2` must equal `decode` of its first `jp2c` box's
-//! contents, extracted here by a separate, deliberately simple box walk. A file
-//! with a `cdef` box is checked against `opj_decompress` 2.5.0's decode of the
-//! `.jp2`, committed as one PGX per channel under `references/`, and its
-//! channel labels against its `cdef` box. A file whose codestream is itself
-//! broken is rejected with the same error as the raw codestream.
+//! Each of the eight files that decode is checked against `opj_decompress`
+//! 2.5.0's decode of the `.jp2`, committed as one PGX per channel under
+//! `references/`. A file without channel definitions must also equal
+//! `decode` of its first `jp2c` box's contents, extracted here by a separate,
+//! deliberately simple box walk, and a file with a `cdef` box has its channel
+//! labels checked against that box. The ninth file's codestream is itself
+//! broken, and it is rejected with the same error as the raw codestream.
 //!
 //! Every file's header, including the broken one's, must also match its record
 //! in `metadata.json` (written by the box walker) through `read_header`, and

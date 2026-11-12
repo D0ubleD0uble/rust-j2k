@@ -1338,7 +1338,10 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
 ///
 /// A palettized JP2 file expands its index plane into one channel per palette
 /// column, and sYCC output replicates sub-sampled chroma to full size; the
-/// budget bounds those channels too.
+/// budget bounds those channels too. While a palette expands, the index
+/// plane and the columns are held together, so the peak there is about twice
+/// the output: a one-column palette at the full budget (8192 x 8192) peaks at
+/// about 515 MiB, on 5/3 and 9/7 alike.
 ///
 /// The decode's peak memory is above the output's size. A full budget's output
 /// is 256 MiB (2^26 `i32` samples). Measured peak resident memory at the full
@@ -1359,7 +1362,9 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
 /// to 1.25 times the output, as fresh zeroed memory is mapped only as it is
 /// written; the rest of the process adds about 0.1 times, so a single tile
 /// peaks at about 1.35 times the output. The empty 5/3 file is lower only
-/// because its subbands are never written.
+/// because its subbands are never written. The coded-data figures include
+/// the caller's input bytes, so they grow with the file: a 38 MB lossless
+/// 8192 x 8192 file peaks at about 380 MiB.
 pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
 
 /// Bound the samples a codestream can ask the decoder to allocate.
@@ -1641,8 +1646,10 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     })
 }
 
-/// The most progression volumes a tile's walk will honor, matching OpenJPEG's
-/// 32-entry `opj_tcp_t::pocs` array ("Too many POCs" past it). The standard sets
+/// The most progression volumes a tile's walk will honor. This is a decode
+/// guard one volume above OpenJPEG's limit: its `opj_tcp_t::pocs` array has
+/// 32 entries, and `opj_j2k_read_poc` refuses ("Too many POCs") a count of 32
+/// or more, so it reads at most 31. The standard sets
 /// no limit, but each volume re-enumerates the packet space and a duplicate
 /// emission consumes no bitstream bytes, so an uncapped list is a quadratic
 /// work bomb: `V` volumes over `P` one-byte packets cost `V·P` dedup probes

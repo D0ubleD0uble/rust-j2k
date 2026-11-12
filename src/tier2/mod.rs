@@ -173,8 +173,9 @@ pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 
 /// The visits a decode may spend per byte of its tiles' data, when that comes
 /// to more than [`DECODE_VISITS_MIN`]. At 2 to 15 ns a visit, that is up to
-/// 0.5 µs a byte, about what decoding a byte of real data costs (0.25 to
-/// 0.47 µs), so a file past the floor is refused in no more than about the
+/// 0.5 µs a byte, about what decoding a byte of real data costs (0.14 to
+/// 0.93 µs over the conformance codestreams, 0.20 to 0.73 µs over those past
+/// 100 KB), so a file past the floor is refused in no more than about the
 /// time its decode would take. The cheapest visits, the layer orders' steps
 /// over resolutions with no precinct, refuse a file at about 0.02 to 0.06 µs
 /// a byte.
