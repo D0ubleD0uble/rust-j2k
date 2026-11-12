@@ -26,9 +26,10 @@ disclosure timeline with you.
 ## Threat model
 
 rust-j2k is a decoder: it parses binary input it did not produce and that may be
-hostile. The robustness contract for the public `decode` entry point is that for
-**any** input it returns either a decoded `Image` or a typed `Error` — never a
-panic, an abort, an out-of-bounds access, unbounded allocation, or a hang.
+hostile. The robustness contract for the public entry points (`decode`,
+`decode_with`, `read_header` and `read_header_with`) is that for **any** input
+they return either a result or a typed `Error`, never a panic, an abort, an
+out-of-bounds access, unbounded allocation, or a hang.
 
 A few things that back this up:
 
@@ -37,9 +38,11 @@ A few things that back this up:
   do is an incorrect value or a panic.
 - **No C dependency.** The crate is pure Rust with no native/C codec, removing
   that class of memory-safety risk entirely.
-- **Fuzzed.** A `cargo-fuzz` target drives `decode` with arbitrary bytes; a
-  panic, an allocation past the memory limit, or a hang fails the run. CI runs a
-  bounded smoke on every change. See `fuzz/`.
+- **Fuzzed.** `cargo-fuzz` targets drive `decode` and `read_header` with
+  arbitrary bytes, and the stages on their own (the JP2 box reader, the ICC
+  path, tier-1, the MQ decoder, a tile's body); a panic, an allocation past the
+  memory limit, or a hang fails the run. CI runs a bounded smoke on every
+  change. See `fuzz/`.
 
 A panic, hang, or excessive allocation on any input is treated as a bug. If you
 find one, please report it as above — even without a security impact, it is a

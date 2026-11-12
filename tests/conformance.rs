@@ -8,9 +8,9 @@
 //! - **irreversible (9/7, lossy)** fixtures: within a stated absolute tolerance.
 //!
 //! Drop fixtures under `tests/fixtures/<name>.j2k` with a sibling
-//! `<name>.expected.json` oracle (samples + geometry + tolerance), and record
-//! each fixture's provenance (source file, how the oracle was generated) so the
-//! corpus stays reproducible. Seed it from the GRIB2 §5.40 fixtures in the
+//! `<name>.expected.json` oracle (image area, tolerance, per-component
+//! samples, provenance), and record each fixture's provenance (source file,
+//! how the oracle was generated) so the corpus stays reproducible. Seed it from the GRIB2 §5.40 fixtures in the
 //! fieldglass repo, plus a 9/7 re-encode for the irreversible path (no GRIB2
 //! producer ships lossy 9/7). The `<name>.expected.json` schema lives in
 //! [`support`].

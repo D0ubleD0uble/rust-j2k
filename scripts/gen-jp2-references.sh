@@ -31,6 +31,7 @@ trap 'rm -rf "$workdir"' EXIT
 for stem in "${stems[@]}"; do
 	opj_decompress -i "$dir/$stem.jp2" -o "$workdir/$stem.pgx" >/dev/null
 done
-# Every decode succeeded: swap the directory's contents.
+# Every decode succeeded, so delete the old references and copy the new ones
+# in. The two steps are not atomic: a failed copy leaves the directory short.
 rm -f "$dir"/references/*.pgx
 cp "$workdir"/*.pgx "$dir/references/"

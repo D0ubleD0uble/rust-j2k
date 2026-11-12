@@ -103,9 +103,10 @@ quality-progressive read — is a decode-control feature deferred past Phase 2.
 | Resolution (res), capture/display metadata | — | 3 |
 | xml / uuid boxes passed through as bytes | — | 3 |
 | IPR (jp2i) passed through as bytes; UUID info (uinf) read | — | 3 |
-| Header-only read (`read_header`) without decoding pixels | — | 3 |
+| Reader requirements (rreq), file type (ftyp) and every colr box, reported | — | 3 |
+| Header-only read (`read_header`, `read_header_with`) without decoding pixels | — | 3 |
 
-All nine rows decode on `main`: the ISO/IEC 15444-4 JP2 reader files grade in
+Every row decodes on `main`: the nine ISO/IEC 15444-4 JP2 reader files grade in
 class, and the real-world set matches OpenJPEG. A file that does not claim
 `jp2 ` compatibility (pure JPX, JPM, MJ2) is refused as `Unsupported`.
 

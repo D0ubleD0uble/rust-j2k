@@ -557,7 +557,8 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
 /// extents at `reduction`, before any tile is decoded or plane allocated.
 /// The budget bounds the expanded channels alone: the decoded components are
 /// held while the channels are built from them, so the peak is about twice
-/// the budget (2^26 samples is 256 MiB as `i32`, so roughly 512 MiB).
+/// the budget (2^26 samples is 256 MiB as `i32`, so about 512 MiB computed;
+/// a one-column palette at the full budget measures about 515 MiB).
 fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8) -> Result<()> {
     let mut total: u64 = 0;
     for channel in channels {

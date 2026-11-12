@@ -45,10 +45,11 @@ pub struct ComponentInfo {
     pub y_sampling: u8,
     /// The channel's width in samples, as
     /// [`Component::width`](crate::Component::width): `ceil(x1 / dx) -
-    /// ceil(x0 / dx)` for the image area `x0..x1` and the sub-sampling `dx`,
-    /// then halved (rounding up) once per level of resolution reduction. It
-    /// is not `ceil(width / dx)`: that is off by one when the image area
-    /// starts at an odd offset.
+    /// ceil(x0 / dx)` for the image area `x0..x1` and the sub-sampling `dx`.
+    /// Under a resolution reduction of `r` levels each end is reduced on its
+    /// own, as OpenJPEG has it: `ceil(ceil(x1 / dx) / 2^r) - ceil(ceil(x0 /
+    /// dx) / 2^r)`. Neither is `ceil(width / dx)`, nor the full width halved:
+    /// those are off by one when the image area starts at an odd offset.
     pub width: u32,
     /// The channel's height in samples, as
     /// [`Component::height`](crate::Component::height); see

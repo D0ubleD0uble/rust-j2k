@@ -39,8 +39,10 @@ pub enum Error {
     /// that take more work to read than the bound for their size (see
     /// [`decode`](crate::decode)), not a missing feature.
     Limit(String),
-    /// The caller passed invalid [`DecodeOptions`](crate::DecodeOptions) for
-    /// this codestream — the input itself may be fine.
+    /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
+    /// invalid for this codestream, or that contradict each other whatever
+    /// the input (sRGB output with `raw_channels`). The input itself may be
+    /// fine.
     InvalidOptions(String),
     /// A decoder invariant was violated (declared geometry and decoded state
     /// disagreed where they never should); please file a bug.

@@ -15,11 +15,11 @@
 //! A JP2 file's codestream decodes the same way, and the file's header comes
 //! back on [`Image::jp2`]. A palettized JP2 file decodes to the palette's
 //! channels, and a file with channel definitions puts its color channels in
-//! color order. [`read_header`] reads the same header without decoding any
-//! tile data. Samples come out as coded by default;
+//! color order. [`read_header`] and [`read_header_with`] read the same header
+//! without decoding any tile data. Samples come out as coded by default;
 //! [`ColorOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
-//! HTJ2K and an encoder are later work, not permanent non-goals.
-//! See `docs/roadmap.md` and `docs/scope.md`.
+//! HTJ2K and an encoder are later work, not permanent non-goals. See the
+//! [roadmap](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md) and the [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
 //!
 //! # Pipeline
 //!
@@ -58,18 +58,40 @@
 //! }
 //! ```
 //!
+//! A JP2 file's header says how to read its samples. To get sRGB instead of
+//! the samples as coded, ask for it in the options:
+//!
+//! ```no_run
+//! use rust_j2k::{ColorOutput, ColorSpace, DecodeOptions, decode_with};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let bytes = std::fs::read("photo.jp2")?;
+//! let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
+//! let image = decode_with(&bytes, &options)?;
+//! if let Some(jp2) = &image.jp2 {
+//!     // After a conversion the color space says sRGB, or grayscale for a
+//!     // monochrome profile; a file left as coded keeps the space it
+//!     // declares. `channels` labels each component (color 1, 2, 3, opacity).
+//!     if jp2.color == ColorSpace::Srgb {
+//!         println!("sRGB, channels {:?}", jp2.channels);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Status
 //!
-//! All 23 entries of the ISO/IEC 15444-4 conformance suite decode within their
-//! class-1 error bounds, and that gate runs in `tests/` against committed
-//! oracle snapshots, with no external tools. Correctness is defined by
-//! cross-checking a reference decoder (OpenJPEG / eccodes), not by
-//! self-consistency. An input using a feature outside the decoded set — HTJ2K,
-//! a Part 2 extension — is rejected with
-//! [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
+//! All 23 codestreams of the ISO/IEC 15444-4 conformance suite decode within
+//! their class-1 error bounds, and its nine JP2 files within their compliance
+//! class. That gate runs in `tests/` against committed oracle snapshots, with
+//! no external tools. Correctness is defined by cross-checking a reference
+//! decoder (OpenJPEG / eccodes), not by self-consistency. An input using a
+//! feature outside the decoded set (HTJ2K, a Part 2 extension) is rejected
+//! with [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. See each module's docs for the ISO §reference and what it owns;
-//! the feature map is in `docs/scope.md`.
+//! the feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`,
@@ -163,7 +185,13 @@ pub use jp2::{
 /// under 13% of the bound; a packet header of one byte can still skip each
 /// row of code-blocks in its precinct, and a sweep can check millions of
 /// positions that hold no packet, so a file of a few hundred bytes could
-/// otherwise take minutes. OpenJPEG has no such bound.
+/// otherwise take minutes. OpenJPEG has no such bound. A valid file of many
+/// layers that each include a few scattered code-blocks can exceed it (see
+/// [the tier-2 work bound][work-bound]). A JP2 file whose last tile-part has
+/// `Psot = 0` may first walk that tile as [`read_header_with`] does, under its
+/// own smaller bound, so its decode can take about 1.25 times as many steps.
+///
+/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -221,7 +249,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// image, is a fault under some options and not others. A fault in the tile
 /// data (a broken tile-part, a tile header that changes a component's
 /// wavelet, a reduction that a tile-part COD or COC with fewer levels cannot
-/// take) is only found by decoding. A reduction that the main header's own
+/// take) is only found by decoding. So is a POC sequence that leaves out
+/// packets of a tile, even one in the main header: whether it covers a tile
+/// depends on that tile's geometry. A reduction that the main header's own
 /// levels cannot take is [`Error::InvalidOptions`] here, as OpenJPEG has it.
 ///
 /// ```
@@ -273,108 +303,90 @@ pub enum ColorOutput {
     /// an ICC profile is passed through, not applied.
     #[default]
     AsCoded,
-    /// sRGB. sYCC is converted to RGB, with sub-sampled chroma (2x1 or 2x2)
-    /// replicated to full resolution first, and a restricted ICC profile (a
-    /// monochrome or a three-component matrix/TRC input profile) is applied
-    /// at its rendering intent, as OpenJPEG applies it with LittleCMS: the
-    /// samples match `opj_decompress -force-rgb`. The reference is OpenJPEG
-    /// 2.5.0 linked against LittleCMS 2.14 on x86-64 Linux (glibc 2.39), and
-    /// the output is the same on every platform whose `fma` is correctly
-    /// rounded (MinGW's, on `*-pc-windows-gnu`, may not be:
-    /// rust-lang/rust#140515). sRGB and grayscale pass
-    /// through. A monochrome profile gives one gray channel. A monochrome
-    /// profile whose output is not neutral (absolute colorimetric with a
-    /// tinted white point) gives three sRGB channels in its place, as
-    /// OpenJPEG does, so the channel count can't be predicted from the
-    /// header. No conversion changes a channel's bit depth. Non-color
-    /// channels (opacity, say) are untouched. When the
-    /// samples are converted, [`Jp2Metadata::color`] says what they now
-    /// are: [`ColorSpace::Srgb`], or [`ColorSpace::Grayscale`] for one
-    /// gray channel, with no ICC profile. [`read_header`] and the default
-    /// [`ColorOutput::AsCoded`] report the color space the file declares.
-    /// One or two channels pass through as coded whatever the color space
-    /// (a raw codestream, a file with no `colr`, any enumerated color
-    /// space, sRGB included, or an RGB or YCbCr profile), as OpenJPEG reads
-    /// them as gray, or gray and opacity; only a monochrome profile converts
-    /// them, and it refuses samples that are not 8-bit unsigned. Their
-    /// metadata stays as declared.
+    /// sRGB. A restricted ICC profile (a monochrome or a three-component
+    /// matrix/TRC input profile) is applied at its rendering intent, as
+    /// OpenJPEG applies it with LittleCMS: the samples match
+    /// `opj_decompress -force-rgb` sample for sample. sYCC is converted to
+    /// RGB, with sub-sampled chroma (2x1 or 2x2) replicated to full
+    /// resolution first, using the IEC 61966-2-1 constants and rounding;
+    /// OpenJPEG shortens the constants and truncates, so the two differ by an
+    /// MSE of about 0.38 to 0.49 a channel. The ISO references agree with it
+    /// (MSE under 0.03). The color channels are the ones the `cdef` box
+    /// labels color 1, 2 and 3, wherever they sit. No conversion changes a
+    /// channel's bit depth, and other channels (opacity, say) are untouched.
     ///
-    /// An ICC profile that LittleCMS refuses also passes through, as
-    /// OpenJPEG leaves it (except on a three-channel 4:2:0 or 4:2:2 image,
-    /// refused below, which OpenJPEG converts as sYCC before it reads the
-    /// profile): the samples come out as coded, and
-    /// [`Jp2Metadata::color`] stays [`ColorSpace::RestrictedIcc`], so a
-    /// caller can tell nothing was converted. A profile whose color space is
-    /// neither RGB, gray nor YCbCr passes through the same way, since
-    /// OpenJPEG has no transform for it. So does an RGB profile when any of
-    /// the first four output channels (all of them, if fewer) differs from
-    /// the first in depth, sign or sub-sampling, whatever the channel is
-    /// (an opacity channel too): OpenJPEG checks this after LittleCMS opens
-    /// the profile and before it builds the transform. The exception is a
-    /// three-channel 4:2:0 or 4:2:2 image, which OpenJPEG converts as sYCC
-    /// (below). LittleCMS refuses:
+    /// The ICC reference is OpenJPEG 2.5.0 with LittleCMS 2.14 on x86-64
+    /// Linux (glibc 2.39). The output is the same on every platform whose
+    /// `fma` is correctly rounded; CI checks this on x86-64 Linux, macOS on
+    /// aarch64 and wasm32-wasip1. MinGW's `fma` (`*-pc-windows-gnu`) may not
+    /// be correctly rounded (rust-lang/rust#140515), and i586 targets use x87
+    /// arithmetic, which is not exact IEEE, so the output there can differ.
     ///
-    /// - a profile shorter than its 128-byte header and tag count;
-    /// - no `acsp` signature, a version above 5.0, or a device class it does
-    ///   not know;
-    /// - more than 100 tags, a tag table past the profile's end, or two
-    ///   entries with the same signature among those it keeps (it skips an
-    ///   entry with a zero offset or size, or one that ends past the
-    ///   profile's declared size);
-    /// - a named color profile, or a device link or abstract profile with no
-    ///   lookup table;
-    /// - a rendering intent other than 0 to 3 and 10 to 15 (10 to 15, its
-    ///   black-preserving intents, convert as relative colorimetric);
-    /// - a connection space other than XYZ or Lab;
-    /// - a lookup table it would read that is of the wrong type, has the
-    ///   wrong number of input or output channels, a grid of one point, or
-    ///   runs past the end of the profile;
-    /// - a tag it needs that is missing, under 8 bytes, of the wrong type, or
-    ///   has a value that runs past the end of the profile;
-    /// - a parametric curve of an unknown function, or a `curv` of more than
-    ///   32767 entries.
+    /// When the samples are converted, [`Jp2Metadata::color`] says what they
+    /// now are: [`ColorSpace::Srgb`], or [`ColorSpace::Grayscale`] for a
+    /// monochrome profile, with no ICC profile. A monochrome profile whose
+    /// output is not neutral (absolute colorimetric with a tinted white
+    /// point) gives three sRGB channels in place of the gray one, as OpenJPEG
+    /// does. [`read_header`] doesn't predict that; [`read_header_with`] with
+    /// the same options does.
     ///
-    /// As in LittleCMS, a value that runs past its tag is read from the bytes
-    /// after it, and a media white point that can't be read is taken as D50,
-    /// as it is for a version 2 display profile. Input, display, output,
-    /// color space and class 0 profiles convert alike.
+    /// These pass through as coded, with the metadata as declared, except a
+    /// three-channel 4:2:0 or 4:2:2 image (below):
     ///
-    /// Anything else is [`Error::Unsupported`]: three or more channels in
-    /// another color space or with no color specification (a raw
-    /// codestream included), a YCbCr profile, a profile LittleCMS would apply
-    /// through a lookup table or a Lab connection space, a monochrome profile
-    /// on more than two channels, an RGB profile on samples that are not 8
-    /// or 16-bit unsigned (8-bit for a monochrome profile), signed sYCC, and
-    /// color channels that differ in depth, sign or sub-sampling other than
-    /// sYCC's chroma layouts. Under an RGB profile, channels that differ
-    /// among the first four pass through instead (above), except a
-    /// three-channel 4:2:0 or 4:2:2 image (luma at 1x1, both chroma
-    /// channels at 2x2 or both at 2x1), which OpenJPEG converts as sYCC
-    /// whatever the file declares and whatever its `cdef` labels. As in
-    /// OpenJPEG, every refusal above, and a profile on one or two color
-    /// channels, passes through before these checks: a profile LittleCMS
-    /// refuses passes through whatever the samples are, except on a
-    /// three-channel 4:2:0 or 4:2:2 image, which is refused before the
-    /// profile is read. These errors apply only when `Srgb` is asked for:
-    /// [`ColorOutput::AsCoded`] decodes the same files.
+    /// - sRGB and grayscale;
+    /// - one or two channels, whatever the color space, as OpenJPEG reads them
+    ///   as gray, or gray and opacity; only a monochrome profile converts
+    ///   them;
+    /// - an ICC profile that LittleCMS refuses to open or to build a
+    ///   transform from, or whose color space is not RGB, gray or YCbCr, as
+    ///   OpenJPEG leaves it. [`Jp2Metadata::color`] stays
+    ///   [`ColorSpace::RestrictedIcc`], so a caller can tell nothing was
+    ///   converted;
+    /// - an RGB profile when any of the first four channels differs from the
+    ///   first in depth, sign or sub-sampling (OpenJPEG's "AFL test").
+    ///
+    /// Anything else that cannot be converted is [`Error::Unsupported`]:
+    ///
+    /// - three or more channels with no color space (a raw codestream
+    ///   included) or another enumerated color space;
+    /// - a three-channel 4:2:0 or 4:2:2 image (luma at 1x1, both chroma
+    ///   channels at 2x2 or both at 2x1) that is not declared sYCC, which
+    ///   OpenJPEG converts as sYCC whatever the file declares;
+    /// - color channels that are missing, or that differ in depth, sign or
+    ///   sub-sampling outside the cases above;
+    /// - signed sYCC, sYCC in another layout, and samples a profile is not
+    ///   applied at (8- or 16-bit unsigned for RGB, 8-bit unsigned for gray);
+    /// - a YCbCr profile, a profile LittleCMS would apply through a lookup
+    ///   table or the Lab connection space, and a monochrome profile on more
+    ///   than two channels.
+    ///
+    /// Replicated chroma, or a tinted gray channel, past the sample budget is
+    /// [`Error::Limit`]. These errors apply only when `Srgb` is asked for:
+    /// [`ColorOutput::AsCoded`] decodes the same files. The [table of
+    /// outcomes][outcomes] lists every case against what OpenJPEG does, and
+    /// the profiles LittleCMS refuses.
+    ///
+    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#outcomes
     Srgb,
 }
 
 /// Options for [`decode_with`]. The default decodes at full resolution —
 /// [`decode`] is exactly that.
 ///
-/// Start from [`DecodeOptions::default`] and set what differs, with a
-/// `with_*` method where one exists or the field directly. The struct is `#[non_exhaustive]`,
+/// Start from [`DecodeOptions::default`] and set what differs with its
+/// `with_*` method, or the field directly. The struct is `#[non_exhaustive]`,
 /// so a new option is not a breaking change.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct DecodeOptions {
-    /// How many of the finest resolution levels to discard. Each level halves
-    /// the output in both axes (rounding up), so `1` decodes a half-size image,
-    /// `2` a quarter-size, and so on — the wavelet pyramid's own lower
-    /// resolutions, not a resample. Every component must keep at least one
-    /// resolution: a reduction that consumes some component's whole pyramid is
-    /// rejected as [`Error::InvalidOptions`].
+    /// How many of the finest resolution levels to discard. Each level about
+    /// halves the output in both axes, so `1` decodes a half-size image, `2`
+    /// a quarter-size, and so on: the wavelet pyramid's own lower
+    /// resolutions, not a resample. The exact size depends on the image
+    /// origin; [`Image`] and [`ComponentInfo::width`] give the formula. Every
+    /// component must keep at least one resolution: a reduction that consumes
+    /// some component's whole pyramid is rejected as
+    /// [`Error::InvalidOptions`].
     pub resolution_reduction: u8,
     /// Return a JP2 file's codestream components as coded, without applying
     /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
@@ -399,8 +411,11 @@ pub struct DecodeOptions {
     ///    `component`; a [`MappingKind::Direct`] entry is used as it is, and a
     ///    [`MappingKind::Palette`] entry looks each sample up as an index into
     ///    that column of [`Jp2Metadata::palette`] (an index past the table
-    ///    reads its last entry, a negative one its first). Without a palette
-    ///    the raw channels are used as they are.
+    ///    reads its last entry, a negative one its first). Each channel
+    ///    takes its bit depth and sign from its palette column: column
+    ///    `column` for a palette entry, and column `i` for a direct entry at
+    ///    position `i`, as OpenJPEG has it. Without a palette the raw
+    ///    channels are used as they are.
     /// 2. Put the channels in color order with
     ///    [`Jp2Metadata::channel_definitions`], by the rule documented there
     ///    (each swap looks up where the entry's channel has moved to, not its

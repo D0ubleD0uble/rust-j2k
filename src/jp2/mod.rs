@@ -292,11 +292,12 @@ fn locate_codestream<'a>(
 
 /// The most code-blocks, and the most precincts, [`packets_end_at`] builds the
 /// packet geometry for. Each costs a few hundred bytes of geometry and decode
-/// state, so that is a few MB at most. A larger tile is not walked. A POC
-/// marker of more than one volume adds a bit per packet they reach, as the
-/// decode's does: at most 2 MB, or 4 bytes per byte of tile data when that
-/// is more. A tile whose volumes reach more packets than that, where
-/// the decode would keep a set, is not walked (see `tier2::progression`).
+/// state, so the geometry stays at a few MB. A larger tile is not walked. A
+/// POC marker of more than one volume adds a bit per packet they reach, as
+/// the decode's does: at most 2 MB, or 4 bytes per byte of tile data when
+/// that is more, so for a file of several MB this part grows with the file.
+/// A tile whose volumes reach more packets than that, where the decode would
+/// keep a set, is not walked (see `tier2::progression`).
 const PROBE_GEOMETRY: usize = 1 << 14;
 
 /// The most tiles, and the most components, a codestream may have for
@@ -306,9 +307,11 @@ const PROBE_GEOMETRY: usize = 1 << 14;
 const PROBE_TILES: usize = 1 << 12;
 const PROBE_COMPONENTS: usize = 1 << 10;
 
-/// The fewest visits [`packets_end_at`] may spend: packets read, code-block
-/// entries visited in their headers, and points of the progression order's
-/// loops (see [`crate::tier2::Budget::visits`]).
+/// The fewest visits [`packets_end_at`] may spend: packets read, steps over
+/// code-blocks a packet header names no bit for, and points of the
+/// progression order's loops (see [`crate::tier2::Budget::visits`]). A
+/// code-block entry that reads a bit is paid for by the header's bytes and
+/// is not counted.
 const PROBE_VISITS_MIN: u64 = 1 << 22;
 
 /// The visits [`packets_end_at`] may spend per byte of the tile's data, when
@@ -327,8 +330,10 @@ fn probe_visits(bytes: u64) -> u64 {
 /// this holds only when the packets end exactly at the box's end.
 ///
 /// That makes the box's end safe to use. OpenJPEG reads the tile-part on to
-/// the end of the file, past the box: the same packets, then bytes it
-/// ignores. Read that way here, the same packets are followed by bytes left
+/// the end of the file, past the box: the same packets when the tile has 999
+/// layers or fewer, then bytes it ignores (docs/correctness.md, "Where the
+/// decoders differ", covers more layers). Read that way here, the same
+/// packets are followed by bytes left
 /// after the last packet, which are refused, so reading to the end of the file
 /// could never decode instead; a fault in tier-1 would be the same fault
 /// either way. When the packets do not end there, the box ends inside the

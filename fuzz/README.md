@@ -55,7 +55,10 @@ packet headers stitched from out-of-order marker segments. The bypass shape is
 deliberately a `tile_body` variant rather than a `rust_j2k::fuzz` hook: the
 lazy `10, 2, 1, 2, 1, …` codeword-segment split belongs to tier-2, so setting
 the style byte in the pinned COD drives `decode_block` through the same split
-production decodes use instead of a hand-built one.
+production decodes use instead of a hand-built one. For the same reason
+`tier1_block` leaves the bypass style out (`src/fuzz.rs`), so the bypass
+code paths in `decode_block` (`terminated`, `raw_from`) are reached only
+through `tile_body`.
 
 `jp2_boxes` does for the JP2 file format what `tile_body` does for tile
 data: the codestream is pinned (one of eight small committed fixtures) and the
@@ -190,10 +193,11 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-01 | `jp2_boxes` | `gen-jp2-fuzz-seeds.py` (46 seeds), `jp2.dict` | 61 s, 785 605 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `jp2_boxes` with the `Srgb` decode | `gen-jp2-fuzz-seeds.py` (72 seeds), `jp2.dict` | 61 s, 86 856 runs (1 423 exec/s), under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `jp2_boxes` with `jp2i` and `uinf` seeds | `gen-jp2-fuzz-seeds.py` (75 seeds), `jp2.dict` | 61 s, 35 821 runs, under `nice` | no crash, leak, or timeout |
-| 2026-11-10 | `jp2_boxes` with the `raw_channels` decode, reduction (bit 7), and the `srgb.rs` branch seeds | `gen-jp2-fuzz-seeds.py` (154 seeds), `jp2.dict` | 61 s, 24 058 runs (394 exec/s), `nice -n 19`, one job | no crash, leak, or timeout |
+| 2026-11-10 | `jp2_boxes` with the `raw_channels` decode, reduction (bit 7), and the `srgb.rs` branch seeds | `gen-jp2-fuzz-seeds.py` (154 seeds; the script now writes 160), `jp2.dict` | 61 s, 24 058 runs (394 exec/s), `nice -n 19`, one job | no crash, leak, or timeout |
 | 2026-11-01 | `header` | `tests/fixtures/*.j2k` and `jp2_*.jp2` (53 seeds), `jp2.dict` | 61 s, 9 928 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-01 | `icc_srgb` | `gen-icc-oracles.py --fuzz-seeds` (136 seeds), `icc.dict` | 61 s, 11 137 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-11 | `icc_srgb`, profile read on every input and the transform built for one in 16 | `gen-icc-oracles.py --fuzz-seeds` (349 seeds and 185 `_build` copies), `icc.dict` | 31 s, 17 471 runs (563 exec/s, coverage 3344; `main` on its 349 seeds: 21 exec/s, coverage 3278), `nice -n 19`, one job | no crash, leak, or timeout |
+| 2026-11-12 | the pre-release smoke: `decode`, `tile_body`, `tier1_block`, `mq`, `jp2_boxes`, `header`, `icc_srgb`, one after another with the CI step's options | the CI seeding (`gen-jp2-fuzz-seeds.py`, 160 seeds; the fixtures for `header`; `gen-icc-oracles.py --fuzz-seeds`) | 61, 46, 31, 16, 31, 31 and 31 s; 4 433 646, 182 668, 19 952, 242 767, 14 211, 9 216 and 1 620 runs; `nice -n 19`, one job | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

@@ -3,7 +3,9 @@
 //!
 //! The step runs after the palette and the channel definitions, on the color
 //! channels: the channels labeled color 1, 2, 3 (one for grayscale). Other
-//! channels, such as opacity, pass through untouched. [`plan`] checks
+//! channels, such as opacity, pass through untouched. OpenJPEG picks the
+//! first channels by position instead; the labels follow the standard
+//! (`docs/correctness.md`, "sRGB output"). [`plan`] checks
 //! everything from the header before any tile is decoded; [`SrgbPlan::apply`]
 //! converts the decoded samples. No conversion changes a channel's depth.
 //!
@@ -36,31 +38,20 @@
 //!   channel. A monochrome profile on more than two channels is refused:
 //!   OpenJPEG passes the planes to a gray transform as if they were RGB.
 //!
-//! One or two channels pass through as coded whatever the color space
-//! (sRGB, grayscale, sYCC, no `colr`, another enumerated color space, an
-//! RGB or YCbCr profile), as OpenJPEG reads them as gray; only a monochrome
-//! profile converts them, and it refuses samples that are not 8-bit
-//! unsigned. So do a profile LittleCMS refuses to open or to build a
-//! transform from (its header checks, a class or intent it does not know, a
-//! missing or unreadable tag, a lookup table it can't read), and a profile
-//! in a color space other than RGB, gray or YCbCr: OpenJPEG then skips the
-//! conversion. An RGB profile passes through too when any of the first four
-//! output channels differs from the first in depth, sign or sub-sampling
-//! (OpenJPEG's "AFL test", [`first_four_differ`]). None of these holds for
-//! three channels that are 4:2:0 or 4:2:2, which `opj_decompress` converts
-//! as sYCC before it reads any profile ([`converted_as_sycc`]), so those are
-//! refused whatever the profile is.
-//! These come first, before any check on the samples, as in OpenJPEG. The
-//! profile reader follows LittleCMS's, including where it reads past a
-//! tag's size.
+//! Some inputs pass through as coded, as OpenJPEG leaves them: one or two
+//! channels in any color space other than a monochrome profile, a profile
+//! LittleCMS refuses to open or to build a transform from, a profile in a
+//! color space other than RGB, gray or YCbCr, and an RGB profile whose first
+//! four channels differ in depth, sign or sub-sampling ([`first_four_differ`]).
+//! These come first, before any check on the samples, as in OpenJPEG. Three
+//! channels that are 4:2:0 or 4:2:2 are refused whatever the color space,
+//! since `opj_decompress` converts them as sYCC before it reads any profile
+//! ([`converted_as_sycc`]). The profile reader follows LittleCMS's,
+//! including where it reads past a tag's size.
 //!
-//! Everything else is [`Error::Unsupported`]: three or more channels in
-//! another enumerated color space or with no color space, a YCbCr
-//! profile, a profile LittleCMS would apply through a lookup table or the
-//! Lab connection space, and color channels that differ in depth, sign or
-//! sub-sampling (except the sYCC layouts and the RGB profile case above).
-//! OpenJPEG converts some of those anyway and gets them wrong;
-//! `docs/correctness.md` lists each case.
+//! Everything else is [`Error::Unsupported`]. The table in
+//! `docs/correctness.md` ("sRGB output", "Outcomes") gives every case, what
+//! OpenJPEG does with it, and the rule behind the choice.
 
 use super::lcms::{Format, InputProfile, ToneCurve, Transform};
 use super::metadata::{Association, ChannelDefinition, ChannelType, ColorSpace, Jp2Metadata};

@@ -52,7 +52,10 @@ pub struct Jp2Metadata {
     /// 1 with itself, then 2 and 0 back, and give `[0, 1, 2]`, which is wrong.
     ///
     /// The committed `jp2_cdef_reversed.jp2` has exactly those entries. This
-    /// applies the rule above to them and checks it against the decoder:
+    /// example applies the rule above to the entries the decoder reports and
+    /// shows that the default decode is the raw one in that order. It is an
+    /// illustration, not an oracle: the oracle for the file is
+    /// `jp2_cdef_reversed.expected.json`, OpenJPEG's decode of it.
     ///
     /// ```
     /// use rust_j2k::{Association, ChannelType, DecodeOptions, decode_with};
@@ -130,8 +133,7 @@ pub struct Jp2Metadata {
     /// `uinf` is left out and never fails a decode, as OpenJPEG skips the box
     /// (see [`UuidInfo`]).
     pub uuid_info: Vec<UuidInfo>,
-    /// The Image Header box's (I.5.3.1) fields that are not taken from the
-    /// codestream.
+    /// The Image Header box's (I.5.3.1) flags `C`, `UnkC` and `IPR`.
     pub image_header: ImageHeader,
     /// Every Colour Specification box (`colr`, I.5.3.3) in file order, the
     /// ignored ones too: those in every `jp2h` box and those misplaced at the
@@ -142,8 +144,9 @@ pub struct Jp2Metadata {
     ///
     /// The boxes are reported as stored in the file, whatever
     /// [`DecodeOptions::color`](crate::DecodeOptions::color) is. Under
-    /// [`ColorOutput::Srgb`](crate::ColorOutput::Srgb) the first may still
-    /// hold the original ICC profile while [`color`](Self::color) is
+    /// [`ColorOutput::Srgb`](crate::ColorOutput::Srgb) the first usable one
+    /// (`METH` 1 or 2, not always the first listed) may still hold the
+    /// original ICC profile while [`color`](Self::color) is
     /// [`ColorSpace::Srgb`].
     pub color_specifications: Vec<ColorSpecification>,
     /// The File Type box (`ftyp`, I.5.2).
@@ -154,8 +157,10 @@ pub struct Jp2Metadata {
     pub reader_requirements: Option<ReaderRequirements>,
 }
 
-/// The Image Header box's (`ihdr`, I.5.3.1) fields that are not taken from
-/// the codestream, as stored. None of them changes the decode.
+/// The Image Header box's (`ihdr`, I.5.3.1) flags `C`, `UnkC` and `IPR`, as
+/// stored. None of them changes the decode. The codestream's SIZ decides the
+/// image size, the component count and the depths, so `ihdr`'s `HEIGHT`,
+/// `WIDTH`, `NC` and `BPC`, and the `bpcc` box, are not reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ImageHeader {
@@ -166,9 +171,10 @@ pub struct ImageHeader {
     /// [`Jp2Metadata::color`].
     pub unknown_color_space: u8,
     /// `IPR`: 1 when the file claims to hold intellectual property rights
-    /// boxes, 0 when it does not. This is only the flag as stored: it is not
+    /// boxes, 0 when it does not. The flag is stored as-is, so it can hold
+    /// the values I.5.3.1 reserves (only 0 and 1 are defined). It is not
     /// checked against the boxes present, so it may disagree with
-    /// [`Jp2Metadata::ipr`], which holds the `jp2i` boxes actually found.
+    /// [`Jp2Metadata::ipr`], which holds the top-level `jp2i` boxes.
     pub ipr_flag: u8,
 }
 
@@ -490,7 +496,9 @@ pub enum ColorSpace {
     /// here: it holds whatever the box contains.
     /// Applied to the samples only under
     /// [`ColorOutput::Srgb`](crate::ColorOutput::Srgb), which then reports
-    /// the converted color space instead.
+    /// the converted color space instead. The same bytes are also in that
+    /// box's [`ColorSpecification::payload`] on
+    /// [`Jp2Metadata::color_specifications`], so the profile is held twice.
     RestrictedIcc(Vec<u8>),
     /// Another enumerated color space value from the first usable box,
     /// reported but not interpreted.
@@ -502,6 +510,11 @@ pub enum ColorSpace {
 }
 
 /// What one output channel is: its type and the color it belongs to.
+///
+/// It mirrors a `cdef` entry's `Typ` and `Asoc`, and both enums already hold
+/// every 16-bit value, so the struct and its enums are not
+/// `#[non_exhaustive]`: a caller may build one, and match on both enums
+/// without a catch-all arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelDefinition {
     /// The channel's type.

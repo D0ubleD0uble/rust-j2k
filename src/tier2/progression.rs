@@ -413,11 +413,12 @@ where
                 // read is marked, and a read takes a visit and at least a byte of
                 // packet header; at most 31 later volumes can meet it again. A
                 // bitmap skip takes about 4 ns, so the skips cost at most about
-                // 0.12 µs per byte, under the 0.25 to 0.47 µs a byte of real
-                // data takes to decode that the bound is set by. Charging them would refuse
-                // files OpenJPEG reads quickly, such as 31 identical volumes over
-                // 1 MB of empty packets. A skip from the set costs far more and
-                // is charged (see `SET_SKIP_VISITS`).
+                // 0.12 µs per byte, under the 0.19 µs a byte the fastest
+                // conformance codestream past 100 KB takes to decode (best of
+                // five release builds). Charging them would refuse files
+                // OpenJPEG reads quickly, such as 31 identical volumes over 1 MB
+                // of empty packets. A skip from the set costs far more and is
+                // charged (see `SET_SKIP_VISITS`).
                 if emitted.insert(walk, layer, res, comp, precinct)? {
                     f(layer, res, comp, precinct)
                 } else if skip_visits > 0 {
@@ -433,8 +434,8 @@ where
 
 /// The visits a packet skipped from [`Emitted`]'s set is charged. A lookup
 /// in a set of millions of packets misses the cache: about 80 to 180 ns,
-/// measured on the `setskip` shape of 1.4e7 packets read, against about
-/// 10 ns for a visit there (the bound is set by 14 ns), so 12 visits.
+/// measured on the `setskip` shape of 1.4e7 packets read, against at most
+/// 15 ns for a visit, so 12 visits.
 const SET_SKIP_VISITS: usize = 12;
 
 /// The packets a `POC` sequence has emitted so far (see [`for_each_packet`]),

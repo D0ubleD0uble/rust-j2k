@@ -12,7 +12,9 @@ use crate::{Error, Jp2Metadata, Result};
 ///
 /// [`width`](Self::width) and [`height`](Self::height) describe the *reference
 /// grid* image area (`Xsiz - XOsiz` by `Ysiz - YOsiz`), which is the coordinate
-/// space the components are registered against. A sub-sampled component covers
+/// space the components are registered against. Under a resolution reduction
+/// of `r` levels they are that area at the reduced resolution:
+/// `ceil(Xsiz / 2^r) - ceil(XOsiz / 2^r)` by the same in y. A sub-sampled component covers
 /// that same area with fewer samples, so its own
 /// [`Component::width`]/[`Component::height`] can be smaller. With unit
 /// sub-sampling — the common case — they are equal.
@@ -30,9 +32,10 @@ use crate::{Error, Jp2Metadata, Result};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Image {
-    /// Reference-grid image area width, in reference-grid points.
+    /// The image area's width: reference-grid points, or points of the
+    /// reduced grid under a resolution reduction.
     pub width: u32,
-    /// Reference-grid image area height, in reference-grid points.
+    /// The image area's height, as [`width`](Self::width).
     pub height: u32,
     /// One entry per output channel. For a raw codestream, and for a JP2 file
     /// with no palette, no channel definitions and as-coded output, that is one

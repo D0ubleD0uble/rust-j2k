@@ -124,17 +124,19 @@ packages. Present by default on Linux and macOS.
 [`scripts/gen-oracle.sh`](../scripts/gen-oracle.sh) decodes one codestream with
 `opj_decompress` and writes the sibling `<name>.expected.json` the harness reads,
 echoing the exact command it ran so the snapshot's provenance is captured.
+Run it from the repository root and spell the path `tests/fixtures/...`: the
+snapshot's `oracle_command` records the input path exactly as typed, so
+`./tests/...` changes its bytes.
 
 ```sh
 # reversible (5/3, lossless): bit-exact agreement
-scripts/gen-oracle.sh tests/fixtures/sample.j2k \
+scripts/gen-oracle.sh tests/fixtures/jpeg2000_regular_latlon.j2k \
     --source "fieldglass/jpeg2000_regular_latlon.grib2"
-
-# irreversible (9/7, lossy): an absolute per-sample bound
-scripts/gen-oracle.sh tests/fixtures/eta_lambert_irreversible.j2k \
-    --tolerance 2.0 --source "9/7 re-encode of eta_lambert_lossless.j2k (opj_compress -I)" \
-    --notes "9/7 lossy path"
 ```
+
+The irreversible 9/7 fixture has its own script, which re-encodes the Eta
+grid and calls `gen-oracle.sh` with the committed provenance:
+[`scripts/gen-irreversible-fixture.sh`](../scripts/gen-irreversible-fixture.sh).
 
 For a GRIB2-sourced fixture, extract the §5.40 codestream first with
 [`scripts/extract-grib2-codestream.py`](../scripts/extract-grib2-codestream.py)
