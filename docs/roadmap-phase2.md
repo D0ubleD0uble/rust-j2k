@@ -237,7 +237,7 @@ since POC is legal in any tile-part, not only the first).
 **Goal:** decode every code-block style flag, not just the Phase 1 default.
 
 **Work:** read the SPcod/SPcoc style byte and decode the optional modes:
-selective arithmetic-coding bypass (lazy, Annex D.5), reset of context
+selective arithmetic-coding bypass (lazy, Annex D.6), reset of context
 probabilities on each pass, termination on each coding pass (restart),
 vertically causal context, predictable termination, and segmentation symbols.
 Each changes MQ termination, context handling, or pass boundaries inside the
