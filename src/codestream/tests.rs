@@ -2796,6 +2796,19 @@ fn a_tile_part_rgn_with_a_part_2_style_is_unsupported() {
 
 use super::markers::TlmEntry;
 
+/// The TLM entries of a codestream's main header, in marker order. The parse
+/// checks each one and drops it, so this reads them again from the header.
+fn tlm_entries(bytes: &[u8]) -> Vec<TlmEntry> {
+    let (segments, _) = walk_main_header(bytes).expect("walks");
+    let siz = decode_siz(Cursor::new(segments[0].body)).expect("SIZ");
+    let mut seen = 0;
+    let mut entries = Vec::new();
+    for tlm in segments.iter().filter(|s| s.code == marker::TLM) {
+        decode_tlm(Cursor::new(tlm.body), &siz, &mut seen, |e| entries.push(e)).expect("TLM");
+    }
+    entries
+}
+
 /// TLM body: `Ztlm`, `Stlm`, then the entry bytes verbatim.
 fn tlm_body(stlm: u8, entries: &[u8]) -> Vec<u8> {
     let mut b = vec![0, stlm];
@@ -2803,7 +2816,7 @@ fn tlm_body(stlm: u8, entries: &[u8]) -> Vec<u8> {
     b
 }
 
-/// Length markers are informational, so the parse records TLM's entries and
+/// Length markers are informational, so the parse checks TLM's entries and
 /// nothing more. `Stlm = 0x60` is `ST = 2` (two-byte tile indices) and
 /// `SP = 1` (four-byte lengths) — the shape `p0_05` carries.
 #[test]
@@ -2813,9 +2826,9 @@ fn tlm_records_the_tile_part_lengths() {
         marker::TLM,
         &tlm_body(0x60, &[0, 0, 0x00, 0x13, 0xFF, 0x4C]),
     ));
-    let header = parsed(&segments);
+    parsed(&segments);
     assert_eq!(
-        header.tlm,
+        tlm_entries(&codestream(&segments)),
         vec![TlmEntry {
             tile_index: 0,
             length: 0x0013_FF4C,
@@ -2829,9 +2842,9 @@ fn tlm_records_the_tile_part_lengths() {
 fn tlm_indices_can_be_implied_and_lengths_two_bytes() {
     let mut segments = default_header();
     segments.push(seg(marker::TLM, &tlm_body(0x00, &[0x12, 0x34])));
-    let header = parsed(&segments);
+    parsed(&segments);
     assert_eq!(
-        header.tlm,
+        tlm_entries(&codestream(&segments)),
         vec![TlmEntry {
             tile_index: 0,
             length: 0x1234,
@@ -2846,10 +2859,11 @@ fn tlm_entries_accumulate_across_markers() {
     // ST = 1 (one-byte explicit index), SP = 0: entries `index, len16`.
     segments.push(seg(marker::TLM, &tlm_body(0x10, &[0, 0x00, 0x14])));
     segments.push(seg(marker::TLM, &tlm_body(0x10, &[0, 0x00, 0x2C])));
-    let header = parsed(&segments);
-    assert_eq!(header.tlm.len(), 2);
-    assert_eq!(header.tlm[0].length, 0x14);
-    assert_eq!(header.tlm[1].length, 0x2C);
+    parsed(&segments);
+    let tlm = tlm_entries(&codestream(&segments));
+    assert_eq!(tlm.len(), 2);
+    assert_eq!(tlm[0].length, 0x14);
+    assert_eq!(tlm[1].length, 0x2C);
 }
 
 /// `ST = 3` is undefined (Table A-33). OpenJPEG warns and ignores the TLM
@@ -2902,8 +2916,8 @@ fn tlm_naming_a_missing_tile_is_a_marker_error() {
 fn plm_parses_and_is_skipped() {
     let mut segments = default_header();
     segments.push(seg(marker::PLM, &[0, 2, 0x85, 0x02]));
-    let header = parsed(&segments);
-    assert_eq!(header.tlm, vec![]);
+    parsed(&segments);
+    assert_eq!(tlm_entries(&codestream(&segments)), vec![]);
 }
 
 /// A PLM with no `Zplm` byte at all is malformed.
@@ -2966,9 +2980,10 @@ fn tlm_of_p0_05_matches_its_tile_part_length() {
         return;
     };
 
-    let cs = parse(&bytes).expect("p0_05 parses");
-    assert_eq!(cs.header.tlm.len(), 1, "one tile-part, one entry");
-    assert_eq!(cs.header.tlm[0].tile_index, 0);
+    parse(&bytes).expect("p0_05 parses");
+    let tlm = tlm_entries(&bytes);
+    assert_eq!(tlm.len(), 1, "one tile-part, one entry");
+    assert_eq!(tlm[0].tile_index, 0);
 
     // Psot: bytes 6..10 of the SOT segment (marker, Lsot, Isot precede it).
     let sot = bytes
@@ -2976,5 +2991,266 @@ fn tlm_of_p0_05_matches_its_tile_part_length() {
         .position(|w| w == be16(marker::SOT))
         .expect("SOT");
     let psot = u32::from_be_bytes(bytes[sot + 6..sot + 10].try_into().unwrap());
-    assert_eq!(cs.header.tlm[0].length, psot);
+    assert_eq!(tlm[0].length, psot);
+}
+
+// --- The quick tile-header check (issue #256) --------------------------------
+
+/// A small deterministic generator (xorshift64*), so the cases below are the
+/// same on every run.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// A value in `0..n`.
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn chance(&mut self, one_in: u64) -> bool {
+        self.below(one_in) == 0
+    }
+
+    fn transform(&mut self) -> Transform {
+        if self.chance(2) {
+            Transform::Reversible53
+        } else {
+            Transform::Irreversible97
+        }
+    }
+
+    /// Decomposition levels; the step counts below reach their thresholds.
+    fn levels(&mut self) -> u8 {
+        self.below(4) as u8
+    }
+
+    fn quant(&mut self) -> Qcd {
+        let style = match self.below(3) {
+            0 => QuantStyle::None,
+            1 => QuantStyle::ScalarDerived,
+            _ => QuantStyle::ScalarExpounded,
+        };
+        let steps = if style == QuantStyle::ScalarDerived {
+            1
+        } else {
+            1 + self.below(11) as usize
+        };
+        Qcd {
+            style,
+            guard_bits: 2,
+            steps: vec![(8, 0); steps],
+        }
+    }
+
+    fn cod(&mut self, components: usize) -> Cod {
+        Cod {
+            progression: Progression::Lrcp,
+            layers: 1,
+            decomposition_levels: self.levels(),
+            code_block_width: 4,
+            code_block_height: 4,
+            code_block_style: 0,
+            use_sop: false,
+            use_eph: false,
+            multiple_component_transform: components >= 3 && self.chance(3),
+            transform: self.transform(),
+            precinct_sizes: vec![],
+        }
+    }
+
+    fn coding(&mut self) -> Coding {
+        Coding {
+            decomposition_levels: self.levels(),
+            code_block_width: 4,
+            code_block_height: 4,
+            code_block_style: 0,
+            transform: self.transform(),
+            precinct_sizes: vec![],
+        }
+    }
+
+    fn poc(&mut self) -> Vec<PocVolume> {
+        let volume = PocVolume {
+            res_start: 0,
+            res_end: 1,
+            comp_start: 0,
+            comp_end: 1,
+            layer_end: 1,
+            progression: Progression::Lrcp,
+        };
+        // Mostly none, sometimes enough that the two lists together pass the
+        // 32-volume budget.
+        let count = if self.chance(3) { self.below(20) } else { 0 };
+        vec![volume; count as usize]
+    }
+
+    /// A main header the main-header checks accept, or `None`.
+    fn main_header(&mut self) -> Option<MainHeader> {
+        let components = 1 + self.below(6) as usize;
+        let comp = SizComponent {
+            bit_depth: 8,
+            signed: false,
+            x_sampling: 1,
+            y_sampling: 1,
+        };
+        let mut siz_components = vec![comp; components];
+        if components >= 3 && self.chance(6) {
+            siz_components[2].bit_depth = 9;
+        }
+        let siz = Siz {
+            x_size: 8,
+            y_size: 8,
+            x_offset: 0,
+            y_offset: 0,
+            tile_width: 8,
+            tile_height: 8,
+            tile_x_offset: 0,
+            tile_y_offset: 0,
+            components: siz_components,
+        };
+        let cod = self.cod(components);
+        let qcd = self.quant();
+        let mut header = MainHeader::new(siz, cod, qcd);
+        header.poc = self.poc();
+        for params in &mut header.components {
+            if self.chance(3) {
+                params.coding = self.coding();
+            }
+            if self.chance(3) {
+                params.quant = self.quant();
+            }
+        }
+        (validate_resolved(&header).is_ok() && header.poc.len() <= MAX_POC_VOLUMES)
+            .then_some(header)
+    }
+
+    /// Indices among `components`, each at most once, in a random order.
+    fn named(&mut self, components: usize) -> Vec<usize> {
+        let mut out: Vec<usize> = (0..components).filter(|_| self.chance(3)).collect();
+        for i in (1..out.len()).rev() {
+            out.swap(i, self.below(i as u64 + 1) as usize);
+        }
+        out
+    }
+
+    fn tile_header(&mut self, components: usize) -> TileHeader {
+        TileHeader {
+            cod: self.chance(2).then(|| self.cod(components)),
+            qcd: self.chance(2).then(|| self.quant()),
+            coc: (self.named(components).into_iter())
+                .map(|i| (i, self.coding()))
+                .collect(),
+            qcc: (self.named(components).into_iter())
+                .map(|i| (i, self.quant()))
+                .collect(),
+            rgn: (self.named(components).into_iter())
+                .map(|i| (i, self.below(8) as u8))
+                .collect(),
+            poc: self.poc(),
+        }
+    }
+}
+
+/// The quick check `parse_tiles` runs on every tile agrees with resolving the
+/// tile's header in full, the old per-tile check, on 20000 random main and
+/// tile headers: every mix of tile COD, QCD, COC, QCC, RGN and POC over main
+/// headers with and without their own COCs and QCCs, both wavelets, all
+/// three quantization styles and the color transform. The quick check is
+/// what lets a tile cost its own markers rather than the component count;
+/// any rule it gets wrong shows here as a disagreement.
+#[test]
+fn the_quick_tile_check_agrees_with_the_full_resolution() {
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let (mut valid, mut invalid) = (0, 0);
+    let mut cases = 0;
+    while cases < 20_000 {
+        let Some(main) = rng.main_header() else {
+            continue;
+        };
+        cases += 1;
+        let tile = rng.tile_header(main.components.len());
+        let full = check_tile_in_full(&main, &tile, 0).is_ok();
+        let quick = tile_header_is_valid(&main, &OnceCell::new(), &tile);
+        assert_eq!(quick, full, "case {cases}: main {main:?}, tile {tile:?}");
+        if full {
+            valid += 1;
+        } else {
+            invalid += 1;
+        }
+    }
+    // Both verdicts are common, so neither side of the check goes untested.
+    assert!(
+        valid > 2000 && invalid > 2000,
+        "{valid} valid, {invalid} invalid"
+    );
+}
+
+/// A tile-part COC alone, with no tile COD or QCD, still overrides the coding
+/// of the component it names: the tile decodes with 2 levels where the main
+/// header has 5. A tile with markers of its own is never the main header
+/// borrowed.
+#[test]
+fn a_tile_part_coc_alone_overrides_its_component() {
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 2, 4, 4, 0, 1));
+    let bytes = assemble_with_tile_markers(&default_header(), &[coc], &[1, 2]);
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.components[0].coding.decomposition_levels, 2);
+    assert_eq!(cs.header.components[0].coding.decomposition_levels, 5);
+}
+
+/// A tile-part QCC alone overrides the quantization of the component it
+/// names, as the COC does its coding.
+#[test]
+fn a_tile_part_qcc_alone_overrides_its_component() {
+    let qcc = seg(marker::QCC, &{
+        let mut b = vec![0u8];
+        b.extend_from_slice(&qcd_none(2, &[9; 16]));
+        b
+    });
+    let bytes = assemble_with_tile_markers(&default_header(), &[qcc], &[1, 2]);
+    let cs = parse(&bytes).expect("parse");
+    let tile = cs.tile_header(0).expect("resolve tile 0");
+    assert_eq!(tile.components[0].quant.steps[0], (9, 0));
+    assert_eq!(cs.header.components[0].quant.steps[0], (8, 0));
+}
+
+/// A.6 allows one COC and one QCC per component in a tile-part header, as in
+/// the main header; a second one for the same component is malformed.
+#[test]
+fn a_second_tile_part_coc_or_qcc_for_one_component_is_a_codestream_error() {
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 2, 4, 4, 0, 1));
+    let qcc = seg(marker::QCC, &{
+        let mut b = vec![0u8];
+        b.extend_from_slice(&qcd_none(2, &[8; 16]));
+        b
+    });
+    for (name, marker) in [("COC", coc), ("QCC", qcc)] {
+        let bytes =
+            assemble_with_tile_markers(&default_header(), &[marker.clone(), marker], &[1, 2]);
+        match perr(&bytes) {
+            Error::Codestream(m) => assert!(m.contains("duplicate"), "{name}: {m}"),
+            other => panic!("{name}: {other}"),
+        }
+    }
+}
+
+/// `ST = 0` implies each entry's tile by its place among every TLM entry,
+/// across markers, so in a one-tile grid a second entry, even in a second
+/// marker, names tile 1, which the grid does not hold.
+#[test]
+fn tlm_implied_indices_count_across_markers() {
+    let mut segments = default_header();
+    segments.push(seg(marker::TLM, &tlm_body(0x00, &[0x12, 0x34])));
+    segments.push(seg(marker::TLM, &tlm_body(0x00, &[0x12, 0x34])));
+    match err(&codestream(&segments)) {
+        Error::Marker(m) => assert!(m.contains("names tile 1"), "{m}"),
+        other => panic!("{other}"),
+    }
 }

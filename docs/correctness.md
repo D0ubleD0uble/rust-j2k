@@ -407,6 +407,45 @@ bound of 2^14 code-blocks: `read_header` allocates for its walk, and a
 geometry bound at the decode's 2^19 code-blocks would let `read_header`
 hold about 75 MB for a 66 KB file.
 
+### Tile header cost
+
+A tile's header is the main header with the tile's own COD, COC, QCD, QCC,
+RGN and POC markers laid over it. Resolving one is sized by the component
+count, up to 16384, and a codestream can hold 65535 tiles. Resolving every
+tile's header up front cost tiles × components, before any check ran (#256).
+
+The parse checks each tile's markers against the main header without
+resolving a header, in time proportional to the tile's own markers. A
+component the tile names in a COC or QCC is checked on its own. A tile COD
+or QCD lands on every other component, so it is checked once, against the
+most demanding of them: the fewest QCD steps under a tile COD, the most
+levels under a tile QCD, and a count of each wavelet. Only a tile found at
+fault is resolved in full, so the error reads as it always did.
+`the_quick_tile_check_agrees_with_the_full_resolution` checks that the two
+agree on 20000 random main and tile headers.
+
+At decode, a tile with no markers runs under the main header, borrowed. A
+tile with markers is resolved in full, sized by the component count, and
+the decode then spends at least that much on its components: every
+tile-component must hold a sample, so tiles × components is at most the
+sample budget for a file that decodes. TLM entries are checked and dropped,
+since nothing reads them. Measured on release builds
+(`scripts/gen-tile-header-fixtures.py --big`; before, after, then
+`opj_decompress` 2.5.0):
+
+| Shape | Size | Before | After | OpenJPEG |
+| ----- | ---- | ------ | ----- | -------- |
+| 4096 tiles × 16384 components | 110 KB | 2.2 s | 3 ms | fails to read the header, 10 ms |
+| 128² tiles × 16384, heavy header | 295 KB | 63.9 s | 9 ms | 22 s, 55 GB |
+| 65025 tiles × 16384 | 1.0 MB | 45.8 s | 17 ms | 25 s, 55 GB |
+| The same, a COD and a QCD in every tile | 2.3 MB | 78.8 s | 26 ms | |
+| 65025 tiles, 1 MB of TLM entries, decodes | 2.0 MB | 13.2 s | 56 ms | 0.34 s |
+| 65025 tiles, 4 MB of TLM entries, decodes | 5.2 MB | 85.5 s | 63 ms | 0.35 s |
+
+The first four are refused at tile 0, whose components but the first hold no
+sample. The OpenJPEG figures for the 16384-component shapes are from the
+review that filed #256.
+
 ### The `jp2i` and `uinf` boxes
 
 OpenJPEG 2.5.0 skips both box types, so ISO/IEC 15444-1 (I.6, I.7.3) is the
