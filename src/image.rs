@@ -149,16 +149,23 @@ impl Component {
 /// written once. Nothing is blended and no tile overlaps another: the wavelet
 /// transform is applied per tile, which is why a tiled encode can show seams,
 /// and reproducing them is correct.
+///
+/// A plane is allocated when its first tile arrives. A tile that covers the
+/// whole plane, as the only tile of an image does, becomes the plane: its
+/// raster is moved in rather than copied, so the decode never holds two
+/// image-sized buffers for one component.
 pub(crate) struct Canvas {
-    planes: Vec<Samples>,
+    planes: Vec<Option<Samples>>,
     /// Each component's whole grid at the decode's reduction — the rectangle a
     /// tile's placement is measured against.
     rects: Vec<Rect>,
+    /// Each component's wavelet, which fixes its plane's arithmetic.
+    transforms: Vec<Transform>,
 }
 
 impl Canvas {
-    /// Allocate one zeroed plane per component, at the reduced size
-    /// [`assemble`] will expect.
+    /// Record each component's grid at the reduced size [`assemble`] will
+    /// expect, and its wavelet.
     ///
     /// A plane's arithmetic follows its component's wavelet — 5/3 reconstructs
     /// exact integers, 9/7 reals — which is why `parse` rejects a codestream
@@ -166,16 +173,9 @@ impl Canvas {
     /// to hold both.
     pub(crate) fn new(header: &MainHeader, reduction: u8) -> Result<Self> {
         let siz = &header.siz;
-        let (mut planes, mut rects) = (Vec::new(), Vec::new());
-        for index in 0..siz.components.len() {
-            let (width, height) = siz
-                .component_extent_at(index, reduction)
-                .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
-            let count = (width as usize) * (height as usize);
-            planes.push(match header.components[index].coding.transform {
-                Transform::Reversible53 => Samples::Reversible(vec![0; count]),
-                Transform::Irreversible97 => Samples::Irreversible(vec![0.0; count]),
-            });
+        let count = siz.components.len();
+        let (mut rects, mut transforms) = (Vec::with_capacity(count), Vec::with_capacity(count));
+        for index in 0..count {
             rects.push(
                 siz.component_rect(index)
                     .ok_or_else(|| {
@@ -183,18 +183,33 @@ impl Canvas {
                     })?
                     .reduced(reduction),
             );
+            transforms.push(
+                header
+                    .components
+                    .get(index)
+                    .ok_or_else(|| {
+                        Error::Inconsistent(format!("no coding parameters for component {index}"))
+                    })?
+                    .coding
+                    .transform,
+            );
         }
-        Ok(Canvas { planes, rects })
+        Ok(Canvas {
+            planes: (0..count).map(|_| None).collect(),
+            rects,
+            transforms,
+        })
     }
 
     /// Write one tile-component's reconstructed raster into its component's
     /// plane. `rect` is the tile-component's rectangle on the component grid, at
     /// the same reduction the canvas was built at.
     pub(crate) fn place(&mut self, index: usize, rect: Rect, samples: Samples) -> Result<()> {
-        let (plane, canvas) = self
+        let ((plane, canvas), transform) = self
             .planes
             .get_mut(index)
             .zip(self.rects.get(index))
+            .zip(self.transforms.get(index))
             .ok_or_else(|| Error::Inconsistent(format!("no canvas plane for component {index}")))?;
         if samples.len() as u64 != rect.area() {
             return Err(Error::Inconsistent(format!(
@@ -214,6 +229,22 @@ impl Canvas {
                 "a tile's component {index} rectangle {rect:?} falls outside the canvas {canvas:?}",
             )));
         }
+        if !matches!(
+            (transform, &samples),
+            (Transform::Reversible53, Samples::Reversible(_))
+                | (Transform::Irreversible97, Samples::Irreversible(_))
+        ) {
+            return Err(Error::Inconsistent(format!(
+                "a tile reconstructed component {index} on the other wavelet's arithmetic"
+            )));
+        }
+        // A tile that covers the whole plane writes every sample of it, so its
+        // raster is the plane.
+        if rect == *canvas {
+            *plane = Some(samples);
+            return Ok(());
+        }
+        let plane = plane.get_or_insert_with(|| zeroed(*transform, canvas.area() as usize));
         let (left, top) = (
             (rect.x0 - canvas.x0) as usize,
             (rect.y0 - canvas.y0) as usize,
@@ -235,15 +266,31 @@ impl Canvas {
         Ok(())
     }
 
-    /// The finished planes, in SIZ component order, ready for [`assemble`].
+    /// The finished planes, in SIZ component order, ready for [`assemble`]. A
+    /// plane no tile reached is all zeros.
     pub(crate) fn into_planes(self) -> Vec<Samples> {
         self.planes
+            .into_iter()
+            .zip(self.rects)
+            .zip(self.transforms)
+            .map(|((plane, rect), transform)| {
+                plane.unwrap_or_else(|| zeroed(transform, rect.area() as usize))
+            })
+            .collect()
+    }
+}
+
+/// A zeroed plane of `count` samples on `transform`'s arithmetic.
+fn zeroed(transform: Transform, count: usize) -> Samples {
+    match transform {
+        Transform::Reversible53 => Samples::Reversible(vec![0; count]),
+        Transform::Irreversible97 => Samples::Irreversible(vec![0.0; count]),
     }
 }
 
 /// Copy a `src_width`-wide raster into `dst` (a `stride`-wide raster) with its
 /// top-left at `(left, top)`. The caller has already checked that it fits.
-fn blit<T: Copy>(
+pub(crate) fn blit<T: Copy>(
     dst: &mut [T],
     stride: usize,
     src: &[T],
@@ -605,6 +652,68 @@ mod tests {
         for depth in [0, 39] {
             let h = header(1, 1, depth, false);
             assert!(matches!(assemble1(&h, vec![0]), Err(Error::Marker(_))));
+        }
+    }
+
+    fn rect(x0: u32, y0: u32, x1: u32, y1: u32) -> Rect {
+        Rect { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn a_tile_covering_the_canvas_is_moved_in() {
+        let h = header(4, 2, 8, false);
+        let mut canvas = Canvas::new(&h, 0).unwrap();
+        let samples = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let at = samples.as_ptr();
+        canvas
+            .place(0, rect(0, 0, 4, 2), Samples::Reversible(samples))
+            .unwrap();
+        match canvas.into_planes().as_slice() {
+            [Samples::Reversible(plane)] => {
+                assert_eq!(plane, &[1, 2, 3, 4, 5, 6, 7, 8]);
+                assert_eq!(plane.as_ptr(), at, "the tile's buffer is the plane");
+            }
+            other => panic!("expected one reversible plane, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn partial_tiles_are_copied_into_one_plane() {
+        let h = header(4, 2, 8, false);
+        let mut canvas = Canvas::new(&h, 0).unwrap();
+        canvas
+            .place(0, rect(2, 0, 4, 2), Samples::Reversible(vec![3, 4, 7, 8]))
+            .unwrap();
+        canvas
+            .place(0, rect(0, 0, 2, 2), Samples::Reversible(vec![1, 2, 5, 6]))
+            .unwrap();
+        match canvas.into_planes().as_slice() {
+            [Samples::Reversible(plane)] => assert_eq!(plane, &[1, 2, 3, 4, 5, 6, 7, 8]),
+            other => panic!("expected one reversible plane, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_plane_no_tile_reached_is_zeros() {
+        let mut h = header(2, 1, 8, false);
+        h.components[0].coding.transform = Transform::Irreversible97;
+        match Canvas::new(&h, 0).unwrap().into_planes().as_slice() {
+            [Samples::Irreversible(plane)] => assert_eq!(plane, &[0.0, 0.0]),
+            other => panic!("expected one irreversible plane, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_tile_on_the_other_wavelet_is_inconsistent() {
+        let h = header(2, 2, 8, false);
+        for area in [rect(0, 0, 2, 2), rect(0, 0, 1, 2)] {
+            let mut canvas = Canvas::new(&h, 0).unwrap();
+            let samples = Samples::Irreversible(vec![0.0; area.area() as usize]);
+            let err = canvas.place(0, area, samples).unwrap_err();
+            assert!(
+                matches!(err, Error::Inconsistent(_)),
+                "{area:?} got {err:?}"
+            );
         }
     }
 }
