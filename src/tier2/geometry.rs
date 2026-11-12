@@ -142,7 +142,7 @@ pub(crate) fn resolution_geoms(
 
     let nl = cod.decomposition_levels as i64;
     if nl > 32 {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::Inconsistent(format!(
             "{nl} decomposition levels exceeds the 32-level maximum"
         )));
     }

@@ -45,7 +45,7 @@ Deviating needs two things, and one is not enough:
 
 Assume first that a divergence is our bug. It almost always is.
 
-There is one known case. On the inverse 9/7, the standard scales the high-pass
+There are two known cases. On the inverse 9/7, the standard scales the high-pass
 samples by `1/K` and the subband gain (Table E-1) enters the quantization step,
 so a high-pass coefficient is scaled by `2 · (1/K) = 1.6257861…`. OpenJPEG's
 decoder instead zeroes the gain and folds the factor of two into the transform:
@@ -76,6 +76,54 @@ worth carrying into any future disagreement:
   match `two_invK` while leaving the gain in the step makes the divergence
   *worse*, because the factor of two is then counted twice. A half-emulation
   reads as a refutation of a correct hypothesis.
+
+### Bypass under a maxshift
+
+The second case (#258). Under the bypass code-block style, a code-block's
+significance and refinement passes switch to raw coding from its fifth coded
+bit-plane on (D.6, Table D.9), counted from its first coded plane. Under an RGN
+maxshift the shifted planes are coded planes (H.2): the first one is
+`top = Mb + SPrgn - zero_bit_planes`. Tier-2 splits the segments by pass count
+(10 passes, then 2, 1, 2, 1, …), which agrees with that count.
+
+OpenJPEG's decoder starts at the same plane, `bpno_plus_one = roishift +
+cblk->numbps`, but tests `bpno_plus_one <= cblk->numbps - 4` (t1.c,
+`opj_t1_decode_cblk`). `cblk->numbps` leaves the shift out, so the switch comes
+`SPrgn` planes late and the decoder MQ-decodes segments that were written raw.
+Its own encoder counts from the first plane it codes (`bpno < cblk->numbps - 4`
+in `opj_t1_encode_cblk`), which is the plane the decoder calls `top`. So
+`opj_compress -ROI` with any bypass style writes a stream that `opj_decompress`
+2.5.0 decodes wrong. This crate counts from `top`
+(`src/tier1/passes.rs`, `decode_block`).
+
+**Evidence.** The encode is lossless, so the source image is the reference. A
+sweep of `opj_compress -i source.pgm -n {1,3,6} -ROI c=0,U={1,3,7,12} -M m` over
+`m` in {0, 1, 3, 5, 9, 17, 33, 49, 63} (108 encodes of
+`tests/fixtures/roi_bypass/source.pgm`):
+
+| Decoder | Equal to the source |
+| ------- | ------------------- |
+| `opj_decompress` 2.5.0 | 12 of 108: the `-M 0` encodes only |
+| this crate, counting like OpenJPEG | 12 of 108; 60 wrong, 36 errors |
+| this crate, counting from `top` | 108 of 108 |
+
+Without a maxshift both counts are the same, so no other fixture changes.
+`tests/roi_bypass.rs` pins four of these encodes (`-M 1`, `5`, `33`, `17`, at
+`U=3`, `-n 3`) against the source; provenance is in
+`tests/fixtures/roi_bypass/README.md`.
+
+**OpenJPEG's history.** The decoder rule has been there since the initial
+import (2ad6a977, 2003, `libopenjpeg/t1.c`: `bpno = roishift + cblk->numbps - 1`
+and `bpno <= (cblk->numbps - 1) - 4`). `git log -L` on the line shows only
+renames, reformatting and sign-conversion fixes since, with no commit that
+gives a reason. The encoder's rule is from the same import; the 2017 bypass and
+termination fixes (81c53117, upstream #674) changed the encoder's termination
+and left the decoder's raw decision alone. No upstream issue or pull request
+covers ROI with bypass. Upstream ROI has no tests (#1035, "Add unit tests for
+ROI feature", open since 2017). Its encoder shifts no coefficients: `-ROI`
+only signals `SPrgn`, so the decoder reads every nonzero coefficient of the
+component as region of interest (#1036, open). The rule reads as an
+oversight, not a choice, so this crate follows the standard. Recorded with the owner's approval on #226.
 
 ### Stricter than the oracle on non-conforming streams
 
