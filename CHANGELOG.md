@@ -189,6 +189,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bound; a tile past the bound is read to the end of the file. A raw
   codestream, or a `jp2c` with `LBox` 0 or a length that ends inside the
   codestream, is still refused when bytes follow the last packet.
+- A code-block with an RGN maxshift and the bypass style now switches to raw
+  coding at its fifth coded bit-plane, counting the shifted planes, as the
+  standard and the encoder do. It switched `SPrgn` planes late, as
+  OpenJPEG's decoder does, and decoded such streams wrong or refused them.
+  Streams without a maxshift decode as before.
 
 ### Changed
 
