@@ -154,6 +154,52 @@ fn the_raw_metadata_rebuilds_the_default_decode_in_order() {
     }
 }
 
+/// `jp2_palette_mixed` with its direct channel moved to position 1 and the
+/// palette's column 1 made signed. Every fixture's direct channel shares its
+/// format with column 0 and with its component, so only a file like this one
+/// tells the three apart. `opj_decompress` 2.5.0 writes channel 1 of this
+/// file as signed 8-bit (`PG ML - 8`), column 1's format.
+fn direct_channel_mid_palette() -> Vec<u8> {
+    let mut bytes = read("jp2_palette_mixed");
+    // The `pclr` payload: NE = 256, NPC = 3, then B0..B2 (8-bit unsigned).
+    assert_eq!(bytes[81..85], *b"pclr");
+    assert_eq!(bytes[85..91], [0x01, 0x00, 0x03, 0x07, 0x07, 0x07]);
+    bytes[89] = 0x87; // column 1: 8-bit signed
+    // The `cmap` payload: channel 0 from column 0 of component 0, channel 1
+    // direct from component 2, channel 2 from column 2 of component 0.
+    assert_eq!(bytes[863..867], *b"cmap");
+    bytes[867..879].copy_from_slice(&[0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 1, 2]);
+    bytes
+}
+
+#[test]
+fn a_direct_channel_takes_the_format_of_the_column_at_its_position() {
+    let bytes = direct_channel_mid_palette();
+    let image = decode(&bytes).unwrap();
+    let raw = decode_with(&bytes, &DecodeOptions::default().with_raw_channels(true)).unwrap();
+    let formats: Vec<(u8, bool)> = image
+        .components
+        .iter()
+        .map(|c| (c.bit_depth, c.signed))
+        .collect();
+    assert_eq!(formats, [(8, false), (8, true), (8, false)]);
+    assert_eq!(
+        (raw.components[2].bit_depth, raw.components[2].signed),
+        (8, false),
+        "the direct channel's component is unsigned"
+    );
+    assert_eq!(image.components[1].samples, raw.components[2].samples);
+
+    let rebuilt = rebuild(&raw);
+    assert_eq!(rebuilt.len(), image.components.len());
+    for (i, (size, samples, _, format)) in rebuilt.iter().enumerate() {
+        let want = &image.components[i];
+        assert_eq!(*size, (want.width, want.height), "channel {i}");
+        assert_eq!(samples, &want.samples, "channel {i}");
+        assert_eq!(*format, (want.bit_depth, want.signed), "channel {i}");
+    }
+}
+
 #[test]
 fn the_mapping_and_the_palette_are_the_same_in_both_modes() {
     for name in FIXTURES {

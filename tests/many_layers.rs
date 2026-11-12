@@ -15,10 +15,17 @@
 //! 0, 999 and never decodes as its twin with the layers 0, 1 and never.
 //! OpenJPEG 2.5.0 decodes each twin to [`expected`]'s image
 //! (`opj_decompress -i twin.j2k -o twin.pgm`, on the bytes [`codestream`]
-//! writes for the twin); the twins are decoded here too. Found in the review
-//! of PR #249 with a 2048 x 2048, 1000-layer file built the same way.
+//! writes for the twin); the twins are decoded here too, and their bytes are
+//! pinned by SHA-256 so a change to the writer can't move them away from what
+//! OpenJPEG decoded. So are two 999-layer files with a code-block first
+//! included at layer 998, the last threshold OpenJPEG reads correctly: it
+//! decodes both to [`expected`]'s image as well. Found in the review of
+//! PR #249 with a 2048 x 2048, 1000-layer file built the same way.
+
+mod support;
 
 use rust_j2k::decode;
+use support::jp2::sha256_hex;
 
 /// A packet-header bit writer (B.10.1): after a 0xFF byte, the next byte
 /// holds only 7 bits.
@@ -193,6 +200,11 @@ fn expected(included: [bool; 3]) -> Vec<i32> {
     samples
 }
 
+/// `bytes` as written when OpenJPEG 2.5.0 decoded them to [`expected`].
+fn assert_pinned(bytes: &[u8], sha256: &str) {
+    assert_eq!(sha256_hex(bytes), sha256, "the bytes OpenJPEG decoded");
+}
+
 fn samples(bytes: &[u8]) -> Vec<i32> {
     let image = decode(bytes).expect("decodes");
     assert_eq!((image.width, image.height), (12, 4));
@@ -204,6 +216,10 @@ fn samples(bytes: &[u8]) -> Vec<i32> {
 #[test]
 fn a_code_block_first_included_at_layer_999_decodes() {
     let twin = codestream(2, [Some(0), Some(1), None]);
+    assert_pinned(
+        &twin,
+        "9763825b89a69b9c49a4a273b91e115c11634218bb2a31fa596af7c673fefc57",
+    );
     assert_eq!(samples(&twin), expected([true, true, false]));
     let file = codestream(1000, [Some(0), Some(999), None]);
     assert_eq!(samples(&file), expected([true, true, false]));
@@ -215,8 +231,31 @@ fn a_code_block_first_included_at_layer_999_decodes() {
 #[test]
 fn every_code_block_included_the_last_at_layer_999_decodes() {
     let twin = codestream(3, [Some(0), Some(1), Some(2)]);
+    assert_pinned(
+        &twin,
+        "cf1a7e288a08f1ec72d97e9bc5b856ffc75b8ef2c734c29e36af62a583b54ec5",
+    );
     assert_eq!(samples(&twin), expected([true; 3]));
     let file = codestream(1000, [Some(0), Some(1), Some(999)]);
+    assert_eq!(samples(&file), expected([true; 3]));
+}
+
+/// 999 layers, a code-block first included in the last one: OpenJPEG 2.5.0
+/// reads these, since no threshold reaches its 999, and decodes both to
+/// [`expected`]'s image.
+#[test]
+fn a_code_block_first_included_at_layer_998_decodes_as_in_openjpeg() {
+    let file = codestream(999, [Some(0), Some(998), None]);
+    assert_pinned(
+        &file,
+        "0ad0d419445213a249ea5ae248799d799aa6de5aa533efde0f4a4ab280f3a74c",
+    );
+    assert_eq!(samples(&file), expected([true, true, false]));
+    let file = codestream(999, [Some(0), Some(1), Some(998)]);
+    assert_pinned(
+        &file,
+        "053286107dd7d442c10d3918742292b0e2eb9e26068b8e2a093939fee4b1aff0",
+    );
     assert_eq!(samples(&file), expected([true; 3]));
 }
 
