@@ -64,17 +64,32 @@ whole-crate look happens.
 2. Bump `version` in `Cargo.toml` to match.
 3. Update the README's install line (`rust-j2k = "X.Y"`) and the
    supported-versions table in `SECURITY.md` to the new minor version.
-4. Open a PR with those changes; merge once CI is green.
-5. Tag the merged commit and push the tag:
+4. Point the published docs at the release, so docs.rs and crates.io show
+   the docs for that version rather than `main`:
+   - In `src/lib.rs`, change every `rust-j2k/blob/main/` link to
+     `rust-j2k/blob/vX.Y.Z/`
+     (`sed -i 's#rust-j2k/blob/main/#rust-j2k/blob/vX.Y.Z/#g' src/lib.rs`).
+   - In `README.md`, make each relative link (`docs/...`, `CONTRIBUTING.md`,
+     `SECURITY.md`, the license files) absolute at the tag:
+     `https://github.com/D0ubleD0uble/rust-j2k/blob/vX.Y.Z/<path>`.
+
+   The tag does not exist yet when the PR is written, but it does by the time
+   docs.rs builds the published crate. Afterwards, both
+   `grep -n 'blob/main' src/lib.rs` and
+   `grep -nE '\]\((docs|[A-Z][A-Za-z-]*\.md|LICENSE)' README.md` should print
+   nothing. Between releases, new links may use `main` or relative paths; the
+   next release pins them.
+5. Open a PR with those changes; merge once CI is green.
+6. Tag the merged commit and push the tag:
    ```sh
    git checkout main && git pull
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
-6. The `release.yml` workflow runs the full gate, checks the tag matches the
+7. The `release.yml` workflow runs the full gate, checks the tag matches the
    crate version, then pauses on the `crates-io` environment. Approve the
    deployment in the GitHub UI (Actions → the run → Review deployments).
-7. On approval it publishes to crates.io and creates the GitHub Release.
+8. On approval it publishes to crates.io and creates the GitHub Release.
 
 ## Versioning
 
