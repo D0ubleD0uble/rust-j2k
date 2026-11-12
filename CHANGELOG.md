@@ -17,6 +17,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (past the end of the file, `LBox` 2..7, `XLBox` below 16, or shorter than
   its codestream), since the codestream ends where its tile-parts end. A file
   that is not JP2-compatible is `Unsupported`.
+- In a JP2 file, a `Psot = 0` last tile-part ends at the end of its `jp2c`
+  box, with or without `EOC`, when the box's length ends before the end of
+  the file and the tile's packets end exactly there. Such a file decodes as
+  in OpenJPEG, and its boxes after the codestream are reported. Otherwise
+  the tile-part is read to the end of the file, as OpenJPEG reads it, and
+  bytes after the last packet are refused. `read_header` makes the same
+  check, walking that tile's packet headers within a fixed bound; a tile
+  past the bound, or one whose POC volumes reach too many packets to walk,
+  is read to the end of the file, so the boxes after `jp2c` are not
+  reported. Bytes after a box that ends inside the codestream are never
+  reported as metadata.
 - The boxes after the codestream are read as OpenJPEG reads them after
   decoding. Unknown boxes there are skipped, but a malformed header box is
   `FileFormat`: a second signature or `ftyp`, a `jp2h` without `ihdr`, a bad
@@ -24,56 +35,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   That includes junk after the `EOC` of a `jp2c` with `LBox` 0, and padding
   inside a `jp2c` that reads as a bad box.
 - A JP2 file with a palette (`pclr` + `cmap`) decodes to the palette's
-  channels, one per palette column, with each channel's depth and sign from the
-  palette. What is accepted and the output samples follow OpenJPEG, so a
+  channels, one per palette column, with each channel's depth and sign from
+  the palette. What is accepted and the output samples follow OpenJPEG, so a
   palette channel that reads another channel's column is `Unsupported`. Two
-  differences: a palette column too deep for an `i32` sample is
-  `Unsupported`, and channels from components of different sub-sampling each
-  keep their own grid, where OpenJPEG fails.
-  `Jp2Metadata::palette_applied` says whether the palette was applied. The
-  expanded channels count against the same sample budget as the codestream
-  (`Error::Limit`), so while the decoded components are still held a palette
-  can briefly take about twice the budget (~512 MiB of `i32`).
+  differences: a palette column too deep for an `i32` sample is `Unsupported`,
+  and channels from components of different sub-sampling each keep their own
+  grid, where OpenJPEG fails. `Jp2Metadata::palette_applied` says whether the
+  palette was applied. The expanded channels count against the same sample
+  budget as the codestream (`Error::Limit`), so while the decoded components
+  are still held a palette can briefly take about twice the budget: a
+  one-column palette at the full budget peaks at about 515 MiB, measured.
 - A JP2 file with channel definitions (`cdef`) puts its color channels in
   color order and labels every channel on `Jp2Metadata::channels` with its
-  type and association. What is accepted and the output order follow
-  OpenJPEG: each color entry moves its channel to its color's position, and
-  other channels stay where the file put them. The entries describe the
-  channels after the palette. Without a `cdef` (or under `raw_channels`),
-  only the first N channels are colors, N being the color space's
-  number of colors (3 for sRGB and sYCC, 1 for grayscale, the profile's for
-  an ICC profile); any channel past them is `Unspecified` with no
-  association, since I.5.3.6 gives it no meaning. When the count is not
-  known (no `colr`, an enumerated value without a listed count, or a
-  profile too short to name its color space), every channel is labeled a
-  color, in order. This also lets a file of two components, a grayscale
-  ICC profile and no `cdef` convert under
+  type and association. What is accepted and the output order follow OpenJPEG:
+  each color entry moves its channel to its color's position, and other
+  channels stay where the file put them. The entries describe the channels
+  after the palette. Without a `cdef` (or under `raw_channels`), only the
+  first N channels are colors, N being the color space's number of colors (3
+  for sRGB and sYCC, 1 for grayscale, the profile's for an ICC profile); any
+  channel past them is `Unspecified` with no association, since I.5.3.6 gives
+  it no meaning. When the count is not known (no `colr`, an enumerated value
+  without a listed count, or a profile too short to name its color space),
+  every channel is labeled a color, in order. This also lets a file of two
+  components, a grayscale ICC profile and no `cdef` convert under
   `ColorOutput::Srgb` as gray plus opacity, and an sRGB file of four
-  components whose fourth differs in format from the colors passes through
-  as coded, as OpenJPEG does. A file declared sRGB or grayscale on three
-  components is still refused, whatever its `cdef` labels or without one,
-  where `opj_decompress` would convert it as sYCC (4:2:0 or 4:2:2).
+  components whose fourth differs in format from the colors passes through as
+  coded, as OpenJPEG does. Under `Srgb`, a three-component sRGB or grayscale
+  file at 4:2:0 or 4:2:2 is still refused, whatever its `cdef` labels or
+  without one, where `opj_decompress` would convert it as sYCC.
 - `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
   coded, without the palette or channel definitions. The index plane is then
   labeled `ChannelType::Unspecified`, and only the boxes' layout is checked.
 - `read_header_with` reads the header for a given `DecodeOptions`: it fails
   exactly when `decode_with` does for a fault in the boxes or the main header
   (a palette `cmap` that `raw_channels` leaves unchecked, a palette that fits
-  the sample budget once the resolution is reduced, a code-block size past
-  the limit in the main-header COD or COC, a reduction past the main header's
-  decomposition levels), and its `width` and
-  `height` follow the resolution reduction. `read_header` is the same at the
-  default options.
+  the sample budget once the resolution is reduced, a code-block size past the
+  limit in the main-header COD or COC, a reduction past the main header's
+  decomposition levels), and its `width` and `height` follow the resolution
+  reduction. `read_header` is the same at the default options.
 - `ComponentInfo::width` and `ComponentInfo::height` give each output
   channel's size in samples, equal to the decoded `Component`'s under the same
   options: they follow the image origin (`ceil(x1/dx) - ceil(x0/dx)`, not
   `ceil(width/dx)`), the resolution reduction, the palette and channel
   definitions, and the sRGB conversion (sYCC chroma on the luma grid).
-- `Association` has three cases: `WholeImage` (`Asoc` 0), `Color(n)` (1 to
-  65534) and `None` (65535). Every `Asoc` value maps to one of them.
 - `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
   the samples (`None` for a raw codestream), with `ColorSpace`,
-  `ChannelDefinition`, `ChannelType`, and `Association`. The color space
+  `ChannelDefinition`, `ChannelType`, and `Association` (`WholeImage` for
+  `Asoc` 0, `Color(n)` for 1 to 65534, `None` for 65535). The color space
   comes from the first usable `colr` box (`METH` 1 or 2); the ICC profile
   bytes of a `METH` 2 box are returned as they are, not applied. A `colr`
   shorter than 3 bytes, a `METH` 1 box without its `EnumCS`, a `METH` 2 box
@@ -96,48 +104,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`jp2i`) verbatim as an `IprBox`, and `Jp2Metadata::uuid_info` every
   top-level UUID info box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst`
   box and the version, flags and location of its `url ` box, with
-  `UuidInfo::location_str` for the location as text. Both are collected
-  before and after the codestream, like `xml ` and `uuid`. A malformed `uinf` (not exactly one `ulst` and one
-  `url `, a `ulst` whose count does not match its length, a `url ` under 4
-  bytes, or a bad box inside it) is left out and never fails a decode, as
-  OpenJPEG skips the box.
+  `UuidInfo::location_str` for the location as text. Both are collected before
+  and after the codestream, like `xml ` and `uuid`. A malformed `uinf` (not
+  exactly one `ulst` and one `url `, a `ulst` whose count does not match its
+  length, a `url ` under 4 bytes, or a bad box inside it) is left out and
+  never fails a decode, as OpenJPEG skips the box.
 - `Jp2Metadata` reports the rest of the JP2 header: `image_header`
   (`ImageHeader`: the `ihdr` compression type, unknown-color-space flag and
   `IPR` flag as `ipr_flag`), `color_specifications` (every `colr` box in file
   order as a `ColorSpecification`, with its method, precedence, approximation
   and the bytes after them as `payload`; the first usable one still sets
-  `color`), `file_type`
-  (`FileType`: the `ftyp` brand, minor version and compatibility list) and
-  `reader_requirements` (`ReaderRequirements`, with `StandardFeature` and
-  `VendorFeature`: the first top-level `rreq` box's masks and features). A
-  malformed `rreq` is left out and never fails a decode, as OpenJPEG skips
-  the box.
+  `color`), `file_type` (`FileType`: the `ftyp` brand, minor version and
+  compatibility list) and `reader_requirements` (`ReaderRequirements`, with
+  `StandardFeature` and `VendorFeature`: the first top-level `rreq` box's
+  masks and features). A malformed `rreq` is left out and never fails a
+  decode, as OpenJPEG skips the box.
 - `DecodeOptions::color` takes a `ColorOutput`. The default, `AsCoded`,
   returns the samples as the file codes them. `Srgb` converts a JP2 file's
   color channels, picked by their labels, to sRGB:
-  - sYCC to RGB, with sub-sampled chroma replicated to full resolution
-    first;
+  - sYCC to RGB, with sub-sampled chroma replicated to full resolution first.
+    This uses the IEC 61966-2-1 constants and rounds, where OpenJPEG shortens
+    the constants and truncates, so the two differ by an MSE of about 0.38 to
+    0.49 a channel; the ISO references match this formula;
   - a restricted ICC profile (monochrome, or three-component matrix/TRC)
     applied at its rendering intent, with the same output as OpenJPEG 2.5.0
     with LittleCMS 2.14, sample for sample. That holds on x86-64 Linux
     (glibc 2.39) and on every platform whose `fma` is correctly rounded
     (MinGW's, on `*-pc-windows-gnu`, may not be: rust-lang/rust#140515).
+    i586 targets use x87 arithmetic, which is not exact IEEE, so the output
+    there can differ too.
 
-  sRGB and grayscale pass through. So do the files OpenJPEG leaves as
-  coded: one or two channels in any color space but a monochrome profile, a
-  profile LittleCMS refuses, a profile in a color space other than RGB,
-  gray or YCbCr, and an RGB profile whose first four channels differ in
-  format. The metadata then keeps the profile. A three-channel 4:2:0 or
-  4:2:2 image in any color space but sYCC is refused, where
-  `opj_decompress` would convert it as sYCC. Other color spaces and
-  channel layouts are `Unsupported`, and `Srgb` with `raw_channels` is
-  `InvalidOptions`.
-  After a conversion `Jp2Metadata::color` says sRGB, or grayscale for a
-  monochrome profile whose output is neutral. A monochrome profile with a
-  tinted white point gives three channels; `read_header` doesn't predict
-  that, and `read_header_with` with the same options does. The table in
-  `docs/correctness.md` ("sRGB output") lists every case, what OpenJPEG
-  does with it, and why this decoder follows or differs.
+  sRGB and grayscale pass through. So do the files OpenJPEG leaves as coded:
+  one or two channels in any color space but a monochrome profile, a profile
+  LittleCMS refuses, a profile in a color space other than RGB, gray or YCbCr,
+  and an RGB profile whose first four channels differ in format. The metadata
+  then keeps the profile. A three-channel 4:2:0 or 4:2:2 image in any color
+  space but sYCC is refused, where `opj_decompress` would convert it as sYCC.
+  Other color spaces and channel layouts are `Unsupported`, and `Srgb` with
+  `raw_channels` is `InvalidOptions`. After a conversion `Jp2Metadata::color`
+  says sRGB, or grayscale for a monochrome profile whose output is neutral. A
+  monochrome profile with a tinted white point gives three channels;
+  `read_header` doesn't predict that, and `read_header_with` with the same
+  options does. The table in `docs/correctness.md` ("sRGB output") lists every
+  case, what OpenJPEG does with it, and why this decoder follows or differs.
 - `DecodeOptions::with_raw_channels` and `DecodeOptions::with_color` set
   those options like `with_resolution_reduction` does; the fields stay public.
 - Every public type added in this release is `#[non_exhaustive]` except
@@ -169,6 +178,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `raw_channels` documentation gives the recipe.
 - `src/jp2/lcms.rs` is a Rust port of parts of LittleCMS 2.14 (MIT). Its
   notice is at the top of the file and in the README.
+- `src/jp2/math.rs` and `src/jp2/math_data.rs` are a Rust port of `pow` and
+  `log` from Arm's optimized-routines (MIT), so the ICC output does not
+  depend on the platform's `libm`. Its notice is at the top of `math.rs` and
+  in the README.
 
 ### Fixed
 
@@ -184,17 +197,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with no `EOC` loses its last two data bytes and fails in the tile
   ("overruns the tile-part"); it used to be rejected as not terminated by
   `EOC`.
-- In a JP2 file, a `Psot = 0` last tile-part now ends at the end of its
-  `jp2c` box, with or without `EOC`, when the box's length ends before the
-  end of the file and the tile's packets end exactly there; otherwise it is
-  read to the end of the file as before. Such a file decodes as in OpenJPEG
-  where it was refused for bytes left after the last packet, and its `xml `
-  and `uuid` boxes after the codestream are reported again. Bytes after a box
-  that ends inside the codestream are not reported as metadata. `read_header`
-  makes the same check, walking that tile's packet headers within a fixed
-  bound; a tile past the bound is read to the end of the file. A raw
-  codestream, or a `jp2c` with `LBox` 0 or a length that ends inside the
-  codestream, is still refused when bytes follow the last packet.
 - Tile headers are checked in time proportional to their own markers. Each
   tile's header used to be a copy of the main header, made for every tile
   before any check, so the time grew as the tiles times the components or
@@ -211,10 +213,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   terminate. On a terminated pass (every pass under `restart`, the block's
   last cleanup, and the bypass cleanups from the fourth coded plane down) it
   is still an error. Rate control can cut an unterminated pass a few bytes
-  short, and
-  `opj_compress` output with segmentation symbols and `-r` was refused about
-  once in 50 encodes. Such streams now decode as in OpenJPEG. A wrong symbol
-  read from the segment's own bytes is still a `Codestream` error.
+  short, and `opj_compress` output with segmentation symbols and `-r` was
+  refused about once in 50 encodes. Such streams now decode as in OpenJPEG. A
+  wrong symbol read from the segment's own bytes is still a `Codestream`
+  error.
 - A POC in a tile's first tile-part header now replaces the main header's
   POC for that tile, as the standard requires. The tile's volumes were
   appended after the main header's, as OpenJPEG does, so a file with both
@@ -223,16 +225,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   allow, is still read as OpenJPEG reads it. The 32-volume limit counts the
   volumes the tile walks, so the main header's no longer count against a
   tile that replaces them.
-- The packet-header bound now counts only the components that hold a
-  precinct at each resolution, and a resolution with none costs less to set
-  up. A tile of one sample at
-  an odd origin has 32 such resolutions per component. These files used to
-  be `Error::Limit` and now decode, as in OpenJPEG: 64 one-sample tiles of
-  16384 components (1.1 MB), refused after 21 s, now decode in 10.5 s; an
-  LRCP or RLCP column of 8 components and 65535 layers; and an RPCL or PCRL
-  column of 16 components and 2^17 rows. One tile of 16384 such components
-  takes 0.18 s instead of 0.5 s, and 64 tiles of 1024 take 0.41 s instead
-  of 1.7 s.
 - A single-tile decode no longer holds two image-sized buffers at once. The
   image plane takes the tile's buffer instead of a copy, and the inverse
   wavelet frees each level's subbands as it merges them. At the full sample
@@ -285,12 +277,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Reading the packet headers is bounded: `decode` may take 2^24 steps that
   read no header bit, or 32 per byte of tile data when that is more,
   counting packets, steps over code-blocks a header reads no bit for, and
-  the positions a positional progression order sweeps. Past it the decode
+  the positions a positional progression order sweeps, for the components
+  that hold a precinct at each resolution. Past it the decode
   is `Error::Limit`. Encoder output seen spends under 13% of it, but a
   valid file of many layers that each include a few scattered code-blocks
   can exceed it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
   819 bytes took 6.5 s and a 9 KB PCRL sweep 29 s; both are now refused in
   a fraction of a second. OpenJPEG has no such bound and decodes them.
+- A resolution that holds no precinct costs less: it gets no band or
+  code-block geometry, and the packet walk checks no component there. A tile
+  of one sample at an odd origin has 32 such resolutions per component, so
+  64 such tiles of 16384 components (1.1 MB) decode in 10.5 s instead of
+  0.3.0's 20.9 s, and one such tile in 0.18 s instead of 0.41 s.
 - A POC marker whose volumes reach the same packets again costs a bit per
   packet instead of about 80 bytes, and a few ns per repeat instead of
   about 1 µs, in `decode` and in `read_header`. A 1 MB file of 31 identical
@@ -298,13 +296,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one of 160 components took 4.5 s and 824 MB and now takes 0.32 s and
   14 MB. When every volume is LRCP or RLCP and they reach more packets than
   the decode's work bound allows, the decode is `Error::Limit` before it
-  reads one, where it used to read on until the data or the bound ran out.
-  With a positional volume, each repeat skipped past that point counts 12
-  steps against the bound. For a `Psot = 0` codestream in a JP2 file, such a
-  tile is too costly for `read_header` to walk to see whether the codestream
-  ends at its box's end, so it runs to the end of the file: boxes after
-  `jp2c` are not reported, and the decode refuses their bytes as left after
-  the last packet, as for the other tiles too costly to walk.
+  reads one, where 0.3.0 read on until the data ran out. With a positional
+  volume, each repeat skipped past that point counts 12 steps against the
+  bound.
 - A POC marker whose volumes leave out packets of a tile is refused as
   `Error::Codestream`, naming the tile, component, resolution and first
   missing layer: each resolution of each component, counting the
@@ -316,9 +310,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   holds under a resolution reduction too. `read_header` does not check
   coverage, so for such a file in JP2 it still reports the boxes after the
   codestream.
-- Two new error variants split what `Error::Unsupported` used to conflate
-  (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
-  wildcard arms now see these instead of `Unsupported`): `Error::Limit` is
+- Breaking: two new error variants split what `Error::Unsupported` used to
+  conflate. `Error` is `#[non_exhaustive]`, so existing matches keep
+  compiling, but a caller matching `Unsupported` for these inputs now gets
+  a different variant: `Error::Limit` is
   returned when an input exceeds a decoder resource guard (image/component
   sample budget, precinct and code-block counts, bit-plane depth, progression
   volumes), and `Error::InvalidOptions` when the caller's `DecodeOptions` are
