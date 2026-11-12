@@ -290,14 +290,20 @@ bound, then after, then `opj_decompress` 2.5.0):
 | Shape | Size | Before | After | OpenJPEG |
 | ----- | ---- | ------ | ----- | -------- |
 | LRCP, 2^17 4x4 code-blocks, 1000 one-byte packets | 1.1 KB | 4.6 s | 0.6 s | 6.6 s |
-| LRCP, 2^14 code-blocks, 65535 layers | 66 KB | 28.7 s | 0.5 s | fails |
-| PCRL sweep, 1024 components, step 2 on a 2048^2 tile | 9.3 KB | 28.9 s | 0.2 s | |
+| LRCP, 2^14 code-blocks, 65535 layers | 66 KB | 28.7 s | 0.4 s | 0.3 s |
+| PCRL sweep, 1024 components, step 2 on a 2048^2 tile | 9.3 KB | 28.9 s | 0.2 s | 37.4 s |
 | CPRL, one 2^24-row column, 31 POC volumes | 819 B | 6.5 s | 0.1 s | 20.6 s |
 
-Encoder output stays far below the bound: every committed file and every
-conformance file spends under 1% of it (at most 0.54 visits per byte), and
-`opj_compress` output with 16x16 code-blocks, 100 layers and `termall` 0.41
-per byte (`every_committed_file_walks_far_below_the_work_bound` prints the
+The bound scales with size, so a large file of the same shape still takes
+as long as its bytes allow: the 65535-layer shape padded to 10 MB is refused
+after 4.5 s, about what 10 MB of real data takes to decode.
+
+Encoder output stays far below the bound: every conformance file spends
+under 1% of it (at most 0.54 visits per byte), and so does every committed
+file other than the hand-built `psot0/jp2_t2_*` walks (at most 6.7%).
+`opj_compress` output with 16x16 code-blocks, 100 layers and `termall`
+takes 0.41 visits per byte, and with 4x4 code-blocks, 20 layers, SOP and
+EPH 1.42 (`every_committed_file_walks_far_below_the_work_bound` prints the
 table). What the bound can refuse is a valid file of the same shape as the
 repro above: a nearly empty image with tiny code-blocks and many layers,
 whose packets are a byte each yet visit every code-block. A flat 2048^2
