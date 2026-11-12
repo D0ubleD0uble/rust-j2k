@@ -1,10 +1,11 @@
 # Phase 3 roadmap — JP2 file format decode
 
-> **Status: implemented on `main`, release pending.** P3.0 to P3.7 have landed
-> and P3.8's docs pass is done. All nine Part 4 JP2 reader files decode in
-> class. What remains is the owner's public-API decisions and the pre-release
-> review in `RELEASING.md`. The milestones below are the build order that was
-> followed, each with the oracle that gated it.
+> **Status: implemented on `main`, release pending.** P3.0 to P3.8 have
+> landed. All nine Part 4 JP2 reader files decode in class, the owner's
+> public-API decisions are applied, and the `RELEASING.md` pre-release review
+> is done (#226, #167). What remains is the release itself. The milestones
+> below are the build order that was followed, each with the oracle that
+> gated it.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file
 zooms into Phase 3 alone. It breaks the line item "JP2 file format decode" into
@@ -528,8 +529,10 @@ review in `RELEASING.md`.
 **Status:** the docs pass is done (`lib.rs`, `README.md`, `scope.md`,
 `roadmap.md`, `correctness.md`, `tests/fixtures/README.md`, `CHANGELOG.md`
 under Unreleased). The Part 4 JP2 gate is met: nine of nine in `IN_CLASS`, and
-the 23 Part 1 entries are unchanged. Left: the owner's public-API decisions
-and the `RELEASING.md` pre-release review.
+the 23 Part 1 entries are unchanged. The owner's public-API decisions are
+applied, and the `RELEASING.md` pre-release review is done: the whole-crate
+reviews under #226, and the documentation pass and extended gate under #167.
+Left: the release.
 
 **Gate (the Phase 3 exit):** all nine ISO/IEC 15444-4 JP2 reader files decode
 within PAE 4 / MSE 1 against their references (bit-exact where the manifest
@@ -609,7 +612,7 @@ so and why we differ (or do not).
 | Under `Srgb`: color channels of different depth, sign or sub-sampling (other than sYCC chroma at 2x1 or 2x2) | ICC: conversion skipped, samples as coded; three components with sub-sampled chroma and an sRGB or absent `colr`: converted as if sYCC | reject | `Unsupported` (owner decision 2026-11-01); `AsCoded` decodes them; row of `srgb_reject_matrix_maps_each_input_to_its_typed_error` |
 | Under `Srgb`: sYCC with sub-sampled luma or another chroma layout | "CAN NOT CONVERT", samples as coded | reject | `Unsupported` |
 | Under `Srgb`: signed sYCC | converted silently as if unsigned, then clamped (R `[-7,-62,61,114]` → `[0,0,15,0]`) | reject | `Unsupported` (owner decision 2026-11-01) |
-| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, an ICC profile lcms would apply through a LUT or the Lab PCS, a `YCbr` profile, or ICC lcms would apply on samples other than 8/16-bit (RGB) or 8-bit (gray) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit gray 15 → 18 | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as gray, metadata as declared (`docs/correctness.md`, sRGB output) |
+| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, an ICC profile lcms would apply through a LUT or the Lab PCS, a `YCbr` profile, or ICC lcms would apply on samples other than 8/16-bit (RGB) or 8-bit (gray) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit gray 15 → 18. `-force-rgb` converts CMYK (12, four channels at one sampling) to three RGB planes, CIELab (14, three channels) to 16-bit RGB, and e-sYCC (24) | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as gray, metadata as declared (`docs/correctness.md`, sRGB output) |
 | `raw_channels` with `Srgb` | n/a | reject before reading | `InvalidOptions` |
 | sYCC chroma replication past the sample budget | allocates | reject before any tile | `Limit` |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |

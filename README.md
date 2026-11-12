@@ -33,13 +33,14 @@ supported Rust version is **1.87**.
 
 The public surface is small: the bytes of a JPEG 2000 codestream or JP2 file in
 (detected from the first bytes), a decoded `Image` out — `decode`, or
-`decode_with` to set options such as a resolution reduction. `read_header`
-reads the image area, the channel formats and a JP2 file's metadata without
-decoding any tile data. An `Image` is the image area on the reference grid plus
-one `Component` per output channel, each on its own sample grid: per codestream
-component, or per palette column for a palettized JP2 file. For a JP2 file,
-`image.jp2` holds what its boxes say (color space, channel types, resolution,
-`xml ` and `uuid` boxes).
+`decode_with` to set options such as a resolution reduction or sRGB output.
+`read_header` reads the image area, the channel formats and a JP2 file's
+metadata without decoding any tile data, and `read_header_with` does the same
+for a given set of options. An `Image` is the image area on the reference grid
+plus one `Component` per output channel, each on its own sample grid: per
+codestream component, or per palette column for a palettized JP2 file. For a
+JP2 file, `image.jp2` holds what its boxes say (color space, channel types,
+palette, resolution, and the `xml `, `uuid`, `jp2i` and `uinf` boxes).
 
 ```rust
 use rust_j2k::decode;
@@ -97,8 +98,8 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 | Decoded | Not yet (returns `Error::Unsupported`) |
 | --- | --- |
 | Raw codestream (Annex A) and JP2 files (Annex I), detected from the first bytes | JPX, JPM and MJ2 files that do not claim `jp2 ` compatibility |
-| JP2 palettes (`pclr`, `cmap`), channel definitions (`cdef`), color specification (`colr`), `res `, `xml ` and `uuid` boxes, reported on `Image::jp2` | — |
-| Opt-in sRGB output (`DecodeOptions::color`): sYCC and restricted ICC profiles | Other color spaces and profiles under that option |
+| JP2 palettes (`pclr`, `cmap`), channel definitions (`cdef`), color specifications (`colr`), and the `ihdr`, `ftyp`, `rreq`, `res `, `xml `, `uuid`, `jp2i` and `uinf` boxes, reported on `Image::jp2` | — |
+| Opt-in sRGB output (`DecodeOptions::color`): sYCC and restricted ICC profiles, matching OpenJPEG with LittleCMS sample for sample | Other color spaces (CMYK, CIELab, e-sYCC, …) and profiles under that option |
 | Integer components, unsigned up to 31 bits or signed up to 32 bits, with sub-sampling | Unsigned 32-bit components, and depths past the `i32` container (33–38 bits) |
 | Both color transforms: reversible (RCT) and irreversible (ICT) | Part 2 extensions (array MCT, …) |
 | Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | HTJ2K (Part 15) block coding |
@@ -108,10 +109,12 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 | All six code-block coding styles; region of interest (maxshift) | — |
 | Resolution-reduced decode (each level halves the output) | — |
 
-Anything outside the decoded set is rejected cleanly, not half-decoded. The
-long-run target is OpenJPEG-level coverage (HTJ2K, an encoder, and the later parts); we get there by widening this same
-engine outward. See [docs/roadmap.md](docs/roadmap.md) and
-[docs/scope.md](docs/scope.md).
+Anything outside the decoded set is rejected cleanly, not half-decoded. Where
+this decoder and OpenJPEG differ, and why, is listed in
+[docs/correctness.md](docs/correctness.md). The long-run target is
+OpenJPEG-level coverage (HTJ2K, an encoder, and the later parts); we get there
+by widening this same engine outward. See [docs/roadmap.md](docs/roadmap.md)
+and [docs/scope.md](docs/scope.md).
 
 ## Pipeline
 
@@ -133,7 +136,8 @@ against the OpenJPEG/eccodes oracle.
 The nine ISO/IEC 15444-4 JP2 reader files decode within their reference bounds
 too, and a set of real `.jp2` files matches OpenJPEG.
 
-Next come HTJ2K and an encoder, widening this same engine. The plan is in [docs/roadmap.md](docs/roadmap.md).
+Next come HTJ2K and an encoder, widening this same engine. The plan is in
+[docs/roadmap.md](docs/roadmap.md).
 
 ## Correctness
 

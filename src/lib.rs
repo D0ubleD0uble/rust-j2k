@@ -15,11 +15,11 @@
 //! A JP2 file's codestream decodes the same way, and the file's header comes
 //! back on [`Image::jp2`]. A palettized JP2 file decodes to the palette's
 //! channels, and a file with channel definitions puts its color channels in
-//! color order. [`read_header`] reads the same header without decoding any
-//! tile data. Samples come out as coded by default;
+//! color order. [`read_header`] and [`read_header_with`] read the same header
+//! without decoding any tile data. Samples come out as coded by default;
 //! [`ColorOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
-//! HTJ2K and an encoder are later work, not permanent non-goals.
-//! See `docs/roadmap.md` and `docs/scope.md`.
+//! HTJ2K and an encoder are later work, not permanent non-goals. See
+//! `docs/roadmap.md` and `docs/scope.md`.
 //!
 //! # Pipeline
 //!
@@ -58,15 +58,37 @@
 //! }
 //! ```
 //!
+//! A JP2 file's header says how to read its samples. To get sRGB instead of
+//! the samples as coded, ask for it in the options:
+//!
+//! ```no_run
+//! use rust_j2k::{ColorOutput, ColorSpace, DecodeOptions, decode_with};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let bytes = std::fs::read("photo.jp2")?;
+//! let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
+//! let image = decode_with(&bytes, &options)?;
+//! if let Some(jp2) = &image.jp2 {
+//!     // After a conversion the color space says sRGB, or grayscale for a
+//!     // monochrome profile; a file left as coded keeps the space it
+//!     // declares. `channels` labels each component (color 1, 2, 3, opacity).
+//!     if jp2.color == ColorSpace::Srgb {
+//!         println!("sRGB, channels {:?}", jp2.channels);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Status
 //!
-//! All 23 entries of the ISO/IEC 15444-4 conformance suite decode within their
-//! class-1 error bounds, and that gate runs in `tests/` against committed
-//! oracle snapshots, with no external tools. Correctness is defined by
-//! cross-checking a reference decoder (OpenJPEG / eccodes), not by
-//! self-consistency. An input using a feature outside the decoded set — HTJ2K,
-//! a Part 2 extension — is rejected with
-//! [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
+//! All 23 codestreams of the ISO/IEC 15444-4 conformance suite decode within
+//! their class-1 error bounds, and its nine JP2 files within their compliance
+//! class. That gate runs in `tests/` against committed oracle snapshots, with
+//! no external tools. Correctness is defined by cross-checking a reference
+//! decoder (OpenJPEG / eccodes), not by self-consistency. An input using a
+//! feature outside the decoded set (HTJ2K, a Part 2 extension) is rejected
+//! with [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. See each module's docs for the ISO §reference and what it owns;
 //! the feature map is in `docs/scope.md`.
