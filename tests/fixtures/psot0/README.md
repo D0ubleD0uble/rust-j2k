@@ -83,6 +83,12 @@ is the finest precinct span over all of the component's resolutions, empty
 ones included, and each axis can take it from a different resolution, so the
 sweep can visit many more positions than there are precincts. A POC marker
 repeats the sweep once per volume.
+The OpenJPEG column of `jp2_t2_many_layers` agrees by coincidence.
+OpenJPEG starts every tag-tree node at 999, so from layer 999 on it takes
+each code-block not yet included as included, without reading its bit, and
+reads the rest of those packet headers out of step. Here that lands on
+samples of 128 again. OpenJPEG is not an oracle past 999 layers
+(`docs/correctness.md`, "Where the decoders differ").
 The walk is bounded, and past a bound it answers no, so they run to the end of
 the file, as they do without the check. The `Codestream` rows are a
 known difference, recorded in `docs/correctness.md`: the box's end is not

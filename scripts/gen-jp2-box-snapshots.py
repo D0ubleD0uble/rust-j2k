@@ -142,7 +142,10 @@ def edge_cases(file5: bytes) -> list[tuple[str, str, list[tuple[int, int, bytes]
     (such as `rreq`) and for a misplaced header box it ignores. So any later
     top-level header box before `jp2h` is read as if `jp2h` had been: a
     `colr` after file5's `rreq`, or the second of two `colr` boxes after the
-    `ftyp`, becomes its color space. Those cases are not pinned here."""
+    `ftyp`, becomes its color space. This decoder follows the standard and
+    ignores every header box at the top level before `jp2h` (owner decision,
+    2026-11-11; OpenJPEG's `JP2_STATE_UNKNOWN` sets every state bit). So the
+    decoders differ on those cases, and they are not pinned here."""
     return [
         (
             "rreq_vendor_features",
