@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Generate `cblksty_segsym_truncated`: a segmentation symbol read past the end
+of a rate-truncated segment, and its OpenJPEG oracle.
+
+Under `segmentation symbols` (`-M 32`) with rate control (`-r`), `opj_compress`
+can cut the last included cleanup pass of a code-block a few bytes short: it
+estimates a truncated pass's length as `numbytes + 3` (t1.c). The decoder then
+reads the four symbol decisions from the `0xFF` fill past the segment, and they
+spell `1001` rather than `1010`. OpenJPEG decodes regardless (its comparison is
+commented out), and so must this crate: D.5 makes the symbol an error-detection
+aid. See docs/correctness.md, "Segmentation symbols".
+
+The input is the 128-byte raw image `SOURCE` below (64 bytes for component 0,
+32 for each of the two vertically sub-sampled components). It came from a
+random search over `opj_compress -M 32 -r ...` option combinations; about 3 in
+300 hit the case. The script checks the style byte and that the codestream is
+the committed one, byte for byte.
+
+Usage: python3 scripts/gen-segsym-truncated-fixture.py
+Requires OpenJPEG 2.5.0 `opj_compress` and `opj_decompress` on PATH.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import struct
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from oracle_tools import require_openjpeg
+
+FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+NAME = "cblksty_segsym_truncated"
+
+SOURCE = bytes.fromhex(
+    "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a"
+    "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a"
+    "2a2a2a2a646a70767c02080e141a20262c32383e444a50565c62686e747a"
+    "00060c12181e68162001453d6506710905765c45096578630f0705001a2f"
+    "3521716c1006680b"
+)
+SOURCE_SHA256 = "ae3b72c7bb288c8450756a87e85a8a1f50fb997e35100222650f15c356f2cc71"
+CODESTREAM_SHA256 = "3cde73749d1c6b0edbe8a04bd2c9e1af6015e53b4c60e7ba61133c3b5bed00bc"
+
+WIDTH, HEIGHT = 1, 64
+# (x_sampling, y_sampling) per component, as in `-F ...@1x1:1x2:1x2`.
+SAMPLING = [(1, 1), (1, 2), (1, 2)]
+FLAGS = [
+    "-F", "1,64,3,7,u@1x1:1x2:1x2",
+    "-n", "5",
+    "-d", "38,17",
+    "-r", "10",
+    "-M", "32",
+]
+
+
+def read_pgx(path: Path) -> tuple[int, int, int, bool, list[int]]:
+    raw = path.read_bytes()
+    end = raw.index(b"\n")
+    tokens = raw[:end].split()
+    assert tokens[0] == b"PG", f"{path}: not a PGX file"
+    sign, depth, width, height = tokens[2], int(tokens[3]), int(tokens[4]), int(tokens[5])
+    signed = sign == b"-"
+    assert depth <= 8, f"{path}: depth {depth}"
+    fmt = "b" if signed else "B"
+    count = width * height
+    values = list(struct.unpack(f">{count}{fmt}", raw[end + 1 : end + 1 + count]))
+    return width, height, depth, signed, values
+
+
+def run(*argv: str) -> None:
+    result = subprocess.run(argv, capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.exit(f"{argv[0]} failed:\n{result.stdout}\n{result.stderr}")
+
+
+def code_block_style(raw: bytes) -> int:
+    """`SPcod`'s code-block style byte, straight out of COD."""
+    offset = 2
+    while offset < len(raw) - 3:
+        marker, length = struct.unpack(">HH", raw[offset : offset + 4])
+        if marker == 0xFF52:
+            return raw[offset + 4 + 8]
+        offset += 2 + length
+    sys.exit("no COD marker")
+
+
+def main() -> None:
+    require_openjpeg("opj_compress", "opj_decompress")
+    if hashlib.sha256(SOURCE).hexdigest() != SOURCE_SHA256:
+        sys.exit("SOURCE does not match its SHA-256")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "in.raw").write_bytes(SOURCE)
+        codestream = FIXTURES / f"{NAME}.j2k"
+        run("opj_compress", "-i", str(tmp / "in.raw"), "-o", str(codestream), *FLAGS)
+        raw = codestream.read_bytes()
+        if code_block_style(raw) != 0x20:
+            sys.exit(f"code-block style is {code_block_style(raw):#04x}, expected 0x20")
+        if hashlib.sha256(raw).hexdigest() != CODESTREAM_SHA256:
+            sys.exit("the codestream differs from the committed one")
+
+        run("opj_decompress", "-i", str(codestream), "-o", str(tmp / "out.pgx"))
+        components = []
+        for index, (dx, dy) in enumerate(SAMPLING):
+            w, h, depth, signed, values = read_pgx(tmp / f"out_{index}.pgx")
+            assert (w, h) == (WIDTH // dx, HEIGHT // dy), f"component {index}: {w}x{h}"
+            components.append(
+                {
+                    "width": w,
+                    "height": h,
+                    "bit_depth": depth,
+                    "signed": signed,
+                    "x_sampling": dx,
+                    "y_sampling": dy,
+                    "samples": values,
+                }
+            )
+
+    snapshot = {
+        "image": {"width": WIDTH, "height": HEIGHT},
+        "tolerance": {"mode": "exact"},
+        "components": components,
+        "provenance": {
+            "source": f"synthetic; generated by scripts/{Path(__file__).name}",
+            "oracle_command": (
+                f"opj_compress -i in.raw -o {NAME}.j2k " + " ".join(FLAGS)
+                + f" ; opj_decompress -i {NAME}.j2k -o out.pgx"
+            ),
+            "notes": "segmentation symbols with rate control: the last cleanup pass of a "
+            "truncated code-block reads its symbol from fill past the segment end",
+        },
+    }
+    (FIXTURES / f"{NAME}.expected.json").write_text(json.dumps(snapshot, indent=2) + "\n")
+    print(f"wrote {NAME}.j2k + {NAME}.expected.json")
+
+
+if __name__ == "__main__":
+    main()
