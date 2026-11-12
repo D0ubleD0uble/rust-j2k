@@ -602,9 +602,9 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
     let mut visits = tier2::decode_visits(tile_bytes(&cs));
     for (index, tile) in cs.tiles.iter().enumerate() {
         // The tile's own parameters: the main header with this tile's tile-part
-        // header resolved over it. Held for one tile at a time — a header is
-        // sized by the component count, and a codestream can declare tens of
-        // thousands of tiles.
+        // header resolved over it. A tile with no markers of its own borrows the
+        // main header; any other is a copy, sized by the component count, held
+        // for this tile alone, as a codestream can declare tens of thousands.
         let header = cs.tile_header(index)?;
 
         // A reduction must leave every component a resolution to decode, checked

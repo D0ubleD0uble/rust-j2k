@@ -16,6 +16,8 @@
 pub mod markers;
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
+use std::collections::{HashMap, HashSet};
 
 use crate::{Error, Result};
 use markers::{
@@ -37,10 +39,6 @@ pub struct MainHeader {
     /// past the header reads these rather than [`cod`](Self::cod) or
     /// [`qcd`](Self::qcd), which hold the codestream-wide defaults.
     pub components: Vec<ComponentParams>,
-    /// Tile-part lengths from any TLM markers, in marker order; empty when the
-    /// codestream carries none. Informational (A.7.1): decoding does not use
-    /// them, so they are recorded for callers to check, not consulted.
-    pub tlm: Vec<TlmEntry>,
     /// The progression volumes of any `POC` marker, in order; empty when the
     /// codestream carries none, in which case the packet order is [`cod`]'s
     /// single progression over every axis (A.6.6). A tile-part `POC` replaces
@@ -74,7 +72,6 @@ impl MainHeader {
             cod,
             qcd,
             components,
-            tlm: Vec::new(),
             poc: Vec::new(),
             crg: Vec::new(),
         }
@@ -101,9 +98,14 @@ pub struct Tile<'a> {
     ///
     /// They are *not* resolved into a whole header here, because a header is
     /// sized by the component count and there can be tens of thousands of tiles:
-    /// materializing one per tile would cost `tiles × components`, which a header
-    /// under 50 KB can drive into the gigabytes. Resolved one tile at a time, the
-    /// cost is `tiles + components`.
+    /// materializing one per tile would cost `tiles × components` in memory and
+    /// in time, which a header under 50 KB can drive into gigabytes and minutes.
+    /// Instead, [`parse_tiles`] checks each tile's markers against a summary of
+    /// the main header, in time proportional to the tile's own markers. At
+    /// decode, a tile with no markers runs under the main header itself,
+    /// borrowed; a tile with markers is resolved in full, in time and memory
+    /// proportional to the component count, and the decode then spends at least
+    /// that much on the tile's components anyway.
     pub header: TileHeader,
     pub data: Cow<'a, [u8]>,
     /// The tile's packed packet headers (`PPT`), concatenated across its
@@ -126,8 +128,9 @@ impl Codestream<'_> {
     ///
     /// Every stage past the codestream takes one of these, so nothing downstream
     /// has to know that a tile header exists — a tile is just a header, a
-    /// rectangle, and some bytes.
-    pub fn tile_header(&self, index: usize) -> Result<MainHeader> {
+    /// rectangle, and some bytes. A tile with no tile-part-header markers of its
+    /// own decodes under the main header itself, borrowed, not copied.
+    pub fn tile_header(&self, index: usize) -> Result<Cow<'_, MainHeader>> {
         let tile = self
             .tiles
             .get(index)
@@ -172,37 +175,246 @@ pub fn parse_header(bytes: &[u8]) -> Result<ParsedHeader> {
 }
 
 /// Walk the tile-parts of the codestream whose main header `parsed` holds, and
-/// resolve and check every tile's header.
+/// check every tile's header.
 pub fn parse_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
     let codestream = split_tiles(bytes, parsed)?;
 
-    // Resolve every tile's header once, here, so a malformed tile-part header is
-    // a parse error rather than a surprise partway through a decode. Each one is
-    // dropped again immediately: they are sized by the component count, and a
-    // codestream can declare tens of thousands of tiles.
-    for index in 0..codestream.tiles.len() {
-        let tile = codestream.tile_header(index)?;
-
-        // Every tile writes into one buffer per component, and that buffer's
-        // arithmetic follows the component's wavelet: 5/3 reconstructs exact
-        // integers, 9/7 reals. A tile-part COD may legally give a component a
-        // different wavelet than the main header does, which would ask one buffer
-        // to hold both. Nothing in Part 4 encodes that and no real encoder emits
-        // it, so it is rejected rather than given a widened container.
-        let pairs = tile.components.iter().zip(&codestream.header.components);
-        for (component, (in_tile, in_main)) in pairs.enumerate() {
-            if in_tile.coding.transform != in_main.coding.transform {
-                return Err(Error::Unsupported(format!(
-                    "tile {index} codes component {component} with the {:?} wavelet where the \
-                     main header uses {:?}; tiles that disagree on a component's wavelet are \
-                     not decoded",
-                    in_tile.coding.transform, in_main.coding.transform,
-                )));
-            }
+    // Check every tile's header once, here, so a malformed tile-part header is
+    // a parse error rather than a surprise partway through a decode. A header is
+    // sized by the component count and a codestream can declare tens of
+    // thousands of tiles, so each tile's own markers are checked against a
+    // summary of the main header instead of resolving a header per tile. Only
+    // a tile found at fault is resolved in full, so that the fault is reported
+    // in the full check's words.
+    let main = &codestream.header;
+    let summary = OnceCell::new();
+    for (index, tile) in codestream.tiles.iter().enumerate() {
+        if !tile_header_is_valid(main, &summary, &tile.header) {
+            check_tile_in_full(main, &tile.header, index)?;
+            // The two checks agree, so the full one has just failed. Were it
+            // ever to pass, its verdict stands.
+            debug_assert!(false, "tile {index}: the quick check refused a valid tile");
         }
     }
 
     Ok(codestream)
+}
+
+/// Resolve a tile's header in full and check it: every invariant
+/// [`resolve_tile_header`] holds it to, then the wavelet rule below. This is
+/// what a valid tile header is; [`tile_header_is_valid`] decides the same
+/// without resolving one.
+fn check_tile_in_full(main: &MainHeader, tile: &TileHeader, index: usize) -> Result<()> {
+    let resolved = resolve_tile_header(main, tile)?;
+
+    // Every tile writes into one buffer per component, and that buffer's
+    // arithmetic follows the component's wavelet: 5/3 reconstructs exact
+    // integers, 9/7 reals. A tile-part COD may legally give a component a
+    // different wavelet than the main header does, which would ask one buffer
+    // to hold both. Nothing in Part 4 encodes that and no real encoder emits
+    // it, so it is rejected rather than given a widened container.
+    let pairs = resolved.components.iter().zip(&main.components);
+    for (component, (in_tile, in_main)) in pairs.enumerate() {
+        if in_tile.coding.transform != in_main.coding.transform {
+            return Err(Error::Unsupported(format!(
+                "tile {index} codes component {component} with the {:?} wavelet where the \
+                 main header uses {:?}; tiles that disagree on a component's wavelet are \
+                 not decoded",
+                in_tile.coding.transform, in_main.coding.transform,
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The main header's components, sorted by what a tile COD or QCD can fall
+/// short of. Either marker lands on every component the tile does not name in
+/// a COC or QCC, so checking it a component at a time would cost the
+/// component count per tile; against this it costs the tile's own markers.
+struct ComponentSummary {
+    /// `(step entries, component)` for each component whose quantization is
+    /// not derived, fewest entries first. The first a tile does not name is
+    /// the tightest test of a tile COD's decomposition levels.
+    by_steps: Vec<(usize, usize)>,
+    /// `(decomposition levels, component)` for every component, most first.
+    /// The first a tile does not name is the tightest test of a tile QCD's
+    /// step entries.
+    by_levels: Vec<(u8, usize)>,
+    /// How many components use the 9/7 wavelet.
+    irreversible: usize,
+}
+
+impl ComponentSummary {
+    fn of(main: &MainHeader) -> Self {
+        let mut by_steps: Vec<(usize, usize)> = main
+            .components
+            .iter()
+            .enumerate()
+            .filter(|(_, params)| params.quant.style != QuantStyle::ScalarDerived)
+            .map(|(index, params)| (params.quant.steps.len(), index))
+            .collect();
+        by_steps.sort_unstable();
+        let mut by_levels: Vec<(u8, usize)> = main
+            .components
+            .iter()
+            .enumerate()
+            .map(|(index, params)| (params.coding.decomposition_levels, index))
+            .collect();
+        by_levels.sort_unstable_by(|a, b| b.cmp(a));
+        let irreversible = main
+            .components
+            .iter()
+            .filter(|params| params.coding.transform == Transform::Irreversible97)
+            .count();
+        ComponentSummary {
+            by_steps,
+            by_levels,
+            irreversible,
+        }
+    }
+}
+
+/// Whether `quant` can quantize a component of `levels` decomposition levels
+/// under `transform`: the per-component half of [`validate_resolved`].
+fn quant_fits(levels: u8, transform: Transform, quant: &Qcd) -> bool {
+    let needed = 3 * usize::from(levels) + 1;
+    (quant.style == QuantStyle::ScalarDerived || quant.steps.len() >= needed)
+        && !(transform == Transform::Irreversible97 && quant.style == QuantStyle::None)
+}
+
+/// Whether [`check_tile_in_full`] accepts `tile` over `main`, decided in time
+/// proportional to the tile's own markers, not to the component count. `main`
+/// must be a header [`parse_main_header`] accepted, so that the components a
+/// tile leaves alone are valid already.
+///
+/// A component the tile names in a COC or QCC is resolved and checked on its
+/// own. Every other one takes the tile COD's coding if there is one, else its
+/// main-header coding, and likewise the tile QCD's quantization. So a tile COD
+/// or QCD is checked once, against the extreme of the components it lands on:
+/// the first entry of `summary` the tile does not name.
+fn tile_header_is_valid(
+    main: &MainHeader,
+    summary: &OnceCell<ComponentSummary>,
+    tile: &TileHeader,
+) -> bool {
+    if main.poc.len() + tile.poc.len() > MAX_POC_VOLUMES {
+        return false;
+    }
+    if tile.cod.is_none() && tile.qcd.is_none() && tile.coc.is_empty() && tile.qcc.is_empty() {
+        // RGN and POC change no invariant checked here.
+        return true;
+    }
+
+    // `read_tile_part_header` refused a second COC or QCC for one component,
+    // and `decode_coc`/`decode_qcc` bounded each index by the component count.
+    let coc: HashMap<usize, &Coding> = tile.coc.iter().map(|(i, c)| (*i, c)).collect();
+    let qcc: HashMap<usize, &Qcd> = tile.qcc.iter().map(|(i, q)| (*i, q)).collect();
+    let named = || {
+        coc.keys()
+            .chain(qcc.keys().filter(|index| !coc.contains_key(index)))
+            .copied()
+    };
+    let is_named = |index: usize| coc.contains_key(&index) || qcc.contains_key(&index);
+    let in_main = |index: usize| &main.components[index];
+    // The decomposition levels and wavelet component `index` takes in the tile,
+    // and its quantization.
+    let coding = |index: usize| match (coc.get(&index), &tile.cod) {
+        (Some(coding), _) => (coding.decomposition_levels, coding.transform),
+        (None, Some(cod)) => (cod.decomposition_levels, cod.transform),
+        (None, None) => {
+            let coding = &in_main(index).coding;
+            (coding.decomposition_levels, coding.transform)
+        }
+    };
+    let quant = |index: usize| match (qcc.get(&index), &tile.qcd) {
+        (Some(quant), _) => *quant,
+        (None, Some(qcd)) => qcd,
+        (None, None) => &in_main(index).quant,
+    };
+
+    // The components the tile names, each on its own.
+    for index in named() {
+        let (levels, transform) = coding(index);
+        if !quant_fits(levels, transform, quant(index))
+            || transform != in_main(index).coding.transform
+        {
+            return false;
+        }
+    }
+
+    // The rest, if any, against the summary.
+    let total = main.components.len();
+    if named().count() < total {
+        let summary = summary.get_or_init(|| ComponentSummary::of(main));
+        match (&tile.cod, &tile.qcd) {
+            (None, None) => {}
+            (Some(cod), qcd) => {
+                // Each keeps its main-header wavelet, so none may differ from
+                // the tile COD's.
+                let differ = match cod.transform {
+                    Transform::Irreversible97 => total - summary.irreversible,
+                    Transform::Reversible53 => summary.irreversible,
+                };
+                let differ_named = named()
+                    .filter(|&index| in_main(index).coding.transform != cod.transform)
+                    .count();
+                if differ != differ_named {
+                    return false;
+                }
+                match qcd {
+                    Some(qcd) => {
+                        if !quant_fits(cod.decomposition_levels, cod.transform, qcd) {
+                            return false;
+                        }
+                    }
+                    // Their own quantization under the tile COD's levels. Each
+                    // has the tile COD's wavelet (checked above) and passed the
+                    // main header's checks under it, so the 9/7 rule holds.
+                    None => {
+                        let needed = 3 * usize::from(cod.decomposition_levels) + 1;
+                        let fewest = summary.by_steps.iter().find(|&&(_, i)| !is_named(i));
+                        if fewest.is_some_and(|&(steps, _)| steps < needed) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            // Their own coding under the tile QCD.
+            (None, Some(qcd)) => {
+                if qcd.style != QuantStyle::ScalarDerived {
+                    let most = summary.by_levels.iter().find(|&&(_, i)| !is_named(i));
+                    if most.is_some_and(|&(levels, _)| {
+                        qcd.steps.len() < 3 * usize::from(levels) + 1
+                    }) {
+                        return false;
+                    }
+                }
+                if qcd.style == QuantStyle::None {
+                    let irreversible_named = named()
+                        .filter(|&index| {
+                            in_main(index).coding.transform == Transform::Irreversible97
+                        })
+                        .count();
+                    if summary.irreversible != irreversible_named {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    // The color transform, over the first three components.
+    let cod = tile.cod.as_ref().unwrap_or(&main.cod);
+    if cod.multiple_component_transform {
+        if crate::mct::check_geometry(&main.siz.components).is_err() {
+            return false;
+        }
+        let first = coding(0).1;
+        if (1..3).any(|index| coding(index).1 != first) {
+            return false;
+        }
+    }
+    true
 }
 
 /// [`parse_tiles`] without resolving every tile's header, for a caller that
@@ -493,7 +705,10 @@ fn read_tile_part_header(
     let mut ppt: Vec<(u8, Vec<u8>)> = Vec::new();
     // A.6 allows one of each per header. The tile-part tally is tracked apart
     // from the main header's: a tile-part marker over a main-header one for the
-    // same component is the legal override, not a duplicate.
+    // same component is the legal override, not a duplicate. `named` holds the
+    // `(marker, component)` pairs met so far, so that a tile-part naming every
+    // component is checked in time proportional to its markers.
+    let mut named: HashSet<(u16, usize)> = HashSet::new();
     let overrides_here = |code: u16| -> Result<()> {
         if first_part {
             Ok(())
@@ -535,7 +750,7 @@ fn read_tile_part_header(
             marker::COC => {
                 overrides_here(m)?;
                 let (index, coding) = decode_coc(segment(cur)?, siz)?;
-                if tile.coc.iter().any(|&(i, _)| i == index) {
+                if !named.insert((m, index)) {
                     return Err(Error::Codestream(format!(
                         "duplicate COC marker for component {index} in the tile-part header"
                     )));
@@ -545,7 +760,7 @@ fn read_tile_part_header(
             marker::QCC => {
                 overrides_here(m)?;
                 let (index, quant) = decode_qcc(segment(cur)?, siz)?;
-                if tile.qcc.iter().any(|&(i, _)| i == index) {
+                if !named.insert((m, index)) {
                     return Err(Error::Codestream(format!(
                         "duplicate QCC marker for component {index} in the tile-part header"
                     )));
@@ -555,7 +770,7 @@ fn read_tile_part_header(
             marker::RGN => {
                 overrides_here(m)?;
                 let (index, shift) = decode_rgn(segment(cur)?, siz)?;
-                if tile.rgn.iter().any(|&(i, _)| i == index) {
+                if !named.insert((m, index)) {
                     return Err(Error::Codestream(format!(
                         "duplicate RGN marker for component {index} in the tile-part header"
                     )));
@@ -636,7 +851,14 @@ fn read_tile_part_header(
 /// coding (beating any main COC), and a tile COC then overwrites the one
 /// component it names (beating the tile COD). An RGN in a tile-part header
 /// likewise *replaces* the main header's for that component (A.6.3).
-fn resolve_tile_header(main: &MainHeader, tile: &TileHeader) -> Result<MainHeader> {
+///
+/// A tile with no markers of its own decodes under the main header unchanged,
+/// so that is returned borrowed: the main header already passed every check
+/// below. Any other tile is a copy, sized by the component count.
+fn resolve_tile_header<'m>(main: &'m MainHeader, tile: &TileHeader) -> Result<Cow<'m, MainHeader>> {
+    if *tile == TileHeader::default() {
+        return Ok(Cow::Borrowed(main));
+    }
     let mut header = main.clone();
 
     // A tile COD/QCD is the tile's new default: it displaces the main header's
@@ -683,7 +905,7 @@ fn resolve_tile_header(main: &MainHeader, tile: &TileHeader) -> Result<MainHeade
     // The tile's resolved parameters must hold every invariant the main header's
     // do: a tile COD/QCD pair can break one the main header kept.
     validate_resolved(&header)?;
-    Ok(header)
+    Ok(Cow::Owned(header))
 }
 
 /// SOT fields (A.4.2): the tile index, tile-part length, part index, and part
@@ -847,7 +1069,9 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     let mut coc: Vec<Option<Coding>> = vec![None; siz.components.len()];
     let mut qcc: Vec<Option<Qcd>> = vec![None; siz.components.len()];
     let mut rgn: Vec<Option<u8>> = vec![None; siz.components.len()];
-    let mut tlm: Vec<TlmEntry> = Vec::new();
+    // TLM entries met so far, which is the tile index an `ST = 0` entry
+    // implies.
+    let mut tlm_entries = 0usize;
     let mut poc: Vec<PocVolume> = Vec::new();
     let mut crg: Option<Vec<(u16, u16)>> = None;
     // Packed packet headers (A.7.4), collected as `(Zppm, Ippm)` and split into
@@ -909,9 +1133,10 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // parameters — the packet and tile-part structures they describe
             // are read from the codestream itself, so decoding is identical
             // with them present or absent. TLM's entries are validated and
-            // recorded; PLM's packet lengths are skipped as OpenJPEG skips
+            // dropped, since no decode step reads them and a header can hold
+            // millions; PLM's packet lengths are skipped as OpenJPEG skips
             // them (`opj_j2k_read_plm` reads nothing past `Zplm`).
-            marker::TLM => decode_tlm(body(), &siz, &mut tlm)?,
+            marker::TLM => decode_tlm(body(), &siz, &mut tlm_entries, |_| {})?,
             marker::PLM => decode_plm(body())?,
 
             // Progression-order change (A.6.6): a sequence of progression volumes
@@ -998,7 +1223,6 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     // That is the whole of A.6.2's and A.6.5's resolution rule at the main
     // header's level; `resolve_tile_header` continues the ladder for a tile.
     let mut header = MainHeader::new(siz, cod, qcd);
-    header.tlm = tlm;
     header.poc = poc;
     header.crg = crg.unwrap_or_default();
     for (params, ((coding, quant), shift)) in header
@@ -1629,7 +1853,15 @@ fn decode_rgn(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, u8)> {
 ///
 /// An entry may only name a tile the grid actually holds. OpenJPEG makes the
 /// same range check against its grid.
-fn decode_tlm(mut b: Cursor<'_>, siz: &Siz, entries: &mut Vec<TlmEntry>) -> Result<()> {
+///
+/// `seen` counts the entries of every TLM marker read so far, across markers;
+/// each valid entry is handed to `entry`.
+fn decode_tlm(
+    mut b: Cursor<'_>,
+    siz: &Siz,
+    seen: &mut usize,
+    mut entry: impl FnMut(TlmEntry),
+) -> Result<()> {
     b.u8()?; // Ztlm: this marker's position among the TLMs
     let stlm = b.u8()?;
     if stlm & 0x8F != 0 {
@@ -1656,7 +1888,7 @@ fn decode_tlm(mut b: Cursor<'_>, siz: &Siz, entries: &mut Vec<TlmEntry>) -> Resu
 
     while b.remaining() > 0 {
         let tile_index = match st {
-            0 => entries.len() as u32,
+            0 => u32::try_from(*seen).unwrap_or(u32::MAX),
             1 => u32::from(b.u8()?),
             _ => u32::from(b.u16()?),
         };
@@ -1670,7 +1902,8 @@ fn decode_tlm(mut b: Cursor<'_>, siz: &Siz, entries: &mut Vec<TlmEntry>) -> Resu
             0 => u32::from(b.u16()?),
             _ => b.u32()?,
         };
-        entries.push(TlmEntry { tile_index, length });
+        *seen += 1;
+        entry(TlmEntry { tile_index, length });
     }
     Ok(())
 }
