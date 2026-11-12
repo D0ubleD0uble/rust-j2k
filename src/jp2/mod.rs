@@ -75,8 +75,8 @@ mod tests;
 pub(crate) use after::check as check_after_codestream;
 pub use metadata::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, ColorSpace,
-    ColorSpecification, FileType, ImageHeader, Jp2Metadata, Ratio, ReaderRequirements, Res,
-    Resolution, StandardFeature, UuidBox, UuidInfo, VendorFeature,
+    ColorSpecification, FileType, ImageHeader, IprBox, Jp2Metadata, Ratio, ReaderRequirements, Res,
+    Resolution, StandardFeature, UuidBox, UuidInfo, VendorFeature, XmlBox,
 };
 pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 
@@ -478,9 +478,9 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
 /// The metadata boxes [`passthrough`] collects.
 #[derive(Default)]
 struct Passthrough {
-    xml: Vec<Vec<u8>>,
+    xml: Vec<XmlBox>,
     uuid: Vec<UuidBox>,
-    ipr: Vec<Vec<u8>>,
+    ipr: Vec<IprBox>,
     uuid_info: Vec<UuidInfo>,
     reader_requirements: Option<ReaderRequirements>,
 }
@@ -496,7 +496,9 @@ fn passthrough(file: &Jp2File<'_>) -> Passthrough {
     let mut rreq_seen = false;
     for item in file.other.iter().chain(&file.after_box) {
         match &item.kind {
-            b"xml " => out.xml.push(item.payload.to_vec()),
+            b"xml " => out.xml.push(XmlBox {
+                payload: item.payload.to_vec(),
+            }),
             b"uuid" => {
                 if let Some((id, payload)) = item.payload.split_first_chunk::<16>() {
                     out.uuid.push(UuidBox {
@@ -505,7 +507,9 @@ fn passthrough(file: &Jp2File<'_>) -> Passthrough {
                     });
                 }
             }
-            b"jp2i" => out.ipr.push(item.payload.to_vec()),
+            b"jp2i" => out.ipr.push(IprBox {
+                payload: item.payload.to_vec(),
+            }),
             b"uinf" => out.uuid_info.extend(uuid_info::parse(item.payload)),
             b"rreq" if !rreq_seen => {
                 rreq_seen = true;

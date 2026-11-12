@@ -12,7 +12,12 @@
 
 use std::path::PathBuf;
 
-use rust_j2k::{Error, decode, read_header};
+use rust_j2k::{Error, Jp2Metadata, decode, read_header};
+
+/// The payloads of a file's `xml ` boxes, in order.
+fn xml_payloads(metadata: &Jp2Metadata) -> Vec<&[u8]> {
+    metadata.xml.iter().map(|x| x.payload.as_slice()).collect()
+}
 
 fn dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/psot0")
@@ -114,7 +119,7 @@ fn assert_leftover(name: &str) {
 #[test]
 fn a_psot_zero_codestream_ends_at_the_end_of_its_box() {
     let metadata = assert_jp2_decodes("jp2_p0noeoc_xml.jp2", "single.expected.pgm");
-    assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
+    assert_eq!(xml_payloads(&metadata), [b"<a>hello</a>"]);
 }
 
 /// The same with many tile-parts (the PR #182 shape), then an `xml ` and a
@@ -125,7 +130,7 @@ fn a_psot_zero_tile_part_codestream_ends_at_the_end_of_its_box() {
         "jp2_p0noeoc_tileparts_xml_uuid.jp2",
         "tileparts.expected.pgm",
     );
-    assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
+    assert_eq!(xml_payloads(&metadata), [b"<a>hello</a>"]);
     assert_eq!(metadata.uuid.len(), 1);
     assert_eq!(metadata.uuid[0].id, std::array::from_fn(|i| i as u8));
     assert_eq!(metadata.uuid[0].payload, b"payload");
@@ -173,7 +178,7 @@ fn a_codestream_box_that_ends_before_the_last_tile_part_is_not_trusted() {
 #[test]
 fn a_psot_zero_codestream_box_followed_by_broken_boxes_decodes() {
     let metadata = assert_jp2_decodes("jp2_p0noeoc_xml_junk.jp2", "single.expected.pgm");
-    assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()]);
+    assert_eq!(xml_payloads(&metadata), [b"<a>hello</a>"]);
 }
 
 /// A box that ends inside the last tile-part's header (at a COM whose text

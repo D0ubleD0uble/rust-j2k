@@ -297,13 +297,13 @@ impl Jp2Snapshot {
                 capture: res(metadata.resolution.capture),
                 display: res(metadata.resolution.display),
             },
-            xml: metadata.xml.iter().map(Vec::len).collect(),
+            xml: metadata.xml.iter().map(|x| x.payload.len()).collect(),
             uuid: metadata
                 .uuid
                 .iter()
                 .map(|u| (hex(&u.id), u.payload.len()))
                 .collect(),
-            ipr: metadata.ipr.iter().map(Vec::len).collect(),
+            ipr: metadata.ipr.iter().map(|b| b.payload.len()).collect(),
             uuid_info: metadata
                 .uuid_info
                 .iter()

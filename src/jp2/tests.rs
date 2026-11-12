@@ -8,8 +8,8 @@
 use super::SIGNATURE;
 use crate::{
     Association, ChannelDefinition, ChannelType, ColorSpace, ColorSpecification, DecodeOptions,
-    Error, FileType, Image, ImageHeader, Jp2Metadata, Ratio, Res, Resolution, UuidBox, decode,
-    decode_with, read_header,
+    Error, FileType, Image, ImageHeader, Jp2Metadata, Ratio, Res, Resolution, UuidBox, XmlBox,
+    decode, decode_with, read_header,
 };
 
 mod after;
@@ -155,6 +155,11 @@ fn unsupported(bytes: &[u8], fragment: &str) {
         ),
         other => panic!("expected Unsupported mentioning {fragment:?}, got {other:?}"),
     }
+}
+
+/// The payloads of a file's `xml ` boxes, in order.
+fn xml_payloads(metadata: &Jp2Metadata) -> Vec<&[u8]> {
+    metadata.xml.iter().map(|x| x.payload.as_slice()).collect()
 }
 
 #[test]
@@ -1152,8 +1157,12 @@ fn xml_and_uuid_boxes_are_passed_through_in_file_order() {
     assert_decodes_like_raw(&bytes);
     let metadata = decode(&bytes).unwrap().jp2.unwrap();
     assert_eq!(
-        metadata.xml,
-        vec![b"<one/>".to_vec(), b"<two/>".to_vec(), b"<three/>".to_vec()]
+        metadata
+            .xml
+            .iter()
+            .map(|x| x.payload.as_slice())
+            .collect::<Vec<_>>(),
+        [&b"<one/>"[..], b"<two/>", b"<three/>"]
     );
     assert_eq!(
         metadata.uuid,
