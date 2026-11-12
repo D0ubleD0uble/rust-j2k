@@ -125,6 +125,59 @@ only signals `SPrgn`, so the decoder reads every nonzero coefficient of the
 component as region of interest (#1036, open). The rule reads as an
 oversight, not a choice, so this crate follows the standard. Recorded with the owner's approval on #226.
 
+### Segmentation symbols
+
+Under the `segmentation symbols` style each cleanup pass ends with four
+decisions that spell `1010` (D.5). D.5 makes the symbol an error-detection
+aid, and OpenJPEG never checks it (t1.c, the comparison is commented out).
+This crate checks it, but not everywhere:
+
+- A wrong symbol is a `Codestream` error while the MQ decoder has read only
+  the segment's own bytes. Those bytes then decide the symbol, so they are
+  corrupt.
+- On a terminated cleanup pass a wrong symbol is an error even past the end.
+  Its length is exact, and the MQ termination makes the codeword decode
+  correctly from the fill. The terminated cleanups are the ones t1.c's
+  `opj_t1_enc_is_term_pass` terminates: every pass under `restart`, the
+  block's last cleanup (plane 1 at this crate's double scale), and under
+  bypass every cleanup from the fourth coded plane down (`bpno - 1 <=
+  raw_from` in `decode_block`, so counted from `top`, maxshift included).
+  Predictable termination changes how a pass is terminated, not which.
+- On any other cleanup pass, once the decoder has read past the end of the
+  segment, a wrong symbol decodes. Rate control cuts such a pass at an
+  estimated length: `opj_compress` uses the bytes written so far plus three
+  (t1.c, `opj_t1_encode_cblk`), which can be a few bytes short. The decoder
+  then reads the symbol from the `0xFF` fill and gets `0b1001`.
+
+"Past the end" is `MqDecoder::ran_past_end`: the code register has taken in a
+byte the decoder synthesized. It is set by the read that moves the byte
+pointer to the segment length, or by the marker test after a final `0xFF`.
+That is the first read of fill, and it can come up to about 16 code bits
+before any decision depends on fill, so the flag errs early. It is often set
+by the end of a segment even in an intact stream, because the MQ decoder
+reads ahead. So on an unterminated pass the check mostly catches damage in the
+earlier passes of a segment, not in its last one.
+
+**Evidence.** 459 random `opj_compress -M 32|m -r ...` encodes, with `m` from
+bypass, reset, restart, vertically causal and predictable termination, layer
+counts from one to three, and 5/3 and 9/7. Checking every symbol, the crate
+refused 10. With the rule above it refuses none, nine of the ten match
+`opj_decompress` exactly, and the tenth (9/7) is within 1. A second run of
+1,664 encodes (1,350 with `-r`, 314 with `-ROI`, the same style mix) refuses
+none either, and every sample mismatch with `opj_decompress` is explained:
+9/7, the sYCC-to-RGB conversion `opj_decompress` applies to three components
+with sub-sampled chroma, or OpenJPEG's own maxshift + bypass bug (above).
+
+Single-bit flips (`0x01`, `0x10`, `0x80`) of every body byte of
+`cblksty_segsym_lossless` and `roi_bypass_m33` are refused and accepted
+exactly as when every symbol is checked. Tolerating fill on every cleanup
+outside `restart` would have accepted 250 more of the 2,580
+`cblksty_segsym_lossless` flips, 229 of them decoding to a wrong image. A
+narrower rule, which tolerated fill on the block's last decoded pass only,
+refused one of the ten: in a two-layer encode the cut pass was followed by
+passes with no bytes of their own. `cblksty_segsym_truncated` pins one such
+encode. Its provenance is in `tests/fixtures/README.md`.
+
 ### Stricter than the oracle on non-conforming streams
 
 Three tier-2 checks reject streams OpenJPEG decodes with a warning: an `Nsop`

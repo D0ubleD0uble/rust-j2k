@@ -89,6 +89,9 @@ pub struct MqDecoder<'a> {
     c: u32,
     a: u32,
     ct: i32,
+    /// Set once `c` has taken in a byte from past the end of `data`; see
+    /// [`ran_past_end`](Self::ran_past_end).
+    past_end: bool,
 }
 
 impl<'a> MqDecoder<'a> {
@@ -100,6 +103,7 @@ impl<'a> MqDecoder<'a> {
             c: 0,
             a: 0,
             ct: 0,
+            past_end: false,
         };
         d.init();
         d
@@ -137,6 +141,25 @@ impl<'a> MqDecoder<'a> {
         self.unconsumed() <= 2
     }
 
+    /// Whether the decoder has read past the end of its segment: the code
+    /// register has taken in at least one `0xFF` that [`byte`](Self::byte)
+    /// synthesized rather than read from `data`.
+    ///
+    /// Until then every decision depends only on bytes of the segment, so an
+    /// encoder that wrote a correct codeword fixes them. After it, decisions
+    /// may depend on fill. That is routine at the end of a rate-truncated pass,
+    /// whose length the encoder estimates and can set a few bytes short.
+    ///
+    /// The flag is sticky. It is set by the [`bytein`](Self::bytein) that moves
+    /// `pos` to `data.len()`, or by the marker test that looks at the
+    /// synthesized byte after a final `0xFF`. That is the first read of fill,
+    /// not the first decision that depends on it: the register reads up to
+    /// about 16 bits ahead of the decisions, so the flag can come early, never
+    /// late.
+    pub fn ran_past_end(&self) -> bool {
+        self.past_end
+    }
+
     /// INITDEC (ISO C.3.5): prime the registers and fold in the first byte.
     fn init(&mut self) {
         self.pos = 0;
@@ -156,9 +179,18 @@ impl<'a> MqDecoder<'a> {
     /// this in `OPJ_UINT32` arithmetic, where the carry silently drops, so
     /// wrapping is the oracle-faithful behavior — spelled out here so debug
     /// and release builds agree instead of the checked add panicking.
+    ///
+    /// A synthesized byte sets [`ran_past_end`](Self::ran_past_end). The
+    /// stuffing arm never reads one: it needs a byte `<= 0x8F` after the
+    /// `0xFF`, and a synthesized byte is `0xFF`.
     fn bytein(&mut self) {
         if self.byte(self.pos) == 0xFF {
             if self.byte(self.pos + 1) > 0x8F {
+                // A marker, real or synthesized. It is synthesized when the
+                // byte after the `0xFF` lies past the end.
+                if self.pos + 1 >= self.data.len() {
+                    self.past_end = true;
+                }
                 self.c = self.c.wrapping_add(0xFF00);
                 self.ct = 8;
             } else {
@@ -168,6 +200,9 @@ impl<'a> MqDecoder<'a> {
             }
         } else {
             self.pos += 1;
+            if self.pos >= self.data.len() {
+                self.past_end = true;
+            }
             self.c = self.c.wrapping_add((self.byte(self.pos) as u32) << 8);
             self.ct = 8;
         }
@@ -247,7 +282,7 @@ impl<'a> MqDecoder<'a> {
     }
 }
 
-/// Raw bit reader for the lazy (`bypass`) coding style (ISO/IEC 15444-1 D.5,
+/// Raw bit reader for the lazy (`bypass`) coding style (ISO/IEC 15444-1 D.6,
 /// OpenJPEG's `opj_mqc_raw_decode`).
 ///
 /// Under `bypass` the significance-propagation and magnitude-refinement passes
@@ -365,6 +400,47 @@ mod tests {
         // keeps every read in bounds.
         for _ in 0..(H2_DECODED.len() * 8 * 4) {
             let _ = mq.decode(&mut cx);
+        }
+    }
+
+    /// `ran_past_end` is set exactly when the decoder first takes in a byte from
+    /// past the segment, no sooner and no later.
+    ///
+    /// The oracle is a second decoder over the same prefix followed by `0x00`
+    /// bytes. Until the first decoder reads a synthesized `0xFF`, both have read
+    /// the same bytes and their registers agree. The read that takes in the
+    /// `0xFF` (where the second decoder reads `0x00`) makes them differ. Every
+    /// prefix of the H.2 sequence is checked, which covers a prefix ending in
+    /// `0xFF` (the marker arm) and the empty segment.
+    #[test]
+    fn ran_past_end_is_exact_at_the_segment_boundary() {
+        for n in 0..=H2_CODED.len() {
+            let prefix = &H2_CODED[..n];
+            let mut extended = prefix.to_vec();
+            extended.extend_from_slice(&[0x00; 8]);
+            let mut short = MqDecoder::new(prefix);
+            let mut long = MqDecoder::new(&extended);
+            let (mut cx_short, mut cx_long) = (Context::default(), Context::default());
+            let mut diverged = false;
+            for step in 0..(H2_DECODED.len() * 8 + 64) {
+                diverged |= (short.c, short.a, short.ct) != (long.c, long.a, long.ct);
+                assert_eq!(
+                    short.ran_past_end(),
+                    diverged,
+                    "prefix of {n} bytes, before decision {step}, pos {}",
+                    short.pos
+                );
+                let _ = short.decode(&mut cx_short);
+                let _ = long.decode(&mut cx_long);
+            }
+            // The whole sequence ends in `0xFF 0xAC`, a marker inside the
+            // segment: the decoder stops there and never reads past the end.
+            // Every shorter prefix runs out.
+            assert_eq!(
+                short.ran_past_end(),
+                n < H2_CODED.len(),
+                "prefix of {n} bytes"
+            );
         }
     }
 

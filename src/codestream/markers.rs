@@ -120,7 +120,7 @@ pub mod code_block_style {
     /// Bit 0: selective arithmetic coding bypass (lazy). From the fifth coded
     /// bit-plane on, the significance-propagation and magnitude-refinement passes
     /// are coded as raw bits instead of MQ-coded decisions, and each raw run and
-    /// each MQ cleanup is a separately terminated codeword segment (D.5). Part of
+    /// each MQ cleanup is a separately terminated codeword segment (D.6). Part of
     /// the codeword: a decoder that runs the whole block as one MQ codeword
     /// reconstructs garbage.
     pub const LAZY: u8 = 0x01;
