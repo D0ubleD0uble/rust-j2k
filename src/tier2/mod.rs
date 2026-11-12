@@ -164,7 +164,7 @@ pub fn decode_packets<'a>(
 }
 
 /// The fewest visits (see [`Budget::visits`]) a decode may spend walking its
-/// tiles' packets. Most visits cost about 10 to 50 ns, so this is under a
+/// tiles' packets. A visit costs about 6 to 15 ns, so this is under a
 /// second. A packet a POC marker's volumes reach again is skipped from a
 /// bitmap without a visit, in about 4 ns; skipped from the set a sequence
 /// past the bitmap keeps, it is charged 12 visits (see
@@ -172,10 +172,16 @@ pub fn decode_packets<'a>(
 pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 
 /// The visits a decode may spend per byte of its tiles' data, when that comes
-/// to more than [`DECODE_VISITS_MIN`]. At 10 to 25 ns a visit, which is what
-/// the visits that can pile up cost, that is about what decoding a byte of
-/// real data costs (about 0.45 µs), so a file past the floor is refused in
-/// about the time its decode would take.
+/// to more than [`DECODE_VISITS_MIN`]. At 6 to 15 ns a visit, that is 0.2 to
+/// 0.5 µs a byte, about what decoding a byte of real data costs (0.25 to
+/// 0.47 µs), so a file past the floor is refused in about the time its decode
+/// would take.
+///
+/// Setting up a tile's geometry is not counted. A resolution with no precinct
+/// gets no band or code-block geometry, so its setup is a few small
+/// allocations. The costliest shape measured, 64 tiles of 16384 components
+/// with one byte of packet data each, decodes at about 10 µs a byte, about
+/// twice what OpenJPEG takes.
 pub(crate) const DECODE_VISITS_PER_BYTE: u64 = 32;
 
 /// The visits a decode may spend walking the packets of tiles that hold

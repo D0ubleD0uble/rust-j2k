@@ -404,8 +404,8 @@ where
                 // read is marked, and a read takes a visit and at least a byte of
                 // packet header; at most 31 later volumes can meet it again. A
                 // bitmap skip takes about 4 ns, so the skips cost at most about
-                // 0.12 µs per byte, under the 0.45 µs a byte of real data takes
-                // to decode that the bound is set by. Charging them would refuse
+                // 0.12 µs per byte, under the 0.25 to 0.47 µs a byte of real
+                // data takes to decode that the bound is set by. Charging them would refuse
                 // files OpenJPEG reads quickly, such as 31 identical volumes over
                 // 1 MB of empty packets. A skip from the set costs far more and
                 // is charged (see `SET_SKIP_VISITS`).
