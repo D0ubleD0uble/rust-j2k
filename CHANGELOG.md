@@ -224,6 +224,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fault and a broken codestream reports the header fault.
 - A codestream component too deep for an `i32` sample is refused as
   `Unsupported` when the main header is read, before any tile data.
+- Reading the packet headers is bounded: `decode` may take 2^24 steps, or 16
+  per byte of tile data when that is more, counting packets, code-block
+  entries visited in their headers, and the positions a positional
+  progression order sweeps. Past it the decode is `Error::Limit`. Encoder
+  output takes a step or less per byte, but a file of 1 KB whose one-byte
+  packet headers each visit 2^17 code-blocks took 4.6 s, and a POC-repeated
+  CPRL sweep of 819 bytes 6.5 s; both are now refused in under a second.
+  OpenJPEG has no such bound and decodes them.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is

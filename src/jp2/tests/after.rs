@@ -527,7 +527,7 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         let parsed = crate::codestream::parse_header(cut).unwrap();
         let cs = crate::codestream::parse_tiles(cut, parsed).unwrap();
         let header = cs.tile_header(0).unwrap();
-        let mut budget = Budget::DECODE;
+        let mut budget = Budget::decode(u64::MAX);
         decode_packets_within(&header, &cs.tiles[0], &mut budget).expect("ends at the cut");
         (u64::MAX - budget.visits, MAX_CODE_BLOCKS - budget.blocks)
     };
@@ -574,6 +574,27 @@ fn the_packet_walk_bound_grows_with_the_tile_data() {
     assert_eq!(probe_visits((1 << 19) + 1), (1 << 22) + 8);
     assert_eq!(probe_visits(1 << 24), 1 << 27);
     assert_eq!(probe_visits(u64::MAX), u64::MAX);
+}
+
+/// The decode's work bound is no smaller than this walk's at any size, so a
+/// single-tile codestream whose packets this walk finishes is one the
+/// decode's walk finishes too: the box's end is never chosen for a tile the
+/// decode then refuses at its work bound.
+#[test]
+fn the_decode_work_bound_covers_the_packet_walk() {
+    use crate::jp2::probe_visits;
+    use crate::tier2::decode_visits;
+    for bytes in [
+        0,
+        1 << 19,
+        1 << 21,
+        (1 << 21) + 1,
+        1 << 24,
+        1 << 40,
+        u64::MAX,
+    ] {
+        assert!(probe_visits(bytes) <= decode_visits(bytes), "{bytes} bytes");
+    }
 }
 
 /// The walk resolves only the walked tile's header, not every tile's (which

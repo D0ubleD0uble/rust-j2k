@@ -146,9 +146,43 @@ pub struct CodedData<'a> {
 /// Each component carries its own tile-component geometry, so a sub-sampled
 /// component's subbands are smaller at the same resolution, and its precinct
 /// lattice is coarser on the reference grid.
-pub fn decode_packets<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> Result<CodedData<'a>> {
-    let mut budget = Budget::DECODE;
-    decode_packets_within(header, tile, &mut budget)
+///
+/// The walk spends `visits`, what is left of the decode's work bound (see
+/// [`decode_visits`]), and fails with [`Error::Limit`] once it is gone.
+pub fn decode_packets<'a>(
+    header: &MainHeader,
+    tile: &'a Tile<'a>,
+    visits: &mut u64,
+) -> Result<CodedData<'a>> {
+    let mut budget = Budget::decode(*visits);
+    let coded = decode_packets_within(header, tile, &mut budget);
+    *visits = budget.visits;
+    coded
+}
+
+/// The fewest visits (see [`Budget::visits`]) a decode may spend walking its
+/// tiles' packets. A visit costs about 10 to 30 ns, so this is about half a
+/// second at most.
+pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
+
+/// The visits a decode may spend per byte of its tiles' data, when that comes
+/// to more than [`DECODE_VISITS_MIN`]. At about 30 ns a visit, that is about
+/// what decoding a byte of real data costs, so a file past the floor is
+/// refused in about the time its decode would take.
+pub(crate) const DECODE_VISITS_PER_BYTE: u64 = 16;
+
+/// The visits a decode may spend walking the packets of tiles that hold
+/// `bytes` bytes of data in all, packed packet headers included.
+///
+/// Encoder output spends a visit or less per byte: a packet that visits a
+/// code-block mostly carries bits for it. A packet header of one byte can
+/// still visit every code-block of its precinct, and a positional sweep can
+/// check millions of positions that hold no packet, so without a bound a file
+/// of a few hundred bytes could make the walk run for minutes. The one bound
+/// covers every tile of the decode, so many small tiles cannot each spend the
+/// floor.
+pub(crate) fn decode_visits(bytes: u64) -> u64 {
+    DECODE_VISITS_MIN.max(bytes.saturating_mul(DECODE_VISITS_PER_BYTE))
 }
 
 /// What one walk of a tile's packets may spend. Each field is spent as the
@@ -170,12 +204,15 @@ pub(crate) struct Budget {
 }
 
 impl Budget {
-    /// The decode's budget: the geometry guards, and no bound on the visits.
-    pub(crate) const DECODE: Budget = Budget {
-        precincts: MAX_PRECINCTS,
-        blocks: MAX_CODE_BLOCKS,
-        visits: u64::MAX,
-    };
+    /// The decode's budget for one tile: the geometry guards, and `visits`,
+    /// what is left of the decode's work bound.
+    pub(crate) const fn decode(visits: u64) -> Budget {
+        Budget {
+            precincts: MAX_PRECINCTS,
+            blocks: MAX_CODE_BLOCKS,
+            visits,
+        }
+    }
 }
 
 /// [`decode_packets`] under `budget`, which is left holding what was not spent,
@@ -850,3 +887,5 @@ fn read_num_passes(bio: &mut BitReader) -> u32 {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod work_bound_tests;

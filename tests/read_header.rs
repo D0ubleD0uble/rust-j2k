@@ -26,7 +26,9 @@ use rust_j2k::{
 /// the boxes after it are tile data past the last packet, which `decode`
 /// refuses. The `psot0/jp2_t2bomb_*` and `psot0/jp2_t2_sweep_*` files are too
 /// costly to check where their codestream ends, so it runs to the end of the
-/// file, with the same result.
+/// file, with the same result. The `work_bound/` files walk past the decode's
+/// tier-2 work bound, which `read_header` does not walk, so `decode` refuses
+/// them with `Limit`.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
@@ -50,7 +52,7 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     ),
     (
         "psot0/jp2_t2_sweep_cprl_tall.jp2",
-        "too many sweep positions to check",
+        "too many sweep positions to check, or to decode (`Limit`)",
     ),
     (
         "psot0/jp2_t2_sweep_pcrl.jp2",
@@ -73,6 +75,14 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     ("psot0/single_psot0_one_byte_after_sod.j2k", "no tile data"),
     ("psot0/tiled_psot0_no_eoc.j2k", "no EOC"),
     ("psot0/tileparts_psot0_no_eoc.j2k", "no EOC"),
+    ("work_bound/cprl_tall.j2k", "past the work bound"),
+    ("work_bound/cprl_tall_poc31.j2k", "past the work bound"),
+    ("work_bound/sweep_pcrl_1024_64.j2k", "past the work bound"),
+    ("work_bound/sweep_rpcl_1024_64.j2k", "past the work bound"),
+    (
+        "work_bound/t2bomb_2048x1024_1000.j2k",
+        "past the work bound",
+    ),
 ];
 
 fn fixtures() -> PathBuf {
@@ -186,7 +196,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     compared[reduction as usize] += 1;
                 }
                 (Err(h), Err(d)) => assert_eq!(h, d, "{name}: the same error"),
-                (Ok(_), Err(Error::Codestream(_))) => {
+                (Ok(_), Err(Error::Codestream(_) | Error::Limit(_))) => {
                     assert!(
                         TILE_FAULTS.iter().any(|(listed, _)| *listed == name),
                         "{name}: decode failed on tile data but read_header succeeded: {decoded:?}"

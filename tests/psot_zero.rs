@@ -282,7 +282,9 @@ fn a_raw_psot_zero_codestream_with_bytes_after_its_packets_is_refused() {
 /// repeats a sweep in 31 POC volumes, both past the visit bound. Past a bound
 /// the walk answers no, so the codestream runs to the end of the file and the
 /// bytes after its packets are refused, as on a codestream the check does not
-/// apply to. OpenJPEG 2.5.0 decodes all seven to a flat 128.
+/// apply to. The tall CPRL file's 25 million visits are past the decode's own
+/// work bound too, so the decode stops there, at `Limit`, before it reaches
+/// those bytes. OpenJPEG 2.5.0 decodes all seven to a flat 128.
 #[test]
 fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
     for name in [
@@ -297,7 +299,14 @@ fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
         let bytes = std::fs::read(dir().join(name)).unwrap();
         let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(header.jp2.is_some_and(|m| m.xml.is_empty()), "{name}");
-        assert_leftover(name);
+        if name == "jp2_t2_sweep_cprl_tall.jp2" {
+            match decode(&bytes) {
+                Err(Error::Limit(m)) => assert!(m.contains("work bound"), "{name}: {m}"),
+                other => panic!("{name}: expected the work bound, got {other:?}"),
+            }
+        } else {
+            assert_leftover(name);
+        }
     }
 }
 

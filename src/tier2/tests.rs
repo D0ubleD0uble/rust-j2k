@@ -589,7 +589,7 @@ fn packet_two_blocks_partial_inclusion() {
 fn seed_codestream_parses() {
     let bytes = include_bytes!("../../tests/fixtures/jpeg2000_regular_latlon.j2k");
     let cs = crate::codestream::parse(bytes).unwrap();
-    let coded = decode_packets(&cs.header, &cs.tiles[0]).unwrap();
+    let coded = decode_packets(&cs.header, &cs.tiles[0], &mut decode_visits(0)).unwrap();
 
     // opj_dump reports numresolutions = 5 (NL = 4): one LL packet + four detail
     // levels.
@@ -636,7 +636,7 @@ fn malformed_tile_data_never_panics() {
     for data in &cases {
         let t = tile(data);
         // The result is allowed to be either Ok or Err; only a panic would fail.
-        let _ = decode_packets(&h, &t);
+        let _ = decode_packets(&h, &t, &mut decode_visits(0));
     }
 }
 
@@ -648,7 +648,8 @@ fn block_count_guard_rejects_metadata_bomb() {
     // 4096×4096 with 4×4 blocks: ~1.4M blocks across the ladder, over the 2^19 cap.
     let h = header(4096, 4096, 1, 2);
     let t = tile(&[]);
-    let err = decode_packets(&h, &t).expect_err("guard fires before any packet parse");
+    let err = decode_packets(&h, &t, &mut decode_visits(0))
+        .expect_err("guard fires before any packet parse");
     assert!(matches!(err, crate::Error::Limit(_)), "{err}");
 }
 

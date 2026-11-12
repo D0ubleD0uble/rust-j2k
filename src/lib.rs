@@ -151,6 +151,18 @@ pub use jp2::{
 /// JP2-compatible is valid JPEG 2000 but is rejected with
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
+///
+/// The work of reading the packet headers is bounded, as the image area and
+/// the code-block count are. Walking every tile's packets may take at most
+/// 2^24 steps, or 16 per byte of tile data when that is more, counting
+/// packets read, code-block entries visited in their headers, and the
+/// positions a positional progression order sweeps, once for each
+/// (component, resolution) checked there. A codestream past the bound is
+/// refused with [`Error::Limit`]. Encoder output takes a step or less per
+/// byte; a packet header of one byte can still visit every code-block of its
+/// precinct, and a sweep can check millions of positions that hold no
+/// packet, so a file of a few hundred bytes could otherwise take minutes.
+/// OpenJPEG has no such bound.
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -586,6 +598,9 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
     // tile boundary — that is what tiling is for — so the tiles meet only at the
     // end, when each writes its rectangle of the canvas.
     let mut canvas = image::Canvas::new(&cs.header, reduction)?;
+    // One work bound for every tile's packet walk, in proportion to the
+    // tiles' data, so that many small tiles cannot each spend a floor's worth.
+    let mut visits = tier2::decode_visits(tile_bytes(&cs));
     for (index, tile) in cs.tiles.iter().enumerate() {
         // The tile's own parameters: the main header with this tile's tile-part
         // header resolved over it. Held for one tile at a time — a header is
@@ -612,7 +627,7 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // component. The walk covers every resolution whatever the reduction:
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
-        let coded = tier2::decode_packets(&header, tile)?;
+        let coded = tier2::decode_packets(&header, tile, &mut visits)?;
         // Tier-1: MQ + EBCOT bit-plane decode each code block into subband
         // coeffs. The dropped resolutions' code-blocks are skipped, never
         // decoded.
@@ -659,4 +674,13 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
     }
 
     image::assemble(&cs.header, canvas.into_planes(), reduction)
+}
+
+/// The bytes of tile data the codestream's packets are read from: every
+/// tile's packet data and packed packet headers.
+pub(crate) fn tile_bytes(cs: &codestream::Codestream<'_>) -> u64 {
+    cs.tiles
+        .iter()
+        .map(|tile| (tile.data.len() + tile.packed_headers.len()) as u64)
+        .fold(0, u64::saturating_add)
 }

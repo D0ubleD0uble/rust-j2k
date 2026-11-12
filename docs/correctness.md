@@ -271,6 +271,46 @@ under OpenJPEG and rejects here. No corpus or conformance file trips any of
 these today. If one ever does, relax that check to match the oracle — the
 protective argument loses to a demonstrated real file.
 
+### The tier-2 work bound
+
+`decode` bounds the work of reading packet headers; OpenJPEG has no such
+bound (owner decision on #235, 2026-11-11). Walking every tile's packets may
+take at most max(2^24, 16 × the tiles' data bytes) visits, counting packets
+read, code-block entries visited in their headers, and sweep positions once
+for each (component, resolution) checked there. Past it the decode is
+`Limit`. It is one bound for the whole decode, not one per tile, and there
+is no option to change it.
+
+A packet header of one byte can visit every code-block of its precinct, and
+a positional order can sweep millions of positions that hold no packet, so
+small valid files could take seconds or minutes. Measured on release builds
+(`scripts/gen-work-bound-fixtures.py`; times are this decoder before the
+bound, then after, then `opj_decompress` 2.5.0):
+
+| Shape | Size | Before | After | OpenJPEG |
+| ----- | ---- | ------ | ----- | -------- |
+| LRCP, 2^17 4x4 code-blocks, 1000 one-byte packets | 1.1 KB | 4.6 s | 0.6 s | 6.6 s |
+| LRCP, 2^14 code-blocks, 65535 layers | 66 KB | 28.7 s | 0.5 s | fails |
+| PCRL sweep, 1024 components, step 2 on a 2048^2 tile | 9.3 KB | 28.9 s | 0.2 s | |
+| CPRL, one 2^24-row column, 31 POC volumes | 819 B | 6.5 s | 0.1 s | 20.6 s |
+
+Encoder output stays far below the bound: every committed file and every
+conformance file spends under 1% of it (at most 0.54 visits per byte), and
+`opj_compress` output with 16x16 code-blocks, 100 layers and `termall` 0.41
+per byte (`every_committed_file_walks_far_below_the_work_bound` prints the
+table). What the bound can refuse is a valid file of the same shape as the
+repro above: a nearly empty image with tiny code-blocks and many layers,
+whose packets are a byte each yet visit every code-block. A flat 2048^2
+image in 4x4 code-blocks needs about 64 layers to reach it.
+
+The bound covers the walk `read_header` makes for a `Psot = 0` tile-part
+(see above): that walk's own bound is max(2^22, 8 × the tile's data bytes),
+no larger at any size, so for a single-tile codestream a tile that walk
+finishes is one the decode's walk finishes too. The decode's bound does not
+replace that walk's geometry bound of 2^14 code-blocks: `read_header`
+allocates for its walk, and a geometry bound at the decode's 2^19
+code-blocks would let `read_header` hold about 75 MB for a 66 KB file.
+
 ### The `jp2i` and `uinf` boxes
 
 OpenJPEG 2.5.0 skips both box types, so ISO/IEC 15444-1 (I.6, I.7.3) is the
