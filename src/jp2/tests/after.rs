@@ -682,6 +682,62 @@ fn empty_packets(tiles: u32, components: u16) -> Vec<u8> {
     out
 }
 
+/// `setskip` from `scripts/gen-work-bound-fixtures.py` as a `Psot = 0`
+/// codestream: one 38608 x 1 tile in RPCL, 1 x 1 precincts, 512
+/// layers, `volumes` identical POC volumes, one component at `XRsiz` 254 and
+/// 64 at 255. The volumes reach 9880 packets a layer and read 216.
+fn setskip(volumes: usize) -> Vec<u8> {
+    let segment = |code: u16, body: &[u8]| {
+        let mut out = code.to_be_bytes().to_vec();
+        out.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    };
+    let layers: u16 = 512;
+    let mut siz = vec![0, 0];
+    for value in [152 * 254, 1, 0, 0, 152 * 254, 1, 0, 0u32] {
+        siz.extend_from_slice(&value.to_be_bytes());
+    }
+    siz.extend_from_slice(&65u16.to_be_bytes());
+    siz.extend_from_slice(&[7, 254, 1]);
+    for _ in 0..64 {
+        siz.extend_from_slice(&[7, 255, 1]);
+    }
+    let mut cod = vec![1, 2];
+    cod.extend_from_slice(&layers.to_be_bytes());
+    cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0]);
+    let mut volume = vec![0, 0];
+    volume.extend_from_slice(&layers.to_be_bytes());
+    volume.extend_from_slice(&[1, 65, 2]);
+    let mut out = vec![0xFF, 0x4F];
+    out.extend(segment(0xFF51, &siz));
+    out.extend(segment(0xFF52, &cod));
+    out.extend(segment(0xFF5C, &[0x40, 0x40]));
+    out.extend(segment(0xFF5F, &volume.repeat(volumes)));
+    out.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0xFF, 0x93]);
+    out.resize(out.len() + 216 * usize::from(layers), 0);
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
+/// A tile whose POC volumes reach more packets than the walk's bitmap may
+/// hold is not walked when one is in a positional order, though the decode,
+/// keeping a set, finishes it. With one volume it is walked.
+#[test]
+fn the_packet_walk_skips_a_poc_sequence_past_its_bitmap() {
+    use crate::jp2::probe_packets;
+    use crate::tier2::{Budget, decode_packets_within};
+
+    assert!(probe_packets(&setskip(1), 0).0);
+    let repeated = setskip(2);
+    assert_eq!(probe_packets(&repeated, 0), (false, 0));
+    let parsed = crate::codestream::parse_header(&repeated).unwrap();
+    let cs = crate::codestream::parse_tiles(&repeated, parsed).unwrap();
+    let header = cs.tile_header(0).unwrap();
+    decode_packets_within(&header, &cs.tiles[0], &mut Budget::decode(u64::MAX))
+        .expect("the packets end at the end");
+}
+
 /// A codestream of more than [`PROBE_TILES`] tiles or [`PROBE_COMPONENTS`]
 /// components is not walked, since its tile list and the walked tile's
 /// header grow with them; at the bound it is.

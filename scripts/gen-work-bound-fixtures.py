@@ -217,6 +217,22 @@ def pocdup(
     return codestream(main, b"\x00" * packets)
 
 
+def setskip(layers: int, volumes: int, thin: int = 64) -> bytes:
+    """One 38608 x 1 tile in RPCL, no wavelet levels, 1 x 1 precincts,
+    `layers` layers and `volumes` identical POC volumes. One component at
+    XRsiz 254 sets the sweep's step to 254; `thin` more at XRsiz 255 have 152
+    precincts each, but the sweep meets only their first. So the volumes
+    reach (152 + 152 * thin) packets a layer and read (152 + thin), each
+    empty (0x00). From the review of PR #261."""
+    comps = [(7, 254, 1)] + [(7, 255, 1)] * thin
+    cod = seg(0xFF52, bytes([1, RPCL]) + struct.pack(">H", layers) + bytes([0, 0, 0, 0, 0, 1, 0]))
+    qcd = seg(0xFF5C, bytes([0x40, 0x40]))
+    entry = bytes([0, 0]) + struct.pack(">H", layers) + bytes([1, len(comps), RPCL])
+    poc = seg(0xFF5F, entry * volumes)
+    main = siz(0, 152 * 254, 1, comps) + cod + qcd + poc
+    return codestream(main, b"\x00" * ((152 + thin) * layers))
+
+
 # Committed: name -> bytes. Each but the first and the last walks far past
 # the decode's work bound for its size and is refused with `Error::Limit`.
 FILES = {
@@ -274,6 +290,12 @@ BIG = {
     # first 10^7 of them. 4800 components, 3.1e8 packets, for `decode`.
     "pocdup_1000c_65535_2_10mb.j2k": lambda: pocdup(1, 1, 1000, 65535, 2, 10_000_000),
     "pocdup_4800c_65535_2_10mb.j2k": lambda: pocdup(1, 1, 4800, 65535, 2, 10_000_000),
+    # 6.5e8 packets reached, 1.4e7 read and 4.2e8 skipped from the set: 14 MB.
+    "setskip_65535_31.j2k": lambda: setskip(65535, 31),
+    # The shape `tests/work_bound.rs` builds: 442 KB, refused; and with one
+    # volume, which decodes.
+    "setskip_2048_31.j2k": lambda: setskip(2048, 31),
+    "setskip_2048_1.j2k": lambda: setskip(2048, 1),
 }
 
 

@@ -1127,6 +1127,7 @@ fn order_of_header(header: &MainHeader) -> Vec<(u32, usize, usize, usize)> {
         header,
         &walk,
         &std::cell::Cell::new(u64::MAX),
+        true,
         |l, r, c, p| {
             seen.push((l, r, c, p));
             Ok(())
@@ -1398,6 +1399,7 @@ fn order_holding(header: &MainHeader, dense_bits: u64) -> Vec<(u32, usize, usize
         &walk,
         &std::cell::Cell::new(u64::MAX),
         dense_bits,
+        true,
         |l, r, c, p| {
             seen.push((l, r, c, p));
             Ok(())
@@ -1494,12 +1496,13 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
         geoms: &geoms,
     };
     // 4 layers x 3 resolutions x 1 precinct.
-    let walk_with = |header: &MainHeader, visits: u64| {
+    let walk_with = |header: &MainHeader, visits: u64, poc_set: bool| {
         let mut read = 0;
         let result = for_each_packet(
             header,
             &walk,
             &std::cell::Cell::new(visits),
+            poc_set,
             |_, _, _, _| {
                 read += 1;
                 Ok(())
@@ -1507,19 +1510,70 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
         );
         (result, read)
     };
-    let (result, read) = walk_with(&header, 11);
+    let (result, read) = walk_with(&header, 11, true);
     match result {
         Err(Error::Limit(m)) => assert!(m.contains("work bound") && m.contains("12"), "{m}"),
         other => panic!("expected the work bound, got {other:?}"),
     }
     assert_eq!(read, 0);
-    let (_, read) = walk_with(&header, 12);
+    let (_, read) = walk_with(&header, 12, true);
     assert!(read > 0);
 
-    // A positional volume may pass over precincts, so it is walked.
+    // A positional volume may pass over precincts, so it is walked, unless
+    // the walk keeps no set, as `read_header`'s does not.
     header.poc[1].progression = Progression::Rpcl;
-    let (result, read) = walk_with(&header, 11);
+    let (result, read) = walk_with(&header, 11, true);
     assert!(read > 0, "{result:?}");
+    let (result, read) = walk_with(&header, 11, false);
+    assert!(matches!(result, Err(Error::Limit(_))), "{result:?}");
+    assert_eq!(read, 0);
+}
+
+/// A packet skipped from the set is charged `SET_SKIP_VISITS` (12) visits,
+/// one skipped from the bitmap none: two identical RPCL volumes spend 12
+/// visits more per packet read when the packets are held in a set.
+#[test]
+fn only_a_skip_from_the_set_is_charged() {
+    let mut header = overlapping_volumes();
+    let full = PocVolume {
+        res_start: 0,
+        res_end: 3,
+        comp_start: 0,
+        comp_end: 3,
+        layer_end: 4,
+        progression: Progression::Rpcl,
+    };
+    header.poc = vec![full, full];
+    let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
+        .map(|c| geoms_of(&header, 0, c).expect("geometry"))
+        .collect();
+    let walk = PacketWalk {
+        siz: &header.siz,
+        tile: header.siz.tile_rect(0).expect("tile 0"),
+        geoms: &geoms,
+    };
+    let spent = |dense_bits: u64| {
+        let visits = std::cell::Cell::new(u64::MAX);
+        let mut read = 0u64;
+        super::progression::for_each_packet_holding(
+            &header,
+            &walk,
+            &visits,
+            dense_bits,
+            true,
+            |_, _, _, _| {
+                read += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        (u64::MAX - visits.get(), read)
+    };
+    let (bitmap, read) = spent(u64::MAX);
+    let (set, read_from_set) = spent(0);
+    assert_eq!(read, read_from_set);
+    assert!(read > 100, "{read} packets");
+    assert_eq!(set - bitmap, 12 * read);
 }
 
 // ---- Packet delimiters: SOP / EPH (issue #73) ----

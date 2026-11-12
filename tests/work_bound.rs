@@ -227,6 +227,51 @@ fn encoder_output_with_many_layers_decodes() {
     }
 }
 
+/// `setskip` from the generator: one 38608 x 1 tile in RPCL, no wavelet
+/// levels, 1 x 1 precincts, `layers` layers and `volumes` identical POC
+/// volumes. One component at `XRsiz` 254 sets the sweep's step; 64 more at
+/// 255 have 152 precincts each, but the sweep meets only their first, so
+/// the volumes reach 9880 packets a layer and read 216. Every packet read is
+/// empty (0x00).
+fn setskip(layers: u16, volumes: usize) -> Vec<u8> {
+    let mut comps = vec![(254, 1)];
+    comps.extend([(255, 1); 64]);
+    let mut cod = vec![1, 2];
+    cod.extend_from_slice(&layers.to_be_bytes());
+    cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0x00]);
+    let body = vec![0; 216 * usize::from(layers)];
+    let mut cs = codestream(
+        0,
+        152 * 254,
+        1,
+        152 * 254,
+        &comps,
+        &cod,
+        &[0x40, 0x40],
+        &body,
+    );
+    // RSpoc, CSpoc, LYEpoc, REpoc, CEpoc, Ppoc, before the first SOT.
+    let mut volume = vec![0, 0];
+    volume.extend_from_slice(&layers.to_be_bytes());
+    volume.extend_from_slice(&[1, 65, 2]);
+    let sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    cs.splice(sot..sot, seg(0xFF5F, &volume.repeat(volumes)));
+    cs
+}
+
+/// More packets reached than the bitmap may hold, in a positional order, so
+/// the packets read are kept in a set, and each one skipped from it is
+/// charged 12 steps: 2048 layers in 31 volumes skip 1.3 x 10^7 packets,
+/// past the bound for their 442 KB. With one volume, nothing is skipped and
+/// it decodes. OpenJPEG 2.5.0 decodes both to a flat 128.
+#[test]
+fn skips_from_the_poc_set_are_bounded() {
+    assert_limit("setskip 31 volumes", &setskip(2048, 31));
+    let image = decode(&setskip(2048, 1)).unwrap();
+    assert_eq!(image.components.len(), 65);
+    assert!(image.components[0].samples.iter().all(|&s| s == 128));
+}
+
 /// The bound is one budget for the whole decode, not one per tile: 16 tiles
 /// of 128 x 128 code-blocks and 5000 layers spend about 2 x 10^7 steps in
 /// all, past the bound for their 80 KB of packets, while each tile alone

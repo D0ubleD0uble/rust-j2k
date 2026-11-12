@@ -246,9 +246,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   about 1 µs, in `decode` and in `read_header`. A 1 MB file of 31 identical
   volumes took 5.7 s and 105 MB and now takes 0.15 s and 3.5 MB; a 10.5 MB
   one of 160 components took 4.5 s and 824 MB and now takes 0.32 s and
-  14 MB. When volumes in layer orders (LRCP, RLCP) reach more packets than
-  the decode's step bound allows, the decode is `Error::Limit` before it
+  14 MB. When every volume is LRCP or RLCP and they reach more packets than
+  the decode's work bound allows, the decode is `Error::Limit` before it
   reads one, where it used to read on until the data or the bound ran out.
+  With a positional volume, each repeat skipped past that point counts 12
+  steps against the bound, and `read_header` does not walk the tile.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is

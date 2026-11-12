@@ -173,16 +173,21 @@ struct Volume {
 /// The loops spend `visits` (see [`super::Budget::visits`]) as they go, the
 /// points that hold no packet included, so a walk under a bound stops however
 /// sparse its packets are.
+///
+/// `poc_set` says whether a `POC` sequence that reaches more packets than
+/// the bitmap may hold keeps a set of the packets read (see [`Emitted`]);
+/// without it such a walk is [`crate::Error::Limit`].
 pub(crate) fn for_each_packet<F>(
     header: &MainHeader,
     walk: &PacketWalk<'_>,
     visits: &Cell<u64>,
+    poc_set: bool,
     f: F,
 ) -> Result<()>
 where
     F: FnMut(u32, usize, usize, usize) -> Result<()>,
 {
-    for_each_packet_holding(header, walk, visits, visits.get(), f)
+    for_each_packet_holding(header, walk, visits, visits.get(), poc_set, f)
 }
 
 /// [`for_each_packet`], with a `POC` sequence's packets held in a bitmap
@@ -193,6 +198,7 @@ pub(super) fn for_each_packet_holding<F>(
     walk: &PacketWalk<'_>,
     visits: &Cell<u64>,
     dense_bits: u64,
+    poc_set: bool,
     mut f: F,
 ) -> Result<()>
 where
@@ -230,19 +236,23 @@ where
     if volumes.len() == 1 {
         return run_order(&volumes[0], walk, visits, &mut f);
     }
-    let mut emitted = Emitted::new(&volumes, walk, max_res, dense_bits)?;
+    let mut emitted = Emitted::new(&volumes, walk, max_res, dense_bits, poc_set)?;
+    let skip_visits = emitted.skip_visits();
     for volume in &volumes {
         run_order(volume, walk, visits, &mut |layer, res, comp, precinct| {
-            // A packet already read is skipped without a visit. Only a packet
+            // A packet skipped from the bitmap is not charged. Only a packet
             // read is marked, and a read takes a visit and at least a byte of
             // packet header; at most 31 later volumes can meet it again. A
-            // skip takes about 4 ns, so the skips cost at most about 0.12 µs
-            // per byte, under the 0.45 µs a byte of real data takes to decode
-            // that the bound is set by. Charging each skip would refuse files
-            // OpenJPEG reads quickly, such as 31 identical volumes over 1 MB
-            // of empty packets.
+            // bitmap skip takes about 4 ns, so the skips cost at most about
+            // 0.12 µs per byte, under the 0.45 µs a byte of real data takes
+            // to decode that the bound is set by. Charging them would refuse
+            // files OpenJPEG reads quickly, such as 31 identical volumes over
+            // 1 MB of empty packets. A skip from the set costs far more and
+            // is charged (see `SET_SKIP_VISITS`).
             if emitted.insert(walk, layer, res, comp, precinct)? {
                 f(layer, res, comp, precinct)
+            } else if skip_visits > 0 {
+                visit(visits, skip_visits)
             } else {
                 Ok(())
             }
@@ -250,6 +260,12 @@ where
     }
     Ok(())
 }
+
+/// The visits a packet skipped from [`Emitted`]'s set is charged. A lookup
+/// in a set of millions of packets misses the cache: about 80 to 180 ns,
+/// measured on the `setskip` shape of 1.4e7 packets read, against about
+/// 10 ns for a visit there (the bound is set by 14 ns), so 12 visits.
+const SET_SKIP_VISITS: usize = 12;
 
 /// The packets a `POC` sequence has emitted so far (see [`for_each_packet`]),
 /// as OpenJPEG's `include` array holds them.
@@ -273,7 +289,9 @@ where
 /// [`Error::Limit`]. A positional order can pass over precincts, as
 /// OpenJPEG's does (see [`PacketWalk::step`]), so the walk might still
 /// finish; the packets read are then kept in a set, at most one per visit
-/// and one per byte of packet headers, about 24 bytes each.
+/// and one per byte of packet headers, about 24 bytes each, and each packet
+/// skipped from it is charged [`SET_SKIP_VISITS`]. `read_header`'s walk
+/// keeps no set: it fails with [`Error::Limit`] there too.
 struct Emitted {
     /// The first bit of each (component, resolution), at
     /// `component * resolutions + resolution`.
@@ -291,12 +309,13 @@ enum Marks {
 impl Emitted {
     /// Nothing emitted yet, for `volumes` over a tile of at most
     /// `resolutions` resolutions per component; a bitmap when the volumes
-    /// reach at most `dense_bits` packets.
+    /// reach at most `dense_bits` packets, else a set if `poc_set`.
     fn new(
         volumes: &[Volume],
         walk: &PacketWalk<'_>,
         resolutions: usize,
         dense_bits: u64,
+        poc_set: bool,
     ) -> Result<Self> {
         // First the highest layer end over the volumes that cover each
         // (component, resolution): at most 32 steps per pair, for each of
@@ -325,12 +344,14 @@ impl Emitted {
         let words = usize::try_from(reached.div_ceil(64))
             .ok()
             .filter(|_| reached <= dense_bits);
+        let layer_orders = volumes
+            .iter()
+            .all(|v| matches!(v.progression, Progression::Lrcp | Progression::Rlcp));
         let marks = match words {
             Some(words) => Marks::Dense(vec![0; words]),
-            None if volumes
-                .iter()
-                .all(|v| matches!(v.progression, Progression::Lrcp | Progression::Rlcp)) =>
-            {
+            // Refusing a walk that cannot finish relies on strict decoding;
+            // revisit it for partial decode (#214).
+            None if layer_orders || !poc_set => {
                 return Err(Error::Limit(format!(
                     "tile packet walk exceeds its work bound: its POC volumes reach \
                      {reached} packets"
@@ -343,6 +364,15 @@ impl Emitted {
             resolutions,
             marks,
         })
+    }
+
+    /// The visits a packet skipped as already emitted is charged: none from
+    /// the bitmap, [`SET_SKIP_VISITS`] from the set.
+    fn skip_visits(&self) -> usize {
+        match self.marks {
+            Marks::Dense(_) => 0,
+            Marks::Sparse(_) => SET_SKIP_VISITS,
+        }
     }
 
     /// Mark packet `(layer, res, comp, precinct)` emitted; whether it was not
