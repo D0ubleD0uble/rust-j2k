@@ -158,6 +158,29 @@ loops iterate zero times. Rejecting is the stricter, spec-faithful reading; a
 volume that covers nothing is almost certainly a corrupt field, not one the
 encoder meant.
 
+A fourth is the tier-2 counterpart: a `POC` sequence whose volumes leave out
+packets of a tile is rejected as `Codestream` before its packets are read. A
+tile has a packet for every layer, every resolution each component has (its
+own `COD` or `COC` level count) and every precinct of it, empty ones included
+(B.6, B.9); a resolution with no precincts on the tile has no packets and
+needs no volume. The volumes are the main header's and every tile-part's,
+appended in order. Volumes start at layer 0, so a component's resolution has
+all its packets only when one volume reaching the last layer covers it; the
+check costs `components × (volumes + resolutions)` steps. OpenJPEG decodes
+such a tile with the missing packets empty, and `opj_compress` writes such a
+file when its `-POC` volumes do not cover the tile: `-n 2 -POC
+T1=0,0,1,1,1,LRCP` leaves resolution 1 out, and OpenJPEG's decode of it has
+every sample wrong (`tests/fixtures/poc_coverage/`). The check is on the
+volumes' axes, not on each precinct: a positional order's sweep can pass over
+a precinct with mixed sub-sampling (see "The tier-2 work bound"), with or without
+a `POC`, as OpenJPEG's encoder and decoder both do, and that is not refused.
+`read_header`'s walk of a `Psot = 0` tile makes the same check, so for such
+a tile in a JP2 file the codestream runs to the end of the file and the boxes
+after `jp2c` are not reported; the decode refuses the tile either way. 381
+`opj_compress -POC` encodes whose volumes do cover the tile (two or three
+volumes split by resolution or component, every order, 1 to 4 components,
+some sub-sampled, 1 to 3 layers) decode as before.
+
 The JP2 box layer follows OpenJPEG 2.5.0 where a file bends Annex I in a
 way it tolerates: `ihdr` anywhere in `jp2h`, a second `jp2h` merged into the
 first, a header box misplaced at the top level after `jp2h` applied as if it

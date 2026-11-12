@@ -307,6 +307,7 @@ pub(crate) fn decode_packets_within<'a>(
         body_pos: 0,
         packed,
     };
+    progression::check_poc_coverage(header, &walk)?;
     let visits = Cell::new(budget.visits);
     let mut packet_index = 0u32;
     let walked = for_each_packet(
