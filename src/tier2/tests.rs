@@ -271,6 +271,64 @@ fn geometry_multi_block_grid() {
     assert_eq!(last, (96, 96, 4, 4));
 }
 
+/// A tile of one sample at an odd origin has a precinct at its finest
+/// resolution alone. The geometry builds no band for the 32 others, yet
+/// `decode_packets` still hands each its empty subbands at their own origins
+/// (ISO B.5, Eq. B-15), which the inverse DWT reads.
+#[test]
+fn empty_resolutions_build_no_band_geometry() {
+    let mut header = header(2, 2, 32, 6);
+    header.siz.x_offset = 1;
+    header.siz.y_offset = 1;
+    header.siz.tile_x_offset = 1;
+    header.siz.tile_y_offset = 1;
+    header.siz.tile_width = 1;
+    header.siz.tile_height = 1;
+    let geoms = geoms_of(&header, 0, 0).unwrap();
+    assert_eq!(geoms.len(), 33);
+    for geom in &geoms[..32] {
+        assert_eq!(geom.precinct_count(), 0);
+        assert!(geom.bands.is_empty());
+    }
+    assert_eq!(geoms[32].precinct_count(), 1);
+    assert_eq!(geoms[32].bands.len(), 3);
+
+    // One empty packet, for the finest resolution's precinct.
+    let data = [0u8];
+    let tile = tile(&data);
+    let coded = decode_packets(&header, &tile, &mut decode_visits(0)).unwrap();
+    let resolutions = &coded.components[0].resolutions;
+    assert_eq!(resolutions.len(), 33);
+    type Band = (BandKind, (u32, u32), usize, usize, usize);
+    let bands = |r: usize| -> Vec<Band> {
+        resolutions[r]
+            .subbands
+            .iter()
+            .map(|b| (b.kind, b.origin, b.width, b.height, b.blocks.len()))
+            .collect()
+    };
+    // NLLL at level 32: [ceil(1 / 2^32), ceil(2 / 2^32)) = [1, 1) both ways.
+    assert_eq!(bands(0), [(BandKind::Ll, (1, 1), 0, 0, 0)]);
+    // Level 2, at resolution 31: HL is [0, 0) x [1, 1), LH [1, 1) x [0, 0).
+    assert_eq!(
+        bands(31),
+        [
+            (BandKind::Hl, (0, 1), 0, 0, 0),
+            (BandKind::Lh, (1, 0), 0, 0, 0),
+            (BandKind::Hh, (0, 0), 0, 0, 0),
+        ]
+    );
+    // Level 1 holds the one sample, in HH.
+    assert_eq!(
+        bands(32),
+        [
+            (BandKind::Hl, (0, 1), 1, 0, 0),
+            (BandKind::Lh, (1, 0), 0, 1, 0),
+            (BandKind::Hh, (0, 0), 1, 1, 1),
+        ]
+    );
+}
+
 /// The maximum decomposition depth builds without overflowing the grid shifts
 /// and yields one resolution per level plus the base.
 #[test]

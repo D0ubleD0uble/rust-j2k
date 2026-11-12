@@ -219,6 +219,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   allow, is still read as OpenJPEG reads it. The 32-volume limit counts the
   volumes the tile walks, so the main header's no longer count against a
   tile that replaces them.
+- The packet-header bound now counts only the components that hold a
+  precinct at each resolution, and a resolution with none costs less to set
+  up. A tile of one sample at
+  an odd origin has 32 such resolutions per component. These files used to
+  be `Error::Limit` and now decode, as in OpenJPEG: 64 one-sample tiles of
+  16384 components (1.1 MB), refused after 21 s, now decode in 10.5 s; an
+  LRCP or RLCP column of 8 components and 65535 layers; and an RPCL or PCRL
+  column of 16 components and 2^17 rows. One tile of 16384 such components
+  takes 0.18 s instead of 0.5 s, and 64 tiles of 1024 take 0.41 s instead
+  of 1.7 s.
 
 ### Changed
 

@@ -10,8 +10,8 @@ inclusion bits of 0, or empty, 0x00), so a decoder that walks them all reads
 a flat image. OpenJPEG 2.5.0 has no work bound and walks them; `--check`
 prints what it does.
 
-The shapes come from the reviews of PR #227, issue #235, PR #249 and
-issue #247:
+The shapes come from the reviews of PR #227, issue #235, PR #249,
+issue #247 and issue #265:
 
 - `t2bomb`: one tile, one component, no wavelet levels, 4x4 code-blocks in
   one precinct, `layers` layers, LRCP. Each packet is 0x80: present, then an
@@ -35,6 +35,16 @@ issue #247:
   resolution and component, so each volume after the first reaches only
   packets the first one read. A decoder must emit each packet once and skip
   the rest cheaply; these decode.
+- `deep`: a row of tiles of one sample each at y = 1, `components`
+  components, 32 wavelet levels, one layer, LRCP. Each tile is empty at
+  every resolution but the finest, so it carries one empty packet (0x00)
+  per component, yet has 33 resolutions of up to 3 bands per component to
+  set up. These decode.
+- `layer_edge`: a one-sample column on x in [1, 2) in tiles of two rows,
+  one component, `levels` wavelet levels, 65535 LRCP or RLCP layers, every
+  packet 0x00. Only the finest resolution holds a precinct, so each layer
+  costs `levels` + 3 steps for its byte: 33 a byte at 30 levels, past the
+  bound of 32 and refused; 32 at 29, which decodes.
 
 The small files are written to tests/fixtures/work_bound/ (see the README
 there). With `--big DIR`, the large timing shapes from the issue are written
@@ -56,7 +66,7 @@ import time
 
 DIR = pathlib.Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "work_bound"
 
-LRCP, RPCL, PCRL, CPRL = 0, 2, 3, 4
+LRCP, RLCP, RPCL, PCRL, CPRL = 0, 1, 2, 3, 4
 
 
 def seg(code: int, body: bytes) -> bytes:
@@ -233,6 +243,40 @@ def setskip(layers: int, volumes: int, thin: int = 64) -> bytes:
     return codestream(main, b"\x00" * ((152 + thin) * layers))
 
 
+def deep(tiles: int, components: int) -> bytes:
+    """A row of `tiles` tiles of one sample each on the image area
+    `[1, 1 + tiles) x [1, 2)`, `components` components, 32 wavelet levels,
+    one layer, LRCP, 64 x 64 code-blocks, 2^15 precincts. At y = 1 each
+    tile is empty at every level above 0 (B.5: `ceil(1 / 2^l) ==
+    ceil(2 / 2^l)`), so only its finest resolution has a precinct, and the
+    tile carries one empty packet (0x00) per component."""
+    levels = 32
+    comps = [(7, 1, 1)] * components
+    main = (
+        seg(
+            0xFF51,
+            struct.pack(">HIIIIIIIIH", 0, 1 + tiles, 2, 1, 1, 1, 1, 1, 1, components)
+            + b"".join(bytes(c) for c in comps),
+        )
+        + seg(0xFF52, bytes([0, LRCP]) + struct.pack(">H", 1) + bytes([0, levels, 4, 4, 0, 1]))
+        + seg(0xFF5C, bytes([0x40]) + bytes([0x48] * (3 * levels + 1)))
+    )
+    return codestream(main, b"\x00" * components, tiles)
+
+
+def layer_edge(order: int, levels: int, tiles: int = 10) -> bytes:
+    """`tiles` tiles of a 1 x 2 column on x in [1, 2), one component,
+    `levels` wavelet levels, 65535 layers in `order` (LRCP or RLCP), 1 x 1
+    code-blocks. Each tile is 65535 empty packets (0x00), one a layer at the
+    finest resolution; the others are empty in x."""
+    main = (
+        siz(1, 2, 2 * tiles, [(7, 1, 1)], 2)
+        + seg(0xFF52, bytes([0, order]) + struct.pack(">H", 65535) + bytes([0, levels, 0, 0, 0, 1]))
+        + seg(0xFF5C, bytes([0x40]) + bytes([0x40] * (3 * levels + 1)))
+    )
+    return codestream(main, b"\x00" * 65535, tiles)
+
+
 # Committed: name -> bytes. Each but the first and the last walks far past
 # the decode's work bound for its size and is refused with `Error::Limit`.
 FILES = {
@@ -302,6 +346,18 @@ BIG = {
     # box; 2.0e7, past it, so `read_header` gives up and it runs to the end.
     "setskip_1024_31.j2k": lambda: setskip(1024, 31),
     "setskip_2048_2.j2k": lambda: setskip(2048, 2),
+    # The #265 shapes: tiles whose 33 resolutions per component are all
+    # empty but the finest. One tile of 16384 components, then 64 tiles of
+    # 1024 and of 16384.
+    "deep_1_16384.j2k": lambda: deep(1, 16384),
+    "deep_64_1024.j2k": lambda: deep(64, 1024),
+    "deep_64_16384.j2k": lambda: deep(64, 16384),
+    # The layer orders' step for each component they check decides these
+    # (`the_layer_orders_charge_each_component_they_check`): 10 tiles, 655
+    # KB, refused at 30 levels and decoded at 29.
+    "layer_edge_lrcp_30.j2k": lambda: layer_edge(LRCP, 30),
+    "layer_edge_rlcp_30.j2k": lambda: layer_edge(RLCP, 30),
+    "layer_edge_lrcp_29.j2k": lambda: layer_edge(LRCP, 29),
 }
 
 

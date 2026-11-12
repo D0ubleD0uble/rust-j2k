@@ -518,7 +518,9 @@ visit 262144 code-blocks per layer; it now decodes in 0.15 s.
 What remains is still bounded (owner decision on #235, 2026-11-11). Walking
 every tile's packets may take at most max(2^24, 32 × the tiles' data
 bytes) steps. A step is a packet read, a span stepped over, or a sweep
-position, once for each (component, resolution) checked there. Code-block
+position, once for each (component, resolution) checked there. Only the
+pairs that hold a precinct are checked, and RPCL sweeps no resolution
+where none does. Code-block
 entries that read a bit are not counted, since the header's bytes already
 pay for them. Past the bound the decode is `Limit`. It is one bound for the
 whole decode, not one per tile, and there is no option to change it.
@@ -541,8 +543,32 @@ times are this decoder before this change, then after, then
 
 The bound scales with size, so a large file of the same shape still takes
 as long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after
-4.5 s, about what 10 MB of real data takes to decode (about 0.45 µs a
-byte). A step costs 10 to 50 ns.
+3.1 s, about what 10 MB of real data takes to decode. A step costs about
+2 to 15 ns, and the conformance files decode at 0.25 to 0.47 µs a byte.
+The cheapest refusals are in the layer orders over resolutions with no
+precinct, at about 2 ns a step: `layer_edge` (655 KB, 33 steps a byte) is
+refused in 0.015 to 0.04 s, 0.02 to 0.06 µs a byte, and OpenJPEG decodes
+it in 0.08 s.
+
+Setting up each tile's geometry is not counted. A tile of one sample at
+an odd origin has 32 resolutions per component that hold no precinct, and
+each component of each tile costs about a byte. Those resolutions now get
+no band or code-block geometry, and the walk checks no component there. Measured
+on release builds (`deep` in `scripts/gen-work-bound-fixtures.py`, a row
+of one-sample tiles at y = 1, 32 levels, one layer, every packet 0x00;
+times are before this change, then after, then `opj_decompress` 2.5.0):
+
+| Shape | Size | Before | After | OpenJPEG |
+| ----- | ---- | ------ | ----- | -------- |
+| 1 tile, 16384 components | 66 KB | 0.5 s, 383 MB | 0.18 s | 0.4 s, 192 MB |
+| 64 tiles, 1024 components | 70 KB | 1.7 s | 0.41 s | 0.24 s |
+| 64 tiles, 16384 components | 1.1 MB | `Limit`, 21 s | 10.5 s, 226 MB | 5.5 s, 1.3 GB |
+
+The last is about 10 µs a byte, twice OpenJPEG, and the slowest shape
+known per byte. The same change lets the layer orders decode 8 such
+components in one tile, and the positional orders a 16-component column
+of 2^17 rows, which were `Limit` and which OpenJPEG decodes
+(`tests/work_bound.rs`).
 
 A POC marker's volumes may reach the same packet more than once; the
 first reads it and the rest skip it (OpenJPEG's `include` array). The
