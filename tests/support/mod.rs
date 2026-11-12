@@ -70,9 +70,9 @@ pub struct Expected {
 ///   "ipr": [120],
 ///   "uuid_info": [[["2b0d7e97aa2e317d9133e53161a2f7d0"], 24]],
 ///   "file_type": { "brand": "jp2 ", "minor_version": 0, "compatibility": ["jp2 "] },
-///   "image_header": { "compression": 7, "unknown_color_space": 0, "ipr": 0 },
+///   "image_header": { "compression": 7, "unknown_color_space": 0, "ipr_flag": 0 },
 ///   "color_specifications": [{ "method": 1, "precedence": 0, "approximation": 0,
-///     "data_len": 4, "data_sha256": "<hex>", "enum_cs": 16 }],
+///     "payload_len": 4, "payload_sha256": "<hex>", "enum_cs": 16 }],
 ///   "reader_requirements": null
 /// }
 /// ```
@@ -137,10 +137,10 @@ pub struct FileTypeSnapshot {
 pub struct ImageHeaderSnapshot {
     pub compression: u8,
     pub unknown_color_space: u8,
-    pub ipr: u8,
+    pub ipr_flag: u8,
 }
 
-/// One `colr` box: `METH`, `PREC`, `APPROX`, the data's length and SHA-256,
+/// One `colr` box: `METH`, `PREC`, `APPROX`, the payload's length and SHA-256,
 /// and `EnumCS` when `METH` is 1 with a 4-byte value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,8 +148,8 @@ pub struct ColorSpecSnapshot {
     pub method: u8,
     pub precedence: u8,
     pub approximation: u8,
-    pub data_len: usize,
-    pub data_sha256: String,
+    pub payload_len: usize,
+    pub payload_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enum_cs: Option<u32>,
 }
@@ -195,7 +195,7 @@ impl Jp2Boxes {
             image_header: ImageHeaderSnapshot {
                 compression: header.compression,
                 unknown_color_space: header.unknown_color_space,
-                ipr: header.ipr_flag,
+                ipr_flag: header.ipr_flag,
             },
             color_specifications: metadata
                 .color_specifications
@@ -204,8 +204,8 @@ impl Jp2Boxes {
                     method: c.method,
                     precedence: c.precedence,
                     approximation: c.approximation,
-                    data_len: c.payload.len(),
-                    data_sha256: jp2::sha256_hex(&c.payload),
+                    payload_len: c.payload.len(),
+                    payload_sha256: jp2::sha256_hex(&c.payload),
                     enum_cs: <[u8; 4]>::try_from(c.payload.as_slice())
                         .ok()
                         .filter(|_| c.method == 1)
