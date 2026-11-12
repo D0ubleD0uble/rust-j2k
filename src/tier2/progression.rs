@@ -8,10 +8,11 @@
 
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::hash::{BuildHasherDefault, Hasher};
 
-use crate::Result;
 use crate::codestream::MainHeader;
 use crate::codestream::markers::{Progression, Rect, Siz};
+use crate::{Error, Result};
 
 use super::geometry::ResolutionGeom;
 use super::visit;
@@ -163,7 +164,7 @@ struct Volume {
 /// (A.6.6), each an order over its own layer/resolution/component sub-range; the
 /// packet stream is their concatenation, and a packet reached by more than one
 /// volume is emitted once, by the first — OpenJPEG dedups through a shared
-/// `include` array, mirrored here by `seen`.
+/// `include` array, mirrored here by [`Emitted`].
 ///
 /// Each volume is enumerated by [`run_order`]. The five orders are permutations
 /// of the four axes — layer, resolution, component, position — and the three
@@ -172,10 +173,34 @@ struct Volume {
 /// The loops spend `visits` (see [`super::Budget::visits`]) as they go, the
 /// points that hold no packet included, so a walk under a bound stops however
 /// sparse its packets are.
+///
+/// `poc_bitmap` is how a `POC` sequence's packets are held (see
+/// [`Emitted`]): with `None`, in a bitmap when they are no more than the
+/// visits left and else in a set; with `Some(bits)`, in a bitmap when they
+/// are no more than `bits`, and else the walk is [`crate::Error::Limit`].
 pub(crate) fn for_each_packet<F>(
     header: &MainHeader,
     walk: &PacketWalk<'_>,
     visits: &Cell<u64>,
+    poc_bitmap: Option<u64>,
+    f: F,
+) -> Result<()>
+where
+    F: FnMut(u32, usize, usize, usize) -> Result<()>,
+{
+    let dense_bits = poc_bitmap.unwrap_or(visits.get());
+    for_each_packet_holding(header, walk, visits, dense_bits, poc_bitmap.is_none(), f)
+}
+
+/// [`for_each_packet`], with a `POC` sequence's packets held in a bitmap
+/// only when its volumes reach at most `dense_bits` of them (see
+/// [`Emitted`]).
+pub(super) fn for_each_packet_holding<F>(
+    header: &MainHeader,
+    walk: &PacketWalk<'_>,
+    visits: &Cell<u64>,
+    dense_bits: u64,
+    poc_set: bool,
     mut f: F,
 ) -> Result<()>
 where
@@ -213,17 +238,215 @@ where
     if volumes.len() == 1 {
         return run_order(&volumes[0], walk, visits, &mut f);
     }
-    let mut seen: HashSet<(u32, usize, usize, usize)> = HashSet::new();
+    let mut emitted = Emitted::new(&volumes, walk, max_res, visits.get(), dense_bits, poc_set)?;
+    let skip_visits = emitted.skip_visits();
     for volume in &volumes {
         run_order(volume, walk, visits, &mut |layer, res, comp, precinct| {
-            if seen.insert((layer, res, comp, precinct)) {
+            // A packet skipped from the bitmap is not charged. Only a packet
+            // read is marked, and a read takes a visit and at least a byte of
+            // packet header; at most 31 later volumes can meet it again. A
+            // bitmap skip takes about 4 ns, so the skips cost at most about
+            // 0.12 µs per byte, under the 0.45 µs a byte of real data takes
+            // to decode that the bound is set by. Charging them would refuse
+            // files OpenJPEG reads quickly, such as 31 identical volumes over
+            // 1 MB of empty packets. A skip from the set costs far more and
+            // is charged (see `SET_SKIP_VISITS`).
+            if emitted.insert(walk, layer, res, comp, precinct)? {
                 f(layer, res, comp, precinct)
+            } else if skip_visits > 0 {
+                visit(visits, skip_visits)
             } else {
                 Ok(())
             }
         })?;
     }
     Ok(())
+}
+
+/// The visits a packet skipped from [`Emitted`]'s set is charged. A lookup
+/// in a set of millions of packets misses the cache: about 80 to 180 ns,
+/// measured on the `setskip` shape of 1.4e7 packets read, against about
+/// 10 ns for a visit there (the bound is set by 14 ns), so 12 visits.
+const SET_SKIP_VISITS: usize = 12;
+
+/// The packets a `POC` sequence has emitted so far (see [`for_each_packet`]),
+/// as OpenJPEG's `include` array holds them.
+///
+/// Packet `(layer, res, comp, precinct)` is the bit `start + layer *
+/// precincts + precinct`, where `start` is where its (component,
+/// resolution) begins and `precincts` is that resolution's precinct count.
+/// Each (component, resolution) holds the layers below the highest layer end
+/// of the volumes that cover it, so the bits are exactly the packets the
+/// volumes reach.
+///
+/// A layer order reads all of a resolution's precincts, so if every volume
+/// is one and they reach more packets than the visits the walk has left, it
+/// cannot finish, and it fails here with [`Error::Limit`].
+///
+/// Otherwise they are a bitmap when they are no more than the decode's
+/// visits left. Each packet read spends a visit, so a walk that reads them
+/// all never has more. The bitmap is then at most a bit per visit: 2 MB
+/// under the decode's floor of 2^24 visits, and 4 bytes per byte of tile
+/// data above it. `read_header`'s walk takes the same cap from the
+/// decode's bound for the same tile data, so it holds a bitmap wherever
+/// the decode can.
+///
+/// When there are more, a positional order can pass over precincts, as
+/// OpenJPEG's does (see [`PacketWalk::step`]), so the walk might still
+/// finish; the packets read are then kept in a set, at most one per visit
+/// and one per byte of packet headers, about 24 bytes each, and each packet
+/// skipped from it is charged [`SET_SKIP_VISITS`]. `read_header`'s walk
+/// keeps no set: it fails with [`Error::Limit`] there.
+struct Emitted {
+    /// The first bit of each (component, resolution), at
+    /// `component * resolutions + resolution`.
+    starts: Vec<u64>,
+    resolutions: usize,
+    marks: Marks,
+}
+
+/// How [`Emitted`] holds its bits.
+enum Marks {
+    Dense(Vec<u64>),
+    Sparse(HashSet<u64, BuildHasherDefault<PacketHasher>>),
+}
+
+impl Emitted {
+    /// Nothing emitted yet, for `volumes` over a tile of at most
+    /// `resolutions` resolutions per component, with `visits_left` for the
+    /// walk; a bitmap when the volumes reach at most `dense_bits` packets,
+    /// else a set if `poc_set`.
+    fn new(
+        volumes: &[Volume],
+        walk: &PacketWalk<'_>,
+        resolutions: usize,
+        visits_left: u64,
+        dense_bits: u64,
+        poc_set: bool,
+    ) -> Result<Self> {
+        // First the highest layer end over the volumes that cover each
+        // (component, resolution): at most 32 steps per pair, for each of
+        // which the geometry has already built far more.
+        let mut starts = vec![0u64; walk.geoms.len() * resolutions];
+        for volume in volumes {
+            for comp in volume.components.clone() {
+                let held = walk.geoms[comp].len();
+                for res in volume.resolutions.clone().filter(|&r| r < held) {
+                    let layers = &mut starts[comp * resolutions + res];
+                    *layers = (*layers).max(u64::from(volume.layers));
+                }
+            }
+        }
+        // Then each pair's start: the layers times the precincts of the
+        // pairs before it. At most 65535 layers times the geometry's 2^18
+        // precincts, so the sum cannot overflow.
+        let mut reached = 0u64;
+        for (index, start) in starts.iter_mut().enumerate() {
+            let (comp, res) = (index / resolutions, index % resolutions);
+            let layers = std::mem::replace(start, reached);
+            if layers > 0 {
+                reached += layers * walk.geoms[comp][res].precinct_count() as u64;
+            }
+        }
+        let words = usize::try_from(reached.div_ceil(64))
+            .ok()
+            .filter(|_| reached <= dense_bits);
+        let layer_orders = volumes
+            .iter()
+            .all(|v| matches!(v.progression, Progression::Lrcp | Progression::Rlcp));
+        let marks = match words {
+            // Refusing a walk that cannot finish relies on strict decoding;
+            // revisit it for partial decode (#214).
+            _ if layer_orders && reached > visits_left => {
+                return Err(Error::Limit(format!(
+                    "tile packet walk exceeds its work bound: its POC volumes reach \
+                     {reached} packets"
+                )));
+            }
+            Some(words) => Marks::Dense(vec![0; words]),
+            None if !poc_set => {
+                return Err(Error::Limit(format!(
+                    "tile packet walk exceeds its work bound: its POC volumes reach \
+                     {reached} packets"
+                )));
+            }
+            None => Marks::Sparse(HashSet::default()),
+        };
+        Ok(Emitted {
+            starts,
+            resolutions,
+            marks,
+        })
+    }
+
+    /// The visits a packet skipped as already emitted is charged: none from
+    /// the bitmap, [`SET_SKIP_VISITS`] from the set.
+    fn skip_visits(&self) -> usize {
+        match self.marks {
+            Marks::Dense(_) => 0,
+            Marks::Sparse(_) => SET_SKIP_VISITS,
+        }
+    }
+
+    /// Mark packet `(layer, res, comp, precinct)` emitted; whether it was not
+    /// already.
+    fn insert(
+        &mut self,
+        walk: &PacketWalk<'_>,
+        layer: u32,
+        res: usize,
+        comp: usize,
+        precinct: usize,
+    ) -> Result<bool> {
+        let start = self.starts[comp * self.resolutions + res];
+        let precincts = walk.geoms[comp][res].precinct_count() as u64;
+        debug_assert!(
+            (precinct as u64) < precincts,
+            "precinct {precinct} of {precincts}"
+        );
+        let bit = start + u64::from(layer) * precincts + precinct as u64;
+        match &mut self.marks {
+            Marks::Dense(words) => {
+                let word = usize::try_from(bit / 64)
+                    .ok()
+                    .and_then(|w| words.get_mut(w))
+                    .ok_or_else(|| {
+                        Error::Inconsistent(format!("packet {bit} past the POC bitmap"))
+                    })?;
+                let mask = 1u64 << (bit % 64);
+                let new = *word & mask == 0;
+                *word |= mask;
+                Ok(new)
+            }
+            Marks::Sparse(set) => Ok(set.insert(bit)),
+        }
+    }
+}
+
+/// The hash of a packet's bit in [`Emitted`]'s set: SplitMix64's finalizer,
+/// which spreads neighboring bits over every bucket. It is a bijection, so
+/// two packets never hash alike, and the bits are laid out by the tile's
+/// geometry, not chosen one by one.
+#[derive(Default)]
+struct PacketHasher(u64);
+
+impl Hasher for PacketHasher {
+    fn finish(&self) -> u64 {
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 << 8) | u64::from(b);
+        }
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
 }
 
 /// Enumerate one progression volume, calling `emit` for each of its packets in

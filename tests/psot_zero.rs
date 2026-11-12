@@ -290,7 +290,10 @@ fn a_raw_psot_zero_codestream_with_bytes_after_its_packets_is_refused() {
 /// bytes after its packets are refused, as on a codestream the check does not
 /// apply to. The tall CPRL file's 25 million visits are past the decode's own
 /// work bound too, so the decode stops there, at `Limit`, before it reaches
-/// those bytes. OpenJPEG 2.5.0 decodes all seven to a flat 128.
+/// those bytes. OpenJPEG 2.5.0 decodes all seven to a flat 128. A POC
+/// sequence past the decode's bitmap is in this class too; it is built in
+/// `tests/work_bound.rs`
+/// (`a_psot_zero_poc_sequence_ends_at_its_box_within_the_decodes_bitmap`).
 #[test]
 fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
     for name in [

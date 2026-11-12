@@ -190,6 +190,16 @@ fn packets_that_include_nothing_decode() {
     );
 }
 
+/// 31 identical POC volumes over 4 precincts and 1024 layers of empty
+/// packets: each packet is read once and met 30 times more, skipped without
+/// a visit each time. OpenJPEG 2.5.0 decodes it to a flat 128.
+#[test]
+fn repeated_poc_volumes_decode() {
+    let name = "pocdup_4x4_1024_31.j2k";
+    let bytes = std::fs::read(dir().join(name)).unwrap();
+    assert_flat(name, &bytes, 4, 4);
+}
+
 /// `opj_compress` output with 4x4 code-blocks and 64 or 100 quality layers on
 /// a nearly flat 2048^2 image. OpenJPEG's encoder sets every packet's
 /// "present" bit, so each layer's header names every one of its 262144
@@ -214,6 +224,125 @@ fn encoder_output_with_many_layers_decodes() {
         assert_eq!((component.width, component.height), (2048, 2048), "{name}");
         let samples: Vec<u8> = component.samples.iter().map(|&s| s as u8).collect();
         assert_eq!(sha256_hex(&samples), sha256, "{name}");
+    }
+}
+
+/// `setskip` from the generator: one 38608 x 1 tile in RPCL, no wavelet
+/// levels, 1 x 1 precincts, `layers` layers and `volumes` identical POC
+/// volumes. One component at `XRsiz` 254 sets the sweep's step; 64 more at
+/// 255 have 152 precincts each, but the sweep meets only their first, so
+/// the volumes reach 9880 packets a layer and read 216. Every packet read is
+/// empty (0x00).
+fn setskip(layers: u16, volumes: usize) -> Vec<u8> {
+    let mut comps = vec![(254, 1)];
+    comps.extend([(255, 1); 64]);
+    let mut cod = vec![1, 2];
+    cod.extend_from_slice(&layers.to_be_bytes());
+    cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0x00]);
+    let body = vec![0; 216 * usize::from(layers)];
+    let mut cs = codestream(
+        0,
+        152 * 254,
+        1,
+        152 * 254,
+        &comps,
+        &cod,
+        &[0x40, 0x40],
+        &body,
+    );
+    // RSpoc, CSpoc, LYEpoc, REpoc, CEpoc, Ppoc, before the first SOT.
+    let mut volume = vec![0, 0];
+    volume.extend_from_slice(&layers.to_be_bytes());
+    volume.extend_from_slice(&[1, 65, 2]);
+    let sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    cs.splice(sot..sot, seg(0xFF5F, &volume.repeat(volumes)));
+    cs
+}
+
+/// More packets reached than the bitmap may hold, in a positional order, so
+/// the packets read are kept in a set, and each one skipped from it is
+/// charged 12 steps: 2048 layers in 31 volumes skip 1.3 x 10^7 packets,
+/// past the bound for their 442 KB. With one volume, nothing is skipped and
+/// it decodes. OpenJPEG 2.5.0 decodes both to a flat 128.
+#[test]
+fn skips_from_the_poc_set_are_bounded() {
+    assert_limit("setskip 31 volumes", &setskip(2048, 31));
+    let image = decode(&setskip(2048, 1)).unwrap();
+    assert_eq!(image.components.len(), 65);
+    assert!(image.components[0].samples.iter().all(|&s| s == 128));
+}
+
+/// A JP2 box: the length, the type, the payload.
+fn jp2_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let mut out = u32::try_from(8 + payload.len())
+        .unwrap()
+        .to_be_bytes()
+        .to_vec();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(payload);
+    out
+}
+
+/// `cs` in a JP2 file as `jp2_psot0` in the generator writes it: its one
+/// tile-part's `Psot` set to 0 and its EOC dropped, in a `jp2c` box that ends
+/// where the packets end, followed here by an `xml ` box of `xml`.
+fn jp2_psot0(cs: &[u8], xml: &[u8]) -> Vec<u8> {
+    let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
+    let mut ihdr = (word(12) - word(20)).to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&(word(8) - word(16)).to_be_bytes());
+    ihdr.extend_from_slice(&cs[40..42]);
+    ihdr.extend_from_slice(&[7, 7, 0, 0]);
+    let mut colr = vec![1, 0, 0];
+    colr.extend_from_slice(&17u32.to_be_bytes());
+    let mut jp2h = jp2_box(b"ihdr", &ihdr);
+    jp2h.extend(jp2_box(b"colr", &colr));
+    let sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    let mut body = cs[..sot + 6].to_vec();
+    body.extend_from_slice(&[0; 4]);
+    body.extend_from_slice(&cs[sot + 10..cs.len() - 2]);
+    let mut out = jp2_box(b"jP  ", b"\x0d\x0a\x87\x0a");
+    out.extend(jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    out.extend(jp2_box(b"jp2h", &jp2h));
+    out.extend(jp2_box(b"jp2c", &body));
+    out.extend(jp2_box(b"xml ", xml));
+    out
+}
+
+/// `read_header` walks a `Psot = 0` tile's packets to see whether its
+/// codestream ends at its box's end, holding a POC sequence's packets in a
+/// bitmap wherever the decode does. `setskip(1024, 31)` reaches 1.0e7
+/// packets, under the decode's 2^24 visits: the codestream ends at its box,
+/// and the `xml ` box after it is reported by both calls. OpenJPEG 2.5.0
+/// decodes it to a flat 128. `setskip(2048, 2)` reaches 2.0e7, so the decode
+/// would keep a set, and the walk gives up: the codestream runs to the end
+/// of the file, the `xml ` box is not reported, and the decode refuses its
+/// bytes as left after the last packet, as for the files of
+/// `a_psot_zero_tile_too_costly_to_walk_reads_to_the_end` in
+/// `tests/psot_zero.rs`.
+#[test]
+fn a_psot_zero_poc_sequence_ends_at_its_box_within_the_decodes_bitmap() {
+    let file = jp2_psot0(&setskip(1024, 31), b"<a/>");
+    let image = decode(&file).unwrap();
+    assert_eq!(image.components.len(), 65);
+    assert!(
+        image
+            .components
+            .iter()
+            .all(|c| c.samples.iter().all(|&s| s == 128))
+    );
+    let xml = |metadata: &rust_j2k::Jp2Metadata| {
+        let payloads: Vec<Vec<u8>> = metadata.xml.iter().map(|x| x.payload.clone()).collect();
+        payloads
+    };
+    assert_eq!(xml(image.jp2.as_ref().unwrap()), [b"<a/>".to_vec()]);
+    let header = read_header(&file).unwrap();
+    assert_eq!(xml(header.jp2.as_ref().unwrap()), [b"<a/>".to_vec()]);
+
+    let file = jp2_psot0(&setskip(2048, 2), b"<a/>");
+    assert!(xml(read_header(&file).unwrap().jp2.as_ref().unwrap()).is_empty());
+    match decode(&file) {
+        Err(Error::Codestream(m)) => assert!(m.contains("left after the last packet"), "{m}"),
+        other => panic!("expected a codestream error, got {other:?}"),
     }
 }
 

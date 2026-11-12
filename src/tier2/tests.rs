@@ -1127,6 +1127,7 @@ fn order_of_header(header: &MainHeader) -> Vec<(u32, usize, usize, usize)> {
         header,
         &walk,
         &std::cell::Cell::new(u64::MAX),
+        None,
         |l, r, c, p| {
             seen.push((l, r, c, p));
             Ok(())
@@ -1377,6 +1378,209 @@ fn poc_emits_each_packet_once_across_overlapping_volumes() {
         no_poc.into_iter().collect::<BTreeSet<_>>(),
         "the overlapping volumes must cover exactly the tile's packet set",
     );
+}
+
+/// `header`'s packets, walked with every visit to spare and its `POC`
+/// sequence's packets held in a bitmap only when they are at most
+/// `dense_bits`, as [`super::progression::for_each_packet_holding`] holds
+/// them.
+fn order_holding(header: &MainHeader, dense_bits: u64) -> Vec<(u32, usize, usize, usize)> {
+    let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
+        .map(|c| geoms_of(header, 0, c).expect("geometry"))
+        .collect();
+    let walk = PacketWalk {
+        siz: &header.siz,
+        tile: header.siz.tile_rect(0).expect("tile 0"),
+        geoms: &geoms,
+    };
+    let mut seen = Vec::new();
+    super::progression::for_each_packet_holding(
+        header,
+        &walk,
+        &std::cell::Cell::new(u64::MAX),
+        dense_bits,
+        true,
+        |l, r, c, p| {
+            seen.push((l, r, c, p));
+            Ok(())
+        },
+    )
+    .unwrap();
+    seen
+}
+
+/// Three components, two sub-sampled differently, two levels, 4x4 precincts
+/// at every resolution and four layers, under five `POC` volumes that overlap
+/// in part and in full, in all five orders. The last two cover the whole tile.
+fn overlapping_volumes() -> MainHeader {
+    let mut layout = Layout::plain((32, 32), 2).components(3).precincts(2, 2);
+    layout.sampling = vec![(1, 1), (2, 2), (1, 2)];
+    let mut header = layout.header();
+    header.cod.layers = 4;
+    let volume = |res: (u8, u8), comp: (u16, u16), layer_end: u16, progression| PocVolume {
+        res_start: res.0,
+        res_end: res.1,
+        comp_start: comp.0,
+        comp_end: comp.1,
+        layer_end,
+        progression,
+    };
+    header.poc = vec![
+        volume((0, 2), (0, 2), 2, Progression::Lrcp),
+        volume((1, 3), (1, 3), 3, Progression::Rpcl),
+        volume((0, 3), (0, 3), 1, Progression::Pcrl),
+        volume((0, 3), (0, 3), 4, Progression::Cprl),
+        volume((0, 3), (0, 3), 4, Progression::Rlcp),
+    ];
+    header
+}
+
+/// Volumes that overlap, in part and in full and in every order, emit each
+/// packet once, where the first volume to reach it puts it, whether the
+/// sequence's packets are held in a bitmap or in a set. The reference walks
+/// each volume on its own (one volume takes no dedup) and keeps the first
+/// time each packet comes.
+#[test]
+fn overlapping_poc_volumes_emit_each_packet_once_in_order() {
+    let header = overlapping_volumes();
+    let mut first = Vec::new();
+    let mut reached = std::collections::HashSet::new();
+    for volume in &header.poc {
+        let mut alone = header.clone();
+        alone.poc = vec![*volume];
+        first.extend(
+            order_of_header(&alone)
+                .into_iter()
+                .filter(|&packet| reached.insert(packet)),
+        );
+    }
+    // The last volumes cover the whole tile: every packet of the plain order.
+    let mut plain = header.clone();
+    plain.poc.clear();
+    let all: BTreeSet<_> = order_of_header(&plain).into_iter().collect();
+    assert_eq!(first.iter().copied().collect::<BTreeSet<_>>(), all);
+    assert!(first.len() > 100, "{} packets", first.len());
+
+    assert_eq!(order_of_header(&header), first, "bitmap");
+    assert_eq!(order_holding(&header, u64::MAX), first, "bitmap");
+    assert_eq!(order_holding(&header, 0), first, "set");
+}
+
+/// When the volumes reach more packets than the walk has visits left and
+/// every volume is a layer order, which reads every precinct it reaches, the
+/// walk cannot finish: it is refused before a packet is read. With exactly
+/// as many visits as packets it starts.
+#[test]
+fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
+    let mut header = Layout::plain((32, 32), 2).header();
+    header.cod.layers = 4;
+    let full = PocVolume {
+        res_start: 0,
+        res_end: 3,
+        comp_start: 0,
+        comp_end: 1,
+        layer_end: 4,
+        progression: Progression::Lrcp,
+    };
+    header.poc = vec![
+        full,
+        PocVolume {
+            progression: Progression::Rlcp,
+            ..full
+        },
+    ];
+    let geoms: Vec<Vec<ResolutionGeom>> = vec![geoms_of(&header, 0, 0).expect("geometry")];
+    let walk = PacketWalk {
+        siz: &header.siz,
+        tile: header.siz.tile_rect(0).expect("tile 0"),
+        geoms: &geoms,
+    };
+    // 4 layers x 3 resolutions x 1 precinct.
+    let walk_with = |header: &MainHeader, visits: u64, poc_bitmap: Option<u64>| {
+        let mut read = 0;
+        let result = for_each_packet(
+            header,
+            &walk,
+            &std::cell::Cell::new(visits),
+            poc_bitmap,
+            |_, _, _, _| {
+                read += 1;
+                Ok(())
+            },
+        );
+        (result, read)
+    };
+    let (result, read) = walk_with(&header, 11, None);
+    match result {
+        Err(Error::Limit(m)) => assert!(m.contains("work bound") && m.contains("12"), "{m}"),
+        other => panic!("expected the work bound, got {other:?}"),
+    }
+    assert_eq!(read, 0);
+    let (_, read) = walk_with(&header, 12, None);
+    assert!(read > 0);
+    // A bitmap cap above the visits left does not save it.
+    let (result, read) = walk_with(&header, 11, Some(u64::MAX));
+    assert!(matches!(result, Err(Error::Limit(_))), "{result:?}");
+    assert_eq!(read, 0);
+
+    // A positional volume may pass over precincts, so it is walked, unless
+    // the walk keeps no set, as `read_header`'s does not, and the packets
+    // are more than its bitmap may hold.
+    header.poc[1].progression = Progression::Rpcl;
+    let (result, read) = walk_with(&header, 11, None);
+    assert!(read > 0, "{result:?}");
+    let (result, read) = walk_with(&header, 11, Some(11));
+    assert!(matches!(result, Err(Error::Limit(_))), "{result:?}");
+    assert_eq!(read, 0);
+    let (result, read) = walk_with(&header, 11, Some(12));
+    assert!(read > 0, "{result:?}");
+}
+
+/// A packet skipped from the set is charged `SET_SKIP_VISITS` (12) visits,
+/// one skipped from the bitmap none: two identical RPCL volumes spend 12
+/// visits more per packet read when the packets are held in a set.
+#[test]
+fn only_a_skip_from_the_set_is_charged() {
+    let mut header = overlapping_volumes();
+    let full = PocVolume {
+        res_start: 0,
+        res_end: 3,
+        comp_start: 0,
+        comp_end: 3,
+        layer_end: 4,
+        progression: Progression::Rpcl,
+    };
+    header.poc = vec![full, full];
+    let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
+        .map(|c| geoms_of(&header, 0, c).expect("geometry"))
+        .collect();
+    let walk = PacketWalk {
+        siz: &header.siz,
+        tile: header.siz.tile_rect(0).expect("tile 0"),
+        geoms: &geoms,
+    };
+    let spent = |dense_bits: u64| {
+        let visits = std::cell::Cell::new(u64::MAX);
+        let mut read = 0u64;
+        super::progression::for_each_packet_holding(
+            &header,
+            &walk,
+            &visits,
+            dense_bits,
+            true,
+            |_, _, _, _| {
+                read += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        (u64::MAX - visits.get(), read)
+    };
+    let (bitmap, read) = spent(u64::MAX);
+    let (set, read_from_set) = spent(0);
+    assert_eq!(read, read_from_set);
+    assert!(read > 100, "{read} packets");
+    assert_eq!(set - bitmap, 12 * read);
 }
 
 // ---- Packet delimiters: SOP / EPH (issue #73) ----
