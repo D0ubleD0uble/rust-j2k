@@ -159,7 +159,8 @@ pub struct Jp2Metadata {
     /// asked for the raw index plane, or there is no palette).
     pub palette_applied: bool,
     pub resolution: Resolution,          // capture and/or default display, each optional
-    pub xml: Vec<Vec<u8>>,               // every `xml ` box, in file order, bytes verbatim
+    pub xml: Vec<XmlBox>,                // every `xml ` box, in file order, bytes verbatim
+    pub ipr: Vec<IprBox>,                // every `jp2i` box, in file order, bytes verbatim
     pub uuid: Vec<UuidBox>,              // every `uuid` box: 16-byte id + payload
 }
 

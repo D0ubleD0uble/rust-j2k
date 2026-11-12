@@ -249,12 +249,14 @@ fn the_part4_files_report_their_xml_boxes() {
     let xml_lengths = |n| {
         let jp2 = read_header(&part4(n)).unwrap().jp2.unwrap();
         assert!(jp2.uuid.is_empty(), "file{n}");
-        jp2.xml.iter().map(Vec::len).collect::<Vec<_>>()
+        jp2.xml.iter().map(|x| x.payload.len()).collect::<Vec<_>>()
     };
     assert_eq!(xml_lengths(1), [431, 741]);
     assert_eq!(xml_lengths(8), [377, 902]);
     let file8 = part4(8);
-    let after = read_header(&file8).unwrap().jp2.unwrap().xml[1].clone();
+    let after = read_header(&file8).unwrap().jp2.unwrap().xml[1]
+        .payload
+        .clone();
     assert!(
         file8.ends_with(&after),
         "file8's second xml is after the codestream"

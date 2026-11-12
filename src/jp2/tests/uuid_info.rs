@@ -93,12 +93,12 @@ fn ipr_boxes_are_returned_in_file_order() {
     ]);
     let metadata = metadata_of(&bytes);
     assert_eq!(
-        metadata.ipr,
-        vec![
-            b"<rights>first</rights>".to_vec(),
-            Vec::new(),
-            vec![0xFF, 0, 0x80]
-        ]
+        metadata
+            .ipr
+            .iter()
+            .map(|b| b.payload.as_slice())
+            .collect::<Vec<_>>(),
+        [&b"<rights>first</rights>"[..], b"", &[0xFF, 0, 0x80]]
     );
     assert!(metadata.uuid_info.is_empty());
     assert!(metadata.xml.is_empty() && metadata.uuid.is_empty());
