@@ -211,6 +211,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `opj_compress` output with segmentation symbols and `-r` was refused about
   once in 50 encodes. Such streams now decode as in OpenJPEG. A wrong symbol
   read from the segment's own bytes is still a `Codestream` error.
+- A POC in a tile-part header now replaces the main header's POC for that
+  tile, as the standard requires. The tile's volumes were appended after the
+  main header's, as OpenJPEG does, so a file with both decoded its packets in
+  the wrong order and was refused. The 32-volume limit now counts the volumes
+  the tile walks, so the main header's no longer count against a tile that
+  replaces them.
 
 ### Changed
 

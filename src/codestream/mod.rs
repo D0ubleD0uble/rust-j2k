@@ -301,7 +301,9 @@ fn tile_header_is_valid(
     summary: &OnceCell<ComponentSummary>,
     tile: &TileHeader,
 ) -> bool {
-    if main.poc.len() + tile.poc.len() > MAX_POC_VOLUMES {
+    // A tile POC replaces the main header's, so only the tile's own count is
+    // bounded here; the main header's passed its own check.
+    if tile.poc.len() > MAX_POC_VOLUMES {
         return false;
     }
     if tile.cod.is_none() && tile.qcd.is_none() && tile.coc.is_empty() && tile.qcc.is_empty() {
@@ -894,17 +896,20 @@ fn resolve_tile_header<'m>(main: &'m MainHeader, tile: &TileHeader) -> Result<Co
         header.components[*index].roi_shift = *shift;
     }
 
-    // A tile-part POC *appends* to the main header's, it does not replace it: a
-    // tile inherits the main header's progression volumes and adds its own after
-    // them (A.6.6). OpenJPEG seeds each tile's coding parameters from the main
-    // header — POC volumes included — then `opj_j2k_read_poc` appends the
-    // tile-part's, so the tile's order is `[main volumes…, tile volumes…]`. The
-    // volume walk emits each packet by the first volume that reaches it, so the
-    // two must stay in that order. `header.poc` is already the main header's
-    // here, from `main.clone()` above. OpenJPEG's 32-entry array holds the
-    // *combined* list, so the budget binds the sum, not each side.
-    check_poc_budget(header.poc.len() + tile.poc.len())?;
-    header.poc.extend(tile.poc.iter().copied());
+    // A tile-part POC *overrides* the main header's for this tile (A.6.6:
+    // "Tile-part POC > Main POC > Tile-part COD > Main COD", the greater
+    // overriding the lesser; B.12.3 likewise). So a tile with any POC of its own
+    // walks only its own volumes, accumulated across its tile-parts in order,
+    // and a tile with none keeps the main header's from `main.clone()` above.
+    // OpenJPEG 2.5.0 instead seeds each tile from the main header, POC included,
+    // and `opj_j2k_read_poc` appends the tile-part's volumes after it; a file
+    // carrying both decodes wrong there (docs/correctness.md). The per-marker
+    // and per-part checks already capped `tile.poc`; the budget is checked
+    // again on the list the walk will use.
+    if !tile.poc.is_empty() {
+        check_poc_budget(tile.poc.len())?;
+        header.poc.clone_from(&tile.poc);
+    }
 
     // The tile's resolved parameters must hold every invariant the main header's
     // do: a tile COD/QCD pair can break one the main header kept.
@@ -1631,8 +1636,9 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
 /// emission consumes no bitstream bytes, so an uncapped list is a quadratic
 /// work bomb: `V` volumes over `P` one-byte packets cost `V·P` dedup probes
 /// while the input pays for `P + 7V` bytes. The cap is enforced wherever
-/// volumes accumulate — per marker, across a tile's parts, and on the resolved
-/// main-plus-tile list.
+/// volumes accumulate — per marker and across a tile's parts — and again on the
+/// list a tile resolves to, which is its own volumes when it has any and the
+/// main header's otherwise.
 const MAX_POC_VOLUMES: usize = 32;
 
 /// Reject a progression-volume count past [`MAX_POC_VOLUMES`].
@@ -1654,9 +1660,10 @@ fn check_poc_budget(volumes: usize) -> Result<()> {
 /// against the component count; `LYEpoc` is clamped to the layer count later,
 /// where it is known for certain.
 ///
-/// A `POC` in a *tile-part* header appends to any already parsed for that tile,
-/// as OpenJPEG's `opj_j2k_read_poc` does; a decoder that replaced them would drop
-/// a split-across-markers progression.
+/// Volumes append to any already in `into`: several POC markers in one header,
+/// or in the tile-parts of one tile, form one sequence, as in OpenJPEG's
+/// `opj_j2k_read_poc`. A tile's sequence then replaces the main header's (see
+/// `resolve_tile_header`).
 fn decode_poc(mut b: Cursor<'_>, siz: &Siz, into: &mut Vec<PocVolume>) -> Result<()> {
     let comp_room = if siz.components.len() < 257 { 1 } else { 2 };
     let volume_size = 5 + 2 * comp_room;
