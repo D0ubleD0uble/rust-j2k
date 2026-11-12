@@ -4,13 +4,14 @@
 # decode the committed lossless Eta fixture with OpenJPEG, re-encode the
 # samples with the irreversible 9/7 transform, then write the oracle.
 #
-# Refuses before it writes anything unless opj_decompress and opj_compress are
-# the pinned OpenJPEG version. Run from the repository root.
+# Refuses before it writes anything unless opj_decompress, opj_compress and
+# opj_dump (which gen-oracle.sh uses) are the pinned OpenJPEG version. Run
+# from the repository root.
 
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 "$script_dir/oracle_tools.py" opj_decompress opj_compress
+python3 "$script_dir/oracle_tools.py" opj_decompress opj_compress opj_dump
 
 fixtures=tests/fixtures
 workdir="$(mktemp -d)"

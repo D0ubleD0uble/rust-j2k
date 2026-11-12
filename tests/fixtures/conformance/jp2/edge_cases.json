@@ -24,22 +24,22 @@
         "image_header": {
           "compression": 7,
           "unknown_color_space": 0,
-          "ipr": 0
+          "ipr_flag": 0
         },
         "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
             "approximation": 1,
-            "data_len": 546,
-            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+            "payload_len": 546,
+            "payload_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
           },
           {
             "method": 1,
             "precedence": 1,
             "approximation": 1,
-            "data_len": 4,
-            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "payload_len": 4,
+            "payload_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
             "enum_cs": 21
           }
         ],
@@ -89,22 +89,22 @@
         "image_header": {
           "compression": 7,
           "unknown_color_space": 0,
-          "ipr": 0
+          "ipr_flag": 0
         },
         "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
             "approximation": 1,
-            "data_len": 546,
-            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+            "payload_len": 546,
+            "payload_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
           },
           {
             "method": 1,
             "precedence": 1,
             "approximation": 1,
-            "data_len": 4,
-            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "payload_len": 4,
+            "payload_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
             "enum_cs": 21
           }
         ],
@@ -153,22 +153,22 @@
         "image_header": {
           "compression": 7,
           "unknown_color_space": 0,
-          "ipr": 0
+          "ipr_flag": 0
         },
         "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
             "approximation": 1,
-            "data_len": 546,
-            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+            "payload_len": 546,
+            "payload_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
           },
           {
             "method": 1,
             "precedence": 1,
             "approximation": 1,
-            "data_len": 4,
-            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "payload_len": 4,
+            "payload_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
             "enum_cs": 21
           }
         ],
@@ -217,30 +217,30 @@
         "image_header": {
           "compression": 7,
           "unknown_color_space": 0,
-          "ipr": 0
+          "ipr_flag": 0
         },
         "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
             "approximation": 1,
-            "data_len": 546,
-            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+            "payload_len": 546,
+            "payload_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
           },
           {
             "method": 1,
             "precedence": 1,
             "approximation": 1,
-            "data_len": 4,
-            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "payload_len": 4,
+            "payload_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
             "enum_cs": 21
           },
           {
             "method": 1,
             "precedence": 0,
             "approximation": 0,
-            "data_len": 4,
-            "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+            "payload_len": 4,
+            "payload_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
             "enum_cs": 16
           }
         ],
@@ -289,30 +289,30 @@
         "image_header": {
           "compression": 7,
           "unknown_color_space": 0,
-          "ipr": 0
+          "ipr_flag": 0
         },
         "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
             "approximation": 1,
-            "data_len": 546,
-            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+            "payload_len": 546,
+            "payload_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
           },
           {
             "method": 1,
             "precedence": 1,
             "approximation": 1,
-            "data_len": 4,
-            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "payload_len": 4,
+            "payload_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
             "enum_cs": 21
           },
           {
             "method": 1,
             "precedence": 2,
             "approximation": 0,
-            "data_len": 4,
-            "data_sha256": "8e00d1c0c8ffe94540e534e256d4589be3e3865dc0559a732697aef38a364e83",
+            "payload_len": 4,
+            "payload_sha256": "8e00d1c0c8ffe94540e534e256d4589be3e3865dc0559a732697aef38a364e83",
             "enum_cs": 17
           }
         ],
@@ -361,22 +361,22 @@
         "image_header": {
           "compression": 7,
           "unknown_color_space": 0,
-          "ipr": 0
+          "ipr_flag": 0
         },
         "color_specifications": [
           {
             "method": 2,
             "precedence": 0,
             "approximation": 1,
-            "data_len": 546,
-            "data_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
+            "payload_len": 546,
+            "payload_sha256": "d9f63489c08414e9a86acf88cac9b022144841ec1ea0e77d19c68f9d563d5581"
           },
           {
             "method": 1,
             "precedence": 1,
             "approximation": 1,
-            "data_len": 4,
-            "data_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
+            "payload_len": 4,
+            "payload_sha256": "21548c66b44347d877e7b405a250121cda87cd494b122f0324f7df3b6cd75f86",
             "enum_cs": 21
           }
         ],

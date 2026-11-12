@@ -295,8 +295,8 @@ def colr(payload: bytes) -> dict:
         "method": method,
         "precedence": precedence,
         "approximation": approximation,
-        "data_len": len(data),
-        "data_sha256": hashlib.sha256(data).hexdigest(),
+        "payload_len": len(data),
+        "payload_sha256": hashlib.sha256(data).hexdigest(),
     }
     if method == 1 and len(data) == 4:
         record["enum_cs"] = struct.unpack(">I", data)[0]
@@ -309,9 +309,9 @@ def color_name(spec: dict) -> str:
             spec["enum_cs"], f"enumerated:{spec['enum_cs']}"
         )
     if spec["method"] == 2:
-        return f"icc:{spec['data_len']}"
+        return f"icc:{spec['payload_len']}"
     if spec["method"] == 1:
-        sys.exit(f"colr METH 1 with {spec['data_len']} bytes of data instead of a 4-byte EnumCS")
+        sys.exit(f"colr METH 1 with {spec['payload_len']} bytes of data instead of a 4-byte EnumCS")
     sys.exit(f"colr METH {spec['method']} is not recorded")
 
 
@@ -431,7 +431,7 @@ def walk(data: bytes, strict: bool = False) -> tuple[dict, dict]:
                     image_header = {
                         "compression": body[11],
                         "unknown_color_space": body[12],
-                        "ipr": body[13],
+                        "ipr_flag": body[13],
                     }
                 elif child == b"colr":
                     colors.append(colr(body))

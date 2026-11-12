@@ -245,7 +245,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`colr`, `EnumCS`, "Colour Specification box").
 - Breaking: `DecodeOptions` and `ColorOutput` are no longer `Copy`, so a
   later option can carry data (an output ICC profile). Both stay `Clone`;
-  clone them where you reuse one.
+  clone them where you reuse one. For the same reason the new
+  `ComponentInfo`, `ChannelMapping`, `MappingKind`, `PaletteColumn` and
+  `ChannelDefinitionEntry` are `Clone` but not `Copy`.
 - A code-block size past the limit in a main-header COD is now refused when
   the header is read, even when a COC overrides it, as OpenJPEG does. `p0_02.j2k`
   with byte 55 set to 56 decoded in 0.3.0 and is now `Error::Marker`. Likewise a
@@ -294,7 +296,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `jp2c` are not reported, and the decode refuses their bytes as left after
   the last packet, as for the other tiles too costly to walk.
 - A POC marker whose volumes leave out packets of a tile is refused as
-  `Error::Codestream`: each resolution of each component, counting the
+  `Error::Codestream`, naming the tile, component, resolution and first
+  missing layer: each resolution of each component, counting the
   component's own levels, must be in a volume that reaches every layer. The
   main header's and every tile-part's volumes count, and a resolution with
   no precincts needs none. These files used to decode with the missing

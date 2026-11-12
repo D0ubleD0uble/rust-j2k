@@ -479,8 +479,8 @@ fixtures without a `jp2` section carry. The same four fields, for ISO/IEC
 | Field | Content |
 | ----- | ------- |
 | `file_type` | `brand`, `minor_version`, `compatibility[]`. Each 4-byte code is text, with `\xNN` for a byte outside printable ASCII. |
-| `image_header` | `compression` (`C`), `unknown_color_space` (`UnkC`), `ipr` (`IPR`). |
-| `color_specifications[]` | One per `colr` box before the codestream, in file order: `method`, `precedence`, `approximation`, `data_len`, `data_sha256` (SHA-256 of the bytes after `APPROX`, so a profile is pinned), and `enum_cs` for `METH` 1 with a 4-byte value. |
+| `image_header` | `compression` (`C`), `unknown_color_space` (`UnkC`), `ipr_flag` (`IPR`). |
+| `color_specifications[]` | One per `colr` box before the codestream, in file order: `method`, `precedence`, `approximation`, `payload_len`, `payload_sha256` (SHA-256 of the bytes after `APPROX`, so a profile is pinned), and `enum_cs` for `METH` 1 with a 4-byte value. |
 | `reader_requirements` | `null`, or `mask_length` (`ML`), `fully_understand`, `decode_completely` (hex), `standard_features[]` as `[SF, SM hex]`, `vendor_features[]` as `[VF hex, VM hex]`. |
 
 Source of truth: `scripts/gen-jp2-box-snapshots.py`, a standalone box walker

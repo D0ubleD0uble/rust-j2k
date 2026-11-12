@@ -324,7 +324,7 @@ pub(crate) fn decode_packets_within<'a>(
         packed,
     };
     if budget.poc_coverage {
-        progression::check_poc_coverage(header, &walk)?;
+        progression::check_poc_coverage(header, &walk, tile.index)?;
     }
     let visits = Cell::new(budget.visits);
     let mut packet_index = 0u32;
