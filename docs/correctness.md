@@ -120,9 +120,10 @@ gives a reason. The encoder's rule is from the same import; the 2017 bypass and
 termination fixes (81c53117, upstream #674) changed the encoder's termination
 and left the decoder's raw decision alone. No upstream issue or pull request
 covers ROI with bypass. Upstream ROI has no tests (#1035, "Add unit tests for
-ROI feature", open since 2017), and the maxshift encoder only shifts whole
-components (#1036, open). The rule reads as an oversight, not a choice, so this
-crate follows the standard. Recorded with the owner's approval on #226.
+ROI feature", open since 2017). Its encoder shifts no coefficients: `-ROI`
+only signals `SPrgn`, so the decoder reads every nonzero coefficient of the
+component as region of interest (#1036, open). The rule reads as an
+oversight, not a choice, so this crate follows the standard. Recorded with the owner's approval on #226.
 
 ### Stricter than the oracle on non-conforming streams
 

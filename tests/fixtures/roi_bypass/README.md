@@ -22,6 +22,6 @@ control encode without bypass round-trips under `opj_decompress`.
 | `roi_bypass_m17.j2k` | `opj_compress -i source.pgm -o roi_bypass_m17.j2k -n 3 -ROI c=0,U=3 -M 17` | 3814 wrong, max error 30 |
 
 `-M 1` is bypass, `5` adds termination on every pass, `33` segmentation
-symbols, `17` predictable termination. `-M 5` is the one that pins the exact
-plane: every pass is its own segment there, so a segment opens at the
-significance pass of the fourth coded plane, which must stay MQ-coded.
+symbols, `17` predictable termination. Of these four, `-M 5` is the one that
+pins the exact plane: every pass is its own segment there, so a segment opens
+at the significance pass of the fourth coded plane, which must stay MQ-coded.

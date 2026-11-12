@@ -38,8 +38,8 @@ ROI = "c=0,U=3"
 # pass; 33 = bypass + segmentation symbols; 17 = bypass + predictable
 # termination. Under 5 every pass is its own segment, so a segment opens at
 # the significance pass of every plane; under the lazy split one only opens at
-# the fifth coded plane and below. Only 5 tells a raw decision that starts one
-# plane early (`top - 3`) from the right one.
+# the fifth coded plane and below. Of these four styles, only 5 tells a raw
+# decision that starts one plane early (`top - 3`) from the right one.
 STYLES = {1: "roi_bypass_m1", 5: "roi_bypass_m5", 33: "roi_bypass_m33",
           17: "roi_bypass_m17"}
 BASE_FLAGS = ["-n", "3", "-ROI", ROI]

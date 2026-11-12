@@ -199,7 +199,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   85 s to decode and now take 63 ms.
 - A code-block with an RGN maxshift and the bypass style now switches to raw
   coding at its fifth coded bit-plane, counting the shifted planes, as the
-  standard and the encoder do. It switched `SPrgn` planes late, as
+  standard and OpenJPEG's encoder do. It switched `SPrgn` planes late, as
   OpenJPEG's decoder does, and decoded such streams wrong or refused them.
   Streams without a maxshift decode as before.
 

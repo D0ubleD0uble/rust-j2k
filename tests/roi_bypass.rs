@@ -3,8 +3,9 @@
 //! Each codestream is a lossless `opj_compress -ROI c=0,U=3` encode of
 //! `source.pgm` with bypass alone, bypass + termination on every pass, bypass +
 //! segmentation symbols, or bypass + predictable termination. The decode must
-//! equal the source. `opj_decompress` 2.5.0 decodes all four wrong: it switches to raw coding `SPrgn` planes too
-//! late. See `tests/fixtures/roi_bypass/README.md` and docs/correctness.md.
+//! equal the source. `opj_decompress` 2.5.0 decodes all four wrong: it
+//! switches to raw coding `SPrgn` planes too late. See
+//! `tests/fixtures/roi_bypass/README.md` and docs/correctness.md.
 
 use std::path::PathBuf;
 
@@ -60,8 +61,8 @@ fn maxshift_with_bypass_round_trips() {
 }
 
 /// Every pass is its own segment here, so a segment opens at the significance
-/// pass of the fourth coded plane too. That is the only fixture that tells a
-/// raw decision one plane early from the right one.
+/// pass of the fourth coded plane too. Of the four fixtures here, it is the
+/// only one that tells a raw decision one plane early from the right one.
 #[test]
 fn maxshift_with_bypass_and_termination_on_every_pass_round_trips() {
     assert_round_trips("roi_bypass_m5.j2k");
