@@ -122,8 +122,8 @@ deterministic vector, so the decoder is proven before any pass exists.
 
 **Work:** the per-block state (magnitudes, signs, significance flags); context
 formation from the 3×3 neighborhood (D.3 tables); the three passes in order,
-significance propagation (D.3.1), magnitude refinement (D.3.2), cleanup (D.3.3)
-with run-length mode; sign coding with the neighbor-sign context (D.3.4).
+significance propagation (D.3.1), magnitude refinement (D.3.3), cleanup (D.3.4)
+with run-length mode; sign coding with the neighbor-sign context (D.3.2).
 Bit-planes run MSB→LSB, starting from the cleanup pass of the top non-zero
 plane. Phase 1 needs only the default code-block style (no bypass, reset,
 restart, vertically-causal, or segmentation, which are Phase 2).
