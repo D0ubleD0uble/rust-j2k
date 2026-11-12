@@ -271,7 +271,11 @@ impl Plan {
 ///
 /// The refusal relies on strict decoding; partial decode (#214) must revisit
 /// it, as the packets left out are missing data like a cut tile-part.
-pub(crate) fn check_poc_coverage(header: &MainHeader, walk: &PacketWalk<'_>) -> Result<()> {
+pub(crate) fn check_poc_coverage(
+    header: &MainHeader,
+    walk: &PacketWalk<'_>,
+    tile: u32,
+) -> Result<()> {
     if header.poc.is_empty() {
         return Ok(());
     }
@@ -298,8 +302,8 @@ pub(crate) fn check_poc_coverage(header: &MainHeader, walk: &PacketWalk<'_>) -> 
                     .max()
                     .unwrap_or(0);
                 return Err(Error::Codestream(format!(
-                    "the tile's POC volumes leave out its packets of component {comp}, \
-                     resolution {res}, from layer {reached} of {layers}"
+                    "the POC volumes of tile {tile} leave out its packets of component \
+                     {comp}, resolution {res}, from layer {reached} of {layers}"
                 )));
             }
         }
