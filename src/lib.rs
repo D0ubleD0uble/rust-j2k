@@ -252,7 +252,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
     check_raw_color(options, siz.components.len())?;
-    check_reduction(&parsed, reduction)?;
+    check_reduction(&parsed.header, reduction, None)?;
     let (width, height) = siz.image_extent_at(reduction);
     Ok(Header {
         width,
@@ -472,7 +472,7 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     // The header checks come before the tile walk, as `read_header_with` has it.
     let parsed = codestream::parse_header(bytes)?;
     check_raw_color(options, parsed.header.siz.components.len())?;
-    check_reduction(&parsed, options.resolution_reduction)?;
+    check_reduction(&parsed.header, options.resolution_reduction, None)?;
     let cs = codestream::parse_tiles(bytes, parsed)?;
     decode_codestream(cs, options)
 }
@@ -489,18 +489,25 @@ fn check_options(options: &DecodeOptions) -> Result<()> {
     Ok(())
 }
 
-/// A reduction must leave every component a resolution to decode. This is the
-/// check against the main header's coding parameters (COD and COC), which
-/// `decode_with` and `read_header_with` both make before any tile is read; a
-/// tile-part COD or COC with fewer levels is only found while decoding, where
-/// the same test runs per tile.
-fn check_reduction(parsed: &codestream::ParsedHeader, reduction: u8) -> Result<()> {
-    for (component, params) in parsed.header.components.iter().enumerate() {
+/// A reduction must leave every component a resolution to decode, checked
+/// against each component's own decomposition count: a COC can give one
+/// component a shallower pyramid than the rest (p0_08 does exactly that).
+/// `decode_with` and `read_header_with` make this check against the main header
+/// (COD and COC) before any tile is read, with `tile` of `None`. A tile-part COD
+/// or COC with fewer levels is only found while decoding, where the same test
+/// runs per tile with that tile's index.
+fn check_reduction(
+    header: &codestream::MainHeader,
+    reduction: u8,
+    tile: Option<usize>,
+) -> Result<()> {
+    for (component, params) in header.components.iter().enumerate() {
         let resolutions = u32::from(params.coding.decomposition_levels) + 1;
         if u32::from(reduction) >= resolutions {
+            let place = tile.map_or_else(String::new, |index| format!(" in tile {index}"));
             return Err(Error::InvalidOptions(format!(
                 "resolution reduction {reduction} discards all {resolutions} resolutions \
-                 of component {component}"
+                 of component {component}{place}"
             )));
         }
     }
@@ -561,7 +568,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
             Some(plan)
         }
     };
-    check_reduction(&parsed, options.resolution_reduction)?;
+    check_reduction(&parsed.header, options.resolution_reduction, None)?;
     Ok(Jp2Prefix {
         codestream: file.codestream,
         parsed,
@@ -607,20 +614,9 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // for this tile alone, as a codestream can declare tens of thousands.
         let header = cs.tile_header(index)?;
 
-        // A reduction must leave every component a resolution to decode, checked
-        // against each component's own decomposition count: a COC can give one
-        // component a shallower pyramid than the rest (p0_08 does exactly that),
-        // and a tile COD can give one tile a shallower pyramid than the rest — so
-        // this is per tile, not once for the image.
-        for (component, params) in header.components.iter().enumerate() {
-            let resolutions = u32::from(params.coding.decomposition_levels) + 1;
-            if u32::from(reduction) >= resolutions {
-                return Err(Error::InvalidOptions(format!(
-                    "resolution reduction {reduction} discards all {resolutions} resolutions \
-                     of component {component} in tile {index}"
-                )));
-            }
-        }
+        // A tile COD can give one tile a shallower pyramid than the rest, so
+        // the reduction is checked per tile, not once for the image.
+        check_reduction(&header, reduction, Some(index))?;
 
         // Tier-2: parse packets into per-code-block coded segments, per
         // component. The walk covers every resolution whatever the reduction:
@@ -682,4 +678,32 @@ pub(crate) fn tile_bytes(cs: &codestream::Codestream<'_>) -> u64 {
         .iter()
         .map(|tile| (tile.data.len() + tile.packed_headers.len()) as u64)
         .fold(0, u64::saturating_add)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The reduction check names the component and the resolutions it would
+    /// discard, and the tile only when it runs per tile.
+    #[test]
+    fn check_reduction_message_names_the_tile_only_when_given() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/roi_maxshift_lossless.j2k"
+        ))
+        .unwrap();
+        let mut header = codestream::parse_header(&bytes).unwrap().header;
+        // One component is shallower than the rest, as a COC or tile COD makes it.
+        let last = header.components.len() - 1;
+        header.components[last].coding.decomposition_levels = 1;
+        assert!(check_reduction(&header, 1, None).is_ok());
+        let message = |tile| match check_reduction(&header, 2, tile) {
+            Err(Error::InvalidOptions(m)) => m,
+            other => panic!("{other:?}"),
+        };
+        let tail = format!("resolution reduction 2 discards all 2 resolutions of component {last}");
+        assert_eq!(message(None), tail);
+        assert_eq!(message(Some(7)), format!("{tail} in tile 7"));
+    }
 }
