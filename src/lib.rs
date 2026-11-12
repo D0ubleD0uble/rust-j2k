@@ -154,15 +154,16 @@ pub use jp2::{
 ///
 /// The work of reading the packet headers is bounded, as the image area and
 /// the code-block count are. Walking every tile's packets may take at most
-/// 2^24 steps, or 16 per byte of tile data when that is more, counting
-/// packets read, code-block entries visited in their headers, and the
-/// positions a positional progression order sweeps, once for each
-/// (component, resolution) checked there. A codestream past the bound is
-/// refused with [`Error::Limit`]. Encoder output takes a step or less per
-/// byte; a packet header of one byte can still visit every code-block of its
-/// precinct, and a sweep can check millions of positions that hold no
-/// packet, so a file of a few hundred bytes could otherwise take minutes.
-/// OpenJPEG has no such bound.
+/// 2^24 steps, or 32 per byte of tile data when that is more. A step is a
+/// packet read, a run of code-blocks a header skips without reading a bit,
+/// or a position a positional progression order sweeps, once for each
+/// (component, resolution) checked there; code-block entries that read a bit
+/// are paid for by the header's bytes and are not counted. A codestream past
+/// the bound is refused with [`Error::Limit`]. Encoder output takes a few
+/// steps per byte at most; a packet header of one byte can still skip each
+/// row of code-blocks in its precinct, and a sweep can check millions of
+/// positions that hold no packet, so a file of a few hundred bytes could
+/// otherwise take minutes. OpenJPEG has no such bound.
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -206,10 +207,8 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// is bounded. A codestream of more than 4096 tiles or 1024 components, or of
 /// fewer than 14 bytes per tile, is not walked, nor is a tile of more than
 /// 16384 code-blocks or precincts. The walk stops after 2^22 visits, or 8 per
-/// byte of the tile's data when that is more, counting packets read,
-/// code-block entries visited in their headers, and the positions a
-/// positional progression order sweeps, once for each (component,
-/// resolution) checked there. Past a bound the codestream is taken to run to
+/// byte of the tile's data when that is more, counting the same steps as
+/// the decode's bound (see [`decode`]). Past a bound the codestream is taken to run to
 /// the end of the file, the rule for a `Psot = 0` tile-part the check does
 /// not apply to, and [`decode_with`] takes it the same way.
 ///

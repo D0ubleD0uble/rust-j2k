@@ -34,7 +34,7 @@ use crate::codestream::{MainHeader, Tile};
 use crate::{Error, Result};
 use bio::BitReader;
 use std::cell::Cell;
-use tagtree::TagTree;
+use tagtree::{TagTree, UnreadSpans};
 
 pub(crate) use geometry::{
     BandGeom, MAX_CODE_BLOCKS, MAX_PRECINCTS, PrecinctGeom, resolution_geoms,
@@ -161,26 +161,33 @@ pub fn decode_packets<'a>(
 }
 
 /// The fewest visits (see [`Budget::visits`]) a decode may spend walking its
-/// tiles' packets. A visit costs about 10 to 30 ns, so this is about half a
-/// second at most.
+/// tiles' packets. Most visits cost about 10 to 50 ns, so this is under a
+/// second. A packet a POC marker's progression checks against those already
+/// read costs about 1 µs; that is left to its own issue.
 pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 
 /// The visits a decode may spend per byte of its tiles' data, when that comes
-/// to more than [`DECODE_VISITS_MIN`]. At about 30 ns a visit, that is about
-/// what decoding a byte of real data costs, so a file past the floor is
-/// refused in about the time its decode would take.
-pub(crate) const DECODE_VISITS_PER_BYTE: u64 = 16;
+/// to more than [`DECODE_VISITS_MIN`]. At 10 to 25 ns a visit, which is what
+/// the visits that can pile up cost, that is about what decoding a byte of
+/// real data costs (about 0.45 µs), so a file past the floor is refused in
+/// about the time its decode would take.
+pub(crate) const DECODE_VISITS_PER_BYTE: u64 = 32;
 
 /// The visits a decode may spend walking the packets of tiles that hold
 /// `bytes` bytes of data in all, packed packet headers included.
 ///
-/// Encoder output spends a visit or less per byte: a packet that visits a
-/// code-block mostly carries bits for it. A packet header of one byte can
-/// still visit every code-block of its precinct, and a positional sweep can
-/// check millions of positions that hold no packet, so without a bound a file
-/// of a few hundred bytes could make the walk run for minutes. The one bound
-/// covers every tile of the decode, so many small tiles cannot each spend the
-/// floor.
+/// A code-block entry that reads a bit of its packet header is paid for by
+/// the header's bytes and is not counted. What is counted is the work that
+/// reads none: each packet, each step over code-blocks whose inclusion is
+/// already known to lie past the layer (see [`parse_band_header`]), and each
+/// point of the progression order's loops. Encoder output spends up to a few
+/// visits per byte; the most seen is 4.6, from `opj_compress` on a nearly
+/// empty image in 4x4 code-blocks and 64 layers. A packet header of one byte
+/// can still make the walk step over each row of code-blocks of its
+/// precinct, and a positional sweep can check millions of positions that
+/// hold no packet, so without a bound a small file could make the walk run
+/// for minutes. The one bound covers every tile of the decode, so many small
+/// tiles cannot each spend the floor.
 pub(crate) fn decode_visits(bytes: u64) -> u64 {
     DECODE_VISITS_MIN.max(bytes.saturating_mul(DECODE_VISITS_PER_BYTE))
 }
@@ -194,12 +201,13 @@ pub(crate) struct Budget {
     pub(crate) precincts: usize,
     /// Code-blocks across the tile's components (see [`resolution_geoms`]).
     pub(crate) blocks: usize,
-    /// Steps of the walk: packets read, code-block entries visited in their
-    /// headers, and the points of the progression order's loops, such as each
-    /// position of a positional sweep for each (component, resolution) it
-    /// checks. A packet header can be a single byte and still visit every
-    /// code-block of its precinct, and a sweep can check millions of points
-    /// that hold no packet, so this bounds the work where the other two cannot.
+    /// Steps of the walk that read no bit: packets read, steps over
+    /// code-blocks a packet header does not name a bit for, and the points of
+    /// the progression order's loops, such as each position of a positional
+    /// sweep for each (component, resolution) it checks. A packet header can
+    /// be a single byte and still pass over every row of code-blocks of its
+    /// precinct, and a sweep can check millions of points that hold no
+    /// packet, so this bounds the work where the other two cannot.
     pub(crate) visits: u64,
 }
 
@@ -629,8 +637,8 @@ fn parse_packet<'a>(
     let mut contributions: Vec<Contribution> = Vec::new();
     if present {
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
-            visit(visits, band.precincts[precinct].blocks.len())?;
             parse_band_header(
+                visits,
                 band_index,
                 &band.precincts[precinct],
                 &mut state.precincts[precinct],
@@ -692,8 +700,18 @@ fn parse_packet<'a>(
 /// trees are addressed in the precinct's own coordinates — the packet header
 /// knows nothing of the band's wider grid, so a band-relative index here would
 /// address the wrong leaf on every precinct but the first.
+///
+/// A block not yet included can sit under an inclusion-tree node already
+/// known to lie past this layer. Its entry then reads no bit, nor does any
+/// other entry under that node, so the walk steps over that node's blocks at
+/// once (see [`TagTree::unread_span`]): along the row, or over all of its rows
+/// when it spans the whole precinct width, and again on each row below that
+/// it reaches (see [`UnreadSpans`]). Each such step spends a visit. Any
+/// other entry reads at least one bit, so its work is paid for by the header's
+/// bytes and is not counted.
 #[allow(clippy::too_many_arguments)]
 fn parse_band_header(
+    visits: &Cell<u64>,
     band_index: usize,
     precinct: &PrecinctGeom,
     trees: &mut PrecinctState,
@@ -704,12 +722,27 @@ fn parse_band_header(
     contributions: &mut Vec<Contribution>,
 ) -> Result<()> {
     let cols = precinct.cols as u32;
+    let threshold = layer + 1;
 
-    for (entry, &block_index) in precinct.blocks.iter().enumerate() {
+    let mut unread = UnreadSpans::default();
+    let mut entry = 0;
+    while entry < precinct.blocks.len() {
+        let block_index = precinct.blocks[entry];
         let bx = entry as u32 % cols;
         let by = entry as u32 / cols;
+        entry += 1;
 
         let was_included = blocks[block_index].included;
+        let unread = if was_included {
+            None
+        } else {
+            unread.find(&trees.inclusion, bx, by, threshold)
+        };
+        if let Some(span) = unread {
+            visit(visits, 1)?;
+            entry = span.next_entry(by, cols);
+            continue;
+        }
         let contributes = if was_included {
             // Already included: one bit says whether this layer adds passes.
             bio.read_bit() == 1
@@ -718,7 +751,7 @@ fn parse_band_header(
             // that carries this block. Reading at `layer + 1` asks "is that
             // layer at most this one?" and leaves the tree part-decoded when it
             // is not, so the next layer resumes where this one stopped.
-            match trees.inclusion.read(bx, by, layer + 1, bio) {
+            match trees.inclusion.read(bx, by, threshold, bio) {
                 Some(_) => {
                     blocks[block_index].included = true;
                     true

@@ -2,19 +2,25 @@
 """Write the codestreams that test the decode's tier-2 work bound.
 
 Each is a raw codestream (SOC ... EOC) whose packets are a byte or less of
-header each, yet make tier-2 walk far more than its bytes: a packet header
-of one byte can visit every code-block of its precinct, and a positional
+header each, yet could make tier-2 walk far more than its bytes: a packet
+header of one byte names every code-block of its precinct, and a positional
 progression order sweeps the reference grid at every step, whether a packet
-sits there or not. Every packet here is "present, nothing included" (0x80) or
-empty (0x00), so a decoder that walks them all reads a flat image. OpenJPEG
-2.5.0 has no work bound and walks them; `--check` prints what it does.
+sits there or not. Every packet here includes nothing (it is "present" with
+inclusion bits of 0, or empty, 0x00), so a decoder that walks them all reads
+a flat image. OpenJPEG 2.5.0 has no work bound and walks them; `--check`
+prints what it does.
 
-The shapes come from the reviews of PR #227 and issue #235:
+The shapes come from the reviews of PR #227, issue #235 and PR #249:
 
 - `t2bomb`: one tile, one component, no wavelet levels, 4x4 code-blocks in
   one precinct, `layers` layers, LRCP. Each packet is 0x80: present, then an
-  inclusion tag-tree root bit of 0, so its header visits every code-block
-  and includes none.
+  inclusion tag-tree root bit of 0, so no code-block of the precinct is
+  included. The decoder steps over them all at once, so these decode.
+- `t2skip`: the same, but the first packet's root bit is 1, so each layer
+  reads one bit for each of the root's children instead. With the precinct
+  two children wide, every row of code-blocks takes the decoder two steps,
+  so each one-byte packet costs as many steps as the precinct has rows of
+  code-blocks, twice over.
 - `sweep`: one tile in RPCL or PCRL order, `components` components, one
   layer, one wavelet level. Two thin components set the sweep's step to 2 on
   both axes; the rest, subsampled 255 times both ways, hold two packets each
@@ -28,7 +34,11 @@ The small files are written to tests/fixtures/work_bound/ (see the README
 there). With `--big DIR`, the large timing shapes from the issue are written
 to DIR instead; they are not committed.
 
-Usage: scripts/gen-work-bound-fixtures.py [--check] [--big DIR]
+`--opj` writes, instead, the two committed `opj_compress` files: a nearly
+flat image in 4x4 code-blocks and 64 or 100 quality layers, which must
+decode.
+
+Usage: scripts/gen-work-bound-fixtures.py [--check] [--big DIR | --opj]
 """
 
 import pathlib
@@ -51,20 +61,27 @@ def ceil(a: int, b: int) -> int:
     return -(-a // b)
 
 
-def siz(x0: int, x1: int, height: int, comps: list[tuple[int, int, int]]) -> bytes:
-    """SIZ for the image area `[x0, x1) x [0, height)` as one tile."""
+def siz(
+    x0: int, x1: int, height: int, comps: list[tuple[int, int, int]], tile: int = 0
+) -> bytes:
+    """SIZ for the image area `[x0, x1) x [0, height)`, as one tile or, when
+    `tile` is not 0, in tiles of `tile` rows."""
     return seg(
         0xFF51,
-        struct.pack(">HIIIIIIIIH", 0, x1, height, x0, 0, x1, height, 0, 0, len(comps))
+        struct.pack(">HIIIIIIIIH", 0, x1, height, x0, 0, x1, tile or height, 0, 0, len(comps))
         + b"".join(bytes(c) for c in comps),
     )
 
 
-def codestream(main: bytes, data: bytes) -> bytes:
-    """SOC, the main header segments, one tile-part holding `data`, EOC."""
+def codestream(main: bytes, data: bytes, tiles: int = 1) -> bytes:
+    """SOC, the main header segments, `tiles` tile-parts each holding `data`,
+    EOC."""
     psot = 12 + 2 + len(data)
-    sot = struct.pack(">HHHIBB", 0xFF90, 10, 0, psot, 0, 1)
-    return b"\xff\x4f" + main + sot + b"\xff\x93" + data + b"\xff\xd9"
+    parts = b"".join(
+        struct.pack(">HHHIBB", 0xFF90, 10, index, psot, 0, 1) + b"\xff\x93" + data
+        for index in range(tiles)
+    )
+    return b"\xff\x4f" + main + parts + b"\xff\xd9"
 
 
 def t2bomb(width: int, height: int, layers: int, pad: int = 0) -> bytes:
@@ -75,6 +92,19 @@ def t2bomb(width: int, height: int, layers: int, pad: int = 0) -> bytes:
     qcd = seg(0xFF5C, bytes([0x40, 0x40]))
     main = siz(0, width, height, [(7, 1, 1)]) + cod + qcd
     return codestream(main, b"\x80" * layers + b"\x00" * pad)
+
+
+def t2skip(width: int, height: int, layers: int, tiles: int = 1) -> bytes:
+    """`t2bomb`, with the first packet 0xC0: present, an inclusion root of
+    0, then one bit of 0 for each child of the root met in raster order, so
+    each child's value is past the layer. Every later packet is 0x80: present,
+    then a 0 for each child again. For a precinct of 512 x 256 or 128 x 128
+    code-blocks, each packet's bits fit in its byte. With `tiles`, the
+    image is that many such tiles stacked."""
+    cod = seg(0xFF52, bytes([0, LRCP]) + struct.pack(">H", layers) + bytes([0, 0, 0, 0, 0, 1]))
+    qcd = seg(0xFF5C, bytes([0x40, 0x40]))
+    main = siz(0, width, height * tiles, [(7, 1, 1)], height if tiles > 1 else 0) + cod + qcd
+    return codestream(main, b"\xc0" + b"\x80" * (layers - 1), tiles)
 
 
 def sweep(size: int, components: int, order: int) -> bytes:
@@ -150,11 +180,14 @@ def cprl_tall(volumes: int) -> bytes:
     return cprl_steps(1, 1, 1 << 24, 1, [0x0F, 0xF1], bytes([0, 8]), volumes)
 
 
-# Committed: name -> bytes. Each walks far past the decode's work bound for
-# its size and is refused with `Error::Limit`.
+# Committed: name -> bytes. Each but the first walks far past the decode's
+# work bound for its size and is refused with `Error::Limit`.
 FILES = {
-    # 2^17 code-blocks, 1000 layers: 1.3e8 visits for 1000 bytes of packets.
+    # 2^17 code-blocks, 1000 layers, each skipped in one step: decodes.
     "t2bomb_2048x1024_1000.j2k": t2bomb(2048, 1024, 1000),
+    # 512 x 256 code-blocks, 40000 layers: 512 steps a layer, 2.0e7 steps
+    # for 40000 bytes of packets.
+    "t2skip_2048x1024_40000.j2k": t2skip(2048, 1024, 40000),
     # 64 components, 512^2 positions at 129 visits each: 3.4e7 visits.
     "sweep_rpcl_1024_64.j2k": sweep(1024, 64, RPCL),
     "sweep_pcrl_1024_64.j2k": sweep(1024, 64, PCRL),
@@ -175,6 +208,11 @@ BIG = {
     "t2bomb_2896_65535.j2k": lambda: t2bomb(2896, 2896, 65535),
     # The 65535-layer 512^2 bomb padded to 10 MB of tile data.
     "t2bomb_512_65535_10mb.j2k": lambda: t2bomb(512, 512, 65535, 10_000_000 - 65535),
+    # `t2skip` on 2^19 code-blocks, 724 x 724, and 65535 layers.
+    "t2skip_2896_65535.j2k": lambda: t2skip(2896, 2896, 65535),
+    # `t2skip` in 153 tiles of 512 x 512, 65535 layers each: 10 MB of
+    # packets, past the bound for their size.
+    "t2skip_tiles_10mb.j2k": lambda: t2skip(512, 512, 65535, 153),
 }
 
 
@@ -199,6 +237,57 @@ def jp2_psot0(cs: bytes) -> bytes:
         + box(b"jp2h", box(b"ihdr", ihdr) + box(b"colr", bytes([1, 0, 0]) + struct.pack(">I", 17)))
     )
     return prefix + box(b"jp2c", body) + box(b"free", b"")
+
+
+# Committed too: `t2skip` over 128 x 128 code-blocks, 20000 layers, as a
+# `Psot = 0` JP2. 256 steps a layer, 5.1e6 in all: within the decode's bound,
+# past the bound on the walk `read_header` makes.
+FILES["jp2_t2skip_512_20000.jp2"] = jp2_psot0(t2skip(512, 512, 20000))
+
+
+def patch_image(size: int) -> bytes:
+    """A `size` x `size` 8-bit PGM of 128, with one 8 x 8 patch of noise in
+    its top-left corner (Python's `random`, seeded with 1)."""
+    import random
+
+    random.seed(1)
+    px = bytearray([128]) * (size * size)
+    for y in range(8):
+        for x in range(8):
+            px[y * size + x] = random.randrange(256)
+    return b"P5\n%d %d\n255\n" % (size, size) + bytes(px)
+
+
+# Encoder output, `--opj`: name -> (layers, the PSNR list's step in dB from
+# 20). OpenJPEG's encoder sets the "present" bit of every packet, so each
+# layer's header names every code-block; in a nearly flat image most are
+# never included.
+OPJ = {
+    "opj_patch2048_b4_q64.j2k": (64, 0.625),
+    "opj_patch2048_b4_q100.j2k": (100, 0.4),
+}
+
+
+def opj_files() -> list[pathlib.Path]:
+    """Encode `patch_image(2048)` with `opj_compress -b 4,4 -q <list>` for
+    each entry of `OPJ`, the list being `layers` PSNR targets from 20 dB up
+    by the step."""
+    from oracle_tools import require_openjpeg
+
+    require_openjpeg("opj_compress")
+    written = []
+    with tempfile.TemporaryDirectory() as tmp:
+        image = pathlib.Path(tmp) / "patch2048.pgm"
+        image.write_bytes(patch_image(2048))
+        for name, (layers, step) in OPJ.items():
+            psnr = ",".join(str(round(20 + step * i, 4)) for i in range(layers))
+            subprocess.run(
+                ["opj_compress", "-i", str(image), "-o", str(DIR / name), "-b", "4,4", "-q", psnr],
+                check=True,
+                capture_output=True,
+            )
+            written.append(DIR / name)
+    return written
 
 
 def check(path: pathlib.Path) -> str:
@@ -231,9 +320,13 @@ def main() -> None:
         # JP2, for the walk `read_header` makes. The committed ones too.
         shapes = {name: make() for name, make in BIG.items()} | FILES
         for name, data in shapes.items():
+            if name.endswith(".jp2"):
+                continue
             for file, data in ((name, data), (name[:-4] + ".jp2", jp2_psot0(data))):
                 (out / file).write_bytes(data)
                 written.append(out / file)
+    elif "--opj" in sys.argv:
+        written = opj_files()
     else:
         DIR.mkdir(exist_ok=True)
         for name, data in FILES.items():

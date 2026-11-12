@@ -170,13 +170,12 @@ codestream), the codestream is read to the end of the file instead, with the
 result above. The check is part of reading the file's structure, so
 `read_header` makes it too: it walks that one tile's packet headers, without
 decoding any samples. Every step of the walk is bounded, since a one-byte
-packet header can visit every code-block of its precinct and a positional
+packet header can step over each row of code-blocks of its precinct and a positional
 progression order can sweep millions of positions that hold no packet: a
 codestream of more than 4096 tiles or 1024 components, or of fewer than 14
 bytes per tile, is not walked, nor is a tile of more than 2^14 code-blocks or
 precincts, and the walk stops after max(2^22, 8 × the tile's data bytes)
-visits, counting packets read, code-block entries visited in their headers,
-and sweep positions once for each (component, resolution) checked there.
+steps, counted as the decode's bound counts them (see below).
 Past a bound the check answers no, and the codestream is read to the end of
 the file as above (`jp2_t2bomb_*` and `jp2_t2_sweep_*` in
 `tests/fixtures/psot0/`). When the box's end is used, the boxes after it are
@@ -273,49 +272,77 @@ protective argument loses to a demonstrated real file.
 
 ### The tier-2 work bound
 
-`decode` bounds the work of reading packet headers; OpenJPEG has no such
-bound (owner decision on #235, 2026-11-11). Walking every tile's packets may
-take at most max(2^24, 16 × the tiles' data bytes) visits, counting packets
-read, code-block entries visited in their headers, and sweep positions once
-for each (component, resolution) checked there. Past it the decode is
-`Limit`. It is one bound for the whole decode, not one per tile, and there
-is no option to change it.
+A packet header names every code-block of its precinct, in raster order,
+and reads tag-tree bits for each one not yet included. Once a node of the
+inclusion tree is known to lie past the current layer, every code-block
+under it is excluded from that packet without reading a bit. The decode
+steps over them in one go: the rest of the node's span on the current row,
+or all of its rows when it spans the precinct's width. It keeps the spans it
+has found for the rows below. This yields the same inclusion and tag-tree
+state as reading each code-block in turn
+(`stepping_over_unread_spans_reads_as_every_leaf_does` checks this over
+3000 random precincts and layer sequences). The work of a header is then
+proportional to the bits it reads plus the code-blocks it includes, plus
+one step for each span it steps over.
 
-A packet header of one byte can visit every code-block of its precinct, and
-a positional order can sweep millions of positions that hold no packet, so
-small valid files could take seconds or minutes. Measured on release builds
-(`scripts/gen-work-bound-fixtures.py`; times are this decoder before the
-bound, then after, then `opj_decompress` 2.5.0):
+That matters for real files: OpenJPEG's encoder sets every packet's
+"present" bit, so each layer's header names all of its code-blocks even
+when almost none are included. `opj_compress -b 4,4` with 64 or 100 layers
+on a nearly flat 2048^2 image (`tests/fixtures/work_bound/opj_*`) used to
+visit 262144 code-blocks per layer; it now decodes in 0.15 s.
+
+What remains is still bounded (owner decision on #235, 2026-11-11). Walking
+every tile's packets may take at most max(2^24, 32 × the tiles' data
+bytes) steps. A step is a packet read, a span stepped over, or a sweep
+position, once for each (component, resolution) checked there. Code-block
+entries that read a bit are not counted, since the header's bytes already
+pay for them. Past the bound the decode is `Limit`. It is one bound for the
+whole decode, not one per tile, and there is no option to change it.
+
+A header of one byte can still step over each row of code-blocks in its
+precinct, and a positional order can sweep millions of positions that hold
+no packet. Measured on release builds (`scripts/gen-work-bound-fixtures.py`;
+times are this decoder before this change, then after, then
+`opj_decompress` 2.5.0):
 
 | Shape | Size | Before | After | OpenJPEG |
 | ----- | ---- | ------ | ----- | -------- |
-| LRCP, 2^17 4x4 code-blocks, 1000 one-byte packets | 1.1 KB | 4.6 s | 0.6 s | 6.6 s |
-| LRCP, 2^14 code-blocks, 65535 layers | 66 KB | 28.7 s | 0.4 s | 0.3 s |
-| PCRL sweep, 1024 components, step 2 on a 2048^2 tile | 9.3 KB | 28.9 s | 0.2 s | 37.4 s |
-| CPRL, one 2^24-row column, 31 POC volumes | 819 B | 6.5 s | 0.1 s | 20.6 s |
+| LRCP, 2^17 4x4 code-blocks, 1000 one-byte packets | 1.1 KB | 4.6 s | decodes, 14 ms | 6.8 s |
+| LRCP, 2^14 code-blocks, 65535 layers | 66 KB | 28.7 s | decodes, 8 ms | 0.3 s |
+| LRCP, 2^19 code-blocks, 65535 layers | 66 KB | | decodes, 0.09 s | 26.5 s |
+| As above, first packet resolves the root (`t2skip`), 2^19 blocks | 66 KB | | `Limit`, 0.5 s | 37.7 s |
+| `t2skip`, 512 x 256 code-blocks, 40000 layers | 40 KB | | `Limit`, 0.4 s | 6.1 s |
+| PCRL sweep, 1024 components, step 2 on a 2048^2 tile | 9.3 KB | 28.9 s | `Limit`, 0.3 s | 37.4 s |
+| CPRL, one 2^24-row column, 31 POC volumes | 819 B | 6.5 s | `Limit`, 0.1 s | 20.6 s |
 
 The bound scales with size, so a large file of the same shape still takes
-as long as its bytes allow: the 65535-layer shape padded to 10 MB is refused
-after 4.5 s, about what 10 MB of real data takes to decode.
+as long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after
+4.5 s, about what 10 MB of real data takes to decode (about 0.45 µs a
+byte). A step costs 10 to 50 ns, except that a POC marker's progression
+checks each packet against those already read, at about 1 µs; that cost is
+#247.
 
-Encoder output stays far below the bound: every conformance file spends
-under 1% of it (at most 0.54 visits per byte), and so does every committed
-file other than the hand-built `psot0/jp2_t2_*` walks (at most 6.7%).
-`opj_compress` output with 16x16 code-blocks, 100 layers and `termall`
-takes 0.41 visits per byte, and with 4x4 code-blocks, 20 layers, SOP and
-EPH 1.42 (`every_committed_file_walks_far_below_the_work_bound` prints the
-table). What the bound can refuse is a valid file of the same shape as the
-repro above: a nearly empty image with tiny code-blocks and many layers,
-whose packets are a byte each yet visit every code-block. A flat 2048^2
-image in 4x4 code-blocks needs about 64 layers to reach it.
+Encoder output stays far below the bound. Every conformance file spends
+under 0.5% of it (`p1_05` the most, 0.29 steps per byte; `p0_13` takes 0.76
+steps per byte, under the floor). The most seen from `opj_compress` is 4.6
+steps per byte, 12.8% of the bound: a sparse 2048^2 image in 4x4
+code-blocks with 64 layers, 469 KB. Small files of the same kind sit under
+the floor: the committed 64- and 100-layer files take about 17 steps per
+byte, under 0.1% of it.
+`every_committed_file_walks_far_below_the_work_bound` prints the table for
+the committed files and asserts each is under 1/64. What the bound can
+still refuse is a valid file whose layers mostly step over code-blocks one
+row at a time: tiny code-blocks, a resolved inclusion root, and thousands
+of layers with nothing new in them. No encoder seen writes that.
 
 The bound covers the walk `read_header` makes for a `Psot = 0` tile-part
-(see above): that walk's own bound is max(2^22, 8 × the tile's data bytes),
-no larger at any size, so for a single-tile codestream a tile that walk
-finishes is one the decode's walk finishes too. The decode's bound does not
-replace that walk's geometry bound of 2^14 code-blocks: `read_header`
-allocates for its walk, and a geometry bound at the decode's 2^19
-code-blocks would let `read_header` hold about 75 MB for a 66 KB file.
+(see above). That walk counts the same steps under its own bound,
+max(2^22, 8 × the tile's data bytes), no larger at any size, so for a
+single-tile codestream a tile that walk finishes is one the decode's walk
+finishes too. The decode's bound does not replace that walk's geometry
+bound of 2^14 code-blocks: `read_header` allocates for its walk, and a
+geometry bound at the decode's 2^19 code-blocks would let `read_header`
+hold about 75 MB for a 66 KB file.
 
 ### The `jp2i` and `uinf` boxes
 

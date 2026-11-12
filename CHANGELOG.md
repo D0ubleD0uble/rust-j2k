@@ -224,14 +224,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fault and a broken codestream reports the header fault.
 - A codestream component too deep for an `i32` sample is refused as
   `Unsupported` when the main header is read, before any tile data.
-- Reading the packet headers is bounded: `decode` may take 2^24 steps, or 16
-  per byte of tile data when that is more, counting packets, code-block
-  entries visited in their headers, and the positions a positional
-  progression order sweeps. Past it the decode is `Error::Limit`. Encoder
-  output takes a step or less per byte, but a file of 1 KB whose one-byte
-  packet headers each visit 2^17 code-blocks took 4.6 s, and a POC-repeated
-  CPRL sweep of 819 bytes 6.5 s; both are now refused in under a second.
-  OpenJPEG has no such bound and decodes them.
+- Packet headers that name many code-blocks and include none read faster:
+  where the inclusion tag tree already puts a group of code-blocks past the
+  layer, the decode steps over the group instead of each code-block. A
+  1 KB file whose one-byte packet headers each name 2^17 code-blocks took
+  4.6 s and now takes 14 ms. `opj_compress` writes such headers for every
+  layer, so its output with small code-blocks and many layers gains too.
+- Reading the packet headers is bounded: `decode` may take 2^24 steps that
+  read no header bit, or 32 per byte of tile data when that is more,
+  counting packets, steps over code-blocks a header reads no bit for, and
+  the positions a positional progression order sweeps. Past it the decode
+  is `Error::Limit`. Encoder output takes at most a few steps per byte, but
+  a POC-repeated CPRL sweep of 819 bytes took 6.5 s and a 9 KB PCRL sweep
+  29 s; both are now refused in a fraction of a second. OpenJPEG has no
+  such bound and decodes them.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is

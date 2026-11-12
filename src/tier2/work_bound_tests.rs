@@ -7,11 +7,7 @@ use super::{decode_packets, decode_visits};
 
 /// How far below its bound every committed file's walk must stay: at most
 /// this fraction of it.
-const MARGIN: f64 = 1.0 / 8.0;
-
-/// The same for every file but the synthetic `psot0/jp2_t2*` ones, whose
-/// one-byte packet headers visit up to 59 code-blocks per byte on purpose.
-const MARGIN_ENCODED: f64 = 1.0 / 64.0;
+const MARGIN: f64 = 1.0 / 64.0;
 
 /// Every `.j2k` and `.jp2` under `dir`, recursively.
 fn files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -44,19 +40,20 @@ pub(crate) fn walk(bytes: &[u8]) -> Option<(u64, u64)> {
     Some((u64::MAX - left, crate::tile_bytes(&cs)))
 }
 
-/// The bound is 2^24 visits, or 16 per byte of tile data past 2^20 bytes.
+/// The bound is 2^24 visits, or 32 per byte of tile data past 2^19 bytes.
 #[test]
 fn the_work_bound_grows_with_the_tile_data() {
     assert_eq!(decode_visits(0), 1 << 24);
-    assert_eq!(decode_visits(1 << 20), 1 << 24);
-    assert_eq!(decode_visits((1 << 20) + 1), (1 << 24) + 16);
-    assert_eq!(decode_visits(1 << 24), 1 << 28);
+    assert_eq!(decode_visits(1 << 19), 1 << 24);
+    assert_eq!(decode_visits((1 << 19) + 1), (1 << 24) + 32);
+    assert_eq!(decode_visits(1 << 24), 1 << 29);
     assert_eq!(decode_visits(u64::MAX), u64::MAX);
 }
 
-/// Every committed file whose packets parse, conformance and real-world files
-/// included, walks them in a small fraction of the decode's bound, so the
-/// bound refuses none of them. Run with `--nocapture` for the table.
+/// Every committed file whose packets parse, conformance, real-world and
+/// `opj_compress` many-layer files included, walks them in a small fraction
+/// of the decode's bound, so the bound refuses none of them. Run with
+/// `--nocapture` for the table.
 #[test]
 fn every_committed_file_walks_far_below_the_work_bound() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -66,8 +63,8 @@ fn every_committed_file_walks_far_below_the_work_bound() {
     let mut rows = Vec::new();
     for path in &paths {
         let name = path.strip_prefix(&root).unwrap().display().to_string();
-        // These are made to go past the bound.
-        if name.starts_with("work_bound/") {
+        // These are made to go past the bound, but for the encoder output.
+        if name.starts_with("work_bound/") && !name.starts_with("work_bound/opj_") {
             continue;
         }
         let bytes = std::fs::read(path).unwrap();
@@ -85,12 +82,8 @@ fn every_committed_file_walks_far_below_the_work_bound() {
     eprintln!("{} files walked of {}", rows.len(), paths.len());
     // The conformance corpus and the real-world files are among them.
     assert!(rows.len() > 100, "{} files walked", rows.len());
+    assert!(rows.iter().any(|row| row.3.starts_with("work_bound/opj_")));
     for (fraction, _, _, name) in &rows {
-        let margin = if name.starts_with("psot0/jp2_t2") {
-            MARGIN
-        } else {
-            MARGIN_ENCODED
-        };
-        assert!(*fraction <= margin, "{name} spends {fraction} of its bound");
+        assert!(*fraction <= MARGIN, "{name} spends {fraction} of its bound");
     }
 }
