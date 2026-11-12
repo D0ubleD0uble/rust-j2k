@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 
 use crate::codestream::MainHeader;
-use crate::codestream::markers::{Progression, Rect, Siz};
+use crate::codestream::markers::{PocVolume, Progression, Rect, Siz};
 use crate::{Error, Result};
 
 use super::geometry::ResolutionGeom;
@@ -154,6 +154,72 @@ struct Volume {
     layers: u32,
     resolutions: std::ops::Range<usize>,
     components: std::ops::Range<usize>,
+}
+
+/// Refuse a `POC` sequence that leaves out packets of the tile, with
+/// [`Error::Codestream`].
+///
+/// A tile has a packet for every layer of `COD`, every resolution each
+/// component has (its own `COD` or `COC` level count), and every precinct of
+/// that resolution, including one with no code-blocks (B.6, B.9). A
+/// resolution empty on the tile has no precincts, so no packets, and needs
+/// no volume. `header.poc` holds the main header's volumes and then every
+/// tile-part's, and they must define every packet (A.6.6, B.12.3); a packet
+/// none of them reaches is missing from the codestream, as if dropped from
+/// the end of the tile (B.11), and decoding it as empty would invent its
+/// samples. OpenJPEG decodes such a tile with those packets left empty.
+///
+/// A volume's layers start at 0, so a (component, resolution) has every
+/// layer's packets only when one volume reaching the last layer covers it.
+/// The check is on those axes, before the walk, and costs `components ×
+/// (volumes + resolutions)` steps, against the geometry's own `components ×
+/// resolutions` built before it. A layer order reads every precinct of a
+/// resolution it reaches. A positional order reads the precincts its sweep
+/// meets, which with mixed sub-sampling is not always all of them; that is
+/// the same with or without a `POC`, as in OpenJPEG's encoder and decoder,
+/// and not refused here.
+///
+/// The refusal relies on strict decoding; partial decode (#214) must revisit
+/// it, as the packets left out are missing data like a cut tile-part.
+pub(crate) fn check_poc_coverage(header: &MainHeader, walk: &PacketWalk<'_>) -> Result<()> {
+    if header.poc.is_empty() {
+        return Ok(());
+    }
+    let layers = header.cod.layers;
+    for (comp, resolutions) in walk.geoms.iter().enumerate() {
+        let covers = |v: &&PocVolume| (v.comp_start..v.comp_end).contains(&(comp as u16));
+        // Bit `r` is set when a volume over every layer covers resolution `r`
+        // of this component. A component has at most 33 resolutions.
+        let mut full = 0u64;
+        for v in header.poc.iter().filter(covers) {
+            if v.layer_end >= layers {
+                let (start, end) = (u32::from(v.res_start).min(64), u32::from(v.res_end).min(64));
+                full |= mask_below(end) & !mask_below(start);
+            }
+        }
+        for (res, geom) in resolutions.iter().enumerate() {
+            if (full >> res) & 1 == 0 && geom.precinct_count() > 0 {
+                let reached = header
+                    .poc
+                    .iter()
+                    .filter(covers)
+                    .filter(|v| (usize::from(v.res_start)..usize::from(v.res_end)).contains(&res))
+                    .map(|v| v.layer_end)
+                    .max()
+                    .unwrap_or(0);
+                return Err(Error::Codestream(format!(
+                    "the tile's POC volumes leave out its packets of component {comp}, \
+                     resolution {res}, from layer {reached} of {layers}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The bits below bit `n`, for `n` up to 64.
+fn mask_below(n: u32) -> u64 {
+    1u64.checked_shl(n).map_or(u64::MAX, |bit| bit - 1)
 }
 
 /// Visit every packet of the tile in `header`'s progression order (ISO/IEC

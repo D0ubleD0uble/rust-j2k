@@ -1583,6 +1583,155 @@ fn only_a_skip_from_the_set_is_charged() {
     assert_eq!(set - bitmap, 12 * read);
 }
 
+// ---- POC coverage (issue #260) ----
+
+/// `check_poc_coverage` on `header`'s own geometry.
+fn coverage(header: &MainHeader) -> Result<()> {
+    let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
+        .map(|c| geoms_of(header, 0, c).expect("geometry"))
+        .collect();
+    let walk = PacketWalk {
+        siz: &header.siz,
+        tile: header.siz.tile_rect(0).expect("tile 0"),
+        geoms: &geoms,
+    };
+    super::progression::check_poc_coverage(header, &walk)
+}
+
+fn poc(res: (u8, u8), comp: (u16, u16), layer_end: u16, progression: Progression) -> PocVolume {
+    PocVolume {
+        res_start: res.0,
+        res_end: res.1,
+        comp_start: comp.0,
+        comp_end: comp.1,
+        layer_end,
+        progression,
+    }
+}
+
+/// Three components, three resolutions, three layers.
+fn coverage_header(volumes: Vec<PocVolume>) -> MainHeader {
+    let mut header = Layout::plain((32, 32), 2).components(3).header();
+    header.cod.layers = 3;
+    header.poc = volumes;
+    header
+}
+
+/// Volumes that together reach every layer, resolution and component pass;
+/// volumes that leave out the first or the last of any axis, or a gap where
+/// two volumes meet, are `Codestream`, naming the first packet left out.
+#[test]
+fn poc_volumes_must_cover_every_packet_of_the_tile() {
+    use Progression::{Cprl, Lrcp, Pcrl, Rlcp, Rpcl};
+    let pass = |volumes: Vec<PocVolume>| coverage(&coverage_header(volumes));
+    let fail = |volumes: Vec<PocVolume>, comp: usize, res: usize, layer: u16| match pass(
+        volumes.clone(),
+    ) {
+        Err(Error::Codestream(m)) => assert!(
+            m.contains(&format!(
+                "component {comp}, resolution {res}, from layer {layer} of 3"
+            )),
+            "{volumes:?}: {m}"
+        ),
+        other => panic!("{volumes:?}: expected a codestream error, got {other:?}"),
+    };
+
+    // One volume over everything, in each order, and past the axes' ends.
+    for order in [Lrcp, Rlcp, Rpcl, Pcrl, Cprl] {
+        pass(vec![poc((0, 3), (0, 3), 3, order)]).unwrap();
+    }
+    pass(vec![poc((0, 33), (0, 255), 255, Rpcl)]).unwrap();
+    // Each axis split between two volumes that meet.
+    pass(vec![
+        poc((0, 1), (0, 3), 3, Lrcp),
+        poc((1, 3), (0, 3), 3, Cprl),
+    ])
+    .unwrap();
+    pass(vec![
+        poc((0, 3), (0, 2), 3, Lrcp),
+        poc((0, 3), (2, 3), 3, Rpcl),
+    ])
+    .unwrap();
+    // Layers: a later volume over every layer completes an earlier one.
+    pass(vec![
+        poc((0, 3), (0, 3), 1, Lrcp),
+        poc((0, 3), (0, 3), 3, Pcrl),
+    ])
+    .unwrap();
+
+    // The last of each axis left out.
+    fail(vec![poc((0, 3), (0, 3), 2, Lrcp)], 0, 0, 2);
+    fail(vec![poc((0, 2), (0, 3), 3, Lrcp)], 0, 2, 0);
+    fail(vec![poc((0, 3), (0, 2), 3, Lrcp)], 2, 0, 0);
+    // The first of each axis left out (layers always start at 0).
+    fail(vec![poc((1, 3), (0, 3), 3, Rlcp)], 0, 0, 0);
+    fail(vec![poc((0, 3), (1, 3), 3, Cprl)], 0, 0, 0);
+    // A gap between two volumes.
+    fail(
+        vec![poc((0, 1), (0, 3), 3, Lrcp), poc((2, 3), (0, 3), 3, Lrcp)],
+        0,
+        1,
+        0,
+    );
+    fail(
+        vec![poc((0, 3), (0, 1), 3, Lrcp), poc((0, 3), (2, 3), 3, Lrcp)],
+        1,
+        0,
+        0,
+    );
+    // Layers split over different resolutions do not add up: resolution 1
+    // has layers 0..1 from the first volume only.
+    fail(
+        vec![
+            poc((0, 2), (0, 3), 1, Lrcp),
+            poc((0, 1), (0, 3), 3, Lrcp),
+            poc((2, 3), (0, 3), 3, Lrcp),
+        ],
+        0,
+        1,
+        1,
+    );
+    // Without a POC there is nothing to check.
+    pass(Vec::new()).unwrap();
+}
+
+/// A component with fewer decomposition levels (its own `COC`) has fewer
+/// resolutions, and a volume need only cover those it has: here component 1
+/// has two, and its volume stops at resolution 2. Its missing second
+/// resolution is still refused.
+#[test]
+fn poc_coverage_counts_each_components_own_resolutions() {
+    let mut header = coverage_header(vec![
+        poc((0, 3), (0, 1), 3, Progression::Lrcp),
+        poc((0, 2), (1, 2), 3, Progression::Rpcl),
+        poc((0, 3), (2, 3), 3, Progression::Cprl),
+    ]);
+    header.components[1].coding.decomposition_levels = 1;
+    coverage(&header).unwrap();
+
+    header.poc[1].res_end = 1;
+    match coverage(&header) {
+        Err(Error::Codestream(m)) => assert!(m.contains("component 1, resolution 1,"), "{m}"),
+        other => panic!("expected a codestream error, got {other:?}"),
+    }
+}
+
+/// A resolution empty on the tile has no precincts and so no packets, and no
+/// volume need cover it. A 2 x 1 tile at x = 1 has nothing at resolution 0 of
+/// two levels: `ceil(1 / 4) = ceil(3 / 4)`.
+#[test]
+fn poc_coverage_does_not_need_an_empty_resolution() {
+    let mut header = Layout::plain((3, 1), 2).header();
+    header.siz.x_offset = 1;
+    let geoms = geoms_of(&header, 0, 0).unwrap();
+    assert_eq!(geoms[0].precinct_count(), 0);
+    assert!(geoms[1].precinct_count() > 0);
+    header.poc = vec![poc((1, 3), (0, 1), 1, Progression::Lrcp)];
+    coverage(&header).unwrap();
+    header.poc[0].res_start = 2;
+    assert!(matches!(coverage(&header), Err(Error::Codestream(_))));
+}
+
 // ---- Packet delimiters: SOP / EPH (issue #73) ----
 
 const SOP: Delimiters = Delimiters {

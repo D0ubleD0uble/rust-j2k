@@ -219,6 +219,12 @@ pub(crate) struct Budget {
     /// `None` for the decode's bitmap up to the visits left and a set past
     /// it, `Some(bits)` for a bitmap of at most `bits` and a failure past it.
     pub(crate) poc_bitmap: Option<u64>,
+    /// Whether a POC sequence that leaves out packets of the tile is refused
+    /// before the walk (see `progression::check_poc_coverage`). The decode
+    /// sets it. `read_header`'s walk of a `Psot = 0` tile does not: it asks
+    /// only where the packets the volumes reach end, and the decode refuses
+    /// the tile anyway.
+    pub(crate) poc_coverage: bool,
 }
 
 impl Budget {
@@ -230,6 +236,7 @@ impl Budget {
             blocks: MAX_CODE_BLOCKS,
             visits,
             poc_bitmap: None,
+            poc_coverage: true,
         }
     }
 }
@@ -307,6 +314,9 @@ pub(crate) fn decode_packets_within<'a>(
         body_pos: 0,
         packed,
     };
+    if budget.poc_coverage {
+        progression::check_poc_coverage(header, &walk)?;
+    }
     let visits = Cell::new(budget.visits);
     let mut packet_index = 0u32;
     let walked = for_each_packet(

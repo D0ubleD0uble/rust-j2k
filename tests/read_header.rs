@@ -30,13 +30,20 @@ use rust_j2k::{
 /// The other `work_bound/` files listed walk past the decode's tier-2 work
 /// bound, which `read_header` does not walk, so `decode` refuses them with
 /// `Limit`. The `tile_header/tilecomp_*` files hold components with no sample
-/// in tile 0, which only the decode's tile geometry finds.
+/// in tile 0, which only the decode's tile geometry finds. The
+/// `poc_coverage/*_missing` files carry POC volumes that leave out packets of
+/// the tile, which only the decode's packet walk checks.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
     ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
+    (
+        "poc_coverage/poc_comp_missing.j2k",
+        "POC leaves out packets",
+    ),
+    ("poc_coverage/poc_res_missing.j2k", "POC leaves out packets"),
     ("psot0/jp2_lbox0_p0eoc_xml.jp2", "jp2c LBox 0, then xml"),
     (
         "psot0/jp2_p0eoc_short_badcolr.jp2",
