@@ -10,7 +10,8 @@ inclusion bits of 0, or empty, 0x00), so a decoder that walks them all reads
 a flat image. OpenJPEG 2.5.0 has no work bound and walks them; `--check`
 prints what it does.
 
-The shapes come from the reviews of PR #227, issue #235 and PR #249:
+The shapes come from the reviews of PR #227, issue #235, PR #249 and
+issue #247:
 
 - `t2bomb`: one tile, one component, no wavelet levels, 4x4 code-blocks in
   one precinct, `layers` layers, LRCP. Each packet is 0x80: present, then an
@@ -29,6 +30,11 @@ The shapes come from the reviews of PR #227, issue #235 and PR #249:
   comes from a different resolution, so the sweep visits far more positions
   than there are precincts; a POC marker can repeat the whole order up to 31
   times.
+- `pocdup`: one tile, no wavelet levels, 2 x 2 precincts, LRCP, empty
+  packets, and a POC marker of identical volumes over every layer,
+  resolution and component, so each volume after the first reaches only
+  packets the first one read. A decoder must emit each packet once and skip
+  the rest cheaply; these decode.
 
 The small files are written to tests/fixtures/work_bound/ (see the README
 there). With `--big DIR`, the large timing shapes from the issue are written
@@ -180,8 +186,39 @@ def cprl_tall(volumes: int) -> bytes:
     return cprl_steps(1, 1, 1 << 24, 1, [0x0F, 0xF1], bytes([0, 8]), volumes)
 
 
-# Committed: name -> bytes. Each but the first walks far past the decode's
-# work bound for its size and is refused with `Error::Limit`.
+def pocdup(
+    width: int,
+    height: int,
+    components: int,
+    layers: int,
+    volumes: int,
+    data: int = 0,
+    order: int = LRCP,
+) -> bytes:
+    """`components` components on a `width` x `height` tile, no wavelet
+    levels, 2 x 2 precincts (4 x 4 code-blocks clipped to them), `layers`
+    layers, and a POC marker of `volumes` identical volumes over every
+    layer, resolution and component. Every packet is empty (0x00), one for
+    each precinct of each component in each layer; with `data`, only the
+    first `data` of them, so the walk runs out of packets. `order` is the
+    progression of COD and of every volume."""
+    # User precincts, `order`, `layers`, no MCT; no levels, 4x4 code-blocks,
+    # 5/3; PPx = PPy = 1.
+    cod = seg(0xFF52, bytes([1, order]) + struct.pack(">H", layers) + bytes([0, 0, 0, 0, 0, 1, 0x11]))
+    qcd = seg(0xFF5C, bytes([0x40, 0x40]))
+    # RSpoc, CSpoc, LYEpoc, REpoc, CEpoc, Ppoc; past 256 components the two
+    # component fields take two bytes.
+    wide = components > 256
+    comp = (lambda v: struct.pack(">H", v)) if wide else (lambda v: bytes([v & 0xFF]))
+    entry = bytes([0]) + comp(0) + struct.pack(">H", layers) + bytes([1]) + comp(components) + bytes([order])
+    poc = seg(0xFF5F, entry * volumes)
+    packets = data or components * ceil(width, 2) * ceil(height, 2) * layers
+    main = siz(0, width, height, [(7, 1, 1)] * components) + cod + qcd + poc
+    return codestream(main, b"\x00" * packets)
+
+
+# Committed: name -> bytes. Each but the first and the last walks far past
+# the decode's work bound for its size and is refused with `Error::Limit`.
 FILES = {
     # 2^17 code-blocks, 1000 layers, each skipped in one step: decodes.
     "t2bomb_2048x1024_1000.j2k": t2bomb(2048, 1024, 1000),
@@ -194,6 +231,9 @@ FILES = {
     # 2^23 positions, 3 visits each, once and in 31 POC volumes.
     "cprl_tall.j2k": cprl_tall(0),
     "cprl_tall_poc31.j2k": cprl_tall(31),
+    # 4 precincts, 1024 layers, 31 identical POC volumes: 4096 packets read
+    # once and 126976 skipped. Decodes.
+    "pocdup_4x4_1024_31.j2k": pocdup(4, 4, 1, 1024, 31),
 }
 
 # Not committed (`--big DIR`): the issue's timing shapes.
@@ -213,6 +253,27 @@ BIG = {
     # `t2skip` in 153 tiles of 512 x 512, 65535 layers each: 10 MB of
     # packets, past the bound for their size.
     "t2skip_tiles_10mb.j2k": lambda: t2skip(512, 512, 65535, 153),
+    # The #247 shapes. 16 precincts, 65535 layers, 31 identical volumes: 1 MB.
+    "pocdup_8x8_65535_31.j2k": lambda: pocdup(8, 8, 1, 65535, 31),
+    # The same in 100 KB: 4 precincts, 25600 layers.
+    "pocdup_4x4_25600_31.j2k": lambda: pocdup(4, 4, 1, 25600, 31),
+    # 160 components of one precinct, 65535 layers, two volumes: 10.5 MB.
+    "pocdup_160c_65535_2.j2k": lambda: pocdup(1, 1, 160, 65535, 2),
+    # 160 precincts, 65535 layers, 32 volumes, past OpenJPEG's 31: 10.5 MB.
+    "pocdup_8x80_65535_32.j2k": lambda: pocdup(8, 80, 1, 65535, 32),
+    # Two volumes over 2^14 precincts and 65535 layers, 1.1e9 packets, but
+    # only the first 10^7 in the data: more packets than the walk can read,
+    # in `decode` or `read_header`. In LRCP it is refused before the walk;
+    # in RPCL the walk reads to the end of the data.
+    "pocdup_256x256_65535_2_10mb.j2k": lambda: pocdup(256, 256, 1, 65535, 2, 10_000_000),
+    "pocdup_256x256_65535_2_10mb_rpcl.j2k": lambda: pocdup(
+        256, 256, 1, 65535, 2, 10_000_000, RPCL
+    ),
+    # Two volumes over 1000 components of one precinct: 6.6e7 packets, just
+    # under the bit per visit `read_header` holds for 10^7 bytes, then the
+    # first 10^7 of them. 4800 components, 3.1e8 packets, for `decode`.
+    "pocdup_1000c_65535_2_10mb.j2k": lambda: pocdup(1, 1, 1000, 65535, 2, 10_000_000),
+    "pocdup_4800c_65535_2_10mb.j2k": lambda: pocdup(1, 1, 4800, 65535, 2, 10_000_000),
 }
 
 

@@ -318,9 +318,31 @@ times are this decoder before this change, then after, then
 The bound scales with size, so a large file of the same shape still takes
 as long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after
 4.5 s, about what 10 MB of real data takes to decode (about 0.45 µs a
-byte). A step costs 10 to 50 ns, except that a POC marker's progression
-checks each packet against those already read, at about 1 µs; that cost is
-#247.
+byte). A step costs 10 to 50 ns.
+
+A POC marker's volumes may reach the same packet more than once; the
+first reads it and the rest skip it (OpenJPEG's `include` array). The
+decode keeps one bit per packet the volumes reach, and skips a packet
+already read in about 4 ns, without a step: there are at most 31 skips per
+packet read, and charging them would refuse the 1 MB file below. The
+bitmap is used when it has no more bits than the steps left, since a walk
+that reads every packet takes a step for each; that keeps it under 2 MB
+below the floor and 4 bytes per byte of data above it (`read_header`:
+512 KB and 1 byte). With more packets than that, a walk in layer orders
+cannot finish and is `Limit` before it starts; one with a positional order
+can pass over precincts, so it keeps the packets read in a set, at most
+one per byte of packet headers and about 24 bytes each. Measured on
+release builds (`pocdup` in `scripts/gen-work-bound-fixtures.py`; times
+and peak memory are before this change, then after, then `opj_decompress`
+2.5.0; `read_header` is on the `Psot = 0` JP2 form):
+
+| Shape | Size | `decode` before | `decode` after | `read_header` before | `read_header` after | OpenJPEG |
+| ----- | ---- | --------------- | -------------- | -------------------- | ------------------- | -------- |
+| 16 precincts, 65535 layers, 31 identical volumes | 1 MB | 5.7 s, 105 MB | 0.15 s, 3.5 MB | 5.3 s, 105 MB | 0.15 s, 3.5 MB | 0.10 s, 9 MB |
+| 160 components, 65535 layers, 2 volumes | 10.5 MB | 4.5 s, 824 MB | 0.32 s, 14 MB | 4.2 s, 824 MB | 0.33 s, 14 MB | 0.57 s, 37 MB |
+| 160 precincts, 65535 layers, 32 volumes | 10.5 MB | 65 s, 824 MB | 1.5 s, 14 MB | 71 s, 824 MB | 1.5 s, 14 MB | refused, 32 POCs |
+| 2^14 precincts, 65535 layers, 2 volumes, 10^7 packets in the data | 10 MB | `Codestream`, 1.7 s, 828 MB | `Limit`, 0.003 s, 16 MB | 1.8 s, 828 MB | 0.003 s, 16 MB | 53 s, 2.1 GB |
+| The same in RPCL | 10 MB | `Codestream`, 1.9 s, 828 MB | `Codestream`, 1.1 s, 238 MB | 2.0 s, 828 MB | 1.2 s, 238 MB | 153 s, 2.1 GB |
 
 Encoder output stays far below the bound. Every conformance file spends
 under 0.5% of it (`p1_05` the most, at 0.29 steps per byte; `p0_13` takes

@@ -164,8 +164,8 @@ pub fn decode_packets<'a>(
 
 /// The fewest visits (see [`Budget::visits`]) a decode may spend walking its
 /// tiles' packets. Most visits cost about 10 to 50 ns, so this is under a
-/// second. A packet a POC marker's progression checks against those already
-/// read costs about 1 µs; that is left to its own issue.
+/// second. A packet a POC marker's volumes reach again is skipped without a
+/// visit, in about 4 ns (see `progression::for_each_packet`).
 pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 
 /// The visits a decode may spend per byte of its tiles' data, when that comes

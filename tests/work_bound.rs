@@ -190,6 +190,16 @@ fn packets_that_include_nothing_decode() {
     );
 }
 
+/// 31 identical POC volumes over 4 precincts and 1024 layers of empty
+/// packets: each packet is read once and met 30 times more, skipped without
+/// a visit each time. OpenJPEG 2.5.0 decodes it to a flat 128.
+#[test]
+fn repeated_poc_volumes_decode() {
+    let name = "pocdup_4x4_1024_31.j2k";
+    let bytes = std::fs::read(dir().join(name)).unwrap();
+    assert_flat(name, &bytes, 4, 4);
+}
+
 /// `opj_compress` output with 4x4 code-blocks and 64 or 100 quality layers on
 /// a nearly flat 2048^2 image. OpenJPEG's encoder sets every packet's
 /// "present" bit, so each layer's header names every one of its 262144
