@@ -1653,7 +1653,7 @@ fn coverage(header: &MainHeader) -> Result<()> {
         tile: header.siz.tile_rect(0).expect("tile 0"),
         geoms: &geoms,
     };
-    super::progression::check_poc_coverage(header, &walk)
+    super::progression::check_poc_coverage(header, &walk, 0)
 }
 
 fn poc(res: (u8, u8), comp: (u16, u16), layer_end: u16, progression: Progression) -> PocVolume {
@@ -1788,6 +1788,24 @@ fn poc_coverage_does_not_need_an_empty_resolution() {
     coverage(&header).unwrap();
     header.poc[0].res_start = 2;
     assert!(matches!(coverage(&header), Err(Error::Codestream(_))));
+}
+
+/// The refusal names the tile it is in: here the second of two 16 x 32
+/// tiles, through the decode's own entry point.
+#[test]
+fn the_poc_coverage_error_names_the_tile() {
+    let mut header = coverage_header(vec![poc((0, 2), (0, 3), 3, Progression::Lrcp)]);
+    header.siz.tile_width = 16;
+    let mut second = tile(&[]);
+    second.index = 1;
+    match decode_packets(&header, &second, &mut decode_visits(0)) {
+        Err(Error::Codestream(m)) => assert!(
+            m.contains("tile 1 leave out its packets of component 0, resolution 2,"),
+            "{m}"
+        ),
+        Err(e) => panic!("expected a codestream error, got {e}"),
+        Ok(_) => panic!("expected a codestream error, got coded data"),
+    }
 }
 
 // ---- Packet delimiters: SOP / EPH (issue #73) ----

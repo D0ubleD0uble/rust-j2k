@@ -3103,26 +3103,37 @@ impl Rng {
         }
     }
 
-    /// Decomposition levels; the step counts below reach their thresholds.
+    /// Decomposition levels: half the time 0 to 3, half the time anything up
+    /// to the 32 the standard allows (Table A-15).
     fn levels(&mut self) -> u8 {
-        self.below(4) as u8
+        if self.chance(2) {
+            self.below(4) as u8
+        } else {
+            self.below(33) as u8
+        }
     }
 
-    fn quant(&mut self) -> Qcd {
+    /// A quantization for a component of `levels` decomposition levels: most
+    /// often one entry short of, at, or one past the `3·NL + 1` it needs, and
+    /// otherwise any count up to the 97 of a 32-level decomposition.
+    fn quant(&mut self, levels: u8) -> Qcd {
         let style = match self.below(3) {
             0 => QuantStyle::None,
             1 => QuantStyle::ScalarDerived,
             _ => QuantStyle::ScalarExpounded,
         };
+        let needed = 3 * u64::from(levels) + 1;
         let steps = if style == QuantStyle::ScalarDerived {
             1
+        } else if self.chance(4) {
+            1 + self.below(97)
         } else {
-            1 + self.below(11) as usize
+            (needed + self.below(3)).saturating_sub(1).clamp(1, 97)
         };
         Qcd {
             style,
             guard_bits: 2,
-            steps: vec![(8, 0); steps],
+            steps: vec![(8, 0); steps as usize],
         }
     }
 
@@ -3169,9 +3180,15 @@ impl Rng {
         vec![volume; count as usize]
     }
 
-    /// A main header the main-header checks accept, or `None`.
+    /// A main header the main-header checks accept, or `None`. One in five
+    /// has 255 to 300 components, either side of the 257 at which the
+    /// component indices of COC, QCC, RGN and POC take two bytes.
     fn main_header(&mut self) -> Option<MainHeader> {
-        let components = 1 + self.below(6) as usize;
+        let components = if self.chance(5) {
+            255 + self.below(46) as usize
+        } else {
+            1 + self.below(6) as usize
+        };
         let comp = SizComponent {
             bit_depth: 8,
             signed: false,
@@ -3194,44 +3211,77 @@ impl Rng {
             components: siz_components,
         };
         let cod = self.cod(components);
-        let qcd = self.quant();
+        let qcd = self.quant(cod.decomposition_levels);
         let mut header = MainHeader::new(siz, cod, qcd);
         header.poc = self.poc();
-        for params in &mut header.components {
-            if self.chance(3) {
-                params.coding = self.coding();
+        for index in self.named(components) {
+            let coding = (!self.chance(3)).then(|| self.coding());
+            let params = &mut header.components[index];
+            if let Some(coding) = coding {
+                params.coding = coding;
             }
-            if self.chance(3) {
-                params.quant = self.quant();
+            let levels = params.coding.decomposition_levels;
+            if !self.chance(3) {
+                header.components[index].quant = self.quant(levels);
             }
         }
         (validate_resolved(&header).is_ok() && header.poc.len() <= MAX_POC_VOLUMES)
             .then_some(header)
     }
 
-    /// Indices among `components`, each at most once, in a random order.
+    /// Indices among `components`, each at most once, in a random order:
+    /// each one in three of a few components, or up to four of many.
     fn named(&mut self, components: usize) -> Vec<usize> {
-        let mut out: Vec<usize> = (0..components).filter(|_| self.chance(3)).collect();
+        let mut out: Vec<usize> = if components <= 8 {
+            (0..components).filter(|_| self.chance(3)).collect()
+        } else {
+            let count = self.below(5);
+            let mut picked: Vec<usize> = (0..count)
+                .map(|_| self.below(components as u64) as usize)
+                .collect();
+            picked.sort_unstable();
+            picked.dedup();
+            picked
+        };
         for i in (1..out.len()).rev() {
             out.swap(i, self.below(i as u64 + 1) as usize);
         }
         out
     }
 
-    fn tile_header(&mut self, components: usize) -> TileHeader {
+    /// A tile header over `main`. Each quantization is drawn near what the
+    /// component it lands on needs, so both verdicts stay common.
+    fn tile_header(&mut self, main: &MainHeader) -> TileHeader {
+        let components = main.components.len();
         let poc = self.poc();
+        let cod = self.chance(2).then(|| self.cod(components));
+        let coc: Vec<(usize, Coding)> = (self.named(components).into_iter())
+            .map(|i| (i, self.coding()))
+            .collect();
+        // The levels component `index` takes in the tile.
+        let levels = |index: usize| {
+            coc.iter()
+                .find(|(i, _)| *i == index)
+                .map(|(_, c)| c.decomposition_levels)
+                .or(cod.as_ref().map(|c| c.decomposition_levels))
+                .unwrap_or(main.components[index].coding.decomposition_levels)
+        };
+        let qcd_levels = cod
+            .as_ref()
+            .map_or(main.cod.decomposition_levels, |c| c.decomposition_levels);
+        let qcd = self.chance(2).then(|| self.quant(qcd_levels));
+        let qcc = (self.named(components).into_iter())
+            .map(|i| (i, self.quant(levels(i))))
+            .collect();
+        let rgn = (self.named(components).into_iter())
+            .map(|i| (i, self.below(8) as u8))
+            .collect();
         TileHeader {
-            cod: self.chance(2).then(|| self.cod(components)),
-            qcd: self.chance(2).then(|| self.quant()),
-            coc: (self.named(components).into_iter())
-                .map(|i| (i, self.coding()))
-                .collect(),
-            qcc: (self.named(components).into_iter())
-                .map(|i| (i, self.quant()))
-                .collect(),
-            rgn: (self.named(components).into_iter())
-                .map(|i| (i, self.below(8) as u8))
-                .collect(),
+            cod,
+            qcd,
+            coc,
+            qcc,
+            rgn,
             // As the parser sets it: only a nonempty list can start in the
             // first tile-part.
             poc_in_first_part: !poc.is_empty() && self.chance(2),
@@ -3240,38 +3290,297 @@ impl Rng {
     }
 }
 
+/// How often each verdict came up, overall and on the wide cases.
+#[derive(Default, Debug)]
+struct Verdicts {
+    valid: u32,
+    invalid: u32,
+    many_valid: u32,
+    many_invalid: u32,
+    deep_valid: u32,
+    deep_invalid: u32,
+}
+
+impl Verdicts {
+    fn add(&mut self, main: &MainHeader, tile: &TileHeader, valid: bool) {
+        let many = main.components.len() >= 257;
+        let deep = main
+            .components
+            .iter()
+            .map(|c| c.coding.decomposition_levels)
+            .chain(tile.cod.iter().map(|c| c.decomposition_levels))
+            .chain(tile.coc.iter().map(|(_, c)| c.decomposition_levels))
+            .any(|levels| levels > 3);
+        let count = |yes: &mut u32, no: &mut u32| *if valid { yes } else { no } += 1;
+        count(&mut self.valid, &mut self.invalid);
+        if many {
+            count(&mut self.many_valid, &mut self.many_invalid);
+        }
+        if deep {
+            count(&mut self.deep_valid, &mut self.deep_invalid);
+        }
+    }
+
+    /// Both verdicts are common overall, with 257 or more components, and
+    /// with more than 3 levels, so no side of the check goes untested.
+    fn assert_both(&self, overall: u32, wide: u32) {
+        let s = self;
+        assert!(
+            s.valid > overall
+                && s.invalid > overall
+                && s.many_valid > wide
+                && s.many_invalid > wide
+                && s.deep_valid > wide
+                && s.deep_invalid > wide,
+            "{s:?}"
+        );
+    }
+}
+
 /// The quick check `parse_tiles` runs on every tile agrees with resolving the
 /// tile's header in full, the old per-tile check, on 20000 random main and
 /// tile headers: every mix of tile COD, QCD, COC, QCC, RGN and POC over main
 /// headers with and without their own COCs and QCCs, both wavelets, all
-/// three quantization styles and the color transform. The quick check is
+/// three quantization styles, the color transform, 0 to 32 decomposition
+/// levels, 1 to 97 step entries, up to 300 components, and tile POCs that
+/// start in the first tile-part or only in a later one. The quick check is
 /// what lets a tile cost its own markers rather than the component count;
 /// any rule it gets wrong shows here as a disagreement.
 #[test]
 fn the_quick_tile_check_agrees_with_the_full_resolution() {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-    let (mut valid, mut invalid) = (0, 0);
+    let mut verdicts = Verdicts::default();
     let mut cases = 0;
     while cases < 20_000 {
         let Some(main) = rng.main_header() else {
             continue;
         };
         cases += 1;
-        let tile = rng.tile_header(main.components.len());
+        let tile = rng.tile_header(&main);
         let full = check_tile_in_full(&main, &tile, 0).is_ok();
         let quick = tile_header_is_valid(&main, &OnceCell::new(), &tile);
         assert_eq!(quick, full, "case {cases}: main {main:?}, tile {tile:?}");
-        if full {
-            valid += 1;
+        verdicts.add(&main, &tile, full);
+    }
+    verdicts.assert_both(2000, 200);
+}
+
+// The generated headers written out as marker segments (Annex A), for the
+// byte-level check below.
+
+/// A component index: one byte below 257 components, two from 257 on.
+fn component_index(index: usize, components: usize) -> Vec<u8> {
+    if components < 257 {
+        vec![index as u8]
+    } else {
+        be16(index as u16).to_vec()
+    }
+}
+
+fn transform_byte(transform: Transform) -> u8 {
+    match transform {
+        Transform::Irreversible97 => 0,
+        Transform::Reversible53 => 1,
+    }
+}
+
+/// `SPcod`/`SPcoc` after the progression fields: levels, code-block size and
+/// style, wavelet. Every generated coding has a maximal precinct partition.
+fn coding_bytes(coding: &Coding) -> [u8; 5] {
+    [
+        coding.decomposition_levels,
+        coding.code_block_width,
+        coding.code_block_height,
+        coding.code_block_style,
+        transform_byte(coding.transform),
+    ]
+}
+
+fn cod_segment(cod: &Cod) -> Vec<u8> {
+    let mut b = vec![0, cod.progression as u8];
+    b.extend_from_slice(&be16(cod.layers));
+    b.push(u8::from(cod.multiple_component_transform));
+    b.extend_from_slice(&coding_bytes(&cod.coding()));
+    seg(marker::COD, &b)
+}
+
+fn coc_segment(index: usize, coding: &Coding, components: usize) -> Vec<u8> {
+    let mut b = component_index(index, components);
+    b.push(0);
+    b.extend_from_slice(&coding_bytes(coding));
+    seg(marker::COC, &b)
+}
+
+/// `Sqcd` and the step table, as `decode_quant` reads them.
+fn quant_bytes(qcd: &Qcd) -> Vec<u8> {
+    let style = match qcd.style {
+        QuantStyle::None => 0,
+        QuantStyle::ScalarDerived => 1,
+        QuantStyle::ScalarExpounded => 2,
+    };
+    let mut b = vec![(qcd.guard_bits << 5) | style];
+    for &(exponent, mantissa) in &qcd.steps {
+        if qcd.style == QuantStyle::None {
+            b.push(exponent << 3);
         } else {
-            invalid += 1;
+            b.extend_from_slice(&be16((u16::from(exponent) << 11) | mantissa));
         }
     }
-    // Both verdicts are common, so neither side of the check goes untested.
-    assert!(
-        valid > 2000 && invalid > 2000,
-        "{valid} valid, {invalid} invalid"
-    );
+    b
+}
+
+fn qcc_segment(index: usize, qcd: &Qcd, components: usize) -> Vec<u8> {
+    let mut b = component_index(index, components);
+    b.extend_from_slice(&quant_bytes(qcd));
+    seg(marker::QCC, &b)
+}
+
+fn rgn_segment(index: usize, shift: u8, components: usize) -> Vec<u8> {
+    let mut b = component_index(index, components);
+    b.extend_from_slice(&[0, shift]);
+    seg(marker::RGN, &b)
+}
+
+fn poc_segment(volumes: &[PocVolume], components: usize) -> Vec<u8> {
+    let mut b = Vec::new();
+    for v in volumes {
+        b.push(v.res_start);
+        b.extend_from_slice(&component_index(usize::from(v.comp_start), components));
+        b.extend_from_slice(&be16(v.layer_end));
+        b.push(v.res_end);
+        b.extend_from_slice(&component_index(usize::from(v.comp_end), components));
+        b.push(v.progression as u8);
+    }
+    seg(marker::POC, &b)
+}
+
+/// The main header's segments: SIZ, COD, QCD, a COC or QCC for each
+/// component that differs from the defaults, and any POC.
+fn main_segments(main: &MainHeader) -> Vec<Vec<u8>> {
+    let siz = &main.siz;
+    let components = siz.components.len();
+    let mut b = be16(0).to_vec();
+    for v in [siz.x_size, siz.y_size, siz.x_offset, siz.y_offset] {
+        b.extend_from_slice(&v.to_be_bytes());
+    }
+    let tiles = [
+        siz.tile_width,
+        siz.tile_height,
+        siz.tile_x_offset,
+        siz.tile_y_offset,
+    ];
+    for v in tiles {
+        b.extend_from_slice(&v.to_be_bytes());
+    }
+    b.extend_from_slice(&be16(components as u16));
+    for c in &siz.components {
+        let ssiz = (c.bit_depth - 1) | (u8::from(c.signed) << 7);
+        b.extend_from_slice(&[ssiz, c.x_sampling, c.y_sampling]);
+    }
+    let mut segments = vec![
+        seg(marker::SIZ, &b),
+        cod_segment(&main.cod),
+        seg(marker::QCD, &quant_bytes(&main.qcd)),
+    ];
+    let default = main.cod.coding();
+    for (index, params) in main.components.iter().enumerate() {
+        if params.coding != default {
+            segments.push(coc_segment(index, &params.coding, components));
+        }
+        if params.quant != main.qcd {
+            segments.push(qcc_segment(index, &params.quant, components));
+        }
+    }
+    if !main.poc.is_empty() {
+        segments.push(poc_segment(&main.poc, components));
+    }
+    segments
+}
+
+/// The codestream for `main` with one tile carrying `tile`'s markers. The
+/// coding markers and RGN go in the first tile-part. A POC that starts in
+/// the first part puts its first half there and the rest, if any, in a
+/// second tile-part; any other POC goes in the second tile-part alone.
+fn tile_codestream(main: &MainHeader, tile: &TileHeader) -> Vec<u8> {
+    let components = main.components.len();
+    let mut first = Vec::new();
+    if let Some(cod) = &tile.cod {
+        first.push(cod_segment(cod));
+    }
+    if let Some(qcd) = &tile.qcd {
+        first.push(seg(marker::QCD, &quant_bytes(qcd)));
+    }
+    for (index, coding) in &tile.coc {
+        first.push(coc_segment(*index, coding, components));
+    }
+    for (index, qcd) in &tile.qcc {
+        first.push(qcc_segment(*index, qcd, components));
+    }
+    for &(index, shift) in &tile.rgn {
+        first.push(rgn_segment(index, shift, components));
+    }
+    let mut later = Vec::new();
+    if tile.poc_in_first_part {
+        let split = tile.poc.len().div_ceil(2);
+        first.push(poc_segment(&tile.poc[..split], components));
+        if split < tile.poc.len() {
+            later.push(poc_segment(&tile.poc[split..], components));
+        }
+    } else if !tile.poc.is_empty() {
+        later.push(poc_segment(&tile.poc, components));
+    }
+    let mut parts = vec![first];
+    if !later.is_empty() {
+        parts.push(later);
+    }
+
+    let mut bytes = be16(marker::SOC).to_vec();
+    for s in main_segments(main) {
+        bytes.extend_from_slice(&s);
+    }
+    let data = [0u8];
+    for (at, markers) in parts.iter().enumerate() {
+        let markers = markers.concat();
+        let psot = psot_for(&data) + markers.len() as u32;
+        bytes.extend_from_slice(&sot_seg(0, psot, at as u8, parts.len() as u8));
+        bytes.extend_from_slice(&markers);
+        bytes.extend_from_slice(&be16(marker::SOD));
+        bytes.extend_from_slice(&data);
+    }
+    bytes.extend_from_slice(&be16(marker::EOC));
+    bytes
+}
+
+/// The same agreement from the bytes: 5000 generated header pairs are written
+/// out as codestreams, and `parse` accepts one exactly when the full
+/// resolution accepts its pair, reading the main and tile headers back as
+/// generated. This reaches what the struct-level check cannot: the two-byte
+/// component indices from 257 components on, and a tile POC split across
+/// tile-parts or carried only by a later one.
+#[test]
+fn the_quick_tile_check_agrees_with_the_full_resolution_from_the_bytes() {
+    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+    let mut verdicts = Verdicts::default();
+    let mut cases = 0;
+    while cases < 5_000 {
+        let Some(main) = rng.main_header() else {
+            continue;
+        };
+        cases += 1;
+        let tile = rng.tile_header(&main);
+        let full = check_tile_in_full(&main, &tile, 0);
+        let bytes = tile_codestream(&main, &tile);
+        match parse(&bytes) {
+            Ok(cs) => {
+                assert!(full.is_ok(), "case {cases}: parsed, but {full:?}");
+                assert_eq!(cs.header, main, "case {cases}: main header");
+                assert_eq!(cs.tiles[0].header, tile, "case {cases}: tile header");
+            }
+            Err(e) => assert!(full.is_err(), "case {cases}: refused with {e}"),
+        }
+        verdicts.add(&main, &tile, full.is_ok());
+    }
+    verdicts.assert_both(500, 50);
 }
 
 /// A tile-part COC alone, with no tile COD or QCD, still overrides the coding

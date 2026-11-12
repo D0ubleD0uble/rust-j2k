@@ -266,6 +266,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
 /// [`DecodeOptions::color`] option.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
+#[doc(alias = "ColourOutput")]
 pub enum ColorOutput {
     /// The samples as the codestream coded them, after the palette and the
     /// channel definitions. [`Jp2Metadata::color`] says how to read them;
@@ -452,6 +453,7 @@ impl DecodeOptions {
     /// assert_eq!(options.color, ColorOutput::Srgb);
     /// ```
     #[must_use]
+    #[doc(alias = "with_colour")]
     pub fn with_color(mut self, color: ColorOutput) -> Self {
         self.color = color;
         self

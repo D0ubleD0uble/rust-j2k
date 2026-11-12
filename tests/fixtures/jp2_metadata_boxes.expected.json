@@ -873,30 +873,30 @@
     "image_header": {
       "compression": 7,
       "unknown_color_space": 0,
-      "ipr": 1
+      "ipr_flag": 1
     },
     "color_specifications": [
       {
         "method": 1,
         "precedence": 0,
         "approximation": 0,
-        "data_len": 4,
-        "data_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
+        "payload_len": 4,
+        "payload_sha256": "5085cb99dbe1e374ccd321e5b58182d2c42cf4840c68cfab17b0618a8285e7d6",
         "enum_cs": 16
       },
       {
         "method": 3,
         "precedence": 1,
         "approximation": 2,
-        "data_len": 6,
-        "data_sha256": "17e88db187afd62c16e5debf3e6527cd006bc012bc90b51a810cd80c2d511f43"
+        "payload_len": 6,
+        "payload_sha256": "17e88db187afd62c16e5debf3e6527cd006bc012bc90b51a810cd80c2d511f43"
       },
       {
         "method": 1,
         "precedence": 0,
         "approximation": 1,
-        "data_len": 4,
-        "data_sha256": "e9f3440e5518839aa600db07b5400f8ec287ce0321fad602afd103ce447a1c98",
+        "payload_len": 4,
+        "payload_sha256": "e9f3440e5518839aa600db07b5400f8ec287ce0321fad602afd103ce447a1c98",
         "enum_cs": 18
       }
     ],

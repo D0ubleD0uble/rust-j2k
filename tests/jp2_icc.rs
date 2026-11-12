@@ -16,8 +16,8 @@ mod support;
 use std::path::PathBuf;
 
 use rust_j2k::{
-    Association, ChannelType, ColorOutput, ColorSpace, Component, DecodeOptions, Error, Image,
-    decode, decode_with,
+    Association, ChannelDefinition, ChannelType, ColorOutput, ColorSpace, Component, DecodeOptions,
+    Error, Image, decode, decode_with,
 };
 use serde::Deserialize;
 use support::jp2::sha256_hex;
@@ -922,5 +922,63 @@ fn the_afl_test_applies_where_openjpeg_cannot_convert_as_sycc() {
             "86c6b642679e2be8a9ce5370e1fe49e60b120aa9291d5b182174b4ef69f15ead",
         ],
         true,
+    );
+}
+
+/// Under `Srgb` the color channels are the ones the `cdef` box labels color
+/// 1, 2 and 3, wherever they sit after it. This `cdef` names channel 2 as
+/// color 3 and then as opacity, so the output keeps the coded order with
+/// color 3 last; the decode converts planes 0, 1 and 3 and leaves the
+/// opacity plane as coded. `opj_decompress -force-rgb` converts the first
+/// three positions instead, planes 0, 1 and 2 (`docs/correctness.md`).
+///
+/// The oracle is the same codestream with a plain `cdef` that puts color 3
+/// third: OpenJPEG converts planes 0, 1 and 3 there too. The hashes are its
+/// planes (`opj_decompress -i <file>.jp2 -o out.pgx`, OpenJPEG 2.5.0,
+/// LittleCMS 2.14); the label-based decode gives the same planes, with the
+/// last two in the order of its `cdef`.
+#[test]
+fn srgb_picks_the_color_channels_by_their_cdef_labels() {
+    let profile = named_profile("gamma22");
+    let plain = wrap_with(
+        &rgba(),
+        &profile,
+        &[cdef(&[(0, 0, 1), (1, 0, 2), (3, 0, 3), (2, 1, 0)])],
+    );
+    let red = "04ac395e065c497368f588c30ee66ac3f6291583efb49ac2ff2d7049f9b7d12f";
+    let green = "f9661fc23e1f3a3c8bd923c2abc2d53dc7f52aac495368995f45578301e827b9";
+    let blue = "68c126e6492ec4df1be9d8c4883edc386e675c9b27e0175aeb22353bad9a6135";
+    let opacity = "d086834ee4d5cc3b7340601f3ec141c0adae87e3fb4d340ef74955e5feb17946";
+    check_afl("plain cdef", &plain, &[red, green, blue, opacity], true);
+
+    let relabeled = wrap_with(
+        &rgba(),
+        &profile,
+        &[cdef(&[
+            (0, 0, 1),
+            (1, 0, 2),
+            (3, 0, 3),
+            (2, 0, 3),
+            (2, 1, 0),
+        ])],
+    );
+    check_afl(
+        "relabeled cdef",
+        &relabeled,
+        &[red, green, opacity, blue],
+        true,
+    );
+    let image = decode_with(&relabeled, &srgb()).unwrap();
+    let color = |n| ChannelDefinition {
+        kind: ChannelType::Color,
+        association: Association::Color(n),
+    };
+    let alpha = ChannelDefinition {
+        kind: ChannelType::Opacity,
+        association: Association::WholeImage,
+    };
+    assert_eq!(
+        image.jp2.unwrap().channels,
+        [color(1), color(2), alpha, color(3)]
     );
 }

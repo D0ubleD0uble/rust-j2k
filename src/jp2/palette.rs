@@ -56,7 +56,7 @@ use crate::{Component, ComponentInfo, Error, Result};
 const MAX_ENTRIES: u16 = 1024;
 
 /// One palette column's sample format, from its `Bi` byte.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PaletteColumn {
     /// Bit depth, `(Bi & 0x7F) + 1`: 1 to 128.
@@ -70,13 +70,13 @@ impl PaletteColumn {
     /// up to whole bytes, but at most 4. A column deeper than 32 bits is
     /// therefore read at a 4-byte stride; such a column is never applied (see
     /// [`PaletteColumn::fits_i32`]), so this only decides how long the table must be.
-    fn entry_bytes(self) -> usize {
+    fn entry_bytes(&self) -> usize {
         usize::from(self.bit_depth).div_ceil(8).min(4)
     }
 
     /// Whether the column's range fits the `i32` sample container (signed up
     /// to 32 bits, unsigned up to 31), as the codestream's components must.
-    fn fits_i32(self) -> bool {
+    fn fits_i32(&self) -> bool {
         if self.signed {
             self.bit_depth <= 32
         } else {
@@ -223,7 +223,7 @@ fn entry_value(bytes: &[u8]) -> i32 {
 /// reported. Only a `cmap` the default decode refuses is reported as written
 /// (and only under [`raw_channels`](crate::DecodeOptions::raw_channels),
 /// which does not check it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ChannelMapping {
     /// `CMP`: the codestream component this channel reads.
@@ -233,7 +233,7 @@ pub struct ChannelMapping {
 }
 
 /// How a mapped channel is made from its component (`MTYP`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MappingKind {
     /// `MTYP` 0: the component's samples as coded.

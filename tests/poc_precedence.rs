@@ -82,7 +82,7 @@ fn the_coverage_check_sees_only_the_tile_volumes() {
     let message = error.to_string();
     assert!(
         matches!(error, rust_j2k::Error::Codestream(_))
-            && message.contains("leave out its packets of component 0, resolution 1"),
+            && message.contains("tile 0 leave out its packets of component 0, resolution 1"),
         "{name}: {message}"
     );
 }

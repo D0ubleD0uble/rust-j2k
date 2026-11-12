@@ -251,7 +251,7 @@ fn a_second_jp2h_adds_its_colr_and_not_its_ihdr() {
     let boxes = edge_case("second_jp2h");
     assert_eq!(colors(&boxes), [(2, 0), (1, 1), (1, 2)]);
     let header = &boxes.image_header;
-    assert_eq!((header.unknown_color_space, header.ipr), (0, 0));
+    assert_eq!((header.unknown_color_space, header.ipr_flag), (0, 0));
 }
 
 /// The first top-level `rreq` is the one that counts, even when it is cut

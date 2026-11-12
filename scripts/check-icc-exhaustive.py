@@ -33,7 +33,8 @@ profile or the transform, or OpenJPEG returns before it calls LittleCMS), the
 decoder must give back the samples unchanged. Where the decoder declines the
 profile with `Error::Unsupported` (a lookup table profile, say), the case must
 be one that `REFUSED_BY_US` in `tests/jp2_icc.rs` lists, and every listed case
-must be declined. LittleCMS must also refuse exactly the profiles that
+must be declined. On a full run (no `--only`), a listed name that matches no
+case is a surprise too. LittleCMS must also refuse exactly the profiles that
 `icc/profiles.json` records as unconverted by OpenJPEG. Any other result is
 printed as a SURPRISE and makes the script exit non-zero, as does any mismatch.
 
@@ -387,9 +388,11 @@ def main() -> None:
         started = time.time()
         surprises: list[str] = []
         declined = declined_by_design()
+        seen: set[str] = set()
         for name, kind_name, profile, openjpeg in cases(args.only):
             if args.only and args.only not in name:
                 continue
+            seen.add(name.split("/")[-1])
             kind = kinds[kind_name]
             outcome, mismatches, detail, extra, converted = compare(
                 lcms, kinds, kind, name, profile, tmp, declined)
@@ -409,6 +412,11 @@ def main() -> None:
             else:
                 notes.append(f"{name}: {outcome}" + (f" ({detail[:100]})" if detail else ""))
                 print(f"{name:60} {outcome}", flush=True)
+        # A listed name that matches no case would go unchecked, so it is a
+        # surprise too, on a full run.
+        if not args.only:
+            for name in sorted(declined - seen):
+                surprises.append(f"{name}: listed in `REFUSED_BY_US`, but no case has that name")
         print()
         for note in notes:
             print("not compared:", note)
