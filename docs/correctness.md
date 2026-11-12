@@ -45,7 +45,7 @@ Deviating needs two things, and one is not enough:
 
 Assume first that a divergence is our bug. It almost always is.
 
-There is one known case. On the inverse 9/7, the standard scales the high-pass
+There are two known cases. On the inverse 9/7, the standard scales the high-pass
 samples by `1/K` and the subband gain (Table E-1) enters the quantization step,
 so a high-pass coefficient is scaled by `2 · (1/K) = 1.6257861…`. OpenJPEG's
 decoder instead zeroes the gain and folds the factor of two into the transform:
@@ -76,6 +76,54 @@ worth carrying into any future disagreement:
   match `two_invK` while leaving the gain in the step makes the divergence
   *worse*, because the factor of two is then counted twice. A half-emulation
   reads as a refutation of a correct hypothesis.
+
+### Bypass under a maxshift
+
+The second case (#258). Under the bypass code-block style, a code-block's
+significance and refinement passes switch to raw coding from its fifth coded
+bit-plane on (D.6, Table D.9), counted from its first coded plane. Under an RGN
+maxshift the shifted planes are coded planes (H.2): the first one is
+`top = Mb + SPrgn - zero_bit_planes`. Tier-2 splits the segments by pass count
+(10 passes, then 2, 1, 2, 1, …), which agrees with that count.
+
+OpenJPEG's decoder starts at the same plane, `bpno_plus_one = roishift +
+cblk->numbps`, but tests `bpno_plus_one <= cblk->numbps - 4` (t1.c,
+`opj_t1_decode_cblk`). `cblk->numbps` leaves the shift out, so the switch comes
+`SPrgn` planes late and the decoder MQ-decodes segments that were written raw.
+Its own encoder counts from the first plane it codes (`bpno < cblk->numbps - 4`
+in `opj_t1_encode_cblk`), which is the plane the decoder calls `top`. So
+`opj_compress -ROI` with any bypass style writes a stream that `opj_decompress`
+2.5.0 decodes wrong. This crate counts from `top`
+(`src/tier1/passes.rs`, `decode_block`).
+
+**Evidence.** The encode is lossless, so the source image is the reference. A
+sweep of `opj_compress -i source.pgm -n {1,3,6} -ROI c=0,U={1,3,7,12} -M m` over
+`m` in {0, 1, 3, 5, 9, 17, 33, 49, 63} (108 encodes of
+`tests/fixtures/roi_bypass/source.pgm`):
+
+| Decoder | Equal to the source |
+| ------- | ------------------- |
+| `opj_decompress` 2.5.0 | 12 of 108: the `-M 0` encodes only |
+| this crate, counting like OpenJPEG | 12 of 108; 60 wrong, 36 errors |
+| this crate, counting from `top` | 108 of 108 |
+
+Without a maxshift both counts are the same, so no other fixture changes.
+`tests/roi_bypass.rs` pins four of these encodes (`-M 1`, `5`, `33`, `17`, at
+`U=3`, `-n 3`) against the source; provenance is in
+`tests/fixtures/roi_bypass/README.md`.
+
+**OpenJPEG's history.** The decoder rule has been there since the initial
+import (2ad6a977, 2003, `libopenjpeg/t1.c`: `bpno = roishift + cblk->numbps - 1`
+and `bpno <= (cblk->numbps - 1) - 4`). `git log -L` on the line shows only
+renames, reformatting and sign-conversion fixes since, with no commit that
+gives a reason. The encoder's rule is from the same import; the 2017 bypass and
+termination fixes (81c53117, upstream #674) changed the encoder's termination
+and left the decoder's raw decision alone. No upstream issue or pull request
+covers ROI with bypass. Upstream ROI has no tests (#1035, "Add unit tests for
+ROI feature", open since 2017). Its encoder shifts no coefficients: `-ROI`
+only signals `SPrgn`, so the decoder reads every nonzero coefficient of the
+component as region of interest (#1036, open). The rule reads as an
+oversight, not a choice, so this crate follows the standard. Recorded with the owner's approval on #226.
 
 ### Stricter than the oracle on non-conforming streams
 
@@ -318,9 +366,46 @@ times are this decoder before this change, then after, then
 The bound scales with size, so a large file of the same shape still takes
 as long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after
 4.5 s, about what 10 MB of real data takes to decode (about 0.45 µs a
-byte). A step costs 10 to 50 ns, except that a POC marker's progression
-checks each packet against those already read, at about 1 µs; that cost is
-#247.
+byte). A step costs 10 to 50 ns.
+
+A POC marker's volumes may reach the same packet more than once; the
+first reads it and the rest skip it (OpenJPEG's `include` array). The
+decode keeps one bit per packet the volumes reach, and skips a packet
+already read from that bitmap in about 4 ns, without a step: there are at
+most 31 skips per packet read, and charging them would refuse the 1 MB
+file below. The bitmap is used when it has no more bits than the steps
+left, since a walk that reads every packet takes a step for each; that
+keeps it under 2 MB below the floor and 4 bytes per byte of data above it.
+`read_header` holds the same bitmap, sized from the decode's bound for the
+same tile data, so it walks every tile the decode holds in a bitmap. A
+walk in layer orders that reaches more packets than its steps left cannot
+finish and is `Limit` before it starts. With more packets than the bitmap
+holds, one with a
+positional order can pass over precincts, so the decode keeps the packets
+read in a set, at most one per byte of packet headers and about 24 bytes
+each. A skip from the set is a lookup that misses the cache, 80 to 180 ns
+against about 10 ns for a step, so each one is charged 12 steps.
+`read_header`'s walk keeps no set: past its bitmap, only where the decode
+would keep one, it gives up. For a `Psot = 0` codestream in a JP2 file the
+codestream then runs to the end of the file, like the other tiles too
+costly to walk (`a_psot_zero_tile_too_costly_to_walk_reads_to_the_end`):
+boxes after `jp2c` are not reported, and the decode refuses their bytes as
+left after the last packet. `setskip(1024, 31)`, 1.0e7 packets reached,
+ends at its box and decodes, as on OpenJPEG; `setskip(2048, 2)`, 2.0e7,
+runs to the end (`a_psot_zero_poc_sequence_ends_at_its_box_within_the_decodes_bitmap`
+in `tests/work_bound.rs`). Measured on
+release builds (`pocdup` in `scripts/gen-work-bound-fixtures.py`; times
+and peak memory are before this change, then after, then `opj_decompress`
+2.5.0; `read_header` is on the `Psot = 0` JP2 form):
+
+| Shape | Size | `decode` before | `decode` after | `read_header` before | `read_header` after | OpenJPEG |
+| ----- | ---- | --------------- | -------------- | -------------------- | ------------------- | -------- |
+| 16 precincts, 65535 layers, 31 identical volumes | 1 MB | 5.7 s, 105 MB | 0.15 s, 3.5 MB | 5.3 s, 105 MB | 0.15 s, 3.5 MB | 0.10 s, 9 MB |
+| 160 components, 65535 layers, 2 volumes | 10.5 MB | 4.5 s, 824 MB | 0.32 s, 14 MB | 4.2 s, 824 MB | 0.33 s, 14 MB | 0.57 s, 37 MB |
+| 160 precincts, 65535 layers, 32 volumes | 10.5 MB | 65 s, 824 MB | 1.5 s, 14 MB | 71 s, 824 MB | 1.5 s, 14 MB | refused, 32 POCs |
+| 2^14 precincts, 65535 layers, 2 volumes, 10^7 packets in the data | 10 MB | `Codestream`, 1.7 s, 828 MB | `Limit`, 0.003 s, 16 MB | 1.8 s, 828 MB | 0.003 s, 16 MB | 53 s, 2.1 GB |
+| The same in RPCL | 10 MB | `Codestream`, 1.9 s, 828 MB | `Codestream`, 1.2 s, 238 MB | 2.0 s, 828 MB | not walked, 0.004 s, 16 MB | 153 s, 2.1 GB |
+| `setskip(65535, 31)`: RPCL, 6.5e8 packets reached, 1.4e7 read | 14 MB | decodes, 46.7 s, 240 MB | `Limit`, 5.5 s, 240 MB | 44 s | not walked, 0.003 s, 19 MB | |
 
 Encoder output stays far below the bound. Every conformance file spends
 under 0.5% of it (`p1_05` the most, at 0.29 steps per byte; `p0_13` takes
@@ -350,6 +435,18 @@ At 2048^2 or more it passes the bound from about 600 to 800 layers:
 
 OpenJPEG decodes all three. No encoder seen writes this shape; the files
 were built by hand for the review of #235.
+
+The charge on skips from a POC sequence's set refuses another class. Take
+one 38608 x 1 tile in RPCL, no wavelet levels, 1 x 1 precincts, one
+component at `XRsiz` 254 and 64 at 255. The first sets the sweep's step to
+254, which meets only the first of each other component's 152 precincts,
+so the volumes reach 9880 packets a layer but read 216. That is more than
+the bitmap may hold, so the packets read go in a set, and every volume
+after the first skips each of them at 12 steps. With 2048 layers (442 KB)
+one volume decodes and 31 are `Limit` after 0.05 s; OpenJPEG decodes both
+in 0.14 s or less. `setskip` in `scripts/gen-work-bound-fixtures.py`
+writes the shape, and `skips_from_the_poc_set_are_bounded` in
+`tests/work_bound.rs` builds it. It came from the review of PR #261.
 
 The bound covers the walk `read_header` makes for a `Psot = 0` tile-part
 (see above). That walk counts the same steps under its own bound,
