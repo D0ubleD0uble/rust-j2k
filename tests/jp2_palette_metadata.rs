@@ -34,20 +34,27 @@ fn read(name: &str) -> Vec<u8> {
     std::fs::read(path).unwrap()
 }
 
-/// One rebuilt channel: its grid size, samples and label.
-type Rebuilt = ((u32, u32), Vec<i32>, ChannelDefinition);
+/// One rebuilt channel: its grid size, samples, label, and depth and sign.
+type Rebuilt = ((u32, u32), Vec<i32>, ChannelDefinition, (u8, bool));
+
+/// A channel after step 1: its grid size, samples, and depth and sign.
+type Expanded = ((u32, u32), Vec<i32>, (u8, bool));
 
 /// Step 1 and 2 of the `raw_channels` recipe.
 fn rebuild(raw: &rust_j2k::Image) -> Vec<Rebuilt> {
     let meta: &Jp2Metadata = raw.jp2.as_ref().unwrap();
 
     // 1. Expand the index planes.
-    let mut channels: Vec<((u32, u32), Vec<i32>)> = Vec::new();
+    let mut channels: Vec<Expanded> = Vec::new();
     match &meta.channel_mapping {
         None => {
             assert!(meta.palette.is_none());
             for c in &raw.components {
-                channels.push(((c.width, c.height), c.samples.clone()));
+                channels.push((
+                    (c.width, c.height),
+                    c.samples.clone(),
+                    (c.bit_depth, c.signed),
+                ));
             }
         }
         Some(mapping) => {
@@ -55,8 +62,15 @@ fn rebuild(raw: &rust_j2k::Image) -> Vec<Rebuilt> {
                 .palette
                 .as_ref()
                 .expect("a mapping comes with a palette");
-            for entry in mapping {
+            for (i, entry) in mapping.iter().enumerate() {
                 let source = &raw.components[usize::from(entry.component)];
+                // A palette channel takes its column's depth and sign, and a
+                // direct channel those of the column at its own position.
+                let format_column = match entry.kind {
+                    MappingKind::Palette { column } => usize::from(column),
+                    _ => i,
+                };
+                let format = &palette.columns()[format_column];
                 let samples = match entry.kind {
                     MappingKind::Direct => source.samples.clone(),
                     MappingKind::Palette { column } => source
@@ -71,7 +85,11 @@ fn rebuild(raw: &rust_j2k::Image) -> Vec<Rebuilt> {
                         .collect(),
                     _ => panic!("an unexpected mapping kind"),
                 };
-                channels.push(((source.width, source.height), samples));
+                channels.push((
+                    (source.width, source.height),
+                    samples,
+                    (format.bit_depth, format.signed),
+                ));
             }
         }
     }
@@ -101,7 +119,14 @@ fn rebuild(raw: &rust_j2k::Image) -> Vec<Rebuilt> {
     }
     order
         .iter()
-        .map(|&c| (channels[c].0, channels[c].1.clone(), labels[c]))
+        .map(|&c| {
+            (
+                channels[c].0,
+                channels[c].1.clone(),
+                labels[c],
+                channels[c].2,
+            )
+        })
         .collect()
 }
 
@@ -114,10 +139,11 @@ fn the_raw_metadata_rebuilds_the_default_decode_in_order() {
 
         let rebuilt = rebuild(&raw);
         assert_eq!(rebuilt.len(), image.components.len(), "{name}");
-        for (i, (size, samples, _)) in rebuilt.iter().enumerate() {
+        for (i, (size, samples, _, format)) in rebuilt.iter().enumerate() {
             let want = &image.components[i];
             assert_eq!(*size, (want.width, want.height), "{name} channel {i}");
             assert_eq!(samples, &want.samples, "{name} channel {i}");
+            assert_eq!(*format, (want.bit_depth, want.signed), "{name} channel {i}");
         }
         // The labels are the default decode's too, for the files with a cdef.
         if raw.jp2.as_ref().unwrap().channel_definitions.is_some() {
