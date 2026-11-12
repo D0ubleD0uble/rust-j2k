@@ -990,7 +990,7 @@ fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
     let image = decode(&right_sized).unwrap_or_else(|e| panic!("{what}: {e}"));
     assert_eq!(image.components, raw().components, "{what}");
     let metadata = image.jp2.expect("a JP2 file");
-    assert_eq!(metadata.xml, vec![b"<a>hello</a>".to_vec()], "{what}");
+    assert_eq!(xml_payloads(&metadata), [b"<a>hello</a>"], "{what}");
     assert_eq!(
         read_header(&right_sized).unwrap().jp2,
         Some(metadata),
