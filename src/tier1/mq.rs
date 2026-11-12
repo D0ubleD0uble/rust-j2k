@@ -433,7 +433,11 @@ mod tests {
             // The whole sequence ends in `0xFF 0xAC`, a marker inside the
             // segment: the decoder stops there and never reads past the end.
             // Every shorter prefix runs out.
-            assert_eq!(short.ran_past_end(), n < H2_CODED.len(), "prefix of {n} bytes");
+            assert_eq!(
+                short.ran_past_end(),
+                n < H2_CODED.len(),
+                "prefix of {n} bytes"
+            );
         }
     }
 
