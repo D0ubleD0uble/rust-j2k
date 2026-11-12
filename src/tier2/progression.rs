@@ -234,12 +234,13 @@ where
     for volume in &volumes {
         run_order(volume, walk, visits, &mut |layer, res, comp, precinct| {
             // A packet already read is skipped without a visit. Only a packet
-            // read is marked, and a read spends a visit; at most 31 later
-            // volumes can meet it again, so there are at most 31 skips per
-            // visit spent. A skip costs a few ns, and in a layer order one
-            // visit covers all of a resolution's precincts, so charging each
-            // skip would refuse files OpenJPEG reads quickly, such as 31
-            // identical volumes over 1 MB of empty packets.
+            // read is marked, and a read takes a visit and at least a byte of
+            // packet header; at most 31 later volumes can meet it again. A
+            // skip takes about 4 ns, so the skips cost at most about 0.12 µs
+            // per byte, under the 0.45 µs a byte of real data takes to decode
+            // that the bound is set by. Charging each skip would refuse files
+            // OpenJPEG reads quickly, such as 31 identical volumes over 1 MB
+            // of empty packets.
             if emitted.insert(walk, layer, res, comp, precinct)? {
                 f(layer, res, comp, precinct)
             } else {
