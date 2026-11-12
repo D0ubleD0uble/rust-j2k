@@ -703,13 +703,17 @@ pub fn decode_block(
     let mut pass_type = PassType::Cleanup;
 
     let bypass = style & LAZY != 0;
-    // OpenJPEG's `cblk->numbps`, the coded plane count without the maxshift: our
-    // `top` is `bpno_plus_one` (`roishift + cblk->numbps`), so subtracting the
-    // shift recovers it. Under `bypass` a significance or refinement pass turns
-    // raw once the four most significant bit-planes are behind it, i.e. once
-    // `bpno <= cblk->numbps - 4` (t1.c). Signed, because that difference is
-    // negative on a shallow block that never reaches the raw region.
-    let cblk_numbps = top as i32 - i32::from(roi_shift);
+    // Under `bypass` a significance or refinement pass turns raw once the four
+    // most significant coded bit-planes are behind it (D.6, Table D.9), i.e.
+    // once `bpno <= top - 4`. The count starts at the block's first coded
+    // plane, `top`, which includes the maxshift (H.2): the shifted planes are
+    // coded planes, and tier-2's pass-count split of the segments
+    // (`segment_max_passes`) agrees. OpenJPEG's decoder counts from
+    // `cblk->numbps`, which leaves the shift out, and so decodes a maxshift +
+    // bypass stream wrong, its own encoder's included (docs/correctness.md,
+    // "Bypass under a maxshift"). Signed, because `top - 4` is negative on a
+    // shallow block that never reaches the raw region.
+    let raw_from = top as i32 - 4;
 
     'segments: for (bytes, passes) in segments {
         // A codeword segment is a single terminated stream — MQ for the
@@ -720,7 +724,7 @@ pub fn decode_block(
         // per-segment `type`: the lazy split (Tier-2) keeps each segment
         // homogeneous — a two-pass raw run (significance + refinement) or a
         // one-pass MQ cleanup — so this one decision holds for every pass in it.
-        let raw = bypass && pass_type != PassType::Cleanup && (bpno as i32) <= cblk_numbps - 4;
+        let raw = bypass && pass_type != PassType::Cleanup && (bpno as i32) <= raw_from;
         let mut coder = if raw {
             PassCoder::Raw(RawDecoder::new(bytes))
         } else {

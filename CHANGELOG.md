@@ -197,6 +197,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the TLM entries. 65025 1x1 tiles over 16384 components took 46 s to be
   refused and now take 17 ms; 65025 tiles behind 4 MB of TLM entries took
   85 s to decode and now take 63 ms.
+- A code-block with an RGN maxshift and the bypass style now switches to raw
+  coding at its fifth coded bit-plane, counting the shifted planes, as the
+  standard and OpenJPEG's encoder do. It switched `SPrgn` planes late, as
+  OpenJPEG's decoder does, and decoded such streams wrong or refused them.
+  Streams without a maxshift decode as before.
 
 ### Changed
 
