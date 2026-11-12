@@ -226,9 +226,9 @@ fn uniform(colors: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
     let Some(&first) = colors.first() else {
         return Ok(());
     };
-    let first = outputs[first];
+    let first = &outputs[first];
     for &at in &colors[1..] {
-        let other = outputs[at];
+        let other = &outputs[at];
         if (other.x_sampling, other.y_sampling) != (first.x_sampling, first.y_sampling) {
             return Err(Error::Unsupported(format!(
                 "sRGB output from color channels of different sub-sampling ({}x{} and {}x{})",
@@ -244,9 +244,9 @@ fn same_format(colors: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
     let Some(&first) = colors.first() else {
         return Ok(());
     };
-    let first = outputs[first];
+    let first = &outputs[first];
     for &at in &colors[1..] {
-        let other = outputs[at];
+        let other = &outputs[at];
         if (other.bit_depth, other.signed) != (first.bit_depth, first.signed) {
             return Err(Error::Unsupported(format!(
                 "sRGB output from color channels of different formats ({}-bit {} and \
@@ -288,13 +288,13 @@ fn plan_sycc(
 ) -> Result<SrgbPlan> {
     let colors = three_colors(channels, outputs, "sYCC")?;
     same_format(&colors, outputs)?;
-    let [y, cb, cr] = colors.map(|at| outputs[at]);
+    let [y, cb, cr] = colors.map(|at| &outputs[at]);
     if y.signed {
         return Err(Error::Unsupported(
             "sRGB output from signed sYCC samples".into(),
         ));
     }
-    let sampling = |c: ComponentInfo| (c.x_sampling, c.y_sampling);
+    let sampling = |c: &ComponentInfo| (c.x_sampling, c.y_sampling);
     let layout = match (sampling(y), sampling(cb), sampling(cr)) {
         ((1, 1), (1, 1), (1, 1)) => ChromaLayout::Full,
         ((1, 1), (2, 1), (2, 1)) => ChromaLayout::Horizontal,
@@ -406,7 +406,7 @@ fn plan_icc_or_refuse(
                 ))
                 .into());
             }
-            check_icc_format(outputs[channel], &[8], "monochrome")?;
+            check_icc_format(&outputs[channel], &[8], "monochrome")?;
             let transform = Transform::new(&input, Format::Gray8);
             let mut table = Box::new([[0u8; 3]; 256]);
             for (gray, rgb) in (0..=255u8).zip(table.iter_mut()) {
@@ -435,7 +435,7 @@ fn plan_icc_or_refuse(
             let input = icc.input_profile(Form::Rgb)?;
             let colors = three_colors(channels, outputs, "an RGB ICC profile")?;
             uniform(&colors, outputs)?;
-            let info = outputs[colors[0]];
+            let info = &outputs[colors[0]];
             check_icc_format(info, &[8, 16], "RGB")?;
             let format = if info.bit_depth == 8 {
                 Format::Rgb8
@@ -499,7 +499,7 @@ fn validated_version([major, minor, _, _]: [u8; 4]) -> u32 {
 /// samples at their own depth (8-bit and 16-bit RGB, 8-bit gray). At other
 /// depths OpenJPEG hands lcms the samples as 8- or 16-bit values and the
 /// result is wrong, so this decoder refuses them.
-fn check_icc_format(info: ComponentInfo, depths: &[u8], form: &str) -> Result<()> {
+fn check_icc_format(info: &ComponentInfo, depths: &[u8], form: &str) -> Result<()> {
     if info.signed || !depths.contains(&info.bit_depth) {
         return Err(Error::Unsupported(format!(
             "sRGB output through a {form} ICC profile from {}-bit {} samples",
@@ -953,13 +953,13 @@ impl SrgbPlan {
         match self {
             SrgbPlan::PassThrough | SrgbPlan::IccRgb { .. } => {}
             SrgbPlan::Sycc { channels, .. } => {
-                let luma = outputs[channels[0]];
+                let luma = outputs[channels[0]].clone();
                 for &at in channels {
-                    let own = outputs[at];
+                    let own = &outputs[at];
                     outputs[at] = ComponentInfo {
                         bit_depth: own.bit_depth,
                         signed: own.signed,
-                        ..luma
+                        ..luma.clone()
                     };
                 }
             }
@@ -967,8 +967,8 @@ impl SrgbPlan {
                 channel, neutral, ..
             } => {
                 if !neutral {
-                    let gray = outputs[*channel];
-                    outputs.insert(*channel + 1, gray);
+                    let gray = outputs[*channel].clone();
+                    outputs.insert(*channel + 1, gray.clone());
                     outputs.insert(*channel + 1, gray);
                 }
             }

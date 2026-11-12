@@ -32,7 +32,7 @@ pub struct Header {
 ///
 /// The struct is `#[non_exhaustive]`, so more of a channel's description can
 /// be added without a breaking change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ComponentInfo {
     /// Bits per sample.

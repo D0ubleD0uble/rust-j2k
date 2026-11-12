@@ -175,6 +175,7 @@ pub struct ImageHeader {
 /// One Colour Specification box (`colr`, I.5.3.3), as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[doc(alias = "ColourSpecification")]
 pub struct ColorSpecification {
     /// `METH`: 1 for an enumerated color space, 2 for a restricted ICC
     /// profile. Other values are reserved by this standard (ISO/IEC 15444-2
@@ -475,6 +476,7 @@ impl UuidInfo {
 /// are converted and [`Jp2Metadata::color`] reports the converted space.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[doc(alias = "ColourSpace")]
 pub enum ColorSpace {
     /// sRGB (enumerated color space 16).
     Srgb,
@@ -514,7 +516,7 @@ pub struct ChannelDefinition {
 /// [`Jp2Metadata::channels`] has the labels of the output channels in output
 /// order; these entries are indexed by `Cn`, the channel's position before
 /// the `cdef` box reorders anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ChannelDefinitionEntry {
     /// `Cn`: the channel described, counting the components after palette
