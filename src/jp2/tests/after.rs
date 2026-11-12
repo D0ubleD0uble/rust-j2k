@@ -736,6 +736,15 @@ fn the_packet_walk_skips_a_poc_sequence_past_its_bitmap() {
     }
     let repeated = setskip(2048, 2);
     assert_eq!(probe_packets(&repeated, 0), (false, 0));
+    // 1 MB of COM segments in the main header is not tile data: it does not
+    // raise the bitmap's cap past the decode's, so the tile is still not
+    // walked.
+    let mut padded = repeated.clone();
+    let sot = padded.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    let mut com = vec![0xFF, 0x64, 0xFF, 0xFF, 0, 1];
+    com.resize(2 + 0xFFFF, b'.');
+    padded.splice(sot..sot, com.repeat(16));
+    assert_eq!(probe_packets(&padded, 0), (false, 0));
     let parsed = crate::codestream::parse_header(&repeated).unwrap();
     let cs = crate::codestream::parse_tiles(&repeated, parsed).unwrap();
     let header = cs.tile_header(0).unwrap();

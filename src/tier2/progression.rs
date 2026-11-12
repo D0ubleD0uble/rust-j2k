@@ -288,7 +288,7 @@ const SET_SKIP_VISITS: usize = 12;
 /// all never has more. The bitmap is then at most a bit per visit: 2 MB
 /// under the decode's floor of 2^24 visits, and 4 bytes per byte of tile
 /// data above it. `read_header`'s walk takes the same cap from the
-/// decode's bound for the whole codestream, so it holds a bitmap wherever
+/// decode's bound for the same tile data, so it holds a bitmap wherever
 /// the decode can.
 ///
 /// When there are more, a positional order can pass over precincts, as

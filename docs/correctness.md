@@ -377,7 +377,7 @@ file below. The bitmap is used when it has no more bits than the steps
 left, since a walk that reads every packet takes a step for each; that
 keeps it under 2 MB below the floor and 4 bytes per byte of data above it.
 `read_header` holds the same bitmap, sized from the decode's bound for the
-whole codestream, so it walks every tile the decode holds in a bitmap. A
+same tile data, so it walks every tile the decode holds in a bitmap. A
 walk in layer orders that reaches more packets than its steps left cannot
 finish and is `Limit` before it starts. With more packets than the bitmap
 holds, one with a

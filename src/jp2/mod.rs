@@ -294,8 +294,8 @@ fn locate_codestream<'a>(
 /// packet geometry for. Each costs a few hundred bytes of geometry and decode
 /// state, so that is a few MB at most. A larger tile is not walked. A POC
 /// marker of more than one volume adds a bit per packet they reach, as the
-/// decode's does: at most 2 MB, or 4 bytes per byte of the codestream when
-/// that is more. A tile whose volumes reach more packets than that, where
+/// decode's does: at most 2 MB, or 4 bytes per byte of tile data when that
+/// is more. A tile whose volumes reach more packets than that, where
 /// the decode would keep a set, is not walked (see `tier2::progression`).
 const PROBE_GEOMETRY: usize = 1 << 14;
 
@@ -383,9 +383,9 @@ fn probe_packets(codestream: &[u8], tile: u16) -> (bool, u64) {
         blocks: PROBE_GEOMETRY,
         visits,
         // A POC sequence holds a bitmap wherever the decode could, sized by
-        // the decode's bound for the whole codestream, and past it gives up
+        // the decode's bound for the same tile data, and past it gives up
         // rather than keep a set.
-        poc_bitmap: Some(crate::tier2::decode_visits(codestream.len() as u64)),
+        poc_bitmap: Some(crate::tier2::decode_visits(crate::tile_bytes(&cs))),
     };
     let ends = crate::tier2::decode_packets_within(&header, data, &mut budget).is_ok();
     (ends, visits - budget.visits)
