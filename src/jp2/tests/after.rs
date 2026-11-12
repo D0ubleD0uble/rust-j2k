@@ -683,17 +683,16 @@ fn empty_packets(tiles: u32, components: u16) -> Vec<u8> {
 }
 
 /// `setskip` from `scripts/gen-work-bound-fixtures.py` as a `Psot = 0`
-/// codestream: one 38608 x 1 tile in RPCL, 1 x 1 precincts, 512
+/// codestream: one 38608 x 1 tile in RPCL, 1 x 1 precincts, `layers`
 /// layers, `volumes` identical POC volumes, one component at `XRsiz` 254 and
 /// 64 at 255. The volumes reach 9880 packets a layer and read 216.
-fn setskip(volumes: usize) -> Vec<u8> {
+fn setskip(layers: u16, volumes: usize) -> Vec<u8> {
     let segment = |code: u16, body: &[u8]| {
         let mut out = code.to_be_bytes().to_vec();
         out.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
         out.extend_from_slice(body);
         out
     };
-    let layers: u16 = 512;
     let mut siz = vec![0, 0];
     for value in [152 * 254, 1, 0, 0, 152 * 254, 1, 0, 0u32] {
         siz.extend_from_slice(&value.to_be_bytes());
@@ -720,16 +719,22 @@ fn setskip(volumes: usize) -> Vec<u8> {
     out
 }
 
-/// A tile whose POC volumes reach more packets than the walk's bitmap may
-/// hold is not walked when one is in a positional order, though the decode,
-/// keeping a set, finishes it. With one volume it is walked.
+/// The walk holds a POC sequence's packets in a bitmap wherever the decode
+/// does: 31 volumes reaching 1.0e7 packets, under the decode's 2^24 visits,
+/// are walked. Past that, where the decode keeps a set, the walk gives up:
+/// 2 volumes reaching 2.0e7 packets are not walked, though a decode with no
+/// work bound finishes them. With one volume nothing is held, and it is
+/// walked.
 #[test]
 fn the_packet_walk_skips_a_poc_sequence_past_its_bitmap() {
     use crate::jp2::probe_packets;
     use crate::tier2::{Budget, decode_packets_within};
 
-    assert!(probe_packets(&setskip(1), 0).0);
-    let repeated = setskip(2);
+    for (layers, volumes) in [(1024, 31), (2048, 1)] {
+        let (ends, _) = probe_packets(&setskip(layers, volumes), 0);
+        assert!(ends, "{layers} layers, {volumes} volumes");
+    }
+    let repeated = setskip(2048, 2);
     assert_eq!(probe_packets(&repeated, 0), (false, 0));
     let parsed = crate::codestream::parse_header(&repeated).unwrap();
     let cs = crate::codestream::parse_tiles(&repeated, parsed).unwrap();

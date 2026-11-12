@@ -272,6 +272,80 @@ fn skips_from_the_poc_set_are_bounded() {
     assert!(image.components[0].samples.iter().all(|&s| s == 128));
 }
 
+/// A JP2 box: the length, the type, the payload.
+fn jp2_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let mut out = u32::try_from(8 + payload.len())
+        .unwrap()
+        .to_be_bytes()
+        .to_vec();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(payload);
+    out
+}
+
+/// `cs` in a JP2 file as `jp2_psot0` in the generator writes it: its one
+/// tile-part's `Psot` set to 0 and its EOC dropped, in a `jp2c` box that ends
+/// where the packets end, followed here by an `xml ` box of `xml`.
+fn jp2_psot0(cs: &[u8], xml: &[u8]) -> Vec<u8> {
+    let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
+    let mut ihdr = (word(12) - word(20)).to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&(word(8) - word(16)).to_be_bytes());
+    ihdr.extend_from_slice(&cs[40..42]);
+    ihdr.extend_from_slice(&[7, 7, 0, 0]);
+    let mut colr = vec![1, 0, 0];
+    colr.extend_from_slice(&17u32.to_be_bytes());
+    let mut jp2h = jp2_box(b"ihdr", &ihdr);
+    jp2h.extend(jp2_box(b"colr", &colr));
+    let sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    let mut body = cs[..sot + 6].to_vec();
+    body.extend_from_slice(&[0; 4]);
+    body.extend_from_slice(&cs[sot + 10..cs.len() - 2]);
+    let mut out = jp2_box(b"jP  ", b"\x0d\x0a\x87\x0a");
+    out.extend(jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    out.extend(jp2_box(b"jp2h", &jp2h));
+    out.extend(jp2_box(b"jp2c", &body));
+    out.extend(jp2_box(b"xml ", xml));
+    out
+}
+
+/// `read_header` walks a `Psot = 0` tile's packets to see whether its
+/// codestream ends at its box's end, holding a POC sequence's packets in a
+/// bitmap wherever the decode does. `setskip(1024, 31)` reaches 1.0e7
+/// packets, under the decode's 2^24 visits: the codestream ends at its box,
+/// and the `xml ` box after it is reported by both calls. OpenJPEG 2.5.0
+/// decodes it to a flat 128. `setskip(2048, 2)` reaches 2.0e7, so the decode
+/// would keep a set, and the walk gives up: the codestream runs to the end
+/// of the file, the `xml ` box is not reported, and the decode refuses its
+/// bytes as left after the last packet, as for the files of
+/// `a_psot_zero_tile_too_costly_to_walk_reads_to_the_end` in
+/// `tests/psot_zero.rs`.
+#[test]
+fn a_psot_zero_poc_sequence_ends_at_its_box_within_the_decodes_bitmap() {
+    let file = jp2_psot0(&setskip(1024, 31), b"<a/>");
+    let image = decode(&file).unwrap();
+    assert_eq!(image.components.len(), 65);
+    assert!(
+        image
+            .components
+            .iter()
+            .all(|c| c.samples.iter().all(|&s| s == 128))
+    );
+    let xml = |metadata: &rust_j2k::Jp2Metadata| {
+        let payloads: Vec<Vec<u8>> = metadata.xml.iter().map(|x| x.payload.clone()).collect();
+        payloads
+    };
+    assert_eq!(xml(image.jp2.as_ref().unwrap()), [b"<a/>".to_vec()]);
+    let header = read_header(&file).unwrap();
+    assert_eq!(xml(header.jp2.as_ref().unwrap()), [b"<a/>".to_vec()]);
+
+    let file = jp2_psot0(&setskip(2048, 2), b"<a/>");
+    assert!(xml(read_header(&file).unwrap().jp2.as_ref().unwrap()).is_empty());
+    match decode(&file) {
+        Err(Error::Codestream(m)) => assert!(m.contains("left after the last packet"), "{m}"),
+        other => panic!("expected a codestream error, got {other:?}"),
+    }
+}
+
 /// The bound is one budget for the whole decode, not one per tile: 16 tiles
 /// of 128 x 128 code-blocks and 5000 layers spend about 2 x 10^7 steps in
 /// all, past the bound for their 80 KB of packets, while each tile alone

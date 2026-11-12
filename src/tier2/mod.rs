@@ -215,10 +215,10 @@ pub(crate) struct Budget {
     /// precinct, and a sweep can check millions of points that hold no
     /// packet, so this bounds the work where the other two cannot.
     pub(crate) visits: u64,
-    /// Whether a POC sequence that reaches more packets than its bitmap may
-    /// hold keeps a set of the packets read instead of failing (see
-    /// [`for_each_packet`]).
-    pub(crate) poc_set: bool,
+    /// How a POC sequence's packets are held (see [`for_each_packet`]):
+    /// `None` for the decode's bitmap up to the visits left and a set past
+    /// it, `Some(bits)` for a bitmap of at most `bits` and a failure past it.
+    pub(crate) poc_bitmap: Option<u64>,
 }
 
 impl Budget {
@@ -229,7 +229,7 @@ impl Budget {
             precincts: MAX_PRECINCTS,
             blocks: MAX_CODE_BLOCKS,
             visits,
-            poc_set: true,
+            poc_bitmap: None,
         }
     }
 }
@@ -313,7 +313,7 @@ pub(crate) fn decode_packets_within<'a>(
         header,
         &walk,
         &visits,
-        budget.poc_set,
+        budget.poc_bitmap,
         |layer, resolution, component, precinct| {
             let geom = &geoms[component][resolution];
             parse_packet(

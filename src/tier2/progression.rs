@@ -174,20 +174,22 @@ struct Volume {
 /// points that hold no packet included, so a walk under a bound stops however
 /// sparse its packets are.
 ///
-/// `poc_set` says whether a `POC` sequence that reaches more packets than
-/// the bitmap may hold keeps a set of the packets read (see [`Emitted`]);
-/// without it such a walk is [`crate::Error::Limit`].
+/// `poc_bitmap` is how a `POC` sequence's packets are held (see
+/// [`Emitted`]): with `None`, in a bitmap when they are no more than the
+/// visits left and else in a set; with `Some(bits)`, in a bitmap when they
+/// are no more than `bits`, and else the walk is [`crate::Error::Limit`].
 pub(crate) fn for_each_packet<F>(
     header: &MainHeader,
     walk: &PacketWalk<'_>,
     visits: &Cell<u64>,
-    poc_set: bool,
+    poc_bitmap: Option<u64>,
     f: F,
 ) -> Result<()>
 where
     F: FnMut(u32, usize, usize, usize) -> Result<()>,
 {
-    for_each_packet_holding(header, walk, visits, visits.get(), poc_set, f)
+    let dense_bits = poc_bitmap.unwrap_or(visits.get());
+    for_each_packet_holding(header, walk, visits, dense_bits, poc_bitmap.is_none(), f)
 }
 
 /// [`for_each_packet`], with a `POC` sequence's packets held in a bitmap
@@ -236,7 +238,7 @@ where
     if volumes.len() == 1 {
         return run_order(&volumes[0], walk, visits, &mut f);
     }
-    let mut emitted = Emitted::new(&volumes, walk, max_res, dense_bits, poc_set)?;
+    let mut emitted = Emitted::new(&volumes, walk, max_res, visits.get(), dense_bits, poc_set)?;
     let skip_visits = emitted.skip_visits();
     for volume in &volumes {
         run_order(volume, walk, visits, &mut |layer, res, comp, precinct| {
@@ -277,21 +279,24 @@ const SET_SKIP_VISITS: usize = 12;
 /// of the volumes that cover it, so the bits are exactly the packets the
 /// volumes reach.
 ///
-/// They are a bitmap when they are no more than the visits the walk has
-/// left. Each packet read spends a visit, so a walk that reads them all
-/// never has more. The bitmap is then at most a bit per visit: 2 MB under
-/// the decode's floor of 2^24 visits, 512 KB under `read_header`'s 2^22, and
-/// 4 bytes (`read_header`: 1 byte) per byte of tile data above them.
+/// A layer order reads all of a resolution's precincts, so if every volume
+/// is one and they reach more packets than the visits the walk has left, it
+/// cannot finish, and it fails here with [`Error::Limit`].
 ///
-/// When there are more, the walk cannot read every packet the volumes
-/// reach. A layer order reads all of a resolution's precincts, so if every
-/// volume is one the walk cannot finish, and it fails here with
-/// [`Error::Limit`]. A positional order can pass over precincts, as
+/// Otherwise they are a bitmap when they are no more than the decode's
+/// visits left. Each packet read spends a visit, so a walk that reads them
+/// all never has more. The bitmap is then at most a bit per visit: 2 MB
+/// under the decode's floor of 2^24 visits, and 4 bytes per byte of tile
+/// data above it. `read_header`'s walk takes the same cap from the
+/// decode's bound for the whole codestream, so it holds a bitmap wherever
+/// the decode can.
+///
+/// When there are more, a positional order can pass over precincts, as
 /// OpenJPEG's does (see [`PacketWalk::step`]), so the walk might still
 /// finish; the packets read are then kept in a set, at most one per visit
 /// and one per byte of packet headers, about 24 bytes each, and each packet
 /// skipped from it is charged [`SET_SKIP_VISITS`]. `read_header`'s walk
-/// keeps no set: it fails with [`Error::Limit`] there too.
+/// keeps no set: it fails with [`Error::Limit`] there.
 struct Emitted {
     /// The first bit of each (component, resolution), at
     /// `component * resolutions + resolution`.
@@ -308,12 +313,14 @@ enum Marks {
 
 impl Emitted {
     /// Nothing emitted yet, for `volumes` over a tile of at most
-    /// `resolutions` resolutions per component; a bitmap when the volumes
-    /// reach at most `dense_bits` packets, else a set if `poc_set`.
+    /// `resolutions` resolutions per component, with `visits_left` for the
+    /// walk; a bitmap when the volumes reach at most `dense_bits` packets,
+    /// else a set if `poc_set`.
     fn new(
         volumes: &[Volume],
         walk: &PacketWalk<'_>,
         resolutions: usize,
+        visits_left: u64,
         dense_bits: u64,
         poc_set: bool,
     ) -> Result<Self> {
@@ -348,10 +355,16 @@ impl Emitted {
             .iter()
             .all(|v| matches!(v.progression, Progression::Lrcp | Progression::Rlcp));
         let marks = match words {
-            Some(words) => Marks::Dense(vec![0; words]),
             // Refusing a walk that cannot finish relies on strict decoding;
             // revisit it for partial decode (#214).
-            None if layer_orders || !poc_set => {
+            _ if layer_orders && reached > visits_left => {
+                return Err(Error::Limit(format!(
+                    "tile packet walk exceeds its work bound: its POC volumes reach \
+                     {reached} packets"
+                )));
+            }
+            Some(words) => Marks::Dense(vec![0; words]),
+            None if !poc_set => {
                 return Err(Error::Limit(format!(
                     "tile packet walk exceeds its work bound: its POC volumes reach \
                      {reached} packets"

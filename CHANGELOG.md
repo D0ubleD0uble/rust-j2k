@@ -256,7 +256,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the decode's work bound allows, the decode is `Error::Limit` before it
   reads one, where it used to read on until the data or the bound ran out.
   With a positional volume, each repeat skipped past that point counts 12
-  steps against the bound, and `read_header` does not walk the tile.
+  steps against the bound. For a `Psot = 0` codestream in a JP2 file, such a
+  tile is too costly for `read_header` to walk to see whether the codestream
+  ends at its box's end, so it runs to the end of the file: boxes after
+  `jp2c` are not reported, and the decode refuses their bytes as left after
+  the last packet, as for the other tiles too costly to walk.
 - Two new error variants split what `Error::Unsupported` used to conflate
   (`Error` is `#[non_exhaustive]`, so existing matches keep compiling, but
   wildcard arms now see these instead of `Unsupported`): `Error::Limit` is

@@ -285,9 +285,9 @@ BIG = {
     "pocdup_256x256_65535_2_10mb_rpcl.j2k": lambda: pocdup(
         256, 256, 1, 65535, 2, 10_000_000, RPCL
     ),
-    # Two volumes over 1000 components of one precinct: 6.6e7 packets, just
-    # under the bit per visit `read_header` holds for 10^7 bytes, then the
-    # first 10^7 of them. 4800 components, 3.1e8 packets, for `decode`.
+    # Two volumes over 1000 components of one precinct: 6.6e7 packets, then
+    # the first 10^7 of them. 4800 components, 3.1e8 packets, just under the
+    # bit per visit the decode's bitmap holds for 10^7 bytes.
     "pocdup_1000c_65535_2_10mb.j2k": lambda: pocdup(1, 1, 1000, 65535, 2, 10_000_000),
     "pocdup_4800c_65535_2_10mb.j2k": lambda: pocdup(1, 1, 4800, 65535, 2, 10_000_000),
     # 6.5e8 packets reached, 1.4e7 read and 4.2e8 skipped from the set: 14 MB.
@@ -296,6 +296,12 @@ BIG = {
     # volume, which decodes.
     "setskip_2048_31.j2k": lambda: setskip(2048, 31),
     "setskip_2048_1.j2k": lambda: setskip(2048, 1),
+    # Their `Psot = 0` JP2 forms, which `tests/work_bound.rs` builds with an
+    # `xml ` box after `jp2c`: 1.0e7 packets reached, within the decode's
+    # bitmap, so `read_header` walks the tile and the codestream ends at its
+    # box; 2.0e7, past it, so `read_header` gives up and it runs to the end.
+    "setskip_1024_31.j2k": lambda: setskip(1024, 31),
+    "setskip_2048_2.j2k": lambda: setskip(2048, 2),
 }
 
 

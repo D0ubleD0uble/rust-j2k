@@ -327,15 +327,25 @@ already read from that bitmap in about 4 ns, without a step: there are at
 most 31 skips per packet read, and charging them would refuse the 1 MB
 file below. The bitmap is used when it has no more bits than the steps
 left, since a walk that reads every packet takes a step for each; that
-keeps it under 2 MB below the floor and 4 bytes per byte of data above it
-(`read_header`: 512 KB and 1 byte). With more packets than that, a walk in
-layer orders cannot finish and is `Limit` before it starts. One with a
+keeps it under 2 MB below the floor and 4 bytes per byte of data above it.
+`read_header` holds the same bitmap, sized from the decode's bound for the
+whole codestream, so it walks every tile the decode holds in a bitmap. A
+walk in layer orders that reaches more packets than its steps left cannot
+finish and is `Limit` before it starts. With more packets than the bitmap
+holds, one with a
 positional order can pass over precincts, so the decode keeps the packets
 read in a set, at most one per byte of packet headers and about 24 bytes
 each. A skip from the set is a lookup that misses the cache, 80 to 180 ns
 against about 10 ns for a step, so each one is charged 12 steps.
-`read_header`'s walk keeps no set: past its bitmap it gives up, and the
-codestream runs to the end of the file. Measured on
+`read_header`'s walk keeps no set: past its bitmap, only where the decode
+would keep one, it gives up. For a `Psot = 0` codestream in a JP2 file the
+codestream then runs to the end of the file, like the other tiles too
+costly to walk (`a_psot_zero_tile_too_costly_to_walk_reads_to_the_end`):
+boxes after `jp2c` are not reported, and the decode refuses their bytes as
+left after the last packet. `setskip(1024, 31)`, 1.0e7 packets reached,
+ends at its box and decodes, as on OpenJPEG; `setskip(2048, 2)`, 2.0e7,
+runs to the end (`a_psot_zero_poc_sequence_ends_at_its_box_within_the_decodes_bitmap`
+in `tests/work_bound.rs`). Measured on
 release builds (`pocdup` in `scripts/gen-work-bound-fixtures.py`; times
 and peak memory are before this change, then after, then `opj_decompress`
 2.5.0; `read_header` is on the `Psot = 0` JP2 form):

@@ -1127,7 +1127,7 @@ fn order_of_header(header: &MainHeader) -> Vec<(u32, usize, usize, usize)> {
         header,
         &walk,
         &std::cell::Cell::new(u64::MAX),
-        true,
+        None,
         |l, r, c, p| {
             seen.push((l, r, c, p));
             Ok(())
@@ -1496,13 +1496,13 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
         geoms: &geoms,
     };
     // 4 layers x 3 resolutions x 1 precinct.
-    let walk_with = |header: &MainHeader, visits: u64, poc_set: bool| {
+    let walk_with = |header: &MainHeader, visits: u64, poc_bitmap: Option<u64>| {
         let mut read = 0;
         let result = for_each_packet(
             header,
             &walk,
             &std::cell::Cell::new(visits),
-            poc_set,
+            poc_bitmap,
             |_, _, _, _| {
                 read += 1;
                 Ok(())
@@ -1510,23 +1510,30 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
         );
         (result, read)
     };
-    let (result, read) = walk_with(&header, 11, true);
+    let (result, read) = walk_with(&header, 11, None);
     match result {
         Err(Error::Limit(m)) => assert!(m.contains("work bound") && m.contains("12"), "{m}"),
         other => panic!("expected the work bound, got {other:?}"),
     }
     assert_eq!(read, 0);
-    let (_, read) = walk_with(&header, 12, true);
+    let (_, read) = walk_with(&header, 12, None);
     assert!(read > 0);
-
-    // A positional volume may pass over precincts, so it is walked, unless
-    // the walk keeps no set, as `read_header`'s does not.
-    header.poc[1].progression = Progression::Rpcl;
-    let (result, read) = walk_with(&header, 11, true);
-    assert!(read > 0, "{result:?}");
-    let (result, read) = walk_with(&header, 11, false);
+    // A bitmap cap above the visits left does not save it.
+    let (result, read) = walk_with(&header, 11, Some(u64::MAX));
     assert!(matches!(result, Err(Error::Limit(_))), "{result:?}");
     assert_eq!(read, 0);
+
+    // A positional volume may pass over precincts, so it is walked, unless
+    // the walk keeps no set, as `read_header`'s does not, and the packets
+    // are more than its bitmap may hold.
+    header.poc[1].progression = Progression::Rpcl;
+    let (result, read) = walk_with(&header, 11, None);
+    assert!(read > 0, "{result:?}");
+    let (result, read) = walk_with(&header, 11, Some(11));
+    assert!(matches!(result, Err(Error::Limit(_))), "{result:?}");
+    assert_eq!(read, 0);
+    let (result, read) = walk_with(&header, 11, Some(12));
+    assert!(read > 0, "{result:?}");
 }
 
 /// A packet skipped from the set is charged `SET_SKIP_VISITS` (12) visits,
