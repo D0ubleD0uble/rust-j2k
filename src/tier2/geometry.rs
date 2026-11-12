@@ -9,6 +9,7 @@
 //! bound, spent while it is built rather than after.
 
 use crate::codestream::MainHeader;
+use crate::codestream::markers::Rect;
 use crate::{Error, Result};
 
 use super::BandKind;
@@ -83,6 +84,12 @@ pub(crate) struct PrecinctGeom {
 /// its `trx1` at least 1), which is why this only matters once tiles exist.
 /// OpenJPEG skips them the same way: `opj_pi_next_*` bounds its precinct loop by
 /// `res->pw * res->ph`, which is zero here.
+///
+/// An empty resolution's subbands are empty too, since each lies within the
+/// resolution on both axes, so they own no code-block and no packet reads
+/// them. Their geometry is not built, and `bands` is empty: a tile of one
+/// sample at an odd origin has 32 such resolutions per component. The
+/// rectangles the inverse DWT still needs come from [`band_rects`].
 pub(crate) struct ResolutionGeom {
     /// Precinct exponents `(PPx, PPy)` on **this resolution's** grid.
     pub(crate) ppx: u32,
@@ -90,6 +97,8 @@ pub(crate) struct ResolutionGeom {
     /// The precinct grid: OpenJPEG's `res->pw` and `res->ph`.
     pub(crate) precincts_wide: usize,
     pub(crate) precincts_high: usize,
+    /// The subbands in packet order, or none when the resolution holds no
+    /// precinct.
     pub(crate) bands: Vec<BandGeom>,
 }
 
@@ -101,13 +110,60 @@ impl ResolutionGeom {
     }
 }
 
-/// `ceil(a / b)` for any integers with `b > 0` (Rust's `/` truncates toward
-/// zero, so the subband formula's negative numerators need this floor-based
-/// form).
-fn ceil_div(a: i64, b: i64) -> i64 {
-    debug_assert!(b > 0, "ceil_div needs a positive divisor");
-    let q = a.div_euclid(b);
-    if a.rem_euclid(b) != 0 { q + 1 } else { q }
+/// `ceil(a / 2^exp)` for any integer `a` and `exp < 63`. The subband
+/// formula's numerators can be negative and an arithmetic shift is a floor, so
+/// this negates around it. Every divisor here is a power of two, and a shift
+/// does not cost the tens of cycles an `i64` division does.
+fn ceil_shr(a: i64, exp: u32) -> i64 {
+    debug_assert!(exp < 63, "ceil_shr needs a shift below 63");
+    -((-a) >> exp)
+}
+
+/// The subbands of resolution `r` of a tile-component on `rect` with `nl`
+/// decomposition levels, in packet order: `NLLL` alone at resolution 0, else
+/// `HL`, `LH`, `HH` at level `nb = nl - r + 1`. Each is its orientation and
+/// its sample bounds `[x0, x1) x [y0, y1)` on its own grid (ISO B.5, Eq.
+/// B-15), as `(kind, x0, x1, y0, y1)`; a bound pair can be equal, or crossed
+/// by one, where the band is empty. `r` is at most `nl`, and `nl` at most 32.
+pub(crate) fn band_rects(
+    rect: Rect,
+    nl: u32,
+    r: u32,
+) -> impl Iterator<Item = (BandKind, i64, i64, i64, i64)> {
+    debug_assert!(r <= nl && nl <= 32, "resolution {r} of {nl} levels");
+    let (tcx0, tcx1) = (i64::from(rect.x0), i64::from(rect.x1));
+    let (tcy0, tcy1) = (i64::from(rect.y0), i64::from(rect.y1));
+    let level = nl - r;
+    let bands = if r == 0 {
+        // The coarsest resolution carries only the NLLL band, and it *is* the
+        // resolution rectangle.
+        let ll = (
+            BandKind::Ll,
+            ceil_shr(tcx0, level),
+            ceil_shr(tcx1, level),
+            ceil_shr(tcy0, level),
+            ceil_shr(tcy1, level),
+        );
+        [ll; 3]
+    } else {
+        let nb = level + 1;
+        let half = 1i64 << (nb - 1);
+        [
+            (BandKind::Hl, 1, 0),
+            (BandKind::Lh, 0, 1),
+            (BandKind::Hh, 1, 1),
+        ]
+        .map(|(kind, xob, yob)| {
+            (
+                kind,
+                ceil_shr(tcx0 - xob * half, nb),
+                ceil_shr(tcx1 - xob * half, nb),
+                ceil_shr(tcy0 - yob * half, nb),
+                ceil_shr(tcy1 - yob * half, nb),
+            )
+        })
+    };
+    bands.into_iter().take(if r == 0 { 1 } else { 3 })
 }
 
 /// Compute the resolution → precinct → subband → code-block geometry for one
@@ -176,9 +232,9 @@ pub(crate) fn resolution_geoms(
         // precinct grid is cut from — not the bands', which can be empty while
         // the resolution is not.
         let level = nl - r;
-        let pow = 1i64 << level;
-        let (trx0, trx1) = (ceil_div(tcx0, pow), ceil_div(tcx1, pow));
-        let (try0, try1) = (ceil_div(tcy0, pow), ceil_div(tcy1, pow));
+        let shift = level as u32;
+        let (trx0, trx1) = (ceil_shr(tcx0, shift), ceil_shr(tcx1, shift));
+        let (try0, try1) = (ceil_shr(tcy0, shift), ceil_shr(tcy1, shift));
 
         // Precinct exponents are quoted on the resolution grid. The parser
         // guarantees a non-zero exponent above resolution 0, so the `- 1` below
@@ -225,8 +281,8 @@ pub(crate) fn resolution_geoms(
             }
         } else {
             Cbg {
-                x0: ceil_div(tl_prc_x, 2),
-                y0: ceil_div(tl_prc_y, 2),
+                x0: ceil_shr(tl_prc_x, 1),
+                y0: ceil_shr(tl_prc_y, 1),
                 x_exp: ppx - 1,
                 y_exp: ppy - 1,
                 wide: precincts_wide,
@@ -240,46 +296,25 @@ pub(crate) fn resolution_geoms(
         // 2^1 precinct shrinks it to a single sample.
         let (xcb, ycb) = (xcb.min(cbg.x_exp), ycb.min(cbg.y_exp));
 
-        let bands = if r == 0 {
-            // The coarsest resolution carries only the NLLL band, and it *is*
-            // the resolution rectangle.
-            vec![band_geom(
-                BandKind::Ll,
-                trx0,
-                trx1,
-                try0,
-                try1,
-                xcb,
-                ycb,
-                &cbg,
-                block_budget,
-            )?]
-        } else {
-            // Finer levels add HL, LH, HH at decomposition level `nb = NL-r+1`.
-            let nb = level + 1;
-            let pow = 1i64 << nb;
-            let half = 1i64 << (nb - 1);
-            [
-                (BandKind::Hl, 1, 0),
-                (BandKind::Lh, 0, 1),
-                (BandKind::Hh, 1, 1),
-            ]
-            .into_iter()
-            .map(|(kind, xob, yob)| {
-                band_geom(
+        // An empty resolution has empty bands, which own no code-block, so its
+        // geometry stops here (see [`ResolutionGeom`]).
+        let mut bands = Vec::new();
+        if precincts_wide * precincts_high > 0 {
+            bands.reserve_exact(if r == 0 { 1 } else { 3 });
+            for (kind, bx0, bx1, by0, by1) in band_rects(rect, nl as u32, r as u32) {
+                bands.push(band_geom(
                     kind,
-                    ceil_div(tcx0 - xob * half, pow),
-                    ceil_div(tcx1 - xob * half, pow),
-                    ceil_div(tcy0 - yob * half, pow),
-                    ceil_div(tcy1 - yob * half, pow),
+                    bx0,
+                    bx1,
+                    by0,
+                    by1,
                     xcb,
                     ycb,
                     &cbg,
                     block_budget,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-        };
+                )?);
+            }
+        }
 
         levels.push(ResolutionGeom {
             ppx,
@@ -312,10 +347,8 @@ fn prc_span(lo: i64, hi: i64, exp: u32) -> (usize, i64) {
     if hi <= lo {
         return (0, 0);
     }
-    let span = 1i64 << exp;
-    let start = lo.div_euclid(span) * span;
-    let end = ceil_div(hi, span) * span;
-    (((end - start) >> exp) as usize, start)
+    let first = lo >> exp;
+    ((ceil_shr(hi, exp) - first) as usize, first << exp)
 }
 
 /// Build one subband's geometry from its sample bounds `[bx0, bx1) × [by0, by1)`
@@ -344,8 +377,8 @@ fn band_geom(
     let cbw = 1i64 << xcb;
     let cbh = 1i64 << ycb;
 
-    let (block_cols, first_col) = grid_span(bx0, bx1, cbw);
-    let (block_rows, first_row) = grid_span(by0, by1, cbh);
+    let (block_cols, first_col) = grid_span(bx0, bx1, xcb);
+    let (block_rows, first_row) = grid_span(by0, by1, ycb);
 
     // Spend the tile's code-block budget before this band's block vector — and
     // the per-precinct index vectors below — are allocated. `checked_mul` guards
@@ -396,8 +429,8 @@ fn band_geom(
             let gx0 = cbg.x0 + i as i64 * group_w;
             let (px0, px1) = (gx0.max(bx0), (gx0 + group_w).min(bx1));
 
-            let (cols, col0) = grid_span(px0, px1, cbw);
-            let (rows, row0) = grid_span(py0, py1, cbh);
+            let (cols, col0) = grid_span(px0, px1, xcb);
+            let (rows, row0) = grid_span(py0, py1, ycb);
             let mut owned = Vec::with_capacity(cols * rows);
             for row in 0..rows {
                 let band_row = (row0 + row as i64 - first_row) as usize;
@@ -432,12 +465,11 @@ fn band_geom(
 }
 
 /// Number of code-block grid cells spanning `[lo, hi)` and the index of the
-/// first cell, with the grid anchored at multiples of `cell` from the origin.
-fn grid_span(lo: i64, hi: i64, cell: i64) -> (usize, i64) {
+/// first cell, with the grid anchored at multiples of `2^exp` from the origin.
+fn grid_span(lo: i64, hi: i64, exp: u32) -> (usize, i64) {
     if hi <= lo {
         return (0, 0);
     }
-    let first = lo.div_euclid(cell);
-    let last = ceil_div(hi, cell);
-    ((last - first) as usize, first)
+    let first = lo >> exp;
+    ((ceil_shr(hi, exp) - first) as usize, first)
 }
