@@ -30,6 +30,7 @@ mod progression;
 pub mod spans;
 pub mod tagtree;
 
+use crate::codestream::markers::Rect;
 use crate::codestream::markers::marker;
 use crate::codestream::{MainHeader, Tile};
 use crate::{Error, Result};
@@ -266,17 +267,16 @@ pub(crate) fn decode_packets_within<'a>(
     // the cap has to bite before those vectors fill rather than summing them
     // afterwards. Both running totals are threaded through `resolution_geoms`.
     let component_count = header.siz.components.len();
-    let geoms = (0..component_count)
-        .map(|c| {
-            resolution_geoms(
-                header,
-                tile.index,
-                c,
-                &mut budget.precincts,
-                &mut budget.blocks,
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut geoms = Vec::with_capacity(component_count);
+    for c in 0..component_count {
+        geoms.push(resolution_geoms(
+            header,
+            tile.index,
+            c,
+            &mut budget.precincts,
+            &mut budget.blocks,
+        )?);
+    }
 
     // One state per (component, resolution, band), carried across every layer.
     // The tag trees decode incrementally and there is a pair per *precinct*, so
@@ -344,23 +344,28 @@ pub(crate) fn decode_packets_within<'a>(
     budget.visits = visits.get();
     walked?;
 
-    let components: Vec<ComponentCoded<'a>> = states
-        .into_iter()
-        .zip(&geoms)
-        .map(|(component_states, component_geoms)| {
-            Ok(ComponentCoded {
-                resolutions: component_states
-                    .into_iter()
-                    .zip(component_geoms)
-                    .map(|(band_states, level)| {
-                        Ok(Resolution {
-                            subbands: build_subbands(&level.bands, band_states)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut components = Vec::with_capacity(states.len());
+    for (comp, (component_states, component_geoms)) in states.into_iter().zip(&geoms).enumerate() {
+        let rect = header
+            .siz
+            .tile_component_rect(tile.index, comp)
+            .ok_or_else(|| Error::Inconsistent(format!("no component {comp} in SIZ")))?;
+        let nl = (component_geoms.len() - 1) as u32;
+        let mut resolutions = Vec::with_capacity(component_states.len());
+        for (r, (band_states, level)) in component_states
+            .into_iter()
+            .zip(component_geoms)
+            .enumerate()
+        {
+            let subbands = if level.bands.is_empty() {
+                empty_subbands(rect, nl, r as u32)
+            } else {
+                build_subbands(&level.bands, band_states)?
+            };
+            resolutions.push(Resolution { subbands });
+        }
+        components.push(ComponentCoded { resolutions });
+    }
 
     // The packets tile the tile-part data exactly, with no padding, up to the
     // closing EOC. Any remainder means a misread field — a dropped layer shows up
@@ -867,6 +872,31 @@ fn parse_band_header(
         }
     }
     Ok(())
+}
+
+/// The subbands of resolution `r` of a tile-component on `rect` with `nl`
+/// levels, when the resolution holds no precinct. Each is empty and owns no
+/// code-block, so the geometry has none of them (see
+/// [`ResolutionGeom`](geometry::ResolutionGeom)), but the inverse DWT still
+/// reads their origins and sizes. Their code-block grid is 0 x 0.
+fn empty_subbands<'a>(rect: Rect, nl: u32, r: u32) -> Vec<Subband<'a>> {
+    geometry::band_rects(rect, nl, r)
+        .map(|(kind, x0, x1, y0, y1)| {
+            debug_assert!(
+                x1 <= x0 || y1 <= y0,
+                "band of an empty resolution is not empty"
+            );
+            Subband {
+                kind,
+                origin: (x0.max(0) as u32, y0.max(0) as u32),
+                width: (x1 - x0).max(0) as usize,
+                height: (y1 - y0).max(0) as usize,
+                block_cols: 0,
+                block_rows: 0,
+                blocks: Vec::new(),
+            }
+        })
+        .collect()
 }
 
 /// Turn the accumulated per-layer state of one resolution into its subbands.

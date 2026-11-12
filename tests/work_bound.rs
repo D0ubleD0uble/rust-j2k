@@ -128,19 +128,60 @@ fn t2skip(width: u32, height: u32, tile: u32, layers: u16) -> Vec<u8> {
     layers_of_nothing(width, height, tile, layers, 0xC0)
 }
 
-/// One sample column on x in [1, 2), two rows, in `progression` (0 LRCP, 1
-/// RLCP) with 65535 layers, 32 wavelet levels and `comps` components. Every
-/// resolution but the top one is empty in x, so it holds no packet, yet the
-/// layer-resolution loops still check each component at each of them: 65535
-/// x 33 x (1 + `comps`) visits for 65535 x `comps` empty packets (0x00).
-fn empty_resolutions(progression: u8, comps: usize) -> Vec<u8> {
+/// One sample column on x in [1, 2), `2 * tiles` rows in tiles of two, in
+/// `progression` (0 LRCP, 1 RLCP) with 65535 layers, 32 wavelet levels and
+/// `comps` components. Every resolution but the top one is empty in x, so it
+/// holds no packet; each tile is 65535 x `comps` empty packets (0x00). The
+/// layer-resolution loops take a step at each of 65535 x 33 points per tile,
+/// and one for each component with a precinct there.
+fn empty_resolutions(progression: u8, comps: usize, tiles: u32) -> Vec<u8> {
     let mut cod = vec![0, progression];
     cod.extend_from_slice(&u16::MAX.to_be_bytes());
     cod.extend_from_slice(&[0, 32, 0, 0, 0, 1]);
     let mut qcd = vec![0x40];
     qcd.extend(std::iter::repeat_n(0x40, 3 * 32 + 1));
     let body = vec![0; usize::from(u16::MAX) * comps];
-    codestream(1, 1, 2, 2, &vec![(1, 1); comps], &cod, &qcd, &body)
+    codestream(1, 1, 2 * tiles, 2, &vec![(1, 1); comps], &cod, &qcd, &body)
+}
+
+/// One sample column on x in [1, 2), 2^17 rows, one tile, in `progression`
+/// (2 RPCL, 3 PCRL, 4 CPRL), one layer, 32 wavelet levels and 16
+/// components. Every resolution but the top one is empty in x. Component 0's
+/// top precinct is 2^15 x 2, so it has 2^16 precincts and sets the sweep's
+/// step to 2 rows; the other 15 have 2^15 x 2^15, four each. Every packet is
+/// empty (0x00).
+fn thin_column(progression: u8) -> Vec<u8> {
+    const COMPS: u16 = 16;
+    const HEIGHT: u32 = 1 << 17;
+    let mut siz = 0u16.to_be_bytes().to_vec();
+    for v in [2, HEIGHT, 1, 0, 2, HEIGHT, 0, 0] {
+        siz.extend_from_slice(&u32::to_be_bytes(v));
+    }
+    siz.extend_from_slice(&COMPS.to_be_bytes());
+    for _ in 0..COMPS {
+        siz.extend_from_slice(&[7, 1, 1]);
+    }
+    // User precincts; one layer; 32 levels, 64x64 code-blocks, 5/3; then
+    // (PPx, PPy) = (15, 15) at every resolution, and for component 0 (15, 1)
+    // at the top one.
+    let mut cod = vec![1, progression, 0, 1, 0, 32, 4, 4, 0, 1];
+    cod.extend([0xFF; 33]);
+    let mut coc = vec![0, 1, 32, 4, 4, 0, 1];
+    coc.extend([0xFF; 32]);
+    coc.push(0x1F);
+    let mut qcd = vec![0x40];
+    qcd.extend(std::iter::repeat_n(0x40, 3 * 32 + 1));
+    let packets = HEIGHT / 2 + u32::from(COMPS - 1) * HEIGHT.div_ceil(1 << 15);
+    let mut cs = vec![0xFF, 0x4F];
+    for (code, body) in [(0xFF51, siz), (0xFF52, cod), (0xFF53, coc), (0xFF5C, qcd)] {
+        cs.extend(seg(code, &body));
+    }
+    cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
+    cs.extend_from_slice(&(12 + 2 + packets).to_be_bytes());
+    cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+    cs.resize(cs.len() + packets as usize, 0);
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
 }
 
 /// The committed shapes past the bound: RPCL and PCRL sweeps that check 64
@@ -355,14 +396,42 @@ fn the_tiles_share_one_work_bound() {
     assert_limit("16 tiles", &t2skip(2048, 2048, 512, 5000));
 }
 
-/// The layer-resolution orders check every component at every resolution of
-/// every layer, packets or not: over 32 empty resolutions and 8 components
-/// that is about 19 million visits for 512 KB of empty packets, refused in
-/// LRCP and RLCP alike.
+/// The layer-resolution orders check only the components that hold a
+/// precinct at a resolution, so 32 empty resolutions of 8 components cost
+/// one step per (layer, resolution), about 3 million in all for 512 KB of
+/// empty packets: it decodes, to the flat 128 OpenJPEG 2.5.0 decodes, in
+/// LRCP and RLCP alike. Those points are still steps: one component in 8
+/// such tiles spends 1.8 x 10^7 for 512 KB, past the bound.
 #[test]
 fn the_layer_orders_are_bounded_over_empty_resolutions() {
-    assert_limit("LRCP", &empty_resolutions(0, 8));
-    assert_limit("RLCP", &empty_resolutions(1, 8));
+    for (name, progression) in [("LRCP", 0), ("RLCP", 1)] {
+        let image =
+            decode(&empty_resolutions(progression, 8, 1)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(image.components.len(), 8, "{name}");
+        for component in &image.components {
+            assert_eq!(component.samples, [128, 128], "{name}");
+        }
+        assert_limit(name, &empty_resolutions(progression, 1, 8));
+    }
+}
+
+/// The positional orders check only the (component, resolution) pairs that
+/// hold a precinct, and RPCL sweeps no resolution where none does. On
+/// `thin_column` that is 17 steps at each of 2^16 positions, 1.1 million for
+/// 64 KB of empty packets, where checking all 33 resolutions of each
+/// component took about 3.5 x 10^7 in RPCL and PCRL, past the bound. Each
+/// order decodes to the
+/// flat 128 OpenJPEG 2.5.0 decodes, 16 components of 1 x 2^17.
+#[test]
+fn the_positional_orders_pass_over_resolutions_with_no_precinct() {
+    for (name, progression) in [("RPCL", 2), ("PCRL", 3), ("CPRL", 4)] {
+        let image = decode(&thin_column(progression)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(image.components.len(), 16, "{name}");
+        for component in &image.components {
+            assert_eq!((component.width, component.height), (1, 1 << 17), "{name}");
+            assert!(component.samples.iter().all(|&s| s == 128), "{name}");
+        }
+    }
 }
 
 /// Within the bound the same shape decodes: `t2skip` on 512 x 256
