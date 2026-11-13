@@ -21,6 +21,14 @@ pub struct Header {
     /// One entry per [`Image::components`](crate::Image::components) entry,
     /// in the same order: for a palettized JP2 file, the palette's channels.
     pub components: Vec<ComponentInfo>,
+    /// The largest
+    /// [`resolution_reduction`](crate::DecodeOptions::resolution_reduction)
+    /// the main header allows: the fewest decomposition levels any component
+    /// has in the main header's `COD` and `COC` markers. A larger reduction is
+    /// [`Error::InvalidOptions`](crate::Error::InvalidOptions). A tile-part
+    /// `COD` or `COC` with fewer levels can still refuse a reduction up to
+    /// this one, but only the decode finds that.
+    pub max_reduction: u8,
     /// What [`decode`](crate::decode) would put on
     /// [`Image::jp2`](crate::Image::jp2): `None` for a raw codestream.
     pub jp2: Option<Jp2Metadata>,

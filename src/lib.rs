@@ -82,10 +82,10 @@
 //!
 //! # Damaged input
 //!
-//! Decoding is strict. Truncated or inconsistent data is an error, and no
-//! partial image comes back with it. A raw codestream cut short fails as
-//! [`Error::Codestream`] (a tile-part that runs past the end is
-//! `Psot overruns the codestream`), a JP2 file cut short as `Codestream` or
+//! Decoding is strict by default. Truncated or inconsistent data is an
+//! error, and no partial image comes back with it. A raw codestream cut
+//! short fails as [`Error::Codestream`] (a tile-part that runs past the end
+//! is `Psot overruns the codestream`), a JP2 file cut short as `Codestream` or
 //! [`Error::FileFormat`], depending on where the cut falls, and a raw
 //! codestream whose `EOC` marker is missing is refused. (A JP2 file whose
 //! last tile-part has `Psot = 0` decodes without an `EOC`, as OpenJPEG
@@ -123,6 +123,15 @@
 //! ```
 //!
 //! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams
+//!
+//! With [`DecodeOptions::strict`] off, a codestream cut short, or one with
+//! bytes left after a tile's last packet, decodes to the image the data
+//! holds, and [`Image::report`] says what is missing (a [`DecodeReport`]).
+//! This is what `opj_decompress -allow-partial` does. A codestream that
+//! streams in can be decoded as it arrives: the report's
+//! [`complete_reduction`](DecodeReport::complete_reduction) is the finest
+//! level the data already gives in full. Everything else damaged is refused
+//! as when strict.
 //!
 //! # Limits
 //!
@@ -169,6 +178,7 @@ pub(crate) mod limit_hint;
 pub(crate) mod mct;
 pub(crate) mod pipeline;
 pub(crate) mod quant;
+pub(crate) mod report;
 pub(crate) mod samples;
 pub(crate) mod tier1;
 pub(crate) mod tier2;
@@ -189,6 +199,7 @@ pub use jp2::{
     Palette, PaletteColumn, Ratio, ReaderRequirements, Res, Resolution, StandardFeature, UuidBox,
     UuidInfo, VendorFeature, XmlBox,
 };
+pub use report::{DecodeReport, ReportEntry};
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
@@ -256,8 +267,15 @@ pub use jp2::{
 /// (component, resolution) checked there, or, at a resolution reduction, a
 /// code-block of a resolution it drops, since every tile builds its geometry
 /// at full resolution; code-block entries that read a bit
-/// are paid for by the header's bytes and are not counted. A codestream past
-/// the bound is refused with [`Error::Limit`]. Encoder output seen spends
+/// are paid for by the header's bytes and are not counted. With
+/// [`strict`](DecodeOptions::strict) off, a packet after the end of the data
+/// is one step, the end of a tile's data costs 32 steps for each of its
+/// (component, resolution) pairs, and a missing tile costs one step for each
+/// of its components. The end-of-data charge falls on every tile whose data
+/// ends, so a prefix cut late in a codestream that interleaves the
+/// tile-parts of very many tiles can be refused though the whole file
+/// decodes; raise [`DecodeOptions::packet_work_limit`] for such a stream. A
+/// codestream past the bound is refused with [`Error::Limit`]. Encoder output seen spends
 /// under 13% of the bound; a packet header of one byte can still skip each
 /// row of code-blocks in its precinct, and a sweep can check millions of
 /// positions that hold no packet, so a file of a few hundred bytes could
@@ -288,8 +306,10 @@ pub use jp2::{
 /// trust the factor. The other guards behind `Error::Limit` have no option
 /// (see [`Error::Limit`]).
 ///
-/// Decoding is strict: damaged or truncated data is an [`Error`], not a
-/// partial image. A flipped byte in entropy-coded data can go unnoticed,
+/// Decoding is strict by default: damaged or truncated data is an
+/// [`Error`], not a partial image. With [`DecodeOptions::strict`] off,
+/// missing data and leftover bytes give an image with an [`Image::report`]
+/// of what is missing. A flipped byte in entropy-coded data can go unnoticed,
 /// since the format has no checksum, and damage can show up as any variant
 /// (see the crate docs).
 ///
@@ -388,6 +408,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
             width,
             height,
             components,
+            max_reduction: max_reduction(&prefix.parsed.header),
             jp2: Some(prefix.metadata),
         });
     }
@@ -401,8 +422,20 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
         width,
         height,
         components: ComponentInfo::of_siz(siz, reduction),
+        max_reduction: max_reduction(&parsed.header),
         jp2: None,
     })
+}
+
+/// The largest reduction [`check_reduction`] lets the main header take: the
+/// fewest decomposition levels of any component.
+fn max_reduction(header: &codestream::MainHeader) -> u8 {
+    header
+        .components
+        .iter()
+        .map(|params| params.coding.decomposition_levels)
+        .min()
+        .unwrap_or(0)
 }
 
 /// What color space a JP2 file's color channels come out in: the
@@ -570,7 +603,7 @@ pub enum ColorOutput {
 /// Start from [`DecodeOptions::default`] and set what differs with its
 /// `with_*` method, or the field directly. The struct is `#[non_exhaustive]`,
 /// so a new option is not a breaking change.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct DecodeOptions {
     /// How many of the finest resolution levels to discard. Each level about
@@ -648,6 +681,84 @@ pub struct DecodeOptions {
     /// [`read_header_with`] checks the same limit, so it refuses what the
     /// decode would.
     pub sample_limit: WorkLimit,
+    /// Refuse missing data with an [`Error`] (`true`, the default), or decode
+    /// what is there and say what is missing on [`Image::report`] (`false`).
+    /// It is the same switch as OpenJPEG's strict mode
+    /// (`opj_decoder_set_strict_mode`, `opj_decompress -allow-partial`) and
+    /// GDAL's `STRICT` option.
+    ///
+    /// `false` relaxes two things and only these, now and later; a later
+    /// relaxation, of damaged packet headers or code-blocks say, gets an
+    /// option of its own:
+    ///
+    /// - **Missing data.** The input may end anywhere after the first `SOT`
+    ///   marker, which ends the main header: inside a tile-part, its header or
+    ///   its packets, with or without the `EOC` marker. Tiles with no
+    ///   tile-part are filled with 0, and packets that were never read (cut
+    ///   off, or left out by the `POC` volumes) add nothing to their
+    ///   code-blocks. A tile-part count (`TNsot`) that
+    ///   disagrees with the tile-parts found is taken as advisory.
+    /// - **Leftover bytes.** Bytes left after a tile's last packet are skipped
+    ///   rather than refused, and the tile is reported as possibly wrong.
+    ///
+    /// Everything else is refused as a strict decode refuses it: a damaged
+    /// packet header, coded data that fails to decode, a marker fault, tile-parts
+    /// out of order or with a gap, and every [`Error::Limit`]. The work bounds
+    /// and the sample limit hold as they do when strict, counted on the data
+    /// that is there. A missing tile is not walked, but each of its
+    /// tile-components is charged against the packet work bound, as are the
+    /// packets after the end of the data, so a short input cannot ask for
+    /// unbounded work.
+    ///
+    /// For a codestream as it streams in: a prefix that holds every packet of
+    /// the resolutions a reduction keeps decodes at that reduction to the same
+    /// samples as the whole codestream, and the report's
+    /// [`complete_reduction`](DecodeReport::complete_reduction) says which
+    /// reduction that is.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
+    ///
+    /// let bytes = include_bytes!(concat!(
+    ///     env!("CARGO_MANIFEST_DIR"),
+    ///     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+    /// ));
+    /// let prefix = &bytes[..bytes.len() - 20];
+    /// // Strict, the default: a cut codestream is an error.
+    /// assert!(matches!(
+    ///     decode_with(prefix, &DecodeOptions::default()),
+    ///     Err(Error::Codestream(_))
+    /// ));
+    /// // Not strict: the image, and what it lacks.
+    /// let options = DecodeOptions::default().with_strict(false);
+    /// let image = decode_with(prefix, &options).expect("decodes");
+    /// assert!(!image.report.is_complete());
+    /// // The coarsest level a decode may ask for, and the finest the data holds.
+    /// let max = read_header(prefix).expect("the main header is there").max_reduction;
+    /// if let Some(r) = image.report.complete_reduction.filter(|&r| r <= max) {
+    ///     let coarse = decode_with(prefix, &options.with_resolution_reduction(r)).expect("decodes");
+    ///     assert!(coarse.report.is_complete());
+    /// }
+    /// ```
+    #[doc(alias = "allow_partial")]
+    #[doc(alias = "allow-partial")]
+    pub strict: bool,
+}
+
+impl Default for DecodeOptions {
+    /// Full resolution, components as the file's boxes shape them, color as
+    /// coded, the default limits, and strict.
+    fn default() -> Self {
+        DecodeOptions {
+            resolution_reduction: 0,
+            raw_channels: false,
+            color: ColorOutput::default(),
+            packet_work_limit: WorkLimit::default(),
+            code_block_work_limit: WorkLimit::default(),
+            sample_limit: WorkLimit::default(),
+            strict: true,
+        }
+    }
 }
 
 /// How far a decode may go against one of its bounds: the
@@ -838,6 +949,22 @@ impl DecodeOptions {
         self.sample_limit = limit;
         self
     }
+
+    /// These options with [`strict`](Self::strict) set to `strict`.
+    ///
+    /// ```
+    /// use rust_j2k::DecodeOptions;
+    ///
+    /// assert!(DecodeOptions::default().strict);
+    /// let options = DecodeOptions::default().with_strict(false);
+    /// assert!(!options.strict);
+    /// ```
+    #[must_use]
+    #[doc(alias = "allow_partial")]
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
+    }
 }
 
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
@@ -893,7 +1020,7 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     )?;
     check_raw_color(options, parsed.header.siz.components.len())?;
     check_reduction(&parsed.header, options.resolution_reduction, None)?;
-    let cs = codestream::parse_tiles(bytes, parsed)?;
+    let cs = codestream::parse_tiles_with(bytes, parsed, options.strict)?;
     decode_codestream(cs, options)
 }
 
@@ -1017,7 +1144,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
 /// and apply the channel plans, then any sRGB step, to the samples.
 fn decode_jp2(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
-    let cs = codestream::parse_tiles(prefix.codestream, prefix.parsed)?;
+    let cs = codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict)?;
     let image = decode_codestream(cs, options)?;
     let mut components = prefix.plans.apply(image.components)?;
     if let Some(srgb) = &prefix.srgb {
@@ -1052,12 +1179,40 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         limit => Some(limit.apply(tier1::decode_work(bytes))),
     };
     let first_work = block_work.unwrap_or(0);
-    for (index, tile) in cs.tiles.iter().enumerate() {
+    // Not strict: what the codestream walk found missing, then each tile's
+    // packets, and the smallest reduction every tile is complete at so far.
+    let mut entries = cs.entries.clone();
+    let mut complete = Some(0u8);
+    // A missing tile reads no packet, but setting its samples to 0 visits
+    // each of its tile-components, and a header of a few kilobytes can
+    // declare 65535 tiles of 16384 components with none of them present. So
+    // each tile-component of a missing tile costs a visit, charged here,
+    // before any tile is decoded.
+    let missing: u64 = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            ReportEntry::MissingTiles { tiles } => Some(u64::from(tiles.end - tiles.start)),
+            _ => None,
+        })
+        .sum();
+    let cost = missing.saturating_mul(cs.header.siz.components.len() as u64);
+    visits = visits
+        .checked_sub(cost)
+        .ok_or_else(|| Error::Limit(limit_hint::missing_tiles(cost, first_visits, poc_bitmap)))?;
+    for (position, tile) in cs.tiles.iter().enumerate() {
+        // `tiles` holds every tile when strict, so `index` is also its
+        // position; not strict, a missing tile is left out.
+        let index = tile.index as usize;
         // The tile's own parameters: the main header with this tile's tile-part
         // header resolved over it. A tile with no markers of its own borrows the
         // main header; any other is a copy, sized by the component count, held
         // for this tile alone, as a codestream can declare tens of thousands.
-        let header = cs.tile_header(index)?;
+        // That copy is paid for by the geometry the packet walk then builds for
+        // every component, whether or not the tile's data runs out; a tile
+        // with no data at all is not resolved. So the copies stay within
+        // `tiles × components`, which SIZ's rule that no tile-component is
+        // empty holds to the image's samples, with `strict` off as with it on.
+        let header = cs.tile_header(position)?;
 
         // A tile COD can give one tile a shallower pyramid than the rest, so
         // the reduction is checked per tile, not once for the image.
@@ -1067,8 +1222,21 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // component. The walk covers every resolution whatever the reduction:
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
-        let coded = match tier2::decode_packets(&header, tile, &mut visits, poc_bitmap, reduction) {
-            Ok(coded) => coded,
+        let walked = if options.strict {
+            tier2::decode_packets(&header, tile, &mut visits, poc_bitmap, reduction)
+                .map(|coded| (coded, None))
+        } else {
+            tier2::decode_packets_partial(&header, tile, &mut visits, poc_bitmap, reduction)
+                .map(|(coded, reach)| (coded, Some(reach)))
+        };
+        let coded = match walked {
+            Ok((coded, reach)) => {
+                if let Some(reach) = reach {
+                    let tile_complete = report_tile(&header, tile, &reach, reduction, &mut entries);
+                    complete = complete.zip(tile_complete).map(|(a, b)| a.max(b));
+                }
+                coded
+            }
             Err(tier2::Refused::Work(work)) => {
                 // `visits` holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
@@ -1146,7 +1314,78 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         }
     }
 
-    image::assemble(&cs.header, canvas.into_planes(), reduction)
+    let mut image = image::assemble(&cs.header, canvas.into_planes(), reduction)?;
+    if !options.strict {
+        for entry in &entries {
+            if let ReportEntry::MissingTiles { tiles } = entry {
+                complete = None;
+                for tile in tiles.clone() {
+                    image::zero_tile(&mut image, &cs.header.siz, tile, reduction);
+                }
+            }
+        }
+        image.report = DecodeReport::new(entries, complete, reduction);
+    }
+    Ok(image)
+}
+
+/// Add what a non-strict walk of `tile` found to `entries`, and give the
+/// smallest reduction at which the tile has every packet.
+fn report_tile(
+    header: &codestream::MainHeader,
+    tile: &codestream::Tile<'_>,
+    reach: &tier2::Reach,
+    reduction: u8,
+    entries: &mut Vec<ReportEntry>,
+) -> Option<u8> {
+    let layers = u32::from(header.cod.layers);
+    let missing = |comp: usize, res: usize| reach.missing_from[comp][res];
+    let resolutions: Vec<usize> = reach.missing_from.iter().map(Vec::len).collect();
+    // The smallest reduction at which every resolution kept is whole.
+    let most = resolutions.iter().min().map_or(0, |&n| n.saturating_sub(1));
+    let leftover = reach.leftover.is_some() || reach.leftover_packed.is_some();
+    let tile_complete = (0..=most)
+        .find(|&r| {
+            resolutions
+                .iter()
+                .enumerate()
+                .all(|(comp, &n)| (0..n.saturating_sub(r)).all(|res| missing(comp, res).is_none()))
+        })
+        .and_then(|r| u8::try_from(r).ok())
+        .filter(|_| !leftover);
+    // The leading layers whole at the resolutions this decode keeps.
+    let mut whole = layers;
+    for (comp, &n) in resolutions.iter().enumerate() {
+        for res in 0..n.saturating_sub(usize::from(reduction)) {
+            if let Some(from) = missing(comp, res) {
+                whole = whole.min(from);
+            }
+        }
+    }
+    if whole < layers {
+        entries.push(ReportEntry::MissingPackets {
+            tile: tile.index,
+            complete_layers: whole as u16,
+            complete_reduction: tile_complete,
+        });
+    }
+    if let Some((at, bytes)) = reach.leftover {
+        entries.push(ReportEntry::LeftoverBytes {
+            tile: tile.index,
+            tile_part: tile.part_at(at),
+            bytes: bytes as u64,
+            in_packed_headers: false,
+        });
+    }
+    if let Some(bytes) = reach.leftover_packed {
+        entries.push(ReportEntry::LeftoverBytes {
+            tile: tile.index,
+            tile_part: tile.part_at(tile.data.len()),
+            bytes: bytes as u64,
+            in_packed_headers: true,
+        });
+    }
+    tile_complete
 }
 
 /// The bytes of tile data the codestream's packets are read from: every

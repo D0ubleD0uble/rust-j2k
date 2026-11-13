@@ -84,6 +84,7 @@ fn parse_layers_styled<'a>(
             bands,
             0,
             &mut states,
+            None,
         )?;
     }
     Ok((build_subbands(bands, states), streams.body_pos))
@@ -189,6 +190,7 @@ fn tile(data: &[u8]) -> Tile<'_> {
         index: 0,
         header: TileHeader::default(),
         data: std::borrow::Cow::Borrowed(data),
+        part_ends: vec![data.len()],
         packed_headers: Vec::new(),
     }
 }
@@ -2038,6 +2040,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
         &bands,
         0,
         &mut states,
+        None,
     )
     .expect("wraps to zero");
 }

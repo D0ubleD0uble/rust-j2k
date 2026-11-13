@@ -291,12 +291,81 @@ impl Budget {
     }
 }
 
+/// What a walk with `strict` off found of a tile's packets: which were never
+/// read, and what was left over.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Reach {
+    /// Per component, per resolution: the first layer with a packet that was
+    /// not read, or `None` when every packet of it was read.
+    pub(crate) missing_from: Vec<Vec<Option<u32>>>,
+    /// Bytes of tile data not read: where they start and how many.
+    pub(crate) leftover: Option<(usize, usize)>,
+    /// Bytes of packed packet headers not read.
+    pub(crate) leftover_packed: Option<usize>,
+}
+
+impl Reach {
+    /// Note that packet (`layer`, `res`, `comp`) was not read.
+    fn miss(&mut self, comp: usize, res: usize, layer: u32) {
+        if let Some(from) = self.missing_from.get_mut(comp).and_then(|c| c.get_mut(res)) {
+            *from = Some(from.map_or(layer, |f| f.min(layer)));
+        }
+    }
+}
+
+/// [`decode_packets`] with `strict` off: the tile's data may end anywhere,
+/// and what was not read comes back as a [`Reach`] beside the coded data
+/// (see [`walk_packets`]).
+pub fn decode_packets_partial<'a>(
+    header: &MainHeader,
+    tile: &'a Tile<'a>,
+    visits: &mut u64,
+    poc_bitmap: u64,
+    reduction: u8,
+) -> std::result::Result<(CodedData<'a>, Reach), Refused> {
+    let mut budget = Budget {
+        reduction,
+        ..Budget::decode(*visits, poc_bitmap)
+    };
+    let mut reach = Reach::default();
+    let coded = walk_packets(header, tile, &mut budget, Some(&mut reach));
+    *visits = budget.visits;
+    match coded {
+        Ok(coded) => Ok((coded, reach)),
+        Err(error) => Err(match (budget.refusal, error) {
+            (Some(work), Error::Limit(_)) => Refused::Work(work),
+            (_, error) => Refused::Other(error),
+        }),
+    }
+}
+
 /// [`decode_packets`] under `budget`, which is left holding what was not spent,
 /// also when the walk fails.
 pub(crate) fn decode_packets_within<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
     budget: &mut Budget,
+) -> Result<CodedData<'a>> {
+    walk_packets(header, tile, budget, None)
+}
+
+/// The packet walk behind [`decode_packets_within`] and
+/// [`decode_packets_partial`]: strict when `reach` is `None`.
+///
+/// Not strict, the walk reads packets until the data ends (see
+/// [`parse_packet`]), then goes on through the rest of the progression
+/// without reading, to note each packet not read in `reach`. That costs a
+/// visit a packet, from the same budget, and the end of the data costs
+/// [`END_VISITS`] for each resolution of each component, for the setup no
+/// byte paid for. Packets the `POC` volumes leave out are noted the same way
+/// rather than refused, and bytes left after the last packet are noted
+/// rather than refused. Every other fault, the work bound included, fails as
+/// it does when strict.
+fn walk_packets<'a>(
+    header: &MainHeader,
+    tile: &'a Tile<'a>,
+    budget: &mut Budget,
+    mut reach: Option<&mut Reach>,
 ) -> Result<CodedData<'a>> {
     let data: &'a [u8] = &tile.data;
 
@@ -382,9 +451,24 @@ pub(crate) fn decode_packets_within<'a>(
         body_pos: 0,
         packed,
     };
-    if budget.poc_coverage {
+    if let Some(reach) = reach.as_deref_mut() {
+        reach.missing_from = geoms.iter().map(|c| vec![None; c.len()]).collect();
+        progression::poc_gaps(header, &walk, |comp, res, layer| {
+            reach.miss(comp, res, u32::from(layer));
+            Ok(())
+        })?;
+    } else if budget.poc_coverage {
         progression::check_poc_coverage(header, &walk, tile.index)?;
     }
+    let strict = reach.is_none();
+    let end_visits = geoms
+        .iter()
+        .map(Vec::len)
+        .sum::<usize>()
+        .saturating_mul(END_VISITS);
+    let mut log = Vec::new();
+    // Not strict: whether the data has ended.
+    let mut ended = false;
     let mut packet_index = 0u32;
     let walked = for_each_packet(
         header,
@@ -393,8 +477,16 @@ pub(crate) fn decode_packets_within<'a>(
         budget.poc_bitmap,
         budget.poc_set,
         |layer, resolution, component, precinct| {
+            if let Some(reach) = reach.as_deref_mut() {
+                if ended {
+                    // Past the end of the data: count the packet, not read.
+                    visit(&visits, 1)?;
+                    reach.miss(component, resolution, layer);
+                    return Ok(());
+                }
+            }
             let geom = &geoms[component][resolution];
-            parse_packet(
+            let packet = parse_packet(
                 &mut streams,
                 &visits,
                 layer,
@@ -404,7 +496,15 @@ pub(crate) fn decode_packets_within<'a>(
                 &geom.bands,
                 precinct,
                 &mut states[component][resolution],
+                if strict { None } else { Some(&mut log) },
             )?;
+            if packet != Packet::Read {
+                ended = true;
+                visit(&visits, end_visits)?;
+                if let Some(reach) = reach.as_deref_mut() {
+                    reach.miss(component, resolution, layer);
+                }
+            }
             packet_index += 1;
             Ok(())
         },
@@ -434,6 +534,20 @@ pub(crate) fn decode_packets_within<'a>(
             resolutions.push(Resolution { subbands });
         }
         components.push(ComponentCoded { resolutions });
+    }
+
+    // Not strict, bytes left after the last packet are noted rather than
+    // refused. Data that ran out leaves none.
+    if let Some(reach) = reach {
+        if !ended {
+            if streams.body_pos < data.len() {
+                reach.leftover = Some((streams.body_pos, data.len() - streams.body_pos));
+            }
+            if packed && streams.header_pos < streams.header.len() {
+                reach.leftover_packed = Some(streams.header.len() - streams.header_pos);
+            }
+        }
+        return Ok(CodedData { components });
     }
 
     // The packets tile the tile-part data exactly, with no padding, up to the
@@ -633,6 +747,20 @@ fn charge_dropped_blocks(visits: &Visits, blocks: usize) -> Result<()> {
 }
 
 /// Spend `n` of what is left of [`Budget::visits`], or fail once it is gone.
+/// What the end of a tile's data costs with `strict` off, in visits, for
+/// each resolution of each of the tile's components.
+///
+/// A strict decode stops at the first tile whose data runs out; one with
+/// `strict` off goes on to the next. The geometry built for a tile and the
+/// decode after its walk cost about a microsecond for each resolution of
+/// each component, which the bytes of its packets pay for when they are
+/// there. When they are not, a tile-part of 14 bytes would buy that setup
+/// for thousands of components, so this charges it: at 32 visits, the
+/// default bound's 2^24 visits hold about half a second of it. The data of
+/// a codestream a strict decode reads never ends early, so this costs that
+/// decode nothing.
+const END_VISITS: usize = 32;
+
 pub(crate) fn visit(visits: &Visits, n: usize) -> Result<()> {
     match visits.left.get().checked_sub(n as u64) {
         Some(rest) => {
@@ -778,12 +906,63 @@ struct Contribution {
     seg_len: usize,
 }
 
+/// How a packet read ended, when the walk is not strict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Packet {
+    /// The packet was read whole.
+    Read,
+    /// The data ended at or inside the packet. What it holds of whole
+    /// code-blocks is kept; the rest of it is undone.
+    Ended,
+}
+
+/// A code-block's state before a packet added to it, so that the packet can
+/// be undone (see [`undo`]).
+struct Undo {
+    band: usize,
+    block: usize,
+    included: bool,
+    lblock: u32,
+    zero_bit_planes: u32,
+    num_passes: u32,
+    /// How many segments the block had, and the passes and chunks of the
+    /// last of them.
+    segments: usize,
+    last_passes: u32,
+    last_chunks: usize,
+}
+
+/// Put back the state of every block in `log`, latest first, so that the
+/// packet that logged them adds nothing to those blocks. Their earlier
+/// layers stay.
+fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
+    for entry in log.iter().rev() {
+        let block = &mut states[entry.band].blocks[entry.block];
+        block.included = entry.included;
+        block.lblock = entry.lblock;
+        block.zero_bit_planes = entry.zero_bit_planes;
+        block.num_passes = entry.num_passes;
+        block.segments.truncate(entry.segments);
+        if let Some(last) = block.segments.last_mut() {
+            last.passes = entry.last_passes;
+            last.chunks.truncate(entry.last_chunks);
+        }
+    }
+}
+
 /// Parse one packet — one precinct of one resolution of one component in one
 /// layer — starting at byte `start` of the tile-part `data`.
 ///
 /// Folds the packet's contributions into `states` and returns the byte offset
 /// where the next packet begins. The subbands are built once every layer has
 /// been read; see [`build_subbands`].
+///
+/// With `log` given (a walk with `strict` off), running out of data is not a
+/// fault. A packet that ends past the data adds the code-blocks whose data is
+/// all there and undoes the rest, from the first code-block whose data runs
+/// out on, back to their earlier layers; a packet whose header runs out adds
+/// nothing. Either is [`Packet::Ended`]. Every other fault fails as it does
+/// when strict, and a packet the strict walk reads is read the same way.
 #[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
     streams: &mut PacketStreams<'a>,
@@ -795,8 +974,17 @@ fn parse_packet<'a>(
     bands: &[BandGeom],
     precinct: usize,
     states: &mut [BandState<'a>],
-) -> Result<()> {
+    mut log: Option<&mut Vec<Undo>>,
+) -> Result<Packet> {
     visit(visits, 1)?;
+    let partial = log.is_some();
+    if partial
+        && delimiters.sop
+        && peek_marker(streams.data, streams.body_pos) == Some(marker::SOP)
+        && streams.body_pos + 6 > streams.data.len()
+    {
+        return Ok(Packet::Ended);
+    }
     // SOP precedes the packet in the *body* stream when COD allows it — but only
     // *may* (A.8.1), so its absence is not an error, and it stays inline even
     // when the headers are packed. OpenJPEG warns and carries on.
@@ -818,21 +1006,28 @@ fn parse_packet<'a>(
     // of the header stream means the codestream promised more packets than it
     // carries.
     if streams.header_pos >= streams.header.len() {
+        if partial {
+            return Ok(Packet::Ended);
+        }
         return Err(Error::Codestream(
             "tile-part ends before the last packet".into(),
         ));
     }
 
     let mut bio = BitReader::new(&streams.header[streams.header_pos..]);
+    if let Some(log) = log.as_deref_mut() {
+        log.clear();
+    }
 
     // The first bit flags an empty packet (no contributions) against a present
     // one. An empty packet still costs its layer: the tag trees are untouched,
     // not reset.
     let present = bio.read_bit() == 1;
     let mut contributions: Vec<Contribution> = Vec::new();
+    let mut fault = None;
     if present {
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
-            parse_band_header(
+            let parsed = parse_band_header(
                 visits,
                 band_index,
                 &band.precincts[precinct],
@@ -842,16 +1037,47 @@ fn parse_packet<'a>(
                 style,
                 &mut bio,
                 &mut contributions,
-            )?;
+                log.as_deref_mut(),
+            );
+            if let Err(error) = parsed {
+                fault = Some(error);
+                break;
+            }
         }
+    }
+    if let Some(error) = fault {
+        // Not strict, a fault in a header that runs past the data is the data
+        // ending, not damage: the bits past the end are fill.
+        return match log.as_deref() {
+            Some(log) if bio.overran() => {
+                undo(log, states);
+                Ok(Packet::Ended)
+            }
+            _ => Err(error),
+        };
     }
 
     // The header is a whole number of bytes. EPH, when COD signals it, sits
     // between the header and the body — after an empty packet's header too — and
     // moves into the packed buffer with the headers, so it is read from the
     // header stream.
+    //
+    // Not strict, an inline header whose bits run past the data is the data
+    // ending. That is taken before the alignment, which past a last byte of
+    // 0xFF reads one more byte that a strict decode does not ask for. Packed
+    // headers are not checked: their bytes sit in the main or tile-part
+    // headers, which are there whole or not at all, and a strict decode reads
+    // a packed header that runs short as fill, so the body decides.
+    let header_overran = bio.overran() && !streams.packed;
     bio.align();
     streams.header_pos += bio.bytes_consumed();
+    if let Some(log) = log.as_deref() {
+        let eph_cut = delimiters.eph && streams.header_pos + 2 > streams.header.len();
+        if header_overran || eph_cut {
+            undo(log, states);
+            return Ok(Packet::Ended);
+        }
+    }
     if delimiters.eph {
         if peek_marker(streams.header, streams.header_pos) != Some(marker::EPH) {
             return Err(Error::Codestream(
@@ -866,13 +1092,28 @@ fn parse_packet<'a>(
         streams.body_pos = streams.header_pos;
     }
     for contribution in &contributions {
-        let end = streams
+        let end = match streams
             .body_pos
             .checked_add(contribution.seg_len)
             .filter(|&e| e <= streams.data.len())
-            .ok_or_else(|| {
-                Error::Codestream("packet body segment overruns the tile-part".into())
-            })?;
+        {
+            Some(end) => end,
+            None => {
+                if let Some(log) = log.as_deref() {
+                    // Keep the blocks before this one; undo this one and every
+                    // block after it in the header.
+                    let from = log
+                        .iter()
+                        .position(|u| (u.band, u.block) == (contribution.band, contribution.block))
+                        .unwrap_or(0);
+                    undo(&log[from..], states);
+                    return Ok(Packet::Ended);
+                }
+                return Err(Error::Codestream(
+                    "packet body segment overruns the tile-part".into(),
+                ));
+            }
+        };
         states[contribution.band].blocks[contribution.block].segments[contribution.segment]
             .chunks
             .push(&streams.data[streams.body_pos..end]);
@@ -883,7 +1124,7 @@ fn parse_packet<'a>(
         streams.header_pos = streams.body_pos;
     }
 
-    Ok(())
+    Ok(Packet::Read)
 }
 
 /// Read one precinct's code-block entries, on one subband, from this layer's
@@ -915,6 +1156,7 @@ fn parse_band_header(
     style: u8,
     bio: &mut BitReader,
     contributions: &mut Vec<Contribution>,
+    mut log: Option<&mut Vec<Undo>>,
 ) -> Result<()> {
     let cols = precinct.cols as u32;
     let threshold = layer + 1;
@@ -956,6 +1198,21 @@ fn parse_band_header(
         };
         if !contributes {
             continue;
+        }
+        if let Some(log) = log.as_deref_mut() {
+            let block = &blocks[block_index];
+            let last = block.segments.last();
+            log.push(Undo {
+                band: band_index,
+                block: block_index,
+                included: was_included,
+                lblock: block.lblock,
+                zero_bit_planes: block.zero_bit_planes,
+                num_passes: block.num_passes,
+                segments: block.segments.len(),
+                last_passes: last.map_or(0, |s| s.passes),
+                last_chunks: last.map_or(0, |s| s.chunks.len()),
+            });
         }
 
         // The zero-bitplane tree is resolved in full the first time a block is
@@ -1132,6 +1389,8 @@ fn read_num_passes(bio: &mut BitReader) -> u32 {
     37 + bio.read(7)
 }
 
+#[cfg(test)]
+mod partial_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -91,8 +91,8 @@ match decode(&bytes) {
 
 ### Damaged input
 
-Decoding is strict. Truncated or inconsistent data is an `Error` and no partial
-image comes back: a raw codestream cut short is `Error::Codestream` (`Psot
+Decoding is strict by default. Truncated or inconsistent data is an `Error` and
+no partial image comes back: a raw codestream cut short is `Error::Codestream` (`Psot
 overruns the codestream`), a JP2 file cut short is `Codestream` or
 `FileFormat` depending on where, and a raw codestream missing its `EOC` marker
 is refused (a JP2 file whose last tile-part has `Psot = 0` decodes without
@@ -105,6 +105,25 @@ entropy-coded data is not always detected; a flipped byte can decode to a
 wrong image without an error.
 What is refused, and where this decoder is stricter than OpenJPEG, is in
 [docs/correctness.md](docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams).
+
+To decode what a cut codestream holds, as `opj_decompress -allow-partial`
+does, turn `strict` off. Only missing data and bytes left after a tile's last
+packet are relaxed; other damage is still an error. `Image::report` says what
+was missing, and its `complete_reduction` is the finest level the data
+already gives in full, so a codestream can be decoded as it streams in:
+
+```rust
+use rust_j2k::{DecodeOptions, decode_with};
+
+// `prefix`: the bytes of the codestream that have arrived so far.
+let options = DecodeOptions::default().with_strict(false);
+let image = decode_with(prefix, &options)?;
+if !image.report.is_complete() {
+    for entry in &image.report.entries {
+        eprintln!("{entry}");
+    }
+}
+```
 
 ### Limits
 
@@ -153,6 +172,7 @@ the codestream's integer output and does not interpret the GRIB2 fields.
 | Precinct partitions; SOP/EPH delimiters; PPM/PPT packed headers | — |
 | All six code-block coding styles; region of interest (maxshift) | — |
 | Resolution-reduced decode (each level halves the output) | — |
+| Partial decode of a cut codestream (`strict` off), with a report of what is missing | Damaged packet headers or code-blocks (still refused) |
 
 Anything outside the decoded set is rejected cleanly, not half-decoded. Where
 this decoder and OpenJPEG differ, and why, is listed in

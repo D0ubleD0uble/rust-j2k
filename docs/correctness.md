@@ -362,9 +362,8 @@ evidence says is broken.
   it silently to a different image (101 of 198 samples differ), so refusing
   is the better outcome here.
 
-Tolerating bytes left at a tile-part boundary once every packet is found
-would recover both without weakening the check inside a tile-part. That is
-not done yet.
+With `strict` off, both decode with the leftover bytes skipped and reported
+(see "Partial decode" below).
 
 Real files from other encoders that these refusals stop:
 
@@ -380,8 +379,8 @@ Real files from other encoders that these refusals stop:
 A tile-part that ends before its last packet is refused too ("tile-part ends
 before the last packet"). That is not a desynchronized walk: B.11 lets "any
 number of whole packets (in order)" be dropped from the end of a tile, so
-this is the strict decode refusing missing data, which partial decode (#214)
-would accept with the missing packets reported. openjpeg-data's `Marrin.jp2`
+this is the strict decode refusing missing data, which partial decode
+accepts with the missing packets reported (see "Partial decode" below). openjpeg-data's `Marrin.jp2`
 (Kakadu 5.2.1) declares two layers, but its one tile-part's `Psot` covers
 only the packets of layer 0. OpenJPEG decodes the packets it finds, with no
 warning.
@@ -577,6 +576,98 @@ or conformance file trips them today, but `opj_compress` writes the two
 tier-2 patterns listed above. If a real file ever needs one relaxed, relax
 it to match the oracle: the protective argument loses to a demonstrated real
 file.
+
+### Partial decode
+
+With `DecodeOptions::strict` off (#214) the decoder takes missing data and
+bytes left after a tile's last packet, as `opj_decompress -allow-partial`
+does, and reports them on `Image::report`. Everything else is refused as
+when strict. A strict decode is unchanged: its output and error text match
+the decoder before this option on every committed fixture and the round-2
+corpus at reductions 0 to 3.
+
+The oracle is `opj_decompress -allow-partial` (OpenJPEG 2.5.0), on the
+fixtures in `tests/fixtures/partial/` (`scripts/gen-partial-fixtures.py`,
+provenance in that directory's README) and checked by
+`tests/partial_decode.rs`:
+
+- **Prefixes.** For a one-tile LRCP codestream of five levels, the shortest
+  prefix that `opj_decompress -allow-partial -r r` decodes to the whole
+  file's image is, for each r from 0 to 5, the shortest prefix this decoder
+  reports complete at r, and both decoders give the same samples for it and
+  for the prefix one byte shorter. A strict decode refuses that shorter
+  prefix; a partial one reports it complete at r + 1, where its image equals
+  the whole file's. Every prefix from the first `SOT` marker on decodes, and
+  a prefix the report calls complete at r gives the whole file's image at r.
+- **Missing tiles** are 0 after the DC level shift, as OpenJPEG writes them.
+- **`Psot = 0` without an `EOC`** (`tests/fixtures/psot0/`) matches OpenJPEG.
+- **Overlapping `POC` volumes**, whose duplicate packets leave bytes over,
+  decode to the source, as OpenJPEG's do, and report `LeftoverBytes`.
+- **`-TP R` with empty resolutions** decodes to OpenJPEG's image, which is
+  not the source: on the committed fixture 117 of 198 samples differ from it
+  (107 on the file measured when this was designed). The phantom bytes sit
+  at tile-part boundaries and nothing tells them from packet data, so the
+  report gives `LeftoverBytes` and the tile counts as incomplete at every
+  reduction.
+
+On real files from the round-2 corpus, not committed: openjpeg-data's
+`Marrin.jp2` (a `Psot` that covers one of two layers) and
+`kodak_2layers_lrcp.j2c` (975304 leftover bytes) are within 1 of OpenJPEG
+(both are 9/7), and GDAL's `small_world_truncated.jp2` (cut inside its tile)
+matches it exactly.
+
+One difference from OpenJPEG is deliberate. When the data ends inside a
+packet's body, B.11 allows only whole packets to be dropped, so a cut packet
+has no meaning of its own. This decoder keeps each code-block whose
+contribution to the packet is all there, and for the rest keeps only the
+layers before the cut packet, so each code-block decodes as a codestream
+truncated after some whole layer would. OpenJPEG keeps the bytes that are
+there for every code-block of the cut packet, a block's data cut mid-layer
+included. The two images can differ in the code-blocks the cut packet
+reaches; the report says the tile is incomplete either way.
+`a_cut_packet_keeps_each_code_blocks_whole_layers` in
+`src/tier2/partial_tests.rs` checks each code-block of a cut three-layer
+packet against layer-limited walks.
+
+A `POC` sequence that leaves packets out (`tests/fixtures/poc_coverage/`)
+decodes with those packets empty and reported. At the reduction that drops
+them the image matches OpenJPEG's. At full resolution the two differ (1023 of
+1024 samples for `poc_res_missing.j2k`) because they fill the gap
+differently. OpenJPEG decodes a tile only up to the highest resolution it
+read a packet of (`resno_decoded`, t2.c:518) and pastes that smaller image
+into the top-left corner of a zeroed full-size frame. This decoder sets the
+missing coefficients to zero and runs the whole inverse wavelet, so its
+even-indexed samples are the reduction-1 image and its largest error against
+the source is 193, where OpenJPEG's is 993. Either way the report says the
+tile is incomplete, with a `complete_reduction` of `Some(1)`.
+
+`TNsot` is advisory: a count that disagrees with the tile-parts found is
+reported and the tile decodes from them. The decode needs the main header
+through the first `SOT` marker; a shorter prefix is an error.
+
+Partial decode bounds its work like a strict one, with two more charges
+against the packet work bound: each tile-component of a missing tile costs
+one step, and the end of a tile's data costs 32 steps for each of its
+(component, resolution) pairs, with one more for each packet after it.
+Without them, a header of a few kilobytes that declares 65535 tiles of 16384
+components with none present took 38 s, and a run of empty tile-parts, each
+making its tile set up its geometry for no data, took 19 s. With them the
+first is refused before any tile is decoded and the second is refused in
+under a second (`missing_tiles_are_charged_against_the_work_bound` and
+`the_end_of_each_tiles_data_is_charged_against_the_work_bound` in
+`tests/partial_decode.rs`). The end-of-data charge falls on every tile whose
+data ends, so a prefix cut late in a codestream that interleaves the
+tile-parts of very many tiles can be refused with `Error::Limit` though the
+whole file decodes: each tile whose later parts have not arrived is charged.
+`DecodeOptions::packet_work_limit` raises the bound for such a stream. The
+report holds at most five entries per tile-part, plus two.
+
+A packet header packed in a `PPM` or `PPT` marker is read as a strict
+decode reads it, with the bits past the end of the packed bytes as fill:
+those bytes are in the main or tile-part headers, which are there whole or
+not at all, so running past them is not the data ending, and the body
+decides whether the packet is there. An inline header whose bits run past
+the end of the data is the data ending, and the packet adds nothing.
 
 ### Encoder mistakes OpenJPEG corrects
 
@@ -777,7 +868,7 @@ and B.12.3 lets "the last progression order volume in each tile" be
 incomplete. A tile whose volumes leave packets out is byte for byte a tile
 whose covering volumes had those packets dropped. So this is the strict
 decode refusing missing data, as it refuses a tile cut short; partial decode
-(#214) is where it would be accepted, with the missing packets reported.
+accepts it, with the missing packets reported.
 OpenJPEG decodes such a tile with them empty, and `opj_compress` writes such
 a file when its `-POC` volumes do not cover the tile: `-n 2 -POC
 T1=0,0,1,1,1,LRCP` leaves resolution 1 out, and OpenJPEG's decode of it has
@@ -787,8 +878,9 @@ The refusal holds under a `resolution_reduction` too, when the packets left
 out are only those of resolutions the reduction discards. That is stricter
 than `opj_decompress -r`, which gives the exact reduced image, and it is
 consistent with refusing a tile cut short (B.11) at a reduction of 1, which
-this decoder already does. Handling missing packets by reduction belongs
-with partial decode (#214).
+this decoder already does. Partial decode reports such a tile complete at
+the reduction that drops the missing resolutions, and its image there is the
+strict decode of a file whose volumes cover the tile.
 
 The check is on the volumes' axes, not on each precinct: a positional order's
 sweep can pass over a precinct with mixed sub-sampling (see "The tier-2 work

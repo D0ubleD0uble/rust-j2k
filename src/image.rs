@@ -6,7 +6,7 @@
 use crate::codestream::MainHeader;
 use crate::codestream::markers::{Rect, Siz, Transform};
 use crate::pipeline::Samples;
-use crate::{Error, Jp2Metadata, Result};
+use crate::{DecodeReport, Error, Jp2Metadata, Result};
 
 /// A decoded image: the image area on the reference grid, plus its components.
 ///
@@ -47,6 +47,12 @@ pub struct Image {
     /// What the JP2 wrapper said about the samples: their color space and
     /// what each channel is. `None` for a raw codestream.
     pub jp2: Option<Jp2Metadata>,
+    /// What the decode left out. A strict decode (the default) gives the
+    /// complete report, [`DecodeReport::default`]; with
+    /// [`strict`](crate::DecodeOptions::strict) off it lists what was missing
+    /// or skipped. `Image`'s `PartialEq` compares the report too, so two
+    /// images with the same samples and different reports are not equal.
+    pub report: DecodeReport,
 }
 
 /// One decoded component: its own sample grid, its declared depth and sign, and
@@ -101,6 +107,7 @@ impl Image {
             height,
             components,
             jp2: None,
+            report: DecodeReport::default(),
         }
     }
 
@@ -364,6 +371,33 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8
     // halve-and-round-up per dropped level.
     let (image_width, image_height) = siz.image_extent_at(reduction);
     Ok(Image::new(image_width, image_height, components))
+}
+
+/// Set tile `tile`'s samples to 0 in every component of `image`, a decode at
+/// `reduction`: what a tile no tile-part of reached gives, after the DC level
+/// shift, as `opj_decompress -allow-partial` writes it.
+pub(crate) fn zero_tile(image: &mut Image, siz: &Siz, tile: u32, reduction: u8) {
+    for (comp, component) in image.components.iter_mut().enumerate() {
+        let (Some(rect), Some(canvas)) = (
+            siz.tile_component_rect(tile, comp),
+            siz.component_rect(comp),
+        ) else {
+            continue;
+        };
+        let (rect, canvas) = (rect.reduced(reduction), canvas.reduced(reduction));
+        let width = component.width as usize;
+        let x0 = rect.x0.saturating_sub(canvas.x0) as usize;
+        let x1 = (rect.x1.saturating_sub(canvas.x0) as usize).min(width);
+        for y in rect.y0..rect.y1 {
+            let row = y.saturating_sub(canvas.y0) as usize;
+            if let Some(line) = component
+                .samples
+                .get_mut(row * width + x0..row * width + x1)
+            {
+                line.fill(0);
+            }
+        }
+    }
 }
 
 /// Round to the nearest integer, level-shift, clamp, and package one

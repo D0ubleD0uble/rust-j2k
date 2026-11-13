@@ -81,3 +81,11 @@ path = "fuzz_targets/icc_srgb.rs"
 test = false
 doc = false
 bench = false
+# `decode_partial` drives the public entry point with `strict` off, on whole
+# inputs and on prefixes, and checks it against the strict decode.
+[[bin]]
+name = "decode_partial"
+path = "fuzz_targets/decode_partial.rs"
+test = false
+doc = false
+bench = false
