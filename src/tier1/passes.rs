@@ -1619,4 +1619,283 @@ mod tests {
         let _ = b.sc_context(0, 0);
         let _ = b.mr_context(0, 0);
     }
+
+    /// Code-block edge columns: the padding sits between one row's last sample
+    /// and the next row's first, so neither sees the other. A whole significant
+    /// edge column is invisible to the opposite edge column, and an edge
+    /// sample counts only the neighbors inside the block.
+    #[test]
+    fn edge_columns_see_no_neighbor_across_the_block_edge() {
+        let (w, h) = (4, 6);
+        let mut east = BlockState::new(w, h);
+        for y in 0..h {
+            east.set_significant(w - 1, y);
+            east.set_negative(w - 1, y, true);
+        }
+        for y in 0..h {
+            assert_eq!(east.neighbor_sums(0, y), (0, 0, 0), "(0, {y})");
+            assert_eq!(east.sc_context(0, y), (CTX_SC, 0), "(0, {y})");
+            assert_eq!(east.mr_context(0, y), CTX_MR, "(0, {y})");
+            // The column beside it does see the edge column: one east
+            // neighbor, plus a diagonal above and below where those rows exist.
+            let d = u8::from(y > 0) + u8::from(y + 1 < h);
+            assert_eq!(east.neighbor_sums(w - 2, y), (1, 0, d), "({}, {y})", w - 2);
+        }
+
+        let mut west = BlockState::new(w, h);
+        for y in 0..h {
+            west.set_significant(0, y);
+        }
+        for y in 0..h {
+            assert_eq!(west.neighbor_sums(w - 1, y), (0, 0, 0), "({}, {y})", w - 1);
+            // The edge column itself sees its vertical neighbors only.
+            let v = u8::from(y > 0) + u8::from(y + 1 < h);
+            assert_eq!(west.neighbor_sums(0, y), (0, v, 0), "(0, {y})");
+        }
+    }
+
+    /// Code-block edge rows: the top and bottom rows, and blocks one sample
+    /// wide or tall, count only in-block neighbors.
+    #[test]
+    fn edge_rows_count_only_in_block_neighbors() {
+        // Every sample of a 3×3 block significant: a corner sees three
+        // neighbors, an edge middle five, the center eight.
+        let mut full = BlockState::new(3, 3);
+        for y in 0..3 {
+            for x in 0..3 {
+                full.set_significant(x, y);
+            }
+        }
+        for (x, y) in [(0, 0), (2, 0), (0, 2), (2, 2)] {
+            assert_eq!(full.neighbor_sums(x, y), (1, 1, 1), "corner ({x}, {y})");
+        }
+        assert_eq!(full.neighbor_sums(1, 0), (2, 1, 2), "top edge");
+        assert_eq!(full.neighbor_sums(1, 2), (2, 1, 2), "bottom edge");
+        assert_eq!(full.neighbor_sums(0, 1), (1, 2, 2), "left edge");
+        assert_eq!(full.neighbor_sums(2, 1), (1, 2, 2), "right edge");
+        assert_eq!(full.neighbor_sums(1, 1), (2, 2, 4), "center");
+
+        // A one-sample-wide column and a one-sample-tall row.
+        let mut column = BlockState::new(1, 8);
+        let mut row = BlockState::new(8, 1);
+        for i in 0..8 {
+            column.set_significant(0, i);
+            row.set_significant(i, 0);
+        }
+        for i in 0..8 {
+            let n = u8::from(i > 0) + u8::from(i < 7);
+            assert_eq!(column.neighbor_sums(0, i), (0, n, 0), "column {i}");
+            assert_eq!(row.neighbor_sums(i, 0), (n, 0, 0), "row {i}");
+        }
+
+        // A whole significant bottom row is invisible to the top row.
+        let mut bottom = BlockState::new(5, 3);
+        for x in 0..5 {
+            bottom.set_significant(x, 2);
+        }
+        for x in 0..5 {
+            assert_eq!(bottom.neighbor_sums(x, 0), (0, 0, 0), "({x}, 0)");
+        }
+    }
+
+    /// Vertically causal coding drops each of the three south neighbors from
+    /// a stripe's bottom row, on every stripe, and nothing else: an interior
+    /// row keeps its south neighbors and the next stripe's top row keeps its
+    /// north ones.
+    #[test]
+    fn vertically_causal_masks_each_south_neighbor_on_a_stripe_bottom_row() {
+        for bottom in [3u32, 7, 11] {
+            for dx in [0u32, 1, 2] {
+                // (1, bottom)'s south neighbor at (dx, bottom + 1): SW, S or SE.
+                let mut b = BlockState::new(3, 13);
+                b.set_significant(dx, bottom + 1);
+                b.set_negative(dx, bottom + 1, true);
+                let seen = if dx == 1 { (0, 1, 0) } else { (0, 0, 1) };
+                assert_eq!(b.neighbor_sums(1, bottom), seen, "default, dx {dx}");
+                b.vcausal = true;
+                let at = format!("vcausal, row {bottom}, dx {dx}");
+                assert_eq!(b.neighbor_sums(1, bottom), (0, 0, 0), "{at}");
+                for orient in [Orientation::Ll, Orientation::Hl, Orientation::Hh] {
+                    assert_eq!(b.zc_context(1, bottom, orient), CTX_ZC, "{at}");
+                }
+                assert_eq!(b.sc_context(1, bottom), (CTX_SC, 0), "{at}");
+                assert_eq!(b.mr_context(1, bottom), CTX_MR, "{at}");
+                // The next stripe's top row still sees the bottom row above it.
+                b.set_significant(1, bottom);
+                assert_eq!(b.neighbor_sums(dx, bottom + 1), seen, "{at}, north kept");
+            }
+            // An interior row keeps its south neighbor under vcausal.
+            let mut b = BlockState::new(3, 13);
+            b.vcausal = true;
+            b.set_significant(1, bottom);
+            assert_eq!(
+                b.neighbor_sums(1, bottom - 1),
+                (0, 1, 0),
+                "row {}",
+                bottom - 1
+            );
+        }
+    }
+
+    /// Every table entry is the label function's value for the mask's sums,
+    /// and label 0 means exactly that no neighbor is significant, which is
+    /// what lets the passes skip on a zero mask.
+    #[test]
+    fn zc_tables_match_the_label_functions() {
+        for mask in 0..=255u8 {
+            let (h, v, d) = neighbor_sums(mask);
+            assert_eq!(u32::from(h + v + d), mask.count_ones());
+            let want = [
+                (Orientation::Ll, zc_label_lh(h, v, d)),
+                (Orientation::Lh, zc_label_lh(h, v, d)),
+                (Orientation::Hl, zc_label_lh(v, h, d)),
+                (Orientation::Hh, zc_label_hh(h + v, d)),
+            ];
+            for (orient, label) in want {
+                let got = zc_table(orient)[usize::from(mask)];
+                assert_eq!(got, label, "{orient:?} mask {mask:#010b}");
+                assert_eq!(got == 0, mask == 0, "{orient:?} mask {mask:#010b}");
+            }
+        }
+    }
+
+    /// The contexts as they were formed before the padded planes: eight
+    /// bounds-checked reads of a plain significance map. The table-driven
+    /// contexts must agree with it at every sample, for many block shapes and
+    /// significance patterns, with and without vertically causal coding.
+    #[test]
+    fn padded_contexts_match_bounds_checked_neighbor_reads() {
+        struct Reference {
+            w: u32,
+            h: u32,
+            sig: Vec<bool>,
+            neg: Vec<bool>,
+            vcausal: bool,
+        }
+        impl Reference {
+            fn at(&self, x: i64, y: i64) -> Option<usize> {
+                let inside = x >= 0 && y >= 0 && x < self.w.into() && y < self.h.into();
+                inside.then(|| (y * i64::from(self.w) + x) as usize)
+            }
+            fn sig(&self, x: i64, y: i64) -> u8 {
+                u8::from(self.at(x, y).is_some_and(|i| self.sig[i]))
+            }
+            fn contrib(&self, x: i64, y: i64) -> i32 {
+                match self.at(x, y) {
+                    Some(i) if self.sig[i] && self.neg[i] => -1,
+                    Some(i) if self.sig[i] => 1,
+                    _ => 0,
+                }
+            }
+            fn south(&self, y: i64) -> bool {
+                !(self.vcausal && y % 4 == 3)
+            }
+            fn sums(&self, x: i64, y: i64) -> (u8, u8, u8) {
+                let s = |dx: i64| {
+                    if self.south(y) {
+                        self.sig(x + dx, y + 1)
+                    } else {
+                        0
+                    }
+                };
+                let h = self.sig(x - 1, y) + self.sig(x + 1, y);
+                let v = self.sig(x, y - 1) + s(0);
+                let d = self.sig(x - 1, y - 1) + self.sig(x + 1, y - 1) + s(-1) + s(1);
+                (h, v, d)
+            }
+            /// ISO Table D-3, from the clamped (H, V) contributions.
+            fn sign(&self, x: i64, y: i64) -> (u8, u8) {
+                let south = if self.south(y) {
+                    self.contrib(x, y + 1)
+                } else {
+                    0
+                };
+                let h = (self.contrib(x - 1, y) + self.contrib(x + 1, y)).clamp(-1, 1);
+                let v = (self.contrib(x, y - 1) + south).clamp(-1, 1);
+                let (label, xor) = match (h, v) {
+                    (1, 1) => (4, 0),
+                    (1, 0) => (3, 0),
+                    (1, -1) => (2, 0),
+                    (0, 1) => (1, 0),
+                    (0, 0) => (0, 0),
+                    (0, -1) => (1, 1),
+                    (-1, 1) => (2, 1),
+                    (-1, 0) => (3, 1),
+                    _ => (4, 1),
+                };
+                (CTX_SC + label, xor)
+            }
+        }
+
+        // xorshift64, so the patterns are fixed and need no dependency.
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+
+        let mut shapes: Vec<(u32, u32)> = Vec::new();
+        for w in 1..=6 {
+            for h in 1..=9 {
+                shapes.push((w, h));
+            }
+        }
+        shapes.extend([(13, 10), (16, 16), (64, 4), (4, 64)]);
+
+        for (w, h) in shapes {
+            let n = (w * h) as usize;
+            // One sample significant at each position in turn, then random
+            // maps of rising density.
+            let mut maps: Vec<Vec<bool>> =
+                (0..n).map(|k| (0..n).map(|i| i == k).collect()).collect();
+            for density in [8u64, 32, 64, 128, 224] {
+                maps.push((0..n).map(|_| next() % 256 < density).collect());
+            }
+            for vcausal in [false, true] {
+                for sig in &maps {
+                    let neg: Vec<bool> = (0..n).map(|_| next() % 2 == 1).collect();
+                    let mut state = BlockState::new(w, h);
+                    state.vcausal = vcausal;
+                    for y in 0..h {
+                        for x in 0..w {
+                            let i = (y * w + x) as usize;
+                            if sig[i] {
+                                state.set_significant(x, y);
+                                state.set_negative(x, y, neg[i]);
+                            }
+                        }
+                    }
+                    let reference = Reference {
+                        w,
+                        h,
+                        sig: sig.clone(),
+                        neg,
+                        vcausal,
+                    };
+                    for y in 0..h {
+                        for x in 0..w {
+                            let at = format!("{w}x{h} vcausal {vcausal} at ({x}, {y})");
+                            let (sh, sv, sd) = reference.sums(x.into(), y.into());
+                            assert_eq!(state.neighbor_sums(x, y), (sh, sv, sd), "{at}");
+                            let zc = [
+                                (Orientation::Ll, zc_label_lh(sh, sv, sd)),
+                                (Orientation::Hl, zc_label_lh(sv, sh, sd)),
+                                (Orientation::Hh, zc_label_hh(sh + sv, sd)),
+                            ];
+                            for (orient, label) in zc {
+                                let got = state.zc_context(x, y, orient);
+                                assert_eq!(got, CTX_ZC + label, "{at} {orient:?}");
+                            }
+                            let sign = reference.sign(x.into(), y.into());
+                            assert_eq!(state.sc_context(x, y), sign, "{at}");
+                            let mr = CTX_MR + u8::from(sh + sv + sd > 0);
+                            assert_eq!(state.mr_context(x, y), mr, "{at}");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
