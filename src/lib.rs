@@ -794,8 +794,12 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // Undo the inter-component decorrelation, if any, before the DC level
         // shift (ISO/IEC 15444-1 G.1). It is a per-tile transform: the flag
         // lives in COD, which a tile-part header can override. Components past
-        // the third are untouched.
-        if header.cod.multiple_component_transform {
+        // the third are untouched. On an image of fewer than three components
+        // the flag is ignored, as OpenJPEG ignores it (`mct::applies`).
+        if mct::applies(
+            header.cod.multiple_component_transform,
+            header.components.len(),
+        ) {
             // The wavelet picks the transform (G.1): 5/3 reconstructs integers
             // and inverts with the reversible RCT, 9/7 reconstructs floats and
             // inverts with the irreversible ICT. All three color components

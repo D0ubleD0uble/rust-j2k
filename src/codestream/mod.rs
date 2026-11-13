@@ -408,9 +408,10 @@ fn tile_header_is_valid(
         }
     }
 
-    // The color transform, over the first three components.
+    // The color transform, over the first three components (skipped on an
+    // image of fewer, see `mct::applies`).
     let cod = tile.cod.as_ref().unwrap_or(&main.cod);
-    if cod.multiple_component_transform {
+    if crate::mct::applies(cod.multiple_component_transform, main.siz.components.len()) {
         if crate::mct::check_geometry(&main.siz.components).is_err() {
             return false;
         }
@@ -438,7 +439,8 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
 /// A tile-part header's own markers (A.4.2): the tile-level COD/QCD defaults and
 /// the per-component COC/QCC/RGN overrides that layer over them. Only the *first*
 /// tile-part of a tile may carry any of these, so one per tile is enough however
-/// many parts the tile is split into.
+/// many parts the tile is split into. (A later tile-part that restates a value
+/// already in force is accepted and dropped; see [`check_restatement`].)
 ///
 /// The per-component overrides are **sparse** — only the components a marker
 /// actually names. Almost every tile carries none at all, and a dense vector per
@@ -464,11 +466,15 @@ struct TileParts<'a> {
     /// Each tile-part's packet data, in `TPsot` order (which is the order they
     /// must appear in, enforced below).
     parts: Vec<&'a [u8]>,
-    /// `TNsot` from whichever tile-part stated it; `None` while every part so
-    /// far left it 0 ("not yet known", A.4.2).
-    declared_parts: Option<u8>,
+    /// `TNsot` from whichever tile-part stated it, plus one once the
+    /// `TPsot == TNsot` correction is on (see [`count_is_one_short`]); `None`
+    /// while every part so far left it 0 ("not yet known", A.4.2).
+    declared_parts: Option<u16>,
     /// The tile's own header, from its first tile-part.
     header: TileHeader,
+    /// What a later tile-part may restate (see [`check_restatement`]), built
+    /// the first time one does.
+    restated: Option<Restated>,
     /// The tile's packed packet headers from any `PPT` markers, concatenated
     /// across its tile-parts in `TPsot` order (and within a tile-part in `Zppt`
     /// order). Empty when the tile carries none, in which case the packet headers
@@ -503,9 +509,18 @@ fn walk_tiles<'a>(
             parts: Vec::new(),
             declared_parts: None,
             header: TileHeader::default(),
+            restated: None,
             packed_headers: Vec::new(),
         })
         .collect();
+    // OpenJPEG's `TPsot == TNsot` correction (see `count_is_one_short`): looked
+    // for once, when the first tile has all its declared parts, and from then
+    // on added to every `TNsot`.
+    let mut count_checked = false;
+    let mut count_correction = 0u16;
+    // Whether every main-header component codes and quantizes as the main
+    // COD and QCD say, for `check_restatement`; worked out on first use.
+    let uniform = OnceCell::new();
 
     let mut part_offset = sot_offset;
     loop {
@@ -540,20 +555,20 @@ fn walk_tiles<'a>(
         // TNsot is 0 in a tile-part that does not yet know the count; any part
         // that does state one must agree with every other that does.
         if sot.num_tile_parts != 0 {
-            if sot.tile_part_index >= sot.num_tile_parts {
+            let stated = u16::from(sot.num_tile_parts) + count_correction;
+            if u16::from(sot.tile_part_index) >= stated {
                 return Err(Error::Codestream(format!(
-                    "tile {index} tile-part {} of a declared {} tile-parts",
-                    sot.tile_part_index, sot.num_tile_parts,
+                    "tile {index} tile-part {} of a declared {stated} tile-parts",
+                    sot.tile_part_index,
                 )));
             }
             match tile.declared_parts {
-                Some(declared) if declared != sot.num_tile_parts => {
+                Some(declared) if declared != stated => {
                     return Err(Error::Codestream(format!(
-                        "tile {index} declares {} tile-parts in one SOT and {declared} in another",
-                        sot.num_tile_parts,
+                        "tile {index} declares {stated} tile-parts in one SOT and {declared} in another",
                     )));
                 }
-                _ => tile.declared_parts = Some(sot.num_tile_parts),
+                _ => tile.declared_parts = Some(stated),
             }
         }
 
@@ -562,11 +577,13 @@ fn walk_tiles<'a>(
         if first_part {
             tile.header = tile_header;
         } else {
-            // A later tile-part carries no coding-style overrides — those are
-            // rejected inside `read_tile_part_header` — but its POC volumes are
-            // legal and append to the tile's, so the progression can be split
-            // across the tile's parts (A.6.6). Each part's list is capped, so
-            // the accumulation across parts must be re-checked.
+            // A later tile-part may restate the coding-style values already in
+            // force, which changes nothing; one that differs is refused here.
+            // Its POC volumes are legal and append to the tile's, so the
+            // progression can be split across the tile's parts (A.6.6). Each
+            // part's list is capped, so the accumulation across parts must be
+            // re-checked.
+            check_restatement(main, &uniform, tile, &tile_header, index)?;
             check_poc_budget(tile.header.poc.len() + tile_header.poc.len())?;
             tile.header.poc.extend(tile_header.poc);
         }
@@ -629,7 +646,24 @@ fn walk_tiles<'a>(
             }
             end
         };
-        tiles[index].parts.push(&bytes[data_start..data_end]);
+        let tile = &mut tiles[index];
+        tile.parts.push(&bytes[data_start..data_end]);
+
+        // The first time a tile has every part it declares, look ahead for one
+        // more part of it, as OpenJPEG does (`count_is_one_short`). If there is
+        // one, every count is one short: raise each one stated so far, and
+        // each one stated from here on.
+        if !count_checked && tile.declared_parts == Some(u16::from(sot.tile_part_index) + 1) {
+            count_checked = true;
+            if sot.psot != 0 && count_is_one_short(bytes, data_end, sot.tile_index) {
+                count_correction = 1;
+                for tile in &mut tiles {
+                    if let Some(declared) = &mut tile.declared_parts {
+                        *declared += 1;
+                    }
+                }
+            }
+        }
 
         // A Psot = 0 tile-part is the last one: the walk ends there, whatever
         // the two bytes after its data are.
@@ -694,14 +728,186 @@ fn walk_tiles<'a>(
         .collect()
 }
 
+/// Whether the tile-part chain from `from` holds another part of tile `tile`
+/// whose `TPsot` equals its `TNsot`, so that every `TNsot` in the codestream
+/// is one short of the parts it carries.
+///
+/// Some encoders (Adobe Photoshop's plug-in is one) number a tile's parts
+/// 0 to N and declare N of them. OpenJPEG 2.5.0 corrects this on purpose
+/// (`opj_j2k_need_nb_tile_parts_correction`, its issue 254: "Non conformant
+/// codestream TPsot==TNsot"), and this copies its test. Once, when the first
+/// tile has every part it declares, it walks the `SOT` chain onward, stepping
+/// over other tiles' parts by `Psot`, to the next part of the same tile. If
+/// that part has `TPsot == TNsot`, every tile's count is raised by one. The
+/// walk gives up, finding nothing, at anything other than an `SOT`, at a
+/// `Psot` below 14 (`0` included) on another tile's part, or at a `Psot` past
+/// the end, as OpenJPEG's does.
+///
+/// The raised counts are held to the parts that arrive, as any count is, and
+/// the parts are still read in `TPsot` order.
+fn count_is_one_short(bytes: &[u8], from: usize, tile: u16) -> bool {
+    let mut at = from;
+    loop {
+        if read_u16(bytes, at) != Some(marker::SOT) {
+            return false;
+        }
+        // A malformed SOT ends the look-ahead; the walk reaches the same SOT
+        // and refuses it there.
+        let mut cur = Cursor::at(bytes, at + 2);
+        let Ok(sot) = segment(&mut cur).and_then(decode_sot) else {
+            return false;
+        };
+        if sot.tile_index == tile {
+            return sot.tile_part_index == sot.num_tile_parts;
+        }
+        if sot.psot < 14 {
+            return false;
+        }
+        match at.checked_add(sot.psot as usize) {
+            Some(next) if next <= bytes.len() => at = next,
+            _ => return false,
+        }
+    }
+}
+
+/// Whether every main-header component codes and quantizes as the main COD and
+/// QCD say, so that no main COC or QCC changes anything.
+#[derive(Debug, Clone, Copy)]
+struct Uniform {
+    coding: bool,
+    quant: bool,
+}
+
+impl Uniform {
+    fn of(main: &MainHeader) -> Self {
+        let coding = main.cod.coding();
+        Uniform {
+            coding: main.components.iter().all(|p| p.coding == coding),
+            quant: main.components.iter().all(|p| p.quant == main.qcd),
+        }
+    }
+}
+
+/// What [`check_restatement`] knows about one tile: where its own COC and QCC
+/// markers are, by component, and the COD and QCD a later part has already
+/// been found to restate.
+#[derive(Debug, Default)]
+struct Restated {
+    coc: HashMap<usize, usize>,
+    qcc: HashMap<usize, usize>,
+    cod: Option<Cod>,
+    qcd: Option<Qcd>,
+}
+
+/// Accept a later tile-part's COD, COC, QCD and QCC only when each restates
+/// the value already in force for the tile; refuse one that differs.
+///
+/// A.4.2 puts these markers in a tile's first tile-part. Some encoders (BAP
+/// Image Systems is one) repeat the main header's COD and QCD in every
+/// tile-part. OpenJPEG 2.5.0 reads a COD or QCD in any tile-part header
+/// (`J2K_STATE_TPH` in its marker table) and applies it to the whole tile; it
+/// dropped its "one COD per tile" check on purpose, because legal files broke
+/// on it (`opj_j2k_read_cod`, its issue 1043).
+///
+/// Here a restatement must change nothing, in this decoder's reading or in
+/// OpenJPEG's, and it is then dropped. OpenJPEG writes a COD over every
+/// component of the tile, and a QCD likewise, so a COD is accepted only when
+/// it equals the tile's COD in force and every component of the tile already
+/// codes as it says, and a QCD the same way. A COC or QCC must equal what its
+/// component already has. Anything else is refused: the tile's earlier parts
+/// are read under one set of values and its later parts would name another,
+/// and which one the encoder meant is not in the file.
+///
+/// The cost is bounded by the markers read: a tile's COC and QCC are indexed
+/// once, a COD or QCD found to restate is remembered, and whether the main
+/// header's components are uniform is worked out once per codestream.
+fn check_restatement(
+    main: &MainHeader,
+    uniform: &OnceCell<Uniform>,
+    tile: &mut TileParts<'_>,
+    later: &TileHeader,
+    index: usize,
+) -> Result<()> {
+    if later.cod.is_none() && later.qcd.is_none() && later.coc.is_empty() && later.qcc.is_empty() {
+        return Ok(());
+    }
+    let own = &tile.header;
+    let restated = tile.restated.get_or_insert_with(|| Restated {
+        coc: own
+            .coc
+            .iter()
+            .enumerate()
+            .map(|(at, (c, _))| (*c, at))
+            .collect(),
+        qcc: own
+            .qcc
+            .iter()
+            .enumerate()
+            .map(|(at, (c, _))| (*c, at))
+            .collect(),
+        ..Restated::default()
+    });
+    let differs = |what: String| {
+        Error::Codestream(format!(
+            "a later tile-part of tile {index} carries a {what} that differs from the one \
+             in force; the coding-parameter overrides belong to the first tile-part of a tile"
+        ))
+    };
+
+    if let Some(cod) = &later.cod {
+        if restated.cod.as_ref() != Some(cod) {
+            let coding = cod.coding();
+            let same = cod == own.cod.as_ref().unwrap_or(&main.cod)
+                && own.coc.iter().all(|(_, c)| *c == coding)
+                && (own.cod.is_some() || uniform.get_or_init(|| Uniform::of(main)).coding);
+            if !same {
+                return Err(differs("COD".into()));
+            }
+            restated.cod = Some(cod.clone());
+        }
+    }
+    if let Some(qcd) = &later.qcd {
+        if restated.qcd.as_ref() != Some(qcd) {
+            let same = qcd == own.qcd.as_ref().unwrap_or(&main.qcd)
+                && own.qcc.iter().all(|(_, q)| q == qcd)
+                && (own.qcd.is_some() || uniform.get_or_init(|| Uniform::of(main)).quant);
+            if !same {
+                return Err(differs("QCD".into()));
+            }
+            restated.qcd = Some(qcd.clone());
+        }
+    }
+    for (component, coding) in &later.coc {
+        let same = match (restated.coc.get(component), &own.cod) {
+            (Some(&at), _) => own.coc[at].1 == *coding,
+            (None, Some(cod)) => cod.coding() == *coding,
+            (None, None) => main.components[*component].coding == *coding,
+        };
+        if !same {
+            return Err(differs(format!("COC for component {component}")));
+        }
+    }
+    for (component, quant) in &later.qcc {
+        let same = match (restated.qcc.get(component), &own.qcd) {
+            (Some(&at), _) => own.qcc[at].1 == *quant,
+            (None, Some(qcd)) => qcd == quant,
+            (None, None) => main.components[*component].quant == *quant,
+        };
+        if !same {
+            return Err(differs(format!("QCC for component {component}")));
+        }
+    }
+    Ok(())
+}
+
 /// Read one tile-part header: the markers between its `SOT` segment and its
 /// `SOD` (A.4.2). The cursor is left on the first byte of the packet data.
 ///
 /// Only the *first* tile-part of a tile may carry the coding-parameter overrides
-/// (COD/COC/QCD/QCC/RGN): they say how to read the tile's packets, and a
-/// later part cannot restate what the earlier parts were already decoded under.
-/// A conformant encoder never emits one; a codestream that does is malformed,
-/// not merely unsupported.
+/// (COD/COC/QCD/QCC/RGN): they say how to read the tile's packets. A later
+/// part's COD, COC, QCD and QCC are returned for the caller to hold to the
+/// values in force ([`check_restatement`]); a later RGN is refused here, as a
+/// malformed codestream rather than an unsupported one.
 fn read_tile_part_header(
     cur: &mut Cursor<'_>,
     siz: &Siz,
@@ -736,7 +942,6 @@ fn read_tile_part_header(
                 segment(cur)?;
             }
             marker::COD => {
-                overrides_here(m)?;
                 if tile.cod.replace(decode_cod(segment(cur)?)?).is_some() {
                     return Err(Error::Codestream(
                         "duplicate COD marker in the tile-part header".into(),
@@ -744,7 +949,6 @@ fn read_tile_part_header(
                 }
             }
             marker::QCD => {
-                overrides_here(m)?;
                 if tile
                     .qcd
                     .replace(decode_quant(segment(cur)?, "QCD")?)
@@ -756,7 +960,6 @@ fn read_tile_part_header(
                 }
             }
             marker::COC => {
-                overrides_here(m)?;
                 let (index, coding) = decode_coc(segment(cur)?, siz)?;
                 if !named.insert((m, index)) {
                     return Err(Error::Codestream(format!(
@@ -766,7 +969,6 @@ fn read_tile_part_header(
                 tile.coc.push((index, coding));
             }
             marker::QCC => {
-                overrides_here(m)?;
                 let (index, quant) = decode_qcc(segment(cur)?, siz)?;
                 if !named.insert((m, index)) {
                     return Err(Error::Codestream(format!(
@@ -1307,8 +1509,12 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
     }
 
     // The color transform is signaled by COD but constrains SIZ, so it can
-    // only be checked once both are read.
-    if header.cod.multiple_component_transform {
+    // only be checked once both are read. On an image of fewer than three
+    // components it is skipped, as OpenJPEG skips it (`mct::applies`).
+    if crate::mct::applies(
+        header.cod.multiple_component_transform,
+        header.siz.components.len(),
+    ) {
         crate::mct::check_geometry(&header.siz.components)?;
         // Which color transform applies follows from the wavelet, and the
         // wavelet is per component once COC is in play: 5/3 is RCT (integers),
