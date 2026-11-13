@@ -330,8 +330,8 @@ fn limit_message(result: rust_j2k::Result<rust_j2k::Image>) -> String {
     }
 }
 
-/// The message names the smallest `Raised` factor: decoding with it
-/// succeeds, and with one less is refused.
+/// The message names the smallest `Raised` factor, which is exact on a single
+/// tile: decoding with it succeeds, and with one less is refused.
 #[test]
 fn the_named_factor_is_the_smallest_that_admits_the_file() {
     type Setter = fn(DecodeOptions, WorkLimit) -> DecodeOptions;
@@ -359,14 +359,18 @@ fn the_named_factor_is_the_smallest_that_admits_the_file() {
     }
 }
 
-/// A file far past the bound is not walked to its end: the message sends the
-/// caller to `Unlimited`.
+/// Both messages point to `Unlimited` for trusted input, and say the factor
+/// is a lower bound.
 #[test]
-fn a_file_far_past_the_bound_names_unlimited() {
-    let bytes = fixture("work_bound/cprl_tall_poc31.j2k");
-    let message = limit_message(decode(&bytes));
-    assert!(message.contains("`WorkLimit::Unlimited`"), "{message}");
-    assert!(!message.contains("Raised("), "{message}");
+fn the_message_names_unlimited_for_trusted_input() {
+    for name in [
+        "tier1_work_bound/t1bomb_1024_64_88.j2k",
+        "work_bound/t2skip_2048x1024_40000.j2k",
+    ] {
+        let message = limit_message(decode(&fixture(name)));
+        assert!(message.contains("`WorkLimit::Unlimited`"), "{message}");
+        assert!(message.contains("at least"), "{message}");
+    }
 }
 
 /// A raised limit that is still too small names a factor above it.

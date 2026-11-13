@@ -123,8 +123,9 @@
 //! [`DecodeOptions::packet_work_limit`] for reading the packet headers and
 //! [`DecodeOptions::code_block_work_limit`] for decoding the code-blocks,
 //! each set with a [`WorkLimit`]. The other caps have no option. The message
-//! says which cap the file hit, and for a work bound it names the smallest
-//! [`WorkLimit::Raised`] factor that admits the file.
+//! says which cap the file hit, and for a work bound it names a
+//! [`WorkLimit::Raised`] factor the file needs at least (later tiles may need
+//! more).
 //!
 //! For a file from a source you trust, lift both bounds. [`WorkLimit`] has an
 //! example that retries after an `Error::Limit`.
@@ -256,8 +257,8 @@ pub use jp2::{
 /// [`decode_with`] can raise or lift either bound, for a file from a source
 /// you trust: see [`DecodeOptions::packet_work_limit`] and
 /// [`DecodeOptions::code_block_work_limit`]. The message of a work-bound
-/// [`Error::Limit`] names the option and the smallest [`WorkLimit::Raised`]
-/// factor that admits the file; [`WorkLimit`] shows a retry. The other caps
+/// [`Error::Limit`] names the option and the least [`WorkLimit::Raised`]
+/// factor the file needs; [`WorkLimit`] shows a retry. The other caps
 /// behind `Error::Limit` (image area, code-block count, precinct count) have
 /// no option.
 ///
@@ -606,7 +607,8 @@ pub struct DecodeOptions {
 /// for minutes of work (see [`decode`]). A valid file can still go past a
 /// bound, when it codes many samples in very few bytes. The decode then
 /// fails with [`Error::Limit`], and its message names the option and the
-/// smallest [`Raised`](WorkLimit::Raised) factor that admits the file.
+/// least [`Raised`](WorkLimit::Raised) factor the file needs. For a file of
+/// several tiles that is a lower bound, since later tiles are not counted.
 ///
 /// Which value to pick:
 ///
@@ -968,12 +970,12 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // component. The walk covers every resolution whatever the reduction:
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
-        let visits_before = visits;
         let coded = match tier2::decode_packets(&header, tile, &mut visits, poc_bitmap) {
             Err(Error::Limit(why)) if why == tier2::WALK_LIMIT => {
-                let spent = (first_visits.saturating_sub(visits_before), first_visits);
                 return Err(Error::Limit(limit_hint::packet_walk(
-                    &cs, index, spent, poc_bitmap, &why,
+                    &why,
+                    first_visits,
+                    poc_bitmap,
                 )));
             }
             other => other?,
@@ -985,16 +987,13 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         if let Some(left) = &mut block_work {
             let work = tier1::work(&header, &coded, reduction);
             let Some(rest) = left.checked_sub(work) else {
-                let hit = limit_hint::CodeBlocks {
+                return Err(Error::Limit(limit_hint::code_blocks(
                     index,
                     work,
-                    spent: first_work.saturating_sub(*left),
-                    left: *left,
-                    default: tier1::decode_work(bytes),
-                    visits: (poc_bitmap, visits),
-                    reduction,
-                };
-                return Err(Error::Limit(limit_hint::code_blocks(&cs, &hit)));
+                    *left,
+                    first_work.saturating_sub(*left),
+                    tier1::decode_work(bytes),
+                )));
             };
             *left = rest;
         }

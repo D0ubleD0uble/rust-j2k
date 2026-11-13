@@ -85,7 +85,8 @@ pub enum Error {
     /// and decoding the code-blocks
     /// ([`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)),
     /// each a [`WorkLimit`](crate::WorkLimit). The message of a work bound names
-    /// the option and the smallest `WorkLimit::Raised` factor that admits the file. The
+    /// the option and the least `WorkLimit::Raised` factor the file needs (a lower
+    /// bound for a file of several tiles). The
     /// caps on the sample area, the code-block count and the precinct count
     /// have no option, so a file past one of them is refused whatever the
     /// options. [`WorkLimit`](crate::WorkLimit) has an example that retries.

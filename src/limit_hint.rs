@@ -1,125 +1,37 @@
-//! The advice an [`Error::Limit`] for a work bound carries: the smallest
-//! [`WorkLimit::Raised`](crate::WorkLimit::Raised) factor that admits the file.
+//! The advice an [`Error::Limit`](crate::Error::Limit) for a work bound
+//! carries: the smallest [`WorkLimit::Raised`](crate::WorkLimit::Raised)
+//! factor the refusal already shows is needed.
 //!
-//! A bound scales with the file, so `Raised(n)` admits a file that needs at
-//! most `n` times the default bound. The decode stops at the first tile that
-//! goes past, so the total the file needs is found here, once, on the error
-//! path.
+//! A bound scales with the file, so `Raised(n)` allows `n` times the default
+//! bound. The figure is plain arithmetic on what the refusal knows; nothing
+//! is walked or decoded to find it, so a refused file costs no more to
+//! refuse. It is a lower bound: later tiles may need more.
 
-use crate::codestream::Codestream;
-use crate::{Error, tier1, tier2};
-
-/// The most times the default packet bound a failed walk is repeated for.
-const PROBE_FACTOR: u64 = 4;
-
-/// The smallest `Raised` factor for `needed` against a `default` bound, as a
-/// phrase for a message.
-fn raised(needed: u64, default: u64) -> String {
-    let factor = needed.div_ceil(default.max(1)).max(1);
-    match u32::try_from(factor) {
-        Ok(factor) => format!("`WorkLimit::Raised({factor})`"),
-        Err(_) => "`WorkLimit::Unlimited`".into(),
-    }
+/// The smallest `Raised` factor for `needed` against a `default` bound.
+fn factor(needed: u64, default: u64) -> u32 {
+    let n = needed.div_ceil(default.max(1)).max(1);
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
-/// The message for a packet walk that ran out of visits in tile `index`
-/// after the earlier tiles spent `spent` of `limit`, the visits the decode
-/// started with. `default` is the default bound, `why` the plain message.
-///
-/// The walk is repeated from that tile on, under a larger limit, to count
-/// what the whole file takes. That costs at most [`PROBE_FACTOR`] times the
-/// default bound. If the repeat fails some other way the message is `why`
-/// alone, and if the count passes that much, or `limit` is already that
-/// much, the message says the file needs more than it.
-pub(crate) fn packet_walk(
-    cs: &Codestream<'_>,
-    index: usize,
-    (spent, limit): (u64, u64),
-    default: u64,
-    why: &str,
-) -> String {
-    let cap = default.saturating_mul(PROBE_FACTOR);
-    // A caller who has already raised the bound past what is probed gets no
-    // repeat: the file needs more than they allowed.
-    if limit >= cap {
-        return format!(
-            "{why}; it needs more than {} times the default bound, so \
-             `WorkLimit::Unlimited` is the way to decode it",
-            limit / default.max(1)
-        );
-    }
-    let mut left = cap.saturating_sub(spent);
-    for (i, tile) in cs.tiles.iter().enumerate().skip(index) {
-        let walked = cs
-            .tile_header(i)
-            .and_then(|header| tier2::decode_packets(&header, tile, &mut left, default));
-        match walked {
-            Ok(_) => {}
-            Err(Error::Limit(m)) if m == tier2::WALK_LIMIT => {
-                return format!(
-                    "{why}; it needs more than {} times the default bound, so \
-                     `WorkLimit::Unlimited` is the way to decode it",
-                    cap / default.max(1)
-                );
-            }
-            Err(_) => return why.to_owned(),
-        }
-    }
+const TRUSTED: &str = "or use `WorkLimit::Unlimited` for trusted input";
+
+/// The message for a packet walk that ran out of `allowed` visits, where
+/// `default` is the default bound and `why` the plain message. All that is
+/// known is that the walk needs more than it was allowed.
+pub(crate) fn packet_walk(why: &str, allowed: u64, default: u64) -> String {
+    let n = factor(allowed.saturating_add(1), default);
     format!(
-        "{why}; {} is the smallest factor that admits the file",
-        raised(cap - left, default)
+        "{why}; it needs at least `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
     )
 }
 
-/// What the code-block bound reports about a tile that goes past it.
-pub(crate) struct CodeBlocks {
-    /// The tile that went past.
-    pub(crate) index: usize,
-    /// Its sample-passes.
-    pub(crate) work: u64,
-    /// The sample-passes the earlier tiles spent.
-    pub(crate) spent: u64,
-    /// The sample-passes left when the tile began.
-    pub(crate) left: u64,
-    /// The default bound.
-    pub(crate) default: u64,
-    /// The default packet bound, and the visits left after the tile's walk.
-    pub(crate) visits: (u64, u64),
-    /// The decode's resolution reduction.
-    pub(crate) reduction: u8,
-}
-
-/// The message for a tile whose code-blocks go past the bound. The packets
-/// of the tiles after it are walked, without decoding any code-block, to
-/// add up what the whole file needs. If that walk fails, the factor is a
-/// lower bound and the message says so.
-pub(crate) fn code_blocks(cs: &Codestream<'_>, hit: &CodeBlocks) -> String {
-    let (poc_bitmap, mut visits) = hit.visits;
-    let mut total = hit.spent.saturating_add(hit.work);
-    let mut exact = true;
-    for (i, tile) in cs.tiles.iter().enumerate().skip(hit.index + 1) {
-        let counted = cs.tile_header(i).and_then(|header| {
-            let coded = tier2::decode_packets(&header, tile, &mut visits, poc_bitmap)?;
-            Ok(tier1::work(&header, &coded, hit.reduction))
-        });
-        match counted {
-            Ok(work) => total = total.saturating_add(work),
-            Err(_) => {
-                exact = false;
-                break;
-            }
-        }
-    }
-    let factor = raised(total, hit.default);
-    let verdict = if exact {
-        format!("{factor} is the smallest factor that admits the file")
-    } else {
-        format!("it needs at least {factor}")
-    };
+/// The message for a tile whose code-blocks need `work` sample-passes when
+/// `left` of the bound were left, after earlier tiles spent `spent`.
+pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, default: u64) -> String {
+    let n = factor(spent.saturating_add(work), default);
     format!(
-        "code-block decoding exceeds its work bound: tile {} needs {} \
-         sample-passes, {} are left (see `DecodeOptions::code_block_work_limit`); \
-         {verdict}",
-        hit.index, hit.work, hit.left
+        "code-block decoding exceeds its work bound: tile {index} needs {work} \
+         sample-passes, {left} are left (see `DecodeOptions::code_block_work_limit`); \
+         the file needs at least `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
     )
 }

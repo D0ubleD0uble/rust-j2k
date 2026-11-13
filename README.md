@@ -112,7 +112,8 @@ may ask for. Only the two work bounds can be changed, with
 - For a file from a source you trust, use `WorkLimit::Unlimited`. It is the
   simplest choice.
 - To keep a ceiling, use `WorkLimit::Raised(n)`. The `Limit` message for a
-  work bound names the smallest `n` that admits the file.
+  work bound names an `n` the file needs at least (a lower bound when the file has
+  several tiles).
 
 The `WorkLimit` docs on [docs.rs](https://docs.rs/rust-j2k) have an example
 that catches `Error::Limit` and retries.
