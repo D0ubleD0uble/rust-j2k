@@ -5,8 +5,10 @@
 //! A bound scales with the file, so `Raised(n)` allows `n` times the default
 //! bound. The figure is plain arithmetic on what the refusal knows; nothing
 //! is walked or decoded to find it, so a refused file costs no more to
-//! refuse. The sample limit's factor is exact, as the image's samples are
-//! known from its header. Of the work bounds, only the code-block bound, a POC
+//! refuse. The sample limit's factor is exact for the check it names, as the
+//! samples it counts are known from the header; palette expansion or sRGB
+//! output is checked after the image area and may need a higher one. Of the
+//! work bounds, only the code-block bound, a POC
 //! sequence's reach and the code-blocks of the resolutions a reduction drops
 //! give the factor the tile needs. A packet walk that runs out of visits shows only
 //! that it needs more than it was allowed, so its message names the next

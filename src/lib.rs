@@ -279,8 +279,8 @@ pub use jp2::{
 /// Encoder output seen spends up to about 14000 per byte, 43% of the bound
 /// (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
 ///
-/// [`decode_with`] can raise or lift the sample limit and either work bound,
-/// for a file from a source you trust: see [`DecodeOptions::sample_limit`],
+/// [`decode_with`] can raise or lift each of these three limits, for a file
+/// from a source you trust: see [`DecodeOptions::sample_limit`],
 /// [`DecodeOptions::packet_work_limit`] and
 /// [`DecodeOptions::code_block_work_limit`]. The message of an
 /// [`Error::Limit`] from one of them names the option and a
@@ -663,8 +663,9 @@ pub struct DecodeOptions {
 /// the option and a [`Raised`](WorkLimit::Raised) factor. Treat the factor as
 /// a hint, not a measure of the file:
 ///
-/// - For the sample limit it is exact: the image's samples are known from
-///   its header.
+/// - For the sample limit it is exact for the check it names: the image's
+///   samples are known from its header. Palette expansion or sRGB output is
+///   checked later, against the same limit, and may need a higher factor.
 /// - For the code-block bound it is what the tiles seen so far need, exact
 ///   for a file of one tile.
 /// - For the packet bound it is the next factor up from the one that failed,
@@ -701,15 +702,16 @@ pub struct DecodeOptions {
 /// let image = match decode(bytes) {
 ///     // The example fails if the bomb is ever admitted by default.
 ///     Ok(_) => panic!("expected the work bound to refuse this file"),
-///     // Past a work bound. The message says which, and the factor.
+///     // Past a limit. The message says which, and the factor.
 ///     Err(Error::Limit(why)) => {
 ///         println!("refused: {why}");
-///         // The file is trusted here, so lift both bounds. To keep a
-///         // ceiling, use `WorkLimit::Raised(n)` for one of them instead.
+///         // The file is trusted here, so lift all three limits. To keep a
+///         // ceiling, use `WorkLimit::Raised(n)` for the one named instead.
 ///         let options = DecodeOptions::default()
+///             .with_sample_limit(WorkLimit::Unlimited)
 ///             .with_code_block_work_limit(WorkLimit::Unlimited)
 ///             .with_packet_work_limit(WorkLimit::Unlimited);
-///         decode_with(bytes, &options).expect("a valid file decodes once the bounds are lifted")
+///         decode_with(bytes, &options).expect("a valid file decodes once the limits are lifted")
 ///     }
 ///     Err(e) => panic!("not a work-bound failure: {e}"),
 /// };
@@ -1065,11 +1067,13 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // component. The walk covers every resolution whatever the reduction:
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
-        let visits_before = visits;
         let coded = match tier2::decode_packets(&header, tile, &mut visits, poc_bitmap, reduction) {
             Ok(coded) => coded,
             Err(tier2::Refused::Work(work)) => {
-                let spent = first_visits.saturating_sub(visits_before);
+                // `visits` holds what is left after the refusal, so this
+                // counts this tile's charges before it as well as the
+                // earlier tiles'.
+                let spent = first_visits.saturating_sub(visits);
                 return Err(Error::Limit(limit_hint::packet(
                     work,
                     spent,

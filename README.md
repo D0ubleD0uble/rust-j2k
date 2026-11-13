@@ -125,9 +125,11 @@ The other guards have no option; the list is on `Error::Limit` in the docs.
   simplest choice. Under the sample limit it allocates what the header
   declares.
 - To keep a ceiling, use `WorkLimit::Raised(n)`. The `Limit` message names an
-  `n` as a hint: for the sample limit it is exact, for the code-block bound
-  it is what the tiles seen so far need, and for the packet bound it is the
-  next factor up, which may not be enough (double `n` on a retry).
+  `n` as a hint: for the sample limit it is exact for the check it names
+  (palette expansion or sRGB output, checked later, may need a higher one),
+  for the code-block bound it is what the tiles seen so far need, and for the
+  packet bound it is the next factor up, which may not be enough (double `n`
+  on a retry).
 
 The `WorkLimit` docs on [docs.rs](https://docs.rs/rust-j2k) have an example
 that catches `Error::Limit` and retries.

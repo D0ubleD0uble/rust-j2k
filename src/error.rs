@@ -101,8 +101,9 @@ pub enum Error {
     /// a measure of the file.
     ///
     /// The other guards have no option, so a file past one of them is refused
-    /// whatever the options: the caps on the code-block count, the precinct
-    /// count and the bit-plane depth. [`WorkLimit`](crate::WorkLimit) has an
+    /// whatever the options. Among them are the caps on the code-block count,
+    /// the precinct count, the bit-plane depth and the number of progression
+    /// order change (POC) volumes. [`WorkLimit`](crate::WorkLimit) has an
     /// example that retries.
     Limit(String),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are

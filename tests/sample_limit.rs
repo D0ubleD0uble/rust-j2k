@@ -226,42 +226,59 @@ fn the_sample_limit_defaults_to_the_default_bound() {
     );
 }
 
-/// A codestream of `side` x `side` tiles of 2800 x 2800, one component, six
-/// wavelet levels and 4x4 code-blocks, where every tile carries an empty packet
-/// for each of its seven resolutions. It is a few hundred bytes, but every tile
-/// has about 490000 code-blocks.
-fn many_tiles_of_empty_packets(side: u32) -> Vec<u8> {
-    fn segment(marker: u16, body: &[u8]) -> Vec<u8> {
-        let mut out = marker.to_be_bytes().to_vec();
-        out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
-        out.extend_from_slice(body);
-        out
-    }
-    let (tile, levels) = (2800u32, 6u8);
+fn segment(marker: u16, body: &[u8]) -> Vec<u8> {
+    let mut out = marker.to_be_bytes().to_vec();
+    out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
+    out.extend_from_slice(body);
+    out
+}
+
+/// The main header of a `size` x `size` image in tiles of `tile`, of
+/// `components` unsigned 8-bit components, six wavelet levels, 4x4
+/// code-blocks, 5/3, no quantization, LRCP and `layers` layers, followed by
+/// `extra` (more main-header segments).
+fn main_header(size: u32, tile: u32, components: u16, layers: u16, extra: &[u8]) -> Vec<u8> {
     let mut siz = vec![0, 0];
-    for field in [side * tile, side * tile, 0, 0, tile, tile, 0, 0] {
+    for field in [size, size, 0, 0, tile, tile, 0, 0] {
         siz.extend_from_slice(&field.to_be_bytes());
     }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
-    // LRCP, one layer, no MCT; six levels, 4x4 code-blocks, 5/3.
-    let cod = [0, 0, 0, 1, 0, levels, 0, 0, 0, 1];
-    // No quantization, a guard of 2 and an exponent of 8 for every subband.
+    siz.extend_from_slice(&components.to_be_bytes());
+    for _ in 0..components {
+        siz.extend_from_slice(&[7, 1, 1]);
+    }
+    let mut cod = vec![0, 0];
+    cod.extend_from_slice(&layers.to_be_bytes());
+    cod.extend_from_slice(&[0, 6, 0, 0, 0, 1]);
+    // A guard of 2 and an exponent of 8 for every subband.
     let qcd = [&[0x40][..], &[8 << 3; 19]].concat();
-    let mut out = [
+    [
         vec![0xFF, 0x4F],
         segment(0xFF51, &siz),
         segment(0xFF52, &cod),
         segment(0xFF5C, &qcd),
+        extra.to_vec(),
     ]
-    .concat();
-    let packets = [0u8; 7];
+    .concat()
+}
+
+/// One tile-part of tile `index` holding `body`.
+fn tile_part(index: u32, body: &[u8]) -> Vec<u8> {
+    let mut sot = (index as u16).to_be_bytes().to_vec();
+    sot.extend_from_slice(&(14 + body.len() as u32).to_be_bytes());
+    sot.extend_from_slice(&[0, 1]);
+    [segment(0xFF90, &sot), vec![0xFF, 0x93], body.to_vec()].concat()
+}
+
+/// A codestream of `side` x `side` tiles of `tile` x `tile`, `components`
+/// components, six wavelet levels and 4x4 code-blocks, where every tile
+/// carries an empty packet for each of its seven resolutions in each
+/// component. It is a few hundred bytes, but a tile of 2800 has about 490000
+/// code-blocks a component.
+fn many_tiles_of_empty_packets(side: u32, tile: u32, components: u16) -> Vec<u8> {
+    let mut out = main_header(side * tile, tile, components, 1, &[]);
+    let packets = vec![0u8; 7 * usize::from(components)];
     for index in 0..side * side {
-        let mut sot = (index as u16).to_be_bytes().to_vec();
-        sot.extend_from_slice(&(14 + packets.len() as u32).to_be_bytes());
-        sot.extend_from_slice(&[0, 1]);
-        out.extend_from_slice(&segment(0xFF90, &sot));
-        out.extend_from_slice(&[0xFF, 0x93]);
-        out.extend_from_slice(&packets);
+        out.extend_from_slice(&tile_part(index, &packets));
     }
     out.extend_from_slice(&[0xFF, 0xD9]);
     out
@@ -271,12 +288,13 @@ fn many_tiles_of_empty_packets(side: u32) -> Vec<u8> {
 /// admitted when its reduced area fits. Every tile still builds its geometry
 /// at full resolution, and that work is charged to the packet work bound, so
 /// many tiles of next to no data are refused quickly at the defaults.
-/// `packet_work_limit` is the one setting to raise.
+/// `packet_work_limit` is the one setting to raise, and the message names
+/// the factor that admits the file.
 #[test]
 fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
     // 7 x 7 tiles, about 24 M code-blocks, past the 2^24 visits the bound
     // allows a file this small.
-    let bytes = many_tiles_of_empty_packets(7);
+    let bytes = many_tiles_of_empty_packets(7, 2800, 1);
     assert!(bytes.len() < 2048, "{} bytes", bytes.len());
     let reduced = DecodeOptions::default().with_resolution_reduction(6);
     let header = read_header_with(&bytes, &reduced).expect("the reduced area fits");
@@ -284,6 +302,10 @@ fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
     match decode_with(&bytes, &reduced) {
         Err(Error::Limit(m)) => {
             assert!(m.contains("`DecodeOptions::packet_work_limit`"), "{m}");
+            assert!(
+                m.contains("the file needs at least `WorkLimit::Raised(2)`"),
+                "{m}"
+            );
         }
         other => panic!("{:?}", other.map(|i| (i.width, i.height))),
     }
@@ -293,4 +315,81 @@ fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
     let image = decode_with(&bytes, &raised).expect("admitted under Raised(2)");
     assert_eq!((image.width, image.height), (307, 307));
     assert!(image.components[0].samples.iter().all(|&s| s == 128));
+}
+
+/// The factor `Raised(n)` a `Limit` message names.
+fn named_factor(message: &str) -> u32 {
+    let (_, rest) = message
+        .split_once("`WorkLimit::Raised(")
+        .unwrap_or_else(|| panic!("no factor named: {message}"));
+    rest.split_once(')').unwrap().0.parse().unwrap()
+}
+
+/// The message of a decode refused for work under `limit` at `-r 6`.
+fn refused_at_r6(bytes: &[u8], limit: WorkLimit) -> String {
+    let options = DecodeOptions::default()
+        .with_resolution_reduction(6)
+        .with_packet_work_limit(limit);
+    match decode_with(bytes, &options) {
+        Err(Error::Limit(m)) => m,
+        other => panic!("{:?}", other.map(|i| (i.width, i.height))),
+    }
+}
+
+/// The factor for the dropped resolutions' code-blocks counts the charges of
+/// the tile's earlier components too. 6 x 6 tiles of 2000 in two components
+/// hold about 1.8e7 code-blocks, past the 2^24 visits, and the refusal comes
+/// at a tile's second component: the message names `Raised(2)`, which
+/// admits the file.
+#[test]
+fn the_dropped_blocks_factor_counts_the_tiles_earlier_components() {
+    let bytes = many_tiles_of_empty_packets(6, 2000, 2);
+    let message = refused_at_r6(&bytes, WorkLimit::Default);
+    assert!(message.contains("the reduction drops"), "{message}");
+    assert_eq!(named_factor(&message), 2, "{message}");
+    let options = DecodeOptions::default()
+        .with_resolution_reduction(6)
+        .with_packet_work_limit(WorkLimit::Raised(2));
+    let image = decode_with(&bytes, &options).expect("admitted under Raised(2)");
+    assert_eq!(image.components.len(), 2);
+}
+
+/// One 64 x 64 tile of 37 components and 64770 layers, with two identical
+/// POC volumes over all of them (the reach is checked only for a sequence).
+/// They reach 64770 x 7 x 37 = 16775430 packets, 1786 under the 2^24
+/// visits. The six resolutions `-r 6` drops hold 261 code-blocks a component,
+/// 9657 in all, so their charge leaves too few visits for the reach. The
+/// tile holds 16 empty packets.
+fn poc_reach_past_the_dropped_blocks() -> Vec<u8> {
+    let (components, layers) = (37u16, 64770u16);
+    // RSpoc 0, CSpoc 0, LYEpoc, REpoc 7, CEpoc, Ppoc LRCP.
+    let mut entry = vec![0, 0];
+    entry.extend_from_slice(&layers.to_be_bytes());
+    entry.extend_from_slice(&[7, components as u8, 0]);
+    let poc = segment(0xFF5F, &[&entry[..], &entry[..]].concat());
+    let mut out = main_header(64, 64, components, layers, &poc);
+    out.extend_from_slice(&tile_part(0, &[0; 16]));
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
+/// A POC reach refused after the dropped resolutions' code-blocks are
+/// charged names the factor for both: 9657 + 16775430 visits is past 2^24,
+/// so `Raised(2)`, though the reach alone fits under the default.
+#[test]
+fn the_poc_factor_counts_the_dropped_blocks_charged_before_it() {
+    let bytes = poc_reach_past_the_dropped_blocks();
+    let message = refused_at_r6(&bytes, WorkLimit::Default);
+    assert!(
+        message.contains("its POC volumes reach 16775430"),
+        "{message}"
+    );
+    assert_eq!(named_factor(&message), 2, "{message}");
+    // Under `Raised(2)` the walk gets past the bound; the tile holds only 16
+    // packets, so it fails some other way.
+    let options = DecodeOptions::default()
+        .with_resolution_reduction(6)
+        .with_packet_work_limit(WorkLimit::Raised(2));
+    let result = decode_with(&bytes, &options);
+    assert!(!matches!(result, Err(Error::Limit(_))), "{result:?}");
 }
