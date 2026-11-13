@@ -345,7 +345,11 @@ fn refused_at_r6(bytes: &[u8], limit: WorkLimit) -> String {
 fn the_dropped_blocks_factor_counts_the_tiles_earlier_components() {
     let bytes = many_tiles_of_empty_packets(6, 2000, 2);
     let message = refused_at_r6(&bytes, WorkLimit::Default);
-    assert!(message.contains("the reduction drops"), "{message}");
+    assert!(
+        message.contains("code-blocks in this component"),
+        "{message}"
+    );
+    assert!(message.contains("visits already spent"), "{message}");
     assert_eq!(named_factor(&message), 2, "{message}");
     let options = DecodeOptions::default()
         .with_resolution_reduction(6)

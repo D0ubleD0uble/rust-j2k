@@ -564,8 +564,8 @@ impl WorkRefusal {
             ),
             WorkRefusal::DroppedBlocks { blocks } => format!(
                 "tile packet walk exceeds its work bound: the resolutions the \
-                 reduction drops hold {blocks} code-blocks (see \
-                 `DecodeOptions::packet_work_limit`)"
+                 reduction drops hold {blocks} code-blocks in this component \
+                 (see `DecodeOptions::packet_work_limit`)"
             ),
         }
     }

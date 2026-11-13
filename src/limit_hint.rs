@@ -46,8 +46,8 @@ pub(crate) fn packet(work: WorkRefusal, spent: u64, allowed: u64, default: u64) 
         | WorkRefusal::DroppedBlocks { blocks: needed } => {
             let n = factor(spent.saturating_add(needed), default);
             format!(
-                "{why}; the file needs at least `WorkLimit::Raised({n})` (later tiles may need \
-                 more), {TRUSTED}"
+                "{why}; with the {spent} visits already spent, the file needs at least \
+                 `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
             )
         }
     }
