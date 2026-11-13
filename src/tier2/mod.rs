@@ -163,14 +163,17 @@ pub fn decode_packets<'a>(
     visits: &mut u64,
     poc_bitmap: u64,
     reduction: u8,
-) -> Result<CodedData<'a>> {
+) -> std::result::Result<CodedData<'a>, Refused> {
     let mut budget = Budget {
         reduction,
         ..Budget::decode(*visits, poc_bitmap)
     };
     let coded = decode_packets_within(header, tile, &mut budget);
     *visits = budget.visits;
-    coded
+    coded.map_err(|error| match (budget.refusal, error) {
+        (Some(work), Error::Limit(_)) => Refused::Work(work),
+        (_, error) => Refused::Other(error),
+    })
 }
 
 /// The fewest visits (see [`Budget::visits`]) a decode may spend walking its
@@ -259,6 +262,8 @@ pub(crate) struct Budget {
     /// per-tile code-block cap, would make a small file take minutes to decode
     /// at a reduction. It is 0 for `read_header`'s walk.
     pub(crate) reduction: u8,
+    /// Why the walk was refused for work, once it is (see [`WorkRefusal`]).
+    pub(crate) refusal: Option<WorkRefusal>,
 }
 
 impl Budget {
@@ -281,6 +286,7 @@ impl Budget {
             poc_set: true,
             poc_coverage: true,
             reduction: 0,
+            refusal: None,
         }
     }
 }
@@ -315,6 +321,7 @@ pub(crate) fn decode_packets_within<'a>(
     // tile can pass the bound by at most one component's geometry, which the
     // caps bound.
     let component_count = header.siz.components.len();
+    let visits = Visits::new(budget.visits);
     let mut geoms = Vec::with_capacity(component_count);
     for c in 0..component_count {
         let resolutions = resolution_geoms(
@@ -332,9 +339,9 @@ pub(crate) fn decode_packets_within<'a>(
             .flat_map(|resolution| &resolution.bands)
             .map(|band| band.blocks.len())
             .sum();
-        let left = Cell::new(budget.visits);
-        let charged = visit(&left, dropped);
-        budget.visits = left.get();
+        let charged = charge_dropped_blocks(&visits, dropped);
+        budget.visits = visits.get();
+        budget.refusal = visits.refusal.get();
         charged?;
         geoms.push(resolutions);
     }
@@ -378,7 +385,6 @@ pub(crate) fn decode_packets_within<'a>(
     if budget.poc_coverage {
         progression::check_poc_coverage(header, &walk, tile.index)?;
     }
-    let visits = Cell::new(budget.visits);
     let mut packet_index = 0u32;
     let walked = for_each_packet(
         header,
@@ -404,6 +410,7 @@ pub(crate) fn decode_packets_within<'a>(
         },
     );
     budget.visits = visits.get();
+    budget.refusal = visits.refusal.get();
     walked?;
 
     let mut components = Vec::with_capacity(states.len());
@@ -422,7 +429,7 @@ pub(crate) fn decode_packets_within<'a>(
             let subbands = if level.bands.is_empty() {
                 empty_subbands(rect, nl, r as u32)
             } else {
-                build_subbands(&level.bands, band_states)?
+                build_subbands(&level.bands, band_states)
             };
             resolutions.push(Resolution { subbands });
         }
@@ -524,17 +531,115 @@ struct PacketStreams<'a> {
     packed: bool,
 }
 
-/// Spend `n` of what is left of [`Budget::visits`], or fail once it is gone.
-pub(crate) fn visit(left: &Cell<u64>, n: usize) -> Result<()> {
-    match left.get().checked_sub(n as u64) {
+/// Why a packet walk was refused for work, with the numbers a caller needs to
+/// name a [`WorkLimit`](crate::WorkLimit) factor. It travels beside the
+/// [`Error`] the walk fails with (see [`Refused`]), so nothing reads it back
+/// out of the message. A new work refusal (the sample-area one, say) is a new
+/// variant here, a line in [`WorkRefusal::why`], and a function in
+/// `limit_hint`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkRefusal {
+    /// The walk ran out of visits.
+    PacketWalk,
+    /// A POC sequence's volumes reach `reached` packets, more than the visits
+    /// left.
+    PocReach { reached: u64 },
+    /// A component's geometry holds `blocks` code-blocks in the resolutions
+    /// the reduction drops, more than the visits left (see
+    /// [`Budget::reduction`]).
+    DroppedBlocks { blocks: u64 },
+}
+
+impl WorkRefusal {
+    /// The plain message of the [`Error::Limit`] for this refusal.
+    pub(crate) fn why(&self) -> String {
+        match self {
+            WorkRefusal::PacketWalk => {
+                "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)"
+                    .into()
+            }
+            WorkRefusal::PocReach { reached } => format!(
+                "tile packet walk exceeds its work bound: its POC volumes reach \
+                 {reached} packets (see `DecodeOptions::packet_work_limit`)"
+            ),
+            WorkRefusal::DroppedBlocks { blocks } => format!(
+                "tile packet walk exceeds its work bound: the resolutions the \
+                 reduction drops hold {blocks} code-blocks (see \
+                 `DecodeOptions::packet_work_limit`)"
+            ),
+        }
+    }
+}
+
+/// How [`decode_packets`] fails: for work, with the typed reason, or for
+/// anything else, as the [`Error`] it is.
+#[derive(Debug)]
+pub(crate) enum Refused {
+    /// The tile went past the packet work bound.
+    Work(WorkRefusal),
+    /// Any other failure.
+    Other(Error),
+}
+
+impl From<Refused> for Error {
+    fn from(refused: Refused) -> Error {
+        match refused {
+            Refused::Work(work) => Error::Limit(work.why()),
+            Refused::Other(error) => error,
+        }
+    }
+}
+
+/// What is left of a walk's visits, and, once it is refused for work, why.
+pub(crate) struct Visits {
+    left: Cell<u64>,
+    refusal: Cell<Option<WorkRefusal>>,
+}
+
+impl Visits {
+    pub(crate) fn new(left: u64) -> Self {
+        Visits {
+            left: Cell::new(left),
+            refusal: Cell::new(None),
+        }
+    }
+
+    /// The visits left.
+    pub(crate) fn get(&self) -> u64 {
+        self.left.get()
+    }
+
+    /// Record `why` as the reason the walk is refused, and give the [`Error`]
+    /// to fail it with.
+    pub(crate) fn refuse(&self, why: WorkRefusal) -> Error {
+        self.refusal.set(Some(why));
+        Error::Limit(why.why())
+    }
+}
+
+/// Spend a visit for each of `blocks` code-blocks of the resolutions the
+/// reduction drops (see [`Budget::reduction`]), or refuse the walk with
+/// [`WorkRefusal::DroppedBlocks`] when fewer are left.
+fn charge_dropped_blocks(visits: &Visits, blocks: usize) -> Result<()> {
+    match visits.left.get().checked_sub(blocks as u64) {
         Some(rest) => {
-            left.set(rest);
+            visits.left.set(rest);
             Ok(())
         }
-        None => Err(Error::Limit(
-            "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)"
-                .into(),
-        )),
+        None => Err(visits.refuse(WorkRefusal::DroppedBlocks {
+            blocks: blocks as u64,
+        })),
+    }
+}
+
+/// Spend `n` of what is left of [`Budget::visits`], or fail once it is gone.
+pub(crate) fn visit(visits: &Visits, n: usize) -> Result<()> {
+    match visits.left.get().checked_sub(n as u64) {
+        Some(rest) => {
+            visits.left.set(rest);
+            Ok(())
+        }
+        None => Err(visits.refuse(WorkRefusal::PacketWalk)),
     }
 }
 
@@ -682,7 +787,7 @@ struct Contribution {
 #[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
     streams: &mut PacketStreams<'a>,
-    visits: &Cell<u64>,
+    visits: &Visits,
     layer: u32,
     packet_index: u32,
     delimiters: Delimiters,
@@ -801,7 +906,7 @@ fn parse_packet<'a>(
 /// bytes and is not counted.
 #[allow(clippy::too_many_arguments)]
 fn parse_band_header(
-    visits: &Cell<u64>,
+    visits: &Visits,
     band_index: usize,
     precinct: &PrecinctGeom,
     trees: &mut PrecinctState,
@@ -911,12 +1016,15 @@ fn parse_band_header(
             let length_bits = block.lblock + new_passes.ilog2();
             let seg_len = bio.read(length_bits) as usize;
 
-            // A layer may add coding passes and no bytes. The MQ codeword is
-            // continuous within a segment, so the encoder's rate split can put
-            // passes in one layer and the bytes carrying them in the next;
-            // OpenJPEG reads such a length without complaint. What must not
-            // happen is a block ending up with passes and no bytes at all,
-            // which `build_subbands` checks once every layer has been read.
+            // A layer may add coding passes and no bytes (B.10.7 sets no
+            // lower bound on the length). The MQ codeword is continuous
+            // within a segment, so the encoder's rate split can put passes in
+            // one layer and the bytes carrying them in the next. A segment
+            // that never gets a byte is decoded from the `0xFF` fill (D.4.1),
+            // as OpenJPEG decodes it. The passes still count and still fill
+            // the segment, so a later layer's passes land in the right one.
+            // A zero length files no chunk, and reading it took at least the
+            // header bits above, so it costs no more than one with bytes.
             let segment = &mut block.segments[segment_index];
             segment.passes += new_passes;
             if seg_len > 0 {
@@ -964,21 +1072,12 @@ fn empty_subbands<'a>(rect: Rect, nl: u32, r: u32) -> Vec<Subband<'a>> {
 
 /// Turn the accumulated per-layer state of one resolution into its subbands.
 ///
-/// A block that took coding passes but no bytes from any layer would hand Tier-1
-/// an empty MQ stream. That is checked here rather than per packet, because a
-/// single layer is allowed to contribute passes without bytes.
-fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Result<Vec<Subband<'a>>> {
-    for state in &states {
-        for block in &state.blocks {
-            if block.num_passes > 0 && block.segments.iter().all(|s| s.chunks.is_empty()) {
-                return Err(Error::Codestream(
-                    "included code-block has coding passes but no coded bytes".into(),
-                ));
-            }
-        }
-    }
-
-    Ok(bands
+/// A block may end up with coding passes and no bytes, in one codeword segment
+/// or in all of them, since B.10.7 lets a contribution's length be zero. Tier-1
+/// decodes such a segment from the `0xFF` bytes D.4.1 appends, as OpenJPEG
+/// does.
+fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Subband<'a>> {
+    bands
         .iter()
         .zip(states)
         .map(|(band, state)| Subband {
@@ -1010,7 +1109,7 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Result<
                 })
                 .collect(),
         })
-        .collect())
+        .collect()
 }
 
 /// Decode the number of coding passes (ISO Table B.4 / OpenJPEG

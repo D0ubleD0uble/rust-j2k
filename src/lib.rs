@@ -80,6 +80,66 @@
 //! # }
 //! ```
 //!
+//! # Damaged input
+//!
+//! Decoding is strict. Truncated or inconsistent data is an error, and no
+//! partial image comes back with it. A raw codestream cut short fails as
+//! [`Error::Codestream`] (a tile-part that runs past the end is
+//! `Psot overruns the codestream`), a JP2 file cut short as `Codestream` or
+//! [`Error::FileFormat`], depending on where the cut falls, and a raw
+//! codestream whose `EOC` marker is missing is refused. (A JP2 file whose
+//! last tile-part has `Psot = 0` decodes without an `EOC`, as OpenJPEG
+//! reads it.) Input that is not JPEG 2000 at all, empty input and plain
+//! text included, is `Codestream` too.
+//!
+//! Damage can show up as any variant, not only those two. A flipped bit in
+//! a header field can read as an absurd image size ([`Error::Limit`]) or an
+//! unknown marker or a feature the decoder does not read
+//! ([`Error::Unsupported`]). Do not retry a file with
+//! [`WorkLimit::Unlimited`] on that evidence alone.
+//!
+//! JPEG 2000 carries no checksum, so damage inside the entropy-coded data is
+//! not always detected: a flipped byte in a code-block can decode without an
+//! error and give a wrong image. If that matters, check the file against a
+//! hash you keep. [The correctness notes][strict] list what is refused and
+//! where this decoder is stricter than OpenJPEG.
+//!
+//! ```
+//! use rust_j2k::{Error, decode};
+//!
+//! let bytes = include_bytes!(concat!(
+//!     env!("CARGO_MANIFEST_DIR"),
+//!     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+//! ));
+//! assert!(decode(bytes).is_ok());
+//!
+//! // Cut short: an error, not a partial image.
+//! let cut = &bytes[..bytes.len() / 2];
+//! assert!(matches!(decode(cut), Err(Error::Codestream(_))));
+//! // Without its closing `EOC` marker (FF D9): refused.
+//! assert!(decode(&bytes[..bytes.len() - 2]).is_err());
+//! // Not JPEG 2000 at all.
+//! assert!(matches!(decode(b"hello"), Err(Error::Codestream(_))));
+//! ```
+//!
+//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams
+//!
+//! # Limits
+//!
+//! A valid file can still be refused with [`Error::Limit`]. The decoder caps
+//! what a file may declare and how much work it may ask for. Three limits
+//! can be changed, each set with a [`WorkLimit`]:
+//! [`DecodeOptions::sample_limit`] for the image's size,
+//! [`DecodeOptions::packet_work_limit`] for reading the packet headers and
+//! [`DecodeOptions::code_block_work_limit`] for decoding the code-blocks.
+//! The other guards have no option; the list is on [`Error::Limit`]. The
+//! message says which guard the file hit. For one of the three it also
+//! names a [`WorkLimit::Raised`] factor (see [`WorkLimit`] for how far to
+//! trust it).
+//!
+//! For a file from a source you trust, lift all three. [`WorkLimit`] has an
+//! example that retries after an `Error::Limit`.
+//!
 //! # Status
 //!
 //! All 23 codestreams of the ISO/IEC 15444-4 conformance suite decode within
@@ -105,6 +165,7 @@ pub(crate) mod error;
 pub(crate) mod header;
 pub(crate) mod image;
 pub(crate) mod jp2;
+pub(crate) mod limit_hint;
 pub(crate) mod mct;
 pub(crate) mod pipeline;
 pub(crate) mod quant;
@@ -221,7 +282,16 @@ pub use jp2::{
 /// [`decode_with`] can raise or lift the sample limit and either work bound,
 /// for a file from a source you trust: see [`DecodeOptions::sample_limit`],
 /// [`DecodeOptions::packet_work_limit`] and
-/// [`DecodeOptions::code_block_work_limit`].
+/// [`DecodeOptions::code_block_work_limit`]. The message of an
+/// [`Error::Limit`] from one of them names the option and a
+/// [`WorkLimit::Raised`] factor; [`WorkLimit`] shows a retry and how far to
+/// trust the factor. The other guards behind `Error::Limit` have no option
+/// (see [`Error::Limit`]).
+///
+/// Decoding is strict: damaged or truncated data is an [`Error`], not a
+/// partial image. A flipped byte in entropy-coded data can go unnoticed,
+/// since the format has no checksum, and damage can show up as any variant
+/// (see the crate docs).
 ///
 /// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-sample-limit
 /// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound
@@ -238,6 +308,11 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// This is [`read_header_with`] at the default [`DecodeOptions`], so a fault in
 /// what it reads is the same [`Error`] that [`decode`] returns for that input.
 /// Use [`read_header_with`] to read the header for other options.
+///
+/// A readable header does not mean [`decode`] will succeed. The tile data is
+/// not read (except the packet headers of the last tile of a JP2 file whose
+/// tile-part has `Psot = 0`, described on [`read_header_with`]), so it can
+/// still be damaged, unsupported, or past a work bound ([`Error::Limit`]).
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -341,7 +416,9 @@ pub enum ColorOutput {
     /// an ICC profile is passed through, not applied.
     #[default]
     AsCoded,
-    /// sRGB. A restricted ICC profile (a monochrome or a three-component
+    /// sRGB. No conversion changes a channel's bit depth: a 12-bit file comes
+    /// out as 12-bit sRGB, and a caller who wants 8-bit samples scales them
+    /// (see the example below). A restricted ICC profile (a monochrome or a three-component
     /// matrix/TRC input profile) is applied at its rendering intent, as
     /// OpenJPEG applies it with LittleCMS: the samples match
     /// `opj_decompress -force-rgb` sample for sample. sYCC is converted to
@@ -350,8 +427,8 @@ pub enum ColorOutput {
     /// OpenJPEG shortens the constants and truncates, so the two differ by an
     /// MSE of about 0.38 to 0.49 a channel. The ISO references agree with it
     /// (MSE under 0.03). The color channels are the ones the `cdef` box
-    /// labels color 1, 2 and 3, wherever they sit. No conversion changes a
-    /// channel's bit depth, and other channels (opacity, say) are untouched.
+    /// labels color 1, 2 and 3, wherever they sit. Other channels (opacity,
+    /// say) are untouched.
     ///
     /// The ICC reference is OpenJPEG 2.5.0 with LittleCMS 2.14 on x86-64
     /// Linux (glibc 2.39). The output is the same on every platform whose
@@ -403,6 +480,85 @@ pub enum ColorOutput {
     /// [`ColorOutput::AsCoded`] decodes the same files. The [table of
     /// outcomes][outcomes] lists every case against what OpenJPEG does, and
     /// the profiles LittleCMS refuses.
+    ///
+    /// # Example: an 8-bit RGBA buffer
+    ///
+    /// Samples are `i32` at each channel's own depth and sign, so a caller
+    /// that wants 8-bit RGBA does three things. It scales each sample to
+    /// 8 bits, adding half the range first when the channel is signed. It
+    /// finds the opacity channel by its [`ChannelType`] on
+    /// [`Jp2Metadata::channels`], not by position. And it repeats a gray
+    /// (one color channel) image's value for red, green and blue. This
+    /// handles those three for a JP2 file whose channels share one grid; an
+    /// image without opacity gets 255, and so does one whose opacity is
+    /// [`ChannelType::PremultipliedOpacity`], which this recipe does not
+    /// handle.
+    ///
+    /// ```
+    /// use rust_j2k::{ChannelType, ColorOutput, DecodeOptions, Image, decode_with};
+    ///
+    /// /// One sample at its channel's depth and sign, as 8 bits.
+    /// fn to_u8(sample: i32, bit_depth: u8, signed: bool) -> u8 {
+    ///     let max = (1i64 << bit_depth) - 1;
+    ///     let offset = if signed { 1i64 << (bit_depth - 1) } else { 0 };
+    ///     let unsigned = (i64::from(sample) + offset).clamp(0, max);
+    ///     ((unsigned * 255 + max / 2) / max) as u8
+    /// }
+    ///
+    /// /// Interleaved RGBA, or `None` when the channels do not fit that shape
+    /// /// (two colors, or channels on different grids).
+    /// fn rgba8(image: &Image) -> Option<Vec<u8>> {
+    ///     let first = image.components.first()?;
+    ///     let same_grid = image
+    ///         .components
+    ///         .iter()
+    ///         .all(|c| (c.width, c.height) == (first.width, first.height));
+    ///     // A raw codestream has no labels: take every channel as a color.
+    ///     let kinds: Vec<ChannelType> = match &image.jp2 {
+    ///         Some(jp2) => jp2.channels.iter().map(|c| c.kind).collect(),
+    ///         None => vec![ChannelType::Color; image.components.len()],
+    ///     };
+    ///     let colors: Vec<usize> = (0..kinds.len())
+    ///         .filter(|&i| kinds[i] == ChannelType::Color)
+    ///         .collect();
+    ///     let alpha = kinds.iter().position(|&k| k == ChannelType::Opacity);
+    ///     let (r, g, b) = match colors.as_slice() {
+    ///         [gray] => (*gray, *gray, *gray),
+    ///         [r, g, b, ..] => (*r, *g, *b),
+    ///         _ => return None,
+    ///     };
+    ///     if !same_grid {
+    ///         return None;
+    ///     }
+    ///     let mut out = Vec::with_capacity(first.samples.len() * 4);
+    ///     for i in 0..first.samples.len() {
+    ///         for channel in [Some(r), Some(g), Some(b), alpha] {
+    ///             out.push(match channel {
+    ///                 Some(c) => {
+    ///                     let c = &image.components[c];
+    ///                     to_u8(c.samples[i], c.bit_depth, c.signed)
+    ///                 }
+    ///                 None => 255,
+    ///             });
+    ///         }
+    ///     }
+    ///     Some(out)
+    /// }
+    ///
+    /// let bytes = include_bytes!(concat!(
+    ///     env!("CARGO_MANIFEST_DIR"),
+    ///     "/tests/fixtures/jp2_cdef_rgba.jp2"
+    /// ));
+    /// let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
+    /// let image = decode_with(bytes, &options).expect("a 16x12 RGBA file");
+    /// let rgba = rgba8(&image).expect("red, green, blue and opacity");
+    /// assert_eq!(rgba.len(), 16 * 12 * 4);
+    ///
+    /// // A gray image repeats its value, and has no opacity channel.
+    /// use rust_j2k::Component;
+    /// let gray = Image::new(2, 1, vec![Component::new(2, 1, 12, false, 1, 1, vec![0, 4095])]);
+    /// assert_eq!(rgba8(&gray), Some(vec![0, 0, 0, 255, 255, 255, 255, 255]));
+    /// ```
     ///
     /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#outcomes
     Srgb,
@@ -501,20 +657,63 @@ pub struct DecodeOptions {
 ///
 /// Each work bound scales with the size of the file, so a small file cannot
 /// ask for minutes of work, and the sample limit holds the memory a file may
-/// ask for to about 1.4 GiB (see [`decode`]). A valid file can still go
-/// past a bound, when it codes many samples in very few bytes or is simply
-/// very large: raise the limit, or lift it, to decode such a file from a
-/// source you trust.
+/// ask for to about 1.4 GiB (see [`decode`]). A valid file can still go past
+/// a bound, when it codes many samples in very few bytes or is simply very
+/// large. The decode then fails with [`Error::Limit`], and its message names
+/// the option and a [`Raised`](WorkLimit::Raised) factor. Treat the factor as
+/// a hint, not a measure of the file:
+///
+/// - For the sample limit it is exact: the image's samples are known from
+///   its header.
+/// - For the code-block bound it is what the tiles seen so far need, exact
+///   for a file of one tile.
+/// - For the packet bound it is the next factor up from the one that failed,
+///   and the file may need more: the walk stops as soon as it runs out, so it
+///   does not know the total. (A POC sequence that reaches too many packets
+///   gets the factor its reach needs, and so do the code-blocks of the
+///   resolutions a reduction drops, but the walk after that check can still
+///   run out.) If `Raised(n)` is refused again, the message names the
+///   next factor. Double `n` on a retry rather than stepping by one: each
+///   retry costs more, and a file can need dozens of steps.
+///
+/// Which value to pick:
+///
+/// - For a file from a source you trust, use [`Unlimited`](WorkLimit::Unlimited).
+///   It is the simplest, and the decode takes as long as the file asks.
+/// - To keep a ceiling, use `Raised(n)` with an `n` of your own choosing,
+///   the largest cost you will accept. Read the factor from the message to
+///   size it: a file that needs `Raised(3)` is refused under `Raised(2)`. Do
+///   not parse the message in code; it is a diagnostic, not a stable format.
+///
+/// Only these three limits can be changed. The other guards also end in
+/// [`Error::Limit`], and no option here raises them (see [`Error::Limit`]).
+/// A damaged file can hit a guard too, so do not lift a bound on that
+/// evidence alone.
 ///
 /// ```
-/// use rust_j2k::{DecodeOptions, WorkLimit};
+/// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode, decode_with};
 ///
-/// // Ten times the default bound for the code-blocks, and no bound on the
-/// // packet headers.
-/// let options = DecodeOptions::default()
-///     .with_code_block_work_limit(WorkLimit::Raised(10))
-///     .with_packet_work_limit(WorkLimit::Unlimited);
-/// assert_eq!(options.code_block_work_limit, WorkLimit::Raised(10));
+/// // A valid 1 KB file that asks for far more work than its size allows.
+/// let bytes = include_bytes!(concat!(
+///     env!("CARGO_MANIFEST_DIR"),
+///     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
+/// ));
+/// let image = match decode(bytes) {
+///     // The example fails if the bomb is ever admitted by default.
+///     Ok(_) => panic!("expected the work bound to refuse this file"),
+///     // Past a work bound. The message says which, and the factor.
+///     Err(Error::Limit(why)) => {
+///         println!("refused: {why}");
+///         // The file is trusted here, so lift both bounds. To keep a
+///         // ceiling, use `WorkLimit::Raised(n)` for one of them instead.
+///         let options = DecodeOptions::default()
+///             .with_code_block_work_limit(WorkLimit::Unlimited)
+///             .with_packet_work_limit(WorkLimit::Unlimited);
+///         decode_with(bytes, &options).expect("a valid file decodes once the bounds are lifted")
+///     }
+///     Err(e) => panic!("not a work-bound failure: {e}"),
+/// };
+/// assert_eq!((image.width, image.height), (1024, 1024));
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -641,6 +840,39 @@ impl DecodeOptions {
 
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
 /// `options`.
+///
+/// Every [`DecodeOptions`] field is set with a `with_*` method. This reads
+/// a JP2 file at half size and converts it to sRGB:
+///
+/// ```
+/// use rust_j2k::{ColorOutput, DecodeOptions, Error, decode_with};
+///
+/// let bytes = include_bytes!(concat!(
+///     env!("CARGO_MANIFEST_DIR"),
+///     "/tests/fixtures/jp2_cdef_rgba.jp2"
+/// ));
+/// let options = DecodeOptions::default()
+///     .with_resolution_reduction(1)
+///     .with_color(ColorOutput::Srgb);
+/// match decode_with(bytes, &options) {
+///     Ok(image) => {
+///         // The file is 16x12; one level discarded halves each side.
+///         assert_eq!((image.width, image.height), (8, 6));
+///         // Red, green, blue and opacity.
+///         assert_eq!(image.components.len(), 4);
+///     }
+///     // Options that contradict each other or do not fit the file (a
+///     // reduction past its levels, `raw_channels` with sRGB output), or a
+///     // file the conversion cannot handle (`Unsupported`), are handled
+///     // here in real code. This file is fine, so they fail the example.
+///     Err(Error::InvalidOptions(why) | Error::Unsupported(why)) => panic!("{why}"),
+///     Err(e) => panic!("decode failed: {e}"),
+/// }
+/// ```
+///
+/// Failures are the same [`Error`] variants as [`decode`], plus
+/// [`Error::InvalidOptions`] for options that contradict each other or the
+/// file.
 pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     check_options(options)?;
     // A codestream opens with SOC; anything else that carries the signature
@@ -812,10 +1044,12 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
     let bytes = tile_bytes(&cs);
     let poc_bitmap = tier2::decode_visits(bytes);
     let mut visits = options.packet_work_limit.apply(poc_bitmap);
+    let first_visits = visits;
     let mut block_work = match &options.code_block_work_limit {
         WorkLimit::Unlimited => None,
         limit => Some(limit.apply(tier1::decode_work(bytes))),
     };
+    let first_work = block_work.unwrap_or(0);
     for (index, tile) in cs.tiles.iter().enumerate() {
         // The tile's own parameters: the main header with this tile's tile-part
         // header resolved over it. A tile with no markers of its own borrows the
@@ -831,20 +1065,36 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // component. The walk covers every resolution whatever the reduction:
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
-        let coded = tier2::decode_packets(&header, tile, &mut visits, poc_bitmap, reduction)?;
+        let visits_before = visits;
+        let coded = match tier2::decode_packets(&header, tile, &mut visits, poc_bitmap, reduction) {
+            Ok(coded) => coded,
+            Err(tier2::Refused::Work(work)) => {
+                let spent = first_visits.saturating_sub(visits_before);
+                return Err(Error::Limit(limit_hint::packet(
+                    work,
+                    spent,
+                    first_visits,
+                    poc_bitmap,
+                )));
+            }
+            Err(tier2::Refused::Other(error)) => return Err(error),
+        };
         // Tier-1: MQ + EBCOT bit-plane decode each code block into subband
         // coeffs. The dropped resolutions' code-blocks are skipped, never
         // decoded. Their work is counted first, so a tile past the bound is
         // refused before any of it is done.
         if let Some(left) = &mut block_work {
             let work = tier1::work(&header, &coded, reduction);
-            *left = left.checked_sub(work).ok_or_else(|| {
-                Error::Limit(format!(
-                    "code-block decoding exceeds its work bound: tile {index} needs \
-                     {work} sample-passes, {left} are left (see \
-                     `DecodeOptions::code_block_work_limit`)"
-                ))
-            })?;
+            let Some(rest) = left.checked_sub(work) else {
+                return Err(Error::Limit(limit_hint::code_blocks(
+                    index,
+                    work,
+                    *left,
+                    first_work.saturating_sub(*left),
+                    tier1::decode_work(bytes),
+                )));
+            };
+            *left = rest;
         }
         let coeffs = tier1::decode_code_blocks(&header, &coded, reduction)?;
 
@@ -861,8 +1111,12 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // Undo the inter-component decorrelation, if any, before the DC level
         // shift (ISO/IEC 15444-1 G.1). It is a per-tile transform: the flag
         // lives in COD, which a tile-part header can override. Components past
-        // the third are untouched.
-        if header.cod.multiple_component_transform {
+        // the third are untouched. On an image of fewer than three components
+        // the flag is ignored, as OpenJPEG ignores it (`mct::applies`).
+        if mct::applies(
+            header.cod.multiple_component_transform,
+            header.components.len(),
+        ) {
             // The wavelet picks the transform (G.1): 5/3 reconstructs integers
             // and inverts with the reversible RCT, 9/7 reconstructs floats and
             // inverts with the irreversible ICT. All three color components

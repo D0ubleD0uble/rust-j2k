@@ -1252,7 +1252,7 @@ mod tests {
     /// each pass is its own segment, and its length field may be zero. The MQ
     /// decoder reads `0xFF` past the end of its slice, the way OpenJPEG pads
     /// with `OPJ_COMMON_CBLK_DATA_EXTRA`, so this decodes rather than panicking.
-    /// `build_subbands` still rejects a block with passes and no bytes anywhere.
+    /// A block whose every segment is empty decodes the same way (B.10.7, D.4.1).
     #[test]
     fn an_empty_codeword_segment_does_not_panic() {
         let mut state = BlockState::new(4, 4);

@@ -655,21 +655,46 @@ fn array_multiple_component_transform_is_unsupported() {
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
 }
 
-/// The color transform is defined over the first three components, so a
-/// codestream that signals it with fewer is describing something the transform
-/// cannot express. Skipping it (as OpenJPEG does) would decode the wrong image.
+/// The color transform is defined over the first three components, so on an
+/// image of one or two it has nothing to apply to. OpenJPEG skips it there
+/// (`opj_tcd_mct_decode`), and so does this decoder: the header parses, with
+/// the flag kept as read, and either wavelet passes.
 #[test]
-fn color_transform_needs_three_components() {
-    let bytes = codestream(&[
-        seg(marker::SIZ, &one_component()),
-        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1)),
-        seg(marker::QCD, &qcd_none(2, &[8; 16])),
-    ]);
-    let e = err(&bytes);
-    assert!(
-        matches!(&e, Error::Marker(m) if m.contains("first three")),
-        "got {e:?}"
-    );
+fn a_color_transform_on_fewer_than_three_components_is_skipped() {
+    for count in [1u16, 2] {
+        for wavelet in [0, 1] {
+            let header = parsed(&[
+                seg(
+                    marker::SIZ,
+                    &siz_body(count, &vec![(7, 1, 1); count.into()]),
+                ),
+                seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, wavelet)),
+                seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
+            ]);
+            assert!(header.cod.multiple_component_transform);
+            assert!(!crate::mct::applies(true, header.components.len()));
+        }
+    }
+}
+
+/// The same on a tile: a tile-part COD that signals the transform on a
+/// one-component image passes the tile check, which looks at no component
+/// past the first.
+#[test]
+fn a_tile_color_transform_on_one_component_is_skipped() {
+    let tile_cod = seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1));
+    let data = [0u8];
+    let psot = psot_for(&data) + tile_cod.len() as u32;
+    let mut bytes = be16(marker::SOC).to_vec();
+    for part in default_header() {
+        bytes.extend_from_slice(&part);
+    }
+    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&tile_cod);
+    bytes.extend_from_slice(&be16(marker::SOD));
+    bytes.extend_from_slice(&data);
+    bytes.extend_from_slice(&be16(marker::EOC));
+    parse(&bytes).expect("a tile COD with the transform on one component");
 }
 
 /// The three transformed components must share a depth, sign, and sub-sampling.
@@ -1227,6 +1252,316 @@ fn a_tile_with_no_tile_part_is_codestream() {
     // Only tile 0 is carried; tile 1 never appears.
     let bytes = assemble(&header, &sot_seg(0, 0, 0, 1), &[1, 2], true);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+// --- encoder quirks OpenJPEG corrects (issue #282) ----------------------
+
+/// One tile-part for [`tile_parts`]: `(Isot, TPsot, TNsot, header markers)`.
+type Part = (u16, u8, u8, Vec<Vec<u8>>);
+
+/// SOC, `header`, then each part with one data byte of its own, then EOC.
+fn tile_parts(header: &[Vec<u8>], parts: &[Part]) -> Vec<u8> {
+    let mut bytes = be16(marker::SOC).to_vec();
+    for s in header {
+        bytes.extend_from_slice(s);
+    }
+    for (at, (isot, tpsot, tnsot, markers)) in parts.iter().enumerate() {
+        let markers = markers.concat();
+        let data = [at as u8];
+        let psot = psot_for(&data) + markers.len() as u32;
+        bytes.extend_from_slice(&sot_seg(*isot, psot, *tpsot, *tnsot));
+        bytes.extend_from_slice(&markers);
+        bytes.extend_from_slice(&be16(marker::SOD));
+        bytes.extend_from_slice(&data);
+    }
+    bytes.extend_from_slice(&be16(marker::EOC));
+    bytes
+}
+
+/// A 2x1 grid of one component.
+fn two_tiles() -> Vec<Vec<u8>> {
+    vec![
+        seg(marker::SIZ, &siz_geom(512, 256, 0, 0, 256, 256, 0, 0)),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]
+}
+
+/// Parts numbered 0 to N with N declared, interleaved across two tiles, as
+/// Adobe Photoshop's plug-in writes them. OpenJPEG raises every count by one
+/// (`opj_j2k_need_nb_tile_parts_correction`), and so does this decoder: each
+/// tile gets all its parts, in order.
+#[test]
+fn a_last_tpsot_equal_to_tnsot_raises_every_count() {
+    let bytes = tile_parts(
+        &two_tiles(),
+        &[
+            (0, 0, 2, vec![]),
+            (1, 0, 2, vec![]),
+            (0, 1, 2, vec![]),
+            (1, 1, 2, vec![]),
+            (0, 2, 2, vec![]),
+            (1, 2, 2, vec![]),
+        ],
+    );
+    let cs = parse(&bytes).expect("TPsot == TNsot on the last parts");
+    assert_eq!(cs.tiles[0].data.as_ref(), &[0, 2, 4]);
+    assert_eq!(cs.tiles[1].data.as_ref(), &[1, 3, 5]);
+}
+
+/// OpenJPEG looks for the extra part once, when the first tile has all the
+/// parts it declares. A tile that completes later with an extra part is not
+/// looked at, and its extra part is refused, as OpenJPEG refuses it.
+#[test]
+fn the_extra_part_is_looked_for_only_when_the_first_tile_completes() {
+    let bytes = tile_parts(
+        &two_tiles(),
+        &[(0, 0, 1, vec![]), (1, 0, 1, vec![]), (1, 1, 1, vec![])],
+    );
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.contains("tile-part 1 of a declared 1")),
+        "got {e:?}"
+    );
+}
+
+/// The correction needs the next part of the tile to have `TPsot == TNsot`.
+/// One that declares a different count is refused, as before.
+#[test]
+fn an_extra_part_with_another_count_is_refused() {
+    let bytes = tile_parts(&default_header(), &[(0, 0, 1, vec![]), (0, 1, 2, vec![])]);
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.contains("declares 2 tile-parts in one SOT and 1")),
+        "got {e:?}"
+    );
+}
+
+/// Once raised, every count is held to the parts that arrive: a tile that
+/// carries only the parts it declared is now one short, and refused.
+#[test]
+fn a_raised_count_is_still_held_to_the_parts() {
+    let bytes = tile_parts(
+        &two_tiles(),
+        &[(0, 0, 1, vec![]), (0, 1, 1, vec![]), (1, 0, 1, vec![])],
+    );
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.contains("tile 1 declares 2 tile-parts but carries 1")),
+        "got {e:?}"
+    );
+}
+
+/// The main header's COD and QCD restated in a later tile-part change nothing,
+/// so they are accepted and dropped, as OpenJPEG reads them (it accepts a COD
+/// in any tile-part header). BAP Image Systems writes them so.
+#[test]
+fn a_later_tile_part_may_restate_the_cod_and_qcd_in_force() {
+    let restated = vec![
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ];
+    let bytes = tile_parts(
+        &default_header(),
+        &[
+            (0, 0, 3, vec![]),
+            (0, 1, 3, restated.clone()),
+            (0, 2, 3, restated),
+        ],
+    );
+    let cs = parse(&bytes).expect("COD and QCD restated");
+    assert_eq!(cs.tiles[0].header, TileHeader::default());
+    assert_eq!(cs.tiles[0].data.as_ref(), &[0, 1, 2]);
+}
+
+/// A tile's own COD from its first part may be restated too.
+#[test]
+fn a_later_tile_part_may_restate_the_tiles_own_cod() {
+    let own = seg(marker::COD, &cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1)); // two layers
+    let bytes = tile_parts(
+        &default_header(),
+        &[(0, 0, 2, vec![own.clone()]), (0, 1, 2, vec![own])],
+    );
+    let cs = parse(&bytes).expect("the tile's COD restated");
+    assert_eq!(cs.tiles[0].header.cod.as_ref().map(|c| c.layers), Some(2));
+}
+
+/// A refusal case: its name, the first part's markers, the later part's
+/// markers, and what the error names.
+type Refusal = (&'static str, Vec<Vec<u8>>, Vec<Vec<u8>>, &'static str);
+
+/// The later part's markers, each refused because it differs from the value
+/// in force, with what the error names.
+fn later_part_refusals() -> Vec<Refusal> {
+    let qcc = |index: u8, exponent: u8| {
+        let mut body = vec![index];
+        body.extend_from_slice(&qcd_none(2, &[exponent; 16]));
+        seg(marker::QCC, &body)
+    };
+    vec![
+        (
+            "a COD with another layer count",
+            vec![],
+            vec![seg(marker::COD, &cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1))],
+            "a COD that differs",
+        ),
+        (
+            "a QCD with other exponents",
+            vec![],
+            vec![seg(marker::QCD, &qcd_none(2, &[9; 16]))],
+            "a QCD that differs",
+        ),
+        (
+            "a COC with other code-blocks",
+            vec![],
+            vec![seg(marker::COC, &coc_body(&[0], 0, 5, 3, 3, 0, 1))],
+            "a COC for component 0 that differs",
+        ),
+        (
+            "a QCC with other exponents",
+            vec![],
+            vec![qcc(0, 9)],
+            "a QCC for component 0 that differs",
+        ),
+        (
+            // OpenJPEG would write the COD over the tile's COC; here the COC
+            // wins. The two readings differ, so neither is guessed.
+            "the main COD over a tile COC that differs from it",
+            vec![seg(marker::COC, &coc_body(&[0], 0, 5, 3, 3, 0, 1))],
+            vec![seg(marker::COD, &cod_default(1))],
+            "a COD that differs",
+        ),
+        (
+            "the main QCD over a tile QCC that differs from it",
+            vec![qcc(0, 9)],
+            vec![seg(marker::QCD, &qcd_none(2, &[8; 16]))],
+            "a QCD that differs",
+        ),
+        (
+            "the main COD where the tile's own COD differs",
+            vec![seg(marker::COD, &cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1))],
+            vec![seg(marker::COD, &cod_default(1))],
+            "a COD that differs",
+        ),
+        (
+            "the main QCD where the tile's own QCD differs",
+            vec![seg(marker::QCD, &qcd_none(2, &[9; 16]))],
+            vec![seg(marker::QCD, &qcd_none(2, &[8; 16]))],
+            "a QCD that differs",
+        ),
+        (
+            "a COC that differs from the tile's own COD",
+            vec![seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 3, 3, 0, 1))],
+            vec![seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0, 1))],
+            "a COC for component 0 that differs",
+        ),
+        (
+            "a COC that differs from the tile's own COC",
+            vec![seg(marker::COC, &coc_body(&[0], 0, 5, 3, 3, 0, 1))],
+            vec![seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0, 1))],
+            "a COC for component 0 that differs",
+        ),
+        (
+            "a QCC that differs from the tile's own QCD",
+            vec![seg(marker::QCD, &qcd_none(2, &[9; 16]))],
+            vec![qcc(0, 8)],
+            "a QCC for component 0 that differs",
+        ),
+        (
+            "a QCC that differs from the tile's own QCC",
+            vec![qcc(0, 9)],
+            vec![qcc(0, 8)],
+            "a QCC for component 0 that differs",
+        ),
+    ]
+}
+
+/// A later part's COD, COC, QCD or QCC that differs from the value in force
+/// is refused: the earlier parts are read under one value and the later ones
+/// would name another, and which the encoder meant is not in the file.
+#[test]
+fn a_later_tile_part_that_changes_a_value_in_force_is_refused() {
+    for (case, first, later, names) in later_part_refusals() {
+        let bytes = tile_parts(&default_header(), &[(0, 0, 2, first), (0, 1, 2, later)]);
+        let e = perr(&bytes);
+        assert!(
+            matches!(&e, Error::Codestream(m) if m.contains(names) && m.contains("tile 0")),
+            "{case}: got {e:?}"
+        );
+    }
+}
+
+/// A COC or QCC restating its component's value is accepted, whether that
+/// value comes from the main header, the tile's COD/QCD, or its own COC/QCC.
+#[test]
+fn a_later_tile_part_may_restate_a_coc_or_qcc_in_force() {
+    let qcc = |exponent: u8| {
+        let mut body = vec![0];
+        body.extend_from_slice(&qcd_none(2, &[exponent; 16]));
+        seg(marker::QCC, &body)
+    };
+    let coc = |xcb: u8| seg(marker::COC, &coc_body(&[0], 0, 5, xcb, xcb, 0, 1));
+    for (first, later) in [
+        // From the main header.
+        (vec![], vec![coc(4), qcc(8)]),
+        // From the tile's own COD and QCD.
+        (
+            vec![
+                seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 3, 3, 0, 1)),
+                seg(marker::QCD, &qcd_none(2, &[9; 16])),
+            ],
+            vec![coc(3), qcc(9)],
+        ),
+        // From the tile's own COC and QCC.
+        (vec![coc(3), qcc(9)], vec![coc(3), qcc(9)]),
+    ] {
+        let bytes = tile_parts(&default_header(), &[(0, 0, 2, first), (0, 1, 2, later)]);
+        parse(&bytes).expect("a COC and QCC restated");
+    }
+}
+
+/// A main-header COC makes a component code other than the main COD says, so
+/// a later COD restating the main COD would change it in OpenJPEG's reading
+/// and is refused. A main QCC does the same to a later QCD. Without the main
+/// COC or QCC, the same restatement is accepted.
+#[test]
+fn a_restated_main_cod_or_qcd_over_a_main_coc_or_qcc_is_refused() {
+    let mut qcc = vec![1];
+    qcc.extend_from_slice(&qcd_none(2, &[9; 16]));
+    for (extra, later, names) in [
+        (
+            seg(marker::COC, &coc_body(&[1], 0, 5, 3, 3, 0, 1)),
+            seg(marker::COD, &cod_default(1)),
+            "a COD that differs",
+        ),
+        (
+            seg(marker::QCC, &qcc),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+            "a QCD that differs",
+        ),
+    ] {
+        let mut header = vec![
+            seg(marker::SIZ, &siz_body(2, &[(7, 1, 1); 2])),
+            seg(marker::COD, &cod_default(1)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ];
+        let parts = [(0, 0, 2, vec![]), (0, 1, 2, vec![later])];
+        parse(&tile_parts(&header, &parts)).expect("no main COC or QCC");
+        header.push(extra);
+        let e = perr(&tile_parts(&header, &parts));
+        assert!(
+            matches!(&e, Error::Codestream(m) if m.contains(names)),
+            "got {e:?}"
+        );
+    }
+}
+
+/// RGN is not among the markers a later part may restate: it stays refused.
+#[test]
+fn a_later_tile_part_rgn_is_still_refused() {
+    let later = vec![seg(marker::RGN, &rgn_body(&[0], 0, 0))];
+    let bytes = tile_parts(&default_header(), &[(0, 0, 2, vec![]), (0, 1, 2, later)]);
+    assert!(matches!(perr(&bytes), Error::Codestream(m) if m.contains("other than the first")));
 }
 
 /// PPM's payload frames one packet-header chunk per tile-part with a 4-byte
@@ -1956,9 +2291,9 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             Variant::Marker,
         ),
         // Both color transforms are decoded now (RCT and ICT), so they left
-        // this table. What remains out of subset: Part 2's array MCT, a
-        // codestream that signals the transform without the three components it
-        // is defined over, and one that mixes wavelets across those components.
+        // this table, and on fewer than three components the transform is
+        // skipped. What remains out of subset: Part 2's array MCT, and a
+        // codestream that mixes wavelets across the three components.
         (
             "color transform over mixed wavelets",
             err(&codestream(&[
@@ -1973,11 +2308,6 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             "Part 2 array multiple-component transform",
             err(&header_with_cod(cod_body(0, 0, 1, 2, 5, 4, 4, 0, 1))),
             Variant::Unsupported,
-        ),
-        (
-            "color transform without three components",
-            err(&header_with_cod(cod_body(0, 0, 1, 1, 5, 4, 4, 0, 1))),
-            Variant::Marker,
         ),
         (
             "reserved progression order",

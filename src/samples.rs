@@ -72,20 +72,11 @@ pub(crate) fn over(what: &str, total: u64, cap: u64) -> Error {
              ({ADDRESSABLE_SAMPLES})"
         ));
     }
-    let over = format!(
+    Error::Limit(format!(
         "{what} needs {total} samples, over the sample limit of {cap} (see \
-         `DecodeOptions::sample_limit`)"
-    );
-    // Past `u32::MAX` times the default no `Raised` factor admits it.
-    match u32::try_from(total.div_ceil(MAX_IMAGE_SAMPLES)) {
-        Ok(factor) => Error::Limit(format!(
-            "{over}; it needs at least `WorkLimit::Raised({factor})`, or use \
-             `WorkLimit::Unlimited` for trusted input"
-        )),
-        Err(_) => Error::Limit(format!(
-            "{over}; only `WorkLimit::Unlimited` admits it, for trusted input"
-        )),
-    }
+         `DecodeOptions::sample_limit`); {}",
+        crate::limit_hint::samples(total, MAX_IMAGE_SAMPLES)
+    ))
 }
 
 /// " at resolution reduction `reduction`", or nothing at full resolution:

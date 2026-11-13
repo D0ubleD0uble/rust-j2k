@@ -70,8 +70,14 @@ pub struct Component {
     pub width: u32,
     /// Component height in samples.
     pub height: u32,
-    /// Bits per sample as declared in SIZ `Ssiz` (1..=32), or by the palette
-    /// for a palette channel.
+    /// Bits per sample as declared in SIZ `Ssiz`, or by the palette for a
+    /// palette channel: 1 to 31 for unsigned samples, 1 to 32 for signed ones
+    /// (the `i32` container holds both).
+    ///
+    /// Unsigned samples run from 0 to `2^bit_depth - 1`; signed samples from
+    /// `-2^(bit_depth - 1)` to `2^(bit_depth - 1) - 1`. To map a signed
+    /// sample to an unsigned one, add `2^(bit_depth - 1)` (do it in `i64`,
+    /// since the sum overflows `i32` at 32 bits).
     pub bit_depth: u8,
     /// Whether samples are signed (SIZ component sign bit, or the palette's).
     pub signed: bool,
