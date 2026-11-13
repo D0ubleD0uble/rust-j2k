@@ -196,6 +196,32 @@ def cprl_tall(volumes: int) -> bytes:
     return cprl_steps(1, 1, 1 << 24, 1, [0x0F, 0xF1], bytes([0, 8]), volumes)
 
 
+def pocspent(layers: int, rows: int) -> bytes:
+    """Two tiles of one 2-sample-wide column, in tiles of `2 * rows` rows with
+    the grid offset so the first tile is one row high: 1 x 1 precinct
+    against 1 x `rows` for the second, no wavelet levels, 2 x 2 precincts,
+    `layers` LRCP layers, two identical POC volumes. The first tile holds
+    its `layers` empty packets and the second none, since the decode refuses
+    its POC volumes (`rows * layers` packets) before it reads any. It checks
+    that the factor named counts the visits the first tile spent."""
+    tile = 2 * rows
+    # Rsiz, Xsiz, Ysiz, XOsiz, YOsiz, XTsiz, YTsiz, XTOsiz, YTOsiz, Csiz,
+    # then one component of 8 bits.
+    size = seg(
+        0xFF51,
+        struct.pack(">HIIIIIIIIH", 0, 2, 2 * tile, 0, tile - 1, 2, tile, 0, 0, 1) + bytes([7, 1, 1]),
+    )
+    cod = seg(0xFF52, bytes([1, LRCP]) + struct.pack(">H", layers) + bytes([0, 0, 0, 0, 0, 1, 0x11]))
+    qcd = seg(0xFF5C, bytes([0x40, 0x40]))
+    entry = bytes([0, 0]) + struct.pack(">H", layers) + bytes([1, 1, LRCP])
+    poc = seg(0xFF5F, entry * 2)
+    parts = b""
+    for index, data in enumerate([b"\x00" * layers, b""]):
+        psot = 12 + 2 + len(data)
+        parts += struct.pack(">HHHIBB", 0xFF90, 10, index, psot, 0, 1) + b"\xff\x93" + data
+    return b"\xff\x4f" + size + cod + qcd + poc + parts + b"\xff\xd9"
+
+
 def pocdup(
     width: int,
     height: int,
@@ -297,6 +323,9 @@ FILES = {
     # 2 identical POC volumes over 1.3e5 precincts x 1000 layers: the volumes
     # reach 1.3e8 packets, 7.8 times the bound, with 100 bytes of packets.
     "pocvol_1024x512_1000_2.j2k": pocdup(1024, 512, 1, 1000, 2, 100),
+    # Tile 0 reads 60000 packets, tile 1 reaches 559 x 60000 = 3.354e7, 14432
+    # short of twice the bound: with tile 0's visits it needs `Raised(3)`.
+    "pocspent_2tiles_60000_559.j2k": pocspent(60000, 559),
 }
 
 # Not committed (`--big DIR`): the issue's timing shapes.

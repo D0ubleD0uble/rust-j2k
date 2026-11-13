@@ -195,7 +195,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   what the tiles seen so far need (exact for a file of one tile). For a POC
   sequence that reaches too many packets it is what that reach needs; the
   walk after the check can still run out. For the packet walk it is the
-  next factor up, and the file may need more, so double it on a retry. The variant stays `Limit`.
+  next factor up, and the file may need more, so double `n` on a retry. The
+  variant stays `Limit`.
 
 ### Fixed
 

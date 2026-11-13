@@ -996,20 +996,17 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // packets must still be stepped over to reach the kept ones.
         let visits_before = visits;
         let coded = match tier2::decode_packets(&header, tile, &mut visits, poc_bitmap) {
-            Err(Error::Limit(why)) if why == tier2::WALK_LIMIT => {
-                return Err(Error::Limit(limit_hint::packet_walk(
-                    &why,
+            Ok(coded) => coded,
+            Err(tier2::Refused::Work(work)) => {
+                let spent = first_visits.saturating_sub(visits_before);
+                return Err(Error::Limit(limit_hint::packet(
+                    work,
+                    spent,
                     first_visits,
                     poc_bitmap,
                 )));
             }
-            Err(Error::Limit(why)) if why.starts_with(tier2::POC_REACH) => {
-                let spent = first_visits.saturating_sub(visits_before);
-                return Err(Error::Limit(limit_hint::poc_volumes(
-                    &why, spent, poc_bitmap,
-                )));
-            }
-            other => other?,
+            Err(tier2::Refused::Other(error)) => return Err(error),
         };
         // Tier-1: MQ + EBCOT bit-plane decode each code block into subband
         // coeffs. The dropped resolutions' code-blocks are skipped, never

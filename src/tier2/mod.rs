@@ -160,11 +160,14 @@ pub fn decode_packets<'a>(
     tile: &'a Tile<'a>,
     visits: &mut u64,
     poc_bitmap: u64,
-) -> Result<CodedData<'a>> {
+) -> std::result::Result<CodedData<'a>, Refused> {
     let mut budget = Budget::decode(*visits, poc_bitmap);
     let coded = decode_packets_within(header, tile, &mut budget);
     *visits = budget.visits;
-    coded
+    coded.map_err(|error| match (budget.refusal, error) {
+        (Some(work), Error::Limit(_)) => Refused::Work(work),
+        (_, error) => Refused::Other(error),
+    })
 }
 
 /// The fewest visits (see [`Budget::visits`]) a decode may spend walking its
@@ -242,6 +245,8 @@ pub(crate) struct Budget {
     /// only where the packets the volumes reach end, and the decode refuses
     /// the tile anyway.
     pub(crate) poc_coverage: bool,
+    /// Why the walk was refused for work, once it is (see [`WorkRefusal`]).
+    pub(crate) refusal: Option<WorkRefusal>,
 }
 
 impl Budget {
@@ -263,6 +268,7 @@ impl Budget {
             },
             poc_set: true,
             poc_coverage: true,
+            refusal: None,
         }
     }
 }
@@ -342,7 +348,7 @@ pub(crate) fn decode_packets_within<'a>(
     if budget.poc_coverage {
         progression::check_poc_coverage(header, &walk, tile.index)?;
     }
-    let visits = Cell::new(budget.visits);
+    let visits = Visits::new(budget.visits);
     let mut packet_index = 0u32;
     let walked = for_each_packet(
         header,
@@ -368,6 +374,7 @@ pub(crate) fn decode_packets_within<'a>(
         },
     );
     budget.visits = visits.get();
+    budget.refusal = visits.refusal.get();
     walked?;
 
     let mut components = Vec::with_capacity(states.len());
@@ -488,25 +495,91 @@ struct PacketStreams<'a> {
     packed: bool,
 }
 
-/// The message of the [`Error::Limit`] a walk fails with when its visits run
-/// out. The decode matches it to tell that failure from the geometry caps.
-pub(crate) const WALK_LIMIT: &str =
-    "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)";
+/// Why a packet walk was refused for work, with the numbers a caller needs to
+/// name a [`WorkLimit`](crate::WorkLimit) factor. It travels beside the
+/// [`Error`] the walk fails with (see [`Refused`]), so nothing reads it back
+/// out of the message. A new work refusal (the sample-area one, say) is a new
+/// variant here, a line in [`WorkRefusal::why`], and a function in
+/// `limit_hint`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkRefusal {
+    /// The walk ran out of visits.
+    PacketWalk,
+    /// A POC sequence's volumes reach `reached` packets, more than the visits
+    /// left.
+    PocReach { reached: u64 },
+}
 
-/// How the [`Error::Limit`] for a POC sequence whose volumes reach too many
-/// packets begins; the number of packets follows. The decode reads it to
-/// name a factor.
-pub(crate) const POC_REACH: &str =
-    "tile packet walk exceeds its work bound: its POC volumes reach ";
+impl WorkRefusal {
+    /// The plain message of the [`Error::Limit`] for this refusal.
+    pub(crate) fn why(&self) -> String {
+        match self {
+            WorkRefusal::PacketWalk => {
+                "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)"
+                    .into()
+            }
+            WorkRefusal::PocReach { reached } => format!(
+                "tile packet walk exceeds its work bound: its POC volumes reach \
+                 {reached} packets (see `DecodeOptions::packet_work_limit`)"
+            ),
+        }
+    }
+}
+
+/// How [`decode_packets`] fails: for work, with the typed reason, or for
+/// anything else, as the [`Error`] it is.
+#[derive(Debug)]
+pub(crate) enum Refused {
+    /// The tile went past the packet work bound.
+    Work(WorkRefusal),
+    /// Any other failure.
+    Other(Error),
+}
+
+impl From<Refused> for Error {
+    fn from(refused: Refused) -> Error {
+        match refused {
+            Refused::Work(work) => Error::Limit(work.why()),
+            Refused::Other(error) => error,
+        }
+    }
+}
+
+/// What is left of a walk's visits, and, once it is refused for work, why.
+pub(crate) struct Visits {
+    left: Cell<u64>,
+    refusal: Cell<Option<WorkRefusal>>,
+}
+
+impl Visits {
+    pub(crate) fn new(left: u64) -> Self {
+        Visits {
+            left: Cell::new(left),
+            refusal: Cell::new(None),
+        }
+    }
+
+    /// The visits left.
+    pub(crate) fn get(&self) -> u64 {
+        self.left.get()
+    }
+
+    /// Record `why` as the reason the walk is refused, and give the [`Error`]
+    /// to fail it with.
+    pub(crate) fn refuse(&self, why: WorkRefusal) -> Error {
+        self.refusal.set(Some(why));
+        Error::Limit(why.why())
+    }
+}
 
 /// Spend `n` of what is left of [`Budget::visits`], or fail once it is gone.
-pub(crate) fn visit(left: &Cell<u64>, n: usize) -> Result<()> {
-    match left.get().checked_sub(n as u64) {
+pub(crate) fn visit(visits: &Visits, n: usize) -> Result<()> {
+    match visits.left.get().checked_sub(n as u64) {
         Some(rest) => {
-            left.set(rest);
+            visits.left.set(rest);
             Ok(())
         }
-        None => Err(Error::Limit(WALK_LIMIT.into())),
+        None => Err(visits.refuse(WorkRefusal::PacketWalk)),
     }
 }
 
@@ -654,7 +727,7 @@ struct Contribution {
 #[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
     streams: &mut PacketStreams<'a>,
-    visits: &Cell<u64>,
+    visits: &Visits,
     layer: u32,
     packet_index: u32,
     delimiters: Delimiters,
@@ -773,7 +846,7 @@ fn parse_packet<'a>(
 /// bytes and is not counted.
 #[allow(clippy::too_many_arguments)]
 fn parse_band_header(
-    visits: &Cell<u64>,
+    visits: &Visits,
     band_index: usize,
     precinct: &PrecinctGeom,
     trees: &mut PrecinctState,

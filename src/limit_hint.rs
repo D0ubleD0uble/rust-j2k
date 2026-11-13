@@ -10,7 +10,7 @@
 //! that it needs more than it was allowed, so its message names the next
 //! factor up. Later tiles are never counted.
 
-use crate::tier2;
+use crate::tier2::WorkRefusal;
 
 /// The smallest `Raised` factor for `needed` against a `default` bound.
 fn factor(needed: u64, default: u64) -> u32 {
@@ -20,35 +20,31 @@ fn factor(needed: u64, default: u64) -> u32 {
 
 const TRUSTED: &str = "or use `WorkLimit::Unlimited` for trusted input";
 
-/// The message for a packet walk that ran out of `allowed` visits, where
-/// `default` is the default bound and `why` the plain message. All that is
-/// known is that the walk needs more than it was allowed, so this names the
-/// next factor up, which may not be enough.
-pub(crate) fn packet_walk(why: &str, allowed: u64, default: u64) -> String {
-    let n = factor(allowed.saturating_add(1), default);
-    format!(
-        "{why}; the next factor up is `WorkLimit::Raised({n})`, but the file may need more, \
-         {TRUSTED}"
-    )
-}
-
-/// The message for a POC sequence that reaches more packets than the walk may
-/// visit, after earlier tiles spent `spent` visits. `why` is the refusal,
-/// whose count follows [`tier2::POC_REACH`].
-pub(crate) fn poc_volumes(why: &str, spent: u64, default: u64) -> String {
-    let reached = why
-        .strip_prefix(tier2::POC_REACH)
-        .and_then(|rest| rest.split_whitespace().next())
-        .and_then(|digits| digits.parse::<u64>().ok());
-    match reached {
-        Some(reached) => {
+/// The message for a tile whose packet walk was refused for `work`, after
+/// earlier tiles spent `spent` visits of the `allowed` the decode started
+/// with. `default` is the default bound.
+///
+/// A walk that ran out of visits shows only that it needs more than it was
+/// allowed, so it names the next factor up, which may not be enough. A POC
+/// sequence's reach is a count of packets, so it names the factor its reach
+/// needs.
+pub(crate) fn packet(work: WorkRefusal, spent: u64, allowed: u64, default: u64) -> String {
+    let why = work.why();
+    match work {
+        WorkRefusal::PacketWalk => {
+            let n = factor(allowed.saturating_add(1), default);
+            format!(
+                "{why}; the next factor up is `WorkLimit::Raised({n})`, but the file may need \
+                 more, {TRUSTED}"
+            )
+        }
+        WorkRefusal::PocReach { reached } => {
             let n = factor(spent.saturating_add(reached), default);
             format!(
                 "{why}; the file needs at least `WorkLimit::Raised({n})` (later tiles may need \
                  more), {TRUSTED}"
             )
         }
-        None => format!("{why}; {TRUSTED}"),
     }
 }
 
@@ -77,25 +73,22 @@ mod tests {
     fn code_blocks_add_the_work_already_spent() {
         // 100 spent, 10 more needed, 50 a factor: 110 / 50 rounds up to 3.
         assert_eq!(named(&code_blocks(1, 10, 5, 100, 50)), 3);
-        assert_eq!(named(&code_blocks(0, 10, 5, 0, 50)), 1);
+        assert_eq!(named(&code_blocks(1, 100, 0, 100, 50)), 4);
         assert_eq!(named(&code_blocks(0, 100, 0, 0, 50)), 2);
     }
 
     /// The POC factor counts the visits earlier tiles spent.
     #[test]
     fn poc_volumes_add_the_visits_already_spent() {
-        let why = format!("{}100 packets (see `option`)", tier2::POC_REACH);
-        assert_eq!(named(&poc_volumes(&why, 100, 50)), 4);
-        assert_eq!(named(&poc_volumes(&why, 0, 50)), 2);
-        // A message without a count names no factor.
-        let odd = format!("{}many packets", tier2::POC_REACH);
-        assert!(!poc_volumes(&odd, 0, 50).contains("Raised("));
+        let reach = WorkRefusal::PocReach { reached: 100 };
+        assert_eq!(named(&packet(reach, 100, 150, 50)), 4);
+        assert_eq!(named(&packet(reach, 0, 50, 50)), 2);
     }
 
     /// The packet walk names the factor above what it was allowed.
     #[test]
     fn the_packet_walk_names_the_next_factor_up() {
-        assert_eq!(named(&packet_walk("why", 50, 50)), 2);
-        assert_eq!(named(&packet_walk("why", 100, 50)), 3);
+        assert_eq!(named(&packet(WorkRefusal::PacketWalk, 0, 50, 50)), 2);
+        assert_eq!(named(&packet(WorkRefusal::PacketWalk, 0, 100, 50)), 3);
     }
 }

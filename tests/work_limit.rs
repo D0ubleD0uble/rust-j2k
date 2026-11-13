@@ -79,6 +79,11 @@ impl Bits {
 /// included with 88 coding passes and the one byte 0x00. QCD gives the band
 /// 30 bit-planes and no block has a zero bit-plane, so each runs all 88.
 fn t1bomb(size: u32) -> Vec<u8> {
+    t1bomb_tiled(size, 1)
+}
+
+/// `t1bomb(size)` as `side` x `side` tiles, each the same bomb.
+fn t1bomb_tiled(size: u32, side: u32) -> Vec<u8> {
     let blocks = size.div_ceil(64);
     // The tag trees' levels, leaves first: (columns, rows).
     let mut levels = vec![(blocks, blocks)];
@@ -121,7 +126,7 @@ fn t1bomb(size: u32) -> Vec<u8> {
         out
     };
     let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [size, size, 0, 0, size, size, 0, 0] {
+    for v in [size * side, size * side, 0, 0, size, size, 0, 0] {
         siz.extend_from_slice(&v.to_be_bytes());
     }
     siz.extend_from_slice(&[0, 1, 7, 1, 1]);
@@ -129,10 +134,13 @@ fn t1bomb(size: u32) -> Vec<u8> {
     cs.extend(seg(0xFF51, &siz));
     cs.extend(seg(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0, 1]));
     cs.extend(seg(0xFF5C, &[0x40, 29 << 3]));
-    cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
-    cs.extend_from_slice(&(12 + 2 + data.len() as u32).to_be_bytes());
-    cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);
-    cs.extend(data);
+    for tile in 0..side * side {
+        cs.extend_from_slice(&[0xFF, 0x90, 0, 10]);
+        cs.extend_from_slice(&(tile as u16).to_be_bytes());
+        cs.extend_from_slice(&(12 + 2 + data.len() as u32).to_be_bytes());
+        cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+        cs.extend_from_slice(&data);
+    }
     cs.extend_from_slice(&[0xFF, 0xD9]);
     cs
 }
@@ -414,4 +422,40 @@ fn poc_volumes_name_the_factor_they_need() {
         !matches!(decode_with(&bytes, &options), Err(Error::Limit(_))),
         "Raised(8) should clear the bound"
     );
+}
+
+/// The factor counts what the tiles before the refused one spent. Four
+/// tiles of 512^2 in 64x64 code-blocks of 88 passes ask for 2.3e7
+/// sample-passes each against a bound of 2^26 (6.7e7): the third is refused,
+/// with 4.6e7 spent, and the four need 9.2e7, which is `Raised(2)`. The
+/// third alone would name `Raised(1)`, which is the default.
+#[test]
+fn the_code_block_factor_counts_the_tiles_before_the_refused_one() {
+    let bytes = t1bomb_tiled(512, 2);
+    let message = limit_message(decode(&bytes));
+    assert!(message.contains("tile 2 needs"), "{message}");
+    assert_eq!(named_factor(&message), 2, "{message}");
+    let options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Raised(2));
+    decode_with(&bytes, &options).expect("within twice the bound");
+}
+
+/// The same for a POC reach. `pocspent_2tiles_60000_559.j2k`: the first tile
+/// reads 60000 packets; the second reaches 3.354e7, 14432 under twice the
+/// bound, so with the first tile's visits it needs `Raised(3)`. Under
+/// `Raised(2)` it is refused again and still names 3.
+#[test]
+fn the_poc_factor_counts_the_visits_of_the_tiles_before_the_refused_one() {
+    let bytes = fixture("work_bound/pocspent_2tiles_60000_559.j2k");
+    let message = limit_message(decode(&bytes));
+    assert_eq!(named_factor(&message), 3, "{message}");
+    let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
+    assert_eq!(
+        named_factor(&limit_message(decode_with(&bytes, &options))),
+        3
+    );
+    let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(3));
+    assert!(!matches!(
+        decode_with(&bytes, &options),
+        Err(Error::Limit(_))
+    ));
 }

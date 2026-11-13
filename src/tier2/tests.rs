@@ -76,7 +76,7 @@ fn parse_layers_styled<'a>(
     for layer in 0..layers {
         parse_packet(
             &mut streams,
-            &std::cell::Cell::new(u64::MAX),
+            &super::Visits::new(u64::MAX),
             layer,
             layer,
             delimiters,
@@ -707,6 +707,7 @@ fn block_count_guard_rejects_metadata_bomb() {
     let h = header(4096, 4096, 1, 2);
     let t = tile(&[]);
     let err = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX)
+        .map_err(Error::from)
         .expect_err("guard fires before any packet parse");
     assert!(matches!(err, crate::Error::Limit(_)), "{err}");
 }
@@ -1184,7 +1185,7 @@ fn order_of_header(header: &MainHeader) -> Vec<(u32, usize, usize, usize)> {
     for_each_packet(
         header,
         &walk,
-        &std::cell::Cell::new(u64::MAX),
+        &super::Visits::new(u64::MAX),
         u64::MAX,
         true,
         |l, r, c, p| {
@@ -1456,7 +1457,7 @@ fn order_holding(header: &MainHeader, dense_bits: u64) -> Vec<(u32, usize, usize
     super::progression::for_each_packet(
         header,
         &walk,
-        &std::cell::Cell::new(u64::MAX),
+        &super::Visits::new(u64::MAX),
         dense_bits,
         true,
         |l, r, c, p| {
@@ -1560,7 +1561,7 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
         let result = for_each_packet(
             header,
             &walk,
-            &std::cell::Cell::new(visits),
+            &super::Visits::new(visits),
             poc_bitmap.unwrap_or(visits),
             poc_bitmap.is_none(),
             |_, _, _, _| {
@@ -1620,7 +1621,7 @@ fn only_a_skip_from_the_set_is_charged() {
         geoms: &geoms,
     };
     let spent = |dense_bits: u64| {
-        let visits = std::cell::Cell::new(u64::MAX);
+        let visits = super::Visits::new(u64::MAX);
         let mut read = 0u64;
         super::progression::for_each_packet(
             &header,
@@ -1800,7 +1801,7 @@ fn the_poc_coverage_error_names_the_tile() {
     header.siz.tile_width = 16;
     let mut second = tile(&[]);
     second.index = 1;
-    match decode_packets(&header, &second, &mut decode_visits(0), u64::MAX) {
+    match decode_packets(&header, &second, &mut decode_visits(0), u64::MAX).map_err(Error::from) {
         Err(Error::Codestream(m)) => assert!(
             m.contains("tile 1 leave out its packets of component 0, resolution 2,"),
             "{m}"
@@ -1923,7 +1924,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
     // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
     parse_packet(
         &mut streams,
-        &std::cell::Cell::new(u64::MAX),
+        &super::Visits::new(u64::MAX),
         0,
         65536,
         SOP,
