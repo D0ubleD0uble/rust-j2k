@@ -95,10 +95,10 @@ pub(crate) const DECODE_WORK_MIN: u64 = 1 << 26;
 /// The sample-passes a decode may spend per byte of its tiles' data, when
 /// that comes to more than [`DECODE_WORK_MIN`].
 ///
-/// Encoder output spends up to about 3300 per byte: `opj_compress` on a
+/// Encoder output spends up to about 3600 per byte: `opj_compress` on a
 /// flat image with a few bright specks, which includes many code-blocks
 /// with every pass for a few bytes each. Most files spend under 120. So
-/// this is about 10 times the most seen. A packet header can ask for 88
+/// this is about 9 times the most seen. A packet header can ask for 88
 /// passes over a 64x64 code-block in about 4 bytes, about 100000
 /// sample-passes per byte, so this cuts a file's worst case to a third,
 /// about 0.1 ms a byte, and refuses it before any of that work is done.

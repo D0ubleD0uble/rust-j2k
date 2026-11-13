@@ -800,7 +800,7 @@ and one byte; times are this decoder before this change, then after, then
 With the bound lifted, the 8192^2 file decodes in the same 19 s
 (`the_issue_bomb_decodes_with_the_limit_lifted`, ignored by default).
 
-The bound is about 10 times the most encoder output was seen to spend.
+The bound is about 9 times the most encoder output was seen to spend.
 Over the committed files, the conformance corpus and the real-world files,
 most spend under 120 sample-passes per byte; `budget/flat_1024_lossless`
 spends 7100 in 202 bytes, under the floor. Encoder output that spends the
