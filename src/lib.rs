@@ -279,7 +279,8 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// [`raw_channels`](DecodeOptions::raw_channels) does not check, or an image
 /// or palette that fits the sample limit only once
 /// [`resolution_reduction`](DecodeOptions::resolution_reduction) shrinks the
-/// image or [`sample_limit`](DecodeOptions::sample_limit) raises it, is a fault under some options and not others. A fault in the tile
+/// image or [`sample_limit`](DecodeOptions::sample_limit) raises the limit,
+/// is a fault under some options and not others. A fault in the tile
 /// data (a broken tile-part, a tile header that changes a component's
 /// wavelet, a reduction that a tile-part COD or COC with fewer levels cannot
 /// take) is only found by decoding. So is a POC sequence that leaves out
@@ -477,10 +478,9 @@ pub struct DecodeOptions {
     /// [`WorkLimit::Default`].
     ///
     /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
-    /// limit: the decode allocates what the header declares, about 4 bytes
-    /// per sample for the output and as much again while the image is
-    /// decoded (see [`decode`]), so a small hostile file can ask for many
-    /// gigabytes. If the allocation fails the process aborts, as Rust's
+    /// limit: the decode allocates what the header declares, 4 bytes per
+    /// sample for the output and up to as much again while it decodes (see
+    /// [`decode`]), so a small hostile file can ask for many gigabytes. If the allocation fails the process aborts, as Rust's
     /// allocation failures do. Only an image too large for this target to
     /// address (`isize::MAX` bytes of samples) is still refused, with
     /// [`Error::Limit`]. Use it only for files from a source you trust.

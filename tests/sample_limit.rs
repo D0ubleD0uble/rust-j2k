@@ -171,20 +171,21 @@ fn a_reduced_decode_of_an_image_over_the_limit_is_admitted() {
 /// still over the limit.
 #[test]
 fn a_reduced_image_still_over_the_limit_names_the_reduction() {
-    // 100000 x 100000 at one level down is 50000 x 50000: 2.5e9 samples.
+    // 40000 x 40000 at one level down is 20000 x 20000: 4e8 samples, which a
+    // 32-bit target can still address.
     let mut bytes = flat_header_only();
     // SOC, then SIZ: marker, Lsiz, Rsiz, then Xsiz at 8, Ysiz, XOsiz, YOsiz,
     // XTsiz, YTsiz.
     assert_eq!(&bytes[2..4], &[0xFF, 0x51]);
     for at in [8, 12, 24, 28] {
-        bytes[at..at + 4].copy_from_slice(&100_000u32.to_be_bytes());
+        bytes[at..at + 4].copy_from_slice(&40_000u32.to_be_bytes());
     }
     let options = DecodeOptions::default().with_resolution_reduction(1);
     match read_header_with(&bytes, &options) {
         Err(Error::Limit(m)) => assert!(
             m.starts_with(
-                "image area 50000×50000 at resolution reduction 1 needs 2500000000 samples"
-            ) && m.contains("`WorkLimit::Raised(10)`"),
+                "image area 20000×20000 at resolution reduction 1 needs 400000000 samples"
+            ) && m.contains("`WorkLimit::Raised(2)`"),
             "{m}"
         ),
         other => panic!("{other:?}"),
