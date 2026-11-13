@@ -403,6 +403,7 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
         // Volumes that leave out packets do not move where the packets they
         // reach end; the decode refuses them.
         poc_coverage: false,
+        reduction: 0,
     };
     let ends = crate::tier2::decode_packets_within(&header, data, &mut budget).is_ok();
     (ends, visits - budget.visits)

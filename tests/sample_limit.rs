@@ -225,3 +225,72 @@ fn the_sample_limit_defaults_to_the_default_bound() {
         WorkLimit::Unlimited
     );
 }
+
+/// A codestream of `side` x `side` tiles of 2800 x 2800, one component, six
+/// wavelet levels and 4x4 code-blocks, where every tile carries an empty packet
+/// for each of its seven resolutions. It is a few hundred bytes, but every tile
+/// has about 490000 code-blocks.
+fn many_tiles_of_empty_packets(side: u32) -> Vec<u8> {
+    fn segment(marker: u16, body: &[u8]) -> Vec<u8> {
+        let mut out = marker.to_be_bytes().to_vec();
+        out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+    let (tile, levels) = (2800u32, 6u8);
+    let mut siz = vec![0, 0];
+    for field in [side * tile, side * tile, 0, 0, tile, tile, 0, 0] {
+        siz.extend_from_slice(&field.to_be_bytes());
+    }
+    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    // LRCP, one layer, no MCT; six levels, 4x4 code-blocks, 5/3.
+    let cod = [0, 0, 0, 1, 0, levels, 0, 0, 0, 1];
+    // No quantization, a guard of 2 and an exponent of 8 for every subband.
+    let qcd = [&[0x40][..], &[8 << 3; 19]].concat();
+    let mut out = [
+        vec![0xFF, 0x4F],
+        segment(0xFF51, &siz),
+        segment(0xFF52, &cod),
+        segment(0xFF5C, &qcd),
+    ]
+    .concat();
+    let packets = [0u8; 7];
+    for index in 0..side * side {
+        let mut sot = (index as u16).to_be_bytes().to_vec();
+        sot.extend_from_slice(&(14 + packets.len() as u32).to_be_bytes());
+        sot.extend_from_slice(&[0, 1]);
+        out.extend_from_slice(&segment(0xFF90, &sot));
+        out.extend_from_slice(&[0xFF, 0x93]);
+        out.extend_from_slice(&packets);
+    }
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
+/// The sample limit is counted at the reduction, so an image far over it is
+/// admitted when its reduced area fits. Every tile still builds its geometry
+/// at full resolution, and that work is charged to the packet work bound, so
+/// many tiles of next to no data are refused quickly at the defaults.
+/// `packet_work_limit` is the one setting to raise.
+#[test]
+fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
+    // 7 x 7 tiles, about 24 M code-blocks, past the 2^24 visits the bound
+    // allows a file this small.
+    let bytes = many_tiles_of_empty_packets(7);
+    assert!(bytes.len() < 2048, "{} bytes", bytes.len());
+    let reduced = DecodeOptions::default().with_resolution_reduction(6);
+    let header = read_header_with(&bytes, &reduced).expect("the reduced area fits");
+    assert_eq!((header.width, header.height), (307, 307));
+    match decode_with(&bytes, &reduced) {
+        Err(Error::Limit(m)) => {
+            assert!(m.contains("`DecodeOptions::packet_work_limit`"), "{m}");
+        }
+        other => panic!("{:?}", other.map(|i| (i.width, i.height))),
+    }
+    // Twice the bound admits it. With no coded data, every sample is the
+    // level shift of an unsigned 8-bit component.
+    let raised = reduced.with_packet_work_limit(WorkLimit::Raised(2));
+    let image = decode_with(&bytes, &raised).expect("admitted under Raised(2)");
+    assert_eq!((image.width, image.height), (307, 307));
+    assert!(image.components[0].samples.iter().all(|&s| s == 128));
+}

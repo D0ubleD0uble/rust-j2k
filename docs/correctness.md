@@ -665,9 +665,9 @@ orders over resolutions with no precinct, at about 2 ns a step: `layer_edge`
 (655 KB, 33 steps a byte) is refused in 0.015 to 0.04 s, 0.02 to 0.06 µs a
 byte, and OpenJPEG decodes it in 0.08 s.
 
-Setting up each tile's geometry is not counted. A tile of one sample at
-an odd origin has 32 resolutions per component that hold no precinct, and
-each component of each tile costs about a byte. Those resolutions now get
+At full resolution, setting up a tile's geometry is not counted. A tile of
+one sample at an odd origin has 32 resolutions per component that hold no
+precinct, and each component of each tile costs about a byte. Those resolutions now get
 no band or code-block geometry, and the walk checks no component there. Measured
 on release builds (`deep` in `scripts/gen-work-bound-fixtures.py`, a row
 of one-sample tiles at y = 1, 32 levels, one layer, every packet 0x00;
@@ -684,6 +684,34 @@ known per byte. The same change lets the layer orders decode 8 such
 components in one tile, and the positional orders a 16-component column
 of 2^17 rows, which were `Limit` and which OpenJPEG decodes
 (`tests/work_bound.rs`).
+
+At a resolution reduction the geometry is counted too: one step for each
+code-block of a resolution the reduction drops (orchestrator decision on
+#281). Every tile builds its geometry at full resolution whatever the
+reduction, and the per-tile caps on precincts and code-blocks do not bound a
+file of many tiles. Once the sample limit was counted at the reduction, a
+small file could build a great deal of geometry it never decodes: 2800^2
+tiles in 4x4 code-blocks, six levels, one empty byte per packet, decoded at
+reduction 6, took 10.3 s for 256 tiles (5.5 KB), 147 s for 4096 tiles
+(87 KB) and about 40 minutes for 65025 tiles (1.4 MB). Each is now refused in
+about 1.1 to 1.7 s.
+
+Nothing else of the geometry needs a charge. Each precinct is already paid
+for: the walk reads each precinct's packet in each layer, a step each,
+whatever the reduction. The code-blocks of the kept resolutions are no more
+than the reduced image's samples / 16, which the sample limit holds to
+2^24, about a second to build. A decode at full resolution drops no
+resolution, so it spends exactly what it did before; a file built to spend
+exactly the bound (`the_layer_orders_charge_each_component_they_check` in
+`tests/work_bound.rs`) still decodes.
+
+A code-block costs about 30 to 70 ns to build, a few steps' worth, but one
+step each keeps real files far inside the bound. At reductions 1 to 3 the
+committed files spend at most 1.6% of it (a sparse 2048^2 image in 4x4
+code-blocks at reduction 3); the Sentinel-2 10 m band about 0.15%; a
+2^28-sample single tile in 64x64 code-blocks about 0.4%; and of the
+Sentinel-2, GDAL and OpenJPEG test files measured, none more than 1.9%
+(`s2_MSK_QUALIT_B02.jp2` at reduction 3).
 
 A POC marker's volumes may reach the same packet more than once; the
 first reads it and the rest skip it (OpenJPEG's `include` array). The

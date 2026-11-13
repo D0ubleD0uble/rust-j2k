@@ -254,6 +254,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whole main header is read, so a header with another fault reports that
   fault first. The `Error::Limit` message changed: it gives the samples
   needed and names `DecodeOptions::sample_limit`.
+- At a resolution reduction, the packet work bound
+  (`DecodeOptions::packet_work_limit`) also counts each code-block of the
+  resolutions the reduction drops, which every tile still builds, so a small
+  file of many tiles cannot take minutes to decode at a reduction. A decode
+  at full resolution spends what it did before.
 - The crate uses American spellings: color, gray, grayscale, -ize, behavior,
   center. Every public name added in this release is spelled that way
   (`ColorSpace`, `ColorSpace::Grayscale`, `ColorOutput`,

@@ -191,8 +191,10 @@ pub use jp2::{
 /// is. Walking every tile's packets may take at most
 /// 2^24 steps, or 32 per byte of tile data when that is more. A step is a
 /// packet read, a run of code-blocks a header skips without reading a bit,
-/// or a position a positional progression order sweeps, once for each
-/// (component, resolution) checked there; code-block entries that read a bit
+/// a position a positional progression order sweeps, once for each
+/// (component, resolution) checked there, or, at a resolution reduction, a
+/// code-block of a resolution it drops, since every tile builds its geometry
+/// at full resolution; code-block entries that read a bit
 /// are paid for by the header's bytes and are not counted. A codestream past
 /// the bound is refused with [`Error::Limit`]. Encoder output seen spends
 /// under 13% of the bound; a packet header of one byte can still skip each
@@ -829,7 +831,7 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // component. The walk covers every resolution whatever the reduction:
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
-        let coded = tier2::decode_packets(&header, tile, &mut visits, poc_bitmap)?;
+        let coded = tier2::decode_packets(&header, tile, &mut visits, poc_bitmap, reduction)?;
         // Tier-1: MQ + EBCOT bit-plane decode each code block into subband
         // coeffs. The dropped resolutions' code-blocks are skipped, never
         // decoded. Their work is counted first, so a tile past the bound is

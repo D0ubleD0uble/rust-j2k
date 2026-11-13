@@ -154,14 +154,20 @@ pub struct CodedData<'a> {
 /// [`decode_visits`]), and fails with [`Error::Limit`] once it is gone. A
 /// POC sequence's packets are held in a bitmap of at most `poc_bitmap`
 /// bits, and no more than `visits`, and past it in a set (see
-/// [`for_each_packet`]).
+/// [`for_each_packet`]). The code-blocks of the resolutions that
+/// `reduction` drops are charged to `visits` too (see
+/// [`Budget::reduction`]).
 pub fn decode_packets<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
     visits: &mut u64,
     poc_bitmap: u64,
+    reduction: u8,
 ) -> Result<CodedData<'a>> {
-    let mut budget = Budget::decode(*visits, poc_bitmap);
+    let mut budget = Budget {
+        reduction,
+        ..Budget::decode(*visits, poc_bitmap)
+    };
     let coded = decode_packets_within(header, tile, &mut budget);
     *visits = budget.visits;
     coded
@@ -184,7 +190,8 @@ pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 /// cheapest visits, the layer orders' steps over resolutions with no
 /// precinct, refuse a file at about 0.02 to 0.06 µs a byte.
 ///
-/// Setting up a tile's geometry is not counted. A resolution with no precinct
+/// Setting up a tile's geometry is counted only for the code-blocks of the
+/// resolutions a reduction drops (see [`Budget::reduction`]). A resolution with no precinct
 /// gets no band or code-block geometry, so its setup is a few small
 /// allocations. The costliest shape measured, 64 tiles of 16384 components
 /// with one byte of packet data each, decodes at about 10 µs a byte, about
@@ -242,6 +249,16 @@ pub(crate) struct Budget {
     /// only where the packets the volumes reach end, and the decode refuses
     /// the tile anyway.
     pub(crate) poc_coverage: bool,
+    /// The decode's resolution reduction. Each code-block of a resolution it
+    /// drops costs a visit once the geometry is built, since every tile builds
+    /// its geometry at full resolution whatever the reduction. Nothing else is
+    /// charged for the geometry: each precinct is paid for by its packets'
+    /// visits, and the code-blocks of the kept resolutions are no more than
+    /// the reduced tile's samples / 16, which the sample limit bounds. Without
+    /// the charge, many tiles of next to no data, each building close to the
+    /// per-tile code-block cap, would make a small file take minutes to decode
+    /// at a reduction. It is 0 for `read_header`'s walk.
+    pub(crate) reduction: u8,
 }
 
 impl Budget {
@@ -263,6 +280,7 @@ impl Budget {
             },
             poc_set: true,
             poc_coverage: true,
+            reduction: 0,
         }
     }
 }
@@ -291,16 +309,34 @@ pub(crate) fn decode_packets_within<'a>(
     // geometry tuple, and legal 4×4 blocks push the count toward samples/16, so
     // the cap has to bite before those vectors fill rather than summing them
     // afterwards. Both running totals are threaded through `resolution_geoms`.
+    //
+    // The code-blocks of the resolutions the reduction drops are charged to
+    // `visits` as each component is built (see [`Budget::reduction`]), so a
+    // tile can pass the bound by at most one component's geometry, which the
+    // caps bound.
     let component_count = header.siz.components.len();
     let mut geoms = Vec::with_capacity(component_count);
     for c in 0..component_count {
-        geoms.push(resolution_geoms(
+        let resolutions = resolution_geoms(
             header,
             tile.index,
             c,
             &mut budget.precincts,
             &mut budget.blocks,
-        )?);
+        )?;
+        let kept = resolutions
+            .len()
+            .saturating_sub(usize::from(budget.reduction));
+        let dropped: usize = resolutions[kept..]
+            .iter()
+            .flat_map(|resolution| &resolution.bands)
+            .map(|band| band.blocks.len())
+            .sum();
+        let left = Cell::new(budget.visits);
+        let charged = visit(&left, dropped);
+        budget.visits = left.get();
+        charged?;
+        geoms.push(resolutions);
     }
 
     // One state per (component, resolution, band), carried across every layer.
