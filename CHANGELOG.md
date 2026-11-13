@@ -6,6 +6,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Migrating from 0.3
+
+The main changes that can break a 0.3 caller or change what it sees are
+below. The first fails to compile; the others compile and behave differently.
+
+- Pass options by reference: `decode_with(bytes, &options)`.
+  `DecodeOptions` is no longer `Copy`, so call `.clone()` where you reuse
+  one by value.
+- Re-check every `match` arm on `Error::Unsupported`. `Error` is
+  `#[non_exhaustive]`, so the match still compiles, but some inputs that
+  were `Unsupported` now return another variant and fall to your wildcard
+  arm. A `resolution_reduction` past the decomposition levels is
+  `Error::InvalidOptions`. A resource guard is `Error::Limit`. A malformed
+  JP2 file is `Error::FileFormat`. `Unsupported` now means only a valid
+  feature that is not decoded. A "level not available, fall back to full
+  resolution" path should match `InvalidOptions` (`Header::max_reduction`
+  gives the largest reduction the main header allows; a decode can still
+  return `InvalidOptions` when a tile-part header allows less).
+- `decode` and `decode_with` accept JP2 files as well as raw codestreams.
+  If only a raw codestream is valid for you (GRIB2 section 7, say), refuse
+  input that does not start with SOC (`FF 4F`) before you decode. Or call
+  `read_header` first, which reads both forms, and refuse the input when
+  `header.jp2` is `Some`; that also lets you check `width`, `height` and
+  the component count before anything is allocated. Without that, input you
+  used to refuse now decodes. Some raw codestreams 0.3 refused decode too
+  (see "Fixed" and "Changed"), so do not use `decode` alone to validate
+  input.
+- Do not match on error message text. Messages are not stable, and the
+  spelling is now American ("color", not "colour").
+
+Also, the decoder now bounds its work, so a file 0.3 decoded can come back as
+`Error::Limit`. Raise the bound that was hit with
+`DecodeOptions::packet_work_limit`, `code_block_work_limit` or
+`sample_limit`, each set to a `WorkLimit` (`Unlimited` for trusted input). The
+sample limit itself is higher than in 0.3 (2^28 samples, four times
+2^26), so no image 0.3 decoded is refused on size. But the default now
+admits four times the samples, which is about 1.4 GiB peak, estimated, for
+a single-component tile, and about twice that for a JP2 palette.
+`WorkLimit` cannot set a lower ceiling. To keep one, check `width`,
+`height` and the component count from `read_header` before decoding.
+Adding `Image::jp2` and `Image::report` breaks no caller, since `Image` is
+`#[non_exhaustive]`. The other files that 0.3 decoded and that are now refused
+are listed in "Changed" (a code-block size past the limit in any COD or COC,
+and a POC marker that leaves out packets). Some decoded values changed with no
+error (an RGN maxshift with the bypass style, and a POC in a tile's first
+tile-part header; see "Fixed"), so output snapshots from 0.3 can differ.
+
 ### Added
 
 - `decode` and `decode_with` read JP2 files as well as raw codestreams,
@@ -310,9 +357,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`colr`, `EnumCS`, "Colour Specification box").
 - Breaking: `decode_with` takes `&DecodeOptions` instead of `DecodeOptions`,
   so one set of options serves many calls: `decode_with(bytes, &options)`.
-- Breaking: `DecodeOptions` and `ColorOutput` are no longer `Copy`, so a
-  later option can carry data (an output ICC profile). Both stay `Clone`;
-  clone them where you reuse one. For the same reason the new
+- Breaking: `DecodeOptions` is no longer `Copy`, so a later option can
+  carry data (an output ICC profile). It stays `Clone`; clone it where you
+  reuse one. `ColorOutput`, new in this release, is likewise `Clone` but
+  not `Copy`. For the same reason the new
   `ComponentInfo`, `ChannelMapping`, `MappingKind`, `PaletteColumn` and
   `ChannelDefinitionEntry` are `Clone` but not `Copy`.
 - A code-block size past the limit in any COD or COC, in the main header or
@@ -396,10 +444,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   coverage, so for such a file in JP2 it still reports the boxes after the
   codestream.
 - Breaking: two new error variants split what `Error::Unsupported` used to
-  conflate. `Error` is `#[non_exhaustive]`, so existing matches keep
-  compiling, but a caller matching `Unsupported` for these inputs now gets
-  a different variant: `Error::Limit` is returned when an input exceeds a
-  decoder resource guard (image/component sample budget, precinct and
+  conflate. `Error` is `#[non_exhaustive]`, so a `match` still compiles,
+  but an `Unsupported` arm no longer sees these inputs; they reach your
+  other arms. Re-check each such arm. `Error::Limit` is returned when an input
+  exceeds a decoder resource guard (image/component sample budget, precinct and
   code-block counts, bit-plane depth, progression volumes), and
   `Error::InvalidOptions` when the caller's `DecodeOptions` are invalid for
   the codestream (a `resolution_reduction` that consumes a whole pyramid).
