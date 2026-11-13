@@ -181,10 +181,11 @@ pub use jp2::{
 /// component, a palette's expanded channels, and the channels sRGB output
 /// adds. That admits a 10980 x 10980 Sentinel-2 band, or an RGB image of up
 /// to about 89 MP. A larger image is refused with [`Error::Limit`] from its
-/// header alone, before any tile is read, so a small file cannot make the
-/// decode allocate gigabytes. Peak memory is about 1.35 times the output for
-/// one tile, and about twice it while a palette expands (see [the sample
-/// limit][sample-limit]). OpenJPEG has no such limit.
+/// header alone, before any tile is read. A small file can still ask for
+/// the whole limit: peak memory is about 1.35 times the output for one tile,
+/// about 1.4 GiB at the limit, and about twice the output while a palette
+/// expands (see [the sample limit][sample-limit]). OpenJPEG has no such
+/// limit.
 ///
 /// The work of reading the packet headers is bounded, as the code-block count
 /// is. Walking every tile's packets may take at most
@@ -480,8 +481,9 @@ pub struct DecodeOptions {
     /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output and up to as much again while it decodes (see
-    /// [`decode`]), so a small hostile file can ask for many gigabytes. If the allocation fails the process aborts, as Rust's
-    /// allocation failures do. Only an image too large for this target to
+    /// [`decode`]), so a small hostile file can ask for many gigabytes. If
+    /// the allocation fails the process aborts, as Rust's allocation
+    /// failures do. Only an image too large for this target to
     /// address (`isize::MAX` bytes of samples) is still refused, with
     /// [`Error::Limit`]. Use it only for files from a source you trust.
     ///
@@ -496,8 +498,8 @@ pub struct DecodeOptions {
 /// [`DecodeOptions::sample_limit`] on the image's size.
 ///
 /// Each work bound scales with the size of the file, so a small file cannot
-/// ask for minutes of work, and the sample limit keeps a small file from
-/// asking for gigabytes of memory (see [`decode`]). A valid file can still go
+/// ask for minutes of work, and the sample limit holds the memory a file may
+/// ask for to about 1.4 GiB (see [`decode`]). A valid file can still go
 /// past a bound, when it codes many samples in very few bytes or is simply
 /// very large: raise the limit, or lift it, to decode such a file from a
 /// source you trust.

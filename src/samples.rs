@@ -63,8 +63,8 @@ pub(crate) fn cap(limit: &WorkLimit) -> u64 {
 /// The [`Error::Limit`] for `what` (a description of what is over the limit,
 /// such as "image area 10980×10980"), which needs `total` samples where `cap`
 /// are allowed. It names the option, and the smallest
-/// [`WorkLimit::Raised`] factor that admits `total`, or says that the target
-/// cannot address that many.
+/// [`WorkLimit::Raised`] factor that admits `total` (or, past any factor, only
+/// [`WorkLimit::Unlimited`]), or says that the target cannot address that many.
 pub(crate) fn over(what: &str, total: u64, cap: u64) -> Error {
     if total > ADDRESSABLE_SAMPLES {
         return Error::Limit(format!(
@@ -72,12 +72,20 @@ pub(crate) fn over(what: &str, total: u64, cap: u64) -> Error {
              ({ADDRESSABLE_SAMPLES})"
         ));
     }
-    let factor = u32::try_from(total.div_ceil(MAX_IMAGE_SAMPLES)).unwrap_or(u32::MAX);
-    Error::Limit(format!(
+    let over = format!(
         "{what} needs {total} samples, over the sample limit of {cap} (see \
-         `DecodeOptions::sample_limit`); it needs at least `WorkLimit::Raised({factor})`, \
-         or use `WorkLimit::Unlimited` for trusted input"
-    ))
+         `DecodeOptions::sample_limit`)"
+    );
+    // Past `u32::MAX` times the default no `Raised` factor admits it.
+    match u32::try_from(total.div_ceil(MAX_IMAGE_SAMPLES)) {
+        Ok(factor) => Error::Limit(format!(
+            "{over}; it needs at least `WorkLimit::Raised({factor})`, or use \
+             `WorkLimit::Unlimited` for trusted input"
+        )),
+        Err(_) => Error::Limit(format!(
+            "{over}; only `WorkLimit::Unlimited` admits it, for trusted input"
+        )),
+    }
 }
 
 /// " at resolution reduction `reduction`", or nothing at full resolution:
@@ -122,4 +130,45 @@ pub(crate) fn check_codestream(
         return Err(over(&what, total, cap));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(total: u64) -> String {
+        match over("image area", total, MAX_IMAGE_SAMPLES) {
+            Error::Limit(m) => m,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The hint names the smallest factor that admits the image, up to the
+    /// largest factor there is.
+    #[test]
+    fn the_hint_names_the_smallest_factor() {
+        assert!(message(MAX_IMAGE_SAMPLES + 1).contains("`WorkLimit::Raised(2)`"));
+        let largest = u64::from(u32::MAX) * MAX_IMAGE_SAMPLES;
+        if largest <= ADDRESSABLE_SAMPLES {
+            let m = message(largest);
+            assert!(
+                m.contains(&format!("`WorkLimit::Raised({})`", u32::MAX)),
+                "{m}"
+            );
+        }
+    }
+
+    /// Past what any `Raised` factor admits, but within what the target can
+    /// address, the hint names only `Unlimited`. A 2^60-sample image, such as
+    /// GDAL's `dimensions_above_31bit.jp2` at reduction 2, is one.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn past_every_factor_the_hint_names_only_unlimited() {
+        let largest = u64::from(u32::MAX) * MAX_IMAGE_SAMPLES;
+        for total in [largest + 1, 1 << 60] {
+            let m = message(total);
+            assert!(!m.contains("Raised"), "{m}");
+            assert!(m.contains("only `WorkLimit::Unlimited` admits it"), "{m}");
+        }
+    }
 }
