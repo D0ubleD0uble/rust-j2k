@@ -40,15 +40,16 @@ Also, the decoder now bounds its work, so a file 0.3 decoded can come back as
 `Error::Limit`. Raise the bound that was hit with
 `DecodeOptions::packet_work_limit`, `code_block_work_limit` or
 `sample_limit`, each set to a `WorkLimit` (`Unlimited` for trusted input). The
-sample limit itself is higher than in 0.3 (2^28 samples, up from 2^26), so
-no image 0.3 decoded is refused on size. But the default now admits about
-four times what 0.3 did, up to about 1.4 GiB peak for one tile, and
+sample limit itself is higher than in 0.3 (2^28 samples, four times
+2^26), so no image 0.3 decoded is refused on size. But the default now
+admits four times the samples, which is about 1.4 GiB peak, estimated, for
+a single-component tile, and about twice that for a JP2 palette.
 `WorkLimit` cannot set a lower ceiling. To keep one, check `width`,
-`height` and the component count from `read_header` before decoding. Adding `Image::jp2` and
-`Image::report` breaks no caller, since `Image` is `#[non_exhaustive]`. The
-other files that 0.3 decoded and that are now refused are listed in
-"Changed" (a code-block size past the limit in any COD or COC, and a POC
-marker that leaves out packets). Some decoded values changed with no error
+`height` and the component count from `read_header` before decoding.
+Adding `Image::jp2` and `Image::report` breaks no caller, since `Image` is
+`#[non_exhaustive]`. The other files that 0.3 decoded and that are now
+refused are listed in "Changed" (a code-block size past the limit in any
+COD or COC, and a POC marker that leaves out packets). Some decoded values changed with no error
 (an RGN maxshift with the bypass style, and a POC in a tile's first
 tile-part header; see "Fixed"), so output snapshots from 0.3 can differ.
 
