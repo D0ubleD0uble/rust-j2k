@@ -495,6 +495,103 @@ tier-2 patterns listed above. If a real file ever needs one relaxed, relax
 it to match the oracle: the protective argument loses to a demonstrated real
 file.
 
+### Encoder mistakes OpenJPEG corrects
+
+Three mistakes real encoders make are corrected by OpenJPEG 2.5.0 on
+purpose, and this decoder corrects them the same way. Each rests on rule 2
+of the owner's rules (see "sRGB output" below: the standard first, then the
+error correction a user would expect, OpenJPEG usually the guide, and
+otherwise an error rather than a wrong image). In each case the standard
+says the file is wrong but not what it means, OpenJPEG's correction is
+deliberate (a named function, a warning, a fixed issue), and the checks that
+follow still refuse a file the correction reads wrongly. Fixtures:
+`quirk_*_lossless` in `tests/fixtures/`, from
+`scripts/gen-encoder-quirk-fixtures.py`; tests in `tests/encoder_quirks.rs`
+and the `encoder quirks` block of `src/codestream/tests.rs`.
+
+**`TPsot == TNsot`.** A tile's tile-parts are numbered 0 to N with N
+declared, so its last part has `TPsot` equal to `TNsot`. Adobe Photoshop's
+plug-in writes this. OpenJPEG warns "Non conformant codestream
+TPsot==TNsot" and adds one to every count
+(`opj_j2k_need_nb_tile_parts_correction`, `j2k.c:9410`, called at
+`j2k.c:9701`; its issue 254). Its trigger is copied exactly
+(`count_is_one_short` in `src/codestream/mod.rs`): once per codestream,
+when the first tile has all the parts it declares, the `SOT` chain is
+walked onward, stepping over other tiles' parts by `Psot`, to the next part
+of that tile. If that part has `TPsot == TNsot`, every count stated so far
+and every count stated after is raised by one. The walk finds nothing at a
+marker other than `SOT`, at a `Psot` below 14 on another tile's part, or at
+a `Psot` past the end. It is safe because the raised counts are held to the
+parts that arrive like any other count, and the parts are still read in
+`TPsot` order.
+
+The two decoders differ where the counts are mixed. When the correction is
+on, a tile whose own count was right now carries one part fewer than its
+count, and is refused as a tile with a missing part ("tile 3 declares 4
+tile-parts but carries 3"). OpenJPEG decodes it as it decodes a truncated
+tile, which here gives the full image. When the first tile to complete is
+counted right and a later tile has an extra part, the correction is not
+made, and the extra part is refused ("tile 1 tile-part 2 of a declared 2
+tile-parts"). OpenJPEG decodes that tile from the parts before it and drops
+the last one: 2293 of the 3072 samples then differ from the source. Both
+were measured on `quirk_tpsot_tnsot_lossless` with its counts edited.
+
+**A COD, COC, QCD or QCC restated in a later tile-part.** A.4.2 puts these
+in a tile's first tile-part. BAP Image Systems writes the main header's COD
+and QCD into every tile-part. OpenJPEG reads them in any tile-part header
+(`J2K_STATE_TPH` in its marker table, `j2k.c:1411`) and applies them to the whole tile;
+it removed its "one COD per tile" check on purpose so that files like these
+decode (`opj_j2k_read_cod`, the `#if 0` at `j2k.c:2688`; its issue 1043, a
+BAP bulk-scanner file). Here a later
+part's marker is accepted only when it changes nothing in either reading,
+and is then dropped (`check_restatement`):
+
+- a COD must equal the tile's COD in force (its own, else the main
+  header's), and every component of the tile must already code as it says,
+  since OpenJPEG writes a COD over every component. So a tile or main COC
+  that differs from the COD makes the restatement a refusal: this decoder
+  would keep the COC and OpenJPEG would overwrite it;
+- a QCD likewise, against the QCD in force and every QCC;
+- a COC or QCC must equal what its component already has.
+
+A marker that differs is `Codestream` ("a later tile-part of tile 0 carries
+a COD that differs from the one in force"). OpenJPEG applies it to the
+whole tile, including the parts read before it; which values the encoder
+meant is not in the file, so this decoder does not guess. An RGN in a later
+part is still refused, as before. This is safe because an accepted
+restatement leaves every value the decode reads as it was.
+
+**The color transform on one or two components.** `SGcod`'s MCT byte set
+on an image of fewer than three components (openjpeg-data `123.j2c`). The
+transform is defined over components 0, 1 and 2 (G.2), so it has nothing
+to apply to. OpenJPEG says "Number of components (1) is inconsistent with a
+MCT. Skip the MCT step." and decodes the components as coded
+(`opj_tcd_mct_decode`, `tcd.c:2188`), the only image such a file can
+describe. This decoder skips it too (`mct::applies`); before, it refused the
+file as `Marker`. Three or more components whose sub-sampling or sizes
+differ are still refused, as OpenJPEG refuses them (`tcd.c:2085-2120`).
+Three that differ only in depth or sign are refused too; OpenJPEG decodes
+those, so that refusal is this decoder's own stricter choice
+(`mct::check_geometry`).
+
+Real files, decoded with `opj_decompress` 2.5.0 from their bare
+codestreams and compared sample by sample (the files are not committed;
+their licenses vary):
+
+| File | Quirk | Result |
+| ---- | ----- | ------ |
+| openjpeg-data `issue235.jp2`, `issue254.jp2`, `text_GBR.jp2` | `TPsot == TNsot` | bit-exact (5/3) |
+| openjpeg-data `issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2`; jpylyzer `jpx_disguised_as_jp2.jp2` (and `wrong-number-of-tileparts.jpf`, byte-identical to it) | `TPsot == TNsot` | within 1 (9/7) |
+| openjpeg-data `issue559-eci-090-CIELab.jp2` | `TPsot == TNsot` | within 2 (9/7, 16-bit) |
+| openjpeg-data `issue390.jp2` | `TPsot == TNsot` | both refuse a later fault |
+| openjpeg-data `db11217111510058.jp2` | COD and QCD restated | within 1 (9/7) |
+| openjpeg-data `123.j2c` | MCT on one component | bit-exact (5/3) |
+
+`issue559-eci-090-CIELab.jp2` decodes the same, in both decoders, with its
+counts edited to be right, so its difference of 2 (731 of 89888 samples of
+component 0) is the 9/7 difference at 16 bits, not the correction. Every
+other committed fixture and conformance file decodes as it did before.
+
 ### Where the decoders differ
 
 Every known place where this decoder and OpenJPEG 2.5.0 give a different
@@ -508,6 +605,9 @@ result on the same file:
 - streams this decoder refuses where OpenJPEG warns or reads on ("Stricter
   than the oracle on non-conforming streams"), and POC sequences that leave
   out packets ("Packets a POC sequence leaves out");
+- mixed tile-part counts around the `TPsot == TNsot` correction, and a later
+  tile-part's COD, COC, QCD or QCC that differs from the value in force,
+  both refused here ("Encoder mistakes OpenJPEG corrects");
 - signed 32-bit components, which OpenJPEG refuses ("Signed 32-bit
   components");
 - under `ColorOutput::Srgb`: sYCC with the IEC constants, rounded, and the
