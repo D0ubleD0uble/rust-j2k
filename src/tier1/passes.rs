@@ -265,7 +265,9 @@ impl BlockState {
     /// Magnitude-refinement context (`CTX_MR..CTX_RUN`) of the sample at padded
     /// index `p` on row `y` (ISO Table D-4 / D.3.3). After the first refinement
     /// the context is always 16; on the first refinement it is 15 if any
-    /// neighbor is significant, else 14.
+    /// neighbor in its context is significant, else 14. Under vertically causal
+    /// coding a stripe's bottom row leaves out the row below it, as the other
+    /// contexts do.
     fn refinement_context(&self, p: usize, y: u32) -> u8 {
         if self.flags[p] & REFINED != 0 {
             CTX_MR + 2
@@ -1735,6 +1737,65 @@ mod tests {
                 bottom - 1
             );
         }
+    }
+
+    /// The cleanup pass's run-length test sees the same vertically causal
+    /// neighborhood as the contexts. A 4-row column whose only significant
+    /// neighbor sits below its bottom row, in the next stripe, still aggregates
+    /// under VCAUSAL, so it decodes exactly as if that neighbor were not
+    /// significant. Without VCAUSAL the neighbor breaks the run and the decode
+    /// differs, which shows the comparison can tell the two apart.
+    #[test]
+    fn vertically_causal_cleanup_aggregates_past_a_next_stripe_neighbor() {
+        use crate::codestream::markers::code_block_style::VCAUSAL;
+        let bytes = [0x5A, 0xC3, 0x1F, 0x88, 0x24, 0xE7, 0x6B, 0x90, 0x3D, 0x71];
+        // Everything the decode leaves behind: the first stripe's
+        // coefficients and signs, every context state, and the decoder's
+        // position, read as the next 32 uniform decisions.
+        let run = |south_significant: bool, vcausal: bool| {
+            // A 1×5 block: the first stripe is rows 0..=3, and row 4 is the
+            // next stripe's only row. Row 4 is significant, or only visited so
+            // the cleanup pass skips it the same way without its neighbors
+            // seeing it.
+            let mut state = BlockState::new(1, 5);
+            state.vcausal = vcausal;
+            if south_significant {
+                state.set_significant(0, 4);
+            } else {
+                state.set_visited(0, 4, true);
+            }
+            let mut mq = MqDecoder::new(&bytes);
+            let mut cx = init_contexts();
+            let style = if vcausal { VCAUSAL } else { 0 };
+            cleanup_pass(
+                &mut mq,
+                &mut state,
+                &mut cx,
+                Orientation::Ll,
+                4,
+                style,
+                false,
+            )
+            .unwrap();
+            let stripe: Vec<(i32, bool)> = (0..4)
+                .map(|y| (state.coeffs[y as usize], state.is_negative(0, y)))
+                .collect();
+            let contexts: Vec<(u8, u8)> = cx.iter().map(|c| (c.index, c.mps)).collect();
+            let after: Vec<u8> = (0..32)
+                .map(|_| mq.decode(&mut cx[CTX_UNI as usize]))
+                .collect();
+            (stripe, contexts, after)
+        };
+        assert_eq!(
+            run(true, true),
+            run(false, true),
+            "under VCAUSAL the next stripe's neighbor must not break the run"
+        );
+        assert_ne!(
+            run(true, false),
+            run(false, false),
+            "without VCAUSAL the neighbor breaks the run"
+        );
     }
 
     /// Every table entry is the label function's value for the mask's sums,
