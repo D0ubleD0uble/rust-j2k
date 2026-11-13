@@ -245,6 +245,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wavelet frees each level's subbands as it merges them. At the full sample
   budget, one 9/7 tile peaked at about 580 MiB and now peaks at about
   340 MiB.
+- A code-block whose coding passes never get a byte now decodes, as the
+  standard allows (B.10.7) and as OpenJPEG decodes it: the passes read the
+  `0xFF` fill the decoder appends (D.4.1). It was refused with "included
+  code-block has coding passes but no coded bytes". The passes still count
+  against the code-block work bound.
 
 ### Changed
 
@@ -279,6 +284,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reduction past the main header's decomposition levels is checked before
   the tile data, so a truncated file with an impossible reduction reports
   the reduction rather than the truncation.
+- Three encoder mistakes that OpenJPEG corrects on purpose now decode as
+  they do there; each was an error in 0.3.0. A tile whose last tile-part has
+  `TPsot` equal to `TNsot` (one part more than declared, as Adobe Photoshop
+  writes them): when the first tile to have all its declared parts has one
+  more, every tile's count is raised by one. A later tile-part that repeats
+  the COD, COC, QCD or QCC already in force (as BAP Image Systems writes
+  them): it is accepted and changes nothing, while one that differs is
+  still `Error::Codestream`. And the color transform flag on an image of
+  one or two components, which is ignored.
 - A JP2 file used to be `Unsupported`; it now decodes, or fails with
   `FileFormat` when its boxes are malformed.
 - A JP2 file whose `ihdr` component count differs from its codestream's

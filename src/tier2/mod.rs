@@ -393,7 +393,7 @@ pub(crate) fn decode_packets_within<'a>(
             let subbands = if level.bands.is_empty() {
                 empty_subbands(rect, nl, r as u32)
             } else {
-                build_subbands(&level.bands, band_states)?
+                build_subbands(&level.bands, band_states)
             };
             resolutions.push(Resolution { subbands });
         }
@@ -956,12 +956,15 @@ fn parse_band_header(
             let length_bits = block.lblock + new_passes.ilog2();
             let seg_len = bio.read(length_bits) as usize;
 
-            // A layer may add coding passes and no bytes. The MQ codeword is
-            // continuous within a segment, so the encoder's rate split can put
-            // passes in one layer and the bytes carrying them in the next;
-            // OpenJPEG reads such a length without complaint. What must not
-            // happen is a block ending up with passes and no bytes at all,
-            // which `build_subbands` checks once every layer has been read.
+            // A layer may add coding passes and no bytes (B.10.7 sets no
+            // lower bound on the length). The MQ codeword is continuous
+            // within a segment, so the encoder's rate split can put passes in
+            // one layer and the bytes carrying them in the next. A segment
+            // that never gets a byte is decoded from the `0xFF` fill (D.4.1),
+            // as OpenJPEG decodes it. The passes still count and still fill
+            // the segment, so a later layer's passes land in the right one.
+            // A zero length files no chunk, and reading it took at least the
+            // header bits above, so it costs no more than one with bytes.
             let segment = &mut block.segments[segment_index];
             segment.passes += new_passes;
             if seg_len > 0 {
@@ -1009,21 +1012,12 @@ fn empty_subbands<'a>(rect: Rect, nl: u32, r: u32) -> Vec<Subband<'a>> {
 
 /// Turn the accumulated per-layer state of one resolution into its subbands.
 ///
-/// A block that took coding passes but no bytes from any layer would hand Tier-1
-/// an empty MQ stream. That is checked here rather than per packet, because a
-/// single layer is allowed to contribute passes without bytes.
-fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Result<Vec<Subband<'a>>> {
-    for state in &states {
-        for block in &state.blocks {
-            if block.num_passes > 0 && block.segments.iter().all(|s| s.chunks.is_empty()) {
-                return Err(Error::Codestream(
-                    "included code-block has coding passes but no coded bytes".into(),
-                ));
-            }
-        }
-    }
-
-    Ok(bands
+/// A block may end up with coding passes and no bytes, in one codeword segment
+/// or in all of them, since B.10.7 lets a contribution's length be zero. Tier-1
+/// decodes such a segment from the `0xFF` bytes D.4.1 appends, as OpenJPEG
+/// does.
+fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Subband<'a>> {
+    bands
         .iter()
         .zip(states)
         .map(|(band, state)| Subband {
@@ -1055,7 +1049,7 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Result<
                 })
                 .collect(),
         })
-        .collect())
+        .collect()
 }
 
 /// Decode the number of coding passes (ISO Table B.4 / OpenJPEG

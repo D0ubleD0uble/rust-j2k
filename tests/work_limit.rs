@@ -79,11 +79,22 @@ impl Bits {
 /// included with 88 coding passes and the one byte 0x00. QCD gives the band
 /// 30 bit-planes and no block has a zero bit-plane, so each runs all 88.
 fn t1bomb(size: u32) -> Vec<u8> {
-    t1bomb_tiled(size, 1)
+    t1bomb_tiled_with_length(size, 1, 1)
 }
 
 /// `t1bomb(size)` as `side` x `side` tiles, each the same bomb.
 fn t1bomb_tiled(size: u32, side: u32) -> Vec<u8> {
+    t1bomb_tiled_with_length(size, side, 1)
+}
+
+/// [`t1bomb`] with each code-block's length `length` (0 or 1), and that
+/// many bytes of 0x00 for each.
+fn t1bomb_with_length(size: u32, length: u32) -> Vec<u8> {
+    t1bomb_tiled_with_length(size, 1, length)
+}
+
+fn t1bomb_tiled_with_length(size: u32, side: u32, length: u32) -> Vec<u8> {
+    assert!(length <= 1);
     let blocks = size.div_ceil(64);
     // The tag trees' levels, leaves first: (columns, rows).
     let mut levels = vec![(blocks, blocks)];
@@ -108,16 +119,16 @@ fn t1bomb_tiled(size: u32, side: u32) -> Vec<u8> {
                     }
                 }
             }
-            // 88 passes (Table B.4), Lblock stays 3, a length of 1 in
+            // 88 passes (Table B.4), Lblock stays 3, the length in
             // 3 + floor(log2(88)) = 9 bits.
             bits.put_int(0b1_1111_1111, 9);
             bits.put_int(88 - 37, 7);
             bits.put(0);
-            bits.put_int(1, 9);
+            bits.put_int(length, 9);
         }
     }
     let mut data = bits.finish();
-    data.resize(data.len() + (blocks * blocks) as usize, 0);
+    data.resize(data.len() + (blocks * blocks * length) as usize, 0);
 
     let seg = |code: u16, body: &[u8]| {
         let mut out = code.to_be_bytes().to_vec();
@@ -191,6 +202,24 @@ fn raising_the_code_block_limit_admits_a_file_the_default_refuses() {
     // Raising the other bound does not.
     let other = DecodeOptions::default().with_packet_work_limit(WorkLimit::Unlimited);
     assert_limit("packet limit", decode_with(&bytes, &other));
+}
+
+/// The same shape with a length of zero for every code-block: passes and no
+/// bytes, which B.10.7 allows and Tier-1 decodes from the `0xFF` fill. The
+/// passes cost what they cost with a byte, so the file, smaller by a byte a
+/// block, is still past the bound. Twice the bound admits it, and it decodes
+/// to what OpenJPEG 2.5.0 decodes.
+#[test]
+fn passes_with_no_bytes_still_count_against_the_code_block_bound() {
+    let bytes = t1bomb_with_length(1024, 0);
+    assert_limit("default", decode(&bytes));
+    let raised = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Raised(2));
+    let image = decode_with(&bytes, &raised).expect("within twice the bound");
+    // The hash of `opj_decompress`'s samples for these bytes.
+    assert_eq!(
+        sha256_hex(&samples_u8(&image)),
+        "36ff34972077a9e824cce89d6a7056a0923719b8ae884a5ed7f0ba299303534e"
+    );
 }
 
 /// The issue's shape: 8192^2 in 64x64 code-blocks of 88 passes, 76 KB. It
