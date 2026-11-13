@@ -267,6 +267,35 @@ writes a main-header POC only for the 4K cinema profile
 either rule. The append reads as an oversight, not a choice, so this crate
 follows the standard.
 
+### Code-block contributions of zero bytes
+
+A packet may include a code-block with coding passes and a length of zero.
+B.10.7.1 gives the length as a plain binary number ("The length of a codeword
+segment is represented by a binary number of length: bits = Lblock +
+⌊log2(coding passes added)⌋") and sets no lower bound. B.10.7 also says how a
+contribution can end up empty: "in the event that an 0xFF would have appeared
+at the end of a code-block's contribution to some packet, the 0xFF may be
+safely moved to the subsequent packet which contains contributions from the
+code-block, or dropped if there is no such packet." The B.10.8 header order
+reads the length for every included block, with no zero case. D.4.1 says how
+such passes decode: "the decoder shall extend the input bit stream to the
+arithmetic coder with 0xFF bytes, as necessary, until all symbols have been
+decoded."
+
+So the decoder accepts passes with no bytes, in one layer or in every layer
+that includes the block. The passes count and fill their codeword segment, so
+a later layer's passes and lengths go to the right segment, under `restart`
+and `bypass` too. A segment that never gets a byte is decoded from the fill,
+as OpenJPEG 2.5.0 decodes it (`opj_mqc_init_dec` with a length of 0). Until
+this was settled the decoder refused a block whose passes never got a byte,
+which stopped openjpeg-data's `kodak_2layers_lrcp.j2c` (DCP-Werkstatt) on
+2153 such blocks. That file now reaches the leftover-bytes refusal below.
+
+A contribution of zero bytes reads its header bits like any other, and its
+passes cost the same against the code-block work bound as passes with bytes.
+`zero_length_contribution` and `zero_length_contribution_bypass` pin the
+cases; `tests/work_limit.rs` pins the bound.
+
 ### Stricter than the oracle on non-conforming streams
 
 Three tier-2 checks reject streams OpenJPEG decodes with a warning: an `Nsop`
@@ -302,6 +331,26 @@ evidence says is broken.
 Tolerating bytes left at a tile-part boundary once every packet is found
 would recover both without weakening the check inside a tile-part. That is
 not done yet.
+
+Real files from other encoders that these refusals stop:
+
+- ECW JPEG 2000 SDK 6.0 (ERDAS APOLLO GeoCompressor 2021) numbers its SOP
+  markers out of sequence. jpylyzer-test-files'
+  `erdas-nullinput-uint8-rgb-null-2tileparts.jp2` is refused with "SOP
+  sequence number 50 for packet 0, expected 0"; OpenJPEG decodes it.
+- openjpeg-data's `kodak_2layers_lrcp.j2c` (DCP-Werkstatt) has 975304 bytes
+  left after its last packet, refused with "tile-part has 975304 body
+  byte(s) left after the last packet"; OpenJPEG ignores them. With the check
+  turned off, this decoder's image is within 1 of OpenJPEG's (it is 9/7).
+
+A tile-part that ends before its last packet is refused too ("tile-part ends
+before the last packet"). That is not a desynchronized walk: B.11 lets "any
+number of whole packets (in order)" be dropped from the end of a tile, so
+this is the strict decode refusing missing data, which partial decode (#214)
+would accept with the missing packets reported. openjpeg-data's `Marrin.jp2`
+(Kakadu 5.2.1) declares two layers, but its one tile-part's `Psot` covers
+only the packets of layer 0. OpenJPEG decodes the packets it finds, with no
+warning.
 
 Two parse-time checks are also stricter than the oracle, for a different
 reason: the codestream is *missing data the standard requires*, and OpenJPEG
