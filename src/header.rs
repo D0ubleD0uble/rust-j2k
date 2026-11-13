@@ -35,7 +35,8 @@ pub struct Header {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ComponentInfo {
-    /// Bits per sample.
+    /// Bits per sample: 1 to 31 for unsigned samples, 1 to 32 for signed
+    /// ones, as [`Component::bit_depth`](crate::Component::bit_depth).
     pub bit_depth: u8,
     /// Whether the samples are signed.
     pub signed: bool,

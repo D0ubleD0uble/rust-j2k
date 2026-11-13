@@ -313,3 +313,67 @@ fn a_limit_raised_by_zero_is_invalid_options() {
     let one = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Raised(1));
     assert_limit("Raised(1)", decode_with(&bytes, &one));
 }
+
+/// The factor a `Limit` message names, as `WorkLimit::Raised(n)`.
+fn named_factor(message: &str) -> u32 {
+    let (_, rest) = message
+        .split_once("`WorkLimit::Raised(")
+        .unwrap_or_else(|| panic!("no factor named: {message}"));
+    let (digits, _) = rest.split_once(')').unwrap();
+    digits.parse().unwrap()
+}
+
+fn limit_message(result: rust_j2k::Result<rust_j2k::Image>) -> String {
+    match result {
+        Err(Error::Limit(m)) => m,
+        other => panic!("expected the work bound, got {other:?}"),
+    }
+}
+
+/// The message names the smallest `Raised` factor: decoding with it
+/// succeeds, and with one less is refused.
+#[test]
+fn the_named_factor_is_the_smallest_that_admits_the_file() {
+    type Setter = fn(DecodeOptions, WorkLimit) -> DecodeOptions;
+    let cases: [(&str, Setter, u32); 2] = [
+        (
+            "tier1_work_bound/t1bomb_1024_64_88.j2k",
+            DecodeOptions::with_code_block_work_limit,
+            2,
+        ),
+        (
+            "work_bound/t2skip_2048x1024_40000.j2k",
+            DecodeOptions::with_packet_work_limit,
+            2,
+        ),
+    ];
+    for (name, set, expected) in cases {
+        let bytes = fixture(name);
+        let message = limit_message(decode(&bytes));
+        let factor = named_factor(&message);
+        assert_eq!(factor, expected, "{name}: {message}");
+        let options = set(DecodeOptions::default(), WorkLimit::Raised(factor));
+        decode_with(&bytes, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let one_less = set(DecodeOptions::default(), WorkLimit::Raised(factor - 1));
+        assert_limit(name, decode_with(&bytes, &one_less));
+    }
+}
+
+/// A file far past the bound is not walked to its end: the message sends the
+/// caller to `Unlimited`.
+#[test]
+fn a_file_far_past_the_bound_names_unlimited() {
+    let bytes = fixture("work_bound/cprl_tall_poc31.j2k");
+    let message = limit_message(decode(&bytes));
+    assert!(message.contains("`WorkLimit::Unlimited`"), "{message}");
+    assert!(!message.contains("Raised("), "{message}");
+}
+
+/// A raised limit that is still too small names a factor above it.
+#[test]
+fn a_raised_limit_that_is_too_small_names_a_larger_factor() {
+    let bytes = fixture("work_bound/sweep_rpcl_1024_64.j2k");
+    let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
+    let message = limit_message(decode_with(&bytes, &options));
+    assert_eq!(named_factor(&message), 3, "{message}");
+}

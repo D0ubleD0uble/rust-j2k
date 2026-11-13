@@ -189,6 +189,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorkLimit::Unlimited`. The packet limit also bounds the walk
   `read_header_with` makes of a `Psot = 0` tile. Raising it does not raise
   the memory a POC sequence's packets are held in.
+- The `Error::Limit` message for a work bound names the smallest
+  `WorkLimit::Raised(n)` that admits the file, or says `WorkLimit::Unlimited`
+  when the file needs more than four times the default packet bound. Finding
+  it repeats the packet walk after a refusal, at most four times the bound,
+  so a refused file takes up to that much longer to report. The variant
+  stays `Limit`.
 
 ### Fixed
 
@@ -240,6 +246,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The docs say what a caller can do about each failure. The crate docs and
+  README gained "Damaged input" and "Limits" sections, `Error` says which
+  variant to expect for non-JPEG-2000 input and that messages are not
+  stable, and `WorkLimit`, `decode_with` and `ColorOutput::Srgb` have
+  runnable examples (a retry after `Error::Limit`, a reduction with sRGB
+  output, and an 8-bit RGBA buffer).
 - The crate uses American spellings: color, gray, grayscale, -ize, behavior,
   center. Every public name added in this release is spelled that way
   (`ColorSpace`, `ColorSpace::Grayscale`, `ColorOutput`,

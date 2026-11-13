@@ -488,6 +488,11 @@ struct PacketStreams<'a> {
     packed: bool,
 }
 
+/// The message of the [`Error::Limit`] a walk fails with when its visits run
+/// out. The decode matches it to tell that failure from the geometry caps.
+pub(crate) const WALK_LIMIT: &str =
+    "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)";
+
 /// Spend `n` of what is left of [`Budget::visits`], or fail once it is gone.
 pub(crate) fn visit(left: &Cell<u64>, n: usize) -> Result<()> {
     match left.get().checked_sub(n as u64) {
@@ -495,10 +500,7 @@ pub(crate) fn visit(left: &Cell<u64>, n: usize) -> Result<()> {
             left.set(rest);
             Ok(())
         }
-        None => Err(Error::Limit(
-            "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)"
-                .into(),
-        )),
+        None => Err(Error::Limit(WALK_LIMIT.into())),
     }
 }
 

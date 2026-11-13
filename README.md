@@ -89,6 +89,34 @@ match decode(&bytes) {
 }
 ```
 
+### Damaged input
+
+Decoding is strict. Truncated or inconsistent data is an `Error` and no partial
+image comes back: a file cut short is `Error::Codestream` (`Psot overruns the
+codestream`), a codestream missing its `EOC` marker is refused, and anything
+that is not JPEG 2000, empty input and text included, is `Codestream` too.
+JPEG 2000 has no checksum, so damage inside the entropy-coded data is not
+always detected; a flipped byte can decode to a wrong image without an error.
+What is refused, and where this decoder is stricter than OpenJPEG, is in
+[docs/correctness.md](docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams).
+
+### Limits
+
+A valid file can come back as `Error::Limit`: the decoder caps what a file may
+declare (image area, code-block count, precinct count) and how much work it
+may ask for. Only the two work bounds can be changed, with
+`DecodeOptions::packet_work_limit` (reading the packet headers) and
+`DecodeOptions::code_block_work_limit` (decoding the code-blocks), each a
+`WorkLimit`. The other caps have no option.
+
+- For a file from a source you trust, use `WorkLimit::Unlimited`. It is the
+  simplest choice.
+- To keep a ceiling, use `WorkLimit::Raised(n)`. The `Limit` message for a
+  work bound names the smallest `n` that admits the file.
+
+The `WorkLimit` docs on [docs.rs](https://docs.rs/rust-j2k) have an example
+that catches `Error::Limit` and retries.
+
 `samples` are raw integer values. For GRIB2 the caller un-scales them with the
 template's reference value and binary/decimal scale factors; this crate stops at
 the codestream's integer output and does not interpret the GRIB2 fields.
