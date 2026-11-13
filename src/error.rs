@@ -83,7 +83,7 @@ pub enum Error {
     Unsupported(String),
     /// The input exceeded one of the decoder's resource guards — a hostile or
     /// absurd declaration (sample area, code-block count, precinct count,
-    /// bit-plane depth, progression volumes) past a cap, or work past the
+    /// bit-plane depth) past a cap, or work past the
     /// bound for the file's size (see [`decode`](crate::decode)), not a
     /// missing feature. The file may be valid.
     ///

@@ -62,3 +62,40 @@ pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, defaul
          the file needs at least `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn named(message: &str) -> u32 {
+        let (_, rest) = message.split_once("`WorkLimit::Raised(").unwrap();
+        rest.split_once(')').unwrap().0.parse().unwrap()
+    }
+
+    /// The code-block factor counts what earlier tiles spent.
+    #[test]
+    fn code_blocks_add_the_work_already_spent() {
+        // 100 spent, 10 more needed, 50 a factor: 110 / 50 rounds up to 3.
+        assert_eq!(named(&code_blocks(1, 10, 5, 100, 50)), 3);
+        assert_eq!(named(&code_blocks(0, 10, 5, 0, 50)), 1);
+        assert_eq!(named(&code_blocks(0, 100, 0, 0, 50)), 2);
+    }
+
+    /// The POC factor counts the visits earlier tiles spent.
+    #[test]
+    fn poc_volumes_add_the_visits_already_spent() {
+        let why = format!("{}100 packets (see `option`)", tier2::POC_REACH);
+        assert_eq!(named(&poc_volumes(&why, 100, 50)), 4);
+        assert_eq!(named(&poc_volumes(&why, 0, 50)), 2);
+        // A message without a count names no factor.
+        let odd = format!("{}many packets", tier2::POC_REACH);
+        assert!(!poc_volumes(&odd, 0, 50).contains("Raised("));
+    }
+
+    /// The packet walk names the factor above what it was allowed.
+    #[test]
+    fn the_packet_walk_names_the_next_factor_up() {
+        assert_eq!(named(&packet_walk("why", 50, 50)), 2);
+        assert_eq!(named(&packet_walk("why", 100, 50)), 3);
+    }
+}

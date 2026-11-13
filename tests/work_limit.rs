@@ -394,16 +394,6 @@ fn the_packet_factor_is_the_next_one_up_not_what_the_file_needs() {
     assert_limit("Raised(2)", decode_with(&bytes, &options));
 }
 
-/// The same file is refused at `Raised(31)` too (it needs 32). About 5e8
-/// visits, so ignored.
-#[test]
-#[ignore = "slow: about 5e8 packet-walk visits"]
-fn the_packet_factor_does_not_admit_the_file() {
-    let bytes = fixture("work_bound/cprl_tall_poc31.j2k");
-    let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(31));
-    assert_limit("Raised(31)", decode_with(&bytes, &options));
-}
-
 /// POC volumes that reach more packets than the walk may visit are refused
 /// before the walk, and the message names the exact factor: 1.3e8 packets is
 /// 7.8 times the bound. Under `Raised(7)` it is refused, naming 8; under

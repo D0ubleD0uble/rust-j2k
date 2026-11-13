@@ -27,7 +27,7 @@ a flat image of 128.
 | `cprl_tall.j2k` | `cprl_tall(0)`: one column of 2^24 rows on x in [1, 2), one level; resolution 0 sets the y step to 2 and resolution 1 the x step to 2, so the CPRL sweep visits 2^23 positions for 512 packets | 2.5e7 | decodes, all 128, 0.7 s | `Limit` |
 | `cprl_tall_poc31.j2k` | `cprl_tall(31)`: the same, with a POC marker repeating the CPRL order 31 times | 7.8e8 | decodes, all 128, 20.6 s | `Limit` |
 | `pocdup_4x4_1024_31.j2k` | `pocdup(4, 4, 1, 1024, 31)`: one 4 x 4 tile, no wavelet levels, 2 x 2 precincts, 1024 LRCP layers of empty packets, and 31 identical POC volumes over all of them, so each packet is read once and skipped 30 times | 6.8e4 | decodes, all 128, 0.00 s | decodes, all 128 |
-| `pocvol_1024x512_1000_2.j2k` | `pocdup(1024, 512, 1, 1000, 2, 100)`: one 1024 x 512 tile, no wavelet levels, 2 x 2 precincts, 1000 LRCP layers, two identical POC volumes over all of them, and only 100 bytes of packets, so the volumes reach 1.3e8 packets, 7.8 times the bound, so it needs `Raised(8)`, and the decode refuses them before the walk | 1.3e8 | not run | `Limit` naming `Raised(8)` |
+| `pocvol_1024x512_1000_2.j2k` | `pocdup(1024, 512, 1, 1000, 2, 100)`: one 1024 x 512 tile, no wavelet levels, 2 x 2 precincts, 1000 LRCP layers, two identical POC volumes over all of them, and only 100 bytes of packets, so the volumes reach 1.3e8 packets, 7.8 times the bound, so it needs `Raised(8)`, and the decode refuses them before the walk | 1.3e8 | decodes, writes a PGM, 8.7 s | `Limit` naming `Raised(8)` |
 
 The same generator functions, with other arguments, write the shapes of
 `tests/fixtures/psot0/jp2_t2bomb_*` and `jp2_t2_sweep_*` (those are JP2 files

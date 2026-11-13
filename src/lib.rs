@@ -626,9 +626,11 @@ pub struct DecodeOptions {
 ///   for a file of one tile.
 /// - For the packet bound it is the next factor up from the one that failed,
 ///   and the file may need more: the walk stops as soon as it runs out, so it
-///   does not know the total. (Only a POC sequence that reaches too many
-///   packets gets an exact figure.) If `Raised(n)` is refused again, the
-///   message names the next factor.
+///   does not know the total. (A POC sequence that reaches too many packets
+///   gets the factor its reach needs, but the walk after that check can
+///   still run out.) If `Raised(n)` is refused again, the message names the
+///   next factor. Double `n` on a retry rather than stepping by one: each
+///   retry costs more, and a file can need dozens of steps.
 ///
 /// Which value to pick:
 ///

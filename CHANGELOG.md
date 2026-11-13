@@ -191,10 +191,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the memory a POC sequence's packets are held in.
 - The `Error::Limit` message for a work bound names a
   `WorkLimit::Raised(n)`, worked out from the refusal alone, and points to
-  `WorkLimit::Unlimited` for trusted input. For the code-block bound and for
-  a POC sequence that reaches too many packets it is what the tiles seen so
-  far need (exact for a file of one tile). For the packet walk it is the
-  next factor up, and the file may need more. The variant stays `Limit`.
+  `WorkLimit::Unlimited` for trusted input. For the code-block bound it is
+  what the tiles seen so far need (exact for a file of one tile). For a POC
+  sequence that reaches too many packets it is what that reach needs; the
+  walk after the check can still run out. For the packet walk it is the
+  next factor up, and the file may need more, so double it on a retry. The variant stays `Limit`.
 
 ### Fixed
 

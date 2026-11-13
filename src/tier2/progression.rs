@@ -518,8 +518,8 @@ impl Emitted {
             Some(words) => Marks::Dense(vec![0; words]),
             None if !poc_set => {
                 return Err(Error::Limit(format!(
-                    "tile packet walk exceeds its work bound: its POC volumes reach \
-                     {reached} packets"
+                    "tile packet walk exceeds its work bound: its POC volumes hold \
+                     {reached} packets, past the packet bitmap"
                 )));
             }
             None => Marks::Sparse(HashSet::default()),

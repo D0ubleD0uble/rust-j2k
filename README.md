@@ -100,8 +100,9 @@ one, as OpenJPEG reads it). Anything that is not JPEG 2000, empty input and
 text included, is `Codestream` too. Damage can show up as any variant: a
 flipped header bit can read as an absurd image size (`Limit`) or as an unknown
 marker or feature (`Unsupported`), so do not retry a `Limit` with `Unlimited`
-on that evidence alone. JPEG 2000 has no checksum, so damage inside the entropy-coded data is not
-always detected; a flipped byte can decode to a wrong image without an error.
+on that evidence alone. JPEG 2000 has no checksum, so damage inside the
+entropy-coded data is not always detected; a flipped byte can decode to a
+wrong image without an error.
 What is refused, and where this decoder is stricter than OpenJPEG, is in
 [docs/correctness.md](docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams).
 
@@ -119,7 +120,7 @@ the docs.
 - To keep a ceiling, use `WorkLimit::Raised(n)`. The `Limit` message for a
   work bound names an `n` as a hint: for the code-block bound it is what the
   tiles seen so far need, and for the packet bound it is the next factor up,
-  which may not be enough.
+  which may not be enough (double `n` on a retry).
 
 The `WorkLimit` docs on [docs.rs](https://docs.rs/rust-j2k) have an example
 that catches `Error::Limit` and retries.
