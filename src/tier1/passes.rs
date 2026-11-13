@@ -31,9 +31,9 @@ mod golden_vectors;
 /// [`Context`] per index (`NUM_CONTEXTS` total); the
 /// context-formation routines below return an index into that array.
 ///
-/// - `0..=8`   zero coding (the nine significance contexts, [`zc_context`](BlockState::zc_context))
-/// - `9..=13`  sign coding ([`sc_context`](BlockState::sc_context))
-/// - `14..=16` magnitude refinement ([`mr_context`](BlockState::mr_context))
+/// - `0..=8`   zero coding (the nine significance contexts, [`zc_table`])
+/// - `9..=13`  sign coding ([`sign_context`](BlockState::sign_context))
+/// - `14..=16` magnitude refinement ([`refinement_context`](BlockState::refinement_context))
 /// - `17`      run-length (the cleanup pass's aggregation context)
 /// - `18`      uniform (equiprobable; raw bits in the cleanup run mode)
 pub const CTX_ZC: u8 = 0;
