@@ -6,7 +6,6 @@
 //! the reference grid rather than counting, so this module needs the canvas
 //! coordinates the per-component [`ResolutionGeom`] has already divided away.
 
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -15,7 +14,7 @@ use crate::codestream::markers::{PocVolume, Progression, Rect, Siz};
 use crate::{Error, Result};
 
 use super::geometry::ResolutionGeom;
-use super::visit;
+use super::{Visits, WorkRefusal, visit};
 
 /// Everything the packet walk needs beyond the geometry itself: the tile's
 /// rectangle on the **reference grid** and the components' sub-sampling.
@@ -340,7 +339,7 @@ fn mask_below(n: u32) -> u64 {
 pub(crate) fn for_each_packet<F>(
     header: &MainHeader,
     walk: &PacketWalk<'_>,
-    visits: &Cell<u64>,
+    visits: &Visits,
     poc_bitmap: u64,
     poc_set: bool,
     mut f: F,
@@ -382,7 +381,7 @@ where
     if volumes.len() == 1 {
         return run_order(&volumes[0], walk, &plan, visits, &mut f);
     }
-    let mut emitted = Emitted::new(&volumes, walk, max_res, visits.get(), poc_bitmap, poc_set)?;
+    let mut emitted = Emitted::new(&volumes, walk, max_res, visits, poc_bitmap, poc_set)?;
     let skip_visits = emitted.skip_visits();
     for volume in &volumes {
         run_order(
@@ -465,14 +464,14 @@ enum Marks {
 
 impl Emitted {
     /// Nothing emitted yet, for `volumes` over a tile of at most
-    /// `resolutions` resolutions per component, with `visits_left` for the
+    /// `resolutions` resolutions per component, with `visits` for the
     /// walk; a bitmap when the volumes reach at most `dense_bits` packets,
     /// else a set if `poc_set`.
     fn new(
         volumes: &[Volume],
         walk: &PacketWalk<'_>,
         resolutions: usize,
-        visits_left: u64,
+        visits: &Visits,
         dense_bits: u64,
         poc_set: bool,
     ) -> Result<Self> {
@@ -509,17 +508,14 @@ impl Emitted {
         let marks = match words {
             // Refusing a walk that cannot finish relies on strict decoding;
             // revisit it for partial decode (#214).
-            _ if layer_orders && reached > visits_left => {
-                return Err(Error::Limit(format!(
-                    "tile packet walk exceeds its work bound: its POC volumes reach \
-                     {reached} packets (see `DecodeOptions::packet_work_limit`)"
-                )));
+            _ if layer_orders && reached > visits.get() => {
+                return Err(visits.refuse(WorkRefusal::PocReach { reached }));
             }
             Some(words) => Marks::Dense(vec![0; words]),
             None if !poc_set => {
                 return Err(Error::Limit(format!(
-                    "tile packet walk exceeds its work bound: its POC volumes reach \
-                     {reached} packets"
+                    "tile packet walk exceeds its work bound: its POC volumes hold \
+                     {reached} packets, past the packet bitmap"
                 )));
             }
             None => Marks::Sparse(HashSet::default()),
@@ -632,7 +628,7 @@ fn run_order<F>(
     volume: &Volume,
     walk: &PacketWalk<'_>,
     plan: &Plan,
-    visits: &Cell<u64>,
+    visits: &Visits,
     emit: &mut F,
 ) -> Result<()>
 where

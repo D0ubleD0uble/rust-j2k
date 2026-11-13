@@ -14,6 +14,11 @@ oracle; they are excluded from the published crate, because their rights are
 not confirmed. The ISO/IEC 15444-4 JP2 reader files and their references are
 in [`conformance/`](conformance/README.md).
 
+The JP2 files with an ICC profile are ISO/IEC 15444-4 files 5, 7 and 8, at
+`conformance/jp2/files/file5.jp2`, `file7.jp2` and `file8.jp2`. Their oracles
+are in `conformance/jp2/icc_variants.json` (see "ICC to sRGB oracles" below).
+The conformance corpus is excluded from the published crate.
+
 ## The corpus
 
 Every fixture is the exact subset Phase 1 decodes: one component, one tile, one
