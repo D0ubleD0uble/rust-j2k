@@ -53,6 +53,18 @@ pub(crate) fn packet(work: WorkRefusal, spent: u64, allowed: u64, default: u64) 
     }
 }
 
+/// The message for a decode with `strict` off whose missing tiles have
+/// `cost` tile-components, more than the `allowed` visits. `default` is the
+/// default bound.
+pub(crate) fn missing_tiles(cost: u64, allowed: u64, default: u64) -> String {
+    let n = factor(cost, default);
+    format!(
+        "the missing tiles' {cost} tile-components exceed the packet work bound of {allowed} \
+         visits (see `DecodeOptions::packet_work_limit`); the file needs at least \
+         `WorkLimit::Raised({n})`, {TRUSTED}"
+    )
+}
+
 /// The advice for an image of `total` samples against a sample limit whose
 /// default is `default`: the smallest factor that admits it, or, past
 /// `u32::MAX` times the default, where no `Raised` factor does, only

@@ -203,6 +203,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walk after the check can still run out. For the packet walk it is the
   next factor up, and the file may need more, so double `n` on a retry. The
   variant stays `Limit`.
+- `DecodeOptions::strict` (and `with_strict`), `true` by default. With it
+  off, the decode takes missing data and bytes left after a tile's last
+  packet, as `opj_decompress -allow-partial` does, and says what it left
+  out on `Image::report`, a `DecodeReport`. The input may end anywhere after
+  the first `SOT` marker: missing tiles are 0, packets never read add
+  nothing, a cut packet keeps each code-block's whole layers, and a `TNsot`
+  that disagrees with the tile-parts found is advisory. Every other fault,
+  and every work and sample bound, is refused as when strict. The report
+  lists `ReportEntry` values (`MissingTiles`, `MissingPackets`,
+  `TruncatedTilePart`, `TilePartCountMismatch`, `LeftoverBytes`,
+  `MissingEoc`), at most five per tile-part plus two, and
+  `complete_reduction`, the finest reduction the data holds in full, so a
+  codestream can be decoded as it streams in. A strict decode is unchanged
+  and its report is `DecodeReport::default()`.
+- `Header::max_reduction`, the largest `resolution_reduction` the main
+  header allows.
 
 ### Fixed
 

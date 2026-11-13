@@ -268,12 +268,30 @@ impl Plan {
 /// the same with or without a `POC`, as in OpenJPEG's encoder and decoder,
 /// and not refused here.
 ///
-/// The refusal relies on strict decoding; partial decode (#214) must revisit
-/// it, as the packets left out are missing data like a cut tile-part.
+/// A decode with `strict` off takes the packets left out as missing instead,
+/// like a cut tile-part's, through [`poc_gaps`].
 pub(crate) fn check_poc_coverage(
     header: &MainHeader,
     walk: &PacketWalk<'_>,
     tile: u32,
+) -> Result<()> {
+    let layers = header.cod.layers;
+    poc_gaps(header, walk, |comp, res, reached| {
+        Err(Error::Codestream(format!(
+            "the POC volumes of tile {tile} leave out its packets of component \
+             {comp}, resolution {res}, from layer {reached} of {layers}"
+        )))
+    })
+}
+
+/// Call `gap(component, resolution, layer)` for each (component, resolution)
+/// whose packets the `POC` volumes leave out, from `layer` on, in component
+/// and then resolution order, as [`check_poc_coverage`] defines it; stop at
+/// the first error `gap` returns.
+pub(crate) fn poc_gaps(
+    header: &MainHeader,
+    walk: &PacketWalk<'_>,
+    mut gap: impl FnMut(usize, usize, u16) -> Result<()>,
 ) -> Result<()> {
     if header.poc.is_empty() {
         return Ok(());
@@ -300,10 +318,7 @@ pub(crate) fn check_poc_coverage(
                     .map(|v| v.layer_end)
                     .max()
                     .unwrap_or(0);
-                return Err(Error::Codestream(format!(
-                    "the POC volumes of tile {tile} leave out its packets of component \
-                     {comp}, resolution {res}, from layer {reached} of {layers}"
-                )));
+                gap(comp, res, reached)?;
             }
         }
     }
@@ -506,8 +521,9 @@ impl Emitted {
             .iter()
             .all(|v| matches!(v.progression, Progression::Lrcp | Progression::Rlcp));
         let marks = match words {
-            // Refusing a walk that cannot finish relies on strict decoding;
-            // revisit it for partial decode (#214).
+            // A walk that cannot finish is refused up front. With `strict`
+            // off it cannot finish either: the packets past the end of the
+            // data are counted, a visit each.
             _ if layer_orders && reached > visits.get() => {
                 return Err(visits.refuse(WorkRefusal::PocReach { reached }));
             }
