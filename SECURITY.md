@@ -31,6 +31,11 @@ hostile. The robustness contract for the public entry points (`decode`,
 they return either a result or a typed `Error`, never a panic, an abort, an
 out-of-bounds access, unbounded allocation, or a hang.
 
+The promise of no hang holds at the default work limits. `DecodeOptions` can
+raise (`WorkLimit::Raised`) or lift (`WorkLimit::Unlimited`) the bounds on
+packet-header and code-block work, for input from a trusted source; a
+decode under a raised or lifted limit may take as long as the file asks.
+
 A few things that back this up:
 
 - **No `unsafe`.** The decode path contains no `unsafe` code, so a malformed

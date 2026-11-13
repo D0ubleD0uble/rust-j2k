@@ -298,8 +298,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   code-blocks is decoded. Each pass scans its whole code-block however few
   bytes it carries, so a 76 KB file of 8192^2 samples, every 64x64
   code-block asking for 88 passes, took 19 s and is now refused in 6 ms.
-  Encoder output seen spends up to about 3600 per byte, 11% of the bound.
-  OpenJPEG has no such bound and decodes the file in 9 s.
+  A file just under the bound can still take about 0.5 s, or 0.25 ms a
+  byte. Encoder output seen spends up to 43% of the bound
+  (`opj_compress -n 1` on a flat 16-bit image). OpenJPEG has no such bound
+  and decodes the 76 KB file in 9 s.
   `DecodeOptions::code_block_work_limit` raises or lifts the bound.
 - A resolution that holds no precinct costs less: it gets no band or
   code-block geometry, and the packet walk checks no component there. A tile

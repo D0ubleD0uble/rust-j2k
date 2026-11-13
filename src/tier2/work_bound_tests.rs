@@ -28,7 +28,7 @@ pub(crate) fn walk(bytes: &[u8]) -> Option<(u64, u64)> {
     let codestream = if bytes.starts_with(&[0xFF, 0x4F]) {
         bytes
     } else {
-        crate::jp2::parse(bytes, crate::WorkLimit::Default)
+        crate::jp2::parse(bytes, &crate::WorkLimit::Default)
             .ok()?
             .codestream
     };

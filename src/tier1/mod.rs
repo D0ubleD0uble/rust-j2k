@@ -89,19 +89,22 @@ pub fn decode_code_blocks(
 
 /// The fewest sample-passes (see [`work`]) a decode may spend in the block
 /// decoder. A sample-pass costs about 3 ns where a pass finds little to
-/// code, so this is about 0.2 s.
+/// code, but 7 to 8 ns on the data slowest to decode (every byte 0x4e), so
+/// this is about 0.5 s.
 pub(crate) const DECODE_WORK_MIN: u64 = 1 << 26;
 
 /// The sample-passes a decode may spend per byte of its tiles' data, when
 /// that comes to more than [`DECODE_WORK_MIN`].
 ///
-/// Encoder output spends up to about 3600 per byte: `opj_compress` on a
-/// flat image with a few bright specks, which includes many code-blocks
-/// with every pass for a few bytes each. Most files spend under 120. So
-/// this is about 9 times the most seen. A packet header can ask for 88
-/// passes over a 64x64 code-block in about 4 bytes, about 100000
+/// Encoder output spends up to about 14000 per byte: `opj_compress -n 1`
+/// (no wavelet level) on a flat 16-bit image, where every 64x64 code-block
+/// runs about 46 passes for about 14 bytes. With the wavelet, a flat image
+/// with a few bright specks spends up to about 5600. Most files spend under
+/// 120. So this is about 2.35 times the most seen. A packet header can ask
+/// for 88 passes over a 64x64 code-block in about 4 bytes, about 100000
 /// sample-passes per byte, so this cuts a file's worst case to a third,
-/// about 0.1 ms a byte, and refuses it before any of that work is done.
+/// about 0.25 ms a byte on the slowest data, and refuses it before any of
+/// that work is done.
 pub(crate) const DECODE_WORK_PER_BYTE: u64 = 1 << 15;
 
 /// The sample-passes the block decoder may spend on tiles that hold `bytes`

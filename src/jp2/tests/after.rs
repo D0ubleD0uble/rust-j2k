@@ -552,7 +552,7 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
     ] {
         let cut = box_end_cut(file);
         assert!(unbounded(cut).0 > PROBE_VISITS_MIN);
-        let (ends, visits) = probe_packets(cut, 0, WorkLimit::Default);
+        let (ends, visits) = probe_packets(cut, 0, &WorkLimit::Default);
         assert!(!ends);
         assert!(visits <= PROBE_VISITS_MIN, "{visits} visits");
         // The visit bound is what stopped the walk, not the geometry bound
@@ -569,11 +569,11 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
     for file in [T2BOMB_BLOCKS, T2_SWEEP_CPRL] {
         let cut = box_end_cut(file);
         assert!(unbounded(cut).1 > PROBE_GEOMETRY);
-        assert_eq!(probe_packets(cut, 0, WorkLimit::Default), (false, 0));
+        assert_eq!(probe_packets(cut, 0, &WorkLimit::Default), (false, 0));
     }
 
     for file in [T2BOMB_VISITS, T2_MANY_LAYERS] {
-        assert!(probe_packets(box_end_cut(file), 0, WorkLimit::Default).0);
+        assert!(probe_packets(box_end_cut(file), 0, &WorkLimit::Default).0);
     }
 }
 
@@ -640,7 +640,7 @@ fn the_packet_walk_resolves_only_its_own_tile() {
     let parsed = crate::codestream::parse_header(&codestream).unwrap();
     let whole = crate::codestream::parse_tiles(&codestream, parsed).map(|_| ());
     assert!(matches!(whole, Err(Error::Marker(_))), "{whole:?}");
-    assert!(crate::jp2::probe_packets(&codestream, 3, WorkLimit::Default).0);
+    assert!(crate::jp2::probe_packets(&codestream, 3, &WorkLimit::Default).0);
 }
 
 /// A codestream of `tiles` 1x1 tiles in a row and `components` 8-bit
@@ -732,11 +732,11 @@ fn the_packet_walk_skips_a_poc_sequence_past_its_bitmap() {
     use crate::tier2::{Budget, decode_packets_within};
 
     for (layers, volumes) in [(1024, 31), (2048, 1)] {
-        let (ends, _) = probe_packets(&setskip(layers, volumes), 0, WorkLimit::Default);
+        let (ends, _) = probe_packets(&setskip(layers, volumes), 0, &WorkLimit::Default);
         assert!(ends, "{layers} layers, {volumes} volumes");
     }
     let repeated = setskip(2048, 2);
-    assert_eq!(probe_packets(&repeated, 0, WorkLimit::Default), (false, 0));
+    assert_eq!(probe_packets(&repeated, 0, &WorkLimit::Default), (false, 0));
     // 1 MB of COM segments in the main header is not tile data: it does not
     // raise the bitmap's cap past the decode's, so the tile is still not
     // walked.
@@ -745,7 +745,7 @@ fn the_packet_walk_skips_a_poc_sequence_past_its_bitmap() {
     let mut com = vec![0xFF, 0x64, 0xFF, 0xFF, 0, 1];
     com.resize(2 + 0xFFFF, b'.');
     padded.splice(sot..sot, com.repeat(16));
-    assert_eq!(probe_packets(&padded, 0, WorkLimit::Default), (false, 0));
+    assert_eq!(probe_packets(&padded, 0, &WorkLimit::Default), (false, 0));
     let parsed = crate::codestream::parse_header(&repeated).unwrap();
     let cs = crate::codestream::parse_tiles(&repeated, parsed).unwrap();
     let header = cs.tile_header(0).unwrap();
@@ -769,7 +769,7 @@ fn the_packet_walk_skips_a_codestream_of_too_many_tiles_or_components() {
         probe_packets(
             &empty_packets(tiles, 1),
             (tiles - 1) as u16,
-            WorkLimit::Default
+            &WorkLimit::Default
         )
         .0
     );
@@ -777,15 +777,15 @@ fn the_packet_walk_skips_a_codestream_of_too_many_tiles_or_components() {
         probe_packets(
             &empty_packets(tiles + 1, 1),
             tiles as u16,
-            WorkLimit::Default
+            &WorkLimit::Default
         ),
         (false, 0)
     );
 
     let components = u16::try_from(PROBE_COMPONENTS).unwrap();
-    assert!(probe_packets(&empty_packets(1, components), 0, WorkLimit::Default).0);
+    assert!(probe_packets(&empty_packets(1, components), 0, &WorkLimit::Default).0);
     assert_eq!(
-        probe_packets(&empty_packets(1, components + 1), 0, WorkLimit::Default),
+        probe_packets(&empty_packets(1, components + 1), 0, &WorkLimit::Default),
         (false, 0)
     );
 }

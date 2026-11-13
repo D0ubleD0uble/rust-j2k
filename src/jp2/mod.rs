@@ -148,7 +148,7 @@ pub(crate) struct Jp2File<'a> {
 /// the caller's tier-2 work limit, which also bounds the walk of a
 /// `Psot = 0` tile that finds where the codestream ends
 /// ([`packets_end_at`]).
-pub(crate) fn parse(bytes: &[u8], packet_work: WorkLimit) -> Result<Jp2File<'_>> {
+pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2File<'a>> {
     if !bytes.starts_with(&SIGNATURE) {
         return Err(Error::FileFormat(
             "the file must open with the 12-byte JP2 signature box (`jP  ` holding \
@@ -264,7 +264,7 @@ fn locate_codestream<'a>(
     file: &'a [u8],
     payload: &'a [u8],
     rest: &'a [u8],
-    packet_work: WorkLimit,
+    packet_work: &WorkLimit,
 ) -> (&'a [u8], &'a [u8], bool) {
     // `payload` and `rest` are the end of `file`, back to back.
     let tail = file
@@ -361,12 +361,12 @@ fn probe_visits(bytes: u64) -> u64 {
 /// any bound the answer is `false`, so the codestream runs to the end of the
 /// file, the rule for a `Psot = 0` tile-part that this check does not apply
 /// to.
-fn packets_end_at(codestream: &[u8], tile: u16, packet_work: WorkLimit) -> bool {
+fn packets_end_at(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> bool {
     probe_packets(codestream, tile, packet_work).0
 }
 
 /// [`packets_end_at`], and the visits the walk spent.
-fn probe_packets(codestream: &[u8], tile: u16, packet_work: WorkLimit) -> (bool, u64) {
+fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool, u64) {
     let Ok(parsed) = crate::codestream::parse_header(codestream) else {
         return (false, 0);
     };

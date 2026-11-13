@@ -2,8 +2,9 @@
 
 Used by `tests/work_limit.rs` and the margin test in
 `src/tier1/work_bound_tests.rs`. A codestream whose code-blocks ask the
-block decoder for far more work than its bytes, and an `opj_compress` file
-that spends the most work per byte seen from an encoder, which must decode.
+block decoder for far more work than its bytes, and `opj_compress` files
+that spend much work per byte, the most seen from an encoder among them,
+which must decode.
 
 ## Source
 
@@ -36,3 +37,18 @@ Each speck makes its code-blocks run every pass for a few bytes, so it
 spends about 3600 sample-passes per byte, 11% of the bound. It decodes
 here and in `opj_decompress` 2.5.0 to exactly the image that was coded;
 the test rebuilds that image and compares sample for sample.
+
+`opj_flat2048_16bit_n1.j2k` (13968 B, SHA-256 `ba45005d…f189`) is written
+by the same `--opj` run: `opj_compress` 2.5.0 with no wavelet level and
+otherwise its defaults, on a 2048^2 16-bit image of 0 (`specks_image(2048,
+0, 0)`; the PGM's SHA-256 is
+`799684cb89c9575e382fe1471293b29f04dec810f588483cf62d4cd832c5dfdc`):
+
+```
+opj_compress -i flat.pgm -o opj_flat2048_16bit_n1.j2k -n 1
+```
+
+Every 64x64 code-block runs about 46 passes for about 14 bytes, so it
+spends 13933 sample-passes per byte, 42.5% of the bound, the most seen
+from an encoder. It decodes here and in `opj_decompress` 2.5.0 to the
+flat 0 that was coded.

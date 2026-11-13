@@ -195,13 +195,13 @@ pub use jp2::{
 /// scans its whole code-block, however few bytes it carries, so the work is
 /// counted as the passes run times the code-block's samples, over every
 /// code-block decoded. It may come to at most 2^26 sample-passes, or 2^15
-/// per byte of tile data when that is more, about 0.1 ms a byte, for every
-/// tile together. A tile past the bound
-/// is refused with [`Error::Limit`] before any of its code-blocks is
-/// decoded. A packet header can ask for 88 passes over 4096 samples in
-/// about 4 bytes, so a 76 KB file could otherwise take 19 s. Encoder output
-/// seen spends up to about 3600 per byte, 11% of the bound (see [the tier-1
-/// work bound][tier1-bound]). OpenJPEG has no such bound.
+/// per byte of tile data when that is more, for every tile together. On
+/// the data slowest to decode that is about 0.5 s, or 0.25 ms a byte. A
+/// tile past the bound is refused with [`Error::Limit`] before any of its
+/// code-blocks is decoded. A packet header can ask for 88 passes over 4096
+/// samples in about 4 bytes, so a 76 KB file could otherwise take 19 s.
+/// Encoder output seen spends up to about 14000 per byte, 43% of the bound
+/// (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
 ///
 /// [`decode_with`] can raise or lift either bound, for a file from a source
 /// you trust: see [`DecodeOptions::packet_work_limit`] and
@@ -476,27 +476,30 @@ pub struct DecodeOptions {
 ///     .with_packet_work_limit(WorkLimit::Unlimited);
 /// assert_eq!(options.code_block_work_limit, WorkLimit::Raised(10));
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WorkLimit {
     /// The bound as [`decode`] describes it.
     #[default]
     Default,
     /// The default bound times this factor: both its floor and the work it
-    /// allows per byte. `Raised(1)` is the default bound; `Raised(0)` is
+    /// allows per byte. `Raised(1)` sets the same bound as `Default`, though
+    /// the two do not compare equal. `Raised(0)` is
     /// [`Error::InvalidOptions`].
     Raised(u32),
-    /// No bound. The decode does all the work the file asks for, however
-    /// long that takes.
+    /// No bound on this work. The decode does all the work the file asks
+    /// for, however long that takes. The other limits stay in force: the
+    /// image-area cap, the code-block-count cap, and the cap on the memory
+    /// that remembers which packets a POC sequence has read.
     Unlimited,
 }
 
 impl WorkLimit {
     /// The bound this limit sets, from the default bound `bound`.
-    pub(crate) fn apply(self, bound: u64) -> u64 {
+    pub(crate) fn apply(&self, bound: u64) -> u64 {
         match self {
             WorkLimit::Default => bound,
-            WorkLimit::Raised(factor) => bound.saturating_mul(u64::from(factor)),
+            WorkLimit::Raised(factor) => bound.saturating_mul(u64::from(*factor)),
             WorkLimit::Unlimited => u64::MAX,
         }
     }
@@ -607,10 +610,10 @@ fn check_options(options: &DecodeOptions) -> Result<()> {
         ));
     }
     for (name, limit) in [
-        ("packet", options.packet_work_limit),
-        ("code-block", options.code_block_work_limit),
+        ("packet", &options.packet_work_limit),
+        ("code-block", &options.code_block_work_limit),
     ] {
-        if limit == WorkLimit::Raised(0) {
+        if *limit == WorkLimit::Raised(0) {
             return Err(Error::InvalidOptions(format!(
                 "a {name} work limit raised by a factor of 0; the default is \
                  `WorkLimit::Default`"
@@ -677,7 +680,7 @@ struct Jp2Prefix<'a> {
 /// has decoded, are checked next, then the sRGB step is planned; all of it
 /// before any tile is read.
 fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Prefix<'a>> {
-    let file = jp2::parse(bytes, options.packet_work_limit)?;
+    let file = jp2::parse(bytes, &options.packet_work_limit)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
     jp2::check_against_siz(&file.header, siz)?;
@@ -742,7 +745,7 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
     let bytes = tile_bytes(&cs);
     let poc_bitmap = tier2::decode_visits(bytes);
     let mut visits = options.packet_work_limit.apply(poc_bitmap);
-    let mut block_work = match options.code_block_work_limit {
+    let mut block_work = match &options.code_block_work_limit {
         WorkLimit::Unlimited => None,
         limit => Some(limit.apply(tier1::decode_work(bytes))),
     };

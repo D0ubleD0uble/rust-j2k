@@ -18,10 +18,13 @@ the README there). With `--big DIR`, the issue's timing shape is written to
 DIR instead; it is not committed. `--check` runs each through
 `opj_decompress` 2.5.0 and prints what it does and the time.
 
-`--opj` writes, instead, the committed `opj_compress` file: a 16-bit image
-of 1000 with 128 specks of 60000, coded losslessly. Each speck makes its
-code-blocks run every pass for a few bytes, the most work per byte seen
-from an encoder, which the bound must admit.
+`--opj` writes, instead, the committed `opj_compress` files, which the
+bound must admit. One is a 16-bit image of 1000 with 128 specks of 60000,
+coded losslessly at the defaults: each speck makes its code-blocks run
+every pass for a few bytes. The other is a flat 16-bit image of 0 coded
+with no wavelet level (`-n 1`): each 64x64 code-block runs about 46
+passes for about 14 bytes, the most work per byte seen from an encoder,
+42% of the bound.
 
 Usage: scripts/gen-tier1-work-bound-fixtures.py [--check] [--big DIR | --opj]
 """
@@ -157,10 +160,10 @@ BIG = {
 }
 
 
-def specks_image(size: int, specks: int) -> bytes:
-    """A `size` x `size` 16-bit PGM of 1000, with a speck of 60000 at
+def specks_image(size: int, specks: int, background: int = 1000) -> bytes:
+    """A `size` x `size` 16-bit PGM of `background`, with a speck of 60000 at
     `(i * 977 % size, i * 613 % size)` (x, y) for each `i` below `specks`."""
-    px = bytearray(b"\x03\xe8" * (size * size))
+    px = bytearray(background.to_bytes(2, "big") * (size * size))
     for i in range(specks):
         x, y = i * 977 % size, i * 613 % size
         at = 2 * (y * size + x)
@@ -168,15 +171,18 @@ def specks_image(size: int, specks: int) -> bytes:
     return b"P5\n%d %d\n65535\n" % (size, size) + bytes(px)
 
 
-# Encoder output, `--opj`: name -> (size, specks).
+# Encoder output, `--opj`: name -> (size, specks, background, extra
+# `opj_compress` arguments).
 OPJ = {
-    "opj_specks2048_16bit.j2k": (2048, 128),
+    "opj_specks2048_16bit.j2k": (2048, 128, 1000, []),
+    "opj_flat2048_16bit_n1.j2k": (2048, 0, 0, ["-n", "1"]),
 }
 
 
 def opj_files() -> list[pathlib.Path]:
     """Encode `specks_image` with `opj_compress` at its defaults (lossless
-    5/3, 64x64 code-blocks, 5 levels, one layer) for each entry of `OPJ`."""
+    5/3, 64x64 code-blocks, 5 levels, one layer) and the entry's extra
+    arguments, for each entry of `OPJ`."""
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from oracle_tools import require_openjpeg
 
@@ -184,11 +190,11 @@ def opj_files() -> list[pathlib.Path]:
     written = []
     DIR.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
-        for name, (size, specks) in OPJ.items():
+        for name, (size, specks, background, args) in OPJ.items():
             image = pathlib.Path(tmp) / "specks.pgm"
-            image.write_bytes(specks_image(size, specks))
+            image.write_bytes(specks_image(size, specks, background))
             subprocess.run(
-                ["opj_compress", "-i", str(image), "-o", str(DIR / name)],
+                ["opj_compress", "-i", str(image), "-o", str(DIR / name), *args],
                 check=True,
                 capture_output=True,
             )

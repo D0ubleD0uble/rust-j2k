@@ -216,8 +216,8 @@ fn the_issue_bomb_decodes_with_the_limit_lifted() {
     assert_eq!(image.components[0].samples.len(), 8192 * 8192);
 }
 
-/// Encoder output that spends the most work per byte seen: `opj_compress`
-/// on a 16-bit image of 1000 with 128 specks of 60000, lossless. Each speck
+/// Encoder output that spends much work per byte: `opj_compress` on a
+/// 16-bit image of 1000 with 128 specks of 60000, lossless. Each speck
 /// makes its code-blocks run every pass for a few bytes. It decodes at the
 /// default bound, sample for sample the image that was coded (OpenJPEG
 /// 2.5.0 decodes it the same way).
@@ -236,6 +236,19 @@ fn encoder_output_of_specks_decodes_at_the_default_bound() {
     );
 }
 
+/// The encoder output that spends the most work per byte seen:
+/// `opj_compress -n 1` on a flat 16-bit image of 0, 42% of the bound. Each
+/// code-block runs about 46 passes for about 14 bytes. It decodes at the
+/// default bound to the flat image that was coded (OpenJPEG 2.5.0 decodes
+/// it the same way).
+#[test]
+fn encoder_output_of_a_flat_image_without_wavelet_decodes_at_the_default_bound() {
+    let image = decode(&fixture("tier1_work_bound/opj_flat2048_16bit_n1.j2k")).expect("decodes");
+    assert_eq!(image.components.len(), 1);
+    assert_eq!(image.components[0].samples.len(), 2048 * 2048);
+    assert!(image.components[0].samples.iter().all(|&s| s == 0));
+}
+
 /// `t2skip_2048x1024_40000` walks 2.0e7 steps for 40 KB, past the tier-2
 /// floor of 2^24: refused by default, and decoded to its flat 128 under
 /// twice the bound or none.
@@ -244,7 +257,7 @@ fn raising_the_packet_limit_admits_a_file_the_default_refuses() {
     let bytes = fixture("work_bound/t2skip_2048x1024_40000.j2k");
     assert_limit("default", decode(&bytes));
     for limit in [WorkLimit::Raised(2), WorkLimit::Unlimited] {
-        let options = DecodeOptions::default().with_packet_work_limit(limit);
+        let options = DecodeOptions::default().with_packet_work_limit(limit.clone());
         let image = decode_with(&bytes, &options).unwrap_or_else(|e| panic!("{limit:?}: {e}"));
         assert_eq!(image.components[0].samples.len(), 2048 * 1024);
         assert!(image.components[0].samples.iter().all(|&s| s == 128));

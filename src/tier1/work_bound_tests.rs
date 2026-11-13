@@ -4,12 +4,15 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{decode_work, passes_run, work};
+use super::{decode_work, numbps, passes_run, work};
 use crate::tier2::{BandKind, CodeBlock, CodedData, ComponentCoded, Resolution, Subband};
 
 /// How far below its bound every committed file's block decode must stay:
-/// at most this fraction of it.
-const MARGIN: f64 = 1.0 / 8.0;
+/// at most this fraction of it. The most encoder output was seen to spend
+/// is 42.5% of the bound (`opj_compress -n 1` on a flat 16-bit image, the
+/// committed `opj_flat2048_16bit_n1`), so half leaves it room, and a file
+/// past half spends more than any encoder output measured.
+const MARGIN: f64 = 1.0 / 2.0;
 
 /// Every `.j2k` and `.jp2` under `dir`, recursively.
 fn files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -31,7 +34,7 @@ fn spend(bytes: &[u8]) -> Option<(u64, u64, u64)> {
     let codestream = if bytes.starts_with(&[0xFF, 0x4F]) {
         bytes
     } else {
-        crate::jp2::parse(bytes, crate::WorkLimit::Default)
+        crate::jp2::parse(bytes, &crate::WorkLimit::Default)
             .ok()?
             .codestream
     };
@@ -105,10 +108,12 @@ fn every_committed_file_decodes_far_below_the_tier1_work_bound() {
     }
     eprintln!("{} files measured of {}", rows.len(), paths.len());
     assert!(rows.len() > 100, "{} files measured", rows.len());
-    assert!(
-        rows.iter()
-            .any(|row| row.4.starts_with("tier1_work_bound/opj_"))
-    );
+    for name in [
+        "tier1_work_bound/opj_flat2048_16bit_n1.j2k",
+        "tier1_work_bound/opj_specks2048_16bit.j2k",
+    ] {
+        assert!(rows.iter().any(|row| row.4 == name), "{name} not measured");
+    }
     for (fraction, _, _, _, name) in &rows {
         assert!(*fraction <= MARGIN, "{name} spends {fraction} of its bound");
     }
@@ -191,4 +196,31 @@ fn the_work_counts_the_code_blocks_decoded() {
     // A reduction past the pyramid keeps the coarsest resolution, as the
     // decode does (it refuses that reduction before this point).
     assert_eq!(work(&header, &coded, 5), 64);
+}
+
+/// A component's maxshift raises its blocks' top plane, so the work counts
+/// the passes that shift lets them run.
+#[test]
+fn the_work_counts_the_passes_a_maxshift_adds() {
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/multilayer_lossless.j2k"
+    ))
+    .unwrap();
+    let header = crate::codestream::parse_header(&bytes).unwrap().header;
+    let coded = CodedData {
+        components: vec![ComponentCoded {
+            resolutions: vec![Resolution {
+                subbands: vec![band(BandKind::Ll, vec![block(8, 8, 164)])],
+            }],
+        }],
+    };
+    let planes = numbps(&header, 0, 0).unwrap();
+    let mut shifted = header.clone();
+    shifted.components[0].roi_shift = 5;
+    assert_eq!(work(&header, &coded, 0), 64 * u64::from(3 * planes - 2));
+    assert_eq!(
+        work(&shifted, &coded, 0),
+        64 * u64::from(3 * (planes + 5) - 2)
+    );
 }
