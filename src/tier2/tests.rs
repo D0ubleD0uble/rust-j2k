@@ -1050,7 +1050,10 @@ fn a_block_with_passes_and_no_bytes_at_all_is_accepted() {
     assert_eq!(block.num_passes, 2, "both layers' passes count");
     assert_eq!(block.segments.len(), 1);
     assert_eq!(block.segments[0].passes, 2);
-    assert!(block.segments[0].chunks.is_empty(), "a zero length files no chunk");
+    assert!(
+        block.segments[0].chunks.is_empty(),
+        "a zero length files no chunk"
+    );
     assert_eq!(next, data.len());
 }
 
