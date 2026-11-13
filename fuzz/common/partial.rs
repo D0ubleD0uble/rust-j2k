@@ -22,9 +22,9 @@ pub fn check(bytes: &[u8], options: &DecodeOptions, strict: &Result<Image>) {
             (partial.width, partial.height, &partial.components, &partial.jp2),
             "the same image"
         );
-        assert!(partial.report.entries.is_empty(), "{:?}", partial.report);
-        assert_eq!(partial.report.complete_reduction, Some(0));
+        assert_eq!(partial.report, rust_j2k::DecodeReport::default());
         assert!(partial.report.is_complete());
+        assert_eq!(image, partial, "the same Image, report included");
     }
     if let Ok(image) = &lenient {
         let report = &image.report;

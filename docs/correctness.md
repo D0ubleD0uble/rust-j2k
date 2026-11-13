@@ -631,9 +631,15 @@ packet against layer-limited walks.
 
 A `POC` sequence that leaves packets out (`tests/fixtures/poc_coverage/`)
 decodes with those packets empty and reported. At the reduction that drops
-them the image matches OpenJPEG's; at full resolution OpenJPEG's differs
-(1023 of 1024 samples for `poc_res_missing.j2k`), which has not been looked
-into.
+them the image matches OpenJPEG's. At full resolution the two differ (1023 of
+1024 samples for `poc_res_missing.j2k`) because they fill the gap
+differently. OpenJPEG decodes a tile only up to the highest resolution it
+read a packet of (`resno_decoded`, t2.c:518) and pastes that smaller image
+into the top-left corner of a zeroed full-size frame. This decoder sets the
+missing coefficients to zero and runs the whole inverse wavelet, so its
+even-indexed samples are the reduction-1 image and its largest error against
+the source is 193, where OpenJPEG's is 993. Either way the report says the
+tile is incomplete, with a `complete_reduction` of `Some(1)`.
 
 `TNsot` is advisory: a count that disagrees with the tile-parts found is
 reported and the tile decodes from them. The decode needs the main header
@@ -642,12 +648,26 @@ through the first `SOT` marker; a shorter prefix is an error.
 Partial decode bounds its work like a strict one, with two more charges
 against the packet work bound: each tile-component of a missing tile costs
 one step, and the end of a tile's data costs 32 steps for each of its
-(component, resolution) pairs, with one more for each packet after it. A
-header of a few kilobytes can declare 65535 tiles of 16384 components with
-none present, which otherwise took 38 s; and a run of empty tile-parts
-could make each tile set up its geometry for no data, which took 19 s.
-Both are now refused, or bounded to under a second. The report holds at
-most five entries per tile-part, plus two.
+(component, resolution) pairs, with one more for each packet after it.
+Without them, a header of a few kilobytes that declares 65535 tiles of 16384
+components with none present took 38 s, and a run of empty tile-parts, each
+making its tile set up its geometry for no data, took 19 s. With them the
+first is refused before any tile is decoded and the second is refused in
+under a second (`missing_tiles_are_charged_against_the_work_bound` and
+`the_end_of_each_tiles_data_is_charged_against_the_work_bound` in
+`tests/partial_decode.rs`). The end-of-data charge falls on every tile whose
+data ends, so a prefix cut late in a codestream that interleaves the
+tile-parts of very many tiles can be refused with `Error::Limit` though the
+whole file decodes: each tile whose later parts have not arrived is charged.
+`DecodeOptions::packet_work_limit` raises the bound for such a stream. The
+report holds at most five entries per tile-part, plus two.
+
+A packet header packed in a `PPM` or `PPT` marker is read as a strict
+decode reads it, with the bits past the end of the packed bytes as fill:
+those bytes are in the main or tile-part headers, which are there whole or
+not at all, so running past them is not the data ending, and the body
+decides whether the packet is there. An inline header whose bits run past
+the end of the data is the data ending, and the packet adds nothing.
 
 ### Encoder mistakes OpenJPEG corrects
 

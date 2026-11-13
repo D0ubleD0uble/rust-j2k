@@ -467,3 +467,267 @@ fn a_run_of_missing_tiles_is_one_entry() {
     assert!(!image.report.is_complete());
     assert!(samples(&image)[..32].iter().any(|&s| s != 0));
 }
+
+/// A marker segment: `code`, its length counting itself, then `body`.
+fn segment(code: u16, body: &[u8]) -> Vec<u8> {
+    let mut out = code.to_be_bytes().to_vec();
+    out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
+    out.extend_from_slice(body);
+    out
+}
+
+/// A main header: an image of `width` x `height` in tiles of `tile_width` x
+/// `tile_height`, `components` 8-bit unsigned components, `levels`
+/// decomposition levels, one layer, LRCP, the 5/3 wavelet, code-blocks of
+/// `4 << block` samples square, no quantization.
+fn main_header(
+    (width, height): (u32, u32),
+    (tile_width, tile_height): (u32, u32),
+    components: u16,
+    levels: u8,
+    block: u8,
+) -> Vec<u8> {
+    let mut siz = Vec::new();
+    siz.extend_from_slice(&0u16.to_be_bytes());
+    for value in [width, height, 0, 0, tile_width, tile_height, 0, 0] {
+        siz.extend_from_slice(&value.to_be_bytes());
+    }
+    siz.extend_from_slice(&components.to_be_bytes());
+    for _ in 0..components {
+        siz.extend_from_slice(&[7, 1, 1]);
+    }
+    let cod = [0, 0, 0, 1, 0, levels, block, block, 0, 1];
+    let mut qcd = vec![0x20];
+    qcd.extend(std::iter::repeat_n(9 << 3, 3 * usize::from(levels) + 1));
+    let mut out = vec![0xFF, 0x4F];
+    out.extend(segment(0xFF51, &siz));
+    out.extend(segment(0xFF52, &cod));
+    out.extend(segment(0xFF5C, &qcd));
+    out
+}
+
+/// A tile-part: `SOT` for tile `tile`, part `part` of `parts`, then `extra`
+/// (marker segments of its header), `SOD` and `data`.
+fn tile_part(tile: u16, part: u8, parts: u8, extra: &[u8], data: &[u8]) -> Vec<u8> {
+    let psot = (12 + extra.len() + 2 + data.len()) as u32;
+    let mut sot = Vec::new();
+    sot.extend_from_slice(&tile.to_be_bytes());
+    sot.extend_from_slice(&psot.to_be_bytes());
+    sot.extend_from_slice(&[part, parts]);
+    let mut out = segment(0xFF90, &sot);
+    out.extend_from_slice(extra);
+    out.extend_from_slice(&[0xFF, 0x93]);
+    out.extend_from_slice(data);
+    out
+}
+
+/// One 8 x 4 tile of two 4 x 4 code-blocks, no decomposition, its one packet
+/// header packed in a `PPT` as `header` and its body `body`.
+fn packed(header: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut ppt = vec![0];
+    ppt.extend_from_slice(header);
+    let mut out = main_header((8, 4), (8, 4), 1, 0, 0);
+    out.extend(tile_part(0, 0, 1, &segment(0xFF61, &ppt), body));
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
+/// A packed packet header that runs short is read as a strict decode reads
+/// it, with the bits past its end as fill, so the decode with `strict` off
+/// gives the same image: the stream does not end there, since the tile's
+/// body is whole.
+#[test]
+fn a_packed_header_that_runs_short_decodes_as_strict() {
+    let cases = [
+        // A one-block header whose last byte is 0xFF, with and without the
+        // stuffed byte the alignment after it reads.
+        (
+            "0xFF last, no stuffed byte",
+            vec![0xC4, 0xFF],
+            vec![0; 7],
+            1,
+            1,
+        ),
+        (
+            "0xFF last, stuffed byte",
+            vec![0xC4, 0xFF, 0x00],
+            vec![0; 7],
+            1,
+            1,
+        ),
+        // Two blocks, the second's last length bit (a 1) past the end.
+        ("a bit short", vec![0xF8, 0x30], vec![0x00], 8, 4),
+        ("whole", vec![0xF8, 0x30, 0x80], vec![0x00], 8, 4),
+    ];
+    for (what, header, body, width, height) in cases {
+        let bytes = if width == 1 {
+            let mut ppt = vec![0];
+            ppt.extend_from_slice(&header);
+            let mut out = main_header((1, 1), (1, 1), 1, 0, 4);
+            out.extend(tile_part(0, 0, 1, &segment(0xFF61, &ppt), &body));
+            out.extend_from_slice(&[0xFF, 0xD9]);
+            out
+        } else {
+            packed(&header, &body)
+        };
+        let strict = decode_ok(&bytes, &strict(0), what);
+        let partial = decode_ok(&bytes, &lenient(0), what);
+        assert_eq!(strict, partial, "{what}");
+        assert_eq!(partial.report, DecodeReport::default(), "{what}");
+        assert_eq!(samples(&partial).len(), (width * height) as usize, "{what}");
+    }
+}
+
+/// A decode with `strict` off of a whole file, at a reduction, is the strict
+/// decode: the same `Image`, report included.
+#[test]
+fn a_whole_file_at_a_reduction_is_the_strict_image() {
+    for name in [
+        "partial/lrcp.j2k",
+        "partial/tiles.j2k",
+        "multilayer_lossless.j2k",
+    ] {
+        let bytes = read(name);
+        for r in 0..=2 {
+            let strict = decode_ok(&bytes, &strict(r), name);
+            let partial = decode_ok(&bytes, &lenient(r), name);
+            assert_eq!(strict, partial, "{name} at r{r}");
+        }
+    }
+}
+
+/// A `Psot = 0` tile-part takes the codestream to two bytes before its end.
+/// With `strict` off, a prefix that leaves it fewer than two bytes is a
+/// tile-part with no data, not an error: every prefix from the first `SOT`
+/// marker on decodes.
+#[test]
+fn every_prefix_of_a_psot_zero_tile_part_decodes() {
+    let whole = read("psot0/single_psot0_eoc.j2k");
+    let sot = whole.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    let sod = sot + 12;
+    assert_eq!(whole[sod..sod + 2], [0xFF, 0x93]);
+    for length in sot + 2..=whole.len() {
+        let image = decode_ok(&whole[..length], &lenient(0), &format!("{length}"));
+        if let Some(c) = image.report.complete_reduction {
+            let coarse = decode_ok(&whole[..length], &lenient(c), &format!("{length} at {c}"));
+            let full = decode_ok(&whole, &strict(c), "whole");
+            assert_eq!(coarse.components, full.components, "{length} at {c}");
+        }
+    }
+    // Zero and one bytes after SOD: strict refuses, partial has no data.
+    for length in [sod + 2, sod + 3] {
+        assert!(
+            decode_with(&whole[..length], &strict(0)).is_err(),
+            "{length}"
+        );
+        let image = decode_ok(&whole[..length], &lenient(0), &format!("{length}"));
+        assert!(!image.report.is_complete(), "{length}");
+    }
+}
+
+/// With SOP and EPH markers, a prefix may end inside a packet's SOP segment,
+/// header or EPH marker: every prefix decodes, and the report never says more
+/// is there than is.
+#[test]
+fn every_prefix_with_sop_and_eph_reports_no_more_than_it_holds() {
+    for name in [
+        "delimiters_sop_eph_lossless.j2k",
+        "delimiters_sop_lossless.j2k",
+        "delimiters_eph_lossless.j2k",
+    ] {
+        let whole = read(name);
+        let levels = read_header(&whole).unwrap().max_reduction;
+        let full: Vec<Image> = (0..=levels)
+            .map(|r| decode_ok(&whole, &strict(r), name))
+            .collect();
+        let sot = whole.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+        for length in sot + 2..=whole.len() {
+            let prefix = &whole[..length];
+            let image = decode_ok(prefix, &lenient(0), &format!("{name} {length}"));
+            if let Some(c) = image.report.complete_reduction {
+                let coarse = decode_ok(prefix, &lenient(c), &format!("{name} {length} at {c}"));
+                assert!(coarse.report.is_complete(), "{name} {length}");
+                assert_eq!(
+                    coarse.components,
+                    full[usize::from(c)].components,
+                    "{name} {length} at {c}"
+                );
+            }
+        }
+    }
+}
+
+/// With `strict` off a damaged packet header is still an error: only a
+/// header that runs past the end of the data is taken as the data ending.
+#[test]
+fn a_damaged_packet_header_is_refused_with_strict_off() {
+    // One 4 x 4 code-block: nonempty 1, included 1 1, zero bit-planes 1 1,
+    // one pass 0, then an Lblock indicator of 64 ones, longer than any
+    // Lblock, and whole bytes after it.
+    let mut bits = vec![1, 1, 1, 1, 1, 0];
+    bits.extend(std::iter::repeat_n(1, 64));
+    bits.extend([0, 0, 0, 1]);
+    let header = pack_bits(&bits);
+    let mut data = header;
+    data.extend_from_slice(&[0x00; 4]);
+    let mut bytes = main_header((4, 4), (4, 4), 1, 0, 0);
+    bytes.extend(tile_part(0, 0, 1, &[], &data));
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    let strict_error = decode_with(&bytes, &strict(0)).expect_err("strict refuses");
+    let partial_error = decode_with(&bytes, &lenient(0)).expect_err("partial refuses");
+    assert!(
+        matches!(&partial_error, Error::Codestream(m) if m.contains("Lblock")),
+        "{partial_error}"
+    );
+    assert_eq!(strict_error, partial_error);
+}
+
+/// Each tile-component of a missing tile is charged against the packet work
+/// bound. A main header that declares 65535 tiles of 257 components, followed
+/// by nothing, is refused at once rather than zeroing 16.8 million
+/// tile-components.
+#[test]
+fn missing_tiles_are_charged_against_the_work_bound() {
+    let mut bytes = main_header((65535, 1), (1, 1), 257, 0, 0);
+    bytes.extend_from_slice(&[0xFF, 0x90]);
+    match decode_with(&bytes, &lenient(0)) {
+        Err(Error::Limit(message)) => assert!(message.contains("missing tiles"), "{message}"),
+        other => panic!("expected Limit: {other:?}"),
+    }
+}
+
+/// The end of a tile's data is charged 32 visits for each (component,
+/// resolution): 6000 empty tiles of 16 components and 6 resolutions come to
+/// 18.4 million, past the bound of 2^24, while their packets alone are 576000
+/// visits.
+#[test]
+fn the_end_of_each_tiles_data_is_charged_against_the_work_bound() {
+    let mut bytes = main_header((6000, 1), (1, 1), 16, 5, 0);
+    for tile in 0..6000 {
+        bytes.extend(tile_part(tile, 0, 1, &[], &[]));
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    match decode_with(&bytes, &lenient(0)) {
+        Err(Error::Limit(message)) => {
+            assert!(message.contains("packet_work_limit"), "{message}")
+        }
+        other => panic!("expected Limit: {other:?}"),
+    }
+}
+
+/// `bits` as packet header bytes, MSB first, with the bit stuffing B.10.1
+/// asks for: a byte after a 0xFF holds seven bits. The last byte is padded
+/// with zeros.
+fn pack_bits(bits: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut bits = bits.iter().copied().peekable();
+    while bits.peek().is_some() {
+        let width = if out.last() == Some(&0xFF) { 7 } else { 8 };
+        let mut byte = 0u8;
+        for _ in 0..width {
+            byte = byte << 1 | bits.next().unwrap_or(0);
+        }
+        out.push(byte);
+    }
+    out
+}

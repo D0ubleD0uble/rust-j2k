@@ -712,15 +712,18 @@ fn walk_tiles<'a>(
         // EOC) is therefore deliberate: with no declared length there is nothing
         // else to anchor to.
         let data_end = if sot.psot == 0 {
-            bytes
-                .len()
-                .checked_sub(2)
-                .filter(|&end| end >= data_start)
-                .ok_or_else(|| {
-                    Error::Codestream(
+            match bytes.len().checked_sub(2).filter(|&end| end >= data_start) {
+                Some(end) => end,
+                // Not strict, the codestream ends within two bytes of the
+                // header: the tile-part has no data, and its packets are
+                // missing.
+                None if !strict => data_start,
+                None => {
+                    return Err(Error::Codestream(
                         "Psot=0 tile-part has fewer than two bytes after its header".into(),
-                    )
-                })?
+                    ));
+                }
+            }
         } else {
             let end = match part_offset
                 .checked_add(sot.psot as usize)

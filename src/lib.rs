@@ -83,9 +83,9 @@
 //! # Damaged input
 //!
 //! Decoding is strict by default. Truncated or inconsistent data is an
-//! error, and no partial image comes back with it. A raw codestream cut short fails as
-//! [`Error::Codestream`] (a tile-part that runs past the end is
-//! `Psot overruns the codestream`), a JP2 file cut short as `Codestream` or
+//! error, and no partial image comes back with it. A raw codestream cut
+//! short fails as [`Error::Codestream`] (a tile-part that runs past the end
+//! is `Psot overruns the codestream`), a JP2 file cut short as `Codestream` or
 //! [`Error::FileFormat`], depending on where the cut falls, and a raw
 //! codestream whose `EOC` marker is missing is refused. (A JP2 file whose
 //! last tile-part has `Psot = 0` decodes without an `EOC`, as OpenJPEG
@@ -271,8 +271,11 @@ pub use report::{DecodeReport, ReportEntry};
 /// [`strict`](DecodeOptions::strict) off, a packet after the end of the data
 /// is one step, the end of a tile's data costs 32 steps for each of its
 /// (component, resolution) pairs, and a missing tile costs one step for each
-/// of its components. A codestream past
-/// the bound is refused with [`Error::Limit`]. Encoder output seen spends
+/// of its components. The end-of-data charge falls on every tile whose data
+/// ends, so a prefix cut late in a codestream that interleaves the
+/// tile-parts of very many tiles can be refused though the whole file
+/// decodes; raise [`DecodeOptions::packet_work_limit`] for such a stream. A
+/// codestream past the bound is refused with [`Error::Limit`]. Encoder output seen spends
 /// under 13% of the bound; a packet header of one byte can still skip each
 /// row of code-blocks in its precinct, and a sweep can check millions of
 /// positions that hold no packet, so a file of a few hundred bytes could
@@ -690,9 +693,10 @@ pub struct DecodeOptions {
     ///
     /// - **Missing data.** The input may end anywhere after the first `SOT`
     ///   marker, which ends the main header: inside a tile-part, its header or
-    ///   its packets, with or without the `EOC` marker. Tiles with no tile-part are filled with 0, and packets
-    ///   that were never read (cut off, or left out by the `POC` volumes) add
-    ///   nothing to their code-blocks. A tile-part count (`TNsot`) that
+    ///   its packets, with or without the `EOC` marker. Tiles with no
+    ///   tile-part are filled with 0, and packets that were never read (cut
+    ///   off, or left out by the `POC` volumes) add nothing to their
+    ///   code-blocks. A tile-part count (`TNsot`) that
     ///   disagrees with the tile-parts found is taken as advisory.
     /// - **Leftover bytes.** Bytes left after a tile's last packet are skipped
     ///   rather than refused, and the tile is reported as possibly wrong.

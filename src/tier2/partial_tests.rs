@@ -38,17 +38,45 @@ fn walk<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> CodedData<'a> {
 /// counts, the lower at least 1.
 #[test]
 fn a_cut_packet_keeps_each_code_blocks_whole_layers() {
-    let bytes = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/multilayer_lossless.j2k"
+    assert!(
+        whole_layers("multilayer_lossless.j2k", 3),
+        "no cut kept a block at an earlier layer beside a whole one"
+    );
+}
+
+/// The same under the code-block styles that end segments within a block's
+/// passes (bypass, restart) or not (the others), two layers each: a block
+/// whose layer 2 continues its layer 1 segment and opens another keeps
+/// neither when the second runs out.
+#[test]
+fn a_cut_packet_keeps_whole_layers_under_each_code_block_style() {
+    for name in [
+        "cblksty_bypass_lossless.j2k",
+        "cblksty_restart_lossless.j2k",
+        "cblksty_restart_pterm_segsym_lossless.j2k",
+        "cblksty_pterm_lossless.j2k",
+        "cblksty_reset_lossless.j2k",
+    ] {
+        whole_layers(name, 2);
+    }
+}
+
+/// Cut the tile data of fixture `name`, of one tile and `layers` layers, at
+/// every byte, and check each code-block is what a decode of the first `k`
+/// layers of the whole file gives it, for some `k`. Whether some cut left
+/// code-blocks of one resolution at two layer counts, the lower at least 1.
+fn whole_layers(name: &str, layers: u16) -> bool {
+    let bytes = std::fs::read(format!(
+        "{}/tests/fixtures/{name}",
+        env!("CARGO_MANIFEST_DIR")
     ))
     .unwrap();
     let parsed = crate::codestream::parse_header(&bytes).unwrap();
     let cs = crate::codestream::parse_tiles(&bytes, parsed).unwrap();
+    assert_eq!(cs.tiles.len(), 1, "{name}");
     let header = cs.tile_header(0).unwrap().into_owned();
     let tile = &cs.tiles[0];
-    let layers = header.cod.layers;
-    assert_eq!(layers, 3);
+    assert_eq!(header.cod.layers, layers, "{name}");
 
     // The first k layers of the whole file, for k from 0 to 3: the same data
     // under a COD that declares k layers, its packets past them left over.
@@ -86,7 +114,10 @@ fn a_cut_packet_keeps_each_code_blocks_whole_layers() {
             let ks: Vec<u16> = (0..=layers)
                 .filter(|&k| limited[usize::from(k)][b].1 == *block)
                 .collect();
-            assert!(!ks.is_empty(), "cut {cut}: block {b} holds part of a layer");
+            assert!(
+                !ks.is_empty(),
+                "{name} cut {cut}: block {b} holds part of a layer"
+            );
             matched.push((*at, ks));
         }
         // A block that holds layers 1 to k but not layer k + 1, beside one of
@@ -101,10 +132,7 @@ fn a_cut_packet_keeps_each_code_blocks_whole_layers() {
             }
         }
     }
-    assert!(
-        split,
-        "no cut kept a block at an earlier layer beside a whole one"
-    );
+    split
 }
 
 /// `coded` with its blocks' segments made `'static`: the empty decode holds
@@ -137,4 +165,62 @@ fn strip(coded: CodedData<'_>) -> CodedData<'static> {
         out.components.push(c);
     }
     out
+}
+
+/// A packet whose inline header runs past the end of the data adds nothing,
+/// even to a code-block whose entry was read whole before the cut. One 8 x 4
+/// tile of two 4 x 4 code-blocks, no decomposition, one layer; the header
+/// gives the first block one pass and no bytes, the second one pass and one
+/// byte: nonempty 1; included 1 1, zero bit-planes 1 1, one pass 0, Lblock
+/// 0, length 000; included 1, zero bit-planes 1, one pass 0, Lblock 0,
+/// length 001. That is 17 bits, `F8 30 80`; the data is cut after `F8 30`.
+#[test]
+fn a_cut_inline_header_adds_nothing() {
+    fn segment(code: u16, body: &[u8]) -> Vec<u8> {
+        let mut out = code.to_be_bytes().to_vec();
+        out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+    let mut siz = vec![0, 0];
+    for value in [8u32, 4, 0, 0, 8, 4, 0, 0] {
+        siz.extend_from_slice(&value.to_be_bytes());
+    }
+    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let data = [0xF8, 0x30, 0x80, 0x00];
+    let mut bytes = vec![0xFF, 0x4F];
+    bytes.extend(segment(0xFF51, &siz));
+    bytes.extend(segment(0xFF52, &[0, 0, 0, 1, 0, 0, 0, 0, 0, 1]));
+    bytes.extend(segment(0xFF5C, &[0x20, 9 << 3]));
+    let mut sot = vec![0, 0];
+    sot.extend_from_slice(&(12 + 2 + data.len() as u32).to_be_bytes());
+    sot.extend_from_slice(&[0, 1]);
+    bytes.extend(segment(0xFF90, &sot));
+    bytes.extend_from_slice(&[0xFF, 0x93]);
+    bytes.extend_from_slice(&data);
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+
+    let parsed = crate::codestream::parse_header(&bytes).unwrap();
+    let cs = crate::codestream::parse_tiles(&bytes, parsed).unwrap();
+    let header = cs.tile_header(0).unwrap().into_owned();
+    let tile = &cs.tiles[0];
+    let at = |cut: usize| Tile {
+        data: Cow::Borrowed(&tile.data[..cut]),
+        part_ends: vec![cut],
+        ..tile.clone()
+    };
+    let empty = strip(walk(&header, &at(0)));
+    let empty = blocks(&empty);
+    // The whole header with its body cut: the first block's entry and data
+    // are whole, so it keeps its pass.
+    let body_cut = at(3);
+    let body_cut = walk(&header, &body_cut);
+    let body_cut = blocks(&body_cut);
+    assert_eq!(body_cut.len(), 2);
+    assert_eq!(body_cut[0].1.num_passes, 1);
+    assert_eq!(body_cut[1], empty[1]);
+    // The header cut: nothing.
+    let header_cut = at(2);
+    let header_cut = walk(&header, &header_cut);
+    assert_eq!(blocks(&header_cut), empty);
 }

@@ -77,12 +77,16 @@ impl Default for DecodeReport {
 
 impl DecodeReport {
     /// A report of `entries`, complete at `complete_reduction`, for a decode
-    /// at `reduction`.
+    /// at `reduction`. Nothing missing at any reduction is the default report,
+    /// whatever the reduction, so it compares equal to a strict decode's.
     pub(crate) fn new(
         entries: Vec<ReportEntry>,
         complete_reduction: Option<u8>,
         reduction: u8,
     ) -> Self {
+        if entries.is_empty() && complete_reduction == Some(0) {
+            return DecodeReport::default();
+        }
         DecodeReport {
             entries,
             complete_reduction,

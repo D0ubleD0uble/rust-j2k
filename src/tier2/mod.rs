@@ -1061,11 +1061,19 @@ fn parse_packet<'a>(
     // between the header and the body — after an empty packet's header too — and
     // moves into the packed buffer with the headers, so it is read from the
     // header stream.
+    //
+    // Not strict, an inline header whose bits run past the data is the data
+    // ending. That is taken before the alignment, which past a last byte of
+    // 0xFF reads one more byte that a strict decode does not ask for. Packed
+    // headers are not checked: their bytes sit in the main or tile-part
+    // headers, which are there whole or not at all, and a strict decode reads
+    // a packed header that runs short as fill, so the body decides.
+    let header_overran = bio.overran() && !streams.packed;
     bio.align();
     streams.header_pos += bio.bytes_consumed();
     if let Some(log) = log.as_deref() {
         let eph_cut = delimiters.eph && streams.header_pos + 2 > streams.header.len();
-        if bio.overran() || eph_cut {
+        if header_overran || eph_cut {
             undo(log, states);
             return Ok(Packet::Ended);
         }
