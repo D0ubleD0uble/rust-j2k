@@ -291,6 +291,14 @@ this was settled the decoder refused a block whose passes never got a byte,
 which stopped openjpeg-data's `kodak_2layers_lrcp.j2c` (DCP-Werkstatt) on
 2153 such blocks. That file now reaches the leftover-bytes refusal below.
 
+One case is still refused. Under segmentation symbols, an empty segment whose
+cleanup pass counts as terminated (under `restart`, on plane 1, or from the
+fourth coded plane down under `bypass`; see "Segmentation symbols") reads its
+symbol from the fill, gets a wrong value, and is refused as `Codestream`.
+OpenJPEG decodes it. No encoder could have written that segment: a terminated
+cleanup ends with a correct symbol in bytes of its own. So the decoder returns
+an error rather than an image built on a segment that cannot be right.
+
 A contribution of zero bytes reads its header bits like any other, and its
 passes cost the same against the code-block work bound as passes with bytes.
 `zero_length_contribution` and `zero_length_contribution_bypass` pin the
@@ -305,7 +313,9 @@ bytes left over after the last packet (OpenJPEG ignores them). A tier-1 check
 is of the same kind: under predictable termination every MQ segment of a
 code-block must end as the termination predicts, where OpenJPEG checks only
 the last segment and only warns (`decode_block` in `src/tier1/passes.rs`; see
-also "Segmentation symbols" above). These are deliberate, and they are a
+also "Segmentation symbols" above). So is a wrong segmentation symbol read
+from the fill of an empty terminated segment, which OpenJPEG decodes (see
+"Code-block contributions of zero bytes" above). These are deliberate, and they are a
 different axis from the numeric rule above: each condition means the packet
 walk has probably desynchronized, and continuing risks a silently wrong image
 — the one outcome this crate never accepts. A typed error preserves the
