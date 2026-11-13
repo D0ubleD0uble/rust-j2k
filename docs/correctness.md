@@ -61,20 +61,24 @@ const OPJ_INT32 log2_gain = (!isEncoder && l_tccp->qmfbid == 0) ? 0 : ...;
 const float two_invK = 1.625732422f;
 ```
 
-`1.625732422` is 3.3e-5 short of `2/K`. This crate keeps the exact constant.
-OpenJPEG's constant, together with its rounding of the lifting constants β and
-δ ("Where the decoders differ" below), makes this decoder bit-exact against
-`opj_decompress` on `issue206_image-000.jp2`, `issue208.jp2`, both
-`issue559-eci-*` files and `jpx_disguised_as_jp2.jp2`, and on a synthetic
-sweep at 12 and 16 bits. It also makes the output worse:
+`1.625732422` is 5.4e-5 (3.3e-5 relative) short of `2/K`. This crate keeps the
+exact constant, because it is the standard's: Table F.4 gives `K`, and the
+subband gain of Table E-1 supplies the factor of two. OpenJPEG's constant,
+together with its rounding of the lifting constants β and δ ("Where the
+decoders differ" below), makes this decoder bit-exact against `opj_decompress`
+on `issue206_image-000.jp2`, `issue208.jp2`, both `issue559-eci-*` files and
+`jpx_disguised_as_jp2.jp2`, and on a synthetic sweep at 12 and 16 bits.
 
-- On near-lossless round trips through `opj_compress -I -r 1`, whose forward
-  transform uses the exact `K`, this decoder returns the encoder's input more
-  closely than `opj_decompress` in all 30 cases measured (64x64 synthetic
-  images, five patterns, three seeds each, at 12 and 16 bits). At 16 bits the
-  mean-squared error from the input is 0.003 to 0.10 here and 0.45 to 2.34 for
-  OpenJPEG. At `-r 2`, where quantization error dominates, this decoder is
-  closer in 25 of 30. `tests/irreversible_16bit.rs` checks one such case.
+The measurements support the standard's constant, though not uniformly:
+
+- On near-lossless round trips (`opj_compress -I -n 6 -r 1`, whose forward
+  transform uses the exact `K`; 64x64 images, nine patterns, two seeds each),
+  this decoder returns the encoder's input more closely than `opj_decompress`
+  in 18 of 18 cases at 16 bits, 15 of 18 at 14 and 12 of 18 at 12. OpenJPEG is
+  closer, by a small margin, on smooth gradients and a random walk. At `-r 4`
+  and `-r 20`, where quantization error dominates, the comparison is mixed and
+  the margins are negligible. `tests/irreversible_16bit.rs` checks one 16-bit
+  case.
 - `p0_09` decodes bit-exact against its ISO reference with either constant, so
   it does not decide the question.
 - On the lossy conformance entries the ISO references lean slightly the other
@@ -84,7 +88,7 @@ sweep at 12 and 16 bits. It also makes the output worse:
 
 The error `two_invK` adds grows with the sample range, so the gap between the
 two decoders grows with bit depth. "Agreement standard" below gives the
-measured bound.
+measured gaps.
 
 So a 9/7 fixture graded `tolerance: exact` against OpenJPEG must not carry detail
 bands whose values reach a rounding boundary; grade multi-level 9/7 against the
@@ -691,8 +695,8 @@ result on the same file:
   step from OpenJPEG's. OpenJPEG's are the nearest `f32` values to the ISO
   constants (Table F.4); these are not. The effect is small. Next to
   OpenJPEG's `two_invK` they account for the last differences of 1 on
-  eci-090 (above). Next to the exact `2/K`, changing them leaves the bound per
-  bit depth as it is;
+  eci-090 (above). Next to the exact `2/K`, changing them leaves the largest
+  measured gap at each bit depth as it is;
 - the bypass switch under an RGN maxshift ("Bypass under a maxshift");
 - a tile-part POC that replaces the main header's (#269; "A tile-part POC
   overrides the main header's");
@@ -1569,23 +1573,34 @@ color space the file declares.
 
 The 9/7 difference from OpenJPEG depends on the bit depth, because OpenJPEG's
 `two_invK` ("When the oracle and the standard disagree") adds an error that
-grows with the sample range. The largest difference measured, per depth:
+grows with the sample range. It also grows with image size and with how many
+sharp edges the image has. The largest differences seen so far:
 
 | Bit depth | Largest difference from `opj_decompress` |
 | --------- | ---------------------------------------- |
 | 8, 10, 12 | 1 |
 | 14 | 2 |
-| 16 | 5 |
+| 16 | 7 |
 
-The sweep: 128x128 single-component images coded by `opj_compress -I -n 6` at
-rates 1, 4 and 20, in seven patterns (noise, a random walk, a checkerboard,
-bars, two sizes of blocks and ragged edges) with two seeds each. The largest
-differences come from full-swing edges. Real files agree: the 8-bit
+The images: 128x128 single-component images coded by `opj_compress -I -n 6`
+at rates 1, 4 and 20, in seven patterns (noise, a random walk, a checkerboard,
+bars, two sizes of blocks and ragged edges) with two seeds each; and, at `-r 1`,
+checkerboards of full-swing blocks from 1x1 to 5x5 on images from 32x32 to
+256x256 with five or seven decomposition levels. The 7 is a 256x256
+checkerboard of 5x5 blocks; 3x3 blocks reach 6. On all of them this decoder
+stays within 1 of the encoder's input. Real files agree: the 8-bit
 `issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2` and
 `jpx_disguised_as_jp2.jp2` are within 1, and the 16-bit
-`issue559-eci-090-CIELab.jp2` is within 2. These are measured maxima, not a
-proof; a larger image or a harsher pattern could go higher. The committed
-`irreversible_16bit` fixture reaches 5 and is graded at that tolerance.
+`issue559-eci-090-CIELab.jp2` is within 2.
+
+These are measured maxima, not a bound. For a rough scale: each high-pass
+scaling is off by 5.4e-5 times the coefficient, high-pass coefficients range
+about as widely as the samples, and a sample collects that error once per
+decomposition level, so the gap stays roughly under 5.4e-5 × 2^depth × levels.
+That is about 18 at 16 bits with five levels, 4 at 14, 1 at 12 and under 0.1
+at 8. It is an estimate, not a hard bound. The committed `irreversible_16bit`
+fixture reaches 5 on its full-swing component and 3 on its mid-range one, and
+is graded at a tolerance of 5.
 
 ## Grading against Part 4
 
