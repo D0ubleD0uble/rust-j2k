@@ -83,11 +83,20 @@
 //! # Damaged input
 //!
 //! Decoding is strict. Truncated or inconsistent data is an error, and no
-//! partial image comes back with it. A file cut short fails as
+//! partial image comes back with it. A raw codestream cut short fails as
 //! [`Error::Codestream`] (a tile-part that runs past the end is
-//! `Psot overruns the codestream`), and so does a codestream whose `EOC`
-//! marker is missing. Input that is not JPEG 2000 at all, empty input and
-//! plain text included, is `Codestream` too.
+//! `Psot overruns the codestream`), a JP2 file cut short as `Codestream` or
+//! [`Error::FileFormat`], depending on where the cut falls, and a raw
+//! codestream whose `EOC` marker is missing is refused. (A JP2 file whose
+//! last tile-part has `Psot = 0` decodes without an `EOC`, as OpenJPEG
+//! reads it.) Input that is not JPEG 2000 at all, empty input and plain
+//! text included, is `Codestream` too.
+//!
+//! Damage can show up as any variant, not only those two. A flipped bit in
+//! a header field can read as an absurd image size ([`Error::Limit`]) or an
+//! unknown marker or a feature the decoder does not read
+//! ([`Error::Unsupported`]). Do not retry a file with
+//! [`WorkLimit::Unlimited`] on that evidence alone.
 //!
 //! JPEG 2000 carries no checksum, so damage inside the entropy-coded data is
 //! not always detected: a flipped byte in a code-block can decode without an
@@ -118,14 +127,14 @@
 //! # Limits
 //!
 //! A valid file can still be refused with [`Error::Limit`]. The decoder caps
-//! what a file may declare (image area, code-block count, precinct count) and
-//! how much work it may ask for. Only the two work bounds can be changed:
+//! what a file may declare and how much work it may ask for. Only the two
+//! work bounds can be changed:
 //! [`DecodeOptions::packet_work_limit`] for reading the packet headers and
 //! [`DecodeOptions::code_block_work_limit`] for decoding the code-blocks,
-//! each set with a [`WorkLimit`]. The other caps have no option. The message
-//! says which cap the file hit, and for a work bound it names a
-//! [`WorkLimit::Raised`] factor the file needs at least (later tiles may need
-//! more).
+//! each set with a [`WorkLimit`]. The other guards have no option; the list
+//! is on [`Error::Limit`]. The message says which guard the file hit. For a
+//! work bound it also names a [`WorkLimit::Raised`] factor (see
+//! [`WorkLimit`] for how far to trust it).
 //!
 //! For a file from a source you trust, lift both bounds. [`WorkLimit`] has an
 //! example that retries after an `Error::Limit`.
@@ -257,14 +266,14 @@ pub use jp2::{
 /// [`decode_with`] can raise or lift either bound, for a file from a source
 /// you trust: see [`DecodeOptions::packet_work_limit`] and
 /// [`DecodeOptions::code_block_work_limit`]. The message of a work-bound
-/// [`Error::Limit`] names the option and the least [`WorkLimit::Raised`]
-/// factor the file needs; [`WorkLimit`] shows a retry. The other caps
-/// behind `Error::Limit` (image area, code-block count, precinct count) have
-/// no option.
+/// [`Error::Limit`] names the option and a [`WorkLimit::Raised`] factor;
+/// [`WorkLimit`] shows a retry and how far to trust the factor. The other
+/// guards behind `Error::Limit` have no option (see [`Error::Limit`]).
 ///
 /// Decoding is strict: damaged or truncated data is an [`Error`], not a
 /// partial image. A flipped byte in entropy-coded data can go unnoticed,
-/// since the format has no checksum (see the crate docs).
+/// since the format has no checksum, and damage can show up as any variant
+/// (see the crate docs).
 ///
 /// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound
 /// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-1-work-bound
@@ -282,8 +291,9 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// Use [`read_header_with`] to read the header for other options.
 ///
 /// A readable header does not mean [`decode`] will succeed. The tile data is
-/// not read, so it can still be damaged, unsupported, or past a work bound
-/// ([`Error::Limit`]).
+/// not read (except the packet headers of the last tile of a JP2 file whose
+/// tile-part has `Psot = 0`, described on [`read_header_with`]), so it can
+/// still be damaged, unsupported, or past a work bound ([`Error::Limit`]).
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -459,7 +469,9 @@ pub enum ColorOutput {
     /// [`Jp2Metadata::channels`], not by position. And it repeats a gray
     /// (one color channel) image's value for red, green and blue. This
     /// handles those three for a JP2 file whose channels share one grid; an
-    /// image without opacity gets 255.
+    /// image without opacity gets 255, and so does one whose opacity is
+    /// [`ChannelType::PremultipliedOpacity`], which this recipe does not
+    /// handle.
     ///
     /// ```
     /// use rust_j2k::{ChannelType, ColorOutput, DecodeOptions, Image, decode_with};
@@ -606,9 +618,17 @@ pub struct DecodeOptions {
 /// Each bound scales with the size of the file, so a small file cannot ask
 /// for minutes of work (see [`decode`]). A valid file can still go past a
 /// bound, when it codes many samples in very few bytes. The decode then
-/// fails with [`Error::Limit`], and its message names the option and the
-/// least [`Raised`](WorkLimit::Raised) factor the file needs. For a file of
-/// several tiles that is a lower bound, since later tiles are not counted.
+/// fails with [`Error::Limit`], and its message names the option and a
+/// [`Raised`](WorkLimit::Raised) factor. Treat the factor as a hint, not a
+/// measure of the file:
+///
+/// - For the code-block bound it is what the tiles seen so far need, exact
+///   for a file of one tile.
+/// - For the packet bound it is the next factor up from the one that failed,
+///   and the file may need more: the walk stops as soon as it runs out, so it
+///   does not know the total. (Only a POC sequence that reaches too many
+///   packets gets an exact figure.) If `Raised(n)` is refused again, the
+///   message names the next factor.
 ///
 /// Which value to pick:
 ///
@@ -619,9 +639,10 @@ pub struct DecodeOptions {
 ///   size it: a file that needs `Raised(3)` is refused under `Raised(2)`. Do
 ///   not parse the message in code; it is a diagnostic, not a stable format.
 ///
-/// Only these two bounds can be changed. The caps on the image area, the
-/// code-block count and the precinct count also end in [`Error::Limit`], and
-/// no option raises them.
+/// Only these two bounds can be changed. The other guards also end in
+/// [`Error::Limit`], and no option here raises them (see [`Error::Limit`]).
+/// A damaged file can hit a guard too, so do not lift a bound on that
+/// evidence alone.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode, decode_with};
@@ -632,7 +653,8 @@ pub struct DecodeOptions {
 ///     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
 /// ));
 /// let image = match decode(bytes) {
-///     Ok(image) => image,
+///     // The example fails if the bomb is ever admitted by default.
+///     Ok(_) => panic!("expected the work bound to refuse this file"),
 ///     // Past a work bound. The message says which, and the factor.
 ///     Err(Error::Limit(why)) => {
 ///         println!("refused: {why}");
@@ -775,12 +797,12 @@ impl DecodeOptions {
 ///         // Red, green, blue and opacity.
 ///         assert_eq!(image.components.len(), 4);
 ///     }
-///     // The options contradict each other or the file: a reduction past the
-///     // file's levels, or `raw_channels` with sRGB output.
-///     Err(Error::InvalidOptions(why)) => eprintln!("bad options: {why}"),
-///     // A file the conversion cannot handle (see `ColorOutput::Srgb`).
-///     Err(Error::Unsupported(why)) => eprintln!("not converted: {why}"),
-///     Err(e) => eprintln!("decode failed: {e}"),
+///     // Options that contradict each other or do not fit the file (a
+///     // reduction past its levels, `raw_channels` with sRGB output), or a
+///     // file the conversion cannot handle (`Unsupported`), are handled
+///     // here in real code. This file is fine, so they fail the example.
+///     Err(Error::InvalidOptions(why) | Error::Unsupported(why)) => panic!("{why}"),
+///     Err(e) => panic!("decode failed: {e}"),
 /// }
 /// ```
 ///
@@ -970,12 +992,19 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // component. The walk covers every resolution whatever the reduction:
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
+        let visits_before = visits;
         let coded = match tier2::decode_packets(&header, tile, &mut visits, poc_bitmap) {
             Err(Error::Limit(why)) if why == tier2::WALK_LIMIT => {
                 return Err(Error::Limit(limit_hint::packet_walk(
                     &why,
                     first_visits,
                     poc_bitmap,
+                )));
+            }
+            Err(Error::Limit(why)) if why.starts_with(tier2::POC_REACH) => {
+                let spent = first_visits.saturating_sub(visits_before);
+                return Err(Error::Limit(limit_hint::poc_volumes(
+                    &why, spent, poc_bitmap,
                 )));
             }
             other => other?,

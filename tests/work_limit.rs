@@ -330,8 +330,9 @@ fn limit_message(result: rust_j2k::Result<rust_j2k::Image>) -> String {
     }
 }
 
-/// The message names the smallest `Raised` factor, which is exact on a single
-/// tile: decoding with it succeeds, and with one less is refused.
+/// On these two files the named factor is the smallest that admits them:
+/// decoding with it succeeds, and with one less is refused. (The packet
+/// bound only names the next factor up; see below.)
 #[test]
 fn the_named_factor_is_the_smallest_that_admits_the_file() {
     type Setter = fn(DecodeOptions, WorkLimit) -> DecodeOptions;
@@ -359,8 +360,7 @@ fn the_named_factor_is_the_smallest_that_admits_the_file() {
     }
 }
 
-/// Both messages point to `Unlimited` for trusted input, and say the factor
-/// is a lower bound.
+/// Both messages point to `Unlimited` for trusted input.
 #[test]
 fn the_message_names_unlimited_for_trusted_input() {
     for name in [
@@ -369,7 +369,6 @@ fn the_message_names_unlimited_for_trusted_input() {
     ] {
         let message = limit_message(decode(&fixture(name)));
         assert!(message.contains("`WorkLimit::Unlimited`"), "{message}");
-        assert!(message.contains("at least"), "{message}");
     }
 }
 
@@ -380,4 +379,49 @@ fn a_raised_limit_that_is_too_small_names_a_larger_factor() {
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
     let message = limit_message(decode_with(&bytes, &options));
     assert_eq!(named_factor(&message), 3, "{message}");
+}
+
+/// The packet bound shows only that a walk ran out, so its message names the
+/// next factor up, not what the file needs: `cprl_tall_poc31` (one tile)
+/// needs 32 and is told 2, and is still refused when raised to 2.
+#[test]
+fn the_packet_factor_is_the_next_one_up_not_what_the_file_needs() {
+    let bytes = fixture("work_bound/cprl_tall_poc31.j2k");
+    let message = limit_message(decode(&bytes));
+    assert_eq!(named_factor(&message), 2, "{message}");
+    assert!(message.contains("may need more"), "{message}");
+    let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
+    assert_limit("Raised(2)", decode_with(&bytes, &options));
+}
+
+/// The same file is refused at `Raised(31)` too (it needs 32). About 5e8
+/// visits, so ignored.
+#[test]
+#[ignore = "slow: about 5e8 packet-walk visits"]
+fn the_packet_factor_does_not_admit_the_file() {
+    let bytes = fixture("work_bound/cprl_tall_poc31.j2k");
+    let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(31));
+    assert_limit("Raised(31)", decode_with(&bytes, &options));
+}
+
+/// POC volumes that reach more packets than the walk may visit are refused
+/// before the walk, and the message names the exact factor: 1.3e8 packets is
+/// 7.8 times the bound. Under `Raised(7)` it is refused, naming 8; under
+/// `Raised(8)` the decode gets past the bound (the file holds 100 bytes of
+/// packets, so it fails some other way).
+#[test]
+fn poc_volumes_name_the_factor_they_need() {
+    let bytes = fixture("work_bound/pocvol_1024x512_1000_2.j2k");
+    let message = limit_message(decode(&bytes));
+    assert_eq!(named_factor(&message), 8, "{message}");
+    let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(7));
+    assert_eq!(
+        named_factor(&limit_message(decode_with(&bytes, &options))),
+        8
+    );
+    let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(8));
+    assert!(
+        !matches!(decode_with(&bytes, &options), Err(Error::Limit(_))),
+        "Raised(8) should clear the bound"
+    );
 }

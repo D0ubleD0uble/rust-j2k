@@ -511,8 +511,8 @@ impl Emitted {
             // revisit it for partial decode (#214).
             _ if layer_orders && reached > visits_left => {
                 return Err(Error::Limit(format!(
-                    "tile packet walk exceeds its work bound: its POC volumes reach \
-                     {reached} packets (see `DecodeOptions::packet_work_limit`)"
+                    "{}{reached} packets (see `DecodeOptions::packet_work_limit`)",
+                    super::POC_REACH
                 )));
             }
             Some(words) => Marks::Dense(vec![0; words]),

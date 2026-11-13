@@ -28,8 +28,15 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// | `Codestream`, `Marker`, `FileFormat` | The file is damaged, truncated or not a JPEG 2000 image. |
 /// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read. |
 /// | `Limit` | The file is larger or costlier than the decoder allows by default. For a work bound it can be retried with a higher [`WorkLimit`](crate::WorkLimit). |
-/// | `InvalidOptions` | The decode options do not fit this file (a bug in the caller). |
+/// | `InvalidOptions` | The decode options do not fit this file (for example, a reduction past the file's levels). |
 /// | `Inconsistent` | An internal error; please file a bug. |
+///
+/// Damage does not always show as the first row. A flipped bit in a header
+/// field can read as an absurd image size (`Limit`), an unknown marker or a
+/// feature the decoder does not read (`Unsupported`), so a corrupt file can
+/// come back as any of those. Do not retry a `Limit` with
+/// [`WorkLimit::Unlimited`](crate::WorkLimit::Unlimited) unless the source
+/// is trusted.
 ///
 /// ```
 /// use rust_j2k::{Error, decode};
@@ -85,11 +92,15 @@ pub enum Error {
     /// and decoding the code-blocks
     /// ([`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)),
     /// each a [`WorkLimit`](crate::WorkLimit). The message of a work bound names
-    /// the option and the least `WorkLimit::Raised` factor the file needs (a lower
-    /// bound for a file of several tiles). The
-    /// caps on the sample area, the code-block count and the precinct count
-    /// have no option, so a file past one of them is refused whatever the
-    /// options. [`WorkLimit`](crate::WorkLimit) has an example that retries.
+    /// the option and a `WorkLimit::Raised` factor; the factor is a hint (see
+    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file.
+    ///
+    /// The other guards have no option, so a file past one of them is refused
+    /// whatever the options. Among them are the caps on the code-block count,
+    /// the precinct count and the bit-plane depth, the sample budget that
+    /// palette expansion, sYCC chroma replication and a monochrome ICC
+    /// conversion count against, and the cap on the image area.
+    /// [`WorkLimit`](crate::WorkLimit) has an example that retries.
     Limit(String),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
     /// invalid for this codestream, or that contradict each other whatever

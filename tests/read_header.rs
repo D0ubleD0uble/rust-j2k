@@ -109,6 +109,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "work_bound/jp2_t2skip_512_20000.jp2",
         "too many steps to check",
     ),
+    (
+        "work_bound/pocvol_1024x512_1000_2.j2k",
+        "past the work bound",
+    ),
     ("work_bound/sweep_pcrl_1024_64.j2k", "past the work bound"),
     ("work_bound/sweep_rpcl_1024_64.j2k", "past the work bound"),
     (

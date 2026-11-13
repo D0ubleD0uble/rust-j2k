@@ -92,10 +92,15 @@ match decode(&bytes) {
 ### Damaged input
 
 Decoding is strict. Truncated or inconsistent data is an `Error` and no partial
-image comes back: a file cut short is `Error::Codestream` (`Psot overruns the
-codestream`), a codestream missing its `EOC` marker is refused, and anything
-that is not JPEG 2000, empty input and text included, is `Codestream` too.
-JPEG 2000 has no checksum, so damage inside the entropy-coded data is not
+image comes back: a raw codestream cut short is `Error::Codestream` (`Psot
+overruns the codestream`), a JP2 file cut short is `Codestream` or
+`FileFormat` depending on where, and a raw codestream missing its `EOC` marker
+is refused (a JP2 file whose last tile-part has `Psot = 0` decodes without
+one, as OpenJPEG reads it). Anything that is not JPEG 2000, empty input and
+text included, is `Codestream` too. Damage can show up as any variant: a
+flipped header bit can read as an absurd image size (`Limit`) or as an unknown
+marker or feature (`Unsupported`), so do not retry a `Limit` with `Unlimited`
+on that evidence alone. JPEG 2000 has no checksum, so damage inside the entropy-coded data is not
 always detected; a flipped byte can decode to a wrong image without an error.
 What is refused, and where this decoder is stricter than OpenJPEG, is in
 [docs/correctness.md](docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams).
@@ -103,17 +108,18 @@ What is refused, and where this decoder is stricter than OpenJPEG, is in
 ### Limits
 
 A valid file can come back as `Error::Limit`: the decoder caps what a file may
-declare (image area, code-block count, precinct count) and how much work it
-may ask for. Only the two work bounds can be changed, with
-`DecodeOptions::packet_work_limit` (reading the packet headers) and
-`DecodeOptions::code_block_work_limit` (decoding the code-blocks), each a
-`WorkLimit`. The other caps have no option.
+declare and how much work it may ask for. Only the two work bounds can be
+changed, with `DecodeOptions::packet_work_limit` (reading the packet headers)
+and `DecodeOptions::code_block_work_limit` (decoding the code-blocks), each a
+`WorkLimit`. The other guards have no option; the list is on `Error::Limit` in
+the docs.
 
 - For a file from a source you trust, use `WorkLimit::Unlimited`. It is the
   simplest choice.
 - To keep a ceiling, use `WorkLimit::Raised(n)`. The `Limit` message for a
-  work bound names an `n` the file needs at least (a lower bound when the file has
-  several tiles).
+  work bound names an `n` as a hint: for the code-block bound it is what the
+  tiles seen so far need, and for the packet bound it is the next factor up,
+  which may not be enough.
 
 The `WorkLimit` docs on [docs.rs](https://docs.rs/rust-j2k) have an example
 that catches `Error::Limit` and retries.

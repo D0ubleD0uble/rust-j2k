@@ -294,6 +294,9 @@ FILES = {
     # 4 precincts, 1024 layers, 31 identical POC volumes: 4096 packets read
     # once and 126976 skipped. Decodes.
     "pocdup_4x4_1024_31.j2k": pocdup(4, 4, 1, 1024, 31),
+    # 2 identical POC volumes over 1.3e5 precincts x 1000 layers: the volumes
+    # reach 1.3e8 packets, 7.8 times the bound, with 100 bytes of packets.
+    "pocvol_1024x512_1000_2.j2k": pocdup(1024, 512, 1, 1000, 2, 100),
 }
 
 # Not committed (`--big DIR`): the issue's timing shapes.

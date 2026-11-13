@@ -189,11 +189,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorkLimit::Unlimited`. The packet limit also bounds the walk
   `read_header_with` makes of a `Psot = 0` tile. Raising it does not raise
   the memory a POC sequence's packets are held in.
-- The `Error::Limit` message for a work bound names the least
-  `WorkLimit::Raised(n)` the file needs, worked out from the refusal alone
-  (later tiles may need more), and points to `WorkLimit::Unlimited` for
-  trusted input. It is exact for a file of one tile. The variant stays
-  `Limit`.
+- The `Error::Limit` message for a work bound names a
+  `WorkLimit::Raised(n)`, worked out from the refusal alone, and points to
+  `WorkLimit::Unlimited` for trusted input. For the code-block bound and for
+  a POC sequence that reaches too many packets it is what the tiles seen so
+  far need (exact for a file of one tile). For the packet walk it is the
+  next factor up, and the file may need more. The variant stays `Limit`.
 
 ### Fixed
 
