@@ -78,12 +78,19 @@ fn differs_from_openjpeg_by_the_stated_bound() {
 }
 
 /// The difference is OpenJPEG's error, not this decoder's: against the image the
-/// encoder was given, this decode has the lower mean-squared error, by a wide
-/// margin. With OpenJPEG's constant the two decodes would be identical.
+/// encoder was given, this decode is within 1 everywhere and has the lower
+/// mean-squared error, by a wide margin. OpenJPEG's is off by up to 5.
 #[test]
 fn is_closer_to_the_encoded_image_than_openjpeg() {
     let (ours, expected) = fixture();
     let source = original(expected.image.width, expected.image.height);
+    let peak = ours
+        .iter()
+        .zip(&source)
+        .map(|(&a, &b)| (a - b).abs())
+        .max()
+        .unwrap();
+    assert!(peak <= 1, "largest difference from the encoder's input: {peak}");
     let ours_mse = mse(&ours, &source);
     let opj_mse = mse(&expected.components[0].samples, &source);
     assert!(
