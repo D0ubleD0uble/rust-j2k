@@ -182,6 +182,14 @@ fn reconstruct<S: Synthesis>(bands: Bands<S::Sample>) -> Band<S::Sample> {
 /// interleaving the bands straight into the grid maps half the grid for LL
 /// alone and peaks at 1.5 times. The interleave happens a row or a batch of
 /// columns at a time instead, in `scratch`.
+///
+/// The scratch adds to that peak. Its largest buffer holds a batch of
+/// [`LANES`] columns, `LANES * height` samples, which is `LANES / width` of
+/// the grid: as large as the grid itself at width 8, so the peak reaches 2.25
+/// times the level's size there, falling toward 1.8 times at width 15, and at
+/// most half a grid from width 16 up. A grid narrower than `LANES` has no full
+/// batch and sizes no batch buffer. The one-row and one-column buffers hold
+/// `width` and `height` samples.
 fn merge_level<S: Synthesis>(
     ll: Band<S::Sample>,
     detail: DetailBands<S::Sample>,
