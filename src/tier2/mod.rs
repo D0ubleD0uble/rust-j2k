@@ -154,14 +154,20 @@ pub struct CodedData<'a> {
 /// [`decode_visits`]), and fails with [`Error::Limit`] once it is gone. A
 /// POC sequence's packets are held in a bitmap of at most `poc_bitmap`
 /// bits, and no more than `visits`, and past it in a set (see
-/// [`for_each_packet`]).
+/// [`for_each_packet`]). The code-blocks of the resolutions that
+/// `reduction` drops are charged to `visits` too (see
+/// [`Budget::reduction`]).
 pub fn decode_packets<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
     visits: &mut u64,
     poc_bitmap: u64,
+    reduction: u8,
 ) -> std::result::Result<CodedData<'a>, Refused> {
-    let mut budget = Budget::decode(*visits, poc_bitmap);
+    let mut budget = Budget {
+        reduction,
+        ..Budget::decode(*visits, poc_bitmap)
+    };
     let coded = decode_packets_within(header, tile, &mut budget);
     *visits = budget.visits;
     coded.map_err(|error| match (budget.refusal, error) {
@@ -187,7 +193,8 @@ pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 /// cheapest visits, the layer orders' steps over resolutions with no
 /// precinct, refuse a file at about 0.02 to 0.06 µs a byte.
 ///
-/// Setting up a tile's geometry is not counted. A resolution with no precinct
+/// Setting up a tile's geometry is counted only for the code-blocks of the
+/// resolutions a reduction drops (see [`Budget::reduction`]). A resolution with no precinct
 /// gets no band or code-block geometry, so its setup is a few small
 /// allocations. The costliest shape measured, 64 tiles of 16384 components
 /// with one byte of packet data each, decodes at about 10 µs a byte, about
@@ -245,6 +252,16 @@ pub(crate) struct Budget {
     /// only where the packets the volumes reach end, and the decode refuses
     /// the tile anyway.
     pub(crate) poc_coverage: bool,
+    /// The decode's resolution reduction. Each code-block of a resolution it
+    /// drops costs a visit once the geometry is built, since every tile builds
+    /// its geometry at full resolution whatever the reduction. Nothing else is
+    /// charged for the geometry: each precinct is paid for by its packets'
+    /// visits, and the code-blocks of the kept resolutions are no more than
+    /// the reduced tile's samples / 16, which the sample limit bounds. Without
+    /// the charge, many tiles of next to no data, each building close to the
+    /// per-tile code-block cap, would make a small file take minutes to decode
+    /// at a reduction. It is 0 for `read_header`'s walk.
+    pub(crate) reduction: u8,
     /// Why the walk was refused for work, once it is (see [`WorkRefusal`]).
     pub(crate) refusal: Option<WorkRefusal>,
 }
@@ -268,6 +285,7 @@ impl Budget {
             },
             poc_set: true,
             poc_coverage: true,
+            reduction: 0,
             refusal: None,
         }
     }
@@ -297,16 +315,35 @@ pub(crate) fn decode_packets_within<'a>(
     // geometry tuple, and legal 4×4 blocks push the count toward samples/16, so
     // the cap has to bite before those vectors fill rather than summing them
     // afterwards. Both running totals are threaded through `resolution_geoms`.
+    //
+    // The code-blocks of the resolutions the reduction drops are charged to
+    // `visits` as each component is built (see [`Budget::reduction`]), so a
+    // tile can pass the bound by at most one component's geometry, which the
+    // caps bound.
     let component_count = header.siz.components.len();
+    let visits = Visits::new(budget.visits);
     let mut geoms = Vec::with_capacity(component_count);
     for c in 0..component_count {
-        geoms.push(resolution_geoms(
+        let resolutions = resolution_geoms(
             header,
             tile.index,
             c,
             &mut budget.precincts,
             &mut budget.blocks,
-        )?);
+        )?;
+        let kept = resolutions
+            .len()
+            .saturating_sub(usize::from(budget.reduction));
+        let dropped: usize = resolutions[kept..]
+            .iter()
+            .flat_map(|resolution| &resolution.bands)
+            .map(|band| band.blocks.len())
+            .sum();
+        let charged = charge_dropped_blocks(&visits, dropped);
+        budget.visits = visits.get();
+        budget.refusal = visits.refusal.get();
+        charged?;
+        geoms.push(resolutions);
     }
 
     // One state per (component, resolution, band), carried across every layer.
@@ -348,7 +385,6 @@ pub(crate) fn decode_packets_within<'a>(
     if budget.poc_coverage {
         progression::check_poc_coverage(header, &walk, tile.index)?;
     }
-    let visits = Visits::new(budget.visits);
     let mut packet_index = 0u32;
     let walked = for_each_packet(
         header,
@@ -508,6 +544,10 @@ pub(crate) enum WorkRefusal {
     /// A POC sequence's volumes reach `reached` packets, more than the visits
     /// left.
     PocReach { reached: u64 },
+    /// A component's geometry holds `blocks` code-blocks in the resolutions
+    /// the reduction drops, more than the visits left (see
+    /// [`Budget::reduction`]).
+    DroppedBlocks { blocks: u64 },
 }
 
 impl WorkRefusal {
@@ -521,6 +561,11 @@ impl WorkRefusal {
             WorkRefusal::PocReach { reached } => format!(
                 "tile packet walk exceeds its work bound: its POC volumes reach \
                  {reached} packets (see `DecodeOptions::packet_work_limit`)"
+            ),
+            WorkRefusal::DroppedBlocks { blocks } => format!(
+                "tile packet walk exceeds its work bound: the resolutions the \
+                 reduction drops hold {blocks} code-blocks in this component \
+                 (see `DecodeOptions::packet_work_limit`)"
             ),
         }
     }
@@ -569,6 +614,21 @@ impl Visits {
     pub(crate) fn refuse(&self, why: WorkRefusal) -> Error {
         self.refusal.set(Some(why));
         Error::Limit(why.why())
+    }
+}
+
+/// Spend a visit for each of `blocks` code-blocks of the resolutions the
+/// reduction drops (see [`Budget::reduction`]), or refuse the walk with
+/// [`WorkRefusal::DroppedBlocks`] when fewer are left.
+fn charge_dropped_blocks(visits: &Visits, blocks: usize) -> Result<()> {
+    match visits.left.get().checked_sub(blocks as u64) {
+        Some(rest) => {
+            visits.left.set(rest);
+            Ok(())
+        }
+        None => Err(visits.refuse(WorkRefusal::DroppedBlocks {
+            blocks: blocks as u64,
+        })),
     }
 }
 

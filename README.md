@@ -109,18 +109,27 @@ What is refused, and where this decoder is stricter than OpenJPEG, is in
 ### Limits
 
 A valid file can come back as `Error::Limit`: the decoder caps what a file may
-declare and how much work it may ask for. Only the two work bounds can be
-changed, with `DecodeOptions::packet_work_limit` (reading the packet headers)
-and `DecodeOptions::code_block_work_limit` (decoding the code-blocks), each a
-`WorkLimit`. The other guards have no option; the list is on `Error::Limit` in
-the docs.
+declare and how much work it may ask for. Three limits can be changed, each a
+`WorkLimit`:
+
+- `DecodeOptions::sample_limit`, the image's size: 2^28 samples (1 GiB as
+  `i32`) by default, counted at the resolution reduction, over every output
+  channel, a palette's and sRGB output's included.
+- `DecodeOptions::packet_work_limit`, the work of reading the packet headers.
+- `DecodeOptions::code_block_work_limit`, the work of decoding the
+  code-blocks.
+
+The other guards have no option; the list is on `Error::Limit` in the docs.
 
 - For a file from a source you trust, use `WorkLimit::Unlimited`. It is the
-  simplest choice.
-- To keep a ceiling, use `WorkLimit::Raised(n)`. The `Limit` message for a
-  work bound names an `n` as a hint: for the code-block bound it is what the
-  tiles seen so far need, and for the packet bound it is the next factor up,
-  which may not be enough (double `n` on a retry).
+  simplest choice. Under the sample limit it allocates what the header
+  declares.
+- To keep a ceiling, use `WorkLimit::Raised(n)`. The `Limit` message names an
+  `n` as a hint: for the sample limit it is exact for the check it names
+  (palette expansion or sRGB output, checked later, may need a higher one),
+  for the code-block bound it is what the tiles seen so far need, and for the
+  packet bound it is the next factor up, which may not be enough (double `n`
+  on a retry).
 
 The `WorkLimit` docs on [docs.rs](https://docs.rs/rust-j2k) have an example
 that catches `Error::Limit` and retries.

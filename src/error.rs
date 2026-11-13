@@ -82,25 +82,29 @@ pub enum Error {
     /// input.
     Unsupported(String),
     /// The input exceeded one of the decoder's resource guards — a hostile or
-    /// absurd declaration (sample area, code-block count, precinct count,
-    /// bit-plane depth) past a cap, or work past the
-    /// bound for the file's size (see [`decode`](crate::decode)), not a
-    /// missing feature. The file may be valid.
+    /// absurd declaration (code-block count, precinct count, bit-plane depth)
+    /// past a cap, an image of more samples than the sample limit allows, or
+    /// work past the bound for the file's size (see [`decode`](crate::decode)),
+    /// not a missing feature. The file may be valid.
     ///
-    /// Only the two work bounds can be changed: reading the packet headers
-    /// ([`DecodeOptions::packet_work_limit`](crate::DecodeOptions::packet_work_limit))
+    /// Three of these can be changed, each with a [`WorkLimit`](crate::WorkLimit):
+    /// the sample limit
+    /// ([`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit)),
+    /// which holds the image area and the samples that palette expansion, sYCC
+    /// chroma replication and a monochrome ICC conversion produce; reading the
+    /// packet headers
+    /// ([`DecodeOptions::packet_work_limit`](crate::DecodeOptions::packet_work_limit));
     /// and decoding the code-blocks
-    /// ([`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)),
-    /// each a [`WorkLimit`](crate::WorkLimit). The message of a work bound names
-    /// the option and a `WorkLimit::Raised` factor; the factor is a hint (see
-    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file.
+    /// ([`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)).
+    /// The message of one of them names the option and a `WorkLimit::Raised`
+    /// factor; the factor is a hint (see [`WorkLimit`](crate::WorkLimit)), not
+    /// a measure of the file.
     ///
     /// The other guards have no option, so a file past one of them is refused
     /// whatever the options. Among them are the caps on the code-block count,
-    /// the precinct count and the bit-plane depth, the sample budget that
-    /// palette expansion, sYCC chroma replication and a monochrome ICC
-    /// conversion count against, and the cap on the image area.
-    /// [`WorkLimit`](crate::WorkLimit) has an example that retries.
+    /// the precinct count, the bit-plane depth and the number of progression
+    /// order change (POC) volumes. [`WorkLimit`](crate::WorkLimit) has an
+    /// example that retries.
     Limit(String),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
     /// invalid for this codestream, or that contradict each other whatever

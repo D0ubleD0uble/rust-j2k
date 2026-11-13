@@ -405,10 +405,28 @@ fn the_tile_grid_covers_the_image_with_clipped_edge_tiles() {
 
 #[test]
 fn oversize_image_area_is_a_limit() {
-    // 16384×16384 = 2^28 samples, past the 2^26 decode guard.
+    // 16385×16384 is just past the 2^28 default sample limit. The parse
+    // itself leaves the area to the limit, which knows the caller's options.
     let n = 16384;
-    let bytes = codestream(&[seg(marker::SIZ, &siz_geom(n, n, 0, 0, n, n, 0, 0))]);
-    assert!(matches!(err(&bytes), Error::Limit(_)));
+    let siz = siz_of_geom(n + 1, n);
+    let cap = crate::samples::MAX_IMAGE_SAMPLES;
+    let e = crate::samples::check_codestream(&siz, 0, cap).unwrap_err();
+    assert!(
+        matches!(&e, Error::Limit(m) if m.starts_with("image area 16385×16384 needs")),
+        "got {e:?}"
+    );
+    // 16384×16384 is exactly the limit, and fits.
+    assert!(crate::samples::check_codestream(&siz_of_geom(n, n), 0, cap).is_ok());
+    // One level down the area is a quarter, and fits.
+    assert!(crate::samples::check_codestream(&siz, 1, cap).is_ok());
+}
+
+/// The SIZ of a `width` x `height` single-component image, one tile.
+fn siz_of_geom(width: u32, height: u32) -> Siz {
+    decode_siz(Cursor::new(&siz_geom(
+        width, height, 0, 0, width, height, 0, 0,
+    )))
+    .unwrap()
 }
 
 #[test]
@@ -516,8 +534,8 @@ fn explicit_precinct_sizes_parse_from_spcod() {
 }
 
 /// A maximal partition — `Scod` bit 0 clear — carries no `SPcod` bytes and reads
-/// back as `(15, 15)` everywhere, which is the single precinct that spans any
-/// tile-component the sample budget admits.
+/// back as `(15, 15)` everywhere, the single precinct that spans any
+/// tile-component under 2^15 on a side.
 #[test]
 fn an_implicit_precinct_partition_is_maximal() {
     let data = [0xDE, 0xAD];
@@ -1867,9 +1885,11 @@ fn many_components_exceed_the_sample_budget() {
         seg(marker::COD, &cod_default(1)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
-    let e = err(&bytes);
+    let header = parse_main_header(&bytes).unwrap().0;
+    let cap = crate::samples::MAX_IMAGE_SAMPLES;
+    let e = crate::samples::check_codestream(&header.siz, 0, cap).unwrap_err();
     assert!(
-        matches!(&e, Error::Limit(m) if m.contains("decode guard")),
+        matches!(&e, Error::Limit(m) if m.starts_with("100 components needs 1677721600 samples")),
         "got {e:?}"
     );
 
@@ -2219,19 +2239,9 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with(&seg(marker::CAP, &[0, 0]))),
             Variant::Unsupported,
         ),
-        // Multiple components are decoded, so they left this table. What
-        // replaces them is the allocation guard: every component reconstructs
-        // into its own buffer, so a large image with many components must be
-        // refused rather than attempted.
-        (
-            "components over the sample budget",
-            err(&codestream(&[
-                seg(marker::SIZ, &many_component_siz(100)),
-                seg(marker::COD, &cod_default(1)),
-                seg(marker::QCD, &qcd_none(2, &[8; 16])),
-            ])),
-            Variant::Limit,
-        ),
+        // Multiple components are decoded, so they left this table. The
+        // sample limit that bounds them depends on the caller's options, so
+        // it is checked after this parse (`many_components_exceed_the_sample_budget`).
         // A non-zero image origin is decoded now; one at or past the far edge
         // (XOsiz >= Xsiz, Table A-9) encloses no image and is an illegal field.
         (

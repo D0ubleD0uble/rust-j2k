@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 use super::{decode_packets, decode_visits};
 
 /// How far below its bound every committed file's walk must stay: at most
-/// this fraction of it.
-const MARGIN: f64 = 1.0 / 64.0;
+/// this fraction of it. The largest is a sparse 2048^2 image in 4x4
+/// code-blocks at reduction 3, about 1.6%, nearly all of it the dropped
+/// resolutions' code-blocks; at full resolution it is under 0.1%.
+const MARGIN: f64 = 1.0 / 32.0;
 
 /// Every `.j2k` and `.jp2` under `dir`, recursively.
 fn files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -21,10 +23,12 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The visits an unbounded walk of every tile's packets spends, and the bytes
-/// of tile data the decode's bound is scaled by; `None` when the file has no codestream to
-/// walk or a tile's packets do not parse.
-pub(crate) fn walk(bytes: &[u8]) -> Option<(u64, u64)> {
+/// The visits an unbounded walk of every tile's packets spends at
+/// `reduction`, the dropped resolutions' code-blocks included, and the bytes
+/// of tile data the decode's bound is scaled by; `None` when the file has no
+/// codestream to walk, a tile's packets do not parse, or a tile has fewer
+/// levels than `reduction`.
+pub(crate) fn walk(bytes: &[u8], reduction: u8) -> Option<(u64, u64)> {
     let codestream = if bytes.starts_with(&[0xFF, 0x4F]) {
         bytes
     } else {
@@ -37,7 +41,8 @@ pub(crate) fn walk(bytes: &[u8]) -> Option<(u64, u64)> {
     let mut left = u64::MAX;
     for (index, tile) in cs.tiles.iter().enumerate() {
         let header = cs.tile_header(index).ok()?;
-        decode_packets(&header, tile, &mut left, u64::MAX).ok()?;
+        crate::check_reduction(&header, reduction, Some(index)).ok()?;
+        decode_packets(&header, tile, &mut left, u64::MAX, reduction).ok()?;
     }
     Some((u64::MAX - left, crate::tile_bytes(&cs)))
 }
@@ -54,8 +59,8 @@ fn the_work_bound_grows_with_the_tile_data() {
 
 /// Every committed file whose packets parse, conformance, real-world and
 /// `opj_compress` many-layer files included, walks them in a small fraction
-/// of the decode's bound, so the bound refuses none of them. Run with
-/// `--nocapture` for the table.
+/// of the decode's bound, at full resolution and at reductions 1 to 3, so the
+/// bound refuses none of them. Run with `--nocapture` for the table.
 #[test]
 fn every_committed_file_walks_far_below_the_work_bound() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -70,9 +75,12 @@ fn every_committed_file_walks_far_below_the_work_bound() {
             continue;
         }
         let bytes = std::fs::read(path).unwrap();
-        if let Some((spent, data)) = walk(&bytes) {
-            let bound = decode_visits(data);
-            rows.push((spent as f64 / bound as f64, spent, data, name));
+        for reduction in 0..=3 {
+            if let Some((spent, data)) = walk(&bytes, reduction) {
+                let bound = decode_visits(data);
+                let name = format!("{name} -r {reduction}");
+                rows.push((spent as f64 / bound as f64, spent, data, name));
+            }
         }
     }
     rows.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -81,9 +89,10 @@ fn every_committed_file_walks_far_below_the_work_bound() {
         let per_byte = *spent as f64 / (*data).max(1) as f64;
         eprintln!("{fraction:.6}\t{spent}\t{data}\t{per_byte:.3}\t{name}");
     }
-    eprintln!("{} files walked of {}", rows.len(), paths.len());
+    let walked = rows.iter().filter(|row| row.3.ends_with(" -r 0")).count();
+    eprintln!("{walked} files walked of {}", paths.len());
     // The conformance corpus and the real-world files are among them.
-    assert!(rows.len() > 100, "{} files walked", rows.len());
+    assert!(walked > 100, "{walked} files walked");
     assert!(rows.iter().any(|row| row.3.starts_with("work_bound/opj_")));
     for (fraction, _, _, name) in &rows {
         assert!(*fraction <= MARGIN, "{name} spends {fraction} of its bound");

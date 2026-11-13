@@ -403,6 +403,10 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
         // Volumes that leave out packets do not move where the packets they
         // reach end; the decode refuses them.
         poc_coverage: false,
+        // Where the codestream ends must not depend on the decode options,
+        // so the walk is the same at every reduction. Its geometry is held to
+        // PROBE_GEOMETRY, so no dropped resolutions need charging here.
+        reduction: 0,
         refusal: None,
     };
     let ends = crate::tier2::decode_packets_within(&header, data, &mut budget).is_ok();
@@ -435,16 +439,18 @@ pub(crate) struct ChannelPlans {
 }
 
 impl ChannelPlans {
-    /// Plan the channels for a decode at `reduction` resolution levels down.
+    /// Plan the channels for a decode at `reduction` resolution levels down,
+    /// holding a palette's expanded channels to `cap` samples.
     /// The palette is planned first, so a malformed palette reports its fault
     /// before a malformed `cdef` does, as OpenJPEG reads them.
     pub(crate) fn plan(
         header: &Jp2Header<'_>,
         siz: &Siz,
         reduction: u8,
+        cap: u64,
         raw_channels: bool,
     ) -> Result<Self> {
-        let palette = palette::plan(header, siz, reduction, raw_channels)?;
+        let palette = palette::plan(header, siz, reduction, cap, raw_channels)?;
         let count = palette.output_channels(siz, reduction).len();
         let channels = channels::plan(header, count, raw_channels)?;
         Ok(ChannelPlans { palette, channels })
@@ -631,12 +637,13 @@ fn color_channels(count: usize, color: &ColorSpace) -> Result<Vec<ChannelDefinit
 
 /// Plan the sRGB output step ([`ColorOutput::Srgb`](crate::ColorOutput::Srgb))
 /// from the file's color space and the planned output channels, before any
-/// tile is decoded.
+/// tile is decoded. The output is held to `cap` samples.
 pub(crate) fn plan_srgb(
     metadata: &Jp2Metadata,
     plans: &ChannelPlans,
     siz: &Siz,
     reduction: u8,
+    cap: u64,
 ) -> Result<SrgbPlan> {
     srgb::plan(
         &metadata.color,
@@ -644,5 +651,6 @@ pub(crate) fn plan_srgb(
         &plans.outputs(siz, reduction)?,
         siz,
         reduction,
+        cap,
     )
 }

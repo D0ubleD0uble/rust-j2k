@@ -40,7 +40,7 @@
 //! [`plan`] reads the boxes and the main header into a [`PalettePlan`] before
 //! any tile is decoded; [`PalettePlan::apply`] then builds the channels from
 //! the decoded components. The box layout is checked whenever a palette is
-//! present. The mapping, the column depths, and the sample budget are checked
+//! present. The mapping, the column depths, and the sample limit are checked
 //! only when the palette is applied, so a caller asking for the raw channels
 //! gets them whatever the `cmap` says, as OpenJPEG does with its "ignore
 //! palette" flag. The budget bounds the expanded channels; with the decoded
@@ -48,8 +48,8 @@
 
 use super::header::Jp2Header;
 use super::metadata::{Association, ChannelDefinition, ChannelType, Jp2Metadata};
-use crate::codestream::MAX_IMAGE_SAMPLES;
 use crate::codestream::markers::Siz;
+use crate::samples;
 use crate::{Component, ComponentInfo, Error, Result};
 
 /// The most entries a palette may hold (I.5.3.4: `NE` is 1..=1024).
@@ -345,6 +345,7 @@ pub(crate) fn plan(
     header: &Jp2Header<'_>,
     siz: &Siz,
     reduction: u8,
+    cap: u64,
     raw_channels: bool,
 ) -> Result<PalettePlan> {
     let (pclrs, cmaps) = (header.pclr(), header.cmap());
@@ -402,7 +403,7 @@ pub(crate) fn plan(
         .enumerate()
         .map(|(i, source)| plan_channel(i, source, &palette, siz))
         .collect::<Result<_>>()?;
-    check_budget(&channels, siz, reduction)?;
+    check_budget(&channels, siz, reduction, cap)?;
     Ok(PalettePlan::Apply { palette, channels })
 }
 
@@ -553,13 +554,12 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
     })
 }
 
-/// Hold the expanded channels to the decoder's sample budget, from the SIZ
-/// extents at `reduction`, before any tile is decoded or plane allocated.
-/// The budget bounds the expanded channels alone: the decoded components are
-/// held while the channels are built from them, so the peak is about twice
-/// the budget (2^26 samples is 256 MiB as `i32`, so about 512 MiB computed;
-/// a one-column palette at the full budget measures about 515 MiB).
-fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8) -> Result<()> {
+/// Hold the expanded channels to `cap` samples, from the SIZ extents at
+/// `reduction`, before any tile is decoded or plane allocated. The limit
+/// bounds the expanded channels alone: the decoded components are held while
+/// the channels are built from them, so the peak is about twice the limit
+/// (see [`crate::samples`]).
+fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8, cap: u64) -> Result<()> {
     let mut total: u64 = 0;
     for channel in channels {
         let index = usize::from(channel.source.component());
@@ -567,13 +567,14 @@ fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8) -> Result
             .component_extent_at(index, reduction)
             .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
         total = total.saturating_add(u64::from(width) * u64::from(height));
-        if total > MAX_IMAGE_SAMPLES {
-            return Err(Error::Limit(format!(
-                "palette expansion to {} channels totals over {MAX_IMAGE_SAMPLES} samples, \
-                 above the decode guard",
-                channels.len()
-            )));
-        }
+    }
+    if total > cap {
+        let what = format!(
+            "palette expansion to {} channels{}",
+            channels.len(),
+            samples::at(reduction)
+        );
+        return Err(samples::over(&what, total, cap));
     }
     Ok(())
 }
@@ -776,9 +777,9 @@ mod tests {
         }
     }
 
-    /// 255 channels over a 600x500 component is 76.5 M samples, over the 2^26
-    /// budget: refused from SIZ alone. A reduced decode, or fewer channels,
-    /// fits.
+    /// 255 channels over a 600x500 component is 76.5 M samples, over a
+    /// 2^26 limit: refused from SIZ alone. A reduced decode, or fewer
+    /// channels, fits.
     #[test]
     fn the_expansion_is_held_to_the_sample_budget() {
         let channel = |column| PlannedChannel {
@@ -794,11 +795,11 @@ mod tests {
         let channels: Vec<PlannedChannel> = (0..=254).map(channel).collect();
         let siz = siz(600, 500);
         assert!(matches!(
-            check_budget(&channels, &siz, 0),
+            check_budget(&channels, &siz, 0, 1 << 26),
             Err(Error::Limit(_))
         ));
-        assert!(check_budget(&channels, &siz, 1).is_ok());
-        assert!(check_budget(&channels[..200], &siz, 0).is_ok());
+        assert!(check_budget(&channels, &siz, 1, 1 << 26).is_ok());
+        assert!(check_budget(&channels[..200], &siz, 0, 1 << 26).is_ok());
     }
 
     /// A direct channel moves its component's plane when nothing later reads

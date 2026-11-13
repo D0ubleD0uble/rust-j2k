@@ -1,12 +1,16 @@
-//! The advice an [`Error::Limit`](crate::Error::Limit) for a work bound
-//! carries: a [`WorkLimit::Raised`](crate::WorkLimit::Raised) factor worked
-//! out from what the refusal already shows.
+//! The advice an [`Error::Limit`](crate::Error::Limit) for a work bound or
+//! the sample limit carries: a [`WorkLimit::Raised`](crate::WorkLimit::Raised)
+//! factor worked out from what the refusal already shows.
 //!
 //! A bound scales with the file, so `Raised(n)` allows `n` times the default
 //! bound. The figure is plain arithmetic on what the refusal knows; nothing
 //! is walked or decoded to find it, so a refused file costs no more to
-//! refuse. Only the code-block bound and a POC sequence's reach give the
-//! factor the tile needs. A packet walk that runs out of visits shows only
+//! refuse. The sample limit's factor is exact for the check it names, as the
+//! samples it counts are known from the header; palette expansion or sRGB
+//! output is checked after the image area and may need a higher one. Of the
+//! work bounds, only the code-block bound, a POC
+//! sequence's reach and the code-blocks of the resolutions a reduction drops
+//! give the factor the tile needs. A packet walk that runs out of visits shows only
 //! that it needs more than it was allowed, so its message names the next
 //! factor up. Later tiles are never counted.
 
@@ -38,13 +42,25 @@ pub(crate) fn packet(work: WorkRefusal, spent: u64, allowed: u64, default: u64) 
                  more, {TRUSTED}"
             )
         }
-        WorkRefusal::PocReach { reached } => {
-            let n = factor(spent.saturating_add(reached), default);
+        WorkRefusal::PocReach { reached: needed }
+        | WorkRefusal::DroppedBlocks { blocks: needed } => {
+            let n = factor(spent.saturating_add(needed), default);
             format!(
-                "{why}; the file needs at least `WorkLimit::Raised({n})` (later tiles may need \
-                 more), {TRUSTED}"
+                "{why}; with the {spent} visits already spent, the file needs at least \
+                 `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
             )
         }
+    }
+}
+
+/// The advice for an image of `total` samples against a sample limit whose
+/// default is `default`: the smallest factor that admits it, or, past
+/// `u32::MAX` times the default, where no `Raised` factor does, only
+/// `Unlimited`.
+pub(crate) fn samples(total: u64, default: u64) -> String {
+    match u32::try_from(total.div_ceil(default.max(1))) {
+        Ok(n) => format!("it needs at least `WorkLimit::Raised({n})`, {TRUSTED}"),
+        Err(_) => "only `WorkLimit::Unlimited` admits it, for trusted input".into(),
     }
 }
 
@@ -83,6 +99,13 @@ mod tests {
         let reach = WorkRefusal::PocReach { reached: 100 };
         assert_eq!(named(&packet(reach, 100, 150, 50)), 4);
         assert_eq!(named(&packet(reach, 0, 50, 50)), 2);
+    }
+
+    /// The code-blocks a reduction drops count the visits already spent.
+    #[test]
+    fn dropped_blocks_add_the_visits_already_spent() {
+        let dropped = WorkRefusal::DroppedBlocks { blocks: 100 };
+        assert_eq!(named(&packet(dropped, 100, 150, 50)), 4);
     }
 
     /// The packet walk names the factor above what it was allowed.

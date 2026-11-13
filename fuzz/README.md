@@ -162,8 +162,10 @@ bytes:
 mkdir -p fuzz/corpus/decode
 cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode/
 
-# Time-boxed run (CI-friendly: no panics, no OOM, no hangs).
-cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=2048
+# Time-boxed run (CI-friendly: no panics, no OOM, no hangs). A small input
+# may declare an image at the 2^28-sample default limit, which peaks at about
+# 1.4 GiB, or about 2 GiB while a palette expands, so give it 4 GiB as CI does.
+cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
 # The JP2 box target, seeded from the ISO/IEC 15444-4 JP2 reader files and
 # the synthetic JP2 fixtures.

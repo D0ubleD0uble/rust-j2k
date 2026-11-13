@@ -492,6 +492,7 @@ impl Siz {
     /// so the second case is unreachable for any `Siz` the parser produced —
     /// but the division is guarded here rather than by a `debug_assert` that
     /// would compile out and leave a release-mode panic behind.
+    #[cfg(test)]
     pub fn component_extent(&self, index: usize) -> Option<(u32, u32)> {
         self.component_extent_at(index, 0)
     }
@@ -557,8 +558,8 @@ impl Coding {
     /// resolution's** grid (ISO/IEC 15444-1 B.6).
     ///
     /// A maximal partition — `Scod` bit 0 clear — is `(15, 15)` at every
-    /// resolution, and 2^15 exceeds any tile-component the sample budget admits,
-    /// so it yields the single precinct the pre-#61 decoder assumed. That makes
+    /// resolution (B.6), so a tile-component under 2^15 on a side has the
+    /// single precinct the pre-#61 decoder assumed. That makes
     /// the implicit case a special case of the explicit one rather than a
     /// separate path.
     pub fn precinct(&self, r: usize) -> (u32, u32) {

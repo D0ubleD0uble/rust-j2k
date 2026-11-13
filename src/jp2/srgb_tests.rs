@@ -1274,10 +1274,10 @@ fn converted_output_reports_its_color_space() {
     }
 }
 
-/// sYCC chroma replication that would grow the output past the decode guard
+/// sYCC chroma replication that would grow the output past the sample limit
 /// is refused before any tile is read. The 4:2:0 fixture's SIZ is widened to
-/// 8192x4096: as coded that is 1.5 x 2^25 samples, under the 2^26 guard, but
-/// sRGB output is 3 x 2^25.
+/// 16384x8192: as coded that is 1.5 x 2^27 samples, under the 2^28 limit, but
+/// sRGB output is 3 x 2^27.
 #[test]
 fn chroma_replication_past_the_sample_budget_is_a_limit() {
     let mut codestream = top_box(SYCC_420, b"jp2c").to_vec();
@@ -1285,17 +1285,22 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
     assert_eq!(&codestream[2..4], &[0xFF, 0x51]);
     let put =
         |cs: &mut Vec<u8>, at: usize, v: u32| cs[at..at + 4].copy_from_slice(&v.to_be_bytes());
-    put(&mut codestream, 8, 5 + 8192); // Xsiz
-    put(&mut codestream, 12, 3 + 4096); // Ysiz
-    put(&mut codestream, 24, 5 + 8192); // XTsiz
-    put(&mut codestream, 28, 3 + 4096); // YTsiz
+    put(&mut codestream, 8, 5 + 16384); // Xsiz
+    put(&mut codestream, 12, 3 + 8192); // Ysiz
+    put(&mut codestream, 24, 5 + 16384); // XTsiz
+    put(&mut codestream, 28, 3 + 8192); // YTsiz
     let bytes = file(&codestream, &enumerated(18), &[]);
     expect_err(
         decode_srgb(&bytes),
         |e| matches!(e, Error::Limit(_)),
-        "chroma replication grows the output",
+        "sYCC chroma replicated needs 402653184 samples",
     );
-    // As coded, the same file is under the guard and fails only later, on
+    // A raised limit admits the replicated chroma: the header reads.
+    let raised = crate::DecodeOptions::default()
+        .with_color(crate::ColorOutput::Srgb)
+        .with_sample_limit(crate::WorkLimit::Raised(2));
+    assert!(crate::read_header_with(&bytes, &raised).is_ok());
+    // As coded, the same file is under the limit and fails only later, on
     // its (now too short) tile data.
     assert!(!matches!(decode(&bytes), Err(Error::Limit(_)) | Ok(_)));
 }

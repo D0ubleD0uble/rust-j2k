@@ -296,7 +296,7 @@ fn empty_resolutions_build_no_band_geometry() {
     // One empty packet, for the finest resolution's precinct.
     let data = [0u8];
     let tile = tile(&data);
-    let coded = decode_packets(&header, &tile, &mut decode_visits(0), u64::MAX).unwrap();
+    let coded = decode_packets(&header, &tile, &mut decode_visits(0), u64::MAX, 0).unwrap();
     let resolutions = &coded.components[0].resolutions;
     assert_eq!(resolutions.len(), 33);
     type Band = (BandKind, (u32, u32), usize, usize, usize);
@@ -412,6 +412,53 @@ fn the_precinct_budget_is_shared_across_components() {
         first.is_err() || matches!(second, Err(crate::Error::Limit(_))),
         "two components sharing the budget must not both allocate their precincts"
     );
+}
+
+/// At a resolution reduction, the code-blocks of the resolutions it drops
+/// are charged to the decode's work bound, one visit each, before any packet
+/// is read; nothing else of the geometry is. A 256 x 256 tile of two levels in
+/// 16 x 16 code-blocks has 16, 48 and 192 code-blocks at resolutions 0, 1 and
+/// 2, so a reduction of 1 drops 192 and a reduction of 2 drops 240.
+#[test]
+fn the_dropped_resolutions_code_blocks_are_charged_to_the_work_bound() {
+    let mut header = header(256, 256, 2, 4);
+    header.components[0].coding.precinct_sizes = vec![(15, 15), (6, 6), (6, 6)];
+    let geoms = geoms_of(&header, 0, 0).unwrap();
+    let blocks: Vec<usize> = geoms
+        .iter()
+        .map(|r| r.bands.iter().map(|b| b.blocks.len()).sum())
+        .collect();
+    assert_eq!(blocks, [16, 48, 192]);
+    let precincts: usize = geoms.iter().map(ResolutionGeom::precinct_count).sum();
+    // One empty packet for each precinct.
+    let data = vec![0u8; precincts];
+    let tile = tile(&data);
+    let walk = |visits: u64, reduction: u8| {
+        let mut budget = Budget {
+            reduction,
+            ..Budget::decode(visits, u64::MAX)
+        };
+        let result = decode_packets_within(&header, &tile, &mut budget).map(|_| ());
+        (result, budget.visits)
+    };
+
+    let spent = |reduction| {
+        let (result, left) = walk(u64::MAX, reduction);
+        result.expect("the packets end at the end");
+        u64::MAX - left
+    };
+    let full = spent(0);
+    assert_eq!(spent(1) - full, 192);
+    assert_eq!(spent(2) - full, 240);
+
+    // The charge comes before the walk: one visit short, the geometry is
+    // refused and nothing is spent; with exactly enough, the walk fails at its
+    // first packet with nothing left.
+    for (visits, left) in [(239, 239), (240, 0)] {
+        let (result, after) = walk(visits, 2);
+        assert!(matches!(result, Err(crate::Error::Limit(_))), "{visits}");
+        assert_eq!(after, left, "with {visits} visits");
+    }
 }
 
 /// A code-block size past the standard's 2^10 / xcb+ycb≤12 limit is rejected,
@@ -647,7 +694,8 @@ fn packet_two_blocks_partial_inclusion() {
 fn seed_codestream_parses() {
     let bytes = include_bytes!("../../tests/fixtures/jpeg2000_regular_latlon.j2k");
     let cs = crate::codestream::parse(bytes).unwrap();
-    let coded = decode_packets(&cs.header, &cs.tiles[0], &mut decode_visits(0), u64::MAX).unwrap();
+    let coded =
+        decode_packets(&cs.header, &cs.tiles[0], &mut decode_visits(0), u64::MAX, 0).unwrap();
 
     // opj_dump reports numresolutions = 5 (NL = 4): one LL packet + four detail
     // levels.
@@ -694,7 +742,7 @@ fn malformed_tile_data_never_panics() {
     for data in &cases {
         let t = tile(data);
         // The result is allowed to be either Ok or Err; only a panic would fail.
-        let _ = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX);
+        let _ = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX, 0);
     }
 }
 
@@ -706,7 +754,7 @@ fn block_count_guard_rejects_metadata_bomb() {
     // 4096×4096 with 4×4 blocks: ~1.4M blocks across the ladder, over the 2^19 cap.
     let h = header(4096, 4096, 1, 2);
     let t = tile(&[]);
-    let err = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX)
+    let err = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX, 0)
         .map_err(Error::from)
         .expect_err("guard fires before any packet parse");
     assert!(matches!(err, crate::Error::Limit(_)), "{err}");
@@ -1858,7 +1906,8 @@ fn the_poc_coverage_error_names_the_tile() {
     header.siz.tile_width = 16;
     let mut second = tile(&[]);
     second.index = 1;
-    match decode_packets(&header, &second, &mut decode_visits(0), u64::MAX).map_err(Error::from) {
+    match decode_packets(&header, &second, &mut decode_visits(0), u64::MAX, 0).map_err(Error::from)
+    {
         Err(Error::Codestream(m)) => assert!(
             m.contains("tile 1 leave out its packets of component 0, resolution 2,"),
             "{m}"

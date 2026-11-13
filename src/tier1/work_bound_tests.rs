@@ -44,7 +44,7 @@ fn spend(bytes: &[u8]) -> Option<(u64, u64, u64)> {
     for (index, tile) in cs.tiles.iter().enumerate() {
         let header = cs.tile_header(index).ok()?;
         let mut visits = u64::MAX;
-        let coded = crate::tier2::decode_packets(&header, tile, &mut visits, u64::MAX).ok()?;
+        let coded = crate::tier2::decode_packets(&header, tile, &mut visits, u64::MAX, 0).ok()?;
         spent += work(&header, &coded, 0);
         for component in &coded.components {
             for resolution in &component.resolutions {

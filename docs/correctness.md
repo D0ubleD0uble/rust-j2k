@@ -708,6 +708,10 @@ result on the same file:
   both refused here ("Encoder mistakes OpenJPEG corrects");
 - signed 32-bit components, which OpenJPEG refuses ("Signed 32-bit
   components");
+- an image of more than 2^28 samples at the decode's reduction, which this
+  decoder refuses by default and OpenJPEG decodes if it can allocate it
+  ("The sample limit"), and files past the work bounds ("The tier-2 work
+  bound", "The tier-1 work bound"); each has an option that raises it;
 - under `ColorOutput::Srgb`: sYCC with the IEC constants, rounded, and the
   color channels picked by their `cdef` labels, not by position ("sRGB
   output"; the table there gives every refusal);
@@ -859,9 +863,9 @@ orders over resolutions with no precinct, at about 2 ns a step: `layer_edge`
 (655 KB, 33 steps a byte) is refused in 0.015 to 0.04 s, 0.02 to 0.06 µs a
 byte, and OpenJPEG decodes it in 0.08 s.
 
-Setting up each tile's geometry is not counted. A tile of one sample at
-an odd origin has 32 resolutions per component that hold no precinct, and
-each component of each tile costs about a byte. Those resolutions now get
+At full resolution, setting up a tile's geometry is not counted. A tile of
+one sample at an odd origin has 32 resolutions per component that hold no
+precinct, and each component of each tile costs about a byte. Those resolutions now get
 no band or code-block geometry, and the walk checks no component there. Measured
 on release builds (`deep` in `scripts/gen-work-bound-fixtures.py`, a row
 of one-sample tiles at y = 1, 32 levels, one layer, every packet 0x00;
@@ -878,6 +882,34 @@ known per byte. The same change lets the layer orders decode 8 such
 components in one tile, and the positional orders a 16-component column
 of 2^17 rows, which were `Limit` and which OpenJPEG decodes
 (`tests/work_bound.rs`).
+
+At a resolution reduction the geometry is counted too: one step for each
+code-block of a resolution the reduction drops (orchestrator decision on
+#281). Every tile builds its geometry at full resolution whatever the
+reduction, and the per-tile caps on precincts and code-blocks do not bound a
+file of many tiles. Once the sample limit was counted at the reduction, a
+small file could build a great deal of geometry it never decodes: 2800^2
+tiles in 4x4 code-blocks, six levels, one empty byte per packet, decoded at
+reduction 6, took 10.3 s for 256 tiles (5.5 KB), 147 s for 4096 tiles
+(87 KB) and about 40 minutes for 65025 tiles (1.4 MB). Each is now refused in
+about 1.1 to 1.7 s.
+
+Nothing else of the geometry needs a charge. Each precinct is already paid
+for: the walk reads each precinct's packet in each layer, a step each,
+whatever the reduction. The code-blocks of the kept resolutions are no more
+than the reduced image's samples / 16, which the sample limit holds to
+2^24, about a second to build. A decode at full resolution drops no
+resolution, so it spends exactly what it did before; a file built to spend
+exactly the bound (`the_layer_orders_charge_each_component_they_check` in
+`tests/work_bound.rs`) still decodes.
+
+A code-block costs about 30 to 70 ns to build, a few steps' worth, but one
+step each keeps real files far inside the bound. At reductions 1 to 3 the
+committed files spend at most 1.6% of it (a sparse 2048^2 image in 4x4
+code-blocks at reduction 3); the Sentinel-2 10 m band about 0.15%; a
+2^28-sample single tile in 64x64 code-blocks about 0.4%; and of the
+Sentinel-2, GDAL and OpenJPEG test files measured, none more than 1.9%
+(`s2_MSK_QUALIT_B02.jp2` at reduction 3).
 
 A POC marker's volumes may reach the same packet more than once; the
 first reads it and the rest skip it (OpenJPEG's `include` array). The
@@ -1035,6 +1067,48 @@ stays 2^15 rather than 2^14, which would refuse the `-n 1` files, and it is
 scaled by the tile bytes, packet headers included, as the tier-2 bound is
 (orchestrator decisions on #278, 2026-11-12).
 
+### The sample limit
+
+The decode holds every component in its own plane, so what it allocates
+grows with the sum of the component areas, not with the file. A file of a
+few hundred bytes can declare a 65536 x 65536 image, 16 GiB of `i32`
+samples. The decode counts the samples of every output channel, at the
+resolution reduction asked for, from SIZ and the JP2 boxes alone, and
+refuses an image of more than 2^28 samples (1 GiB as `i32`) with `Limit`
+before it reads a tile. The count covers the codestream's components, a
+palette's expanded channels, and the channels sRGB output adds (sYCC chroma
+replicated to the luma grid, a gray channel a monochrome profile maps to
+R, G and B). `read_header_with` makes the same check, so it refuses what
+the decode would. OpenJPEG has no such limit: it allocates what the header
+declares and fails only when the allocation does.
+
+`DecodeOptions::sample_limit` raises the limit (`WorkLimit::Raised(n)`,
+n times 2^28) or lifts it (`WorkLimit::Unlimited`). The refusal names the
+option and the smallest `Raised` factor that admits the file. Even
+`Unlimited` refuses an image whose 4-byte samples would pass `isize::MAX`
+bytes, so the buffer sizes cannot overflow `usize`, on 32-bit targets
+included; past that, an allocation that fails aborts the process.
+
+The default admits a Sentinel-2 10 m band (10980 x 10980, 120.6 M samples)
+and RGB images up to about 89 MP, and a reduced decode of a larger image
+when the reduced image fits: GDAL's `single_block_32769_16385.jp2` (537 M
+samples) decodes at reduction 3 (4097 x 2049), bit-exact against
+`opj_decompress -r 3` (owner decision on #281, 2026-11-12). Measured on a
+release build against `opj_decompress` 2.5.0 (wall time on a shared,
+loaded machine; peak resident memory from `/usr/bin/time -v`):
+
+| File | Decode | Time | Peak RSS | OpenJPEG time | OpenJPEG peak RSS |
+| ---- | ------ | ---- | -------- | ------------- | ----------------- |
+| `T31UDQ_20240105T105339_AOT_10m.jp2`, 10980^2, 690 KB | full, bit-exact | 4.2 to 4.6 s | 470 MiB | 3.6 to 4.4 s | 471 MiB |
+| the same | reduction 2 (2745^2) | 0.78 s | 32 MiB | | 36 MiB |
+| `single_block_32769_16385.jp2` | reduction 3, bit-exact | 1.05 s | 86 MiB | 0.25 s | 92 MiB |
+
+The peak is about 1.0 times the 4-byte output for the Sentinel-2 band (460
+MiB of samples) and about 1.35 times for one tile of one component (see the
+table in `src/samples.rs`), so the default allows a peak of about 1.4 GiB,
+and about twice the output while a palette expands. Tests:
+`tests/sample_limit.rs` and `tests/sample_limit_alloc.rs`.
+
 ### Tile header cost
 
 A tile's header is the main header with the tile's own COD, COC, QCD, QCC,
@@ -1059,7 +1133,7 @@ At decode, a tile with no markers runs under the main header, borrowed. A
 tile with markers is resolved in full, sized by the component count, and
 the decode then spends at least that much on its components: every
 tile-component must hold a sample, so tiles × components is at most the
-sample budget for a file that decodes. TLM entries are checked and dropped,
+sample limit for a file that decodes. TLM entries are checked and dropped,
 since nothing reads them. Measured on release builds
 (`scripts/gen-tile-header-fixtures.py --big`; before, after, then
 `opj_decompress` 2.5.0):
@@ -1182,7 +1256,7 @@ LittleCMS 2.14, which follows `opj_decompress.c:1620-1720` and `color.c`.
 | 8 | sYCC (`EnumCS` 18) without colors 1, 2 and 3, or with colors that differ in depth or sign | converts positions 0 to 2 | `Unsupported` | 3 |
 | 9 | Signed sYCC | converted as unsigned, then clamped | `Unsupported` | 3 |
 | 10 | sYCC other than luma at 1x1 with both chroma channels at 1x1, 2x1 or 2x2 | "CAN NOT CONVERT", written as coded | `Unsupported` | 3 |
-| 11 | sYCC whose replicated chroma passes the sample budget | | `Limit` | |
+| 11 | sYCC whose replicated chroma passes the sample limit | | `Limit` | |
 | 12 | sYCC otherwise | converted, constants shortened and truncated | converted, IEC constants rounded | 1 |
 | 13 | An ICC profile LittleCMS refuses to open (table below) | written as coded | as coded, `RestrictedIcc` kept | 2 |
 | 14 | A profile in a color space other than RGB, gray or YCbCr | written as coded (no transform) | as coded, `RestrictedIcc` kept | 2 |
@@ -1191,7 +1265,7 @@ LittleCMS 2.14, which follows `opj_decompress.c:1620-1720` and `color.c`.
 | 17 | A profile LittleCMS applies through a lookup table or the Lab connection space | converted | `Unsupported` | 3 |
 | 18 | A monochrome profile without exactly one color channel, or on more than two channels | more than two: the planes go to a gray transform as RGB | `Unsupported` | 3 |
 | 19 | A monochrome profile on samples other than 8-bit unsigned | scaled from the wrong range | `Unsupported` | 3 |
-| 20 | A monochrome profile otherwise | converted | the same; a tinted output gives R, G, B in place of the gray channel (`Limit` past the sample budget) | matches |
+| 20 | A monochrome profile otherwise | converted | the same; a tinted output gives R, G, B in place of the gray channel (`Limit` past the sample limit) | matches |
 | 21 | An RGB profile without colors 1, 2 and 3 | converts positions 0 to 2, whatever they are | `Unsupported` | 3 |
 | 22 | An RGB profile whose colors differ in depth, sign or sub-sampling (possible only with a color past the first four positions) | converts positions 0 to 2 | `Unsupported` | 3 |
 | 23 | An RGB profile on samples other than 8- or 16-bit unsigned | scaled from the wrong range | `Unsupported` | 3 |
@@ -1549,13 +1623,13 @@ Each is `Unsupported` unless noted, and each is a row of
 - `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.
 
 Chroma replication grows the output, so it is checked against the decode's
-sample budget before the tiles are read (`Limit`), as palette expansion is.
+sample limit before the tiles are read (`Limit`), as palette expansion is.
 After a conversion `Image::jp2` reports what the samples now are, as
 OpenJPEG does (owner decision, 2026-11-01, on #165): `ColorSpace::Srgb`,
 or `ColorSpace::Grayscale` for a monochrome profile, with no ICC profile.
 A monochrome profile whose output is not neutral (absolute colorimetric with
 a tinted media white point) gives three channels, R, G and B in place of the
-gray one, as `ColorSpace::Srgb`; this is checked against the sample budget
+gray one, as `ColorSpace::Srgb`; this is checked against the sample limit
 too. sYCC or an RGB profile on one or two channels passes through, as
 OpenJPEG leaves it, with the metadata as declared.
 A pass-through, the default `AsCoded` decode and `read_header` report the
@@ -1798,10 +1872,12 @@ case, not an edge case:
   over the stages (run them per [`fuzz/README.md`](../fuzz/README.md)).
   The bar: no panics, no unbounded allocation, no infinite loops; every rejected
   input returns a typed `Error`, never crashes. A malformed SIZ cannot steer the
-  buffers into an overflowing or out-of-memory allocation: the declared image
-  area — `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, on the reference grid an origin may sit
-  anywhere inside — is bounded at parse time, and the Table A-9 constraints on the
-  image and tile origins are enforced before any geometry reaches the DWT.
+  buffers into an overflowing or out-of-memory allocation: the samples of the
+  declared image — over the image area `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, on the
+  reference grid an origin may sit anywhere inside — are held to the sample
+  limit before any tile is read (see [The sample limit](#the-sample-limit)),
+  and the Table A-9 constraints on the image and tile origins are enforced
+  before any geometry reaches the DWT.
 - **Typed failures** — the flat `Error` enum names the stage that failed, so a
   malformed header, an out-of-scope feature, and a Tier-1 decode fault are
   distinguishable by a caller. No `unwrap`/`panic` on the decode path.
