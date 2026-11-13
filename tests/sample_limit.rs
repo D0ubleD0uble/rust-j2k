@@ -34,6 +34,27 @@ fn flat_header_only() -> Vec<u8> {
     bytes
 }
 
+/// `codestream` in a minimal JP2 file whose `ihdr` matches the flat image.
+fn in_jp2(codestream: &[u8]) -> Vec<u8> {
+    let bx = |kind: &[u8; 4], payload: &[u8]| {
+        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    };
+    let mut ihdr = 16385u32.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&16385u32.to_be_bytes());
+    ihdr.extend_from_slice(&[0, 1, 7, 7, 0, 0]);
+    let jp2h = [bx(b"ihdr", &ihdr), bx(b"colr", &[1, 0, 0, 0, 0, 0, 17])].concat();
+    [
+        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
+        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        bx(b"jp2h", &jp2h),
+        bx(b"jp2c", codestream),
+    ]
+    .concat()
+}
+
 fn with_limit(limit: WorkLimit) -> DecodeOptions {
     DecodeOptions::default().with_sample_limit(limit)
 }
@@ -69,7 +90,11 @@ fn a_6000x4000_rgb_image_decodes_at_defaults_and_matches_openjpeg() {
 /// factor that would admit the file.
 #[test]
 fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
-    for (what, bytes) in [("file", flat()), ("header only", flat_header_only())] {
+    for (what, bytes) in [
+        ("header only", flat_header_only()),
+        ("JP2 header only", in_jp2(&flat_header_only())),
+        ("file", flat()),
+    ] {
         for result in [decode(&bytes).map(|_| ()), read_header(&bytes).map(|_| ())] {
             match result {
                 Err(Error::Limit(m)) => {
@@ -92,20 +117,25 @@ fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
 /// plane is allocated, so the test stays cheap.
 #[test]
 fn raised_and_unlimited_admit_an_image_over_the_default() {
-    let bytes = flat_header_only();
-    for limit in [WorkLimit::Raised(2), WorkLimit::Unlimited] {
+    let codestream = flat_header_only();
+    let file = in_jp2(&codestream);
+    for (bytes, limit) in [
+        (&codestream, WorkLimit::Raised(2)),
+        (&codestream, WorkLimit::Unlimited),
+        (&file, WorkLimit::Raised(2)),
+        (&file, WorkLimit::Unlimited),
+    ] {
         let options = with_limit(limit.clone());
-        let header =
-            read_header_with(&bytes, &options).unwrap_or_else(|e| panic!("{limit:?}: {e}"));
+        let header = read_header_with(bytes, &options).unwrap_or_else(|e| panic!("{limit:?}: {e}"));
         assert_eq!((header.width, header.height), (16385, 16385), "{limit:?}");
-        match decode_with(&bytes, &options) {
+        match decode_with(bytes, &options) {
             Err(Error::Codestream(_)) => {}
             other => panic!("{limit:?}: expected the missing tile data, got {other:?}"),
         }
     }
     // `Raised(1)` is the default limit.
     assert!(matches!(
-        read_header_with(&bytes, &with_limit(WorkLimit::Raised(1))),
+        read_header_with(&file, &with_limit(WorkLimit::Raised(1))),
         Err(Error::Limit(_))
     ));
 }
