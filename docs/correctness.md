@@ -540,8 +540,9 @@ were measured on `quirk_tpsot_tnsot_lossless` with its counts edited.
 in a tile's first tile-part. BAP Image Systems writes the main header's COD
 and QCD into every tile-part. OpenJPEG reads them in any tile-part header
 (`J2K_STATE_TPH` in its marker table, `j2k.c:1411`) and applies them to the whole tile;
-it removed its "one COD per tile" check on purpose because legal files
-broke on it (`opj_j2k_read_cod`, the `#if 0` at `j2k.c:2688`; its issue 1043). Here a later
+it removed its "one COD per tile" check on purpose so that files like these
+decode (`opj_j2k_read_cod`, the `#if 0` at `j2k.c:2688`; its issue 1043, a
+BAP bulk-scanner file). Here a later
 part's marker is accepted only when it changes nothing in either reading,
 and is then dropped (`check_restatement`):
 
@@ -567,8 +568,11 @@ to apply to. OpenJPEG says "Number of components (1) is inconsistent with a
 MCT. Skip the MCT step." and decodes the components as coded
 (`opj_tcd_mct_decode`, `tcd.c:2188`), the only image such a file can
 describe. This decoder skips it too (`mct::applies`); before, it refused the
-file as `Marker`. Three or more components that differ in depth, sign or
-sub-sampling are still refused, as OpenJPEG refuses them.
+file as `Marker`. Three or more components whose sub-sampling or sizes
+differ are still refused, as OpenJPEG refuses them (`tcd.c:2085-2120`).
+Three that differ only in depth or sign are refused too; OpenJPEG decodes
+those, so that refusal is this decoder's own stricter choice
+(`mct::check_geometry`).
 
 Real files, decoded with `opj_decompress` 2.5.0 from their bare
 codestreams and compared sample by sample (the files are not committed;
@@ -577,7 +581,7 @@ their licenses vary):
 | File | Quirk | Result |
 | ---- | ----- | ------ |
 | openjpeg-data `issue235.jp2`, `issue254.jp2`, `text_GBR.jp2` | `TPsot == TNsot` | bit-exact (5/3) |
-| openjpeg-data `issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2`; jpylyzer `jpx_disguised_as_jp2.jp2` | `TPsot == TNsot` | within 1 (9/7) |
+| openjpeg-data `issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2`; jpylyzer `jpx_disguised_as_jp2.jp2` (and `wrong-number-of-tileparts.jpf`, byte-identical to it) | `TPsot == TNsot` | within 1 (9/7) |
 | openjpeg-data `issue559-eci-090-CIELab.jp2` | `TPsot == TNsot` | within 2 (9/7, 16-bit) |
 | openjpeg-data `issue390.jp2` | `TPsot == TNsot` | both refuse a later fault |
 | openjpeg-data `db11217111510058.jp2` | COD and QCD restated | within 1 (9/7) |

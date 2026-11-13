@@ -806,8 +806,8 @@ struct Restated {
 /// Image Systems is one) repeat the main header's COD and QCD in every
 /// tile-part. OpenJPEG 2.5.0 reads a COD or QCD in any tile-part header
 /// (`J2K_STATE_TPH` in its marker table) and applies it to the whole tile; it
-/// dropped its "one COD per tile" check on purpose, because legal files broke
-/// on it (`opj_j2k_read_cod`, its issue 1043).
+/// dropped its "one COD per tile" check on purpose so that files like these
+/// decode (`opj_j2k_read_cod`, its issue 1043, a BAP bulk-scanner file).
 ///
 /// Here a restatement must change nothing, in this decoder's reading or in
 /// OpenJPEG's, and it is then dropped. OpenJPEG writes a COD over every
