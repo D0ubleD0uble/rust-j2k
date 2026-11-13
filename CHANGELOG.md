@@ -50,8 +50,10 @@ Adding `Image::jp2` and `Image::report` breaks no caller, since `Image` is
 `#[non_exhaustive]`. The other files that 0.3 decoded and that are now refused
 are listed in "Changed" (a code-block size past the limit in any COD or COC,
 and a POC marker that leaves out packets). Some decoded values changed with no
-error (an RGN maxshift with the bypass style, and a POC in a tile's first
-tile-part header; see "Fixed"), so output snapshots from 0.3 can differ.
+error (an RGN maxshift with the bypass style, a POC in a tile's first
+tile-part header, and 9/7 output, which can move by 1 on some samples now
+that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
+0.3 can differ.
 
 ### Added
 
@@ -319,6 +321,9 @@ tile-part header; see "Fixed"), so output snapshots from 0.3 can differ.
   `0xFF` fill the decoder appends (D.4.1). It was refused with "included
   code-block has coding passes but no coded bytes". The passes still count
   against the code-block work bound.
+- The 9/7 lifting constants β and δ are now the nearest `f32` values to the
+  standard's (Table F.4), as OpenJPEG's are. Each was one `f32` step off. 9/7
+  output moves by at most 1 on a few samples.
 
 ### Changed
 

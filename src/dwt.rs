@@ -46,12 +46,12 @@ use crate::pipeline::{Band, Bands, DetailBands, Samples, SubbandCoeffs};
 
 /// 9/7 lifting coefficients (ISO/IEC 15444-1 Table F.4): the two predict
 /// (`ALPHA`, `GAMMA`) and two update (`BETA`, `DELTA`) factors.
-/// Values are the ISO constants rounded to `f32` (the lifting runs in `f32`,
-/// matching OpenJPEG's reconstruction precision).
+/// Each value is the nearest `f32` to the ISO constant (the lifting runs in
+/// `f32`, matching OpenJPEG's reconstruction precision).
 const ALPHA: f32 = -1.586_134_3;
-const BETA: f32 = -0.052_980_12;
+const BETA: f32 = -0.052_980_117;
 const GAMMA: f32 = 0.882_911_1;
-const DELTA: f32 = 0.443_506_85;
+const DELTA: f32 = 0.443_506_87;
 /// 9/7 scaling constant `K` (Table F.4). On the inverse the low-pass samples
 /// are scaled by `K` and the high-pass samples by its reciprocal.
 const K: f32 = 1.230_174_1;
@@ -375,6 +375,19 @@ mod tests {
         for i in (high..n).step_by(2) {
             signal[i] *= K / 2.0;
         }
+    }
+
+    /// Each 9/7 constant is the nearest `f32` to its decimal value in ISO/IEC
+    /// 15444-1 Table F.4. Rounding the `f64` to `f32` is a correct nearest
+    /// rounding here: no value lies near enough to an `f32` midpoint for the
+    /// double rounding to matter.
+    #[test]
+    fn constants_are_the_nearest_f32_to_table_f4() {
+        assert_eq!(ALPHA, -1.586_134_342_059_924_f64 as f32);
+        assert_eq!(BETA, -0.052_980_118_572_961_f64 as f32);
+        assert_eq!(GAMMA, 0.882_911_075_530_934_f64 as f32);
+        assert_eq!(DELTA, 0.443_506_852_043_971_f64 as f32);
+        assert_eq!(K, 1.230_174_104_914_001_f64 as f32);
     }
 
     /// Whole-sample symmetric extension reflects about the edges without

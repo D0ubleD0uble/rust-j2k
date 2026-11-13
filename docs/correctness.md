@@ -63,11 +63,12 @@ const float two_invK = 1.625732422f;
 
 `1.625732422` is 5.4e-5 (3.3e-5 relative) short of `2/K`. This crate keeps the
 exact constant, because it is the standard's: Table F.4 gives `K`, and the
-subband gain of Table E-1 supplies the factor of two. OpenJPEG's constant,
-together with its rounding of the lifting constants β and δ ("Where the
-decoders differ" below), makes this decoder bit-exact against `opj_decompress`
-on `issue206_image-000.jp2`, `issue208.jp2`, both `issue559-eci-*` files and
-`jpx_disguised_as_jp2.jp2`, and on a synthetic sweep at 12 and 16 bits.
+subband gain of Table E-1 supplies the factor of two. Both decoders use the
+nearest `f32` to each lifting constant of Table F.4, so `two_invK` is the only
+difference: with it, this decoder is bit-exact against `opj_decompress` on
+`issue206_image-000.jp2`, `issue208.jp2`, both `issue559-eci-*` files,
+`db11217111510058.jp2` and `jpx_disguised_as_jp2.jp2`, and on a synthetic
+sweep at 12, 14 and 16 bits.
 
 The measurements support the standard's constant, though not uniformly:
 
@@ -83,7 +84,7 @@ The measurements support the standard's constant, though not uniformly:
   it does not decide the question.
 - On the lossy conformance entries the ISO references lean slightly the other
   way: OpenJPEG's constant lowers the MSE on 16 of the 26 graded components,
-  raises it on 3 and leaves 7 the same. No change exceeds 0.71%, and no peak
+  raises it on 3 and leaves 7 the same. No change exceeds 0.72%, and no peak
   error moves (#104).
 
 The error `two_invK` adds grows with the sample range, so the gap between the
@@ -762,18 +763,16 @@ their licenses vary):
 | openjpeg-data `123.j2c` | MCT on one component | bit-exact (5/3) |
 
 `issue559-eci-090-CIELab.jp2` decodes the same, in both decoders, with its
-counts edited to be right, so its difference of 2 (731 of 89888 samples of
+counts edited to be right, so its difference of 2 (740 of 89888 samples of
 component 0) is the 9/7 difference at 16 bits, not the correction. Every
 other committed fixture and conformance file decodes as it did before.
 
 The difference of 2 comes from the `2/K` constant. With both decoders dumping
 each stage of every tile-component, the dequantized coefficients agree
 bit-for-bit (all 269664 of them), and the first inverse-DWT level is the first
-stage that differs: 1122 of its 1134 values, by up to 1.07. The gap grows to
+stage that differs: 1121 of its 1134 values, by up to 1.08. The gap grows to
 1.91 at the last level, before rounding. With OpenJPEG's `two_invK` in place
-of `2/K`, the largest gap at the last level falls to 0.068 and the output is
-within 1 (769 samples of component 0 at 1). With OpenJPEG's β and δ as well,
-the file decodes bit-exact.
+of `2/K`, every stage agrees bit for bit and the file decodes bit-exact.
 
 ### Where the decoders differ
 
@@ -782,12 +781,6 @@ result on the same file:
 
 - the inverse 9/7's `2/K` constant ("When the oracle and the standard
   disagree" above);
-- the 9/7 lifting constants β and δ, which in `src/dwt.rs` are each one `f32`
-  step from OpenJPEG's. OpenJPEG's are the nearest `f32` values to the ISO
-  constants (Table F.4); these are not. The effect is small. Next to
-  OpenJPEG's `two_invK` they account for the last differences of 1 on
-  eci-090 (above). Next to the exact `2/K`, changing them leaves the largest
-  measured gap at each bit depth as it is;
 - the bypass switch under an RGN maxshift ("Bypass under a maxshift");
 - a tile-part POC that replaces the main header's (#269; "A tile-part POC
   overrides the main header's");
