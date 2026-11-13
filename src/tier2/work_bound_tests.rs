@@ -28,14 +28,16 @@ pub(crate) fn walk(bytes: &[u8]) -> Option<(u64, u64)> {
     let codestream = if bytes.starts_with(&[0xFF, 0x4F]) {
         bytes
     } else {
-        crate::jp2::parse(bytes).ok()?.codestream
+        crate::jp2::parse(bytes, &crate::WorkLimit::Default)
+            .ok()?
+            .codestream
     };
     let parsed = crate::codestream::parse_header(codestream).ok()?;
     let cs = crate::codestream::parse_tiles(codestream, parsed).ok()?;
     let mut left = u64::MAX;
     for (index, tile) in cs.tiles.iter().enumerate() {
         let header = cs.tile_header(index).ok()?;
-        decode_packets(&header, tile, &mut left).ok()?;
+        decode_packets(&header, tile, &mut left, u64::MAX).ok()?;
     }
     Some((u64::MAX - left, crate::tile_bytes(&cs)))
 }

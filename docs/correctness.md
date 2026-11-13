@@ -628,7 +628,12 @@ pairs that hold a precinct are checked, and RPCL sweeps no resolution
 where none does. Code-block
 entries that read a bit are not counted, since the header's bytes already
 pay for them. Past the bound the decode is `Limit`. It is one bound for the
-whole decode, not one per tile, and there is no option to change it.
+whole decode, not one per tile. `DecodeOptions::packet_work_limit`
+raises it (`WorkLimit::Raised(n)`, n times the floor and the rate) or lifts
+it (`WorkLimit::Unlimited`), for the walk `read_header_with` makes too (below).
+The POC bitmap stays capped at the default bound's size, so raising the
+bound raises the time a file may take, not its memory: past that size the
+packets read go in the set.
 
 A header of one byte can still step over each row of code-blocks in its
 precinct, and a positional order can sweep millions of positions that hold
@@ -766,6 +771,71 @@ it can spend about 1.25 times the decode's bound (`jp2_t2_sweep_cprl_tall` in
 walk's geometry bound of 2^14 code-blocks: `read_header` allocates for its
 walk, and a geometry bound at the decode's 2^19 code-blocks would let
 `read_header` hold about 75 MB for a 66 KB file.
+
+### The tier-1 work bound
+
+Each coding pass of a code-block scans all of the block's samples, however
+few bytes the pass carries, and a packet header can ask for a block's 88
+passes (3 x 30 - 2, for 30 bit-planes) in about 4 bytes. The decode counts
+the work of each tile as the passes the block decoder runs times each
+block's samples, before it decodes the tile's code-blocks. A block runs its
+passes, but no more than its coded bit-planes hold (`3 × top − 2`), and the
+blocks a resolution reduction drops are not counted. The decode may spend
+max(2^26, 2^15 × the tiles' data bytes) such sample-passes, one bound for
+every tile; past it the decode is `Limit` (owner decision on #250,
+2026-11-12). `DecodeOptions::code_block_work_limit` raises or lifts it.
+
+A sample-pass costs about 3.3 ns where the pass finds little to code, but
+7 to 8 ns on the data slowest to decode (every byte 0x4e), so the floor is
+about 0.5 s and the rate about 0.25 ms a byte. A crafted 1024^2 file of 64
+passes per block that spends the floor decodes in 0.49 s, and a 4096^2 file
+of 27 passes per block that fits just under the bound (14 KB) in 3.9 s,
+where `opj_decompress` takes 0.83 s. Measured on
+release builds (`scripts/gen-tier1-work-bound-fixtures.py`; `t1bomb` is one
+tile, no wavelet levels, every 64x64 code-block included with 88 passes
+and one byte; times are this decoder before this change, then after, then
+`opj_decompress` 2.5.0):
+
+| Shape | Size | Sample-passes | Before | After | OpenJPEG |
+| ----- | ---- | ------------- | ------ | ----- | -------- |
+| `t1bomb`, 8192^2 | 76 KB | 5.9e9 | decodes, 19.3 s | `Limit`, 6 ms | decodes, 9.0 s |
+| `t1bomb`, 1024^2 (committed) | 1.3 KB | 9.2e7 | decodes, 0.29 s | `Limit`, under 1 ms | decodes, 0.14 s |
+
+With the bound lifted, the 8192^2 file decodes in the same 19 s
+(`the_issue_bomb_decodes_with_the_limit_lifted`, ignored by default).
+
+The bound is about 2.35 times the most encoder output was seen to spend.
+Over the committed files, the conformance corpus and the real-world files,
+most spend under 120 sample-passes per byte; `budget/flat_1024_lossless`
+spends 7100 in 202 bytes, under the floor. Encoder output that spends the
+most per byte has many code-blocks that each run many passes for a few
+bytes. `opj_compress` 2.5.0 writes the most with no wavelet level
+(`-n 1`) on a flat image, where every block does: a flat 16-bit 8192^2
+image (221 KB) spends 13933 per byte, 42.5% of the bound, and RLCP,
+`-M 8` or 2048^2 tiles change little; flat 8-bit spends 7230, 22%. With one
+level (`-n 2`), a flat 16-bit image with 256 specks spends 12396, 38%. At
+the defaults, a flat 16-bit image with 4 to 64 sparse specks spends about
+5600, 17% (8192^2 with 64 specks is 20 KB). Smooth fields, noise and
+photographs (lossless and 9/7 at ratios from 20 to 10000, 16x16 to 64x64
+code-blocks) spend far less. The committed `opj_flat2048_16bit_n1`
+(2048^2, 16-bit, `-n 1`, 14 KB) spends 13933 per byte, 42.5%, and
+`opj_specks2048_16bit` (2048^2, 16-bit, 128 specks, 28 KB) 3600, 11%.
+`every_committed_file_decodes_far_below_the_tier1_work_bound` prints the
+table for the committed files and asserts each is under half the bound,
+which the worst encoder output seen passes with room.
+
+A crafted file can spend about 100000 per byte (88 passes over 4096
+samples for about 4 bytes of packet header and data), so the gap between
+what encoders write and what a file can ask for is only about 7 times.
+The bound cuts the worst case to a third of the unbounded one and refuses
+it before doing the work, but a file at the bound still takes about 0.25
+ms a byte, against the 0.2 to 0.7 µs a byte real data takes; a valid file
+a little past what was measured, such as a flat image coded with no
+wavelet level at a little more than twice the passes per byte, would be
+refused, and `code_block_work_limit` is the way to decode it. The rate
+stays 2^15 rather than 2^14, which would refuse the `-n 1` files, and it is
+scaled by the tile bytes, packet headers included, as the tier-2 bound is
+(orchestrator decisions on #278, 2026-11-12).
 
 ### Tile header cost
 

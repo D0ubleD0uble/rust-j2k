@@ -182,6 +182,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `log` from Arm's optimized-routines (MIT), so the ICC output does not
   depend on the platform's `libm`. Its notice is at the top of `math.rs` and
   in the README.
+- `DecodeOptions::packet_work_limit` and
+  `DecodeOptions::code_block_work_limit` raise or lift the decode's two
+  work bounds, for a valid file that goes past one: `WorkLimit::Default`
+  (the default), `WorkLimit::Raised(n)` for n times the bound, or
+  `WorkLimit::Unlimited`. The packet limit also bounds the walk
+  `read_header_with` makes of a `Psot = 0` tile. Raising it does not raise
+  the memory a POC sequence's packets are held in.
 
 ### Fixed
 
@@ -284,6 +291,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   can exceed it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
   819 bytes took 6.5 s and a 9 KB PCRL sweep 29 s; both are now refused in
   a fraction of a second. OpenJPEG has no such bound and decodes them.
+  `DecodeOptions::packet_work_limit` raises or lifts the bound.
+- Decoding the code-blocks is bounded: `decode` may run 2^26 sample-passes
+  (coding passes times code-block samples), or 2^15 per byte of tile data
+  when that is more. A tile past it is `Error::Limit` before any of its
+  code-blocks is decoded. Each pass scans its whole code-block however few
+  bytes it carries, so a 76 KB file of 8192^2 samples, every 64x64
+  code-block asking for 88 passes, took 19 s and is now refused in 6 ms.
+  A file just under the bound can still take about 0.5 s, or 0.25 ms a
+  byte. Encoder output seen spends up to 43% of the bound
+  (`opj_compress -n 1` on a flat 16-bit image). OpenJPEG has no such bound
+  and decodes the 76 KB file in 9 s.
+  `DecodeOptions::code_block_work_limit` raises or lifts the bound.
 - A resolution that holds no precinct costs less: it gets no band or
   code-block geometry, and the packet walk checks no component there. A tile
   of one sample at an odd origin has 32 such resolutions per component, so

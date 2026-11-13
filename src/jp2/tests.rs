@@ -491,7 +491,7 @@ fn a_second_jp2h_is_merged_into_the_first() {
         jp2c(),
     ]);
     assert_decodes_like_raw(&bytes);
-    let parsed = super::parse(&bytes).expect("parses");
+    let parsed = super::parse(&bytes, &crate::WorkLimit::Default).expect("parses");
     assert_eq!(parsed.header.ihdr.width, WIDTH, "the first ihdr wins");
     assert_eq!(parsed.header.colr().len(), 2, "both colr boxes, in order");
     assert_eq!(parsed.header.colr()[0], &colr()[8..]);
@@ -573,7 +573,7 @@ fn header_boxes_misplaced_before_jp2h_are_ignored() {
         jp2c(),
     ]);
     assert_decodes_like_raw(&bytes);
-    let parsed = super::parse(&bytes).expect("parses");
+    let parsed = super::parse(&bytes, &crate::WorkLimit::Default).expect("parses");
     assert_eq!(parsed.header.colr(), vec![&colr()[8..]]);
     assert_eq!(parsed.other.len(), 4);
 }
@@ -883,7 +883,7 @@ fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
         jp2c(),
         trailing.clone(),
     ]);
-    let parsed = super::parse(&bytes).expect("parses");
+    let parsed = super::parse(&bytes, &crate::WorkLimit::Default).expect("parses");
     let header = &parsed.header;
     assert_eq!(
         (

@@ -296,7 +296,7 @@ fn empty_resolutions_build_no_band_geometry() {
     // One empty packet, for the finest resolution's precinct.
     let data = [0u8];
     let tile = tile(&data);
-    let coded = decode_packets(&header, &tile, &mut decode_visits(0)).unwrap();
+    let coded = decode_packets(&header, &tile, &mut decode_visits(0), u64::MAX).unwrap();
     let resolutions = &coded.components[0].resolutions;
     assert_eq!(resolutions.len(), 33);
     type Band = (BandKind, (u32, u32), usize, usize, usize);
@@ -647,7 +647,7 @@ fn packet_two_blocks_partial_inclusion() {
 fn seed_codestream_parses() {
     let bytes = include_bytes!("../../tests/fixtures/jpeg2000_regular_latlon.j2k");
     let cs = crate::codestream::parse(bytes).unwrap();
-    let coded = decode_packets(&cs.header, &cs.tiles[0], &mut decode_visits(0)).unwrap();
+    let coded = decode_packets(&cs.header, &cs.tiles[0], &mut decode_visits(0), u64::MAX).unwrap();
 
     // opj_dump reports numresolutions = 5 (NL = 4): one LL packet + four detail
     // levels.
@@ -694,7 +694,7 @@ fn malformed_tile_data_never_panics() {
     for data in &cases {
         let t = tile(data);
         // The result is allowed to be either Ok or Err; only a panic would fail.
-        let _ = decode_packets(&h, &t, &mut decode_visits(0));
+        let _ = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX);
     }
 }
 
@@ -706,7 +706,7 @@ fn block_count_guard_rejects_metadata_bomb() {
     // 4096×4096 with 4×4 blocks: ~1.4M blocks across the ladder, over the 2^19 cap.
     let h = header(4096, 4096, 1, 2);
     let t = tile(&[]);
-    let err = decode_packets(&h, &t, &mut decode_visits(0))
+    let err = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX)
         .expect_err("guard fires before any packet parse");
     assert!(matches!(err, crate::Error::Limit(_)), "{err}");
 }
@@ -1185,7 +1185,8 @@ fn order_of_header(header: &MainHeader) -> Vec<(u32, usize, usize, usize)> {
         header,
         &walk,
         &std::cell::Cell::new(u64::MAX),
-        None,
+        u64::MAX,
+        true,
         |l, r, c, p| {
             seen.push((l, r, c, p));
             Ok(())
@@ -1440,7 +1441,7 @@ fn poc_emits_each_packet_once_across_overlapping_volumes() {
 
 /// `header`'s packets, walked with every visit to spare and its `POC`
 /// sequence's packets held in a bitmap only when they are at most
-/// `dense_bits`, as [`super::progression::for_each_packet_holding`] holds
+/// `dense_bits`, as [`super::progression::for_each_packet`] holds
 /// them.
 fn order_holding(header: &MainHeader, dense_bits: u64) -> Vec<(u32, usize, usize, usize)> {
     let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
@@ -1452,7 +1453,7 @@ fn order_holding(header: &MainHeader, dense_bits: u64) -> Vec<(u32, usize, usize
         geoms: &geoms,
     };
     let mut seen = Vec::new();
-    super::progression::for_each_packet_holding(
+    super::progression::for_each_packet(
         header,
         &walk,
         &std::cell::Cell::new(u64::MAX),
@@ -1560,7 +1561,8 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
             header,
             &walk,
             &std::cell::Cell::new(visits),
-            poc_bitmap,
+            poc_bitmap.unwrap_or(visits),
+            poc_bitmap.is_none(),
             |_, _, _, _| {
                 read += 1;
                 Ok(())
@@ -1620,7 +1622,7 @@ fn only_a_skip_from_the_set_is_charged() {
     let spent = |dense_bits: u64| {
         let visits = std::cell::Cell::new(u64::MAX);
         let mut read = 0u64;
-        super::progression::for_each_packet_holding(
+        super::progression::for_each_packet(
             &header,
             &walk,
             &visits,
@@ -1798,7 +1800,7 @@ fn the_poc_coverage_error_names_the_tile() {
     header.siz.tile_width = 16;
     let mut second = tile(&[]);
     second.index = 1;
-    match decode_packets(&header, &second, &mut decode_visits(0)) {
+    match decode_packets(&header, &second, &mut decode_visits(0), u64::MAX) {
         Err(Error::Codestream(m)) => assert!(
             m.contains("tile 1 leave out its packets of component 0, resolution 2,"),
             "{m}"

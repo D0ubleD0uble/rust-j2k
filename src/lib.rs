@@ -191,7 +191,24 @@ pub use jp2::{
 /// `Psot = 0` may first walk that tile as [`read_header_with`] does, under its
 /// own smaller bound, so its decode can take about 1.25 times as many steps.
 ///
+/// The work of decoding the code-blocks is bounded too. Each coding pass
+/// scans its whole code-block, however few bytes it carries, so the work is
+/// counted as the passes run times the code-block's samples, over every
+/// code-block decoded. It may come to at most 2^26 sample-passes, or 2^15
+/// per byte of tile data when that is more, for every tile together. On
+/// the data slowest to decode that is about 0.5 s, or 0.25 ms a byte. A
+/// tile past the bound is refused with [`Error::Limit`] before any of its
+/// code-blocks is decoded. A packet header can ask for 88 passes over 4096
+/// samples in about 4 bytes, so a 76 KB file could otherwise take 19 s.
+/// Encoder output seen spends up to about 14000 per byte, 43% of the bound
+/// (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
+///
+/// [`decode_with`] can raise or lift either bound, for a file from a source
+/// you trust: see [`DecodeOptions::packet_work_limit`] and
+/// [`DecodeOptions::code_block_work_limit`].
+///
 /// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound
+/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-1-work-bound
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -236,7 +253,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// fewer than 14 bytes per tile, is not walked, nor is a tile of more than
 /// 16384 code-blocks or precincts. The walk stops after 2^22 visits, or 8 per
 /// byte of the tile's data when that is more, counting the same steps as
-/// the decode's bound (see [`decode`]). Past a bound the codestream is taken to run to
+/// the decode's bound (see [`decode`]);
+/// [`packet_work_limit`](DecodeOptions::packet_work_limit) raises or lifts
+/// this bound as it does the decode's. Past a bound the codestream is taken to run to
 /// the end of the file, the rule for a `Psot = 0` tile-part the check does
 /// not apply to, and [`decode_with`] takes it the same way.
 ///
@@ -427,6 +446,63 @@ pub struct DecodeOptions {
     /// What color space the color channels come out in. Default
     /// [`ColorOutput::AsCoded`].
     pub color: ColorOutput,
+    /// How much work reading the packet headers may take, against the bound
+    /// described on [`decode`]. Default [`WorkLimit::Default`].
+    ///
+    /// This also bounds the walk of a `Psot = 0` tile that [`read_header_with`]
+    /// describes, so [`read_header_with`] takes the same option.
+    pub packet_work_limit: WorkLimit,
+    /// How much work decoding the code-blocks may take, against the bound
+    /// described on [`decode`]. Default [`WorkLimit::Default`].
+    pub code_block_work_limit: WorkLimit,
+}
+
+/// How much work a decode may take against one of its work bounds: the
+/// [`DecodeOptions::packet_work_limit`] and
+/// [`DecodeOptions::code_block_work_limit`] options.
+///
+/// Each bound scales with the size of the file, so a small file cannot ask
+/// for minutes of work (see [`decode`]). A valid file can still go past a
+/// bound, when it codes many samples in very few bytes: raise the limit, or
+/// lift it, to decode such a file from a source you trust.
+///
+/// ```
+/// use rust_j2k::{DecodeOptions, WorkLimit};
+///
+/// // Ten times the default bound for the code-blocks, and no bound on the
+/// // packet headers.
+/// let options = DecodeOptions::default()
+///     .with_code_block_work_limit(WorkLimit::Raised(10))
+///     .with_packet_work_limit(WorkLimit::Unlimited);
+/// assert_eq!(options.code_block_work_limit, WorkLimit::Raised(10));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WorkLimit {
+    /// The bound as [`decode`] describes it.
+    #[default]
+    Default,
+    /// The default bound times this factor: both its floor and the work it
+    /// allows per byte. `Raised(1)` sets the same bound as `Default`, though
+    /// the two do not compare equal. `Raised(0)` is
+    /// [`Error::InvalidOptions`].
+    Raised(u32),
+    /// No bound on this work. The decode does all the work the file asks
+    /// for, however long that takes. The other limits stay in force: the
+    /// image-area cap, the code-block-count cap, and the cap on the memory
+    /// that remembers which packets a POC sequence has read.
+    Unlimited,
+}
+
+impl WorkLimit {
+    /// The bound this limit sets, from the default bound `bound`.
+    pub(crate) fn apply(&self, bound: u64) -> u64 {
+        match self {
+            WorkLimit::Default => bound,
+            WorkLimit::Raised(factor) => bound.saturating_mul(u64::from(*factor)),
+            WorkLimit::Unlimited => u64::MAX,
+        }
+    }
 }
 
 impl DecodeOptions {
@@ -473,6 +549,36 @@ impl DecodeOptions {
         self.color = color;
         self
     }
+
+    /// These options with [`packet_work_limit`](Self::packet_work_limit)
+    /// set to `limit`.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, WorkLimit};
+    ///
+    /// let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(4));
+    /// assert_eq!(options.packet_work_limit, WorkLimit::Raised(4));
+    /// ```
+    #[must_use]
+    pub fn with_packet_work_limit(mut self, limit: WorkLimit) -> Self {
+        self.packet_work_limit = limit;
+        self
+    }
+
+    /// These options with
+    /// [`code_block_work_limit`](Self::code_block_work_limit) set to `limit`.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, WorkLimit};
+    ///
+    /// let options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Unlimited);
+    /// assert_eq!(options.code_block_work_limit, WorkLimit::Unlimited);
+    /// ```
+    #[must_use]
+    pub fn with_code_block_work_limit(mut self, limit: WorkLimit) -> Self {
+        self.code_block_work_limit = limit;
+        self
+    }
 }
 
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
@@ -502,6 +608,17 @@ fn check_options(options: &DecodeOptions) -> Result<()> {
              output"
                 .into(),
         ));
+    }
+    for (name, limit) in [
+        ("packet", &options.packet_work_limit),
+        ("code-block", &options.code_block_work_limit),
+    ] {
+        if *limit == WorkLimit::Raised(0) {
+            return Err(Error::InvalidOptions(format!(
+                "a {name} work limit raised by a factor of 0; the default is \
+                 `WorkLimit::Default`"
+            )));
+        }
     }
     Ok(())
 }
@@ -563,7 +680,7 @@ struct Jp2Prefix<'a> {
 /// has decoded, are checked next, then the sRGB step is planned; all of it
 /// before any tile is read.
 fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Prefix<'a>> {
-    let file = jp2::parse(bytes)?;
+    let file = jp2::parse(bytes, &options.packet_work_limit)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
     jp2::check_against_siz(&file.header, siz)?;
@@ -621,9 +738,17 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
     // tile boundary — that is what tiling is for — so the tiles meet only at the
     // end, when each writes its rectangle of the canvas.
     let mut canvas = image::Canvas::new(&cs.header, reduction)?;
-    // One work bound for every tile's packet walk, in proportion to the
-    // tiles' data, so that many small tiles cannot each spend a floor's worth.
-    let mut visits = tier2::decode_visits(tile_bytes(&cs));
+    // One work bound for every tile's packet walk, and one for every tile's
+    // code-blocks, in proportion to the tiles' data, so that many small
+    // tiles cannot each spend a floor's worth. A POC sequence's bitmap stays
+    // within the default bound however far the caller raises it.
+    let bytes = tile_bytes(&cs);
+    let poc_bitmap = tier2::decode_visits(bytes);
+    let mut visits = options.packet_work_limit.apply(poc_bitmap);
+    let mut block_work = match &options.code_block_work_limit {
+        WorkLimit::Unlimited => None,
+        limit => Some(limit.apply(tier1::decode_work(bytes))),
+    };
     for (index, tile) in cs.tiles.iter().enumerate() {
         // The tile's own parameters: the main header with this tile's tile-part
         // header resolved over it. A tile with no markers of its own borrows the
@@ -639,10 +764,21 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // component. The walk covers every resolution whatever the reduction:
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
-        let coded = tier2::decode_packets(&header, tile, &mut visits)?;
+        let coded = tier2::decode_packets(&header, tile, &mut visits, poc_bitmap)?;
         // Tier-1: MQ + EBCOT bit-plane decode each code block into subband
         // coeffs. The dropped resolutions' code-blocks are skipped, never
-        // decoded.
+        // decoded. Their work is counted first, so a tile past the bound is
+        // refused before any of it is done.
+        if let Some(left) = &mut block_work {
+            let work = tier1::work(&header, &coded, reduction);
+            *left = left.checked_sub(work).ok_or_else(|| {
+                Error::Limit(format!(
+                    "code-block decoding exceeds its work bound: tile {index} needs \
+                     {work} sample-passes, {left} are left (see \
+                     `DecodeOptions::code_block_work_limit`)"
+                ))
+            })?;
+        }
         let coeffs = tier1::decode_code_blocks(&header, &coded, reduction)?;
 
         // Dequantize, then invert the DWT per resolution level into samples.
