@@ -11,7 +11,7 @@
 //! filter on the file name (cargo passes its own `--bench` flag, which is
 //! ignored).
 //!
-//! The conformance and `jp2_real` fixtures are left out of the published
+//! The conformance and `bench` fixtures are left out of the published
 //! package, so every file is read at run time and a missing one is skipped
 //! with a note.
 
@@ -34,11 +34,16 @@ const FIXTURES: &[&str] = &[
 ];
 
 fn main() {
-    let iters = std::env::var("RUST_J2K_BENCH_ITERS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(10);
+    let iters = match std::env::var("RUST_J2K_BENCH_ITERS") {
+        Err(_) => 10,
+        Ok(v) => match v.parse::<usize>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                eprintln!("note: RUST_J2K_BENCH_ITERS={v:?} is not a positive integer; using 10");
+                10
+            }
+        },
+    };
     let filters: Vec<String> = std::env::args()
         .skip(1)
         .filter(|a| !a.starts_with('-'))
@@ -65,7 +70,8 @@ fn main() {
     }
 
     let options = DecodeOptions::default();
-    println!("rust-j2k decode bench: 1 warm-up, then {iters} timed iterations; times in ms");
+    let plural = if iters == 1 { "" } else { "s" };
+    println!("rust-j2k decode bench: 1 warm-up, then {iters} timed iteration{plural}; times in ms");
     println!(
         "{:<28} {:>9} {:>9} {:>9} {:>9}",
         "file", "median", "min", "max", "KiB"
