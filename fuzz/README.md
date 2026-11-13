@@ -29,6 +29,8 @@ fuzz/
   j2k.dict                      # J2K marker dictionary for the codestream-reading targets
   jp2.dict                      # JP2 box-type dictionary for jp2_boxes
   fuzz_targets/decode.rs        # the public entry point: rust_j2k::decode(&[u8])
+  fuzz_targets/decode_partial.rs # decode_with, strict off, whole and cut, against the strict decode
+  common/partial.rs             # the strict-off check decode_partial and tile_body share
   fuzz_targets/tile_body.rs     # a pinned valid header (geometry steered) around fuzzed tile-part bytes
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
@@ -137,6 +139,18 @@ of 160 for RGB 16-bit and 15 of 27 for gray. The script exits if the target's
 longer has the lines `let Some((&variant, profile)) = data.split_first()` and
 `if fnv1a(profile) % BUILD_EVERY != 0 {`.
 
+`decode_partial` decodes each input with `strict` off, whole and cut at a
+point a hash of the input picks, at reduction 0 or 1. `common/partial.rs`
+checks each result against the strict decode of the same bytes: when the
+strict decode gives an image, the decode with `strict` off gives an equal
+`Image`, report included: `DecodeReport::default()`, at any reduction. Every report must
+stay within its bound (five entries per `SOT` marker code in the input, plus
+two), a tile with leftover bytes must leave `complete_reduction` at `None`,
+and a complete report must hold no missing tiles. `tile_body` makes the same
+check on each of its inputs, so the steered shapes (POC, packed headers,
+tile-parts) reach the strict-off walk too. Seed `decode_partial` as
+`decode`.
+
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
 `tile_body`): mutation almost never synthesizes a two-byte marker code, and
@@ -166,6 +180,11 @@ cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus
 # may declare an image at the 2^28-sample default limit, which peaks at about
 # 1.4 GiB, or about 2 GiB while a palette expands, so give it 4 GiB as CI does.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
+
+# The same with strict off, against the strict decode.
+mkdir -p fuzz/corpus/decode_partial
+cp fuzz/corpus/decode/* fuzz/corpus/decode_partial/
+cargo +nightly fuzz run decode_partial -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
 # The JP2 box target, seeded from the ISO/IEC 15444-4 JP2 reader files and
 # the synthetic JP2 fixtures.
@@ -200,6 +219,8 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-01 | `icc_srgb` | `gen-icc-oracles.py --fuzz-seeds` (136 seeds), `icc.dict` | 61 s, 11 137 runs, under `nice` | no crash, leak, or timeout |
 | 2026-11-11 | `icc_srgb`, profile read on every input and the transform built for one in 16 | `gen-icc-oracles.py --fuzz-seeds` (349 seeds and 185 `_build` copies), `icc.dict` | 31 s, 17 471 runs (563 exec/s, coverage 3344; `main` on its 349 seeds: 21 exec/s, coverage 3278), `nice -n 19`, one job | no crash, leak, or timeout |
 | 2026-11-12 | the pre-release smoke: `decode`, `tile_body`, `tier1_block`, `mq`, `jp2_boxes`, `header`, `icc_srgb`, one after another with the CI step's options | the CI seeding (`gen-jp2-fuzz-seeds.py`, 160 seeds; the fixtures for `header`; `gen-icc-oracles.py --fuzz-seeds`) | 61, 46, 31, 16, 31, 31 and 31 s; 4 433 646, 182 668, 19 952, 242 767, 14 211, 9 216 and 1 620 runs; `nice -n 19`, one job | no crash, leak, or timeout |
+| 2026-11-13 | `decode_partial`, and `tile_body` with the strict-off check | `decode`'s seeding (923 inputs after earlier runs), and `tile_body`'s corpus (1 478 inputs), `j2k.dict` not passed | 61 s each; 7 256 and 27 382 runs; `nice`, one job | no crash, leak, or timeout. An earlier `decode_partial` run saved a slow unit: a 1 MiB codestream of a 2048 x 2048 image whose tile 37 is cut, which the partial decode reads in 0.54 s (release) and the instrumented build in 12 s over its four decodes |
+| 2026-11-13 | `decode_partial` after the review fixes (packed headers, `Image` equality) | the same corpus | 61 s, 6 042 runs; `nice`, one job | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

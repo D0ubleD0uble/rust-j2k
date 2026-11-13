@@ -35,13 +35,22 @@ use rust_j2k::{
 /// in tile 0, which only the decode's tile geometry finds. The
 /// `poc_coverage/*_missing` files and `poc_precedence/poc_tile_leaves_out_packets`
 /// carry POC volumes that leave out packets of the tile, which only the
-/// decode's packet walk checks.
+/// decode's packet walk checks. `partial/overlap.j2k` and `partial/tp_r.j2k`
+/// leave bytes after the last packet of a tile, which only the decode reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
     ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
+    (
+        "partial/overlap.j2k",
+        "bytes left after the last packet (duplicate packets)",
+    ),
+    (
+        "partial/tp_r.j2k",
+        "bytes left after the last packet (a phantom packet)",
+    ),
     (
         "poc_coverage/poc_comp_missing.j2k",
         "POC leaves out packets",

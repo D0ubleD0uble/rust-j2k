@@ -19,6 +19,7 @@ use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
+use crate::report::ReportEntry;
 use crate::{Error, Result};
 use markers::{
     Cod, Coding, ComponentParams, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent,
@@ -106,9 +107,18 @@ pub struct Tile<'a> {
     /// decode, a tile with no markers runs under the main header itself,
     /// borrowed; a tile with markers is resolved in full, in time and memory
     /// proportional to the component count, and the decode then spends at least
-    /// that much on the tile's components anyway.
+    /// that much on the tile's components anyway: it builds every
+    /// component's geometry before it reads a packet. That holds with
+    /// `strict` off too, where the decode goes on past a tile whose data runs
+    /// out: a tile with no tile-part at all is never resolved, and every
+    /// tile that is resolved builds its geometry. A tile-component holds at
+    /// least one sample (SIZ refuses an empty one), so the copies cost at most
+    /// `tiles × components`, no more than the image's samples.
     pub header: TileHeader,
     pub data: Cow<'a, [u8]>,
+    /// Where each tile-part's data ends in [`data`](Self::data), in `TPsot`
+    /// order, so a report can name the tile-part a byte offset falls in.
+    pub part_ends: Vec<usize>,
     /// The tile's packed packet headers (`PPT`), concatenated across its
     /// tile-parts; empty when the headers are inline with the bodies. When
     /// non-empty, Tier-2 reads every packet header from here and every packet
@@ -117,10 +127,25 @@ pub struct Tile<'a> {
 }
 
 /// A parsed codestream: the main header plus every tile, in tile-index order.
+///
+/// A strict walk refuses a codestream that lacks a tile, so it holds them
+/// all. With `strict` off a missing tile is left out of `tiles` and reported
+/// in `entries`, with whatever else the walk found missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Codestream<'a> {
     pub header: MainHeader,
     pub tiles: Vec<Tile<'a>>,
+    /// What a walk with `strict` off found missing; always empty when strict.
+    pub entries: Vec<ReportEntry>,
+}
+
+impl Tile<'_> {
+    /// The tile-part that byte `offset` of [`data`](Self::data) falls in, or
+    /// the last one for an offset at or past the end.
+    pub fn part_at(&self, offset: usize) -> u8 {
+        let part = self.part_ends.partition_point(|&end| end <= offset);
+        part.min(self.part_ends.len().saturating_sub(1)) as u8
+    }
 }
 
 impl Codestream<'_> {
@@ -177,8 +202,19 @@ pub fn parse_header(bytes: &[u8]) -> Result<ParsedHeader> {
 
 /// Walk the tile-parts of the codestream whose main header `parsed` holds, and
 /// check every tile's header.
+#[cfg(test)]
 pub fn parse_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
-    let codestream = split_tiles(bytes, parsed)?;
+    parse_tiles_with(bytes, parsed, true)
+}
+
+/// [`parse_tiles`], or with `strict` false, the walk that takes missing data
+/// as missing rather than refusing it (see [`walk_tiles`]).
+pub fn parse_tiles_with(
+    bytes: &[u8],
+    parsed: ParsedHeader,
+    strict: bool,
+) -> Result<Codestream<'_>> {
+    let codestream = split_tiles_with(bytes, parsed, strict)?;
 
     // Check every tile's header once, here, so a malformed tile-part header is
     // a parse error rather than a surprise partway through a decode. A header is
@@ -427,13 +463,23 @@ fn tile_header_is_valid(
 /// reads one tile and resolves just that one with [`Codestream::tile_header`].
 /// Resolving them all costs `tiles × components`.
 pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
+    split_tiles_with(bytes, parsed, true)
+}
+
+/// [`split_tiles`], strict or not (see [`walk_tiles`]).
+fn split_tiles_with(bytes: &[u8], parsed: ParsedHeader, strict: bool) -> Result<Codestream<'_>> {
     let ParsedHeader {
         header,
         sot_offset,
         ppm,
     } = parsed;
-    let tiles = walk_tiles(bytes, sot_offset, &header, &ppm)?;
-    Ok(Codestream { header, tiles })
+    let mut entries = Vec::new();
+    let tiles = walk_tiles(bytes, sot_offset, &header, &ppm, strict, &mut entries)?;
+    Ok(Codestream {
+        header,
+        tiles,
+        entries,
+    })
 }
 
 /// A tile-part header's own markers (A.4.2): the tile-level COD/QCD defaults and
@@ -494,11 +540,21 @@ struct TileParts<'a> {
 /// A `Psot` overrun, an out-of-range or out-of-order `TPsot`, a `TNsot` that
 /// disagrees with the parts that arrive, a missing tile, or a missing `EOC` all
 /// reject with [`Error::Codestream`].
+///
+/// With `strict` false, missing data is taken as missing and recorded in
+/// `entries`, and only that: the input may end anywhere after the first
+/// `SOT` (inside a tile-part, its header or the next `SOT`), with or without
+/// an `EOC`; a tile with no tile-part is left out; and `TNsot` is advisory, so
+/// a tile may carry fewer or more tile-parts than it declares. Every other
+/// fault is refused as in a strict walk, including a `TPsot` out of order or
+/// with a gap, since the packets after a gap cannot be placed.
 fn walk_tiles<'a>(
     bytes: &'a [u8],
     sot_offset: usize,
     main: &MainHeader,
     ppm: &[Vec<u8>],
+    strict: bool,
+    entries: &mut Vec<ReportEntry>,
 ) -> Result<Vec<Tile<'a>>> {
     let tile_count = main.siz.num_tiles() as usize;
     // `PPM` (main header) supplies one packet-header chunk per tile-part in
@@ -524,6 +580,12 @@ fn walk_tiles<'a>(
 
     let mut part_offset = sot_offset;
     loop {
+        // Not strict: input that ends inside the `SOT` marker segment ends the
+        // codestream there. `SOT` is always 12 bytes (Lsot = 10).
+        if !strict && bytes.len().saturating_sub(part_offset) < 12 {
+            entries.push(ReportEntry::MissingEoc);
+            break;
+        }
         let mut cur = Cursor::at(bytes, part_offset);
         // `parse_main_header` stopped on the first SOT and the loop below only
         // continues when it has just read one, so this is always present.
@@ -556,7 +618,9 @@ fn walk_tiles<'a>(
         // that does state one must agree with every other that does.
         if sot.num_tile_parts != 0 {
             let stated = u16::from(sot.num_tile_parts) + count_correction;
-            if u16::from(sot.tile_part_index) >= stated {
+            // Not strict, the count is advisory: a part past it is read, and
+            // the difference reported once the walk ends.
+            if strict && u16::from(sot.tile_part_index) >= stated {
                 return Err(Error::Codestream(format!(
                     "tile {index} tile-part {} of a declared {stated} tile-parts",
                     sot.tile_part_index,
@@ -573,7 +637,30 @@ fn walk_tiles<'a>(
         }
 
         let first_part = sot.tile_part_index == 0;
-        let (tile_header, packed) = read_tile_part_header(&mut cur, &main.siz, first_part)?;
+        // Not strict, a tile-part the input ends inside (its `Psot` runs past
+        // the end, or it has none) may end inside its header too. Then the
+        // codestream ends at this tile-part, and none of it is read.
+        let cut = !strict
+            && (sot.psot == 0
+                || part_offset
+                    .checked_add(sot.psot as usize)
+                    .is_none_or(|end| end > bytes.len()));
+        let (tile_header, packed) = match read_tile_part_header(&mut cur, &main.siz, first_part) {
+            Ok(read) => read,
+            Err(_) if cut => {
+                if sot.psot != 0 {
+                    entries.push(ReportEntry::TruncatedTilePart {
+                        tile: u32::from(sot.tile_index),
+                        tile_part: sot.tile_part_index,
+                        declared: u64::from(sot.psot),
+                        present: (bytes.len() - part_offset) as u64,
+                    });
+                }
+                entries.push(ReportEntry::MissingEoc);
+                break;
+            }
+            Err(error) => return Err(error),
+        };
         if first_part {
             tile.header = tile_header;
         } else {
@@ -625,20 +712,37 @@ fn walk_tiles<'a>(
         // EOC) is therefore deliberate: with no declared length there is nothing
         // else to anchor to.
         let data_end = if sot.psot == 0 {
-            bytes
-                .len()
-                .checked_sub(2)
-                .filter(|&end| end >= data_start)
-                .ok_or_else(|| {
-                    Error::Codestream(
+            match bytes.len().checked_sub(2).filter(|&end| end >= data_start) {
+                Some(end) => end,
+                // Not strict, the codestream ends within two bytes of the
+                // header: the tile-part has no data, and its packets are
+                // missing.
+                None if !strict => data_start,
+                None => {
+                    return Err(Error::Codestream(
                         "Psot=0 tile-part has fewer than two bytes after its header".into(),
-                    )
-                })?
+                    ));
+                }
+            }
         } else {
-            let end = part_offset
+            let end = match part_offset
                 .checked_add(sot.psot as usize)
                 .filter(|&end| end <= bytes.len())
-                .ok_or_else(|| Error::Codestream("Psot overruns the codestream".into()))?;
+            {
+                Some(end) => end,
+                // Not strict, a tile-part cut short is read as far as it goes,
+                // and the codestream ends there.
+                None if !strict => {
+                    entries.push(ReportEntry::TruncatedTilePart {
+                        tile: u32::from(sot.tile_index),
+                        tile_part: sot.tile_part_index,
+                        declared: u64::from(sot.psot),
+                        present: (bytes.len() - part_offset) as u64,
+                    });
+                    bytes.len()
+                }
+                None => return Err(Error::Codestream("Psot overruns the codestream".into())),
+            };
             if end < data_start {
                 return Err(Error::Codestream(
                     "Psot is shorter than the tile-part header".into(),
@@ -670,6 +774,11 @@ fn walk_tiles<'a>(
         if sot.psot == 0 {
             break;
         }
+        // Not strict, a tile-part cut short ends the codestream.
+        if data_end == bytes.len() && !strict {
+            entries.push(ReportEntry::MissingEoc);
+            break;
+        }
 
         // Another SOT continues the walk; EOC ends it. Anything else — or
         // nothing at all — means the tile-part chain does not close.
@@ -681,36 +790,67 @@ fn walk_tiles<'a>(
                     "expected SOT or EOC after a tile-part, found {other:#06X}"
                 )));
             }
+            // Not strict, the input may end after any tile-part.
+            None if !strict => {
+                entries.push(ReportEntry::MissingEoc);
+                break;
+            }
             None => return Err(Error::Codestream("missing EOC after the tile-part".into())),
         }
     }
 
     // Every PPM chunk maps to one tile-part; leftover chunks mean the main header
-    // packed headers for tile-parts the codestream never carried.
-    if ppm_seq != ppm.len() {
+    // packed headers for tile-parts the codestream never carried. Not strict,
+    // a codestream that ends early may not reach the last of them.
+    let ended_early = entries.last() == Some(&ReportEntry::MissingEoc);
+    if ppm_seq != ppm.len() && !(ended_early && ppm_seq < ppm.len()) {
         return Err(Error::Codestream(format!(
             "PPM carries {} packet-header chunk(s) but the codestream has {ppm_seq} tile-part(s)",
             ppm.len(),
         )));
     }
 
-    tiles
-        .into_iter()
-        .enumerate()
-        .map(|(index, tile)| {
-            if tile.parts.is_empty() {
+    let mut found = Vec::with_capacity(tiles.len());
+    // Not strict: the run of missing tiles being gathered, as (first, end).
+    let mut missing: Option<(u32, u32)> = None;
+    for (index, tile) in tiles.into_iter().enumerate() {
+        if tile.parts.is_empty() {
+            if strict {
                 return Err(Error::Codestream(format!(
                     "the codestream carries no tile-part for tile {index}"
                 )));
             }
-            if let Some(declared) = tile.declared_parts {
-                if usize::from(declared) != tile.parts.len() {
+            let index = index as u32;
+            missing = Some(missing.map_or((index, index + 1), |(first, _)| (first, index + 1)));
+            continue;
+        }
+        if let Some((first, end)) = missing.take() {
+            entries.push(ReportEntry::MissingTiles { tiles: first..end });
+        }
+        if let Some(declared) = tile.declared_parts {
+            if usize::from(declared) != tile.parts.len() {
+                if strict {
                     return Err(Error::Codestream(format!(
                         "tile {index} declares {declared} tile-parts but carries {}",
                         tile.parts.len()
                     )));
                 }
+                entries.push(ReportEntry::TilePartCountMismatch {
+                    tile: index as u32,
+                    declared,
+                    found: tile.parts.len() as u16,
+                });
             }
+        }
+        found.push((index, tile));
+    }
+    if let Some((first, end)) = missing {
+        entries.push(ReportEntry::MissingTiles { tiles: first..end });
+    }
+
+    found
+        .into_iter()
+        .map(|(index, tile)| {
             // One part: borrow it. Several: join them, which is exact — a
             // tile-part holds a whole number of packets (B.9), so nothing
             // straddles the seam.
@@ -718,10 +858,19 @@ fn walk_tiles<'a>(
                 Ok([only]) => Cow::Borrowed(only),
                 Err(_) => Cow::Owned(tile.parts.concat()),
             };
+            let part_ends = tile
+                .parts
+                .iter()
+                .scan(0, |end, part| {
+                    *end += part.len();
+                    Some(*end)
+                })
+                .collect();
             Ok(Tile {
                 index: index as u32,
                 header: tile.header,
                 data,
+                part_ends,
                 packed_headers: tile.packed_headers,
             })
         })

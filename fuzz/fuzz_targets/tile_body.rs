@@ -25,8 +25,15 @@
 //!   the tiles (shape 6);
 //! - the PPM / PPT packed packet-header split, each stitched from two
 //!   out-of-order marker segments (shape 7).
+//!
+//! Each input is decoded strict and then with `strict` off, and the two are
+//! checked against each other as `decode_partial` checks them
+//! (`common/partial.rs`).
 
 use libfuzzer_sys::fuzz_target;
+
+#[path = "../common/partial.rs"]
+mod partial;
 
 /// `marker + Lmarker (counting itself) + body`.
 fn seg(marker: u16, body: &[u8]) -> Vec<u8> {
@@ -231,5 +238,10 @@ fuzz_target!(|data: &[u8]| {
     let Some((&variant, body)) = data.split_first() else {
         return;
     };
-    let _ = rust_j2k::decode(&wrap(variant, body));
+    // The strict decode, then the same bytes with `strict` off, which reads
+    // a body that runs short or long instead of refusing it.
+    let bytes = wrap(variant, body);
+    let options = rust_j2k::DecodeOptions::default();
+    let strict = rust_j2k::decode_with(&bytes, &options);
+    partial::check(&bytes, &options, &strict);
 });

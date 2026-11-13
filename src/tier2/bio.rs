@@ -21,6 +21,8 @@ pub struct BitReader<'a> {
     buf: u32,
     /// Bits left to read from `buf`'s low byte before the next [`Self::bytein`].
     ct: i32,
+    /// Whether a byte past the end of `data` has been pulled in.
+    overran: bool,
 }
 
 impl<'a> BitReader<'a> {
@@ -31,6 +33,7 @@ impl<'a> BitReader<'a> {
             pos: 0,
             buf: 0,
             ct: 0,
+            overran: false,
         }
     }
 
@@ -43,6 +46,8 @@ impl<'a> BitReader<'a> {
         let byte = self.data.get(self.pos).copied().unwrap_or(0xFF);
         if self.pos < self.data.len() {
             self.pos += 1;
+        } else {
+            self.overran = true;
         }
         self.buf |= byte as u32;
     }
@@ -75,6 +80,12 @@ impl<'a> BitReader<'a> {
             self.bytein();
         }
         self.ct = 0;
+    }
+
+    /// Whether the reader has pulled in a byte past the end of `data`: the
+    /// header it read does not fit in the bytes there are.
+    pub fn overran(&self) -> bool {
+        self.overran
     }
 
     /// Whole bytes consumed from `data` so far. Meaningful at a byte boundary —
