@@ -29,6 +29,7 @@ const FIXTURES: &[&str] = &[
     "tests/fixtures/conformance/codestreams/p0_05.j2k",
     "tests/fixtures/conformance/codestreams/p1_03.j2k",
     "tests/fixtures/conformance/jp2/files/file7.jp2",
+    "tests/fixtures/bench/grib2_shape_1440x721_u16.j2k",
     "tests/fixtures/jpeg2000_regular_latlon.j2k",
 ];
 

@@ -63,9 +63,10 @@ file                            median       min       max       KiB
 p0_08.j2k                      2065.03   1636.32   2574.55      3732
 ```
 
-The set covers 5/3 and 9/7, MCT, a JP2 and a small GRIB2 codestream. The
+The set covers 5/3 and 9/7, MCT, a JP2, a GRIB2-shaped codestream
+(`tests/fixtures/bench/`, in the package) and a small real GRIB2 one. The
 conformance and `jp2_real` fixtures are not in the published package, so a
-missing file is skipped with a note. A full run takes about a minute.
+missing file is skipped with a note. A full run takes a minute or two.
 
 - `RUST_J2K_BENCH_ITERS=N` sets the timed iterations (default 10).
 - `RUST_J2K_BENCH_DIR=<dir>` also times every `.j2k`, `.j2c`, `.jp2` and
