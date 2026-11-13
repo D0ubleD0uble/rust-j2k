@@ -410,6 +410,26 @@ keeps the generated codestreams between runs. The oracles assume LittleCMS
 2.14 (Ubuntu 24.04's `liblcms2-2`) and OpenJPEG 2.5.0 on x86-64; the script
 prints the library version it loaded.
 
+### Benchmark fixture
+
+`bench/grib2_shape_1440x721_u16.j2k` is a synthetic codestream for
+`benches/decode.rs`, the size and shape of an operational GRIB2 template 5.40
+message: 1440x721, one 16-bit component, one tile, 5/3, 5 levels, 1 layer,
+64x64 code-blocks, LRCP, maximum precincts, no SOP, EPH, TLM or PLT. The
+samples are a smooth field plus Gaussian noise from a fixed seed (20261113);
+no external data. It is 692 KB.
+
+```sh
+python3 scripts/gen-grib2-shape-bench-fixture.py
+# which runs, on the raw big-endian u16 samples:
+#   opj_compress -F 1440,721,1,16,u -n 6 -b 64,64 -p LRCP -r 3
+#   opj_decompress -i grib2_shape_1440x721_u16.j2k -o out.pgx
+```
+
+Both tools are OpenJPEG 2.5.0. `grib2_shape_1440x721_u16.expected.json` holds
+the FNV-1a digest of `opj_decompress`'s samples (little-endian `u16`, raster
+order). `tests/bench_fixture.rs` requires our decode to match it exactly.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
