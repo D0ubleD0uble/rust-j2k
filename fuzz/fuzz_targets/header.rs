@@ -4,9 +4,10 @@
 //! Same contract as `decode`: a typed result for every input, never a panic,
 //! an allocation sized from an unchecked field, or a hang. Every input is run
 //! under a fixed list of option sets (the defaults, `raw_channels`, a
-//! resolution reduction of 1, sRGB output, and reduction 1 with sRGB), so a
-//! plain `.j2k` or `.jp2` seed is used as it is. `raw_channels` is left out
-//! for a raw codestream, where it repeats the defaults. The header is read
+//! resolution reduction of 1, sRGB output, reduction 1 with sRGB, and the
+//! sample limit lifted), so a plain `.j2k` or `.jp2` seed is used as it is.
+//! `raw_channels` is left out for a raw codestream, where it repeats the
+//! defaults. The header is read
 //! under every set; the full decode that follows a header that reads runs
 //! under one of the sets whose header read, picked by a hash of the input, to
 //! keep the target fast. For each set it checks that
@@ -39,6 +40,11 @@ fuzz_target!(|data: &[u8]| {
         default.clone().with_resolution_reduction(1),
         srgb(),
         srgb().with_resolution_reduction(1),
+        // The sample limit lifted: the header checks the address-space
+        // ceiling instead of the default limit.
+        default
+            .clone()
+            .with_sample_limit(rust_j2k::WorkLimit::Unlimited),
     ];
     // `raw_channels` skips the palette and the channel definitions, which a
     // raw codestream does not have, so there it repeats the defaults.
