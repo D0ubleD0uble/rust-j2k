@@ -157,7 +157,8 @@ network fetch and no large operational grids.
   full range, component 1 from a quarter to three quarters of it. Graded within
   5 of OpenJPEG, the largest difference measured on this fixture; its
   `two_invK` causes it (`docs/correctness.md`, "Agreement standard"). Other
-  images reach more: 7 has been seen at 16 bits. `tests/irreversible_16bit.rs`
+  content reaches more, depending on how its edges line up with the transform
+  grid: a 256x256 checkerboard of 5x5 blocks reaches 7 at 16 bits. `tests/irreversible_16bit.rs`
   also checks that each component differs from OpenJPEG by more than 1, and
   that this decoder is the closer of the two to the encoder's input. On
   component 0 the output clamp hides any overshoot past 0 or 65535, so that

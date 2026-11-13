@@ -38,9 +38,10 @@ NAME = "irreversible_16bit"
 WIDTH, HEIGHT, DEPTH = 32, 32, 16
 
 # The largest difference from OpenJPEG this decoder shows on the fixture,
-# measured (component 0). It is not a bound on other images: larger images with
-# denser edges have reached 7 at 16 bits (docs/correctness.md, "Agreement
-# standard").
+# measured (component 0; component 1 reaches 3). It is not a bound on other
+# images: the gap depends on the content and on how its edges line up with the
+# transform grid, and a 256x256 checkerboard of 5x5 blocks has reached 7 at 16
+# bits (docs/correctness.md, "Agreement standard").
 TOLERANCE = 5.0
 
 COMPONENTS = 2

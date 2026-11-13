@@ -1573,8 +1573,9 @@ color space the file declares.
 
 The 9/7 difference from OpenJPEG depends on the bit depth, because OpenJPEG's
 `two_invK` ("When the oracle and the standard disagree") adds an error that
-grows with the sample range. It also grows with image size and with how many
-sharp edges the image has. The largest differences seen so far:
+grows with the sample range. Beyond that it depends on the content: how many
+sharp edges the image has and how they line up with the transform grid. The
+largest differences seen so far:
 
 | Bit depth | Largest difference from `opj_decompress` |
 | --------- | ---------------------------------------- |
@@ -1587,7 +1588,10 @@ at rates 1, 4 and 20, in seven patterns (noise, a random walk, a checkerboard,
 bars, two sizes of blocks and ragged edges) with two seeds each; and, at `-r 1`,
 checkerboards of full-swing blocks from 1x1 to 5x5 on images from 32x32 to
 256x256 with five or seven decomposition levels. The 7 is a 256x256
-checkerboard of 5x5 blocks; 3x3 blocks reach 6. On all of them this decoder
+checkerboard of 5x5 blocks, and 3x3 blocks reach 6. The same 5x5 checkerboard
+gives 5 at 64x64, 128x128, 200x200, 300x300 and 384x384, and at 512x512 and
+1024x1024 with up to ten levels, so the gap does not simply grow with image
+size. On all of them this decoder
 stays within 1 of the encoder's input. Real files agree: the 8-bit
 `issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2` and
 `jpx_disguised_as_jp2.jp2` are within 1, and the 16-bit
@@ -1598,7 +1602,8 @@ scaling is off by 5.4e-5 times the coefficient, high-pass coefficients range
 about as widely as the samples, and a sample collects that error once per
 decomposition level, so the gap stays roughly under 5.4e-5 × 2^depth × levels.
 That is about 18 at 16 bits with five levels, 4 at 14, 1 at 12 and under 0.1
-at 8. It is an estimate, not a hard bound. The committed `irreversible_16bit`
+at 8. It is an estimate, not a hard bound. The measured gaps do not grow with
+the level count. The committed `irreversible_16bit`
 fixture reaches 5 on its full-swing component and 3 on its mid-range one, and
 is graded at a tolerance of 5.
 

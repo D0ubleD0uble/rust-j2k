@@ -25,6 +25,10 @@ use support::{Expected, Tolerance};
 const DEPTH: u32 = 16;
 const COMPONENTS: usize = 2;
 
+/// The largest difference from OpenJPEG measured on each component, full swing
+/// and mid-range. The snapshot carries one tolerance per fixture, the larger.
+const MEASURED_GAP: [i32; COMPONENTS] = [5, 3];
+
 fn fixture() -> (Vec<Vec<i32>>, Expected) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let bytes = std::fs::read(dir.join("irreversible_16bit.j2k")).unwrap();
@@ -78,9 +82,10 @@ fn mse(a: &[i32], b: &[i32]) -> f64 {
 }
 
 /// Each component differs from OpenJPEG by more than 1 and by no more than the
-/// snapshot's tolerance. Moving closer to OpenJPEG does not fail this; a
-/// change that brings the two to within 1 means the `2/K` difference this
-/// fixture documents is gone, and the docs need updating.
+/// gap measured on it (5 and 3; the snapshot tolerance is 5). Moving closer to
+/// OpenJPEG does not fail this; a change that brings the two to within 1 means
+/// the `2/K` difference this fixture documents is gone, and the docs need
+/// updating.
 #[test]
 fn differs_from_openjpeg_by_more_than_one_within_the_tolerance() {
     let (ours, expected) = fixture();
@@ -90,9 +95,10 @@ fn differs_from_openjpeg_by_more_than_one_within_the_tolerance() {
     for (c, samples) in ours.iter().enumerate() {
         let gap = peak(samples, &expected.components[c].samples);
         assert!(
-            1 < gap && f64::from(gap) <= max_abs_error,
-            "component {c}: largest difference from opj_decompress is {gap}, \
-             expected more than 1 and at most {max_abs_error}"
+            1 < gap && gap <= MEASURED_GAP[c] && f64::from(gap) <= max_abs_error,
+            "component {c}: largest difference from opj_decompress is {gap}, expected \
+             more than 1 and at most {} (snapshot tolerance {max_abs_error})",
+            MEASURED_GAP[c]
         );
     }
 }
