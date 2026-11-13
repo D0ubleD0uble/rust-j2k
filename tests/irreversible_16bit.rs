@@ -30,7 +30,10 @@ fn fixture() -> (Vec<i32>, Expected) {
     let image = rust_j2k::decode(&bytes).expect("the 16-bit 9/7 fixture decodes");
     assert_eq!(image.components.len(), 1);
     let component = &image.components[0];
-    assert_eq!((component.bit_depth, component.signed), (DEPTH as u8, false));
+    assert_eq!(
+        (component.bit_depth, component.signed),
+        (DEPTH as u8, false)
+    );
     (component.samples.clone(), expected)
 }
 
@@ -90,7 +93,10 @@ fn is_closer_to_the_encoded_image_than_openjpeg() {
         .map(|(&a, &b)| (a - b).abs())
         .max()
         .unwrap();
-    assert!(peak <= 1, "largest difference from the encoder's input: {peak}");
+    assert!(
+        peak <= 1,
+        "largest difference from the encoder's input: {peak}"
+    );
     let ours_mse = mse(&ours, &source);
     let opj_mse = mse(&expected.components[0].samples, &source);
     assert!(
