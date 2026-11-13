@@ -299,9 +299,34 @@ expected planes are hashes of `opj_decompress` output on those JP2 files.
 `budget/flat_1024_lossless.j2k` (328 bytes) is a flat 1024x1024 8-bit
 one-component lossless codestream, made with `head -c 1048576 /dev/zero >
 flat.raw` and `opj_compress -i flat.raw -o flat_1024_lossless.j2k -F
-1024,1024,1,8,u -n 3` (OpenJPEG 2.5.0). `src/jp2/tests/matrix.rs` wraps it in a
-JP2 file with a 255-column palette to test the sample budget at full size and
-at resolution reduction 1.
+1024,1024,1,8,u -n 3` (OpenJPEG 2.5.0). `docs/correctness.md` cites its
+tier-1 work.
+
+`budget/flat_2048_lossless.j2k` (926 bytes, SHA-256
+`0395675bb92fbc2d65f4f09201e148327a42c5b4152bed4f0bcefb426e40b417`) is the
+same at 2048x2048: `head -c 4194304 /dev/zero > flat.raw` and `opj_compress
+-i flat.raw -o flat_2048_lossless.j2k -F 2048,2048,1,8,u -n 3` (OpenJPEG
+2.5.0). `src/jp2/tests/matrix.rs` wraps it in a JP2 file with a 255-column
+palette to test the sample limit at full size (255 x 2^22 samples, over
+2^28) and at resolution reduction 2.
+
+### Sample-limit fixtures
+
+`scripts/gen-sample-limit-fixtures.py` writes both files in `sample_limit/`
+with `opj_compress` 2.5.0; `tests/sample_limit.rs` uses them.
+
+| File | Size | SHA-256 | What |
+| ---- | ---- | ------- | ---- |
+| `rgb_6000x4000.jp2` | 148291 | `511e18920ffee1d1e5786fdcb85f42ec6bf4256cf0e76d5ec354656c99d08b01` | 6000x4000 8-bit RGB, lossless at `opj_compress` defaults: flat blocks (72 M samples) |
+| `flat_16385_tiled_lossless.j2k` | 13808 | `0babe19f5772e99db5c367273804f7fe1a34e87099959b098f25a2a51895cebe` | 16385x16385 8-bit gray, all zero, `-n 4 -t 4096,4096` (just over 2^28 samples) |
+
+The script checks that `opj_decompress` decodes `rgb_6000x4000.jp2` to exactly
+the picture it was coded from, so the test compares the decode with the
+picture's formula. The `opj_decompress` planes, one byte a sample in raster
+order, hash to `bb6fd7344cded7db2f53589600d9aeb752d1df3783d6e196cb5f00c1127cf32a`
+(red), `829c2fd355e456f0914c2e5dd8be6fb4dba3e4542e69395706b3a95dee320d42`
+(green) and `d797e5ddae6828e3152f0fb641999827388e2f165f70e2cd9cebd9b3d5bd7b58`
+(blue). `opj_decompress -r 3` decodes the flat file to 2049x2049 zeros.
 
 ### ICC to sRGB oracles
 

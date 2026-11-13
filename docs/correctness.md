@@ -510,6 +510,10 @@ result on the same file:
   out packets ("Packets a POC sequence leaves out");
 - signed 32-bit components, which OpenJPEG refuses ("Signed 32-bit
   components");
+- an image of more than 2^28 samples at the decode's reduction, which this
+  decoder refuses by default and OpenJPEG decodes if it can allocate it
+  ("The sample limit"), and files past the work bounds ("The tier-2 work
+  bound", "The tier-1 work bound"); each has an option that raises it;
 - under `ColorOutput::Srgb`: sYCC with the IEC constants, rounded, and the
   color channels picked by their `cdef` labels, not by position ("sRGB
   output"; the table there gives every refusal);
@@ -836,6 +840,48 @@ refused, and `code_block_work_limit` is the way to decode it. The rate
 stays 2^15 rather than 2^14, which would refuse the `-n 1` files, and it is
 scaled by the tile bytes, packet headers included, as the tier-2 bound is
 (orchestrator decisions on #278, 2026-11-12).
+
+### The sample limit
+
+The decode holds every component in its own plane, so what it allocates
+grows with the sum of the component areas, not with the file. A file of a
+few hundred bytes can declare a 65536 x 65536 image, 16 GiB of `i32`
+samples. The decode counts the samples of every output channel, at the
+resolution reduction asked for, from SIZ and the JP2 boxes alone, and
+refuses an image of more than 2^28 samples (1 GiB as `i32`) with `Limit`
+before it reads a tile. The count covers the codestream's components, a
+palette's expanded channels, and the channels sRGB output adds (sYCC chroma
+replicated to the luma grid, a gray channel a monochrome profile maps to
+R, G and B). `read_header_with` makes the same check, so it refuses what
+the decode would. OpenJPEG has no such limit: it allocates what the header
+declares and fails only when the allocation does.
+
+`DecodeOptions::sample_limit` raises the limit (`WorkLimit::Raised(n)`,
+n times 2^28) or lifts it (`WorkLimit::Unlimited`). The refusal names the
+option and the smallest `Raised` factor that admits the file. Even
+`Unlimited` refuses an image whose 4-byte samples would pass `isize::MAX`
+bytes, so the buffer sizes cannot overflow `usize`, on 32-bit targets
+included; past that, an allocation that fails aborts the process.
+
+The default admits a Sentinel-2 10 m band (10980 x 10980, 120.6 M samples)
+and RGB images up to about 89 MP, and a reduced decode of a larger image
+when the reduced image fits: GDAL's `single_block_32769_16385.jp2` (537 M
+samples) decodes at reduction 3 (4097 x 2049), bit-exact against
+`opj_decompress -r 3` (owner decision on #281, 2026-11-12). Measured on a
+release build against `opj_decompress` 2.5.0 (wall time on a shared,
+loaded machine; peak resident memory from `/usr/bin/time -v`):
+
+| File | Decode | Time | Peak RSS | OpenJPEG time | OpenJPEG peak RSS |
+| ---- | ------ | ---- | -------- | ------------- | ----------------- |
+| `T31UDQ_20240105T105339_AOT_10m.jp2`, 10980^2, 690 KB | full, bit-exact | 4.2 to 4.6 s | 470 MiB | 3.6 to 4.4 s | 471 MiB |
+| the same | reduction 2 (2745^2) | 0.78 s | 32 MiB | | 36 MiB |
+| `single_block_32769_16385.jp2` | reduction 3, bit-exact | 1.05 s | 86 MiB | 0.25 s | 92 MiB |
+
+The peak is about 1.0 times the 4-byte output for the Sentinel-2 band (460
+MiB of samples) and about 1.35 times for one tile of one component (see the
+table in `src/samples.rs`), so the default allows a peak of about 1.4 GiB,
+and about twice the output while a palette expands. Tests:
+`tests/sample_limit.rs` and `tests/sample_limit_alloc.rs`.
 
 ### Tile header cost
 
@@ -1564,10 +1610,12 @@ case, not an edge case:
   over the stages (run them per [`fuzz/README.md`](../fuzz/README.md)).
   The bar: no panics, no unbounded allocation, no infinite loops; every rejected
   input returns a typed `Error`, never crashes. A malformed SIZ cannot steer the
-  buffers into an overflowing or out-of-memory allocation: the declared image
-  area — `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, on the reference grid an origin may sit
-  anywhere inside — is bounded at parse time, and the Table A-9 constraints on the
-  image and tile origins are enforced before any geometry reaches the DWT.
+  buffers into an overflowing or out-of-memory allocation: the samples of the
+  declared image — over the image area `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, on the
+  reference grid an origin may sit anywhere inside — are held to the sample
+  limit before any tile is read (see [The sample limit](#the-sample-limit)),
+  and the Table A-9 constraints on the image and tile origins are enforced
+  before any geometry reaches the DWT.
 - **Typed failures** — the flat `Error` enum names the stage that failed, so a
   malformed header, an out-of-scope feature, and a Tier-1 decode fault are
   distinguishable by a caller. No `unwrap`/`panic` on the decode path.

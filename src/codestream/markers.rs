@@ -492,6 +492,7 @@ impl Siz {
     /// so the second case is unreachable for any `Siz` the parser produced —
     /// but the division is guarded here rather than by a `debug_assert` that
     /// would compile out and leave a release-mode panic behind.
+    #[cfg(test)]
     pub fn component_extent(&self, index: usize) -> Option<(u32, u32)> {
         self.component_extent_at(index, 0)
     }

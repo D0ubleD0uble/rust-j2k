@@ -1081,7 +1081,6 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     // rather than whichever coding-style bit COD happens to trip on first. Both
     // are `Unsupported`; this is about which reason is useful to read.
     validate_geometry(&siz)?;
-    check_sample_budget(&siz)?;
     check_sample_container(&siz)?;
 
     let mut cod = None;
@@ -1329,66 +1328,6 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
     Ok(())
 }
 
-/// Upper bound on the declared image area (`Xsiz * Ysiz`), a robustness guard
-/// against a malformed SIZ steering the per-subband and DWT buffers into an
-/// overflowing or out-of-memory allocation. Sized for the GRIB2 grids decoded
-/// today: 2^26 samples is 256 MiB as `i32`, well above operational grids (HRRR
-/// ~1.9M, MRMS ~24.5M) and below anything that threatens the decode. Not a
-/// format limit — raise it as larger imagery comes into scope.
-///
-/// A palettized JP2 file expands its index plane into one channel per palette
-/// column, and sYCC output replicates sub-sampled chroma to full size; the
-/// budget bounds those channels too. While a palette expands, the index
-/// plane and the columns are held together, so the peak there is about twice
-/// the output: a one-column palette at the full budget (8192 x 8192) peaks at
-/// about 515 MiB, on 5/3 and 9/7 alike.
-///
-/// The decode's peak memory is above the output's size. A full budget's output
-/// is 256 MiB (2^26 `i32` samples). Measured peak resident memory at the full
-/// budget (release build, Linux, glibc), for the empty-data files that
-/// `scripts/gen-peak-memory-shapes.py` writes and, for one tile, for an 8192 x
-/// 8192 image coded by `opj_compress` (lossless, and `-I -r 20`):
-///
-/// | Shape                           | Empty data | Coded data |
-/// |---------------------------------|------------|------------|
-/// | 1 component, one tile, 9/7      | ~340 MiB   | ~347 MiB   |
-/// | 1 component, one tile, 5/3      | ~260 MiB   | ~351 MiB   |
-/// | 3 components, 9/7 with MCT      | ~316 MiB   |            |
-/// | palette to 3 columns            | ~344 MiB   |            |
-/// | sYCC 4:2:0 to sRGB              | ~395 MiB   |            |
-///
-/// For a single tile the peak comes at the finest wavelet level, which holds
-/// that level's subbands while it builds the merged grid. Those buffers come
-/// to 1.25 times the output, as fresh zeroed memory is mapped only as it is
-/// written; the rest of the process adds about 0.1 times, so a single tile
-/// peaks at about 1.35 times the output. The empty 5/3 file is lower only
-/// because its subbands are never written. The coded-data figures include
-/// the caller's input bytes, so they grow with the file: a 38 MB lossless
-/// 8192 x 8192 file peaks at about 380 MiB.
-pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 26;
-
-/// Bound the samples a codestream can ask the decoder to allocate.
-///
-/// Every component is reconstructed into its own buffer, so the cost is the
-/// *sum* of the component areas, not the image area. `Csiz` reaches 16384, so a
-/// large image declared with many components would otherwise multiply the
-/// allocation far past any single-component guard.
-fn check_sample_budget(siz: &Siz) -> Result<()> {
-    let mut total: u64 = 0;
-    for index in 0..siz.components.len() {
-        let (width, height) = siz
-            .component_extent(index)
-            .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
-        total += u64::from(width) * u64::from(height);
-        if total > MAX_IMAGE_SAMPLES {
-            return Err(Error::Limit(format!(
-                "components total over {MAX_IMAGE_SAMPLES} samples, above the decode guard"
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// Refuse a component whose sample range does not fit the `i32` container
 /// (unsigned 32 bits, or more than 32), from SIZ alone. It is a header fault,
 /// so it is found before any tile is read. OpenJPEG 2.5.0 is stricter: it
@@ -1415,10 +1354,12 @@ fn check_sample_container(siz: &Siz) -> Result<()> {
 }
 
 /// Enforce the decoded geometry subset on the SIZ fields: a well-formed image
-/// and tile grid, bounded in area and tile count. The image and tile origins may
-/// be non-zero (Annex B's reference grid), so this checks the Table A-9
-/// constraints that a non-zero origin makes load-bearing, then bounds the area
-/// and tile count before either reaches the buffer allocations.
+/// and tile grid, bounded in tile count. The image and tile origins may be
+/// non-zero (Annex B's reference grid), so this checks the Table A-9
+/// constraints that a non-zero origin makes load-bearing, then bounds the tile
+/// count before it reaches the buffer allocations. The image area is held to
+/// the caller's sample limit later, once the options are known
+/// (`samples::check_codestream`).
 fn validate_geometry(siz: &Siz) -> Result<()> {
     if siz.x_size == 0 || siz.y_size == 0 {
         return Err(Error::Marker("SIZ declares a zero-size image".into()));
@@ -1457,16 +1398,6 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
             siz.y_offset,
         )));
     }
-    // The area guard is on the *image* area — `(Xsiz - XOsiz)·(Ysiz - YOsiz)` —
-    // not `Xsiz·Ysiz`, so a large origin cannot inflate the bound and reject an
-    // image that reconstructs to a small canvas. `check_sample_budget` re-derives
-    // the same area per component; this is the cheap early-out before that walk.
-    let (width, height) = siz.image_extent_at(0);
-    if u64::from(width) * u64::from(height) > MAX_IMAGE_SAMPLES {
-        return Err(Error::Limit(format!(
-            "image area {width}×{height} exceeds the decode guard of {MAX_IMAGE_SAMPLES} samples",
-        )));
-    }
     // `Isot` is a `u16` running 0..=65534 (Table A-10), so a grid finer than
     // that has tiles no tile-part can name. The bound also caps the per-tile
     // bookkeeping — one resolved header and one geometry walk each — that the
@@ -1488,8 +1419,8 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
 /// sub-sampling (A.5.1).
 ///
 /// Parses all `Csiz` components. Whether the decoder can *reconstruct* them is
-/// a separate question, enforced by [`validate_geometry`] and
-/// [`check_sample_budget`] once the whole main header is read, so a
+/// a separate question, enforced by [`validate_geometry`] once the whole main
+/// header is read, and by the sample limit after it, so a
 /// multi-component codestream still parses cleanly here.
 ///
 /// `Ssiz` is a depth-minus-one in the low 7 bits with the sign in bit 7, so the
@@ -1562,9 +1493,9 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
         tile_y_offset,
         components,
     };
-    // Geometry legality (`validate_geometry`) and the sample budget
-    // (`check_sample_budget`) are the caller's to apply, in that order, so
-    // this function stays a pure reader of the marker segment.
+    // Geometry legality (`validate_geometry`) and the sample limit
+    // (`samples::check_codestream`) are the callers' to apply, in that order,
+    // so this function stays a pure reader of the marker segment.
     Ok(siz)
 }
 

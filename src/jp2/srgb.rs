@@ -55,8 +55,8 @@
 
 use super::lcms::{Format, InputProfile, ToneCurve, Transform};
 use super::metadata::{Association, ChannelDefinition, ChannelType, ColorSpace, Jp2Metadata};
-use crate::codestream::MAX_IMAGE_SAMPLES;
 use crate::codestream::markers::Siz;
+use crate::samples;
 use crate::{Component, ComponentInfo, Error, Result};
 
 /// The ICC header and the tag count that follows it.
@@ -106,13 +106,15 @@ pub(crate) enum ChromaLayout {
 
 /// Plan the sRGB step for a JP2 file's output channels: their formats
 /// (`outputs`), what each one is (`channels`), and the color space the file
-/// declares. `siz` and `reduction` size the output for the sample budget.
+/// declares. `siz` and `reduction` size the output, which is held to `cap`
+/// samples (see [`crate::samples`]).
 pub(crate) fn plan(
     color: &ColorSpace,
     channels: &[ChannelDefinition],
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
+    cap: u64,
 ) -> Result<SrgbPlan> {
     match color {
         // OpenJPEG reads any image of two or fewer components as gray (and
@@ -134,8 +136,10 @@ pub(crate) fn plan(
         // OpenJPEG converts sYCC and an RGB profile only on three or more
         // components; one or two pass through as declared.
         ColorSpace::Sycc if outputs.len() <= 2 => Ok(SrgbPlan::PassThrough),
-        ColorSpace::Sycc => plan_sycc(channels, outputs, siz, reduction),
-        ColorSpace::RestrictedIcc(profile) => plan_icc(profile, channels, outputs, siz, reduction),
+        ColorSpace::Sycc => plan_sycc(channels, outputs, siz, reduction, cap),
+        ColorSpace::RestrictedIcc(profile) => {
+            plan_icc(profile, channels, outputs, siz, reduction, cap)
+        }
         // One or two channels with no color space this step converts:
         // OpenJPEG reads any image of two or fewer components as gray (and
         // gray plus opacity) and passes it through, so this does too.
@@ -276,6 +280,7 @@ fn plan_sycc(
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
+    cap: u64,
 ) -> Result<SrgbPlan> {
     let colors = three_colors(channels, outputs, "sYCC")?;
     same_format(&colors, outputs)?;
@@ -298,7 +303,7 @@ fn plan_sycc(
             )));
         }
     };
-    check_budget(outputs, &colors, siz, reduction)?;
+    check_budget(outputs, &colors, siz, reduction, cap)?;
     Ok(SrgbPlan::Sycc {
         channels: colors,
         layout,
@@ -307,13 +312,14 @@ fn plan_sycc(
     })
 }
 
-/// The output after chroma replication must stay under the decode guard: two
+/// The output after chroma replication must stay under the sample limit: two
 /// chroma channels grow to the luma grid. Every other channel keeps its size.
 fn check_budget(
     outputs: &[ComponentInfo],
     colors: &[usize; 3],
     siz: &Siz,
     reduction: u8,
+    cap: u64,
 ) -> Result<()> {
     let luma = siz.image_extent_at(reduction);
     let mut total: u64 = 0;
@@ -326,11 +332,12 @@ fn check_budget(
         };
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
-    if total > MAX_IMAGE_SAMPLES {
-        return Err(Error::Limit(format!(
-            "sYCC chroma replication grows the output to over {MAX_IMAGE_SAMPLES} samples, \
-             above the decode guard"
-        )));
+    if total > cap {
+        let what = format!(
+            "sRGB output with the sYCC chroma replicated{}",
+            samples::at(reduction)
+        );
+        return Err(samples::over(&what, total, cap));
     }
     Ok(())
 }
@@ -341,6 +348,7 @@ fn plan_icc(
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
+    cap: u64,
 ) -> Result<SrgbPlan> {
     // OpenJPEG converts a 4:2:0 or 4:2:2 image as sYCC before it opens the
     // profile, so this holds whatever the profile is, even one LittleCMS
@@ -351,7 +359,7 @@ fn plan_icc(
         uniform(&[0, 1, 2], outputs)?;
         return Err(converted_as_sycc_error());
     }
-    match plan_icc_or_refuse(profile, channels, outputs, siz, reduction) {
+    match plan_icc_or_refuse(profile, channels, outputs, siz, reduction, cap) {
         Ok(plan) => Ok(plan),
         // OpenJPEG skips the conversion when LittleCMS refuses the profile
         // and writes the samples as coded, and so does this step. The
@@ -373,6 +381,7 @@ fn plan_icc_or_refuse(
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
+    cap: u64,
 ) -> std::result::Result<SrgbPlan, Icc> {
     let icc = Profile::parse(profile)?;
     match &icc.space {
@@ -405,7 +414,7 @@ fn plan_icc_or_refuse(
             }
             let neutral = table.iter().all(|&[r, g, b]| r == g && g == b);
             if !neutral {
-                check_gray_budget(outputs, channel, siz, reduction)?;
+                check_gray_budget(outputs, channel, siz, reduction, cap)?;
             }
             Ok(SrgbPlan::IccGray {
                 channel,
@@ -455,12 +464,13 @@ fn plan_icc_or_refuse(
 }
 
 /// A gray channel that becomes R, G, B grows the output by two channels of
-/// its size, which must stay under the decode guard.
+/// its size, which must stay under the sample limit.
 fn check_gray_budget(
     outputs: &[ComponentInfo],
     channel: usize,
     siz: &Siz,
     reduction: u8,
+    cap: u64,
 ) -> Result<()> {
     let mut total: u64 = 0;
     for (at, info) in outputs.iter().enumerate() {
@@ -470,11 +480,12 @@ fn check_gray_budget(
         let copies = if at == channel { 3 } else { 1 };
         total = total.saturating_add(copies * u64::from(width) * u64::from(height));
     }
-    if total > MAX_IMAGE_SAMPLES {
-        return Err(Error::Limit(format!(
-            "a monochrome ICC profile that maps gray to color grows the output to over \
-             {MAX_IMAGE_SAMPLES} samples, above the decode guard"
-        )));
+    if total > cap {
+        let what = format!(
+            "sRGB output from a monochrome ICC profile that maps gray to color{}",
+            samples::at(reduction)
+        );
+        return Err(samples::over(&what, total, cap));
     }
     Ok(())
 }

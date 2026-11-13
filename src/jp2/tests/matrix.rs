@@ -85,24 +85,24 @@ fn one_entry_pclr(bi: &[u8]) -> Vec<u8> {
     bx(b"pclr", &payload)
 }
 
-/// A one-component 1024x1024 codestream header: the single-component fixture
+/// A one-component 2048x2048 codestream header: the single-component fixture
 /// with its image and tile grown, so its main header parses. Its tile data
 /// is never reached.
 fn big_one_component() -> Vec<u8> {
     let mut codestream = ONE_COMPONENT.to_vec();
     for at in [8, 12, 24, 28] {
-        codestream[at..at + 4].copy_from_slice(&1024u32.to_be_bytes());
+        codestream[at..at + 4].copy_from_slice(&2048u32.to_be_bytes());
     }
     codestream
 }
 
-/// A file whose palette expands a 1024x1024 index plane into 255 channels:
-/// 255 * 2^20 samples, over the 2^26 sample budget.
+/// A file whose palette expands a 2048x2048 index plane into 255 channels:
+/// 255 * 2^22 samples, over the 2^28 sample limit.
 fn palette_over_budget() -> Vec<u8> {
     palette_255_over(&big_one_component())
 }
 
-/// A JP2 file around this 1024x1024 one-component codestream, with a palette
+/// A JP2 file around this 2048x2048 one-component codestream, with a palette
 /// of 255 columns mapped to 255 channels.
 fn palette_255_over(codestream: &[u8]) -> Vec<u8> {
     let columns: Vec<u8> = (0..=254).collect();
@@ -110,7 +110,7 @@ fn palette_255_over(codestream: &[u8]) -> Vec<u8> {
     file(&[
         jp2_ftyp(),
         jp2h(&[
-            ihdr(1024, 1024, 1),
+            ihdr(2048, 2048, 1),
             colr(),
             one_entry_pclr(&[7; 255]),
             cmap(&mapping),
@@ -1002,7 +1002,7 @@ fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
 /// options. Two shapes where the options decide (the #182 critique): a
 /// palette channel that looks up another column is checked unless
 /// `raw_channels` asks for the index plane, and a palette's expansion fits the
-/// sample budget only once a resolution reduction halves the image.
+/// sample limit only once a resolution reduction shrinks the image.
 #[test]
 fn read_header_with_agrees_with_decode_with_under_the_same_options() {
     use crate::{DecodeOptions, read_header, read_header_with};
@@ -1021,13 +1021,22 @@ fn read_header_with_agrees_with_decode_with_under_the_same_options() {
     assert_eq!(header.components.len(), image.components.len());
     assert_eq!(header.jp2, image.jp2);
 
-    // A real 1024x1024 flat image behind a 255-column palette: 255 * 2^20
-    // samples over the 2^26 budget, 255 * 2^18 under it at reduction 1.
-    let flat = include_bytes!("../../../tests/fixtures/budget/flat_1024_lossless.j2k");
+    // A real 2048x2048 flat image behind a 255-column palette: 255 * 2^22
+    // samples over the 2^28 limit, 255 * 2^18 under it at reduction 2.
+    let flat = include_bytes!("../../../tests/fixtures/budget/flat_2048_lossless.j2k");
     let big = palette_255_over(flat);
-    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    let reduced = DecodeOptions::default().with_resolution_reduction(2);
     assert!(matches!(read_header(&big), Err(Error::Limit(_))));
     assert!(matches!(decode(&big), Err(Error::Limit(_))));
+    // 255 * 2^22 is 3.98 times 2^28, so `Raised(4)` admits the expansion
+    // (`Raised(3)` does not); the header is all this test reads at full size.
+    let raised = |n| DecodeOptions::default().with_sample_limit(crate::WorkLimit::Raised(n));
+    assert!(matches!(
+        read_header_with(&big, &raised(3)),
+        Err(Error::Limit(_))
+    ));
+    let header = read_header_with(&big, &raised(4)).expect("fits a raised limit");
+    assert_eq!(header.components.len(), 255);
     let header = read_header_with(&big, &reduced).expect("fits once reduced");
     assert_eq!((header.width, header.height), (512, 512));
     assert_eq!(header.components.len(), 255);

@@ -189,6 +189,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorkLimit::Unlimited`. The packet limit also bounds the walk
   `read_header_with` makes of a `Psot = 0` tile. Raising it does not raise
   the memory a POC sequence's packets are held in.
+- `DecodeOptions::sample_limit` (and `with_sample_limit`) raises or lifts
+  the limit on the decoded image's size, with the same `WorkLimit` values:
+  `Raised(n)` allows n times 2^28 samples, and `Unlimited` allocates what
+  the header declares, refusing only an image too large for the target to
+  address. `Raised(0)` is `InvalidOptions`. The refusal names the option and
+  the smallest `Raised` factor that admits the file.
 
 ### Fixed
 
@@ -240,6 +246,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The decoded image may hold up to 2^28 samples (1 GiB as `i32`), up from
+  2^26, so a Sentinel-2 10 m band (10980 x 10980) and RGB images up to
+  about 89 MP decode at the defaults. The samples are counted at the
+  decode's resolution reduction, so a reduced decode of a larger image is
+  admitted when the reduced image fits. The image is now refused after the
+  whole main header is read, so a header with another fault reports that
+  fault first. The `Error::Limit` message changed: it gives the samples
+  needed and names `DecodeOptions::sample_limit`.
 - The crate uses American spellings: color, gray, grayscale, -ize, behavior,
   center. Every public name added in this release is spelled that way
   (`ColorSpace`, `ColorSpace::Grayscale`, `ColorOutput`,

@@ -108,6 +108,7 @@ pub(crate) mod jp2;
 pub(crate) mod mct;
 pub(crate) mod pipeline;
 pub(crate) mod quant;
+pub(crate) mod samples;
 pub(crate) mod tier1;
 pub(crate) mod tier2;
 
@@ -174,8 +175,19 @@ pub use jp2::{
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 ///
-/// The work of reading the packet headers is bounded, as the image area and
-/// the code-block count are. Walking every tile's packets may take at most
+/// The decoded image may hold at most 2^28 samples (1 GiB as `i32`), summed
+/// over its output channels at the decode's
+/// [`resolution_reduction`](DecodeOptions::resolution_reduction): every
+/// component, a palette's expanded channels, and the channels sRGB output
+/// adds. That admits a 10980 x 10980 Sentinel-2 band, or an RGB image of up
+/// to about 89 MP. A larger image is refused with [`Error::Limit`] from its
+/// header alone, before any tile is read, so a small file cannot make the
+/// decode allocate gigabytes. Peak memory is about 1.35 times the output for
+/// one tile, and about twice it while a palette expands (see [the sample
+/// limit][sample-limit]). OpenJPEG has no such limit.
+///
+/// The work of reading the packet headers is bounded, as the code-block count
+/// is. Walking every tile's packets may take at most
 /// 2^24 steps, or 32 per byte of tile data when that is more. A step is a
 /// packet read, a run of code-blocks a header skips without reading a bit,
 /// or a position a positional progression order sweeps, once for each
@@ -203,10 +215,12 @@ pub use jp2::{
 /// Encoder output seen spends up to about 14000 per byte, 43% of the bound
 /// (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
 ///
-/// [`decode_with`] can raise or lift either bound, for a file from a source
-/// you trust: see [`DecodeOptions::packet_work_limit`] and
+/// [`decode_with`] can raise or lift the sample limit and either work bound,
+/// for a file from a source you trust: see [`DecodeOptions::sample_limit`],
+/// [`DecodeOptions::packet_work_limit`] and
 /// [`DecodeOptions::code_block_work_limit`].
 ///
+/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-sample-limit
 /// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound
 /// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-1-work-bound
 pub fn decode(bytes: &[u8]) -> Result<Image> {
@@ -262,10 +276,10 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks
 /// first. The options matter: a `cmap` that
-/// [`raw_channels`](DecodeOptions::raw_channels) does not check, or a palette
-/// that fits the sample budget once
-/// [`resolution_reduction`](DecodeOptions::resolution_reduction) halves the
-/// image, is a fault under some options and not others. A fault in the tile
+/// [`raw_channels`](DecodeOptions::raw_channels) does not check, or an image
+/// or palette that fits the sample limit only once
+/// [`resolution_reduction`](DecodeOptions::resolution_reduction) shrinks the
+/// image or [`sample_limit`](DecodeOptions::sample_limit) raises it, is a fault under some options and not others. A fault in the tile
 /// data (a broken tile-part, a tile header that changes a component's
 /// wavelet, a reduction that a tile-part COD or COC with fewer levels cannot
 /// take) is only found by decoding. So is a POC sequence that leaves out
@@ -300,6 +314,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     }
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
+    samples::check_codestream(siz, reduction, samples::cap(&options.sample_limit))?;
     check_raw_color(options, siz.components.len())?;
     check_reduction(&parsed.header, reduction, None)?;
     let (width, height) = siz.image_extent_at(reduction);
@@ -379,7 +394,7 @@ pub enum ColorOutput {
     ///   table or the Lab connection space, and a monochrome profile on more
     ///   than two channels.
     ///
-    /// Replicated chroma, or a tinted gray channel, past the sample budget is
+    /// Replicated chroma, or a tinted gray channel, past the sample limit is
     /// [`Error::Limit`]. These errors apply only when `Srgb` is asked for:
     /// [`ColorOutput::AsCoded`] decodes the same files. The [table of
     /// outcomes][outcomes] lists every case against what OpenJPEG does, and
@@ -455,16 +470,37 @@ pub struct DecodeOptions {
     /// How much work decoding the code-blocks may take, against the bound
     /// described on [`decode`]. Default [`WorkLimit::Default`].
     pub code_block_work_limit: WorkLimit,
+    /// How many samples the decoded image may hold, against the limit
+    /// described on [`decode`]: 2^28 samples (1 GiB as `i32`) by default,
+    /// summed over the output channels at
+    /// [`resolution_reduction`](Self::resolution_reduction). Default
+    /// [`WorkLimit::Default`].
+    ///
+    /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
+    /// limit: the decode allocates what the header declares, about 4 bytes
+    /// per sample for the output and as much again while the image is
+    /// decoded (see [`decode`]), so a small hostile file can ask for many
+    /// gigabytes. If the allocation fails the process aborts, as Rust's
+    /// allocation failures do. Only an image too large for this target to
+    /// address (`isize::MAX` bytes of samples) is still refused, with
+    /// [`Error::Limit`]. Use it only for files from a source you trust.
+    ///
+    /// [`read_header_with`] checks the same limit, so it refuses what the
+    /// decode would.
+    pub sample_limit: WorkLimit,
 }
 
-/// How much work a decode may take against one of its work bounds: the
+/// How far a decode may go against one of its bounds: the
 /// [`DecodeOptions::packet_work_limit`] and
-/// [`DecodeOptions::code_block_work_limit`] options.
+/// [`DecodeOptions::code_block_work_limit`] work bounds, and the
+/// [`DecodeOptions::sample_limit`] on the image's size.
 ///
-/// Each bound scales with the size of the file, so a small file cannot ask
-/// for minutes of work (see [`decode`]). A valid file can still go past a
-/// bound, when it codes many samples in very few bytes: raise the limit, or
-/// lift it, to decode such a file from a source you trust.
+/// Each work bound scales with the size of the file, so a small file cannot
+/// ask for minutes of work, and the sample limit keeps a small file from
+/// asking for gigabytes of memory (see [`decode`]). A valid file can still go
+/// past a bound, when it codes many samples in very few bytes or is simply
+/// very large: raise the limit, or lift it, to decode such a file from a
+/// source you trust.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, WorkLimit};
@@ -482,15 +518,17 @@ pub enum WorkLimit {
     /// The bound as [`decode`] describes it.
     #[default]
     Default,
-    /// The default bound times this factor: both its floor and the work it
-    /// allows per byte. `Raised(1)` sets the same bound as `Default`, though
-    /// the two do not compare equal. `Raised(0)` is
+    /// The default bound times this factor: for a work bound, both its floor
+    /// and the work it allows per byte. `Raised(1)` sets the same bound as
+    /// `Default`, though the two do not compare equal. `Raised(0)` is
     /// [`Error::InvalidOptions`].
     Raised(u32),
-    /// No bound on this work. The decode does all the work the file asks
-    /// for, however long that takes. The other limits stay in force: the
-    /// image-area cap, the code-block-count cap, and the cap on the memory
-    /// that remembers which packets a POC sequence has read.
+    /// No bound. For a work bound, the decode does all the work the file
+    /// asks for, however long that takes; for the sample limit, it allocates
+    /// all the memory the file asks for (see [`DecodeOptions::sample_limit`]).
+    /// The other limits stay in force: the other options, the
+    /// code-block-count cap, and the cap on the memory that remembers which
+    /// packets a POC sequence has read.
     Unlimited,
 }
 
@@ -579,6 +617,22 @@ impl DecodeOptions {
         self.code_block_work_limit = limit;
         self
     }
+
+    /// These options with [`sample_limit`](Self::sample_limit) set to
+    /// `limit`.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, WorkLimit};
+    ///
+    /// // Up to 2^29 samples, such as a 16384 x 16384 RGB image.
+    /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(2));
+    /// assert_eq!(options.sample_limit, WorkLimit::Raised(2));
+    /// ```
+    #[must_use]
+    pub fn with_sample_limit(mut self, limit: WorkLimit) -> Self {
+        self.sample_limit = limit;
+        self
+    }
 }
 
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
@@ -594,6 +648,11 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     }
     // The header checks come before the tile walk, as `read_header_with` has it.
     let parsed = codestream::parse_header(bytes)?;
+    samples::check_codestream(
+        &parsed.header.siz,
+        options.resolution_reduction,
+        samples::cap(&options.sample_limit),
+    )?;
     check_raw_color(options, parsed.header.siz.components.len())?;
     check_reduction(&parsed.header, options.resolution_reduction, None)?;
     let cs = codestream::parse_tiles(bytes, parsed)?;
@@ -610,12 +669,13 @@ fn check_options(options: &DecodeOptions) -> Result<()> {
         ));
     }
     for (name, limit) in [
-        ("packet", &options.packet_work_limit),
-        ("code-block", &options.code_block_work_limit),
+        ("packet work", &options.packet_work_limit),
+        ("code-block work", &options.code_block_work_limit),
+        ("sample", &options.sample_limit),
     ] {
         if *limit == WorkLimit::Raised(0) {
             return Err(Error::InvalidOptions(format!(
-                "a {name} work limit raised by a factor of 0; the default is \
+                "a {name} limit raised by a factor of 0; the default is \
                  `WorkLimit::Default`"
             )));
         }
@@ -683,11 +743,14 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let file = jp2::parse(bytes, &options.packet_work_limit)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
+    let cap = samples::cap(&options.sample_limit);
+    samples::check_codestream(siz, options.resolution_reduction, cap)?;
     jp2::check_against_siz(&file.header, siz)?;
     let plans = jp2::ChannelPlans::plan(
         &file.header,
         siz,
         options.resolution_reduction,
+        cap,
         options.raw_channels,
     )?;
     jp2::check_after_codestream(&file, options.raw_channels)?;
@@ -695,7 +758,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let srgb = match options.color {
         ColorOutput::AsCoded => None,
         ColorOutput::Srgb => {
-            let plan = jp2::plan_srgb(&metadata, &plans, siz, options.resolution_reduction)?;
+            let plan = jp2::plan_srgb(&metadata, &plans, siz, options.resolution_reduction, cap)?;
             // A converted image is sRGB (or gray) and carries no profile, as
             // OpenJPEG reports it.
             plan.describe(&mut metadata);
