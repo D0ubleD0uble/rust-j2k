@@ -63,15 +63,18 @@ const float two_invK = 1.625732422f;
 
 `1.625732422` is 3.3e-5 short of `2/K`. This crate keeps the exact constant.
 OpenJPEG's constant, together with its rounding of the lifting constants β and
-δ ("Where the decoders differ" below), makes every 9/7 file measured here decode
-bit-exact against `opj_decompress`, and makes the output worse:
+δ ("Where the decoders differ" below), makes this decoder bit-exact against
+`opj_decompress` on `issue206_image-000.jp2`, `issue208.jp2`, both
+`issue559-eci-*` files and `jpx_disguised_as_jp2.jp2`, and on a synthetic
+sweep at 12 and 16 bits. It also makes the output worse:
 
 - On near-lossless round trips through `opj_compress -I -r 1`, whose forward
   transform uses the exact `K`, this decoder returns the encoder's input more
   closely than `opj_decompress` in all 30 cases measured (64x64 synthetic
   images, five patterns, three seeds each, at 12 and 16 bits). At 16 bits the
   mean-squared error from the input is 0.003 to 0.10 here and 0.45 to 2.34 for
-  OpenJPEG. `tests/irreversible_16bit.rs` checks one such case.
+  OpenJPEG. At `-r 2`, where quantization error dominates, this decoder is
+  closer in 25 of 30. `tests/irreversible_16bit.rs` checks one such case.
 - `p0_09` decodes bit-exact against its ISO reference with either constant, so
   it does not decide the question.
 - On the lossy conformance entries the ISO references lean slightly the other
