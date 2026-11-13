@@ -23,7 +23,11 @@ fn fnv1a64(samples: &[i32]) -> String {
 #[test]
 fn grib2_shape_bench_fixture_matches_opj_decompress() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bench");
-    let bytes = std::fs::read(dir.join("grib2_shape_1440x721_u16.j2k")).unwrap();
+    // `tests/fixtures/bench/` is left out of the published package.
+    let Ok(bytes) = std::fs::read(dir.join("grib2_shape_1440x721_u16.j2k")) else {
+        eprintln!("bench_fixture: fixture not present (packaged crate?); skipping");
+        return;
+    };
     let expected: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(dir.join("grib2_shape_1440x721_u16.expected.json")).unwrap(),
     )

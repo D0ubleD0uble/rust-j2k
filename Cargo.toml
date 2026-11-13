@@ -16,8 +16,9 @@ categories   = ["multimedia::images", "encoding"]
 # tests/fixtures/conformance/COPYRIGHT), so it must not ship in the packaged
 # crate under the crate's own MIT OR Apache-2.0 terms. Keep it in-repo only.
 # The real-world JP2 samples from GDAL have unconfirmed rights (see
-# tests/fixtures/jp2_real/README.md), so they stay in-repo too.
-exclude = ["tests/fixtures/conformance/", "tests/fixtures/jp2_real/"]
+# tests/fixtures/jp2_real/README.md), so they stay in-repo too. The benchmark
+# fixture is large and only contributors use it.
+exclude = ["tests/fixtures/conformance/", "tests/fixtures/jp2_real/", "tests/fixtures/bench/"]
 
 # docs.rs builds: enable the `docsrs` cfg so `#[doc(cfg(...))]` annotations render
 # once features land, and build all features so nothing is hidden.
