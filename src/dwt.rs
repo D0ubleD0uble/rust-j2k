@@ -13,12 +13,19 @@
 //!
 //! ## The 1-D kernel contract
 //!
-//! The two kernels here operate on *interleaved* subband rows or columns in
-//! place (the array the standard calls `a(i)` after the implicit deinterleave).
-//! On return the slice holds the reconstructed samples. They take `L` signals
-//! at once, as a slice of `[T; L]` with one entry per index, and run the same
-//! arithmetic on each lane: the row pass runs one row, and the column pass runs
-//! eight columns per batch so the compiler can vectorize across them.
+//! Each filter has two kernels, with the same arithmetic in the same order.
+//!
+//! - The column kernels operate on *interleaved* subband columns in place (the
+//!   array the standard calls `a(i)` after the implicit deinterleave). On
+//!   return the slice holds the reconstructed samples. They take `L` signals at
+//!   once, as a slice of `[T; L]` with one entry per index, and run the same
+//!   arithmetic on each lane: the column pass runs eight columns per batch so
+//!   the compiler can vectorize across them.
+//! - The row kernels take one row *split* by index parity, its even-index
+//!   samples and its odd-index samples as two slices, and lift them in place.
+//!   Each lifting step updates one slice from the other, which it does not
+//!   write, so the loop runs over contiguous samples and vectorizes along the
+//!   row. The driver interleaves the two slices afterwards.
 //!
 //! The mirror extension reaches only one sample past either end, so the
 //! kernels apply it at the first and last sample and index directly elsewhere.
@@ -37,12 +44,13 @@
 //! Per resolution level (coarsest first) it copies the four subbands into one
 //! grid as four blocks — LL top left, HL top right, LH bottom left, HH bottom
 //! right — then runs the 1-D synthesis across every row and down every column,
-//! interleaving each row or column by the ISO `(xob, yob)` parity on the way
-//! in: LL to the low-pass row and column, HL to the low-pass row and high-pass
-//! column, LH the reverse, HH to both high-pass. The merged grid is the next
-//! finer level's LL; after the last level it is the full-resolution raster of
-//! that tile-component (pre level-shift), which [`crate::image::Canvas`] places
-//! into the image.
+//! interleaving each row or column by the ISO `(xob, yob)` parity: LL to the
+//! low-pass row and column, HL to the low-pass row and high-pass column, LH
+//! the reverse, HH to both high-pass. A row is lifted as its two halves and
+//! interleaved after; a column is interleaved as it is read. The merged grid
+//! is the next finer level's LL; after the last level it is the
+//! full-resolution raster of that tile-component (pre level-shift), which
+//! [`crate::image::Canvas`] places into the image.
 
 use crate::Result;
 use crate::codestream::MainHeader;
@@ -90,12 +98,16 @@ pub fn inverse(header: &MainHeader, comp: usize, coeffs: SubbandCoeffs) -> Resul
     }
 }
 
-/// A 1-D synthesis filter, run over `L` signals in lockstep: `signals[i][k]`
-/// is sample `i` of signal `k`. A row is `L == 1`; the column pass runs
-/// [`LANES`] columns at once.
+/// A 1-D synthesis filter. [`Synthesis::inverse`] runs it over `L` signals in
+/// lockstep, where `signals[i][k]` is sample `i` of signal `k`: the column
+/// pass runs [`LANES`] columns at once, then the rest one at a time.
+/// [`Synthesis::inverse_split`] runs it over one row split by index parity.
 trait Synthesis {
     type Sample: Copy + Default;
     fn inverse<const L: usize>(signals: &mut [[Self::Sample; L]], cas: usize);
+    /// The same filter over one signal held as its even-index samples `even`
+    /// and its odd-index samples `odd` (see [`lift_split`]).
+    fn inverse_split(even: &mut [Self::Sample], odd: &mut [Self::Sample], cas: usize);
 }
 
 /// The reversible 5/3 filter, [`inverse_5_3`].
@@ -105,6 +117,9 @@ impl Synthesis for Reversible53 {
     type Sample = i32;
     fn inverse<const L: usize>(signals: &mut [[i32; L]], cas: usize) {
         inverse_5_3(signals, cas);
+    }
+    fn inverse_split(even: &mut [i32], odd: &mut [i32], cas: usize) {
+        inverse_5_3_split(even, odd, cas);
     }
 }
 
@@ -116,29 +131,15 @@ impl Synthesis for Irreversible97 {
     fn inverse<const L: usize>(signals: &mut [[f32; L]], cas: usize) {
         inverse_9_7(signals, cas);
     }
+    fn inverse_split(even: &mut [f32], odd: &mut [f32], cas: usize) {
+        inverse_9_7_split(even, odd, cas);
+    }
 }
 
 /// Columns per batch in the vertical pass. Eight `f32` or `i32` lanes fill two
 /// 128-bit SSE2 vectors (or one AVX vector), and the compiler vectorizes the
 /// per-lane loops by itself.
 const LANES: usize = 8;
-
-/// Working buffers for [`merge_level`], allocated once per tile-component and
-/// reused at every level.
-struct Scratch<T> {
-    /// One row, interleaved.
-    line: Vec<[T; 1]>,
-    /// A batch of [`LANES`] columns, interleaved.
-    columns: Vec<[T; LANES]>,
-    /// One column, for the columns left over after the last full batch.
-    column: Vec<[T; 1]>,
-}
-
-/// Empty `buf` and refill it with `len` default entries, keeping its capacity.
-fn reset<T: Copy + Default, const L: usize>(buf: &mut Vec<[T; L]>, len: usize) {
-    buf.clear();
-    buf.resize(len, [T::default(); L]);
-}
 
 /// Merge the subband pyramid into the full-resolution band, coarsest level
 /// first. Each level combines the running LL with its three detail bands via
@@ -147,14 +148,9 @@ fn reset<T: Copy + Default, const L: usize>(buf: &mut Vec<[T; L]>, len: usize) {
 /// Each level's bands are consumed as they are merged, so the coarser levels'
 /// buffers are freed before the finer levels are built.
 fn reconstruct<S: Synthesis>(bands: Bands<S::Sample>) -> Band<S::Sample> {
-    let mut scratch = Scratch {
-        line: Vec::new(),
-        columns: Vec::new(),
-        column: Vec::new(),
-    };
     let mut ll = bands.ll;
     for detail in bands.levels {
-        ll = merge_level::<S>(ll, detail, &mut scratch);
+        ll = merge_level::<S>(ll, detail);
     }
     ll
 }
@@ -174,26 +170,37 @@ fn reconstruct<S: Synthesis>(bands: Bands<S::Sample>) -> Band<S::Sample> {
 /// and likewise `ll.origin.y + lh.origin.y == v0`. That is what makes each level
 /// self-describing: nothing has to thread the tile's geometry down here.
 ///
-/// The bands are copied into the grid as four blocks rather than interleaved,
-/// and each band is freed once it is copied. The grid starts as zeroed memory,
-/// which the operating system maps a page at a time as it is first written, so
-/// a band's block maps about as many pages as the band frees. The buffers then
-/// peak at the level's bands plus one band, 1.25 times the level's size, where
-/// interleaving the bands straight into the grid maps half the grid for LL
-/// alone and peaks at 1.5 times. The interleave happens a row or a batch of
-/// columns at a time instead, in `scratch`.
+/// ## Memory
 ///
-/// The scratch adds to that peak. Its largest buffer holds a batch of
-/// [`LANES`] columns, `LANES * height` samples, which is `LANES / width` of
-/// the grid: as large as the grid itself at width 8, so the peak reaches 2.25
-/// times the level's size there, falling toward 1.8 times at width 15, and at
-/// most half a grid from width 16 up. A grid narrower than `LANES` has no full
-/// batch and sizes no batch buffer. The one-row and one-column buffers hold
-/// `width` and `height` samples.
+/// The four bands hold the level's `width * height` samples. The grid starts
+/// as zeroed memory, which the operating system maps a page at a time as it
+/// is first written when the allocator takes fresh pages for it, as it does
+/// for a large grid. The bands are copied into the grid as four blocks, each
+/// freed once it is copied, so the bands and the grid peak at the level's
+/// size plus its largest band. LL is the largest, a quarter of the level
+/// rounded up to whole rows and columns, so the peak is about 1.25 times the
+/// level's size. Reading the bands straight into the interleave instead would
+/// keep LL and HL alive until the whole top half of the grid is written, and
+/// peak at 1.5 times.
+///
+/// Each pass sizes its own working buffer and frees it when it ends, so none
+/// is alive during the copy, and no two at once:
+///
+/// - The row pass holds one row, `width` samples.
+/// - The column pass holds a batch of [`LANES`] columns, `LANES * height`
+///   samples, only when the grid is at least `2 * LANES` wide, so the batch is
+///   at most half the grid. The columns after the last full batch, or all of
+///   them on a narrower grid, go one at a time through a buffer of `height`
+///   samples. With both, the column pass holds at most `(LANES + 1) * height`
+///   samples, `9 / 17` of the grid at width 17 and less on wider grids. On a
+///   grid narrower than `2 * LANES` it holds `height` samples, which is the
+///   whole grid at width 1 and half of it at width 2.
+///
+/// The level's peak is the grid plus the largest of these: the largest band,
+/// one row, or the column buffers.
 fn merge_level<S: Synthesis>(
     ll: Band<S::Sample>,
     detail: DetailBands<S::Sample>,
-    scratch: &mut Scratch<S::Sample>,
 ) -> Band<S::Sample> {
     let DetailBands { hl, lh, hh } = detail;
     // The four bands tile the resolution: LL/LH share the low-pass column count,
@@ -239,40 +246,35 @@ fn merge_level<S: Synthesis>(
     // for a single tile at the canvas origin, which is why it only surfaces now.
     // With no columns, the column pass below runs no batch either.
     //
-    // The row pass leaves the rows in block order: the low-pass rows on top,
-    // the high-pass rows below. The column pass interleaves them as it reads
-    // each batch of columns and writes the batch back in image order.
+    // Each row of the grid holds its low-pass samples on the left and its
+    // high-pass samples on the right, which are the two halves the split
+    // kernel lifts in place. The row is then interleaved through `line` and
+    // copied back. The rows stay in block order: the low-pass rows on top, the
+    // high-pass rows below. The column pass interleaves them as it reads each
+    // batch of columns and writes the batch back in image order.
     if width > 0 {
-        let line = &mut scratch.line;
-        reset(line, width);
+        let mut line = vec![S::Sample::default(); width];
         for row in grid.chunks_exact_mut(width) {
-            let (low, high) = row.split_at(low_x);
-            for (i, &value) in low.iter().enumerate() {
-                line[2 * i + cas_x] = [value];
-            }
-            for (i, &value) in high.iter().enumerate() {
-                line[2 * i + 1 - cas_x] = [value];
-            }
-            S::inverse(line, cas_x);
-            row.copy_from_slice(line.as_flattened());
+            let (low, high) = row.split_at_mut(low_x);
+            let (even, odd) = if cas_x == 0 { (low, high) } else { (high, low) };
+            S::inverse_split(even, odd, cas_x);
+            interleave(&mut line, even, odd);
+            row.copy_from_slice(&line);
         }
     }
     // The columns in batches of `LANES`, then the rest one at a time. Each
-    // column gets the same per-sample arithmetic either way. The batch buffer
-    // is sized only when a full batch exists, so it never outgrows the grid: a
-    // grid narrower than `LANES` would otherwise allocate up to `LANES` times
-    // its own size for a buffer it never uses.
-    let full = width - width % LANES;
+    // column gets the same per-sample arithmetic either way.
+    let full = batched_columns(width);
     if full > 0 {
-        reset(&mut scratch.columns, height);
+        let mut columns = vec![[S::Sample::default(); LANES]; height];
         for x0 in (0..full).step_by(LANES) {
-            column_batch::<S, LANES>(&mut grid, width, x0, low_y, cas_y, &mut scratch.columns);
+            column_batch::<S, LANES>(&mut grid, width, x0, low_y, cas_y, &mut columns);
         }
     }
     if full < width {
-        reset(&mut scratch.column, height);
+        let mut column = vec![[S::Sample::default(); 1]; height];
         for x0 in full..width {
-            column_batch::<S, 1>(&mut grid, width, x0, low_y, cas_y, &mut scratch.column);
+            column_batch::<S, 1>(&mut grid, width, x0, low_y, cas_y, &mut column);
         }
     }
 
@@ -281,6 +283,32 @@ fn merge_level<S: Synthesis>(
         width,
         height,
         data: grid,
+    }
+}
+
+/// How many of a grid's `width` columns the column pass runs in batches of
+/// [`LANES`]: every full batch once the grid is at least two batches wide, and
+/// none below that, where a batch buffer would be more than half the grid (and
+/// below `LANES` columns, up to `LANES` times its size).
+fn batched_columns(width: usize) -> usize {
+    if width >= 2 * LANES {
+        width - width % LANES
+    } else {
+        0
+    }
+}
+
+/// Write `even` to the even indices of `out` and `odd` to the odd ones.
+/// `out` holds `even.len() + odd.len()` samples, and `even` has as many as
+/// `odd` or one more.
+fn interleave<T: Copy>(out: &mut [T], even: &[T], odd: &[T]) {
+    debug_assert_eq!(out.len(), even.len() + odd.len());
+    for (pair, (&e, &o)) in out.chunks_exact_mut(2).zip(even.iter().zip(odd)) {
+        pair[0] = e;
+        pair[1] = o;
+    }
+    if even.len() > odd.len() {
+        out[out.len() - 1] = even[even.len() - 1];
     }
 }
 
@@ -441,6 +469,91 @@ fn lift_9_7<const L: usize>(signals: &mut [[f32; L]], start: usize, coeff: f32) 
     lift(signals, start, |t, left, right| t + coeff * (left + right));
 }
 
+/// [`lift`] over one signal held split by index parity: `even` holds samples
+/// `0, 2, 4, ...` and `odd` holds `1, 3, 5, ...`, so `even` has as many as
+/// `odd` or one more, and together at least two. `parity` picks the samples
+/// the sweep updates: `even` when 0, `odd` when 1.
+///
+/// The neighbors of even sample `2i` are odd samples `i - 1` and `i`, and the
+/// neighbors of odd sample `2i + 1` are even samples `i` and `i + 1`. The
+/// mirror extension reaches past an end only at the first and last sample of
+/// the whole signal, where both neighbors are the one sample inside it: the
+/// first even sample reads `odd[0]` twice, and the last sample reads its one
+/// neighbor twice. Every other sample reads its neighbors directly, from a
+/// slice the sweep does not write, so the loop vectorizes.
+#[inline(always)]
+fn lift_split<T: Copy>(even: &mut [T], odd: &mut [T], parity: usize, step: impl Fn(T, T, T) -> T) {
+    let (m, o) = (even.len(), odd.len());
+    debug_assert!(o >= 1 && (m == o || m == o + 1));
+    if parity == 0 {
+        even[0] = step(even[0], odd[0], odd[0]);
+        for ((t, &left), &right) in even[1..].iter_mut().zip(&*odd).zip(&odd[1..]) {
+            *t = step(*t, left, right);
+        }
+        if m > o {
+            even[m - 1] = step(even[m - 1], odd[o - 1], odd[o - 1]);
+        }
+    } else {
+        for ((t, &left), &right) in odd.iter_mut().zip(&*even).zip(&even[1..]) {
+            *t = step(*t, left, right);
+        }
+        if m == o {
+            odd[o - 1] = step(odd[o - 1], even[m - 1], even[m - 1]);
+        }
+    }
+}
+
+/// [`inverse_5_3`] over one signal held split by index parity, as in
+/// [`lift_split`]. The arithmetic is the same, sample for sample.
+fn inverse_5_3_split(even: &mut [i32], odd: &mut [i32], cas: usize) {
+    if odd.is_empty() {
+        // At most one sample, at index 0: halve it when it is high-pass.
+        if cas == 1 {
+            for v in even {
+                *v /= 2;
+            }
+        }
+        return;
+    }
+    let saturate = crate::mct::saturate;
+    lift_split(even, odd, cas, |t, left, right| {
+        saturate(t as i64 - ((left as i64 + right as i64 + 2) >> 2))
+    });
+    lift_split(even, odd, 1 - cas, |t, left, right| {
+        saturate(t as i64 + ((left as i64 + right as i64) >> 1))
+    });
+}
+
+/// [`inverse_9_7`] over one signal held split by index parity, as in
+/// [`lift_split`]. The arithmetic is the same, sample for sample.
+fn inverse_9_7_split(even: &mut [f32], odd: &mut [f32], cas: usize) {
+    if odd.is_empty() {
+        return;
+    }
+    let two_inv_k = 2.0 * (1.0 / K);
+    let (low, high) = if cas == 0 {
+        (&mut *even, &mut *odd)
+    } else {
+        (&mut *odd, &mut *even)
+    };
+    for v in low.iter_mut() {
+        *v *= K;
+    }
+    for v in high.iter_mut() {
+        *v *= two_inv_k;
+    }
+    let (low, high) = (cas, 1 - cas);
+    let lift = |even: &mut [f32], odd: &mut [f32], parity, coeff: f32| {
+        lift_split(even, odd, parity, |t, left, right| {
+            t + coeff * (left + right)
+        });
+    };
+    lift(even, odd, low, -DELTA);
+    lift(even, odd, high, -GAMMA);
+    lift(even, odd, low, -BETA);
+    lift(even, odd, high, -ALPHA);
+}
+
 /// The scalar kernels as they were before the edge-only extension and the
 /// column batches, kept as the oracle for the kernels above: they look up
 /// every neighbor through [`reflect`]. Also the scalar entry points the 1-D
@@ -544,7 +657,10 @@ mod reference {
 /// each lane.
 #[cfg(test)]
 mod edge_extension {
-    use super::{LANES, inverse_5_3, inverse_9_7, reference};
+    use super::{
+        LANES, interleave, inverse_5_3, inverse_5_3_split, inverse_9_7, inverse_9_7_split,
+        reference,
+    };
 
     /// A fixed, lane- and index-dependent sample pattern with large swings, so
     /// a wrong neighbor changes the result.
@@ -620,6 +736,46 @@ mod edge_extension {
                 check_5_3::<LANES>(n, cas);
                 check_9_7::<1>(n, cas);
                 check_9_7::<LANES>(n, cas);
+            }
+        }
+    }
+
+    /// Split `x` by index parity, run `kernel` on the two halves, and
+    /// interleave them back.
+    fn split_run<T: Copy + Default>(
+        x: &[T],
+        cas: usize,
+        kernel: fn(&mut [T], &mut [T], usize),
+    ) -> Vec<T> {
+        let mut even: Vec<T> = x.iter().step_by(2).copied().collect();
+        let mut odd: Vec<T> = x.iter().skip(1).step_by(2).copied().collect();
+        kernel(&mut even, &mut odd, cas);
+        let mut out = vec![T::default(); x.len()];
+        interleave(&mut out, &even, &odd);
+        out
+    }
+
+    /// The split row kernels against the [`reflect`](reference::reflect)
+    /// ones, bit for bit, on every length from 0 to 40 and both parities of
+    /// the first sample: the one-sample cases, `n = 2` where the first and
+    /// last sample read the same neighbor, and both parities of the last
+    /// sample.
+    #[test]
+    fn split_kernels_match_reflect() {
+        for n in 0..=40 {
+            for cas in [0, 1] {
+                let x: Vec<i32> = (0..n).map(|i| sample(i, 0, n) as i32).collect();
+                let mut want = x.clone();
+                reference::inverse_5_3(&mut want, cas);
+                let got = split_run(&x, cas, inverse_5_3_split);
+                assert_eq!(got, want, "5/3 n {n} cas {cas}");
+
+                let x: Vec<f32> = (0..n).map(|i| sample(i, 1, n) as f32 / 7.0).collect();
+                let mut want = x.clone();
+                reference::inverse_9_7(&mut want, cas);
+                let got = split_run(&x, cas, inverse_9_7_split);
+                let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&got), bits(&want), "9/7 n {n} cas {cas}");
             }
         }
     }
@@ -715,6 +871,30 @@ mod tests {
         assert_eq!(GAMMA, 0.882_911_075_530_934_f64 as f32);
         assert_eq!(DELTA, 0.443_506_852_043_971_f64 as f32);
         assert_eq!(K, 1.230_174_104_914_001_f64 as f32);
+    }
+
+    /// The column pass batches only grids at least two batches wide, so the
+    /// batch buffer, `LANES * height` samples, is at most half the grid.
+    #[test]
+    fn column_batches_start_at_two_batches_wide() {
+        use super::{LANES, batched_columns};
+        for (width, batched) in [
+            (0, 0),
+            (1, 0),
+            (7, 0),
+            (8, 0),
+            (9, 0),
+            (15, 0),
+            (16, 16),
+            (17, 16),
+            (23, 16),
+            (24, 24),
+            (31, 24),
+            (1027, 1024),
+        ] {
+            assert_eq!(batched_columns(width), batched, "width {width}");
+            assert!(batched == 0 || width >= 2 * LANES);
+        }
     }
 
     /// Whole-sample symmetric extension reflects about the edges without
@@ -1384,6 +1564,64 @@ mod scatter_differential {
             ll: band(u0, u1, v0, v1, rng, sample),
             levels: details,
         }
+    }
+
+    /// The driver against the interleaved scatter with the
+    /// [`reflect`](super::reference::reflect) kernels on one resolution,
+    /// bit for bit on both filters.
+    fn check(area: (u32, u32, u32, u32), levels: usize, seed: u64) {
+        let int = |r: u64| (r % 4001) as i32 - 2000;
+        let bands = pyramid(area, levels, &mut Rng(seed), &int);
+        let old = old_reconstruct(&bands, inverse_5_3);
+        assert_eq!(
+            old,
+            reconstruct::<Reversible53>(bands),
+            "5/3 {area:?} {levels} levels"
+        );
+        let real = |r: u64| ((r % 100_001) as f32 - 50_000.0) / 7.0;
+        let bands = pyramid(area, levels, &mut Rng(seed), &real);
+        let old = old_reconstruct(&bands, inverse_9_7);
+        let new = reconstruct::<Irreversible97>(bands);
+        assert_eq!(
+            (old.origin, old.width, old.height),
+            (new.origin, new.width, new.height)
+        );
+        assert!(
+            old.data
+                .iter()
+                .zip(&new.data)
+                .all(|(a, b)| a.to_bits() == b.to_bits()),
+            "9/7 {area:?} {levels} levels"
+        );
+    }
+
+    /// Every resolution up to 18 x 18 samples, at every origin modulo 4 on
+    /// both axes, at 0 to 7 levels. That covers one-sample and empty bands,
+    /// odd and even band sizes at both parities, and grids just below, at
+    /// and just above the width where the column pass starts batching
+    /// (`2 * LANES`), with tails of zero to two columns. Wider grids with
+    /// several batches and every tail length follow, on short heights.
+    #[test]
+    fn every_small_grid_matches_the_interleaved_scatter() {
+        let mut cases = 0;
+        let mut seed = 1;
+        let shapes = (0..=18u32)
+            .flat_map(|w| (0..=18u32).map(move |h| (w, h)))
+            .chain(
+                (23..=41u32)
+                    .chain([47, 48, 49, 64, 65])
+                    .flat_map(|w| [1u32, 2, 3, 9].map(|h| (w, h))),
+            );
+        for (w, h) in shapes {
+            for (u0, v0) in (0..4u32).flat_map(|u| (0..4u32).map(move |v| (u, v))) {
+                for levels in 0..=7 {
+                    seed += 1;
+                    check((u0, u0 + w, v0, v0 + h), levels, seed);
+                    cases += 1;
+                }
+            }
+        }
+        assert_eq!(cases, (19 * 19 + 24 * 4) * 16 * 8);
     }
 
     /// One case in four is at most two samples wide on an axis, and up to

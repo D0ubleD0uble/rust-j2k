@@ -43,7 +43,9 @@ Also, the decoder now bounds its work, so a file 0.3 decoded can come back as
 sample limit itself is higher than in 0.3 (2^28 samples, four times
 2^26), so no image 0.3 decoded is refused on size. But the default now
 admits four times the samples, which is about 1.4 GiB peak, estimated, for
-a single-component tile, and about twice that for a JP2 palette.
+a square single-component tile, about 1.7 GiB for a tall tile 8 samples
+wide, up to about 2.6 GiB for one 1 sample wide, and about twice the output
+for a JP2 palette.
 `WorkLimit` cannot set a lower ceiling. To keep one, check `width`,
 `height` and the component count from `read_header` before decoding.
 Adding `Image::jp2` and `Image::report` breaks no caller, since `Image` is

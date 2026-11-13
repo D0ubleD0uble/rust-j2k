@@ -1194,9 +1194,11 @@ loaded machine; peak resident memory from `/usr/bin/time -v`):
 | `single_block_32769_16385.jp2` | reduction 3, bit-exact | 1.05 s | 86 MiB | 0.25 s | 92 MiB |
 
 The peak is about 1.0 times the 4-byte output for the Sentinel-2 band (460
-MiB of samples) and about 1.35 times for one tile of one component (see the
-table in `src/samples.rs`), so the default allows a peak of about 1.4 GiB,
-and about twice the output while a palette expands. Tests:
+MiB of samples) and about 1.35 times for one square tile of one component
+(see the table in `src/samples.rs`), so the default allows a peak of about
+1.4 GiB. A tall, narrow tile peaks higher: about 1.5 to 1.7 times when it is
+8 to 1024 samples wide, and up to about 2.6 times when it is one sample wide.
+While a palette expands the peak is about twice the output. Tests:
 `tests/sample_limit.rs` and `tests/sample_limit_alloc.rs`.
 
 ### Tile header cost
