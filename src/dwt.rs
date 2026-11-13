@@ -13,9 +13,15 @@
 //!
 //! ## The 1-D kernel contract
 //!
-//! The two kernels here operate on one *interleaved* subband row/column in
+//! The two kernels here operate on *interleaved* subband rows or columns in
 //! place (the array the standard calls `a(i)` after the implicit deinterleave).
-//! On return the slice holds the reconstructed samples.
+//! On return the slice holds the reconstructed samples. They take `L` signals
+//! at once, as a slice of `[T; L]` with one entry per index, and run the same
+//! arithmetic on each lane: the row pass runs one row, and the column pass runs
+//! eight columns per batch so the compiler can vectorize across them.
+//!
+//! The mirror extension reaches only one sample past either end, so the
+//! kernels apply it at the first and last sample and index directly elsewhere.
 //!
 //! Which index holds a low-pass coefficient depends on where the row *starts*.
 //! A sample is low-pass when its coordinate on the tile-component grid is even,
@@ -71,32 +77,84 @@ pub fn inverse(header: &MainHeader, comp: usize, coeffs: SubbandCoeffs) -> Resul
             // `<=`: under a resolution reduction the pyramid arrives with its
             // finest levels already dropped; the synthesis just stops early.
             debug_assert!(bands.levels.len() <= coding.decomposition_levels as usize);
-            Ok(Samples::Reversible(reconstruct(bands, inverse_5_3).data))
+            Ok(Samples::Reversible(reconstruct::<Reversible53>(bands).data))
         }
         SubbandCoeffs::Irreversible(bands) => {
             let coding = &header.components[comp].coding;
             debug_assert_eq!(coding.transform, Transform::Irreversible97);
             debug_assert!(bands.levels.len() <= coding.decomposition_levels as usize);
-            Ok(Samples::Irreversible(reconstruct(bands, inverse_9_7).data))
+            Ok(Samples::Irreversible(
+                reconstruct::<Irreversible97>(bands).data,
+            ))
         }
     }
 }
 
+/// A 1-D synthesis filter, run over `L` signals in lockstep: `signals[i][k]`
+/// is sample `i` of signal `k`. A row is `L == 1`; the column pass runs
+/// [`LANES`] columns at once.
+trait Synthesis {
+    type Sample: Copy + Default;
+    fn inverse<const L: usize>(signals: &mut [[Self::Sample; L]], cas: usize);
+}
+
+/// The reversible 5/3 filter, [`inverse_5_3`].
+struct Reversible53;
+
+impl Synthesis for Reversible53 {
+    type Sample = i32;
+    fn inverse<const L: usize>(signals: &mut [[i32; L]], cas: usize) {
+        inverse_5_3(signals, cas);
+    }
+}
+
+/// The irreversible 9/7 filter, [`inverse_9_7`].
+struct Irreversible97;
+
+impl Synthesis for Irreversible97 {
+    type Sample = f32;
+    fn inverse<const L: usize>(signals: &mut [[f32; L]], cas: usize) {
+        inverse_9_7(signals, cas);
+    }
+}
+
+/// Columns per batch in the vertical pass. Eight `f32` or `i32` lanes fill two
+/// 128-bit SSE2 vectors (or one AVX vector), and the compiler vectorizes the
+/// per-lane loops by itself.
+const LANES: usize = 8;
+
+/// Working buffers for [`merge_level`], allocated once per tile-component and
+/// reused at every level.
+struct Scratch<T> {
+    /// One row, interleaved.
+    line: Vec<[T; 1]>,
+    /// A batch of [`LANES`] columns, interleaved.
+    columns: Vec<[T; LANES]>,
+    /// One column, for the columns left over after the last full batch.
+    column: Vec<[T; 1]>,
+}
+
+/// Empty `buf` and refill it with `len` default entries, keeping its capacity.
+fn reset<T: Copy + Default, const L: usize>(buf: &mut Vec<[T; L]>, len: usize) {
+    buf.clear();
+    buf.resize(len, [T::default(); L]);
+}
+
 /// Merge the subband pyramid into the full-resolution band, coarsest level
 /// first. Each level combines the running LL with its three detail bands via
-/// `kernel` (the 1-D synthesis for the chosen filter) and becomes the next
-/// level's LL.
+/// the filter `S` and becomes the next level's LL.
 ///
 /// Each level's bands are consumed as they are merged, so the coarser levels'
 /// buffers are freed before the finer levels are built.
-fn reconstruct<T, F>(bands: Bands<T>, kernel: F) -> Band<T>
-where
-    T: Copy + Default,
-    F: Fn(&mut [T], usize),
-{
+fn reconstruct<S: Synthesis>(bands: Bands<S::Sample>) -> Band<S::Sample> {
+    let mut scratch = Scratch {
+        line: Vec::new(),
+        columns: Vec::new(),
+        column: Vec::new(),
+    };
     let mut ll = bands.ll;
     for detail in bands.levels {
-        ll = merge_level(ll, detail, &kernel);
+        ll = merge_level::<S>(ll, detail, &mut scratch);
     }
     ll
 }
@@ -122,13 +180,13 @@ where
 /// a band's block maps about as many pages as the band frees. The buffers then
 /// peak at the level's bands plus one band, 1.25 times the level's size, where
 /// interleaving the bands straight into the grid maps half the grid for LL
-/// alone and peaks at 1.5 times. The interleave happens a row or a column at a
-/// time instead, in `line` and `column`.
-fn merge_level<T, F>(ll: Band<T>, detail: DetailBands<T>, kernel: &F) -> Band<T>
-where
-    T: Copy + Default,
-    F: Fn(&mut [T], usize),
-{
+/// alone and peaks at 1.5 times. The interleave happens a row or a batch of
+/// columns at a time instead, in `scratch`.
+fn merge_level<S: Synthesis>(
+    ll: Band<S::Sample>,
+    detail: DetailBands<S::Sample>,
+    scratch: &mut Scratch<S::Sample>,
+) -> Band<S::Sample> {
     let DetailBands { hl, lh, hh } = detail;
     // The four bands tile the resolution: LL/LH share the low-pass column count,
     // HL/HH the high-pass count; LL/HL share the low-pass row count, LH/HH the
@@ -151,7 +209,7 @@ where
     let (low_x, low_y) = (ll.width, ll.height);
     let width = ll.width + hl.width;
     let height = ll.height + lh.height;
-    let mut grid = vec![T::default(); width * height];
+    let mut grid = vec![S::Sample::default(); width * height];
     for (band, left, top) in [
         (ll, 0, 0),
         (hl, low_x, 0),
@@ -171,37 +229,42 @@ where
     // coarse enough resolution collapses to zero columns. Legal input — a narrow
     // edge tile with enough decomposition levels reaches it — and unreachable
     // for a single tile at the canvas origin, which is why it only surfaces now.
+    // With no columns, the column pass below runs no batch either.
     //
     // The row pass leaves the rows in block order: the low-pass rows on top,
     // the high-pass rows below. The column pass interleaves them as it reads
-    // each column and writes the column back in image order.
+    // each batch of columns and writes the batch back in image order.
     if width > 0 {
-        let mut line = vec![T::default(); width];
+        let line = &mut scratch.line;
+        reset(line, width);
         for row in grid.chunks_exact_mut(width) {
             let (low, high) = row.split_at(low_x);
             for (i, &value) in low.iter().enumerate() {
-                line[2 * i + cas_x] = value;
+                line[2 * i + cas_x] = [value];
             }
             for (i, &value) in high.iter().enumerate() {
-                line[2 * i + 1 - cas_x] = value;
+                line[2 * i + 1 - cas_x] = [value];
             }
-            kernel(&mut line, cas_x);
-            row.copy_from_slice(&line);
+            S::inverse(line, cas_x);
+            row.copy_from_slice(line.as_flattened());
         }
     }
-    let mut column = vec![T::default(); height];
-    for x in 0..width {
-        for row in 0..height {
-            let y = if row < low_y {
-                2 * row + cas_y
-            } else {
-                2 * (row - low_y) + 1 - cas_y
-            };
-            column[y] = grid[row * width + x];
+    // The columns in batches of `LANES`, then the rest one at a time. Each
+    // column gets the same per-sample arithmetic either way. The batch buffer
+    // is sized only when a full batch exists, so it never outgrows the grid: a
+    // grid narrower than `LANES` would otherwise allocate up to `LANES` times
+    // its own size for a buffer it never uses.
+    let full = width - width % LANES;
+    if full > 0 {
+        reset(&mut scratch.columns, height);
+        for x0 in (0..full).step_by(LANES) {
+            column_batch::<S, LANES>(&mut grid, width, x0, low_y, cas_y, &mut scratch.columns);
         }
-        kernel(&mut column, cas_y);
-        for (y, &value) in column.iter().enumerate() {
-            grid[y * width + x] = value;
+    }
+    if full < width {
+        reset(&mut scratch.column, height);
+        for x0 in full..width {
+            column_batch::<S, 1>(&mut grid, width, x0, low_y, cas_y, &mut scratch.column);
         }
     }
 
@@ -213,45 +276,93 @@ where
     }
 }
 
-/// Whole-sample symmetric (mirror) extension (ISO/IEC 15444-1 F.3.6): map any
-/// index — including the negative and past-the-end ones the lifting steps reach
-/// for — onto a valid position in `0..n`, reflecting about the edge samples
-/// without repeating them. For `n > 1` the pattern has period `2 * (n - 1)`, so
-/// e.g. `-1 -> 1` and `n -> n - 2`.
-fn reflect(i: isize, n: usize) -> usize {
-    debug_assert!(n > 0);
-    if n == 1 {
-        return 0;
+/// The column pass over the `L` columns that start at `x0` of a grid `width`
+/// wide (`x0 + L <= width`): gather them into `buf`, which has one entry per
+/// row, interleaving the first `low_y` (low-pass) rows with the rest by the
+/// parity `cas_y`; run the filter down all `L` at once; and write them back in
+/// image order.
+fn column_batch<S: Synthesis, const L: usize>(
+    grid: &mut [S::Sample],
+    width: usize,
+    x0: usize,
+    low_y: usize,
+    cas_y: usize,
+    buf: &mut [[S::Sample; L]],
+) {
+    for (row, src) in grid.chunks_exact(width).enumerate() {
+        let y = if row < low_y {
+            2 * row + cas_y
+        } else {
+            2 * (row - low_y) + 1 - cas_y
+        };
+        buf[y].copy_from_slice(&src[x0..x0 + L]);
     }
-    let period = 2 * (n as isize - 1);
-    let mut k = i % period;
-    if k < 0 {
-        k += period;
+    S::inverse(buf, cas_y);
+    for (dst, lanes) in grid.chunks_exact_mut(width).zip(buf.iter()) {
+        dst[x0..x0 + L].copy_from_slice(lanes);
     }
-    if k >= n as isize {
-        k = period - k;
-    }
-    k as usize
 }
 
-/// One-dimensional inverse 5/3 reversible lifting over `signal` in place
-/// (F.3.8.2). Exact integer arithmetic: the arithmetic right shifts floor
-/// toward negative infinity, matching the standard's `floor` even for negative
-/// operands.
+/// One lifting sweep over every sample of the parity `start` selects, in all
+/// `L` lanes: `s[i] = step(s[i], s[i - 1], s[i + 1])` lane by lane, in index
+/// order. `signals` holds at least two samples.
+///
+/// The neighbors come from whole-sample symmetric (mirror) extension (ISO/IEC
+/// 15444-1 F.3.6), which reflects about the edge samples without repeating
+/// them. A lifting step reaches only one sample past either edge, so only the
+/// two end samples need it: at `i == 0` the left neighbor `-1` mirrors to `1`,
+/// and at `i == n - 1` the right neighbor `n` mirrors to `n - 2`. Every other
+/// sample reads its neighbors directly.
+#[inline(always)]
+fn lift<T: Copy, const L: usize>(
+    signals: &mut [[T; L]],
+    start: usize,
+    step: impl Fn(T, T, T) -> T,
+) {
+    let n = signals.len();
+    debug_assert!(n >= 2 && start <= 1);
+    let apply = |target: &mut [T; L], left: &[T; L], right: &[T; L]| {
+        for k in 0..L {
+            target[k] = step(target[k], left[k], right[k]);
+        }
+    };
+    let mut i = start;
+    if i == 0 {
+        let right = signals[1];
+        apply(&mut signals[0], &right, &right);
+        i = 2;
+    }
+    while i + 1 < n {
+        let (left, right) = (signals[i - 1], signals[i + 1]);
+        apply(&mut signals[i], &left, &right);
+        i += 2;
+    }
+    if i == n - 1 {
+        let left = signals[n - 2];
+        apply(&mut signals[i], &left, &left);
+    }
+}
+
+/// One-dimensional inverse 5/3 reversible lifting over `signals` in place
+/// (F.3.8.2), on each of the `L` lanes. Exact integer arithmetic: the
+/// arithmetic right shifts floor toward negative infinity, matching the
+/// standard's `floor` even for negative operands.
 ///
 /// The lifting sums run in `i64`: Tier-1 admits double-scale magnitudes near
 /// `2^30`, so on a hostile codestream `left + right` (of already-lifted
 /// samples) and the `±` on the target can leave `i32` — a debug build would
 /// panic on the overflow. Saturating back preserves bit-exactness for every
 /// in-range (legal) input, exactly as [`crate::mct`] does for RCT.
-fn inverse_5_3(signal: &mut [i32], cas: usize) {
-    let n = signal.len();
+fn inverse_5_3<const L: usize>(signals: &mut [[i32; L]], cas: usize) {
+    let n = signals.len();
     // A lone low-pass sample passes through; a lone high-pass sample is halved
     // (F.3.8.2.1's single-sample case, `tiledp[0] /= 2` in `opj_idwt53_h`). The
     // truncating division is the reference's, not a floor: `/ 2`, not `>> 1`.
     if n <= 1 {
         if n == 1 && cas == 1 {
-            signal[0] /= 2;
+            for v in &mut signals[0] {
+                *v /= 2;
+            }
         }
         return;
     }
@@ -260,26 +371,23 @@ fn inverse_5_3(signal: &mut [i32], cas: usize) {
     // step on the high-pass samples — the forward order reversed. A sample is
     // low-pass when its *absolute* coordinate is even, which is local index
     // `i ≡ cas (mod 2)`.
-    for i in (cas..n).step_by(2) {
-        let left = signal[reflect(i as isize - 1, n)] as i64;
-        let right = signal[reflect(i as isize + 1, n)] as i64;
-        signal[i] = saturate(signal[i] as i64 - ((left + right + 2) >> 2));
-    }
-    for i in (1 - cas..n).step_by(2) {
-        let left = signal[reflect(i as isize - 1, n)] as i64;
-        let right = signal[reflect(i as isize + 1, n)] as i64;
-        signal[i] = saturate(signal[i] as i64 + ((left + right) >> 1));
-    }
+    lift(signals, cas, |t, left, right| {
+        saturate(t as i64 - ((left as i64 + right as i64 + 2) >> 2))
+    });
+    lift(signals, 1 - cas, |t, left, right| {
+        saturate(t as i64 + ((left as i64 + right as i64) >> 1))
+    });
 }
 
-/// One-dimensional inverse 9/7 irreversible lifting over `signal` in place
-/// (F.3.8.1): undo the scaling, then the two update/predict lifting pairs in
-/// reverse order (`δ` update, `γ` predict, `β` update, `α` predict).
+/// One-dimensional inverse 9/7 irreversible lifting over `signals` in place
+/// (F.3.8.1), on each of the `L` lanes: undo the scaling, then the two
+/// update/predict lifting pairs in reverse order (`δ` update, `γ` predict,
+/// `β` update, `α` predict).
 ///
 /// `cas` is the parity of the signal's first absolute coordinate: low-pass
 /// samples sit at local index `i ≡ cas (mod 2)`, high-pass at the other parity.
-fn inverse_9_7(signal: &mut [f32], cas: usize) {
-    let n = signal.len();
+fn inverse_9_7<const L: usize>(signals: &mut [[f32; L]], cas: usize) {
+    let n = signals.len();
     // A single sample passes through unchanged whichever band it belongs to —
     // `opj_v8dwt_decode`'s two early returns, which cover `sn <= 1, dn == 0`
     // (a lone low-pass sample) and `sn == 0, dn <= 1` (a lone high-pass one).
@@ -301,34 +409,245 @@ fn inverse_9_7(signal: &mut [f32], cas: usize) {
     // the ordinary case stays bit-for-bit identical to the old form.
     let two_inv_k = 2.0 * (1.0 / K);
     for i in (low..n).step_by(2) {
-        signal[i] *= K;
+        for v in &mut signals[i] {
+            *v *= K;
+        }
     }
     for i in (high..n).step_by(2) {
-        signal[i] *= two_inv_k;
+        for v in &mut signals[i] {
+            *v *= two_inv_k;
+        }
     }
     // Each lifting step adjusts one parity using its two immediate neighbors of
-    // the other parity, swept across the whole row before the next step runs.
-    lift_step(signal, n, low, -DELTA); // s'_n = s_n - δ(d_{n-1} + d_n)
-    lift_step(signal, n, high, -GAMMA); // d'_n = d_n - γ(s'_n + s'_{n+1})
-    lift_step(signal, n, low, -BETA); // x_2n  = s'_n - β(d'_{n-1} + d'_n)
-    lift_step(signal, n, high, -ALPHA); // x_2n+1 = d'_n - α(x_2n + x_2n+2)
+    // the other parity, swept across the whole signal before the next step runs.
+    lift_9_7(signals, low, -DELTA); // s'_n = s_n - δ(d_{n-1} + d_n)
+    lift_9_7(signals, high, -GAMMA); // d'_n = d_n - γ(s'_n + s'_{n+1})
+    lift_9_7(signals, low, -BETA); // x_2n  = s'_n - β(d'_{n-1} + d'_n)
+    lift_9_7(signals, high, -ALPHA); // x_2n+1 = d'_n - α(x_2n + x_2n+2)
 }
 
 /// One 9/7 lifting sweep: add `coeff * (neighbor_left + neighbor_right)` to
 /// every sample of the parity `start` selects.
-fn lift_step(signal: &mut [f32], n: usize, start: usize, coeff: f32) {
-    for i in (start..n).step_by(2) {
-        let left = signal[reflect(i as isize - 1, n)];
-        let right = signal[reflect(i as isize + 1, n)];
-        signal[i] += coeff * (left + right);
+#[inline(always)]
+fn lift_9_7<const L: usize>(signals: &mut [[f32; L]], start: usize, coeff: f32) {
+    lift(signals, start, |t, left, right| t + coeff * (left + right));
+}
+
+/// The scalar kernels as they were before the edge-only extension and the
+/// column batches, kept as the oracle for the kernels above: they look up
+/// every neighbor through [`reflect`]. Also the scalar entry points the 1-D
+/// tests call.
+#[cfg(test)]
+mod reference {
+    use super::{ALPHA, BETA, DELTA, GAMMA, K};
+
+    /// Whole-sample symmetric (mirror) extension (ISO/IEC 15444-1 F.3.6): map
+    /// any index, including the negative and past-the-end ones the lifting
+    /// steps reach for, onto a valid position in `0..n`, reflecting about the
+    /// edge samples without repeating them. For `n > 1` the pattern has period
+    /// `2 * (n - 1)`, so e.g. `-1 -> 1` and `n -> n - 2`.
+    pub(super) fn reflect(i: isize, n: usize) -> usize {
+        debug_assert!(n > 0);
+        if n == 1 {
+            return 0;
+        }
+        let period = 2 * (n as isize - 1);
+        let mut k = i % period;
+        if k < 0 {
+            k += period;
+        }
+        if k >= n as isize {
+            k = period - k;
+        }
+        k as usize
+    }
+
+    /// Inverse 5/3 over one signal, every neighbor through [`reflect`].
+    pub(super) fn inverse_5_3(signal: &mut [i32], cas: usize) {
+        let n = signal.len();
+        if n <= 1 {
+            if n == 1 && cas == 1 {
+                signal[0] /= 2;
+            }
+            return;
+        }
+        let saturate = crate::mct::saturate;
+        for i in (cas..n).step_by(2) {
+            let left = signal[reflect(i as isize - 1, n)] as i64;
+            let right = signal[reflect(i as isize + 1, n)] as i64;
+            signal[i] = saturate(signal[i] as i64 - ((left + right + 2) >> 2));
+        }
+        for i in (1 - cas..n).step_by(2) {
+            let left = signal[reflect(i as isize - 1, n)] as i64;
+            let right = signal[reflect(i as isize + 1, n)] as i64;
+            signal[i] = saturate(signal[i] as i64 + ((left + right) >> 1));
+        }
+    }
+
+    /// Inverse 9/7 over one signal, every neighbor through [`reflect`].
+    pub(super) fn inverse_9_7(signal: &mut [f32], cas: usize) {
+        let n = signal.len();
+        if n <= 1 {
+            return;
+        }
+        let (low, high) = (cas, 1 - cas);
+        let two_inv_k = 2.0 * (1.0 / K);
+        for i in (low..n).step_by(2) {
+            signal[i] *= K;
+        }
+        for i in (high..n).step_by(2) {
+            signal[i] *= two_inv_k;
+        }
+        lift_step(signal, n, low, -DELTA);
+        lift_step(signal, n, high, -GAMMA);
+        lift_step(signal, n, low, -BETA);
+        lift_step(signal, n, high, -ALPHA);
+    }
+
+    /// One 9/7 lifting sweep: add `coeff * (neighbor_left + neighbor_right)`
+    /// to every sample of the parity `start` selects.
+    pub(super) fn lift_step(signal: &mut [f32], n: usize, start: usize, coeff: f32) {
+        for i in (start..n).step_by(2) {
+            let left = signal[reflect(i as isize - 1, n)];
+            let right = signal[reflect(i as isize + 1, n)];
+            signal[i] += coeff * (left + right);
+        }
+    }
+
+    /// [`super::inverse_5_3`] on one signal: the shipped kernel at one lane.
+    pub(super) fn lane_5_3(signal: &mut [i32], cas: usize) {
+        let mut lanes: Vec<[i32; 1]> = signal.iter().map(|&v| [v]).collect();
+        super::inverse_5_3(&mut lanes, cas);
+        signal.copy_from_slice(lanes.as_flattened());
+    }
+
+    /// [`super::inverse_9_7`] on one signal: the shipped kernel at one lane.
+    pub(super) fn lane_9_7(signal: &mut [f32], cas: usize) {
+        let mut lanes: Vec<[f32; 1]> = signal.iter().map(|&v| [v]).collect();
+        super::inverse_9_7(&mut lanes, cas);
+        signal.copy_from_slice(lanes.as_flattened());
+    }
+}
+
+/// The edge-only kernels against the [`reflect`](reference::reflect) ones,
+/// bit for bit, on every length from 0 to 40 (so `n = 1, 2, 3` and both
+/// parities of the last sample), both parities of the first sample, and both
+/// at one lane and at [`LANES`](super::LANES) lanes with a different signal in
+/// each lane.
+#[cfg(test)]
+mod edge_extension {
+    use super::{LANES, inverse_5_3, inverse_9_7, reference};
+
+    /// A fixed, lane- and index-dependent sample pattern with large swings, so
+    /// a wrong neighbor changes the result.
+    fn sample(i: usize, lane: usize, n: usize) -> i64 {
+        let h = (i as u64 + 1)
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            .wrapping_add((lane as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9))
+            .wrapping_add(n as u64);
+        ((h >> 33) % 20_001) as i64 - 10_000
+    }
+
+    fn check_5_3<const L: usize>(n: usize, cas: usize) {
+        let mut lanes = vec![[0i32; L]; n];
+        for (i, s) in lanes.iter_mut().enumerate() {
+            for (k, v) in s.iter_mut().enumerate() {
+                *v = sample(i, k, n) as i32;
+            }
+        }
+        let mut want: Vec<Vec<i32>> = (0..L)
+            .map(|k| lanes.iter().map(|s| s[k]).collect())
+            .collect();
+        for w in &mut want {
+            reference::inverse_5_3(w, cas);
+        }
+        inverse_5_3(&mut lanes, cas);
+        for (k, w) in want.iter().enumerate() {
+            let got: Vec<i32> = lanes.iter().map(|s| s[k]).collect();
+            assert_eq!(&got, w, "5/3 n {n} cas {cas} lanes {L} lane {k}");
+        }
+    }
+
+    fn check_9_7<const L: usize>(n: usize, cas: usize) {
+        let mut lanes = vec![[0f32; L]; n];
+        for (i, s) in lanes.iter_mut().enumerate() {
+            for (k, v) in s.iter_mut().enumerate() {
+                *v = sample(i, k, n) as f32 / 7.0;
+            }
+        }
+        let mut want: Vec<Vec<f32>> = (0..L)
+            .map(|k| lanes.iter().map(|s| s[k]).collect())
+            .collect();
+        for w in &mut want {
+            reference::inverse_9_7(w, cas);
+        }
+        inverse_9_7(&mut lanes, cas);
+        for (k, w) in want.iter().enumerate() {
+            let got: Vec<u32> = lanes.iter().map(|s| s[k].to_bits()).collect();
+            let w: Vec<u32> = w.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(got, w, "9/7 n {n} cas {cas} lanes {L} lane {k}");
+        }
+    }
+
+    /// The shortest signals, where the two ends are one or two samples apart
+    /// and the first sample's left neighbor and the last sample's right
+    /// neighbor can be the same sample.
+    #[test]
+    fn short_signals_match_reflect() {
+        for n in 0..=3 {
+            for cas in [0, 1] {
+                check_5_3::<1>(n, cas);
+                check_5_3::<LANES>(n, cas);
+                check_9_7::<1>(n, cas);
+                check_9_7::<LANES>(n, cas);
+            }
+        }
+    }
+
+    #[test]
+    fn every_length_to_40_matches_reflect() {
+        for n in 4..=40 {
+            for cas in [0, 1] {
+                check_5_3::<1>(n, cas);
+                check_5_3::<LANES>(n, cas);
+                check_9_7::<1>(n, cas);
+                check_9_7::<LANES>(n, cas);
+            }
+        }
+    }
+
+    /// Hand-checked 5/3 vectors at `n = 2` and `n = 3`, independent of
+    /// [`reference::reflect`]. With `cas = 0` and `[s0, d0]`: `s0 -= (2*d0 +
+    /// 2) >> 2`, then `d0 += (2*s0) >> 1`. With `cas = 1` and `[d0, s0, d1]`:
+    /// `s0 -= (d0 + d1 + 2) >> 2`, then `d0 += (2*s0) >> 1` and `d1 += (2*s0)
+    /// >> 1`.
+    #[test]
+    fn short_5_3_vectors() {
+        let mut a = [[10], [4]];
+        inverse_5_3(&mut a, 0);
+        // s0 = 10 - (8 + 2) >> 2 = 8; d0 = 4 + 16 >> 1 = 12.
+        assert_eq!(a, [[8], [12]]);
+        let mut a = [[4], [10]];
+        inverse_5_3(&mut a, 1);
+        // Low-pass at index 1: s0 = 10 - (8 + 2) >> 2 = 8; d0 = 4 + 8 = 12.
+        assert_eq!(a, [[12], [8]]);
+        let mut a = [[3], [20], [-5]];
+        inverse_5_3(&mut a, 1);
+        // s0 = 20 - (3 - 5 + 2) >> 2 = 20; d0 = 3 + 20 = 23; d1 = -5 + 20 = 15.
+        assert_eq!(a, [[23], [20], [15]]);
+        let mut a = [[20], [3], [12]];
+        inverse_5_3(&mut a, 0);
+        // s0 = 20 - (6 + 2) >> 2 = 18; s1 = 12 - (6 + 2) >> 2 = 10;
+        // d0 = 3 + (18 + 10) >> 1 = 17.
+        assert_eq!(a, [[18], [17], [10]]);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::reference::{lane_5_3, lane_9_7, lift_step, reflect};
     use super::{
-        ALPHA, BETA, Band, Bands, DELTA, DetailBands, GAMMA, K, inverse_5_3, inverse_9_7,
-        lift_step, reconstruct, reflect,
+        ALPHA, BETA, Band, Bands, DELTA, DetailBands, GAMMA, Irreversible97, K, reconstruct,
     };
 
     /// Forward 5/3 lifting, the exact inverse of [`inverse_5_3`], transcribed
@@ -461,7 +780,7 @@ mod tests {
                 },
             ],
         };
-        let out = reconstruct(bands, inverse_9_7);
+        let out = reconstruct::<Irreversible97>(bands);
         assert_eq!((out.width, out.height), (3, 3));
         // Column-constant (all vertical detail is zero), the reference structure.
         let expected = [-23.819, 14.551, 14.359];
@@ -480,7 +799,7 @@ mod tests {
     #[test]
     fn inverse_5_3_known_vector() {
         let mut a = [10, 0, 33, 10];
-        inverse_5_3(&mut a, 0);
+        lane_5_3(&mut a, 0);
         assert_eq!(a, [10, 20, 30, 40]);
     }
 
@@ -503,7 +822,7 @@ mod tests {
             for cas in [0, 1] {
                 let mut a = s.to_vec();
                 forward_5_3(&mut a, cas);
-                inverse_5_3(&mut a, cas);
+                lane_5_3(&mut a, cas);
                 assert_eq!(
                     a,
                     s,
@@ -521,9 +840,9 @@ mod tests {
     fn inverse_5_3_saturates_on_extreme_coefficients() {
         for cas in [0, 1] {
             let mut a = [i32::MAX / 2, i32::MIN / 2, i32::MAX / 2, i32::MIN / 2];
-            inverse_5_3(&mut a, cas); // must not panic
+            lane_5_3(&mut a, cas); // must not panic
             let mut b = [i32::MAX, i32::MIN, i32::MAX, i32::MIN, i32::MAX];
-            inverse_5_3(&mut b, cas); // must not panic
+            lane_5_3(&mut b, cas); // must not panic
         }
     }
 
@@ -540,7 +859,7 @@ mod tests {
             for cas in [0, 1] {
                 let mut a = original.clone();
                 forward_9_7(&mut a, cas);
-                inverse_9_7(&mut a, cas);
+                lane_9_7(&mut a, cas);
                 for (got, want) in a.iter().zip(&original) {
                     assert!(
                         (got - want).abs() < 1e-3,
@@ -566,7 +885,7 @@ mod tests {
         for i in (1..len).step_by(2) {
             assert!(a[i].abs() < 1e-3, "high-pass coeff {i} = {}", a[i]);
         }
-        inverse_9_7(&mut a, 0);
+        lane_9_7(&mut a, 0);
         for &v in &a {
             assert!((v - 5.0).abs() < 1e-3, "DC not preserved: {v}");
         }
@@ -578,24 +897,24 @@ mod tests {
     fn degenerate_lengths_are_identity() {
         for cas in [0, 1] {
             let mut empty_i: [i32; 0] = [];
-            inverse_5_3(&mut empty_i, cas);
+            lane_5_3(&mut empty_i, cas);
             let mut empty_f: [f32; 0] = [];
-            inverse_9_7(&mut empty_f, cas);
+            lane_9_7(&mut empty_f, cas);
             // A single sample passes through 9/7 whichever band it is in.
             let mut one_f = [42.0f32];
-            inverse_9_7(&mut one_f, cas);
+            lane_9_7(&mut one_f, cas);
             assert_eq!(one_f, [42.0]);
         }
         // 5/3 passes a lone low-pass sample through and halves a lone high-pass
         // one (`tiledp[0] /= 2` in `opj_idwt53_h`), truncating toward zero.
         let mut one_low = [42];
-        inverse_5_3(&mut one_low, 0);
+        lane_5_3(&mut one_low, 0);
         assert_eq!(one_low, [42]);
         let mut one_high = [42];
-        inverse_5_3(&mut one_high, 1);
+        lane_5_3(&mut one_high, 1);
         assert_eq!(one_high, [21]);
         let mut one_high_negative = [-43];
-        inverse_5_3(&mut one_high_negative, 1);
+        lane_5_3(&mut one_high_negative, 1);
         assert_eq!(one_high_negative, [-21], "truncating division, not a floor");
     }
 
@@ -928,7 +1247,8 @@ mod tests {
 /// filters.
 #[cfg(test)]
 mod scatter_differential {
-    use super::{Band, Bands, DetailBands, inverse_5_3, inverse_9_7, reconstruct};
+    use super::reference::{inverse_5_3, inverse_9_7};
+    use super::{Band, Bands, DetailBands, Irreversible97, Reversible53, reconstruct};
 
     /// Place `band` at the interleaved position `(2*by + row_off, 2*bx + col_off)`.
     fn scatter<T: Copy>(
@@ -1081,14 +1401,14 @@ mod scatter_differential {
             let old = old_reconstruct(&bands, inverse_5_3);
             assert_eq!(
                 old,
-                reconstruct(bands, inverse_5_3),
+                reconstruct::<Reversible53>(bands),
                 "5/3 {area:?} {levels} levels"
             );
 
             let real = |r: u64| ((r % 100_001) as f32 - 50_000.0) / 7.0;
             let bands = pyramid(area, levels, &mut Rng(seed), &real);
             let old = old_reconstruct(&bands, inverse_9_7);
-            let new = reconstruct(bands, inverse_9_7);
+            let new = reconstruct::<Irreversible97>(bands);
             assert_eq!(
                 (old.origin, old.width, old.height),
                 (new.origin, new.width, new.height)
