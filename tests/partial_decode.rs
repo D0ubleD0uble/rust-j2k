@@ -532,12 +532,12 @@ fn packed(header: &[u8], body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A packed packet header that runs short is read as a strict decode reads
-/// it, with the bits past its end as fill, so the decode with `strict` off
-/// gives the same image: the stream does not end there, since the tile's
-/// body is whole.
+/// A packed packet header that runs short is damage, not the data ending:
+/// its bytes sit in a marker segment, which is there whole or not at all. The
+/// decode with `strict` off refuses it with the strict error. The same header
+/// whole decodes to the strict image.
 #[test]
-fn a_packed_header_that_runs_short_decodes_as_strict() {
+fn a_packed_header_that_runs_short_is_refused_as_strict() {
     let cases = [
         // A one-block header whose last byte is 0xFF, with and without the
         // stuffed byte the alignment after it reads.
@@ -570,6 +570,16 @@ fn a_packed_header_that_runs_short_decodes_as_strict() {
         } else {
             packed(&header, &body)
         };
+        if what.contains("short") || what.contains("no stuffed") {
+            let strict_error = decode_with(&bytes, &strict(0)).expect_err(what);
+            let partial_error = decode_with(&bytes, &lenient(0)).expect_err(what);
+            assert!(
+                matches!(&partial_error, Error::Codestream(m) if m.contains("packed headers")),
+                "{what}: {partial_error}"
+            );
+            assert_eq!(strict_error, partial_error, "{what}");
+            continue;
+        }
         let strict = decode_ok(&bytes, &strict(0), what);
         let partial = decode_ok(&bytes, &lenient(0), what);
         assert_eq!(strict, partial, "{what}");

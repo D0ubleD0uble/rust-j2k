@@ -771,6 +771,12 @@ pub(crate) fn visit(visits: &Visits, n: usize) -> Result<()> {
     }
 }
 
+/// The error for a packed packet header that reads past the end of the
+/// `PPM` or `PPT` bytes it is packed in.
+fn packed_overrun() -> Error {
+    Error::Codestream("a packet header runs past the end of its PPM or PPT packed headers".into())
+}
+
 /// The two-byte marker at `pos`, or `None` if it would run past the end.
 fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
     let hi = *data.get(pos)?;
@@ -960,9 +966,10 @@ fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
 /// With `log` given (a walk with `strict` off), running out of data is not a
 /// fault. A packet that ends past the data adds the code-blocks whose data is
 /// all there and undoes the rest, from the first code-block whose data runs
-/// out on, back to their earlier layers; a packet whose header runs out adds
-/// nothing. Either is [`Packet::Ended`]. Every other fault fails as it does
-/// when strict, and a packet the strict walk reads is read the same way.
+/// out on, back to their earlier layers; a packet whose inline header runs out
+/// adds nothing. Either is [`Packet::Ended`]. Every other fault fails as it
+/// does when strict, a packed header that runs out included, and a packet the
+/// strict walk reads is read the same way.
 #[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
     streams: &mut PacketStreams<'a>,
@@ -1045,6 +1052,14 @@ fn parse_packet<'a>(
             }
         }
     }
+    // A packed header that reads past its bytes is damaged, strict or not:
+    // the bits it needs are not in the codestream. Its bytes sit in the main
+    // or tile-part headers, which are there whole or not at all, so this is
+    // never the data ending. Checked before a fault, which the fill bits can
+    // cause.
+    if streams.packed && bio.overran() {
+        return Err(packed_overrun());
+    }
     if let Some(error) = fault {
         // Not strict, a fault in a header that runs past the data is the data
         // ending, not damage: the bits past the end are fill.
@@ -1065,11 +1080,17 @@ fn parse_packet<'a>(
     // Not strict, an inline header whose bits run past the data is the data
     // ending. That is taken before the alignment, which past a last byte of
     // 0xFF reads one more byte that a strict decode does not ask for. Packed
-    // headers are not checked: their bytes sit in the main or tile-part
-    // headers, which are there whole or not at all, and a strict decode reads
-    // a packed header that runs short as fill, so the body decides.
+    // headers are not checked here: their bytes sit in the main or tile-part
+    // headers, which are there whole or not at all, so one that runs short is
+    // refused below, as damage.
     let header_overran = bio.overran() && !streams.packed;
     bio.align();
+    // A packed header whose last byte is 0xFF needs the stuffed byte after it
+    // (B.10.1). Without one the header is damaged, as OpenJPEG's
+    // `opj_bio_inalign` also finds.
+    if streams.packed && bio.overran() {
+        return Err(packed_overrun());
+    }
     streams.header_pos += bio.bytes_consumed();
     if let Some(log) = log.as_deref() {
         let eph_cut = delimiters.eph && streams.header_pos + 2 > streams.header.len();
