@@ -430,6 +430,26 @@ Both tools are OpenJPEG 2.5.0. `grib2_shape_1440x721_u16.expected.json` holds
 the FNV-1a digest of `opj_decompress`'s samples (little-endian `u16`, raster
 order). `tests/bench_fixture.rs` requires our decode to match it exactly.
 
+### Packed header overrun fixtures
+
+`scripts/gen-packed-overrun-fixtures.py` writes the files in
+`packed_overrun/` byte by byte; `tests/packed_overrun.rs` uses them. Each is
+a 1x1 image, one 8-bit component, no decomposition level, one packet whose
+header is packed in a `PPT` or `PPM` marker, and a body of seven 0x00
+bytes. The script runs `opj_decompress` (OpenJPEG 2.5.0) on each file and
+checks the result in the table.
+
+| File | Size | SHA-256 | Packed header | `opj_decompress` |
+| ---- | ---- | ------- | ------------- | ---------------- |
+| `ppt_short.j2k` | 94 | `a4f4d3a6d07773bd20a0eeb965b3ee5062be5209e9c04265ad974e345dee6b25` | `PPT`: `C4`, one bit short | 128, no error |
+| `ppt_ff_nostuff.j2k` | 95 | `dbae16d2e6e86a450adc45bd98eb44539d845775535c1bcd97cc9ca0b47515f9` | `PPT`: `C4 FF`, no stuffed byte after the 0xFF | refused |
+| `ppm_short.j2k` | 98 | `9afba12af3b58b11ace07073ce14d295ca69718b80265e297914a091da4b709f` | `PPM`: `C4`, one bit short | 128, no error |
+| `ppt_whole.j2k` | 96 | `92405a6bd86b72739596d19973d334283281ee4549f781195f8d8c55db2e9eaa` | `PPT`: `C4 FF 00`, whole | 176 |
+| `ppm_whole.j2k` | 100 | `9a07d9e65b8af391ac0bd3231e9efc8a60bcd5c2f883059b818e4790386d7639` | `PPM`: `C4 FF 00`, whole | 176 |
+
+The first three are refused with `strict` on and off. The two whole files
+are the controls and decode to 176, as OpenJPEG gives.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

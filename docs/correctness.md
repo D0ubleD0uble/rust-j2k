@@ -663,12 +663,17 @@ whole file decodes: each tile whose later parts have not arrived is charged.
 `DecodeOptions::packet_work_limit` raises the bound for such a stream. The
 report holds at most five entries per tile-part, plus two.
 
-A packet header packed in a `PPM` or `PPT` marker is read as a strict
-decode reads it, with the bits past the end of the packed bytes as fill:
-those bytes are in the main or tile-part headers, which are there whole or
-not at all, so running past them is not the data ending, and the body
-decides whether the packet is there. An inline header whose bits run past
-the end of the data is the data ending, and the packet adds nothing.
+A packet header packed in a `PPM` or `PPT` marker that reads past the end
+of the packed bytes is an `Error::Codestream`, with `strict` on or off.
+Those bytes are in the main or tile-part headers, which are there whole or
+not at all, so running past them is damage, not the data ending. That
+includes a header whose last byte is 0xFF with no stuffed byte after it
+(B.10.1). OpenJPEG refuses that case too (`opj_bio_inalign`, t2.c:1323),
+but reads the other missing bits as 0 and decodes with no error; that is
+not a deliberate correction, so this decoder refuses
+(`tests/packed_overrun.rs`, fixtures in `tests/fixtures/packed_overrun/`).
+An inline header whose bits run past the end of the data is the data
+ending, and the packet adds nothing.
 
 ### Encoder mistakes OpenJPEG corrects
 

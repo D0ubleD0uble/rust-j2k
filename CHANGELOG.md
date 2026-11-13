@@ -324,6 +324,10 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
 - The 9/7 lifting constants β and δ are now the nearest `f32` values to the
   standard's (Table F.4), as OpenJPEG's are. Each was one `f32` step off. 9/7
   output moves by at most 1 on a few samples.
+- A packet header packed in a `PPM` or `PPT` marker that reads past the end
+  of its packed bytes is now a `Codestream` error, with `strict` on or off.
+  The missing bits were read as 1s and the decode returned a wrong image
+  with no error.
 
 ### Changed
 

@@ -1055,14 +1055,14 @@ fn parse_packet<'a>(
     // A packed header that reads past its bytes is damaged, strict or not:
     // the bits it needs are not in the codestream. Its bytes sit in the main
     // or tile-part headers, which are there whole or not at all, so this is
-    // never the data ending. Checked before a fault, which the fill bits can
-    // cause.
+    // never the data ending. It is checked before any fault, which the fill
+    // bits may have caused, so the overrun is what is reported.
     if streams.packed && bio.overran() {
         return Err(packed_overrun());
     }
     if let Some(error) = fault {
-        // Not strict, a fault in a header that runs past the data is the data
-        // ending, not damage: the bits past the end are fill.
+        // Not strict, a fault in an inline header that runs past the data is
+        // the data ending, not damage: the bits past the end are fill.
         return match log.as_deref() {
             Some(log) if bio.overran() => {
                 undo(log, states);
@@ -1081,8 +1081,9 @@ fn parse_packet<'a>(
     // ending. That is taken before the alignment, which past a last byte of
     // 0xFF reads one more byte that a strict decode does not ask for. Packed
     // headers are not checked here: their bytes sit in the main or tile-part
-    // headers, which are there whole or not at all, so one that runs short is
-    // refused below, as damage.
+    // headers, which are there whole or not at all, so one that runs short
+    // was refused above, as damage, and one the alignment runs past is
+    // refused below.
     let header_overran = bio.overran() && !streams.packed;
     bio.align();
     // A packed header whose last byte is 0xFF needs the stuffed byte after it
