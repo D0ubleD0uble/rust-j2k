@@ -907,7 +907,7 @@ At decode, a tile with no markers runs under the main header, borrowed. A
 tile with markers is resolved in full, sized by the component count, and
 the decode then spends at least that much on its components: every
 tile-component must hold a sample, so tiles × components is at most the
-sample budget for a file that decodes. TLM entries are checked and dropped,
+sample limit for a file that decodes. TLM entries are checked and dropped,
 since nothing reads them. Measured on release builds
 (`scripts/gen-tile-header-fixtures.py --big`; before, after, then
 `opj_decompress` 2.5.0):
@@ -1030,7 +1030,7 @@ LittleCMS 2.14, which follows `opj_decompress.c:1620-1720` and `color.c`.
 | 8 | sYCC (`EnumCS` 18) without colors 1, 2 and 3, or with colors that differ in depth or sign | converts positions 0 to 2 | `Unsupported` | 3 |
 | 9 | Signed sYCC | converted as unsigned, then clamped | `Unsupported` | 3 |
 | 10 | sYCC other than luma at 1x1 with both chroma channels at 1x1, 2x1 or 2x2 | "CAN NOT CONVERT", written as coded | `Unsupported` | 3 |
-| 11 | sYCC whose replicated chroma passes the sample budget | | `Limit` | |
+| 11 | sYCC whose replicated chroma passes the sample limit | | `Limit` | |
 | 12 | sYCC otherwise | converted, constants shortened and truncated | converted, IEC constants rounded | 1 |
 | 13 | An ICC profile LittleCMS refuses to open (table below) | written as coded | as coded, `RestrictedIcc` kept | 2 |
 | 14 | A profile in a color space other than RGB, gray or YCbCr | written as coded (no transform) | as coded, `RestrictedIcc` kept | 2 |
@@ -1039,7 +1039,7 @@ LittleCMS 2.14, which follows `opj_decompress.c:1620-1720` and `color.c`.
 | 17 | A profile LittleCMS applies through a lookup table or the Lab connection space | converted | `Unsupported` | 3 |
 | 18 | A monochrome profile without exactly one color channel, or on more than two channels | more than two: the planes go to a gray transform as RGB | `Unsupported` | 3 |
 | 19 | A monochrome profile on samples other than 8-bit unsigned | scaled from the wrong range | `Unsupported` | 3 |
-| 20 | A monochrome profile otherwise | converted | the same; a tinted output gives R, G, B in place of the gray channel (`Limit` past the sample budget) | matches |
+| 20 | A monochrome profile otherwise | converted | the same; a tinted output gives R, G, B in place of the gray channel (`Limit` past the sample limit) | matches |
 | 21 | An RGB profile without colors 1, 2 and 3 | converts positions 0 to 2, whatever they are | `Unsupported` | 3 |
 | 22 | An RGB profile whose colors differ in depth, sign or sub-sampling (possible only with a color past the first four positions) | converts positions 0 to 2 | `Unsupported` | 3 |
 | 23 | An RGB profile on samples other than 8- or 16-bit unsigned | scaled from the wrong range | `Unsupported` | 3 |
@@ -1397,13 +1397,13 @@ Each is `Unsupported` unless noted, and each is a row of
 - `raw_channels` with `Srgb`: `InvalidOptions`, before anything is read.
 
 Chroma replication grows the output, so it is checked against the decode's
-sample budget before the tiles are read (`Limit`), as palette expansion is.
+sample limit before the tiles are read (`Limit`), as palette expansion is.
 After a conversion `Image::jp2` reports what the samples now are, as
 OpenJPEG does (owner decision, 2026-11-01, on #165): `ColorSpace::Srgb`,
 or `ColorSpace::Grayscale` for a monochrome profile, with no ICC profile.
 A monochrome profile whose output is not neutral (absolute colorimetric with
 a tinted media white point) gives three channels, R, G and B in place of the
-gray one, as `ColorSpace::Srgb`; this is checked against the sample budget
+gray one, as `ColorSpace::Srgb`; this is checked against the sample limit
 too. sYCC or an RGB profile on one or two channels passes through, as
 OpenJPEG leaves it, with the metadata as declared.
 A pass-through, the default `AsCoded` decode and `read_header` report the

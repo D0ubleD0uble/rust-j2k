@@ -37,8 +37,11 @@
 //! peaks at about 1.35 times the output. The empty 5/3 file is lower only
 //! because its subbands are never written. The coded-data figures include
 //! the caller's input bytes, so they grow with the file: a 38 MB lossless
-//! 8192 x 8192 file peaks at about 380 MiB. At the 2^28 default the same
-//! shapes scale by four, to about 1.4 GiB for one component in one tile.
+//! 8192 x 8192 file peaks at about 380 MiB. The ratios carry over to the
+//! 2^28 default, about 1.4 GiB for one component in one tile, though that size
+//! was not measured. A tiled image peaks lower: the 1024 x 1024-tiled
+//! Sentinel-2 band (460 MiB of samples) peaks at about 470 MiB, as
+//! `opj_decompress` does (see `docs/correctness.md`, "The sample limit").
 
 use crate::{Error, WorkLimit};
 

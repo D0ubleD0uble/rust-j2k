@@ -30,7 +30,8 @@ pub(crate) const MAX_PRECINCTS: usize = 1 << 18;
 /// eventual `CodeBlock`s, roughly 200 bytes a block — is driven by the code-block
 /// *count*, which legal 4×4 blocks push toward samples/16: a sub-kilobyte header
 /// could demand ~1 GiB of metadata. 2^19 clears every plausible real encode
-/// (64×64 default blocks at the full sample budget need ~2^15) while capping
+/// (64×64 default blocks over one tile at the default 2^28-sample limit need
+/// about 2^16.4) while capping
 /// hostile geometry near 100 MiB. Enforced *while* the geometry is built, before
 /// each band's block vector is allocated — see [`band_geom`].
 pub(crate) const MAX_CODE_BLOCKS: usize = 1 << 19;

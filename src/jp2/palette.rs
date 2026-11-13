@@ -40,7 +40,7 @@
 //! [`plan`] reads the boxes and the main header into a [`PalettePlan`] before
 //! any tile is decoded; [`PalettePlan::apply`] then builds the channels from
 //! the decoded components. The box layout is checked whenever a palette is
-//! present. The mapping, the column depths, and the sample budget are checked
+//! present. The mapping, the column depths, and the sample limit are checked
 //! only when the palette is applied, so a caller asking for the raw channels
 //! gets them whatever the `cmap` says, as OpenJPEG does with its "ignore
 //! palette" flag. The budget bounds the expanded channels; with the decoded

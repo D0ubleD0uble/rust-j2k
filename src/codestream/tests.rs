@@ -534,8 +534,8 @@ fn explicit_precinct_sizes_parse_from_spcod() {
 }
 
 /// A maximal partition — `Scod` bit 0 clear — carries no `SPcod` bytes and reads
-/// back as `(15, 15)` everywhere, which is the single precinct that spans any
-/// tile-component the sample budget admits.
+/// back as `(15, 15)` everywhere, the single precinct that spans any
+/// tile-component under 2^15 on a side.
 #[test]
 fn an_implicit_precinct_partition_is_maximal() {
     let data = [0xDE, 0xAD];
