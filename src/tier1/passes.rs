@@ -32,8 +32,8 @@ mod golden_vectors;
 /// context-formation routines below return an index into that array.
 ///
 /// - `0..=8`   zero coding (the nine significance contexts, [`zc_table`])
-/// - `9..=13`  sign coding ([`sign_context`](BlockState::sign_context))
-/// - `14..=16` magnitude refinement ([`refinement_context`](BlockState::refinement_context))
+/// - `9..=13`  sign coding ([`sign_context`])
+/// - `14..=16` magnitude refinement ([`refinement_context`])
 /// - `17`      run-length (the cleanup pass's aggregation context)
 /// - `18`      uniform (equiprobable; raw bits in the cleanup run mode)
 pub const CTX_ZC: u8 = 0;
@@ -63,58 +63,79 @@ pub enum Orientation {
     Hh,
 }
 
-// Per-sample state bits, one byte per sample in `BlockState::flags`.
-/// σ: the coefficient has become significant (a 1 bit has been coded).
-const SIG: u8 = 1 << 0;
-/// The coefficient was coded in the current bit-plane's significance
-/// propagation pass, so the cleanup pass skips it.
-const VISITED: u8 = 1 << 1;
-/// Sign bit: set is negative. Meaningful only once significant.
-const NEGATIVE: u8 = 1 << 2;
-/// The coefficient has been through at least one magnitude-refinement pass,
-/// which selects magnitude-refinement context 16 over 14/15 (D.3.3).
-const REFINED: u8 = 1 << 3;
-
-// Neighbor bits, one byte per sample in `BlockState::neighbors`: a bit is set
-// once the neighbor in that direction is significant.
-const NB_N: u8 = 1 << 0;
-const NB_S: u8 = 1 << 1;
-const NB_W: u8 = 1 << 2;
-const NB_E: u8 = 1 << 3;
-const NB_NW: u8 = 1 << 4;
-const NB_NE: u8 = 1 << 5;
-const NB_SW: u8 = 1 << 6;
-const NB_SE: u8 = 1 << 7;
+// Per-sample state, one `u16` per sample in `BlockState::state`.
+//
+// The low byte says which of the sample's eight neighbors are significant.
+// Marking a sample significant sets its bit in each neighbor's word.
+const NB_N: u16 = 1 << 0;
+const NB_S: u16 = 1 << 1;
+const NB_W: u16 = 1 << 2;
+const NB_E: u16 = 1 << 3;
+const NB_NW: u16 = 1 << 4;
+const NB_NE: u16 = 1 << 5;
+const NB_SW: u16 = 1 << 6;
+const NB_SE: u16 = 1 << 7;
+/// All eight neighbor bits.
+const NB_ALL: u16 = 0xFF;
 /// The three neighbors in the row below, which vertically causal coding drops
 /// from a stripe's bottom row.
-const NB_SOUTH: u8 = NB_S | NB_SW | NB_SE;
+const NB_SOUTH: u16 = NB_S | NB_SW | NB_SE;
+/// σ: the coefficient has become significant (a 1 bit has been coded).
+const SIG: u16 = 1 << 8;
+/// The coefficient was coded in the current bit-plane's significance
+/// propagation pass, so the cleanup pass skips it.
+const VISITED: u16 = 1 << 9;
+/// Sign bit: set is negative. Meaningful only once significant.
+const NEGATIVE: u16 = 1 << 10;
+/// The coefficient has been through at least one magnitude-refinement pass,
+/// which selects magnitude-refinement context 16 over 14/15 (D.3.3).
+const REFINED: u16 = 1 << 11;
+// The top four bits record the sign of the four direct neighbors, set with
+// the neighbor's `NB_*` bit when that neighbor is negative. With the four
+// direct `NB_*` bits they index the sign-context table.
+const NEG_N: u16 = 1 << 12;
+const NEG_S: u16 = 1 << 13;
+const NEG_W: u16 = 1 << 14;
+const NEG_E: u16 = 1 << 15;
+
+/// One per-sample bit repeated for each of the four rows of a stripe column,
+/// as [`column_word`] packs them.
+const fn each_row(bits: u16) -> u64 {
+    (bits as u64) * 0x0001_0001_0001_0001
+}
+
+/// The bits of a column word that hold the neighbor masks the contexts see:
+/// all eight neighbors on every row, except the south ones on the bottom row
+/// under vertically causal coding.
+const fn column_neighbors(vcausal: bool) -> u64 {
+    if vcausal {
+        each_row(NB_ALL) & !((NB_SOUTH as u64) << 48)
+    } else {
+        each_row(NB_ALL)
+    }
+}
 
 /// A code-block's decode state: the coefficient magnitudes plus the per-sample
 /// state the passes consult and update.
 ///
-/// `coeffs` is row-major, `width × height`. The two state planes are padded by
-/// one sample on every side, `(width + 2) × (height + 2)`, so the eight
-/// neighbors of any in-block sample are in range and the padding reads as
-/// insignificant (D.3: out-of-block samples contribute 0). No context needs an
-/// edge test.
-///
-/// - `flags` holds each sample's [`SIG`], [`VISITED`], [`NEGATIVE`] and
-///   [`REFINED`] bits.
-/// - `neighbors` holds, per sample, which of its eight neighbors are
-///   significant. Marking a sample significant sets its bit in each
-///   neighbor's mask, so a zero-coding context is one table lookup, and a
-///   sample with no significant neighbor is found with one test.
+/// `coeffs` is row-major, `width × height`. `state` holds one `u16` per sample
+/// (the `NB_*`, [`SIG`], [`VISITED`], [`NEGATIVE`], [`REFINED`] and `NEG_*`
+/// bits) in stripe order: the four rows of a stripe column are adjacent, so
+/// [`column_word`] reads a whole column at once, and the stripes follow each
+/// other. The plane is padded by one column on each side and one stripe above
+/// and below, so the eight neighbors of any in-block sample are in range and
+/// the padding reads as insignificant (D.3: out-of-block samples contribute
+/// 0). The rows of a short last stripe past the block's height are never
+/// coded, so they read as insignificant too. No context needs an edge test.
 #[derive(Debug)]
 pub struct BlockState {
     pub width: u32,
     pub height: u32,
     pub coeffs: Vec<i32>,
-    /// Row length of the padded planes, `width + 2`.
-    stride: usize,
-    /// Per-sample state bits, padded.
-    flags: Vec<u8>,
-    /// Per-sample significant-neighbor masks, padded.
-    neighbors: Vec<u8>,
+    /// Length of one padded stripe in `state`, `4 × (width + 2)`.
+    stripe_len: usize,
+    /// Per-sample state words, padded, in stripe order.
+    state: Vec<u16>,
     /// Vertically causal context (the `VCAUSAL` style): the context of a sample
     /// on a stripe's bottom row (`y % 4 == 3`) excludes the row below it, which
     /// belongs to the next stripe. `false` for the default style, where the full
@@ -125,15 +146,14 @@ pub struct BlockState {
 impl BlockState {
     pub fn new(width: u32, height: u32) -> Self {
         let n = (width * height) as usize;
-        let stride = width as usize + 2;
-        let padded = stride * (height as usize + 2);
+        let stripe_len = 4 * (width as usize + 2);
+        let padded = stripe_len * (height.div_ceil(4) as usize + 2);
         BlockState {
             width,
             height,
             coeffs: vec![0; n],
-            stride,
-            flags: vec![0; padded],
-            neighbors: vec![0; padded],
+            stripe_len,
+            state: vec![0; padded],
             vcausal: false,
         }
     }
@@ -143,208 +163,189 @@ impl BlockState {
         (y * self.width + x) as usize
     }
 
-    /// Index of an in-bounds sample in the padded `flags` and `neighbors`.
+    /// Index of an in-bounds sample in the padded `state`.
     #[inline]
     fn pad(&self, x: u32, y: u32) -> usize {
-        (y as usize + 1) * self.stride + x as usize + 1
+        (y as usize / 4 + 1) * self.stripe_len + (x as usize + 1) * 4 + y as usize % 4
     }
+}
 
-    /// Mark the sample at padded index `p` significant, and record it in the
-    /// mask of each of its eight neighbors, as the direction that neighbor sees
-    /// it in. The padding absorbs the writes past the block edge.
-    #[inline]
-    fn mark_significant(&mut self, p: usize) {
-        let s = self.stride;
-        self.flags[p] |= SIG;
-        self.neighbors[p - s - 1] |= NB_SE;
-        self.neighbors[p - s] |= NB_S;
-        self.neighbors[p - s + 1] |= NB_SW;
-        self.neighbors[p - 1] |= NB_E;
-        self.neighbors[p + 1] |= NB_W;
-        self.neighbors[p + s - 1] |= NB_NE;
-        self.neighbors[p + s] |= NB_N;
-        self.neighbors[p + s + 1] |= NB_NW;
+/// The four state words of the stripe column that starts at padded index
+/// `p`, row 0 in the low 16 bits. One test of this word tells whether any
+/// sample of the column needs a pass's attention.
+#[inline(always)]
+fn column_word(state: &[u16], p: usize) -> u64 {
+    let c = &state[p..p + 4];
+    u64::from(c[0]) | u64::from(c[1]) << 16 | u64::from(c[2]) << 32 | u64::from(c[3]) << 48
+}
+
+/// Padded index of the north neighbor of the sample at `p` on stripe row `r`:
+/// the row above in the same stripe, or row 3 of the stripe above.
+#[inline(always)]
+fn north(p: usize, r: usize, stripe_len: usize) -> usize {
+    if r == 0 { p - stripe_len + 3 } else { p - 1 }
+}
+
+/// Padded index of the south neighbor of the sample at `p` on stripe row `r`:
+/// the row below in the same stripe, or row 0 of the stripe below.
+#[inline(always)]
+fn south(p: usize, r: usize, stripe_len: usize) -> usize {
+    if r == 3 { p + stripe_len - 3 } else { p + 1 }
+}
+
+/// Mark the sample at padded index `p`, stripe row `r`, significant with the
+/// given sign, and record it in the word of each of its eight neighbors, as
+/// the direction that neighbor sees it in. The four direct neighbors also
+/// record its sign. The padding absorbs the writes past the block edge.
+#[inline(always)]
+fn mark_significant(state: &mut [u16], p: usize, r: usize, stripe_len: usize, negative: bool) {
+    let n = north(p, r, stripe_len);
+    let s = south(p, r, stripe_len);
+    let sign = |bit: u16| if negative { bit } else { 0 };
+    state[p] |= SIG | sign(NEGATIVE);
+    state[n - 4] |= NB_SE;
+    state[n] |= NB_S | sign(NEG_S);
+    state[n + 4] |= NB_SW;
+    state[p - 4] |= NB_E | sign(NEG_E);
+    state[p + 4] |= NB_W | sign(NEG_W);
+    state[s - 4] |= NB_NE;
+    state[s] |= NB_N | sign(NEG_N);
+    state[s + 4] |= NB_NW;
+}
+
+/// The state word as the contexts see it: under vertically causal coding a
+/// stripe's bottom row (`hide_south`) loses its three south significance
+/// bits. Its `NEG_S` bit can stay, since the sign context counts a sign bit
+/// only with its significance bit.
+#[inline(always)]
+fn visible(word: u16, hide_south: bool) -> u16 {
+    if hide_south { word & !NB_SOUTH } else { word }
+}
+
+/// The significant-neighbor mask of a visible state word. Zero means no
+/// significant neighbor, which is zero-coding label 0 in every orientation.
+#[inline(always)]
+fn neighbor_mask(word: u16) -> u8 {
+    (word & NB_ALL) as u8
+}
+
+/// Sign-coding context (`CTX_SC..CTX_MR`) and the XOR bit (ISO Tables D-2,
+/// D-3) for a visible state word. The MQ decision is XORed with the returned
+/// bit to recover the sign (`0` positive, `1` negative).
+#[inline(always)]
+fn sign_context(word: u16) -> (u8, u8) {
+    let key = (word & (NB_N | NB_S | NB_W | NB_E)) | ((word >> 8) & 0xF0);
+    let entry = SIGN_TABLE[usize::from(key as u8)];
+    (entry & 0x7F, entry >> 7)
+}
+
+/// Magnitude-refinement context (`CTX_MR..CTX_RUN`) for a visible state word
+/// (ISO Table D-4 / D.3.3). After the first refinement the context is always
+/// 16; on the first refinement it is 15 if any neighbor in its context is
+/// significant, else 14.
+#[inline(always)]
+fn refinement_context(word: u16) -> u8 {
+    if word & REFINED != 0 {
+        CTX_MR + 2
+    } else {
+        CTX_MR + u8::from(neighbor_mask(word) != 0)
     }
+}
 
-    /// Set a coefficient's magnitude when it first becomes significant at plane
-    /// `bpno`, to the mid-point reconstruction value `2^bpno + 2^(bpno−1)`
-    /// (ISO E.1.1.2 / OpenJPEG `oneplushalf`): the significant bit plus half the
-    /// next plane's weight, placing it at the center of its interval. Then mark
-    /// it significant.
-    fn become_significant(&mut self, x: u32, y: u32, p: usize, bpno: u32) {
-        let one = 1i32 << bpno;
-        let i = self.idx(x, y);
-        self.coeffs[i] = one | (one >> 1);
-        self.mark_significant(p);
-    }
-
-    /// Refine a significant coefficient's magnitude at plane `bpno`: a `1` bit
-    /// pushes it up by half the plane weight, a `0` bit down (OpenJPEG `poshalf`,
-    /// the running mid-point update). Decoding runs at double scale and stops at
-    /// `bpno == 1`, so `poshalf` is always ≥ 1; the carried half is dropped by
-    /// the final halving in [`decode_block`].
-    fn refine_magnitude(&mut self, x: u32, y: u32, bpno: u32, bit: u8) {
-        let poshalf = (1i32 << bpno) >> 1;
-        let i = self.idx(x, y);
-        self.coeffs[i] += if bit == 1 { poshalf } else { -poshalf };
-    }
-
-    /// Clear every per-sample `visited` flag. The flag marks samples coded in
-    /// the current bit-plane's significance-propagation pass; it is local to one
-    /// plane, so the cleanup pass clears it before the next plane begins.
-    fn clear_visited(&mut self) {
-        self.flags.iter_mut().for_each(|f| *f &= !VISITED);
-    }
-
+/// Coordinate-based accessors over the padded plane, for the unit tests. They
+/// form contexts with the same helpers the passes call.
+#[cfg(test)]
+impl BlockState {
     /// Whether the row below `(·, y)` lies in the next stripe and so is excluded
     /// from the context under vertically causal coding: it is the stripe's bottom
     /// row (`y % 4 == 3`) and the flag is set. Off, or on an interior row, the
-    /// full neighborhood is used (D.3).
-    #[inline]
+    /// full neighborhood is used (D.3). The passes make the same choice per
+    /// stripe row.
     fn excludes_south(&self, y: u32) -> bool {
         self.vcausal && y % 4 == 3
     }
 
-    /// The significant-neighbor mask of the sample at padded index `p` on row
-    /// `y`, as its contexts see it: under vertically causal coding a stripe's
-    /// bottom row loses its three south neighbors. Zero means no significant
-    /// neighbor, which is zero-coding label 0 in every orientation.
-    #[inline]
-    fn context_mask(&self, p: usize, y: u32) -> u8 {
-        let mask = self.neighbors[p];
-        if self.excludes_south(y) {
-            mask & !NB_SOUTH
-        } else {
-            mask
-        }
+    /// The state word of `(x, y)` as its contexts see it.
+    fn word(&self, x: u32, y: u32) -> u16 {
+        visible(self.state[self.pad(x, y)], self.excludes_south(y))
     }
 
-    /// A single neighbor's signed contribution to the sign context (Table D-2):
-    /// `0` if insignificant, `+1` if significant and positive, `-1` if negative.
-    /// The padding is never significant, so it contributes `0`.
-    #[inline]
-    fn contrib(&self, p: usize) -> i32 {
-        let f = self.flags[p];
-        if f & SIG == 0 {
-            0
-        } else if f & NEGATIVE != 0 {
-            -1
-        } else {
-            1
-        }
-    }
-
-    /// Sign-coding context (`CTX_SC..CTX_MR`) and the XOR bit (ISO Tables D-2,
-    /// D-3) of the sample at padded index `p` on row `y`. The MQ decision is
-    /// XORed with the returned bit to recover the sign (`0` positive, `1`
-    /// negative).
-    fn sign_context(&self, p: usize, y: u32) -> (u8, u8) {
-        let s = self.stride;
-        let south = if self.excludes_south(y) {
-            0
-        } else {
-            self.contrib(p + s)
-        };
-        let h = (self.contrib(p - 1) + self.contrib(p + 1)).clamp(-1, 1);
-        let v = (self.contrib(p - s) + south).clamp(-1, 1);
-        let (label, xor) = match (h, v) {
-            (1, 1) => (4, 0),
-            (1, 0) => (3, 0),
-            (1, -1) => (2, 0),
-            (0, 1) => (1, 0),
-            (0, 0) => (0, 0),
-            (0, -1) => (1, 1),
-            (-1, 1) => (2, 1),
-            (-1, 0) => (3, 1),
-            (-1, -1) => (4, 1),
-            _ => unreachable!("clamped contributions are in -1..=1"),
-        };
-        (CTX_SC + label, xor)
-    }
-
-    /// Magnitude-refinement context (`CTX_MR..CTX_RUN`) of the sample at padded
-    /// index `p` on row `y` (ISO Table D-4 / D.3.3). After the first refinement
-    /// the context is always 16; on the first refinement it is 15 if any
-    /// neighbor in its context is significant, else 14. Under vertically causal
-    /// coding a stripe's bottom row leaves out the row below it, as the other
-    /// contexts do.
-    fn refinement_context(&self, p: usize, y: u32) -> u8 {
-        if self.flags[p] & REFINED != 0 {
-            CTX_MR + 2
-        } else {
-            CTX_MR + u8::from(self.context_mask(p, y) != 0)
-        }
-    }
-}
-
-/// Coordinate-based accessors over the padded planes, for the unit tests.
-#[cfg(test)]
-impl BlockState {
     pub fn is_significant(&self, x: u32, y: u32) -> bool {
-        self.flags[self.pad(x, y)] & SIG != 0
+        self.state[self.pad(x, y)] & SIG != 0
     }
 
     pub fn set_significant(&mut self, x: u32, y: u32) {
         let p = self.pad(x, y);
-        self.mark_significant(p);
+        mark_significant(&mut self.state, p, y as usize % 4, self.stripe_len, false);
     }
 
     pub fn is_visited(&self, x: u32, y: u32) -> bool {
-        self.flags[self.pad(x, y)] & VISITED != 0
+        self.state[self.pad(x, y)] & VISITED != 0
     }
 
     pub fn set_visited(&mut self, x: u32, y: u32, value: bool) {
         let p = self.pad(x, y);
         if value {
-            self.flags[p] |= VISITED;
+            self.state[p] |= VISITED;
         } else {
-            self.flags[p] &= !VISITED;
+            self.state[p] &= !VISITED;
         }
     }
 
     pub fn is_negative(&self, x: u32, y: u32) -> bool {
-        self.flags[self.pad(x, y)] & NEGATIVE != 0
+        self.state[self.pad(x, y)] & NEGATIVE != 0
     }
 
+    /// Set or clear the sign of `(x, y)` and the sign bit its four direct
+    /// neighbors keep for it, as [`mark_significant`] would have.
     pub fn set_negative(&mut self, x: u32, y: u32, value: bool) {
         let p = self.pad(x, y);
-        if value {
-            self.flags[p] |= NEGATIVE;
-        } else {
-            self.flags[p] &= !NEGATIVE;
+        let (sl, r) = (self.stripe_len, y as usize % 4);
+        let bits = [
+            (p, NEGATIVE),
+            (north(p, r, sl), NEG_S),
+            (south(p, r, sl), NEG_N),
+            (p - 4, NEG_E),
+            (p + 4, NEG_W),
+        ];
+        for (i, bit) in bits {
+            if value {
+                self.state[i] |= bit;
+            } else {
+                self.state[i] &= !bit;
+            }
         }
     }
 
     pub fn is_refined(&self, x: u32, y: u32) -> bool {
-        self.flags[self.pad(x, y)] & REFINED != 0
+        self.state[self.pad(x, y)] & REFINED != 0
     }
 
     pub fn set_refined(&mut self, x: u32, y: u32) {
         let p = self.pad(x, y);
-        self.flags[p] |= REFINED;
+        self.state[p] |= REFINED;
     }
 
     /// (ΣH, ΣV, ΣD) of `(x, y)` as its contexts see them, south excluded on a
     /// stripe's bottom row under vertically causal coding.
     pub fn neighbor_sums(&self, x: u32, y: u32) -> (u8, u8, u8) {
-        neighbor_sums(self.context_mask(self.pad(x, y), y))
+        neighbor_sums(neighbor_mask(self.word(x, y)))
     }
 
     /// Zero-coding context label (`CTX_ZC..CTX_SC`) for `(x, y)` in a subband of
     /// the given orientation (ISO Table D-1).
     pub fn zc_context(&self, x: u32, y: u32, orient: Orientation) -> u8 {
-        CTX_ZC + zc_table(orient)[usize::from(self.context_mask(self.pad(x, y), y))]
+        CTX_ZC + zc_table(orient)[usize::from(neighbor_mask(self.word(x, y)))]
     }
 
-    /// Sign-coding context and XOR bit for `(x, y)`; see [`Self::sign_context`].
+    /// Sign-coding context and XOR bit for `(x, y)`; see [`sign_context`].
     pub fn sc_context(&self, x: u32, y: u32) -> (u8, u8) {
-        self.sign_context(self.pad(x, y), y)
+        sign_context(self.word(x, y))
     }
 
-    /// Magnitude-refinement context for `(x, y)`; see
-    /// [`Self::refinement_context`].
+    /// Magnitude-refinement context for `(x, y)`; see [`refinement_context`].
     pub fn mr_context(&self, x: u32, y: u32) -> u8 {
-        self.refinement_context(self.pad(x, y), y)
+        refinement_context(self.word(x, y))
     }
 }
 
@@ -384,6 +385,7 @@ const fn zc_label_hh(hv: u8, d: u8) -> u8 {
 /// two horizontal, two vertical, and four diagonal neighbors, the inputs to
 /// every D.3 table.
 const fn neighbor_sums(mask: u8) -> (u8, u8, u8) {
+    let mask = mask as u16;
     let h = (mask & NB_W != 0) as u8 + (mask & NB_E != 0) as u8;
     let v = (mask & NB_N != 0) as u8 + (mask & NB_S != 0) as u8;
     let d = (mask & (NB_NW | NB_NE | NB_SW | NB_SE)).count_ones() as u8;
@@ -414,7 +416,7 @@ static ZC_HL: [u8; 256] = build_zc_table(Orientation::Hl);
 static ZC_HH: [u8; 256] = build_zc_table(Orientation::Hh);
 
 /// The zero-coding label table for a subband orientation. Index it with a
-/// sample's [`context_mask`](BlockState::context_mask) and add [`CTX_ZC`].
+/// sample's [`neighbor_mask`] and add [`CTX_ZC`].
 fn zc_table(orient: Orientation) -> &'static [u8; 256] {
     match orient {
         Orientation::Ll | Orientation::Lh => &ZC_LL_LH,
@@ -423,41 +425,258 @@ fn zc_table(orient: Orientation) -> &'static [u8; 256] {
     }
 }
 
+/// The sign context of every combination of the four direct neighbors'
+/// significance and sign (ISO Tables D-2, D-3). The key holds the `NB_N`,
+/// `NB_S`, `NB_W`, `NB_E` bits in its low four bits and the matching `NEG_*`
+/// bits in its high four, in the same order. An entry is the context in its
+/// low seven bits and the XOR bit in its top bit. A sign bit counts only with
+/// its significance bit.
+const fn build_sign_table() -> [u8; 256] {
+    // A neighbor's contribution (Table D-2): 0 if insignificant, -1 if
+    // negative, +1 if positive.
+    const fn contrib(key: usize, sig: u16) -> i32 {
+        let neg = (sig as usize) << 4;
+        if key & sig as usize == 0 {
+            0
+        } else if key & neg != 0 {
+            -1
+        } else {
+            1
+        }
+    }
+    const fn clamp(v: i32) -> i32 {
+        if v > 1 {
+            1
+        } else if v < -1 {
+            -1
+        } else {
+            v
+        }
+    }
+    let mut table = [0u8; 256];
+    let mut key = 0;
+    while key < 256 {
+        let h = clamp(contrib(key, NB_W) + contrib(key, NB_E));
+        let v = clamp(contrib(key, NB_N) + contrib(key, NB_S));
+        let (label, xor) = match (h, v) {
+            (1, 1) => (4, 0),
+            (1, 0) => (3, 0),
+            (1, -1) => (2, 0),
+            (0, 1) => (1, 0),
+            (0, 0) => (0, 0),
+            (0, -1) => (1, 1),
+            (-1, 1) => (2, 1),
+            (-1, 0) => (3, 1),
+            _ => (4, 1),
+        };
+        table[key] = (CTX_SC + label) | (xor << 7);
+        key += 1;
+    }
+    table
+}
+
+static SIGN_TABLE: [u8; 256] = build_sign_table();
+
 /// Initial MQ states for a fresh code-block (ISO Table D-7 / Annex D.3): the
 /// uniform context starts at state 46, the run-length context at 3, and the
 /// all-insignificant zero-coding context at 4; every other context at 0. Using
 /// the default zero state for these three would desynchronize the decoder.
 pub(crate) fn init_contexts() -> [Context; NUM_CONTEXTS] {
     let mut cx = [Context::default(); NUM_CONTEXTS];
-    cx[CTX_ZC as usize].index = 4;
-    cx[CTX_RUN as usize].index = 3;
-    cx[CTX_UNI as usize].index = 46;
+    cx[CTX_ZC as usize] = Context::new(4, 0);
+    cx[CTX_RUN as usize] = Context::new(3, 0);
+    cx[CTX_UNI as usize] = Context::new(46, 0);
     cx
 }
 
-/// Decode the sign of the coefficient at `(·, y)`, padded index `p`, that has
-/// just become significant (D.3.2): the MQ decision under the neighbor-sign
-/// context is XORed with the context's predicted sign. Records the sign in
-/// `state`.
-fn decode_sign(
-    mq: &mut MqDecoder<'_>,
-    state: &mut BlockState,
-    cx: &mut [Context],
-    p: usize,
-    y: u32,
-) {
-    let (ctx, xor) = state.sign_context(p, y);
-    if mq.decode(&mut cx[ctx as usize]) ^ xor == 1 {
-        state.flags[p] |= NEGATIVE;
+/// The parts of a code-block's state a pass works on, split out of
+/// [`BlockState`] so the pass loops hold them as separate borrows.
+struct Plane<'s> {
+    state: &'s mut [u16],
+    coeffs: &'s mut [i32],
+    width: usize,
+    height: usize,
+    stripe_len: usize,
+}
+
+impl<'s> Plane<'s> {
+    fn new(block: &'s mut BlockState) -> Self {
+        Plane {
+            state: &mut block.state,
+            coeffs: &mut block.coeffs,
+            width: block.width as usize,
+            height: block.height as usize,
+            stripe_len: block.stripe_len,
+        }
+    }
+
+    /// The number of stripes that have all four rows.
+    fn full_stripes(&self) -> usize {
+        self.height / 4
+    }
+
+    /// The rows of the short last stripe, `0..=3`.
+    fn last_rows(&self) -> usize {
+        self.height % 4
+    }
+
+    /// Padded index of row 0 of column `x` in stripe `k`.
+    #[inline(always)]
+    fn column(&self, k: usize, x: usize) -> usize {
+        (k + 1) * self.stripe_len + (x + 1) * 4
+    }
+
+    /// Set a coefficient's magnitude when it first becomes significant at plane
+    /// `bpno`, to the mid-point reconstruction value `2^bpno + 2^(bpno−1)`
+    /// (ISO E.1.1.2 / OpenJPEG `oneplushalf`): the significant bit plus half the
+    /// next plane's weight, placing it at the center of its interval. Then mark
+    /// it significant with its sign.
+    #[inline(always)]
+    fn become_significant(&mut self, i: usize, p: usize, r: usize, bpno: u32, negative: bool) {
+        let one = 1i32 << bpno;
+        self.coeffs[i] = one | (one >> 1);
+        mark_significant(self.state, p, r, self.stripe_len, negative);
+    }
+
+    /// Refine a significant coefficient's magnitude at plane `bpno`: a `1` bit
+    /// pushes it up by half the plane weight, a `0` bit down (OpenJPEG `poshalf`,
+    /// the running mid-point update). Decoding runs at double scale and stops at
+    /// `bpno == 1`, so `poshalf` is always ≥ 1; the carried half is dropped by
+    /// the final halving in [`decode_block`].
+    #[inline(always)]
+    fn refine_magnitude(&mut self, i: usize, p: usize, bpno: u32, bit: u8) {
+        let poshalf = (1i32 << bpno) >> 1;
+        self.coeffs[i] += if bit == 1 { poshalf } else { -poshalf };
+        self.state[p] |= REFINED;
     }
 }
 
-/// Iterate a code-block in EBCOT scan order: stripes of four rows top to bottom,
-/// each stripe scanned column by column. The bottom stripe may be shorter.
-fn stripes(width: u32, height: u32) -> impl Iterator<Item = (u32, u32)> {
-    (0..height)
-        .step_by(4)
-        .flat_map(move |y0| (0..width).map(move |x| (x, y0)))
+/// Decode the sign of the coefficient whose visible state word is `word` (D.3.2):
+/// the MQ decision under the neighbor-sign context is XORed with the
+/// context's predicted sign. Returns whether it is negative.
+#[inline(always)]
+fn decode_sign(mq: &mut MqDecoder<'_>, cx: &mut [Context; NUM_CONTEXTS], word: u16) -> bool {
+    let (ctx, xor) = sign_context(word);
+    mq.decode(&mut cx[usize::from(ctx)]) ^ xor == 1
+}
+
+/// Zero-code one sample in the significance-propagation or cleanup pass, and on
+/// a 1 decode its sign and mark it significant. `word` is its visible state
+/// word; `i` its coefficient index, `p` its padded index, `r` its stripe row.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn zero_code(
+    mq: &mut MqDecoder<'_>,
+    cx: &mut [Context; NUM_CONTEXTS],
+    plane: &mut Plane<'_>,
+    table: &[u8; 256],
+    word: u16,
+    i: usize,
+    p: usize,
+    r: usize,
+    bpno: u32,
+) {
+    let ctx = CTX_ZC + table[usize::from(neighbor_mask(word))];
+    if mq.decode(&mut cx[usize::from(ctx)]) == 1 {
+        let negative = decode_sign(mq, cx, word);
+        plane.become_significant(i, p, r, bpno, negative);
+    }
+}
+
+/// Run `$body` once for each row of a full stripe column, with `$r` bound to
+/// the row, `0` to `3`. Spelled out so each copy sees its row as a constant.
+macro_rules! each_stripe_row {
+    ($r:ident => $body:expr) => {{
+        {
+            let $r: usize = 0;
+            $body;
+        }
+        {
+            let $r: usize = 1;
+            $body;
+        }
+        {
+            let $r: usize = 2;
+            $body;
+        }
+        {
+            let $r: usize = 3;
+            $body;
+        }
+    }};
+}
+
+/// One sample of the significance-propagation pass: zero-code it if it is
+/// insignificant with a significant neighbor in its context, and mark it
+/// visited. `hide` says vertically causal coding hides its south neighbors.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn sig_prop_sample(
+    mq: &mut MqDecoder<'_>,
+    cx: &mut [Context; NUM_CONTEXTS],
+    plane: &mut Plane<'_>,
+    table: &[u8; 256],
+    i: usize,
+    p: usize,
+    r: usize,
+    hide: bool,
+    bpno: u32,
+) {
+    let word = plane.state[p];
+    if word & SIG != 0 {
+        return;
+    }
+    let word = visible(word, hide);
+    if neighbor_mask(word) == 0 {
+        return; // no significant neighbor: deferred to cleanup
+    }
+    zero_code(mq, cx, plane, table, word, i, p, r, bpno);
+    plane.state[p] |= VISITED;
+}
+
+/// One sample of the magnitude-refinement pass: refine it if it was
+/// significant before this plane.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn mag_ref_sample(
+    mq: &mut MqDecoder<'_>,
+    cx: &mut [Context; NUM_CONTEXTS],
+    plane: &mut Plane<'_>,
+    i: usize,
+    p: usize,
+    hide: bool,
+    bpno: u32,
+) {
+    let word = plane.state[p];
+    if word & (SIG | VISITED) != SIG {
+        return; // insignificant, or coded in this plane's first pass
+    }
+    let ctx = refinement_context(visible(word, hide));
+    let bit = mq.decode(&mut cx[usize::from(ctx)]);
+    plane.refine_magnitude(i, p, bpno, bit);
+}
+
+/// One sample of the cleanup pass outside a run: zero-code it if this plane
+/// has not coded it yet, and clear its `VISITED` mark.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn cleanup_sample(
+    mq: &mut MqDecoder<'_>,
+    cx: &mut [Context; NUM_CONTEXTS],
+    plane: &mut Plane<'_>,
+    table: &[u8; 256],
+    i: usize,
+    p: usize,
+    r: usize,
+    hide: bool,
+    bpno: u32,
+) {
+    let word = plane.state[p];
+    if word & (SIG | VISITED) != 0 {
+        plane.state[p] = word & !VISITED;
+        return;
+    }
+    zero_code(mq, cx, plane, table, visible(word, hide), i, p, r, bpno);
 }
 
 /// Significance-propagation pass (D.3.1): visit each still-insignificant sample
@@ -466,47 +685,137 @@ fn stripes(width: u32, height: u32) -> impl Iterator<Item = (u32, u32)> {
 fn sig_prop_pass(
     mq: &mut MqDecoder<'_>,
     state: &mut BlockState,
-    cx: &mut [Context],
+    cx: &mut [Context; NUM_CONTEXTS],
     orient: Orientation,
     bpno: u32,
 ) {
+    if state.vcausal {
+        sig_prop_pass_impl::<true>(mq, state, cx, orient, bpno);
+    } else {
+        sig_prop_pass_impl::<false>(mq, state, cx, orient, bpno);
+    }
+}
+
+/// [`sig_prop_pass`] for one setting of vertically causal coding, `VC`. A
+/// column whose samples have no significant neighbor is skipped with one test.
+#[inline(never)]
+fn sig_prop_pass_impl<const VC: bool>(
+    mq_out: &mut MqDecoder<'_>,
+    state: &mut BlockState,
+    cx: &mut [Context; NUM_CONTEXTS],
+    orient: Orientation,
+    bpno: u32,
+) {
+    // The decoder's registers live in locals for the whole pass.
+    let mut mq = mq_out.clone();
     let table = zc_table(orient);
-    let (w, h) = (state.width, state.height);
-    for (x, y0) in stripes(w, h) {
-        for y in y0..(y0 + 4).min(h) {
-            let p = state.pad(x, y);
-            if state.flags[p] & SIG != 0 {
-                continue;
+    let mut plane = Plane::new(state);
+    let w = plane.width;
+    for k in 0..plane.full_stripes() {
+        for x in 0..w {
+            let p = plane.column(k, x);
+            if column_word(plane.state, p) & column_neighbors(VC) == 0 {
+                continue; // no sample of the column has a significant neighbor
             }
-            let mask = state.context_mask(p, y);
-            if mask == 0 {
-                continue; // no significant neighbor: deferred to cleanup
-            }
-            let ctx = CTX_ZC + table[usize::from(mask)];
-            if mq.decode(&mut cx[ctx as usize]) == 1 {
-                state.become_significant(x, y, p, bpno);
-                decode_sign(mq, state, cx, p, y);
-            }
-            state.flags[p] |= VISITED;
+            let i = 4 * k * w + x;
+            each_stripe_row!(r => sig_prop_sample(
+                &mut mq, cx, &mut plane, table, i + r * w, p + r, r, VC && r == 3, bpno
+            ));
         }
     }
+    let (k, rows) = (plane.full_stripes(), plane.last_rows());
+    for x in 0..w {
+        let p = plane.column(k, x);
+        let i = 4 * k * w + x;
+        for r in 0..rows {
+            sig_prop_sample(
+                &mut mq,
+                cx,
+                &mut plane,
+                table,
+                i + r * w,
+                p + r,
+                r,
+                false,
+                bpno,
+            );
+        }
+    }
+    *mq_out = mq;
 }
 
 /// Magnitude-refinement pass (D.3.3): refine every sample that was already
 /// significant before this plane (so not coded in this plane's significance
 /// pass) by decoding one more magnitude bit under the refinement context.
-fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Context], bpno: u32) {
-    let (w, h) = (state.width, state.height);
-    for (x, y0) in stripes(w, h) {
-        for y in y0..(y0 + 4).min(h) {
-            let p = state.pad(x, y);
-            if state.flags[p] & (SIG | VISITED) != SIG {
-                continue; // insignificant, or coded in this plane's first pass
+fn mag_ref_pass(
+    mq: &mut MqDecoder<'_>,
+    state: &mut BlockState,
+    cx: &mut [Context; NUM_CONTEXTS],
+    bpno: u32,
+) {
+    if state.vcausal {
+        mag_ref_pass_impl::<true>(mq, state, cx, bpno);
+    } else {
+        mag_ref_pass_impl::<false>(mq, state, cx, bpno);
+    }
+}
+
+/// [`mag_ref_pass`] for one setting of vertically causal coding, `VC`. A column
+/// with no significant sample is skipped with one test.
+#[inline(never)]
+fn mag_ref_pass_impl<const VC: bool>(
+    mq_out: &mut MqDecoder<'_>,
+    state: &mut BlockState,
+    cx: &mut [Context; NUM_CONTEXTS],
+    bpno: u32,
+) {
+    let mut mq = mq_out.clone();
+    let mut plane = Plane::new(state);
+    let w = plane.width;
+    for k in 0..plane.full_stripes() {
+        for x in 0..w {
+            let p = plane.column(k, x);
+            if column_word(plane.state, p) & each_row(SIG) == 0 {
+                continue; // no significant sample in the column
             }
-            let ctx = state.refinement_context(p, y);
-            let bit = mq.decode(&mut cx[ctx as usize]);
-            state.refine_magnitude(x, y, bpno, bit);
-            state.flags[p] |= REFINED;
+            let i = 4 * k * w + x;
+            each_stripe_row!(r => mag_ref_sample(
+                &mut mq, cx, &mut plane, i + r * w, p + r, VC && r == 3, bpno
+            ));
+        }
+    }
+    let (k, rows) = (plane.full_stripes(), plane.last_rows());
+    for x in 0..w {
+        let p = plane.column(k, x);
+        let i = 4 * k * w + x;
+        for r in 0..rows {
+            mag_ref_sample(&mut mq, cx, &mut plane, i + r * w, p + r, false, bpno);
+        }
+    }
+    *mq_out = mq;
+}
+
+/// Visit every sample in EBCOT scan order (stripes of four rows top to bottom,
+/// each stripe column by column; the bottom stripe may be shorter) and call
+/// `f` with its coefficient index, padded index and stripe row, and whether
+/// vertically causal coding hides its south neighbors.
+#[inline(always)]
+fn for_each_sample(
+    state: &mut BlockState,
+    mut f: impl FnMut(&mut Plane<'_>, usize, usize, usize, bool),
+) {
+    let vcausal = state.vcausal;
+    let mut plane = Plane::new(state);
+    let w = plane.width;
+    let stripes = plane.height.div_ceil(4);
+    for k in 0..stripes {
+        let rows = (plane.height - 4 * k).min(4);
+        for x in 0..w {
+            let p = plane.column(k, x);
+            let i = 4 * k * w + x;
+            for r in 0..rows {
+                f(&mut plane, i + r * w, p + r, r, vcausal && r == 3);
+            }
         }
     }
 }
@@ -518,43 +827,33 @@ fn mag_ref_pass(mq: &mut MqDecoder<'_>, state: &mut BlockState, cx: &mut [Contex
 /// significant neighbor), it just no longer selects a context — so the sign is
 /// the raw bit itself, without the neighbor-sign context or its XOR.
 fn sig_prop_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32) {
-    let (w, h) = (state.width, state.height);
-    for (x, y0) in stripes(w, h) {
-        for y in y0..(y0 + 4).min(h) {
-            let p = state.pad(x, y);
-            if state.flags[p] & SIG != 0 {
-                continue;
-            }
-            if state.context_mask(p, y) == 0 {
-                continue; // no significant neighbor: deferred to cleanup
-            }
-            if raw.decode() == 1 {
-                state.become_significant(x, y, p, bpno);
-                if raw.decode() == 1 {
-                    state.flags[p] |= NEGATIVE;
-                }
-            }
-            state.flags[p] |= VISITED;
+    for_each_sample(state, |plane, i, p, r, hide| {
+        let word = plane.state[p];
+        if word & SIG != 0 {
+            return;
         }
-    }
+        if neighbor_mask(visible(word, hide)) == 0 {
+            return; // no significant neighbor: deferred to cleanup
+        }
+        if raw.decode() == 1 {
+            let negative = raw.decode() == 1;
+            plane.become_significant(i, p, r, bpno, negative);
+        }
+        plane.state[p] |= VISITED;
+    });
 }
 
 /// Magnitude-refinement pass under `bypass` (ISO D.6): identical to
 /// [`mag_ref_pass`] except the refinement bit is a raw bit rather than an
 /// MQ-coded decision under the refinement context.
 fn mag_ref_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32) {
-    let (w, h) = (state.width, state.height);
-    for (x, y0) in stripes(w, h) {
-        for y in y0..(y0 + 4).min(h) {
-            let p = state.pad(x, y);
-            if state.flags[p] & (SIG | VISITED) != SIG {
-                continue;
-            }
-            let bit = raw.decode();
-            state.refine_magnitude(x, y, bpno, bit);
-            state.flags[p] |= REFINED;
+    for_each_sample(state, |plane, i, p, _, _| {
+        if plane.state[p] & (SIG | VISITED) != SIG {
+            return;
         }
-    }
+        let bit = raw.decode();
+        plane.refine_magnitude(i, p, bpno, bit);
+    });
 }
 
 /// Cleanup pass (D.3.4): code every sample not yet handled this plane. A full
@@ -562,6 +861,7 @@ fn mag_ref_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32)
 /// aggregated through the run-length context — a 0 leaves all four
 /// insignificant, a 1 reads the first significant sample's position as two
 /// uniform bits — after which the column finishes with ordinary zero coding.
+/// The pass also clears the plane's `VISITED` marks, column by column.
 ///
 /// Under `segmentation symbols` the pass ends by reading the `1010` symbol
 /// (D.5); see [`read_segmentation_symbol`], which says what `terminated`
@@ -569,55 +869,86 @@ fn mag_ref_pass_raw(raw: &mut RawDecoder<'_>, state: &mut BlockState, bpno: u32)
 fn cleanup_pass(
     mq: &mut MqDecoder<'_>,
     state: &mut BlockState,
-    cx: &mut [Context],
+    cx: &mut [Context; NUM_CONTEXTS],
     orient: Orientation,
     bpno: u32,
     style: u8,
     terminated: bool,
 ) -> Result<()> {
+    if state.vcausal {
+        cleanup_pass_impl::<true>(mq, state, cx, orient, bpno);
+    } else {
+        cleanup_pass_impl::<false>(mq, state, cx, orient, bpno);
+    }
+    if style & crate::codestream::markers::code_block_style::SEGSYM != 0 {
+        read_segmentation_symbol(mq, cx, terminated)?;
+    }
+    Ok(())
+}
+
+/// The scan of [`cleanup_pass`] for one setting of vertically causal coding,
+/// `VC`. The run-length test of a full column is one test of its column word.
+#[inline(never)]
+fn cleanup_pass_impl<const VC: bool>(
+    mq_out: &mut MqDecoder<'_>,
+    state: &mut BlockState,
+    cx: &mut [Context; NUM_CONTEXTS],
+    orient: Orientation,
+    bpno: u32,
+) {
+    let mut mq = mq_out.clone();
     let table = zc_table(orient);
-    let (w, h) = (state.width, state.height);
-    for (x, y0) in stripes(w, h) {
-        let rows = (y0 + 4).min(h) - y0;
-        let mut first = 0;
-        if rows == 4 {
-            let aggregate = (0..4).all(|dy| {
-                let y = y0 + dy;
-                let p = state.pad(x, y);
-                state.flags[p] & (SIG | VISITED) == 0 && state.context_mask(p, y) == 0
-            });
-            if aggregate {
+    let mut plane = Plane::new(state);
+    let w = plane.width;
+    // A column aggregates when no sample is significant or visited and none
+    // has a significant neighbor in its context. The `SIG` term is implied by
+    // the neighbor bits (a significant sample sets `NB_N` or `NB_S` in the
+    // sample beside it in the column, which vertically causal coding never
+    // hides), but it states the rule as D.3.4 does.
+    let run_bits = each_row(SIG | VISITED) | column_neighbors(VC);
+    for k in 0..plane.full_stripes() {
+        for x in 0..w {
+            let p = plane.column(k, x);
+            let i = 4 * k * w + x;
+            let mut first = 0;
+            if column_word(plane.state, p) & run_bits == 0 {
                 if mq.decode(&mut cx[CTX_RUN as usize]) == 0 {
                     continue; // run of four insignificant samples
                 }
                 let hi = mq.decode(&mut cx[CTX_UNI as usize]);
                 let lo = mq.decode(&mut cx[CTX_UNI as usize]);
-                let run = (hi << 1) | lo; // position of the first significant
-                let y = y0 + run as u32;
-                let p = state.pad(x, y);
-                state.become_significant(x, y, p, bpno);
-                decode_sign(mq, state, cx, p, y);
-                first = run as u32 + 1;
+                let run = usize::from((hi << 1) | lo); // first significant
+                let word = visible(plane.state[p + run], VC && run == 3);
+                let negative = decode_sign(&mut mq, cx, word);
+                plane.become_significant(i + run * w, p + run, run, bpno, negative);
+                first = run + 1;
             }
-        }
-        for dy in first..rows {
-            let y = y0 + dy;
-            let p = state.pad(x, y);
-            if state.flags[p] & (SIG | VISITED) != 0 {
-                continue;
-            }
-            let ctx = CTX_ZC + table[usize::from(state.context_mask(p, y))];
-            if mq.decode(&mut cx[ctx as usize]) == 1 {
-                state.become_significant(x, y, p, bpno);
-                decode_sign(mq, state, cx, p, y);
-            }
+            each_stripe_row!(r => if r >= first {
+                cleanup_sample(
+                    &mut mq, cx, &mut plane, table, i + r * w, p + r, r, VC && r == 3, bpno,
+                )
+            });
         }
     }
-    state.clear_visited();
-    if style & crate::codestream::markers::code_block_style::SEGSYM != 0 {
-        read_segmentation_symbol(mq, cx, terminated)?;
+    let (k, rows) = (plane.full_stripes(), plane.last_rows());
+    for x in 0..w {
+        let p = plane.column(k, x);
+        let i = 4 * k * w + x;
+        for r in 0..rows {
+            cleanup_sample(
+                &mut mq,
+                cx,
+                &mut plane,
+                table,
+                i + r * w,
+                p + r,
+                r,
+                false,
+                bpno,
+            );
+        }
     }
-    Ok(())
+    *mq_out = mq;
 }
 
 /// Read the segmentation symbol that closes a cleanup pass under `segmentation
@@ -825,7 +1156,7 @@ pub fn decode_block(
     // rejects this too, before allocating; checking again here is where OpenJPEG
     // puts it (`opj_t1_decode_cblk`'s `bpno_plus_one >= 31`), so a caller that
     // reaches `decode_block` by another route cannot overflow
-    // `set_significant_magnitude`. It does *not* bound the maxshift: enough
+    // `Plane::become_significant`. It does *not* bound the maxshift: enough
     // zero bit-planes keep `top` small under any `SPrgn`, which is why
     // `undo_maxshift` carries its own `roi_shift >= 31` arm.
     if top > MAX_BIT_PLANES {
@@ -963,7 +1294,7 @@ pub fn decode_block(
         for x in 0..state.width {
             let i = state.idx(x, y);
             let mag = undo_maxshift(state.coeffs[i], roi_shift);
-            state.coeffs[i] = if state.flags[state.pad(x, y)] & NEGATIVE != 0 {
+            state.coeffs[i] = if state.state[state.pad(x, y)] & NEGATIVE != 0 {
                 -mag
             } else {
                 mag
@@ -1780,7 +2111,7 @@ mod tests {
             let stripe: Vec<(i32, bool)> = (0..4)
                 .map(|y| (state.coeffs[y as usize], state.is_negative(0, y)))
                 .collect();
-            let contexts: Vec<(u8, u8)> = cx.iter().map(|c| (c.index, c.mps)).collect();
+            let contexts: Vec<(u8, u8)> = cx.iter().map(|c| (c.index(), c.mps())).collect();
             let after: Vec<u8> = (0..32)
                 .map(|_| mq.decode(&mut cx[CTX_UNI as usize]))
                 .collect();
@@ -1958,5 +2289,338 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Marking a sample significant sets exactly one bit in each neighbor's
+    /// state word, the direction that neighbor sees it in, and for a negative
+    /// sample the matching sign bit in each direct neighbor. The sign context
+    /// reads `NB_N`, `NB_S`, `NB_W`, `NB_E` and the `NEG_*` bits one at a
+    /// time, and vertically causal coding reads the south ones, so a swap of
+    /// any two directions is a bug even where the zero-coding tables would not
+    /// notice it. The centers sit on stripe rows 0, 1 and 3, so the north and
+    /// south neighbors are found both within a stripe and across a stripe
+    /// boundary, in both directions.
+    #[test]
+    fn each_neighbor_direction_sets_its_own_bit() {
+        // (dx, dy) of the significant sample as seen from the center, and the
+        // bits the center's word must get for it.
+        let directions: [(i32, i32, u16, u16); 8] = [
+            (0, -1, NB_N, NEG_N),
+            (0, 1, NB_S, NEG_S),
+            (-1, 0, NB_W, NEG_W),
+            (1, 0, NB_E, NEG_E),
+            (-1, -1, NB_NW, 0),
+            (1, -1, NB_NE, 0),
+            (-1, 1, NB_SW, 0),
+            (1, 1, NB_SE, 0),
+        ];
+        for cy in [4u32, 5, 7] {
+            for (dx, dy, bit, neg_bit) in directions {
+                for negative in [false, true] {
+                    let (x, y) = ((1 + dx) as u32, (cy as i32 + dy) as u32);
+                    let want = bit | if negative { neg_bit } else { 0 };
+                    let at = format!("center (1, {cy}), neighbor ({x}, {y}), negative {negative}");
+                    // Through the test helpers, which set the sign after.
+                    let mut b = BlockState::new(3, 12);
+                    b.set_significant(x, y);
+                    b.set_negative(x, y, negative);
+                    assert_eq!(b.state[b.pad(1, cy)], want, "{at}");
+                    // Through the marking the passes use, which takes the
+                    // sign up front.
+                    let mut m = BlockState::new(3, 12);
+                    let p = m.pad(x, y);
+                    mark_significant(&mut m.state, p, y as usize % 4, m.stripe_len, negative);
+                    assert_eq!(m.state[m.pad(1, cy)], want, "{at}, mark_significant");
+                    // Nothing in the block changed but the sample and its
+                    // eight neighbors.
+                    for oy in 0..12u32 {
+                        for ox in 0..3u32 {
+                            if ox.abs_diff(x) > 1 || oy.abs_diff(y) > 1 {
+                                assert_eq!(m.state[m.pad(ox, oy)], 0, "{at}, ({ox}, {oy})");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The three MQ pass loops written the plain way: every sample in scan
+    /// order, its contexts from the coordinate accessors, no column skips and
+    /// no run test on a column word.
+    mod reference {
+        use super::*;
+
+        fn sign(
+            mq: &mut MqDecoder<'_>,
+            cx: &mut [Context],
+            b: &BlockState,
+            x: u32,
+            y: u32,
+        ) -> bool {
+            let (ctx, xor) = b.sc_context(x, y);
+            mq.decode(&mut cx[usize::from(ctx)]) ^ xor == 1
+        }
+
+        fn significant(b: &mut BlockState, x: u32, y: u32, bpno: u32, negative: bool) {
+            let one = 1i32 << bpno;
+            let i = b.idx(x, y);
+            b.coeffs[i] = one | (one >> 1);
+            b.set_significant(x, y);
+            b.set_negative(x, y, negative);
+        }
+
+        fn scan(b: &BlockState) -> Vec<(u32, u32)> {
+            let mut order = Vec::new();
+            for y0 in (0..b.height).step_by(4) {
+                for x in 0..b.width {
+                    for y in y0..(y0 + 4).min(b.height) {
+                        order.push((x, y));
+                    }
+                }
+            }
+            order
+        }
+
+        fn zero_code(
+            mq: &mut MqDecoder<'_>,
+            cx: &mut [Context],
+            b: &mut BlockState,
+            orient: Orientation,
+            (x, y): (u32, u32),
+            bpno: u32,
+        ) {
+            let ctx = b.zc_context(x, y, orient);
+            if mq.decode(&mut cx[usize::from(ctx)]) == 1 {
+                let negative = sign(mq, cx, b, x, y);
+                significant(b, x, y, bpno, negative);
+            }
+        }
+
+        pub fn sig_prop(
+            mq: &mut MqDecoder<'_>,
+            cx: &mut [Context],
+            b: &mut BlockState,
+            orient: Orientation,
+            bpno: u32,
+        ) {
+            for (x, y) in scan(b) {
+                if b.is_significant(x, y) || b.neighbor_sums(x, y) == (0, 0, 0) {
+                    continue;
+                }
+                zero_code(mq, cx, b, orient, (x, y), bpno);
+                b.set_visited(x, y, true);
+            }
+        }
+
+        pub fn mag_ref(mq: &mut MqDecoder<'_>, cx: &mut [Context], b: &mut BlockState, bpno: u32) {
+            for (x, y) in scan(b) {
+                if !b.is_significant(x, y) || b.is_visited(x, y) {
+                    continue;
+                }
+                let bit = mq.decode(&mut cx[usize::from(b.mr_context(x, y))]);
+                let half = (1i32 << bpno) >> 1;
+                let i = b.idx(x, y);
+                b.coeffs[i] += if bit == 1 { half } else { -half };
+                b.set_refined(x, y);
+            }
+        }
+
+        pub fn cleanup(
+            mq: &mut MqDecoder<'_>,
+            cx: &mut [Context],
+            b: &mut BlockState,
+            orient: Orientation,
+            bpno: u32,
+        ) {
+            let quiet = |b: &BlockState, x: u32, y: u32| {
+                !b.is_significant(x, y) && !b.is_visited(x, y) && b.neighbor_sums(x, y) == (0, 0, 0)
+            };
+            for y0 in (0..b.height).step_by(4) {
+                for x in 0..b.width {
+                    let rows = (y0 + 4).min(b.height) - y0;
+                    let mut first = 0;
+                    if rows == 4 && (y0..y0 + 4).all(|y| quiet(b, x, y)) {
+                        if mq.decode(&mut cx[CTX_RUN as usize]) == 0 {
+                            continue;
+                        }
+                        let hi = mq.decode(&mut cx[CTX_UNI as usize]);
+                        let lo = mq.decode(&mut cx[CTX_UNI as usize]);
+                        let run = u32::from((hi << 1) | lo);
+                        let negative = sign(mq, cx, b, x, y0 + run);
+                        significant(b, x, y0 + run, bpno, negative);
+                        first = run + 1;
+                    }
+                    for y in y0 + first..y0 + rows {
+                        if !b.is_significant(x, y) && !b.is_visited(x, y) {
+                            zero_code(mq, cx, b, orient, (x, y), bpno);
+                        }
+                    }
+                }
+            }
+            for y in 0..b.height {
+                for x in 0..b.width {
+                    b.set_visited(x, y, false);
+                }
+            }
+        }
+    }
+
+    /// Everything a pass leaves behind that a later pass or the caller can
+    /// see: each sample's coefficient and state bits, every context state, and
+    /// the decoder's position, read as the next 48 uniform decisions.
+    type PassOutcome = (Vec<(i32, bool, bool, bool, bool)>, Vec<Context>, Vec<u8>);
+
+    fn pass_outcome(
+        b: &BlockState,
+        cx: &[Context; NUM_CONTEXTS],
+        mq: &mut MqDecoder<'_>,
+    ) -> PassOutcome {
+        let mut samples = Vec::new();
+        for y in 0..b.height {
+            for x in 0..b.width {
+                samples.push((
+                    b.coeffs[b.idx(x, y)],
+                    b.is_significant(x, y),
+                    b.is_visited(x, y),
+                    b.is_negative(x, y),
+                    b.is_refined(x, y),
+                ));
+            }
+        }
+        let mut uniform = Context::new(46, 0);
+        let after = (0..48).map(|_| mq.decode(&mut uniform)).collect();
+        (samples, cx.to_vec(), after)
+    }
+
+    /// The pass loops, with their column skips, unrolled full stripes, short
+    /// last stripes, run test on a column word and per-column `VISITED`
+    /// clearing, decode exactly as the plain per-sample loops in
+    /// [`reference`] do. Each pass starts from a random state (significance
+    /// and sign, `VISITED` and `REFINED` marks, at several densities) and
+    /// random context states, for block shapes whose last stripe has one to
+    /// four rows, every orientation, and vertically causal coding on and off.
+    #[test]
+    fn pass_loops_match_a_per_sample_reference() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let shapes = [
+            (1, 1),
+            (1, 4),
+            (1, 5),
+            (2, 7),
+            (3, 8),
+            (4, 9),
+            (5, 10),
+            (6, 11),
+            (7, 12),
+            (8, 3),
+            (9, 6),
+            (13, 13),
+            (16, 16),
+            (5, 2),
+        ];
+        let orients = [
+            Orientation::Ll,
+            Orientation::Lh,
+            Orientation::Hl,
+            Orientation::Hh,
+        ];
+        let densities = [0u64, 4, 16, 64, 160, 240];
+        let trials = 6;
+        let mut checked = 0;
+        for (w, h) in shapes {
+            for vcausal in [false, true] {
+                for density in densities {
+                    for _ in 0..trials {
+                        let mut start = BlockState::new(w, h);
+                        start.vcausal = vcausal;
+                        for y in 0..h {
+                            for x in 0..w {
+                                if next() % 256 < density {
+                                    start.set_significant(x, y);
+                                    start.set_negative(x, y, next() % 2 == 1);
+                                    let i = start.idx(x, y);
+                                    start.coeffs[i] = (next() % 1000) as i32 + 64;
+                                    if next() % 3 == 0 {
+                                        start.set_refined(x, y);
+                                    }
+                                }
+                                if next() % 256 < density / 2 {
+                                    start.set_visited(x, y, true);
+                                }
+                            }
+                        }
+                        let bytes: Vec<u8> = (0..24).map(|_| next() as u8).collect();
+                        let mut cx = init_contexts();
+                        for c in cx.iter_mut() {
+                            *c = Context::new((next() % 47) as u8, (next() % 2) as u8);
+                        }
+                        let orient = orients[(next() % 4) as usize];
+                        let bpno = (next() % 8) as u32 + 2;
+                        let copy = |from: &BlockState| {
+                            let mut b = BlockState::new(w, h);
+                            b.state.clone_from(&from.state);
+                            b.coeffs.clone_from(&from.coeffs);
+                            b.vcausal = from.vcausal;
+                            b
+                        };
+                        for pass in 0..3 {
+                            let (mut real, mut want) = (copy(&start), copy(&start));
+                            let mut mq = MqDecoder::new(&bytes);
+                            let mut ref_mq = MqDecoder::new(&bytes);
+                            let (mut cx_real, mut cx_want) = (cx, cx);
+                            match pass {
+                                0 => {
+                                    sig_prop_pass(&mut mq, &mut real, &mut cx_real, orient, bpno);
+                                    reference::sig_prop(
+                                        &mut ref_mq,
+                                        &mut cx_want,
+                                        &mut want,
+                                        orient,
+                                        bpno,
+                                    );
+                                }
+                                1 => {
+                                    mag_ref_pass(&mut mq, &mut real, &mut cx_real, bpno);
+                                    reference::mag_ref(&mut ref_mq, &mut cx_want, &mut want, bpno);
+                                }
+                                _ => {
+                                    cleanup_pass(
+                                        &mut mq,
+                                        &mut real,
+                                        &mut cx_real,
+                                        orient,
+                                        bpno,
+                                        0,
+                                        false,
+                                    )
+                                    .unwrap();
+                                    reference::cleanup(
+                                        &mut ref_mq,
+                                        &mut cx_want,
+                                        &mut want,
+                                        orient,
+                                        bpno,
+                                    );
+                                }
+                            }
+                            assert_eq!(
+                                pass_outcome(&real, &cx_real, &mut mq),
+                                pass_outcome(&want, &cx_want, &mut ref_mq),
+                                "{w}x{h} vcausal {vcausal} density {density} {orient:?} pass {pass}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, shapes.len() * 2 * densities.len() * trials * 3);
     }
 }
