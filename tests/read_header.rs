@@ -37,12 +37,26 @@ use rust_j2k::{
 /// carry POC volumes that leave out packets of the tile, which only the
 /// decode's packet walk checks. `partial/overlap.j2k` and `partial/tp_r.j2k`
 /// leave bytes after the last packet of a tile, which only the decode reads.
+/// The `packed_overrun/` files listed hold a packed packet header that runs
+/// past its bytes, which only the decode reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
     ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
+    (
+        "packed_overrun/ppm_short.j2k",
+        "a PPM packet header runs short",
+    ),
+    (
+        "packed_overrun/ppt_ff_nostuff.j2k",
+        "a PPT packet header lacks its stuffed byte",
+    ),
+    (
+        "packed_overrun/ppt_short.j2k",
+        "a PPT packet header runs short",
+    ),
     (
         "partial/overlap.j2k",
         "bytes left after the last packet (duplicate packets)",
