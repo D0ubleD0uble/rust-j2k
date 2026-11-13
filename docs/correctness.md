@@ -61,10 +61,34 @@ const OPJ_INT32 log2_gain = (!isEncoder && l_tccp->qmfbid == 0) ? 0 : ...;
 const float two_invK = 1.625732422f;
 ```
 
-`1.625732422` is 3.3e-5 short of `2/K`. Adopting OpenJPEG's split makes a
-multi-level 9/7 decode bit-exact against `opj_decompress` — and slightly wrong.
-This crate keeps the exact constant, and `p0_09` decodes bit-exact against the
-ISO reference image with it, which is the evidence that settles the question.
+`1.625732422` is 5.4e-5 (3.3e-5 relative) short of `2/K`. This crate keeps the
+exact constant, because it is the standard's: Table F.4 gives `K`, and the
+subband gain of Table E-1 supplies the factor of two. OpenJPEG's constant,
+together with its rounding of the lifting constants β and δ ("Where the
+decoders differ" below), makes this decoder bit-exact against `opj_decompress`
+on `issue206_image-000.jp2`, `issue208.jp2`, both `issue559-eci-*` files and
+`jpx_disguised_as_jp2.jp2`, and on a synthetic sweep at 12 and 16 bits.
+
+The measurements support the standard's constant, though not uniformly:
+
+- On near-lossless round trips (`opj_compress -I -n 6 -r 1`, whose forward
+  transform uses the exact `K`; 64x64 images, nine patterns, two seeds each),
+  this decoder returns the encoder's input more closely than `opj_decompress`
+  in 18 of 18 cases at 16 bits, 15 of 18 at 14 and 12 of 18 at 12. OpenJPEG is
+  closer, by a small margin, on smooth gradients and a random walk. At `-r 4`
+  and `-r 20`, where quantization error dominates, the comparison is mixed and
+  the margins are negligible. `tests/irreversible_16bit.rs` checks one 16-bit
+  case.
+- `p0_09` decodes bit-exact against its ISO reference with either constant, so
+  it does not decide the question.
+- On the lossy conformance entries the ISO references lean slightly the other
+  way: OpenJPEG's constant lowers the MSE on 16 of the 26 graded components,
+  raises it on 3 and leaves 7 the same. No change exceeds 0.71%, and no peak
+  error moves (#104).
+
+The error `two_invK` adds grows with the sample range, so the gap between the
+two decoders grows with bit depth. "Agreement standard" below gives the
+measured gaps.
 
 So a 9/7 fixture graded `tolerance: exact` against OpenJPEG must not carry detail
 bands whose values reach a rounding boundary; grade multi-level 9/7 against the
@@ -651,6 +675,15 @@ counts edited to be right, so its difference of 2 (731 of 89888 samples of
 component 0) is the 9/7 difference at 16 bits, not the correction. Every
 other committed fixture and conformance file decodes as it did before.
 
+The difference of 2 comes from the `2/K` constant. With both decoders dumping
+each stage of every tile-component, the dequantized coefficients agree
+bit-for-bit (all 269664 of them), and the first inverse-DWT level is the first
+stage that differs: 1122 of its 1134 values, by up to 1.07. The gap grows to
+1.91 at the last level, before rounding. With OpenJPEG's `two_invK` in place
+of `2/K`, the largest gap at the last level falls to 0.068 and the output is
+within 1 (769 samples of component 0 at 1). With OpenJPEG's β and δ as well,
+the file decodes bit-exact.
+
 ### Where the decoders differ
 
 Every known place where this decoder and OpenJPEG 2.5.0 give a different
@@ -658,6 +691,12 @@ result on the same file:
 
 - the inverse 9/7's `2/K` constant ("When the oracle and the standard
   disagree" above);
+- the 9/7 lifting constants β and δ, which in `src/dwt.rs` are each one `f32`
+  step from OpenJPEG's. OpenJPEG's are the nearest `f32` values to the ISO
+  constants (Table F.4); these are not. The effect is small. Next to
+  OpenJPEG's `two_invK` they account for the last differences of 1 on
+  eci-090 (above). Next to the exact `2/K`, changing them leaves the largest
+  measured gap at each bit depth as it is;
 - the bypass switch under an RGN maxshift ("Bypass under a maxshift");
 - a tile-part POC that replaces the main header's (#269; "A tile-part POC
   overrides the main header's");
@@ -1531,6 +1570,42 @@ color space the file declares.
   against Part 4. Floating-point lifting means our result and
   OpenJPEG's will differ in the low bits; the tolerance is what makes the test
   meaningful rather than flaky.
+
+The 9/7 difference from OpenJPEG depends on the bit depth, because OpenJPEG's
+`two_invK` ("When the oracle and the standard disagree") adds an error that
+grows with the sample range. Beyond that it depends on the content: how many
+sharp edges the image has and how they line up with the transform grid. The
+largest differences seen so far:
+
+| Bit depth | Largest difference from `opj_decompress` |
+| --------- | ---------------------------------------- |
+| 8, 10, 12 | 1 |
+| 14 | 2 |
+| 16 | 7 |
+
+The images: 128x128 single-component images coded by `opj_compress -I -n 6`
+at rates 1, 4 and 20, in seven patterns (noise, a random walk, a checkerboard,
+bars, two sizes of blocks and ragged edges) with two seeds each; and, at `-r 1`,
+checkerboards of full-swing blocks from 1x1 to 5x5 on images from 32x32 to
+256x256 with five or seven decomposition levels. The 7 is a 256x256
+checkerboard of 5x5 blocks, and 3x3 blocks reach 6. The same 5x5 checkerboard
+gives 5 at 64x64, 128x128, 200x200, 300x300 and 384x384, and at 512x512 and
+1024x1024 with up to ten levels, so the gap does not simply grow with image
+size. On all of them this decoder
+stays within 1 of the encoder's input. Real files agree: the 8-bit
+`issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2` and
+`jpx_disguised_as_jp2.jp2` are within 1, and the 16-bit
+`issue559-eci-090-CIELab.jp2` is within 2.
+
+These are measured maxima, not a bound. For a rough scale: each high-pass
+scaling is off by 5.4e-5 times the coefficient, high-pass coefficients range
+about as widely as the samples, and a sample collects that error once per
+decomposition level, so the gap stays roughly under 5.4e-5 × 2^depth × levels.
+That is about 18 at 16 bits with five levels, 4 at 14, 1 at 12 and under 0.1
+at 8. It is an estimate, not a hard bound. The measured gaps do not grow with
+the level count. The committed `irreversible_16bit`
+fixture reaches 5 on its full-swing component and 3 on its mid-range one, and
+is graded at a tolerance of 5.
 
 ## Grading against Part 4
 
