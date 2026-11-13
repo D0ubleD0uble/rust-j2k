@@ -134,13 +134,25 @@ pub(crate) fn saturate(v: i64) -> i32 {
     v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
+/// Whether a COD that signals the color transform applies it to an image of
+/// `components` components.
+///
+/// The transform is defined over components 0, 1 and 2 (§G.2), so an image of
+/// one or two has nothing it could apply to. Some encoders still set the flag
+/// on such a file. OpenJPEG 2.5.0 skips the transform there
+/// (`opj_tcd_mct_decode`: "Number of components (%d) is inconsistent with a
+/// MCT. Skip the MCT step.") and decodes the components as coded, which is the
+/// only image the file can describe; this decoder does the same.
+pub fn applies(signaled: bool, components: usize) -> bool {
+    signaled && components >= 3
+}
+
 /// Whether the three transformed components can be inverted together.
 ///
 /// §G.2 applies the transform to components 0, 1 and 2, which must therefore
-/// share a sample grid. OpenJPEG *skips* the transform when a tile has fewer
-/// than three components and errors when their dimensions disagree; skipping
-/// would silently decode an image the encoder never wrote, so both cases are
-/// rejected here.
+/// share a sample grid. OpenJPEG errors when their dimensions disagree, and so
+/// does this decoder. Callers check [`applies`] first: with fewer than three
+/// components there is no transform to check, and this reports it as an error.
 ///
 /// The bit depths must agree as well: the transform mixes the three components
 /// arithmetically, so a mismatch means the codestream is describing something
