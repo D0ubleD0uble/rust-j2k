@@ -461,9 +461,11 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
   the codestream (a `resolution_reduction` that consumes a whole pyramid).
   `Error::Unsupported` now means only a valid-but-not-decoded feature.
 - The inverse wavelet transform is faster. It applies the boundary
-  extension only at the two ends of each row and column, and it runs the
-  vertical pass on eight columns at a time. The output is unchanged, and
-  9/7 images decode about 1.3 times faster.
+  extension only at the two ends of each row and column, lifts each row as
+  its low-pass and high-pass halves, and runs the vertical pass on eight
+  columns at a time on tiles at least 16 samples wide. The output is
+  unchanged, and 9/7 images decode about 1.3 times faster. A narrow tile
+  needs no more memory than before.
 
 ## [0.3.0] - 2026-07-18
 
