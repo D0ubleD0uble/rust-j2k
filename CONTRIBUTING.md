@@ -51,6 +51,33 @@ cargo deny check
 Robustness is fuzzed with `cargo-fuzz`; CI runs a short smoke over `decode`. To
 run it locally: `cargo +nightly fuzz run decode`.
 
+## Benchmarks
+
+`cargo bench --bench decode` times `decode_with` on committed fixtures. It uses
+only `std`: no extra dependency and no network. Each file gets one warm-up
+decode and then 10 timed ones. The output has one line per file, in a fixed
+order, with the median first and then the min, max and file size:
+
+```text
+file                            median       min       max       KiB
+p0_08.j2k                      2065.03   1636.32   2574.55      3732
+```
+
+The set covers 5/3 and 9/7, MCT, a JP2 and a small GRIB2 codestream. The
+conformance and `jp2_real` fixtures are not in the published package, so a
+missing file is skipped with a note. A full run takes about a minute.
+
+- `RUST_J2K_BENCH_ITERS=N` sets the timed iterations (default 10).
+- `RUST_J2K_BENCH_DIR=<dir>` also times every `.j2k`, `.j2c`, `.jp2` and
+  `.jpx` file in `<dir>`, in name order, after the built-in set.
+- Arguments that do not start with `-` filter by file name:
+  `cargo bench --bench decode -- p0_08`.
+
+For numbers you can compare between runs, use an idle machine, run under
+`nice`, and compare medians on the same machine. The min is the steadiest
+figure when other jobs are running. `cargo test` does not build or run the
+bench.
+
 ## Branching, commits, and PRs
 
 - Trunk-based: branch off `main` and open PRs against it
