@@ -86,7 +86,7 @@ fn parse_layers_styled<'a>(
             &mut states,
         )?;
     }
-    Ok((build_subbands(bands, states)?, streams.body_pos))
+    Ok((build_subbands(bands, states), streams.body_pos))
 }
 use crate::codestream::markers::{
     Cod, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
@@ -1021,10 +1021,12 @@ fn a_layer_may_contribute_passes_without_bytes() {
     assert_eq!(next, data.len());
 }
 
-/// A block that takes coding passes but no bytes from *any* layer would hand
-/// Tier-1 an empty MQ stream. That is the case worth rejecting.
+/// A block may take coding passes and no bytes from every layer: B.10.7 sets
+/// no lower bound on a contribution's length, and Tier-1 decodes the passes
+/// from the `0xFF` fill (D.4.1), as OpenJPEG does. The passes still count and
+/// the one segment holds them both, with no chunk.
 #[test]
-fn a_block_with_passes_and_no_bytes_at_all_is_codestream() {
+fn a_block_with_passes_and_no_bytes_at_all_is_accepted() {
     let mut l0 = PackedHeader::new();
     l0.bit(1);
     l0.bit(1); // included
@@ -1042,10 +1044,65 @@ fn a_block_with_passes_and_no_bytes_at_all_is_codestream() {
 
     let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    assert!(matches!(
-        parse_layers(&data, &bands, 2),
-        Err(Error::Codestream(_))
-    ));
+    let (subbands, next) = parse_layers(&data, &bands, 2).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 2, "both layers' passes count");
+    assert_eq!(block.segments.len(), 1);
+    assert_eq!(block.segments[0].passes, 2);
+    assert!(
+        block.segments[0].chunks.is_empty(),
+        "a zero length files no chunk"
+    );
+    assert_eq!(next, data.len());
+}
+
+/// Under `bypass` a zero-length contribution still fills its codeword
+/// segments, so the next layer's passes and lengths go to the right ones. Layer
+/// 0 adds 11 passes: segment 0 (ten MQ passes) and one pass of segment 1 (raw,
+/// two passes), both with a length of zero. Layer 1 adds 2 passes: the second
+/// of segment 1, with its bytes, then segment 2 (one MQ pass).
+#[test]
+fn a_zero_length_bypass_contribution_keeps_the_segments_in_step() {
+    use crate::codestream::markers::code_block_style::LAZY;
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bits(0b1111, 4);
+    l0.bits(11 - 6, 5); // 11 passes
+    l0.bit(0); // Lblock 3
+    l0.bits(0, 3 + 3); // segment 0: ten passes, floor(log2 10) = 3, length 0
+    l0.bits(0, 3); // segment 1: one pass, length 0
+
+    let mut l1 = PackedHeader::new();
+    l1.bit(1);
+    l1.bit(1); // contributes
+    l1.bits(0b10, 2); // 2 passes
+    l1.bit(0); // Lblock 3
+    l1.bits(2, 3); // segment 1: one more pass, 2 bytes
+    l1.bits(1, 3); // segment 2: one pass, 1 byte
+
+    let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![0x11, 0x22, 0x33])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let delimiters = Delimiters {
+        sop: false,
+        eph: false,
+    };
+    let (subbands, next) = parse_layers_styled(&data, &bands, 2, delimiters, LAZY).unwrap();
+
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 13);
+    let shape: Vec<(u32, Vec<u8>)> = block
+        .segments
+        .iter()
+        .map(|s| (s.passes, s.bytes()))
+        .collect();
+    assert_eq!(
+        shape,
+        vec![(10, vec![]), (2, vec![0x11, 0x22]), (1, vec![0x33])]
+    );
+    assert_eq!(next, data.len());
 }
 
 /// A tile-part that ends before its declared layers are read is truncation, not

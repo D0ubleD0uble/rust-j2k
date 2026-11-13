@@ -237,6 +237,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wavelet frees each level's subbands as it merges them. At the full sample
   budget, one 9/7 tile peaked at about 580 MiB and now peaks at about
   340 MiB.
+- A code-block whose coding passes never get a byte now decodes, as the
+  standard allows (B.10.7) and as OpenJPEG decodes it: the passes read the
+  `0xFF` fill the decoder appends (D.4.1). It was refused with "included
+  code-block has coding passes but no coded bytes". The passes still count
+  against the code-block work bound.
 
 ### Changed
 
