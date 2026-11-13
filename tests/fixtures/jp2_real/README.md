@@ -61,8 +61,8 @@ version.
   `byte_with_xmp.jp2`, `stefan_full_rgba.jp2`) are also graded on their
   channel labels against their `cdef` boxes. Two match bit-exactly.
   `stefan_full_rgba.jp2` is 9/7 and is graded within 1: 10 of its 97200
-  samples differ from OpenJPEG's by 1, from 9/7 float rounding, mostly
-  OpenJPEG's 2/K constant (see `docs/correctness.md`).
+  samples differ from OpenJPEG's by 1, from OpenJPEG's `two_invK` in place
+  of the exact 2/K (see `docs/correctness.md`).
 
 The references are OpenJPEG output for files whose rights are not confirmed,
 so they share the status in Rights above.
