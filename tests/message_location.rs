@@ -74,3 +74,16 @@ fn bytes_left_after_the_last_packet_name_their_tile() {
         "tile 4 has 3 byte(s) left after the last packet"
     );
 }
+
+#[test]
+fn a_tile_cut_short_names_its_tile() {
+    let mut data = fixture();
+    let stated = psot(&data, TILE_8_PART_2, 8, 2);
+    let end = TILE_8_PART_2 + stated as usize;
+    data.drain(end - 40..end);
+    set_psot(&mut data, TILE_8_PART_2, stated - 40);
+    assert_eq!(
+        codestream_error(&data),
+        "a packet body segment overruns the data of tile 8"
+    );
+}
