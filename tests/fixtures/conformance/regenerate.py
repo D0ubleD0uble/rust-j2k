@@ -77,6 +77,14 @@ BOUNDS = {
     (0, 1, "mse"): "not_used;0;74;18.8;0.550;16384;16384;0",
 }
 
+# Where OpenJPEG's list is looser than ITU-T T.803 Table C.7, the grade uses
+# T.803's value: (profile, index, kind) -> {component: bound}. Only p1_05
+# component 1 (T.803 9.716, OpenJPEG 9.816) is looser. p0_05 and p1_03 differ
+# the other way (OpenJPEG is tighter), so they keep OpenJPEG's.
+T803_TIGHTER = {
+    (1, 5, "mse"): {1: 9.716},
+}
+
 # Class-0 references carry irregular resolution-level suffixes (rN) for the
 # reduced-resolution decode tests; everything else is the plain c0p{P}_{NN}.pgx.
 CLASS0_REF_SUFFIXES = {
@@ -236,6 +244,9 @@ def bound_cell(profile: int, idx: int, cls: int, kind: str):
     for part in cell.split(":"):
         v = float(part)
         out.append(int(v) if v.is_integer() else v)
+    if cls == 1:
+        for comp, v in T803_TIGHTER.get((profile, idx, kind), {}).items():
+            out[comp] = v
     return out
 
 
@@ -440,6 +451,11 @@ def main_part1():
                     "the class-0 lists (C0P*) are commented out there (first "
                     "component only) and are recorded per entry for reference, not "
                     "used as the bar."
+                ),
+                "t803_override": (
+                    "p1_05 component 1 MSE is 9.716, from ITU-T T.803 Table C.7; "
+                    "OpenJPEG's C1P1_MSE_list has 9.816. Every other bound is "
+                    "OpenJPEG's."
                 ),
             },
             "features": {
