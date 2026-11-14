@@ -46,8 +46,7 @@ whole-crate look happens.
      allocation), attacker-steered loop bounds and quadratic blowups, the CI
      and release workflows, fuzz coverage against the current feature surface.
 3. **Fix what emerges.** Triage by severity: fix-now findings land in a review
-   PR ahead of the release PR; structural work becomes issues (drafted for
-   approval first, per the conventions).
+   PR ahead of the release PR; structural work becomes issues.
 4. **Documentation currency pass.** README (the "What it decodes" and "What
    it doesn't do" lists, "How it's checked"), `SECURITY.md`'s
    supported-versions table, `docs/`, rustdoc on the public surface, and

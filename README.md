@@ -55,7 +55,8 @@ To show a `.jp2` image, decode it with
 then scale each value to 8 bits; the [`ColorOutput::Srgb`
 docs](https://docs.rs/rust-j2k/latest/rust_j2k/enum.ColorOutput.html#variant.Srgb)
 show how. Check `image.jp2` afterwards. If a profile couldn't be applied, the
-values come back as stored and its `color` still names the ICC profile.
+values come back as stored and `jp2.color` is still
+`ColorSpace::RestrictedIcc`.
 `decode_with` takes the other options too,
 such as a smaller image. To learn the size and channels without decoding, call
 `read_header`. The [API docs](https://docs.rs/rust-j2k) cover each one.
@@ -156,7 +157,8 @@ aborts, as in any Rust program.
 something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means
 the file asks for more memory or work than the limits allow (see [Large
 files](#large-files)). A damaged header can show up as either one.
-`Error::InvalidOptions` means your options don't fit the file.
+`Error::InvalidOptions` means your options are invalid, or don't fit this
+file (such as a reduction past its levels).
 `Error::Inconsistent` is a bug in this decoder; please report it. The other
 variants mean the input is damaged or isn't JPEG 2000.
 
