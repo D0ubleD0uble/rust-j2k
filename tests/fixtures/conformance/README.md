@@ -43,6 +43,7 @@ conformance/
   references/    c{0,1}p{0,1}_*.pgx — reference decodes (class 0 and class 1)
   manifest.json  — per-entry bounds, references, and oracle-derived features
   jp2/           — the nine JP2 reader files and their references (see below)
+  ht/            — the HTJ2K codestreams and JPH files (see below)
   COPYRIGHT      — the upstream conformance grant (retain verbatim)
   regenerate.py  — re-fetches and rebuilds the above from the pinned sources
 ```
@@ -241,6 +242,114 @@ file order), `color` (the first `colr`: `method` with `enum_cs` or
 The re-grade was run with OpenJPEG 2.5.0 (the system build). Provenance is the same pinned `uclouvain/openjpeg-data` commit (`39524bd3`):
 `input/conformance/file{1..9}.jp2` and `baseline/conformance/jp2_{1..9}.tif`.
 
+## HTJ2K files (`ht/`)
+
+The High-Throughput (ISO/IEC 15444-15) conformance files of ITU-T T.803
+(V3, 02/2024) | ISO/IEC 15444-4:2024: 41 codestreams and 20 JPH files. They are
+graded by `tests/conformance_ht.rs` with the Part 1 comparator and ratchet.
+
+| What | Source | Pinned to |
+| ---- | ------ | --------- |
+| Codestreams, JPH files, `COPYRIGHT.txt` | `gitlab.com/wg1/htj2k-codestreams` | commit `f6b9ede0` |
+| `hifi_ht1_02` references | the same repo, `reference_class1HF_profile1/`, copied verbatim | commit `f6b9ede0` |
+| `file10` references | the same repo, `reference_jph/file10_*.pgm`, rewritten as 8-bit PGX | commit `f6b9ede0` |
+| Bounds | T.803 Annex C, Tables C.1bis, C.4bis, C.6, C.7 and C.8 | V3 (02/2024) |
+| Kakadu error, pass counts | the repo's `stats.txt`; OpenJPEG 2.5.0 with a pass-count print | — |
+
+**License.** `ht/COPYRIGHT.txt` is the same conformance-only grant as
+`COPYRIGHT`, kept verbatim. The files sit under `tests/fixtures/conformance/`,
+so the existing `exclude` keeps them out of the published crate.
+
+```
+ht/
+  codestreams/  ds{0,1}_h{t,m}_NN_bB.j2k, hifi_ht1_02.j2k — the 41 codestreams
+  jph/          fileN_bB.jph          — the 20 JPH files
+  references/   hifi_02-K.pgx, jph_10_K.pgx — references not in the Part 1 set
+  oracle/       <name>_K.pgx          — OpenJPEG's output where it differs from the references
+  manifest.json                       — bounds and their sources, signaling, passes, digests
+  COPYRIGHT.txt                       — the upstream grant (retain verbatim)
+```
+
+**Codestreams.** `ds0_*` and `ds1_*` are Kakadu transcodes of the Part 1
+profile-0 and profile-1 codestreams to HT code-blocks, at one or more magnitude
+bounds `B` (the `_bB` suffix). `ds0_hm_*` are MIXED: both block coders in one
+codestream. Each is graded against the Part 1 class-1 references of the
+codestream it came from (`../references/`), at that entry's reduction.
+`hifi_ht1_02` is a transcode of a high-fidelity profile-1 file and is graded
+against its own references.
+
+**Bounds.** T.803 C.2 gives the bound for each HT codestream as the Part 1
+class-1 tolerance (Tables C.6, C.7) plus an additional tolerance (Table C.1bis
+for `ds0`, C.4bis for `ds1`) quoted at a reference depth `Dref`. At depth `D`
+the additional peak scales by `2^(D - Dref)`, rounded up, and the additional
+MSE by `4^(D - Dref)`. `hifi_ht1_02` takes its bounds from Table C.8 whole. The
+Part 1 tolerances in T.803 differ from OpenJPEG's lists (used for the Part 1
+set) in three places, and the HT bounds follow T.803:
+
+| Source | Component | T.803 MSE | OpenJPEG MSE |
+| ------ | --------- | --------- | ------------ |
+| `p0_05` | 0, 1, 2 | 0.319, 0.323, 0.317 | 0.302, 0.307, 0.269 |
+| `p1_03` | 0, 1, 2 | 0.311, 0.280, 0.267 | 0.3, 0.21, 0.2 |
+| `p1_05` | 1 | 9.716 | 9.816 |
+
+Each bound is cross-checked when the manifest is written, and again by the
+tests:
+
+- It is at least the Part 1 tolerance plus the error Kakadu recorded between
+  the transcode and its source (`stats.txt`), PAE and MSE each added at the
+  component's own depth. Kakadu quotes the 4-bit `p0_03` and `p0_15` sets at
+  8 bits, so their figures are divided by 16 and 256.
+- Where `opj_decompress` 2.5.0 decodes a codestream, its error against the
+  references is within the bound. The tests recompute that error from the
+  snapshot in `oracle/`.
+
+Adding the MSE as square roots instead (`(√a + √b)²`) gives a larger figure
+than the T.803 bound for 11 components (`ds0_ht_04_b11`, `ds0_ht_05_b11`,
+`ds0_ht_06_b11`, `ds1_ht_02_b11` and `ds1_ht_03_b11`), so the check adds MSE
+linearly.
+
+**OpenJPEG.** `opj_decompress` 2.5.0 decodes 10 of the 41 codestreams. Six
+match the references exactly. For the other four (`ds1_ht_04_b9`,
+`ds1_ht_05_b11`, `ds1_ht_06_b11`, `hifi_ht1_02`) its output is kept in
+`oracle/`, and a second ratchet grades our decode against it, exact for 5/3 and
+within PAE 1, MSE 1 for 9/7. It warns of zero-length refinement passes on
+`ds1_ht_05_b11` and `ds1_ht_06_b11`. It refuses the other 31; each refusal is
+recorded with its message.
+
+**JPH files.** T.803 G.5 gives no tolerances for JPH files, and B.2 tests a
+decoder on the highest-bound file of each set, so 10 of the 20 are graded:
+
+- `file1` .. `file9` at their highest bound decode, under OpenJPEG, to the same
+  samples as `fileN.jp2`. They are graded as `fileN.jp2` is, against
+  `jp2/references/` and with its bounds and color handling.
+- `file10_b12` (five components) is graded bit-exactly against
+  `references/jph_10_K.pgx`. OpenJPEG decodes its codestream to those samples
+  but refuses the file.
+
+The other 10 record why they are not graded.
+
+**Passes.** For the codestreams OpenJPEG decodes in full, the manifest records
+the pass count of every HT code-block, measured with a print added to
+`opj_t1_ht_decode_cblk`. None has more than three passes, so none has
+placeholder passes. T.803 Table C.5bis describes `ds1` set 5 as having
+placeholder passes, but `ds1_ht_05_b11` measures at most three per block. The
+other files record `placeholder` and `refinement` as unknown.
+
+`ht/manifest.json` denies unknown fields throughout. Each codestream records
+its `source` Part 1 entry, `references`, `bounds`, `bit_exact`, `reduction`,
+`tolerance` (the table, the Part 1 and additional parts, `Dref` and each
+component's `D`), `kakadu_stats`, `features` (as for Part 1, plus every
+code-block style byte), `ht` (`Pcap`, the `Ccap15` fields and `CPFnum`),
+`passes`, digests, and `openjpeg` (whether it decodes, its message or error,
+the agreement bound and any snapshot). Each JPH file records its box list, the
+`jp2c` byte range, the same `features`, `ht` and `passes`, Kakadu's figures,
+and `graded_as` or `not_graded`.
+
+## OpenJPH test codestreams (`../openjph/`)
+
+The 16 OpenJPH test codestreams under 100 KB, with OpenJPEG's decode as their
+references. See [`../openjph/README.md`](../openjph/README.md).
+
 ## Regenerating
 
 Needs `opj_dump` and `opj_decompress` (OpenJPEG) on `PATH` and network access;
@@ -249,10 +358,20 @@ with Pillow and numpy to read the TIFF references (Pillow decodes their LZW
 without extra codecs; the TIFFs are not kept, only the converted `.pgx`).
 
 ```sh
-python3 regenerate.py          # both sets
+python3 regenerate.py          # the Part 1 and JP2 sets
 python3 regenerate.py part1    # the Part 1 corpus only
 python3 regenerate.py jp2      # the JP2 reader files only
+python3 regenerate.py ht       # the HTJ2K files (ht/)
+python3 regenerate.py openjph  # the OpenJPH codestreams (../openjph/)
 ```
+
+The HT set also needs numpy, `opj_decompress` 2.5.0 and LittleCMS, which it
+checks for.
+It downloads from the pinned commit, or copies from a local clone of
+`htj2k-codestreams` at that commit when `HTJ2K_CODESTREAMS` names one (the
+script checks the clone's `HEAD`). The T.803 tables and the measured pass
+counts are transcribed in the script (`T803_*`, `HT_PASSES`); re-pin by editing
+`HT_COMMIT` there. Files already present must match what is fetched.
 
 ### Part 1 details
 

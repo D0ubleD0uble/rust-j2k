@@ -8,8 +8,9 @@
 //!
 //! The machinery here is corpus-agnostic: the Part 4 test binary
 //! (`tests/conformance_part4.rs`) supplies the corpus path and its `IN_CLASS`
-//! ratchet list, and the JP2 (Phase 3) and HTJ2K (Phase 4) conformance sets
-//! will drive the same schema, comparator, and ratchet rather than copying them.
+//! ratchet list, and the JP2 and HTJ2K sets (`tests/conformance_jp2.rs`,
+//! `tests/conformance_ht.rs`) drive the same comparator, decode-and-classify
+//! step ([`grade_decode`]) and ratchet rather than copying them.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -359,14 +360,43 @@ pub fn grade_entry(dir: &Path, entry: &Entry) -> Grade {
         Err(e) => return Grade::Failed(format!("cannot read {}: {e}", entry.codestream)),
     };
 
+    // The entry's recorded reduction is the one its references were decoded
+    // at, so grading decodes there too (`-r` in OpenJPEG's conformance runs).
+    grade_decode(
+        dir,
+        &bytes,
+        entry.reduction,
+        &entry.references.class1,
+        |index| entry.bound(index),
+    )
+}
+
+/// Decode `bytes` at resolution `reduction` and grade its leading components
+/// against `references` (paths relative to `dir`), component `i` within
+/// `bound(i)`. The image may have more components than there are references.
+///
+/// This is the decode-and-classify step every codestream set shares: an
+/// `Error::Unsupported` is [`Grade::NotYetDecoded`], and any other error, a
+/// panic, a missing reference or an out-of-class component is
+/// [`Grade::Failed`].
+pub fn grade_decode(
+    dir: &Path,
+    bytes: &[u8],
+    reduction: u8,
+    references: &[String],
+    bound: impl Fn(usize) -> Bound,
+) -> Grade {
+    let graded = references.len();
+    if graded == 0 {
+        return Grade::Failed("manifest: entry grades no components".into());
+    }
+
     // `decode_with` promises a typed error for every input, so a panic here is
     // a contract violation, not a not-yet-implemented feature. Catch it so one
     // bad entry reports as a failure instead of aborting the whole harness.
-    // The entry's recorded reduction is the one its references were decoded
-    // at, so grading decodes there too (`-r` in OpenJPEG's conformance runs).
-    let options = rust_j2k::DecodeOptions::default().with_resolution_reduction(entry.reduction);
+    let options = rust_j2k::DecodeOptions::default().with_resolution_reduction(reduction);
     let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        rust_j2k::decode_with(&bytes, &options)
+        rust_j2k::decode_with(bytes, &options)
     }));
     let image = match decoded {
         Err(_) => return Grade::Failed("panicked (decode must return a typed error)".into()),
@@ -383,7 +413,7 @@ pub fn grade_entry(dir: &Path, entry: &Entry) -> Grade {
     }
 
     let mut all_exact = true;
-    for (index, reference_path) in entry.references.class1.iter().enumerate() {
+    for (index, reference_path) in references.iter().enumerate() {
         let raw = match std::fs::read(dir.join(reference_path)) {
             Ok(raw) => raw,
             Err(e) => return Grade::Failed(format!("cannot read {reference_path}: {e}")),
@@ -394,7 +424,7 @@ pub fn grade_entry(dir: &Path, entry: &Entry) -> Grade {
         };
 
         let component = &image.components[index];
-        match grade_component(component, &reference, entry.bound(index)) {
+        match grade_component(component, &reference, bound(index)) {
             Ok(measured) => all_exact &= measured.exact(),
             Err(why) => return Grade::Failed(format!("component {index}: {why}")),
         }
