@@ -29,13 +29,30 @@
 //! | 3 components, 9/7 with MCT      | ~316 MiB   |            |
 //! | palette to 3 columns            | ~344 MiB   |            |
 //! | sYCC 4:2:0 to sRGB              | ~395 MiB   |            |
+//! | one tile 1024 x 65536, 9/7      | ~390 MiB   |            |
+//! | one tile 64 x 2^20, 9/7         | ~409 MiB   |            |
+//! | one tile 16 x 2^22, 9/7         | ~409 MiB   |            |
+//! | one tile 8 x 2^23, 9/7          | ~429 MiB   |            |
+//! | one tile 8 x 2^23, 5/3          | ~333 MiB   |            |
 //!
 //! For a single tile the peak comes at the finest wavelet level, which holds
 //! that level's subbands while it builds the merged grid. Those buffers come
 //! to 1.25 times the output, as fresh zeroed memory is mapped only as it is
-//! written; the rest of the process adds about 0.1 times, so a single tile
+//! written; the rest of the process adds about 0.1 times, so a square tile
 //! peaks at about 1.35 times the output. The empty 5/3 file is lower only
-//! because its subbands are never written. The coded-data figures include
+//! because its subbands are never written.
+//!
+//! A tall, narrow tile peaks higher: about 1.5 to 1.7 times the output for the
+//! 9/7 tiles 8 to 1024 samples wide above. Narrower than 16 samples, the
+//! wavelet's column pass takes one column at a time through a buffer as tall
+//! as the tile, and that buffer is a larger share of the tile the narrower it
+//! is. At 2^24 samples (64 MiB of output), 3 wavelet levels and 64 x 64
+//! code-blocks, a 9/7 tile 2 samples wide peaks at about 120 MiB (1.9 times)
+//! and one 1 sample wide at about 165 MiB (2.6 times). More levels add
+//! code-blocks, and their fixed overhead is a larger share of a small image:
+//! at 5 levels the same tiles peak at about 2.1 and 2.7 times, and at 8 levels
+//! the 1-wide tile at about 3.2 times. The 8- to 1024-wide figures in the
+//! table are at 5 levels. The coded-data figures include
 //! the caller's input bytes, so they grow with the file: a 38 MB lossless
 //! 8192 x 8192 file peaks at about 380 MiB. The ratios carry over to the
 //! 2^28 default, about 1.4 GiB for one component in one tile, though that size

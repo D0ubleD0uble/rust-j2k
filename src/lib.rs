@@ -254,10 +254,15 @@ pub use report::{DecodeReport, ReportEntry};
 /// adds. That admits a 10980 x 10980 Sentinel-2 band, or an RGB image of up
 /// to about 89 MP. A larger image is refused with [`Error::Limit`] from its
 /// header alone, before any tile is read. A small file can still ask for
-/// the whole limit: peak memory is about 1.35 times the output for one tile,
-/// about 1.4 GiB at the limit, and about twice the output while a palette
-/// expands (see [the sample limit][sample-limit]). OpenJPEG has no such
-/// limit.
+/// the whole limit. For one square tile, peak memory is about 1.35 times the
+/// output, about 1.4 GiB at the limit. A tall, narrow tile peaks higher:
+/// about 1.5 to 1.7 times the output when it is 8 to 1024 samples wide, and
+/// about 2.6 times (2.6 GiB at the limit) when it is one sample wide. A
+/// smaller narrow image can peak at a higher multiple, as the code-blocks'
+/// fixed overhead is a larger share of it: about 2.7 to 3.2 times for a 9/7
+/// tile one sample wide with 2^24 samples, at 5 to 8 wavelet levels.
+/// While a palette expands the peak is about twice the output (see [the
+/// sample limit][sample-limit]). OpenJPEG has no such limit.
 ///
 /// The work of reading the packet headers is bounded, as the code-block count
 /// is. Walking every tile's packets may take at most
@@ -768,7 +773,8 @@ impl Default for DecodeOptions {
 ///
 /// Each work bound scales with the size of the file, so a small file cannot
 /// ask for minutes of work, and the sample limit holds the memory a file may
-/// ask for to about 1.4 GiB (see [`decode`]). A valid file can still go past
+/// ask for to about 1.4 GiB for a square tile, and to about 2.6 GiB at most
+/// (see [`decode`]). A valid file can still go past
 /// a bound, when it codes many samples in very few bytes or is simply very
 /// large. The decode then fails with [`Error::Limit`], and its message names
 /// the option and a [`Raised`](WorkLimit::Raised) factor. Treat the factor as
