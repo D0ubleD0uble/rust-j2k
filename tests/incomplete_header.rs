@@ -172,8 +172,14 @@ fn every_cut_inside_the_main_header_is_incomplete() {
             match first_marker(&bytes, CAP) {
                 Some(cap) if cap < sot => {
                     assert!(
-                        matches!(read_header(&bytes), Err(Error::Unsupported(_))),
-                        "{name}: a CAP marker the decoder reads"
+                        matches!(
+                            read_header(&bytes),
+                            Err(Error::Unsupported(m))
+                                if m.contains("marker `CAP` (0xFF50) is outside the decoded subset")
+                        ),
+                        "{name}: the CAP marker is no longer refused as outside the decoded \
+                         subset. Now that CAP parses, remove this carve-out so HT codestreams \
+                         are cut through to SOT"
                     );
                     assert_cuts_are_incomplete(&name, &bytes, 0, cap, false);
                 }
