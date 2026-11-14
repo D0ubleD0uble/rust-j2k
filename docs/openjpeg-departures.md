@@ -38,6 +38,7 @@ refusal under `ColorOutput::Srgb`).
 | [Bypass under a maxshift](#bypass-under-a-maxshift) | switches to raw coding where D.6 says; OpenJPEG `SPrgn` planes late | 1 |
 | [Segmentation symbols](#segmentation-symbols) | checks the symbol; OpenJPEG never does | 3 |
 | [A tile-part POC overrides the main header's](#a-tile-part-poc-overrides-the-main-headers) | replaces; OpenJPEG appends | 1 |
+| [COC and QCC apply wherever they sit in the header](#coc-and-qcc-apply-wherever-they-sit-in-the-header) | by marker class; OpenJPEG by position, so a later COD or QCD wipes them out | 1 |
 | [Code-block contributions of zero bytes](#code-block-contributions-of-zero-bytes) | refuses a wrong symbol from an empty terminated segment | 3 |
 | [Stricter than the oracle on non-conforming streams](#stricter-than-the-oracle-on-non-conforming-streams) | refuses; OpenJPEG warns, reads on or invents values | 3 |
 | [Packets a POC sequence leaves out](#packets-a-poc-sequence-leaves-out) | refuses; OpenJPEG decodes them empty | 3 |
@@ -404,6 +405,49 @@ writes a main-header POC only for the 4K cinema profile
 (`opj_j2k_write_first_tile_part`). So its own files decode the same under
 either rule. The append reads as an oversight, not a choice, so this decoder
 follows the standard.
+
+## COC and QCC apply wherever they sit in the header
+
+| | |
+| - | - |
+| This decoder | a COC or QCC applies to its component whether it comes before or after the COD or QCD of the same header |
+| OpenJPEG 2.5.0 | resolves by position; a COD or QCD copies component 0's values over every component, so it wipes out the COCs and QCCs before it |
+| Standard | A.6.1, A.6.2, A.6.4, A.6.5; Figure A.3 |
+| Rule | 1 |
+| Tests and fixtures | `tests/override_order.rs`, `tests/fixtures/override_order/` |
+| Decided | #338 |
+
+A.6.1 and A.6.4 rank the markers by class (A.6.2 and A.6.5 say a COC or QCC is "for the specific component"): a tile-part COC outranks a
+tile-part COD, which outranks a main-header COC, which outranks a main-header
+COD, and likewise for QCC and QCD. The ranking is between classes, not between
+positions in a header, and Figure A.3 fixes only SOC first and SIZ second, so nothing says a COC must follow the COD. So a
+COC placed first still overrides a COD that follows. This decoder reads a
+header's markers into one set, then lays them over each component with the COD
+and QCD first and the COC, QCC and RGN after (`Overrides::lay_over` in
+`src/codestream/mod.rs`).
+
+OpenJPEG applies each marker as it reads it. `opj_j2k_read_cod` ends by calling
+`opj_j2k_copy_tile_component_parameters` (`j2k.c:2767`) and `opj_j2k_read_qcd`
+ends with `opj_j2k_copy_tile_quantization_parameters` (`j2k.c:3089`). Both copy
+component 0's parameters to every other component of the tile (or of the default
+tile, in the main header). A COD that follows a COC therefore overwrites the
+COC. Only a COC or QCC that follows the COD or QCD survives. Writing COC, QCC,
+COD, QCD is legal, though OpenJPEG's own encoder writes the COD and QCD first.
+
+`scripts/gen-override-order-fixtures.py` builds four streams from
+`multicomponent_lossless.j2k`, each with a COD and QCD that are wrong for every
+component and a COC and QCC per component that are right. The `_usual` files
+put the COC and QCC after the COD and QCD, and the `_reordered` files before
+them, in the main header (`main_*`) and in a tile-part header (`tile_*`).
+
+| File | `opj_decompress` 2.5.0 | this decoder |
+| ---- | ---------------------- | ------------ |
+| `main_usual.j2k`, `tile_usual.j2k` | the source's image | the source's image |
+| `main_reordered.j2k`, `tile_reordered.j2k` | no error; 1152 of 1152 samples wrong | the source's image |
+
+OpenJPEG reports nothing on the `_reordered` files. It decodes with the COD's
+selective-bypass style and the QCD's shifted exponents, and gives noise.
+`tests/override_order.rs` grades all four against the source's decode.
 
 ## Code-block contributions of zero bytes
 
