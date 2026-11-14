@@ -2,8 +2,10 @@
 
 > **Status: implemented on `main`, release pending.** P3.0 to P3.8 have
 > landed. All nine Part 4 JP2 reader files decode in class, the owner's
-> public-API decisions are applied, and the `RELEASING.md` pre-release review
-> is done (#226, #167). What remains is the release itself. The milestones
+> public-API decisions are applied, and #167 did the documentation pass and
+> the extended gate. (2026-11-13: the three whole-crate reviews ran under
+> #226; the manual testing rounds there, #285 and #325 are still open, and
+> the release follows them.) The milestones
 > below are the build order that was followed, each with the oracle that
 > gated it.
 
@@ -530,9 +532,10 @@ review in `RELEASING.md`.
 `roadmap.md`, `correctness.md`, `tests/fixtures/README.md`, `CHANGELOG.md`
 under Unreleased). The Part 4 JP2 gate is met: nine of nine in `IN_CLASS`, and
 the 23 Part 1 entries are unchanged. The owner's public-API decisions are
-applied, and the `RELEASING.md` pre-release review is done: the whole-crate
-reviews under #226, and the documentation pass and extended gate under #167.
-Left: the release.
+applied, and #167 did the documentation pass and extended gate of the
+`RELEASING.md` pre-release review. (2026-11-13: the three whole-crate reviews
+ran under #226, which also holds the manual testing rounds; the release
+follows them.)
 
 **Gate (the Phase 3 exit):** all nine ISO/IEC 15444-4 JP2 reader files decode
 within PAE 4 / MSE 1 against their references (bit-exact where the manifest
@@ -649,7 +652,7 @@ so and why we differ (or do not).
 | Second `jp2c` | never read | ignored | none (I.5.4) |
 | Deeply nested superboxes | n/a | only `jp2h`, `res ` and `uinf` are entered | no recursion, so no depth bomb |
 | 10 000 unknown boxes before `jp2h` and after `jp2c` | skipped | skipped | none; each box is one step of a linear walk: about 1.2 ms more per `decode` + `read_header` than the bare file (release build), linear up to 100 000 boxes |
-| Palette expansion over the sample budget (`NPC` planes totaling more than 2^26 samples) | decodes if it can allocate | reject before any tile is decoded | `Limit` |
+| Palette expansion over the sample budget (`NPC` planes totaling more than 2^26 samples; 2^28 by default since #287) | decodes if it can allocate | reject before any tile is decoded | `Limit` |
 | Metadata boxes totaling more than the file | impossible by construction | copies bounded by input length | none |
 
 Allocation discipline: no buffer is sized from a box field. Palette tables are
@@ -659,11 +662,14 @@ the Phase 2 sample budget per plane; the total is checked against the same
 `Limit` budget (2^26 samples, 256 MiB as `i32`) before allocation. The decoded
 components are held while the expanded channels are built from them, so the
 peak is about twice the budget: computed, roughly 512 MiB; measured on a
-one-column palette at the full budget, about 515 MiB. The codestream stage
+one-column palette at the full budget, about 515 MiB. (2026-11-13: since #287
+the budget is the image sample limit, 2^28 samples or 1 GiB as `i32` by
+default and adjustable with `DecodeOptions::sample_limit`, so the peak at the
+default is about four times these figures.) The codestream stage
 keeps all its existing guards, since `jp2c` is handed to it as a slice.
 
 Fuzzing: the `jp2_boxes` target (P3.7) plus the existing `decode` target with
-the new seeds; the 60-second CI smoke covers both. A clean documented run is
+the new seeds; the CI fuzz smoke covers both. A clean documented run is
 part of the gate.
 
 ## Risks
