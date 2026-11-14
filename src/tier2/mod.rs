@@ -20,9 +20,9 @@
 //! so a precinct's tag trees and per-block state outlive any one packet. See
 //! [`for_each_packet`] for the orders and [`BlockState`] for what persists.
 //!
-//! `decode_packets_metered` also computes the resolution / subband / code-block geometry
-//! from the [`MainHeader`], so it is the single
-//! source of truth the assembly stage reuses.
+//! `decode_packets_metered` also computes the resolution / subband /
+//! code-block geometry from the [`MainHeader`], so it is the single source of
+//! truth the assembly stage reuses.
 
 pub mod bio;
 mod geometry;
@@ -323,9 +323,9 @@ impl Reach {
     }
 }
 
-/// [`decode_packets_metered`] with `strict` off: the tile's data may end anywhere,
-/// and what was not read comes back as a [`Reach`] beside the coded data
-/// (see [`walk_packets`]).
+/// [`decode_packets_metered`] with `strict` off: the tile's data may end
+/// anywhere, and what was not read comes back as a [`Reach`] beside the coded
+/// data (see [`walk_packets`]).
 pub fn decode_packets_partial<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
@@ -702,8 +702,8 @@ impl WorkRefusal {
     }
 }
 
-/// How [`decode_packets_metered`] fails: for work, with the typed reason, or for
-/// anything else, as the [`Error`] it is.
+/// How [`decode_packets_metered`] fails: for work, with the typed reason, or
+/// for anything else, as the [`Error`] it is.
 #[derive(Debug)]
 pub(crate) enum Refused {
     /// The tile went past the packet work bound.
@@ -841,9 +841,9 @@ fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
 /// corpus agrees — every single-tile entry that carries SOP numbers its packets
 /// sequentially from zero, every multi-tile one restarts.
 ///
-/// The counter therefore lives in [`decode_packets_metered`], which runs once per tile
-/// over that tile's tile-parts joined end to end: it starts at zero for each
-/// tile and does not restart at a tile-part boundary.
+/// The counter therefore lives in [`decode_packets_metered`], which runs once
+/// per tile over that tile's tile-parts joined end to end: it starts at zero
+/// for each tile and does not restart at a tile-part boundary.
 ///
 /// OpenJPEG leaves `Nsop` unchecked — `/* TODO : check the Nsop value */` — so
 /// this is stricter than the oracle. Validating the sequence number is the whole
