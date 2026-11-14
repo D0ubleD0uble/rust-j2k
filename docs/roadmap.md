@@ -1,162 +1,92 @@
 # Roadmap
 
-This is the plan from the initial skeleton to full-codec parity with
-OpenJPEG. The ordering rule is to **deliver the GRIB2 decode path first**,
-because it is a hard, end-to-end slice with a waiting user, and then widen
-the same engine outward. Each phase states its goal, the work it contains and
-the **gate** that must pass before it counts as done. A gate is always an
-external oracle, never the crate's own output (see
-[correctness.md](correctness.md)).
+Next is Phase 4, decoding HTJ2K (Part 15) codestreams. After it come a Part 1
+encoder (Phase 5), then the Part 2 extensions and an HTJ2K encoder (Phase 6),
+then the rest of the standard's parts (Phase 7). Phases 0 to 3, which built a
+decoder for Part 1 codestreams and JP2 files, are finished, and Phase 3 ships
+as the 0.4.0 release.
 
-Phases 0 to 3 are done. Phase 3 ships as the 0.4.0 release.
-[scope.md](scope.md) maps each feature to its phase; this page gives the order
-and the reasons.
+Each phase has a goal, the work it contains and a gate: the test that must
+pass before the phase counts as done. A gate always compares against an
+external reference, never against the crate's own output, for the reasons in
+[correctness.md](correctness.md). [scope.md](scope.md) lists every feature,
+whether it decodes today, and the phase that plans each one that doesn't. This
+page gives the order and the gates.
 
----
+## Finished phases
 
-## Phase 0: skeleton *(done)*
-
-Every stage compiled, was stubbed with `todo!()`, and cited the ISO section
-it owns. The module layout followed the pipeline: `codestream → tier2 → tier1
-→ quant → dwt → image`. A crate-level `allow(dead_code, unused_variables)` was
-in place and came off as the Phase 1 stages landed.
-
-## Phase 1: GRIB2 decode MVP *(done, shipped in v0.1.0)*
-
-**Goal:** decode the exact codestream GRIB2 §5.40 produces, bit-exact for 5/3,
-within tolerance for 9/7. This unblocks the fieldglass GRIB2 reader.
-
-Scope is the single-component integer subset (see [scope.md](scope.md), the ✓
-rows). The detailed milestone-by-milestone plan for this phase, with the oracle
-that gates each step, is in [roadmap-phase1.md](roadmap-phase1.md); the build
-order in brief, each step testable against an oracle before the next:
-
-1. **Codestream parse**: SOC/SIZ/COD/QCD/SOT/SOD/EOC, COM skip. Reject
-   out-of-subset features cleanly with `Error::Unsupported`.
-2. **MQ decoder**: the arithmetic decoder in isolation, checked against the
-   worked example vectors in the standard.
-3. **Tier-1 EBCOT passes**: significance / refinement / cleanup, context
-   formation, over the MQ stream; output quantized subband coefficients.
-4. **Tier-2 packets**: single layer, LRCP, tag-tree parse feeding step 3.
-5. **Inverse DWT**: 5/3 integer lifting (bit-exact) and 9/7 float lifting,
-   2-D as 1-D over rows then columns, with symmetric boundary extension.
-6. **Dequant + level shift + assemble**: reversible identity / irreversible
-   scalar step, DC shift, clamp, package into `Image`.
-
-**Gate:** the conformance harness decodes the corpus (the fieldglass
-`jpeg2000_regular_latlon.grib2` fixture, a second 5/3 geometry, a rate-truncated
-5/3 codestream, and a 9/7 re-encode) and matches the eccodes/OpenJPEG oracle:
-bit-exact lossless, within tolerance lossy. The crate-level dead-code
-`allow` is removed, and clippy `-D warnings` is clean.
-
-**Status:** met. The gate passes for all four corpus fixtures, and the
-crate-level dead-code `allow` is gone. Released as v0.1.0.
-
-## Phase 2: general Part 1 decoder *(done)*
-
-**Goal:** decode any conformant Part 1 *codestream*, not just the GRIB2 subset.
-
-The milestone-by-milestone build order, each step with the conformance oracle
-that gates it, is in [roadmap-phase2.md](roadmap-phase2.md); in brief:
-
-- Multiple tiles and tile-parts; multiple components with subsampling.
-- Multiple component transform: RCT and ICT (color reconstruction).
-- All five progression orders plus POC; multiple quality layers; precincts.
-- Region of interest (maxshift); all code-block coding styles (bypass, reset,
-  restart, vertically causal, predictable termination, segmentation symbols).
-- Error-resilience markers (SOP/EPH); packed-header and length markers
-  (PPM/PPT/PLM/PLT/TLM); component registration (CRG).
-
-**Gate:** all 23 ISO/IEC 15444-4 Part 1 conformance codestreams decode
-within their compliance-class error bounds, with a clean fuzzing run on malformed
-input (no panics, no `unsafe`, bounded memory).
-
-**Status:** met. Released as v0.3.0.
-
-## Phase 3: JP2 file format decode *(done; release pending)*
-
-**Goal:** open `.jp2` files, not just bare codestreams.
-
-The milestone-by-milestone build order, each step with the oracle that gates
-it, is in [roadmap-phase3.md](roadmap-phase3.md); in brief:
-
-- Box parser: signature, ftyp, jp2h (ihdr, bpcc, colr, pclr, cmap, cdef, res),
-  jp2c contiguous codestream. `decode` accepts a JP2 file or a raw codestream.
-  The metadata boxes (`xml `, `uuid`, `jp2i`, `uinf`, `rreq`) are reported.
-- Color metadata: enumerated sRGB, grayscale and sYCC, and restricted ICC
-  profiles passed through as bytes. Palette and channel mapping applied.
-- Opt-in sRGB output: sYCC to RGB and restricted ICC to sRGB. The default
-  output stays the samples as coded, plus the metadata to interpret them.
-- `read_header` and `read_header_with`: the image and JP2 metadata without
-  decoding pixels.
-
-**Gate:** all nine ISO/IEC 15444-4 JP2 reader files decode within their
-compliance bounds against the Part 4 references, and a set of real `.jp2`
-files matches OpenJPEG's output. Ships as one release.
-
-**Status:** the gate is met. All nine JP2 reader files grade in class
-(`IN_CLASS` in `tests/conformance_jp2.rs`), the 23 Part 1 entries are
-unchanged, and the real-world set decodes with its recorded metadata. #167
-did the documentation pass and the extended gate of `RELEASING.md`, and the
-three whole-crate reviews of its step 2 ran under #226, which also holds the
-manual testing rounds added before the tag. The 0.4.0 release
-waits on the open issues of the Phase 3 milestone.
+The work started with the GRIB2 decode path because it was a hard,
+end-to-end slice with a waiting user, the fieldglass GRIB2 reader, and then
+widened the same engine. Phase 0 laid out one stubbed module per pipeline
+stage. Phase 1 decoded the single-component codestream GRIB2 template 5.40
+produces, bit-exact against the eccodes and OpenJPEG oracle for 5/3 and within
+tolerance for 9/7, and shipped in v0.1.0 ([plan](roadmap-phase1.md)). Phase 2
+decoded any Part 1 codestream: its gate was all 23 ISO/IEC 15444-4 Part 1
+conformance codestreams within their compliance-class bounds, with a clean
+fuzzing run. It shipped in v0.3.0 ([plan](roadmap-phase2.md)). Phase 3 added
+the JP2 file format; its gate was the nine ISO/IEC 15444-4 JP2 reader files
+within their compliance bounds and a set of real `.jp2` files matching
+OpenJPEG ([plan](roadmap-phase3.md)). Each plan ties every step to its module
+and the oracle that checked it.
 
 ## Phase 4: HTJ2K decode (Part 15)
 
-**Goal:** decode High Throughput codestreams, the modern high-value extension.
+The goal is to decode High Throughput (Part 15) codestreams. HTJ2K swaps the
+Tier-1 block coder for a faster one, so the work is in two places:
 
-- CAP marker and HTJ2K capability signaling.
-- FBCOT block decoder (MEL + VLC + MagSgn) as an alternative Tier-1; the rest of
-  the pipeline is shared with Part 1.
+- the CAP marker and HTJ2K capability signaling;
+- the FBCOT block decoder (MEL, VLC and MagSgn) as a second Tier-1, with the
+  rest of the pipeline shared with Part 1.
 
-**Gate:** matches OpenJPEG ≥2.5 HTJ2K decode on the HTJ2K conformance set.
+The gate is a decode that matches OpenJPEG 2.5.0, the version every oracle in
+this repository is pinned to, on an HTJ2K conformance corpus, chosen when
+the phase starts.
 
 ## Phase 5: Part 1 encoder
 
-**Goal:** the crate becomes a *codec*, not just a decoder, and the "decode-only"
-framing falls away. The crate and repository are already named codec-neutrally,
-so nothing needs renaming here.
+The goal is to encode Part 1 codestreams and JP2 files. The work:
 
-- Forward 5/3 and 9/7 DWT; forward scalar quantization.
-- MQ arithmetic encoder; EBCOT pass encoding.
-- Rate control / PCRD-opt; Tier-2 packetization; codestream and JP2 writing.
+- forward 5/3 and 9/7 DWT, and forward scalar quantization;
+- the MQ arithmetic encoder and EBCOT pass encoding;
+- rate control (PCRD-opt), Tier-2 packetization, and codestream and JP2
+  writing.
 
-**Gate:** round-trip (encode → decode → compare against the original within
-the path's tolerance) and cross-decode (OpenJPEG reads this encoder's output,
-and this decoder reads OpenJPEG's) within target rate/quality. The round trip
-alone would be self-consistency. Interoperating with the reference
-implementation in both directions is the real proof of encoder conformance,
-and it is what makes this gate external.
+The gate has two halves. The round trip encodes, decodes and compares against
+the original within the path's tolerance. The cross-decode has OpenJPEG read
+this encoder's output and this decoder read OpenJPEG's, within the target rate
+and quality. The round trip alone would be self-consistency; the
+cross-decode is what makes this gate external.
 
-## Phase 6: Part 2 extensions + HTJ2K encode
+## Phase 6: Part 2 extensions and HTJ2K encode
 
-**Goal:** breadth toward full feature parity.
+The goal is to decode JPX and the Part 2 coding extensions, and to encode
+HTJ2K. The work:
 
-- JPX extended file format; TCQ; arbitrary decomposition and custom wavelet
-  kernels; extended/array-based multiple-component transforms (multi- and
-  hyperspectral); extended ROI.
-- FBCOT block encoder (HTJ2K encode).
+- the JPX extended file format; trellis-coded quantization; arbitrary
+  decompositions and custom wavelet kernels; extended and array-based multiple
+  component transforms (multi- and hyperspectral); extended region of
+  interest;
+- the FBCOT block encoder.
 
-**Gate:** cross-check against OpenJPEG/Grok on Part 2 and HTJ2K encode corpora.
+The gate is a cross-check against OpenJPEG and Grok on Part 2 and HTJ2K encode
+corpora.
 
-## Phase 7: long tail
+## Phase 7: the remaining parts
 
-Motion JPEG 2000 (Part 3, MJ2 container), JPIP interactive streaming (Part 9),
-JPWL wireless error protection (Part 11). Sequenced by demand; none blocks the
-phases above.
+Motion JPEG 2000 (Part 3, the MJ2 container), JPIP interactive streaming
+(Part 9) and JPWL wireless error protection (Part 11). They are sequenced by
+demand, and none blocks the phases above.
 
----
+## Not in a phase yet
 
-## Cross-cutting, every phase
+Three decode options that `opj_decompress` has are not planned in any phase:
+stopping after a given number of quality layers (`-l`), decoding one area of
+the image (`-d`) and decoding one tile (`-t`). The decoder always decodes
+every layer of every tile over the whole image.
 
-- **Correctness gate before merge.** No stage is done until it passes its
-  oracle or conformance check (see [correctness.md](correctness.md)).
-- **Quality gates.** `cargo fmt --all -- --check`, `cargo clippy
-  --all-targets -- -D warnings`, `cargo test` and `cargo deny check` all pass
-  before a PR (see `.claude/rules/conventions.md`).
-- **Pure Rust.** No C or native codec dependency, ever. No `unsafe` unless a
-  measured hot path needs it, with the justification and a test; a test-only
-  allocator shim is the one standing exception.
-- **Robustness.** The decoder parses untrusted bytes, so fuzz it and keep
-  every failure a typed `Error`, never a panic.
+## Rules for every phase
+
+Every phase keeps the crate pure Rust, with no C or native dependency, and
+treats its input as untrusted: a malformed file ends in a typed `Error`, never
+a panic. [CONTRIBUTING.md](../CONTRIBUTING.md) has the quality gates a change
+must pass.
