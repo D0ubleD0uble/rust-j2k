@@ -42,6 +42,12 @@ fn u32_at(bytes: &[u8], at: usize) -> Option<usize> {
 /// over the main header's marker segments; `None` if `cs` is not a
 /// codestream whose main header walks to a `SOT`.
 fn first_sot(cs: &[u8]) -> Option<usize> {
+    first_marker(cs, 0xFF90)
+}
+
+/// The offset of the first `target` marker in a codestream's main header, or
+/// of the first `SOT` if `target` comes before none.
+fn first_marker(cs: &[u8], target: usize) -> Option<usize> {
     if !cs.starts_with(&[0xFF, 0x4F]) {
         return None;
     }
@@ -49,6 +55,7 @@ fn first_sot(cs: &[u8]) -> Option<usize> {
     loop {
         let code = u16_at(cs, at)?;
         match code {
+            _ if code == target => return Some(at),
             0xFF90 => return Some(at),
             // The reserved range carries no length (A.1.3).
             0xFF30..=0xFF3F => at += 2,
@@ -91,6 +98,9 @@ fn jp2c_payload(file: &[u8]) -> Option<(usize, usize)> {
     }
     None
 }
+
+/// The `CAP` marker (A.5.2, ISO/IEC 15444-15).
+const CAP: usize = 0xFF50;
 
 fn lenient() -> DecodeOptions {
     DecodeOptions::default().with_strict(false)
@@ -156,7 +166,25 @@ fn every_cut_inside_the_main_header_is_incomplete() {
         let bytes = std::fs::read(path).unwrap();
         let name = path.strip_prefix(fixtures()).unwrap().display().to_string();
         if let Some(sot) = first_sot(&bytes) {
-            assert_cuts_are_incomplete(&name, &bytes, 0, sot, true);
+            // An HTJ2K codestream is refused as `Unsupported` as soon as its
+            // `CAP` segment has been read, so it is cut only up to the `CAP`
+            // marker.
+            match first_marker(&bytes, CAP) {
+                Some(cap) if cap < sot => {
+                    assert!(
+                        matches!(
+                            read_header(&bytes),
+                            Err(Error::Unsupported(m))
+                                if m.contains("marker `CAP` (0xFF50) is outside the decoded subset")
+                        ),
+                        "{name}: the CAP marker is no longer refused as outside the decoded \
+                         subset. Now that CAP parses, remove this carve-out so HT codestreams \
+                         are cut through to SOT"
+                    );
+                    assert_cuts_are_incomplete(&name, &bytes, 0, cap, false);
+                }
+                _ => assert_cuts_are_incomplete(&name, &bytes, 0, sot, true),
+            }
             codestreams += 1;
         } else if let Some((cs_at, box_end)) = jp2c_payload(&bytes) {
             // Only files whose box layer reads, since a fault there is

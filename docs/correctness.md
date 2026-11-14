@@ -184,6 +184,19 @@ decode right by 4 and 8 (the references were made with `opj_decompress -p 8S`, a
 plain right shift). Beyond the references, `opj_decompress -force-rgb` is the
 oracle for the conversion arithmetic ([srgb-output.md](srgb-output.md)).
 
+### The HTJ2K corpus
+
+`tests/conformance_ht.rs` grades the ISO/IEC 15444-4:2024 HTJ2K files in
+`tests/fixtures/conformance/ht/` with the same comparator and ratchet. The 40
+derived-set codestreams are graded against the Part 1 references of the
+codestream each was transcoded from, within the T.803 Annex C bounds (the Part
+1 tolerance plus an HT allowance). `hifi_ht1_02` has its own references, and
+the highest-bound JPH file of each set is graded as its `fileN.jp2` is. Two
+more ratchets grade against OpenJPEG's decode: of the HT codestreams it
+decodes, and of 16 OpenJPH test codestreams (`tests/fixtures/openjph/`). The
+decoder does not read HT code-blocks yet, so every entry reports *not yet
+decoded* and each `IN_CLASS` list is empty.
+
 ## A passing entry is not proof the feature works
 
 `IN_CLASS` growing is the goal, but it is not the same as a feature being

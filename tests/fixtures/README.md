@@ -12,7 +12,9 @@ oracles are below. The real-world `.jp2` files are in
 [`jp2_real/`](jp2_real/README.md), each with its source, commit, SHA-256 and
 oracle; they are excluded from the published crate, because their rights are
 not confirmed. The ISO/IEC 15444-4 JP2 reader files and their references are
-in [`conformance/`](conformance/README.md).
+in [`conformance/`](conformance/README.md), with the HTJ2K conformance files in
+`conformance/ht/`. The OpenJPH test codestreams are in
+[`openjph/`](openjph/README.md). Both are excluded from the published crate.
 
 The JP2 files with an ICC profile are ISO/IEC 15444-4 files 5, 7 and 8, at
 `conformance/jp2/files/file5.jp2`, `file7.jp2` and `file8.jp2`. Their oracles

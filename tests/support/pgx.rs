@@ -1,9 +1,9 @@
 //! PGX reader — the reference image format of the ISO/IEC 15444-4 corpus.
 //!
 //! One `.pgx` file holds a single component on its own sample grid. This reader
-//! is shared by the Part 4 grading harness (`tests/conformance_part4.rs`); the
-//! JP2 (Phase 3) and HTJ2K (Phase 4) conformance sets will reuse the same PGX
-//! references, so the parser lives here rather than in any one test binary.
+//! is shared by the Part 4 grading harnesses (`tests/conformance_part4.rs`,
+//! `tests/conformance_jp2.rs` and `tests/conformance_ht.rs`), so it lives here
+//! rather than in any one test binary.
 
 /// A decoded `.pgx` reference image: one component on its own sample grid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,8 +35,8 @@ pub struct Pgx {
 /// The byte width follows OpenJPEG's writer: 1 byte to 8 bits, 2 to 16, 4
 /// beyond. (This is `ceil(depth / 8)` only up to 16 bits; 17..=24 uses 4, not 3.)
 ///
-/// `endian` is `ML` (big) or `LM` (little). Every reference in the corpus is
-/// `ML`; `LM` is accepted because the format allows it.
+/// `endian` is `ML` (big) or `LM` (little). The HT set's `hifi_02-*.pgx`
+/// references are `LM`; every other reference is `ML`.
 pub fn parse_pgx(bytes: &[u8]) -> Result<Pgx, String> {
     let newline = bytes
         .iter()
