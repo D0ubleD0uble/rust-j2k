@@ -103,6 +103,352 @@ worth carrying into any future disagreement:
   *worse*, because the factor of two is then counted twice. A half-emulation
   reads as a refutation of a correct hypothesis.
 
+## Agreement standard
+
+- **Reversible path (5/3, lossless):** bit-exact sample equality. Any
+  difference is a bug.
+- **Irreversible path (9/7, lossy):** within a stated absolute tolerance per
+  fixture, and within the compliance-class per-pixel and MSE bounds once we test
+  against Part 4. Floating-point lifting means our result and
+  OpenJPEG's will differ in the low bits; the tolerance is what makes the test
+  meaningful rather than flaky.
+
+The 9/7 difference from OpenJPEG depends on the bit depth, because OpenJPEG's
+`two_invK` ("When the oracle and the standard disagree") adds an error that
+grows with the sample range. Beyond that it depends on the content: how many
+sharp edges the image has and how they line up with the transform grid. The
+largest differences seen so far:
+
+| Bit depth | Largest difference from `opj_decompress` |
+| --------- | ---------------------------------------- |
+| 8, 10, 12 | 1 |
+| 14 | 2 |
+| 16 | 7 |
+
+The images: 128x128 single-component images coded by `opj_compress -I -n 6`
+at rates 1, 4 and 20, in seven patterns (noise, a random walk, a checkerboard,
+bars, two sizes of blocks and ragged edges) with two seeds each; and, at `-r 1`,
+checkerboards of full-swing blocks from 1x1 to 5x5 on images from 32x32 to
+256x256 with five or seven decomposition levels. The 7 is a 256x256
+checkerboard of 5x5 blocks, and 3x3 blocks reach 6. The same 5x5 checkerboard
+gives 5 at 64x64, 128x128, 200x200, 300x300 and 384x384, and at 512x512 and
+1024x1024 with up to ten levels, so the gap does not simply grow with image
+size. On all of them this decoder
+stays within 1 of the encoder's input. Real files agree: the 8-bit
+`issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2` and
+`jpx_disguised_as_jp2.jp2` are within 1, and the 16-bit
+`issue559-eci-090-CIELab.jp2` is within 2.
+
+These are measured maxima, not a bound. For a rough scale: each high-pass
+scaling is off by 5.4e-5 times the coefficient, high-pass coefficients range
+about as widely as the samples, and a sample collects that error once per
+decomposition level, so the gap stays roughly under 5.4e-5 × 2^depth × levels.
+That is about 18 at 16 bits with five levels, 4 at 14, 1 at 12 and under 0.1
+at 8. It is an estimate, not a hard bound. The measured gaps do not grow with
+the level count. The committed `irreversible_16bit`
+fixture reaches 5 on its full-swing component and 3 on its mid-range one, and
+is graded at a tolerance of 5.
+
+## Grading against Part 4
+
+`tests/conformance_part4.rs` decodes every entry in the vendored corpus and
+grades it at **compliance class 1**, which bounds each graded component
+independently. Per component it computes the peak absolute error (the largest
+difference from the reference sample) and the mean-squared error, and checks both
+against the bounds `manifest.json` records for that entry. The reference images
+are `.pgx` files, one per graded component; the harness reads them directly, so
+no reference decoder is needed to run the suite.
+
+Two rules keep the grading honest:
+
+- **Exactness comes from the manifest's `bit_exact` flag, not from the wavelet.**
+  A `bit_exact` entry is graded against zero bounds whatever the manifest quotes,
+  so a corpus edit cannot quietly relax it. The flag and the wavelet disagree in
+  both directions: `p0_09` is irreversible 9/7 yet reproduces its reference
+  exactly, and reversible entries can be graded lossily.
+- **An unimplemented feature is not a pass.** An entry the decoder rejects with
+  `Error::Unsupported` reports as *not yet decoded*. Any other rejection, a
+  panic, a geometry disagreement, or samples outside the class is a failure. The
+  `IN_CLASS` list names the entries that decode in class today, so a milestone
+  that turns one green — or a regression that turns one red — fails the test
+  until the list is updated.
+
+### The JP2 corpus
+
+`tests/conformance_jp2.rs` grades the nine ISO/IEC 15444-4 JP2 reader files
+(`file1.jp2` to `file9.jp2`, in `tests/fixtures/conformance/jp2/`) the same
+way, at class 1, with the same ratchet: `IN_CLASS` lists all nine. Files 1, 4,
+6 and 9 are bit-exact; the others are held to PAE 4 / MSE 1. Two more corpora
+back it, neither needing a reference decoder at test time:
+
+- the synthetic `jp2_*.jp2` files (`tests/jp2_synthetic.rs`), each graded
+  bit-exactly against `opj_decompress` on the same file, or, where OpenJPEG
+  fails, against a table lookup over its decode of the bare codestream;
+- nine real-world files from GDAL's test data (`tests/jp2_real.rs`), written
+  by Kakadu, the ECW JPEG 2000 SDK and OpenJPEG. Eight are graded against
+  `opj_decompress` references, and one has a broken codestream and is
+  refused with the codestream's own error.
+
+The box metadata is checked against box dumps written by
+`scripts/gen-jp2-box-snapshots.py`, a box walker independent of this
+decoder: `metadata.json` for the real-world files, `boxes.json` (with
+`edge_cases.json`, file 5 patched into the layouts no committed file has)
+for the Part 4 files, and the `jp2_boxes` section of each synthetic file's
+`expected.json`.
+
+**The Part 4 JP2 references are display output.** `jp2_N.tif` is what a
+viewer shows: sYCC and ICC-tagged files are already converted to sRGB, and
+files 4, 6 and 8 are grayscale written as three identical channels. Files 2,
+3, 5, 7 and 8 therefore can't be graded on the samples as coded. They are
+decoded with `ColorOutput::Srgb` and graded against the references, and
+their default decode is graded bit-exactly against `opj_decompress` output
+for the same file (`as_coded` references). Files 6 (12-bit) and 7 (16-bit) have
+8-bit references, so the harness shifts their decode right by 4 and 8 (the
+references were made with `opj_decompress -p 8S`, a plain right shift). Beyond the references,
+`opj_decompress -force-rgb` is the oracle for the conversion arithmetic
+(see "sRGB output" above).
+
+## A passing entry is not proof the feature works
+
+`IN_CLASS` growing is the goal, but it is not the same as a feature being
+implemented. A conformance entry only exercises a feature if its *other*
+parameters let that feature change the answer.
+
+The sharp case is `p0_01`. It is RLCP, and it was the only entry whose sole
+remaining blocker was the progression order — so it looked like the test for
+progression support. It is not. `p0_01` has one component, one quality layer,
+one tile, and one precinct, and under those conditions all five progression
+orders enumerate the identical packet sequence, because four of the five nested
+loops run once:
+
+```text
+LRCP  l -> r -> c -> p       PCRL  p -> c -> r -> l
+RLCP  r -> l -> c -> p       CPRL  c -> p -> r -> l
+RPCL  r -> p -> c -> l       all collapse to: r
+```
+
+Accepting the RLCP code and changing nothing else makes `p0_01` decode
+bit-exact. That is the same shape of bug as reading `SPcod`'s code-block style
+byte and discarding it: the decoder reports success on a feature it does not
+implement.
+
+`p0_11` is the same trap wearing the precinct partition's name. It was the only
+corpus entry the partition alone unblocked, so it looked like the test for it — but
+it is 128×1 with **one** resolution and a 2^7 × 2^1 precinct, which is one
+precinct. It grades that `SPcod`'s precinct bytes are *parsed* (get the count
+wrong and the marker segment misreads) and nothing beyond that. Mutating the
+partition confirms it: break the halving of the precinct onto the subband grid,
+address the tag trees by band index instead of precinct index, drop the
+code-block's cap to its precinct, or drop a tile's partial leading precinct, and
+`p0_11` still decodes bit-exact in every case. Each of those mutations is caught
+only by the synthetic `precincts_*` fixtures — and two of them by exactly one
+fixture each, `precincts_varied_sizes_lossless` and `precincts_tiled_cprl_lossless`.
+Adding `p0_11` to `IN_CLASS` is honest; treating it as the oracle for the
+partition would not be.
+
+The same reasoning cuts the other way: two features can be *indistinguishable*
+rather than untested. With one precinct per resolution, PCRL and CPRL enumerate
+the identical packet sequence — OpenJPEG's own output for the two differs in
+exactly one byte, the progression code in COD. That was the state of this crate
+until the precinct partition landed, and it is why `progression_pcrl_lossless`
+and `progression_cprl_lossless` graded one order between them, not two. The
+`precincts_*` fixtures are what separate them: with a real partition the position
+axis has more than one value, PCRL interleaves the components inside one sweep of
+the canvas and CPRL finishes a component before starting the next, and the two
+packet streams diverge. A pair of features that cannot be told apart is worth
+recording next to the code rather than mistaking one's fixture for coverage of
+both.
+
+A third shape is the nastiest, because the fixture looks like it targets the
+feature by name. One feature can *mask* another. Under `restart` the MQ decoder
+is re-initialized for every coding pass, so a decoder that ignores `segmentation
+symbols` and never reads the four decisions ending each cleanup pass still
+decodes correctly: the symbols it skipped are trailing bytes in a segment nobody
+reads again. Turn `restart` off and the same decoder desynchronizes immediately.
+So a `restart | segsym` codestream — which is exactly what `p0_02` is — grades
+`segsym`'s *verification* but not its *consumption*, and a fixture named for both
+flags is weaker than one carrying `segsym` alone. Where features compose, the
+fixture that isolates each one is the one that grades it.
+
+So before adding an entry to `IN_CLASS`, ask what about that entry would have to
+change for the new code to be wrong. If nothing would, the entry is not the
+oracle for that feature, and the milestone needs a fixture that can tell the
+difference — a multi-layer codestream to separate LRCP from RLCP, multiple
+precincts to separate RPCL from RLCP, and so on. Mutating the new code and
+watching the entry fail is the cheapest way to check; if no mutation makes it
+fail, the entry is not testing it. Run the mutation against *every* fixture, not
+just the one you expect to break: the fixtures that survive tell you which ones
+were never testing the feature.
+
+## Per-stage golden tests
+
+The vertical oracle proves the *whole* pipeline; it does not localize a fault.
+So each stage also gets isolated golden tests, which is what makes a failure
+debuggable:
+
+- **MQ decoder** — assert the decoded decisions for the standard's worked
+  example byte sequences.
+- **Tier-1 passes** — feed known code-block byte segments, assert the recovered
+  coefficient planes. The vectors are sliced from reversible (5/3),
+  single-resolution OpenJPEG codestreams, where the coefficients are just the
+  DC-level-shifted samples, so `opj_decompress` gives a bit-exact, decoder-
+  independent oracle. Block decoding has no 5/3-vs-9/7 branch, so reversible
+  vectors fully exercise it; a 0-level 9/7 codestream is lossy, so its samples
+  are not a trustworthy coefficient oracle, and the 9/7 quantization/DWT path is
+  graded instead by the end-to-end lossy fixture. Regenerate with
+  [`scripts/gen-tier1-vectors.py`](../scripts/gen-tier1-vectors.py).
+- **Tag-tree / packet parse** — assert inclusion, zero-bitplane, and length
+  decode for hand-built packet headers.
+- **Inverse DWT** — assert 5/3 integer lifting is bit-exact on known signals,
+  and 9/7 float lifting within tolerance, including the symmetric boundary
+  extension at the edges.
+
+Build the pipeline in the order these can be checked (see Phase 1 in
+[roadmap.md](roadmap.md)) so every stage has a green isolated test before the
+next is wired on top.
+
+## The fixture corpus
+
+The runtime test suite is dependency-free: we commit fixtures and their oracle
+snapshots, and the reference decoder is only needed to *(re)generate* an oracle,
+never to run the tests. For each fixture, record provenance — source file, and
+the exact command that produced its oracle — so the corpus is reproducible.
+
+Layout: a fixture `tests/fixtures/<name>.j2k` with a sibling
+`<name>.expected.json` (image area, tolerance, per-component samples, provenance).
+
+Seed it from:
+
+- the GRIB2 §5.40 fixtures already in the fieldglass repo (e.g.
+  `jpeg2000_regular_latlon.grib2`), plus a 9/7 re-encode for the irreversible
+  path — no GRIB2 producer ships lossy 9/7 (HRRR/NDFD are complex-packed, ECMWF
+  is CCSDS), so OpenJPEG's irreversible mode re-encodes a real grid;
+- the ISO/IEC 15444-4 conformance codestreams, which gated Phase 2 (all 23
+  entries now decode in class);
+- the ISO/IEC 15444-4 JP2 reader files, synthetic `.jp2` files built over the
+  codestreams above, and real `.jp2` files from GDAL's test data, which gated
+  Phase 3 (see "The JP2 corpus" above); HTJ2K codestreams for Phase 4.
+
+## Robustness (the input is untrusted)
+
+A decoder parses bytes it did not produce, so malformed input is a first-class
+case, not an edge case:
+
+- **Fuzzing** — `cargo fuzz` (libFuzzer) in the detached [`fuzz/`](../fuzz/)
+  workspace, seven targets: `decode` and `header` over the public entry
+  points, and `tile_body`, `tier1_block`, `mq`, `jp2_boxes` and `icc_srgb`
+  over the stages (run them per [`fuzz/README.md`](../fuzz/README.md)).
+  The bar: no panics, no unbounded allocation, no infinite loops; every rejected
+  input returns a typed `Error`, never crashes. A malformed SIZ cannot steer the
+  buffers into an overflowing or out-of-memory allocation: the samples of the
+  declared image — over the image area `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, on the
+  reference grid an origin may sit anywhere inside — are held to the sample
+  limit before any tile is read (see [The sample limit](#the-sample-limit)),
+  and the Table A-9 constraints on the image and tile origins are enforced
+  before any geometry reaches the DWT.
+- **Typed failures** — the flat `Error` enum names the stage that failed, so a
+  malformed header, an out-of-scope feature, and a Tier-1 decode fault are
+  distinguishable by a caller. No `unwrap`/`panic` on the decode path.
+- **The reject matrix** — `reject_matrix_maps_every_out_of_subset_input_to_its_typed_error`
+  in `src/codestream/tests.rs` enumerates every input outside the decoded subset
+  and pins the typed error a caller sees: `Codestream` for structural damage,
+  `Marker` for an illegally encoded field, `Unsupported` for valid JPEG 2000 we
+  do not decode yet, `Limit` for an input past one of the decoder's resource
+  guards. The JP2 box layer has its own matrix,
+  `reject_matrix_maps_every_malformed_box_shape_to_its_typed_error` in
+  `src/jp2/tests.rs`, where a malformed box is `FileFormat`, and the sRGB
+  output step has `srgb_reject_matrix_maps_each_input_to_its_typed_error` in
+  `src/jp2/srgb_tests.rs`. Rejecting is not
+  a formality. A feature the decoder reads
+  and then ignores does not yield a slightly wrong image, it yields an arbitrary
+  one, so anything not decoded must be refused rather than skipped. As each
+  milestone lands, its row leaves the table for the decoded set; a row that stops
+  rejecting fails the test first.
+- **No `unsafe`** on the correctness-critical path; if a measured hot path later
+  needs it, it is justified, isolated, and fuzzed.
+
+## Round-trip (once the encoder lands, Phase 5)
+
+When encoding exists, add two checks beyond the decode oracle:
+
+- **Round-trip** — encode → decode → compare against the original within the
+  path's tolerance.
+- **Cross-decode** — our encoder's output read back by OpenJPEG, and OpenJPEG's
+  output read by us. Interoperating with the reference implementation in both
+  directions is the real proof of encoder conformance.
+
+## What "done" means
+
+A stage is done when its isolated golden tests pass **and** it advances the
+vertical oracle/conformance gate for its phase, with the quality gates
+(`cargo fmt`, `clippy -D warnings`, `cargo test`, `cargo deny check`) green. Not
+before. "It looks right" is not a gate.
+
+## Where this decoder departs from OpenJPEG
+
+Each section below records one place where this decoder and OpenJPEG 2.5.0
+can give different answers on the same file. The first section is the index.
+
+### Where the decoders differ
+
+Every known place where this decoder and OpenJPEG 2.5.0 give a different
+result on the same file:
+
+- the inverse 9/7's `2/K` constant ("When the oracle and the standard
+  disagree" above);
+- the bypass switch under an RGN maxshift ("Bypass under a maxshift");
+- a tile-part POC that replaces the main header's (#269; "A tile-part POC
+  overrides the main header's");
+- streams this decoder refuses where OpenJPEG warns or reads on ("Stricter
+  than the oracle on non-conforming streams"), and POC sequences that leave
+  out packets ("Packets a POC sequence leaves out");
+- mixed tile-part counts around the `TPsot == TNsot` correction, and a later
+  tile-part's COD, COC, QCD or QCC that differs from the value in force,
+  both refused here ("Encoder mistakes OpenJPEG corrects");
+- signed 32-bit components, which OpenJPEG refuses ("Signed 32-bit
+  components");
+- an image of more than 2^28 samples at the decode's reduction, which this
+  decoder refuses by default and OpenJPEG decodes if it can allocate it
+  ("The sample limit"), and files past the work bounds ("The tier-2 work
+  bound", "The tier-1 work bound"); each has an option that raises it;
+- under `ColorOutput::Srgb`: sYCC with the IEC constants, rounded, and the
+  color channels picked by their `cdef` labels, not by position ("sRGB
+  output"; the table there gives every refusal);
+- the three cases below.
+
+The three below are files that follow the standard and that OpenJPEG reads
+another way. In each case the standard wins (rule 1 under "sRGB output").
+
+- **More than 999 layers.** OpenJPEG starts every tag-tree node at the
+  value 999 (`tgt.c`, `opj_tgt_reset`), so at a layer threshold of 1000 or
+  more it takes a code-block not yet included as included, without reading
+  its inclusion bit, and reads the rest of the packet header out of step.
+  This decoder starts a node unresolved (`UNRESOLVED = u32::MAX` in
+  `src/tier2/tagtree.rs`) and reads the bit, as B.10.2 says. `COD` allows
+  65535 layers. A file with a code-block first included at layer 999 or
+  later decodes here; OpenJPEG refuses it ("segment too long (3) with max
+  (0) for codeblock 1998" on a 2048^2 file of 1000 layers and two new
+  code-blocks a layer) or returns a wrong image (a 4x4 image of 1000 layers
+  whose `jp2c` is followed by an `xml ` box gives
+  `[128, 255, 255, 255, 128, 0, ...]` from that box's bytes, where every
+  sample is 128). Up to 999 layers the two agree bit for bit on the same
+  files. `tests/many_layers.rs` grades each such file against a twin of
+  the same code-block data in a few layers, which OpenJPEG decodes, up to
+  the 65535 layers `COD` allows. So OpenJPEG is not an oracle above 999
+  layers.
+- **A `Psot = 0` codestream followed by a box that ends in `FF 90`.** A
+  single-tile codestream whose last tile-part has `Psot = 0`, in a `jp2c` of
+  the right length, followed by a box whose last two bytes are `FF 90`,
+  decodes here: the `jp2c` box holds the codestream. OpenJPEG reads the
+  tile-part to the end of the file and fails ("failed to decode image").
+- **A header box at the top level before `jp2h`** (owner decision,
+  2026-11-11). Such a `colr`, or another header box, is always ignored,
+  since the standard puts them inside `jp2h`. OpenJPEG reads it after
+  any unknown box: its `JP2_STATE_UNKNOWN` is `0x7fffffff`, and ORing it
+  into the state flags (`jp2.c`) marks every state as reached, so the
+  `HEADER` test passes. The code warns that such a box "will be ignored",
+  and then reads the next one; it is a mistake, not a rule.
+
 ### Bypass under a maxshift
 
 The second case (#258). Under the bypass code-block style, a code-block's
@@ -415,6 +761,283 @@ it there. When the same COD or COC also has fewer levels than the
 decoder reports the code-block size. Matching it would mean passing the
 reduction into every COD and COC parse.
 
+The stricter checks in this section have a cost in interop: an encoder that
+produces such a stream decodes under OpenJPEG and is refused here. No corpus
+or conformance file trips them today, but `opj_compress` writes the two
+tier-2 patterns listed above. If a real file ever needs one relaxed, relax
+it to match the oracle: the protective argument loses to a demonstrated real
+file.
+
+### Packets a POC sequence leaves out
+
+A `POC` sequence whose volumes leave out packets of a tile is refused as
+`Codestream` before its packets are read. A.6.6 requires the volumes to define
+every packet: "In the case where a POC marker segment is used, the progression
+of every packet in the codestream (or for that tile of the codestream) shall
+be defined in one or more POC marker segments", and B.12.3 adds that "there
+will never be the case where a progression order volume is filled and the next
+one is not defined". The volumes are the ones the tile walks: its own when its
+first tile-part has a POC, which replaces the main header's (see "A tile-part
+POC overrides the main header's"), and otherwise the main header's and then
+any later tile-part's. A tile has a packet for every layer, every resolution
+each component has (its own `COD` or `COC` level count) and every precinct of
+it (B.6, B.9). A precinct or resolution with no code-blocks still has its
+packets, which B.9 says must appear as empty packets, so a `POC` that skips it
+is refused. A resolution with no precincts on the tile has no packets and
+needs no volume. "The layer index always starts at zero" (A.6.6), so a
+component's resolution has all its packets only when one volume reaching the
+last layer covers it; the check costs `components × (volumes + resolutions)`
+steps.
+
+Such a file is not out of the standard in every reading, though: B.11 lets
+"any number of whole packets (in order)" be dropped from the end of a tile,
+and B.12.3 lets "the last progression order volume in each tile" be
+incomplete. A tile whose volumes leave packets out is byte for byte a tile
+whose covering volumes had those packets dropped. So this is the strict
+decode refusing missing data, as it refuses a tile cut short; partial decode
+accepts it, with the missing packets reported.
+OpenJPEG decodes such a tile with them empty, and `opj_compress` writes such
+a file when its `-POC` volumes do not cover the tile: `-n 2 -POC
+T1=0,0,1,1,1,LRCP` leaves resolution 1 out, and OpenJPEG's decode of it has
+every sample wrong (`tests/fixtures/poc_coverage/`).
+
+The refusal holds under a `resolution_reduction` too, when the packets left
+out are only those of resolutions the reduction discards. That is stricter
+than `opj_decompress -r`, which gives the exact reduced image, and it is
+consistent with refusing a tile cut short (B.11) at a reduction of 1, which
+this decoder already does. Partial decode reports such a tile complete at
+the reduction that drops the missing resolutions, and its image there is the
+strict decode of a file whose volumes cover the tile.
+
+The check is on the volumes' axes, not on each precinct: a positional order's
+sweep can pass over a precinct with mixed sub-sampling (see "The tier-2 work
+bound"), with or without a `POC`, as OpenJPEG's encoder and decoder both do,
+and that is not refused. `read_header`'s walk of a `Psot = 0` tile does not
+make the check: the packets the volumes reach end where they end, so for
+such a tile in a JP2 file the codestream ends at its box and the boxes after
+`jp2c` are reported, as for the raw codestream, which the decode refuses.
+381 `opj_compress -POC` encodes whose volumes do cover the tile (two or three
+volumes split by resolution or component, every order, 1 to 4 components,
+some sub-sampled, 1 to 3 layers) decode as before.
+
+### Encoder mistakes OpenJPEG corrects
+
+Three mistakes real encoders make are corrected by OpenJPEG 2.5.0 on
+purpose, and this decoder corrects them the same way. Each rests on rule 2
+of the owner's rules (see "sRGB output" below: the standard first, then the
+error correction a user would expect, OpenJPEG usually the guide, and
+otherwise an error rather than a wrong image). In each case the standard
+says the file is wrong but not what it means, OpenJPEG's correction is
+deliberate (a named function, a warning, a fixed issue), and the checks that
+follow still refuse a file the correction reads wrongly. Fixtures:
+`quirk_*_lossless` in `tests/fixtures/`, from
+`scripts/gen-encoder-quirk-fixtures.py`; tests in `tests/encoder_quirks.rs`
+and the `encoder quirks` block of `src/codestream/tests.rs`.
+
+**`TPsot == TNsot`.** A tile's tile-parts are numbered 0 to N with N
+declared, so its last part has `TPsot` equal to `TNsot`. Adobe Photoshop's
+plug-in writes this. OpenJPEG warns "Non conformant codestream
+TPsot==TNsot" and adds one to every count
+(`opj_j2k_need_nb_tile_parts_correction`, `j2k.c:9410`, called at
+`j2k.c:9701`; its issue 254). Its trigger is copied exactly
+(`count_is_one_short` in `src/codestream/mod.rs`): once per codestream,
+when the first tile has all the parts it declares, the `SOT` chain is
+walked onward, stepping over other tiles' parts by `Psot`, to the next part
+of that tile. If that part has `TPsot == TNsot`, every count stated so far
+and every count stated after is raised by one. The walk finds nothing at a
+marker other than `SOT`, at a `Psot` below 14 on another tile's part, or at
+a `Psot` past the end. It is safe because the raised counts are held to the
+parts that arrive like any other count, and the parts are still read in
+`TPsot` order.
+
+The two decoders differ where the counts are mixed. When the correction is
+on, a tile whose own count was right now carries one part fewer than its
+count, and is refused as a tile with a missing part ("tile 3 declares 4
+tile-parts but carries 3"). OpenJPEG decodes it as it decodes a truncated
+tile, which here gives the full image. When the first tile to complete is
+counted right and a later tile has an extra part, the correction is not
+made, and the extra part is refused ("tile 1 tile-part 2 of a declared 2
+tile-parts"). OpenJPEG decodes that tile from the parts before it and drops
+the last one: 2293 of the 3072 samples then differ from the source. Both
+were measured on `quirk_tpsot_tnsot_lossless` with its counts edited.
+
+**A COD, COC, QCD or QCC restated in a later tile-part.** A.4.2 puts these
+in a tile's first tile-part. BAP Image Systems writes the main header's COD
+and QCD into every tile-part. OpenJPEG reads them in any tile-part header
+(`J2K_STATE_TPH` in its marker table, `j2k.c:1411`) and applies them to the whole tile;
+it removed its "one COD per tile" check on purpose so that files like these
+decode (`opj_j2k_read_cod`, the `#if 0` at `j2k.c:2688`; its issue 1043, a
+BAP bulk-scanner file). Here a later
+part's marker is accepted only when it changes nothing in either reading,
+and is then dropped (`check_restatement`):
+
+- a COD must equal the tile's COD in force (its own, else the main
+  header's), and every component of the tile must already code as it says,
+  since OpenJPEG writes a COD over every component. So a tile or main COC
+  that differs from the COD makes the restatement a refusal: this decoder
+  would keep the COC and OpenJPEG would overwrite it;
+- a QCD likewise, against the QCD in force and every QCC;
+- a COC or QCC must equal what its component already has.
+
+A marker that differs is `Codestream` ("a later tile-part of tile 0 carries
+a COD that differs from the one in force"). OpenJPEG applies it to the
+whole tile, including the parts read before it; which values the encoder
+meant is not in the file, so this decoder does not guess. An RGN in a later
+part is still refused, as before. This is safe because an accepted
+restatement leaves every value the decode reads as it was.
+
+**The color transform on one or two components.** `SGcod`'s MCT byte set
+on an image of fewer than three components (openjpeg-data `123.j2c`). The
+transform is defined over components 0, 1 and 2 (G.2), so it has nothing
+to apply to. OpenJPEG says "Number of components (1) is inconsistent with a
+MCT. Skip the MCT step." and decodes the components as coded
+(`opj_tcd_mct_decode`, `tcd.c:2188`), the only image such a file can
+describe. This decoder skips it too (`mct::applies`); before, it refused the
+file as `Marker`. Three or more components whose sub-sampling or sizes
+differ are still refused, as OpenJPEG refuses them (`tcd.c:2085-2120`).
+Three that differ only in depth or sign are refused too; OpenJPEG decodes
+those, so that refusal is this decoder's own stricter choice
+(`mct::check_geometry`).
+
+Real files, decoded with `opj_decompress` 2.5.0 from their bare
+codestreams and compared sample by sample (the files are not committed;
+their licenses vary):
+
+| File | Quirk | Result |
+| ---- | ----- | ------ |
+| openjpeg-data `issue235.jp2`, `issue254.jp2`, `text_GBR.jp2` | `TPsot == TNsot` | bit-exact (5/3) |
+| openjpeg-data `issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2`; jpylyzer `jpx_disguised_as_jp2.jp2` (and `wrong-number-of-tileparts.jpf`, byte-identical to it) | `TPsot == TNsot` | within 1 (9/7) |
+| openjpeg-data `issue559-eci-090-CIELab.jp2` | `TPsot == TNsot` | within 2 (9/7, 16-bit) |
+| openjpeg-data `issue390.jp2` | `TPsot == TNsot` | both refuse a later fault |
+| openjpeg-data `db11217111510058.jp2` | COD and QCD restated | within 1 (9/7) |
+| openjpeg-data `123.j2c` | MCT on one component | bit-exact (5/3) |
+
+`issue559-eci-090-CIELab.jp2` decodes the same, in both decoders, with its
+counts edited to be right, so its difference of 2 (740 of 89888 samples of
+component 0) is the 9/7 difference at 16 bits, not the correction. Every
+other committed fixture and conformance file decodes as it did before.
+
+The difference of 2 comes from the `2/K` constant. With both decoders dumping
+each stage of every tile-component, the dequantized coefficients agree
+bit-for-bit (all 269664 of them), and the first inverse-DWT level is the first
+stage that differs: 1121 of its 1134 values, by up to 1.08. The gap grows to
+1.91 at the last level, before rounding. With OpenJPEG's `two_invK` in place
+of `2/K`, every stage agrees bit for bit and the file decodes bit-exact.
+
+### Partial decode
+
+With `DecodeOptions::strict` off (#214) the decoder takes missing data and
+bytes left after a tile's last packet, as `opj_decompress -allow-partial`
+does, and reports them on `Image::report`. Everything else is refused as
+when strict. A strict decode is unchanged: its output and error text match
+the decoder before this option on every committed fixture and the round-2
+corpus at reductions 0 to 3.
+
+The oracle is `opj_decompress -allow-partial` (OpenJPEG 2.5.0), on the
+fixtures in `tests/fixtures/partial/` (`scripts/gen-partial-fixtures.py`,
+provenance in that directory's README) and checked by
+`tests/partial_decode.rs`:
+
+- **Prefixes.** For a one-tile LRCP codestream of five levels, the shortest
+  prefix that `opj_decompress -allow-partial -r r` decodes to the whole
+  file's image is, for each r from 0 to 5, the shortest prefix this decoder
+  reports complete at r, and both decoders give the same samples for it and
+  for the prefix one byte shorter. A strict decode refuses that shorter
+  prefix; a partial one reports it complete at r + 1, where its image equals
+  the whole file's. Every prefix from the first `SOT` marker on decodes, and
+  a prefix the report calls complete at r gives the whole file's image at r.
+- **Missing tiles** are 0 after the DC level shift, as OpenJPEG writes them.
+- **`Psot = 0` without an `EOC`** (`tests/fixtures/psot0/`) matches OpenJPEG.
+- **Overlapping `POC` volumes**, whose duplicate packets leave bytes over,
+  decode to the source, as OpenJPEG's do, and report `LeftoverBytes`.
+- **`-TP R` with empty resolutions** decodes to OpenJPEG's image, which is
+  not the source: on the committed fixture 117 of 198 samples differ from it
+  (107 on the file measured when this was designed). The phantom bytes sit
+  at tile-part boundaries and nothing tells them from packet data, so the
+  report gives `LeftoverBytes` and the tile counts as incomplete at every
+  reduction.
+
+On real files from the round-2 corpus, not committed: openjpeg-data's
+`Marrin.jp2` (a `Psot` that covers one of two layers) and
+`kodak_2layers_lrcp.j2c` (975304 leftover bytes) are within 1 of OpenJPEG
+(both are 9/7), and GDAL's `small_world_truncated.jp2` (cut inside its tile)
+matches it exactly.
+
+One difference from OpenJPEG is deliberate. When the data ends inside a
+packet's body, B.11 allows only whole packets to be dropped, so a cut packet
+has no meaning of its own. This decoder keeps each code-block whose
+contribution to the packet is all there, and for the rest keeps only the
+layers before the cut packet, so each code-block decodes as a codestream
+truncated after some whole layer would. OpenJPEG keeps the bytes that are
+there for every code-block of the cut packet, a block's data cut mid-layer
+included. The two images can differ in the code-blocks the cut packet
+reaches; the report says the tile is incomplete either way.
+`a_cut_packet_keeps_each_code_blocks_whole_layers` in
+`src/tier2/partial_tests.rs` checks each code-block of a cut three-layer
+packet against layer-limited walks.
+
+A `POC` sequence that leaves packets out (`tests/fixtures/poc_coverage/`)
+decodes with those packets empty and reported. At the reduction that drops
+them the image matches OpenJPEG's. At full resolution the two differ (1023 of
+1024 samples for `poc_res_missing.j2k`) because they fill the gap
+differently. OpenJPEG decodes a tile only up to the highest resolution it
+read a packet of (`resno_decoded`, t2.c:518) and pastes that smaller image
+into the top-left corner of a zeroed full-size frame. This decoder sets the
+missing coefficients to zero and runs the whole inverse wavelet, so its
+even-indexed samples are the reduction-1 image and its largest error against
+the source is 193, where OpenJPEG's is 993. Either way the report says the
+tile is incomplete, with a `complete_reduction` of `Some(1)`.
+
+`TNsot` is advisory: a count that disagrees with the tile-parts found is
+reported and the tile decodes from them. The decode needs the main header
+through the first `SOT` marker; a shorter prefix is an error.
+
+Partial decode bounds its work like a strict one, with two more charges
+against the packet work bound: each tile-component of a missing tile costs
+one step, and the end of a tile's data costs 32 steps for each of its
+(component, resolution) pairs, with one more for each packet after it.
+Without them, a header of a few kilobytes that declares 65535 tiles of 16384
+components with none present took 38 s, and a run of empty tile-parts, each
+making its tile set up its geometry for no data, took 19 s. With them the
+first is refused before any tile is decoded and the second is refused in
+under a second (`missing_tiles_are_charged_against_the_work_bound` and
+`the_end_of_each_tiles_data_is_charged_against_the_work_bound` in
+`tests/partial_decode.rs`). The end-of-data charge falls on every tile whose
+data ends, so a prefix cut late in a codestream that interleaves the
+tile-parts of very many tiles can be refused with `Error::Limit` though the
+whole file decodes: each tile whose later parts have not arrived is charged.
+`DecodeOptions::packet_work_limit` raises the bound for such a stream. The
+report holds at most five entries per tile-part, plus two.
+
+A packet header packed in a `PPM` or `PPT` marker that reads past the end
+of the packed bytes is an `Error::Codestream`, with `strict` on or off.
+Those bytes are in the main or tile-part headers, which are there whole or
+not at all, so running past them is damage, not the data ending. That
+includes a header whose last byte is 0xFF with no stuffed byte after it
+(B.10.1). OpenJPEG refuses that case too (`opj_bio_inalign`, t2.c:1323),
+but reads the other missing bits as 0 and decodes with no error; that is
+not a deliberate correction, so this decoder refuses
+(`tests/packed_overrun.rs`, fixtures in `tests/fixtures/packed_overrun/`).
+An inline header whose bits run past the end of the data is the data
+ending, and the packet adds nothing.
+
+### Signed 32-bit components
+
+**Looser than OpenJPEG, approved by the owner (2026-11-01).** OpenJPEG 2.5.0
+refuses every precision over 31 bits when it reads SIZ (`j2k.c`, around lines
+2289 and 6618). This decoder accepts a signed 32-bit component, because
+ISO/IEC 15444-1 allows `Ssiz` up to 38 bits and a signed 32-bit sample fits
+the `i32` container exactly. It refuses what the container cannot hold, as
+`Unsupported`, from SIZ and before any tile is read: an unsigned component of
+32 bits or more, and any component over 32 bits. A palette column follows the
+same rule. No oracle decodes such a file, so `tests/signed_32bit.rs` derives the
+expected samples by hand: a signed 8-bit lossless codestream with only `Ssiz`
+patched to 32 bits must decode to the same samples. That shows the depth is
+accepted and the sign, level shift and clamp are right for small values; it
+does not exercise coefficients near 2^31.
+
+### The JP2 box layer
+
 The JP2 box layer follows OpenJPEG 2.5.0 where a file bends Annex I in a
 way it tolerates: `ihdr` anywhere in `jp2h`, a second `jp2h` merged into the
 first, a header box misplaced at the top level after `jp2h` applied as if it
@@ -571,325 +1194,106 @@ box, a `jp2h` without `ihdr`, a `colr` running past the end of the file, a
 bad `cdef`) is `FileFormat`, as in OpenJPEG, which runs its box handlers on
 what follows `jp2c` once it has decoded (`src/jp2/after.rs`).
 
-The stricter checks in this section have a cost in interop: an encoder that
-produces such a stream decodes under OpenJPEG and is refused here. No corpus
-or conformance file trips them today, but `opj_compress` writes the two
-tier-2 patterns listed above. If a real file ever needs one relaxed, relax
-it to match the oracle: the protective argument loses to a demonstrated real
-file.
+### The `jp2i` and `uinf` boxes
 
-### Partial decode
+OpenJPEG 2.5.0 skips both box types, so ISO/IEC 15444-1 (I.6, I.7.3) is the
+reference for their contents. Neither affects the samples. `jp2i` contents
+are returned as bytes: their format is reserved for ISO, so nothing about
+them is checked, and the `ihdr` `IPR` flag is not held to their presence.
 
-With `DecodeOptions::strict` off (#214) the decoder takes missing data and
-bytes left after a tile's last packet, as `opj_decompress -allow-partial`
-does, and reports them on `Image::report`. Everything else is refused as
-when strict. A strict decode is unchanged: its output and error text match
-the decoder before this option on every committed fixture and the round-2
-corpus at reductions 0 to 3.
+A `uinf` is reported only when it is well formed, and a malformed one is
+left out of `Jp2Metadata::uuid_info` as a whole: the decode goes on, as it
+does in OpenJPEG, whose `opj_decompress` decodes every malformed variant
+(owner decision, 2026-11-01). Nothing partial is reported. Well formed means:
 
-The oracle is `opj_decompress -allow-partial` (OpenJPEG 2.5.0), on the
-fixtures in `tests/fixtures/partial/` (`scripts/gen-partial-fixtures.py`,
-provenance in that directory's README) and checked by
-`tests/partial_decode.rs`:
+- Its contents are whole boxes that fill it exactly. A child box that
+  overruns the `uinf`, has length 0, a length of 2..7, an `XLBox` below 16
+  or past the `uinf`, or 1..7 bytes left after the last child make it
+  malformed. A `uinf` whose own length is bad is a top-level fault, handled
+  like any other box's.
+- One `ulst` and one `url `, in either order. Figure I.20 shows `ulst`
+  first, but I.7.3 does not require it, so the order is not checked. A
+  missing or second `ulst` or `url ` makes it malformed. Other boxes inside
+  are ignored (I.8).
+- The `ulst` holds its 2-byte `NU` and exactly `NU` UUIDs ("the number of
+  UUIDi fields shall be the same as the value of the NU field").
+- The `url ` holds at least its `VERS` and `FLAG` (4 bytes).
 
-- **Prefixes.** For a one-tile LRCP codestream of five levels, the shortest
-  prefix that `opj_decompress -allow-partial -r r` decodes to the whole
-  file's image is, for each r from 0 to 5, the shortest prefix this decoder
-  reports complete at r, and both decoders give the same samples for it and
-  for the prefix one byte shorter. A strict decode refuses that shorter
-  prefix; a partial one reports it complete at r + 1, where its image equals
-  the whole file's. Every prefix from the first `SOT` marker on decodes, and
-  a prefix the report calls complete at r gives the whole file's image at r.
-- **Missing tiles** are 0 after the DC level shift, as OpenJPEG writes them.
-- **`Psot = 0` without an `EOC`** (`tests/fixtures/psot0/`) matches OpenJPEG.
-- **Overlapping `POC` volumes**, whose duplicate packets leave bytes over,
-  decode to the source, as OpenJPEG's do, and report `LeftoverBytes`.
-- **`-TP R` with empty resolutions** decodes to OpenJPEG's image, which is
-  not the source: on the committed fixture 117 of 198 samples differ from it
-  (107 on the file measured when this was designed). The phantom bytes sit
-  at tile-part boundaries and nothing tells them from packet data, so the
-  report gives `LeftoverBytes` and the tile counts as incomplete at every
-  reduction.
+Three requirements are reported rather than checked: `VERS` and `FLAG`
+"shall be 0", and `LOC` is "a null terminated string of UTF-8 characters".
+`UuidInfo` keeps the version, flags and location bytes as stored, and
+`UuidInfo::location_str` returns `None` for a location that is not such a
+string.
 
-On real files from the round-2 corpus, not committed: openjpeg-data's
-`Marrin.jp2` (a `Psot` that covers one of two layers) and
-`kodak_2layers_lrcp.j2c` (975304 leftover bytes) are within 1 of OpenJPEG
-(both are 9/7), and GDAL's `small_world_truncated.jp2` (cut inside its tile)
-matches it exactly.
+The boxes are read wherever `xml ` and `uuid` are collected: at the top level
+before the codestream, and after it as far as OpenJPEG's walk there goes. A
+`uinf` or `jp2i` inside `jp2h` or another superbox is not read. No real file
+in the corpus carries either box.
 
-One difference from OpenJPEG is deliberate. When the data ends inside a
-packet's body, B.11 allows only whole packets to be dropped, so a cut packet
-has no meaning of its own. This decoder keeps each code-block whose
-contribution to the packet is all there, and for the rest keeps only the
-layers before the cut packet, so each code-block decodes as a codestream
-truncated after some whole layer would. OpenJPEG keeps the bytes that are
-there for every code-block of the cut packet, a block's data cut mid-layer
-included. The two images can differ in the code-blocks the cut packet
-reaches; the report says the tile is incomplete either way.
-`a_cut_packet_keeps_each_code_blocks_whole_layers` in
-`src/tier2/partial_tests.rs` checks each code-block of a cut three-layer
-packet against layer-limited walks.
+### The `rreq` box
 
-A `POC` sequence that leaves packets out (`tests/fixtures/poc_coverage/`)
-decodes with those packets empty and reported. At the reduction that drops
-them the image matches OpenJPEG's. At full resolution the two differ (1023 of
-1024 samples for `poc_res_missing.j2k`) because they fill the gap
-differently. OpenJPEG decodes a tile only up to the highest resolution it
-read a packet of (`resno_decoded`, t2.c:518) and pastes that smaller image
-into the top-left corner of a zeroed full-size frame. This decoder sets the
-missing coefficients to zero and runs the whole inverse wavelet, so its
-even-indexed samples are the reduction-1 image and its largest error against
-the source is 193, where OpenJPEG's is 993. Either way the report says the
-tile is incomplete, with a `complete_reduction` of `Some(1)`.
+OpenJPEG 2.5.0 has no handler for the Reader Requirements box, so ISO/IEC
+15444-2 M.11.1 is the reference for its layout: `ML`, then `FUAM` and `DCM`
+of `ML` bytes each, `NSF` standard features (`SF` and an `ML`-byte `SM`), and
+`NVF` vendor features (a 16-byte `VF` and an `ML`-byte `VM`). The first
+top-level `rreq`, before or after the codestream, is reported as
+`Jp2Metadata::reader_requirements` when it holds exactly those fields. One
+that is cut short or has bytes left over gives `None` and the decode goes on,
+as in OpenJPEG: `opj_decompress` decodes `file5.jp2` with its `NSF` raised to
+65535, or its `ML` to 255, to the same samples as the unmodified file. The
+values (an `ML` outside 1, 2, 4 and 8, an unknown feature) are reported, not
+checked. Files 5 and 7 of the Part 4 set carry an `rreq`.
 
-`TNsot` is advisory: a count that disagrees with the tile-parts found is
-reported and the tile decodes from them. The decode needs the main header
-through the first `SOT` marker; a shorter prefix is an error.
+## Resource bounds
 
-Partial decode bounds its work like a strict one, with two more charges
-against the packet work bound: each tile-component of a missing tile costs
-one step, and the end of a tile's data costs 32 steps for each of its
-(component, resolution) pairs, with one more for each packet after it.
-Without them, a header of a few kilobytes that declares 65535 tiles of 16384
-components with none present took 38 s, and a run of empty tile-parts, each
-making its tile set up its geometry for no data, took 19 s. With them the
-first is refused before any tile is decoded and the second is refused in
-under a second (`missing_tiles_are_charged_against_the_work_bound` and
-`the_end_of_each_tiles_data_is_charged_against_the_work_bound` in
-`tests/partial_decode.rs`). The end-of-data charge falls on every tile whose
-data ends, so a prefix cut late in a codestream that interleaves the
-tile-parts of very many tiles can be refused with `Error::Limit` though the
-whole file decodes: each tile whose later parts have not arrived is charged.
-`DecodeOptions::packet_work_limit` raises the bound for such a stream. The
-report holds at most five entries per tile-part, plus two.
+The caps this decoder puts on what a hostile file can make it allocate or do.
 
-A packet header packed in a `PPM` or `PPT` marker that reads past the end
-of the packed bytes is an `Error::Codestream`, with `strict` on or off.
-Those bytes are in the main or tile-part headers, which are there whole or
-not at all, so running past them is damage, not the data ending. That
-includes a header whose last byte is 0xFF with no stuffed byte after it
-(B.10.1). OpenJPEG refuses that case too (`opj_bio_inalign`, t2.c:1323),
-but reads the other missing bits as 0 and decodes with no error; that is
-not a deliberate correction, so this decoder refuses
-(`tests/packed_overrun.rs`, fixtures in `tests/fixtures/packed_overrun/`).
-An inline header whose bits run past the end of the data is the data
-ending, and the packet adds nothing.
+### The sample limit
 
-### Encoder mistakes OpenJPEG corrects
+The decode holds every component in its own plane, so what it allocates
+grows with the sum of the component areas, not with the file. A file of a
+few hundred bytes can declare a 65536 x 65536 image, 16 GiB of `i32`
+samples. The decode counts the samples of every output channel, at the
+resolution reduction asked for, from SIZ and the JP2 boxes alone, and
+refuses an image of more than 2^28 samples (1 GiB as `i32`) with `Limit`
+before it reads a tile. The count covers the codestream's components, a
+palette's expanded channels, and the channels sRGB output adds (sYCC chroma
+replicated to the luma grid, a gray channel a monochrome profile maps to
+R, G and B). `read_header_with` makes the same check, so it refuses what
+the decode would. OpenJPEG has no such limit: it allocates what the header
+declares and fails only when the allocation does.
 
-Three mistakes real encoders make are corrected by OpenJPEG 2.5.0 on
-purpose, and this decoder corrects them the same way. Each rests on rule 2
-of the owner's rules (see "sRGB output" below: the standard first, then the
-error correction a user would expect, OpenJPEG usually the guide, and
-otherwise an error rather than a wrong image). In each case the standard
-says the file is wrong but not what it means, OpenJPEG's correction is
-deliberate (a named function, a warning, a fixed issue), and the checks that
-follow still refuse a file the correction reads wrongly. Fixtures:
-`quirk_*_lossless` in `tests/fixtures/`, from
-`scripts/gen-encoder-quirk-fixtures.py`; tests in `tests/encoder_quirks.rs`
-and the `encoder quirks` block of `src/codestream/tests.rs`.
+`DecodeOptions::sample_limit` raises the limit (`WorkLimit::Raised(n)`,
+n times 2^28) or lifts it (`WorkLimit::Unlimited`). The refusal names the
+option and the smallest `Raised` factor that admits the file. Even
+`Unlimited` refuses an image whose 4-byte samples would pass `isize::MAX`
+bytes, so the buffer sizes cannot overflow `usize`, on 32-bit targets
+included; past that, an allocation that fails aborts the process.
 
-**`TPsot == TNsot`.** A tile's tile-parts are numbered 0 to N with N
-declared, so its last part has `TPsot` equal to `TNsot`. Adobe Photoshop's
-plug-in writes this. OpenJPEG warns "Non conformant codestream
-TPsot==TNsot" and adds one to every count
-(`opj_j2k_need_nb_tile_parts_correction`, `j2k.c:9410`, called at
-`j2k.c:9701`; its issue 254). Its trigger is copied exactly
-(`count_is_one_short` in `src/codestream/mod.rs`): once per codestream,
-when the first tile has all the parts it declares, the `SOT` chain is
-walked onward, stepping over other tiles' parts by `Psot`, to the next part
-of that tile. If that part has `TPsot == TNsot`, every count stated so far
-and every count stated after is raised by one. The walk finds nothing at a
-marker other than `SOT`, at a `Psot` below 14 on another tile's part, or at
-a `Psot` past the end. It is safe because the raised counts are held to the
-parts that arrive like any other count, and the parts are still read in
-`TPsot` order.
+The default admits a Sentinel-2 10 m band (10980 x 10980, 120.6 M samples)
+and RGB images up to about 89 MP, and a reduced decode of a larger image
+when the reduced image fits: GDAL's `single_block_32769_16385.jp2` (537 M
+samples) decodes at reduction 3 (4097 x 2049), bit-exact against
+`opj_decompress -r 3` (owner decision on #281, 2026-11-12). Measured on a
+release build against `opj_decompress` 2.5.0 (wall time on a shared,
+loaded machine; peak resident memory from `/usr/bin/time -v`):
 
-The two decoders differ where the counts are mixed. When the correction is
-on, a tile whose own count was right now carries one part fewer than its
-count, and is refused as a tile with a missing part ("tile 3 declares 4
-tile-parts but carries 3"). OpenJPEG decodes it as it decodes a truncated
-tile, which here gives the full image. When the first tile to complete is
-counted right and a later tile has an extra part, the correction is not
-made, and the extra part is refused ("tile 1 tile-part 2 of a declared 2
-tile-parts"). OpenJPEG decodes that tile from the parts before it and drops
-the last one: 2293 of the 3072 samples then differ from the source. Both
-were measured on `quirk_tpsot_tnsot_lossless` with its counts edited.
+| File | Decode | Time | Peak RSS | OpenJPEG time | OpenJPEG peak RSS |
+| ---- | ------ | ---- | -------- | ------------- | ----------------- |
+| `T31UDQ_20240105T105339_AOT_10m.jp2`, 10980^2, 690 KB | full, bit-exact | 4.2 to 4.6 s | 470 MiB | 3.6 to 4.4 s | 471 MiB |
+| the same | reduction 2 (2745^2) | 0.78 s | 32 MiB | | 36 MiB |
+| `single_block_32769_16385.jp2` | reduction 3, bit-exact | 1.05 s | 86 MiB | 0.25 s | 92 MiB |
 
-**A COD, COC, QCD or QCC restated in a later tile-part.** A.4.2 puts these
-in a tile's first tile-part. BAP Image Systems writes the main header's COD
-and QCD into every tile-part. OpenJPEG reads them in any tile-part header
-(`J2K_STATE_TPH` in its marker table, `j2k.c:1411`) and applies them to the whole tile;
-it removed its "one COD per tile" check on purpose so that files like these
-decode (`opj_j2k_read_cod`, the `#if 0` at `j2k.c:2688`; its issue 1043, a
-BAP bulk-scanner file). Here a later
-part's marker is accepted only when it changes nothing in either reading,
-and is then dropped (`check_restatement`):
-
-- a COD must equal the tile's COD in force (its own, else the main
-  header's), and every component of the tile must already code as it says,
-  since OpenJPEG writes a COD over every component. So a tile or main COC
-  that differs from the COD makes the restatement a refusal: this decoder
-  would keep the COC and OpenJPEG would overwrite it;
-- a QCD likewise, against the QCD in force and every QCC;
-- a COC or QCC must equal what its component already has.
-
-A marker that differs is `Codestream` ("a later tile-part of tile 0 carries
-a COD that differs from the one in force"). OpenJPEG applies it to the
-whole tile, including the parts read before it; which values the encoder
-meant is not in the file, so this decoder does not guess. An RGN in a later
-part is still refused, as before. This is safe because an accepted
-restatement leaves every value the decode reads as it was.
-
-**The color transform on one or two components.** `SGcod`'s MCT byte set
-on an image of fewer than three components (openjpeg-data `123.j2c`). The
-transform is defined over components 0, 1 and 2 (G.2), so it has nothing
-to apply to. OpenJPEG says "Number of components (1) is inconsistent with a
-MCT. Skip the MCT step." and decodes the components as coded
-(`opj_tcd_mct_decode`, `tcd.c:2188`), the only image such a file can
-describe. This decoder skips it too (`mct::applies`); before, it refused the
-file as `Marker`. Three or more components whose sub-sampling or sizes
-differ are still refused, as OpenJPEG refuses them (`tcd.c:2085-2120`).
-Three that differ only in depth or sign are refused too; OpenJPEG decodes
-those, so that refusal is this decoder's own stricter choice
-(`mct::check_geometry`).
-
-Real files, decoded with `opj_decompress` 2.5.0 from their bare
-codestreams and compared sample by sample (the files are not committed;
-their licenses vary):
-
-| File | Quirk | Result |
-| ---- | ----- | ------ |
-| openjpeg-data `issue235.jp2`, `issue254.jp2`, `text_GBR.jp2` | `TPsot == TNsot` | bit-exact (5/3) |
-| openjpeg-data `issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2`; jpylyzer `jpx_disguised_as_jp2.jp2` (and `wrong-number-of-tileparts.jpf`, byte-identical to it) | `TPsot == TNsot` | within 1 (9/7) |
-| openjpeg-data `issue559-eci-090-CIELab.jp2` | `TPsot == TNsot` | within 2 (9/7, 16-bit) |
-| openjpeg-data `issue390.jp2` | `TPsot == TNsot` | both refuse a later fault |
-| openjpeg-data `db11217111510058.jp2` | COD and QCD restated | within 1 (9/7) |
-| openjpeg-data `123.j2c` | MCT on one component | bit-exact (5/3) |
-
-`issue559-eci-090-CIELab.jp2` decodes the same, in both decoders, with its
-counts edited to be right, so its difference of 2 (740 of 89888 samples of
-component 0) is the 9/7 difference at 16 bits, not the correction. Every
-other committed fixture and conformance file decodes as it did before.
-
-The difference of 2 comes from the `2/K` constant. With both decoders dumping
-each stage of every tile-component, the dequantized coefficients agree
-bit-for-bit (all 269664 of them), and the first inverse-DWT level is the first
-stage that differs: 1121 of its 1134 values, by up to 1.08. The gap grows to
-1.91 at the last level, before rounding. With OpenJPEG's `two_invK` in place
-of `2/K`, every stage agrees bit for bit and the file decodes bit-exact.
-
-### Where the decoders differ
-
-Every known place where this decoder and OpenJPEG 2.5.0 give a different
-result on the same file:
-
-- the inverse 9/7's `2/K` constant ("When the oracle and the standard
-  disagree" above);
-- the bypass switch under an RGN maxshift ("Bypass under a maxshift");
-- a tile-part POC that replaces the main header's (#269; "A tile-part POC
-  overrides the main header's");
-- streams this decoder refuses where OpenJPEG warns or reads on ("Stricter
-  than the oracle on non-conforming streams"), and POC sequences that leave
-  out packets ("Packets a POC sequence leaves out");
-- mixed tile-part counts around the `TPsot == TNsot` correction, and a later
-  tile-part's COD, COC, QCD or QCC that differs from the value in force,
-  both refused here ("Encoder mistakes OpenJPEG corrects");
-- signed 32-bit components, which OpenJPEG refuses ("Signed 32-bit
-  components");
-- an image of more than 2^28 samples at the decode's reduction, which this
-  decoder refuses by default and OpenJPEG decodes if it can allocate it
-  ("The sample limit"), and files past the work bounds ("The tier-2 work
-  bound", "The tier-1 work bound"); each has an option that raises it;
-- under `ColorOutput::Srgb`: sYCC with the IEC constants, rounded, and the
-  color channels picked by their `cdef` labels, not by position ("sRGB
-  output"; the table there gives every refusal);
-- the three cases below.
-
-The three below are files that follow the standard and that OpenJPEG reads
-another way. In each case the standard wins (rule 1 under "sRGB output").
-
-- **More than 999 layers.** OpenJPEG starts every tag-tree node at the
-  value 999 (`tgt.c`, `opj_tgt_reset`), so at a layer threshold of 1000 or
-  more it takes a code-block not yet included as included, without reading
-  its inclusion bit, and reads the rest of the packet header out of step.
-  This decoder starts a node unresolved (`UNRESOLVED = u32::MAX` in
-  `src/tier2/tagtree.rs`) and reads the bit, as B.10.2 says. `COD` allows
-  65535 layers. A file with a code-block first included at layer 999 or
-  later decodes here; OpenJPEG refuses it ("segment too long (3) with max
-  (0) for codeblock 1998" on a 2048^2 file of 1000 layers and two new
-  code-blocks a layer) or returns a wrong image (a 4x4 image of 1000 layers
-  whose `jp2c` is followed by an `xml ` box gives
-  `[128, 255, 255, 255, 128, 0, ...]` from that box's bytes, where every
-  sample is 128). Up to 999 layers the two agree bit for bit on the same
-  files. `tests/many_layers.rs` grades each such file against a twin of
-  the same code-block data in a few layers, which OpenJPEG decodes, up to
-  the 65535 layers `COD` allows. So OpenJPEG is not an oracle above 999
-  layers.
-- **A `Psot = 0` codestream followed by a box that ends in `FF 90`.** A
-  single-tile codestream whose last tile-part has `Psot = 0`, in a `jp2c` of
-  the right length, followed by a box whose last two bytes are `FF 90`,
-  decodes here: the `jp2c` box holds the codestream. OpenJPEG reads the
-  tile-part to the end of the file and fails ("failed to decode image").
-- **A header box at the top level before `jp2h`** (owner decision,
-  2026-11-11). Such a `colr`, or another header box, is always ignored,
-  since the standard puts them inside `jp2h`. OpenJPEG reads it after
-  any unknown box: its `JP2_STATE_UNKNOWN` is `0x7fffffff`, and ORing it
-  into the state flags (`jp2.c`) marks every state as reached, so the
-  `HEADER` test passes. The code warns that such a box "will be ignored",
-  and then reads the next one; it is a mistake, not a rule.
-
-### Packets a POC sequence leaves out
-
-A `POC` sequence whose volumes leave out packets of a tile is refused as
-`Codestream` before its packets are read. A.6.6 requires the volumes to define
-every packet: "In the case where a POC marker segment is used, the progression
-of every packet in the codestream (or for that tile of the codestream) shall
-be defined in one or more POC marker segments", and B.12.3 adds that "there
-will never be the case where a progression order volume is filled and the next
-one is not defined". The volumes are the ones the tile walks: its own when its
-first tile-part has a POC, which replaces the main header's (see "A tile-part
-POC overrides the main header's"), and otherwise the main header's and then
-any later tile-part's. A tile has a packet for every layer, every resolution
-each component has (its own `COD` or `COC` level count) and every precinct of
-it (B.6, B.9). A precinct or resolution with no code-blocks still has its
-packets, which B.9 says must appear as empty packets, so a `POC` that skips it
-is refused. A resolution with no precincts on the tile has no packets and
-needs no volume. "The layer index always starts at zero" (A.6.6), so a
-component's resolution has all its packets only when one volume reaching the
-last layer covers it; the check costs `components × (volumes + resolutions)`
-steps.
-
-Such a file is not out of the standard in every reading, though: B.11 lets
-"any number of whole packets (in order)" be dropped from the end of a tile,
-and B.12.3 lets "the last progression order volume in each tile" be
-incomplete. A tile whose volumes leave packets out is byte for byte a tile
-whose covering volumes had those packets dropped. So this is the strict
-decode refusing missing data, as it refuses a tile cut short; partial decode
-accepts it, with the missing packets reported.
-OpenJPEG decodes such a tile with them empty, and `opj_compress` writes such
-a file when its `-POC` volumes do not cover the tile: `-n 2 -POC
-T1=0,0,1,1,1,LRCP` leaves resolution 1 out, and OpenJPEG's decode of it has
-every sample wrong (`tests/fixtures/poc_coverage/`).
-
-The refusal holds under a `resolution_reduction` too, when the packets left
-out are only those of resolutions the reduction discards. That is stricter
-than `opj_decompress -r`, which gives the exact reduced image, and it is
-consistent with refusing a tile cut short (B.11) at a reduction of 1, which
-this decoder already does. Partial decode reports such a tile complete at
-the reduction that drops the missing resolutions, and its image there is the
-strict decode of a file whose volumes cover the tile.
-
-The check is on the volumes' axes, not on each precinct: a positional order's
-sweep can pass over a precinct with mixed sub-sampling (see "The tier-2 work
-bound"), with or without a `POC`, as OpenJPEG's encoder and decoder both do,
-and that is not refused. `read_header`'s walk of a `Psot = 0` tile does not
-make the check: the packets the volumes reach end where they end, so for
-such a tile in a JP2 file the codestream ends at its box and the boxes after
-`jp2c` are reported, as for the raw codestream, which the decode refuses.
-381 `opj_compress -POC` encodes whose volumes do cover the tile (two or three
-volumes split by resolution or component, every order, 1 to 4 components,
-some sub-sampled, 1 to 3 layers) decode as before.
+The peak is about 1.0 times the 4-byte output for the Sentinel-2 band (460
+MiB of samples) and about 1.35 times for one square tile of one component
+(see the table in `src/samples.rs`), so the default allows a peak of about
+1.4 GiB. A tall, narrow tile peaks higher: about 1.5 to 1.7 times when it is
+8 to 1024 samples wide, and about 2.6 times when it is one sample wide. A
+smaller narrow image can peak at a higher multiple, as the code-blocks' fixed
+overhead is a larger share of it: a 9/7 tile one sample wide with 2^24 samples
+peaks at about 2.6 times at 3 wavelet levels, 2.7 at 5 and 3.2 at 8.
+While a palette expands the peak is about twice the output. Tests:
+`tests/sample_limit.rs` and `tests/sample_limit_alloc.rs`.
 
 ### The tier-2 work bound
 
@@ -1157,53 +1561,6 @@ stays 2^15 rather than 2^14, which would refuse the `-n 1` files, and it is
 scaled by the tile bytes, packet headers included, as the tier-2 bound is
 (orchestrator decisions on #278, 2026-11-12).
 
-### The sample limit
-
-The decode holds every component in its own plane, so what it allocates
-grows with the sum of the component areas, not with the file. A file of a
-few hundred bytes can declare a 65536 x 65536 image, 16 GiB of `i32`
-samples. The decode counts the samples of every output channel, at the
-resolution reduction asked for, from SIZ and the JP2 boxes alone, and
-refuses an image of more than 2^28 samples (1 GiB as `i32`) with `Limit`
-before it reads a tile. The count covers the codestream's components, a
-palette's expanded channels, and the channels sRGB output adds (sYCC chroma
-replicated to the luma grid, a gray channel a monochrome profile maps to
-R, G and B). `read_header_with` makes the same check, so it refuses what
-the decode would. OpenJPEG has no such limit: it allocates what the header
-declares and fails only when the allocation does.
-
-`DecodeOptions::sample_limit` raises the limit (`WorkLimit::Raised(n)`,
-n times 2^28) or lifts it (`WorkLimit::Unlimited`). The refusal names the
-option and the smallest `Raised` factor that admits the file. Even
-`Unlimited` refuses an image whose 4-byte samples would pass `isize::MAX`
-bytes, so the buffer sizes cannot overflow `usize`, on 32-bit targets
-included; past that, an allocation that fails aborts the process.
-
-The default admits a Sentinel-2 10 m band (10980 x 10980, 120.6 M samples)
-and RGB images up to about 89 MP, and a reduced decode of a larger image
-when the reduced image fits: GDAL's `single_block_32769_16385.jp2` (537 M
-samples) decodes at reduction 3 (4097 x 2049), bit-exact against
-`opj_decompress -r 3` (owner decision on #281, 2026-11-12). Measured on a
-release build against `opj_decompress` 2.5.0 (wall time on a shared,
-loaded machine; peak resident memory from `/usr/bin/time -v`):
-
-| File | Decode | Time | Peak RSS | OpenJPEG time | OpenJPEG peak RSS |
-| ---- | ------ | ---- | -------- | ------------- | ----------------- |
-| `T31UDQ_20240105T105339_AOT_10m.jp2`, 10980^2, 690 KB | full, bit-exact | 4.2 to 4.6 s | 470 MiB | 3.6 to 4.4 s | 471 MiB |
-| the same | reduction 2 (2745^2) | 0.78 s | 32 MiB | | 36 MiB |
-| `single_block_32769_16385.jp2` | reduction 3, bit-exact | 1.05 s | 86 MiB | 0.25 s | 92 MiB |
-
-The peak is about 1.0 times the 4-byte output for the Sentinel-2 band (460
-MiB of samples) and about 1.35 times for one square tile of one component
-(see the table in `src/samples.rs`), so the default allows a peak of about
-1.4 GiB. A tall, narrow tile peaks higher: about 1.5 to 1.7 times when it is
-8 to 1024 samples wide, and about 2.6 times when it is one sample wide. A
-smaller narrow image can peak at a higher multiple, as the code-blocks' fixed
-overhead is a larger share of it: a 9/7 tile one sample wide with 2^24 samples
-peaks at about 2.6 times at 3 wavelet levels, 2.7 at 5 and 3.2 at 8.
-While a palette expands the peak is about twice the output. Tests:
-`tests/sample_limit.rs` and `tests/sample_limit_alloc.rs`.
-
 ### Tile header cost
 
 A tile's header is the main header with the tile's own COD, COC, QCD, QCC,
@@ -1246,72 +1603,7 @@ The first four are refused at tile 0, whose components but the first hold no
 sample. The OpenJPEG figures for the 16384-component shapes are from the
 review that filed #256.
 
-### The `jp2i` and `uinf` boxes
-
-OpenJPEG 2.5.0 skips both box types, so ISO/IEC 15444-1 (I.6, I.7.3) is the
-reference for their contents. Neither affects the samples. `jp2i` contents
-are returned as bytes: their format is reserved for ISO, so nothing about
-them is checked, and the `ihdr` `IPR` flag is not held to their presence.
-
-A `uinf` is reported only when it is well formed, and a malformed one is
-left out of `Jp2Metadata::uuid_info` as a whole: the decode goes on, as it
-does in OpenJPEG, whose `opj_decompress` decodes every malformed variant
-(owner decision, 2026-11-01). Nothing partial is reported. Well formed means:
-
-- Its contents are whole boxes that fill it exactly. A child box that
-  overruns the `uinf`, has length 0, a length of 2..7, an `XLBox` below 16
-  or past the `uinf`, or 1..7 bytes left after the last child make it
-  malformed. A `uinf` whose own length is bad is a top-level fault, handled
-  like any other box's.
-- One `ulst` and one `url `, in either order. Figure I.20 shows `ulst`
-  first, but I.7.3 does not require it, so the order is not checked. A
-  missing or second `ulst` or `url ` makes it malformed. Other boxes inside
-  are ignored (I.8).
-- The `ulst` holds its 2-byte `NU` and exactly `NU` UUIDs ("the number of
-  UUIDi fields shall be the same as the value of the NU field").
-- The `url ` holds at least its `VERS` and `FLAG` (4 bytes).
-
-Three requirements are reported rather than checked: `VERS` and `FLAG`
-"shall be 0", and `LOC` is "a null terminated string of UTF-8 characters".
-`UuidInfo` keeps the version, flags and location bytes as stored, and
-`UuidInfo::location_str` returns `None` for a location that is not such a
-string.
-
-The boxes are read wherever `xml ` and `uuid` are collected: at the top level
-before the codestream, and after it as far as OpenJPEG's walk there goes. A
-`uinf` or `jp2i` inside `jp2h` or another superbox is not read. No real file
-in the corpus carries either box.
-
-### The `rreq` box
-
-OpenJPEG 2.5.0 has no handler for the Reader Requirements box, so ISO/IEC
-15444-2 M.11.1 is the reference for its layout: `ML`, then `FUAM` and `DCM`
-of `ML` bytes each, `NSF` standard features (`SF` and an `ML`-byte `SM`), and
-`NVF` vendor features (a 16-byte `VF` and an `ML`-byte `VM`). The first
-top-level `rreq`, before or after the codestream, is reported as
-`Jp2Metadata::reader_requirements` when it holds exactly those fields. One
-that is cut short or has bytes left over gives `None` and the decode goes on,
-as in OpenJPEG: `opj_decompress` decodes `file5.jp2` with its `NSF` raised to
-65535, or its `ML` to 255, to the same samples as the unmodified file. The
-values (an `ML` outside 1, 2, 4 and 8, an unknown feature) are reported, not
-checked. Files 5 and 7 of the Part 4 set carry an `rreq`.
-
-### Signed 32-bit components
-
-**Looser than OpenJPEG, approved by the owner (2026-11-01).** OpenJPEG 2.5.0
-refuses every precision over 31 bits when it reads SIZ (`j2k.c`, around lines
-2289 and 6618). This decoder accepts a signed 32-bit component, because
-ISO/IEC 15444-1 allows `Ssiz` up to 38 bits and a signed 32-bit sample fits
-the `i32` container exactly. It refuses what the container cannot hold, as
-`Unsupported`, from SIZ and before any tile is read: an unsigned component of
-32 bits or more, and any component over 32 bits. A palette column follows the
-same rule. No oracle decodes such a file, so `tests/signed_32bit.rs` derives the
-expected samples by hand: a signed 8-bit lossless codestream with only `Ssiz`
-patched to 32 bits must decode to the same samples. That shows the depth is
-accepted and the sign, level shift and clamp are right for small values; it
-does not exercise coefficients near 2^31.
-
-### sRGB output
+## sRGB output
 
 `ColorOutput::Srgb` converts sYCC and the two restricted ICC profile forms
 (I.5.3.3) to sRGB. The default output is as coded and is unaffected by
@@ -1329,7 +1621,7 @@ order:
 
 Each deviation from OpenJPEG below names the rule it rests on.
 
-#### Outcomes
+### Outcomes
 
 This table is the complete list of what `Srgb` does. The rustdoc and the
 CHANGELOG summarize it. The checks run in the order of the rows, and the
@@ -1729,284 +2021,3 @@ too. sYCC or an RGB profile on one or two channels passes through, as
 OpenJPEG leaves it, with the metadata as declared.
 A pass-through, the default `AsCoded` decode and `read_header` report the
 color space the file declares.
-
-## Agreement standard
-
-- **Reversible path (5/3, lossless):** bit-exact sample equality. Any
-  difference is a bug.
-- **Irreversible path (9/7, lossy):** within a stated absolute tolerance per
-  fixture, and within the compliance-class per-pixel and MSE bounds once we test
-  against Part 4. Floating-point lifting means our result and
-  OpenJPEG's will differ in the low bits; the tolerance is what makes the test
-  meaningful rather than flaky.
-
-The 9/7 difference from OpenJPEG depends on the bit depth, because OpenJPEG's
-`two_invK` ("When the oracle and the standard disagree") adds an error that
-grows with the sample range. Beyond that it depends on the content: how many
-sharp edges the image has and how they line up with the transform grid. The
-largest differences seen so far:
-
-| Bit depth | Largest difference from `opj_decompress` |
-| --------- | ---------------------------------------- |
-| 8, 10, 12 | 1 |
-| 14 | 2 |
-| 16 | 7 |
-
-The images: 128x128 single-component images coded by `opj_compress -I -n 6`
-at rates 1, 4 and 20, in seven patterns (noise, a random walk, a checkerboard,
-bars, two sizes of blocks and ragged edges) with two seeds each; and, at `-r 1`,
-checkerboards of full-swing blocks from 1x1 to 5x5 on images from 32x32 to
-256x256 with five or seven decomposition levels. The 7 is a 256x256
-checkerboard of 5x5 blocks, and 3x3 blocks reach 6. The same 5x5 checkerboard
-gives 5 at 64x64, 128x128, 200x200, 300x300 and 384x384, and at 512x512 and
-1024x1024 with up to ten levels, so the gap does not simply grow with image
-size. On all of them this decoder
-stays within 1 of the encoder's input. Real files agree: the 8-bit
-`issue206_image-000.jp2`, `issue208.jp2`, `issue559-eci-091-CIELab.jp2` and
-`jpx_disguised_as_jp2.jp2` are within 1, and the 16-bit
-`issue559-eci-090-CIELab.jp2` is within 2.
-
-These are measured maxima, not a bound. For a rough scale: each high-pass
-scaling is off by 5.4e-5 times the coefficient, high-pass coefficients range
-about as widely as the samples, and a sample collects that error once per
-decomposition level, so the gap stays roughly under 5.4e-5 × 2^depth × levels.
-That is about 18 at 16 bits with five levels, 4 at 14, 1 at 12 and under 0.1
-at 8. It is an estimate, not a hard bound. The measured gaps do not grow with
-the level count. The committed `irreversible_16bit`
-fixture reaches 5 on its full-swing component and 3 on its mid-range one, and
-is graded at a tolerance of 5.
-
-## Grading against Part 4
-
-`tests/conformance_part4.rs` decodes every entry in the vendored corpus and
-grades it at **compliance class 1**, which bounds each graded component
-independently. Per component it computes the peak absolute error (the largest
-difference from the reference sample) and the mean-squared error, and checks both
-against the bounds `manifest.json` records for that entry. The reference images
-are `.pgx` files, one per graded component; the harness reads them directly, so
-no reference decoder is needed to run the suite.
-
-Two rules keep the grading honest:
-
-- **Exactness comes from the manifest's `bit_exact` flag, not from the wavelet.**
-  A `bit_exact` entry is graded against zero bounds whatever the manifest quotes,
-  so a corpus edit cannot quietly relax it. The flag and the wavelet disagree in
-  both directions: `p0_09` is irreversible 9/7 yet reproduces its reference
-  exactly, and reversible entries can be graded lossily.
-- **An unimplemented feature is not a pass.** An entry the decoder rejects with
-  `Error::Unsupported` reports as *not yet decoded*. Any other rejection, a
-  panic, a geometry disagreement, or samples outside the class is a failure. The
-  `IN_CLASS` list names the entries that decode in class today, so a milestone
-  that turns one green — or a regression that turns one red — fails the test
-  until the list is updated.
-
-### The JP2 corpus
-
-`tests/conformance_jp2.rs` grades the nine ISO/IEC 15444-4 JP2 reader files
-(`file1.jp2` to `file9.jp2`, in `tests/fixtures/conformance/jp2/`) the same
-way, at class 1, with the same ratchet: `IN_CLASS` lists all nine. Files 1, 4,
-6 and 9 are bit-exact; the others are held to PAE 4 / MSE 1. Two more corpora
-back it, neither needing a reference decoder at test time:
-
-- the synthetic `jp2_*.jp2` files (`tests/jp2_synthetic.rs`), each graded
-  bit-exactly against `opj_decompress` on the same file, or, where OpenJPEG
-  fails, against a table lookup over its decode of the bare codestream;
-- nine real-world files from GDAL's test data (`tests/jp2_real.rs`), written
-  by Kakadu, the ECW JPEG 2000 SDK and OpenJPEG. Eight are graded against
-  `opj_decompress` references, and one has a broken codestream and is
-  refused with the codestream's own error.
-
-The box metadata is checked against box dumps written by
-`scripts/gen-jp2-box-snapshots.py`, a box walker independent of this
-decoder: `metadata.json` for the real-world files, `boxes.json` (with
-`edge_cases.json`, file 5 patched into the layouts no committed file has)
-for the Part 4 files, and the `jp2_boxes` section of each synthetic file's
-`expected.json`.
-
-**The Part 4 JP2 references are display output.** `jp2_N.tif` is what a
-viewer shows: sYCC and ICC-tagged files are already converted to sRGB, and
-files 4, 6 and 8 are grayscale written as three identical channels. Files 2,
-3, 5, 7 and 8 therefore can't be graded on the samples as coded. They are
-decoded with `ColorOutput::Srgb` and graded against the references, and
-their default decode is graded bit-exactly against `opj_decompress` output
-for the same file (`as_coded` references). Files 6 (12-bit) and 7 (16-bit) have
-8-bit references, so the harness shifts their decode right by 4 and 8 (the
-references were made with `opj_decompress -p 8S`, a plain right shift). Beyond the references,
-`opj_decompress -force-rgb` is the oracle for the conversion arithmetic
-(see "sRGB output" above).
-
-## A passing entry is not proof the feature works
-
-`IN_CLASS` growing is the goal, but it is not the same as a feature being
-implemented. A conformance entry only exercises a feature if its *other*
-parameters let that feature change the answer.
-
-The sharp case is `p0_01`. It is RLCP, and it was the only entry whose sole
-remaining blocker was the progression order — so it looked like the test for
-progression support. It is not. `p0_01` has one component, one quality layer,
-one tile, and one precinct, and under those conditions all five progression
-orders enumerate the identical packet sequence, because four of the five nested
-loops run once:
-
-```text
-LRCP  l -> r -> c -> p       PCRL  p -> c -> r -> l
-RLCP  r -> l -> c -> p       CPRL  c -> p -> r -> l
-RPCL  r -> p -> c -> l       all collapse to: r
-```
-
-Accepting the RLCP code and changing nothing else makes `p0_01` decode
-bit-exact. That is the same shape of bug as reading `SPcod`'s code-block style
-byte and discarding it: the decoder reports success on a feature it does not
-implement.
-
-`p0_11` is the same trap wearing the precinct partition's name. It was the only
-corpus entry the partition alone unblocked, so it looked like the test for it — but
-it is 128×1 with **one** resolution and a 2^7 × 2^1 precinct, which is one
-precinct. It grades that `SPcod`'s precinct bytes are *parsed* (get the count
-wrong and the marker segment misreads) and nothing beyond that. Mutating the
-partition confirms it: break the halving of the precinct onto the subband grid,
-address the tag trees by band index instead of precinct index, drop the
-code-block's cap to its precinct, or drop a tile's partial leading precinct, and
-`p0_11` still decodes bit-exact in every case. Each of those mutations is caught
-only by the synthetic `precincts_*` fixtures — and two of them by exactly one
-fixture each, `precincts_varied_sizes_lossless` and `precincts_tiled_cprl_lossless`.
-Adding `p0_11` to `IN_CLASS` is honest; treating it as the oracle for the
-partition would not be.
-
-The same reasoning cuts the other way: two features can be *indistinguishable*
-rather than untested. With one precinct per resolution, PCRL and CPRL enumerate
-the identical packet sequence — OpenJPEG's own output for the two differs in
-exactly one byte, the progression code in COD. That was the state of this crate
-until the precinct partition landed, and it is why `progression_pcrl_lossless`
-and `progression_cprl_lossless` graded one order between them, not two. The
-`precincts_*` fixtures are what separate them: with a real partition the position
-axis has more than one value, PCRL interleaves the components inside one sweep of
-the canvas and CPRL finishes a component before starting the next, and the two
-packet streams diverge. A pair of features that cannot be told apart is worth
-recording next to the code rather than mistaking one's fixture for coverage of
-both.
-
-A third shape is the nastiest, because the fixture looks like it targets the
-feature by name. One feature can *mask* another. Under `restart` the MQ decoder
-is re-initialized for every coding pass, so a decoder that ignores `segmentation
-symbols` and never reads the four decisions ending each cleanup pass still
-decodes correctly: the symbols it skipped are trailing bytes in a segment nobody
-reads again. Turn `restart` off and the same decoder desynchronizes immediately.
-So a `restart | segsym` codestream — which is exactly what `p0_02` is — grades
-`segsym`'s *verification* but not its *consumption*, and a fixture named for both
-flags is weaker than one carrying `segsym` alone. Where features compose, the
-fixture that isolates each one is the one that grades it.
-
-So before adding an entry to `IN_CLASS`, ask what about that entry would have to
-change for the new code to be wrong. If nothing would, the entry is not the
-oracle for that feature, and the milestone needs a fixture that can tell the
-difference — a multi-layer codestream to separate LRCP from RLCP, multiple
-precincts to separate RPCL from RLCP, and so on. Mutating the new code and
-watching the entry fail is the cheapest way to check; if no mutation makes it
-fail, the entry is not testing it. Run the mutation against *every* fixture, not
-just the one you expect to break: the fixtures that survive tell you which ones
-were never testing the feature.
-
-## Per-stage golden tests
-
-The vertical oracle proves the *whole* pipeline; it does not localize a fault.
-So each stage also gets isolated golden tests, which is what makes a failure
-debuggable:
-
-- **MQ decoder** — assert the decoded decisions for the standard's worked
-  example byte sequences.
-- **Tier-1 passes** — feed known code-block byte segments, assert the recovered
-  coefficient planes. The vectors are sliced from reversible (5/3),
-  single-resolution OpenJPEG codestreams, where the coefficients are just the
-  DC-level-shifted samples, so `opj_decompress` gives a bit-exact, decoder-
-  independent oracle. Block decoding has no 5/3-vs-9/7 branch, so reversible
-  vectors fully exercise it; a 0-level 9/7 codestream is lossy, so its samples
-  are not a trustworthy coefficient oracle, and the 9/7 quantization/DWT path is
-  graded instead by the end-to-end lossy fixture. Regenerate with
-  [`scripts/gen-tier1-vectors.py`](../scripts/gen-tier1-vectors.py).
-- **Tag-tree / packet parse** — assert inclusion, zero-bitplane, and length
-  decode for hand-built packet headers.
-- **Inverse DWT** — assert 5/3 integer lifting is bit-exact on known signals,
-  and 9/7 float lifting within tolerance, including the symmetric boundary
-  extension at the edges.
-
-Build the pipeline in the order these can be checked (see Phase 1 in
-[roadmap.md](roadmap.md)) so every stage has a green isolated test before the
-next is wired on top.
-
-## The fixture corpus
-
-The runtime test suite is dependency-free: we commit fixtures and their oracle
-snapshots, and the reference decoder is only needed to *(re)generate* an oracle,
-never to run the tests. For each fixture, record provenance — source file, and
-the exact command that produced its oracle — so the corpus is reproducible.
-
-Layout: a fixture `tests/fixtures/<name>.j2k` with a sibling
-`<name>.expected.json` (image area, tolerance, per-component samples, provenance).
-
-Seed it from:
-
-- the GRIB2 §5.40 fixtures already in the fieldglass repo (e.g.
-  `jpeg2000_regular_latlon.grib2`), plus a 9/7 re-encode for the irreversible
-  path — no GRIB2 producer ships lossy 9/7 (HRRR/NDFD are complex-packed, ECMWF
-  is CCSDS), so OpenJPEG's irreversible mode re-encodes a real grid;
-- the ISO/IEC 15444-4 conformance codestreams, which gated Phase 2 (all 23
-  entries now decode in class);
-- the ISO/IEC 15444-4 JP2 reader files, synthetic `.jp2` files built over the
-  codestreams above, and real `.jp2` files from GDAL's test data, which gated
-  Phase 3 (see "The JP2 corpus" above); HTJ2K codestreams for Phase 4.
-
-## Robustness (the input is untrusted)
-
-A decoder parses bytes it did not produce, so malformed input is a first-class
-case, not an edge case:
-
-- **Fuzzing** — `cargo fuzz` (libFuzzer) in the detached [`fuzz/`](../fuzz/)
-  workspace, seven targets: `decode` and `header` over the public entry
-  points, and `tile_body`, `tier1_block`, `mq`, `jp2_boxes` and `icc_srgb`
-  over the stages (run them per [`fuzz/README.md`](../fuzz/README.md)).
-  The bar: no panics, no unbounded allocation, no infinite loops; every rejected
-  input returns a typed `Error`, never crashes. A malformed SIZ cannot steer the
-  buffers into an overflowing or out-of-memory allocation: the samples of the
-  declared image — over the image area `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, on the
-  reference grid an origin may sit anywhere inside — are held to the sample
-  limit before any tile is read (see [The sample limit](#the-sample-limit)),
-  and the Table A-9 constraints on the image and tile origins are enforced
-  before any geometry reaches the DWT.
-- **Typed failures** — the flat `Error` enum names the stage that failed, so a
-  malformed header, an out-of-scope feature, and a Tier-1 decode fault are
-  distinguishable by a caller. No `unwrap`/`panic` on the decode path.
-- **The reject matrix** — `reject_matrix_maps_every_out_of_subset_input_to_its_typed_error`
-  in `src/codestream/tests.rs` enumerates every input outside the decoded subset
-  and pins the typed error a caller sees: `Codestream` for structural damage,
-  `Marker` for an illegally encoded field, `Unsupported` for valid JPEG 2000 we
-  do not decode yet, `Limit` for an input past one of the decoder's resource
-  guards. The JP2 box layer has its own matrix,
-  `reject_matrix_maps_every_malformed_box_shape_to_its_typed_error` in
-  `src/jp2/tests.rs`, where a malformed box is `FileFormat`, and the sRGB
-  output step has `srgb_reject_matrix_maps_each_input_to_its_typed_error` in
-  `src/jp2/srgb_tests.rs`. Rejecting is not
-  a formality. A feature the decoder reads
-  and then ignores does not yield a slightly wrong image, it yields an arbitrary
-  one, so anything not decoded must be refused rather than skipped. As each
-  milestone lands, its row leaves the table for the decoded set; a row that stops
-  rejecting fails the test first.
-- **No `unsafe`** on the correctness-critical path; if a measured hot path later
-  needs it, it is justified, isolated, and fuzzed.
-
-## Round-trip (once the encoder lands, Phase 5)
-
-When encoding exists, add two checks beyond the decode oracle:
-
-- **Round-trip** — encode → decode → compare against the original within the
-  path's tolerance.
-- **Cross-decode** — our encoder's output read back by OpenJPEG, and OpenJPEG's
-  output read by us. Interoperating with the reference implementation in both
-  directions is the real proof of encoder conformance.
-
-## What "done" means
-
-A stage is done when its isolated golden tests pass **and** it advances the
-vertical oracle/conformance gate for its phase, with the quality gates
-(`cargo fmt`, `clippy -D warnings`, `cargo test`, `cargo deny check`) green. Not
-before. "It looks right" is not a gate.
