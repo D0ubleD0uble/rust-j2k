@@ -189,22 +189,18 @@ const TARGET_HASH: u64 = 9521446311063571855;
 /// Hash of this file's copy and its use (`const SIGNATURE` up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.
-const TEST_HASH: u64 = 15999698394016582647;
+const TEST_HASH: u64 = 4025219996760628514;
 
 fn target_hash() -> u64 {
     let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");
     let start = target.find("const ONE_COMPONENT:").expect("target consts");
-    assert!(
-        start < target.len(),
-        "the target's pinned codestreams moved"
-    );
     fnv(&target[start..])
 }
 
 fn test_hash() -> u64 {
     let this = include_str!("fuzz_seed_outcomes.rs");
     let start = this.find("const SIGNATURE").expect("the copy");
-    let end = this.find("#[test]").expect("the test");
+    let end = this.find("\n#[test]\n").expect("the test");
     assert!(start < end, "the copy must come before the test");
     let region: String = this[start..end]
         .lines()

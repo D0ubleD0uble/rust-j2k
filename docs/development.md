@@ -10,7 +10,7 @@ conformance references), and CI installs none of the reference decoders
 (OpenJPEG, LittleCMS, eccodes). They are needed only to regenerate a snapshot.
 See [correctness.md](correctness.md) for how the corpus is graded. One test,
 `tests/fuzz_seed_outcomes.rs`, runs `scripts/gen-jp2-fuzz-seeds.py`; without
-`python3` on `PATH` it passes without checking anything. CI runs it with Python.
+`python3` on `PATH` it passes without checking the seeds. CI runs it with Python.
 
 ## Before you start
 
