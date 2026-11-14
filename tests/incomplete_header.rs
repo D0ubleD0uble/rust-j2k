@@ -64,13 +64,15 @@ fn walk(cs: &[u8]) -> Option<(usize, Option<usize>)> {
                 if length < 2 {
                     return None;
                 }
-                let body = cs.get(at + 4..at + 2 + length)?;
+                // A body past the input or too short for its field holds no
+                // style; the walk goes on, as it did before it read styles.
+                let body = cs.get(at + 4..at + 2 + length).unwrap_or(&[]);
                 // The style byte: after `Scod`, `SGcod` and three `SPcod`
                 // bytes in COD; after the component index, `Scoc` and three
                 // bytes in COC (A.6.1, A.6.2).
                 let style = match code {
                     0xFF51 => {
-                        csiz = u16_at(body, 34)?;
+                        csiz = u16_at(body, 34).unwrap_or(0);
                         None
                     }
                     0xFF52 => body.get(8),

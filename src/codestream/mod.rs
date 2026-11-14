@@ -57,8 +57,8 @@ pub struct MainHeader {
     pub crg: Vec<(u16, u16)>,
     /// The `Ccap15` word of a `CAP` marker that signals Part 15 (HTJ2K);
     /// `None` when the codestream carries no `CAP`, or one that signals no
-    /// Part 15 capability. It is checked, not obeyed: each component's
-    /// code-block style says which block coder it uses.
+    /// Part 15 capability. It is read for MULTIHT, which is refused, and does
+    /// not decide the block coder: each component's code-block style does.
     pub ccap15: Option<Ccap15>,
     /// The `CPF` marker, when the codestream carries one (ISO/IEC 15444-15
     /// A.6). Informational.
@@ -1725,8 +1725,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // its segment — that is what lets the header be traversed at all —
             // but we will not decode past it: every marker code is allocated by
             // some part of the standard, and an unknown one may well change what
-            // the packet data means (later extensions). Guessing that it is ignorable would trade a clean
-            // rejection for a silently wrong image.
+            // the packet data means. Guessing that it is ignorable would trade
+            // a clean rejection for a silently wrong image.
             other => {
                 return Err(Error::Unsupported(format!(
                     "unrecognized marker {other:#06X} in the main header"

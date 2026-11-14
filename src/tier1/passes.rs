@@ -1109,8 +1109,9 @@ enum PassCoder<'a> {
 /// the codeword runs unbroken.
 ///
 /// Every Part 1 style flag reaches here; an HT-only style does not, since this
-/// is the Part 1 block decoder. Most act at the segment split or the context, which Tier-2 and
-/// [`BlockState`] have already applied, so the pass cycle below is unchanged.
+/// is the Part 1 block decoder. Most act at the segment split or the context,
+/// which Tier-2 and [`BlockState`] have already applied, so the pass cycle
+/// below is unchanged.
 /// Two reach into the passes themselves: `segmentation symbols` appends four
 /// decisions to every cleanup pass, and `bypass` (lazy) switches the
 /// significance and refinement passes of the low bit-planes from MQ-coded to raw
