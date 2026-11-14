@@ -36,6 +36,12 @@ conformance corpus is excluded from it. The script writes `part4.sha256` instead
 SHA-256 of the `opj_decompress -l N -r R` samples, every component in order,
 each sample as a little-endian i32.
 
+`damaged.sha256` holds the same kind of hash for the fixtures in DAMAGED, each
+with one byte flipped (xor 0x10) and decoded at a cap. The flip lands in a
+segment the cap leaves whole and is still decoded within its bytes, so
+OpenJPEG decodes it without a warning, and the segment the cap cuts must not
+be held to `predictable termination`.
+
 Usage: python3 scripts/gen-layer-fixtures.py
 Requires OpenJPEG 2.5.0 `opj_compress` and `opj_decompress` on PATH.
 """
@@ -92,6 +98,11 @@ PART4 = {
     "p0_10": (2, [0]),  # LRCP, three components, two tiles
     "p0_16": (3, [0]),  # RLCP
     "p1_01": (5, [0]),  # LRCP, restart + pterm + segsym, precincts
+}
+
+# Layer fixture -> [(byte offset flipped by xor 0x10, layer count)]
+DAMAGED = {
+    "bypass_pterm": [(403, 2)],
 }
 
 
@@ -231,6 +242,19 @@ def main() -> None:
                     lines.append(f"{name} {n} {reduction} {hashlib.sha256(got).hexdigest()}")
     (DIR / "part4.sha256").write_text("\n".join(lines) + "\n")
     print(f"part4.sha256: {len(lines)} oracles")
+
+    lines = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, flips in DAMAGED.items():
+            for offset, n in flips:
+                bad = bytearray((DIR / f"{name}.j2k").read_bytes())
+                bad[offset] ^= 0x10
+                path = Path(tmp) / "bad.j2k"
+                path.write_bytes(bad)
+                got = samples_of(decode(path, Path(tmp) / "out", n, 0))
+                lines.append(f"{name} {offset} {n} {hashlib.sha256(got).hexdigest()}")
+    (DIR / "damaged.sha256").write_text("\n".join(lines) + "\n")
+    print(f"damaged.sha256: {len(lines)} oracles")
 
 
 if __name__ == "__main__":

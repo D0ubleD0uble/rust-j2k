@@ -313,6 +313,47 @@ fn a_damaged_whole_segment_before_a_cut_is_still_an_error() {
     }
 }
 
+/// A cap cuts the last kept segment of a block short, and only that one is
+/// exempt from `predictable termination`. Here the flip damages a whole
+/// segment that still decodes within its bytes, so the decode is sound and
+/// matches OpenJPEG's, while the cut segment after it would fail the check.
+#[test]
+fn a_cut_segment_is_exempt_beside_a_damaged_whole_one() {
+    let oracles = String::from_utf8(layers_file("damaged.sha256")).unwrap();
+    let mut graded = 0;
+    for line in oracles.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [name, offset, n, hash] = fields[..] else {
+            panic!("bad line {line:?}");
+        };
+        let mut bad = layers_file(&format!("{name}.j2k"));
+        let (offset, n): (usize, u16) = (offset.parse().unwrap(), n.parse().unwrap());
+        bad[offset] ^= 0x10;
+        let image = decode_ok(&bad, &capped(n, 0), line);
+        assert_eq!(sha256_hex(&sample_bytes(&image)), hash, "{line}");
+        graded += 1;
+    }
+    assert_eq!(graded, 1, "the oracle count changed");
+}
+
+/// A block no cap cuts keeps the check on its last segment: `pterm_cut.j2k`
+/// with byte 84 flipped leaves its one segment with bytes unconsumed, which is
+/// refused whether no cap or a cap at the layer count is set. OpenJPEG only
+/// warns.
+#[test]
+fn an_uncut_last_segment_is_still_checked() {
+    let mut bad = layers_file("pterm_cut.j2k");
+    bad[84] ^= 0x10;
+    for options in [DecodeOptions::default(), capped(2, 0)] {
+        match decode_with(&bad, &options) {
+            Err(Error::Codestream(message)) => {
+                assert!(message.contains("predictable termination"), "{message}");
+            }
+            other => panic!("{options:?}: {other:?}"),
+        }
+    }
+}
+
 /// Where the single tile-part's `Psot` sits.
 fn sot_psot_offset(bytes: &[u8]) -> usize {
     let sot = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();

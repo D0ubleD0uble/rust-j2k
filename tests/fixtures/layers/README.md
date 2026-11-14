@@ -50,6 +50,7 @@ the whole codestream. The 5/3 ones are exact.
 | `rpcl_l2_r2_0.pgx` | `-l 2 -r 2` |
 | `cprl_irreversible_l1_r1_<c>.pgx` | `-l 1 -r 1` |
 | `part4.sha256` | for ISO/IEC 15444-4 `p0_02`, `p0_03` (also at `-r 1`), `p0_10`, `p0_16` and `p1_01`, each N from 1 to the layer count: the SHA-256 of the `opj_decompress -l N -r R` samples, every component in order, each sample a little-endian `i32` |
+| `damaged.sha256` | the same hash of `opj_decompress -l 2` on `bypass_pterm.j2k` with byte 403 xor 0x10, a flip in a segment the cap keeps whole; OpenJPEG decodes it without a warning |
 
 The Part 4 oracles are hashes because `layers/` ships in the crate and the
 conformance corpus does not: its license is for conformance testing only, so
