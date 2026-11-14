@@ -20,7 +20,7 @@
 //! so a precinct's tag trees and per-block state outlive any one packet. See
 //! [`for_each_packet`] for the orders and [`BlockState`] for what persists.
 //!
-//! `decode_packets` also computes the resolution / subband / code-block geometry
+//! `decode_packets_metered` also computes the resolution / subband / code-block geometry
 //! from the [`MainHeader`], so it is the single
 //! source of truth the assembly stage reuses.
 
@@ -164,6 +164,7 @@ pub(crate) fn decode_packets_metered<'a>(
     poc_bitmap: u64,
     reduction: u8,
 ) -> std::result::Result<CodedData<'a>, Refused> {
+    meter.clear_refusal();
     let mut budget = Budget {
         reduction,
         ..Budget::decode(meter.left(), poc_bitmap)
@@ -242,8 +243,9 @@ pub(crate) fn decode_visits(bytes: u64) -> u64 {
     DECODE_VISITS_MIN.max(bytes.saturating_mul(DECODE_VISITS_PER_BYTE))
 }
 
-/// What one walk of a tile's packets may spend. Each field is spent as the
-/// walk goes, and running out of any of them fails it with [`Error::Limit`]
+/// What one walk of a tile's packets may hold: the geometry guards, the
+/// POC packet storage and the reduction. The visits it spends are the
+/// [`Meter`]'s. Running out of a guard fails the walk with [`Error::Limit`]
 /// before the work or the allocation is done.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Budget {
@@ -277,8 +279,9 @@ pub(crate) struct Budget {
 }
 
 impl Budget {
-    /// The decode's budget for one tile: the geometry guards, and a POC bitmap of no more
-    /// bits than the visits left or `poc_bitmap`, then a set. A walk that
+    /// The decode's budget for one tile: the geometry guards, and a POC
+    /// bitmap of no more bits than `visits`, the visits left on the decode's
+    /// [`Meter`], or `poc_bitmap`, then a set. A walk that
     /// reads every packet takes a visit for each, so a bitmap of more bits
     /// than the visits left would be wasted. `poc_bitmap` is the decode's
     /// default bound, so a raised bound does not raise the bitmap's memory.
@@ -320,7 +323,7 @@ impl Reach {
     }
 }
 
-/// [`decode_packets`] with `strict` off: the tile's data may end anywhere,
+/// [`decode_packets_metered`] with `strict` off: the tile's data may end anywhere,
 /// and what was not read comes back as a [`Reach`] beside the coded data
 /// (see [`walk_packets`]).
 pub fn decode_packets_partial<'a>(
@@ -330,6 +333,7 @@ pub fn decode_packets_partial<'a>(
     poc_bitmap: u64,
     reduction: u8,
 ) -> std::result::Result<(CodedData<'a>, Reach), Refused> {
+    meter.clear_refusal();
     let mut budget = Budget {
         reduction,
         ..Budget::decode(meter.left(), poc_bitmap)
@@ -357,7 +361,7 @@ pub(crate) fn decode_packets_within<'a>(
 /// Not strict, the walk reads packets until the data ends (see
 /// [`parse_packet`]), then goes on through the rest of the progression
 /// without reading, to note each packet not read in `reach`. That costs a
-/// visit a packet, from the same budget, and the end of the data costs
+/// visit a packet, from the same meter, and the end of the data costs
 /// [`END_VISITS`] for each resolution of each component, for the setup no
 /// byte paid for. Packets the `POC` volumes leave out are noted the same way
 /// rather than refused, and bytes left after the last packet are noted
@@ -698,7 +702,7 @@ impl WorkRefusal {
     }
 }
 
-/// How [`decode_packets`] fails: for work, with the typed reason, or for
+/// How [`decode_packets_metered`] fails: for work, with the typed reason, or for
 /// anything else, as the [`Error`] it is.
 #[derive(Debug)]
 pub(crate) enum Refused {
@@ -762,6 +766,12 @@ impl Meter {
     /// Why the walk was refused for work, once it is.
     fn refusal(&self) -> Option<WorkRefusal> {
         self.refusal.get()
+    }
+
+    /// Forget a refusal an earlier walk recorded, so that it cannot label
+    /// this walk's other limit errors as work.
+    fn clear_refusal(&self) {
+        self.refusal.set(None);
     }
 
     /// Spend `n` visits, or leave the count as it is and say whether they
@@ -831,7 +841,7 @@ fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
 /// corpus agrees — every single-tile entry that carries SOP numbers its packets
 /// sequentially from zero, every multi-tile one restarts.
 ///
-/// The counter therefore lives in [`decode_packets`], which runs once per tile
+/// The counter therefore lives in [`decode_packets_metered`], which runs once per tile
 /// over that tile's tile-parts joined end to end: it starts at zero for each
 /// tile and does not restart at a tile-part boundary.
 ///

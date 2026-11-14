@@ -2317,3 +2317,27 @@ fn non_lazy_segment_max_passes_is_unchanged() {
     assert_eq!(segment_max_passes(TERMALL, &[]), 1);
     assert_eq!(segment_max_passes(0, &[]), 109);
 }
+
+/// A refusal an earlier walk recorded on the meter does not label a later
+/// walk's other limit error as work: a tile past the code-block cap is the
+/// geometry's `Limit`, not `Refused::Work`, however the meter was left.
+#[test]
+fn a_stale_refusal_does_not_relabel_a_geometry_limit() {
+    let h = header(4096, 4096, 1, 2);
+    let t = tile(&[]);
+    let stale = || {
+        let meter = super::Meter::new(u64::MAX);
+        let _ = meter.refuse(super::WorkRefusal::PacketWalk);
+        meter
+    };
+    let strict = super::decode_packets_metered(&h, &t, &stale(), u64::MAX, 0);
+    assert!(
+        matches!(strict, Err(super::Refused::Other(crate::Error::Limit(_)))),
+        "{strict:?}"
+    );
+    let partial = super::decode_packets_partial(&h, &t, &stale(), u64::MAX, 0);
+    assert!(
+        matches!(partial, Err(super::Refused::Other(crate::Error::Limit(_)))),
+        "{partial:?}"
+    );
+}
