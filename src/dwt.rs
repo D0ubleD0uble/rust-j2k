@@ -1116,7 +1116,7 @@ mod tests {
     use super::{Samples, inverse};
     use crate::codestream::MainHeader;
     use crate::codestream::markers::{
-        Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
+        Cod, Coding, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
     };
     use crate::pipeline::SubbandCoeffs;
 
@@ -1144,15 +1144,17 @@ mod tests {
             Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
-                decomposition_levels: levels,
-                code_block_width: 4,
-                code_block_height: 4,
-                code_block_style: 0,
                 use_sop: false,
                 use_eph: false,
                 multiple_component_transform: false,
-                transform,
-                precinct_sizes: Vec::new(),
+                coding: Coding {
+                    decomposition_levels: levels,
+                    code_block_width: 4,
+                    code_block_height: 4,
+                    code_block_style: 0,
+                    transform,
+                    precinct_sizes: Vec::new(),
+                },
             },
             Qcd {
                 style: QuantStyle::None,
