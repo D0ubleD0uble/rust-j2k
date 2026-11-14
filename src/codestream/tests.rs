@@ -4271,7 +4271,9 @@ fn a_cap_signaling_another_part_is_unsupported_naming_it() {
             panic!("{pcap:#010X}: got {e:?}")
         };
         assert!(
-            message.contains(&format!("`Pcap` bit {bit}, which names no part")),
+            message.contains(&format!(
+                "`Pcap` bit {bit}, counted from the MSB, which names no part"
+            )),
             "{message}"
         );
     }

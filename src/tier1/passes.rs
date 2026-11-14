@@ -1110,10 +1110,10 @@ enum PassCoder<'a> {
 ///
 /// Every Part 1 style flag reaches here; the HTJ2K bits do not. Most act at
 /// the segment split or the context, which Tier-2 and [`BlockState`] have
-/// already applied, so the pass cycle below is unchanged. Two reach into the passes themselves: `segmentation symbols` appends four
-/// decisions to every cleanup pass, and `bypass` (lazy) switches the
-/// significance and refinement passes of the low bit-planes from MQ-coded to raw
-/// (D.6) — see the per-segment coder choice below.
+/// already applied, so the pass cycle below is unchanged. Two reach into the
+/// passes themselves: `segmentation symbols` appends four decisions to every
+/// cleanup pass, and `bypass` (lazy) switches the significance and refinement
+/// passes of the low bit-planes from MQ-coded to raw (D.6) — see the per-segment coder choice below.
 pub fn decode_block(
     segments: &[(Vec<u8>, u32)],
     state: &mut BlockState,

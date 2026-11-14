@@ -611,9 +611,10 @@ OpenJPEG reads no field of `CAP` or `CPF` (`opj_j2k_read_cap` and
 `opj_j2k_read_cpf` in `j2k.c` are empty). This decoder reads both. It refuses
 a `CAP` whose length disagrees with its `Pcap` bits, and a `CPF` that is not
 whole 16-bit words, as `Marker`, and a second `CAP` or `CPF` (ISO/IEC 15444-15
-A.6 allows one `CPF`) as `Codestream`, as it does a second `SIZ`. It refuses a `CAP` that signals a part other than Part 15,
-or more than one HT set per code-block (MULTIHT), as `Unsupported`, since
-either can change how the code-blocks read. Both decoders refuse either marker
+A.6 allows one `CPF`) as `Codestream`, as it does a second `SIZ`. It refuses
+a `CAP` that signals a part other than Part 15, or more than one HT set per
+code-block (MULTIHT), as `Unsupported`, since either can change how the
+code-blocks read. Both decoders refuse either marker
 in a tile-part header; this one as `Codestream`, as for a misplaced `TLM`.
 
 Both decoders take the block coder from the code-block style alone. T.814

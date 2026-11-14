@@ -2426,8 +2426,8 @@ fn decode_cap(mut b: Cursor<'_>) -> Result<Option<Ccap15>> {
             format!("`CAP` signals capabilities of ISO/IEC 15444-{bit}, outside the decoded subset")
         } else {
             format!(
-                "`CAP` sets `Pcap` bit {bit}, which names no part of ISO/IEC 15444 with \
-                 capabilities this decoder knows"
+                "`CAP` sets `Pcap` bit {bit}, counted from the MSB, which names no part \
+                 of ISO/IEC 15444 with capabilities this decoder knows"
             )
         };
         return Err(Error::Unsupported(message));
