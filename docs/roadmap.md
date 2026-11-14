@@ -38,9 +38,12 @@ Tier-1 block coder for a faster one, so the work is in two places:
 - the FBCOT block decoder (MEL, VLC and MagSgn) as a second Tier-1, with the
   rest of the pipeline shared with Part 1.
 
-The gate is a decode that matches OpenJPEG 2.5.0, the version every oracle in
-this repository is pinned to, on an HTJ2K conformance corpus, chosen when
-the phase starts.
+The gate is every ISO/IEC 15444-4 HT codestream and JPH file within its ISO
+bounds, MIXED code-blocks included, plus bit-exact agreement with OpenJPEG
+2.5.0 wherever OpenJPEG decodes the file. OpenJPEG decodes only part of the
+HT set; where it and the standard disagree, the standard wins. The phase ships
+as 0.5.0. The [plan](roadmap-phase4.md) breaks it into steps, each with its
+oracle.
 
 ## Phase 5: Part 1 encoder
 
