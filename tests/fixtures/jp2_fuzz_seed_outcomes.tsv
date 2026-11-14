@@ -1,0 +1,161 @@
+# seed<TAB>sRGB outcome (tests/fuzz_seed_outcomes.rs)
+ci_crash_gray_icc	ok Srgb 3
+enum_cmyk_one	ok Enumerated(12) 1
+enum_cmyk_three	Unsupported: sRGB output from the enumerated color space 12; only sRGB, grayscale, sYCC and restricted ICC profiles are converted
+file1_jp2h	ok Srgb 3
+file1_prefix	ok Srgb 3
+file2_jp2h	ok Srgb 3
+file2_prefix	ok Srgb 3
+file3_jp2h	ok Srgb 3
+file3_prefix	ok Srgb 3
+file4_jp2h	ok Grayscale 1
+file4_prefix	ok Grayscale 1
+file5_jp2h	ok Srgb 3
+file5_prefix	ok Srgb 3
+file6_jp2h	ok Grayscale 1
+file6_prefix	ok Grayscale 1
+file7_jp2h	ok Srgb 3
+file7_prefix	ok Srgb 3
+file8_jp2h	ok Grayscale 1
+file8_prefix	ok Grayscale 1
+file9_jp2h	ok Srgb 3
+file9_prefix	ok Srgb 3
+gray_422_as_sycc	Unsupported: sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC
+icc_101_tags	ok Icc 3
+icc_abstract_lut	Unsupported: sRGB output through an ICC profile with a `A2B0` lookup table; only the monochrome and three-component matrix/TRC input profiles of Annex I are applied
+icc_bad_class	ok Icc 3
+icc_cmyk_422	Unsupported: sRGB output from color channels of different sub-sampling (1x1 and 2x1)
+icc_cmyk_space	ok Icc 3
+icc_curve_monaco	ok Srgb 3
+icc_curve_short	ok Icc 3
+icc_curve_too_long	ok Icc 3
+icc_curve_unknown_type	ok Icc 3
+icc_duplicate_tag	ok Icc 3
+icc_gray_16bit	Unsupported: sRGB output through a monochrome ICC profile from 16-bit unsigned samples
+icc_gray_gamma	ok Grayscale 1
+icc_gray_identity	ok Grayscale 1
+icc_gray_lut_mft2	Unsupported: sRGB output through an ICC profile with a `A2B0` lookup table; only the monochrome and three-component matrix/TRC input profiles of Annex I are applied
+icc_gray_no_color	Unsupported: sRGB output from a monochrome ICC profile needs one color channel; the file has 0
+icc_gray_palette_opacity	ok Srgb 4
+icc_gray_para0	ok Grayscale 1
+icc_gray_para1	ok Grayscale 1
+icc_gray_para2	ok Grayscale 1
+icc_gray_para3	ok Grayscale 1
+icc_gray_para4	ok Grayscale 1
+icc_gray_table	ok Grayscale 1
+icc_gray_three	Unsupported: sRGB output from a monochrome ICC profile on 3 channels; only one channel, or one plus opacity, is converted
+icc_gray_tinted	ok Srgb 3
+icc_gray_tinted_reduced	ok Srgb 3
+icc_intent_12	ok Srgb 3
+icc_intent_3	ok Srgb 3
+icc_intent_3_display_v2	ok Srgb 3
+icc_intent_5	ok Icc 3
+icc_link_no_lut	ok Icc 3
+icc_lut_grid_1	ok Icc 3
+icc_lut_mAB	Unsupported: sRGB output through an ICC profile with a `A2B0` lookup table; only the monochrome and three-component matrix/TRC input profiles of Annex I are applied
+icc_lut_mft1	Unsupported: sRGB output through an ICC profile with a `A2B0` lookup table; only the monochrome and three-component matrix/TRC input profiles of Annex I are applied
+icc_lut_mft2	Unsupported: sRGB output through an ICC profile with a `A2B0` lookup table; only the monochrome and three-component matrix/TRC input profiles of Annex I are applied
+icc_lut_mpet	Unsupported: sRGB output through an ICC profile with a `D2B0` lookup table; only the monochrome and three-component matrix/TRC input profiles of Annex I are applied
+icc_lut_short	ok Icc 3
+icc_lut_wrong_inputs	ok Icc 3
+icc_missing_tag	ok Icc 3
+icc_named_color	ok Icc 3
+icc_no_acsp	ok Icc 3
+icc_para_5	ok Icc 3
+icc_para_short	ok Icc 3
+icc_pcs_lab	Unsupported: sRGB output through an ICC profile with the `Lab ` connection space; only the monochrome and three-component matrix/TRC input profiles of Annex I are applied
+icc_pcs_unknown	ok Icc 3
+icc_refused_420	Unsupported: sRGB output from color channels of different sub-sampling (1x1 and 2x2)
+icc_rgb_12bit	Unsupported: sRGB output through a RGB ICC profile from 12-bit unsigned samples
+icc_rgb_16bit	ok Srgb 4
+icc_rgb_16bit_reduced	ok Srgb 4
+icc_rgb_first_four_differ	ok Icc 3
+icc_rgb_gamma	ok Srgb 3
+icc_rgb_identity	ok Srgb 3
+icc_rgb_mixed	Unsupported: sRGB output from color channels of different sub-sampling (1x1 and 2x2)
+icc_rgb_one	ok Icc 1
+icc_rgb_para0	ok Srgb 3
+icc_rgb_para1	ok Srgb 3
+icc_rgb_para2	ok Srgb 3
+icc_rgb_para3	ok Srgb 3
+icc_rgb_para4	ok Srgb 3
+icc_rgb_reduced	ok Srgb 3
+icc_rgb_signed	Unsupported: sRGB output through a RGB ICC profile from 8-bit signed samples
+icc_rgb_subsampled	ok Srgb 3
+icc_rgb_table	ok Srgb 3
+icc_rgb_two_colors	Unsupported: sRGB output from an RGB ICC profile needs color channels 1, 2 and 3; the file has 2
+icc_rgb_uniform_after_afl	Unsupported: sRGB output from color channels of different formats (8-bit unsigned and 4-bit unsigned)
+icc_short	ok Icc 3
+icc_table_past_end	ok Icc 3
+icc_tag_past_end	ok Icc 3
+icc_tag_under_8	ok Icc 3
+icc_version_6	ok Icc 3
+icc_xyz_corbis	ok Srgb 3
+icc_xyz_not_xyz	ok Icc 3
+icc_ycbr_one	ok Icc 1
+icc_ycbr_three	Unsupported: sRGB output through an ICC profile for the `YCbr` color space; only the monochrome and three-component matrix/TRC input profiles of Annex I are applied
+icc_zero_class	ok Srgb 3
+ipr_uinf_after	ok Grayscale 1
+ipr_uinf_before	ok Grayscale 1
+jp2_cdef_alpha_first_jp2h	ok Srgb 4
+jp2_cdef_alpha_first_prefix	ok Srgb 4
+jp2_cdef_palette_jp2h	ok Srgb 3
+jp2_cdef_palette_prefix	ok Srgb 3
+jp2_cdef_reversed_jp2h	ok Srgb 3
+jp2_cdef_reversed_prefix	ok Srgb 3
+jp2_cdef_rgba_jp2h	ok Srgb 4
+jp2_cdef_rgba_prefix	ok Srgb 4
+jp2_cdef_unspecified_jp2h	ok Srgb 3
+jp2_cdef_unspecified_prefix	ok Srgb 3
+jp2_metadata_boxes_jp2h	ok Srgb 4
+jp2_metadata_boxes_prefix	ok Srgb 4
+jp2_palette_12bit_jp2h	ok Srgb 3
+jp2_palette_12bit_prefix	ok Srgb 3
+jp2_palette_8bit_jp2h	ok Srgb 3
+jp2_palette_8bit_prefix	ok Srgb 3
+jp2_palette_clamp_jp2h	ok Srgb 3
+jp2_palette_clamp_prefix	ok Srgb 3
+jp2_palette_corrected_jp2h	ok Srgb 3
+jp2_palette_corrected_prefix	ok Srgb 3
+jp2_palette_mixed_jp2h	ok Srgb 3
+jp2_palette_mixed_prefix	ok Srgb 3
+jp2_palette_subsampled_big_first_jp2h	ok Srgb 2
+jp2_palette_subsampled_big_first_prefix	ok Srgb 2
+jp2_palette_subsampled_small_first_jp2h	ok Srgb 2
+jp2_palette_subsampled_small_first_prefix	ok Srgb 2
+jp2_signed16_jp2h	ok Grayscale 1
+jp2_signed16_prefix	ok Grayscale 1
+jp2_sycc_420_even_jp2h	ok Srgb 3
+jp2_sycc_420_even_prefix	ok Srgb 3
+jp2_sycc_420_odd_jp2h	ok Srgb 3
+jp2_sycc_420_odd_prefix	ok Srgb 3
+jp2_sycc_422_even_jp2h	ok Srgb 3
+jp2_sycc_422_even_prefix	ok Srgb 3
+jp2_sycc_422_odd_jp2h	ok Srgb 3
+jp2_sycc_422_odd_prefix	ok Srgb 3
+minimal_jp2c_form0	ok Unknown 1
+minimal_jp2c_form1	ok Unknown 1
+minimal_jp2c_form2	ok Unknown 1
+minimal_jp2c_form3	ok Unknown 1
+no_colr_three	Unsupported: sRGB output from a file with no color specification
+pclr_no_cmap_twice	ok Grayscale 1
+srgb_420_as_sycc	Unsupported: sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC
+srgb_420_color1_cdef	Unsupported: sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC
+srgb_420_even_as_sycc	Unsupported: sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC
+srgb_mixed_depth	Unsupported: sRGB output from color channels of different formats (8-bit unsigned and 4-bit unsigned)
+srgb_mixed_sampling	Unsupported: sRGB output from color channels of different sub-sampling (1x1 and 2x2)
+srgb_rgba_16bit	ok Srgb 4
+sycc_420	ok Srgb 3
+sycc_420_even	ok Srgb 3
+sycc_420_even_reduced	ok Srgb 3
+sycc_420_reduced	ok Srgb 3
+sycc_422	ok Srgb 3
+sycc_422_reduced	ok Srgb 3
+sycc_444	ok Srgb 3
+sycc_mixed_depth	Unsupported: sRGB output from color channels of different formats (8-bit unsigned and 4-bit unsigned)
+sycc_one_channel	ok Sycc 1
+sycc_rgba_16bit	ok Srgb 4
+sycc_signed	Unsupported: sRGB output from signed sYCC samples
+sycc_subsampled_all	Unsupported: sRGB output from sYCC sampled 2x2, 2x2, 2x2; only luma at full resolution with chroma at 1x1, 2x1 or 2x2 is converted
+sycc_two_colors	Unsupported: sRGB output from sYCC needs color channels 1, 2 and 3; the file has 2
+uinf_unterminated	ok Grayscale 1
