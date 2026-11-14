@@ -535,11 +535,11 @@ impl Siz {
 /// The coding parameters that a component can override: `SPcod`'s tail, which
 /// `SPcoc` repeats verbatim (A.6.1, A.6.2). OpenJPEG's `opj_tccp_t`.
 ///
-/// `COD` supplies the default for every component and `COC` replaces it for one,
-/// so these fields live here rather than on [`Cod`] — the fields that stay on
-/// `Cod` are the ones no `COC` can touch (progression, layer count, the color
-/// transform, and the SOP/EPH flags, all of which are properties of the
-/// codestream rather than of a component).
+/// `COD` supplies the default for every component (its [`coding`](Cod::coding))
+/// and `COC` replaces it for one. The fields on `Cod` itself are the ones no
+/// `COC` can touch (progression, layer count, the color transform, and the
+/// SOP/EPH flags, all of which are properties of the codestream rather than of
+/// a component).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Coding {
     pub decomposition_levels: u8,
@@ -587,16 +587,12 @@ pub struct ComponentParams {
     pub roi_shift: u8,
 }
 
-/// COD — coding style default (ISO A.6.1): the parameters Tier-2 and the DWT
-/// need (decomposition levels, code-block size + style, transform, precincts).
+/// COD — coding style default (ISO A.6.1): the codestream-wide fields, and the
+/// [`Coding`] every component takes unless a COC replaces it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cod {
     pub progression: Progression,
     pub layers: u16,
-    pub decomposition_levels: u8,
-    pub code_block_width: u8,  // exponent: width  = 2^(value + 2)
-    pub code_block_height: u8, // exponent: height = 2^(value + 2)
-    pub code_block_style: u8,  // bit flags: bypass, reset, restart, vcausal, segsym, …
     /// `Scod` bit 1: SOP marker segments *may* precede each packet. The standard
     /// makes them optional even when the bit is set (A.8.1), so a decoder must
     /// tolerate their absence rather than demand them.
@@ -606,12 +602,11 @@ pub struct Cod {
     pub use_eph: bool,
     /// `SGcod` multiple-component transform: whether the first three components
     /// were decorrelated before the wavelet. *Which* transform follows from
-    /// [`transform`](Self::transform) -- 5/3 means RCT, 9/7 means ICT -- not
-    /// from a flag of its own.
+    /// the wavelet in [`coding`](Self::coding) -- 5/3 means RCT, 9/7 means ICT --
+    /// not from a flag of its own.
     pub multiple_component_transform: bool,
-    pub transform: Transform,
-    /// Per-level precinct sizes when explicit; empty = maximal (PPx=PPy=15).
-    pub precinct_sizes: Vec<(u8, u8)>,
+    /// `SPcod`'s tail: the coding parameters a COC can override per component.
+    pub coding: Coding,
 }
 
 /// QCD — quantization default (ISO A.6.4): the step sizes / exponents the
@@ -622,21 +617,6 @@ pub struct Qcd {
     pub guard_bits: u8,
     /// (exponent, mantissa) per subband; mantissa is 0 for the reversible style.
     pub steps: Vec<(u8, u16)>,
-}
-
-impl Cod {
-    /// COD's coding parameters, which every component takes unless a COC
-    /// replaces them.
-    pub fn coding(&self) -> Coding {
-        Coding {
-            decomposition_levels: self.decomposition_levels,
-            code_block_width: self.code_block_width,
-            code_block_height: self.code_block_height,
-            code_block_style: self.code_block_style,
-            transform: self.transform,
-            precinct_sizes: self.precinct_sizes.clone(),
-        }
-    }
 }
 
 impl Qcd {

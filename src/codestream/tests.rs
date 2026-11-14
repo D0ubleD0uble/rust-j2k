@@ -134,15 +134,17 @@ fn valid_reversible_header_parses() {
             Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
-                decomposition_levels: 5,
-                code_block_width: 4,
-                code_block_height: 4,
-                code_block_style: 0,
                 use_sop: false,
                 use_eph: false,
                 multiple_component_transform: false,
-                transform: Transform::Reversible53,
-                precinct_sizes: vec![],
+                coding: Coding {
+                    decomposition_levels: 5,
+                    code_block_width: 4,
+                    code_block_height: 4,
+                    code_block_style: 0,
+                    transform: Transform::Reversible53,
+                    precinct_sizes: vec![],
+                },
             },
             Qcd {
                 style: QuantStyle::None,
@@ -169,7 +171,7 @@ fn valid_irreversible_header_parses() {
 
     assert_eq!(header.siz.components[0].bit_depth, 12);
     assert!(header.siz.components[0].signed);
-    assert_eq!(header.cod.transform, Transform::Irreversible97);
+    assert_eq!(header.cod.coding.transform, Transform::Irreversible97);
     assert_eq!(header.qcd.style, QuantStyle::ScalarExpounded);
     assert_eq!(header.qcd.guard_bits, 1);
     assert_eq!(header.qcd.steps, vec![(10, 1234); 16]);
@@ -524,7 +526,7 @@ fn explicit_precinct_sizes_parse_from_spcod() {
     let bytes = with_precincts(&[0x10, 0x56, 0x77]);
     let cs = parse(&bytes).expect("explicit precincts parse");
     assert_eq!(
-        cs.header.cod.precinct_sizes,
+        cs.header.cod.coding.precinct_sizes,
         vec![(0, 1), (6, 5), (7, 7)],
         "PPx is the low nibble, PPy the high one"
     );
@@ -546,7 +548,7 @@ fn an_implicit_precinct_partition_is_maximal() {
         true,
     );
     let cs = parse(&bytes).expect("implicit precincts parse");
-    assert!(cs.header.cod.precinct_sizes.is_empty());
+    assert!(cs.header.cod.coding.precinct_sizes.is_empty());
     assert_eq!(cs.header.components[0].coding.precinct(0), (15, 15));
     assert_eq!(cs.header.components[0].coding.precinct(5), (15, 15));
 }
@@ -613,7 +615,7 @@ fn reversible_color_transform_parses() {
     ]);
     let (header, _, _) = parse_main_header(&bytes).expect("RCT header parses");
     assert!(header.cod.multiple_component_transform);
-    assert_eq!(header.cod.transform, Transform::Reversible53);
+    assert_eq!(header.cod.coding.transform, Transform::Reversible53);
 }
 
 /// The wavelet chooses the transform, so MCT on the 9/7 path is ICT (issue #76).
@@ -627,7 +629,7 @@ fn irreversible_color_transform_parses() {
         seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
     ]);
     assert!(header.cod.multiple_component_transform);
-    assert_eq!(header.cod.transform, Transform::Irreversible97);
+    assert_eq!(header.cod.coding.transform, Transform::Irreversible97);
 }
 
 /// The three color components must share a wavelet: a COC that moves one of the
@@ -1117,7 +1119,7 @@ fn valid_single_tile_part_parses() {
     assert_eq!(cs.tiles.len(), 1);
     assert_eq!(cs.tiles[0].index, 0);
     assert_eq!(cs.tiles[0].data.as_ref(), &data[..]);
-    assert_eq!(cs.header.cod.transform, Transform::Reversible53);
+    assert_eq!(cs.header.cod.coding.transform, Transform::Reversible53);
 }
 
 #[test]
@@ -1383,7 +1385,10 @@ fn a_later_tile_part_may_restate_the_tiles_own_cod() {
         &[(0, 0, 2, vec![own.clone()]), (0, 1, 2, vec![own])],
     );
     let cs = parse(&bytes).expect("the tile's COD restated");
-    assert_eq!(cs.tiles[0].header.cod.as_ref().map(|c| c.layers), Some(2));
+    assert_eq!(
+        cs.tiles[0].header.overrides.cod.as_ref().map(|c| c.layers),
+        Some(2)
+    );
 }
 
 /// A refusal case: its name, the first part's markers, the later part's
@@ -2483,7 +2488,7 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
         ]);
         let (header, _, _) = parse_main_header(&bytes).expect("a decoded style parses");
-        assert_eq!(header.cod.code_block_style, style);
+        assert_eq!(header.cod.coding.code_block_style, style);
     }
 
     // A decoded flag beside an undecoded one: the message names only the
@@ -2594,7 +2599,7 @@ fn overrides_resolve_else_default_per_component() {
     ]);
 
     // Component 0: both defaults.
-    assert_eq!(header.components[0].coding, header.cod.coding());
+    assert_eq!(header.components[0].coding, header.cod.coding);
     assert_eq!(header.components[0].quant, header.qcd);
 
     // Component 1: COC's coding, QCD's quantization.
@@ -2604,7 +2609,7 @@ fn overrides_resolve_else_default_per_component() {
     assert_eq!(header.components[1].quant, header.qcd);
 
     // Component 2: COD's coding, QCC's quantization.
-    assert_eq!(header.components[2].coding, header.cod.coding());
+    assert_eq!(header.components[2].coding, header.cod.coding);
     assert_eq!(header.components[2].quant.guard_bits, 4);
     assert_ne!(header.components[2].quant, header.qcd);
 }
@@ -2705,7 +2710,7 @@ fn a_coc_carries_its_own_precinct_partition() {
     );
     // COD's own partition stays maximal — the COC replaced it for the component,
     // not for the codestream.
-    assert!(cs.header.cod.precinct_sizes.is_empty());
+    assert!(cs.header.cod.coding.precinct_sizes.is_empty());
 
     assert!(matches!(perr(&with(0x02, &[])), Error::Marker(_)));
     assert!(matches!(perr(&with(0x80, &[])), Error::Marker(_)));
@@ -3478,18 +3483,24 @@ impl Rng {
     }
 
     fn cod(&mut self, components: usize) -> Cod {
+        // Drawn in this order so the generated cases stay the same.
+        let decomposition_levels = self.levels();
+        let multiple_component_transform = components >= 3 && self.chance(3);
+        let transform = self.transform();
         Cod {
             progression: Progression::Lrcp,
             layers: 1,
-            decomposition_levels: self.levels(),
-            code_block_width: 4,
-            code_block_height: 4,
-            code_block_style: 0,
             use_sop: false,
             use_eph: false,
-            multiple_component_transform: components >= 3 && self.chance(3),
-            transform: self.transform(),
-            precinct_sizes: vec![],
+            multiple_component_transform,
+            coding: Coding {
+                decomposition_levels,
+                code_block_width: 4,
+                code_block_height: 4,
+                code_block_style: 0,
+                transform,
+                precinct_sizes: vec![],
+            },
         }
     }
 
@@ -3551,7 +3562,7 @@ impl Rng {
             components: siz_components,
         };
         let cod = self.cod(components);
-        let qcd = self.quant(cod.decomposition_levels);
+        let qcd = self.quant(cod.coding.decomposition_levels);
         let mut header = MainHeader::new(siz, cod, qcd);
         header.poc = self.poc();
         for index in self.named(components) {
@@ -3603,12 +3614,14 @@ impl Rng {
             coc.iter()
                 .find(|(i, _)| *i == index)
                 .map(|(_, c)| c.decomposition_levels)
-                .or(cod.as_ref().map(|c| c.decomposition_levels))
+                .or(cod.as_ref().map(|c| c.coding.decomposition_levels))
                 .unwrap_or(main.components[index].coding.decomposition_levels)
         };
         let qcd_levels = cod
             .as_ref()
-            .map_or(main.cod.decomposition_levels, |c| c.decomposition_levels);
+            .map_or(main.cod.coding.decomposition_levels, |c| {
+                c.coding.decomposition_levels
+            });
         let qcd = self.chance(2).then(|| self.quant(qcd_levels));
         let qcc = (self.named(components).into_iter())
             .map(|i| (i, self.quant(levels(i))))
@@ -3617,11 +3630,13 @@ impl Rng {
             .map(|i| (i, self.below(8) as u8))
             .collect();
         TileHeader {
-            cod,
-            qcd,
-            coc,
-            qcc,
-            rgn,
+            overrides: Overrides {
+                cod,
+                qcd,
+                coc,
+                qcc,
+                rgn,
+            },
             // As the parser sets it: only a nonempty list can start in the
             // first tile-part.
             poc_in_first_part: !poc.is_empty() && self.chance(2),
@@ -3648,8 +3663,18 @@ impl Verdicts {
             .components
             .iter()
             .map(|c| c.coding.decomposition_levels)
-            .chain(tile.cod.iter().map(|c| c.decomposition_levels))
-            .chain(tile.coc.iter().map(|(_, c)| c.decomposition_levels))
+            .chain(
+                tile.overrides
+                    .cod
+                    .iter()
+                    .map(|c| c.coding.decomposition_levels),
+            )
+            .chain(
+                tile.overrides
+                    .coc
+                    .iter()
+                    .map(|(_, c)| c.decomposition_levels),
+            )
             .any(|levels| levels > 3);
         let count = |yes: &mut u32, no: &mut u32| *if valid { yes } else { no } += 1;
         count(&mut self.valid, &mut self.invalid);
@@ -3740,7 +3765,7 @@ fn cod_segment(cod: &Cod) -> Vec<u8> {
     let mut b = vec![0, cod.progression as u8];
     b.extend_from_slice(&be16(cod.layers));
     b.push(u8::from(cod.multiple_component_transform));
-    b.extend_from_slice(&coding_bytes(&cod.coding()));
+    b.extend_from_slice(&coding_bytes(&cod.coding));
     seg(marker::COD, &b)
 }
 
@@ -3822,9 +3847,9 @@ fn main_segments(main: &MainHeader) -> Vec<Vec<u8>> {
         cod_segment(&main.cod),
         seg(marker::QCD, &quant_bytes(&main.qcd)),
     ];
-    let default = main.cod.coding();
+    let default = &main.cod.coding;
     for (index, params) in main.components.iter().enumerate() {
-        if params.coding != default {
+        if params.coding != *default {
             segments.push(coc_segment(index, &params.coding, components));
         }
         if params.quant != main.qcd {
@@ -3844,19 +3869,19 @@ fn main_segments(main: &MainHeader) -> Vec<Vec<u8>> {
 fn tile_codestream(main: &MainHeader, tile: &TileHeader) -> Vec<u8> {
     let components = main.components.len();
     let mut first = Vec::new();
-    if let Some(cod) = &tile.cod {
+    if let Some(cod) = &tile.overrides.cod {
         first.push(cod_segment(cod));
     }
-    if let Some(qcd) = &tile.qcd {
+    if let Some(qcd) = &tile.overrides.qcd {
         first.push(seg(marker::QCD, &quant_bytes(qcd)));
     }
-    for (index, coding) in &tile.coc {
+    for (index, coding) in &tile.overrides.coc {
         first.push(coc_segment(*index, coding, components));
     }
-    for (index, qcd) in &tile.qcc {
+    for (index, qcd) in &tile.overrides.qcc {
         first.push(qcc_segment(*index, qcd, components));
     }
-    for &(index, shift) in &tile.rgn {
+    for &(index, shift) in &tile.overrides.rgn {
         first.push(rgn_segment(index, shift, components));
     }
     let mut later = Vec::new();
@@ -3984,5 +4009,114 @@ fn tlm_implied_indices_count_across_markers() {
     match err(&codestream(&segments)) {
         Error::Marker(m) => assert!(m.contains("names tile 1"), "{m}"),
         other => panic!("{other}"),
+    }
+}
+
+/// Every duplicate-marker message, in both headers, word for word, through
+/// `crate::decode`. The main header and the tile-part header share one
+/// override reader; the tile-part header's messages carry the
+/// "in the tile-part header" suffix and the main header's do not.
+///
+/// The last two cases pin which fault a second, malformed COD reports: the
+/// main header refuses the duplicate before it reads the body, and a tile-part
+/// header reads the body first.
+#[test]
+fn duplicate_override_messages_are_pinned_for_both_headers() {
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 2, 4, 4, 0, 1));
+    let qcc = seg(marker::QCC, &{
+        let mut b = vec![0u8];
+        b.extend_from_slice(&qcd_none(2, &[8; 16]));
+        b
+    });
+    let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 3));
+    let cod = seg(marker::COD, &cod_default(1));
+    let qcd = seg(marker::QCD, &qcd_none(2, &[8; 16]));
+    // A COD with the reserved progression order 9.
+    let bad_cod = seg(marker::COD, &cod_body(0, 9, 1, 0, 5, 4, 4, 0, 1));
+
+    let main_with = |extra: &[Vec<u8>]| {
+        let mut header = default_header();
+        header.extend_from_slice(extra);
+        assemble_with_tile_markers(&header, &[], &[1, 2])
+    };
+    let tile_with =
+        |markers: &[Vec<u8>]| assemble_with_tile_markers(&default_header(), markers, &[1, 2]);
+    let twice = |m: &Vec<u8>| [m.clone(), m.clone()];
+
+    let rows: Vec<(&str, Vec<u8>, &str)> = vec![
+        (
+            "main COD",
+            main_with(std::slice::from_ref(&cod)),
+            "duplicate `COD` marker",
+        ),
+        (
+            "main QCD",
+            main_with(std::slice::from_ref(&qcd)),
+            "duplicate `QCD` marker",
+        ),
+        (
+            "main COC",
+            main_with(&twice(&coc)),
+            "duplicate `COC` marker for component 0",
+        ),
+        (
+            "main QCC",
+            main_with(&twice(&qcc)),
+            "duplicate `QCC` marker for component 0",
+        ),
+        (
+            "main RGN",
+            main_with(&twice(&rgn)),
+            "duplicate `RGN` marker for component 0",
+        ),
+        (
+            "tile COD",
+            tile_with(&twice(&cod)),
+            "duplicate `COD` marker in the tile-part header",
+        ),
+        (
+            "tile QCD",
+            tile_with(&twice(&qcd)),
+            "duplicate `QCD` marker in the tile-part header",
+        ),
+        (
+            "tile COC",
+            tile_with(&twice(&coc)),
+            "duplicate `COC` marker for component 0 in the tile-part header",
+        ),
+        (
+            "tile QCC",
+            tile_with(&twice(&qcc)),
+            "duplicate `QCC` marker for component 0 in the tile-part header",
+        ),
+        (
+            "tile RGN",
+            tile_with(&twice(&rgn)),
+            "duplicate `RGN` marker for component 0 in the tile-part header",
+        ),
+        (
+            "later tile-part RGN",
+            tile_parts(
+                &default_header(),
+                &[(0, 0, 2, vec![]), (0, 1, 2, vec![rgn.clone()])],
+            ),
+            "marker 0xFF5E appears in a tile-part header other than the first; \
+             the coding-parameter overrides belong to the first tile-part of a tile",
+        ),
+        (
+            "main malformed second COD",
+            main_with(std::slice::from_ref(&bad_cod)),
+            "duplicate `COD` marker",
+        ),
+    ];
+    for (name, bytes, expected) in rows {
+        match crate::decode(&bytes) {
+            Err(Error::Codestream(m)) => assert_eq!(m, expected, "{name}"),
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+    match crate::decode(&tile_with(&[cod, bad_cod])) {
+        Err(Error::Marker(m)) => assert_eq!(m, "reserved progression order 9"),
+        other => panic!("tile malformed second COD: {other:?}"),
     }
 }
