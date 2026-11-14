@@ -1155,8 +1155,7 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
     // within the default bound however far the caller raises it.
     let bytes = tile_bytes(&cs);
     let poc_bitmap = tier2::decode_visits(bytes);
-    let mut visits = options.packet_work_limit.apply(poc_bitmap);
-    let first_visits = visits;
+    let meter = tier2::Meter::new(options.packet_work_limit.apply(poc_bitmap));
     let mut block_work = match &options.code_block_work_limit {
         WorkLimit::Unlimited => None,
         limit => Some(limit.apply(tier1::decode_work(bytes))),
@@ -1179,9 +1178,13 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         })
         .sum();
     let cost = missing.saturating_mul(cs.header.siz.components.len() as u64);
-    visits = visits
-        .checked_sub(cost)
-        .ok_or_else(|| Error::Limit(limit_hint::missing_tiles(cost, first_visits, poc_bitmap)))?;
+    if !meter.try_spend(cost) {
+        return Err(Error::Limit(limit_hint::missing_tiles(
+            cost,
+            meter.first(),
+            poc_bitmap,
+        )));
+    }
     for (position, tile) in cs.tiles.iter().enumerate() {
         // `tiles` holds every tile when strict, so `index` is also its
         // position; not strict, a missing tile is left out.
@@ -1206,10 +1209,10 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // packet order is the codestream's framing, so the dropped levels'
         // packets must still be stepped over to reach the kept ones.
         let walked = if options.strict {
-            tier2::decode_packets(&header, tile, &mut visits, poc_bitmap, reduction)
+            tier2::decode_packets_metered(&header, tile, &meter, poc_bitmap, reduction)
                 .map(|coded| (coded, None))
         } else {
-            tier2::decode_packets_partial(&header, tile, &mut visits, poc_bitmap, reduction)
+            tier2::decode_packets_partial(&header, tile, &meter, poc_bitmap, reduction)
                 .map(|(coded, reach)| (coded, Some(reach)))
         };
         let coded = match walked {
@@ -1221,15 +1224,14 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
                 coded
             }
             Err(tier2::Refused::Work(work)) => {
-                // `visits` holds what is left after the refusal, so this
+                // The meter holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
                 // earlier tiles'.
-                let spent = first_visits.saturating_sub(visits);
                 return Err(Error::Limit(limit_hint::packet(
                     work,
                     index,
-                    spent,
-                    first_visits,
+                    meter.spent(),
+                    meter.first(),
                     poc_bitmap,
                 )));
             }
