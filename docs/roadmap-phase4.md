@@ -216,8 +216,9 @@ Settled while planning, on 2026-11-14. Below, *HT codestream* means one of the
    not copied, so no third-party notice ships in the crate.
 7. **One release.** The phase ships as 0.5.0 when the gate passes, with no
    interim HT release. Codestreams that were `Unsupported` now decode, which
-   is a behavior change. The HTJ2K steps add no public API, except possibly
-   for the `cdef` association in P4.7.
+   is a behavior change. The HTJ2K steps add two enum variants for JPH's
+   application-defined channels (P4.7), `ChannelType::ApplicationDefined` and
+   `Association::ApplicationDefined(u16)`, and no other API.
 
 ## What else ships in 0.5.0
 
@@ -423,16 +424,18 @@ against the three files; lift the `0x80` guard.
 
 **Work:** accept `jph ` as brand or compatible brand. Apply the Annex D
 relaxations: the `cdef` `Asoc` range check and the color reordering skip
-`Typ` 3 channels, which already report as `ChannelType::Other(3)`. A missing
+`Typ` 3 channels. A missing
 `colr` already gives `ColorSpace::Unknown`; `file10` adds the test. Add the
 reject-matrix rows in `src/jp2/tests.rs` for the remaining JPX, JPM and MJ2
 brands.
 
-How a `Typ` 3 channel reports its application-defined `Asoc` is not settled.
-None of the existing `Association` variants fits (`Color(n)` means color `n`
-of the color space), and `Association` is not `#[non_exhaustive]`, so a new
-variant would break callers that match on it. This part of P4.7 waits for that
-decision.
+A `Typ` 3 channel reports as a new `ChannelType::ApplicationDefined`, and its
+`Asoc` as a new `Association::ApplicationDefined(u16)` carrying the value as
+stored. Neither existing variant fits: `Other(3)` reads as a reserved type, and
+`Color(n)` means color `n` of the color space. Both enums stay exhaustive, so
+adding the variants is a breaking change for callers that match on them. A
+0.x minor release allows that, and P4.7 lists both in the 0.5.0 CHANGELOG's
+Migrating section.
 
 **Oracle:** the Part 4 JP2 references for `file1`..`file9` (sRGB conversion as
 in `tests/conformance_jp2.rs`); `opj_decompress` on the 18 it decodes; the
