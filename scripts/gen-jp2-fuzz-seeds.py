@@ -3,7 +3,11 @@
 
 Run from the repository root:
 
-    python3 scripts/gen-jp2-fuzz-seeds.py
+    python3 scripts/gen-jp2-fuzz-seeds.py [OUT_DIR]
+
+OUT_DIR defaults to fuzz/corpus/jp2_boxes. `tests/fuzz_seed_outcomes.rs` runs
+the script into a scratch directory and checks every seed's decode outcome
+against `tests/fixtures/jp2_fuzz_seed_outcomes.tsv`.
 
 The target takes `variant byte + body` and appends one of the pinned
 codestreams (see fuzz/fuzz_targets/jp2_boxes.rs): bits 4-6 of the variant pick
@@ -461,6 +465,11 @@ def srgb_branch_seeds(write):
 
 
 def main():
+    global OUT
+    if len(sys.argv) > 2:
+        sys.exit("usage: gen-jp2-fuzz-seeds.py [OUT_DIR]")
+    if len(sys.argv) == 2:
+        OUT = os.path.abspath(sys.argv[1])
     os.makedirs(OUT, exist_ok=True)
     pinned = {}
     for components, (name, bit) in PINNED.items():
