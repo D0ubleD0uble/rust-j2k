@@ -1,5 +1,5 @@
 //! Three encoder quirks OpenJPEG 2.5.0 corrects on purpose, and this decoder
-//! with it (docs/correctness.md, "Encoder mistakes OpenJPEG corrects"):
+//! with it (docs/openjpeg-departures.md, "Encoder mistakes OpenJPEG corrects"):
 //!
 //! - every tile's last part with `TPsot == TNsot` (Adobe Photoshop's plug-in);
 //! - the main COD and QCD restated in every later tile-part (BAP Image

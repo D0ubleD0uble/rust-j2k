@@ -5,8 +5,8 @@ header and one in its tile-part headers. In the first two, the tile-part POC
 overrides the main one (A.6.6), and the packets follow it, so the decode must
 equal `source.raw`. The grading reference is `source.raw` itself:
 `opj_decompress` 2.5.0 appends the tile volumes after the main one and decodes
-those two files wrong (see `docs/correctness.md`, "A tile-part POC overrides the
-main header's").
+those two files wrong (see `docs/openjpeg-departures.md`, "A tile-part POC overrides
+the main header's").
 
 ## Source and tools
 

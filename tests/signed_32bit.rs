@@ -1,6 +1,6 @@
 //! Signed 32-bit components decode, although OpenJPEG 2.5.0 refuses them
 //! (`j2k.c`: a precision over 31 is an error). Owner-approved deviation; see
-//! `docs/correctness.md`. No oracle decodes such a file, so the expected
+//! `docs/openjpeg-departures.md`. No oracle decodes such a file, so the expected
 //! samples are derived by hand instead.
 //!
 //! The source is the signed 8-bit plane inside `jp2_palette_clamp.jp2`: a

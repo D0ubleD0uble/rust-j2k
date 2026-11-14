@@ -12,7 +12,7 @@ decode under the standard equals the source image.
 tile-part's volumes to the ones the tile inherited from the main header, so it
 walks the main volume first and reads the first packets in the wrong order. So
 the grading reference is the source image, not the OpenJPEG decode. See
-docs/correctness.md, "A tile-part POC overrides the main header's".
+docs/openjpeg-departures.md, "A tile-part POC overrides the main header's".
 
 How each file is made:
 

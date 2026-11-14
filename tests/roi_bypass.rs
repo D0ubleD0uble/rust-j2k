@@ -5,7 +5,7 @@
 //! segmentation symbols, or bypass + predictable termination. The decode must
 //! equal the source. `opj_decompress` 2.5.0 decodes all four wrong: it
 //! switches to raw coding `SPrgn` planes too late. See
-//! `tests/fixtures/roi_bypass/README.md` and docs/correctness.md.
+//! `tests/fixtures/roi_bypass/README.md` and docs/openjpeg-departures.md.
 
 use std::path::PathBuf;
 

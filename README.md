@@ -114,7 +114,7 @@ how much.
   ICC profiles that work through a lookup table or through Lab, are refused with
   `Error::Unsupported` when you ask for sRGB. Decoding without the option still
   gives you the values as stored.
-  [docs/correctness.md](docs/correctness.md#outcomes) lists every case.
+  [docs/srgb-output.md](docs/srgb-output.md#every-input-and-its-result) lists every case.
 - It doesn't **read GRIB2 files**. You find the JPEG 2000 bytes in the message
   and turn the decoded numbers into physical values yourself (see
   [GRIB2 grids](#grib2-grids)).
@@ -158,7 +158,7 @@ fn check(bytes: &[u8]) {
 
 By default a damaged or cut-off file is an error, never a partial image. What
 is refused, and where this decoder is stricter than OpenJPEG, is in
-[docs/correctness.md](docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams).
+[docs/openjpeg-departures.md](docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams).
 
 To decode what a cut-short codestream holds, as `opj_decompress -allow-partial`
 does, turn `strict` off. The codestream's header, everything before the first

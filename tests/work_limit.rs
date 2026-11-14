@@ -6,7 +6,7 @@
 //! block decoder for minutes of work. The decode counts that work (passes
 //! times samples) before it decodes a tile, and refuses a file past the
 //! bound with [`Error::Limit`]. OpenJPEG 2.5.0 has no such bound. See
-//! `tests/fixtures/tier1_work_bound/README.md` and `docs/correctness.md`.
+//! `tests/fixtures/tier1_work_bound/README.md` and `docs/resource-bounds.md`.
 //!
 //! The committed files are written by
 //! `scripts/gen-tier1-work-bound-fixtures.py`; the issue's 76 KB shape is

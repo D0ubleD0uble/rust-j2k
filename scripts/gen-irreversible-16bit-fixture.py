@@ -41,7 +41,7 @@ WIDTH, HEIGHT, DEPTH = 32, 32, 16
 # measured (component 0; component 1 reaches 3). It is not a bound on other
 # images: the gap depends on the content and on how its edges line up with the
 # transform grid, and a 256x256 checkerboard of 5x5 blocks has reached 7 at 16
-# bits (docs/correctness.md, "Agreement standard").
+# bits (docs/correctness.md, "How close a decode must be").
 TOLERANCE = 5.0
 
 COMPONENTS = 2

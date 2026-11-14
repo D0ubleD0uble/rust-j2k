@@ -1,7 +1,7 @@
 //! The Reader Requirements box (`rreq`, ISO/IEC 15444-2 M.11.1). OpenJPEG
 //! skips it, so the samples never change. A malformed one is left out, and
 //! `opj_decompress` decodes such a file to the same samples
-//! (`docs/correctness.md`).
+//! (`docs/openjpeg-departures.md`).
 
 use super::*;
 use crate::{ReaderRequirements, StandardFeature, VendorFeature};
