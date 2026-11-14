@@ -178,7 +178,8 @@ cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus
 
 # Time-boxed run (CI-friendly: no panics, no OOM, no hangs). A small input
 # may declare an image at the 2^28-sample default limit, which peaks at about
-# 1.4 GiB, or about 2 GiB while a palette expands, so give it 4 GiB as CI does.
+# 1.4 GiB for a square tile, up to about 2.6 GiB for a tile one sample wide,
+# or about 2 GiB while a palette expands, so give it 4 GiB as CI does.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
 # The same with strict off, against the strict decode.
