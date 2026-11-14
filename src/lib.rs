@@ -1277,14 +1277,12 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         }
         let coeffs = tier1::decode_code_blocks(&header, &coded, reduction)?;
 
-        // Dequantize, then invert the DWT per resolution level into samples.
+        // Invert the DWT per resolution level into samples. Tier-1 has already
+        // dequantized the 9/7 coefficients as it placed each block.
         let mut samples = coeffs
             .into_iter()
             .enumerate()
-            .map(|(component, coeffs)| {
-                let dequant = quant::dequantize(&header, component, coeffs)?;
-                dwt::inverse(&header, component, dequant)
-            })
+            .map(|(component, coeffs)| dwt::inverse(&header, component, coeffs))
             .collect::<Result<Vec<_>>>()?;
 
         // Undo the inter-component decorrelation, if any, before the DC level
