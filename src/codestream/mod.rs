@@ -63,7 +63,7 @@ impl MainHeader {
     pub fn new(siz: Siz, cod: Cod, qcd: Qcd) -> Self {
         let components = vec![
             ComponentParams {
-                coding: cod.coding(),
+                coding: cod.coding.clone(),
                 quant: qcd.clone(),
                 roi_shift: 0,
             };
@@ -341,15 +341,16 @@ fn tile_header_is_valid(
     if resolved_poc_len(main, tile) > MAX_POC_VOLUMES {
         return false;
     }
-    if tile.cod.is_none() && tile.qcd.is_none() && tile.coc.is_empty() && tile.qcc.is_empty() {
+    let own = &tile.overrides;
+    if !own.codes_or_quantizes() {
         // RGN and POC change no invariant checked here.
         return true;
     }
 
-    // `read_tile_part_header` refused a second COC or QCC for one component,
+    // `OverrideReader` refused a second COC or QCC for one component,
     // and `decode_coc`/`decode_qcc` bounded each index by the component count.
-    let coc: HashMap<usize, &Coding> = tile.coc.iter().map(|(i, c)| (*i, c)).collect();
-    let qcc: HashMap<usize, &Qcd> = tile.qcc.iter().map(|(i, q)| (*i, q)).collect();
+    let coc: HashMap<usize, &Coding> = own.coc.iter().map(|(i, c)| (*i, c)).collect();
+    let qcc: HashMap<usize, &Qcd> = own.qcc.iter().map(|(i, q)| (*i, q)).collect();
     let named = || {
         coc.keys()
             .chain(qcc.keys().filter(|index| !coc.contains_key(index)))
@@ -359,15 +360,15 @@ fn tile_header_is_valid(
     let in_main = |index: usize| &main.components[index];
     // The decomposition levels and wavelet component `index` takes in the tile,
     // and its quantization.
-    let coding = |index: usize| match (coc.get(&index), &tile.cod) {
+    let coding = |index: usize| match (coc.get(&index), &own.cod) {
         (Some(coding), _) => (coding.decomposition_levels, coding.transform),
-        (None, Some(cod)) => (cod.decomposition_levels, cod.transform),
+        (None, Some(cod)) => (cod.coding.decomposition_levels, cod.coding.transform),
         (None, None) => {
             let coding = &in_main(index).coding;
             (coding.decomposition_levels, coding.transform)
         }
     };
-    let quant = |index: usize| match (qcc.get(&index), &tile.qcd) {
+    let quant = |index: usize| match (qcc.get(&index), &own.qcd) {
         (Some(quant), _) => *quant,
         (None, Some(qcd)) => qcd,
         (None, None) => &in_main(index).quant,
@@ -387,24 +388,24 @@ fn tile_header_is_valid(
     let total = main.components.len();
     if named().count() < total {
         let summary = summary.get_or_init(|| ComponentSummary::of(main));
-        match (&tile.cod, &tile.qcd) {
+        match (&own.cod, &own.qcd) {
             (None, None) => {}
             (Some(cod), qcd) => {
                 // Each keeps its main-header wavelet, so none may differ from
                 // the tile COD's.
-                let differ = match cod.transform {
+                let differ = match cod.coding.transform {
                     Transform::Irreversible97 => total - summary.irreversible,
                     Transform::Reversible53 => summary.irreversible,
                 };
                 let differ_named = named()
-                    .filter(|&index| in_main(index).coding.transform != cod.transform)
+                    .filter(|&index| in_main(index).coding.transform != cod.coding.transform)
                     .count();
                 if differ != differ_named {
                     return false;
                 }
                 match qcd {
                     Some(qcd) => {
-                        if !quant_fits(cod.decomposition_levels, cod.transform, qcd) {
+                        if !quant_fits(cod.coding.decomposition_levels, cod.coding.transform, qcd) {
                             return false;
                         }
                     }
@@ -412,7 +413,7 @@ fn tile_header_is_valid(
                     // has the tile COD's wavelet (checked above) and passed the
                     // main header's checks under it, so the 9/7 rule holds.
                     None => {
-                        let needed = 3 * usize::from(cod.decomposition_levels) + 1;
+                        let needed = 3 * usize::from(cod.coding.decomposition_levels) + 1;
                         let fewest = summary.by_steps.iter().find(|&&(_, i)| !is_named(i));
                         if fewest.is_some_and(|&(steps, _)| steps < needed) {
                             return false;
@@ -446,7 +447,7 @@ fn tile_header_is_valid(
 
     // The color transform, over the first three components (skipped on an
     // image of fewer, see `mct::applies`).
-    let cod = tile.cod.as_ref().unwrap_or(&main.cod);
+    let cod = own.cod.as_ref().unwrap_or(&main.cod);
     if crate::mct::applies(cod.multiple_component_transform, main.siz.components.len()) {
         if crate::mct::check_geometry(&main.siz.components).is_err() {
             return false;
@@ -482,28 +483,197 @@ fn split_tiles_with(bytes: &[u8], parsed: ParsedHeader, strict: bool) -> Result<
     })
 }
 
-/// A tile-part header's own markers (A.4.2): the tile-level COD/QCD defaults and
-/// the per-component COC/QCC/RGN overrides that layer over them. Only the *first*
-/// tile-part of a tile may carry any of these, so one per tile is enough however
-/// many parts the tile is split into. (A later tile-part that restates a value
-/// already in force is accepted and dropped; see [`check_restatement`].)
-///
-/// The per-component overrides are **sparse** — only the components a marker
-/// actually names. Almost every tile carries none at all, and a dense vector per
-/// tile would cost `tiles × components` for nothing.
+/// A tile-part header's own markers (A.4.2): the tile-level overrides of the
+/// main header's coding parameters, and any progression volumes. Only the
+/// *first* tile-part of a tile may carry the overrides, so one per tile is
+/// enough however many parts the tile is split into. (A later tile-part that
+/// restates a value already in force is accepted and dropped; see
+/// [`check_restatement`].)
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TileHeader {
-    cod: Option<Cod>,
-    qcd: Option<Qcd>,
-    coc: Vec<(usize, Coding)>,
-    qcc: Vec<(usize, Qcd)>,
-    rgn: Vec<(usize, u8)>,
+    overrides: Overrides,
     /// A tile-part `POC`'s progression volumes; empty when the tile carries none,
     /// in which case the main header's `POC` (or its single COD order) governs.
     poc: Vec<PocVolume>,
     /// Whether the tile's first tile-part carries a `POC`. Only then do the
     /// tile's volumes replace the main header's (see `resolve_tile_header`).
     poc_in_first_part: bool,
+}
+
+/// The COD, QCD, COC, QCC and RGN markers of one header, main or tile-part:
+/// a COD/QCD default and the per-component overrides that layer over it.
+///
+/// The per-component overrides are **sparse**: only the components a marker
+/// actually names. Almost every tile carries none at all, and a dense vector per
+/// tile would cost `tiles × components` for nothing.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Overrides {
+    cod: Option<Cod>,
+    qcd: Option<Qcd>,
+    coc: Vec<(usize, Coding)>,
+    qcc: Vec<(usize, Qcd)>,
+    rgn: Vec<(usize, u8)>,
+}
+
+impl Overrides {
+    /// Whether the header carries a COD, QCD, COC or QCC. RGN is left out: it
+    /// changes no coding or quantization parameter.
+    fn codes_or_quantizes(&self) -> bool {
+        self.cod.is_some() || self.qcd.is_some() || !self.coc.is_empty() || !self.qcc.is_empty()
+    }
+
+    /// Lay these markers over `components`, lowest precedence first: a COD or
+    /// QCD lands on every component, then each COC, QCC and RGN on the one
+    /// component it names, outranking the COD or QCD (A.6.1 to A.6.5).
+    ///
+    /// `decode_coc`, `decode_qcc` and `decode_rgn` bounded each index by the
+    /// SIZ component count, and `components` holds one entry per SIZ
+    /// component, so no index lands outside it.
+    fn lay_over(&self, components: &mut [ComponentParams]) {
+        if let Some(cod) = &self.cod {
+            for params in components.iter_mut() {
+                params.coding.clone_from(&cod.coding);
+            }
+        }
+        if let Some(qcd) = &self.qcd {
+            for params in components.iter_mut() {
+                params.quant.clone_from(qcd);
+            }
+        }
+        for (index, coding) in &self.coc {
+            components[*index].coding.clone_from(coding);
+        }
+        for (index, quant) in &self.qcc {
+            components[*index].quant.clone_from(quant);
+        }
+        for (index, shift) in &self.rgn {
+            components[*index].roi_shift = *shift;
+        }
+    }
+}
+
+/// Which header an [`OverrideReader`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Main,
+    /// A tile-part header, and whether it is its tile's first tile-part.
+    TilePart {
+        first: bool,
+    },
+}
+
+/// Reads the COD, QCD, COC, QCC and RGN markers of one header into
+/// [`Overrides`], refusing a duplicate. The main header and every tile-part
+/// header read them through this one routine.
+///
+/// A.6 allows one COD and one QCD per header, and one COC, QCC and RGN per
+/// component per header. A second one is not a later-wins override; it is a
+/// malformed header, and guessing which wins would decode an image the encoder
+/// never described. OpenJPEG is silently last-wins here; rejecting is stricter,
+/// and no conformant codestream carries two. Each header is tallied apart: a
+/// tile-part marker over a main-header one for the same component is the legal
+/// override, not a duplicate.
+struct OverrideReader<'s> {
+    siz: &'s Siz,
+    place: Place,
+    overrides: Overrides,
+    /// The `(marker, component)` pairs met so far, so that a header naming
+    /// every component is checked in time proportional to its markers.
+    named: HashSet<(u16, usize)>,
+}
+
+impl<'s> OverrideReader<'s> {
+    fn new(siz: &'s Siz, place: Place) -> Self {
+        OverrideReader {
+            siz,
+            place,
+            overrides: Overrides::default(),
+            named: HashSet::new(),
+        }
+    }
+
+    /// Read marker `code` if it is a COD, QCD, COC, QCC or RGN, and say
+    /// whether it was. `body` yields the marker's segment body. It is called
+    /// only for one of those markers, so for any other the caller's cursor is
+    /// left where it was.
+    fn read<'b>(&mut self, code: u16, body: impl FnOnce() -> Result<Cursor<'b>>) -> Result<bool> {
+        let suffix = match self.place {
+            Place::Main => "",
+            Place::TilePart { .. } => " in the tile-part header",
+        };
+        let duplicate =
+            |name: &str| Error::Codestream(format!("duplicate `{name}` marker{suffix}"));
+        match code {
+            marker::COD => {
+                let seen = self.overrides.cod.is_some();
+                // The main header refuses a second COD before reading it; a
+                // tile-part header reads it first, so a malformed second COD
+                // reports its own fault there.
+                if seen && self.place == Place::Main {
+                    return Err(duplicate("COD"));
+                }
+                let cod = decode_cod(body()?)?;
+                if seen {
+                    return Err(duplicate("COD"));
+                }
+                self.overrides.cod = Some(cod);
+            }
+            marker::QCD => {
+                // In the same order as COD.
+                let seen = self.overrides.qcd.is_some();
+                if seen && self.place == Place::Main {
+                    return Err(duplicate("QCD"));
+                }
+                let qcd = decode_quant(body()?, "`QCD`")?;
+                if seen {
+                    return Err(duplicate("QCD"));
+                }
+                self.overrides.qcd = Some(qcd);
+            }
+            marker::COC => {
+                let (index, coding) = decode_coc(body()?, self.siz)?;
+                self.first_for(code, "COC", index, suffix)?;
+                self.overrides.coc.push((index, coding));
+            }
+            marker::QCC => {
+                let (index, quant) = decode_qcc(body()?, self.siz)?;
+                self.first_for(code, "QCC", index, suffix)?;
+                self.overrides.qcc.push((index, quant));
+            }
+            marker::RGN => {
+                // A later tile-part's COD, COC, QCD and QCC are read for the
+                // caller to hold to the values in force (`check_restatement`);
+                // its RGN is refused here, as a malformed codestream rather
+                // than an unsupported one.
+                if self.place == (Place::TilePart { first: false }) {
+                    return Err(Error::Codestream(format!(
+                        "marker {code:#06X} appears in a tile-part header other than the first; \
+                         the coding-parameter overrides belong to the first tile-part of a tile"
+                    )));
+                }
+                let (index, shift) = decode_rgn(body()?, self.siz)?;
+                self.first_for(code, "RGN", index, suffix)?;
+                self.overrides.rgn.push((index, shift));
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// Refuse a second `name` marker for component `index` in this header.
+    fn first_for(&mut self, code: u16, name: &str, index: usize, suffix: &str) -> Result<()> {
+        if self.named.insert((code, index)) {
+            Ok(())
+        } else {
+            Err(Error::Codestream(format!(
+                "duplicate `{name}` marker for component {index}{suffix}"
+            )))
+        }
+    }
+
+    fn finish(self) -> Overrides {
+        self.overrides
+    }
 }
 
 /// What has been seen of one tile so far while the tile-parts are walked.
@@ -949,9 +1119,8 @@ struct Uniform {
 
 impl Uniform {
     fn of(main: &MainHeader) -> Self {
-        let coding = main.cod.coding();
         Uniform {
-            coding: main.components.iter().all(|p| p.coding == coding),
+            coding: main.components.iter().all(|p| p.coding == main.cod.coding),
             quant: main.components.iter().all(|p| p.quant == main.qcd),
         }
     }
@@ -997,10 +1166,11 @@ fn check_restatement(
     later: &TileHeader,
     index: usize,
 ) -> Result<()> {
-    if later.cod.is_none() && later.qcd.is_none() && later.coc.is_empty() && later.qcc.is_empty() {
+    let later = &later.overrides;
+    if !later.codes_or_quantizes() {
         return Ok(());
     }
-    let own = &tile.header;
+    let own = &tile.header.overrides;
     let restated = tile.restated.get_or_insert_with(|| Restated {
         coc: own
             .coc
@@ -1025,9 +1195,9 @@ fn check_restatement(
 
     if let Some(cod) = &later.cod {
         if restated.cod.as_ref() != Some(cod) {
-            let coding = cod.coding();
+            let coding = &cod.coding;
             let same = cod == own.cod.as_ref().unwrap_or(&main.cod)
-                && own.coc.iter().all(|(_, c)| *c == coding)
+                && own.coc.iter().all(|(_, c)| c == coding)
                 && (own.cod.is_some() || uniform.get_or_init(|| Uniform::of(main)).coding);
             if !same {
                 return Err(differs("`COD`".into()));
@@ -1049,7 +1219,7 @@ fn check_restatement(
     for (component, coding) in &later.coc {
         let same = match (restated.coc.get(component), &own.cod) {
             (Some(&at), _) => own.coc[at].1 == *coding,
-            (None, Some(cod)) => cod.coding() == *coding,
+            (None, Some(cod)) => cod.coding == *coding,
             (None, None) => main.components[*component].coding == *coding,
         };
         if !same {
@@ -1075,86 +1245,28 @@ fn check_restatement(
 /// Only the *first* tile-part of a tile may carry the coding-parameter overrides
 /// (COD/COC/QCD/QCC/RGN): they say how to read the tile's packets. A later
 /// part's COD, COC, QCD and QCC are returned for the caller to hold to the
-/// values in force ([`check_restatement`]); a later RGN is refused here, as a
-/// malformed codestream rather than an unsupported one.
+/// values in force ([`check_restatement`]); [`OverrideReader`] refuses a later
+/// RGN, as a malformed codestream rather than an unsupported one.
 fn read_tile_part_header(
     cur: &mut Cursor<'_>,
     siz: &Siz,
     first_part: bool,
 ) -> Result<(TileHeader, Vec<u8>)> {
     let mut tile = TileHeader::default();
+    let mut overrides = OverrideReader::new(siz, Place::TilePart { first: first_part });
     // `PPT` packet headers for this tile-part, collected as `(Zppt, bytes)` and
     // concatenated in `Zppt` order below.
     let mut ppt: Vec<(u8, Vec<u8>)> = Vec::new();
-    // A.6 allows one of each per header. The tile-part tally is tracked apart
-    // from the main header's: a tile-part marker over a main-header one for the
-    // same component is the legal override, not a duplicate. `named` holds the
-    // `(marker, component)` pairs met so far, so that a tile-part naming every
-    // component is checked in time proportional to its markers.
-    let mut named: HashSet<(u16, usize)> = HashSet::new();
-    let overrides_here = |code: u16| -> Result<()> {
-        if first_part {
-            Ok(())
-        } else {
-            Err(Error::Codestream(format!(
-                "marker {code:#06X} appears in a tile-part header other than the first; \
-                 the coding-parameter overrides belong to the first tile-part of a tile"
-            )))
-        }
-    };
 
     loop {
         let m = cur.u16()?;
+        if overrides.read(m, || segment(cur))? {
+            continue;
+        }
         match m {
             marker::SOD => break,
             marker::COM => {
                 segment(cur)?;
-            }
-            marker::COD => {
-                if tile.cod.replace(decode_cod(segment(cur)?)?).is_some() {
-                    return Err(Error::Codestream(
-                        "duplicate `COD` marker in the tile-part header".into(),
-                    ));
-                }
-            }
-            marker::QCD => {
-                if tile
-                    .qcd
-                    .replace(decode_quant(segment(cur)?, "`QCD`")?)
-                    .is_some()
-                {
-                    return Err(Error::Codestream(
-                        "duplicate `QCD` marker in the tile-part header".into(),
-                    ));
-                }
-            }
-            marker::COC => {
-                let (index, coding) = decode_coc(segment(cur)?, siz)?;
-                if !named.insert((m, index)) {
-                    return Err(Error::Codestream(format!(
-                        "duplicate `COC` marker for component {index} in the tile-part header"
-                    )));
-                }
-                tile.coc.push((index, coding));
-            }
-            marker::QCC => {
-                let (index, quant) = decode_qcc(segment(cur)?, siz)?;
-                if !named.insert((m, index)) {
-                    return Err(Error::Codestream(format!(
-                        "duplicate `QCC` marker for component {index} in the tile-part header"
-                    )));
-                }
-                tile.qcc.push((index, quant));
-            }
-            marker::RGN => {
-                overrides_here(m)?;
-                let (index, shift) = decode_rgn(segment(cur)?, siz)?;
-                if !named.insert((m, index)) {
-                    return Err(Error::Codestream(format!(
-                        "duplicate `RGN` marker for component {index} in the tile-part header"
-                    )));
-                }
-                tile.rgn.push((index, shift));
             }
             // Packet lengths (A.7.3): informational, so the structure is
             // validated and the lengths discarded — the packets are read from
@@ -1166,18 +1278,18 @@ fn read_tile_part_header(
             // main header's (see `resolve_tile_header`). Unlike the coding-style
             // overrides, it is legal in *any* tile-part, not just the first
             // (B.12.3, OpenJPEG's `J2K_STATE_TPH`), and volumes accumulate
-            // across every one of the tile's parts — so it is not gated by
-            // `overrides_here`.
+            // across every one of the tile's parts — so a later tile-part may
+            // carry one.
             marker::POC => {
                 decode_poc(segment(cur)?, siz, &mut tile.poc)?;
             }
             // Packed packet headers (A.7.5): this tile-part's packet headers,
             // moved out of the bitstream into the marker. `Zppt` orders the
             // markers of one tile-part; the bytes after it are `Ippt`. Legal in
-            // any tile-part (the headers span all of them), so not gated by
-            // `overrides_here`. Collected here and stitched into the tile's
-            // packed buffer by the caller; a decoder that ignored them would read
-            // packet headers off the packet bodies and decode garbage.
+            // any tile-part (the headers span all of them). Collected here and
+            // stitched into the tile's packed buffer by the caller; a decoder
+            // that ignored them would read packet headers off the packet bodies
+            // and decode garbage.
             marker::PPT => {
                 let mut body = segment(cur)?;
                 let zppt = body.u8()?;
@@ -1208,6 +1320,7 @@ fn read_tile_part_header(
     // Stitch this tile-part's PPT markers into one buffer, ordered by Zppt.
     ppt.sort_by_key(|&(z, _)| z);
     let packed = ppt.into_iter().flat_map(|(_, bytes)| bytes).collect();
+    tile.overrides = overrides.finish();
     // `parse_tiles` reads this flag from the first tile-part only; the
     // `first_part` test is defensive.
     tile.poc_in_first_part = first_part && !tile.poc.is_empty();
@@ -1245,33 +1358,16 @@ fn resolve_tile_header<'m>(main: &'m MainHeader, tile: &TileHeader) -> Result<Co
     let mut header = main.clone();
 
     // A tile COD/QCD is the tile's new default: it displaces the main header's
-    // COD/QCD *and* any main-header COC/QCC, so it lands on every component.
-    if let Some(cod) = &tile.cod {
-        header.cod = cod.clone();
-        let coding = header.cod.coding();
-        for params in &mut header.components {
-            params.coding = coding.clone();
-        }
+    // COD/QCD *and* any main-header COC/QCC, so `lay_over` lands it on every
+    // component, then lays the tile's own per-component markers over that.
+    let overrides = &tile.overrides;
+    if let Some(cod) = &overrides.cod {
+        header.cod.clone_from(cod);
     }
-    if let Some(qcd) = &tile.qcd {
-        header.qcd = qcd.clone();
-        for params in &mut header.components {
-            params.quant = qcd.clone();
-        }
+    if let Some(qcd) = &overrides.qcd {
+        header.qcd.clone_from(qcd);
     }
-
-    // Then the tile's own per-component markers, which outrank its COD/QCD.
-    // `decode_coc`/`decode_qcc`/`decode_rgn` already bounded each index by the
-    // SIZ component count, so these cannot land outside the vector.
-    for (index, coding) in &tile.coc {
-        header.components[*index].coding = coding.clone();
-    }
-    for (index, quant) in &tile.qcc {
-        header.components[*index].quant = quant.clone();
-    }
-    for (index, shift) in &tile.rgn {
-        header.components[*index].roi_shift = *shift;
-    }
+    overrides.lay_over(&mut header.components);
 
     // A tile-part POC *overrides* the main header's for this tile (A.6.6:
     // "Tile-part POC > Main POC > Tile-part COD > Main COD", the greater
@@ -1454,11 +1550,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     validate_geometry(&siz)?;
     check_sample_container(&siz)?;
 
-    let mut cod = None;
-    let mut qcd = None;
-    let mut coc: Vec<Option<Coding>> = vec![None; siz.components.len()];
-    let mut qcc: Vec<Option<Qcd>> = vec![None; siz.components.len()];
-    let mut rgn: Vec<Option<u8>> = vec![None; siz.components.len()];
+    let mut overrides = OverrideReader::new(&siz, Place::Main);
     // TLM entries met so far, which is the tile index an `ST = 0` entry
     // implies.
     let mut tlm_entries = 0usize;
@@ -1470,51 +1562,12 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
+        if overrides.read(seg.code, || Ok(body()))? {
+            continue;
+        }
         match seg.code {
             marker::SIZ => {
                 return Err(Error::Codestream("duplicate `SIZ` marker".into()));
-            }
-            marker::COD => {
-                if cod.is_some() {
-                    return Err(Error::Codestream("duplicate `COD` marker".into()));
-                }
-                cod = Some(decode_cod(body())?);
-            }
-            marker::QCD => {
-                if qcd.is_some() {
-                    return Err(Error::Codestream("duplicate `QCD` marker".into()));
-                }
-                qcd = Some(decode_quant(body(), "`QCD`")?);
-            }
-            // A.6.2 and A.6.5 allow at most one COC and one QCC per component in
-            // a header. A second one is not a later-wins override; it is a
-            // malformed header, and guessing which wins would decode an image
-            // the encoder never described. OpenJPEG is silently last-wins here;
-            // rejecting is stricter, and no conformant codestream carries two.
-            marker::COC => {
-                let (index, coding) = decode_coc(body(), &siz)?;
-                if coc[index].replace(coding).is_some() {
-                    return Err(Error::Codestream(format!(
-                        "duplicate `COC` marker for component {index}"
-                    )));
-                }
-            }
-            marker::QCC => {
-                let (index, quant) = decode_qcc(body(), &siz)?;
-                if qcc[index].replace(quant).is_some() {
-                    return Err(Error::Codestream(format!(
-                        "duplicate `QCC` marker for component {index}"
-                    )));
-                }
-            }
-            // A.6.3 allows one RGN per component per header, like COC and QCC.
-            marker::RGN => {
-                let (index, shift) = decode_rgn(body(), &siz)?;
-                if rgn[index].replace(shift).is_some() {
-                    return Err(Error::Codestream(format!(
-                        "duplicate `RGN` marker for component {index}"
-                    )));
-                }
             }
             // Comment: recognized, carries nothing the decoder needs.
             marker::COM => {}
@@ -1606,8 +1659,11 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
         }
     }
 
-    let cod = cod.ok_or_else(|| Error::Codestream("missing required `COD` marker".into()))?;
-    let qcd = qcd.ok_or_else(|| Error::Codestream("missing required `QCD` marker".into()))?;
+    let mut overrides = overrides.finish();
+    let cod = (overrides.cod.take())
+        .ok_or_else(|| Error::Codestream("missing required `COD` marker".into()))?;
+    let qcd = (overrides.qcd.take())
+        .ok_or_else(|| Error::Codestream("missing required `QCD` marker".into()))?;
 
     // Start from COD/QCD's defaults, then lay each override over its component.
     // That is the whole of A.6.2's and A.6.5's resolution rule at the main
@@ -1615,21 +1671,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     let mut header = MainHeader::new(siz, cod, qcd);
     header.poc = poc;
     header.crg = crg.unwrap_or_default();
-    for (params, ((coding, quant), shift)) in header
-        .components
-        .iter_mut()
-        .zip(coc.into_iter().zip(qcc).zip(rgn))
-    {
-        if let Some(coding) = coding {
-            params.coding = coding;
-        }
-        if let Some(quant) = quant {
-            params.quant = quant;
-        }
-        if let Some(shift) = shift {
-            params.roi_shift = shift;
-        }
-    }
+    overrides.lay_over(&mut header.components);
 
     validate_resolved(&header)?;
     let ppm_chunks = decode_ppm_chunks(ppm)?;
@@ -1892,16 +1934,9 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     let use_sop = scod & 0x02 != 0;
     let use_eph = scod & 0x04 != 0;
 
-    let progression = match b.u8()? {
-        0 => Progression::Lrcp,
-        1 => Progression::Rlcp,
-        2 => Progression::Rpcl,
-        3 => Progression::Pcrl,
-        4 => Progression::Cprl,
-        other => {
-            return Err(Error::Marker(format!("reserved progression order {other}")));
-        }
-    };
+    let code = b.u8()?;
+    let progression = Progression::from_u8(code)
+        .ok_or_else(|| Error::Marker(format!("reserved progression order {code}")))?;
 
     // Every packet costs at least one byte, so a layer count is bounded by the
     // tile-part in practice; a declared zero is malformed (ISO Table A-16).
@@ -1924,31 +1959,18 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         }
     };
 
+    // Maximal precincts (PPx=PPy=15) when Scod bit 0 is clear, signaled by an
+    // empty list.
     let coding = decode_coding(&mut b, "`COD`", explicit_precincts)?;
-    let Coding {
-        decomposition_levels,
-        code_block_width,
-        code_block_height,
-        code_block_style,
-        transform,
-        precinct_sizes,
-    } = coding;
     b.expect_consumed("`COD`")?;
 
     Ok(Cod {
         progression,
         layers,
-        decomposition_levels,
-        code_block_width,
-        code_block_height,
-        code_block_style,
         use_sop,
         use_eph,
         multiple_component_transform,
-        transform,
-        // Maximal precincts (PPx=PPy=15) when Scod bit 0 is clear, signaled by
-        // an empty list; explicit precincts were rejected above.
-        precinct_sizes,
+        coding,
     })
 }
 

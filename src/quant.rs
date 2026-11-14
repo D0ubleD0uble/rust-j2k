@@ -133,7 +133,7 @@ fn half_step_of((exp, mant): (u8, u16), prec: i32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codestream::markers::{Cod, Progression, Siz, SizComponent, Transform};
+    use crate::codestream::markers::{Cod, Coding, Progression, Siz, SizComponent, Transform};
 
     /// A `prec`-bit single-component header carrying `qcd`. Only the component
     /// depth and the QCD feed dequantization; the rest is filler.
@@ -158,15 +158,17 @@ mod tests {
             Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
-                decomposition_levels: 1,
-                code_block_width: 4,
-                code_block_height: 4,
-                code_block_style: 0,
                 use_sop: false,
                 use_eph: false,
                 multiple_component_transform: false,
-                transform: Transform::Irreversible97,
-                precinct_sizes: vec![],
+                coding: Coding {
+                    decomposition_levels: 1,
+                    code_block_width: 4,
+                    code_block_height: 4,
+                    code_block_style: 0,
+                    transform: Transform::Irreversible97,
+                    precinct_sizes: vec![],
+                },
             },
             qcd,
         )

@@ -94,7 +94,7 @@ fn parse_layers_styled<'a>(
     Ok((build_subbands(bands, states), streams.body_pos))
 }
 use crate::codestream::markers::{
-    Cod, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
+    Cod, Coding, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
 };
 use crate::codestream::{MainHeader, Tile, TileHeader};
 use crate::tier2::bio::BitReader;
@@ -169,15 +169,17 @@ fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
         Cod {
             progression: Progression::Lrcp,
             layers: 1,
-            decomposition_levels: levels,
-            code_block_width: cblk_exp - 2,
-            code_block_height: cblk_exp - 2,
-            code_block_style: 0,
             use_sop: false,
             use_eph: false,
             multiple_component_transform: false,
-            transform: Transform::Reversible53,
-            precinct_sizes: Vec::new(),
+            coding: Coding {
+                decomposition_levels: levels,
+                code_block_width: cblk_exp - 2,
+                code_block_height: cblk_exp - 2,
+                code_block_style: 0,
+                transform: Transform::Reversible53,
+                precinct_sizes: Vec::new(),
+            },
         },
         Qcd {
             style: QuantStyle::None,
@@ -1318,15 +1320,17 @@ impl Layout {
             Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
-                decomposition_levels: self.levels,
-                code_block_width: 4, // 2^6
-                code_block_height: 4,
-                code_block_style: 0,
                 use_sop: false,
                 use_eph: false,
                 multiple_component_transform: false,
-                transform: Transform::Reversible53,
-                precinct_sizes: self.precincts.clone(),
+                coding: Coding {
+                    decomposition_levels: self.levels,
+                    code_block_width: 4, // 2^6
+                    code_block_height: 4,
+                    code_block_style: 0,
+                    transform: Transform::Reversible53,
+                    precinct_sizes: self.precincts.clone(),
+                },
             },
             Qcd {
                 style: QuantStyle::None,
