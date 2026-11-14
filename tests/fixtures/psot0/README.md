@@ -88,10 +88,10 @@ OpenJPEG starts every tag-tree node at 999, so from layer 999 on it takes
 each code-block not yet included as included, without reading its bit, and
 reads the rest of those packet headers out of step. Here that lands on
 samples of 128 again. OpenJPEG is not an oracle past 999 layers
-(`docs/correctness.md`, "Where the decoders differ").
+(`docs/openjpeg-departures.md`, "More than 999 layers").
 The walk is bounded, and past a bound it answers no, so they run to the end of
 the file, as they do without the check. The `Codestream` rows are a
-known difference, recorded in `docs/correctness.md`: the box's end is not
+known difference, recorded in `docs/openjpeg-departures.md`: the box's end is not
 where the codestream ends, so the tile-part runs to the end of the file and
 the bytes after its last packet are refused, as for a raw codestream.
 

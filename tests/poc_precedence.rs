@@ -5,7 +5,7 @@
 //! follow the tile-part POC, so the decode must equal the source.
 //! `opj_decompress` 2.5.0 decodes the first two wrong: it walks the main
 //! volume first.
-//! See `tests/fixtures/poc_precedence/README.md` and docs/correctness.md.
+//! See `tests/fixtures/poc_precedence/README.md` and docs/openjpeg-departures.md.
 
 use std::path::PathBuf;
 

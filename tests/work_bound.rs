@@ -2,7 +2,7 @@
 //! walk far more than its bytes is refused with [`Error::Limit`], in about the
 //! time a decode of that many bytes takes, instead of running for seconds or
 //! minutes. OpenJPEG 2.5.0 has no such bound and walks them all; see
-//! `tests/fixtures/work_bound/README.md` and `docs/correctness.md`.
+//! `tests/fixtures/work_bound/README.md` and `docs/resource-bounds.md`.
 //!
 //! Packet headers that name many code-blocks and include none are not such
 //! a walk: the decode steps over the code-blocks a header reads no bit for,

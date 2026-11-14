@@ -3,7 +3,7 @@
 Used by `tests/roi_bypass.rs`. Lossless encodes of `source.pgm` with an RGN
 maxshift (`SPrgn = 3`) and a bypass code-block style. The grading reference is
 `source.pgm` itself: `opj_decompress` 2.5.0 decodes all four wrong (see
-`docs/correctness.md`, "Bypass under a maxshift").
+`docs/openjpeg-departures.md`, "Bypass under a maxshift").
 
 ## Source and tools
 

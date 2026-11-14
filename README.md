@@ -117,7 +117,7 @@ don't retry a `Limit` with `Unlimited` on that evidence alone. JPEG 2000 has
 no checksum, so damage inside the entropy-coded data is not always detected; a
 flipped byte can decode to a wrong image without an error. What is refused,
 and where this decoder is stricter than OpenJPEG, is in
-[docs/correctness.md](docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams).
+[docs/openjpeg-departures.md](docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams).
 
 To decode what a cut codestream holds, as `opj_decompress -allow-partial`
 does, turn `strict` off. Only missing data and bytes left after a tile's last
@@ -174,7 +174,7 @@ that catches `Error::Limit` and retries.
 | --- | --- |
 | Raw codestream (Annex A) and JP2 files (Annex I), detected from the first bytes | JPX, JPM and MJ2 files that do not claim `jp2 ` compatibility |
 | JP2 palettes (`pclr`, `cmap`), channel definitions (`cdef`), color specifications (`colr`), and the `ihdr`, `ftyp`, `rreq`, `res `, `xml `, `uuid`, `jp2i` and `uinf` boxes, reported on `Image::jp2` | — |
-| Opt-in sRGB output (`DecodeOptions::color`): restricted ICC profiles, matching OpenJPEG with LittleCMS sample for sample, and sYCC with the IEC constants, rounded (MSE about 0.38 to 0.49 a channel against OpenJPEG, which truncates; see [the outcomes](docs/correctness.md#outcomes)) | Other color spaces (CMYK, CIELab, e-sYCC, …) and ICC profiles applied through a lookup table or Lab, under that option ([every case](docs/correctness.md#outcomes)) |
+| Opt-in sRGB output (`DecodeOptions::color`): restricted ICC profiles, matching OpenJPEG with LittleCMS sample for sample, and sYCC with the IEC constants, rounded (MSE about 0.38 to 0.49 a channel against OpenJPEG, which truncates; see [the outcomes](docs/srgb-output.md#every-input-and-its-result)) | Other color spaces (CMYK, CIELab, e-sYCC, …) and ICC profiles applied through a lookup table or Lab, under that option ([every case](docs/srgb-output.md#every-input-and-its-result)) |
 | Integer components, unsigned up to 31 bits or signed up to 32 bits, with sub-sampling | Unsigned 32-bit components, and depths past the `i32` container (33–38 bits) |
 | Both color transforms: reversible (RCT) and irreversible (ICT) | Part 2 extensions (array MCT, …) |
 | Reversible 5/3 (lossless) and irreversible 9/7 (lossy) wavelets | HTJ2K (Part 15) block coding |
@@ -189,7 +189,7 @@ Anything outside the decoded set is refused with an error rather than
 half-decoded. Partial decode relaxes only missing data and leftover bytes; a
 damaged packet header or code-block is still an error. Where this decoder and
 OpenJPEG differ, and why, is listed in
-[docs/correctness.md](docs/correctness.md). [docs/scope.md](docs/scope.md) maps
+[docs/openjpeg-departures.md](docs/openjpeg-departures.md). [docs/scope.md](docs/scope.md) maps
 every feature, and [docs/roadmap.md](docs/roadmap.md) has the plan for HTJ2K, an
 encoder and the later parts.
 

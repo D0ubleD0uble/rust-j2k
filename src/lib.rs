@@ -124,7 +124,7 @@
 //! assert!(matches!(decode(b"hello"), Err(Error::Codestream(_))));
 //! ```
 //!
-//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#stricter-than-the-oracle-on-non-conforming-streams
+//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams
 //!
 //! With [`DecodeOptions::strict`] off, a codestream cut short, or one with
 //! bytes left after a tile's last packet, decodes to the image the data
@@ -321,9 +321,9 @@ pub use report::{DecodeReport, ReportEntry};
 /// since the format has no checksum, and damage can show up as any variant
 /// (see the crate docs).
 ///
-/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-sample-limit
-/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-2-work-bound
-/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#the-tier-1-work-bound
+/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit
+/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-tier-2-work-bound
+/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-tier-1-work-bound
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -601,7 +601,7 @@ pub enum ColorOutput {
     /// assert_eq!(rgba8(&gray), Some(vec![0, 0, 0, 255, 255, 255, 255, 255]));
     /// ```
     ///
-    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md#outcomes
+    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/srgb-output.md#every-input-and-its-result
     Srgb,
 }
 
