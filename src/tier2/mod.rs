@@ -370,20 +370,23 @@ fn walk_packets<'a>(
     let data: &'a [u8] = &tile.data;
 
     // Precincts are bounded *as the geometry is built*, not after: a precinct's
-    // grid dimensions are cheap to compute but each precinct then allocates a
-    // `PrecinctGeom` with its own `Vec`, and the block count does not bound them
-    // — a band empty in one axis has no blocks while its resolution still has a
-    // full column of precincts. A 1 × 2^26 image under a 2^1 precinct is the
-    // shape that exploits it: ~2^25 precincts, each a heap allocation, built
-    // before any after-the-fact check could fire. So the cap is threaded through
-    // `resolution_geoms` and enforced before the allocation, across every
-    // component of the tile (`resolution_geoms` mutates the running total).
+    // grid dimensions are cheap to compute but each precinct then costs a
+    // `PrecinctGeom` per band and a pair of tag trees, each tree a heap
+    // allocation, and the block count does not bound them — a band empty in
+    // one axis has no blocks while its resolution still has a full column of
+    // precincts. A 1 × 2^26 image under a 2^1 precinct is the shape that
+    // exploits it: ~2^25 precincts, built before any after-the-fact check
+    // could fire. So the cap is threaded through `resolution_geoms` and
+    // enforced before the allocation, across every component of the tile
+    // (`resolution_geoms` mutates the running total).
     //
-    // The code-block count is bounded the same way and for the same reason: each
-    // band's `blocks` vector plus its per-block `BlockState`/tag trees dwarf the
-    // geometry tuple, and legal 4×4 blocks push the count toward samples/16, so
-    // the cap has to bite before those vectors fill rather than summing them
-    // afterwards. Both running totals are threaded through `resolution_geoms`.
+    // The code-block count is bounded the same way and for the same reason:
+    // the per-block `BlockState`s and tag-tree leaves below, and the
+    // `CodeBlock`s after them, are sized by it, and legal 4×4 blocks push the
+    // count toward samples/16, so the cap has to bite before they are
+    // allocated rather than summing them afterwards. Both running totals are
+    // threaded through `resolution_geoms`; the geometry itself holds nothing
+    // per block.
     //
     // The code-blocks of the resolutions the reduction drops are charged to
     // `visits` as each component is built (see [`Budget::reduction`]), so a
@@ -406,7 +409,7 @@ fn walk_packets<'a>(
         let dropped: usize = resolutions[kept..]
             .iter()
             .flat_map(|resolution| &resolution.bands)
-            .map(|band| band.blocks.len())
+            .map(BandGeom::block_count)
             .sum();
         let charged = charge_dropped_blocks(&visits, dropped);
         budget.visits = visits.get();
@@ -900,7 +903,7 @@ impl BandState<'_> {
                     zero_bits: TagTree::new(precinct.cols as u32, precinct.rows as u32),
                 })
                 .collect(),
-            blocks: band.blocks.iter().map(|_| BlockState::new()).collect(),
+            blocks: (0..band.block_count()).map(|_| BlockState::new()).collect(),
         }
     }
 }
@@ -1201,10 +1204,10 @@ fn parse_band_header(
 
     unread.clear();
     let mut entry = 0;
-    while entry < precinct.blocks.len() {
-        let block_index = precinct.blocks[entry];
+    while entry < precinct.cols * precinct.rows {
         let bx = entry as u32 % cols;
         let by = entry as u32 / cols;
+        let block_index = precinct.block(bx as usize, by as usize);
         entry += 1;
 
         let was_included = blocks[block_index].included;
@@ -1375,34 +1378,39 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
     bands
         .iter()
         .zip(states)
-        .map(|(band, state)| Subband {
-            kind: band.kind,
-            origin: band.origin,
-            width: band.width,
-            height: band.height,
-            block_cols: band.block_cols,
-            block_rows: band.block_rows,
-            blocks: band
-                .blocks
-                .iter()
-                .zip(state.blocks)
-                .map(|(&(x, y, width, height), block)| CodeBlock {
-                    x,
-                    y,
-                    width,
-                    height,
-                    num_passes: block.num_passes,
-                    zero_bit_planes: block.zero_bit_planes,
-                    segments: block
-                        .segments
-                        .into_iter()
-                        .map(|s| CodedSegment {
-                            passes: s.passes,
-                            chunks: s.chunks,
-                        })
-                        .collect(),
-                })
-                .collect(),
+        .map(|(band, state)| {
+            // The rectangles come from a nested loop, which gives no exact
+            // length, so the vector is sized up front rather than grown.
+            let mut blocks = Vec::with_capacity(state.blocks.len());
+            blocks.extend(band.block_rects().zip(state.blocks).map(
+                |((x, y, width, height), block)| {
+                    CodeBlock {
+                        x,
+                        y,
+                        width,
+                        height,
+                        num_passes: block.num_passes,
+                        zero_bit_planes: block.zero_bit_planes,
+                        segments: block
+                            .segments
+                            .into_iter()
+                            .map(|s| CodedSegment {
+                                passes: s.passes,
+                                chunks: s.chunks,
+                            })
+                            .collect(),
+                    }
+                },
+            ));
+            Subband {
+                kind: band.kind,
+                origin: band.origin,
+                width: band.width,
+                height: band.height,
+                block_cols: band.block_cols,
+                block_rows: band.block_rows,
+                blocks,
+            }
         })
         .collect()
 }
