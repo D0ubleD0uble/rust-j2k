@@ -33,7 +33,7 @@ subset first because it still runs every stage (codestream → Tier-2 → Tier-1
 → dequant → IDWT → image), so the engine was correct end to end before
 Phases 2 and 3 widened it.
 
-## Part 1 — core coding system (ISO/IEC 15444-1)
+## Part 1: core coding system (ISO/IEC 15444-1)
 
 ### Codestream syntax (Annex A)
 
@@ -66,7 +66,7 @@ Phases 2 and 3 widened it.
 | Multiple component transform: RCT (reversible) color | — | 2 |
 | Multiple component transform: ICT (irreversible) color | — | 2 |
 
-### Tier-1 — EBCOT block coding (Annexes C, D)
+### Tier-1: EBCOT block coding (Annexes C, D)
 
 | Feature | GRIB2 | Phase |
 |---|---|---|
@@ -79,7 +79,7 @@ Phases 2 and 3 widened it.
 | Code-block styles: vertically causal context | ○ | 2 |
 | Code-block styles: predictable termination, segmentation symbols | ○ | 2 |
 
-### Tier-2 — packet decoding (Annex B)
+### Tier-2: packet decoding (Annex B)
 
 | Feature | GRIB2 | Phase |
 |---|---|---|
@@ -116,7 +116,7 @@ class, and the real-world set matches OpenJPEG. A file that does not claim
 palette channel that looks up another column, or a palette column deeper than
 31 bits unsigned (32 signed).
 
-## Part 15 — High Throughput JPEG 2000 / HTJ2K (ISO/IEC 15444-15)
+## Part 15: High Throughput JPEG 2000 / HTJ2K (ISO/IEC 15444-15)
 
 HTJ2K replaces the EBCOT Tier-1 arithmetic coder with a much faster block
 coder (FBCOT) that has no MQ coder. Everything outside Tier-1 (codestream,
@@ -129,7 +129,7 @@ from version 2.5.0.
 | FBCOT block **decoder** (MEL + VLC + MagSgn) | — | 4 |
 | FBCOT block **encoder** | — | 6 |
 
-## Part 2 — extensions / JPX (ISO/IEC 15444-2)
+## Part 2: extensions / JPX (ISO/IEC 15444-2)
 
 | Feature | GRIB2 | Phase |
 |---|---|---|

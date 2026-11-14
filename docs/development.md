@@ -14,13 +14,22 @@ the contract, and the suite must pass with no oracle tool present. See
 
 On Debian/Ubuntu, [`scripts/install-oracle-tools.sh`](../scripts/install-oracle-tools.sh)
 installs OpenJPEG, eccodes, cargo-deny, a nightly toolchain and cargo-fuzz,
-checks that they are on `PATH`, and fails if OpenJPEG is not 2.5.0 (on Linux
-it also checks that LittleCMS is 2.14). On macOS it prints the Homebrew
+checks that they are on `PATH`, and fails if OpenJPEG is not 2.5.0. On Linux
+it also warns, without failing, when LittleCMS is not 2.14, since only the
+ICC oracles need that version. On macOS it prints the Homebrew
 commands to run. The cargo and rustup tools install on any platform. The
 script does not install Python 3.
 
 ```sh
 scripts/install-oracle-tools.sh
+```
+
+The crate's minimum Rust version is 1.87 (`rust-version` in `Cargo.toml`),
+and CI checks that the crate still builds on it. To check it locally:
+
+```sh
+rustup toolchain install 1.87
+cargo +1.87 check
 ```
 
 ## The toolchain

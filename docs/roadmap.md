@@ -14,14 +14,14 @@ and the reasons.
 
 ---
 
-## Phase 0 — skeleton *(done)*
+## Phase 0: skeleton *(done)*
 
 Every stage compiled, was stubbed with `todo!()`, and cited the ISO section
 it owns. The module layout followed the pipeline: `codestream → tier2 → tier1
 → quant → dwt → image`. A crate-level `allow(dead_code, unused_variables)` was
 in place and came off as the Phase 1 stages landed.
 
-## Phase 1 — GRIB2 decode MVP *(done — shipped in v0.1.0)*
+## Phase 1: GRIB2 decode MVP *(done, shipped in v0.1.0)*
 
 **Goal:** decode the exact codestream GRIB2 §5.40 produces, bit-exact for 5/3,
 within tolerance for 9/7. This unblocks the fieldglass GRIB2 reader.
@@ -52,7 +52,7 @@ bit-exact lossless, within tolerance lossy. The crate-level dead-code
 **Status:** met. The gate passes for all four corpus fixtures, and the
 crate-level dead-code `allow` is gone. Released as v0.1.0.
 
-## Phase 2 — general Part 1 decoder *(done)*
+## Phase 2: general Part 1 decoder *(done)*
 
 **Goal:** decode any conformant Part 1 *codestream*, not just the GRIB2 subset.
 
@@ -73,7 +73,7 @@ input (no panics, no `unsafe`, bounded memory).
 
 **Status:** met. Released as v0.3.0.
 
-## Phase 3 — JP2 file format decode *(done; release pending)*
+## Phase 3: JP2 file format decode *(done; release pending)*
 
 **Goal:** open `.jp2` files, not just bare codestreams.
 
@@ -102,7 +102,7 @@ three whole-crate reviews of its step 2 ran under #226, which also holds the
 manual testing rounds the owner added before the tag. The 0.4.0 release
 waits on the open issues of the Phase 3 milestone.
 
-## Phase 4 — HTJ2K decode (Part 15)
+## Phase 4: HTJ2K decode (Part 15)
 
 **Goal:** decode High Throughput codestreams, the modern high-value extension.
 
@@ -112,7 +112,7 @@ waits on the open issues of the Phase 3 milestone.
 
 **Gate:** matches OpenJPEG ≥2.5 HTJ2K decode on the HTJ2K conformance set.
 
-## Phase 5 — Part 1 encoder
+## Phase 5: Part 1 encoder
 
 **Goal:** the crate becomes a *codec*, not just a decoder, and the "decode-only"
 framing falls away. The crate and repository are already named codec-neutrally,
@@ -127,7 +127,7 @@ read back by OpenJPEG, and vice versa) within target rate/quality. The
 round trip alone would be self-consistency; the cross-decode is what makes
 this gate external.
 
-## Phase 6 — Part 2 extensions + HTJ2K encode
+## Phase 6: Part 2 extensions + HTJ2K encode
 
 **Goal:** breadth toward full feature parity.
 
@@ -138,7 +138,7 @@ this gate external.
 
 **Gate:** cross-check against OpenJPEG/Grok on Part 2 and HTJ2K encode corpora.
 
-## Phase 7 — long tail
+## Phase 7: long tail
 
 Motion JPEG 2000 (Part 3, MJ2 container), JPIP interactive streaming (Part 9),
 JPWL wireless error protection (Part 11). Sequenced by demand; none blocks the

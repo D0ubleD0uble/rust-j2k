@@ -26,7 +26,7 @@ later parts of the standard come next.
 
 Other ways to read JPEG 2000 from Rust exist. `jp2k`, `openjpeg-sys` and
 `grokj2k-sys` bind a C or C++ library. `hayro-jpeg2000` is a pure-Rust decoder
-that returns 8-bit images for PDF rendering. By default this crate keeps each
+whose image output is 8-bit (per-component samples are `f32`). By default this crate keeps each
 sample at its coded depth, which a GRIB2 grid of more than 8 bits per value
 needs.
 
