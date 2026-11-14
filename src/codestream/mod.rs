@@ -591,7 +591,7 @@ fn walk_tiles<'a>(
         // continues when it has just read one, so this is always present.
         if cur.u16()? != marker::SOT {
             return Err(Error::Codestream(
-                "tile-part does not start with SOT".into(),
+                "tile-part does not start with `SOT`".into(),
             ));
         }
         let sot = decode_sot(segment(&mut cur)?)?;
@@ -629,7 +629,7 @@ fn walk_tiles<'a>(
             match tile.declared_parts {
                 Some(declared) if declared != stated => {
                     return Err(Error::Codestream(format!(
-                        "tile {index} declares {stated} tile-parts in one SOT and {declared} in another",
+                        "tile {index} declares {stated} tile-parts in one `SOT` and {declared} in another",
                     )));
                 }
                 _ => tile.declared_parts = Some(stated),
@@ -684,12 +684,13 @@ fn walk_tiles<'a>(
         } else {
             if !packed.is_empty() {
                 return Err(Error::Unsupported(
-                    "a codestream carrying both PPM and PPT packed headers is not decoded".into(),
+                    "a codestream carrying both `PPM` and `PPT` packed headers is not decoded"
+                        .into(),
                 ));
             }
             let chunk = ppm.get(ppm_seq).ok_or_else(|| {
                 Error::Codestream(
-                    "PPM carries fewer packet-header chunks than the codestream has tile-parts"
+                    "`PPM` carries fewer packet-header chunks than the codestream has tile-parts"
                         .into(),
                 )
             })?;
@@ -719,9 +720,11 @@ fn walk_tiles<'a>(
                 // missing.
                 None if !strict => data_start,
                 None => {
-                    return Err(Error::Codestream(
-                        "Psot=0 tile-part has fewer than two bytes after its header".into(),
-                    ));
+                    return Err(Error::Codestream(format!(
+                        "tile {} tile-part {} has `Psot` 0 and fewer than two bytes after its \
+                         header",
+                        sot.tile_index, sot.tile_part_index
+                    )));
                 }
             }
         } else {
@@ -741,12 +744,25 @@ fn walk_tiles<'a>(
                     });
                     bytes.len()
                 }
-                None => return Err(Error::Codestream("Psot overruns the codestream".into())),
+                None => {
+                    return Err(Error::Codestream(format!(
+                        "tile {} tile-part {} declares `Psot` {}, but only {} bytes are left in \
+                         the codestream",
+                        sot.tile_index,
+                        sot.tile_part_index,
+                        sot.psot,
+                        bytes.len() - part_offset
+                    )));
+                }
             };
             if end < data_start {
-                return Err(Error::Codestream(
-                    "Psot is shorter than the tile-part header".into(),
-                ));
+                return Err(Error::Codestream(format!(
+                    "tile {} tile-part {} declares `Psot` {}, shorter than its {}-byte header",
+                    sot.tile_index,
+                    sot.tile_part_index,
+                    sot.psot,
+                    data_start - part_offset
+                )));
             }
             end
         };
@@ -787,7 +803,7 @@ fn walk_tiles<'a>(
             Some(marker::SOT) => part_offset = data_end,
             Some(other) => {
                 return Err(Error::Codestream(format!(
-                    "expected SOT or EOC after a tile-part, found {other:#06X}"
+                    "expected `SOT` or `EOC` after a tile-part, found {other:#06X}"
                 )));
             }
             // Not strict, the input may end after any tile-part.
@@ -795,7 +811,11 @@ fn walk_tiles<'a>(
                 entries.push(ReportEntry::MissingEoc);
                 break;
             }
-            None => return Err(Error::Codestream("missing EOC after the tile-part".into())),
+            None => {
+                return Err(Error::Codestream(
+                    "missing `EOC` after the tile-part".into(),
+                ));
+            }
         }
     }
 
@@ -805,7 +825,7 @@ fn walk_tiles<'a>(
     let ended_early = entries.last() == Some(&ReportEntry::MissingEoc);
     if ppm_seq != ppm.len() && !(ended_early && ppm_seq < ppm.len()) {
         return Err(Error::Codestream(format!(
-            "PPM carries {} packet-header chunk(s) but the codestream has {ppm_seq} tile-part(s)",
+            "`PPM` carries {} packet-header chunk(s) but the codestream has {ppm_seq} tile-part(s)",
             ppm.len(),
         )));
     }
@@ -1010,7 +1030,7 @@ fn check_restatement(
                 && own.coc.iter().all(|(_, c)| *c == coding)
                 && (own.cod.is_some() || uniform.get_or_init(|| Uniform::of(main)).coding);
             if !same {
-                return Err(differs("COD".into()));
+                return Err(differs("`COD`".into()));
             }
             restated.cod = Some(cod.clone());
         }
@@ -1021,7 +1041,7 @@ fn check_restatement(
                 && own.qcc.iter().all(|(_, q)| q == qcd)
                 && (own.qcd.is_some() || uniform.get_or_init(|| Uniform::of(main)).quant);
             if !same {
-                return Err(differs("QCD".into()));
+                return Err(differs("`QCD`".into()));
             }
             restated.qcd = Some(qcd.clone());
         }
@@ -1033,7 +1053,7 @@ fn check_restatement(
             (None, None) => main.components[*component].coding == *coding,
         };
         if !same {
-            return Err(differs(format!("COC for component {component}")));
+            return Err(differs(format!("`COC` for component {component}")));
         }
     }
     for (component, quant) in &later.qcc {
@@ -1043,7 +1063,7 @@ fn check_restatement(
             (None, None) => main.components[*component].quant == *quant,
         };
         if !same {
-            return Err(differs(format!("QCC for component {component}")));
+            return Err(differs(format!("`QCC` for component {component}")));
         }
     }
     Ok(())
@@ -1093,18 +1113,18 @@ fn read_tile_part_header(
             marker::COD => {
                 if tile.cod.replace(decode_cod(segment(cur)?)?).is_some() {
                     return Err(Error::Codestream(
-                        "duplicate COD marker in the tile-part header".into(),
+                        "duplicate `COD` marker in the tile-part header".into(),
                     ));
                 }
             }
             marker::QCD => {
                 if tile
                     .qcd
-                    .replace(decode_quant(segment(cur)?, "QCD")?)
+                    .replace(decode_quant(segment(cur)?, "`QCD`")?)
                     .is_some()
                 {
                     return Err(Error::Codestream(
-                        "duplicate QCD marker in the tile-part header".into(),
+                        "duplicate `QCD` marker in the tile-part header".into(),
                     ));
                 }
             }
@@ -1112,7 +1132,7 @@ fn read_tile_part_header(
                 let (index, coding) = decode_coc(segment(cur)?, siz)?;
                 if !named.insert((m, index)) {
                     return Err(Error::Codestream(format!(
-                        "duplicate COC marker for component {index} in the tile-part header"
+                        "duplicate `COC` marker for component {index} in the tile-part header"
                     )));
                 }
                 tile.coc.push((index, coding));
@@ -1121,7 +1141,7 @@ fn read_tile_part_header(
                 let (index, quant) = decode_qcc(segment(cur)?, siz)?;
                 if !named.insert((m, index)) {
                     return Err(Error::Codestream(format!(
-                        "duplicate QCC marker for component {index} in the tile-part header"
+                        "duplicate `QCC` marker for component {index} in the tile-part header"
                     )));
                 }
                 tile.qcc.push((index, quant));
@@ -1131,7 +1151,7 @@ fn read_tile_part_header(
                 let (index, shift) = decode_rgn(segment(cur)?, siz)?;
                 if !named.insert((m, index)) {
                     return Err(Error::Codestream(format!(
-                        "duplicate RGN marker for component {index} in the tile-part header"
+                        "duplicate `RGN` marker for component {index} in the tile-part header"
                     )));
                 }
                 tile.rgn.push((index, shift));
@@ -1163,7 +1183,7 @@ fn read_tile_part_header(
                 let zppt = body.u8()?;
                 if ppt.iter().any(|&(z, _)| z == zppt) {
                     return Err(Error::Codestream(format!(
-                        "duplicate PPT index Zppt {zppt} in one tile-part header"
+                        "duplicate `PPT` index `Zppt` {zppt} in one tile-part header"
                     )));
                 }
                 let ippt = body.take(body.remaining())?;
@@ -1295,7 +1315,7 @@ fn decode_sot(mut b: Cursor<'_>) -> Result<Sot> {
     let psot = b.u32()?;
     let tile_part_index = b.u8()?;
     let num_tile_parts = b.u8()?;
-    b.expect_consumed("SOT")?;
+    b.expect_consumed("`SOT`")?;
     Ok(Sot {
         tile_index,
         psot,
@@ -1354,7 +1374,7 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
 
     if cur.u16()? != marker::SOC {
         return Err(Error::Codestream(
-            "does not start with the SOC marker".into(),
+            "does not start with the `SOC` marker".into(),
         ));
     }
 
@@ -1422,7 +1442,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     };
     if first.code != marker::SIZ {
         return Err(Error::Codestream(
-            "SIZ must be the first marker after SOC".into(),
+            "`SIZ` must be the first marker after `SOC`".into(),
         ));
     }
     let siz = decode_siz(Cursor::new(first.body))?;
@@ -1452,19 +1472,19 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
         let body = || Cursor::new(seg.body);
         match seg.code {
             marker::SIZ => {
-                return Err(Error::Codestream("duplicate SIZ marker".into()));
+                return Err(Error::Codestream("duplicate `SIZ` marker".into()));
             }
             marker::COD => {
                 if cod.is_some() {
-                    return Err(Error::Codestream("duplicate COD marker".into()));
+                    return Err(Error::Codestream("duplicate `COD` marker".into()));
                 }
                 cod = Some(decode_cod(body())?);
             }
             marker::QCD => {
                 if qcd.is_some() {
-                    return Err(Error::Codestream("duplicate QCD marker".into()));
+                    return Err(Error::Codestream("duplicate `QCD` marker".into()));
                 }
-                qcd = Some(decode_quant(body(), "QCD")?);
+                qcd = Some(decode_quant(body(), "`QCD`")?);
             }
             // A.6.2 and A.6.5 allow at most one COC and one QCC per component in
             // a header. A second one is not a later-wins override; it is a
@@ -1475,7 +1495,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
                 let (index, coding) = decode_coc(body(), &siz)?;
                 if coc[index].replace(coding).is_some() {
                     return Err(Error::Codestream(format!(
-                        "duplicate COC marker for component {index}"
+                        "duplicate `COC` marker for component {index}"
                     )));
                 }
             }
@@ -1483,7 +1503,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
                 let (index, quant) = decode_qcc(body(), &siz)?;
                 if qcc[index].replace(quant).is_some() {
                     return Err(Error::Codestream(format!(
-                        "duplicate QCC marker for component {index}"
+                        "duplicate `QCC` marker for component {index}"
                     )));
                 }
             }
@@ -1492,7 +1512,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
                 let (index, shift) = decode_rgn(body(), &siz)?;
                 if rgn[index].replace(shift).is_some() {
                     return Err(Error::Codestream(format!(
-                        "duplicate RGN marker for component {index}"
+                        "duplicate `RGN` marker for component {index}"
                     )));
                 }
             }
@@ -1518,7 +1538,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // but not applied. One CRG per codestream (main-header only).
             marker::CRG => {
                 if crg.replace(decode_crg(body(), &siz)?).is_some() {
-                    return Err(Error::Codestream("duplicate CRG marker".into()));
+                    return Err(Error::Codestream("duplicate `CRG` marker".into()));
                 }
             }
 
@@ -1526,7 +1546,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // header it is a malformed codestream, not a missing feature.
             marker::PLT => {
                 return Err(Error::Codestream(
-                    "PLT is a tile-part-header marker; it is not permitted in the main header"
+                    "`PLT` is a tile-part-header marker; it is not permitted in the main header"
                         .into(),
                 ));
             }
@@ -1586,8 +1606,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
         }
     }
 
-    let cod = cod.ok_or_else(|| Error::Codestream("missing required COD marker".into()))?;
-    let qcd = qcd.ok_or_else(|| Error::Codestream("missing required QCD marker".into()))?;
+    let cod = cod.ok_or_else(|| Error::Codestream("missing required `COD` marker".into()))?;
+    let qcd = qcd.ok_or_else(|| Error::Codestream("missing required `QCD` marker".into()))?;
 
     // Start from COD/QCD's defaults, then lay each override over its component.
     // That is the whole of A.6.2's and A.6.5's resolution rule at the main
@@ -1673,7 +1693,7 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
         for (index, params) in header.components.iter().take(3).enumerate() {
             if params.coding.transform != transform {
                 return Err(Error::Unsupported(format!(
-                    "COD signals the color transform but component {index} uses a different \
+                    "`COD` signals the color transform but component {index} uses a different \
                      wavelet than component 0; the transform is undefined over a mix"
                 )));
             }
@@ -1687,8 +1707,8 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
 /// (unsigned 32 bits, or more than 32), from SIZ alone. It is a header fault,
 /// so it is found before any tile is read. OpenJPEG 2.5.0 is stricter: it
 /// refuses every depth over 31 bits at SIZ, signed 32 included. This decoder
-/// accepts signed 32 on purpose, since it fits `i32` (owner-approved
-/// deviation, see `docs/openjpeg-departures.md`); unsigned 32 and anything above 32
+/// accepts signed 32 on purpose, since it fits `i32` (a deliberate
+/// deviation, #167; see `docs/openjpeg-departures.md`); unsigned 32 and anything above 32
 /// are refused. `image::assemble` repeats the check for headers built by hand.
 fn check_sample_container(siz: &Siz) -> Result<()> {
     for (index, comp) in siz.components.iter().enumerate() {
@@ -1717,18 +1737,18 @@ fn check_sample_container(siz: &Siz) -> Result<()> {
 /// (`samples::check_codestream`).
 fn validate_geometry(siz: &Siz) -> Result<()> {
     if siz.x_size == 0 || siz.y_size == 0 {
-        return Err(Error::Marker("SIZ declares a zero-size image".into()));
+        return Err(Error::Marker("`SIZ` declares a zero-size image".into()));
     }
     // Table A-9: `0 <= XOsiz < Xsiz`. An origin at or past the far edge encloses
     // no image, so it is a malformed field, not an undecoded feature.
     if siz.x_offset >= siz.x_size || siz.y_offset >= siz.y_size {
         return Err(Error::Marker(format!(
-            "image offset ({}, {}) is not inside the image {}×{}",
+            "image offset ({}, {}) is not inside the image {}x{}",
             siz.x_offset, siz.y_offset, siz.x_size, siz.y_size
         )));
     }
     if siz.tile_width == 0 || siz.tile_height == 0 {
-        return Err(Error::Marker("SIZ declares a zero-size tile".into()));
+        return Err(Error::Marker("`SIZ` declares a zero-size tile".into()));
     }
     // Table A-9: `XTOsiz <= XOsiz` and `XTOsiz + XTsiz > XOsiz`. The first keeps
     // the tile grid from starting to the right of the image; the second keeps
@@ -1744,7 +1764,7 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
         || u64::from(siz.tile_y_offset) + u64::from(siz.tile_height) <= u64::from(siz.y_offset)
     {
         return Err(Error::Marker(format!(
-            "tile ({}×{} at offset ({}, {})) does not reach the image offset ({}, {})",
+            "tile ({}x{} at offset ({}, {})) does not reach the image offset ({}, {})",
             siz.tile_width,
             siz.tile_height,
             siz.tile_x_offset,
@@ -1762,7 +1782,7 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
     let tiles = siz.num_tiles();
     if tiles > MAX_TILES {
         return Err(Error::Marker(format!(
-            "tile grid is {}×{} = {tiles} tiles, past the {MAX_TILES}-tile limit on Isot",
+            "tile grid is {}x{} = {tiles} tiles, past the {MAX_TILES}-tile limit on `Isot`",
             siz.tile_grid().0,
             siz.tile_grid().1,
         )));
@@ -1794,11 +1814,11 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
     let csiz = b.u16()?;
 
     if csiz == 0 {
-        return Err(Error::Marker("SIZ declares zero components".into()));
+        return Err(Error::Marker("`SIZ` declares zero components".into()));
     }
     if csiz > markers::MAX_COMPONENTS {
         return Err(Error::Marker(format!(
-            "SIZ declares {csiz} components, above the limit of {}",
+            "`SIZ` declares {csiz} components, above the limit of {}",
             markers::MAX_COMPONENTS
         )));
     }
@@ -1806,7 +1826,7 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
     // before reserving, so a lying `Csiz` cannot steer the allocation.
     if b.remaining() != 3 * csiz as usize {
         return Err(Error::Codestream(format!(
-            "SIZ has {} bytes for {csiz} component records, expected {}",
+            "`SIZ` has {} bytes for {csiz} component records, expected {}",
             b.remaining(),
             3 * csiz as usize,
         )));
@@ -1835,7 +1855,7 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
             y_sampling,
         });
     }
-    b.expect_consumed("SIZ")?;
+    b.expect_consumed("`SIZ`")?;
 
     let siz = Siz {
         x_size,
@@ -1864,7 +1884,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     let scod = b.u8()?;
     if scod & 0xF8 != 0 {
         return Err(Error::Marker(format!(
-            "COD sets reserved Scod bits {:#04X}",
+            "`COD` sets reserved `Scod` bits {:#04X}",
             scod & 0xF8
         )));
     }
@@ -1887,7 +1907,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     // tile-part in practice; a declared zero is malformed (ISO Table A-16).
     let layers = b.u16()?;
     if layers == 0 {
-        return Err(Error::Marker("COD declares zero quality layers".into()));
+        return Err(Error::Marker("`COD` declares zero quality layers".into()));
     }
 
     // SGcod multiple-component transform: 0 = none, 1 = the Part 1 color
@@ -1904,7 +1924,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         }
     };
 
-    let coding = decode_coding(&mut b, "COD", explicit_precincts)?;
+    let coding = decode_coding(&mut b, "`COD`", explicit_precincts)?;
     let Coding {
         decomposition_levels,
         code_block_width,
@@ -1913,7 +1933,7 @@ fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
         transform,
         precinct_sizes,
     } = coding;
-    b.expect_consumed("COD")?;
+    b.expect_consumed("`COD`")?;
 
     Ok(Cod {
         progression,
@@ -1960,7 +1980,8 @@ fn resolved_poc_len(main: &MainHeader, tile: &TileHeader) -> usize {
 fn check_poc_budget(volumes: usize) -> Result<()> {
     if volumes > MAX_POC_VOLUMES {
         return Err(Error::Limit(format!(
-            "{volumes} progression volumes exceeds the decode guard of {MAX_POC_VOLUMES}"
+            "the `POC` markers declare {volumes} progression volumes for a tile, over the \
+             limit of {MAX_POC_VOLUMES}"
         )));
     }
     Ok(())
@@ -1985,7 +2006,7 @@ fn decode_poc(mut b: Cursor<'_>, siz: &Siz, into: &mut Vec<PocVolume>) -> Result
     let body_len = b.remaining();
     if body_len == 0 || !body_len.is_multiple_of(volume_size) {
         return Err(Error::Marker(format!(
-            "POC body is {body_len} bytes, not a whole number of {volume_size}-byte volumes"
+            "`POC` body is {body_len} bytes, not a whole number of {volume_size}-byte volumes"
         )));
     }
     check_poc_budget(into.len() + body_len / volume_size)?;
@@ -2002,8 +2023,9 @@ fn decode_poc(mut b: Cursor<'_>, siz: &Siz, into: &mut Vec<PocVolume>) -> Result
         let layer_end = b.u16()?;
         let res_end = b.u8()?;
         let comp_end = read_comp(&mut b)?;
-        let progression = Progression::from_u8(b.u8()?)
-            .ok_or_else(|| Error::Marker("POC volume sets a reserved progression order".into()))?;
+        let progression = Progression::from_u8(b.u8()?).ok_or_else(|| {
+            Error::Marker("`POC` volume sets a reserved progression order".into())
+        })?;
         // A volume that encloses nothing would consume no packets and desync
         // nothing, but it is a malformed field, not a no-op the encoder meant.
         // `LYEpoc` shares the rule: Table A-33 gives it the range 1–65535, so a
@@ -2011,7 +2033,7 @@ fn decode_poc(mut b: Cursor<'_>, siz: &Siz, into: &mut Vec<PocVolume>) -> Result
         // surfacing later as a less precise desync error.
         if res_end <= res_start || comp_end <= comp_start || layer_end == 0 {
             return Err(Error::Marker(format!(
-                "POC volume has an empty range: resolutions [{res_start}, {res_end}), \
+                "`POC` volume has an empty range: resolutions [{res_start}, {res_end}), \
                  components [{comp_start}, {comp_end}), layers [0, {layer_end})"
             )));
         }
@@ -2085,7 +2107,7 @@ fn decode_coding(b: &mut Cursor<'_>, origin: &str, explicit_precincts: bool) -> 
             // geometry is not merely unusual, it does not exist.
             if resolution > 0 && (ppx == 0 || ppy == 0) {
                 return Err(Error::Marker(format!(
-                    "{origin} sets precinct 2^{ppx}×2^{ppy} at resolution {resolution}; \
+                    "{origin} sets precinct 2^{ppx} x 2^{ppy} at resolution {resolution}; \
                      a zero exponent is permitted only at resolution 0"
                 )));
             }
@@ -2105,7 +2127,7 @@ fn decode_coding(b: &mut Cursor<'_>, origin: &str, explicit_precincts: bool) -> 
     );
     if xcb > 10 || ycb > 10 || xcb + ycb > 12 {
         return Err(Error::Marker(format!(
-            "code-block size 2^{xcb}×2^{ycb} exceeds the 2^10 / xcb+ycb≤12 limit"
+            "code-block size 2^{xcb} x 2^{ycb} is over the 4096-sample limit"
         )));
     }
 
@@ -2131,7 +2153,7 @@ fn component_index(b: &mut Cursor<'_>, siz: &Siz, origin: &str) -> Result<usize>
     };
     if index >= count {
         return Err(Error::Marker(format!(
-            "{origin} targets component {index}, but SIZ declares {count}"
+            "{origin} targets component {index}, but `SIZ` declares {count}"
         )));
     }
     Ok(index)
@@ -2142,7 +2164,7 @@ fn component_index(b: &mut Cursor<'_>, siz: &Siz, origin: &str) -> Result<usize>
 /// Returns the component index and the coding parameters that replace COD's for
 /// it. `Scoc` carries only the precinct flag; every other bit is reserved.
 fn decode_coc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Coding)> {
-    let index = component_index(&mut b, siz, "COC")?;
+    let index = component_index(&mut b, siz, "`COC`")?;
     let scoc = b.u8()?;
     let explicit_precincts = scoc & 0x01 != 0;
     // Only bit 0 is defined in `Scoc` (Table A-21). SOP and EPH are signaled
@@ -2151,20 +2173,20 @@ fn decode_coc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Coding)> {
     // without validating it and consults only bit 0.
     if scoc & 0xFE != 0 {
         return Err(Error::Marker(format!(
-            "COC sets reserved Scoc bits {:#04X}",
+            "`COC` sets reserved `Scoc` bits {:#04X}",
             scoc & 0xFE
         )));
     }
-    let coding = decode_coding(&mut b, "COC", explicit_precincts)?;
-    b.expect_consumed("COC")?;
+    let coding = decode_coding(&mut b, "`COC`", explicit_precincts)?;
+    b.expect_consumed("`COC`")?;
     Ok((index, coding))
 }
 
 /// Decode QCC — a quantization override for one component (A.6.5). The body
 /// after `Cqcc` is a `QCD` body, byte for byte.
 fn decode_qcc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Qcd)> {
-    let index = component_index(&mut b, siz, "QCC")?;
-    let quant = decode_quant(b, "QCC")?;
+    let index = component_index(&mut b, siz, "`QCC`")?;
+    let quant = decode_quant(b, "`QCC`")?;
     Ok((index, quant))
 }
 
@@ -2175,15 +2197,15 @@ fn decode_qcc(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, Qcd)> {
 /// defines. OpenJPEG reads the byte and never looks at it, so a codestream using
 /// a Part 2 style decodes there as though it were maxshift.
 fn decode_rgn(mut b: Cursor<'_>, siz: &Siz) -> Result<(usize, u8)> {
-    let index = component_index(&mut b, siz, "RGN")?;
+    let index = component_index(&mut b, siz, "`RGN`")?;
     let srgn = b.u8()?;
     if srgn != 0 {
         return Err(Error::Unsupported(format!(
-            "region-of-interest style {srgn}; only the implicit maxshift (Srgn = 0) is decoded"
+            "region-of-interest style {srgn}; only the implicit maxshift (`Srgn` = 0) is decoded"
         )));
     }
     let shift = b.u8()?;
-    b.expect_consumed("RGN")?;
+    b.expect_consumed("`RGN`")?;
     Ok((index, shift))
 }
 
@@ -2212,14 +2234,14 @@ fn decode_tlm(
     let stlm = b.u8()?;
     if stlm & 0x8F != 0 {
         return Err(Error::Marker(format!(
-            "TLM sets reserved Stlm bits {:#04X}",
+            "`TLM` sets reserved `Stlm` bits {:#04X}",
             stlm & 0x8F
         )));
     }
     let st = (stlm >> 4) & 0x3;
     if st == 3 {
         return Err(Error::Marker(
-            "TLM tile-index width ST = 3 is not defined".into(),
+            "`TLM` tile-index width `ST` = 3 is not defined".into(),
         ));
     }
     let sp = (stlm >> 6) & 0x1;
@@ -2227,7 +2249,7 @@ fn decode_tlm(
     let entry_size = usize::from(st) + 2 * (usize::from(sp) + 1);
     if !b.remaining().is_multiple_of(entry_size) {
         return Err(Error::Codestream(format!(
-            "TLM carries {} entry bytes, not a multiple of its {entry_size}-byte entries",
+            "`TLM` carries {} entry bytes, not a multiple of its {entry_size}-byte entries",
             b.remaining()
         )));
     }
@@ -2240,7 +2262,7 @@ fn decode_tlm(
         };
         if tile_index >= siz.num_tiles() {
             return Err(Error::Marker(format!(
-                "TLM names tile {tile_index}, but the grid holds {} tiles",
+                "`TLM` names tile {tile_index}, but the grid holds {} tiles",
                 siz.num_tiles()
             )));
         }
@@ -2268,7 +2290,7 @@ fn decode_crg(mut b: Cursor<'_>, siz: &Siz) -> Result<Vec<(u16, u16)>> {
     let count = siz.components.len();
     if b.remaining() != count * 4 {
         return Err(Error::Marker(format!(
-            "CRG carries {} bytes, not the {} its {count} components need",
+            "`CRG` carries {} bytes, not the {} its {count} components need",
             b.remaining(),
             count * 4
         )));
@@ -2311,7 +2333,7 @@ fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
     let chains = b.take(b.remaining())?;
     if chains.last().is_some_and(|&last| last & 0x80 != 0) {
         return Err(Error::Codestream(
-            "PLT ends in the middle of a packet-length entry".into(),
+            "`PLT` ends in the middle of a packet-length entry".into(),
         ));
     }
     Ok(())
@@ -2335,7 +2357,7 @@ fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
     markers.sort_by_key(|&(z, _)| z);
     if markers.windows(2).any(|w| w[0].0 == w[1].0) {
         return Err(Error::Codestream(
-            "duplicate PPM index Zppm in the main header".into(),
+            "duplicate `PPM` index `Zppm` in the main header".into(),
         ));
     }
     let joined: Vec<u8> = markers.into_iter().flat_map(|(_, bytes)| bytes).collect();

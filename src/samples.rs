@@ -78,7 +78,7 @@ pub(crate) fn cap(limit: &WorkLimit) -> u64 {
 }
 
 /// The [`Error::Limit`] for `what` (a description of what is over the limit,
-/// such as "image area 10980×10980"), which needs `total` samples where `cap`
+/// such as "image area 10980x10980"), which needs `total` samples where `cap`
 /// are allowed. It names the option, and the smallest
 /// [`WorkLimit::Raised`] factor that admits `total` (or, past any factor, only
 /// [`WorkLimit::Unlimited`]), or says that the target cannot address that many.
@@ -123,18 +123,22 @@ pub(crate) fn check_codestream(
     let (width, height) = siz.image_extent_at(reduction);
     let area = u64::from(width) * u64::from(height);
     if area > cap {
-        let what = format!("image area {width}×{height}{}", at(reduction));
+        let what = format!("image area {width}x{height}{}", at(reduction));
         return Err(over(&what, area, cap));
     }
     let mut total: u64 = 0;
     for index in 0..siz.components.len() {
         let (width, height) = siz
             .component_extent_at(index, reduction)
-            .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
+            .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {index}")))?;
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
     if total > cap {
-        let what = format!("{} components{}", siz.components.len(), at(reduction));
+        let what = format!(
+            "a decode of {} components{}",
+            siz.components.len(),
+            at(reduction)
+        );
         return Err(over(&what, total, cap));
     }
     Ok(())

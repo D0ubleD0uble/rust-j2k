@@ -36,12 +36,8 @@
 //! # Example
 //!
 //! The core of the public surface is [`decode`]: codestream or JP2 bytes in,
-//! an [`Image`] out. An [`Image`] is the image area on the reference grid plus
-//! one [`Component`] per output channel: per codestream component, or per
-//! palette channel for a palettized JP2 file. A sub-sampled component holds
-//! fewer samples than that area, so size sample buffers from the component,
-//! not from the image. Malformed input never panics; it comes back as a typed
-//! [`Error`].
+//! an [`Image`] out, with one [`Component`] per output channel. Malformed
+//! input never panics; it comes back as a typed [`Error`].
 //!
 //! ```
 //! use rust_j2k::{decode, Error};
@@ -88,11 +84,15 @@
 //! Decoding is strict by default. Truncated or inconsistent data is an
 //! error, and no partial image comes back with it. A raw codestream cut
 //! short fails as [`Error::Codestream`], a JP2 file cut short as `Codestream` or
-//! [`Error::FileFormat`], depending on where the cut falls, and a raw
-//! codestream whose `EOC` marker is missing is refused. (A JP2 file whose
-//! last tile-part has `Psot = 0` decodes without an `EOC`, as OpenJPEG
-//! reads it.) Input that is not JPEG 2000 at all, empty input and plain
-//! text included, is `Codestream` too.
+//! [`Error::FileFormat`], depending on where the cut falls. A codestream
+//! whose last tile-part states its length is refused without its closing
+//! `EOC` marker. A last tile-part of length 0 (`Psot = 0`, "to the end")
+//! takes the data up to the final two bytes without checking that they are
+//! `EOC`, as OpenJPEG does, so a missing `EOC` there costs the tile its last
+//! two bytes and usually fails the tile instead; in a JP2 file such a
+//! tile-part can also end where its `jp2c` box ends. Input that is not
+//! JPEG 2000 at all, empty input and plain text included, is `Codestream`
+//! too.
 //!
 //! Damage can show up as any variant, not only those two. A flipped bit in
 //! a header field can read as an absurd image size ([`Error::Limit`]) or an
@@ -250,69 +250,42 @@ pub use report::{DecodeReport, ReportEntry};
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 ///
-/// The decoded image may hold at most 2^28 samples (1 GiB as `i32`), summed
-/// over its output channels at the decode's
-/// [`resolution_reduction`](DecodeOptions::resolution_reduction): every
-/// component, a palette's expanded channels, and the channels sRGB output
-/// adds. That admits a 10980 x 10980 Sentinel-2 band, or an RGB image of up
-/// to about 89 MP. A larger image is refused with [`Error::Limit`] from its
-/// header alone, before any tile is read. A small file can still ask for
-/// the whole limit. For one square tile, peak memory is about 1.35 times the
-/// output, an estimated 1.4 GiB at the limit. A tall, narrow tile peaks higher:
-/// about 1.5 to 1.7 times the output when it is 8 to 1024 samples wide, and
-/// more when it is one sample wide: a 9/7 tile of 2^24 samples peaks at about
-/// 2.6 times at 3 wavelet levels and 2.7 to 3.2 times at 5 to 8, as the
-/// code-blocks' fixed overhead adds up. Those ratios were measured on that
-/// smaller image, not at the limit, where 2.6 times would be 2.6 GiB.
-/// While a palette expands the peak is about twice the output (see [the
-/// sample limit][sample-limit]). OpenJPEG has no such limit.
+/// Three limits bound a decode: the size of the image, and the work of
+/// reading the packet headers and decoding the code-blocks for the file's
+/// size. Past any of them the decode fails with [`Error::Limit`]. OpenJPEG has none of
+/// them.
 ///
-/// The work of reading the packet headers is bounded, as the code-block count
-/// is. Walking every tile's packets may take at most
-/// 2^24 steps, or 32 per byte of tile data when that is more. A step is a
-/// packet read, a run of code-blocks a header skips without reading a bit,
-/// a position a positional progression order sweeps, once for each
-/// (component, resolution) checked there, or, at a resolution reduction, a
-/// code-block of a resolution it drops, since every tile builds its geometry
-/// at full resolution; code-block entries that read a bit
-/// are paid for by the header's bytes and are not counted. With
-/// [`strict`](DecodeOptions::strict) off, a packet after the end of the data
-/// is one step, the end of a tile's data costs 32 steps for each of its
-/// (component, resolution) pairs, and a missing tile costs one step for each
-/// of its components. The end-of-data charge falls on every tile whose data
-/// ends, so a prefix cut late in a codestream that interleaves the
-/// tile-parts of very many tiles can be refused though the whole file
-/// decodes; raise [`DecodeOptions::packet_work_limit`] for such a stream. A
-/// codestream past the bound is refused with [`Error::Limit`]. Encoder
-/// output measured so far spends under 13% of the bound; a packet header of
-/// one byte can still skip each row of code-blocks in its precinct, and a
-/// sweep can check millions of positions that hold no packet, so a file of a
-/// few hundred bytes could otherwise take minutes. OpenJPEG has no such bound. A valid file of many
-/// layers that each include a few scattered code-blocks can exceed it (see
-/// [the tier-2 work bound][work-bound]). A JP2 file whose last tile-part has
-/// `Psot = 0` may first walk that tile as [`read_header_with`] does, under its
-/// own smaller bound, so its decode can take about 1.25 times as many steps.
+/// - The decoded image may hold at most 2^28 samples (1 GiB
+///   as `i32`), summed over its output channels at the decode's
+///   [`resolution_reduction`](DecodeOptions::resolution_reduction): every
+///   component, a palette's expanded channels, and the channels sRGB output
+///   adds. That admits a 10980 x 10980 Sentinel-2 band, or an RGB image of
+///   up to about 89 MP. A larger image is refused from its header alone,
+///   before any tile is read. Peak memory is about 1.35 times the output for
+///   a square tile, an estimated 1.4 GiB at the limit, and more for a tall,
+///   narrow tile or while a palette expands (see [the sample
+///   limit][sample-limit]).
+/// - Reading the packet headers of every tile may take
+///   at most 2^24 steps, or 32 per byte of tile data when that is more. A
+///   step is a packet read, a run of code-blocks a header skips without
+///   reading a bit, or a position a progression order sweeps; [the tier-2
+///   work bound][work-bound] gives the full count. A valid file of many
+///   layers that each include a few scattered code-blocks can exceed it.
+/// - Decoding the code-blocks may take at most
+///   2^26 sample-passes (passes run times code-block samples), or 2^15 per
+///   byte of tile data when that is more. A tile past it is refused before
+///   any of its code-blocks is decoded. On the slowest data the bound comes
+///   to about 0.5 s, or 0.25 ms a byte (see [the tier-1 work
+///   bound][tier1-bound]).
 ///
-/// The work of decoding the code-blocks is bounded too. Each coding pass
-/// scans its whole code-block, however few bytes it carries, so the work is
-/// counted as the passes run times the code-block's samples, over every
-/// code-block decoded. It may come to at most 2^26 sample-passes, or 2^15
-/// per byte of tile data when that is more, for every tile together. On
-/// the data slowest to decode that is about 0.5 s, or 0.25 ms a byte. A
-/// tile past the bound is refused with [`Error::Limit`] before any of its
-/// code-blocks is decoded. A packet header can ask for 88 passes over 4096
-/// samples in about 4 bytes, so a 76 KB file could otherwise take 19 s.
-/// Encoder output measured so far spends up to about 14000 per byte, 43% of
-/// the bound (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
-///
-/// [`decode_with`] can raise or lift each of these three limits, for a file
-/// from a source you trust: see [`DecodeOptions::sample_limit`],
+/// [`decode_with`] can raise or lift each of the three, for a file from a
+/// source you trust: see [`DecodeOptions::sample_limit`],
 /// [`DecodeOptions::packet_work_limit`] and
 /// [`DecodeOptions::code_block_work_limit`]. The message of an
 /// [`Error::Limit`] from one of them names the option and a
 /// [`WorkLimit::Raised`] factor; [`WorkLimit`] shows a retry and how far to
-/// trust the factor. The other guards behind `Error::Limit` have no option
-/// (see [`Error::Limit`]).
+/// trust the factor. The guards with no option are listed on
+/// [`Error::Limit`].
 ///
 /// Decoding is strict by default: damaged or truncated data is an
 /// [`Error`], not a partial image. With [`DecodeOptions::strict`] off,
@@ -371,7 +344,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// ends at the box's end. No samples are decoded, and every step of the walk
 /// is bounded. A codestream of more than 4096 tiles or 1024 components, or of
 /// fewer than 14 bytes per tile, is not walked, nor is a tile of more than
-/// 16384 code-blocks or precincts. The walk stops after 2^22 visits, or 8 per
+/// 16384 code-blocks or precincts. The walk stops after 2^22 steps, or 8 per
 /// byte of the tile's data when that is more, counting the same steps as
 /// the decode's bound (see [`decode`]);
 /// [`packet_work_limit`](DecodeOptions::packet_work_limit) raises or lifts
@@ -457,34 +430,15 @@ pub enum ColorOutput {
     /// an ICC profile is passed through, not applied.
     #[default]
     AsCoded,
-    /// sRGB. No conversion changes a channel's bit depth: a 12-bit file comes
-    /// out as 12-bit sRGB, and a caller who wants 8-bit samples scales them
-    /// (see the example below). A restricted ICC profile (a monochrome or a three-component
+    /// sRGB. A restricted ICC profile (a monochrome or a three-component
     /// matrix/TRC input profile) is applied at its rendering intent, as
-    /// OpenJPEG applies it with LittleCMS: the samples match
-    /// `opj_decompress -force-rgb` sample for sample. sYCC is converted to
-    /// RGB, with sub-sampled chroma (2x1 or 2x2) replicated to full
-    /// resolution first, using the IEC 61966-2-1 constants and rounding;
-    /// OpenJPEG shortens the constants and truncates, so the two differ by an
-    /// MSE of about 0.38 to 0.49 a channel. This decoder's output is within an
-    /// MSE of 0.03 of the ISO references. The color channels are the ones the `cdef` box
-    /// labels color 1, 2 and 3, wherever they sit. Other channels (opacity,
-    /// say) are untouched.
-    ///
-    /// The ICC reference is OpenJPEG 2.5.0 with LittleCMS 2.14 on x86-64
-    /// Linux (glibc 2.39). The output is the same on every platform whose
-    /// `fma` is correctly rounded; CI checks this on x86-64 Linux, macOS on
-    /// aarch64 and wasm32-wasip1. MinGW's `fma` (`*-pc-windows-gnu`) may not
-    /// be correctly rounded (rust-lang/rust#140515), and i586 targets use x87
-    /// arithmetic, which is not exact IEEE, so the output there can differ.
-    ///
-    /// When the samples are converted, [`Jp2Metadata::color`] says what they
-    /// now are: [`ColorSpace::Srgb`], or [`ColorSpace::Grayscale`] for a
-    /// monochrome profile, with no ICC profile. A monochrome profile whose
-    /// output is not neutral (absolute colorimetric with a tinted white
-    /// point) gives three sRGB channels in place of the gray one, as OpenJPEG
-    /// does. [`read_header`] doesn't predict that; [`read_header_with`] with
-    /// the same options does.
+    /// OpenJPEG applies it with LittleCMS. sYCC is converted to RGB, with
+    /// sub-sampled chroma (2x1 or 2x2) replicated to full resolution first.
+    /// The color channels are the ones the `cdef` box labels color 1, 2 and
+    /// 3, wherever they sit. Other channels (opacity, say) are untouched. No
+    /// conversion changes a channel's bit depth: a 12-bit file comes out as
+    /// 12-bit sRGB, and a caller who wants 8-bit samples scales them (see the
+    /// example below).
     ///
     /// These pass through as coded, with the metadata as declared, except a
     /// three-channel 4:2:0 or 4:2:2 image (below):
@@ -521,6 +475,26 @@ pub enum ColorOutput {
     /// [`ColorOutput::AsCoded`] decodes the same files. The [table of
     /// outcomes][outcomes] lists every case against what OpenJPEG does, and
     /// the profiles LittleCMS refuses.
+    ///
+    /// When the samples are converted, [`Jp2Metadata::color`] says what they
+    /// now are: [`ColorSpace::Srgb`], or [`ColorSpace::Grayscale`] for a
+    /// monochrome profile, with no ICC profile. A monochrome profile whose
+    /// output is not neutral (absolute colorimetric with a tinted white
+    /// point) gives three sRGB channels in place of the gray one, as OpenJPEG
+    /// does. [`read_header`] doesn't predict that; [`read_header_with`] with
+    /// the same options does.
+    ///
+    /// An ICC conversion matches `opj_decompress -force-rgb` (OpenJPEG 2.5.0
+    /// with LittleCMS 2.14 on x86-64 Linux, glibc 2.39) sample for sample.
+    /// The output is the same on every platform whose `fma` is correctly
+    /// rounded; CI checks this on x86-64 Linux, macOS on aarch64 and
+    /// wasm32-wasip1. MinGW's `fma` (`*-pc-windows-gnu`) may not be correctly
+    /// rounded (rust-lang/rust#140515), and i586 targets use x87 arithmetic,
+    /// which is not exact IEEE, so the output there can differ. The sYCC
+    /// conversion uses the IEC 61966-2-1 constants and rounds, and is within
+    /// an MSE of 0.03 of the ISO references. OpenJPEG shortens the constants
+    /// and truncates, so the two differ by an MSE of about 0.38 to 0.49 a
+    /// channel.
     ///
     /// # Example: an 8-bit RGBA buffer
     ///
@@ -681,7 +655,8 @@ pub struct DecodeOptions {
     /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output, and about 1.35 to 3.2 times that in all at its
-    /// peak (see [`decode`]), so a small hostile file can ask for many gigabytes. If
+    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
+    /// for many gigabytes. If
     /// the allocation fails the process aborts, as Rust's allocation
     /// failures do. Only an image too large for this target to
     /// address (`isize::MAX` bytes of samples) is still refused, with
@@ -699,14 +674,14 @@ pub struct DecodeOptions {
     /// `false` relaxes these two things and no others; any other relaxation
     /// is a separate option:
     ///
-    /// - **Missing data.** The input may end anywhere after the first `SOT`
+    /// - The input may end anywhere after the first `SOT`
     ///   marker, which ends the main header: inside a tile-part, its header or
     ///   its packets, with or without the `EOC` marker. Tiles with no
     ///   tile-part are filled with 0, and packets that were never read (cut
     ///   off, or left out by the `POC` volumes) add nothing to their
     ///   code-blocks. A tile-part count (`TNsot`) that
     ///   disagrees with the tile-parts found is taken as advisory.
-    /// - **Leftover bytes.** Bytes left after a tile's last packet are skipped
+    /// - Bytes left after a tile's last packet are skipped
     ///   rather than refused, and the tile is reported as possibly wrong.
     ///
     /// Everything else is refused as a strict decode refuses it: a damaged
@@ -777,7 +752,7 @@ impl Default for DecodeOptions {
 /// Each work bound scales with the size of the file, so a small file cannot
 /// ask for minutes of work, and the sample limit holds the memory a file may
 /// ask for to an estimated 1.4 GiB for a square tile, and to a few GiB for a tall,
-/// narrow one (see [`decode`]). A valid file can still go past
+/// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
 /// a bound, when it codes many samples in very few bytes or is very
 /// large. The decode then fails with [`Error::Limit`], and its message names
 /// the option and a [`Raised`](WorkLimit::Raised) factor. Treat the factor as
@@ -788,14 +763,13 @@ impl Default for DecodeOptions {
 ///   checked later, against the same limit, and may need a higher factor.
 /// - For the code-block bound it is what the tiles seen so far need, exact
 ///   for a file of one tile.
-/// - For the packet bound it is the next factor up from the one that failed,
-///   and the file may need more: the walk stops as soon as it runs out, so it
-///   does not know the total. (A POC sequence that reaches too many packets
-///   gets the factor its reach needs, and so do the code-blocks of the
-///   resolutions a reduction drops, but the walk after that check can still
-///   run out.) If `Raised(n)` is refused again, the message names the
-///   next factor. Double `n` on a retry rather than stepping by one: each
-///   retry costs more, and a file can need dozens of steps.
+/// - For the packet bound it is the next factor up from the one that failed
+///   (or, when the refusal comes from a POC sequence's reach or a
+///   reduction's dropped code-blocks, the factor that check needs), and the
+///   file may need more: the walk stops as soon as it runs
+///   out, so it does not know the total. Double `n` on each retry rather than
+///   stepping by one: each retry costs more, and a file can need a factor of
+///   dozens.
 ///
 /// Which value to pick:
 ///
@@ -852,8 +826,7 @@ pub enum WorkLimit {
     /// asks for, however long that takes; for the sample limit, it allocates
     /// all the memory the file asks for (see [`DecodeOptions::sample_limit`]).
     /// The other two limits keep their own settings, and the guards with no
-    /// option (listed on [`Error::Limit`]) stay in force, as does the cap on
-    /// the memory that records which packets a POC sequence has read.
+    /// option (listed on [`Error::Limit`]) stay in force.
     Unlimited,
 }
 
@@ -1038,20 +1011,20 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
 fn check_options(options: &DecodeOptions) -> Result<()> {
     if options.color == ColorOutput::Srgb && options.raw_channels {
         return Err(Error::InvalidOptions(
-            "raw channels means no color conversion, so it cannot be combined with sRGB \
-             output"
+            "`raw_channels` returns the channels as coded, so it cannot be combined with \
+             `ColorOutput::Srgb`"
                 .into(),
         ));
     }
     for (name, limit) in [
-        ("packet work", &options.packet_work_limit),
-        ("code-block work", &options.code_block_work_limit),
-        ("sample", &options.sample_limit),
+        ("packet_work_limit", &options.packet_work_limit),
+        ("code_block_work_limit", &options.code_block_work_limit),
+        ("sample_limit", &options.sample_limit),
     ] {
         if *limit == WorkLimit::Raised(0) {
             return Err(Error::InvalidOptions(format!(
-                "a {name} limit raised by a factor of 0; the default is \
-                 `WorkLimit::Default`"
+                "`DecodeOptions::{name}` is `WorkLimit::Raised(0)`, but the factor must be \
+                 at least 1"
             )));
         }
     }
@@ -1254,6 +1227,7 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
                 let spent = first_visits.saturating_sub(visits);
                 return Err(Error::Limit(limit_hint::packet(
                     work,
+                    index,
                     spent,
                     first_visits,
                     poc_bitmap,
@@ -1314,7 +1288,7 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
                 .tile_component_rect(tile.index, component)
                 .ok_or_else(|| {
                     Error::Inconsistent(format!(
-                        "no tile {} or no component {component} in SIZ",
+                        "no tile {} or no component {component} in `SIZ`",
                         tile.index
                     ))
                 })?;

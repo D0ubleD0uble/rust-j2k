@@ -256,12 +256,12 @@ pub(crate) fn resolution_geoms(
     let nl = cod.decomposition_levels as i64;
     if nl > 32 {
         return Err(Error::Inconsistent(format!(
-            "{nl} decomposition levels exceeds the 32-level maximum"
+            "{nl} decomposition levels exceed the 32-level maximum"
         )));
     }
 
     let rect = siz.tile_component_rect(tile, comp).ok_or_else(|| {
-        Error::Inconsistent(format!("no tile {tile} or no component {comp} in SIZ"))
+        Error::Inconsistent(format!("no tile {tile} or no component {comp} in `SIZ`"))
     })?;
     if rect.is_empty() {
         return Err(Error::Codestream(format!(
@@ -279,7 +279,7 @@ pub(crate) fn resolution_geoms(
     let ycb = cod.code_block_height as u32 + 2;
     if xcb > 10 || ycb > 10 || xcb + ycb > 12 {
         return Err(Error::Marker(format!(
-            "code-block size 2^{xcb}×2^{ycb} exceeds the 2^10 / xcb+ycb≤12 limit"
+            "code-block size 2^{xcb} x 2^{ycb} is over the 4096-sample limit"
         )));
     }
 
@@ -314,9 +314,12 @@ pub(crate) fn resolution_geoms(
         let here = precincts_wide.checked_mul(precincts_high);
         match here.filter(|&n| n <= *precinct_budget) {
             Some(n) => *precinct_budget -= n,
+            // The JP2 `Psot = 0` probe walks with a smaller budget, but it
+            // only asks whether the walk succeeds and drops this error, so
+            // every message a caller sees names the decode's limit.
             None => {
                 return Err(Error::Limit(format!(
-                    "tile precinct count exceeds the decode guard of {MAX_PRECINCTS}"
+                    "tile {tile} holds more than {MAX_PRECINCTS} precincts, the limit for a tile"
                 )));
             }
         }
@@ -368,6 +371,7 @@ pub(crate) fn resolution_geoms(
                     xcb,
                     ycb,
                     &cbg,
+                    tile,
                     block_budget,
                 )?);
             }
@@ -427,6 +431,7 @@ fn band_geom(
     xcb: u32,
     ycb: u32,
     cbg: &Cbg,
+    tile: u32,
     block_budget: &mut usize,
 ) -> Result<BandGeom> {
     let width = (bx1 - bx0).max(0) as usize;
@@ -438,7 +443,8 @@ fn band_geom(
     // Spend the tile's code-block budget before the walk allocates a state for
     // each of this band's blocks. `checked_mul` guards the product itself,
     // since a thin band under tiny blocks makes one factor as large as the
-    // band.
+    // band. The JP2 probe's smaller budget never reaches a caller (see the
+    // precinct check in `resolution_geoms`).
     match block_cols
         .checked_mul(block_rows)
         .filter(|&n| n <= *block_budget)
@@ -446,7 +452,7 @@ fn band_geom(
         Some(n) => *block_budget -= n,
         None => {
             return Err(Error::Limit(format!(
-                "tile code-block count exceeds the decode guard of {MAX_CODE_BLOCKS}"
+                "tile {tile} holds more than {MAX_CODE_BLOCKS} code-blocks, the limit for a tile"
             )));
         }
     }

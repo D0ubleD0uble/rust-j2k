@@ -87,7 +87,7 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
         // header but fails to decode the tile ("segment too long"), so neither
         // decoder decodes it. Its `cdef` (every type unspecified) is checked
         // by `the_ecw_unspecified_cdef_is_read` below.
-        Outcome::BrokenCodestream("overruns the tile-part"),
+        Outcome::BrokenCodestream("overruns the data of tile"),
     ),
     (
         "rgbwcmyk01_YeGeo_kakadu.jp2",

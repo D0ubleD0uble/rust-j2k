@@ -546,6 +546,6 @@
   "provenance": {
     "source": "jp2_sycc_420_odd.jp2",
     "oracle_command": "opj_decompress -i jp2_sycc_420_odd.jp2 -o out.pgx",
-    "notes": "OpenJPEG 2.5.0's sYCC to RGB, with its replication of sub-sampled chroma and its odd-origin rule. Its formula uses 0.344 and 0.714 and truncates each product; the decoder uses the IEC constants and rounds (owner-approved deviation, 2026-11-01), hence the tolerance of 1"
+    "notes": "OpenJPEG 2.5.0's sYCC to RGB, with its replication of sub-sampled chroma and its odd-origin rule. Its formula uses 0.344 and 0.714 and truncates each product; the decoder uses the IEC constants and rounds (a deliberate deviation, #165, 2026-11-01), hence the tolerance of 1"
   }
 }

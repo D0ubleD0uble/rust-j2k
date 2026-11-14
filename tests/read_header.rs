@@ -18,7 +18,7 @@ use rust_j2k::{
 
 /// Files where `decode` fails on tile data while `read_header` succeeds, and
 /// why. `rgb16_ecwsdk.jp2`'s codestream has no EOC: `decode` fails on its
-/// packets ("overruns the tile-part"; OpenJPEG fails there too), while its
+/// packets ("overruns the data of tile"; OpenJPEG fails there too), while its
 /// header, `cdef` included, reads cleanly. The `psot0/` files are the same
 /// shape (a `Psot = 0` last tile-part with no EOC or too little data), made
 /// from OpenJPEG codestreams. The `psot0/jp2_*` files listed wrap a `Psot = 0`

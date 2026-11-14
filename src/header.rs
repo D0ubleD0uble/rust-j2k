@@ -12,11 +12,11 @@ use crate::jp2::Jp2Metadata;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Header {
-    /// The image area's width on the reference grid, as
-    /// [`Image::width`](crate::Image::width).
+    /// The image area's width, as [`Image::width`](crate::Image::width): on
+    /// the reduced grid under a resolution reduction.
     pub width: u32,
-    /// The image area's height on the reference grid, as
-    /// [`Image::height`](crate::Image::height).
+    /// The image area's height, as [`Image::height`](crate::Image::height):
+    /// on the reduced grid under a resolution reduction.
     pub height: u32,
     /// One entry per [`Image::components`](crate::Image::components) entry,
     /// in the same order: for a palettized JP2 file, the palette's channels.
@@ -48,9 +48,11 @@ pub struct ComponentInfo {
     pub bit_depth: u8,
     /// Whether the samples are signed.
     pub signed: bool,
-    /// Horizontal sub-sampling factor on the reference grid; `1` is none.
+    /// Horizontal sub-sampling factor on the reference grid; `1` means no
+    /// sub-sampling.
     pub x_sampling: u8,
-    /// Vertical sub-sampling factor on the reference grid; `1` is none.
+    /// Vertical sub-sampling factor on the reference grid; `1` means no
+    /// sub-sampling.
     pub y_sampling: u8,
     /// The channel's width in samples, as
     /// [`Component::width`](crate::Component::width): `ceil(x1 / dx) -

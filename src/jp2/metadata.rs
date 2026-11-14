@@ -51,11 +51,9 @@ pub struct Jp2Metadata {
     /// position 0. Reading `Cn` as a position instead would swap 0 and 2, then
     /// 1 with itself, then 2 and 0 back, and give `[0, 1, 2]`, which is wrong.
     ///
-    /// The committed `jp2_cdef_reversed.jp2` has exactly those entries. This
-    /// example applies the rule above to the entries the decoder reports and
-    /// shows that the default decode is the raw one in that order. It is an
-    /// illustration, not an oracle: the oracle for the file is
-    /// `jp2_cdef_reversed.expected.json`, OpenJPEG's decode of it.
+    /// A file with exactly those entries decodes as this example shows: it
+    /// applies the rule above to the entries the decoder reports, and the
+    /// default decode is the raw one in that order.
     ///
     /// ```
     /// use rust_j2k::{Association, ChannelType, DecodeOptions, decode_with};

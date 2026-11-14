@@ -956,7 +956,7 @@ fn raw_channels_with_srgb_output_is_invalid() {
         expect_err(
             decode_with(&bytes, &options),
             |e| matches!(e, Error::InvalidOptions(_)),
-            "raw channels means no color conversion",
+            "`raw_channels` returns the channels as coded",
         );
     }
     // Each option alone is fine.

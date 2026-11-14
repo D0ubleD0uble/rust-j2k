@@ -26,7 +26,7 @@ Palette fixtures (`pclr` + `cmap`):
   both orders. OpenJPEG 2.5.0 sizes every channel by the first one's grid and
   crashes or emits uninitialized memory, so the oracle is OpenJPEG's decode of
   the bare codestream, with the palette applied by table lookup here. Each
-  channel keeps its own component's grid (an owner-approved deviation).
+  channel keeps its own component's grid (a deliberate deviation, #162).
 
 Channel definition fixtures (`cdef`):
 
@@ -79,8 +79,8 @@ At (6, 2) the reduced origin (3, 1) is odd in both axes, and at (5, 3) the
 reduced (3, 2) is even in y, so these tell a replication keyed on the
 full-resolution origin, as OpenJPEG's is, from one keyed on the reduced
 origin. That output uses OpenJPEG's formula (0.344 and
-0.714, products truncated); the decoder uses the IEC constants and rounds (an
-owner-approved deviation), so it is graded within 1 of it, and the test
+0.714, products truncated); the decoder uses the IEC constants and rounds (a
+deliberate deviation, #165), so it is graded within 1 of it, and the test
 build's OpenJPEG formula must match the odd fixtures' `.srgb.json` exactly.
 
 Usage: python3 scripts/gen-jp2-fixtures.py
@@ -529,7 +529,7 @@ def subsampled_fixtures() -> None:
                 f"OpenJPEG {OPENJPEG_VERSION} sizes every palette channel by the first channel's grid and "
                 "crashes or emits uninitialized memory on this file, so it is graded by "
                 "table lookup over OpenJPEG's decode of the bare codestream; each channel "
-                "keeps its source component's grid (owner-approved deviation, 2026-11-01)",
+                "keeps its source component's grid (a deliberate deviation, #162, 2026-11-01)",
             },
         )
 
@@ -612,8 +612,8 @@ def sycc_fixture(
                     ["opj_decompress", "-i", f"{name}.jp2", "-o", "out.pgx", *flags]),
                 "notes": f"OpenJPEG {OPENJPEG_VERSION}'s sYCC to RGB, with its replication of sub-sampled "
                 f"chroma {rule}. Its formula uses 0.344 and 0.714 and truncates each "
-                "product; the decoder uses the IEC constants and rounds (owner-approved "
-                "deviation, 2026-11-01), hence the tolerance of 1",
+                "product; the decoder uses the IEC constants and rounds (a deliberate "
+                "deviation, #165, 2026-11-01), hence the tolerance of 1",
             },
         }
         (FIXTURES / f"{name}.{suffix}.json").write_text(json.dumps(snapshot, indent=2) + "\n")

@@ -90,9 +90,11 @@ pub struct Component {
     pub bit_depth: u8,
     /// Whether samples are signed (SIZ component sign bit, or the palette's).
     pub signed: bool,
-    /// Horizontal sub-sampling factor (SIZ `XRsiz`); `1` means unit sampling.
+    /// Horizontal sub-sampling factor (SIZ `XRsiz`); `1` means no
+    /// sub-sampling.
     pub x_sampling: u8,
-    /// Vertical sub-sampling factor (SIZ `YRsiz`); `1` means unit sampling.
+    /// Vertical sub-sampling factor (SIZ `YRsiz`); `1` means no
+    /// sub-sampling.
     pub y_sampling: u8,
     /// `width * height` samples, row-major.
     pub samples: Vec<i32>,
@@ -198,7 +200,7 @@ impl Canvas {
             rects.push(
                 siz.component_rect(index)
                     .ok_or_else(|| {
-                        Error::Inconsistent(format!("SIZ declares no component {index}"))
+                        Error::Inconsistent(format!("`SIZ` declares no component {index}"))
                     })?
                     .reduced(reduction),
             );
@@ -353,13 +355,13 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8
     let siz = &header.siz;
     if samples.len() != siz.components.len() {
         return Err(Error::Inconsistent(format!(
-            "decoded {} components but SIZ declares {}",
+            "decoded {} components but `SIZ` declares {}",
             samples.len(),
             siz.components.len(),
         )));
     }
     if samples.is_empty() {
-        return Err(Error::Inconsistent("SIZ declares no components".into()));
+        return Err(Error::Inconsistent("`SIZ` declares no components".into()));
     }
 
     let components = samples
@@ -437,7 +439,7 @@ fn assemble_component(
     let comp = siz
         .components
         .get(index)
-        .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
+        .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {index}")))?;
 
     let depth = comp.bit_depth;
     // The standard allows 1..=38 (Table A-11) and `decode_siz` enforces it;
@@ -447,7 +449,7 @@ fn assemble_component(
     // through to the container check, which rejects them as Unsupported.
     if !(1..=38).contains(&depth) {
         return Err(Error::Marker(format!(
-            "component {index} bit depth {depth} outside the standard's range 1..=38"
+            "component {index} has bit depth {depth}, outside the standard's range of 1 to 38"
         )));
     }
     if comp.x_sampling == 0 || comp.y_sampling == 0 {
@@ -459,7 +461,7 @@ fn assemble_component(
     // Safe now that the zero-factor case above is excluded.
     let (width, height) = siz
         .component_extent_at(index, reduction)
-        .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
+        .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {index}")))?;
 
     let expected = (width as usize) * (height as usize);
     if samples.len() != expected {

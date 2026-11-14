@@ -436,7 +436,7 @@ fn walk_packets<'a>(
         tile: header
             .siz
             .tile_rect(tile.index)
-            .ok_or_else(|| Error::Inconsistent(format!("no tile {} in SIZ", tile.index)))?,
+            .ok_or_else(|| Error::Inconsistent(format!("no tile {} in `SIZ`", tile.index)))?,
         geoms: &geoms,
     };
     let delimiters = Delimiters {
@@ -453,6 +453,7 @@ fn walk_packets<'a>(
         data,
         body_pos: 0,
         packed,
+        tile: tile.index,
     };
     if let Some(reach) = reach.as_deref_mut() {
         reach.missing_from = geoms.iter().map(|c| vec![None; c.len()]).collect();
@@ -523,7 +524,7 @@ fn walk_packets<'a>(
         let rect = header
             .siz
             .tile_component_rect(tile.index, comp)
-            .ok_or_else(|| Error::Inconsistent(format!("no component {comp} in SIZ")))?;
+            .ok_or_else(|| Error::Inconsistent(format!("no component {comp} in `SIZ`")))?;
         let nl = (component_geoms.len() - 1) as u32;
         let mut resolutions = Vec::with_capacity(component_states.len());
         for (r, (band_states, level)) in component_states
@@ -560,7 +561,8 @@ fn walk_packets<'a>(
     // here as leftover bytes (this doubles as the parse self-check).
     if streams.body_pos != data.len() {
         return Err(Error::Codestream(format!(
-            "tile-part has {} body byte(s) left after the last packet",
+            "tile {} has {} byte(s) left after the last packet",
+            tile.index,
             data.len() - streams.body_pos
         )));
     }
@@ -568,7 +570,8 @@ fn walk_packets<'a>(
     // same kind of misread, caught on the header stream instead of the body.
     if packed && streams.header_pos != streams.header.len() {
         return Err(Error::Codestream(format!(
-            "PPT packed headers have {} byte(s) left after the last packet",
+            "tile {} has {} byte(s) of packed packet headers left after the last packet",
+            tile.index,
             streams.header.len() - streams.header_pos
         )));
     }
@@ -648,6 +651,8 @@ struct PacketStreams<'a> {
     body_pos: usize,
     /// Whether the header stream is separate from the body stream.
     packed: bool,
+    /// The tile's index, for an error message.
+    tile: u32,
 }
 
 /// Why a packet walk was refused for work, with the numbers a caller needs to
@@ -670,21 +675,23 @@ pub(crate) enum WorkRefusal {
 }
 
 impl WorkRefusal {
-    /// The plain message of the [`Error::Limit`] for this refusal.
+    /// The plain message of the [`Error::Limit`] for this refusal, without
+    /// the tile or a retry factor. [`decode`](crate::decode) replaces it with
+    /// the full message from `limit_hint`.
     pub(crate) fn why(&self) -> String {
         match self {
-            WorkRefusal::PacketWalk => {
-                "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)"
-                    .into()
-            }
+            WorkRefusal::PacketWalk => "reading the packet headers goes past the packet work \
+                                        bound (see `DecodeOptions::packet_work_limit`)"
+                .into(),
             WorkRefusal::PocReach { reached } => format!(
-                "tile packet walk exceeds its work bound: its POC volumes reach \
-                 {reached} packets (see `DecodeOptions::packet_work_limit`)"
+                "the `POC` volumes reach {reached} packets, a step each, more than \
+                 the steps left of the packet work bound (see \
+                 `DecodeOptions::packet_work_limit`)"
             ),
             WorkRefusal::DroppedBlocks { blocks } => format!(
-                "tile packet walk exceeds its work bound: the resolutions the \
-                 reduction drops hold {blocks} code-blocks in this component \
-                 (see `DecodeOptions::packet_work_limit`)"
+                "the resolutions the reduction drops hold {blocks} code-blocks in \
+                 one component, a step each, more than the steps left of the \
+                 packet work bound (see `DecodeOptions::packet_work_limit`)"
             ),
         }
     }
@@ -779,7 +786,9 @@ pub(crate) fn visit(visits: &Visits, n: usize) -> Result<()> {
 /// The error for a packed packet header that reads past the end of the
 /// `PPM` or `PPT` bytes it is packed in.
 fn packed_overrun() -> Error {
-    Error::Codestream("a packet header runs past the end of its PPM or PPT packed headers".into())
+    Error::Codestream(
+        "a packet header runs past the end of its `PPM` or `PPT` packed headers".into(),
+    )
 }
 
 /// The two-byte marker at `pos`, or `None` if it would run past the end.
@@ -808,12 +817,12 @@ fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
 fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
     let end = pos + 6;
     if end > data.len() {
-        return Err(Error::Codestream("truncated SOP marker segment".into()));
+        return Err(Error::Codestream("truncated `SOP` marker segment".into()));
     }
     let lsop = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
     if lsop != 4 {
         return Err(Error::Codestream(format!(
-            "SOP declares Lsop {lsop}, expected 4"
+            "`SOP` declares `Lsop` {lsop}, expected 4"
         )));
     }
     let nsop = u16::from_be_bytes([data[pos + 4], data[pos + 5]]);
@@ -821,7 +830,7 @@ fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
     let expected = (packet_index % 65536) as u16;
     if nsop != expected {
         return Err(Error::Codestream(format!(
-            "SOP sequence number {nsop} for packet {packet_index}, expected {expected}"
+            "`SOP` sequence number {nsop} for packet {packet_index}, expected {expected}"
         )));
     }
     Ok(end)
@@ -1032,9 +1041,10 @@ fn parse_packet<'a>(
         if partial {
             return Ok(Packet::Ended);
         }
-        return Err(Error::Codestream(
-            "tile-part ends before the last packet".into(),
-        ));
+        return Err(Error::Codestream(format!(
+            "the data of tile {} ends before the last packet",
+            streams.tile
+        )));
     }
 
     let mut bio = BitReader::new(&streams.header[streams.header_pos..]);
@@ -1121,7 +1131,7 @@ fn parse_packet<'a>(
     if delimiters.eph {
         if peek_marker(streams.header, streams.header_pos) != Some(marker::EPH) {
             return Err(Error::Codestream(
-                "COD signals EPH but the packet header is not followed by one".into(),
+                "`COD` signals `EPH` but the packet header is not followed by one".into(),
             ));
         }
         streams.header_pos += 2;
@@ -1149,9 +1159,10 @@ fn parse_packet<'a>(
                     undo(&log[from..], states);
                     return Ok(Packet::Ended);
                 }
-                return Err(Error::Codestream(
-                    "packet body segment overruns the tile-part".into(),
-                ));
+                return Err(Error::Codestream(format!(
+                    "a packet body segment overruns the data of tile {}",
+                    streams.tile
+                )));
             }
         };
         states[contribution.band].blocks[contribution.block].segments[contribution.segment]
@@ -1263,7 +1274,13 @@ fn parse_band_header(
             blocks[block_index].zero_bit_planes = trees
                 .zero_bits
                 .read(bx, by, ZBP_LIMIT, bio)
-                .ok_or_else(|| Error::Codestream("zero-bitplane count exceeds the limit".into()))?;
+                .ok_or_else(|| {
+                    Error::Codestream(format!(
+                        "code-block zero-bitplane count is over {}, the most a valid stream \
+                         can signal",
+                        ZBP_LIMIT - 1
+                    ))
+                })?;
         }
 
         // `read_num_passes` always returns >= 1, so the `ilog2` below never hits
@@ -1284,7 +1301,9 @@ fn parse_band_header(
         while bio.read_bit() == 1 {
             block.lblock += 1;
             if block.lblock > LBLOCK_MAX {
-                return Err(Error::Codestream("Lblock indicator runs too long".into()));
+                return Err(Error::Codestream(format!(
+                    "code-block `Lblock` grows past the limit of {LBLOCK_MAX}"
+                )));
             }
         }
         // The passes are handed to codeword segments in turn, each with its own

@@ -503,8 +503,8 @@ Tile-part bytes left over after the last packet are refused with a
   repeats, ignores the bytes left over, and matches the source. This decoder
   refuses it with a `Codestream` error that counts the bytes left after the
   last packet. A partial overlap (`-r 4,2,1`, layer ranges 2 then 3) is
-  refused with a `Codestream` error saying the tile-part ends before its last
-  packet.
+  refused with a `Codestream` error saying the data of the tile ends before
+  its last packet.
 - `-TP R` or `-TP C` with empty resolutions (`-F 2,99,1,1,u -n 6 -t 32,64
   -d 22,14 -TP R`). The encoder writes a stray `0x80` byte into each
   tile-part of an empty resolution. This decoder refuses it
@@ -520,8 +520,8 @@ decoder's image is within 1 of OpenJPEG's (it is 9/7).
 
 ### A tile-part that ends before its last packet
 
-A tile-part that ends before its last packet is refused ("tile-part ends
-before the last packet"). That is not a desynchronized walk: B.11 lets "any
+A tile-part that ends before its last packet is refused ("the data of tile T
+ends before the last packet"). That is not a desynchronized walk: B.11 lets "any
 number of whole packets (in order)" be dropped from the end of a tile, so this
 is the strict decode refusing missing data, which partial decode accepts with
 the missing packets reported ([Partial decode](#partial-decode)).

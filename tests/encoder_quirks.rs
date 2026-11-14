@@ -87,11 +87,11 @@ fn a_changed_restatement_is_refused(marker: [u8; 2], offset: usize, bits: u8, na
 /// The COD's layer count (its low byte): three layers where one is in force.
 #[test]
 fn a_later_cod_that_differs_is_refused() {
-    a_changed_restatement_is_refused([0xFF, 0x52], 7, 0x02, "a COD that differs");
+    a_changed_restatement_is_refused([0xFF, 0x52], 7, 0x02, "a `COD` that differs");
 }
 
 /// The QCD's first exponent (the byte's top five bits), one more.
 #[test]
 fn a_later_qcd_that_differs_is_refused() {
-    a_changed_restatement_is_refused([0xFF, 0x5C], 5, 0x08, "a QCD that differs");
+    a_changed_restatement_is_refused([0xFF, 0x5C], 5, 0x08, "a `QCD` that differs");
 }

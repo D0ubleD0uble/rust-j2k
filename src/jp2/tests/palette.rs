@@ -173,7 +173,7 @@ fn every_validation_row_is_a_file_format_error() {
         (
             "MTYP 0 with PCOL != 0",
             with_children(&[pclr.clone(), cmap_of(&[(0, 1, 0), (1, 0, 1), (0, 1, 2)])]),
-            "a direct channel's PCOL must be 0",
+            "a direct channel's `PCOL` must be 0",
         ),
         // OpenJPEG: "Component 0 is mapped twice."
         (

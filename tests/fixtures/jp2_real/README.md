@@ -16,8 +16,8 @@ tile decoding, "segment too long").
 not mention its test data, and several files are output of third-party
 encoders. They are not labeled MIT here, and the crate's own `MIT OR
 Apache-2.0` license does not cover them. The directory is excluded from the
-published crate (`exclude` in `Cargo.toml`). Committing them was an owner
-decision (Decision 2 in `docs/roadmap-phase3.md`); if a rights holder objects,
+published crate (`exclude` in `Cargo.toml`). We chose to commit them
+(Decision 2 in `docs/roadmap-phase3.md`); if a rights holder objects,
 delete the file and its row in `tests/jp2_real.rs`.
 
 ## Source
