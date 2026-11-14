@@ -99,7 +99,7 @@ files matches OpenJPEG's output. Ships as one release.
 unchanged, and the real-world set decodes with its recorded metadata. #167
 did the documentation pass and the extended gate of `RELEASING.md`, and the
 three whole-crate reviews of its step 2 ran under #226, which also holds the
-manual testing rounds the owner added before the tag. The 0.4.0 release
+manual testing rounds added before the tag. The 0.4.0 release
 waits on the open issues of the Phase 3 milestone.
 
 ## Phase 4: HTJ2K decode (Part 15)
@@ -122,10 +122,12 @@ so nothing needs renaming here.
 - MQ arithmetic encoder; EBCOT pass encoding.
 - Rate control / PCRD-opt; Tier-2 packetization; codestream and JP2 writing.
 
-**Gate:** round-trip (encode → decode → compare) and cross-decode (our encode
-read back by OpenJPEG, and vice versa) within target rate/quality. The
-round trip alone would be self-consistency; the cross-decode is what makes
-this gate external.
+**Gate:** round-trip (encode → decode → compare against the original within
+the path's tolerance) and cross-decode (OpenJPEG reads this encoder's output,
+and this decoder reads OpenJPEG's) within target rate/quality. The round trip
+alone would be self-consistency. Interoperating with the reference
+implementation in both directions is the real proof of encoder conformance,
+and it is what makes this gate external.
 
 ## Phase 6: Part 2 extensions + HTJ2K encode
 

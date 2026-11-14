@@ -7,7 +7,7 @@
 `cblk->numbps - 4`, a plane count that leaves the maxshift out, while its
 encoder and the standard (D.6, Table D.9) count from the code-block's first
 coded plane. So the grading reference is the source image itself, not the
-OpenJPEG decode. See docs/correctness.md, "Bypass under a maxshift".
+OpenJPEG decode. See docs/openjpeg-departures.md, "Bypass under a maxshift".
 
 The script writes `source.pgm` and one `.j2k` per style, then checks that each
 `.j2k` carries the RGN and the bypass flag, and that `opj_decompress` does not

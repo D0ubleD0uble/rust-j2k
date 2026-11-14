@@ -1017,7 +1017,7 @@ fn read_segmentation_symbol(
 /// so the rule below, taken literally, would keep every coefficient as
 /// background. `t1.c` zeroes `datap` wholesale instead, and this follows it —
 /// changing the arm to keep the coefficients would diverge from OpenJPEG on
-/// every such stream (see `docs/correctness.md` on deviations).
+/// every such stream (see `docs/openjpeg-departures.md`).
 fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
     if roi_shift == 0 {
         return mag;
@@ -1182,7 +1182,7 @@ pub fn decode_block(
     // coded planes, and tier-2's pass-count split of the segments
     // (`segment_max_passes`) agrees. OpenJPEG's decoder counts from
     // `cblk->numbps`, which leaves the shift out, and so decodes a maxshift +
-    // bypass stream wrong, its own encoder's included (docs/correctness.md,
+    // bypass stream wrong, its own encoder's included (docs/openjpeg-departures.md,
     // "Bypass under a maxshift"). Signed, because `top - 4` is negative on a
     // shallow block that never reaches the raw region.
     let raw_from = top as i32 - 4;

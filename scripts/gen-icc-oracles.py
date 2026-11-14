@@ -771,14 +771,14 @@ def fuzz_seeds() -> None:
 def require_platform() -> None:
     """Exit unless this is the reference platform: x86-64 with glibc 2.39.
 
-    docs/correctness.md says LittleCMS's `pow` and `log` follow the C library,
+    docs/srgb-output.md says LittleCMS's `pow` and `log` follow the C library,
     so other platforms can change the ICC output bytes.
     """
     machine = platform.machine()
     libc, libc_version = platform.libc_ver()
     if machine != "x86_64" or libc != "glibc" or libc_version != "2.39":
         sys.exit(f"this is {machine} with {libc} {libc_version}, not x86_64 with glibc 2.39: "
-                 "refusing to generate ICC oracles (see docs/correctness.md)")
+                 "refusing to generate ICC oracles (see docs/srgb-output.md)")
 
 
 def main() -> None:

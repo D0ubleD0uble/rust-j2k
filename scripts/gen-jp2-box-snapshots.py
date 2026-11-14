@@ -58,7 +58,7 @@ subject to these checks.
 - `color_specifications`: every `colr` box before the codestream, in file
   order: those inside any `jp2h` box, and those misplaced at the top level
   after the first `jp2h`. A `colr` before the first `jp2h` or after the
-  first `jp2c` is not counted (docs/correctness.md, "The JP2 box layer").
+  first `jp2c` is not counted (docs/openjpeg-departures.md, "The JP2 box layer").
 - `reader_requirements`: the first top-level `rreq`, before or after the
   codestream (ISO/IEC 15444-2 M.11.1); `null` when there is none or it does
   not hold exactly its fields.

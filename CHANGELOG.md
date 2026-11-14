@@ -50,7 +50,7 @@ The first fails to compile; the others compile but behave differently.
   estimated 1.4 GiB for a square single-component tile, up to about 3.2 GiB
   for a tile one sample wide, and about 2 GiB while a JP2 palette expands.
   These are ratios measured on images of 2^24 to 2^26 samples, scaled to the
-  limit ([the sample limit](docs/correctness.md#the-sample-limit)).
+  limit ([the sample limit](docs/resource-bounds.md#the-sample-limit)).
   `WorkLimit` cannot set a lower limit.
 - Expect an error on three kinds of malformed file that 0.3 decoded: a
   code-block size past the 4096-sample limit in any `COD` or `COC`, even
@@ -71,7 +71,7 @@ The first fails to compile; the others compile but behave differently.
   codestream. The boxes are checked; files that bend the box rules the way
   OpenJPEG tolerates decode as they do there. A file that is not
   JP2-compatible is `Error::Unsupported`. The rules for what is accepted are
-  on `decode` and in [the correctness notes](docs/correctness.md).
+  on `decode` and in [the JP2 box layer notes](docs/openjpeg-departures.md#the-jp2-box-layer).
 - A JP2 file with a palette (`pclr` and `cmap`) decodes to the palette's
   channels, and one with channel definitions (`cdef`) puts its color
   channels in color order. `DecodeOptions::raw_channels` skips both and
@@ -221,7 +221,7 @@ The first fails to compile; the others compile but behave differently.
 - With `strict` off, each missing tile-component and each tile whose data
   ends is charged against the packet work bound, so a short input cannot ask
   for unbounded work.
-- [Resource bounds](docs/correctness.md#resource-bounds) gives each limit
+- [Resource bounds](docs/resource-bounds.md) gives each limit
   and its measurements.
 
 ## [0.3.0] - 2026-07-18

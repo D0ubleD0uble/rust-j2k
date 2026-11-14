@@ -62,7 +62,7 @@ version.
   channel labels against their `cdef` boxes. Two match bit-exactly.
   `stefan_full_rgba.jp2` is 9/7 and is graded within 1: 10 of its 97200
   samples differ from OpenJPEG's by 1, from OpenJPEG's `two_invK` in place
-  of the exact 2/K (see `docs/correctness.md`).
+  of the exact 2/K (see `docs/openjpeg-departures.md`).
 
 The references are OpenJPEG output for files whose rights are not confirmed,
 so they share the status in Rights above.

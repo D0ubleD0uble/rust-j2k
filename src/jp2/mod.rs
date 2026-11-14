@@ -40,7 +40,7 @@
 //! the box's end is used when that tile's packets end exactly there
 //! ([`locate_codestream`]). The two
 //! decoders still differ on some files, in both directions;
-//! `docs/correctness.md` and the reject matrix in `docs/roadmap-phase3.md`
+//! `docs/openjpeg-departures.md` and the reject matrix in `docs/roadmap-phase3.md`
 //! list where.
 //!
 //! Every length is checked before use and nothing is allocated from one (see
@@ -335,8 +335,8 @@ fn probe_visits(bytes: u64) -> u64 {
 ///
 /// That makes the box's end safe to use. OpenJPEG reads the tile-part on to
 /// the end of the file, past the box: the same packets when the tile has 999
-/// layers or fewer, then bytes it ignores (docs/correctness.md, "Where the
-/// decoders differ", covers more layers). Read that way here, the same
+/// layers or fewer, then bytes it ignores (docs/openjpeg-departures.md,
+/// "More than 999 layers"). Read that way here, the same
 /// packets are followed by bytes left
 /// after the last packet, which are refused, so reading to the end of the file
 /// could never decode instead; a fault in tier-1 would be the same fault

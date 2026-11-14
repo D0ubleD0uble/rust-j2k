@@ -17,7 +17,7 @@
 //!
 //! The standard also requires `VERS` and `FLAG` to be 0 and `LOC` to be a
 //! NUL-terminated UTF-8 string. Those are reported as stored, not checked.
-//! `docs/correctness.md` records the choices.
+//! `docs/openjpeg-departures.md` records the choices.
 
 use super::UuidInfo;
 use super::boxes::{Boxes, Jp2Box};

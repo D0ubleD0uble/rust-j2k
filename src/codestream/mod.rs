@@ -1280,7 +1280,7 @@ fn resolve_tile_header<'m>(main: &'m MainHeader, tile: &TileHeader) -> Result<Co
     // POC walks only its own volumes, accumulated across its tile-parts in
     // order. OpenJPEG 2.5.0 instead seeds each tile from the main header, POC
     // included, and `opj_j2k_read_poc` appends the tile-part's volumes after
-    // it, so a file carrying both decodes wrong there (docs/correctness.md).
+    // it, so a file carrying both decodes wrong there (docs/openjpeg-departures.md).
     //
     // A tile whose first POC is in a later tile-part breaks A.6.6. Its first
     // packets can only follow the main header's order, so it is read as
@@ -1665,7 +1665,7 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
         // reversible path ignores the mantissas — same output) but rejects
         // 9/7-with-none rather than adopt the oracle's zero-mantissa
         // interpretation of a stream the standard forbids — a documented
-        // stricter-than-oracle call (docs/correctness.md), relaxed if a real
+        // stricter-than-oracle call (docs/openjpeg-departures.md), relaxed if a real
         // file ever trips it.
         if params.coding.transform == Transform::Irreversible97
             && params.quant.style == QuantStyle::None
@@ -1708,7 +1708,7 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
 /// so it is found before any tile is read. OpenJPEG 2.5.0 is stricter: it
 /// refuses every depth over 31 bits at SIZ, signed 32 included. This decoder
 /// accepts signed 32 on purpose, since it fits `i32` (a deliberate
-/// deviation, #167; see `docs/correctness.md`); unsigned 32 and anything above 32
+/// deviation, #167; see `docs/openjpeg-departures.md`); unsigned 32 and anything above 32
 /// are refused. `image::assemble` repeats the check for headers built by hand.
 fn check_sample_container(siz: &Siz) -> Result<()> {
     for (index, comp) in siz.components.iter().enumerate() {

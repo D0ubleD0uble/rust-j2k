@@ -212,7 +212,7 @@ bits, the ISO columns after the shift):
 
 All five are in class (PAE 4, MSE 1). The sYCC files differ from OpenJPEG by
 its formula (shortened constants, truncation), a deliberate deviation
-(#165) written up in `docs/correctness.md`. The ICC files match OpenJPEG exactly:
+(#165) written up in `docs/srgb-output.md`. The ICC files match OpenJPEG exactly:
 the decoder ports LittleCMS's pipeline (`tests/jp2_icc.rs` also checks them
 at every rendering intent).
 

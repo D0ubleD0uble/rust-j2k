@@ -38,15 +38,19 @@ than 8 bits per value needs.
 - [roadmap.md](roadmap.md) is the phased plan, from the GRIB2 decode MVP
   (Phase 1, v0.1.0) through the general Part 1 decoder (Phase 2, v0.3.0) and the JP2
   file format (Phase 3) to full-codec parity, with the gate for each phase.
-- [correctness.md](correctness.md) explains how the output is checked: the
-  conformance suite, the OpenJPEG oracle, per-stage golden tests and fuzzing.
-  It also records every place this decoder deliberately differs from
-  OpenJPEG, and why, and it states the decoder's resource limits and what
-  sRGB output produces for each kind of input.
+- [correctness.md](correctness.md) explains why the output can be trusted:
+  the conformance suite, the OpenJPEG oracle, per-stage golden tests and
+  fuzzing.
+- [openjpeg-departures.md](openjpeg-departures.md) records every place this
+  decoder deliberately differs from OpenJPEG 2.5.0, and why.
+- [resource-bounds.md](resource-bounds.md) states the decoder's resource
+  limits, how each is counted and what it costs a valid file.
+- [srgb-output.md](srgb-output.md) gives what sRGB output produces for each
+  kind of input, and the evidence for each case.
 - [development.md](development.md) lists the tools that regenerate the oracle
   snapshots and run the extra quality gates (cargo-deny, cargo-fuzz), with a
   version and an install command for each. You don't need them to run the
-  tests.
+  tests. It also lists the checks for work on a decode stage.
 - [roadmap-phase1.md](roadmap-phase1.md), [roadmap-phase2.md](roadmap-phase2.md)
   and [roadmap-phase3.md](roadmap-phase3.md) are the milestone plans for the
   first three phases, each step tied to its module and its oracle. All three
@@ -57,4 +61,5 @@ than 8 bits per value needs.
 If you're new, read this page, then [roadmap.md](roadmap.md) for the shape of
 the work, then [scope.md](scope.md) when you need to know whether a feature is
 supported or which phase it belongs to. Read [correctness.md](correctness.md)
-before you claim a stage is done.
+and [what "done" means](development.md#what-done-means) before you claim a
+stage is done.

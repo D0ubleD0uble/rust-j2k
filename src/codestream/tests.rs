@@ -2951,7 +2951,7 @@ fn a_tile_part_rgn_names_one_component() {
 
 /// A tile-part POC **overrides** the main header's (A.6.6: "Tile-part POC >
 /// Main POC"): the tile walks its own volumes only. OpenJPEG appends the
-/// tile's volumes after the main header's instead (docs/correctness.md). The
+/// tile's volumes after the main header's instead (docs/openjpeg-departures.md). The
 /// main header keeps its own volume for any tile without a POC.
 #[test]
 fn a_tile_part_poc_overrides_the_main_header_poc() {
