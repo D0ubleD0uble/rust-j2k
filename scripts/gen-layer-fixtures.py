@@ -12,6 +12,10 @@ gradients (seed 2150). It encodes them with `opj_compress` into the codestreams
 in FIXTURES, then for each one and each layer count N from 1 to its layer
 count writes `<name>_l<N>_<c>.pgx`, the `opj_decompress -l N` output of
 component c, and `<name>_l<N>_r<R>_<c>.pgx` for the reductions in REDUCED.
+`zero_length_contribution.j2k` and `zero_length_contribution_bypass.j2k`, in
+tests/fixtures/ (see `gen-zero-length-fixtures.py`), are graded the same way;
+their oracles are written here.
+
 It checks that each N decodes to other samples than N + 1, so every cap is
 graded on samples it changes.
 
@@ -67,6 +71,11 @@ FIXTURES = {
     "cprl_irreversible": ("rgb.ppm", ["-n", "3", "-p", "CPRL", "-I", "-r", "60,20,6"], 3),
     # Written by `pterm_cut` rather than encoded: see the module docs.
     "pterm_cut": (None, [], 2),
+    # The fixtures of `gen-zero-length-fixtures.py`, read from
+    # tests/fixtures/: a block's layer 0 passes have no bytes, and layer 1
+    # brings them, so a cap of 1 decodes those passes from the fill.
+    "zero_length_contribution": ("..", [], 2),
+    "zero_length_contribution_bypass": ("..", [], 2),
 }
 
 # name -> [(reduction, [layer counts])]
@@ -197,7 +206,9 @@ def main() -> None:
         pterm_cut(Path(tmp))
     for name, (source, args, layers) in FIXTURES.items():
         j2k = DIR / f"{name}.j2k"
-        if source is not None:
+        if source == "..":
+            j2k = FIXTURES_ROOT / f"{name}.j2k"
+        elif source is not None:
             run("opj_compress", "-i", str(DIR / source), "-o", str(j2k), *args)
         plans = [(0, list(range(1, layers + 1)))] + REDUCED.get(name, [])
         for reduction, counts in plans:

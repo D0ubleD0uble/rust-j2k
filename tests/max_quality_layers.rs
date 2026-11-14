@@ -62,13 +62,29 @@ fn sample_bytes(image: &Image) -> Vec<u8> {
 /// differ from OpenJPEG's. 5/3 is exact integer arithmetic. The 9/7 one is
 /// float: OpenJPEG's decode of the whole codestream differs from this one by
 /// at most 1 too.
-const SYNTHETIC: [(&str, u16, i32); 5] = [
+///
+/// `zero_length_contribution` and `zero_length_contribution_bypass` sit in
+/// `tests/fixtures/`: a cap of 1 decodes passes whose bytes come in layer 1
+/// from the fill, as OpenJPEG does, not from those bytes.
+const SYNTHETIC: [(&str, u16, i32); 7] = [
     ("lrcp", 4, 0),
     ("rpcl", 3, 0),
     ("bypass_pterm", 4, 0),
     ("pterm_cut", 2, 0),
     ("cprl_irreversible", 3, 1),
+    ("zero_length_contribution", 2, 0),
+    ("zero_length_contribution_bypass", 2, 0),
 ];
+
+/// The codestream `name`, in `tests/fixtures/layers/` or `tests/fixtures/`.
+fn codestream(name: &str) -> Vec<u8> {
+    let path = fixtures().join("layers").join(format!("{name}.j2k"));
+    if path.exists() {
+        read(&path)
+    } else {
+        read(&fixtures().join(format!("{name}.j2k")))
+    }
+}
 
 /// The decodes at a reduction with an oracle: fixture, reduction, caps.
 const REDUCED: [(&str, u8, &[u16]); 3] = [
@@ -80,7 +96,7 @@ const REDUCED: [(&str, u8, &[u16]); 3] = [
 /// Decode `name` at `layers` and `reduction` and compare each component
 /// with the oracle `<stem>_<c>.pgx`.
 fn grade(name: &str, layers: u16, reduction: u8, tolerance: i32) {
-    let bytes = layers_file(&format!("{name}.j2k"));
+    let bytes = codestream(name);
     let what = format!("{name} -l {layers} -r {reduction}");
     let image = decode_ok(&bytes, &capped(layers, reduction), &what);
     let stem = if reduction == 0 {
@@ -122,7 +138,7 @@ fn layers_file_exists(name: &str) -> Option<PathBuf> {
 #[test]
 fn each_cap_matches_openjpeg() {
     for (name, layers, tolerance) in SYNTHETIC {
-        let bytes = layers_file(&format!("{name}.j2k"));
+        let bytes = codestream(name);
         assert_eq!(cod_layers(&bytes), layers, "{name}");
         let mut previous: Option<Vec<u8>> = None;
         for n in 1..=layers {
