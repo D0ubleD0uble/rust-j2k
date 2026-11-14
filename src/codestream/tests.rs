@@ -2280,7 +2280,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with(
                 &[seg(marker::CAP, &cap15(3)), seg(marker::CAP, &cap15(3))].concat(),
             )),
-            Variant::Marker,
+            Variant::Codestream,
         ),
         (
             "CPF of an odd byte count",
@@ -2292,7 +2292,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with(
                 &[seg(marker::CPF, &[0, 2]), seg(marker::CPF, &[0, 2])].concat(),
             )),
-            Variant::Marker,
+            Variant::Codestream,
         ),
         (
             "CAP in a tile-part header",
@@ -2301,7 +2301,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
                 &[seg(marker::CAP, &cap15(3))],
                 &[0],
             )),
-            Variant::Marker,
+            Variant::Codestream,
         ),
         (
             "CPF in a tile-part header",
@@ -2310,7 +2310,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
                 &[seg(marker::CPF, &[0, 2])],
                 &[0],
             )),
-            Variant::Marker,
+            Variant::Codestream,
         ),
         // Multiple components are decoded, so they left this table. The
         // sample limit that bounds them depends on the caller's options, so
@@ -4251,12 +4251,7 @@ fn a_cap_whose_length_disagrees_with_pcap_is_marker() {
 
 #[test]
 fn a_cap_signaling_another_part_is_unsupported_naming_it() {
-    for (pcap, part) in [
-        (PART2_PCAP, 2),
-        (1 << 31, 1),
-        (1, 32),
-        (PCAP_PART15 | 1 << 15, 17),
-    ] {
+    for (pcap, part) in [(PART2_PCAP, 2), (PCAP_PART15 | 1 << 15, 17)] {
         let words = vec![0; pcap.count_ones() as usize];
         let e = err(&header_with(&seg(marker::CAP, &cap_body(pcap, &words))));
         let Error::Unsupported(message) = &e else {
@@ -4264,6 +4259,19 @@ fn a_cap_signaling_another_part_is_unsupported_naming_it() {
         };
         assert!(
             message.contains(&format!("ISO/IEC 15444-{part},")),
+            "{message}"
+        );
+    }
+    // Part 1 has no extended capabilities and no part past 17 exists, so
+    // those bits are named as bits, not as parts.
+    for (pcap, bit) in [(1u32 << 31, 1), (1 << 14, 18), (1, 32)] {
+        let words = vec![0; pcap.count_ones() as usize];
+        let e = err(&header_with(&seg(marker::CAP, &cap_body(pcap, &words))));
+        let Error::Unsupported(message) = &e else {
+            panic!("{pcap:#010X}: got {e:?}")
+        };
+        assert!(
+            message.contains(&format!("`Pcap` bit {bit}, which names no part")),
             "{message}"
         );
     }
@@ -4291,11 +4299,11 @@ fn multiht_is_unsupported_and_every_other_ccap15_is_kept() {
 }
 
 #[test]
-fn a_second_cap_or_cpf_is_marker() {
+fn a_second_cap_or_cpf_is_codestream() {
     for (code, body) in [(marker::CAP, cap15(3)), (marker::CPF, vec![0, 2])] {
         let twice = [seg(code, &body), seg(code, &body)].concat();
         let e = err(&header_with(&twice));
-        let Error::Marker(message) = &e else {
+        let Error::Codestream(message) = &e else {
             panic!("{code:#06X}: got {e:?}")
         };
         assert!(message.contains("duplicate"), "{message}");
@@ -4323,11 +4331,11 @@ fn a_cpf_that_is_not_whole_words_is_marker() {
 }
 
 #[test]
-fn cap_or_cpf_in_a_tile_part_header_is_marker() {
+fn cap_or_cpf_in_a_tile_part_header_is_codestream() {
     for (code, body) in [(marker::CAP, cap15(3)), (marker::CPF, vec![0, 2])] {
         let bytes = assemble_with_tile_markers(&default_header(), &[seg(code, &body)], &[0]);
         let e = perr(&bytes);
-        let Error::Marker(message) = &e else {
+        let Error::Codestream(message) = &e else {
             panic!("{code:#06X}: got {e:?}")
         };
         assert!(message.contains("tile-part header"), "{message}");

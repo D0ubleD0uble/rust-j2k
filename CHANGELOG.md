@@ -23,9 +23,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Error::Unsupported`, now refused for the HT code-block style of their COD
   or COC instead of for `CAP`, so a cut header is `Error::Incomplete` up to
   that COD or COC. A `CAP` that signals a part other than Part 15 is
-  `Unsupported`. A malformed or repeated `CAP` or `CPF` is `Error::Marker`, as
-  is either one in a tile-part header (a `CAP` there was
-  `Error::Codestream`).
+  `Unsupported`. A malformed `CAP` or `CPF` is `Error::Marker`; a repeated one,
+  or either one in a tile-part header, is `Error::Codestream`.
 
 ## [0.4.0] - 2026-11-14
 

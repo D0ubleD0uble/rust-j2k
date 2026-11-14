@@ -1325,10 +1325,10 @@ fn read_tile_part_header(
             }
             // CAP and CPF describe the whole codestream, so they belong in the
             // main header only (ISO/IEC 15444-1 A.5.2, ISO/IEC 15444-15 A.6);
-            // OpenJPEG reads both there only. Here they are an illegal field
-            // placement.
+            // OpenJPEG reads both there only. Here, like a misplaced TLM, they
+            // are a malformed codestream.
             marker::CAP | marker::CPF => {
-                return Err(Error::Marker(format!(
+                return Err(Error::Codestream(format!(
                     "{} is a main-header marker; it is not permitted in a tile-part header",
                     marker::describe(m)
                 )));
@@ -1685,12 +1685,12 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // codestream.
             marker::CAP => {
                 if cap.replace(decode_cap(body())?).is_some() {
-                    return Err(Error::Marker("duplicate `CAP` marker".into()));
+                    return Err(Error::Codestream("duplicate `CAP` marker".into()));
                 }
             }
             marker::CPF => {
                 if cpf.replace(decode_cpf(body())?).is_some() {
-                    return Err(Error::Marker("duplicate `CPF` marker".into()));
+                    return Err(Error::Codestream("duplicate `CPF` marker".into()));
                 }
             }
 
@@ -2417,14 +2417,27 @@ fn decode_cap(mut b: Cursor<'_>) -> Result<Option<Ccap15>> {
             "`CAP` carries {len} bytes, not the {needed} its `Pcap` needs"
         )));
     }
-    if let Some(part) = (1..=32).find(|&i| i != 15 && pcap & (1 << (32 - i)) != 0) {
-        return Err(Error::Unsupported(format!(
-            "`CAP` signals capabilities of ISO/IEC 15444-{part}, outside the decoded subset"
-        )));
+    if let Some(bit) = (1..=32).find(|&i| i != 15 && pcap & (1 << (32 - i)) != 0) {
+        // Part 1 is the baseline and has no extended capabilities, and no
+        // part past 17 exists. Such a bit names no capability this decoder
+        // knows; it is still `Unsupported`, not `Marker`, since a later
+        // edition may assign it.
+        let message = if (2..=17).contains(&bit) {
+            format!("`CAP` signals capabilities of ISO/IEC 15444-{bit}, outside the decoded subset")
+        } else {
+            format!(
+                "`CAP` sets `Pcap` bit {bit}, which names no part of ISO/IEC 15444 with \
+                 capabilities this decoder knows"
+            )
+        };
+        return Err(Error::Unsupported(message));
     }
     if pcap & PCAP_PART15 == 0 {
         return Ok(None);
     }
+    // The `Ccap` words follow `Pcap`'s bits from the MSB, so `Ccap15` is the
+    // first word only because every other part's bit was refused above. Once
+    // a Part 2 capability is read, `Ccap2` comes before it.
     let ccap15 = Ccap15(b.u16()?);
     if ccap15.multiht() {
         return Err(Error::Unsupported(
