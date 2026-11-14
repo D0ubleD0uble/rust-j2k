@@ -92,7 +92,8 @@ encodes the codestreams behind the Tier-1 golden vectors and the synthetic
 fixtures.
 
 ```sh
-# Ubuntu 24.04 ships 2.5.0; other releases may not, and the scripts refuse them
+# Ubuntu 24.04 ships 2.5.0 (2.5.0-2ubuntu0.5, the oracle build); other
+# releases may not, and the scripts refuse them
 sudo apt-get install libopenjp2-tools
 ```
 
@@ -102,9 +103,14 @@ from source.
 
 #### Build OpenJPEG 2.5.0 from source
 
-Build the pinned tag when your package manager has another version, or when
-you want an oracle that doesn't depend on the distribution package. The build
-needs Git, CMake, a C compiler and the LittleCMS headers:
+The oracle is Ubuntu 24.04's package (2.5.0-2ubuntu0.5), so use it when you
+can. Build the tag only when your package manager has another version. The tag
+lacks a patch the Ubuntu build carries (the `comp12w` guard,
+[srgb-output.md](srgb-output.md#row-12-sycc-is-converted)), so a tag build
+writes different samples for the odd-origin sYCC fixtures `jp2_sycc_420_odd`
+and `jp2_sycc_422_odd` (made by `scripts/gen-jp2-fixtures.py`). Don't commit
+those two from it. The build needs Git, CMake, a C compiler and the LittleCMS
+headers:
 
 ```sh
 sudo apt-get install git cmake build-essential liblcms2-dev
@@ -239,13 +245,14 @@ them. Each script's header comment gives its usage, such as
 step 2.
 
 The four GRIB2 fixtures need only `gen-oracle.sh` to rebuild a snapshot from
-the committed `.j2k`, as in step 1. Rebuilding the codestream itself takes one
-more step. The 9/7 fixture is re-encoded by
+the committed `.j2k`, as in step 1. Rebuilding the codestream itself takes
+more. The 9/7 fixture is re-encoded by
 [`scripts/gen-irreversible-fixture.sh`](../scripts/gen-irreversible-fixture.sh),
 which then calls `gen-oracle.sh` with the committed provenance. The other three
-are extracted from their GRIB2 messages with
+are extracted from GRIB2 messages with
 [`scripts/extract-grib2-codestream.py`](../scripts/extract-grib2-codestream.py)
-first.
+first, and two of them, `eta_lambert_lossless` and `regular_latlon_lossy`, are
+repacked to `grid_jpeg` with eccodes' `grib_set` before that.
 [Regenerating the corpus](../tests/fixtures/README.md#regenerating-the-corpus)
 has the exact commands for all four GRIB2 fixtures.
 

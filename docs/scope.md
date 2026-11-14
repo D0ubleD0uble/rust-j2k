@@ -116,8 +116,10 @@ Limits inside the decoded rows:
   is a palette column deeper than 31 bits unsigned or 32 bits signed.
 - sRGB output handles sYCC and the restricted ICC profiles. With three or
   more color channels, other color spaces (CMYK, CIELab, e-sYCC and so on) are
-  refused under that option; one or two channels pass through as gray. ICC
-  profiles applied through a lookup table or Lab are refused too.
+  refused under that option; one or two channels pass through as gray. An ICC
+  profile that LittleCMS would apply through a lookup table or the Lab
+  connection space is refused: a monochrome profile always, an RGB profile
+  only on three or more channels (on one or two it passes through, as above).
   [srgb-output.md](srgb-output.md) lists every case.
 
 The nine JP2 reader files of ISO/IEC 15444-4 decode within their compliance
