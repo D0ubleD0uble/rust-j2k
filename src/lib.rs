@@ -257,7 +257,10 @@ pub use report::{DecodeReport, ReportEntry};
 /// the whole limit. For one square tile, peak memory is about 1.35 times the
 /// output, about 1.4 GiB at the limit. A tall, narrow tile peaks higher:
 /// about 1.5 to 1.7 times the output when it is 8 to 1024 samples wide, and
-/// up to about 2.6 times (2.6 GiB at the limit) when it is one sample wide.
+/// about 2.6 times (2.6 GiB at the limit) when it is one sample wide. A
+/// smaller narrow image can peak at a higher multiple, as the code-blocks'
+/// fixed overhead is a larger share of it: about 2.7 to 3.2 times for a 9/7
+/// tile one sample wide with 2^24 samples, at 5 to 8 wavelet levels.
 /// While a palette expands the peak is about twice the output (see [the
 /// sample limit][sample-limit]). OpenJPEG has no such limit.
 ///

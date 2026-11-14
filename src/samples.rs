@@ -46,9 +46,13 @@
 //! 9/7 tiles 8 to 1024 samples wide above. Narrower than 16 samples, the
 //! wavelet's column pass takes one column at a time through a buffer as tall
 //! as the tile, and that buffer is a larger share of the tile the narrower it
-//! is. At 2^24 samples (64 MiB of output), a 9/7 tile 2 samples wide peaks at
-//! about 120 MiB (1.9 times) and one 1 sample wide at about 165 MiB (2.6
-//! times). The coded-data figures include
+//! is. At 2^24 samples (64 MiB of output), 3 wavelet levels and 64 x 64
+//! code-blocks, a 9/7 tile 2 samples wide peaks at about 120 MiB (1.9 times)
+//! and one 1 sample wide at about 165 MiB (2.6 times). More levels add
+//! code-blocks, and their fixed overhead is a larger share of a small image:
+//! at 5 levels the same tiles peak at about 2.1 and 2.7 times, and at 8 levels
+//! the 1-wide tile at about 3.2 times. The 8- to 1024-wide figures in the
+//! table are at 5 levels. The coded-data figures include
 //! the caller's input bytes, so they grow with the file: a 38 MB lossless
 //! 8192 x 8192 file peaks at about 380 MiB. The ratios carry over to the
 //! 2^28 default, about 1.4 GiB for one component in one tile, though that size

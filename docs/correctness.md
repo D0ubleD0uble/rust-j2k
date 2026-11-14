@@ -1197,7 +1197,10 @@ The peak is about 1.0 times the 4-byte output for the Sentinel-2 band (460
 MiB of samples) and about 1.35 times for one square tile of one component
 (see the table in `src/samples.rs`), so the default allows a peak of about
 1.4 GiB. A tall, narrow tile peaks higher: about 1.5 to 1.7 times when it is
-8 to 1024 samples wide, and up to about 2.6 times when it is one sample wide.
+8 to 1024 samples wide, and about 2.6 times when it is one sample wide. A
+smaller narrow image can peak at a higher multiple, as the code-blocks' fixed
+overhead is a larger share of it: a 9/7 tile one sample wide with 2^24 samples
+peaks at about 2.6 times at 3 wavelet levels, 2.7 at 5 and 3.2 at 8.
 While a palette expands the peak is about twice the output. Tests:
 `tests/sample_limit.rs` and `tests/sample_limit_alloc.rs`.
 

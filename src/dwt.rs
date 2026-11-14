@@ -191,10 +191,11 @@ fn reconstruct<S: Synthesis>(bands: Bands<S::Sample>) -> Band<S::Sample> {
 ///   samples, only when the grid is at least `2 * LANES` wide, so the batch is
 ///   at most half the grid. The columns after the last full batch, or all of
 ///   them on a narrower grid, go one at a time through a buffer of `height`
-///   samples. With both, the column pass holds at most `(LANES + 1) * height`
-///   samples, `9 / 17` of the grid at width 17 and less on wider grids. On a
-///   grid narrower than `2 * LANES` it holds `height` samples, which is the
-///   whole grid at width 1 and half of it at width 2.
+///   samples, allocated after the batch buffer is freed. The column pass so
+///   holds at most `LANES * height` samples, `8 / 17` of the grid at width 17
+///   and less on wider grids. On a grid narrower than `2 * LANES` it holds
+///   `height` samples, which is the whole grid at width 1 and half of it at
+///   width 2.
 ///
 /// The level's peak is the grid plus the largest of these: the largest band,
 /// one row, or the column buffers.

@@ -465,7 +465,8 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
   its low-pass and high-pass halves, and runs the vertical pass on eight
   columns at a time on tiles at least 16 samples wide. The output is
   unchanged, and 9/7 images decode about 1.3 times faster. A narrow tile
-  needs no more memory than before.
+  needs about the same memory as before these changes, within a few
+  percent.
 
 ## [0.3.0] - 2026-07-18
 
