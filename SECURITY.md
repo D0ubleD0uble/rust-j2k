@@ -1,63 +1,63 @@
 # Security Policy
 
+## Reporting a vulnerability
+
+If rust-j2k panics, hangs or allocates without bound on any input at the
+default limits, that is a bug, even when it has no security impact. Please
+report it privately, not in a public issue or pull request.
+
+Use GitHub's private vulnerability reporting: open the repository's
+**Security** tab and choose **Report a vulnerability**. This opens a private
+advisory that only you and we can see. Include:
+
+- the affected version;
+- the `DecodeOptions` you used, such as `strict` off or a raised limit;
+- the input bytes. For a fuzzer find, send the artifact. We replay it with
+  `cargo +nightly fuzz run decode fuzz/artifacts/decode/crash-<hash>`.
+
+We aim to acknowledge a report within a few days and to agree a fix and
+disclosure timeline with you.
+
+Open a public issue instead for a wrong decode, a valid file that is refused,
+or an `Error::Inconsistent`. Two things are expected behavior, not bugs: a
+wrong image from damaged data (JPEG 2000 has no checksum, so some damage
+can't be detected), and an abort after you lift a limit with
+`WorkLimit::Unlimited` and memory runs out.
+
 ## Supported versions
 
-This crate is pre-1.0 and developed on a single release line. Security fixes land
-on the latest published `0.x` release.
+Fixes land in the latest `0.x` release.
 
 | Version | Supported |
 | --- | --- |
-| 0.3.x | ✅ |
-| < 0.3 | ❌ |
+| 0.3.x | Yes |
+| < 0.3 | No |
 
-## Reporting a vulnerability
+## What counts as a vulnerability
 
-Please report security issues privately, not in public issues or pull requests.
+rust-j2k is a decoder: it reads binary input it did not produce, and that
+input may be hostile. With the default limits, the public functions (`decode`,
+`decode_with`, `read_header` and `read_header_with`) return either a result or
+a typed `Error` for any input. They never panic, abort, read out of bounds,
+allocate without bound or hang. If one does, report it as above.
 
-Use GitHub's private vulnerability reporting: open the repository's **Security**
-tab and choose **Report a vulnerability** (this opens a private advisory visible
-only to the maintainers). Include the affected version, a description, and a
-reproducer if you have one. For a decode crash, send the input bytes or the
-fuzzer artifact.
+By default the decoded image may hold 2^28 samples (1 GiB as `i32`). A decode
+peaks at an estimated 1.4 GiB for a square tile, and at up to about 3.2 GiB
+for a tile one sample wide (scaled from measurements on smaller images; see the
+[`decode` docs](https://docs.rs/rust-j2k/latest/rust_j2k/fn.decode.html)). A
+file past a limit is refused with `Error::Limit`, which is the guard working,
+not a bug.
 
-We aim to acknowledge a report within a few days and to coordinate a fix and
-disclosure timeline with you.
+For input from a source you trust, `DecodeOptions` can raise these limits
+(`WorkLimit::Raised`) or remove them (`WorkLimit::Unlimited`). A decode under
+a raised or removed limit may take as long, and allocate as much, as the file
+asks. If an allocation fails under `WorkLimit::Unlimited`, the process aborts,
+as Rust's allocation failures do.
 
-## Threat model
-
-rust-j2k is a decoder: it parses binary input it did not produce and that may be
-hostile. The robustness contract for the public entry points (`decode`,
-`decode_with`, `read_header` and `read_header_with`) is that for **any** input
-they return either a result or a typed `Error`, never a panic, an abort, an
-out-of-bounds access, unbounded allocation, or a hang.
-
-The promises of no hang and no unbounded allocation hold at the default limits.
-By default the decoded image may hold 2^28 samples (1 GiB as `i32`), and a
-decode peaks at an estimated 1.4 GiB for a square tile and at a few GiB for a tall,
-narrow one (the `decode` docs give the details). A file past a limit is refused with
-`Error::Limit`, which is the guard working, not a bug.
-
-`DecodeOptions` can raise (`WorkLimit::Raised`) or lift (`WorkLimit::Unlimited`)
-the bounds on packet-header work, code-block work and image size, for input
-from a trusted source. A decode under a raised or lifted limit may take as long,
-and allocate as much, as the file asks. If an allocation fails under
-`WorkLimit::Unlimited`, the process aborts, as Rust's allocation failures do.
-
-Three things back the contract. The library has no `unsafe` code, so a
+Three things back the promise. The library has no `unsafe` code, so a
 malformed input cannot cause undefined behavior: a bug can give a wrong value,
 panic, hang or allocate too much, but not corrupt memory. It has no runtime
 dependencies, Rust or C, so no third-party codec brings its own memory-safety
-bugs. And it is fuzzed: `cargo-fuzz` targets drive `decode`
-(with `strict` on and off) and `read_header` with arbitrary bytes, and the
-stages on their own (the JP2 box reader, the ICC profile reader and sRGB
-conversion, tier-1, the MQ decoder, and tier-2 packet parsing with everything
-after it). A panic fails a fuzz run, and so does an allocation past libFuzzer's
-`-rss_limit_mb` or an input that runs past its `-timeout`. On every pull
-request and every push to `main`, CI runs seven of the eight targets in
-`fuzz/`, each for 15 to 60 seconds with a 4096 MB memory limit; the `strict`-off
-target, `decode_partial`, is built but not run.
-
-A panic on any input, or a hang or excessive allocation at the default limits,
-is a bug. If you find one,
-report it as above. Even without a security impact, it is a robustness defect
-we want to fix.
+bugs. And it is fuzzed: cargo-fuzz targets feed arbitrary bytes to the public
+functions and to each decoding stage, and CI runs a short fuzz session on
+every pull request. [fuzz/README.md](fuzz/README.md) lists the targets.
