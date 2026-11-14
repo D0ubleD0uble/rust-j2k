@@ -88,6 +88,7 @@ fn parse_layers_styled<'a>(
             0,
             &mut states,
             &mut scratch,
+            true,
             None,
         )?;
     }
@@ -2119,6 +2120,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
         0,
         &mut states,
         &mut Scratch::default(),
+        true,
         None,
     )
     .expect("wraps to zero");
@@ -2302,6 +2304,7 @@ fn lazy_segment_max_passes_follows_the_10_2_1_pattern() {
         pattern.push(max_passes);
         segments.push(SegmentState {
             passes: 0,
+            kept: 0,
             max_passes,
             chunks: Vec::new(),
         });
@@ -2330,12 +2333,12 @@ fn a_stale_refusal_does_not_relabel_a_geometry_limit() {
         let _ = meter.refuse(super::WorkRefusal::PacketWalk);
         meter
     };
-    let strict = super::decode_packets_metered(&h, &t, &stale(), u64::MAX, 0);
+    let strict = super::decode_packets_metered(&h, &t, &stale(), u64::MAX, 0, None);
     assert!(
         matches!(strict, Err(super::Refused::Other(crate::Error::Limit(_)))),
         "{strict:?}"
     );
-    let partial = super::decode_packets_partial(&h, &t, &stale(), u64::MAX, 0);
+    let partial = super::decode_packets_partial(&h, &t, &stale(), u64::MAX, 0, None);
     assert!(
         matches!(partial, Err(super::Refused::Other(crate::Error::Limit(_)))),
         "{partial:?}"

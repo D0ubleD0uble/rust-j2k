@@ -130,6 +130,7 @@ fn block(width: usize, height: usize, passes: u32) -> CodeBlock<'static> {
         num_passes: passes,
         zero_bit_planes: 0,
         segments: Vec::new(),
+        cut: false,
     }
 }
 

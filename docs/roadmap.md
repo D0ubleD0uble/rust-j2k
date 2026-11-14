@@ -88,10 +88,10 @@ demand, and none blocks the phases above.
 
 ## Not in a phase yet
 
-Three decode options that `opj_decompress` has are not planned in any phase:
-stopping after a given number of quality layers (`-l`), decoding one area of
-the image (`-d`) and decoding one tile (`-t`). The decoder always decodes
-every layer of every tile over the whole image.
+Two decode options that `opj_decompress` has are not planned in any phase:
+decoding one area of the image (`-d`) and decoding one tile (`-t`). The
+decoder always decodes every tile over the whole image. Stopping after a given
+number of quality layers (`-l`) is `DecodeOptions::max_quality_layers`.
 
 ## Rules for every phase
 

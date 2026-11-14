@@ -53,6 +53,9 @@ pub fn tier1_block(data: &[u8]) {
         // rejected by decode_cod.
         style: c & (RESET | TERMALL | VCAUSAL | PTERM | SEGSYM),
         roi_shift: d & 0x3F,
+        // A spare bit of the maxshift byte: whether a layer cap cut the
+        // (one) segment short, which lifts its `predictable termination` check.
+        last_segment_cut: d & 0x40 != 0,
     };
     let num_passes = u32::from(*e) % 110; // tier-2's 109-pass segment cap
     let numbps = u32::from(*f) % 31; // MAX_BIT_PLANES
