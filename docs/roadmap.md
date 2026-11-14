@@ -32,15 +32,24 @@ and the oracle that checked it.
 ## Phase 4: HTJ2K decode (Part 15)
 
 The goal is to decode High Throughput (Part 15) codestreams. HTJ2K swaps the
-Tier-1 block coder for a faster one, so the work is in two places:
+Tier-1 block coder for a faster one, so the work is in four places:
 
 - the CAP marker and HTJ2K capability signaling;
 - the FBCOT block decoder (MEL, VLC and MagSgn) as a second Tier-1, with the
-  rest of the pipeline shared with Part 1.
+  rest of the pipeline shared with Part 1;
+- Tier-2 packet parsing for HT code-blocks (placeholder passes and the two
+  segments);
+- the JPH file format (`jph ` brand).
 
-The gate is a decode that matches OpenJPEG 2.5.0, the version every oracle in
-this repository is pinned to, on an HTJ2K conformance corpus, chosen when
-the phase starts.
+The gate is every ISO/IEC 15444-4 HT codestream and JPH file within its ISO
+bounds, MIXED code-blocks included, plus bit-exact agreement with OpenJPEG
+2.5.0 wherever OpenJPEG decodes the file, apart from the departures listed in
+[openjpeg-departures.md](openjpeg-departures.md), including any this phase
+adds with the spec text that justifies it. OpenJPEG decodes only part of the
+HT set; where it and the standard disagree, the standard wins. The phase ships
+as 0.5.0, together with the streaming and partial-decode work in the same
+milestone. The [plan](roadmap-phase4.md) breaks it into steps, each with its
+oracle.
 
 ## Phase 5: Part 1 encoder
 
