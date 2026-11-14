@@ -320,6 +320,18 @@ codestreams: `ds0_ht_06_b15` has none, so its `Ccap15` is checked against its
 not a parse error; the Part 1 and JP2 corpora are unchanged; the reject matrix
 passes.
 
+**Done (#340).** The guard is `check_block_coder` in `src/codestream/mod.rs`,
+over one `&Coding`, run by `OverrideReader::read` on each COD and COC of the
+main and tile-part headers as it is read, so a cut header that already holds an
+HT COD is `Unsupported`, not `Incomplete`. Later steps relax it there; it
+reads only the style byte, so a step that needs more (a tile-component's
+`RGN`, its passes) passes that in. The coder stays the raw `code_block_style`
+byte: a typed coder lands with the seam (#137), where tier-1 and tier-2 first
+consume it. Measured: OpenJPEG 2.5.0 decodes `ds0_ht_01_b11` and
+`ds1_ht_07_b11` with the `CAP` removed, with `Rsiz` bit 14 cleared, and with
+both, to the same samples as the files as made, so the style bits decide here
+too ([openjpeg-departures.md](openjpeg-departures.md#cap-and-cpf)).
+
 ### P4.2 — Tier-1 seam and cleanup-only HT blocks (`src/tier1/`, #137)
 
 **Goal:** assembly dispatches through a block-coder seam, and an HT block with

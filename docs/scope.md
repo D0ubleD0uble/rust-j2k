@@ -28,13 +28,17 @@ refused or handled partly. The text under each table names them.
 | Multiple tiles and multiple tile-parts per tile | Yes, with limits |
 | Non-zero image offset (XOsiz/YOsiz) | Yes |
 | Non-zero tile offset (XTOsiz/YTOsiz) | Yes |
-| CAP (capabilities, carried by HTJ2K codestreams) | No (Phase 4) |
+| CAP (capabilities) and CPF (corresponding profile) | Yes, with limits |
 | Part 2 markers (MCT, MCC, NLT, MCO, CBD) | No (Phase 6) |
 
 Limits inside the decoded rows:
 
 - RGN decodes only the maxshift style of Annex H (`Srgn = 0`). Any other style
   is refused.
+- CAP may signal only Part 15 (HTJ2K). A capability of any other part, and
+  more than one HT set per code-block (MULTIHT), are refused. The code-block
+  style of each COD and COC decides the block coder, so a codestream whose
+  COD or COC selects HT code-blocks is refused with or without a CAP.
 - A codestream that carries both PPM and PPT packed headers is refused.
 - A tile-part COD or COC that gives a component a different wavelet from the
   main header is refused: tiles must agree on each component's wavelet.
@@ -173,7 +177,7 @@ OpenJPEG 2.5.0 and later decode them.
 
 | Feature | Decoded |
 |---|---|
-| CAP marker and HTJ2K capability signaling | No (Phase 4) |
+| CAP marker and HTJ2K capability signaling | Yes, read; MULTIHT refused |
 | FBCOT block decoder (MEL, VLC and MagSgn) | No (Phase 4) |
 
 ## Part 2: extensions and JPX (ISO/IEC 15444-2)
