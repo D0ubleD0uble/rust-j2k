@@ -41,13 +41,6 @@ pub(crate) struct Jp2Box<'a> {
     pub(crate) payload: &'a [u8],
 }
 
-impl Jp2Box<'_> {
-    /// The box type as text, for error messages.
-    pub(crate) fn name(&self) -> String {
-        type_name(self.kind)
-    }
-}
-
 /// A four-character box type as printable text: `jp2h`, `xml `, or escaped
 /// bytes for a type that is not ASCII.
 pub(crate) fn type_name(kind: [u8; 4]) -> String {
