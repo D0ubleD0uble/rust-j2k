@@ -54,7 +54,7 @@ pub(crate) fn packet(
         WorkRefusal::PocReach { reached } => {
             let n = factor(spent.saturating_add(reached), default);
             format!(
-                "the `POC` volumes of tile {tile} reach {reached} packets, more than the {left} \
+                "the `POC` volumes of tile {tile} reach {reached} packets, a step each, more than the {left} \
                  steps left of the packet work bound of {allowed} {OPTION}; retry with at \
                  least `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
             )

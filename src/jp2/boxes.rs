@@ -138,7 +138,7 @@ impl<'a> Boxes<'a> {
             1 => {
                 let Some(xl) = rest.get(8..16) else {
                     return Err(Error::FileFormat(format!(
-                        "box `{name}` has a 64-bit length but its XLBox field is truncated"
+                        "box `{name}` has a 64-bit length but its `XLBox` field is truncated"
                     )));
                 };
                 let mut be = [0u8; 8];
@@ -148,7 +148,7 @@ impl<'a> Boxes<'a> {
                     0..16 if codestream => (rest.len() as u64, 16),
                     0..16 => {
                         return Err(Error::FileFormat(format!(
-                            "box `{name}` has XLBox {xlbox}, shorter than its 16-byte header"
+                            "box `{name}` has `XLBox` {xlbox}, shorter than its 16-byte header"
                         )));
                     }
                     _ => (xlbox, 16),
@@ -262,7 +262,7 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
             break None;
         }
         if (length as usize) < header {
-            let field = if lbox == 1 { "XLBox" } else { "length" };
+            let field = if lbox == 1 { "`XLBox`" } else { "length" };
             break Some(Error::FileFormat(format!(
                 "box `{}` after the codestream has {field} {length}, shorter than its \
                  {header}-byte header",

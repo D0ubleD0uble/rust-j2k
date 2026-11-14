@@ -7,10 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 JP2 files now decode, with their header metadata, and can be converted to
-sRGB. Whole-file decodes are several times faster than 0.3.0. Each decode is
-bounded in time and memory for its file's size, so a small hostile file
-cannot take minutes or gigabytes, and a damaged codestream can be decoded in
-part on request. Some of these changes break 0.3 callers or change what they
+sRGB. Whole-file decodes are several times faster than 0.3.0. Each
+decode's work is bounded for its file's size and its image by a fixed sample
+limit, so a small hostile file cannot take minutes or unbounded memory, and a
+damaged codestream can be decoded in part on request. Some of these changes break 0.3 callers or change what they
 see: read "Migrating from 0.3" first.
 
 ### Migrating from 0.3
@@ -123,9 +123,8 @@ The first fails to compile; the others compile but behave differently.
 
 - Whole-file decodes are 1.7 to 5.3 times faster than 0.3.0, depending on
   the file, measured on the conformance and benchmark files with the first
-  three changes below. Very small files gain little. The last three changes
-  came later and were each measured against the code before them, not
-  against 0.3.0. None of them changes the output.
+  three changes below. Very small files gain little. The last three were
+  each measured against the code before it, not against 0.3.0. None of them changes the output.
   - The inverse wavelet extends only at the ends of each row and column,
     lifts each row as its two halves, and runs the vertical pass eight
     columns at a time on tiles at least 16 samples wide.

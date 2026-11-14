@@ -250,8 +250,9 @@ pub use report::{DecodeReport, ReportEntry};
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 ///
-/// Three limits hold a decode to what a file of its size should cost. Past
-/// any of them the decode fails with [`Error::Limit`]. OpenJPEG has none of
+/// Three limits bound a decode: the size of the image, and the work of
+/// reading the packet headers and decoding the code-blocks for the file's
+/// size. Past any of them the decode fails with [`Error::Limit`]. OpenJPEG has none of
 /// them.
 ///
 /// - The decoded image may hold at most 2^28 samples (1 GiB
@@ -762,8 +763,10 @@ impl Default for DecodeOptions {
 ///   checked later, against the same limit, and may need a higher factor.
 /// - For the code-block bound it is what the tiles seen so far need, exact
 ///   for a file of one tile.
-/// - For the packet bound it is often the next factor up from the one that
-///   failed, and the file may need more: the walk stops as soon as it runs
+/// - For the packet bound it is the next factor up from the one that failed
+///   (or, when the refusal comes from a POC sequence's reach or a
+///   reduction's dropped code-blocks, the factor that check needs), and the
+///   file may need more: the walk stops as soon as it runs
 ///   out, so it does not know the total. Double `n` on each retry rather than
 ///   stepping by one: each retry costs more, and a file can need a factor of
 ///   dozens.
@@ -823,8 +826,7 @@ pub enum WorkLimit {
     /// asks for, however long that takes; for the sample limit, it allocates
     /// all the memory the file asks for (see [`DecodeOptions::sample_limit`]).
     /// The other two limits keep their own settings, and the guards with no
-    /// option (listed on [`Error::Limit`]) stay in force, as does the cap on
-    /// the memory that records which packets a POC sequence has read.
+    /// option (listed on [`Error::Limit`]) stay in force.
     Unlimited,
 }
 

@@ -83,7 +83,7 @@ pub mod marker {
         })
     }
 
-    /// The marker's name and code, for an error message: `"POC (0xFF5F)"`, or
+    /// The marker's name and code, for an error message: ``"`POC` (0xFF5F)"``, or
     /// just the code when the marker is not one this decoder knows.
     pub fn describe(m: u16) -> String {
         match name(m) {

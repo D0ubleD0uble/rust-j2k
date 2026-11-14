@@ -71,7 +71,7 @@ fn psot_zero_without_eoc_fails_in_the_tile() {
     ] {
         match decode_file(name) {
             Err(Error::Codestream(m)) => {
-                assert!(m.contains("overruns the tile-part"), "{name}: {m}");
+                assert!(m.contains("overruns the data of tile"), "{name}: {m}");
             }
             other => panic!("{name}: expected a codestream error, got {other:?}"),
         }

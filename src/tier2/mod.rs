@@ -675,21 +675,23 @@ pub(crate) enum WorkRefusal {
 }
 
 impl WorkRefusal {
-    /// The plain message of the [`Error::Limit`] for this refusal.
+    /// The plain message of the [`Error::Limit`] for this refusal, without
+    /// the tile or a retry factor. [`decode`](crate::decode) replaces it with
+    /// the full message from `limit_hint`.
     pub(crate) fn why(&self) -> String {
         match self {
-            WorkRefusal::PacketWalk => {
-                "tile packet walk exceeds its work bound (see `DecodeOptions::packet_work_limit`)"
-                    .into()
-            }
+            WorkRefusal::PacketWalk => "reading the packet headers goes past the packet work \
+                                        bound (see `DecodeOptions::packet_work_limit`)"
+                .into(),
             WorkRefusal::PocReach { reached } => format!(
-                "tile packet walk exceeds its work bound: its `POC` volumes reach \
-                 {reached} packets (see `DecodeOptions::packet_work_limit`)"
+                "the `POC` volumes reach {reached} packets, a step each, more than \
+                 the steps left of the packet work bound (see \
+                 `DecodeOptions::packet_work_limit`)"
             ),
             WorkRefusal::DroppedBlocks { blocks } => format!(
-                "tile packet walk exceeds its work bound: the resolutions the \
-                 reduction drops hold {blocks} code-blocks in this component \
-                 (see `DecodeOptions::packet_work_limit`)"
+                "the resolutions the reduction drops hold {blocks} code-blocks in \
+                 one component, a step each, more than the steps left of the \
+                 packet work bound (see `DecodeOptions::packet_work_limit`)"
             ),
         }
     }
@@ -1157,9 +1159,10 @@ fn parse_packet<'a>(
                     undo(&log[from..], states);
                     return Ok(Packet::Ended);
                 }
-                return Err(Error::Codestream(
-                    "packet body segment overruns the tile-part".into(),
-                ));
+                return Err(Error::Codestream(format!(
+                    "a packet body segment overruns the data of tile {}",
+                    streams.tile
+                )));
             }
         };
         states[contribution.band].blocks[contribution.block].segments[contribution.segment]

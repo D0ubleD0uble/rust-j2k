@@ -314,6 +314,9 @@ pub(crate) fn resolution_geoms(
         let here = precincts_wide.checked_mul(precincts_high);
         match here.filter(|&n| n <= *precinct_budget) {
             Some(n) => *precinct_budget -= n,
+            // The JP2 `Psot = 0` probe walks with a smaller budget, but it
+            // only asks whether the walk succeeds and drops this error, so
+            // every message a caller sees names the decode's limit.
             None => {
                 return Err(Error::Limit(format!(
                     "tile {tile} holds more than {MAX_PRECINCTS} precincts, the limit for a tile"
@@ -440,7 +443,8 @@ fn band_geom(
     // Spend the tile's code-block budget before the walk allocates a state for
     // each of this band's blocks. `checked_mul` guards the product itself,
     // since a thin band under tiny blocks makes one factor as large as the
-    // band.
+    // band. The JP2 probe's smaller budget never reaches a caller (see the
+    // precinct check in `resolution_geoms`).
     match block_cols
         .checked_mul(block_rows)
         .filter(|&n| n <= *block_budget)

@@ -477,7 +477,7 @@ fn map_channels(
         if mtyp == 0 && pcol != 0 {
             return Err(Error::FileFormat(format!(
                 "`cmap` channel {i} uses component {component} directly but names palette \
-                 column {pcol}; a direct channel's PCOL must be 0"
+                 column {pcol}; a direct channel's `PCOL` must be 0"
             )));
         }
         used[column] = true;
@@ -507,8 +507,9 @@ fn map_channels(
         .enumerate()
         .map(|(i, &(component, mtyp, pcol))| {
             Ok(if correct {
-                let column = u8::try_from(i)
-                    .map_err(|_| Error::Inconsistent(format!("palette column {i} exceeds NPC")))?;
+                let column = u8::try_from(i).map_err(|_| {
+                    Error::Inconsistent(format!("palette column {i} exceeds `NPC`"))
+                })?;
                 Source::Palette { component, column }
             } else if mtyp == 0 {
                 Source::Direct { component }
