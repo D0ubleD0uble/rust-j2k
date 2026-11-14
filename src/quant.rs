@@ -19,7 +19,7 @@
 //! HH 2). Guard bits do not enter the step; they size the magnitude bit-planes,
 //! which Tier-1/Tier-2 already consumed. The `gain_b` term is **not** applied
 //! here — the inverse 9/7 carries it, one factor of two per high-pass filtering
-//! (see [`apply_band`] and [`crate::dwt`]).
+//! (see [`half_step_of`] and [`crate::dwt`]).
 //!
 //! **The mid-point reconstruction (E.1.1.2, r = ½) is not applied here.**
 //! Tier-1 already carries it: a coefficient that becomes significant at plane
@@ -39,46 +39,32 @@
 //! correct on any coefficient that was coded to its last bit-plane.
 //!
 //! The step here therefore matches OpenJPEG's gain-free 9/7 decode step on
-//! every band; the gain moves to the inverse transform (see [`apply_band`]).
+//! every band; the gain moves to the inverse transform (see [`half_step_of`]).
 
 use crate::Result;
 use crate::codestream::MainHeader;
 use crate::codestream::markers::{Qcd, QuantStyle};
 use crate::error::Error;
-use crate::pipeline::{Band, Bands, SubbandCoeffs};
 
 /// 2^11 — the implicit denominator of the 11-bit QCD mantissa.
 const MANTISSA_DENOM: f64 = 2048.0;
 
-/// Apply per-subband dequantization in place for component `comp`. Reversible:
-/// identity. Irreversible: multiply by half the subband step, because Tier-1
-/// hands over magnitudes at twice their weight and already at the interval
-/// mid-point. Returns coefficients ready for the inverse DWT.
+/// The factor that turns one decoded 9/7 index of subband `band` of component
+/// `comp` into a coefficient: half the subband step, because Tier-1 hands over
+/// magnitudes at twice their weight and already at the interval mid-point.
+/// Tier-1 multiplies each index by it as it places the block, one `f32`
+/// multiply per coefficient. (The 5/3 path has no scaling.)
 ///
-/// The step size depends on the component's declared bit depth, so a
+/// `band` is the subband index in QCD order: LL is 0, then each resolution
+/// level coarsest-first as `HL, LH, HH`.
+///
+/// The step depends on the component's declared bit depth, so a
 /// multi-component image with mixed depths dequantizes each one on its own
 /// scale. The quantization parameters read here are per component: the
 /// codestream stage resolves QCD's main-header default and any QCC override
-/// before this runs.
-pub fn dequantize(
-    header: &MainHeader,
-    comp: usize,
-    coeffs: SubbandCoeffs,
-) -> Result<SubbandCoeffs> {
-    match coeffs {
-        // Reversible (5/3): the integer coefficients are already exact.
-        SubbandCoeffs::Reversible(bands) => Ok(SubbandCoeffs::Reversible(bands)),
-        SubbandCoeffs::Irreversible(mut bands) => {
-            scale_irreversible(header, comp, &mut bands)?;
-            Ok(SubbandCoeffs::Irreversible(bands))
-        }
-    }
-}
-
-/// Scale every subband of the 9/7 pyramid by its reconstructed step size. Bands
-/// run in QCD subband order: LL first, then each resolution level coarsest-first
-/// as `HL, LH, HH` ([`Bands`] stores `levels` coarsest-first to match).
-fn scale_irreversible(header: &MainHeader, comp: usize, bands: &mut Bands<f32>) -> Result<()> {
+/// before this runs. A QCD without a step for `band` is an error, so a
+/// pyramid deeper than its steps is refused, as before.
+pub fn half_step(header: &MainHeader, comp: usize, band: usize) -> Result<f32> {
     let prec = i32::from(
         header
             .siz
@@ -92,33 +78,7 @@ fn scale_irreversible(header: &MainHeader, comp: usize, bands: &mut Bands<f32>) 
         .get(comp)
         .ok_or_else(|| Error::Inconsistent(format!("no coding parameters for component {comp}")))?
         .quant;
-
-    // Expounded quantization carries one step per subband (1 LL + 3 per
-    // level). A shortfall means the component's quantization and its
-    // decomposition depth disagree — parse_main_header rejects that, so this
-    // is a backstop for callers that assemble a header by hand. Excess
-    // entries are ignored, as OpenJPEG ignores them and as the parse stage
-    // documents.
-    if qcd.style == QuantStyle::ScalarExpounded {
-        let expected = 1 + 3 * bands.levels.len();
-        if qcd.steps.len() < expected {
-            return Err(Error::Inconsistent(format!(
-                "expounded QCD carries {} step sizes, expected {expected} for {} levels",
-                qcd.steps.len(),
-                bands.levels.len()
-            )));
-        }
-    }
-
-    apply_band(&mut bands.ll, step_params(qcd, 0)?, prec);
-    let mut b = 1;
-    for level in &mut bands.levels {
-        apply_band(&mut level.hl, step_params(qcd, b)?, prec);
-        apply_band(&mut level.lh, step_params(qcd, b + 1)?, prec);
-        apply_band(&mut level.hh, step_params(qcd, b + 2)?, prec);
-        b += 3;
-    }
-    Ok(())
+    Ok(half_step_of(step_params(qcd, band)?, prec))
 }
 
 /// The `(exponent, mantissa)` pair for subband index `band`. Expounded styles
@@ -142,7 +102,7 @@ fn step_params(qcd: &Qcd, band: usize) -> Result<(u8, u16)> {
     })
 }
 
-/// Scale one subband by half its step size.
+/// Half the step size of one subband.
 ///
 /// The step is computed in `f64` because `R_I` can reach 38 bits (the SIZ
 /// depth), so the `2^(R_I − ε)` factor can leave the `f32` range. It is then
@@ -165,19 +125,15 @@ fn step_params(qcd: &Qcd, band: usize) -> Result<(u8, u16)> {
 /// (see #126). `2/K` is applied as an exact `2 · (1/K)`, so for the ordinary
 /// case — where the high-pass count equals the gain — the result is bit-for-bit
 /// what the old `2^gain`-in-step form produced, and `p0_09` stays exact.
-fn apply_band(band: &mut Band<f32>, (exp, mant): (u8, u16), prec: i32) {
+fn half_step_of((exp, mant): (u8, u16), prec: i32) -> f32 {
     let step = (1.0 + f64::from(mant) / MANTISSA_DENOM) * 2f64.powi(prec - i32::from(exp));
-    let half_step = 0.5f32 * step as f32;
-    for v in &mut band.data {
-        *v *= half_step;
-    }
+    0.5f32 * step as f32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codestream::markers::{Cod, Progression, Siz, SizComponent, Transform};
-    use crate::pipeline::DetailBands;
 
     /// A `prec`-bit single-component header carrying `qcd`. Only the component
     /// depth and the QCD feed dequantization; the rest is filler.
@@ -216,40 +172,17 @@ mod tests {
         )
     }
 
-    /// A 1×1 float band holding a single coefficient.
-    fn band(value: f32) -> Band<f32> {
-        Band {
-            origin: (0, 0),
-            width: 1,
-            height: 1,
-            data: vec![value],
-        }
-    }
-
-    /// A one-decomposition-level pyramid: `ll` plus a single detail level.
-    fn one_level(ll: f32, hl: f32, lh: f32, hh: f32) -> SubbandCoeffs {
-        SubbandCoeffs::Irreversible(Bands {
-            ll: band(ll),
-            levels: vec![DetailBands {
-                hl: band(hl),
-                lh: band(lh),
-                hh: band(hh),
-            }],
-        })
-    }
-
     /// The Annex E.1 step size, recomputed independently for the assertions.
     /// The gain is not part of the step (dequantization omits it; the inverse
-    /// 9/7 carries it — see [`apply_band`]), so it does not appear here.
+    /// 9/7 carries it, see [`half_step_of`]), so it does not appear here.
     fn step(prec: i32, exp: i32, mant: i32) -> f32 {
         (1.0 + mant as f32 / 2048.0) * 2f32.powi(prec - exp)
     }
 
-    /// One coefficient, as `opj_t1_clbl_decode_processor` computes it:
-    /// `(float)datap * (0.5f * band->stepsize)`. `q` is the double-scale
-    /// magnitude Tier-1 produces, which already sits at the interval mid-point.
-    fn recon(q: f32, step: f32) -> f32 {
-        q * (0.5f32 * step)
+    /// The factor `opj_t1_clbl_decode_processor` multiplies by:
+    /// `0.5f * band->stepsize`.
+    fn want(step: f32) -> f32 {
+        0.5f32 * step
     }
 
     fn assert_close(got: f32, want: f32) {
@@ -259,84 +192,49 @@ mod tests {
         );
     }
 
-    /// Pull the irreversible bands out, failing loudly on the wrong arm.
-    fn irreversible(coeffs: SubbandCoeffs) -> Bands<f32> {
-        match coeffs {
-            SubbandCoeffs::Irreversible(b) => b,
-            SubbandCoeffs::Reversible(_) => panic!("expected irreversible coefficients"),
-        }
-    }
-
-    #[test]
-    fn reversible_is_identity() {
-        let bands = Bands {
-            ll: Band {
-                origin: (0, 0),
-                width: 2,
-                height: 1,
-                data: vec![3, -7],
-            },
-            levels: vec![],
-        };
-        let qcd = Qcd {
-            style: QuantStyle::None,
-            guard_bits: 2,
-            steps: vec![(8, 0)],
-        };
-        let out = dequantize(&header(8, qcd), 0, SubbandCoeffs::Reversible(bands.clone())).unwrap();
-        assert_eq!(out, SubbandCoeffs::Reversible(bands));
-    }
-
     #[test]
     fn expounded_matches_hand_computed() {
-        let prec = 8;
         let qcd = Qcd {
             style: QuantStyle::ScalarExpounded,
             guard_bits: 2,
             // (exp, mant) for LL, HL, LH, HH of the single level.
             steps: vec![(8, 0), (7, 512), (7, 512), (6, 1024)],
         };
-        let out = irreversible(
-            dequantize(&header(prec, qcd), 0, one_level(5.0, -3.0, 0.0, 2.0)).unwrap(),
-        );
+        let h = header(8, qcd);
+        assert_close(half_step(&h, 0, 0).unwrap(), want(step(8, 8, 0)));
+        assert_close(half_step(&h, 0, 1).unwrap(), want(step(8, 7, 512)));
+        assert_close(half_step(&h, 0, 2).unwrap(), want(step(8, 7, 512)));
+        assert_close(half_step(&h, 0, 3).unwrap(), want(step(8, 6, 1024)));
+    }
 
-        assert_close(out.ll.data[0], recon(5.0, step(8, 8, 0)));
-        assert_close(out.levels[0].hl.data[0], recon(-3.0, step(8, 7, 512)));
-        // A zero index stays exactly zero, no bias applied.
-        assert_eq!(out.levels[0].lh.data[0], 0.0);
-        assert_close(out.levels[0].hh.data[0], recon(2.0, step(8, 6, 1024)));
+    /// The factor is the exact operand the oracle multiplies by, not just a
+    /// close value: narrow the `f64` step, then halve.
+    #[test]
+    fn half_step_is_the_narrowed_step_halved() {
+        let qcd = Qcd {
+            style: QuantStyle::ScalarExpounded,
+            guard_bits: 2,
+            steps: vec![(9, 1234)],
+        };
+        let exact = (1.0 + 1234.0 / 2048.0) * 2f64.powi(12 - 9);
+        assert_eq!(
+            half_step(&header(12, qcd), 0, 0).unwrap().to_bits(),
+            (0.5f32 * exact as f32).to_bits()
+        );
     }
 
     #[test]
     fn derived_drops_exponent_one_per_level() {
-        let prec = 8;
         let qcd = Qcd {
             style: QuantStyle::ScalarDerived,
             guard_bits: 1,
             steps: vec![(10, 100)],
         };
-        let coeffs = SubbandCoeffs::Irreversible(Bands {
-            ll: band(1.0),
-            levels: vec![
-                // Coarsest level: exponent ε₀ = 10.
-                DetailBands {
-                    hl: band(1.0),
-                    lh: band(1.0),
-                    hh: band(1.0),
-                },
-                // Finer level: exponent drops to 9.
-                DetailBands {
-                    hl: band(1.0),
-                    lh: band(1.0),
-                    hh: band(1.0),
-                },
-            ],
-        });
-        let out = irreversible(dequantize(&header(prec, qcd), 0, coeffs).unwrap());
-
-        assert_close(out.ll.data[0], recon(1.0, step(8, 10, 100)));
-        assert_close(out.levels[0].hl.data[0], recon(1.0, step(8, 10, 100)));
-        assert_close(out.levels[1].hl.data[0], recon(1.0, step(8, 9, 100)));
+        let h = header(8, qcd);
+        assert_close(half_step(&h, 0, 0).unwrap(), want(step(8, 10, 100)));
+        // Coarsest level: exponent 10. Finer level: 9.
+        assert_close(half_step(&h, 0, 1).unwrap(), want(step(8, 10, 100)));
+        assert_close(half_step(&h, 0, 4).unwrap(), want(step(8, 9, 100)));
     }
 
     #[test]
@@ -346,104 +244,60 @@ mod tests {
             guard_bits: 1,
             steps: vec![(1, 0)],
         };
-        // Three levels: the finest sits at level index 2, so ε = max(1 − 2, 0) = 0.
-        let levels = (0..3)
-            .map(|_| DetailBands {
-                hl: band(1.0),
-                lh: band(1.0),
-                hh: band(1.0),
-            })
-            .collect();
-        let coeffs = SubbandCoeffs::Irreversible(Bands {
-            ll: band(1.0),
-            levels,
-        });
-        let out = irreversible(dequantize(&header(8, qcd), 0, coeffs).unwrap());
-        assert_close(out.levels[2].hl.data[0], recon(1.0, step(8, 0, 0)));
-    }
-
-    #[test]
-    fn expounded_with_too_few_steps_is_inconsistent() {
-        let qcd = Qcd {
-            style: QuantStyle::ScalarExpounded,
-            guard_bits: 2,
-            // Only the LL step, but a one-level pyramid needs four.
-            steps: vec![(8, 0)],
-        };
-        let err = dequantize(&header(8, qcd), 0, one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
-        assert!(matches!(err, Error::Inconsistent(_)));
-    }
-
-    #[test]
-    fn expounded_with_excess_steps_ignores_the_tail() {
-        let qcd = Qcd {
-            style: QuantStyle::ScalarExpounded,
-            guard_bits: 2,
-            // Seven steps (two levels' worth) against a one-level pyramid: the
-            // first four apply in order and the tail is ignored, as OpenJPEG
-            // ignores it (and as parse_main_header documents).
-            steps: vec![(8, 0); 7],
-        };
-        dequantize(&header(8, qcd), 0, one_level(1.0, 1.0, 1.0, 1.0))
-            .expect("excess entries are padding, not a geometry disagreement");
+        // The finest of three levels is band 7: exponent max(1 - 2, 0) = 0.
+        assert_close(
+            half_step(&header(8, qcd), 0, 7).unwrap(),
+            want(step(8, 0, 0)),
+        );
     }
 
     #[test]
     fn expounded_walks_two_levels_in_order() {
-        let prec = 8;
-        // LL, then coarsest HL/LH/HH, then finer HL/LH/HH — each a distinct step
-        // so a mis-indexed walk would surface.
+        // LL, then coarsest HL/LH/HH, then finer HL/LH/HH, each a distinct
+        // step so a mis-indexed walk would surface.
+        let steps = [
+            (9, 0),
+            (8, 16),
+            (8, 32),
+            (7, 64),
+            (6, 128),
+            (6, 256),
+            (5, 512),
+        ];
         let qcd = Qcd {
             style: QuantStyle::ScalarExpounded,
             guard_bits: 2,
-            steps: vec![
-                (9, 0),
-                (8, 16),
-                (8, 32),
-                (7, 64),
-                (6, 128),
-                (6, 256),
-                (5, 512),
-            ],
+            steps: steps.to_vec(),
         };
-        let coeffs = SubbandCoeffs::Irreversible(Bands {
-            ll: band(2.0),
-            levels: vec![
-                DetailBands {
-                    hl: band(2.0),
-                    lh: band(2.0),
-                    hh: band(2.0),
-                },
-                DetailBands {
-                    hl: band(2.0),
-                    lh: band(2.0),
-                    hh: band(2.0),
-                },
-            ],
-        });
-        let out = irreversible(dequantize(&header(prec, qcd), 0, coeffs).unwrap());
-
-        assert_close(out.ll.data[0], recon(2.0, step(8, 9, 0)));
-        assert_close(out.levels[0].lh.data[0], recon(2.0, step(8, 8, 32)));
-        assert_close(out.levels[0].hh.data[0], recon(2.0, step(8, 7, 64)));
-        assert_close(out.levels[1].hl.data[0], recon(2.0, step(8, 6, 128)));
-        assert_close(out.levels[1].hh.data[0], recon(2.0, step(8, 5, 512)));
+        let h = header(8, qcd);
+        for (band, (exp, mant)) in steps.into_iter().enumerate() {
+            assert_close(
+                half_step(&h, 0, band).unwrap(),
+                want(step(8, i32::from(exp), i32::from(mant))),
+            );
+        }
     }
 
     #[test]
-    fn opposite_signs_reconstruct_to_negatives() {
+    fn a_band_without_a_step_is_inconsistent() {
         let qcd = Qcd {
             style: QuantStyle::ScalarExpounded,
             guard_bits: 2,
-            steps: vec![(7, 300), (7, 300), (7, 300), (7, 300)],
+            steps: vec![(8, 0)],
         };
-        let pos = irreversible(
-            dequantize(&header(10, qcd.clone()), 0, one_level(6.0, 0.0, 0.0, 0.0)).unwrap(),
-        );
-        let neg =
-            irreversible(dequantize(&header(10, qcd), 0, one_level(-6.0, 0.0, 0.0, 0.0)).unwrap());
-        assert_eq!(pos.ll.data[0], -neg.ll.data[0]);
-        assert!(pos.ll.data[0] > 0.0);
+        let err = half_step(&header(8, qcd), 0, 1).unwrap_err();
+        assert!(matches!(err, Error::Inconsistent(_)));
+    }
+
+    #[test]
+    fn excess_steps_are_ignored() {
+        let qcd = Qcd {
+            style: QuantStyle::ScalarExpounded,
+            guard_bits: 2,
+            steps: vec![(8, 0); 7],
+        };
+        half_step(&header(8, qcd), 0, 3)
+            .expect("excess entries are padding, as OpenJPEG treats them");
     }
 
     #[test]
@@ -453,7 +307,18 @@ mod tests {
             guard_bits: 2,
             steps: vec![(8, 0)],
         };
-        let err = dequantize(&header(8, qcd), 0, one_level(1.0, 1.0, 1.0, 1.0)).unwrap_err();
+        let err = half_step(&header(8, qcd), 0, 0).unwrap_err();
+        assert!(matches!(err, Error::Inconsistent(_)));
+    }
+
+    #[test]
+    fn an_unknown_component_is_inconsistent() {
+        let qcd = Qcd {
+            style: QuantStyle::ScalarExpounded,
+            guard_bits: 2,
+            steps: vec![(8, 0)],
+        };
+        let err = half_step(&header(8, qcd), 1, 0).unwrap_err();
         assert!(matches!(err, Error::Inconsistent(_)));
     }
 }

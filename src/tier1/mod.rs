@@ -13,6 +13,7 @@ pub mod passes;
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
 use crate::pipeline::{Band, Bands, DetailBands, SubbandCoeffs};
+use crate::quant;
 use crate::tier1::passes::{
     BlockParams, BlockState, MAX_BIT_PLANES, Orientation, decode_block, top_coded_plane,
 };
@@ -25,8 +26,9 @@ use crate::{Error, Result};
 /// The arithmetic is integer regardless of filter — Tier-1 recovers the
 /// quantized indices — so the COD transform only fixes how those indices are
 /// carried onward: the 5/3 reversible path keeps them as `i32` (the inverse is
-/// exact), while the 9/7 irreversible path widens them to `f32` for [`dequant`]
-/// to scale by the subband step. [`Bands`] mirrors one component of
+/// exact), while the 9/7 irreversible path widens them to `f32` and scales
+/// each by its subband's step as the block is placed ([`quant::half_step`]).
+/// [`Bands`] mirrors one component of
 /// [`CodedData`]: the coarsest resolution's lone `NLLL` band becomes `ll`, and
 /// each finer resolution's `HL/LH/HH` triple becomes one `levels` entry,
 /// coarsest first.
@@ -38,8 +40,6 @@ use crate::{Error, Result};
 /// finest resolutions are dropped from the pyramid, their code-blocks skipped
 /// rather than decoded. The caller has already checked it leaves every
 /// component at least its coarsest resolution.
-///
-/// [`dequant`]: crate::quant::dequantize
 pub fn decode_code_blocks(
     header: &MainHeader,
     coded: &CodedData<'_>,
@@ -68,19 +68,24 @@ pub fn decode_code_blocks(
                     index,
                     component,
                     reduction,
-                    |q| q / 2,
+                    |_| Ok(|q| q / 2),
                 )?)),
                 // On the irreversible arm the half bit must survive into the
-                // float: OpenJPEG multiplies by `0.5f * band->stepsize`, so the
-                // halving happens in float, not as an integer truncation. `q`
-                // can be odd, and dropping its low bit here loses up to half a
-                // quantization step on every coefficient.
+                // float: OpenJPEG multiplies by `0.5f * band->stepsize` as it
+                // copies the block into the band, so the halving happens in
+                // float, not as an integer truncation. `q` can be odd, and
+                // dropping its low bit here loses up to half a quantization
+                // step on every coefficient. Dequantization is that multiply,
+                // folded into placement: each band gets its own factor.
                 Transform::Irreversible97 => Ok(SubbandCoeffs::Irreversible(assemble(
                     header,
                     index,
                     component,
                     reduction,
-                    |q| q as f32,
+                    |band| {
+                        let half_step = quant::half_step(header, index, band)?;
+                        Ok(move |q| q as f32 * half_step)
+                    },
                 )?)),
             }
         })
@@ -136,12 +141,7 @@ pub(crate) fn work(header: &MainHeader, coded: &CodedData<'_>, reduction: u8) ->
             .max(1);
         for (res, resolution) in component.resolutions.iter().take(kept).enumerate() {
             for subband in &resolution.subbands {
-                let band = match (res, subband.kind) {
-                    (0, _) => 0,
-                    (_, BandKind::Hl) => 3 * res - 2,
-                    (_, BandKind::Lh) => 3 * res - 1,
-                    (_, _) => 3 * res,
-                };
+                let band = band_index(res, subband.kind);
                 // A band without a step size fails its decode; it costs nothing.
                 let Ok(numbps) = numbps(header, comp, band) else {
                     continue;
@@ -171,24 +171,36 @@ fn passes_run(numbps: u32, block: &CodeBlock<'_>, roi_shift: u8) -> u64 {
     u64::from(block.num_passes.min(3 * top - 2))
 }
 
-/// Decode every subband into a [`Bands`] pyramid, converting each quantized
-/// index with `convert` (identity for the reversible path, `i32 as f32` for the
-/// irreversible one).
+/// The QCD subband index of a `kind` band in resolution `res`: LL is 0, then
+/// each resolution level coarsest-first as `HL, LH, HH`.
+fn band_index(res: usize, kind: BandKind) -> usize {
+    match (res, kind) {
+        (0, _) => 0,
+        (_, BandKind::Hl) => 3 * res - 2,
+        (_, BandKind::Lh) => 3 * res - 1,
+        (_, _) => 3 * res,
+    }
+}
+
+/// Decode every subband into a [`Bands`] pyramid. `convert_for(band)` gives
+/// the function that turns each quantized index of subband `band` into its
+/// stored value: `q / 2` for the reversible path, the index times the band's
+/// half step for the irreversible one.
 ///
-/// Subbands run in QCD order — LL, then `HL, LH, HH` per resolution level
-/// coarsest-first — which sets each band's magnitude bit-plane count `Mb`
-/// (guard bits + quantization exponent − 1) that Tier-1 needs to place bits at
-/// their true weights.
-fn assemble<T, F>(
+/// Subbands run in QCD order (see [`band_index`]), which sets each band's
+/// magnitude bit-plane count `Mb` (guard bits + quantization exponent - 1)
+/// that Tier-1 needs to place bits at their true weights.
+fn assemble<T, F, G>(
     header: &MainHeader,
     comp: usize,
     coded: &ComponentCoded<'_>,
     reduction: u8,
-    convert: F,
+    convert_for: G,
 ) -> Result<Bands<T>>
 where
     T: Copy + Default,
-    F: Fn(i32) -> T + Copy,
+    F: Fn(i32) -> T,
+    G: Fn(usize) -> Result<F>,
 {
     let params = BlockParams {
         style: header.components[comp].coding.code_block_style,
@@ -207,36 +219,24 @@ where
     let coarsest = resolutions
         .next()
         .ok_or_else(|| Error::Inconsistent("Tier-2 produced no resolutions to decode".into()))?;
-    // Subband index 0 is the LL band; the detail bands count up from 1.
-    let ll = decode_subband(
-        subband_of(coarsest, BandKind::Ll)?,
-        numbps(header, comp, 0)?,
-        params,
-        convert,
-    )?;
+    let decode = |res: usize, resolution: &Resolution<'_>, kind: BandKind| {
+        let band = band_index(res, kind);
+        decode_subband(
+            subband_of(resolution, kind)?,
+            numbps(header, comp, band)?,
+            params,
+            convert_for(band)?,
+        )
+    };
+    let ll = decode(0, coarsest, BandKind::Ll)?;
 
     let mut levels = Vec::with_capacity(keep);
     for (level, resolution) in resolutions.take(keep).enumerate() {
-        let base = 1 + level * 3;
+        let res = level + 1;
         levels.push(DetailBands {
-            hl: decode_subband(
-                subband_of(resolution, BandKind::Hl)?,
-                numbps(header, comp, base)?,
-                params,
-                convert,
-            )?,
-            lh: decode_subband(
-                subband_of(resolution, BandKind::Lh)?,
-                numbps(header, comp, base + 1)?,
-                params,
-                convert,
-            )?,
-            hh: decode_subband(
-                subband_of(resolution, BandKind::Hh)?,
-                numbps(header, comp, base + 2)?,
-                params,
-                convert,
-            )?,
+            hl: decode(res, resolution, BandKind::Hl)?,
+            lh: decode(res, resolution, BandKind::Lh)?,
+            hh: decode(res, resolution, BandKind::Hh)?,
         });
     }
 
