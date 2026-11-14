@@ -1,6 +1,7 @@
 //! Error type for the decoder. One flat enum; each failure maps to the variant
 //! that names its class, so a caller can tell a malformed input from an
 //! unsupported feature: [`Error::Codestream`] for structural damage,
+//! [`Error::Incomplete`] for input that ends inside the main header,
 //! [`Error::Marker`] for an invalid field value, [`Error::FileFormat`] for a
 //! malformed JP2 box structure, [`Error::Unsupported`] for
 //! a valid-but-out-of-subset feature, [`Error::Limit`] for an input past a
@@ -26,6 +27,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// | Variant | A message for a user |
 /// | ------- | -------------------- |
 /// | `Codestream`, `Marker`, `FileFormat` | The file is damaged, truncated or not a JPEG 2000 image. |
+/// | `Incomplete` | The file is cut short before its header ends. If it is still arriving, try again with more of it. |
 /// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read. |
 /// | `Limit` | The file is larger or costlier than the decoder allows by default. If the message names a `DecodeOptions` limit, it can be retried with a higher [`WorkLimit`](crate::WorkLimit). |
 /// | `InvalidOptions` | The decode options are invalid, for any file (`WorkLimit::Raised(0)`, sRGB output with `raw_channels`) or for this one (a reduction past the file's levels). |
@@ -46,6 +48,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 ///         Error::Codestream(_) | Error::Marker(_) | Error::FileFormat(_) => {
 ///             "the file is damaged, truncated or not a JPEG 2000 image"
 ///         }
+///         Error::Incomplete(_) => "the file is cut short before its header ends",
 ///         Error::Unsupported(_) => "the file uses a feature this decoder does not read",
 ///         Error::Limit(_) => "the file is larger or costlier than the decoder allows",
 ///         Error::InvalidOptions(_) => "the decode options do not fit this file",
@@ -64,11 +67,60 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
-    /// Not a JPEG 2000 codestream, or its structure is broken: a truncated or
-    /// missing segment, lost sync, or corrupt packet / coded data. Any input
+    /// Not a JPEG 2000 codestream, or its structure is broken: a missing
+    /// segment, a segment too short for its fields, lost sync, a tile-part or
+    /// packet data cut short, or corrupt packet / coded data. Input that ends
+    /// inside the main header is [`Error::Incomplete`] instead. Any input
     /// that is not JPEG 2000 at all (empty input, text, another image
     /// format) is this variant, since it has no `SOC` marker.
     Codestream(String),
+    /// The input ends inside the codestream's main header: after the `SOC`
+    /// marker and before the first `SOT` marker is complete. No segment the
+    /// input holds in full was found damaged, so more bytes may still give a
+    /// valid header.
+    ///
+    /// This is the "wait for more bytes" signal for a caller whose input
+    /// streams in. [`read_header`](crate::read_header) and
+    /// [`decode_with`](crate::decode_with) return it whether or not
+    /// [`strict`](crate::DecodeOptions::strict) is set, since every decode
+    /// needs the whole main header. In a JP2 file it is returned when the
+    /// input ends inside the main header of the `jp2c` box's codestream.
+    ///
+    /// The segments the input holds in full are judged first: a damaged one
+    /// gives an error, not this variant, usually the one the whole file gives
+    /// ([`Error::Codestream`], [`Error::Marker`], [`Error::Unsupported`] or
+    /// [`Error::Limit`]). The whole file can give another one when a later
+    /// part of its header is broken too. The checks that tie segments to each
+    /// other or to the JP2 boxes wait for the whole header (for example, a
+    /// missing `COD` or `QCD`, quantization coverage, 9/7 without
+    /// quantization, MCT geometry, `PPM` order, and `ihdr` against SIZ).
+    ///
+    /// If no more bytes are coming, the file is truncated. A segment length
+    /// that is damaged so that it reaches past the end of the input looks the
+    /// same as a cut, so it is this variant too. Input too short to hold the
+    /// `SOC` marker (0 or 1 byte) is [`Error::Codestream`], as is any input
+    /// that does not start with it.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
+    ///
+    /// let bytes = include_bytes!(concat!(
+    ///     env!("CARGO_MANIFEST_DIR"),
+    ///     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+    /// ));
+    /// // The first 40 bytes end inside the main header: wait for more.
+    /// assert!(matches!(read_header(&bytes[..40]), Err(Error::Incomplete(_))));
+    /// let options = DecodeOptions::default().with_strict(false);
+    /// assert!(matches!(
+    ///     decode_with(&bytes[..40], &options),
+    ///     Err(Error::Incomplete(_))
+    /// ));
+    /// // Once the main header is there, the header reads, and a decode with
+    /// // `strict` off gives the image the data holds.
+    /// assert!(read_header(&bytes[..600]).is_ok());
+    /// assert!(decode_with(&bytes[..600], &options).is_ok());
+    /// ```
+    Incomplete(String),
     /// A marker segment has an invalid field: a reserved value, a bad length
     /// or an out-of-range value.
     Marker(String),
@@ -123,6 +175,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Codestream(m) => write!(f, "codestream: {m}"),
+            Error::Incomplete(m) => write!(f, "incomplete: {m}"),
             Error::Marker(m) => write!(f, "marker: {m}"),
             Error::FileFormat(m) => write!(f, "file format: {m}"),
             Error::Unsupported(m) => write!(f, "unsupported: {m}"),

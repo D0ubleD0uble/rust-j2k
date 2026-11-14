@@ -1248,7 +1248,7 @@ fn read_header_reads_no_tile_data() {
     }
     assert!(matches!(
         read_header(&CODESTREAM[..sot]),
-        Err(Error::Codestream(_))
+        Err(Error::Incomplete(_))
     ));
 }
 
