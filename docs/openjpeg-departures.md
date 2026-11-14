@@ -808,7 +808,8 @@ matches it exactly.
 
 `TNsot` is advisory: a count that disagrees with the tile-parts found is
 reported and the tile decodes from them. The decode needs the main header
-through the first `SOT` marker; a shorter prefix is an error.
+through the first `SOT` marker; a shorter prefix is `Error::Incomplete`, in
+either mode, so a streaming caller can tell it from a damaged header.
 
 Partial decode bounds its work like a strict one, with two more charges
 against the packet work bound: each tile-component of a missing tile costs

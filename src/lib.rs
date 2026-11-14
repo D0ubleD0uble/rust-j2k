@@ -84,7 +84,10 @@
 //! Decoding is strict by default. Truncated or inconsistent data is an
 //! error, and no partial image comes back with it. A raw codestream cut
 //! short fails as [`Error::Codestream`], a JP2 file cut short as `Codestream` or
-//! [`Error::FileFormat`], depending on where the cut falls. A codestream
+//! [`Error::FileFormat`], depending on where the cut falls. A cut inside the
+//! codestream's main header, before its first `SOT` marker, is
+//! [`Error::Incomplete`] instead, so a caller whose input streams in can tell
+//! it to wait for more bytes. A codestream
 //! whose last tile-part states its length is refused without its closing
 //! `EOC` marker. A last tile-part of length 0 (`Psot = 0`, "to the end")
 //! takes the data up to the final two bytes without checking that they are
@@ -132,8 +135,9 @@
 //! This is what `opj_decompress -allow-partial` does. A codestream that
 //! streams in can be decoded as it arrives: the report's
 //! [`complete_reduction`](DecodeReport::complete_reduction) is the finest
-//! level the data already gives in full. Everything else damaged is refused
-//! as when strict.
+//! level the data already gives in full. Until the main header has arrived,
+//! the decode, like [`read_header`], is [`Error::Incomplete`]. Everything else
+//! damaged is refused as when strict.
 //!
 //! # Limits
 //!
@@ -337,7 +341,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// The input is detected as [`decode`] detects it. The read covers a JP2
 /// file's boxes and the codestream's main header, up to the first tile-part
 /// (`SOT` marker), and stops there, so a file whose tile data is cut short or
-/// missing still has a readable header. Nothing is allocated for the samples.
+/// missing still has a readable header. Input that ends before the first
+/// `SOT` marker is whole is [`Error::Incomplete`]: wait for more bytes and
+/// try again. Nothing is allocated for the samples.
 /// One case reads further: in a JP2 file whose last tile-part has `Psot = 0`
 /// (no length) and whose `jp2c` box ends before the file does, the packet
 /// headers of that tile-part's tile are walked to see whether the codestream
@@ -675,7 +681,8 @@ pub struct DecodeOptions {
     /// is a separate option:
     ///
     /// - The input may end anywhere after the first `SOT`
-    ///   marker, which ends the main header: inside a tile-part, its header or
+    ///   marker, which ends the main header (input that ends before it is
+    ///   [`Error::Incomplete`], as when strict): inside a tile-part, its header or
     ///   its packets, with or without the `EOC` marker. Tiles with no
     ///   tile-part are filled with 0, and packets that were never read (cut
     ///   off, or left out by the `POC` volumes) add nothing to their

@@ -1463,8 +1463,12 @@ const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 ///   question, and `parse_main_header` answers it with `Unsupported`.
 ///
 /// Returns the segments in codestream order and the offset of the `SOT` that
-/// ended the header. Truncation, a non-marker where a marker must be, and
-/// `SOD`/`EOC` before any tile-part are [`Error::Codestream`].
+/// ended the header. Input that ends after `SOC` and before the first `SOT`
+/// marker is whole is [`Error::Incomplete`]: the walk reads only marker codes
+/// and lengths here, so running out of input can only mean the input was cut
+/// short (or a length was damaged to reach past it, which looks the same). A
+/// non-marker where a marker must be, a length below 2, and `SOD`/`EOC`
+/// before any tile-part are [`Error::Codestream`].
 fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
     let mut cur = Cursor::new(bytes);
 
@@ -1476,7 +1480,9 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
 
     let mut segments = Vec::new();
     let sot_offset = loop {
-        let code = cur.u16()?;
+        let code = cur
+            .u16()
+            .map_err(|_| cut_short("before its first `SOT` marker"))?;
         match code {
             // The first SOT ends the main header; point the offset back at it.
             marker::SOT => break cur.pos - 2,
@@ -1507,7 +1513,7 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
                     )));
                 }
                 let body = if marker::has_segment(code) {
-                    segment(&mut cur)?.buf
+                    main_header_segment(&mut cur, code)?
                 } else {
                     &[][..]
                 };
@@ -1517,6 +1523,24 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
     };
 
     Ok((segments, sot_offset))
+}
+
+/// The body of the main-header segment whose marker `code` the walk just
+/// read, as [`segment`] reads it, but with the input ending inside the length
+/// or the body reported as [`Error::Incomplete`] rather than as a malformed
+/// segment.
+fn main_header_segment<'a>(cur: &mut Cursor<'a>, code: u16) -> Result<&'a [u8]> {
+    let ended = |_| cut_short(&format!("in its {} segment", marker::describe(code)));
+    let len = cur.u16().map_err(ended)? as usize;
+    if len < 2 {
+        return Err(Error::Codestream("marker segment length below 2".into()));
+    }
+    cur.take(len - 2).map_err(ended)
+}
+
+/// The input ends inside the main header, at `place`.
+fn cut_short(place: &str) -> Error {
+    Error::Incomplete(format!("the input ends inside the main header, {place}"))
 }
 
 /// Parse the main header up to (but not into) the first `SOT`.
