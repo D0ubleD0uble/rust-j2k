@@ -580,6 +580,13 @@ termination predicts. OpenJPEG checks only the last segment and only warns
 (`decode_block` in `src/tier1/passes.rs`; see also [Segmentation
 symbols](#segmentation-symbols)).
 
+Under `DecodeOptions::max_quality_layers`, the last segment of a block may end
+before the encoder terminated it, because the cap dropped its later passes.
+That one segment is not checked, since its bytes run past the passes that are
+decoded; every earlier segment of the block is whole and is still checked.
+OpenJPEG makes no check at all when it decodes fewer layers than the
+codestream has.
+
 ### Too few quantization steps
 
 A QCD/QCC carrying fewer than the 3·NL + 1 step entries its decomposition needs

@@ -205,6 +205,7 @@ where
     let params = BlockParams {
         style: header.components[comp].coding.code_block_style,
         roi_shift: header.components[comp].roi_shift,
+        last_segment_cut: false,
     };
     // A resolution reduction drops that many of the finest levels: their
     // packets were parsed (the codestream's framing demands it) but their
@@ -333,6 +334,14 @@ where
             .iter()
             .map(|segment| (segment.bytes(), segment.passes))
             .collect();
+        // A segment the layer cap cut short ends before the encoder
+        // terminated it, so it cannot be held to `predictable termination`.
+        // Only the last segment can be cut; the block's earlier segments are
+        // whole and stay checked.
+        let params = BlockParams {
+            last_segment_cut: block.cut,
+            ..params
+        };
         decode_block(
             &segments,
             &mut state,
@@ -408,6 +417,7 @@ mod tests {
                     passes: 1,
                     chunks: vec![&[0x80][..]],
                 }],
+                cut: false,
             }],
         }
     }
@@ -432,6 +442,7 @@ mod tests {
         let params = BlockParams {
             style: 0,
             roi_shift: 1,
+            last_segment_cut: false,
         };
         let err = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, params, |q| q)
             .expect_err("MAX_BIT_PLANES + 1 planes");

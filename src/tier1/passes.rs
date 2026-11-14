@@ -1051,11 +1051,16 @@ pub fn top_coded_plane(numbps: u32, zero_bit_planes: u32, roi_shift: u8) -> u32 
 
 /// The per-component parameters a code-block decode needs beyond its own
 /// subband: the code-block style flags (`SPcod`/`SPcoc`) and the
-/// region-of-interest maxshift (`SPrgn`).
+/// region-of-interest maxshift (`SPrgn`), and whether the block's last
+/// codeword segment was cut short by a layer cap.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BlockParams {
     pub style: u8,
     pub roi_shift: u8,
+    /// The last segment ends before the encoder terminated it, because a
+    /// `max_quality_layers` cap dropped its later passes. `predictable
+    /// termination` cannot hold of it, so only that segment skips the check.
+    pub last_segment_cut: bool,
 }
 
 /// Which of the three coding passes runs next within a bit-plane (ISO D.3).
@@ -1123,7 +1128,12 @@ pub fn decode_block(
     zero_bit_planes: u32,
     params: BlockParams,
 ) -> Result<()> {
-    let BlockParams { style, roi_shift } = params;
+    let BlockParams {
+        style,
+        roi_shift,
+        last_segment_cut,
+    } = params;
+    let last_segment = segments.len().saturating_sub(1);
     use crate::codestream::markers::code_block_style::{
         HT, HT_MIXED, LAZY, PTERM, RESET, TERMALL, VCAUSAL,
     };
@@ -1189,7 +1199,7 @@ pub fn decode_block(
     // shallow block that never reaches the raw region.
     let raw_from = top as i32 - 4;
 
-    'segments: for (bytes, passes) in segments {
+    'segments: for (index, (bytes, passes)) in segments.iter().enumerate() {
         // A codeword segment is a single terminated stream — MQ for the
         // context-coded passes, raw for the `bypass` ones. Context states and
         // `bpno` carry across segments; only the arithmetic decoder restarts.
@@ -1266,9 +1276,11 @@ pub fn decode_block(
         // only the last segment of a block and warns; checking each one costs
         // nothing and localizes the damage. The check is the MQ flush's, so it
         // applies to MQ segments only — a raw `bypass` segment ends on a byte
-        // boundary with no such guarantee.
+        // boundary with no such guarantee. A last segment a layer cap cut
+        // short is exempt: its later passes, and the flush, were dropped.
+        let cut = last_segment_cut && index == last_segment;
         if let PassCoder::Mq(mq) = &coder {
-            if style & PTERM != 0 && !mq.ends_predictably() {
+            if style & PTERM != 0 && !cut && !mq.ends_predictably() {
                 return Err(Error::Codestream(format!(
                     "code-block style declares predictable termination, but a codeword segment \
                      leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
@@ -1429,6 +1441,7 @@ mod tests {
             BlockParams {
                 style: PTERM,
                 roi_shift: 0,
+                last_segment_cut: false,
             },
         )
         .expect_err("eight bytes for one cleanup pass leaves more than two unconsumed");
@@ -1465,6 +1478,7 @@ mod tests {
             BlockParams {
                 style: PTERM,
                 roi_shift: 0,
+                last_segment_cut: false,
             },
         )
         .expect("a segment the decoder stops early in is not checked");
@@ -1489,6 +1503,7 @@ mod tests {
             BlockParams {
                 style: SEGSYM,
                 roi_shift: 0,
+                last_segment_cut: false,
             },
         )
         .expect_err("the trailing symbol is not 1010");
@@ -1513,6 +1528,7 @@ mod tests {
             BlockParams {
                 style,
                 roi_shift: 0,
+                last_segment_cut: false,
             },
         )
     }
@@ -1670,6 +1686,7 @@ mod tests {
                 BlockParams {
                     style: 0,
                     roi_shift,
+                    last_segment_cut: false,
                 },
             )
             .expect_err(&format!("maxshift {roi_shift} passes the bit-plane limit"));
@@ -1697,6 +1714,7 @@ mod tests {
                 BlockParams {
                     style: 0,
                     roi_shift,
+                    last_segment_cut: false,
                 },
             )
             .expect("a small top decodes whatever the maxshift");
@@ -1725,6 +1743,7 @@ mod tests {
             BlockParams {
                 style: crate::codestream::markers::code_block_style::TERMALL,
                 roi_shift: 0,
+                last_segment_cut: false,
             },
         )
         .expect("an empty segment decodes as 0xFF padding");

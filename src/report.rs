@@ -53,7 +53,10 @@ pub struct DecodeReport {
     /// The smallest [`resolution_reduction`](crate::DecodeOptions::resolution_reduction)
     /// at which every tile has every packet: a decode at this reduction, or
     /// any larger one the file allows, gives the same samples as a decode of
-    /// the whole codestream. It is counted over all of the data, whatever
+    /// the whole codestream. Under a
+    /// [`max_quality_layers`](crate::DecodeOptions::max_quality_layers) cap,
+    /// only the packets of the layers it keeps count, and the decode compared
+    /// against has the same cap. It is counted over all of the data, whatever
     /// reduction this decode used, so one cheap decode at a coarse level says
     /// which finer level the data can already give. It can be larger than
     /// [`Header::max_reduction`](crate::Header::max_reduction), the largest
@@ -105,7 +108,10 @@ impl DecodeReport {
     /// most that reduction, no tile is missing and no tile has bytes left
     /// over. A missing `EOC` marker, a tile-part count that disagrees with the
     /// parts found ([`ReportEntry::TilePartCountMismatch`]), and packets
-    /// missing only from the resolutions the reduction drops leave it true.
+    /// missing only from the resolutions the reduction drops, or from the
+    /// layers past the
+    /// [`max_quality_layers`](crate::DecodeOptions::max_quality_layers) cap,
+    /// leave it true.
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.complete_reduction
@@ -156,7 +162,9 @@ pub enum ReportEntry {
         /// The tile.
         tile: u32,
         /// How many of the leading quality layers are whole, counted over
-        /// the resolutions this decode keeps.
+        /// the resolutions this decode keeps, and no more than its
+        /// [`max_quality_layers`](crate::DecodeOptions::max_quality_layers)
+        /// cap.
         complete_layers: u16,
         /// The smallest reduction at which this tile has every packet, as
         /// [`DecodeReport::complete_reduction`] counts it, or `None` when even

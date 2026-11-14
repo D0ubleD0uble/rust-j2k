@@ -604,6 +604,46 @@ pub struct DecodeOptions {
     /// [`Error::InvalidOptions`]. [`Header::max_reduction`] gives the largest
     /// the main header allows.
     pub resolution_reduction: u8,
+    /// How many of the leading quality layers to decode: `Some(n)` decodes
+    /// layers `0..n` of each tile, `None` (the default) every layer. A
+    /// codestream builds its image up in layers, each adding coding passes
+    /// to the code-blocks, so a cap gives a lower-fidelity image at full
+    /// size from fewer passes, and the block decoder does less work. It is
+    /// OpenJPEG's `opj_decompress -l n`.
+    ///
+    /// A cap at or above a tile's layer count decodes that tile whole, as
+    /// OpenJPEG does. `Some(0)` is [`Error::InvalidOptions`]. It combines
+    /// with [`resolution_reduction`](Self::resolution_reduction).
+    ///
+    /// The packets of the later layers are still read, since they frame the
+    /// packets after them, so a fault in one is still an error, and they
+    /// count against [`packet_work_limit`](Self::packet_work_limit) as
+    /// without a cap. Only their coding passes are left out. With
+    /// [`strict`](Self::strict) off, a packet of a layer past the cap that
+    /// the data does not reach is not reported missing.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, decode, decode_with};
+    ///
+    /// // 32x24, in three quality layers, the last one lossless.
+    /// let bytes = include_bytes!(concat!(
+    ///     env!("CARGO_MANIFEST_DIR"),
+    ///     "/tests/fixtures/multilayer_lossless.j2k"
+    /// ));
+    /// let whole = decode(bytes).expect("decodes");
+    /// let first = decode_with(bytes, &DecodeOptions::default().with_max_quality_layers(Some(1)))
+    ///     .expect("decodes");
+    /// // The same size, from fewer coding passes.
+    /// assert_eq!((first.width, first.height), (whole.width, whole.height));
+    /// assert_ne!(first.components[0].samples, whole.components[0].samples);
+    /// // A cap at or past the layer count is the whole decode.
+    /// let all = decode_with(bytes, &DecodeOptions::default().with_max_quality_layers(Some(3)))
+    ///     .expect("decodes");
+    /// assert_eq!(all.components[0].samples, whole.components[0].samples);
+    /// ```
+    #[doc(alias = "layers")]
+    #[doc(alias = "cp_layer")]
+    pub max_quality_layers: Option<u16>,
     /// Return a JP2 file's codestream components as coded, without applying
     /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
     /// the file decodes exactly as its codestream does on its own, in SIZ
@@ -736,11 +776,12 @@ pub struct DecodeOptions {
 }
 
 impl Default for DecodeOptions {
-    /// Full resolution, components as the file's boxes shape them, color as
-    /// coded, the default limits, and strict.
+    /// Full resolution, every quality layer, components as the file's boxes
+    /// shape them, color as coded, the default limits, and strict.
     fn default() -> Self {
         DecodeOptions {
             resolution_reduction: 0,
+            max_quality_layers: None,
             raw_channels: false,
             color: ColorOutput::default(),
             packet_work_limit: WorkLimit::default(),
@@ -861,6 +902,21 @@ impl DecodeOptions {
     #[must_use]
     pub fn with_resolution_reduction(mut self, levels: u8) -> Self {
         self.resolution_reduction = levels;
+        self
+    }
+
+    /// These options with
+    /// [`max_quality_layers`](Self::max_quality_layers) set to `layers`.
+    ///
+    /// ```
+    /// use rust_j2k::DecodeOptions;
+    ///
+    /// let options = DecodeOptions::default().with_max_quality_layers(Some(2));
+    /// assert_eq!(options.max_quality_layers, Some(2));
+    /// ```
+    #[must_use]
+    pub fn with_max_quality_layers(mut self, layers: Option<u16>) -> Self {
+        self.max_quality_layers = layers;
         self
     }
 
@@ -990,8 +1046,8 @@ impl DecodeOptions {
 ///
 /// Failures are the same [`Error`] variants as [`decode`], plus
 /// [`Error::InvalidOptions`] for options that are invalid on their own
-/// ([`WorkLimit::Raised`]`(0)`), contradict each other, or do not fit the
-/// file.
+/// ([`WorkLimit::Raised`]`(0)`, a [`max_quality_layers`](DecodeOptions::max_quality_layers)
+/// of `Some(0)`), contradict each other, or do not fit the file.
 pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     check_options(options)?;
     // A codestream opens with SOC; anything else that carries the signature
@@ -1034,6 +1090,13 @@ fn check_options(options: &DecodeOptions) -> Result<()> {
                  at least 1"
             )));
         }
+    }
+    if options.max_quality_layers == Some(0) {
+        return Err(Error::InvalidOptions(
+            "`DecodeOptions::max_quality_layers` is `Some(0)`, but a decode keeps at least \
+             one layer"
+                .into(),
+        ));
     }
     Ok(())
 }
@@ -1150,6 +1213,7 @@ fn decode_jp2(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
 /// Decode a parsed codestream into its components.
 fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) -> Result<Image> {
     let reduction = options.resolution_reduction;
+    let layers = options.max_quality_layers;
 
     // Each tile is a whole decode of its own: its own header, its own packets,
     // its own wavelet pyramid in its own coordinate frame. Nothing crosses a
@@ -1212,20 +1276,22 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         check_reduction(&header, reduction, Some(index))?;
 
         // Tier-2: parse packets into per-code-block coded segments, per
-        // component. The walk covers every resolution whatever the reduction:
-        // packet order is the codestream's framing, so the dropped levels'
-        // packets must still be stepped over to reach the kept ones.
+        // component. The walk covers every resolution and layer whatever the
+        // reduction and layer cap: packet order is the codestream's framing,
+        // so the dropped levels' and layers' packets must still be stepped
+        // over to reach the kept ones.
         let walked = if options.strict {
-            tier2::decode_packets_metered(&header, tile, &meter, poc_bitmap, reduction)
+            tier2::decode_packets_metered(&header, tile, &meter, poc_bitmap, reduction, layers)
                 .map(|coded| (coded, None))
         } else {
-            tier2::decode_packets_partial(&header, tile, &meter, poc_bitmap, reduction)
+            tier2::decode_packets_partial(&header, tile, &meter, poc_bitmap, reduction, layers)
                 .map(|(coded, reach)| (coded, Some(reach)))
         };
         let coded = match walked {
             Ok((coded, reach)) => {
                 if let Some(reach) = reach {
-                    let tile_complete = report_tile(&header, tile, &reach, reduction, &mut entries);
+                    let tile_complete =
+                        report_tile(&header, tile, &reach, reduction, layers, &mut entries);
                     complete = complete.zip(tile_complete).map(|(a, b)| a.max(b));
                 }
                 coded
@@ -1321,16 +1387,19 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
 }
 
 /// Add what a non-strict walk of `tile` found to `entries`, and give the
-/// smallest reduction at which the tile has every packet.
+/// smallest reduction at which the tile has every packet. Under a layer cap
+/// of `cap`, only the packets of the layers it keeps count: one past it that
+/// was not read is not missing.
 fn report_tile(
     header: &codestream::MainHeader,
     tile: &codestream::Tile<'_>,
     reach: &tier2::Reach,
     reduction: u8,
+    cap: Option<u16>,
     entries: &mut Vec<ReportEntry>,
 ) -> Option<u8> {
-    let layers = u32::from(header.cod.layers);
-    let missing = |comp: usize, res: usize| reach.missing_from[comp][res];
+    let layers = u32::from(cap.map_or(header.cod.layers, |cap| cap.min(header.cod.layers)));
+    let missing = |comp: usize, res: usize| reach.missing_from[comp][res].filter(|&l| l < layers);
     let resolutions: Vec<usize> = reach.missing_from.iter().map(Vec::len).collect();
     // The smallest reduction at which every resolution kept is whole.
     let most = resolutions.iter().min().map_or(0, |&n| n.saturating_sub(1));
@@ -1391,6 +1460,41 @@ pub(crate) fn tile_bytes(cs: &codestream::Codestream<'_>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sample-passes Tier-1 runs on `bytes` (one tile) under a layer
+    /// cap of `layers`, and the packet visits the walk spends.
+    fn capped_work(bytes: &[u8], layers: Option<u16>) -> (u64, u64) {
+        let parsed = codestream::parse_header(bytes).unwrap();
+        let cs = codestream::parse_tiles(bytes, parsed).unwrap();
+        let header = cs.tile_header(0).unwrap();
+        let meter = tier2::Meter::new(u64::MAX);
+        let coded =
+            tier2::decode_packets_metered(&header, &cs.tiles[0], &meter, u64::MAX, 0, layers)
+                .unwrap();
+        (tier1::work(&header, &coded, 0), meter.spent())
+    }
+
+    /// Each layer the cap drops is Tier-1 work not done, and the packet walk
+    /// spends the same visits whatever the cap, since it still reads every
+    /// packet.
+    #[test]
+    fn a_layer_cap_cuts_block_work_and_not_packet_work() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/layers/lrcp.j2k"
+        ))
+        .unwrap();
+        let (full, visits) = capped_work(&bytes, None);
+        let mut previous = 0;
+        for n in 1..=4 {
+            let (work, spent) = capped_work(&bytes, Some(n));
+            assert!(work > previous, "-l {n}: {work} after {previous}");
+            assert_eq!(spent, visits, "-l {n}");
+            previous = work;
+        }
+        assert_eq!(previous, full);
+        assert_eq!(capped_work(&bytes, Some(u16::MAX)), (full, visits));
+    }
 
     /// The reduction check names the component and the resolutions it would
     /// discard, and the tile only when it runs per tile.

@@ -24,7 +24,7 @@ fn blocks<'a>(coded: &'a CodedData<'a>) -> Vec<(usize, &'a CodeBlock<'a>)> {
 
 fn walk<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> CodedData<'a> {
     let meter = super::Meter::new(u64::MAX);
-    decode_packets_partial(header, tile, &meter, u64::MAX, 0)
+    decode_packets_partial(header, tile, &meter, u64::MAX, 0, None)
         .unwrap_or_else(|_| panic!("the walk fails"))
         .0
 }
