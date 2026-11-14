@@ -96,7 +96,11 @@ budget refusals (the pinned images are tiny), an even-origin 4:2:2
 conversion (no pinned codestream; `tests/jp2_sycc_replication.rs` grades one
 against OpenJPEG). The RGB profile's `uniform` refusal after the "AFL test"
 needs a `cdef` that moves a differing color past the first four channels
-(`icc_rgb_uniform_after_afl`). The CI smoke generates these seeds before it
+(`icc_rgb_uniform_after_afl`). `tests/fuzz_seed_outcomes.rs` runs the script
+into a scratch directory and checks that every seed decodes as coded and that
+its `ColorOutput::Srgb` outcome matches `tests/fixtures/jp2_fuzz_seed_outcomes.tsv`
+(130 convert or pass through, 30 are refused as `Unsupported`; regenerate the
+table with `J2K_BLESS_SEED_OUTCOMES=1`). The CI smoke generates these seeds before it
 runs `jp2_boxes` for 30 s, and seeds `header` from the committed fixtures.
 `gen-jp2-fuzz-seeds.py` builds the matching ICC and sYCC `colr` seeds, and
 seeds with `jp2i` and `uinf` boxes before and after the codestream.
