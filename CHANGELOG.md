@@ -464,14 +464,19 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
   extension only at the two ends of each row and column, lifts each row as
   its low-pass and high-pass halves, and runs the vertical pass on eight
   columns at a time on tiles at least 16 samples wide. The output is
-  unchanged, and 9/7 images decode about 1.3 times faster. A narrow tile
-  needs about the same memory as before these changes, within a few
-  percent.
-- Code-block decoding is faster. The coding passes keep the arithmetic
+  unchanged. A narrow tile of a file with coded data needs about the same
+  memory as before these changes, within a few percent. A file with no coded
+  data can peak higher on a narrow tile, because the wavelet transform now
+  allocates its work buffers per pass.
+- Code-block decoding is faster. The flag plane is padded, so the pass loops
+  need no edge tests, and it keeps each sample's neighbor mask up to date, so
+  contexts come from table lookups. The coding passes keep the arithmetic
   decoder's registers in locals, read the state of a four-row column with
   one load, and skip a column that has nothing to code with one test. The
-  output is unchanged, and the benchmark set decodes 1.2 to 1.4 times
-  faster.
+  output is unchanged.
+- Together, these make whole-file decodes several times faster than 0.3.0:
+  1.7 to 5.3 times on the conformance and benchmark files measured,
+  depending on the file. Very small files gain little.
 
 ## [0.3.0] - 2026-07-18
 
