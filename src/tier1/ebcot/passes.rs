@@ -19,7 +19,7 @@
 //! the low bit-planes as raw bits rather than MQ decisions (D.6); the raw reader
 //! and the per-segment coder choice live in [`decode_block`].
 
-use crate::tier1::mq::{Context, MqDecoder, RawDecoder};
+use super::mq::{Context, MqDecoder, RawDecoder};
 use crate::{Error, Result};
 
 #[cfg(test)]
