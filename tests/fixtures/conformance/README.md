@@ -2,9 +2,9 @@
 
 The Profile-0 (`p0_*`) and Profile-1 (`p1_*`) JPEG 2000 conformance codestreams
 from ITU-T T.803 | ISO/IEC 15444-4, with their `.pgx` reference decodes and the
-per-file error bounds. This is the authoritative bar for the Phase 2 decoder:
-where the Phase 1 fixtures in the parent directory grade against an OpenJPEG
-re-decode, these grade against the standard's own conformance suite.
+per-file error bounds. This is the authoritative bar for the decoder: where
+the fixtures in the parent directory grade against an OpenJPEG re-decode,
+these grade against the standard's own conformance suite.
 
 The corpus is committed so it grades offline, with no reference decoder and no
 network fetch at test time. `tests/conformance_part4.rs` decodes these and
@@ -310,8 +310,9 @@ C.8 bounds to their own transcription of the T.803 tables
 
 The MSE parts add linearly: the bound is the Part 1 MSE plus the allowance,
 so the cross-check holds exactly when the allowance is at least Kakadu's
-recorded MSE, as every T.803 allowance is. Adding them as square roots instead (`(√a + √b)²`) gives a larger figure than the
-T.803 bound for 11 components (`ds0_ht_04_b11`, `ds0_ht_05_b11`,
+recorded MSE, as every T.803 allowance is. Adding them as square roots
+instead (`(√a + √b)²`) gives a larger figure than the T.803 bound for 11
+components (`ds0_ht_04_b11`, `ds0_ht_05_b11`,
 `ds0_ht_06_b11`, `ds1_ht_02_b11` and `ds1_ht_03_b11`).
 
 Two oddities in the tables are transcribed as printed:

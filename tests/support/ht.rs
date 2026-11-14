@@ -353,8 +353,11 @@ pub fn decodes_or_unsupported(
 }
 
 impl JphEntry {
-    /// Decode a file that is not graded: it must decode or be refused as
-    /// `Unsupported`, and must not panic. `None` for a graded file.
+    /// Decode a file that is not graded, and its bare `jp2c` codestream: each
+    /// must decode or be refused as `Unsupported`, and must not panic. The
+    /// codestream is decoded on its own because the file-level brand check
+    /// can refuse the file before the codestream is read. `None` for a graded
+    /// file.
     pub fn check_ungraded(&self, ht_dir: &Path) -> Option<Result<(), String>> {
         if self.graded_as.is_some() {
             return None;
@@ -363,7 +366,19 @@ impl JphEntry {
             Ok(bytes) => bytes,
             Err(e) => return Some(Err(format!("cannot read {}: {e}", self.file))),
         };
-        Some(decodes_or_unsupported(|| rust_j2k::decode(&bytes)))
+        let [start, end] = self.codestream_range;
+        let Some(codestream) = bytes.get(start..end) else {
+            return Some(Err(format!(
+                "codestream range {start}..{end} past the file"
+            )));
+        };
+        let outcome = decodes_or_unsupported(|| rust_j2k::decode(&bytes))
+            .map_err(|why| format!("file: {why}"))
+            .and_then(|()| {
+                decodes_or_unsupported(|| rust_j2k::decode(codestream))
+                    .map_err(|why| format!("codestream: {why}"))
+            });
+        Some(outcome)
     }
 
     /// Decode and grade the file. `None` for a file that is not graded.
