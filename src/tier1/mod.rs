@@ -381,8 +381,17 @@ mod tests {
     /// A single-cell LL subband carrying one code-block with the given pass and
     /// zero-bitplane counts.
     fn one_block_subband(num_passes: u32, zero_bit_planes: u32) -> Subband<'static> {
+        kind_block_subband(BandKind::Ll, num_passes, zero_bit_planes)
+    }
+
+    /// As [`one_block_subband`], for a band of orientation `kind`.
+    fn kind_block_subband(
+        kind: BandKind,
+        num_passes: u32,
+        zero_bit_planes: u32,
+    ) -> Subband<'static> {
         Subband {
-            kind: BandKind::Ll,
+            kind,
             origin: (0, 0),
             width: 1,
             height: 1,
@@ -450,6 +459,95 @@ mod tests {
         let band = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, default_params(), |q| q)
             .expect("in range");
         assert_eq!(band.data.len(), 1);
+    }
+
+    /// A one-sample band whose block decodes to a nonzero index.
+    fn coded_subband(kind: BandKind) -> Subband<'static> {
+        let mut sb = kind_block_subband(kind, 1, 0);
+        sb.blocks[0].segments[0].chunks = vec![&[0x00, 0x00, 0x00][..]];
+        sb
+    }
+
+    /// Subband indices follow QCD order: LL is 0, then each resolution
+    /// coarsest-first as HL, LH, HH.
+    #[test]
+    fn band_index_follows_qcd_order() {
+        for kind in [BandKind::Ll, BandKind::Hl, BandKind::Lh, BandKind::Hh] {
+            assert_eq!(band_index(0, kind), 0);
+        }
+        assert_eq!(band_index(1, BandKind::Hl), 1);
+        assert_eq!(band_index(1, BandKind::Lh), 2);
+        assert_eq!(band_index(1, BandKind::Hh), 3);
+        assert_eq!(band_index(2, BandKind::Hl), 4);
+        assert_eq!(band_index(2, BandKind::Lh), 5);
+        assert_eq!(band_index(2, BandKind::Hh), 6);
+    }
+
+    /// Each 9/7 band is placed scaled by its own step: with the same coded
+    /// block in every band and a distinct step per band (same exponent, so
+    /// the same bit-plane count), a swapped pairing shows in the values.
+    #[test]
+    fn each_irreversible_band_is_scaled_by_its_own_step() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/irreversible_lossy.j2k"
+        ))
+        .unwrap();
+        let mut header = crate::codestream::parse_header(&bytes).unwrap().header;
+        assert_eq!(
+            header.components[0].coding.transform,
+            Transform::Irreversible97
+        );
+        header.components[0].quant.style = crate::codestream::markers::QuantStyle::ScalarExpounded;
+        header.components[0].quant.guard_bits = 2;
+        header.components[0].quant.steps = vec![(8, 0), (8, 100), (8, 700), (8, 1500)];
+        let coded = CodedData {
+            components: vec![ComponentCoded {
+                resolutions: vec![
+                    Resolution {
+                        subbands: vec![coded_subband(BandKind::Ll)],
+                    },
+                    Resolution {
+                        subbands: vec![
+                            coded_subband(BandKind::Hl),
+                            coded_subband(BandKind::Lh),
+                            coded_subband(BandKind::Hh),
+                        ],
+                    },
+                ],
+            }],
+        };
+        // The quantized index every band decodes to, before scaling.
+        let q = decode_subband::<i32, _>(
+            &coded.components[0].resolutions[0].subbands[0],
+            numbps(&header, 0, 0).unwrap(),
+            default_params(),
+            |q| q,
+        )
+        .unwrap()
+        .data[0];
+        assert_ne!(q, 0);
+
+        let out = decode_code_blocks(&header, &coded, 0).unwrap();
+        let SubbandCoeffs::Irreversible(bands) = &out[0] else {
+            panic!("expected the irreversible arm");
+        };
+        let got = [
+            bands.ll.data[0],
+            bands.levels[0].hl.data[0],
+            bands.levels[0].lh.data[0],
+            bands.levels[0].hh.data[0],
+        ];
+        for (band, value) in got.into_iter().enumerate() {
+            let step = quant::half_step(&header, 0, band).unwrap();
+            assert_eq!(value.to_bits(), (q as f32 * step).to_bits(), "band {band}");
+        }
+        // The four steps differ, so a swapped pairing cannot pass.
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                assert_ne!(got[i].to_bits(), got[j].to_bits());
+            }
+        }
     }
 
     fn default_params() -> BlockParams {
