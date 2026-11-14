@@ -99,7 +99,7 @@ files matches OpenJPEG's output. Ships as one release.
 unchanged, and the real-world set decodes with its recorded metadata. #167
 did the documentation pass and the extended gate of `RELEASING.md`, and the
 three whole-crate reviews of its step 2 ran under #226, which also holds the
-manual testing rounds the owner added before the tag. The 0.4.0 release
+manual testing rounds added before the tag. The 0.4.0 release
 waits on the open issues of the Phase 3 milestone.
 
 ## Phase 4: HTJ2K decode (Part 15)

@@ -1,8 +1,11 @@
 # Correctness & conformance
 
 All 23 ISO/IEC 15444-4 conformance codestreams and all nine JP2 reader files
-of the same suite decode within compliance class 1. Every lossless fixture,
-the GRIB2 grids included, matches OpenJPEG bit for bit. Lossy fixtures stay
+of the same suite decode within compliance class 1. Every lossless fixture
+decodes bit for bit against its oracle: OpenJPEG for most, eccodes for the
+GRIB2 grids, and, where OpenJPEG decodes the feature wrongly, the encoder's
+source image, a table lookup or a twin file
+([departures](openjpeg-departures.md)). Lossy fixtures stay
 within a stated tolerance of OpenJPEG: at 8 to 12 bits the largest measured
 difference is 1 (see [How close a decode must be](#how-close-a-decode-must-be)).
 
@@ -28,7 +31,7 @@ Three reference pages hold the detailed record:
 
 From strongest to most convenient:
 
-1. The **ISO/IEC 15444-4 conformance suite**: the official test codestreams
+1. The ISO/IEC 15444-4 conformance suite: the official test codestreams
    and their *compliance classes*. Lossy decoders legitimately differ in the
    low bits, so Part 4 does not ask for bit-exact output. It bounds the
    per-pixel peak error and the mean-squared error against the reference
@@ -36,11 +39,11 @@ From strongest to most convenient:
    whether the decoder is correct, and Phase 2 and later gate on it. The corpus
    is in `tests/fixtures/conformance/`, and `tests/conformance_part4.rs` grades
    it.
-2. The **reference-decoder oracle**: decode the same input with OpenJPEG
+2. The reference-decoder oracle: decode the same input with OpenJPEG
    (`opj_decompress`), or with eccodes for GRIB2-sourced files, and compare.
    It runs on any real-world file, so it is the day-to-day check, and it was
    the Phase 1 gate.
-3. **Worked examples from the standard**: the MQ decoder has the test
+3. Worked examples from the standard: the MQ decoder has the test
    sequence of ITU-T T.88 §H.2, and the 5/3 lifting steps have small vectors
    worked by hand from F.3.8.2, so a single stage can be tested before the
    stages around it exist.
@@ -119,13 +122,8 @@ On real files the gaps fit the table: the 8-bit
 `jpx_disguised_as_jp2.jp2` are within 1, and the 16-bit
 `issue559-eci-090-CIELab.jp2` is within 2.
 
-These are measured maxima, not a bound. For a rough scale: each high-pass
-scaling is off by 5.4e-5 times the coefficient, and high-pass coefficients
-range about as widely as the samples, so the gap scales with 2^depth. At five
-levels, collecting that error once per level gives about 18 at 16 bits, 4 at
-14, 1 at 12 and under 0.1 at 8. The measured gaps stay well under this and
-don't grow with the level count. The committed `irreversible_16bit` fixture
-reaches 5 on its full-swing component and 3 on its mid-range one, and is
+These are measured maxima, not a bound. The committed `irreversible_16bit`
+fixture reaches 5 on its full-swing component and 3 on its mid-range one, and is
 graded at a tolerance of 5.
 
 ## Grading against Part 4
@@ -233,9 +231,7 @@ decoder until the precinct partition landed, and it is why
 between them, not two. The `precincts_*` fixtures are what separate them: with
 a real partition the position axis has more than one value, PCRL interleaves
 the components inside one sweep of the canvas and CPRL finishes a component
-before starting the next, and the two packet streams diverge. Such a pair is
-recorded next to the code, so that one feature's fixture is not taken for
-coverage of both.
+before starting the next, and the two packet streams diverge.
 
 A third shape is the nastiest, because the fixture looks like it targets the
 feature by name. One feature can *mask* another. Under `restart` the MQ decoder
@@ -258,9 +254,9 @@ The conformance suite and the oracle test the whole pipeline at once, so a
 failure there doesn't say which stage is wrong. Each stage also has isolated
 golden tests, which point at the stage that broke:
 
-- **MQ decoder**: the decoded decisions for the test sequence of ITU-T T.88
+- MQ decoder: the decoded decisions for the test sequence of ITU-T T.88
   §H.2.
-- **Tier-1 passes**: known code-block byte segments in, the recovered
+- Tier-1 passes: known code-block byte segments in, the recovered
   coefficient planes out. The vectors are sliced from reversible (5/3),
   single-resolution OpenJPEG codestreams. There the coefficients are just the
   DC-level-shifted samples, so `opj_decompress` gives a bit-exact oracle that
@@ -270,9 +266,9 @@ golden tests, which point at the stage that broke:
   end-to-end lossy fixtures grade the 9/7 quantization and wavelet path
   instead. Regenerate the vectors with
   [`scripts/gen-tier1-vectors.py`](../scripts/gen-tier1-vectors.py).
-- **Tag trees and packet headers**: inclusion, zero bit-planes and lengths
+- Tag trees and packet headers: inclusion, zero bit-planes and lengths
   decoded from hand-built packet headers.
-- **Inverse DWT**: 5/3 integer lifting bit-exact on known signals, and 9/7
+- Inverse DWT: 5/3 integer lifting bit-exact on known signals, and 9/7
   float lifting within tolerance, including the symmetric boundary extension
   at the edges.
 
@@ -310,40 +306,43 @@ The corpus holds:
 A decoder parses bytes it did not produce, so malformed input is an ordinary
 case, not an edge case.
 
-- **Fuzzing.** `cargo fuzz` (libFuzzer) runs in the detached
-  [`fuzz/`](../fuzz/) workspace, with eight targets: `decode`, `header` and
-  `decode_partial` over the public entry points, and `tile_body`,
-  `tier1_block`, `mq`, `jp2_boxes` and `icc_srgb` over single stages. See
-  [`fuzz/README.md`](../fuzz/README.md) to run them. The bar is no panics, no
-  unbounded allocation and no infinite loops: every rejected input returns a
-  typed `Error`. A malformed SIZ cannot steer the buffers into an
-  overflowing or out-of-memory allocation. SIZ's declared image area,
-  `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, is held to the sample limit before any tile
-  is read ([The sample limit](resource-bounds.md#the-sample-limit)), and the
-  Table A-9 constraints on the image and tile origins are enforced before any
-  geometry reaches the DWT.
-- **Typed failures.** The flat `Error` enum names the kind of failure, so a
-  caller can tell a damaged codestream (`Codestream`), an illegal field
-  (`Marker`), a malformed JP2 box (`FileFormat`), a feature outside what
-  this decoder reads (`Unsupported`) and a resource bound (`Limit`) apart.
-  The decode path does not `unwrap` or panic on input. Review and fuzzing
-  hold this, not a lint; the only `expect` calls outside tests invert
-  constant matrices in `src/jp2/lcms.rs`.
-- **The reject matrices.**
-  `reject_matrix_maps_every_out_of_subset_input_to_its_typed_error` in
-  `src/codestream/tests.rs` lists codestream inputs outside the decoded
-  subset and pins the error a caller sees: `Codestream` for structural
-  damage, `Marker` for an illegally encoded field, and `Unsupported` for
-  valid JPEG 2000 this decoder does not read. The JP2 box layer has its own
-  matrix, `reject_matrix_maps_every_malformed_box_shape_to_its_typed_error`
-  in `src/jp2/tests.rs`, where a malformed box is `FileFormat`, and the sRGB
-  output step has `srgb_reject_matrix_maps_each_input_to_its_typed_error` in
-  `src/jp2/srgb_tests.rs`. The `Limit` refusals are pinned by their own
-  tests ([resource-bounds.md](resource-bounds.md)). Rejecting is not a
-  formality: a feature the decoder reads and then ignores yields an arbitrary
-  image, not a slightly wrong one, so anything not decoded must be refused
-  rather than skipped. When a feature lands, its row moves out of the matrix,
-  and a row that stops rejecting fails the test.
-- **No `unsafe`.** The library has none. If a measured hot path ever needs
-  it, it must be justified, isolated and fuzzed. The only `unsafe` in the
-  repository is in the test binaries that count allocations.
+This decoder is fuzzed with `cargo fuzz` (libFuzzer) in the detached
+[`fuzz/`](../fuzz/) workspace, with eight targets: `decode`, `header` and
+`decode_partial` over the public entry points, and `tile_body`,
+`tier1_block`, `mq`, `jp2_boxes` and `icc_srgb` over single stages. See
+[`fuzz/README.md`](../fuzz/README.md) to run them. The bar is no panics, no
+unbounded allocation and no infinite loops: every rejected input returns a
+typed `Error`. A malformed SIZ cannot steer the buffers into an overflowing
+or out-of-memory allocation. SIZ's declared image area,
+`(Xsiz − XOsiz)·(Ysiz − YOsiz)`, is held to the sample limit before any tile
+is read ([The sample limit](resource-bounds.md#the-sample-limit)), and the
+Table A-9 constraints on the image and tile origins are enforced before any
+geometry reaches the DWT.
+
+Every failure is typed. The flat `Error` enum names the kind of failure, so a
+caller can tell a damaged codestream (`Codestream`), an illegal field
+(`Marker`), a malformed JP2 box (`FileFormat`), a feature outside what this
+decoder reads (`Unsupported`) and a resource bound (`Limit`) apart. The
+decode path does not `unwrap` or panic on input. Review and fuzzing hold
+this, not a lint; the only `expect` calls outside tests invert constant
+matrices in `src/jp2/lcms.rs`.
+
+Reject matrices pin the error for each kind of input this decoder refuses.
+`reject_matrix_maps_every_out_of_subset_input_to_its_typed_error` in
+`src/codestream/tests.rs` lists codestream inputs outside the decoded subset
+and pins the error a caller sees: `Codestream` for structural damage,
+`Marker` for an illegally encoded field, and `Unsupported` for valid JPEG
+2000 this decoder does not read. The JP2 box layer has its own matrix,
+`reject_matrix_maps_every_malformed_box_shape_to_its_typed_error` in
+`src/jp2/tests.rs`, where a malformed box is `FileFormat`, and the sRGB
+output step has `srgb_reject_matrix_maps_each_input_to_its_typed_error` in
+`src/jp2/srgb_tests.rs`. The `Limit` refusals are pinned by their own tests
+([resource-bounds.md](resource-bounds.md)). Rejecting is not a formality: a
+feature the decoder reads and then ignores yields an arbitrary image, not a
+slightly wrong one, so anything not decoded must be refused rather than
+skipped. When a feature lands, its row moves out of the matrix, and a row
+that stops rejecting fails the test.
+
+The library has no `unsafe`. If a measured hot path ever needs it, it must be
+justified, isolated and fuzzed. The only `unsafe` in the repository is in the
+test binaries that count allocations.

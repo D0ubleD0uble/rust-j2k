@@ -412,7 +412,7 @@ follows the standard.
 | This decoder | accepts passes with no bytes and decodes them from the fill; refuses a wrong segmentation symbol read from the fill of an empty terminated segment |
 | OpenJPEG 2.5.0 | decodes both (`opj_mqc_init_dec` with a length of 0) |
 | Standard | B.10.7, B.10.7.1, B.10.8, D.4.1 |
-| Rule | matches OpenJPEG on the acceptance; 3 for the refusal |
+| Rule | 3 (the refusal); the acceptance matches OpenJPEG |
 | Tests and fixtures | `zero_length_contribution`, `zero_length_contribution_bypass`; `tests/work_limit.rs` for the bound |
 | Decided | not recorded |
 
@@ -501,8 +501,10 @@ Tile-part bytes left over after the last packet are refused with a
   for each tile-part (`t2.c:248`, `opj_t2_encode_packets`), so it writes the
   packets twice and the file doubles in size. OpenJPEG's decoder skips the
   repeats, ignores the bytes left over, and matches the source. This decoder
-  refuses it. A partial overlap (`-r 4,2,1`, layer ranges 2 then 3) is refused
-  with "tile-part ends before the last packet".
+  refuses it with a `Codestream` error that counts the bytes left after the
+  last packet. A partial overlap (`-r 4,2,1`, layer ranges 2 then 3) is
+  refused with a `Codestream` error saying the tile-part ends before its last
+  packet.
 - `-TP R` or `-TP C` with empty resolutions (`-F 2,99,1,1,u -n 6 -t 32,64
   -d 22,14 -TP R`). The encoder writes a stray `0x80` byte into each
   tile-part of an empty resolution. This decoder refuses it
@@ -512,8 +514,8 @@ Tile-part bytes left over after the last packet are refused with a
   here.
 
 openjpeg-data's `kodak_2layers_lrcp.j2c` (DCP-Werkstatt) has 975304 bytes left
-after its last packet, and this decoder refuses the file for them; OpenJPEG
-ignores them. With the check turned off, this
+after its last packet, and this decoder refuses the file with a `Codestream`
+error that gives that count; OpenJPEG ignores them. With the check turned off, this
 decoder's image is within 1 of OpenJPEG's (it is 9/7).
 
 ### A tile-part that ends before its last packet
@@ -594,7 +596,7 @@ bytes) would still catch a wrong guess. So such a file is read with
 | This decoder | refuses as `Codestream`, before the packets are read |
 | OpenJPEG 2.5.0 | decodes the missing packets as empty |
 | Standard | A.6.6, B.6, B.9, B.11, B.12.3 |
-| Rule | strict decoding refuses missing data; partial decode reports it |
+| Rule | 3 |
 | Tests and fixtures | `tests/fixtures/poc_coverage/` |
 | Decided | not recorded |
 
@@ -711,8 +713,8 @@ only when it changes nothing in either reading, and is then dropped
 - a QCD likewise, against the QCD in force and every QCC;
 - a COC or QCC must equal what its component already has.
 
-A marker that differs from the one in force is a `Codestream` error. OpenJPEG applies it to the
-whole tile, including the parts read before it; which values the encoder
+A marker that differs from the one in force is a `Codestream` error naming
+the tile and the marker. OpenJPEG applies it to the whole tile, including the parts read before it; which values the encoder
 meant is not in the file, so this decoder does not guess. An RGN in a later
 part is still refused, as before. This is safe because an accepted
 restatement leaves every value the decode reads as it was.
@@ -765,7 +767,7 @@ of `2/K`, every stage agrees bit for bit and the file decodes bit-exact.
 | This decoder | with `DecodeOptions::strict` off, takes missing data and leftover bytes and reports them on `Image::report` |
 | OpenJPEG 2.5.0 | `opj_decompress -allow-partial` |
 | Standard | B.11 (whole packets may be dropped from the end of a tile) |
-| Rule | B.11 for a cut packet; a packed-header overrun is damage, refused |
+| Rule | 1 for a cut packet (B.11); 3 for a packed-header overrun |
 | Tests and fixtures | `tests/partial_decode.rs`, `src/tier2/partial_tests.rs`, `tests/packed_overrun.rs`; `tests/fixtures/partial/`, `tests/fixtures/poc_coverage/`, `tests/fixtures/packed_overrun/` |
 | Decided | #214 |
 
@@ -773,8 +775,8 @@ With `DecodeOptions::strict` off the decoder takes missing data and bytes left
 after a tile's last packet, as `opj_decompress -allow-partial` does, and
 reports them on `Image::report`. Everything else is refused as when strict. A
 strict decode is unchanged: its output and error text match the decoder before
-this option on every committed fixture and on a few dozen public JP2, J2K and
-GRIB2 files, not committed (the outside corpus of #226), at reductions 0 to 3.
+this option on every committed fixture and on the public JP2, J2K and GRIB2
+files of the #226 testing round, not committed, at reductions 0 to 3.
 
 The oracle is `opj_decompress -allow-partial`, on the fixtures in
 `tests/fixtures/partial/` (`scripts/gen-partial-fixtures.py`, provenance in
@@ -875,7 +877,7 @@ of the data is the data ending, and the packet adds nothing.
 | This decoder | accepts a signed 32-bit component; refuses unsigned 32 bits or more, and 33 to 38 bits, as `Unsupported` |
 | OpenJPEG 2.5.0 | refuses every precision over 31 bits when it reads SIZ (`j2k.c:2289` and `j2k.c:6618`) |
 | Standard | ISO/IEC 15444-1 allows `Ssiz` up to 38 bits |
-| Rule | looser than OpenJPEG, from the standard |
+| Rule | 1 (looser than OpenJPEG) |
 | Tests and fixtures | `tests/signed_32bit.rs` |
 | Decided | 2026-11-01 |
 
@@ -935,7 +937,7 @@ return the same error as `decode` for every header fault.
 | OpenJPEG 2.5.0 | decodes the first codestream |
 | Standard | a file without `jp2 ` compatibility says a JP2 reader cannot present it correctly |
 | Rule | 3 (an error over a possibly wrong image) |
-| Tests and fixtures | the box reject matrix (`src/jp2/tests/matrix.rs`) |
+| Tests and fixtures | `a_jpx_without_jp2_compatibility_is_unsupported` (`src/jp2/tests.rs`); the "no jp2 in brand or compatibility list" row of `every_robustness_table_row_has_its_outcome` (`src/jp2/tests/matrix.rs`) |
 | Decided | 2026-11-01 |
 
 A file whose `ftyp` does not claim `jp2 ` compatibility (pure JPX, JPM or MJ2)
@@ -976,7 +978,8 @@ When the box end is not used (`LBox` 0, or a length that ends inside the
 codestream with more bytes after the codestream), the tile-part runs to the
 end of the file in both decoders, so the bytes after its last packet are tile
 data. OpenJPEG ignores them; the codestream parser rejects them with a
-`Codestream` error, as it does for a raw codestream.
+`Codestream` error that counts the bytes left after the last packet, as it
+does for a raw codestream.
 The packets themselves decode, so this is not the
 [leftover-bytes rule](#bytes-left-after-the-last-packet) of a raw stream.
 
@@ -1016,7 +1019,7 @@ in both.
 | This decoder | follows OpenJPEG on what it accepts and on its output samples; refuses a column too deep for `i32`; keeps each channel's own sub-sampling |
 | OpenJPEG 2.5.0 | decodes deep columns; sizes every channel by the first one's grid |
 | Standard | Annex I (`pclr`, `cmap`) |
-| Rule | 3 for deep columns; looser for mixed sub-sampling, where OpenJPEG crashes |
+| Rule | 3 for deep columns; 1 for mixed sub-sampling (OpenJPEG crashes) |
 | Tests and fixtures | `jp2_palette_subsampled_*`; `src/jp2/tests/palette.rs` |
 | Decided | 2026-11-01 |
 

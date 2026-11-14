@@ -199,7 +199,10 @@ oracle for that feature, and the milestone needs a fixture that can tell the
 difference: a multi-layer codestream to separate LRCP from RLCP, multiple
 precincts to separate RPCL from RLCP, and so on
 ([correctness.md](correctness.md#a-passing-entry-is-not-proof-the-feature-works)
-has the cases that motivate this).
+has the cases that motivate this). When two orders give the same stream on a
+fixture, as PCRL and CPRL do without a precinct partition, record the pair
+next to the code, so that one feature's fixture is not taken for coverage of
+both.
 
 Mutating the new code and watching the entry fail is the cheapest way to check.
 If no mutation makes it fail, the entry is not testing it. Run the mutation

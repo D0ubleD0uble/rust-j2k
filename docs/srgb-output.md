@@ -354,7 +354,7 @@ A monochrome (`GRAY`) ICC profile on more than two channels is refused (#197,
 branch, which passes the planes interleaved to a gray transform as if they
 were RGB, so its three-channel output is not a conversion. Checked on a 24x16
 file with a tinted gray profile and a `cdef` of (color 1, opacity, opacity):
-`opj_decompress` writes an RGB PNG; the earlier output here was five channels.
+`opj_decompress` writes an RGB PNG.
 One gray channel (1 to 1 or 3) and gray plus opacity (2 to 2 or 4) match
 OpenJPEG and are unchanged. Test:
 `a_gray_profile_on_more_than_two_channels_is_unsupported`.

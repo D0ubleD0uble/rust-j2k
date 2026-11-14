@@ -30,8 +30,9 @@ The caps count work, not time: samples, packet-walk steps and code-block
 sample-passes, each defined below. The times on this page were measured on
 release builds when each cap was set, before the 0.4.0 speed-ups to tier 1, the
 wavelet, tier 2 and dequantization (#314, #315, #319 to #322 and #324), so the
-decoder is now faster than some of them show. Where a table has a "Before"
-column, it gives this decoder's time before the change named in its header.
+decoder is now faster than some of them show. Where a table has "Before #N"
+and "After #N" columns, they give this decoder's times on either side of that
+change, measured then.
 
 ## The sample limit
 
@@ -127,7 +128,7 @@ it (`WorkLimit::Unlimited`), for the walk `read_header_with` makes too
 
 Measured on release builds (`scripts/gen-work-bound-fixtures.py`):
 
-| Shape | Size | Before #235 | Since #235 | OpenJPEG 2.5.0 |
+| Shape | Size | Before #235 | After #235 | OpenJPEG 2.5.0 |
 | ----- | ---- | ----------- | ---------- | -------------- |
 | LRCP, 2^17 4x4 code-blocks, 1000 one-byte packets | 1.1 KB | 4.6 s | decodes, 14 ms | 6.8 s |
 | LRCP, 2^14 code-blocks, 65535 layers | 66 KB | 28.7 s | decodes, 8 ms | 0.3 s |
@@ -170,7 +171,7 @@ component there. Measured on release builds (`deep` in
 `scripts/gen-work-bound-fixtures.py`, a row of one-sample tiles at y = 1, 32
 levels, one layer, every packet 0x00):
 
-| Shape | Size | Before #271 | Since #271 | OpenJPEG 2.5.0 |
+| Shape | Size | Before #271 | After #271 | OpenJPEG 2.5.0 |
 | ----- | ---- | ----------- | ---------- | -------------- |
 | 1 tile, 16384 components | 66 KB | 0.5 s, 383 MB | 0.18 s | 0.4 s, 192 MB |
 | 64 tiles, 1024 components | 70 KB | 1.7 s | 0.41 s | 0.24 s |
@@ -248,7 +249,7 @@ volumes), 1.0e7 packets reached, ends at its box and decodes, as on OpenJPEG;
 `scripts/gen-work-bound-fixtures.py`; times and peak memory; `read_header` is on
 the `Psot = 0` JP2 form):
 
-| Shape | Size | `decode` before #261 | `decode` since #261 | `read_header` before #261 | `read_header` since #261 | OpenJPEG 2.5.0 |
+| Shape | Size | `decode` before #261 | `decode` after #261 | `read_header` before #261 | `read_header` after #261 | OpenJPEG 2.5.0 |
 | ----- | ---- | -------------------- | ------------------- | ------------------------- | ------------------------ | -------------- |
 | 16 precincts, 65535 layers, 31 identical volumes | 1 MB | 5.7 s, 105 MB | 0.15 s, 3.5 MB | 5.3 s, 105 MB | 0.15 s, 3.5 MB | 0.10 s, 9 MB |
 | 160 components, 65535 layers, 2 volumes | 10.5 MB | 4.5 s, 824 MB | 0.32 s, 14 MB | 4.2 s, 824 MB | 0.33 s, 14 MB | 0.57 s, 37 MB |
@@ -328,7 +329,7 @@ release builds (`scripts/gen-tier1-work-bound-fixtures.py`; `t1bomb` is one
 tile, no wavelet levels, every 64x64 code-block included with 88 passes
 and one byte):
 
-| Shape | Size | Sample-passes | Before #278 | Since #278 | OpenJPEG 2.5.0 |
+| Shape | Size | Sample-passes | Before #278 | After #278 | OpenJPEG 2.5.0 |
 | ----- | ---- | ------------- | ----------- | ---------- | -------------- |
 | `t1bomb`, 8192x8192 | 76 KB | 5.9e9 | decodes, 19.3 s | `Limit`, 6 ms | decodes, 9.0 s |
 | `t1bomb`, 1024x1024 (committed) | 1.3 KB | 9.2e7 | decodes, 0.29 s | `Limit`, under 1 ms | decodes, 0.14 s |
@@ -401,7 +402,7 @@ sample limit for a file that decodes. TLM entries are checked and dropped,
 since nothing reads them. Measured on release builds
 (`scripts/gen-tile-header-fixtures.py --big`):
 
-| Shape | Size | Before #256 | Since #256 | OpenJPEG 2.5.0 |
+| Shape | Size | Before #256 | After #256 | OpenJPEG 2.5.0 |
 | ----- | ---- | ----------- | ---------- | -------------- |
 | 4096 tiles of 16384 components | 110 KB | 2.2 s | 3 ms | fails to read the header, 10 ms |
 | 128x128 tiles of 16384, heavy header | 295 KB | 63.9 s | 9 ms | 22 s, 55 GB |
