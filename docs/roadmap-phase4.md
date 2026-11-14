@@ -103,25 +103,24 @@ refinement segment: SigProp is read forward from its start and MagRef
 backward from its end.
 
 ### Tier-2
-
-An HT block's passes split into segments by the rule of B.2, not by the Part 1
-`segment_max_passes` rule. In the packet with a block's first contribution,
-the first segment holds the placeholder passes plus the one cleanup pass,
-`3k + 1` passes in all, and the second holds up to two refinement passes
-(B.3). The first contribution can also hold only placeholder passes (B.3
-NOTE 4); the cleanup pass then arrives in a later layer, and the B.2 rule
-covers both cases. The length fields are `Lblock + floor(log2(3k + 1))` bits for the
-cleanup segment and `Lblock + floor(log2(n))` bits for `n` refinement passes.
-The cleanup segment is under 65535 bytes and the refinement segment under
+ An HT block's passes split into segments by the rule of B.2, not by the Part 1
+`segment_max_passes` rule. In the packet with a block's first contribution, the
+first segment holds the placeholder passes plus the one cleanup pass, `3k + 1`
+passes in all, and the second holds up to two refinement passes (B.3). The first
+contribution can also hold only placeholder passes (B.3 NOTE 4); the cleanup
+pass then arrives in a later layer, and the B.2 rule covers both cases. The
+length fields are `Lblock + floor(log2(3k + 1))` bits for the cleanup segment
+and `Lblock + floor(log2(n))` bits for `n` refinement passes. The cleanup
+segment is under 65535 bytes and the refinement segment under
 2047.
 
 ### File format
-
-JPH (Annex D) is the JP2 format with the `jph ` brand, which `ftyp` must give
+ JPH (Annex D) is the JP2 format with the `jph ` brand, which `ftyp` must give
 as its brand and in its compatibility list (D.3). Its `colr` box may be absent
-when `ihdr`'s `UnkC` is set, and then no channel may be `Typ` 0 (D.2). Its `cdef` box allows a channel type `Typ` 3, a color the application
-defines, with an `Asoc` value the application defines too (D.6.3). Every
-Part 4 JPH file lists only `jph ` in `ftyp`, so the decoder's `jp2 `
+when `ihdr`'s `UnkC` is set, and then no channel may be `Typ` 0 (D.2). Its
+`cdef` box allows a channel type `Typ` 3, a color the application defines, with
+an `Asoc` value the application defines too (D.6.3). Every Part 4 JPH file lists
+only `jph ` in `ftyp`, so the decoder's `jp2 `
 compatibility check refuses them today.
 
 ## What OpenJPEG 2.5.0 decodes
@@ -242,13 +241,13 @@ P4.0 corpus + harness ─ P4.1 CAP/CPF + refusals ─ P4.2 tier-1 seam + HT clea
 P4.8 fuzz targets + reject matrix (starts after P4.2, runs throughout) ─────────────────────────────────────────────────────────────── P4.9 integration + gate
 ```
 
-P4.0 comes first, as in Phases 2 and 3. The Tier-1 seam lands in P4.2 with
-the first HT decoder, so the second implementation shapes it (#137). Moving
-EBCOT behind the seam touches only `src/tier1/` and can start beside P4.1; the
-HT half of P4.2 needs P4.1's parsing. P4.3 comes before the refinement passes because Tier-2 must hand
-Tier-1 both segments before a refinement pass can be read. P4.5 and P4.7 each
-need only P4.4 and can run in parallel. P4.6 needs P4.5 as well, because all
-three MIXED codestreams carry an `RGN` marker.
+P4.0 comes first, as in Phases 2 and 3. The Tier-1 seam lands in P4.2 with the
+first HT decoder, so the second implementation shapes it (#137). Moving EBCOT
+behind the seam touches only `src/tier1/` and can start beside P4.1; the HT half
+of P4.2 needs P4.1's parsing. P4.3 comes before the refinement passes because
+Tier-2 must hand Tier-1 both segments before a refinement pass can be read. P4.5
+and P4.7 each need only P4.4 and can run in parallel. P4.6 needs P4.5 as well,
+because all three MIXED codestreams carry an `RGN` marker.
 
 ## Steps
 
@@ -467,13 +466,12 @@ target; a work bound for an HT block in `tier1::work` and
 budget) finds nothing; the reject matrices pass.
 
 ### P4.9 — Integration and the phase gate
-
-**Work:** the `scope.md` Part 15 rows and the two Part 1 rows; `roadmap.md`;
+ **Work:** the `scope.md` Part 15 rows and the two Part 1 rows; `roadmap.md`;
 `correctness.md` gains the HT corpus; `openjpeg-departures.md` lists each place
 this decoder decodes what OpenJPEG refuses (placeholder passes, ROI, MIXED,
-`file10`) and any departure found on files OpenJPEG decodes, each with its spec text; `resource-bounds.md`;
-`tests/fixtures/README.md` provenance; `lib.rs` docs, README and CHANGELOG;
-the `RELEASING.md` pre-release review.
+`file10`) and any departure found on files OpenJPEG decodes, each with its spec
+text; `resource-bounds.md`; `tests/fixtures/README.md` provenance; `lib.rs`
+docs, README and CHANGELOG; the `RELEASING.md` pre-release review.
 
 **Gate (the Phase 4 exit):**
 - every graded entry decodes within its bounds (decision 4), tracked by
@@ -495,9 +493,14 @@ Refused cleanly, never attempted: MULTIHT; Part 2 codestreams, HT or not
 JP2 skips an unknown `METH` today, so such a file reports its color space as
 unknown; no corpus file uses them. Annex D's other `cdef` rules are not
 checked or acted on: at most one opacity channel, with `Asoc` 0 (D.6.1);
-several channels sharing one `Typ` and `Asoc` (D.6.2), which JPH allows and
-which is handled as JP2 handles it today; and no `Typ` 0 channel when `colr`
-is absent (D.2). No corpus file needs them. The HTJ2K encoder is Phase 6.
+several channels sharing one `Typ` and `Asoc` (D.6.2), which JPH allows; and
+no `Typ` 0 channel when `colr` is absent (D.2). Shared pairs decode as in JP2
+today: nothing is refused, and `Typ` 0 entries are swapped to position
+`Asoc − 1` in file order, so the later of two that share a color ends there
+and the earlier one takes the later one's old position. Other types stay where
+the file put them. No corpus file needs the first or last of these rules;
+`file10` shares an `Asoc` between two `Typ` 3 channels, which the reorder
+leaves in place. The HTJ2K encoder is Phase 6.
 `hifi_p1_02.j2k`, the Part 1 codestream beside `hifi_ht1_02`, is not part of
 the HT set. See [roadmap.md](roadmap.md) and [scope.md](scope.md).
 
@@ -509,7 +512,8 @@ the HT set. See [roadmap.md](roadmap.md) and [scope.md](scope.md).
   C.2.
 - OpenJPEG 2.5.0 source, tag `v2.5.0` (`a5891555`): `src/lib/openjp2/ht_dec.c`,
   `j2k.c` (`opj_j2k_read_cap`, `opj_j2k_read_cpf`, `opj_j2k_read_SPCod_SPCoc`),
-  `t2.c` (`opj_t2_read_packet_header`), `tests/nonregression/test_suite.ctest.in`.
+  `t2.c` (`opj_t2_read_packet_header`),
+  `tests/nonregression/test_suite.ctest.in`.
 - `https://gitlab.com/wg1/htj2k-codestreams`, commit `f6b9ede`: codestreams,
   `transcode` scripts, `stats.txt`, syntax logs, `COPYRIGHT.txt`.
 - `https://github.com/uclouvain/openjpeg-data`, commit `39524bd3`:
