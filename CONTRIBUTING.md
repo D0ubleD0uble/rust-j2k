@@ -72,7 +72,7 @@ cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_li
 ## Tests for a decoding change
 
 A change to decoding needs a test that compares against a committed fixture
-and its reference snapshot. [docs/development.md](docs/development.md#regenerating-an-oracle-snapshot)
+and its reference snapshot. [docs/development.md](docs/development.md#regenerate-an-oracle-snapshot)
 shows how to make a snapshot. Record where the fixture came from, and the
 commands that made it, in [tests/fixtures/README.md](tests/fixtures/README.md).
 
