@@ -2441,7 +2441,7 @@ fn decode_cap(mut b: Cursor<'_>) -> Result<Option<Ccap15>> {
 /// it. A body that is not whole words is malformed.
 fn decode_cpf(mut b: Cursor<'_>) -> Result<Cpf> {
     let len = b.remaining();
-    if len == 0 || len % 2 != 0 {
+    if len == 0 || !len.is_multiple_of(2) {
         return Err(Error::Marker(format!(
             "`CPF` carries {len} bytes, not one or more 16-bit `Pcpf` words"
         )));
