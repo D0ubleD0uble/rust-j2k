@@ -44,7 +44,9 @@
 //! list where.
 //!
 //! Every length is checked before use and nothing is allocated from one (see
-//! [`boxes`]). Box-layer faults are [`Error::FileFormat`]; a file this decoder
+//! [`boxes`]). Box-layer faults are [`Error::FileFormat`], and a file that
+//! ends before its codestream's main header is whole is [`Error::Incomplete`]
+//! (see [`parse`]); a file this decoder
 //! does not read (no `jp2 ` compatibility, or a palette mapping or column depth
 //! it does not decode) is [`Error::Unsupported`].
 
@@ -83,7 +85,7 @@ pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 use crate::codestream::markers::Siz;
 use crate::{Component, ComponentInfo, Error, Result, WorkLimit};
 use after::End;
-use boxes::{Boxes, Jp2Box, walk_after_codestream};
+use boxes::{Boxes, Jp2Box, type_name, walk_after_codestream};
 use channels::ChannelPlan;
 use header::{Jp2Header, check_file_type};
 use palette::PalettePlan;
@@ -98,8 +100,13 @@ pub(crate) const SIGNATURE: [u8; 12] = [
 /// Whether `bytes` open with a box of the signature box's type. Such input is
 /// read as a JP2 file, so a damaged signature box is reported as one
 /// ([`Error::FileFormat`]) rather than as a codestream missing its `SOC`.
+/// Input of 1 to 7 bytes that starts the signature box is read as a JP2 file
+/// too, so it is [`Error::Incomplete`].
 pub(crate) fn looks_like_jp2(bytes: &[u8]) -> bool {
-    bytes.get(4..8) == Some(&SIGNATURE[4..8])
+    match bytes.get(4..8) {
+        Some(kind) => kind == &SIGNATURE[4..8],
+        None => !bytes.is_empty() && SIGNATURE.starts_with(bytes),
+    }
 }
 
 /// A JP2 file's boxes up to and including its first `jp2c`.
@@ -148,7 +155,18 @@ pub(crate) struct Jp2File<'a> {
 /// the caller's tier-2 work limit, which also bounds the walk of a
 /// `Psot = 0` tile that finds where the codestream ends
 /// ([`packets_end_at`]).
+///
+/// Input that ends before the `jp2c` box's header is whole is
+/// [`Error::Incomplete`]: inside the signature box, after it, between boxes
+/// or inside one. Every box the input holds in full is read first, and a box
+/// cut short whose type is already wrong (not `ftyp` second, or `jp2c` with
+/// no `jp2h` before it) is the whole file's [`Error::FileFormat`].
 pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2File<'a>> {
+    if SIGNATURE.starts_with(bytes) && bytes.len() < SIGNATURE.len() {
+        return Err(Error::Incomplete(
+            "the input ends inside the JP2 signature box".into(),
+        ));
+    }
     if !bytes.starts_with(&SIGNATURE) {
         return Err(Error::FileFormat(
             "the file must open with the 12-byte JP2 signature box (`jP  ` holding \
@@ -158,17 +176,24 @@ pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2F
     }
 
     let mut boxes = Boxes::top_level(bytes, SIGNATURE.len());
-    let file_type = match boxes.next().transpose()? {
-        Some(ftyp) if &ftyp.kind == b"ftyp" => check_file_type(&ftyp)?,
-        Some(other) => {
-            return Err(Error::FileFormat(format!(
-                "the `ftyp` box must follow the signature, not `{}`",
-                other.name()
-            )));
-        }
+    let not_ftyp = |kind: [u8; 4]| {
+        Error::FileFormat(format!(
+            "the `ftyp` box must follow the signature, not `{}`",
+            type_name(kind)
+        ))
+    };
+    let file_type = match boxes.next() {
+        Some(Ok(ftyp)) if &ftyp.kind == b"ftyp" => check_file_type(&ftyp)?,
+        Some(Ok(other)) => return Err(not_ftyp(other.kind)),
+        // A box cut short is judged on its type once that has arrived.
+        Some(Err(error @ Error::Incomplete(_))) => match boxes.cut_kind() {
+            Some(kind) if &kind != b"ftyp" => return Err(not_ftyp(kind)),
+            _ => return Err(error),
+        },
+        Some(Err(error)) => return Err(error),
         None => {
-            return Err(Error::FileFormat(
-                "the file ends after the signature box".into(),
+            return Err(Error::Incomplete(
+                "the input ends after the JP2 signature box".into(),
             ));
         }
     };
@@ -179,7 +204,14 @@ pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2F
     // message when it swallowed the boxes meant to follow it.
     let mut open_ended = false;
     while let Some(item) = boxes.next() {
-        let item = item?;
+        let item = match item {
+            // A `jp2c` cut inside its 16-byte header still needs a `jp2h`
+            // before it.
+            Err(Error::Incomplete(_)) if header.is_none() && boxes.cut_kind() == Some(*b"jp2c") => {
+                return Err(no_jp2h());
+            }
+            item => item?,
+        };
         open_ended = boxes.last_was_open_ended();
         match &item.kind {
             b"jp2h" => {
@@ -190,9 +222,7 @@ pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2F
             }
             b"jp2c" => {
                 let Some(header) = header else {
-                    return Err(Error::FileFormat(
-                        "the file has no `jp2h` header box before its `jp2c` codestream box".into(),
-                    ));
+                    return Err(no_jp2h());
                 };
                 color::check_bpcc(&header)?;
                 let color = color::read(&header)?;
@@ -228,15 +258,25 @@ pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2F
             }
         }
     }
+    // Every box read was whole, so the input ends between boxes: more may
+    // follow, unless a box of length 0 claimed the rest of the file.
+    if !open_ended {
+        return Err(Error::Incomplete(
+            "the input ends before the `jp2c` codestream box".into(),
+        ));
+    }
     let missing = match header {
         None => "the file has no `jp2h` header box and no `jp2c` codestream box",
         Some(_) => "the file has no `jp2c` codestream box",
     };
-    Err(Error::FileFormat(if open_ended {
-        format!("{missing}: a box of length 0 (to the end of the file) swallowed the rest")
-    } else {
-        missing.into()
-    }))
+    Err(Error::FileFormat(format!(
+        "{missing}: a box of length 0 (to the end of the file) swallowed the rest"
+    )))
+}
+
+/// A `jp2c` codestream box with no `jp2h` before it.
+fn no_jp2h() -> Error {
+    Error::FileFormat("the file has no `jp2h` header box before its `jp2c` codestream box".into())
 }
 
 /// Find the codestream that starts with the `jp2c` box's contents `payload`,

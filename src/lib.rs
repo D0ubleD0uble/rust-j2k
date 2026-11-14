@@ -82,20 +82,19 @@
 //! # Damaged input
 //!
 //! Decoding is strict by default. Truncated or inconsistent data is an
-//! error, and no partial image comes back with it. A raw codestream cut
-//! short fails as [`Error::Codestream`], a JP2 file cut short as `Codestream` or
-//! [`Error::FileFormat`], depending on where the cut falls. A cut inside the
-//! codestream's main header, before its first `SOT` marker, is
-//! [`Error::Incomplete`] instead, so a caller whose input streams in can tell
-//! it to wait for more bytes. A codestream
-//! whose last tile-part states its length is refused without its closing
-//! `EOC` marker. A last tile-part of length 0 (`Psot = 0`, "to the end")
+//! error, and no partial image comes back with it. Input cut before the
+//! codestream's main header is whole, that is, before its first `SOT` marker,
+//! is [`Error::Incomplete`], so a caller whose input streams in can tell it to
+//! wait for more bytes. That covers every cut from the empty input on,
+//! including a JP2 file's boxes before the codestream. A cut later fails as
+//! [`Error::Codestream`], or as [`Error::FileFormat`] when it falls in a JP2
+//! box after the codestream. A codestream whose last tile-part states its
+//! length is refused without its closing `EOC` marker. A last tile-part of length 0 (`Psot = 0`, "to the end")
 //! takes the data up to the final two bytes without checking that they are
 //! `EOC`, as OpenJPEG does, so a missing `EOC` there costs the tile its last
 //! two bytes and usually fails the tile instead; in a JP2 file such a
 //! tile-part can also end where its `jp2c` box ends. Input that is not
-//! JPEG 2000 at all, empty input and plain text included, is `Codestream`
-//! too.
+//! JPEG 2000 at all, plain text included, is `Codestream` too.
 //!
 //! Damage can show up as any variant, not only those two. A flipped bit in
 //! a header field can read as an absurd image size ([`Error::Limit`]) or an
@@ -342,8 +341,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// file's boxes and the codestream's main header, up to the first tile-part
 /// (`SOT` marker), and stops there, so a file whose tile data is cut short or
 /// missing still has a readable header. Input that ends before the first
-/// `SOT` marker is whole is [`Error::Incomplete`]: wait for more bytes and
-/// try again. Nothing is allocated for the samples.
+/// `SOT` marker is whole, from the empty input on and in a JP2 file's boxes
+/// too, is [`Error::Incomplete`]: wait for more bytes and try again. Nothing
+/// is allocated for the samples.
 /// One case reads further: in a JP2 file whose last tile-part has `Psot = 0`
 /// (no length) and whose `jp2c` box ends before the file does, the packet
 /// headers of that tile-part's tile are walked to see whether the codestream

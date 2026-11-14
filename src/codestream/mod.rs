@@ -1474,7 +1474,13 @@ const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
     let mut cur = Cursor::new(bytes);
 
-    if cur.u16()? != marker::SOC {
+    // 0 bytes, or `FF` alone, may still become `SOC`.
+    if bytes.len() < 2 && marker::SOC.to_be_bytes().starts_with(bytes) {
+        return Err(Error::Incomplete(
+            "the input ends before the codestream's `SOC` marker is whole".into(),
+        ));
+    }
+    if cur.u16().ok() != Some(marker::SOC) {
         return Err(Error::Codestream(
             "does not start with the `SOC` marker".into(),
         ));

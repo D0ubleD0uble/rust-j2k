@@ -1,11 +1,12 @@
-//! Input that ends inside the main header is `Error::Incomplete`, apart from
-//! a main header that is all there but damaged, which stays
-//! `Error::Codestream`.
+//! Input that ends before the codestream's main header is whole is
+//! `Error::Incomplete`, apart from a header that is all there but damaged,
+//! which keeps its own error.
 //!
-//! Each committed codestream, and the codestream of each committed JP2 file,
-//! is cut at every byte inside its main header: from just after the `SOC`
-//! marker to just before the first `SOT` marker is whole. The header bounds
-//! come from a marker walk written here (A.4, A.6), not from the decoder.
+//! Each committed codestream, and each committed JP2 file, is cut at every
+//! byte from the empty input to just before the first `SOT` marker is whole:
+//! for a JP2 file that takes in its signature, its boxes before `jp2c`, the
+//! `jp2c` box header and the codestream's main header. The bounds come from
+//! a marker and box walk written here (A.4, A.6, I.4), not from the decoder.
 
 use std::path::{Path, PathBuf};
 
@@ -106,12 +107,14 @@ fn lenient() -> DecodeOptions {
     DecodeOptions::default().with_strict(false)
 }
 
-/// Every prefix of `bytes` that ends inside the codestream main header which
-/// starts at `cs_at` and whose first `SOT` is at `cs_at + sot` is
-/// `Incomplete`: from `read_header`, a strict decode and a partial one. With
-/// `boundary`, the prefix that holds the whole `SOT` marker is not.
+/// Every prefix of `bytes` that ends before the whole first `SOT` marker of
+/// the codestream which starts at `cs_at`, with that `SOT` at `cs_at + sot`,
+/// is `Incomplete`: from `read_header`, a strict decode and a partial one.
+/// That includes the empty prefix and, in a JP2 file, every prefix that ends
+/// in the boxes before the codestream. With `boundary`, the prefix that holds
+/// the whole `SOT` marker is not.
 fn assert_cuts_are_incomplete(name: &str, bytes: &[u8], cs_at: usize, sot: usize, boundary: bool) {
-    for length in cs_at + 2..cs_at + sot + 2 {
+    for length in 0..cs_at + sot + 2 {
         let prefix = &bytes[..length];
         let what = format!("{name} cut at {length}");
         match read_header(prefix) {
@@ -211,17 +214,217 @@ fn every_cut_inside_the_main_header_is_incomplete() {
     assert!(jp2s >= 30, "only {jp2s} JP2 files cut");
 }
 
-/// Input too short to hold the `SOC` marker is not recognizably JPEG 2000,
-/// so it is `Codestream`, as empty input always was.
+/// Empty input, and the first byte of `SOC` or of the JP2 signature, may
+/// still become JPEG 2000, so they are `Incomplete`. A short input that can
+/// no longer become either is `Codestream`, as text is.
 #[test]
-fn input_shorter_than_soc_is_codestream() {
-    for prefix in [&[][..], &[0xFF][..]] {
-        assert!(matches!(read_header(prefix), Err(Error::Codestream(_))));
-        assert!(matches!(decode(prefix), Err(Error::Codestream(_))));
-        assert!(matches!(
-            decode_with(prefix, &lenient()),
-            Err(Error::Codestream(_))
-        ));
+fn input_shorter_than_a_magic_is_incomplete_while_it_could_still_match() {
+    let incomplete: [&[u8]; 4] = [&[], &[0xFF], &[0x00], &[0, 0, 0, 12, b'j', b'P', b' ']];
+    for prefix in incomplete {
+        for result in [
+            read_header(prefix).map(|_| ()),
+            decode(prefix).map(|_| ()),
+            decode_with(prefix, &lenient()).map(|_| ()),
+        ] {
+            assert!(
+                matches!(result, Err(Error::Incomplete(_))),
+                "{prefix:02X?}: {result:?}"
+            );
+        }
+    }
+    let not_jpeg_2000: [&[u8]; 4] = [&[0x41], &[0xFF, 0x4E], &[0x00, 0x01], b"hello"];
+    for bytes in not_jpeg_2000 {
+        for result in [
+            read_header(bytes).map(|_| ()),
+            decode(bytes).map(|_| ()),
+            decode_with(bytes, &lenient()).map(|_| ()),
+        ] {
+            assert_eq!(
+                result,
+                Err(Error::Codestream(
+                    "does not start with the `SOC` marker".into()
+                )),
+                "{bytes:02X?}"
+            );
+        }
+    }
+}
+
+/// The incomplete messages say where the input ends.
+#[test]
+fn incomplete_before_the_main_header_says_where_the_input_ends() {
+    let file = signed16();
+    let cases: [(usize, &str); 7] = [
+        (
+            0,
+            "the input ends before the codestream's `SOC` marker is whole",
+        ),
+        (5, "the input ends inside the JP2 signature box"),
+        (12, "the input ends after the JP2 signature box"),
+        (
+            15,
+            "the input ends inside a box header, after 3 of its 8 bytes",
+        ),
+        (
+            50,
+            "the input ends inside box `jp2h`, which is 45 bytes, after 18 of them",
+        ),
+        (77, "the input ends before the `jp2c` codestream box"),
+        (
+            86,
+            "the input ends before the codestream's `SOC` marker is whole",
+        ),
+    ];
+    for (length, message) in cases {
+        assert_eq!(
+            read_header(&file[..length]).map(|_| ()),
+            Err(Error::Incomplete(message.into())),
+            "cut at {length}"
+        );
+    }
+}
+
+/// The JP2 signature box (I.5.1).
+const SIGNATURE: [u8; 12] = [0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
+
+/// `jp2_signed16.jp2`: the signature at 0, `ftyp` at 12 (20 bytes), `jp2h`
+/// at 32 (45 bytes, holding `ihdr` at 40 and `colr` at 62) and `jp2c` at 77,
+/// its codestream from 85.
+fn signed16() -> Vec<u8> {
+    let whole = std::fs::read(fixtures().join("jp2_signed16.jp2")).unwrap();
+    assert_eq!(&whole[16..20], b"ftyp");
+    assert_eq!(&whole[36..40], b"jp2h");
+    assert_eq!(&whole[44..48], b"ihdr");
+    assert_eq!(&whole[66..70], b"colr");
+    assert_eq!(&whole[81..87], b"jp2c\xFF\x4F");
+    whole
+}
+
+/// Damaged JP2 box headers and fields before the codestream, each with the
+/// error the whole file gives today and the length of the shortest prefix
+/// that holds the damage.
+fn damaged_boxes() -> Vec<(&'static str, Vec<u8>, Error, usize)> {
+    let whole = signed16();
+    let file_format = |message: &str| Error::FileFormat(message.into());
+    vec![
+        (
+            "signature contents wrong",
+            edited(&whole, &[(11, 0x0B)]),
+            file_format(
+                "the file must open with the 12-byte JP2 signature box (`jP  ` holding \
+                 0D 0A 87 0A)",
+            ),
+            12,
+        ),
+        (
+            "signature length wrong",
+            edited(&whole, &[(3, 0x0D)]),
+            file_format(
+                "the file must open with the 12-byte JP2 signature box (`jP  ` holding \
+                 0D 0A 87 0A)",
+            ),
+            8,
+        ),
+        (
+            "ftyp not second",
+            edited(&whole, &[(19, b'q')]),
+            file_format("the `ftyp` box must follow the signature, not `ftyq`"),
+            20,
+        ),
+        (
+            "ftyp length below 8",
+            edited(&whole, &[(15, 3)]),
+            file_format("box `ftyp` has length 3, shorter than its 8-byte header"),
+            20,
+        ),
+        (
+            "ftyp of 4 bytes",
+            edited(&whole, &[(15, 12)]),
+            file_format(
+                "the `ftyp` box holds 4 bytes; it needs a brand, a version, and whole 4-byte \
+                 compatibility codes",
+            ),
+            24,
+        ),
+        (
+            "no jp2 in ftyp",
+            edited(&whole, &[(23, b'x'), (31, b'x')]),
+            Error::Unsupported(
+                "file brand `jp2x` without `jp2 ` compatibility (a JPX, JPM or MJ2 file that \
+                 does not claim to be readable as JP2)"
+                    .into(),
+            ),
+            32,
+        ),
+        (
+            "jp2h length below 8",
+            edited(&whole, &[(35, 5)]),
+            file_format("box `jp2h` has length 5, shorter than its 8-byte header"),
+            40,
+        ),
+        (
+            "jp2h XLBox below 16",
+            {
+                // `LBox` 1, then an `XLBox` of 15 over `ihdr`'s header.
+                let mut bytes = edited(&whole, &[(35, 1)]);
+                bytes[40..48].copy_from_slice(&15u64.to_be_bytes());
+                bytes
+            },
+            file_format("box `jp2h` has `XLBox` 15, shorter than its 16-byte header"),
+            48,
+        ),
+        (
+            "ihdr past the end of jp2h",
+            edited(&whole, &[(43, 0x30)]),
+            file_format("box `ihdr` is 48 bytes but only 37 remain in the `jp2h` box"),
+            77,
+        ),
+        (
+            "ihdr with no components",
+            edited(&whole, &[(57, 0)]),
+            file_format("the `ihdr` box declares a 24x16 image of 0 components; none may be 0"),
+            77,
+        ),
+        (
+            "no jp2h before jp2c",
+            edited(&whole, &[(39, b'i')]),
+            file_format("the file has no `jp2h` header box before its `jp2c` codestream box"),
+            85,
+        ),
+    ]
+}
+
+/// Damaging a complete box header or field before the codestream gives the
+/// same error as before `Incomplete` reached the box layer, from
+/// `read_header`, a strict decode and a partial one. So does every prefix
+/// that holds the damage; a shorter one is `Incomplete`, or, under 8 bytes
+/// that are not the start of the signature, `Codestream`, since such input
+/// is not yet known to be JP2.
+#[test]
+fn a_damaged_box_before_the_codestream_keeps_its_error() {
+    for (what, bytes, error, holds) in damaged_boxes() {
+        for length in 0..=bytes.len() {
+            let prefix = &bytes[..length];
+            for result in [
+                read_header(prefix).map(|_| ()),
+                decode(prefix).map(|_| ()),
+                decode_with(prefix, &lenient()).map(|_| ()),
+            ] {
+                if length >= holds {
+                    assert_eq!(result, Err(error.clone()), "{what}, cut at {length}");
+                } else if length < 8 && !SIGNATURE.starts_with(prefix) {
+                    assert!(
+                        matches!(result, Err(Error::Codestream(_))),
+                        "{what}, cut at {length}: {result:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(result, Err(Error::Incomplete(_))),
+                        "{what}, cut at {length}: {result:?}"
+                    );
+                }
+            }
+        }
     }
 }
 
