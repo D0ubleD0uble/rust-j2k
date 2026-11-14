@@ -313,7 +313,7 @@ const PROBE_COMPONENTS: usize = 1 << 10;
 
 /// The fewest visits [`packets_end_at`] may spend: packets read, steps over
 /// code-blocks a packet header names no bit for, and points of the
-/// progression order's loops (see [`crate::tier2::Budget::visits`]). A
+/// progression order's loops (see [`crate::tier2::Meter`]). A
 /// code-block entry that reads a bit is paid for by the header's bytes and
 /// is not counted.
 const PROBE_VISITS_MIN: u64 = 1 << 22;
@@ -390,11 +390,10 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
         return (false, 0);
     };
     let bytes = (data.data.len() + data.packed_headers.len()) as u64;
-    let visits = packet_work.apply(probe_visits(bytes));
+    let meter = crate::tier2::Meter::new(packet_work.apply(probe_visits(bytes)));
     let mut budget = crate::tier2::Budget {
         precincts: PROBE_GEOMETRY,
         blocks: PROBE_GEOMETRY,
-        visits,
         // A POC sequence holds a bitmap wherever the decode could, sized by
         // the decode's bound for the same tile data, and past it gives up
         // rather than keep a set.
@@ -407,10 +406,9 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
         // so the walk is the same at every reduction. Its geometry is held to
         // PROBE_GEOMETRY, so no dropped resolutions need charging here.
         reduction: 0,
-        refusal: None,
     };
-    let ends = crate::tier2::decode_packets_within(&header, data, &mut budget).is_ok();
-    (ends, visits - budget.visits)
+    let ends = crate::tier2::decode_packets_within(&header, data, &mut budget, &meter).is_ok();
+    (ends, meter.spent())
 }
 
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image
