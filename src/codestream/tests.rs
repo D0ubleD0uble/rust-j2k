@@ -3986,3 +3986,112 @@ fn tlm_implied_indices_count_across_markers() {
         other => panic!("{other}"),
     }
 }
+
+/// Every duplicate-marker message, in both headers, word for word, through
+/// `crate::decode`. The main header and the tile-part header share one
+/// override reader; the tile-part header's messages carry the
+/// "in the tile-part header" suffix and the main header's do not.
+///
+/// The last two cases pin which fault a second, malformed COD reports: the
+/// main header refuses the duplicate before it reads the body, and a tile-part
+/// header reads the body first.
+#[test]
+fn duplicate_override_messages_are_pinned_for_both_headers() {
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 2, 4, 4, 0, 1));
+    let qcc = seg(marker::QCC, &{
+        let mut b = vec![0u8];
+        b.extend_from_slice(&qcd_none(2, &[8; 16]));
+        b
+    });
+    let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 3));
+    let cod = seg(marker::COD, &cod_default(1));
+    let qcd = seg(marker::QCD, &qcd_none(2, &[8; 16]));
+    // A COD with the reserved progression order 9.
+    let bad_cod = seg(marker::COD, &cod_body(0, 9, 1, 0, 5, 4, 4, 0, 1));
+
+    let main_with = |extra: &[Vec<u8>]| {
+        let mut header = default_header();
+        header.extend_from_slice(extra);
+        assemble_with_tile_markers(&header, &[], &[1, 2])
+    };
+    let tile_with =
+        |markers: &[Vec<u8>]| assemble_with_tile_markers(&default_header(), markers, &[1, 2]);
+    let twice = |m: &Vec<u8>| [m.clone(), m.clone()];
+
+    let rows: Vec<(&str, Vec<u8>, &str)> = vec![
+        (
+            "main COD",
+            main_with(&[cod.clone()]),
+            "duplicate `COD` marker",
+        ),
+        (
+            "main QCD",
+            main_with(&[qcd.clone()]),
+            "duplicate `QCD` marker",
+        ),
+        (
+            "main COC",
+            main_with(&twice(&coc)),
+            "duplicate `COC` marker for component 0",
+        ),
+        (
+            "main QCC",
+            main_with(&twice(&qcc)),
+            "duplicate `QCC` marker for component 0",
+        ),
+        (
+            "main RGN",
+            main_with(&twice(&rgn)),
+            "duplicate `RGN` marker for component 0",
+        ),
+        (
+            "tile COD",
+            tile_with(&twice(&cod)),
+            "duplicate `COD` marker in the tile-part header",
+        ),
+        (
+            "tile QCD",
+            tile_with(&twice(&qcd)),
+            "duplicate `QCD` marker in the tile-part header",
+        ),
+        (
+            "tile COC",
+            tile_with(&twice(&coc)),
+            "duplicate `COC` marker for component 0 in the tile-part header",
+        ),
+        (
+            "tile QCC",
+            tile_with(&twice(&qcc)),
+            "duplicate `QCC` marker for component 0 in the tile-part header",
+        ),
+        (
+            "tile RGN",
+            tile_with(&twice(&rgn)),
+            "duplicate `RGN` marker for component 0 in the tile-part header",
+        ),
+        (
+            "later tile-part RGN",
+            tile_parts(
+                &default_header(),
+                &[(0, 0, 2, vec![]), (0, 1, 2, vec![rgn.clone()])],
+            ),
+            "marker 0xFF5E appears in a tile-part header other than the first; \
+             the coding-parameter overrides belong to the first tile-part of a tile",
+        ),
+        (
+            "main malformed second COD",
+            main_with(&[bad_cod.clone()]),
+            "duplicate `COD` marker",
+        ),
+    ];
+    for (name, bytes, expected) in rows {
+        match crate::decode(&bytes) {
+            Err(Error::Codestream(m)) => assert_eq!(m, expected, "{name}"),
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+    match crate::decode(&tile_with(&[cod, bad_cod])) {
+        Err(Error::Marker(m)) => assert_eq!(m, "reserved progression order 9"),
+        other => panic!("tile malformed second COD: {other:?}"),
+    }
+}
