@@ -46,10 +46,10 @@ pub struct Bands<T> {
     pub levels: Vec<DetailBands<T>>,
 }
 
-/// Quantized wavelet coefficients flowing Tier-1 → dequant → inverse DWT. The
+/// Wavelet coefficients flowing Tier-1 → inverse DWT. The
 /// reversible (5/3) path stays integer so it can reconstruct bit-exactly; the
-/// irreversible (9/7) path is real-valued once dequantized, so it carries
-/// `f32`. The arm matches the COD transform.
+/// irreversible (9/7) path arrives dequantized from Tier-1 and is
+/// real-valued, so it carries `f32`. The arm matches the COD transform.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SubbandCoeffs {
     /// 5/3 reversible: exact integer coefficients.
