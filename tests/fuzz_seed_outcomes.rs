@@ -172,17 +172,42 @@ fn describe(result: Result<Image, Error>) -> (bool, String) {
     }
 }
 
-/// Each seed's name, whether it decodes as coded, and its sRGB outcome.
-fn outcomes() -> BTreeMap<String, (bool, String)> {
+/// FNV-1a over the target's pinned-codestream and `wrap` code, which this
+/// file copies. If you changed `fuzz/fuzz_targets/jp2_boxes.rs` there, update
+/// the copy here, then this hash.
+const TARGET_HASH: u64 = 11400830327102865682;
+
+fn target_hash() -> u64 {
+    let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");
+    let start = target.find("const ONE_COMPONENT:").expect("target consts");
+    let end = target.find("fuzz_target!(").expect("target body");
+    target[start..end]
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+}
+
+/// Each seed's name, a description of what is wrong with it as coded (empty if
+/// nothing), and its sRGB outcome. `None` if `python3` is not installed.
+fn outcomes() -> Option<BTreeMap<String, (String, String)>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("jp2_fuzz_seeds");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("jp2_fuzz_seeds_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let out = Command::new("python3")
+    let out = match Command::new("python3")
         .arg("-I")
         .arg(root.join("scripts/gen-jp2-fuzz-seeds.py"))
         .arg(&dir)
         .output()
-        .expect("run python3 to generate the seeds");
+    {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("fuzz_seed_outcomes: SKIPPED, python3 is not installed (CI runs this test)");
+            return None;
+        }
+        Err(e) => panic!("run python3: {e}"),
+    };
     assert!(
         out.status.success(),
         "gen-jp2-fuzz-seeds.py failed: {}",
@@ -196,7 +221,7 @@ fn outcomes() -> BTreeMap<String, (bool, String)> {
         let (&variant, body) = data.split_first().expect("a seed holds a variant byte");
         let file = wrap(variant, body);
         let options = DecodeOptions::default().with_resolution_reduction(variant >> 7);
-        let (decodes, _) = describe(decode_with(&file, &options));
+        let (decodes, coded) = describe(decode_with(&file, &options));
         let cs = codestream(variant);
         let be32 = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
         let area = (
@@ -204,30 +229,43 @@ fn outcomes() -> BTreeMap<String, (bool, String)> {
             be32(8) - be32(16),
             u16::from_be_bytes(cs[40..42].try_into().unwrap()),
         );
-        let coded_ok = decodes && ihdr_of(&file) == Some(area);
+        let problem = if !decodes {
+            coded
+        } else if ihdr_of(&file) != Some(area) {
+            "ihdr is not the codestream's".to_string()
+        } else {
+            String::new()
+        };
         let options = options.with_color(ColorOutput::Srgb);
         let (_, srgb) = describe(decode_with(&file, &options));
-        map.insert(name, (coded_ok, srgb));
+        map.insert(name, (problem, srgb));
     }
-    map
+    let _ = std::fs::remove_dir_all(&dir);
+    Some(map)
 }
 
 #[test]
 fn every_seed_decodes_as_coded_and_srgb_matches_the_table() {
-    let got = outcomes();
+    assert_eq!(
+        target_hash(),
+        TARGET_HASH,
+        "fuzz/fuzz_targets/jp2_boxes.rs changed: update the copy in tests/fuzz_seed_outcomes.rs, then TARGET_HASH"
+    );
+    let Some(got) = outcomes() else { return };
     let table_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(TABLE);
 
     let broken: Vec<_> = got
         .iter()
-        .filter(|(_, (ok, _))| !ok)
-        .map(|(n, _)| n)
+        .filter(|(_, (problem, _))| !problem.is_empty())
+        .map(|(n, (problem, _))| format!("{n}: {problem}"))
         .collect();
     assert!(
         broken.is_empty(),
-        "seeds that do not decode as coded or whose `ihdr` is not the codestream's:{broken:?}"
+        "seeds that do not decode as coded or whose `ihdr` is not the codestream's:\n{}",
+        broken.join("\n")
     );
 
-    if std::env::var_os("J2K_BLESS_SEED_OUTCOMES").is_some() {
+    if std::env::var_os("J2K_BLESS_SEED_OUTCOMES").is_some_and(|v| v == "1") {
         let mut text = String::from("# seed<TAB>sRGB outcome (tests/fuzz_seed_outcomes.rs)\n");
         for (name, (_, srgb)) in &got {
             text.push_str(&format!("{name}\t{srgb}\n"));

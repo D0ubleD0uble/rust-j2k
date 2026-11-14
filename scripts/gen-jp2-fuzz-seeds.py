@@ -469,6 +469,8 @@ def main():
     if len(sys.argv) > 2:
         sys.exit("usage: gen-jp2-fuzz-seeds.py [OUT_DIR]")
     if len(sys.argv) == 2:
+        if not sys.argv[1]:
+            sys.exit("gen-jp2-fuzz-seeds.py: OUT_DIR is empty")
         OUT = os.path.abspath(sys.argv[1])
     os.makedirs(OUT, exist_ok=True)
     pinned = {}

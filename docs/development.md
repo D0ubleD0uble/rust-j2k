@@ -8,6 +8,7 @@ You don't need any of these tools to run the tests. `cargo test` compares each
 decode against the committed snapshots (`<name>.expected.json` and the
 conformance references), and CI installs none of the reference decoders
 (OpenJPEG, LittleCMS, eccodes). They are needed only to regenerate a snapshot.
+This one test checks the Python seed script and is skipped when python3 isn't installed; CI runs it.
 See [correctness.md](correctness.md) for how the corpus is graded.
 
 ## Before you start
