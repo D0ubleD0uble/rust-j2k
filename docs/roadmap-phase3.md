@@ -1,13 +1,9 @@
 # Phase 3 roadmap — JP2 file format decode
 
-> **Status: implemented on `main`, release pending.** P3.0 to P3.8 have
-> landed. All nine Part 4 JP2 reader files decode in class, the project's
-> public-API decisions are applied, and #167 did the documentation pass and
-> the extended gate. (2026-11-13: the three whole-crate reviews ran under
-> #226; the manual testing rounds there, #285 and #325 are still open, and
-> the release follows them.) The milestones
-> below are the build order that was followed, each with the oracle that
-> gated it.
+> **Status: complete.** P3.0 to P3.8 have landed, all nine Part 4 JP2 reader
+> files decode in class, and the public-API decisions are applied. Phase 3
+> ships as the 0.4.0 release (#226). The milestones below are the build order
+> that was followed, each with the oracle that gated it.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file
 zooms into Phase 3 alone. It breaks the line item "JP2 file format decode" into
@@ -531,11 +527,9 @@ review in `RELEASING.md`.
 **Status:** the docs pass is done (`lib.rs`, `README.md`, `scope.md`,
 `roadmap.md`, `correctness.md`, `tests/fixtures/README.md`, `CHANGELOG.md`
 under Unreleased). The Part 4 JP2 gate is met: nine of nine in `IN_CLASS`, and
-the 23 Part 1 entries are unchanged. The project's public-API decisions are
-applied, and #167 did the documentation pass and extended gate of the
-`RELEASING.md` pre-release review. (2026-11-13: the three whole-crate reviews
-ran under #226, which also holds the manual testing rounds; the release
-follows them.)
+the 23 Part 1 entries are unchanged. The public-API decisions are applied,
+and the `RELEASING.md` pre-release review runs before the 0.4.0 tag (#167,
+#226).
 
 **Gate (the Phase 3 exit):** all nine ISO/IEC 15444-4 JP2 reader files decode
 within PAE 4 / MSE 1 against their references (bit-exact where the manifest
@@ -662,7 +656,7 @@ the Phase 2 sample budget per plane; the total is checked against the same
 `Limit` budget (2^26 samples, 256 MiB as `i32`) before allocation. The decoded
 components are held while the expanded channels are built from them, so the
 peak is about twice the budget: computed, roughly 512 MiB; measured on a
-one-column palette at the full budget, about 515 MiB. (2026-11-13: since #287
+one-column palette at the full budget, about 515 MiB. (Since #287,
 the budget is the image sample limit, 2^28 samples or 1 GiB as `i32` by
 default and adjustable with `DecodeOptions::sample_limit`, so the peak at the
 default is about four times these figures.) The codestream stage

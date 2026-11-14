@@ -1,160 +1,204 @@
 # Feature scope
 
-The JPEG 2000 family is large. This document inventories the capabilities a
-full codec carries, maps each to its part of the standard, and records two
-things per feature: whether the **GRIB2** decode path needs it, and which
-project **phase** delivers it. Phases are defined in [roadmap.md](roadmap.md);
-Phases 1 to 3 are implemented, so their rows decode today.
+This page lists the JPEG 2000 features, grouped by part of the standard, and
+says whether this decoder reads each one today. When a feature isn't read yet,
+the table names the [roadmap](roadmap.md) phase that plans it. A file that
+needs a feature this decoder doesn't read is refused with
+`Error::Unsupported` rather than decoded wrongly.
 
-Legend: ✓ required · — not needed · ○ optional/rare. "GRIB2" is the column for
-template 5.40 (`grid_jpeg`) decode. It says what such a codestream needs, not
-what this decoder supports; the Phase column says when support landed.
-
-## How GRIB2 narrows the standard
-
-GRIB2 §5.40 wraps a *raw codestream* (ISO/IEC 15444-1 Annex A) in the GRIB2
-data section. That codestream is deliberately plain:
-
-- one component (a single scalar grid), so no multi-component or color transform;
-- integer samples, signed or unsigned, up to 32 bits;
-- either wavelet: 5/3 reversible (lossless) or 9/7 irreversible (lossy);
-- typically a single tile at the canvas origin, a single quality layer, LRCP
-  progression, and no JP2 box wrapper, no region of interest, no precinct
-  subdivision.
-
-The decoder reads up to 31 bits unsigned and 32 bits signed; an unsigned
-32-bit component is refused as `Unsupported`, since it does not fit the `i32`
-sample. No operational GRIB2 producer ships lossy 9/7 (HRRR and NDFD are
-complex-packed, ECMWF is CCSDS), so the 9/7 path is graded by re-encoding a
-real grid with OpenJPEG's irreversible mode.
-
-So GRIB2 needs a strict subset of the Part 1 decoder. Phase 1 built that
-subset first because it still runs every stage (codestream → Tier-2 → Tier-1
-→ dequant → IDWT → image), so the engine was correct end to end before
-Phases 2 and 3 widened it.
+"Yes, with limits" means the feature decodes, but a few inputs inside it are
+refused or handled partly. The text under each table names them.
 
 ## Part 1: core coding system (ISO/IEC 15444-1)
 
 ### Codestream syntax (Annex A)
 
-| Feature | GRIB2 | Phase |
-|---|---|---|
-| SOC / SIZ / COD / QCD / SOT / SOD / EOC (minimum viable header + tile) | ✓ | 1 |
-| COC / QCC (per-component coding/quant overrides) | — | 2 |
-| RGN (region of interest, maxshift) | ○ | 2 |
-| POC (progression order change) | — | 2 |
-| PPM / PPT (packed packet headers) | ○ | 2 |
-| PLM / PLT (packet-length markers) | ○ | 2 |
-| TLM (tile-part-length marker) | ○ | 2 |
-| CRG (component registration) | — | 2 |
-| SOP / EPH (start-of-packet / end-of-packet-header, error resilience) | ○ | 2 |
-| COM (comment), recognized and skipped | ✓ | 1 |
-| Multiple tiles and multiple tile-parts per tile | — | 2 |
-| Non-zero image offset (XOsiz/YOsiz) | — | 2 |
-| Non-zero tile offset (XTOsiz/YTOsiz) | — | 2 |
+| Feature | Decoded |
+|---|---|
+| SOC / SIZ / COD / QCD / SOT / SOD / EOC (main header and tile-parts) | Yes, with limits |
+| COC / QCC (per-component coding and quantization overrides) | Yes, with limits |
+| RGN (region of interest) | Yes, with limits |
+| POC (progression order change) | Yes |
+| PPM / PPT (packed packet headers) | Yes, with limits |
+| PLM / PLT (packet-length markers) | Yes |
+| TLM (tile-part-length marker) | Yes |
+| CRG (component registration) | Yes, with limits |
+| SOP / EPH (start-of-packet and end-of-packet-header markers) | Yes |
+| COM (comment), read and skipped | Yes |
+| Multiple tiles and multiple tile-parts per tile | Yes, with limits |
+| Non-zero image offset (XOsiz/YOsiz) | Yes |
+| Non-zero tile offset (XTOsiz/YTOsiz) | Yes |
+| CAP (capabilities, carried by HTJ2K codestreams) | No (Phase 4) |
+| Part 2 markers (MCT, MCC, NLT, MCO, CBD) | No (Phase 6) |
 
-### Transform & reconstruction
+Limits inside the decoded rows:
 
-| Feature | GRIB2 | Phase |
-|---|---|---|
-| 5/3 reversible inverse DWT (integer lifting, bit-exact) | ✓ | 1 |
-| 9/7 irreversible inverse DWT (float lifting) | ✓ | 1 |
-| Multiple resolution levels (decomposition) | ✓ | 1 |
-| Scalar dequantization: derived & expounded, guard bits | ✓ | 1 |
-| DC level shift + clamp to component depth | ✓ | 1 |
-| Multiple components (up to 16384) with subsampling | — | 2 |
-| Multiple component transform: RCT (reversible) color | — | 2 |
-| Multiple component transform: ICT (irreversible) color | — | 2 |
+- RGN decodes only the maxshift style of Annex H (`Srgn = 0`). Any other style
+  is refused.
+- A codestream that carries both PPM and PPT packed headers is refused.
+- A tile-part COD or COC that gives a component a different wavelet from the
+  main header is refused: tiles must agree on each component's wavelet.
+- CRG is read and checked, but its offsets are not applied to the samples and
+  are not returned by the API. The decoded components are the same with or
+  without it.
+
+### Transform and reconstruction
+
+| Feature | Decoded |
+|---|---|
+| 5/3 reversible inverse DWT (integer lifting, bit-exact) | Yes |
+| 9/7 irreversible inverse DWT (floating-point lifting) | Yes |
+| Multiple resolution levels | Yes |
+| Scalar dequantization: derived and expounded, guard bits | Yes |
+| DC level shift and clamp to the component depth | Yes |
+| Component depth up to 31 bits unsigned or 32 bits signed | Yes |
+| Component depth past that (an unsigned 32-bit component, 33 to 38 bits) | No |
+| Multiple components (up to 16384) with sub-sampling | Yes |
+| Multiple component transform: RCT (reversible color) | Yes, with limits |
+| Multiple component transform: ICT (irreversible color) | Yes, with limits |
+
+Each sample is held as an `i32`, which is why the depth stops at 31 bits
+unsigned and 32 signed. No phase plans deeper components.
+
+The color transform runs over components 0 to 2, and the wavelet picks which
+one applies (5/3 means RCT, 9/7 means ICT). If COD asks for the transform and
+those three components don't all use the same wavelet, the codestream is
+refused.
 
 ### Tier-1: EBCOT block coding (Annexes C, D)
 
-| Feature | GRIB2 | Phase |
-|---|---|---|
-| MQ arithmetic decoder | ✓ | 1 |
-| Significance-propagation / magnitude-refinement / cleanup passes | ✓ | 1 |
-| Context formation from the 3×3 neighborhood | ✓ | 1 |
-| Code-block styles: selective arithmetic-coding bypass (lazy) | ○ | 2 |
-| Code-block styles: termination on each pass (restart) | ○ | 2 |
-| Code-block styles: reset context probabilities | ○ | 2 |
-| Code-block styles: vertically causal context | ○ | 2 |
-| Code-block styles: predictable termination, segmentation symbols | ○ | 2 |
+| Feature | Decoded |
+|---|---|
+| MQ arithmetic decoder | Yes |
+| Significance-propagation, magnitude-refinement and cleanup passes | Yes |
+| Context formation from the 3×3 neighborhood | Yes |
+| Code-block style: selective arithmetic-coding bypass (lazy) | Yes |
+| Code-block style: termination on each pass (restart) | Yes |
+| Code-block style: reset context probabilities | Yes |
+| Code-block style: vertically causal context | Yes |
+| Code-block style: predictable termination | Yes |
+| Code-block style: segmentation symbols | Yes |
+| Code-block style bits that signal HTJ2K | No (Phase 4) |
 
 ### Tier-2: packet decoding (Annex B)
 
-| Feature | GRIB2 | Phase |
-|---|---|---|
-| Packet header parse: inclusion / zero-bitplane / pass-count / length tag-trees | ✓ | 1 |
-| Single quality layer | ✓ | 1 |
-| LRCP progression | ✓ | 1 |
-| Remaining progressions: RLCP, RPCL, PCRL, CPRL | — | 2 |
-| Multiple quality layers (accumulation across all layers) | — | 2 |
-| Precinct partition (non-maximal precincts) | ○ | 2 |
+| Feature | Decoded |
+|---|---|
+| Packet headers: inclusion, zero-bitplane, pass-count and length tag-trees | Yes |
+| All five progression orders: LRCP, RLCP, RPCL, PCRL, CPRL | Yes |
+| Multiple quality layers | Yes |
+| Precinct partitions (non-maximal precincts) | Yes |
 
-The decoder always decodes every quality layer, which is what the conformance
-suite grades. Stopping at a caller-chosen layer, for a quality-progressive
-read, is not supported yet; `DecodeOptions` has no such option.
+The decoder always decodes every quality layer. See
+[Decode options](#decode-options) for the layer, area and tile reads it does
+not offer.
 
 ### JP2 file format (Annex I)
 
-| Feature | GRIB2 | Phase |
-|---|---|---|
-| Box parsing: signature, ftyp, jp2h, jp2c (contiguous codestream) | — | 3 |
-| Image header (ihdr), bits-per-component (bpcc) | — | 3 |
-| Enumerated colorspaces (sRGB, grayscale, sYCC), reported as metadata | — | 3 |
-| Restricted ICC profile (colr), passed through as bytes | — | 3 |
-| Opt-in sRGB output: sYCC to RGB, restricted ICC to sRGB | — | 3 |
-| Palette (pclr), component mapping (cmap), channel definition (cdef) | — | 3 |
-| Resolution (res), capture/display metadata | — | 3 |
-| xml / uuid boxes passed through as bytes | — | 3 |
-| IPR (jp2i) passed through as bytes; UUID info (uinf) read | — | 3 |
-| Reader requirements (rreq), file type (ftyp) and every colr box, reported | — | 3 |
-| Header-only read (`read_header`, `read_header_with`) without decoding pixels | — | 3 |
+| Feature | Decoded |
+|---|---|
+| Box parsing: signature, ftyp, jp2h, jp2c (contiguous codestream) | Yes, with limits |
+| Image header (ihdr), bits-per-component (bpcc) | Yes |
+| Enumerated color spaces (sRGB, grayscale, sYCC), reported as metadata | Yes |
+| Restricted ICC profile (colr), passed through as bytes | Yes |
+| Opt-in sRGB output: sYCC to RGB, restricted ICC to sRGB | Yes, with limits |
+| Palette (pclr), component mapping (cmap), channel definition (cdef) | Yes, with limits |
+| Resolution (res), capture and display | Yes |
+| xml and uuid boxes, passed through as bytes | Yes |
+| IPR (jp2i) passed through as bytes; UUID info (uinf) read | Yes |
+| Reader requirements (rreq), file type (ftyp) and every colr box, reported | Yes |
 
-Every row decodes on `main`: the nine ISO/IEC 15444-4 JP2 reader files grade in
-class, and the real-world set matches OpenJPEG. A file that does not claim
-`jp2 ` compatibility (pure JPX, JPM, MJ2) is refused as `Unsupported`, as is a
-palette channel that looks up another column, or a palette column deeper than
-31 bits unsigned (32 signed).
+Limits inside the decoded rows:
 
-## Part 15: High Throughput JPEG 2000 / HTJ2K (ISO/IEC 15444-15)
+- A file that does not claim `jp2 ` compatibility (a pure JPX, JPM or MJ2
+  file) is refused.
+- A palette channel that looks up another palette column is refused, and so
+  is a palette column deeper than 31 bits unsigned or 32 bits signed.
+- sRGB output handles sYCC and the restricted ICC profiles. With three or
+  more color channels, other color spaces (CMYK, CIELab, e-sYCC and so on) are
+  refused under that option; one or two channels pass through as gray. An ICC
+  profile that LittleCMS would apply through a lookup table or the Lab
+  connection space is refused: a monochrome profile always, an RGB profile
+  only on three or more channels (on one or two it passes through, as above).
+  [srgb-output.md](srgb-output.md) lists every case.
 
-HTJ2K replaces the EBCOT Tier-1 arithmetic coder with a much faster block
-coder (FBCOT) that has no MQ coder. Everything outside Tier-1 (codestream,
-Tier-2, DWT, quantization) is shared with Part 1. OpenJPEG decodes HTJ2K
-from version 2.5.0.
+The nine JP2 reader files of ISO/IEC 15444-4 decode within their compliance
+class, and a set of real-world `.jp2` files matches OpenJPEG.
 
-| Feature | GRIB2 | Phase |
-|---|---|---|
-| CAP marker + HTJ2K capability signaling | — | 4 |
-| FBCOT block **decoder** (MEL + VLC + MagSgn) | — | 4 |
-| FBCOT block **encoder** | — | 6 |
+## Decode options
 
-## Part 2: extensions / JPX (ISO/IEC 15444-2)
+These are the ways to change what a decode returns, set on `DecodeOptions` and
+passed to `decode_with`. The OpenJPEG equivalent is the `opj_decompress` flag
+that does the same job.
 
-| Feature | GRIB2 | Phase |
-|---|---|---|
-| Extended (.jpx) file format and boxes | — | 6 |
-| Variable DC offset, nonlinear point transform | — | 6 |
-| Trellis-coded quantization (TCQ) | — | 6 |
-| Arbitrary decomposition structures & custom wavelet kernels | — | 6 |
-| Extended / array-based multiple component transforms (multi/hyperspectral) | — | 6 |
-| Extended region of interest | — | 6 |
+| Option | Supported | How | OpenJPEG |
+|---|---|---|---|
+| Decode at a lower resolution | Yes | `with_resolution_reduction(n)` | `-r` |
+| Decode a cut codestream and report what is missing | Yes | `with_strict(false)`, then `Image::report` | `-allow-partial` |
+| Return a JP2 file's palette indexes without applying the palette | Yes | `with_raw_channels(true)` | none |
+| Convert the color channels to sRGB | Yes | `with_color(ColorOutput::Srgb)` | `-force-rgb` |
+| Raise or lift the sample limit and the two work limits | Yes | `with_sample_limit`, `with_packet_work_limit`, `with_code_block_work_limit` | none |
+| Read the header without decoding any pixels | Yes | `read_header`, `read_header_with` | `opj_dump` |
+| Stop after a given number of quality layers | No | none | `-l` |
+| Decode one area of the image | No | none | `-d` |
+| Decode one tile | No | none | `-t` |
 
-## Later parts (long tail)
+The last three are not in any phase of the roadmap yet. A partial decode
+relaxes only missing data and leftover bytes: a damaged packet header or
+code-block is still an error. The limits and what they cost a valid file are
+in [resource-bounds.md](resource-bounds.md).
 
-| Feature | GRIB2 | Phase |
-|---|---|---|
-| Encoder for Part 1 (forward DWT, MQ encoder, rate control, packetization) | — | 5 |
-| Part 3 — Motion JPEG 2000 (MJ2 container) | — | 7 |
-| Part 9 — JPIP interactive streaming protocol | — | 7 |
-| Part 11 — JPWL wireless error protection | — | 7 |
+## GRIB2 template 5.40
 
-## Explicit non-goals (for now)
+GRIB2 weather files can store each grid as a raw JPEG 2000 codestream
+(template 5.40, `grid_jpeg`). That codestream uses a small part of Part 1, all
+of which decodes:
 
-- Performance parity with OpenJPEG/Grok before correctness parity. Correct
-  first, then profile and optimize the measured hot paths.
-- `unsafe` and SIMD before a benchmark justifies them (see
-  [`.claude/rules/conventions.md`](../.claude/rules/conventions.md)).
+- one component (a single scalar grid), so no color transform;
+- integer samples, signed or unsigned, up to 32 bits (an unsigned 32-bit grid
+  is refused, as above);
+- either wavelet: 5/3 reversible (lossless) or 9/7 irreversible (lossy);
+- typically one tile at the canvas origin, one quality layer, LRCP progression,
+  no JP2 boxes, no region of interest and no precinct partition.
 
-These are "not yet," not "never": the aim is OpenJPEG-level coverage. They are
-listed so a contributor knows what the current work is not trying to do.
+The template allows 9/7, but no operational producer we know of ships it: HRRR
+and NDFD grids are complex-packed, and ECMWF uses CCSDS.
+
+## Part 15: High Throughput JPEG 2000 (HTJ2K, ISO/IEC 15444-15)
+
+HTJ2K replaces the Tier-1 block coder with a much faster one (FBCOT) that has
+no MQ coder. Everything outside Tier-1 (codestream, Tier-2, DWT,
+quantization) is the same as Part 1. This decoder refuses HTJ2K codestreams;
+OpenJPEG 2.5.0 and later decode them.
+
+| Feature | Decoded |
+|---|---|
+| CAP marker and HTJ2K capability signaling | No (Phase 4) |
+| FBCOT block decoder (MEL, VLC and MagSgn) | No (Phase 4) |
+
+## Part 2: extensions and JPX (ISO/IEC 15444-2)
+
+| Feature | Decoded |
+|---|---|
+| Extended (.jpx) file format and boxes | No (Phase 6) |
+| Variable DC offset, nonlinear point transform | No (Phase 6) |
+| Trellis-coded quantization (TCQ) | No (Phase 6) |
+| Arbitrary decomposition structures and custom wavelet kernels | No (Phase 6) |
+| Extended and array-based multiple component transforms (multi- and hyperspectral) | No (Phase 6) |
+| Extended region of interest | No (Phase 6) |
+
+## Encoding and later parts
+
+| Feature | Supported |
+|---|---|
+| Part 1 encoder (forward DWT, MQ encoder, rate control, packetization) | No (Phase 5) |
+| HTJ2K (FBCOT) block encoder | No (Phase 6) |
+| Part 3: Motion JPEG 2000 (MJ2 container) | No (Phase 7) |
+| Part 9: JPIP interactive streaming protocol | No (Phase 7) |
+| Part 11: JPWL wireless error protection | No (Phase 7) |
+
+## Speed
+
+The decoder aims for correct output first and OpenJPEG's speed second.
+Optimizations go only into hot paths a profile has measured, and `unsafe` code
+and SIMD wait until a benchmark shows they're needed.
