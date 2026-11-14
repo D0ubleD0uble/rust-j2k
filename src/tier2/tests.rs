@@ -79,7 +79,7 @@ fn parse_layers_styled<'a>(
     for layer in 0..layers {
         parse_packet(
             &mut streams,
-            &super::Visits::new(u64::MAX),
+            &super::Meter::new(u64::MAX),
             layer,
             layer,
             delimiters,
@@ -512,8 +512,9 @@ fn the_dropped_resolutions_code_blocks_are_charged_to_the_work_bound() {
             reduction,
             ..Budget::decode(visits, u64::MAX)
         };
-        let result = decode_packets_within(&header, &tile, &mut budget).map(|_| ());
-        (result, budget.visits)
+        let meter = super::Meter::new(visits);
+        let result = decode_packets_within(&header, &tile, &mut budget, &meter).map(|_| ());
+        (result, meter.left())
     };
 
     let spent = |reduction| {
@@ -1368,7 +1369,7 @@ fn order_of_header(header: &MainHeader) -> Vec<(u32, usize, usize, usize)> {
     for_each_packet(
         header,
         &walk,
-        &super::Visits::new(u64::MAX),
+        &super::Meter::new(u64::MAX),
         u64::MAX,
         true,
         |l, r, c, p| {
@@ -1640,7 +1641,7 @@ fn order_holding(header: &MainHeader, dense_bits: u64) -> Vec<(u32, usize, usize
     super::progression::for_each_packet(
         header,
         &walk,
-        &super::Visits::new(u64::MAX),
+        &super::Meter::new(u64::MAX),
         dense_bits,
         true,
         |l, r, c, p| {
@@ -1744,7 +1745,7 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
         let result = for_each_packet(
             header,
             &walk,
-            &super::Visits::new(visits),
+            &super::Meter::new(visits),
             poc_bitmap.unwrap_or(visits),
             poc_bitmap.is_none(),
             |_, _, _, _| {
@@ -1804,7 +1805,7 @@ fn only_a_skip_from_the_set_is_charged() {
         geoms: &geoms,
     };
     let spent = |dense_bits: u64| {
-        let visits = super::Visits::new(u64::MAX);
+        let visits = super::Meter::new(u64::MAX);
         let mut read = 0u64;
         super::progression::for_each_packet(
             &header,
@@ -1818,7 +1819,7 @@ fn only_a_skip_from_the_set_is_charged() {
             },
         )
         .unwrap();
-        (u64::MAX - visits.get(), read)
+        (visits.spent(), read)
     };
     let (bitmap, read) = spent(u64::MAX);
     let (set, read_from_set) = spent(0);
@@ -2109,7 +2110,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
     // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
     parse_packet(
         &mut streams,
-        &super::Visits::new(u64::MAX),
+        &super::Meter::new(u64::MAX),
         0,
         65536,
         SOP,
@@ -2315,4 +2316,28 @@ fn non_lazy_segment_max_passes_is_unchanged() {
     const TERMALL: u8 = 0x04;
     assert_eq!(segment_max_passes(TERMALL, &[]), 1);
     assert_eq!(segment_max_passes(0, &[]), 109);
+}
+
+/// A refusal an earlier walk recorded on the meter does not label a later
+/// walk's other limit error as work: a tile past the code-block cap is the
+/// geometry's `Limit`, not `Refused::Work`, however the meter was left.
+#[test]
+fn a_stale_refusal_does_not_relabel_a_geometry_limit() {
+    let h = header(4096, 4096, 1, 2);
+    let t = tile(&[]);
+    let stale = || {
+        let meter = super::Meter::new(u64::MAX);
+        let _ = meter.refuse(super::WorkRefusal::PacketWalk);
+        meter
+    };
+    let strict = super::decode_packets_metered(&h, &t, &stale(), u64::MAX, 0);
+    assert!(
+        matches!(strict, Err(super::Refused::Other(crate::Error::Limit(_)))),
+        "{strict:?}"
+    );
+    let partial = super::decode_packets_partial(&h, &t, &stale(), u64::MAX, 0);
+    assert!(
+        matches!(partial, Err(super::Refused::Other(crate::Error::Limit(_)))),
+        "{partial:?}"
+    );
 }

@@ -23,8 +23,8 @@ fn blocks<'a>(coded: &'a CodedData<'a>) -> Vec<(usize, &'a CodeBlock<'a>)> {
 }
 
 fn walk<'a>(header: &MainHeader, tile: &'a Tile<'a>) -> CodedData<'a> {
-    let mut visits = u64::MAX;
-    decode_packets_partial(header, tile, &mut visits, u64::MAX, 0)
+    let meter = super::Meter::new(u64::MAX);
+    decode_packets_partial(header, tile, &meter, u64::MAX, 0)
         .unwrap_or_else(|_| panic!("the walk fails"))
         .0
 }

@@ -20,9 +20,9 @@
 //! so a precinct's tag trees and per-block state outlive any one packet. See
 //! [`for_each_packet`] for the orders and [`BlockState`] for what persists.
 //!
-//! `decode_packets` also computes the resolution / subband / code-block geometry
-//! from the [`MainHeader`], so it is the single
-//! source of truth the assembly stage reuses.
+//! `decode_packets_metered` also computes the resolution / subband /
+//! code-block geometry from the [`MainHeader`], so it is the single source of
+//! truth the assembly stage reuses.
 
 pub mod bio;
 mod geometry;
@@ -150,13 +150,31 @@ pub struct CodedData<'a> {
 /// component's subbands are smaller at the same resolution, and its precinct
 /// lattice is coarser on the reference grid.
 ///
-/// The walk spends `visits`, what is left of the decode's work bound (see
+/// The walk spends `meter`, what is left of the decode's work bound (see
 /// [`decode_visits`]), and fails with [`Error::Limit`] once it is gone. A
 /// POC sequence's packets are held in a bitmap of at most `poc_bitmap`
-/// bits, and no more than `visits`, and past it in a set (see
+/// bits, and no more than the visits left, and past it in a set (see
 /// [`for_each_packet`]). The code-blocks of the resolutions that
-/// `reduction` drops are charged to `visits` too (see
+/// `reduction` drops are charged to `meter` too (see
 /// [`Budget::reduction`]).
+pub(crate) fn decode_packets_metered<'a>(
+    header: &MainHeader,
+    tile: &'a Tile<'a>,
+    meter: &Meter,
+    poc_bitmap: u64,
+    reduction: u8,
+) -> std::result::Result<CodedData<'a>, Refused> {
+    meter.clear_refusal();
+    let mut budget = Budget {
+        reduction,
+        ..Budget::decode(meter.left(), poc_bitmap)
+    };
+    decode_packets_within(header, tile, &mut budget, meter).map_err(|error| refused(meter, error))
+}
+
+/// [`decode_packets_metered`] on a meter of `visits` that is read back into
+/// it, for tests that walk a tile on its own.
+#[cfg(test)]
 pub fn decode_packets<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
@@ -164,19 +182,22 @@ pub fn decode_packets<'a>(
     poc_bitmap: u64,
     reduction: u8,
 ) -> std::result::Result<CodedData<'a>, Refused> {
-    let mut budget = Budget {
-        reduction,
-        ..Budget::decode(*visits, poc_bitmap)
-    };
-    let coded = decode_packets_within(header, tile, &mut budget);
-    *visits = budget.visits;
-    coded.map_err(|error| match (budget.refusal, error) {
-        (Some(work), Error::Limit(_)) => Refused::Work(work),
-        (_, error) => Refused::Other(error),
-    })
+    let meter = Meter::new(*visits);
+    let coded = decode_packets_metered(header, tile, &meter, poc_bitmap, reduction);
+    *visits = meter.left();
+    coded
 }
 
-/// The fewest visits (see [`Budget::visits`]) a decode may spend walking its
+/// How a walk that failed with `error` was refused: for work when `meter`
+/// recorded why, otherwise as the error it is.
+fn refused(meter: &Meter, error: Error) -> Refused {
+    match (meter.refusal(), error) {
+        (Some(work), Error::Limit(_)) => Refused::Work(work),
+        (_, error) => Refused::Other(error),
+    }
+}
+
+/// The fewest visits (see [`Meter`]) a decode may spend walking its
 /// tiles' packets. A visit costs about 2 to 15 ns, so this is under a
 /// second. A packet a POC marker's volumes reach again is skipped from a
 /// bitmap without a visit, in about 4 ns; skipped from the set a sequence
@@ -222,8 +243,9 @@ pub(crate) fn decode_visits(bytes: u64) -> u64 {
     DECODE_VISITS_MIN.max(bytes.saturating_mul(DECODE_VISITS_PER_BYTE))
 }
 
-/// What one walk of a tile's packets may spend. Each field is spent as the
-/// walk goes, and running out of any of them fails it with [`Error::Limit`]
+/// What one walk of a tile's packets may hold: the geometry guards, the
+/// POC packet storage and the reduction. The visits it spends are the
+/// [`Meter`]'s. Running out of a guard fails the walk with [`Error::Limit`]
 /// before the work or the allocation is done.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Budget {
@@ -231,14 +253,6 @@ pub(crate) struct Budget {
     pub(crate) precincts: usize,
     /// Code-blocks across the tile's components (see [`resolution_geoms`]).
     pub(crate) blocks: usize,
-    /// Steps of the walk that read no bit: packets read, steps over
-    /// code-blocks a packet header does not name a bit for, and the points of
-    /// the progression order's loops, such as each position of a positional
-    /// sweep for each (component, resolution) it checks. A packet header can
-    /// be a single byte and still pass over every row of code-blocks of its
-    /// precinct, and a sweep can check millions of points that hold no
-    /// packet, so this bounds the work where the other two cannot.
-    pub(crate) visits: u64,
     /// The most bits a POC sequence's packets are held in a bitmap of (see
     /// [`for_each_packet`]).
     pub(crate) poc_bitmap: u64,
@@ -262,14 +276,12 @@ pub(crate) struct Budget {
     /// per-tile code-block cap, would make a small file take minutes to decode
     /// at a reduction. It is 0 for `read_header`'s walk.
     pub(crate) reduction: u8,
-    /// Why the walk was refused for work, once it is (see [`WorkRefusal`]).
-    pub(crate) refusal: Option<WorkRefusal>,
 }
 
 impl Budget {
-    /// The decode's budget for one tile: the geometry guards, `visits`,
-    /// what is left of the decode's work bound, and a POC bitmap of no more
-    /// bits than the visits left or `poc_bitmap`, then a set. A walk that
+    /// The decode's budget for one tile: the geometry guards, and a POC
+    /// bitmap of no more bits than `visits`, the visits left on the decode's
+    /// [`Meter`], or `poc_bitmap`, then a set. A walk that
     /// reads every packet takes a visit for each, so a bitmap of more bits
     /// than the visits left would be wasted. `poc_bitmap` is the decode's
     /// default bound, so a raised bound does not raise the bitmap's memory.
@@ -277,7 +289,6 @@ impl Budget {
         Budget {
             precincts: MAX_PRECINCTS,
             blocks: MAX_CODE_BLOCKS,
-            visits,
             poc_bitmap: if visits < poc_bitmap {
                 visits
             } else {
@@ -286,7 +297,6 @@ impl Budget {
             poc_set: true,
             poc_coverage: true,
             reduction: 0,
-            refusal: None,
         }
     }
 }
@@ -313,40 +323,36 @@ impl Reach {
     }
 }
 
-/// [`decode_packets`] with `strict` off: the tile's data may end anywhere,
-/// and what was not read comes back as a [`Reach`] beside the coded data
-/// (see [`walk_packets`]).
+/// [`decode_packets_metered`] with `strict` off: the tile's data may end
+/// anywhere, and what was not read comes back as a [`Reach`] beside the coded
+/// data (see [`walk_packets`]).
 pub fn decode_packets_partial<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
-    visits: &mut u64,
+    meter: &Meter,
     poc_bitmap: u64,
     reduction: u8,
 ) -> std::result::Result<(CodedData<'a>, Reach), Refused> {
+    meter.clear_refusal();
     let mut budget = Budget {
         reduction,
-        ..Budget::decode(*visits, poc_bitmap)
+        ..Budget::decode(meter.left(), poc_bitmap)
     };
     let mut reach = Reach::default();
-    let coded = walk_packets(header, tile, &mut budget, Some(&mut reach));
-    *visits = budget.visits;
-    match coded {
-        Ok(coded) => Ok((coded, reach)),
-        Err(error) => Err(match (budget.refusal, error) {
-            (Some(work), Error::Limit(_)) => Refused::Work(work),
-            (_, error) => Refused::Other(error),
-        }),
-    }
+    walk_packets(header, tile, &mut budget, meter, Some(&mut reach))
+        .map(|coded| (coded, reach))
+        .map_err(|error| refused(meter, error))
 }
 
-/// [`decode_packets`] under `budget`, which is left holding what was not spent,
-/// also when the walk fails.
+/// [`decode_packets_metered`] under `budget`, spending `meter`, which is left
+/// holding what was not spent, also when the walk fails.
 pub(crate) fn decode_packets_within<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
     budget: &mut Budget,
+    meter: &Meter,
 ) -> Result<CodedData<'a>> {
-    walk_packets(header, tile, budget, None)
+    walk_packets(header, tile, budget, meter, None)
 }
 
 /// The packet walk behind [`decode_packets_within`] and
@@ -355,7 +361,7 @@ pub(crate) fn decode_packets_within<'a>(
 /// Not strict, the walk reads packets until the data ends (see
 /// [`parse_packet`]), then goes on through the rest of the progression
 /// without reading, to note each packet not read in `reach`. That costs a
-/// visit a packet, from the same budget, and the end of the data costs
+/// visit a packet, from the same meter, and the end of the data costs
 /// [`END_VISITS`] for each resolution of each component, for the setup no
 /// byte paid for. Packets the `POC` volumes leave out are noted the same way
 /// rather than refused, and bytes left after the last packet are noted
@@ -365,6 +371,7 @@ fn walk_packets<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
     budget: &mut Budget,
+    meter: &Meter,
     mut reach: Option<&mut Reach>,
 ) -> Result<CodedData<'a>> {
     let data: &'a [u8] = &tile.data;
@@ -389,11 +396,10 @@ fn walk_packets<'a>(
     // per block.
     //
     // The code-blocks of the resolutions the reduction drops are charged to
-    // `visits` as each component is built (see [`Budget::reduction`]), so a
+    // `meter` as each component is built (see [`Budget::reduction`]), so a
     // tile can pass the bound by at most one component's geometry, which the
     // caps bound.
     let component_count = header.siz.components.len();
-    let visits = Visits::new(budget.visits);
     let mut geoms = Vec::with_capacity(component_count);
     for c in 0..component_count {
         let resolutions = resolution_geoms(
@@ -411,10 +417,12 @@ fn walk_packets<'a>(
             .flat_map(|resolution| &resolution.bands)
             .map(BandGeom::block_count)
             .sum();
-        let charged = charge_dropped_blocks(&visits, dropped);
-        budget.visits = visits.get();
-        budget.refusal = visits.refusal.get();
-        charged?;
+        meter.spend(
+            dropped,
+            WorkRefusal::DroppedBlocks {
+                blocks: dropped as u64,
+            },
+        )?;
         geoms.push(resolutions);
     }
 
@@ -475,17 +483,17 @@ fn walk_packets<'a>(
     // Not strict: whether the data has ended.
     let mut ended = false;
     let mut packet_index = 0u32;
-    let walked = for_each_packet(
+    for_each_packet(
         header,
         &walk,
-        &visits,
+        meter,
         budget.poc_bitmap,
         budget.poc_set,
         |layer, resolution, component, precinct| {
             if let Some(reach) = reach.as_deref_mut() {
                 if ended {
                     // Past the end of the data: count the packet, not read.
-                    visit(&visits, 1)?;
+                    meter.spend(1, WorkRefusal::PacketWalk)?;
                     reach.miss(component, resolution, layer);
                     return Ok(());
                 }
@@ -493,7 +501,7 @@ fn walk_packets<'a>(
             let geom = &geoms[component][resolution];
             let packet = parse_packet(
                 &mut streams,
-                &visits,
+                meter,
                 layer,
                 packet_index,
                 delimiters,
@@ -506,7 +514,7 @@ fn walk_packets<'a>(
             )?;
             if packet != Packet::Read {
                 ended = true;
-                visit(&visits, end_visits)?;
+                meter.spend(end_visits, WorkRefusal::PacketWalk)?;
                 if let Some(reach) = reach.as_deref_mut() {
                     reach.miss(component, resolution, layer);
                 }
@@ -514,10 +522,7 @@ fn walk_packets<'a>(
             packet_index += 1;
             Ok(())
         },
-    );
-    budget.visits = visits.get();
-    budget.refusal = visits.refusal.get();
-    walked?;
+    )?;
 
     let mut components = Vec::with_capacity(states.len());
     for (comp, (component_states, component_geoms)) in states.into_iter().zip(&geoms).enumerate() {
@@ -697,8 +702,8 @@ impl WorkRefusal {
     }
 }
 
-/// How [`decode_packets`] fails: for work, with the typed reason, or for
-/// anything else, as the [`Error`] it is.
+/// How [`decode_packets_metered`] fails: for work, with the typed reason, or
+/// for anything else, as the [`Error`] it is.
 #[derive(Debug)]
 pub(crate) enum Refused {
     /// The tile went past the packet work bound.
@@ -716,23 +721,78 @@ impl From<Refused> for Error {
     }
 }
 
-/// What is left of a walk's visits, and, once it is refused for work, why.
-pub(crate) struct Visits {
+/// A decode's packet work count: the visits it started with, what is left,
+/// and, once a walk is refused for work, why. The decode owns one and every
+/// tile's walk spends it, so there is a single count to read afterwards.
+///
+/// A visit is a step of a walk that reads no bit: packets read, steps over
+/// code-blocks a packet header does not name a bit for, and the points of
+/// the progression order's loops, such as each position of a positional
+/// sweep for each (component, resolution) it checks. A packet header can
+/// be a single byte and still pass over every row of code-blocks of its
+/// precinct, and a sweep can check millions of points that hold no
+/// packet, so this bounds the work where the other limits cannot.
+pub(crate) struct Meter {
+    first: u64,
     left: Cell<u64>,
     refusal: Cell<Option<WorkRefusal>>,
 }
 
-impl Visits {
-    pub(crate) fn new(left: u64) -> Self {
-        Visits {
-            left: Cell::new(left),
+impl Meter {
+    /// A meter with `first` visits to spend.
+    pub(crate) fn new(first: u64) -> Self {
+        Meter {
+            first,
+            left: Cell::new(first),
             refusal: Cell::new(None),
         }
     }
 
+    /// The visits it started with.
+    pub(crate) fn first(&self) -> u64 {
+        self.first
+    }
+
     /// The visits left.
-    pub(crate) fn get(&self) -> u64 {
+    pub(crate) fn left(&self) -> u64 {
         self.left.get()
+    }
+
+    /// The visits spent so far.
+    pub(crate) fn spent(&self) -> u64 {
+        self.first.saturating_sub(self.left.get())
+    }
+
+    /// Why the walk was refused for work, once it is.
+    fn refusal(&self) -> Option<WorkRefusal> {
+        self.refusal.get()
+    }
+
+    /// Forget a refusal an earlier walk recorded, so that it cannot label
+    /// this walk's other limit errors as work.
+    fn clear_refusal(&self) {
+        self.refusal.set(None);
+    }
+
+    /// Spend `n` visits, or leave the count as it is and say whether they
+    /// were there. For a charge whose refusal is not a [`WorkRefusal`].
+    pub(crate) fn try_spend(&self, n: u64) -> bool {
+        match self.left.get().checked_sub(n) {
+            Some(rest) => {
+                self.left.set(rest);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Spend `n` visits, or refuse the walk for `why` when fewer are left.
+    pub(crate) fn spend(&self, n: usize, why: WorkRefusal) -> Result<()> {
+        if self.try_spend(n as u64) {
+            Ok(())
+        } else {
+            Err(self.refuse(why))
+        }
     }
 
     /// Record `why` as the reason the walk is refused, and give the [`Error`]
@@ -743,22 +803,6 @@ impl Visits {
     }
 }
 
-/// Spend a visit for each of `blocks` code-blocks of the resolutions the
-/// reduction drops (see [`Budget::reduction`]), or refuse the walk with
-/// [`WorkRefusal::DroppedBlocks`] when fewer are left.
-fn charge_dropped_blocks(visits: &Visits, blocks: usize) -> Result<()> {
-    match visits.left.get().checked_sub(blocks as u64) {
-        Some(rest) => {
-            visits.left.set(rest);
-            Ok(())
-        }
-        None => Err(visits.refuse(WorkRefusal::DroppedBlocks {
-            blocks: blocks as u64,
-        })),
-    }
-}
-
-/// Spend `n` of what is left of [`Budget::visits`], or fail once it is gone.
 /// What the end of a tile's data costs with `strict` off, in visits, for
 /// each resolution of each of the tile's components.
 ///
@@ -772,16 +816,6 @@ fn charge_dropped_blocks(visits: &Visits, blocks: usize) -> Result<()> {
 /// a codestream a strict decode reads never ends early, so this costs that
 /// decode nothing.
 const END_VISITS: usize = 32;
-
-pub(crate) fn visit(visits: &Visits, n: usize) -> Result<()> {
-    match visits.left.get().checked_sub(n as u64) {
-        Some(rest) => {
-            visits.left.set(rest);
-            Ok(())
-        }
-        None => Err(visits.refuse(WorkRefusal::PacketWalk)),
-    }
-}
 
 /// The error for a packed packet header that reads past the end of the
 /// `PPM` or `PPT` bytes it is packed in.
@@ -807,9 +841,9 @@ fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
 /// corpus agrees — every single-tile entry that carries SOP numbers its packets
 /// sequentially from zero, every multi-tile one restarts.
 ///
-/// The counter therefore lives in [`decode_packets`], which runs once per tile
-/// over that tile's tile-parts joined end to end: it starts at zero for each
-/// tile and does not restart at a tile-part boundary.
+/// The counter therefore lives in [`decode_packets_metered`], which runs once
+/// per tile over that tile's tile-parts joined end to end: it starts at zero
+/// for each tile and does not restart at a tile-part boundary.
 ///
 /// OpenJPEG leaves `Nsop` unchecked — `/* TODO : check the Nsop value */` — so
 /// this is stricter than the oracle. Validating the sequence number is the whole
@@ -997,7 +1031,7 @@ fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
 #[allow(clippy::too_many_arguments)]
 fn parse_packet<'a>(
     streams: &mut PacketStreams<'a>,
-    visits: &Visits,
+    meter: &Meter,
     layer: u32,
     packet_index: u32,
     delimiters: Delimiters,
@@ -1008,7 +1042,7 @@ fn parse_packet<'a>(
     scratch: &mut Scratch,
     mut log: Option<&mut Vec<Undo>>,
 ) -> Result<Packet> {
-    visit(visits, 1)?;
+    meter.spend(1, WorkRefusal::PacketWalk)?;
     let partial = log.is_some();
     if partial
         && delimiters.sop
@@ -1062,7 +1096,7 @@ fn parse_packet<'a>(
     if present {
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
             let parsed = parse_band_header(
-                visits,
+                meter,
                 band_index,
                 &band.precincts[precinct],
                 &mut state.precincts[precinct],
@@ -1198,7 +1232,7 @@ fn parse_packet<'a>(
 /// bytes and is not counted.
 #[allow(clippy::too_many_arguments)]
 fn parse_band_header(
-    visits: &Visits,
+    meter: &Meter,
     band_index: usize,
     precinct: &PrecinctGeom,
     trees: &mut PrecinctState,
@@ -1228,7 +1262,7 @@ fn parse_band_header(
             unread.find(&trees.inclusion, bx, by, threshold)
         };
         if let Some(span) = span {
-            visit(visits, 1)?;
+            meter.spend(1, WorkRefusal::PacketWalk)?;
             entry = span.next_entry(by, cols);
             continue;
         }

@@ -14,7 +14,7 @@ use crate::codestream::markers::{PocVolume, Progression, Rect, Siz};
 use crate::{Error, Result};
 
 use super::geometry::ResolutionGeom;
-use super::{Visits, WorkRefusal, visit};
+use super::{Meter, WorkRefusal};
 
 /// Everything the packet walk needs beyond the geometry itself: the tile's
 /// rectangle on the **reference grid** and the components' sub-sampling.
@@ -344,7 +344,7 @@ fn mask_below(n: u32) -> u64 {
 /// of the four axes — layer, resolution, component, position — and the three
 /// positional ones sweep the reference grid; see that function.
 ///
-/// The loops spend `visits` (see [`super::Budget::visits`]) as they go, the
+/// The loops spend `meter` as they go, the
 /// points that hold no packet included, so a walk under a bound stops however
 /// sparse its packets are.
 ///
@@ -354,7 +354,7 @@ fn mask_below(n: u32) -> u64 {
 pub(crate) fn for_each_packet<F>(
     header: &MainHeader,
     walk: &PacketWalk<'_>,
-    visits: &Visits,
+    meter: &Meter,
     poc_bitmap: u64,
     poc_set: bool,
     mut f: F,
@@ -394,16 +394,16 @@ where
     // With one volume every tuple is visited once, so the dedup is pure overhead
     // and skipped; a `POC` sequence needs it, because volumes may overlap.
     if volumes.len() == 1 {
-        return run_order(&volumes[0], walk, &plan, visits, &mut f);
+        return run_order(&volumes[0], walk, &plan, meter, &mut f);
     }
-    let mut emitted = Emitted::new(&volumes, walk, max_res, visits, poc_bitmap, poc_set)?;
+    let mut emitted = Emitted::new(&volumes, walk, max_res, meter, poc_bitmap, poc_set)?;
     let skip_visits = emitted.skip_visits();
     for volume in &volumes {
         run_order(
             volume,
             walk,
             &plan,
-            visits,
+            meter,
             &mut |layer, res, comp, precinct| {
                 // A packet skipped from the bitmap is not charged. Only a packet
                 // read is marked, and a read takes a visit and at least a byte of
@@ -418,7 +418,7 @@ where
                 if emitted.insert(walk, layer, res, comp, precinct)? {
                     f(layer, res, comp, precinct)
                 } else if skip_visits > 0 {
-                    visit(visits, skip_visits)
+                    meter.spend(skip_visits, WorkRefusal::PacketWalk)
                 } else {
                     Ok(())
                 }
@@ -479,14 +479,14 @@ enum Marks {
 
 impl Emitted {
     /// Nothing emitted yet, for `volumes` over a tile of at most
-    /// `resolutions` resolutions per component, with `visits` for the
+    /// `resolutions` resolutions per component, with `meter` for the
     /// walk; a bitmap when the volumes reach at most `dense_bits` packets,
     /// else a set if `poc_set`.
     fn new(
         volumes: &[Volume],
         walk: &PacketWalk<'_>,
         resolutions: usize,
-        visits: &Visits,
+        meter: &Meter,
         dense_bits: u64,
         poc_set: bool,
     ) -> Result<Self> {
@@ -524,8 +524,8 @@ impl Emitted {
             // A walk that cannot finish is refused up front. With `strict`
             // off it cannot finish either: the packets past the end of the
             // data are counted, a visit each.
-            _ if layer_orders && reached > visits.get() => {
-                return Err(visits.refuse(WorkRefusal::PocReach { reached }));
+            _ if layer_orders && reached > meter.left() => {
+                return Err(meter.refuse(WorkRefusal::PocReach { reached }));
             }
             Some(words) => Marks::Dense(vec![0; words]),
             None if !poc_set => {
@@ -644,7 +644,7 @@ fn run_order<F>(
     volume: &Volume,
     walk: &PacketWalk<'_>,
     plan: &Plan,
-    visits: &Visits,
+    meter: &Meter,
     emit: &mut F,
 ) -> Result<()>
 where
@@ -663,7 +663,7 @@ where
             for layer in 0..layers {
                 for res in res_range.clone() {
                     let comps = plan.held(res, comp_range);
-                    visit(visits, 1 + comps.len())?;
+                    meter.spend(1 + comps.len(), WorkRefusal::PacketWalk)?;
                     for &comp in comps {
                         for precinct in 0..precincts(comp, res) {
                             emit(layer, res, comp, precinct)?;
@@ -676,7 +676,7 @@ where
             for res in res_range.clone() {
                 let comps = plan.held(res, comp_range);
                 for layer in 0..layers {
-                    visit(visits, 1 + comps.len())?;
+                    meter.spend(1 + comps.len(), WorkRefusal::PacketWalk)?;
                     for &comp in comps {
                         for precinct in 0..precincts(comp, res) {
                             emit(layer, res, comp, precinct)?;
@@ -701,7 +701,7 @@ where
                 while y < ty1 {
                     let mut x = tx0;
                     while x < tx1 {
-                        visit(visits, 1 + comps.len())?;
+                        meter.spend(1 + comps.len(), WorkRefusal::PacketWalk)?;
                         for &comp in comps {
                             if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
                                 for layer in 0..layers {
@@ -729,7 +729,7 @@ where
             while y < ty1 {
                 let mut x = tx0;
                 while x < tx1 {
-                    visit(visits, 1 + pairs.len())?;
+                    meter.spend(1 + pairs.len(), WorkRefusal::PacketWalk)?;
                     for &(comp, res) in &pairs {
                         if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
                             for layer in 0..layers {
@@ -757,7 +757,7 @@ where
                 while y < ty1 {
                     let mut x = tx0;
                     while x < tx1 {
-                        visit(visits, 1 + group.len())?;
+                        meter.spend(1 + group.len(), WorkRefusal::PacketWalk)?;
                         for &(_, res) in group {
                             if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
                                 for layer in 0..layers {
