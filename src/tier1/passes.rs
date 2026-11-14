@@ -1118,7 +1118,8 @@ enum PassCoder<'a> {
 /// already applied, so the pass cycle below is unchanged. Two reach into the
 /// passes themselves: `segmentation symbols` appends four decisions to every
 /// cleanup pass, and `bypass` (lazy) switches the significance and refinement
-/// passes of the low bit-planes from MQ-coded to raw (D.6) — see the per-segment coder choice below.
+/// passes of the low bit-planes from MQ-coded to raw (D.6); see the
+/// per-segment coder choice below.
 pub fn decode_block(
     segments: &[(Vec<u8>, u32)],
     state: &mut BlockState,
