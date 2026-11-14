@@ -172,20 +172,46 @@ fn describe(result: Result<Image, Error>) -> (bool, String) {
     }
 }
 
-/// FNV-1a over the target's pinned-codestream and `wrap` code, which this
-/// file copies. If you changed `fuzz/fuzz_targets/jp2_boxes.rs` there, update
-/// the copy here, then this hash.
-const TARGET_HASH: u64 = 11400830327102865682;
+/// FNV-1a over a source region with `\r` removed, so a CRLF checkout hashes
+/// the same.
+fn fnv(text: &str) -> u64 {
+    text.bytes()
+        .filter(|&b| b != b'\r')
+        .fold(0xcbf2_9ce4_8422_2325, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+}
+
+/// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its pinned codestreams to
+/// the end of the file, which this file copies. If it changed, update the
+/// copy here, then both hashes.
+const TARGET_HASH: u64 = 9521446311063571855;
+/// Hash of this file's copy and its use (`const SIGNATURE` up to the test),
+/// without the two hash lines. An edit to either copy fails until both
+/// are reviewed.
+const TEST_HASH: u64 = 15999698394016582647;
 
 fn target_hash() -> u64 {
     let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");
     let start = target.find("const ONE_COMPONENT:").expect("target consts");
-    let end = target.find("fuzz_target!(").expect("target body");
-    target[start..end]
-        .bytes()
-        .fold(0xcbf2_9ce4_8422_2325, |h, b| {
-            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-        })
+    assert!(
+        start < target.len(),
+        "the target's pinned codestreams moved"
+    );
+    fnv(&target[start..])
+}
+
+fn test_hash() -> u64 {
+    let this = include_str!("fuzz_seed_outcomes.rs");
+    let start = this.find("const SIGNATURE").expect("the copy");
+    let end = this.find("#[test]").expect("the test");
+    assert!(start < end, "the copy must come before the test");
+    let region: String = this[start..end]
+        .lines()
+        .filter(|l| !l.starts_with("const TARGET_HASH") && !l.starts_with("const TEST_HASH"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fnv(&region)
 }
 
 /// Each seed's name, a description of what is wrong with it as coded (empty if
@@ -203,7 +229,11 @@ fn outcomes() -> Option<BTreeMap<String, (String, String)>> {
     {
         Ok(out) => out,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("fuzz_seed_outcomes: SKIPPED, python3 is not installed (CI runs this test)");
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "python3 is not on PATH, and this test must run in CI"
+            );
+            eprintln!("fuzz_seed_outcomes: SKIPPED, python3 is not installed");
             return None;
         }
         Err(e) => panic!("run python3: {e}"),
@@ -249,7 +279,12 @@ fn every_seed_decodes_as_coded_and_srgb_matches_the_table() {
     assert_eq!(
         target_hash(),
         TARGET_HASH,
-        "fuzz/fuzz_targets/jp2_boxes.rs changed: update the copy in tests/fuzz_seed_outcomes.rs, then TARGET_HASH"
+        "fuzz/fuzz_targets/jp2_boxes.rs changed: update the copy in tests/fuzz_seed_outcomes.rs, then both hashes"
+    );
+    assert_eq!(
+        test_hash(),
+        TEST_HASH,
+        "tests/fuzz_seed_outcomes.rs's copy of the target changed: check it against fuzz/fuzz_targets/jp2_boxes.rs, then update both hashes"
     );
     let Some(got) = outcomes() else { return };
     let table_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(TABLE);

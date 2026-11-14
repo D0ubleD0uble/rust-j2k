@@ -23,7 +23,11 @@ docs are in [docs/](docs/).
 ## Getting set up
 
 `cargo test` needs no external tools. It compares each decode with committed
-snapshots of the reference decoder's output. This one test checks the Python seed script and is skipped when python3 isn't installed; CI runs it.
+snapshots of the reference decoder's output.
+
+One test, `tests/fuzz_seed_outcomes.rs`, runs
+`scripts/gen-jp2-fuzz-seeds.py`; without `python3` on `PATH` it passes
+without checking anything. CI runs it with Python.
 
 To run every check below you also need cargo-deny, Rust 1.87 (for the
 minimum-version check) and, for fuzzing, nightly with cargo-fuzz. On Debian or
