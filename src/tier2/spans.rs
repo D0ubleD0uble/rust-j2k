@@ -61,6 +61,15 @@ pub struct UnreadSpans {
 }
 
 impl UnreadSpans {
+    /// Start a new pass, as [`UnreadSpans::default`] would, keeping the
+    /// buffers.
+    pub fn clear(&mut self) {
+        self.above.clear();
+        self.next = 0;
+        self.below.clear();
+        self.row = 0;
+    }
+
     /// The span holding leaf `(x, y)` that a read at `threshold` passes over
     /// without reading a bit, or `None` if the leaf must be read (see
     /// [`TagTree::unread_span`]). The leaves must come in raster order, none

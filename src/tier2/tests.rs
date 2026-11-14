@@ -73,6 +73,8 @@ fn parse_layers_styled<'a>(
         body_pos: 0,
         packed: false,
     };
+    // One scratch for every layer, as the walk keeps it across packets.
+    let mut scratch = Scratch::default();
     for layer in 0..layers {
         parse_packet(
             &mut streams,
@@ -84,6 +86,7 @@ fn parse_layers_styled<'a>(
             bands,
             0,
             &mut states,
+            &mut scratch,
             None,
         )?;
     }
@@ -2040,6 +2043,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
         &bands,
         0,
         &mut states,
+        &mut Scratch::default(),
         None,
     )
     .expect("wraps to zero");

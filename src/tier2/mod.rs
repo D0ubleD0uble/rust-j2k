@@ -467,6 +467,7 @@ fn walk_packets<'a>(
         .sum::<usize>()
         .saturating_mul(END_VISITS);
     let mut log = Vec::new();
+    let mut scratch = Scratch::default();
     // Not strict: whether the data has ended.
     let mut ended = false;
     let mut packet_index = 0u32;
@@ -496,6 +497,7 @@ fn walk_packets<'a>(
                 &geom.bands,
                 precinct,
                 &mut states[component][resolution],
+                &mut scratch,
                 if strict { None } else { Some(&mut log) },
             )?;
             if packet != Packet::Read {
@@ -912,6 +914,16 @@ struct Contribution {
     seg_len: usize,
 }
 
+/// The buffers a packet read fills and empties again, kept across the
+/// packets of a walk so that a packet allocates nothing of its own.
+#[derive(Default)]
+struct Scratch {
+    /// The packet's contributions, in header order.
+    contributions: Vec<Contribution>,
+    /// The unread spans of one band's inclusion pass.
+    unread: UnreadSpans,
+}
+
 /// How a packet read ended, when the walk is not strict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Packet {
@@ -981,6 +993,7 @@ fn parse_packet<'a>(
     bands: &[BandGeom],
     precinct: usize,
     states: &mut [BandState<'a>],
+    scratch: &mut Scratch,
     mut log: Option<&mut Vec<Undo>>,
 ) -> Result<Packet> {
     visit(visits, 1)?;
@@ -1030,7 +1043,8 @@ fn parse_packet<'a>(
     // one. An empty packet still costs its layer: the tag trees are untouched,
     // not reset.
     let present = bio.read_bit() == 1;
-    let mut contributions: Vec<Contribution> = Vec::new();
+    let contributions = &mut scratch.contributions;
+    contributions.clear();
     let mut fault = None;
     if present {
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
@@ -1043,7 +1057,8 @@ fn parse_packet<'a>(
                 layer,
                 style,
                 &mut bio,
-                &mut contributions,
+                contributions,
+                &mut scratch.unread,
                 log.as_deref_mut(),
             );
             if let Err(error) = parsed {
@@ -1113,7 +1128,7 @@ fn parse_packet<'a>(
     if !streams.packed {
         streams.body_pos = streams.header_pos;
     }
-    for contribution in &contributions {
+    for contribution in contributions.iter() {
         let end = match streams
             .body_pos
             .checked_add(contribution.seg_len)
@@ -1178,12 +1193,13 @@ fn parse_band_header(
     style: u8,
     bio: &mut BitReader,
     contributions: &mut Vec<Contribution>,
+    unread: &mut UnreadSpans,
     mut log: Option<&mut Vec<Undo>>,
 ) -> Result<()> {
     let cols = precinct.cols as u32;
     let threshold = layer + 1;
 
-    let mut unread = UnreadSpans::default();
+    unread.clear();
     let mut entry = 0;
     while entry < precinct.blocks.len() {
         let block_index = precinct.blocks[entry];
@@ -1192,12 +1208,12 @@ fn parse_band_header(
         entry += 1;
 
         let was_included = blocks[block_index].included;
-        let unread = if was_included {
+        let span = if was_included {
             None
         } else {
             unread.find(&trees.inclusion, bx, by, threshold)
         };
-        if let Some(span) = unread {
+        if let Some(span) = span {
             visit(visits, 1)?;
             entry = span.next_entry(by, cols);
             continue;
