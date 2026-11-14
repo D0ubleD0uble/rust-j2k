@@ -52,8 +52,9 @@ If this fails:
 - `install-oracle-tools: warning: LittleCMS is not 2.14: ICC oracles
   (gen-icc-oracles.py) cannot be regenerated here`. This is a warning, and
   the script still succeeds. Only the ICC oracles need LittleCMS 2.14.
-- `python3: command not found`, after the installs. Install Python 3 and run
-  the script again.
+- `python3: command not found`, after the installs, followed by `the installed
+  OpenJPEG is missing or is not 2.5.0`. The OpenJPEG line is a side effect of
+  the missing `python3`: install Python 3 and run the script again.
 
 ## Check the minimum Rust version
 
@@ -237,12 +238,14 @@ them. Each script's header comment gives its usage, such as
 `python3 scripts/gen-tile-fixtures.py`. Run it, then check the result as in
 step 2.
 
-Two of the GRIB2 fixtures need more than `gen-oracle.sh`. The 9/7 fixture is
-re-encoded by
+The four GRIB2 fixtures need only `gen-oracle.sh` to rebuild a snapshot from
+the committed `.j2k`, as in step 1. Rebuilding the codestream itself takes one
+more step. The 9/7 fixture is re-encoded by
 [`scripts/gen-irreversible-fixture.sh`](../scripts/gen-irreversible-fixture.sh),
-which then calls `gen-oracle.sh` with the committed provenance. A fixture taken
-from a GRIB2 message needs its §5.40 codestream extracted first, with
-[`scripts/extract-grib2-codestream.py`](../scripts/extract-grib2-codestream.py).
+which then calls `gen-oracle.sh` with the committed provenance. The other three
+are extracted from their GRIB2 messages with
+[`scripts/extract-grib2-codestream.py`](../scripts/extract-grib2-codestream.py)
+first.
 [Regenerating the corpus](../tests/fixtures/README.md#regenerating-the-corpus)
 has the exact commands for all four GRIB2 fixtures.
 
@@ -271,8 +274,9 @@ test before the next is wired on top.
 
 ### When the output differs from OpenJPEG
 
-Assume first that the difference is a bug in this decoder. It almost always
-is. Two lessons from the one exception, the inverse 9/7's `2/K`
+Assume first that the difference is a bug in this decoder.
+[openjpeg-departures.md](openjpeg-departures.md) lists the cases where it was
+not. Two lessons from one of them, the inverse 9/7's `2/K`
 ([openjpeg-departures.md](openjpeg-departures.md#the-inverse-97s-high-pass-scale-2k)),
 carry over to any future disagreement:
 
@@ -309,5 +313,4 @@ that survive tell you which ones were never testing the feature.
 
 A stage is done when its isolated golden tests pass and it moves its phase's
 oracle or conformance gate forward, with the quality gates (`cargo fmt`,
-`clippy -D warnings`, `cargo test`, `cargo deny check`) green. Not before.
-"It looks right" is not a gate.
+`clippy -D warnings`, `cargo test`, `cargo deny check`) green.

@@ -7,7 +7,7 @@ needs a feature this decoder doesn't read is refused with
 `Error::Unsupported` rather than decoded wrongly.
 
 "Yes, with limits" means the feature decodes, but a few inputs inside it are
-refused or handled partly. The list under each table names them.
+refused or handled partly. The text under each table names them.
 
 ## Part 1: core coding system (ISO/IEC 15444-1)
 
@@ -15,7 +15,7 @@ refused or handled partly. The list under each table names them.
 
 | Feature | Decoded |
 |---|---|
-| SOC / SIZ / COD / QCD / SOT / SOD / EOC (main header and tile-parts) | Yes |
+| SOC / SIZ / COD / QCD / SOT / SOD / EOC (main header and tile-parts) | Yes, with limits |
 | COC / QCC (per-component coding and quantization overrides) | Yes, with limits |
 | RGN (region of interest) | Yes, with limits |
 | POC (progression order change) | Yes |
@@ -114,10 +114,11 @@ Limits inside the decoded rows:
   file) is refused.
 - A palette channel that looks up another palette column is refused, and so
   is a palette column deeper than 31 bits unsigned or 32 bits signed.
-- sRGB output handles sYCC and the restricted ICC profiles. Other color spaces
-  (CMYK, CIELab, e-sYCC and so on) and ICC profiles applied through a lookup
-  table or Lab are refused under that option. [srgb-output.md](srgb-output.md)
-  lists every case.
+- sRGB output handles sYCC and the restricted ICC profiles. With three or
+  more color channels, other color spaces (CMYK, CIELab, e-sYCC and so on) are
+  refused under that option; one or two channels pass through as gray. ICC
+  profiles applied through a lookup table or Lab are refused too.
+  [srgb-output.md](srgb-output.md) lists every case.
 
 The nine JP2 reader files of ISO/IEC 15444-4 decode within their compliance
 class, and a set of real-world `.jp2` files matches OpenJPEG.
@@ -130,10 +131,10 @@ that does the same job.
 
 | Option | Supported | How | OpenJPEG |
 |---|---|---|---|
-| Decode at a lower resolution | Yes | `resolution_reduction` | `-r` |
+| Decode at a lower resolution | Yes | `with_resolution_reduction(n)` | `-r` |
 | Decode a cut codestream and report what is missing | Yes | `with_strict(false)`, then `Image::report` | `-allow-partial` |
-| Return a JP2 file's palette indexes without applying the palette | Yes | `raw_channels` | none |
-| Convert the color channels to sRGB | Yes | `color` (`ColorOutput::Srgb`) | `-force-rgb` |
+| Return a JP2 file's palette indexes without applying the palette | Yes | `with_raw_channels(true)` | none |
+| Convert the color channels to sRGB | Yes | `with_color(ColorOutput::Srgb)` | `-force-rgb` |
 | Raise or lift the sample limit and the two work limits | Yes | `with_sample_limit`, `with_packet_work_limit`, `with_code_block_work_limit` | none |
 | Read the header without decoding any pixels | Yes | `read_header`, `read_header_with` | `opj_dump` |
 | Stop after a given number of quality layers | No | none | `-l` |
@@ -172,7 +173,6 @@ OpenJPEG 2.5.0 and later decode them.
 |---|---|
 | CAP marker and HTJ2K capability signaling | No (Phase 4) |
 | FBCOT block decoder (MEL, VLC and MagSgn) | No (Phase 4) |
-| FBCOT block encoder | No (Phase 6) |
 
 ## Part 2: extensions and JPX (ISO/IEC 15444-2)
 
@@ -190,12 +190,13 @@ OpenJPEG 2.5.0 and later decode them.
 | Feature | Supported |
 |---|---|
 | Part 1 encoder (forward DWT, MQ encoder, rate control, packetization) | No (Phase 5) |
+| HTJ2K (FBCOT) block encoder | No (Phase 6) |
 | Part 3: Motion JPEG 2000 (MJ2 container) | No (Phase 7) |
 | Part 9: JPIP interactive streaming protocol | No (Phase 7) |
 | Part 11: JPWL wireless error protection | No (Phase 7) |
 
 ## Speed
 
-The decoder aims to match OpenJPEG's output first and its speed second.
+The decoder aims for correct output first and OpenJPEG's speed second.
 Optimizations go only into hot paths a profile has measured, and `unsafe` code
 and SIMD wait until a benchmark shows they're needed.

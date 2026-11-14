@@ -9,8 +9,9 @@ as the 0.4.0 release.
 Each phase has a goal, the work it contains and a gate: the test that must
 pass before the phase counts as done. A gate always compares against an
 external reference, never against the crate's own output, for the reasons in
-[correctness.md](correctness.md). [scope.md](scope.md) lists every feature
-with the phase that delivers it; this page gives the order and the gates.
+[correctness.md](correctness.md). [scope.md](scope.md) lists every feature,
+whether it decodes today, and the phase that plans each one that doesn't. This
+page gives the order and the gates.
 
 ## Finished phases
 
@@ -38,8 +39,8 @@ Tier-1 block coder for a faster one, so the work is in two places:
   rest of the pipeline shared with Part 1.
 
 The gate is a decode that matches OpenJPEG 2.5.0, the version every oracle in
-this repository is pinned to, on the Part 15 codestreams of the ISO/IEC
-15444-4 conformance suite.
+this repository is pinned to, on an HTJ2K conformance corpus, chosen when
+the phase starts.
 
 ## Phase 5: Part 1 encoder
 
@@ -53,9 +54,8 @@ The goal is to encode Part 1 codestreams and JP2 files. The work:
 The gate has two halves. The round trip encodes, decodes and compares against
 the original within the path's tolerance. The cross-decode has OpenJPEG read
 this encoder's output and this decoder read OpenJPEG's, within the target rate
-and quality. The round trip alone would be self-consistency. Interoperating
-with the reference implementation in both directions is the real proof of
-encoder conformance, and it is what makes this gate external.
+and quality. The round trip alone would be self-consistency; the
+cross-decode is what makes this gate external.
 
 ## Phase 6: Part 2 extensions and HTJ2K encode
 
