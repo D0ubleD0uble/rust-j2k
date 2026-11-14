@@ -311,7 +311,7 @@ fn a_short_box_length_after_the_codestream_is_rejected() {
     for xlbox in [0, 8, 15] {
         let mut bytes = minimal();
         bytes.extend_from_slice(&xl_header_only(xlbox, b"junk"));
-        file_format(&bytes, "after the codestream has XLBox");
+        file_format(&bytes, "after the codestream has `XLBox`");
     }
     // Reached after well-formed boxes of both length forms.
     let mut bytes = minimal();
@@ -396,7 +396,7 @@ fn a_box_length_of_1_to_7_is_rejected() {
     let mut truncated = file(&[jp2_ftyp(), good_jp2h()]);
     truncated.extend_from_slice(&header_only(1, b"jp2c"));
     truncated.extend_from_slice(&[0, 0, 0]);
-    file_format(&truncated, "XLBox field is truncated");
+    file_format(&truncated, "`XLBox` field is truncated");
 }
 
 #[test]
@@ -810,7 +810,7 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
         (
             "XLBox below 16 after the codestream",
             [minimal(), xl_header_only(15, b"junk")].concat(),
-            "after the codestream has XLBox 15",
+            "after the codestream has `XLBox` 15",
         ),
         (
             "a box header cut short before jp2c",
