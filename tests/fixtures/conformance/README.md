@@ -7,9 +7,9 @@ where the Phase 1 fixtures in the parent directory grade against an OpenJPEG
 re-decode, these grade against the standard's own conformance suite.
 
 The corpus is committed so it grades offline, with no reference decoder and no
-network fetch at test time. It is **not yet wired into the test harness** — the
-grading harness that decodes these and compares against the bounds is a separate
-piece of work (issue #55). This directory is the data and its provenance.
+network fetch at test time. `tests/conformance_part4.rs` decodes these and
+grades them against the bounds; the JP2 and HTJ2K sets below have their own
+harnesses (`tests/conformance_jp2.rs`, `tests/conformance_ht.rs`).
 
 ## License and redistribution
 
@@ -252,7 +252,7 @@ graded by `tests/conformance_ht.rs` with the Part 1 comparator and ratchet.
 | ---- | ------ | --------- |
 | Codestreams, JPH files, `COPYRIGHT.txt` | `gitlab.com/wg1/htj2k-codestreams` | commit `f6b9ede0` |
 | `hifi_ht1_02` references | the same repo, `reference_class1HF_profile1/`, copied verbatim | commit `f6b9ede0` |
-| `file10` references | the same repo, `reference_jph/file10_*.pgm`, rewritten as 8-bit PGX | commit `f6b9ede0` |
+| `file10` references | the same repo, `reference_jph/jph_10_*.pgm`, rewritten as 8-bit PGX | commit `f6b9ede0` |
 | Bounds | T.803 Annex C, Tables C.1bis, C.4bis, C.6, C.7 and C.8 | V3 (02/2024) |
 | Kakadu error, pass counts | the repo's `stats.txt`; OpenJPEG 2.5.0 with a pass-count print | — |
 
@@ -301,12 +301,27 @@ tests:
   8 bits, so their figures are divided by 16 and 256.
 - Where `opj_decompress` 2.5.0 decodes a codestream, its error against the
   references is within the bound. The tests recompute that error from the
-  snapshot in `oracle/`.
+  snapshot in `oracle/` for the four codestreams that have one; for the six
+  that matched the references they check that the recorded error is zero.
 
-Adding the MSE as square roots instead (`(√a + √b)²`) gives a larger figure
-than the T.803 bound for 11 components (`ds0_ht_04_b11`, `ds0_ht_05_b11`,
-`ds0_ht_06_b11`, `ds1_ht_02_b11` and `ds1_ht_03_b11`), so the check adds MSE
-linearly.
+The tests also hold the manifest's additional tolerances, `Dref` values and
+C.8 bounds to their own transcription of the T.803 tables
+(`T803_ALLOWANCE`, `T803_C8` in `tests/conformance_ht.rs`).
+
+The MSE parts add linearly: the bound is the Part 1 MSE plus the allowance,
+so the cross-check holds exactly when the allowance is at least Kakadu's
+recorded MSE, as every T.803 allowance is. Adding them as square roots instead (`(√a + √b)²`) gives a larger figure than the
+T.803 bound for 11 components (`ds0_ht_04_b11`, `ds0_ht_05_b11`,
+`ds0_ht_06_b11`, `ds1_ht_02_b11` and `ds1_ht_03_b11`).
+
+Two oddities in the tables are transcribed as printed:
+
+- `ds0_ht_03_b11` and `ds0_ht_15_b11` have an additional peak of 17 on 4-bit
+  data, where no error can exceed 15, so their PAE bound cannot fail. It is
+  likely a typo in T.803.
+- The note under Table C.4bis says the allowances apply to Table C.6, but
+  `ds1` is profile 1, whose tolerances are in Table C.7. The bounds here use
+  C.7.
 
 **OpenJPEG.** `opj_decompress` 2.5.0 decodes 10 of the 41 codestreams. Six
 match the references exactly. For the other four (`ds1_ht_04_b9`,

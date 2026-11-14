@@ -290,6 +290,61 @@ const T803_PART1_MSE: &[(&str, usize, f64)] = &[
     ("p1_05", 1, 9.716),
 ];
 
+/// T.803 Tables C.1bis (`ds0`) and C.4bis (`ds1`) as printed: per codestream,
+/// `Dref` and the additional peak and MSE of each component.
+#[rustfmt::skip]
+const T803_ALLOWANCE: &[(&str, u32, &[f64], &[f64])] = &[
+    ("ds0_ht_01_b11", 8, &[0.0], &[0.0]),
+    ("ds0_ht_02_b11", 8, &[1.0], &[0.001]),
+    ("ds0_ht_02_b12", 8, &[0.0], &[0.0]),
+    ("ds0_ht_03_b11", 4, &[17.0], &[0.15]),
+    ("ds0_ht_03_b14", 4, &[0.0], &[0.0]),
+    ("ds0_ht_04_b11", 8, &[2.0, 2.0, 2.0], &[0.1, 0.1, 0.1]),
+    ("ds0_ht_04_b12", 8, &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ("ds0_ht_05_b11", 8, &[0.0, 1.0, 1.0, 2.0], &[0.0, 0.001, 0.001, 0.001]),
+    ("ds0_ht_05_b12", 8, &[0.0, 0.0, 0.0, 0.0], &[0.0, 0.0, 0.0, 0.0]),
+    ("ds0_ht_06_b11", 12, &[2500.0, 0.0, 0.0, 200.0], &[75000.0, 0.0, 0.0, 2000.0]),
+    ("ds0_ht_06_b15", 12, &[0.0, 0.0, 0.0, 12.0], &[0.0, 0.0, 0.0, 10.0]),
+    ("ds0_ht_06_b18", 12, &[0.0, 0.0, 0.0, 0.0], &[0.0, 0.0, 0.0, 0.0]),
+    ("ds0_hm_06_b11", 12, &[0.0, 0.0, 0.0, 200.0], &[0.0, 0.0, 0.0, 2000.0]),
+    ("ds0_hm_06_b18", 12, &[0.0, 0.0, 0.0, 0.0], &[0.0, 0.0, 0.0, 0.0]),
+    ("ds0_ht_07_b11", 12, &[40.0, 40.0, 50.0], &[25.0, 25.0, 25.0]),
+    ("ds0_ht_07_b15", 12, &[2.0, 2.0, 2.0], &[0.075, 0.05, 0.075]),
+    ("ds0_ht_07_b16", 12, &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ("ds0_ht_08_b11", 12, &[40.0, 40.0, 40.0], &[45.0, 30.0, 45.0]),
+    ("ds0_ht_08_b15", 12, &[0.0, 1.0, 0.0], &[0.0, 0.001, 0.0]),
+    ("ds0_ht_08_b16", 12, &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ("ds0_ht_09_b11", 8, &[0.0], &[0.0]),
+    ("ds0_ht_10_b11", 8, &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ("ds0_ht_11_b10", 8, &[0.0], &[0.0]),
+    ("ds0_ht_12_b11", 8, &[0.0], &[0.0]),
+    ("ds0_ht_13_b11", 8, &[0.0, 0.0, 0.0, 0.0], &[0.0, 0.0, 0.0, 0.0]),
+    ("ds0_ht_14_b11", 8, &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ("ds0_ht_15_b11", 4, &[17.0], &[0.15]),
+    ("ds0_ht_15_b14", 4, &[0.0], &[0.0]),
+    ("ds0_hm_15_b8", 4, &[0.0], &[0.0]),
+    ("ds0_ht_16_b11", 8, &[0.0], &[0.0]),
+    ("ds1_ht_01_b11", 8, &[1.0], &[0.001]),
+    ("ds1_ht_01_b12", 8, &[0.0], &[0.0]),
+    ("ds1_ht_02_b11", 8, &[2.0, 2.0, 2.0], &[0.1, 0.1, 0.1]),
+    ("ds1_ht_02_b12", 8, &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ("ds1_ht_03_b11", 8, &[0.0, 1.0, 2.0, 2.0], &[0.0, 0.03, 0.05, 0.001]),
+    ("ds1_ht_03_b12", 8, &[0.0, 0.0, 0.0, 0.0], &[0.0, 0.0, 0.0, 0.0]),
+    ("ds1_ht_04_b9", 8, &[0.0], &[0.0]),
+    ("ds1_ht_05_b11", 8, &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ("ds1_ht_06_b11", 8, &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]),
+    ("ds1_ht_07_b11", 8, &[0.0, 0.0], &[0.0, 0.0]),
+];
+
+/// T.803 Table C.8 as printed: the peak and MSE bounds of `hifi_ht1_02`, then
+/// of `hifi_p1_02`, the Part 1 codestream it was made from.
+const T803_C8: [&[f64]; 4] = [
+    &[47.0, 36.0, 42.0],
+    &[82.0, 65.0, 86.0],
+    &[43.0, 33.0, 38.0],
+    &[80.0, 62.0, 72.0],
+];
+
 const EPS: f64 = 1e-9;
 
 fn bounds_at(bounds: &Bounds, k: usize) -> (f64, f64) {
@@ -305,8 +360,9 @@ fn bounds_at(bounds: &Bounds, k: usize) -> (f64, f64) {
 ///   those of the Part 1 entry;
 /// - the bound is at least the Part 1 tolerance plus the error Kakadu recorded
 ///   between the transcode and its source, at the component's own depth;
-/// - OpenJPEG's error, recomputed from its snapshot, is the recorded one and
-///   within the bound;
+/// - the additional tolerance, `Dref` and the C.8 bounds are those T.803
+///   prints, transcribed here apart from the manifest ([`T803_ALLOWANCE`],
+///   [`T803_C8`]);
 /// - an entry is `bit_exact` exactly when every bound is zero.
 #[test]
 fn every_bound_passes_its_cross_check() {
@@ -324,6 +380,25 @@ fn every_bound_passes_its_cross_check() {
         assert_eq!(c.bounds.mse.len(), n, "{name}");
         let all_zero = c.bounds.pae.iter().chain(&c.bounds.mse).all(|&b| b == 0.0);
         assert_eq!(c.bit_exact, all_zero, "{name}: bit_exact");
+
+        // The allowance the manifest applies is the one T.803 prints.
+        if name == "hifi_ht1_02" {
+            let [pae, mse, p1_pae, p1_mse] = T803_C8;
+            assert_eq!(c.bounds.pae, pae, "{name}: C.8 peak");
+            assert_eq!(c.bounds.mse, mse, "{name}: C.8 MSE");
+            assert_eq!(t.part1.pae, p1_pae, "{name}: C.8 hifi_p1_02 peak");
+            assert_eq!(t.part1.mse, p1_mse, "{name}: C.8 hifi_p1_02 MSE");
+            assert!(t.additional.is_none() && t.reference_depth.is_none());
+        } else {
+            let &(_, dref, pae, mse) = T803_ALLOWANCE
+                .iter()
+                .find(|(n, ..)| n == name)
+                .unwrap_or_else(|| panic!("{name}: not in T803_ALLOWANCE"));
+            let add = t.additional.as_ref().expect("additional tolerance");
+            assert_eq!(t.reference_depth, Some(dref), "{name}: Dref");
+            assert_eq!(add.pae, pae, "{name}: additional peak");
+            assert_eq!(add.mse, mse, "{name}: additional MSE");
+        }
 
         for k in 0..n {
             let d = t.depth[k];
@@ -398,10 +473,54 @@ fn every_bound_passes_its_cross_check() {
         };
         assert_eq!(t.table, table, "{name}");
     }
+
+    // The table covers exactly the derived-set codestreams.
+    let names: BTreeSet<&str> = manifest
+        .codestreams
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    let table: BTreeSet<&str> = T803_ALLOWANCE.iter().map(|(n, ..)| *n).collect();
+    assert_eq!(table.len(), T803_ALLOWANCE.len(), "a name listed twice");
+    assert_eq!(
+        names.difference(&table).copied().collect::<Vec<_>>(),
+        ["hifi_ht1_02"]
+    );
+    assert_eq!(table.difference(&names).count(), 0);
 }
 
-/// OpenJPEG's recorded error is what its output measures against the
-/// references, and is within the bound.
+/// The JPH files below the highest bound of their set are not graded, but
+/// each must decode or be refused as `Unsupported`, and must not panic.
+#[test]
+fn ungraded_jph_files_decode_or_are_unsupported() {
+    let dir = ht_dir();
+    let mut checked = 0;
+    for j in &load_ht_manifest(&dir).jph {
+        if let Some(outcome) = j.check_ungraded(&dir) {
+            outcome.unwrap_or_else(|why| panic!("{}: {why}", j.name));
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 10);
+}
+
+/// That check fails a panic and an error other than `Unsupported`.
+#[test]
+fn the_ungraded_check_catches_a_panic() {
+    use support::ht::decodes_or_unsupported;
+    let panicked = decodes_or_unsupported(|| panic!("forced panic"));
+    assert!(panicked.unwrap_err().contains("panicked"));
+    let other = decodes_or_unsupported(|| rust_j2k::decode(b"not a codestream"));
+    assert!(other.is_err(), "a non-Unsupported error must fail");
+    let unsupported =
+        decodes_or_unsupported(|| Err(rust_j2k::Error::Unsupported("feature".into())));
+    assert_eq!(unsupported, Ok(()));
+}
+
+/// OpenJPEG's recorded error is within the bound. For the 4 codestreams with
+/// a snapshot it is recomputed from the snapshot against the references; the
+/// 6 that matched the references when the manifest was written must record
+/// zero.
 #[test]
 fn openjpeg_output_is_within_every_bound() {
     let ht = ht_dir();
@@ -441,7 +560,17 @@ fn openjpeg_output_is_within_every_bound() {
                     );
                     part4::metrics(&opj.samples, &reference.samples)
                 }
-                None => part4::metrics(&reference.samples, &reference.samples),
+                // No snapshot: OpenJPEG's output equaled the references when
+                // the manifest was written. That is not recomputed here; the
+                // recorded figures must say so.
+                None => {
+                    assert_eq!(
+                        (metrics.pae[k], metrics.mse[k]),
+                        (0.0, 0.0),
+                        "{name} c{k}: matches_references with a nonzero error"
+                    );
+                    continue;
+                }
             };
             assert_eq!(measured.pae, metrics.pae[k], "{name} c{k}: PAE");
             assert!(

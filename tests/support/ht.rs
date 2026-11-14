@@ -8,6 +8,7 @@
 //! in [`super::jp2`].
 
 use std::collections::BTreeMap;
+use std::panic;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -339,7 +340,32 @@ impl HtCodestream {
     }
 }
 
+/// Run `decode` and accept a decoded image or `Error::Unsupported`. Any other
+/// error, or a panic, is the reason returned.
+pub fn decodes_or_unsupported(
+    decode: impl FnOnce() -> Result<rust_j2k::Image, rust_j2k::Error>,
+) -> Result<(), String> {
+    match panic::catch_unwind(panic::AssertUnwindSafe(decode)) {
+        Err(_) => Err("panicked (decode must return a typed error)".into()),
+        Ok(Ok(_) | Err(rust_j2k::Error::Unsupported(_))) => Ok(()),
+        Ok(Err(e)) => Err(format!("decoder rejected a valid file: {e}")),
+    }
+}
+
 impl JphEntry {
+    /// Decode a file that is not graded: it must decode or be refused as
+    /// `Unsupported`, and must not panic. `None` for a graded file.
+    pub fn check_ungraded(&self, ht_dir: &Path) -> Option<Result<(), String>> {
+        if self.graded_as.is_some() {
+            return None;
+        }
+        let bytes = match std::fs::read(ht_dir.join(&self.file)) {
+            Ok(bytes) => bytes,
+            Err(e) => return Some(Err(format!("cannot read {}: {e}", self.file))),
+        };
+        Some(decodes_or_unsupported(|| rust_j2k::decode(&bytes)))
+    }
+
     /// Decode and grade the file. `None` for a file that is not graded.
     ///
     /// `file1`..`file9` are graded as `fileN.jp2` is (`jp2_dir` holds its

@@ -204,8 +204,11 @@ Settled while planning, on 2026-11-14. Below, *HT codestream* means one of the
    suite stays offline.
 4. **Bounds come from T.803 C.2.** Each entry's PAE and MSE bounds are
    transcribed from the HTJ2K tolerances there. Every transcribed number must
-   also pass a cross-check: the source Part 1 entry's bound plus the transcode
-   error Kakadu recorded for that file (PAE adds; for MSE, square roots add).
+   also pass a cross-check: the bound is at least the source Part 1 entry's
+   bound plus the transcode error Kakadu recorded for that file, with PAE and
+   MSE each added linearly. Since the bound is the Part 1 bound plus the T.803
+   allowance, this is the same as "allowance ≥ Kakadu's recorded error", both
+   at the component's depth.
    If T.803 can't be obtained, only the highest-bound file of each set is
    graded (it is lossless against its Part 1 decode), and every other entry is
    recorded with the reason it is not graded.
