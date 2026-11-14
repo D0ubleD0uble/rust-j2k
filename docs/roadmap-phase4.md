@@ -59,7 +59,8 @@ support:
 - Bit 5 says HT code-blocks may be used with the irreversible transform.
 - Bits 4–0 hold `P`, which gives the cleanup magnitude bound `B` (A.3.7): 8
   when `P` is 0, `P + 8` below 20, `4(P − 19) + 27` from 20 to 30, and 74 at
-  31. Each Part 4 file's `_bNN` name is its `B`, from 8 to 18.
+  31. Every `_bNN` in a file name is that file's `B`: 8 to 18 for the HT
+  codestreams, up to 19 for the JPH files.
 
 ### Code-block style
 
@@ -107,7 +108,9 @@ An HT block's passes split into segments by the rule of B.2, not by the Part 1
 `segment_max_passes` rule. In the packet with a block's first contribution,
 the first segment holds the placeholder passes plus the one cleanup pass,
 `3k + 1` passes in all, and the second holds up to two refinement passes
-(B.3). The length fields are `Lblock + floor(log2(3k + 1))` bits for the
+(B.3). The first contribution can also hold only placeholder passes (B.3
+NOTE 4); the cleanup pass then arrives in a later layer, and the B.2 rule
+covers both cases. The length fields are `Lblock + floor(log2(3k + 1))` bits for the
 cleanup segment and `Lblock + floor(log2(n))` bits for `n` refinement passes.
 The cleanup segment is under 65535 bytes and the refinement segment under
 2047.
@@ -116,7 +119,7 @@ The cleanup segment is under 65535 bytes and the refinement segment under
 
 JPH (Annex D) is the JP2 format with the `jph ` brand, which `ftyp` must give
 as its brand and in its compatibility list (D.3). Its `colr` box may be absent
-(D.2). Its `cdef` box allows a channel type `Typ` 3, a color the application
+when `ihdr`'s `UnkC` is set, and then no channel may be `Typ` 0 (D.2). Its `cdef` box allows a channel type `Typ` 3, a color the application
 defines, with an `Asoc` value the application defines too (D.6.3). Every
 Part 4 JPH file lists only `jph ` in `ftyp`, so the decoder's `jp2 `
 compatibility check refuses them today.
@@ -158,7 +161,7 @@ where it decoded, grading its output against the ISO reference.
 | Corpus | Files | License | What it covers | `opj_decompress` 2.5.0 |
 | ------ | ----- | ------- | -------------- | ---------------------- |
 | Part 4 HT codestreams: `gitlab.com/wg1/htj2k-codestreams` (`htj2k_bsets_profile0`, `htj2k_bsets_profile1`, `codestreams_hifi`), commit `f6b9ede` | 41, 40 MB: 27 `ds0_ht_*`, 3 `ds0_hm_*` (MIXED), 10 `ds1_ht_*`, `hifi_ht1_02`. 32 MB of it is the `p0_07` and `p0_08` sets | the conformance-only grant (`COPYRIGHT.txt`, "Copyright (c) 2002, 2021") | Kakadu `kdu_transcode` of each Part 1 `p0_*`/`p1_*` codestream at one to three magnitude bounds; HTONLY and MIXED; RGN; 1 to 30 layers; 5/3 and 9/7; vertically causal; the Part 1 sets' tiling, sampling, progression and marker variety | decodes 10 (see above) |
-| Part 4 JPH files: same repository, `testfiles_jph` | 20, 9 MB: `file1`..`file9` at two or three bounds, plus `file10` at two | same grant | HT transcodes of the nine Part 4 JP2 files (`colr` enumerated and restricted ICC, `pclr`/`cmap`, `cdef`, `xml `); `file10`: five components, no `colr`, a `cdef` with four `Typ` 3 channels and one opacity channel | decodes 18. The highest-bound file of each set matches the `fileN.jp2` decode bit for bit. Refuses `file10_b11` and `file10_b12` ("Invalid component index"); their references are five `.pgm` files in `reference_jph/` |
+| Part 4 JPH files: same repository, `testfiles_jph` | 20, 9 MB: `file1`..`file9` at one to three bounds, plus `file10` at two | same grant | HT transcodes of the nine Part 4 JP2 files (`colr` enumerated and restricted ICC, `pclr`/`cmap`, `cdef`, `xml `); `file10`: five components, no `colr`, a `cdef` with four `Typ` 3 channels and one opacity channel | decodes 18. The highest-bound file of each set matches the `fileN.jp2` decode bit for bit. Refuses `file10_b11` and `file10_b12` ("Invalid component index"); their references are five `.pgm` files in `reference_jph/` |
 | openjpeg-data `input/nonregression/htj2k/`, commit `39524bd3` (the commit already pinned for the Part 1 corpus) | 4: `Bretagne1_ht.j2k`, `Bretagne1_ht_lossy.j2k`, `byte.jph`, `byte_causal.jhc` | no license statement | single-layer HTONLY: RGB 5/3 and 9/7, gray in JPH, vertically causal | decodes all 4 |
 | OpenJPH test codestreams: `github.com/aous72/jp2k_test_codestreams` `openjph/`, commit `1ccd349` | 70, 39 MB; 16 under 100 KB (420 KB in all) | BSD-2-Clause | OpenJPH encoder output: single layer, HTONLY; code-block sizes from 4×4 to 1024×4; all five progression orders; tiles; YUV with sub-sampled chroma; 16-bit; gray; tall and narrow images | decodes 69. Refuses `simple_dec_irv53_bhvhb_low_latency.jph`, a Part 2 codestream (`Rsiz` `0xC0A0`) |
 
@@ -291,8 +294,10 @@ the decoder can't read yet.
   `CAP` or `CPF`, and either one in a tile-part header (OpenJPEG reads both in
   the main header only).
 - Record the `0x40` and `0x80` style bits on `Coding` instead of refusing them
-  in `decode_coding`. The refusal moves to one guard that P4.2, P4.4 and P4.6
-  relax in turn. Until P4.2, any code-block style with `0x40` is
+  in `decode_coding`. The refusal moves to one guard that later steps relax
+  in turn: P4.2 for blocks with only a cleanup pass, P4.4 for HTONLY
+  codestreams without `RGN`, P4.5 for those with `RGN`, and P4.6 for MIXED.
+  Until P4.2, any code-block style with `0x40` is
   `Unsupported`.
 - Refuse MULTIHT (decision 5). The code-block style bits decide the coder of
   each tile-component, or that it may mix both (MIXED); `CAP` is cross-checked
@@ -374,10 +379,10 @@ only cleanup passes is in class; the Part 1 Tier-2 fixtures are unchanged.
 
 **Work:** the SigProp pass (forward stream, neighbors from the cleanup pass's
 significance) and the MagRef pass (backward stream), each run only when its
-pass is present. For a zero-length refinement segment with passes declared,
-compare what B.3 and clause 7 give with OpenJPEG's cleanup-only fallback,
-which it applies to `ds1_ht_05` and `ds1_ht_06`, and follow the standard where
-they differ (decision 1). Lift the `0x40` guard for HTONLY codestreams without
+pass is present. A refinement segment of zero length with passes declared
+gives `Z_blk = 1` (B.3), so only the cleanup pass is decoded. OpenJPEG does
+the same for `ds1_ht_05` and `ds1_ht_06`, though it warns that the block is
+malformed. Lift the `0x40` guard for HTONLY codestreams without
 `RGN`.
 
 **Oracle:** `opj_decompress` on every file it decodes, and OpenJPH on the
@@ -393,7 +398,8 @@ codestream in the corpora that OpenJPEG decodes, with `.jph` files read as raw
 
 **Work:** apply `roi_shift` to HT output the way `undo_maxshift` does for
 EBCOT; check `top_coded_plane` against the `B` bound; cross-check the
-`Ccap15` RGN bit against the `RGN` markers.
+`Ccap15` RGN bit against the `RGN` markers; lift the guard for HTONLY
+codestreams with `RGN`.
 
 **Oracle:** the Part 4 references for `ds0_ht_03`, `06`, `13` and `15` (eight
 files). OpenJPEG refuses ROI on HT blocks.
@@ -423,8 +429,8 @@ against the three files; lift the `0x80` guard.
 **Goal:** a `.jph` file decodes through `decode` like a `.jp2`.
 
 **Work:** accept `jph ` as brand or compatible brand. Apply the Annex D
-relaxations: the `cdef` `Asoc` range check and the color reordering skip
-`Typ` 3 channels. A missing
+relaxations: the `cdef` `Asoc` range check skips `Typ` 3 channels (the color
+reorder already moves only `Typ` 0). A missing
 `colr` already gives `ColorSpace::Unknown`; `file10` adds the test. Add the
 reject-matrix rows in `src/jp2/tests.rs` for the remaining JPX, JPM and MJ2
 brands.
@@ -465,8 +471,7 @@ budget) finds nothing; the reject matrices pass.
 **Work:** the `scope.md` Part 15 rows and the two Part 1 rows; `roadmap.md`;
 `correctness.md` gains the HT corpus; `openjpeg-departures.md` lists each place
 this decoder decodes what OpenJPEG refuses (placeholder passes, ROI, MIXED,
-`file10`) and any departure on files OpenJPEG decodes, such as the zero-length
-refinement result, each with its spec text; `resource-bounds.md`;
+`file10`) and any departure found on files OpenJPEG decodes, each with its spec text; `resource-bounds.md`;
 `tests/fixtures/README.md` provenance; `lib.rs` docs, README and CHANGELOG;
 the `RELEASING.md` pre-release review.
 
@@ -488,7 +493,11 @@ Refused cleanly, never attempted: MULTIHT; Part 2 codestreams, HT or not
 (Phase 6); `CAP` bits for parts other than 15. JPH's extra `colr` methods
 (`METH` 3, any ICC profile, and `METH` 5, H.273 parameters; D.4) are skipped as
 JP2 skips an unknown `METH` today, so such a file reports its color space as
-unknown; no corpus file uses them. The HTJ2K encoder is Phase 6.
+unknown; no corpus file uses them. Annex D's other `cdef` rules are not
+checked or acted on: at most one opacity channel, with `Asoc` 0 (D.6.1);
+several channels sharing one `Typ` and `Asoc` (D.6.2), which JPH allows and
+which is handled as JP2 handles it today; and no `Typ` 0 channel when `colr`
+is absent (D.2). No corpus file needs them. The HTJ2K encoder is Phase 6.
 `hifi_p1_02.j2k`, the Part 1 codestream beside `hifi_ht1_02`, is not part of
 the HT set. See [roadmap.md](roadmap.md) and [scope.md](scope.md).
 
