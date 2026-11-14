@@ -60,10 +60,10 @@ pub enum BandKind {
 }
 
 /// One code-block's coded contribution within its subband. `num_passes` is the
-/// coding-pass count from the packet header (0 if the block is never included
-/// in the single layer) and `zero_bit_planes` the all-zero most-significant
-/// bit-plane count from the zero-bitplane tag tree. `segment` is the raw
-/// MQ-coded byte slice Tier-1 decodes (empty when the block is not included).
+/// coding-pass count from the packet headers (0 if no layer the decode keeps
+/// includes the block) and `zero_bit_planes` the all-zero most-significant
+/// bit-plane count from the zero-bitplane tag tree. `segments` are the raw
+/// coded byte slices Tier-1 decodes (none when the block is not included).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeBlock<'a> {
     /// Top-left of the block within its subband, in band-relative samples.
@@ -71,12 +71,19 @@ pub struct CodeBlock<'a> {
     pub y: usize,
     pub width: usize,
     pub height: usize,
-    /// Coding passes accumulated over every layer that contributed.
+    /// Coding passes accumulated over every layer the decode keeps that
+    /// contributed.
     pub num_passes: u32,
     pub zero_bit_planes: u32,
     /// The block's codeword segments, in order. Tier-1 restarts the MQ decoder
     /// at each one and carries its bit-plane state across them.
     pub segments: Vec<CodedSegment<'a>>,
+    /// Whether the layer cap cut the last segment short: a layer the decode
+    /// drops adds coding passes to it, so the encoder terminated it past the
+    /// passes and bytes kept here. Tier-1 then does not hold it to
+    /// `predictable termination`. Only the last segment can be cut, since a
+    /// layer adds passes and bytes to the last segment or to new ones.
+    pub cut: bool,
 }
 
 /// One codeword segment: the coding passes it carries and the bytes coding
@@ -156,17 +163,20 @@ pub struct CodedData<'a> {
 /// bits, and no more than the visits left, and past it in a set (see
 /// [`for_each_packet`]). The code-blocks of the resolutions that
 /// `reduction` drops are charged to `meter` too (see
-/// [`Budget::reduction`]).
+/// [`Budget::reduction`]). The packets of the layers past `layers` are read
+/// but add nothing to their code-blocks (see [`Budget::layers`]).
 pub(crate) fn decode_packets_metered<'a>(
     header: &MainHeader,
     tile: &'a Tile<'a>,
     meter: &Meter,
     poc_bitmap: u64,
     reduction: u8,
+    layers: Option<u16>,
 ) -> std::result::Result<CodedData<'a>, Refused> {
     meter.clear_refusal();
     let mut budget = Budget {
         reduction,
+        layers,
         ..Budget::decode(meter.left(), poc_bitmap)
     };
     decode_packets_within(header, tile, &mut budget, meter).map_err(|error| refused(meter, error))
@@ -183,7 +193,7 @@ pub fn decode_packets<'a>(
     reduction: u8,
 ) -> std::result::Result<CodedData<'a>, Refused> {
     let meter = Meter::new(*visits);
-    let coded = decode_packets_metered(header, tile, &meter, poc_bitmap, reduction);
+    let coded = decode_packets_metered(header, tile, &meter, poc_bitmap, reduction, None);
     *visits = meter.left();
     coded
 }
@@ -276,6 +286,13 @@ pub(crate) struct Budget {
     /// per-tile code-block cap, would make a small file take minutes to decode
     /// at a reduction. It is 0 for `read_header`'s walk.
     pub(crate) reduction: u8,
+    /// The decode's layer cap (`DecodeOptions::max_quality_layers`): the
+    /// packets of layer `layers` on are still read, since they frame the
+    /// packets after them and their headers carry each code-block's state
+    /// into the next layer, but their coding passes and bytes are not added
+    /// to the code-blocks. Reading them costs the visits it does without a
+    /// cap. `None` keeps every layer, as `read_header`'s walk does.
+    pub(crate) layers: Option<u16>,
 }
 
 impl Budget {
@@ -297,6 +314,7 @@ impl Budget {
             poc_set: true,
             poc_coverage: true,
             reduction: 0,
+            layers: None,
         }
     }
 }
@@ -332,10 +350,12 @@ pub fn decode_packets_partial<'a>(
     meter: &Meter,
     poc_bitmap: u64,
     reduction: u8,
+    layers: Option<u16>,
 ) -> std::result::Result<(CodedData<'a>, Reach), Refused> {
     meter.clear_refusal();
     let mut budget = Budget {
         reduction,
+        layers,
         ..Budget::decode(meter.left(), poc_bitmap)
     };
     let mut reach = Reach::default();
@@ -510,6 +530,7 @@ fn walk_packets<'a>(
                 precinct,
                 &mut states[component][resolution],
                 &mut scratch,
+                budget.layers.is_none_or(|cap| layer < u32::from(cap)),
                 if strict { None } else { Some(&mut log) },
             )?;
             if packet != Packet::Read {
@@ -884,7 +905,8 @@ struct BlockState<'a> {
     /// Length-indicator width, grown by a unary run of 1s and never reset.
     lblock: u32,
     zero_bit_planes: u32,
-    /// Coding passes summed over every contributing layer.
+    /// Coding passes summed over every contributing layer the decode keeps
+    /// (see [`Budget::layers`]).
     num_passes: u32,
     /// Codeword segments in order; the last one may still take passes.
     segments: Vec<SegmentState<'a>>,
@@ -892,7 +914,13 @@ struct BlockState<'a> {
 
 /// A codeword segment while it is being filled from successive layers.
 struct SegmentState<'a> {
+    /// Coding passes from every layer read, which decide where the next
+    /// segment starts.
     passes: u32,
+    /// The passes of [`passes`](Self::passes) from the layers the decode
+    /// keeps: all of them without a layer cap. The layers past the cap only
+    /// add passes after these, and add no chunks.
+    kept: u32,
     /// How many passes this segment may hold before the next one starts:
     /// 1 under `termall`, the `10, 2, 1, 2, 1, …` pattern under `bypass`,
     /// otherwise 109 — the most a code-block can carry (`3 * Mb - 2` with
@@ -989,10 +1017,11 @@ struct Undo {
     lblock: u32,
     zero_bit_planes: u32,
     num_passes: u32,
-    /// How many segments the block had, and the passes and chunks of the
-    /// last of them.
+    /// How many segments the block had, and the passes, kept passes and
+    /// chunks of the last of them.
     segments: usize,
     last_passes: u32,
+    last_kept: u32,
     last_chunks: usize,
 }
 
@@ -1009,6 +1038,7 @@ fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
         block.segments.truncate(entry.segments);
         if let Some(last) = block.segments.last_mut() {
             last.passes = entry.last_passes;
+            last.kept = entry.last_kept;
             last.chunks.truncate(entry.last_chunks);
         }
     }
@@ -1020,6 +1050,10 @@ fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
 /// Folds the packet's contributions into `states` and returns the byte offset
 /// where the next packet begins. The subbands are built once every layer has
 /// been read; see [`build_subbands`].
+///
+/// With `keep` false (a layer past the decode's cap, see [`Budget::layers`]),
+/// the packet is read the same way and its header still moves each
+/// code-block's state on, but its passes and bytes are not added.
 ///
 /// With `log` given (a walk with `strict` off), running out of data is not a
 /// fault. A packet that ends past the data adds the code-blocks whose data is
@@ -1040,6 +1074,7 @@ fn parse_packet<'a>(
     precinct: usize,
     states: &mut [BandState<'a>],
     scratch: &mut Scratch,
+    keep: bool,
     mut log: Option<&mut Vec<Undo>>,
 ) -> Result<Packet> {
     meter.spend(1, WorkRefusal::PacketWalk)?;
@@ -1103,6 +1138,7 @@ fn parse_packet<'a>(
                 &mut state.blocks,
                 layer,
                 style,
+                keep,
                 &mut bio,
                 contributions,
                 &mut scratch.unread,
@@ -1199,9 +1235,11 @@ fn parse_packet<'a>(
                 )));
             }
         };
-        states[contribution.band].blocks[contribution.block].segments[contribution.segment]
-            .chunks
-            .push(&streams.data[streams.body_pos..end]);
+        if keep {
+            states[contribution.band].blocks[contribution.block].segments[contribution.segment]
+                .chunks
+                .push(&streams.data[streams.body_pos..end]);
+        }
         streams.body_pos = end;
     }
     // Inline, keep the two cursors together for the next packet.
@@ -1230,6 +1268,10 @@ fn parse_packet<'a>(
 /// it reaches (see [`UnreadSpans`]). Each such step spends a visit. Any
 /// other entry reads at least one bit, so its work is paid for by the header's
 /// bytes and is not counted.
+///
+/// With `keep` false the entries are read the same way, and the passes still
+/// fill the segments so that the next layer's lengths are read at the right
+/// width, but they are not counted as kept (see [`SegmentState::kept`]).
 #[allow(clippy::too_many_arguments)]
 fn parse_band_header(
     meter: &Meter,
@@ -1239,6 +1281,7 @@ fn parse_band_header(
     blocks: &mut [BlockState<'_>],
     layer: u32,
     style: u8,
+    keep: bool,
     bio: &mut BitReader,
     contributions: &mut Vec<Contribution>,
     unread: &mut UnreadSpans,
@@ -1297,6 +1340,7 @@ fn parse_band_header(
                 num_passes: block.num_passes,
                 segments: block.segments.len(),
                 last_passes: last.map_or(0, |s| s.passes),
+                last_kept: last.map_or(0, |s| s.kept),
                 last_chunks: last.map_or(0, |s| s.chunks.len()),
             });
         }
@@ -1344,7 +1388,9 @@ fn parse_band_header(
         // length field. Without termination one segment swallows them all;
         // under `restart` each pass terminates, so each gets a segment and a
         // length of its own. OpenJPEG spells this `do { ... } while (n > 0)`.
-        block.num_passes += num_passes;
+        if keep {
+            block.num_passes += num_passes;
+        }
         let mut remaining = num_passes;
         loop {
             if block
@@ -1355,6 +1401,7 @@ fn parse_band_header(
                 let max_passes = segment_max_passes(style, &block.segments);
                 block.segments.push(SegmentState {
                     passes: 0,
+                    kept: 0,
                     max_passes,
                     chunks: Vec::new(),
                 });
@@ -1378,6 +1425,9 @@ fn parse_band_header(
             // header bits above, so it costs no more than one with bytes.
             let segment = &mut block.segments[segment_index];
             segment.passes += new_passes;
+            if keep {
+                segment.kept += new_passes;
+            }
             if seg_len > 0 {
                 contributions.push(Contribution {
                     band: band_index,
@@ -1442,6 +1492,23 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
             let mut blocks = Vec::with_capacity(state.blocks.len());
             blocks.extend(band.block_rects().zip(state.blocks).map(
                 |((x, y, width, height), block)| {
+                    // Under a layer cap, the segments the kept layers never
+                    // reached are left out, and the last one kept may hold
+                    // only some of its passes. Without a cap every pass is
+                    // kept.
+                    let mut cut = false;
+                    let segments = block
+                        .segments
+                        .into_iter()
+                        .take_while(|s| s.kept > 0)
+                        .map(|s| {
+                            cut = s.kept < s.passes;
+                            CodedSegment {
+                                passes: s.kept,
+                                chunks: s.chunks,
+                            }
+                        })
+                        .collect();
                     CodeBlock {
                         x,
                         y,
@@ -1449,14 +1516,8 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                         height,
                         num_passes: block.num_passes,
                         zero_bit_planes: block.zero_bit_planes,
-                        segments: block
-                            .segments
-                            .into_iter()
-                            .map(|s| CodedSegment {
-                                passes: s.passes,
-                                chunks: s.chunks,
-                            })
-                            .collect(),
+                        segments,
+                        cut,
                     }
                 },
             ));

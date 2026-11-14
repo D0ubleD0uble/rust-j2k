@@ -12,6 +12,7 @@ pub mod passes;
 
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
+use crate::codestream::markers::code_block_style::PTERM;
 use crate::pipeline::{Band, Bands, DetailBands, SubbandCoeffs};
 use crate::quant;
 use crate::tier1::passes::{
@@ -333,6 +334,19 @@ where
             .iter()
             .map(|segment| (segment.bytes(), segment.passes))
             .collect();
+        // A segment the layer cap cut short ends before the encoder
+        // terminated it, so it cannot be held to `predictable termination`,
+        // as OpenJPEG does not check it when it decodes fewer layers than the
+        // codestream has. Only the last segment can be cut, but the block's
+        // style is shared by all of them.
+        let params = if block.cut {
+            BlockParams {
+                style: params.style & !PTERM,
+                ..params
+            }
+        } else {
+            params
+        };
         decode_block(
             &segments,
             &mut state,
@@ -408,6 +422,7 @@ mod tests {
                     passes: 1,
                     chunks: vec![&[0x80][..]],
                 }],
+                cut: false,
             }],
         }
     }

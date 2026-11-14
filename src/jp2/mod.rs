@@ -406,6 +406,8 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
         // so the walk is the same at every reduction. Its geometry is held to
         // PROBE_GEOMETRY, so no dropped resolutions need charging here.
         reduction: 0,
+        // Nor on the layer cap: every layer's packets are read either way.
+        layers: None,
     };
     let ends = crate::tier2::decode_packets_within(&header, data, &mut budget, &meter).is_ok();
     (ends, meter.spent())

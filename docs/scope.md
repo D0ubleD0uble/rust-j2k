@@ -89,9 +89,9 @@ refused.
 | Multiple quality layers | Yes |
 | Precinct partitions (non-maximal precincts) | Yes |
 
-The decoder always decodes every quality layer. See
-[Decode options](#decode-options) for the layer, area and tile reads it does
-not offer.
+The decoder decodes every quality layer unless a decode caps them (see
+[Decode options](#decode-options)), which also lists the area and tile reads it
+does not offer.
 
 ### JP2 file format (Annex I)
 
@@ -139,11 +139,12 @@ that does the same job.
 | Convert the color channels to sRGB | Yes | `with_color(ColorOutput::Srgb)` | `-force-rgb` |
 | Raise or lift the sample limit and the two work limits | Yes | `with_sample_limit`, `with_packet_work_limit`, `with_code_block_work_limit` | none |
 | Read the header without decoding any pixels | Yes | `read_header`, `read_header_with` | `opj_dump` |
-| Stop after a given number of quality layers | No | none | `-l` |
+| Stop after a given number of quality layers | Yes | `with_max_quality_layers(Some(n))` | `-l` |
 | Decode one area of the image | No | none | `-d` |
 | Decode one tile | No | none | `-t` |
 
-The last three are not in any phase of the roadmap yet. A partial decode
+The last two are not in any phase of the roadmap yet. A layer cap still reads
+the packets of the later layers, so damage in them is still an error. A partial decode
 relaxes only missing data and leftover bytes: a damaged packet header or
 code-block is still an error. The limits and what they cost a valid file are
 in [resource-bounds.md](resource-bounds.md).

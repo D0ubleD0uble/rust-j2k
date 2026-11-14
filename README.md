@@ -93,6 +93,8 @@ how much.
   matrix and curves), giving the same samples as OpenJPEG with LittleCMS.
 - It can **decode a smaller image**. Each resolution level you drop about halves the
   width and height (`DecodeOptions::with_resolution_reduction`).
+- It can **decode fewer quality layers**, for a coarser image at full size in
+  less time (`DecodeOptions::with_max_quality_layers`).
 - It can **decode a codestream that is cut short**, such as one still
   arriving, and tell you what is missing (`DecodeOptions::with_strict(false)`).
 - It reads **whole numbers up to 32 bits**: unsigned up to 31 bits and signed
@@ -121,10 +123,9 @@ how much.
   gives you the values as stored.
   [docs/srgb-output.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/srgb-output.md#every-input-and-its-result) lists
   every case.
-- It doesn't **decode part of an image**. It always decodes the whole image
-  and every quality layer. For a smaller image, drop resolution levels
-  instead. OpenJPEG's `opj_decompress` can decode a region (`-d`) or fewer
-  layers (`-l`).
+- It doesn't **decode part of an image**. It always decodes the whole image.
+  For a smaller image, drop resolution levels instead. OpenJPEG's
+  `opj_decompress` can decode a region (`-d`).
 - It doesn't **read GRIB2 files**. You find the JPEG 2000 bytes in the message
   and turn the decoded numbers into physical values yourself (see
   [GRIB2 grids](#grib2-grids)).
