@@ -473,8 +473,10 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
   contexts come from table lookups. The coding passes keep the arithmetic
   decoder's registers in locals, read the state of a four-row column with
   one load, and skip a column that has nothing to code with one test. The
-  output is unchanged. With the wavelet change, whole-file decodes measured
-  2 to 4 times faster than 0.3.0 on 9/7 and 5/3 files, depending on the file.
+  output is unchanged.
+- Together, these make whole-file decodes several times faster than 0.3.0:
+  1.7 to 5.3 times on the conformance and benchmark files measured,
+  depending on the file. Very small files gain little.
 
 ## [0.3.0] - 2026-07-18
 

@@ -441,7 +441,7 @@ impl Siz {
 
     /// The whole image area on component `comp`'s sample grid (ISO B.2) — the
     /// canvas each tile-component is placed into. Its extent is
-    /// `component_extent`.
+    /// [`component_extent_at`](Self::component_extent_at) at reduction 0.
     pub fn component_rect(&self, comp: usize) -> Option<Rect> {
         let c = self.components.get(comp)?;
         let (xr, yr) = (u64::from(c.x_sampling), u64::from(c.y_sampling));

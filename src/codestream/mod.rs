@@ -102,7 +102,7 @@ pub struct Tile<'a> {
     /// sized by the component count and there can be tens of thousands of tiles:
     /// materializing one per tile would cost `tiles × components` in memory and
     /// in time, which a header under 50 KB can drive into gigabytes and minutes.
-    /// Instead, `parse_tiles` checks each tile's markers against a summary of
+    /// Instead, [`parse_tiles_with`] checks each tile's markers against a summary of
     /// the main header, in time proportional to the tile's own markers. At
     /// decode, a tile with no markers runs under the main header itself,
     /// borrowed; a tile with markers is resolved in full, in time and memory
@@ -459,7 +459,7 @@ fn tile_header_is_valid(
     true
 }
 
-/// `parse_tiles` without resolving every tile's header, for a caller that
+/// [`parse_tiles_with`] (strict) without resolving every tile's header, for a caller that
 /// reads one tile and resolves just that one with [`Codestream::tile_header`].
 /// Resolving them all costs `tiles × components`.
 pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
