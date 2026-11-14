@@ -741,7 +741,7 @@ fn out_of_subset_marker_is_unsupported() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::CAP, &[0, 0]), // extended capabilities (HTJ2K et al.)
+        seg(marker::MCT, &[0, 0]), // a Part 2 multiple-component transform
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     assert!(matches!(err(&bytes), Error::Unsupported(_)));
@@ -1998,7 +1998,8 @@ fn header_altering_markers_are_rejected_not_skipped() {
     // codestream is interpreted, so each is named and rejected rather than
     // passed over. PPM has left this list — it is decoded now (issue #71); the
     // length markers TLM/PLM/PLT are absent too, being informational (#72).
-    for code in [marker::CAP, marker::PPT, marker::SOP] {
+    // CAP has left it too: it is read (#340).
+    for code in [marker::PPT, marker::SOP] {
         let bytes = header_with(&seg(code, &[0, 0]));
         assert!(
             matches!(err(&bytes), Error::Unsupported(_)),
@@ -2257,10 +2258,59 @@ fn header_with_cod(cod: Vec<u8>) -> Vec<u8> {
 fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     // (what the input carries, the error it produced, the variant it must be)
     let mut rows: Vec<(&str, Error, Variant)> = vec![
+        // CAP and CPF are read now (#340), so CAP left this table; what
+        // remains is the capabilities not decoded and the malformed fields.
         (
-            "HTJ2K capabilities (CAP)",
-            err(&header_with(&seg(marker::CAP, &[0, 0]))),
+            "CAP whose length disagrees with Pcap",
+            err(&header_with(&seg(marker::CAP, &[0, 2, 0, 0]))),
+            Variant::Marker,
+        ),
+        (
+            "CAP signaling a Part 2 capability",
+            err(&header_with(&seg(marker::CAP, &cap_body(PART2_PCAP, &[0])))),
             Variant::Unsupported,
+        ),
+        (
+            "CAP signaling MULTIHT",
+            err(&header_with(&seg(marker::CAP, &cap15(0x2000)))),
+            Variant::Unsupported,
+        ),
+        (
+            "a second CAP",
+            err(&header_with(
+                &[seg(marker::CAP, &cap15(3)), seg(marker::CAP, &cap15(3))].concat(),
+            )),
+            Variant::Marker,
+        ),
+        (
+            "CPF of an odd byte count",
+            err(&header_with(&seg(marker::CPF, &[0, 2, 0]))),
+            Variant::Marker,
+        ),
+        (
+            "a second CPF",
+            err(&header_with(
+                &[seg(marker::CPF, &[0, 2]), seg(marker::CPF, &[0, 2])].concat(),
+            )),
+            Variant::Marker,
+        ),
+        (
+            "CAP in a tile-part header",
+            perr(&assemble_with_tile_markers(
+                &default_header(),
+                &[seg(marker::CAP, &cap15(3))],
+                &[0],
+            )),
+            Variant::Marker,
+        ),
+        (
+            "CPF in a tile-part header",
+            perr(&assemble_with_tile_markers(
+                &default_header(),
+                &[seg(marker::CPF, &[0, 2])],
+                &[0],
+            )),
+            Variant::Marker,
         ),
         // Multiple components are decoded, so they left this table. The
         // sample limit that bounds them depends on the caller's options, so
@@ -2422,7 +2472,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
 
     // Every JPEG 2000 Part 2 codestream marker (0xFF74..=0xFF78): out of the
     // Part 1 subset, so each is an `Unsupported` feature the moment it appears,
-    // never half-parsed as Part 1 (issue #78). CAP (Part 15/HTJ2K) is above.
+    // never half-parsed as Part 1 (issue #78).
     for (name, code) in [
         ("MCT", marker::MCT),
         ("MCC", marker::MCC),
@@ -2451,7 +2501,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     // changes how Tier-1 reads a code-block, so none may be ignored. `bypass`,
     // `restart`, `predictable termination`, `segmentation symbols`, `vertically
     // causal context` and `reset context probabilities` have left this table,
-    // leaving only the two HTJ2K bits.
+    // leaving only the two HTJ2K bits, which `check_block_coder` refuses.
     use markers::code_block_style::{LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
     for (bit, name) in markers::code_block_style::FLAGS {
         if bit & (LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET) != 0 {
@@ -2551,8 +2601,8 @@ fn code_block_style_rejection_names_the_flags() {
     assert!(message.contains("mixed-mode"), "{message}");
 
     // The high bits select the HTJ2K block coder rather than being reserved, so
-    // they are named too. Such a codestream also carries CAP, which rejects on
-    // its own, but the style byte alone must not read as the default style.
+    // they are named too: with or without a CAP, the style byte decides the
+    // coder and must not read as the default style.
     for (bit, name) in [(0x40u8, "high-throughput"), (0x80, "mixed-mode")] {
         let e = err(&header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, bit, 1)));
         let Error::Unsupported(message) = &e else {
@@ -4133,4 +4183,311 @@ fn duplicate_override_messages_are_pinned_for_both_headers() {
         Err(Error::Marker(m)) => assert_eq!(m, "reserved progression order 9"),
         other => panic!("tile malformed second COD: {other:?}"),
     }
+}
+
+// --- CAP, CPF and the block-coder guard (issue #340) -----------------------
+
+/// `Pcap` with only bit 2 (from the MSB) set: a Part 2 capability.
+const PART2_PCAP: u32 = 1 << 30;
+
+/// A CAP body: `Pcap`, then one `Ccap` word per set bit.
+fn cap_body(pcap: u32, ccap: &[u16]) -> Vec<u8> {
+    let mut b = pcap.to_be_bytes().to_vec();
+    for &word in ccap {
+        b.extend_from_slice(&be16(word));
+    }
+    b
+}
+
+/// A CAP body that signals Part 15 only, with `Ccap15`.
+fn cap15(ccap15: u16) -> Vec<u8> {
+    cap_body(PCAP_PART15, &[ccap15])
+}
+
+/// A CAP and a CPF beside Part 1 code-blocks parse and are kept: the style
+/// bits, not CAP, decide the block coder.
+#[test]
+fn cap_and_cpf_are_read_and_kept() {
+    let header = parsed(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::CAP, &cap15(0x0003)),
+        seg(marker::CPF, &[0, 2]),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert_eq!(header.ccap15, Some(markers::Ccap15(0x0003)));
+    assert_eq!(header.cpf, Some(markers::Cpf { words: vec![2] }));
+
+    // A CAP that signals no capability at all carries no `Ccap` word.
+    let header = parsed(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::CAP, &cap_body(0, &[])),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert_eq!((header.ccap15, header.cpf), (None, None));
+
+    // No CAP, no CPF.
+    let header = parsed(&default_header());
+    assert_eq!((header.ccap15, header.cpf), (None, None));
+}
+
+#[test]
+fn a_cap_whose_length_disagrees_with_pcap_is_marker() {
+    for body in [
+        vec![],
+        vec![0, 2],
+        vec![0, 2, 0, 0],               // Part 15 set, no `Ccap15`
+        cap_body(0, &[3]),              // no part set, one word
+        cap_body(PCAP_PART15, &[3, 3]), // one part set, two words
+    ] {
+        let e = err(&header_with(&seg(marker::CAP, &body)));
+        let Error::Marker(message) = &e else {
+            panic!("{body:?}: got {e:?}")
+        };
+        assert!(message.contains("`CAP`"), "{message}");
+    }
+}
+
+#[test]
+fn a_cap_signaling_another_part_is_unsupported_naming_it() {
+    for (pcap, part) in [
+        (PART2_PCAP, 2),
+        (1 << 31, 1),
+        (1, 32),
+        (PCAP_PART15 | 1 << 15, 17),
+    ] {
+        let words = vec![0; pcap.count_ones() as usize];
+        let e = err(&header_with(&seg(marker::CAP, &cap_body(pcap, &words))));
+        let Error::Unsupported(message) = &e else {
+            panic!("{pcap:#010X}: got {e:?}")
+        };
+        assert!(
+            message.contains(&format!("ISO/IEC 15444-{part},")),
+            "{message}"
+        );
+    }
+}
+
+/// MULTIHT is refused; the HTONLY, HTDECLARED and MIXED coder sets are read,
+/// with every other `Ccap15` bit kept as it is, reserved ones included.
+#[test]
+fn multiht_is_unsupported_and_every_other_ccap15_is_kept() {
+    let e = err(&header_with(&seg(marker::CAP, &cap15(0x2000 | 0x0003))));
+    let Error::Unsupported(message) = &e else {
+        panic!("got {e:?}")
+    };
+    assert!(message.contains("MULTIHT"), "{message}");
+
+    for ccap15 in [0x0000, 0x8000, 0xC000, 0x4000, 0x07C0, 0xDFFF] {
+        let header = parsed(&[
+            seg(marker::SIZ, &one_component()),
+            seg(marker::CAP, &cap15(ccap15)),
+            seg(marker::COD, &cod_default(1)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ]);
+        assert_eq!(header.ccap15, Some(markers::Ccap15(ccap15)));
+    }
+}
+
+#[test]
+fn a_second_cap_or_cpf_is_marker() {
+    for (code, body) in [(marker::CAP, cap15(3)), (marker::CPF, vec![0, 2])] {
+        let twice = [seg(code, &body), seg(code, &body)].concat();
+        let e = err(&header_with(&twice));
+        let Error::Marker(message) = &e else {
+            panic!("{code:#06X}: got {e:?}")
+        };
+        assert!(message.contains("duplicate"), "{message}");
+    }
+}
+
+#[test]
+fn a_cpf_that_is_not_whole_words_is_marker() {
+    for body in [&[][..], &[0][..], &[0, 2, 0][..]] {
+        let e = err(&header_with(&seg(marker::CPF, body)));
+        let Error::Marker(message) = &e else {
+            panic!("{body:?}: got {e:?}")
+        };
+        assert!(message.contains("`CPF`"), "{message}");
+    }
+    // Several words, the last zero, are read as they are: T.814 A.6 asks the
+    // encoder for the shortest form, and the profile changes no sample.
+    let header = parsed(&[
+        seg(marker::SIZ, &one_component()),
+        seg(marker::CPF, &[0, 2, 0, 0]),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    assert_eq!(header.cpf.map(|c| c.words), Some(vec![2, 0]));
+}
+
+#[test]
+fn cap_or_cpf_in_a_tile_part_header_is_marker() {
+    for (code, body) in [(marker::CAP, cap15(3)), (marker::CPF, vec![0, 2])] {
+        let bytes = assemble_with_tile_markers(&default_header(), &[seg(code, &body)], &[0]);
+        let e = perr(&bytes);
+        let Error::Marker(message) = &e else {
+            panic!("{code:#06X}: got {e:?}")
+        };
+        assert!(message.contains("tile-part header"), "{message}");
+    }
+}
+
+/// An HT style is refused by the block-coder guard whether or not the
+/// codestream signals Part 15: with a CAP, and with none and `Rsiz` 0.
+/// OpenJPEG 2.5.0 decodes both shapes, reading the style bits alone.
+#[test]
+fn an_ht_style_is_unsupported_with_or_without_cap() {
+    for style in [0x40, 0x48, 0xC0, 0x80] {
+        for cap in [None, Some(seg(marker::CAP, &cap15(0x0003)))] {
+            let mut segments = vec![seg(marker::SIZ, &one_component())];
+            segments.extend(cap.clone());
+            segments.push(seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)));
+            segments.push(seg(marker::QCD, &qcd_none(2, &[8; 16])));
+            let e = err(&codestream(&segments));
+            let Error::Unsupported(message) = &e else {
+                panic!("{style:#04X}, CAP {}: got {e:?}", cap.is_some())
+            };
+            assert!(
+                message.contains("`COD` code-block style (HTJ2K"),
+                "{message}"
+            );
+        }
+    }
+}
+
+/// A tile-part COD or COC goes through the same guard as the main header's.
+#[test]
+fn a_tile_part_ht_style_is_unsupported() {
+    let cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0x40, 1));
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0x40, 1));
+    for (name, tile_marker) in [("`COD`", cod), ("`COC`", coc)] {
+        let bytes = assemble_with_tile_markers(&default_header(), &[tile_marker], &[0]);
+        let e = perr(&bytes);
+        let Error::Unsupported(message) = &e else {
+            panic!("{name}: got {e:?}")
+        };
+        assert!(message.contains(name), "{message}");
+        assert!(message.contains("high-throughput"), "{message}");
+    }
+}
+
+/// The guard runs as each segment is read, so a main header cut after an HT
+/// COD is refused for the coder, not reported as incomplete: more bytes
+/// could not make it decode.
+#[test]
+fn a_cut_header_holding_an_ht_cod_is_unsupported_not_incomplete() {
+    let mut bytes = be16(marker::SOC).to_vec();
+    bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
+    bytes.extend_from_slice(&seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0x40, 1)));
+    // A QCD cut inside its body.
+    bytes.extend_from_slice(&seg(marker::QCD, &qcd_none(2, &[8; 16]))[..6]);
+    let e = err(&bytes);
+    assert!(matches!(e, Error::Unsupported(_)), "got {e:?}");
+}
+
+/// `Ccap15` and `CPFnum` of the HT conformance codestreams, as the
+/// `jp2codestream.py` logs of the WG1 htj2k-codestreams repository record them
+/// (commit f6b9ede, `descriptions_htj2k_profile0/` and `_profile1/`,
+/// `<name>syntax.txt`: "Extended capabilities for part 15" and
+/// "Corresponding Profile"). `ds0_ht_06_b15` has no log. `None` is a file
+/// with no CPF.
+#[rustfmt::skip]
+const HT_LOGS: &[(&str, u16, Option<u64>)] = &[
+    ("ds0_hm_06_b11", 0xd823, Some(2)), ("ds0_hm_06_b18", 0xd82a, Some(2)),
+    ("ds0_hm_15_b8", 0xd800, Some(1)), ("ds0_ht_01_b11", 0x0003, Some(1)),
+    ("ds0_ht_02_b11", 0x0023, Some(1)), ("ds0_ht_02_b12", 0x0024, Some(1)),
+    ("ds0_ht_03_b11", 0x1803, Some(1)), ("ds0_ht_03_b14", 0x1806, Some(1)),
+    ("ds0_ht_04_b11", 0x0023, Some(1)), ("ds0_ht_04_b12", 0x0024, Some(1)),
+    ("ds0_ht_05_b11", 0x0023, Some(1)), ("ds0_ht_05_b12", 0x0024, Some(1)),
+    ("ds0_ht_06_b11", 0x1823, Some(2)), ("ds0_ht_06_b18", 0x182a, Some(2)),
+    ("ds0_ht_07_b11", 0x0803, Some(1)), ("ds0_ht_07_b15", 0x0807, Some(1)),
+    ("ds0_ht_07_b16", 0x0808, Some(1)), ("ds0_ht_08_b11", 0x0003, Some(1)),
+    ("ds0_ht_08_b15", 0x0007, Some(1)), ("ds0_ht_08_b16", 0x0008, Some(1)),
+    ("ds0_ht_09_b11", 0x0023, None), ("ds0_ht_10_b11", 0x0003, Some(1)),
+    ("ds0_ht_11_b10", 0x0002, Some(1)), ("ds0_ht_12_b11", 0x0003, Some(1)),
+    ("ds0_ht_13_b11", 0x1003, Some(1)), ("ds0_ht_14_b11", 0x0003, None),
+    ("ds0_ht_15_b11", 0x1803, Some(1)), ("ds0_ht_15_b14", 0x1806, Some(1)),
+    ("ds0_ht_16_b11", 0x0003, None), ("ds1_ht_01_b11", 0x0023, Some(2)),
+    ("ds1_ht_01_b12", 0x0024, Some(2)), ("ds1_ht_02_b11", 0x0823, Some(2)),
+    ("ds1_ht_02_b12", 0x0824, Some(2)), ("ds1_ht_03_b11", 0x0023, Some(2)),
+    ("ds1_ht_03_b12", 0x0024, Some(2)), ("ds1_ht_04_b9", 0x0821, Some(2)),
+    ("ds1_ht_05_b11", 0x0823, Some(2)), ("ds1_ht_06_b11", 0x0023, Some(2)),
+    ("ds1_ht_07_b11", 0x0003, Some(2)), ("hifi_ht1_02", 0x0026, None),
+];
+
+/// The magnitude bound `B` that `Ccap15` bits 0-4 signal (T.814 A.3.7).
+fn magnitude_bound(ccap15: u16) -> u32 {
+    match u32::from(ccap15 & 0x1F) {
+        0 => 8,
+        p @ 1..=19 => p + 8,
+        p @ 20..=30 => 4 * (p - 19) + 27,
+        _ => 74,
+    }
+}
+
+/// `CPFnum = -1 + Σ Pcpf_i · 2^(16(i-1))` (T.814 A.6), for the short `CPF`s
+/// of the corpus.
+fn cpf_number(cpf: &markers::Cpf) -> u64 {
+    assert!(cpf.words.len() <= 4, "{cpf:?}");
+    let sum = (cpf.words.iter().rev()).fold(0u64, |acc, &w| (acc << 16) | u64::from(w));
+    sum - 1
+}
+
+/// Every HT conformance codestream: its CAP and CPF decode to the values its
+/// log records, and the whole header reaches the block-coder guard, not a
+/// parse error.
+#[test]
+fn the_ht_corpus_decodes_its_cap_and_cpf_and_reaches_the_guard() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/conformance/ht/codestreams");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .map(|entry| {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            name.strip_suffix(".j2k")
+                .expect("only .j2k files")
+                .to_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 41);
+
+    let mut decoded = std::collections::BTreeMap::new();
+    for name in &names {
+        let bytes = std::fs::read(dir.join(format!("{name}.j2k"))).unwrap();
+        let (segments, end) = walk_main_header(&bytes).expect(name);
+        end.expect(name);
+        let caps: Vec<_> = segments.iter().filter(|s| s.code == marker::CAP).collect();
+        assert_eq!(caps.len(), 1, "{name}");
+        let ccap15 = decode_cap(Cursor::new(caps[0].body))
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .unwrap_or_else(|| panic!("{name}: CAP signals no Part 15 capability"))
+            .0;
+        let cpf = (segments.iter())
+            .find(|s| s.code == marker::CPF)
+            .map(|s| cpf_number(&decode_cpf(Cursor::new(s.body)).expect(name)));
+        decoded.insert(name.as_str(), (ccap15, cpf));
+
+        match parse_main_header(&bytes) {
+            Err(Error::Unsupported(m)) if m.contains("code-block style (HTJ2K") => {}
+            other => panic!("{name}: {:?}", other.map(|_| ())),
+        }
+    }
+
+    for &(name, ccap15, cpf) in HT_LOGS {
+        assert_eq!(decoded.remove(name), Some((ccap15, cpf)), "{name}");
+    }
+    // The one file with no log: its bound is the 15 of its name, and its
+    // `_b11` and `_b18` siblings differ from it only in that bound.
+    let (b15, cpf) = decoded.remove("ds0_ht_06_b15").expect("ds0_ht_06_b15");
+    assert_eq!(magnitude_bound(b15), 15);
+    for (sibling, bound) in [("ds0_ht_06_b11", 11), ("ds0_ht_06_b18", 18)] {
+        let &(_, ccap15, sibling_cpf) = HT_LOGS.iter().find(|e| e.0 == sibling).unwrap();
+        assert_eq!(magnitude_bound(ccap15), bound, "{sibling}");
+        assert_eq!(ccap15 & !0x1F, b15 & !0x1F, "{sibling}");
+        assert_eq!(sibling_cpf, cpf, "{sibling}");
+    }
+    assert!(decoded.is_empty(), "files with no log: {decoded:?}");
 }
