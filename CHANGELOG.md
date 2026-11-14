@@ -13,8 +13,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whose input streams in can wait for more bytes instead of treating the file
   as damaged. `read_header` and `decode_with` return it whether or not
   `strict` is set, for a raw codestream and for the codestream of a JP2 file.
-  These inputs were `Error::Codestream` before. A main header that is all
-  there but damaged is still `Error::Codestream`.
+  These inputs were `Error::Codestream` before. The segments the input holds
+  in full are checked first, so a damaged one gives the same error as in the
+  whole file.
 
 ## [0.4.0] - 2026-11-14
 

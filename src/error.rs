@@ -67,15 +67,17 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
-    /// Not a JPEG 2000 codestream, or its structure is broken: a truncated or
-    /// missing segment, lost sync, or corrupt packet / coded data. Any input
+    /// Not a JPEG 2000 codestream, or its structure is broken: a missing
+    /// segment, a segment too short for its fields, lost sync, a tile-part or
+    /// packet data cut short, or corrupt packet / coded data. Input that ends
+    /// inside the main header is [`Error::Incomplete`] instead. Any input
     /// that is not JPEG 2000 at all (empty input, text, another image
     /// format) is this variant, since it has no `SOC` marker.
     Codestream(String),
     /// The input ends inside the codestream's main header: after the `SOC`
-    /// marker and before the first `SOT` marker is complete. The header's
-    /// segments are not judged until all of them are there, so more bytes may
-    /// still give a valid header.
+    /// marker and before the first `SOT` marker is complete. Every segment
+    /// the input holds in full is valid, so more bytes may still give a valid
+    /// header.
     ///
     /// This is the "wait for more bytes" signal for a caller whose input
     /// streams in. [`read_header`](crate::read_header) and
@@ -84,11 +86,15 @@ pub enum Error {
     /// needs the whole main header. In a JP2 file it is returned when the
     /// input ends inside the main header of the `jp2c` box's codestream.
     ///
-    /// If no more bytes are coming, the file is truncated. A segment length
-    /// that is damaged so that it reaches past the end of the input looks the
-    /// same as a cut, so it is this variant too. A field that is all there but
-    /// wrong is [`Error::Codestream`] or [`Error::Marker`], as for a whole
-    /// file. Input too short to hold the `SOC` marker (0 or 1 byte) is
+    /// The segments the input holds in full are judged first, as in a whole
+    /// file: a damaged one gives the error the whole file gives
+    /// ([`Error::Codestream`], [`Error::Marker`], [`Error::Unsupported`] or
+    /// [`Error::Limit`]), not this variant. What needs the whole header waits
+    /// for it: a missing `COD` or `QCD`, a quantization that does not cover a
+    /// component's subbands, and the order of the `PPM` markers. If no more
+    /// bytes are coming, the file is truncated. A segment length that is
+    /// damaged so that it reaches past the end of the input looks the same as
+    /// a cut, so it is this variant too. Input too short to hold the `SOC` marker (0 or 1 byte) is
     /// [`Error::Codestream`], as is any input that does not start with it.
     ///
     /// ```

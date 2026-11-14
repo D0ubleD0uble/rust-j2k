@@ -197,35 +197,74 @@ fn input_shorter_than_soc_is_codestream() {
     }
 }
 
-/// A whole file whose main header has a damaged field is `Codestream`, not
-/// `Incomplete`: every byte of the header is there, so more bytes would not
-/// help. The fixture's main header is SIZ at 2, COD at 45, QCD at 59, COM at
-/// 77 and the first SOT at 116.
-#[test]
-fn a_damaged_main_header_is_codestream() {
+/// The fixture's main header: SIZ at 2, COD at 45, QCD at 59, COM at 77 and
+/// the first SOT at 116.
+fn latlon() -> Vec<u8> {
     let whole = std::fs::read(fixtures().join("jpeg2000_regular_latlon.j2k")).unwrap();
     assert_eq!(first_sot(&whole), Some(116));
-    let cases: [(&str, &[(usize, u8)]); 9] = [
-        ("SOC is not SOC", &[(1, 0x4E)]),
-        ("Lsiz below 2", &[(5, 1)]),
-        ("Lsiz one short, so the walk loses sync", &[(5, 40)]),
-        ("Csiz past the SIZ segment's end", &[(41, 2)]),
+    whole
+}
+
+/// `whole` with each `(offset, value)` written over it.
+fn edited(whole: &[u8], edits: &[(usize, u8)]) -> Vec<u8> {
+    let mut bytes = whole.to_vec();
+    for &(at, value) in edits {
+        assert_ne!(bytes[at], value, "the edit at {at} changes nothing");
+        bytes[at] = value;
+    }
+    bytes
+}
+
+/// Damaged main headers, each with the length of the shortest prefix that
+/// holds the damage: from there on, the segments the prefix holds in full
+/// show it. The missing QCD is only known once the whole header is there.
+fn damaged() -> Vec<(&'static str, Vec<u8>, usize)> {
+    let whole = latlon();
+    vec![
+        ("SOC is not SOC", edited(&whole, &[(1, 0x4E)]), 2),
+        ("Lsiz below 2", edited(&whole, &[(5, 1)]), 6),
+        (
+            "Lsiz one short, so the walk loses sync",
+            edited(&whole, &[(5, 40)]),
+            46,
+        ),
+        (
+            "Csiz past the SIZ segment's end",
+            edited(&whole, &[(41, 2)]),
+            45,
+        ),
         (
             "COD declares precinct sizes it does not carry",
-            &[(49, 0x01)],
+            edited(&whole, &[(49, 0x01)]),
+            59,
         ),
-        ("COD's marker code is not a marker", &[(45, 0x00)]),
-        ("SOD in the main header", &[(46, 0x93)]),
-        ("a second SIZ", &[(46, 0x51)]),
-        ("QCD missing (its code made COM)", &[(60, 0x64)]),
-    ];
+        (
+            "COD's marker code is not a marker",
+            edited(&whole, &[(45, 0x00)]),
+            47,
+        ),
+        ("SOD in the main header", edited(&whole, &[(46, 0x93)]), 47),
+        ("a second SIZ", edited(&whole, &[(46, 0x51)]), 59),
+        (
+            "SIZ after COD",
+            [&whole[..2], &whole[45..59], &whole[2..45], &whole[59..]].concat(),
+            16,
+        ),
+        (
+            "QCD missing (its code made COM)",
+            edited(&whole, &[(60, 0x64)]),
+            118,
+        ),
+    ]
+}
+
+/// A whole file whose main header has a damaged field is `Codestream`, not
+/// `Incomplete`: every byte of the header is there, so more bytes would not
+/// help.
+#[test]
+fn a_damaged_main_header_is_codestream() {
     let mut messages = Vec::new();
-    for (what, edits) in cases {
-        let mut bytes = whole.clone();
-        for &(at, value) in edits {
-            assert_ne!(bytes[at], value, "{what}: the edit changes nothing");
-            bytes[at] = value;
-        }
+    for (what, bytes, _) in damaged() {
         let header = read_header(&bytes);
         let Err(Error::Codestream(message)) = &header else {
             panic!("{what}: read_header gave {header:?}");
@@ -239,7 +278,56 @@ fn a_damaged_main_header_is_codestream() {
     messages.sort();
     messages.dedup();
     assert!(
-        messages.len() >= 8,
+        messages.len() >= 9,
         "the cases are not distinct: {messages:?}"
+    );
+}
+
+/// A prefix that holds a damaged segment in full gives the whole file's
+/// error, from `read_header`, a strict decode and a partial one: the
+/// segments the input holds are judged before the cut is reported. A shorter
+/// prefix does not yet show it, and is `Incomplete` or `Codestream`.
+#[test]
+fn a_cut_after_a_damaged_segment_gives_the_whole_files_error() {
+    for (what, bytes, holds) in damaged() {
+        let whole = read_header(&bytes).map(|_| ());
+        assert!(whole.is_err(), "{what}");
+        for length in 0..=bytes.len() {
+            let prefix = &bytes[..length];
+            let results = [
+                read_header(prefix).map(|_| ()),
+                decode(prefix).map(|_| ()),
+                decode_with(prefix, &lenient()).map(|_| ()),
+            ];
+            for result in results {
+                if length >= holds {
+                    assert_eq!(result, whole, "{what}, cut at {length}");
+                } else if length >= 2 {
+                    // Under 2 bytes there is no SOC, which some whole-file
+                    // messages ("truncated marker segment") share.
+                    assert_ne!(result, whole, "{what}, cut at {length}");
+                    assert!(
+                        matches!(result, Err(Error::Incomplete(_) | Error::Codestream(_))),
+                        "{what}, cut at {length}: {result:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The message names where the input ended, after the variant's prefix.
+#[test]
+fn incomplete_displays_where_the_input_ends() {
+    let whole = latlon();
+    let error = read_header(&whole[..40]).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "incomplete: the input ends inside the main header, in its `SIZ` (0xFF51) segment"
+    );
+    let error = read_header(&whole[..2]).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "incomplete: the input ends inside the main header, before its first `SOT` marker"
     );
 }

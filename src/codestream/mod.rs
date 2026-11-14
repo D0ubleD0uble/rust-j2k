@@ -1463,13 +1463,15 @@ const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 ///   question, and `parse_main_header` answers it with `Unsupported`.
 ///
 /// Returns the segments in codestream order and the offset of the `SOT` that
-/// ended the header. Input that ends after `SOC` and before the first `SOT`
-/// marker is whole is [`Error::Incomplete`]: the walk reads only marker codes
-/// and lengths here, so running out of input can only mean the input was cut
-/// short (or a length was damaged to reach past it, which looks the same). A
-/// non-marker where a marker must be, a length below 2, and `SOD`/`EOC`
-/// before any tile-part are [`Error::Codestream`].
-fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
+/// ended the header. When the input ends after `SOC` and before the first
+/// `SOT` marker is whole, the offset is [`Error::Incomplete`] instead and the
+/// segments are those the input holds in full, so the caller can judge them
+/// before it reports the cut: the walk reads only marker codes and lengths
+/// here, so running out of input means the input was cut short (or a length
+/// was damaged to reach past it, which looks the same). A non-marker where a
+/// marker must be, a length below 2, and `SOD`/`EOC` before any tile-part are
+/// [`Error::Codestream`].
+fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
     let mut cur = Cursor::new(bytes);
 
     if cur.u16()? != marker::SOC {
@@ -1480,12 +1482,12 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
 
     let mut segments = Vec::new();
     let sot_offset = loop {
-        let code = cur
-            .u16()
-            .map_err(|_| cut_short("before its first `SOT` marker"))?;
+        let Ok(code) = cur.u16() else {
+            break Err(cut_short("before its first `SOT` marker"));
+        };
         match code {
             // The first SOT ends the main header; point the offset back at it.
-            marker::SOT => break cur.pos - 2,
+            marker::SOT => break Ok(cur.pos - 2),
 
             // A second SOC, or a delimiter that belongs to a tile-part, means
             // the header is malformed rather than merely unfamiliar.
@@ -1513,7 +1515,15 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
                     )));
                 }
                 let body = if marker::has_segment(code) {
-                    main_header_segment(&mut cur, code)?
+                    match main_header_segment(&mut cur)? {
+                        Some(body) => body,
+                        None => {
+                            break Err(cut_short(&format!(
+                                "in its {} segment",
+                                marker::describe(code)
+                            )));
+                        }
+                    }
                 } else {
                     &[][..]
                 };
@@ -1525,17 +1535,17 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, usize)> {
     Ok((segments, sot_offset))
 }
 
-/// The body of the main-header segment whose marker `code` the walk just
-/// read, as [`segment`] reads it, but with the input ending inside the length
-/// or the body reported as [`Error::Incomplete`] rather than as a malformed
-/// segment.
-fn main_header_segment<'a>(cur: &mut Cursor<'a>, code: u16) -> Result<&'a [u8]> {
-    let ended = |_| cut_short(&format!("in its {} segment", marker::describe(code)));
-    let len = cur.u16().map_err(ended)? as usize;
+/// The body of the main-header segment whose marker the walk just read, as
+/// [`segment`] reads it, or `None` when the input ends inside its length or
+/// its body: a cut, not a malformed segment.
+fn main_header_segment<'a>(cur: &mut Cursor<'a>) -> Result<Option<&'a [u8]>> {
+    let Ok(len) = cur.u16() else {
+        return Ok(None);
+    };
     if len < 2 {
         return Err(Error::Codestream("marker segment length below 2".into()));
     }
-    cur.take(len - 2).map_err(ended)
+    Ok(cur.take(usize::from(len) - 2).ok())
 }
 
 /// The input ends inside the main header, at `place`.
@@ -1552,10 +1562,15 @@ fn cut_short(place: &str) -> Error {
 /// The header is walked in full by [`walk_main_header`] first, then each
 /// located segment is interpreted in codestream order.
 fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> {
-    let (segments, sot_offset) = walk_main_header(bytes)?;
+    // A cut header is judged on the segments the input holds in full, in the
+    // order a whole one is, so a damaged segment before the cut is reported
+    // as it would be in the whole file; `end` reports the cut only once those
+    // all pass.
+    let (segments, end) = walk_main_header(bytes)?;
 
     // SIZ shall be the first marker segment after SOC (A.6).
     let Some(first) = segments.first() else {
+        end?;
         return Err(Error::Codestream(
             "main header has no marker segments".into(),
         ));
@@ -1683,6 +1698,11 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
         }
     }
 
+    // Every segment the input holds is valid. What is left needs the whole
+    // header: whether COD and QCD are there, the resolved components (a later
+    // COC can change a component's levels, and so the subbands its
+    // quantization must cover), and the PPM chunk order.
+    let sot_offset = end?;
     let mut overrides = overrides.finish();
     let cod = (overrides.cod.take())
         .ok_or_else(|| Error::Codestream("missing required `COD` marker".into()))?;

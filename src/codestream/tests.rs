@@ -2178,7 +2178,8 @@ fn p0_02_reserved_marker_walks_cleanly() {
         return;
     };
 
-    let (segments, _) = walk_main_header(&bytes).expect("main header walks");
+    let (segments, sot) = walk_main_header(&bytes).expect("main header walks");
+    assert!(sot.is_ok(), "the walk reaches the SOT: {sot:?}");
     assert!(
         segments.iter().any(|s| s.code == 0xFF30),
         "p0_02 should carry the reserved 0xFF30 marker",
