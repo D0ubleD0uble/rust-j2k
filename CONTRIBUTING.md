@@ -31,7 +31,8 @@ needed to *regenerate* those snapshots; see
 
 The gates below also need `cargo install cargo-deny` and
 `rustup toolchain install 1.87`; fuzzing needs nightly and cargo-fuzz.
-[docs/development.md](docs/development.md) has install commands for each.
+[docs/development.md](docs/development.md) has the install commands for
+cargo-deny and for nightly with cargo-fuzz.
 
 We recommend the [pre-commit](https://pre-commit.com) hooks. On commit they run
 fmt, clippy, file-hygiene fixers and a secret scan (gitleaks); on push, test,

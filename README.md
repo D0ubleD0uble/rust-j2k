@@ -196,8 +196,11 @@ encoder and the later parts.
 ## Pipeline
 
 ```text
-bytes -> [jp2 boxes] -> codestream -> tier-2 -> tier-1 -> dequant -> inverse DWT -> inverse MCT -> [palette, cdef, sRGB] -> Image
-         (Annex I)       (markers)     (packets)  (MQ+EBCOT) (quant)    (5/3 | 9/7)    (RCT | ICT)    (JP2 only)
+bytes -> [jp2 boxes] -> codestream -> tier-2 -> tier-1 -> dequant
+         (Annex I)       (markers)     (packets)  (MQ+EBCOT) (quant)
+
+      -> inverse DWT -> inverse MCT -> [palette, cdef, sRGB] -> Image
+         (5/3 | 9/7)    (RCT | ICT)    (JP2 only)
 ```
 
 Each stage is a module under `src/`, and each module's docs cite the ISO section
@@ -259,7 +262,7 @@ malformed input) and the fuzzing that backs it.
 ## Why this exists
 
 It is the decoder the fieldglass GRIB2 reader needs for template 5.40, kept in
-its own crate so the codec is reusable and testable on its own, and so the
+its own crate so the decoder is reusable and testable on its own, and so the
 fieldglass bundle stays free of a C JPEG 2000 dependency.
 
 ## License

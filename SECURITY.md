@@ -33,7 +33,7 @@ out-of-bounds access, unbounded allocation, or a hang.
 
 The promises of no hang and no unbounded allocation hold at the default limits.
 By default the decoded image may hold 2^28 samples (1 GiB as `i32`), and a
-decode peaks at about 1.4 GiB for a square tile and at a few GiB for a tall,
+decode peaks at an estimated 1.4 GiB for a square tile and at a few GiB for a tall,
 narrow one (the `decode` docs give the details). A file past a limit is refused with
 `Error::Limit`, which is the guard working, not a bug.
 

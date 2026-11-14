@@ -24,8 +24,11 @@
 //! # Pipeline
 //!
 //! ```text
-//! bytes ─▶ [jp2 boxes] ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequant ─▶ inverse DWT ─▶ inverse MCT ─▶ [palette, cdef, sRGB] ─▶ Image
-//!          (Annex I)      (markers)     (packets)  (MQ+EBCOT) (quant)    (5/3 | 9/7)     (RCT | ICT)    (JP2 only)
+//! bytes ─▶ [jp2 boxes] ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequant
+//!          (Annex I)      (markers)     (packets)  (MQ+EBCOT) (quant)
+//!
+//!       ─▶ inverse DWT ─▶ inverse MCT ─▶ [palette, cdef, sRGB] ─▶ Image
+//!          (5/3 | 9/7)    (RCT | ICT)    (JP2 only)
 //! ```
 //!
 //! [`decode`] runs these stages in order.
@@ -255,7 +258,7 @@ pub use report::{DecodeReport, ReportEntry};
 /// to about 89 MP. A larger image is refused with [`Error::Limit`] from its
 /// header alone, before any tile is read. A small file can still ask for
 /// the whole limit. For one square tile, peak memory is about 1.35 times the
-/// output, about 1.4 GiB at the limit. A tall, narrow tile peaks higher:
+/// output, an estimated 1.4 GiB at the limit. A tall, narrow tile peaks higher:
 /// about 1.5 to 1.7 times the output when it is 8 to 1024 samples wide, and
 /// more when it is one sample wide: a 9/7 tile of 2^24 samples peaks at about
 /// 2.6 times at 3 wavelet levels and 2.7 to 3.2 times at 5 to 8, as the
@@ -280,11 +283,11 @@ pub use report::{DecodeReport, ReportEntry};
 /// ends, so a prefix cut late in a codestream that interleaves the
 /// tile-parts of very many tiles can be refused though the whole file
 /// decodes; raise [`DecodeOptions::packet_work_limit`] for such a stream. A
-/// codestream past the bound is refused with [`Error::Limit`]. Encoder output measured so
-/// far spends under 13% of the bound; a packet header of one byte can still skip each
-/// row of code-blocks in its precinct, and a sweep can check millions of
-/// positions that hold no packet, so a file of a few hundred bytes could
-/// otherwise take minutes. OpenJPEG has no such bound. A valid file of many
+/// codestream past the bound is refused with [`Error::Limit`]. Encoder
+/// output measured so far spends under 13% of the bound; a packet header of
+/// one byte can still skip each row of code-blocks in its precinct, and a
+/// sweep can check millions of positions that hold no packet, so a file of a
+/// few hundred bytes could otherwise take minutes. OpenJPEG has no such bound. A valid file of many
 /// layers that each include a few scattered code-blocks can exceed it (see
 /// [the tier-2 work bound][work-bound]). A JP2 file whose last tile-part has
 /// `Psot = 0` may first walk that tile as [`read_header_with`] does, under its
@@ -299,8 +302,8 @@ pub use report::{DecodeReport, ReportEntry};
 /// tile past the bound is refused with [`Error::Limit`] before any of its
 /// code-blocks is decoded. A packet header can ask for 88 passes over 4096
 /// samples in about 4 bytes, so a 76 KB file could otherwise take 19 s.
-/// Encoder output measured so far spends up to about 14000 per byte, 43% of the bound
-/// (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
+/// Encoder output measured so far spends up to about 14000 per byte, 43% of
+/// the bound (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
 ///
 /// [`decode_with`] can raise or lift each of these three limits, for a file
 /// from a source you trust: see [`DecodeOptions::sample_limit`],
@@ -773,7 +776,7 @@ impl Default for DecodeOptions {
 ///
 /// Each work bound scales with the size of the file, so a small file cannot
 /// ask for minutes of work, and the sample limit holds the memory a file may
-/// ask for to about 1.4 GiB for a square tile, and to a few GiB for a tall,
+/// ask for to an estimated 1.4 GiB for a square tile, and to a few GiB for a tall,
 /// narrow one (see [`decode`]). A valid file can still go past
 /// a bound, when it codes many samples in very few bytes or is very
 /// large. The decode then fails with [`Error::Limit`], and its message names

@@ -47,6 +47,8 @@ below. The first fails to compile. The others compile but behave differently.
   output for a JP2 palette. `WorkLimit` cannot set a lower ceiling. To keep
   one, check `width`, `height` and the component count from `read_header`
   before decoding.
+- Nothing to change for the new `Image::jp2` and `Image::report` fields:
+  adding them breaks no caller, because `Image` is `#[non_exhaustive]`.
 - Two more kinds of file that 0.3 decoded are now refused (see "Changed"):
   a code-block size past the limit in any COD or COC, and a POC marker that
   leaves out packets.
