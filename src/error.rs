@@ -27,7 +27,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// | ------- | -------------------- |
 /// | `Codestream`, `Marker`, `FileFormat` | The file is damaged, truncated or not a JPEG 2000 image. |
 /// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read. |
-/// | `Limit` | The file is larger or costlier than the decoder allows by default. For a work bound it can be retried with a higher [`WorkLimit`](crate::WorkLimit). |
+/// | `Limit` | The file is larger or costlier than the decoder allows by default. If the message names a `DecodeOptions` limit, it can be retried with a higher [`WorkLimit`](crate::WorkLimit). |
 /// | `InvalidOptions` | The decode options do not fit this file (for example, a reduction past the file's levels). |
 /// | `Inconsistent` | An internal error; please file a bug. |
 ///
@@ -81,11 +81,12 @@ pub enum Error {
     /// JP2-compatible. A newer version of the decoder may accept the same
     /// input.
     Unsupported(String),
-    /// The input exceeded one of the decoder's resource guards — a hostile or
+    /// The input exceeded one of the decoder's resource guards: a hostile or
     /// absurd declaration (code-block count, precinct count, bit-plane depth)
     /// past a cap, an image of more samples than the sample limit allows, or
-    /// work past the bound for the file's size (see [`decode`](crate::decode)),
-    /// not a missing feature. The file may be valid.
+    /// work past the bound for the file's size (see [`decode`](crate::decode)).
+    /// It is not a missing feature (that is [`Error::Unsupported`]), and the
+    /// file may be valid.
     ///
     /// Three of these can be changed, each with a [`WorkLimit`](crate::WorkLimit):
     /// the sample limit
@@ -107,9 +108,9 @@ pub enum Error {
     /// example that retries.
     Limit(String),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
-    /// invalid for this codestream, or that contradict each other whatever
-    /// the input (sRGB output with `raw_channels`). The input itself may be
-    /// fine.
+    /// invalid for this codestream, or that are invalid whatever the input
+    /// (sRGB output with `raw_channels`, or a limit of `WorkLimit::Raised(0)`).
+    /// The input itself may be fine.
     InvalidOptions(String),
     /// A decoder invariant was violated (declared geometry and decoded state
     /// disagreed where they never should); please file a bug.

@@ -17,18 +17,20 @@ use crate::{DecodeReport, Error, Jp2Metadata, Result};
 /// `ceil(Xsiz / 2^r) - ceil(XOsiz / 2^r)` by the same in y. A sub-sampled component covers
 /// that same area with fewer samples, so its own
 /// [`Component::width`]/[`Component::height`] can be smaller. With unit
-/// sub-sampling — the common case — they are equal.
+/// sub-sampling, the common case, they are equal.
 ///
 /// Components are in output-channel order. For a raw codestream that is SIZ
 /// order; a JP2 file's palette, channel definitions and sRGB option can change
 /// the channels (see [`components`](Self::components)). The codestream's
-/// inter-component (color) transform is part of decoding; nothing else is
-/// applied unless the caller asks for sRGB output.
+/// inter-component (color) transform, and a JP2 file's palette and channel
+/// definitions, are part of decoding (unless
+/// [`raw_channels`](crate::DecodeOptions::raw_channels) is set); no color
+/// conversion is applied unless the caller asks for sRGB output.
 ///
-/// The struct is `#[non_exhaustive]`: [`decode`](crate::decode) is the normal
-/// producer, and later metadata can then land as new fields without a breaking
-/// change. To build one by hand — an expected image in a test harness, for
-/// instance — use [`Image::new`].
+/// The struct is `#[non_exhaustive]`, so fields can be added without a
+/// breaking change, and [`decode`](crate::decode) is the normal producer. To
+/// build one by hand, such as an expected image in a test harness, use
+/// [`Image::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Image {
@@ -64,8 +66,8 @@ pub struct Image {
 /// A channel made by a JP2 palette (`pclr`) is different: its depth and sign
 /// come from the palette's `Bi` (for a direct channel `i`, from column `i`),
 /// and its samples are the palette entries as stored (for a direct channel,
-/// the component's samples). Either may fall outside that declared range, as
-/// in OpenJPEG.
+/// the component's samples). Its samples can fall outside the range that depth
+/// and sign declare, as in OpenJPEG.
 ///
 /// `#[non_exhaustive]`, like [`Image`]; build one by hand with
 /// [`Component::new`].
@@ -80,7 +82,8 @@ pub struct Component {
     /// palette channel: 1 to 31 for unsigned samples, 1 to 32 for signed ones
     /// (the `i32` container holds both).
     ///
-    /// Unsigned samples run from 0 to `2^bit_depth - 1`; signed samples from
+    /// Except in a palette channel (see [`Component`]), unsigned samples run
+    /// from 0 to `2^bit_depth - 1`; signed samples from
     /// `-2^(bit_depth - 1)` to `2^(bit_depth - 1) - 1`. To map a signed
     /// sample to an unsigned one, add `2^(bit_depth - 1)` (do it in `i64`,
     /// since the sum overflows `i32` at 32 bits).
