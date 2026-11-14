@@ -14,8 +14,9 @@ docs are in [docs/](docs/).
   ([docs/roadmap.md](docs/roadmap.md)), and [docs/scope.md](docs/scope.md)
   shows what is supported.
 - Tests compare our output with a trusted reference decoder, never with our
-  own earlier output. The reference is OpenJPEG, or eccodes for a GRIB2 file,
-  plus the reference images of the JPEG 2000 conformance suite. Lossless
+  own earlier output. The reference is OpenJPEG, for GRIB2 grids too (eccodes
+  only cross-checks the scaled values), plus the reference images of the JPEG
+  2000 conformance suite. Lossless
   fixtures must match exactly, and lossy ones within a stated tolerance. The
   full approach is in [docs/correctness.md](docs/correctness.md).
 
@@ -44,6 +45,9 @@ pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
 ## Checks every pull request must pass
+
+CI uses the newest stable Rust, so run `rustup update stable` first. An older
+clippy can pass code that CI's clippy fails.
 
 ```sh
 cargo fmt --all -- --check

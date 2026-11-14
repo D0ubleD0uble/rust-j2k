@@ -47,12 +47,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The values are the numbers the file stores. Unsigned ones run from 0 to
+The values are the image's samples. Unsigned ones run from 0 to
 2^bit_depth − 1, and signed ones are centered on 0.
 
 To show a `.jp2` image, decode it with
 `DecodeOptions::default().with_color(ColorOutput::Srgb)` through `decode_with`,
-then scale each value to 8 bits. `decode_with` takes the other options too,
+then scale each value to 8 bits; the [`ColorOutput::Srgb`
+docs](https://docs.rs/rust-j2k/latest/rust_j2k/enum.ColorOutput.html#variant.Srgb)
+show how. Check `image.jp2` afterwards. If a profile couldn't be applied, the
+values come back as stored and its `color` still names the ICC profile.
+`decode_with` takes the other options too,
 such as a smaller image. To learn the size and channels without decoding, call
 `read_header`. The [API docs](https://docs.rs/rust-j2k) cover each one.
 
@@ -62,7 +66,7 @@ A JPEG 2000 image is stored as one compressed stream of bytes, called a
 codestream. A `.j2k` or `.j2c` file is just that stream, and so is the JPEG
 2000 part of a GRIB2 grid. A `.jp2` file wraps the stream in labeled sections,
 called boxes. The boxes say what the colors mean, and they can carry a palette,
-the print resolution or XML metadata.
+the capture and display resolution, or XML metadata.
 
 The image has one or more channels: one for a grayscale picture or a weather
 grid, three for RGB, and sometimes one more for transparency. Each channel is
@@ -84,9 +88,9 @@ how much.
   palette and puts the color channels in order, and reports the rest on
   `Image::jp2`.
 - It can **convert to sRGB** if you ask (`ColorOutput::Srgb`). It converts
-  sYCC and the ICC color profiles a `.jp2` file may carry. For ICC profiles it
-  gives the same samples as OpenJPEG with LittleCMS.
-- It can **decode a smaller image**. Each resolution level you drop halves the
+  sYCC, and the restricted ICC profiles JP2 allows (gray, or RGB defined by a
+  matrix and curves), giving the same samples as OpenJPEG with LittleCMS.
+- It can **decode a smaller image**. Each resolution level you drop about halves the
   width and height (`DecodeOptions::with_resolution_reduction`).
 - It can **decode a codestream that is cut short**, such as one still
   arriving, and tell you what is missing (`DecodeOptions::with_strict(false)`).
@@ -114,7 +118,12 @@ how much.
   ICC profiles that work through a lookup table or through Lab, are refused with
   `Error::Unsupported` when you ask for sRGB. Decoding without the option still
   gives you the values as stored.
-  [docs/srgb-output.md](docs/srgb-output.md#every-input-and-its-result) lists every case.
+  [docs/srgb-output.md](docs/srgb-output.md#every-input-and-its-result) lists
+  every case.
+- It doesn't **decode part of an image**. It always decodes the whole image
+  and every quality layer. For a smaller image, drop resolution levels
+  instead. OpenJPEG's `opj_decompress` can decode a region (`-d`) or fewer
+  layers (`-l`).
 - It doesn't **read GRIB2 files**. You find the JPEG 2000 bytes in the message
   and turn the decoded numbers into physical values yourself (see
   [GRIB2 grids](#grib2-grids)).
@@ -132,13 +141,23 @@ value R, the binary scale factor E and the decimal scale factor D from section
 5, and compute Y = (R + X × 2^E) / 10^D (WMO regulation 92.9.4, note 4). If the
 message has a bitmap in section 6, the values fill only the points it marks.
 
+If section 5 gives 0 bits per value (octet 20), the field is constant and
+section 7 may hold no codestream at all. Don't call `decode` then: every point
+has the value R, which is how eccodes and NCEP's g2clib read it.
+
 ## When a file won't decode
 
 Every failure comes back as an `Error`. With the default limits, decoding
-never panics or aborts, whatever the input. `Error::Unsupported` means the file
-is valid JPEG 2000 that uses something from [What it doesn't
-do](#what-it-doesnt-do). `Error::Limit` means the file asks for more memory or
-work than the limits allow (see [Large files](#large-files)). The other
+never panics or hangs, whatever the input, and needs at most about 3.2 GiB of
+memory. If the machine can't supply that, the allocation fails and the process
+aborts, as in any Rust program.
+
+`Error::Unsupported` usually means the file is valid JPEG 2000 that uses
+something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means
+the file asks for more memory or work than the limits allow (see [Large
+files](#large-files)). A damaged header can show up as either one.
+`Error::InvalidOptions` means your options don't fit the file.
+`Error::Inconsistent` is a bug in this decoder; please report it. The other
 variants mean the input is damaged or isn't JPEG 2000.
 
 ```rust
@@ -147,7 +166,7 @@ use rust_j2k::{Error, decode};
 fn check(bytes: &[u8]) {
     match decode(bytes) {
         Ok(image) => println!("decoded {} channels", image.components.len()),
-        Err(Error::Unsupported(what)) => eprintln!("valid, but not decoded: {what}"),
+        Err(Error::Unsupported(what)) => eprintln!("not decoded: {what}"),
         Err(Error::Limit(what)) => eprintln!("past a limit: {what}"),
         Err(e) => eprintln!("damaged or not JPEG 2000: {e}"),
     }
@@ -206,10 +225,11 @@ retry.
 It decodes all 23 test codestreams of the JPEG 2000 conformance suite
 (ISO/IEC 15444-4) within the error the standard allows, and the suite's nine
 JP2 files within theirs. Lossless images, including GRIB2 grids written by
-eccodes, match OpenJPEG bit for bit. The details, and the places where this
-decoder and OpenJPEG differ on purpose, are in
-[docs/correctness.md](docs/correctness.md). The test suite needs no external
-tools.
+eccodes, match OpenJPEG bit for bit. The details are in
+[docs/correctness.md](docs/correctness.md), and the places where this decoder
+and OpenJPEG differ on purpose are in
+[docs/openjpeg-departures.md](docs/openjpeg-departures.md). The test suite
+needs no external tools.
 
 ## Contributing and security
 
