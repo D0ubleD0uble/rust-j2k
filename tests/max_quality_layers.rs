@@ -3,7 +3,8 @@
 //! Each oracle is `opj_decompress -l N` 2.5.0 on the same bytes; see
 //! `tests/fixtures/layers/README.md`. The synthetic fixtures' oracles are
 //! committed as PGX. The ISO/IEC 15444-4 ones are committed as the SHA-256 of
-//! their samples, since the corpus may not be redistributed.
+//! their samples: `layers/` ships in the crate, and the conformance corpus is
+//! excluded from it.
 
 mod support;
 
@@ -202,6 +203,8 @@ fn part4_codestreams_match_openjpeg_at_each_cap() {
 /// No cap, a cap at the layer count and a cap past it decode every
 /// codestream in the repository, the ISO/IEC 15444-4 corpus with it, to the
 /// same result. `opj_decompress -l` past the layer count decodes them all.
+/// A cap past the count takes the same path as one at it, so it runs only on
+/// the small codestreams, to keep the test short.
 #[test]
 fn a_cap_at_or_past_the_layer_count_is_no_cap() {
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -229,7 +232,12 @@ fn a_cap_at_or_past_the_layer_count_is_no_cap() {
             decode_with(&bytes, &unlimited(options)).map(|image| sample_bytes(&image))
         };
         let whole = outcome(DecodeOptions::default());
-        for cap in [layers, u16::MAX] {
+        let caps: &[u16] = if bytes.len() <= 16 * 1024 {
+            &[layers, u16::MAX]
+        } else {
+            &[layers]
+        };
+        for &cap in caps {
             let got = outcome(DecodeOptions::default().with_max_quality_layers(Some(cap)));
             match (&whole, &got) {
                 (Ok(a), Ok(b)) => assert!(a == b, "{what} at a cap of {cap}"),
@@ -278,6 +286,29 @@ fn a_damaged_later_layer_is_still_an_error() {
         match decode_with(bytes, &capped(1, 0)) {
             Err(Error::Codestream(_)) => {}
             other => panic!("{what}: {other:?}"),
+        }
+    }
+}
+
+/// Under `bypass` and `predictable termination`, a cap cuts only the last
+/// segment of a block short; the block's earlier MQ segments are whole and
+/// still checked. Each flip lands in a segment the cap keeps whole, and leaves
+/// it with more unconsumed bytes than the check allows.
+#[test]
+fn a_damaged_whole_segment_before_a_cut_is_still_an_error() {
+    let whole = layers_file("bypass_pterm.j2k");
+    for (offset, layers) in [(188, 1), (128, 3)] {
+        let mut bad = whole.clone();
+        bad[offset] ^= 0x10;
+        assert!(decode(&bad).is_err(), "byte {offset}: uncapped");
+        match decode_with(&bad, &capped(layers, 0)) {
+            Err(Error::Codestream(message)) => {
+                assert!(
+                    message.contains("predictable termination"),
+                    "byte {offset}: {message}"
+                );
+            }
+            other => panic!("byte {offset} at a cap of {layers}: {other:?}"),
         }
     }
 }

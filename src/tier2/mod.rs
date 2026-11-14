@@ -1495,14 +1495,18 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                     // Under a layer cap, the segments the kept layers never
                     // reached are left out, and the last one kept may hold
                     // only some of its passes. Without a cap every pass is
-                    // kept.
+                    // kept. `cut` is read off the last segment with a kept
+                    // pass, so it holds even without the filter: an empty
+                    // segment after it is never the one the cap cut.
                     let mut cut = false;
                     let segments = block
                         .segments
                         .into_iter()
                         .take_while(|s| s.kept > 0)
                         .map(|s| {
-                            cut = s.kept < s.passes;
+                            if s.kept > 0 {
+                                cut = s.kept < s.passes;
+                            }
                             CodedSegment {
                                 passes: s.kept,
                                 chunks: s.chunks,

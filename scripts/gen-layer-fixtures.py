@@ -31,8 +31,8 @@ OpenJPEG does not make it under `-l`. The script checks that the full decode
 is the source.
 
 For the ISO/IEC 15444-4 codestreams in PART4 (5/3, several layers), the
-oracle is not committed, as the corpus may not be redistributed. The script
-writes `part4.sha256` instead: for each codestream, N and reduction, the
+decoded samples are not committed: `layers/` ships in the crate, and the
+conformance corpus is excluded from it. The script writes `part4.sha256` instead: for each codestream, N and reduction, the
 SHA-256 of the `opj_decompress -l N -r R` samples, every component in order,
 each sample as a little-endian i32.
 

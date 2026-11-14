@@ -51,9 +51,11 @@ the whole codestream. The 5/3 ones are exact.
 | `cprl_irreversible_l1_r1_<c>.pgx` | `-l 1 -r 1` |
 | `part4.sha256` | for ISO/IEC 15444-4 `p0_02`, `p0_03` (also at `-r 1`), `p0_10`, `p0_16` and `p1_01`, each N from 1 to the layer count: the SHA-256 of the `opj_decompress -l N -r R` samples, every component in order, each sample a little-endian `i32` |
 
-The Part 4 oracles are hashes because the corpus may not be redistributed
-(see [`../conformance/README.md`](../conformance/README.md)); the codestreams
-are read from `../conformance/codestreams/`. All five are 5/3, so the hash is
+The Part 4 oracles are hashes because `layers/` ships in the crate and the
+conformance corpus does not: its license is for conformance testing only, so
+`Cargo.toml` excludes it (see [`../conformance/README.md`](../conformance/README.md)).
+Decoded PGX of it here would ship what the exclusion keeps out. The
+codestreams are read from `../conformance/codestreams/`. All five are 5/3, so the hash is
 graded bit-exactly.
 
 The script checks that each N decodes to other samples than N + 1, so every

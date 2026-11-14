@@ -53,6 +53,7 @@ pub fn tier1_block(data: &[u8]) {
         // rejected by decode_cod.
         style: c & (RESET | TERMALL | VCAUSAL | PTERM | SEGSYM),
         roi_shift: d & 0x3F,
+        last_segment_cut: false,
     };
     let num_passes = u32::from(*e) % 110; // tier-2's 109-pass segment cap
     let numbps = u32::from(*f) % 31; // MAX_BIT_PLANES

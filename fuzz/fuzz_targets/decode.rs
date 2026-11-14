@@ -8,17 +8,17 @@
 //! not crash". A panic, an allocation past libFuzzer's `-rss_limit_mb`, or a
 //! hang past `-timeout` fails the run and is dumped as a reproducer artifact.
 //!
-//! Half the inputs, picked by a hash of the input, decode under a
-//! `max_quality_layers` cap of 1 to 3 instead, so the walk that reads a
-//! layer's packets without keeping their passes is fuzzed too.
+//! Every input is decoded without a cap. Half of them, picked by a hash of
+//! the input, are then decoded again under a `max_quality_layers` cap of 1 to
+//! 3, so the walk that reads a layer's packets without keeping their passes is
+//! fuzzed too.
 
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
+    let _ = rust_j2k::decode(data);
     let hash = fnv1a(data);
-    if hash & 1 == 0 {
-        let _ = rust_j2k::decode(data);
-    } else {
+    if hash & 1 == 1 {
         let layers = 1 + ((hash >> 1) % 3) as u16;
         let options = rust_j2k::DecodeOptions::default().with_max_quality_layers(Some(layers));
         let _ = rust_j2k::decode_with(data, &options);
