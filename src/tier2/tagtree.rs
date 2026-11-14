@@ -23,18 +23,10 @@ use crate::tier2::spans::Span;
 /// always compares as "not below threshold".
 const UNRESOLVED: u32 = u32::MAX;
 
-/// Maximum tag-tree path length handled without heap allocation. A `u32` grid
-/// halves to its 1×1 root in at most 32 steps (so 33 levels, 32 ancestors on a
-/// path); this bounds the stack for any precinct size, including a malformed one
-/// from untrusted input, so a read never allocates and never overflows.
-const MAX_DEPTH: usize = 33;
-
 /// One tag-tree node: the current best (lowest-known) value estimate and the
 /// lower bound the incremental search has already established.
 #[derive(Debug, Clone, Copy)]
 struct Node {
-    /// Index of this node's parent in [`TagTree::nodes`]; `None` for the root.
-    parent: Option<usize>,
     /// The value if known, else [`UNRESOLVED`]. Set to `low` when a `1` bit is
     /// read; only meaningful (final) once it is below the read threshold.
     value: u32,
@@ -48,17 +40,18 @@ struct Node {
 pub struct TagTree {
     width: u32,
     height: u32,
+    /// The root's level: the leaves are level 0, and each level up halves the
+    /// grid (`ceil` per axis) until it is 1×1. At most 32, for a `u32` grid.
+    top: u32,
     /// All nodes, level 0 (the leaves) first, then each coarser level. A leaf
-    /// `(x, y)` is at index `y * width + x`.
+    /// `(x, y)` is at index `y * width + x`, and the root is the last node.
     nodes: Vec<Node>,
 }
 
-/// Geometry of one tag-tree level: its grid size and where its nodes start in
-/// [`TagTree::nodes`].
-struct Level {
-    width: u32,
-    height: u32,
-    offset: usize,
+/// The size of a `width`-wide axis of leaves at `level`: `ceil(width /
+/// 2^level)`, the same as halving it, rounding up, `level` times.
+fn level_size(width: u32, level: u32) -> usize {
+    ((u64::from(width) + (1u64 << level) - 1) >> level) as usize
 }
 
 impl TagTree {
@@ -68,52 +61,49 @@ impl TagTree {
         let width = width.max(1);
         let height = height.max(1);
 
-        // Enumerate levels from the leaf grid up to the 1×1 root, recording each
-        // level's size and its base offset in the flat node array.
-        let mut levels = Vec::new();
-        let (mut lw, mut lh, mut offset) = (width, height, 0usize);
+        // Count the levels from the leaf grid up to the 1×1 root, and the
+        // nodes over all of them.
+        let (mut lw, mut lh, mut count, mut top) = (width, height, 0usize, 0);
         loop {
-            levels.push(Level {
-                width: lw,
-                height: lh,
-                offset,
-            });
-            offset += lw as usize * lh as usize;
+            count += lw as usize * lh as usize;
             if lw == 1 && lh == 1 {
                 break;
             }
             lw = lw.div_ceil(2);
             lh = lh.div_ceil(2);
-        }
-
-        let mut nodes = vec![
-            Node {
-                parent: None,
-                value: UNRESOLVED,
-                low: 0,
-            };
-            offset
-        ];
-
-        // Link each node to its parent in the next coarser level: the node at
-        // (x, y) descends from the parent at (x/2, y/2).
-        for pair in levels.windows(2) {
-            let (cur, parent) = (&pair[0], &pair[1]);
-            for y in 0..cur.height {
-                for x in 0..cur.width {
-                    let child = cur.offset + (y as usize * cur.width as usize + x as usize);
-                    let par = parent.offset
-                        + ((y / 2) as usize * parent.width as usize + (x / 2) as usize);
-                    nodes[child].parent = Some(par);
-                }
-            }
+            top += 1;
         }
 
         TagTree {
             width,
             height,
-            nodes,
+            top,
+            nodes: vec![
+                Node {
+                    value: UNRESOLVED,
+                    low: 0,
+                };
+                count
+            ],
         }
+    }
+
+    /// The nodes on the path from the root down to leaf `(x, y)`, as
+    /// `(level, index into nodes)`. The node at `level` above a leaf is at
+    /// `(x >> level, y >> level)` on its level's grid, since each level up
+    /// halves the coordinates, and the levels sit in `nodes` finest first, so
+    /// each one starts where the levels above it, counted back from the end,
+    /// leave off.
+    fn descent(&self, x: u32, y: u32) -> impl Iterator<Item = (u32, usize)> + use<> {
+        let (width, height) = (self.width, self.height);
+        let mut end = self.nodes.len();
+        (0..=self.top).rev().map(move |level| {
+            let cols = level_size(width, level);
+            end -= cols * level_size(height, level);
+            let index =
+                end + (u64::from(y) >> level) as usize * cols + (u64::from(x) >> level) as usize;
+            (level, index)
+        })
     }
 
     /// Read leaf `(x, y)` against `threshold`, consuming bits from the packet
@@ -127,22 +117,11 @@ impl TagTree {
             x < self.width && y < self.height,
             "leaf ({x}, {y}) out of range"
         );
-        let leaf = y as usize * self.width as usize + x as usize;
 
-        // Stack the path from leaf up to the root, so the search can run the
-        // other way (root→leaf), carrying the running lower bound downward.
-        let mut path = [0usize; MAX_DEPTH];
-        let mut depth = 0;
-        let mut idx = leaf;
-        while let Some(parent) = self.nodes[idx].parent {
-            path[depth] = idx;
-            depth += 1;
-            idx = parent;
-        }
-        // `idx` is now the root.
-
+        // The search runs root→leaf, carrying the running lower bound downward.
         let mut low = 0;
-        loop {
+        let mut leaf = 0;
+        for (_, idx) in self.descent(x, y) {
             let node = &mut self.nodes[idx];
             // A child can never resolve below its parent's bound; carry the
             // larger of the two and keep them in step.
@@ -155,12 +134,7 @@ impl TagTree {
                 }
             }
             node.low = low;
-
-            if depth == 0 {
-                break;
-            }
-            depth -= 1;
-            idx = path[depth];
+            leaf = idx;
         }
 
         let value = self.nodes[leaf].value;
@@ -187,24 +161,12 @@ impl TagTree {
             x < self.width && y < self.height,
             "leaf ({x}, {y}) out of range"
         );
-        let leaf = y as usize * self.width as usize + x as usize;
-
-        // The path from the leaf up to the root, as in `read`; `path[k]` is
-        // the node at level `k`.
-        let mut path = [0usize; MAX_DEPTH];
-        let mut level = 0;
-        let mut idx = leaf;
-        while let Some(parent) = self.nodes[idx].parent {
-            path[level] = idx;
-            level += 1;
-            idx = parent;
-        }
 
         // The read's descent, without the reading: carry the lower bound down
         // and stop where a bit would be read, or at the first unresolved node
         // already known not to be below the threshold.
         let mut low = 0;
-        loop {
+        for (level, idx) in self.descent(x, y) {
             let node = &self.nodes[idx];
             low = low.max(node.low);
             if low < threshold {
@@ -212,14 +174,10 @@ impl TagTree {
                     return None;
                 }
             } else if node.value == UNRESOLVED {
-                return Some(Span::of(x, y, level as u32, self.width, self.height));
+                return Some(Span::of(x, y, level, self.width, self.height));
             }
-            if level == 0 {
-                return None;
-            }
-            level -= 1;
-            idx = path[level];
         }
+        None
     }
 }
 
@@ -316,8 +274,64 @@ mod tests {
         assert_eq!(t.read(0, 0, 1, &mut bio), Some(0));
     }
 
-    /// Building odd-sized trees must not panic and must link every leaf to the
-    /// root through valid parents (a read terminates).
+    /// The descent from the root to each leaf is the chain of parents the
+    /// standard defines: every node's parent is the node at `(x / 2, y / 2)`
+    /// on the next coarser level. The parents are linked here the long way,
+    /// level by level, and the descent must walk exactly that chain, from the
+    /// last node down to the leaf, one level at a time.
+    #[test]
+    fn descent_follows_the_parent_links() {
+        let mut sizes: Vec<(u32, u32)> = (1..=17)
+            .flat_map(|w| (1..=17).map(move |h| (w, h)))
+            .collect();
+        sizes.extend([(64, 1), (1, 64), (33, 65), (100, 3), (129, 2)]);
+        for (width, height) in sizes {
+            let tree = TagTree::new(width, height);
+            // Each level's offset and width, finest first, then the parents.
+            let mut levels = Vec::new();
+            let (mut lw, mut lh, mut offset) = (width as usize, height as usize, 0);
+            loop {
+                levels.push((offset, lw, lh));
+                offset += lw * lh;
+                if lw == 1 && lh == 1 {
+                    break;
+                }
+                lw = lw.div_ceil(2);
+                lh = lh.div_ceil(2);
+            }
+            assert_eq!(offset, tree.nodes.len(), "{width} x {height}");
+            assert_eq!(levels.len() as u32, tree.top + 1, "{width} x {height}");
+            let mut parent = vec![None; offset];
+            for pair in levels.windows(2) {
+                let ((cur, cw, ch), (up, uw, _)) = (pair[0], pair[1]);
+                for y in 0..ch {
+                    for x in 0..cw {
+                        parent[cur + y * cw + x] = Some(up + (y / 2) * uw + x / 2);
+                    }
+                }
+            }
+            for y in 0..height {
+                for x in 0..width {
+                    let path: Vec<(u32, usize)> = tree.descent(x, y).collect();
+                    let leaf = (y * width + x) as usize;
+                    let mut chain = vec![leaf];
+                    while let Some(up) = parent[*chain.last().unwrap()] {
+                        chain.push(up);
+                    }
+                    chain.reverse();
+                    let levels: Vec<u32> = (0..=tree.top).rev().collect();
+                    assert_eq!(
+                        path,
+                        levels.into_iter().zip(chain).collect::<Vec<_>>(),
+                        "{width} x {height}, leaf ({x}, {y})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Building odd-sized trees must not panic, and a read of the far corner
+    /// must stay in bounds and terminate.
     #[test]
     fn odd_dimensions_build_and_read() {
         for (w, h) in [(1, 1), (3, 2), (5, 5), (7, 3), (1, 9)] {

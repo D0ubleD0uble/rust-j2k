@@ -370,20 +370,23 @@ fn walk_packets<'a>(
     let data: &'a [u8] = &tile.data;
 
     // Precincts are bounded *as the geometry is built*, not after: a precinct's
-    // grid dimensions are cheap to compute but each precinct then allocates a
-    // `PrecinctGeom` with its own `Vec`, and the block count does not bound them
-    // — a band empty in one axis has no blocks while its resolution still has a
-    // full column of precincts. A 1 × 2^26 image under a 2^1 precinct is the
-    // shape that exploits it: ~2^25 precincts, each a heap allocation, built
-    // before any after-the-fact check could fire. So the cap is threaded through
-    // `resolution_geoms` and enforced before the allocation, across every
-    // component of the tile (`resolution_geoms` mutates the running total).
+    // grid dimensions are cheap to compute but each precinct then costs a
+    // `PrecinctGeom` per band and a pair of tag trees, each tree a heap
+    // allocation, and the block count does not bound them — a band empty in
+    // one axis has no blocks while its resolution still has a full column of
+    // precincts. A 1 × 2^26 image under a 2^1 precinct is the shape that
+    // exploits it: ~2^25 precincts, built before any after-the-fact check
+    // could fire. So the cap is threaded through `resolution_geoms` and
+    // enforced before the allocation, across every component of the tile
+    // (`resolution_geoms` mutates the running total).
     //
-    // The code-block count is bounded the same way and for the same reason: each
-    // band's `blocks` vector plus its per-block `BlockState`/tag trees dwarf the
-    // geometry tuple, and legal 4×4 blocks push the count toward samples/16, so
-    // the cap has to bite before those vectors fill rather than summing them
-    // afterwards. Both running totals are threaded through `resolution_geoms`.
+    // The code-block count is bounded the same way and for the same reason:
+    // the per-block `BlockState`s and tag-tree leaves below, and the
+    // `CodeBlock`s after them, are sized by it, and legal 4×4 blocks push the
+    // count toward samples/16, so the cap has to bite before they are
+    // allocated rather than summing them afterwards. Both running totals are
+    // threaded through `resolution_geoms`; the geometry itself holds nothing
+    // per block.
     //
     // The code-blocks of the resolutions the reduction drops are charged to
     // `visits` as each component is built (see [`Budget::reduction`]), so a
@@ -406,7 +409,7 @@ fn walk_packets<'a>(
         let dropped: usize = resolutions[kept..]
             .iter()
             .flat_map(|resolution| &resolution.bands)
-            .map(|band| band.blocks.len())
+            .map(BandGeom::block_count)
             .sum();
         let charged = charge_dropped_blocks(&visits, dropped);
         budget.visits = visits.get();
@@ -467,6 +470,7 @@ fn walk_packets<'a>(
         .sum::<usize>()
         .saturating_mul(END_VISITS);
     let mut log = Vec::new();
+    let mut scratch = Scratch::default();
     // Not strict: whether the data has ended.
     let mut ended = false;
     let mut packet_index = 0u32;
@@ -496,6 +500,7 @@ fn walk_packets<'a>(
                 &geom.bands,
                 precinct,
                 &mut states[component][resolution],
+                &mut scratch,
                 if strict { None } else { Some(&mut log) },
             )?;
             if packet != Packet::Read {
@@ -898,7 +903,7 @@ impl BandState<'_> {
                     zero_bits: TagTree::new(precinct.cols as u32, precinct.rows as u32),
                 })
                 .collect(),
-            blocks: band.blocks.iter().map(|_| BlockState::new()).collect(),
+            blocks: (0..band.block_count()).map(|_| BlockState::new()).collect(),
         }
     }
 }
@@ -910,6 +915,16 @@ struct Contribution {
     block: usize,
     segment: usize,
     seg_len: usize,
+}
+
+/// The buffers a packet read fills and empties again, kept across the
+/// packets of a walk so that a packet allocates nothing of its own.
+#[derive(Default)]
+struct Scratch {
+    /// The packet's contributions, in header order.
+    contributions: Vec<Contribution>,
+    /// The unread spans of one band's inclusion pass.
+    unread: UnreadSpans,
 }
 
 /// How a packet read ended, when the walk is not strict.
@@ -981,6 +996,7 @@ fn parse_packet<'a>(
     bands: &[BandGeom],
     precinct: usize,
     states: &mut [BandState<'a>],
+    scratch: &mut Scratch,
     mut log: Option<&mut Vec<Undo>>,
 ) -> Result<Packet> {
     visit(visits, 1)?;
@@ -1030,7 +1046,8 @@ fn parse_packet<'a>(
     // one. An empty packet still costs its layer: the tag trees are untouched,
     // not reset.
     let present = bio.read_bit() == 1;
-    let mut contributions: Vec<Contribution> = Vec::new();
+    let contributions = &mut scratch.contributions;
+    contributions.clear();
     let mut fault = None;
     if present {
         for (band_index, (band, state)) in bands.iter().zip(states.iter_mut()).enumerate() {
@@ -1043,7 +1060,8 @@ fn parse_packet<'a>(
                 layer,
                 style,
                 &mut bio,
-                &mut contributions,
+                contributions,
+                &mut scratch.unread,
                 log.as_deref_mut(),
             );
             if let Err(error) = parsed {
@@ -1113,7 +1131,7 @@ fn parse_packet<'a>(
     if !streams.packed {
         streams.body_pos = streams.header_pos;
     }
-    for contribution in &contributions {
+    for contribution in contributions.iter() {
         let end = match streams
             .body_pos
             .checked_add(contribution.seg_len)
@@ -1178,26 +1196,27 @@ fn parse_band_header(
     style: u8,
     bio: &mut BitReader,
     contributions: &mut Vec<Contribution>,
+    unread: &mut UnreadSpans,
     mut log: Option<&mut Vec<Undo>>,
 ) -> Result<()> {
     let cols = precinct.cols as u32;
     let threshold = layer + 1;
 
-    let mut unread = UnreadSpans::default();
+    unread.clear();
     let mut entry = 0;
-    while entry < precinct.blocks.len() {
-        let block_index = precinct.blocks[entry];
+    while entry < precinct.cols * precinct.rows {
         let bx = entry as u32 % cols;
         let by = entry as u32 / cols;
+        let block_index = precinct.block(bx as usize, by as usize);
         entry += 1;
 
         let was_included = blocks[block_index].included;
-        let unread = if was_included {
+        let span = if was_included {
             None
         } else {
             unread.find(&trees.inclusion, bx, by, threshold)
         };
-        if let Some(span) = unread {
+        if let Some(span) = span {
             visit(visits, 1)?;
             entry = span.next_entry(by, cols);
             continue;
@@ -1359,34 +1378,44 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
     bands
         .iter()
         .zip(states)
-        .map(|(band, state)| Subband {
-            kind: band.kind,
-            origin: band.origin,
-            width: band.width,
-            height: band.height,
-            block_cols: band.block_cols,
-            block_rows: band.block_rows,
-            blocks: band
-                .blocks
-                .iter()
-                .zip(state.blocks)
-                .map(|(&(x, y, width, height), block)| CodeBlock {
-                    x,
-                    y,
-                    width,
-                    height,
-                    num_passes: block.num_passes,
-                    zero_bit_planes: block.zero_bit_planes,
-                    segments: block
-                        .segments
-                        .into_iter()
-                        .map(|s| CodedSegment {
-                            passes: s.passes,
-                            chunks: s.chunks,
-                        })
-                        .collect(),
-                })
-                .collect(),
+        .map(|(band, state)| {
+            // The rectangles come from a nested loop, which gives no exact
+            // length, so the vector is sized up front rather than grown.
+            debug_assert_eq!(
+                state.blocks.len(),
+                band.block_count(),
+                "one block state per code-block of the band"
+            );
+            let mut blocks = Vec::with_capacity(state.blocks.len());
+            blocks.extend(band.block_rects().zip(state.blocks).map(
+                |((x, y, width, height), block)| {
+                    CodeBlock {
+                        x,
+                        y,
+                        width,
+                        height,
+                        num_passes: block.num_passes,
+                        zero_bit_planes: block.zero_bit_planes,
+                        segments: block
+                            .segments
+                            .into_iter()
+                            .map(|s| CodedSegment {
+                                passes: s.passes,
+                                chunks: s.chunks,
+                            })
+                            .collect(),
+                    }
+                },
+            ));
+            Subband {
+                kind: band.kind,
+                origin: band.origin,
+                width: band.width,
+                height: band.height,
+                block_cols: band.block_cols,
+                block_rows: band.block_rows,
+                blocks,
+            }
         })
         .collect()
 }

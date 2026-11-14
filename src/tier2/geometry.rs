@@ -15,8 +15,8 @@ use crate::{Error, Result};
 use super::BandKind;
 
 /// Ceiling on the number of precincts one tile may hold, across every component
-/// and resolution. Each precinct costs a `PrecinctGeom` (its own `Vec`) plus a
-/// tag-tree pair per subband, none of it bounded by the code-block or sample
+/// and resolution. Each precinct costs a `PrecinctGeom` plus a tag-tree pair
+/// (two `Vec`s) per subband, none of it bounded by the code-block or sample
 /// budgets — a band empty in one axis carries no blocks while its resolution
 /// still has a full column of precincts. 2^18 leaves any real encode far behind
 /// (a 4096-square image at the 64×64 precincts JPIP favors needs ~5.5k) while
@@ -27,18 +27,19 @@ pub(crate) const MAX_PRECINCTS: usize = 1 << 18;
 /// Ceiling on the number of code-blocks one tile may hold, across every
 /// component, resolution, and subband. The sample budget bounds the decoded
 /// buffers, but the per-block bookkeeping — `BlockState`, the tag trees, and the
-/// eventual `CodeBlock`s, roughly 200 bytes a block — is driven by the code-block
+/// eventual `CodeBlock`s, at most about 200 bytes a block — is driven by the code-block
 /// *count*, which legal 4×4 blocks push toward samples/16: a sub-kilobyte header
 /// could demand ~1 GiB of metadata. 2^19 clears every plausible real encode
 /// (64×64 default blocks over one tile at the default 2^28-sample limit need
 /// about 2^16.4) while capping
-/// hostile geometry near 100 MiB. Enforced *while* the geometry is built, before
-/// each band's block vector is allocated — see [`band_geom`].
+/// hostile geometry below 100 MiB. Enforced *while* the geometry is built, before
+/// anything sized by a band's block count is allocated — see [`band_geom`].
 pub(crate) const MAX_CODE_BLOCKS: usize = 1 << 19;
 
 /// Geometry of one subband before its segments are parsed: orientation, origin,
-/// sample dimensions, the code-block grid (each block's band-relative position
-/// and size), and how the precincts divide that grid up.
+/// sample dimensions, the code-block grid, and how the precincts divide that
+/// grid up. Each block's band-relative position and size come from the grid
+/// (see [`BandGeom::block_rects`]), so a band holds nothing per block.
 pub(crate) struct BandGeom {
     pub(crate) kind: BandKind,
     pub(crate) origin: (u32, u32),
@@ -46,8 +47,15 @@ pub(crate) struct BandGeom {
     pub(crate) height: usize,
     pub(crate) block_cols: usize,
     pub(crate) block_rows: usize,
-    /// `(x, y, width, height)` per block, row-major over the **whole band**.
-    pub(crate) blocks: Vec<(usize, usize, usize, usize)>,
+    /// The band's sample bounds `[x0, x1) x [y0, y1)` on its own grid, as
+    /// `(x0, x1, y0, y1)`.
+    pub(crate) bounds: (i64, i64, i64, i64),
+    /// The code-block grid's first column and row, counted from the canvas
+    /// origin, and its exponents: block `(i, j)` of the band is cell
+    /// `(first.0 + i, first.1 + j)` of a `2^exp.0 x 2^exp.1` grid, clipped to
+    /// the band.
+    pub(crate) first_block: (i64, i64),
+    pub(crate) block_exp: (u32, u32),
     /// One entry per precinct of the enclosing resolution, in raster order — so
     /// `precincts.len()` is the same on every band of a resolution, even where
     /// the band is empty and each entry owns nothing.
@@ -55,7 +63,8 @@ pub(crate) struct BandGeom {
 }
 
 /// One precinct's slice of one subband: the sub-grid of code-blocks it owns
-/// (ISO/IEC 15444-1 B.7).
+/// (ISO/IEC 15444-1 B.7). It is a rectangle of the band's grid, so it is held
+/// as where it starts and how wide and high it is.
 ///
 /// The precinct partition and the code-block partition are both anchored at the
 /// canvas origin, and a code-block is never larger than its precinct, so the
@@ -66,8 +75,54 @@ pub(crate) struct BandGeom {
 pub(crate) struct PrecinctGeom {
     pub(crate) cols: usize,
     pub(crate) rows: usize,
-    /// Indices into [`BandGeom::blocks`], row-major within the precinct.
-    pub(crate) blocks: Vec<usize>,
+    /// The band index (row-major over the whole band) of the precinct's
+    /// top-left code-block; 0 when it owns none.
+    pub(crate) first: usize,
+    /// The band's code-block columns: block `(x, y)` of the precinct is band
+    /// block `first + y * stride + x`.
+    pub(crate) stride: usize,
+}
+
+impl PrecinctGeom {
+    /// The band index of block `(x, y)` of the precinct, `x < cols` and
+    /// `y < rows`.
+    pub(crate) fn block(&self, x: usize, y: usize) -> usize {
+        self.first + y * self.stride + x
+    }
+}
+
+impl BandGeom {
+    /// The band's code-block count.
+    pub(crate) fn block_count(&self) -> usize {
+        self.block_cols * self.block_rows
+    }
+
+    /// `(x, y, width, height)` of each code-block, band-relative, row-major
+    /// over the **whole band**: each cell of the code-block grid anchored at
+    /// the canvas origin (ISO B.7), clipped to the band.
+    pub(crate) fn block_rects(&self) -> impl Iterator<Item = (usize, usize, usize, usize)> + use<> {
+        let (bx0, bx1, by0, by1) = self.bounds;
+        let (first_col, first_row) = self.first_block;
+        let cbw = 1i64 << self.block_exp.0;
+        let cbh = 1i64 << self.block_exp.1;
+        let cols = self.block_cols;
+        (0..self.block_rows).flat_map(move |j| {
+            let gy0 = (first_row + j as i64) * cbh;
+            let cy0 = gy0.max(by0);
+            let cy1 = (gy0 + cbh).min(by1);
+            (0..cols).map(move |i| {
+                let gx0 = (first_col + i as i64) * cbw;
+                let cx0 = gx0.max(bx0);
+                let cx1 = (gx0 + cbw).min(bx1);
+                (
+                    (cx0 - bx0) as usize,
+                    (cy0 - by0) as usize,
+                    (cx1 - cx0) as usize,
+                    (cy1 - cy0) as usize,
+                )
+            })
+        })
+    }
 }
 
 /// One resolution level of a tile-component: its precinct grid and its subbands.
@@ -181,8 +236,9 @@ pub(crate) fn band_rects(
 /// this decrements it per resolution and errors before the allocation once it is
 /// spent, so the [`MAX_PRECINCTS`] cap holds regardless of how a hostile header
 /// splits the count between components. `block_budget` is the matching allowance
-/// for code-blocks, spent inside [`band_geom`] before each band's block vector is
-/// filled, so the [`MAX_CODE_BLOCKS`] cap holds the same way.
+/// for code-blocks, spent inside [`band_geom`] for each band, so the
+/// [`MAX_CODE_BLOCKS`] cap holds the same way before the walk allocates a
+/// state per block.
 pub(crate) fn resolution_geoms(
     header: &MainHeader,
     tile: u32,
@@ -358,9 +414,9 @@ fn prc_span(lo: i64, hi: i64, exp: u32) -> (usize, i64) {
 /// precinct they fall in.
 ///
 /// `block_budget` is the tile's remaining code-block allowance; this band's
-/// `block_cols × block_rows` is spent against it before either the band-wide or
-/// the per-precinct index vectors are allocated, so a hostile geometry is
-/// rejected up front rather than after megabytes have been built.
+/// `block_cols × block_rows` is spent against it before anything sized by the
+/// block count is allocated (the walk's per-block state), so a hostile
+/// geometry is rejected up front rather than after megabytes have been built.
 #[allow(clippy::too_many_arguments)]
 fn band_geom(
     kind: BandKind,
@@ -375,16 +431,14 @@ fn band_geom(
 ) -> Result<BandGeom> {
     let width = (bx1 - bx0).max(0) as usize;
     let height = (by1 - by0).max(0) as usize;
-    let cbw = 1i64 << xcb;
-    let cbh = 1i64 << ycb;
 
     let (block_cols, first_col) = grid_span(bx0, bx1, xcb);
     let (block_rows, first_row) = grid_span(by0, by1, ycb);
 
-    // Spend the tile's code-block budget before this band's block vector — and
-    // the per-precinct index vectors below — are allocated. `checked_mul` guards
-    // the product itself, since a thin band under tiny blocks makes one factor as
-    // large as the band.
+    // Spend the tile's code-block budget before the walk allocates a state for
+    // each of this band's blocks. `checked_mul` guards the product itself,
+    // since a thin band under tiny blocks makes one factor as large as the
+    // band.
     match block_cols
         .checked_mul(block_rows)
         .filter(|&n| n <= *block_budget)
@@ -394,24 +448,6 @@ fn band_geom(
             return Err(Error::Limit(format!(
                 "tile code-block count exceeds the decode guard of {MAX_CODE_BLOCKS}"
             )));
-        }
-    }
-
-    let mut blocks = Vec::with_capacity(block_cols * block_rows);
-    for j in 0..block_rows {
-        let gy0 = (first_row + j as i64) * cbh;
-        let cy0 = gy0.max(by0);
-        let cy1 = (gy0 + cbh).min(by1);
-        for i in 0..block_cols {
-            let gx0 = (first_col + i as i64) * cbw;
-            let cx0 = gx0.max(bx0);
-            let cx1 = (gx0 + cbw).min(bx1);
-            blocks.push((
-                (cx0 - bx0) as usize,
-                (cy0 - by0) as usize,
-                (cx1 - cx0) as usize,
-                (cy1 - cy0) as usize,
-            ));
         }
     }
 
@@ -432,23 +468,23 @@ fn band_geom(
 
             let (cols, col0) = grid_span(px0, px1, xcb);
             let (rows, row0) = grid_span(py0, py1, ycb);
-            let mut owned = Vec::with_capacity(cols * rows);
-            for row in 0..rows {
-                let band_row = (row0 + row as i64 - first_row) as usize;
-                for col in 0..cols {
-                    let band_col = (col0 + col as i64 - first_col) as usize;
-                    owned.push(band_row * block_cols + band_col);
-                }
-            }
+            // A precinct the band does not reach owns no block, and its
+            // `grid_span` start is a placeholder, not a cell of the band.
+            let first = if cols * rows == 0 {
+                0
+            } else {
+                (row0 - first_row) as usize * block_cols + (col0 - first_col) as usize
+            };
             precincts.push(PrecinctGeom {
                 cols,
                 rows,
-                blocks: owned,
+                first,
+                stride: block_cols,
             });
         }
     }
     debug_assert_eq!(
-        precincts.iter().map(|p| p.blocks.len()).sum::<usize>(),
+        precincts.iter().map(|p| p.cols * p.rows).sum::<usize>(),
         block_cols * block_rows,
         "the precincts must partition the band's code-block grid"
     );
@@ -460,7 +496,9 @@ fn band_geom(
         height,
         block_cols,
         block_rows,
-        blocks,
+        bounds: (bx0, bx1, by0, by1),
+        first_block: (first_col, first_row),
+        block_exp: (xcb, ycb),
         precincts,
     })
 }
