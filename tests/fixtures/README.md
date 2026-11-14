@@ -450,6 +450,12 @@ checks the result in the table.
 The first three are refused with `strict` on and off. The two whole files
 are the controls and decode to 176, as OpenJPEG gives.
 
+### Override order fixtures
+
+`override_order/` holds four streams with a COC and QCC per component placed
+before or after a wrong COD and QCD, in the main header and in a tile-part
+header. See [`override_order/README.md`](override_order/README.md).
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
