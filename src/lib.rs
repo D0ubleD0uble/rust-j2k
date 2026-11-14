@@ -1,12 +1,12 @@
-//! Pure-Rust JPEG 2000 codec, built GRIB2-decode-first toward OpenJPEG-level
-//! coverage. No C dependency, so it cross-compiles cleanly to every target.
+//! A pure-Rust JPEG 2000 decoder. It has no C dependency, so cross-compiling it
+//! needs no C toolchain.
 //!
 //! The decoder reads a **raw codestream** (ISO/IEC 15444-1 Annex A) or a
 //! **JP2 file** (Annex I) into **integer** samples: one grid per component,
 //! signed up to 32 bits, unsigned up to 31 (an `i32` container), each with its
-//! own bit depth, sign, and sub-sampling. Both wavelet paths decode — the
-//! reversible 5/3 bit-exactly, the irreversible 9/7 within the standard's
-//! compliance bounds — as do tiling and tile-parts, precincts, quality layers,
+//! own bit depth, sign, and sub-sampling. Both wavelet paths decode, the
+//! reversible 5/3 bit-exactly and the irreversible 9/7 within the standard's
+//! compliance bounds, as do tiling and tile-parts, precincts, quality layers,
 //! all five progression orders and POC changes between them, packed packet
 //! headers (PPM/PPT), every Part 1 code-block coding style, region of interest
 //! (maxshift), non-zero canvas offsets, resolution-reduced decoding, and the
@@ -18,17 +18,20 @@
 //! color order. [`read_header`] and [`read_header_with`] read the same header
 //! without decoding any tile data. Samples come out as coded by default;
 //! [`ColorOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
-//! HTJ2K and an encoder are later work, not permanent non-goals. See the
-//! [roadmap](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md) and the [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
+//! The [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md)
+//! maps what is decoded and what is not.
 //!
 //! # Pipeline
 //!
 //! ```text
-//! bytes ─▶ [jp2 boxes] ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequant ─▶ inverse DWT ─▶ Image
-//!          (Annex I)      (markers)     (packets)  (MQ+EBCOT) (quant)    (5/3 | 9/7)
+//! bytes ─▶ [jp2 boxes] ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequant
+//!          (Annex I)      (markers)     (packets)  (MQ+EBCOT) (quant)
+//!
+//!       ─▶ inverse DWT ─▶ inverse MCT ─▶ [palette, cdef, sRGB] ─▶ Image
+//!          (5/3 | 9/7)    (RCT | ICT)    (JP2 only)
 //! ```
 //!
-//! Each stage is a module below. [`decode`] wires them together.
+//! [`decode`] runs these stages in order.
 //!
 //! # Example
 //!
@@ -43,7 +46,7 @@
 //! ```
 //! use rust_j2k::{decode, Error};
 //!
-//! // In real use these are the bytes of a `.j2k` codestream, or the GRIB2 §7
+//! // In real use these are the bytes of a `.j2k` codestream or `.jp2` file, or the GRIB2 §7
 //! // data section of a `grid_jpeg` message. Invalid input is rejected cleanly:
 //! match decode(b"not a codestream") {
 //!     Ok(image) => {
@@ -84,8 +87,7 @@
 //!
 //! Decoding is strict by default. Truncated or inconsistent data is an
 //! error, and no partial image comes back with it. A raw codestream cut
-//! short fails as [`Error::Codestream`] (a tile-part that runs past the end
-//! is `Psot overruns the codestream`), a JP2 file cut short as `Codestream` or
+//! short fails as [`Error::Codestream`], a JP2 file cut short as `Codestream` or
 //! [`Error::FileFormat`], depending on where the cut falls, and a raw
 //! codestream whose `EOC` marker is missing is refused. (A JP2 file whose
 //! last tile-part has `Psot = 0` decodes without an `EOC`, as OpenJPEG
@@ -149,18 +151,17 @@
 //! For a file from a source you trust, lift all three. [`WorkLimit`] has an
 //! example that retries after an `Error::Limit`.
 //!
-//! # Status
+//! # Conformance
 //!
 //! All 23 codestreams of the ISO/IEC 15444-4 conformance suite decode within
 //! their class-1 error bounds, and its nine JP2 files within their compliance
 //! class. That gate runs in `tests/` against committed oracle snapshots, with
-//! no external tools. Correctness is defined by cross-checking a reference
-//! decoder (OpenJPEG / eccodes), not by self-consistency. An input using a
+//! no external tools. Correctness is defined by cross-checking OpenJPEG, not
+//! by self-consistency. An input using a
 //! feature outside the decoded set (HTJ2K, a Part 2 extension) is rejected
 //! with [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
-//! directly. See each module's docs for the ISO §reference and what it owns;
-//! the feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
+//! directly. The feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`,
@@ -205,7 +206,8 @@ pub use report::{DecodeReport, ReportEntry};
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
 /// output channel, each on its own sample grid. For a raw codestream that is
 /// one per SIZ component, in SIZ order. A JP2 file can change the channels:
-/// its palette and channel definitions (below), and the sRGB output option.
+/// its palette and channel definitions (below), and, through [`decode_with`],
+/// the sRGB output option.
 ///
 /// The input kind is detected from its first bytes. Input that opens with the
 /// `SOC` marker (`FF 4F`) is a codestream. Otherwise, input whose bytes 4..8
@@ -242,8 +244,9 @@ pub use report::{DecodeReport, ReportEntry};
 /// single-component, so its images carry one component; a codestream declaring
 /// more decodes each component onto its own grid, independently.
 ///
-/// A malformed JP2 box structure is [`Error::FileFormat`]. A file that is not
-/// JP2-compatible is valid JPEG 2000 but is rejected with
+/// A malformed JP2 box structure is [`Error::FileFormat`]. A file whose File
+/// Type box has `jp2 ` neither as its brand nor in its compatibility list is
+/// valid JPEG 2000 but is rejected with
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 ///
@@ -255,12 +258,12 @@ pub use report::{DecodeReport, ReportEntry};
 /// to about 89 MP. A larger image is refused with [`Error::Limit`] from its
 /// header alone, before any tile is read. A small file can still ask for
 /// the whole limit. For one square tile, peak memory is about 1.35 times the
-/// output, about 1.4 GiB at the limit. A tall, narrow tile peaks higher:
+/// output, an estimated 1.4 GiB at the limit. A tall, narrow tile peaks higher:
 /// about 1.5 to 1.7 times the output when it is 8 to 1024 samples wide, and
-/// about 2.6 times (2.6 GiB at the limit) when it is one sample wide. A
-/// smaller narrow image can peak at a higher multiple, as the code-blocks'
-/// fixed overhead is a larger share of it: about 2.7 to 3.2 times for a 9/7
-/// tile one sample wide with 2^24 samples, at 5 to 8 wavelet levels.
+/// more when it is one sample wide: a 9/7 tile of 2^24 samples peaks at about
+/// 2.6 times at 3 wavelet levels and 2.7 to 3.2 times at 5 to 8, as the
+/// code-blocks' fixed overhead adds up. Those ratios were measured on that
+/// smaller image, not at the limit, where 2.6 times would be 2.6 GiB.
 /// While a palette expands the peak is about twice the output (see [the
 /// sample limit][sample-limit]). OpenJPEG has no such limit.
 ///
@@ -280,11 +283,11 @@ pub use report::{DecodeReport, ReportEntry};
 /// ends, so a prefix cut late in a codestream that interleaves the
 /// tile-parts of very many tiles can be refused though the whole file
 /// decodes; raise [`DecodeOptions::packet_work_limit`] for such a stream. A
-/// codestream past the bound is refused with [`Error::Limit`]. Encoder output seen spends
-/// under 13% of the bound; a packet header of one byte can still skip each
-/// row of code-blocks in its precinct, and a sweep can check millions of
-/// positions that hold no packet, so a file of a few hundred bytes could
-/// otherwise take minutes. OpenJPEG has no such bound. A valid file of many
+/// codestream past the bound is refused with [`Error::Limit`]. Encoder
+/// output measured so far spends under 13% of the bound; a packet header of
+/// one byte can still skip each row of code-blocks in its precinct, and a
+/// sweep can check millions of positions that hold no packet, so a file of a
+/// few hundred bytes could otherwise take minutes. OpenJPEG has no such bound. A valid file of many
 /// layers that each include a few scattered code-blocks can exceed it (see
 /// [the tier-2 work bound][work-bound]). A JP2 file whose last tile-part has
 /// `Psot = 0` may first walk that tile as [`read_header_with`] does, under its
@@ -299,8 +302,8 @@ pub use report::{DecodeReport, ReportEntry};
 /// tile past the bound is refused with [`Error::Limit`] before any of its
 /// code-blocks is decoded. A packet header can ask for 88 passes over 4096
 /// samples in about 4 bytes, so a 76 KB file could otherwise take 19 s.
-/// Encoder output seen spends up to about 14000 per byte, 43% of the bound
-/// (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
+/// Encoder output measured so far spends up to about 14000 per byte, 43% of
+/// the bound (see [the tier-1 work bound][tier1-bound]). OpenJPEG has no such bound.
 ///
 /// [`decode_with`] can raise or lift each of these three limits, for a file
 /// from a source you trust: see [`DecodeOptions::sample_limit`],
@@ -372,9 +375,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// byte of the tile's data when that is more, counting the same steps as
 /// the decode's bound (see [`decode`]);
 /// [`packet_work_limit`](DecodeOptions::packet_work_limit) raises or lifts
-/// this bound as it does the decode's. Past a bound the codestream is taken to run to
-/// the end of the file, the rule for a `Psot = 0` tile-part the check does
-/// not apply to, and [`decode_with`] takes it the same way.
+/// this bound as it does the decode's. Past a bound the walk gives up, and the
+/// codestream is taken to run to the end of the file, as for any `Psot = 0`
+/// tile-part; [`decode_with`] does the same.
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks
@@ -463,8 +466,8 @@ pub enum ColorOutput {
     /// RGB, with sub-sampled chroma (2x1 or 2x2) replicated to full
     /// resolution first, using the IEC 61966-2-1 constants and rounding;
     /// OpenJPEG shortens the constants and truncates, so the two differ by an
-    /// MSE of about 0.38 to 0.49 a channel. The ISO references agree with it
-    /// (MSE under 0.03). The color channels are the ones the `cdef` box
+    /// MSE of about 0.38 to 0.49 a channel. This decoder's output is within an
+    /// MSE of 0.03 of the ISO references. The color channels are the ones the `cdef` box
     /// labels color 1, 2 and 3, wherever they sit. Other channels (opacity,
     /// say) are untouched.
     ///
@@ -602,8 +605,8 @@ pub enum ColorOutput {
     Srgb,
 }
 
-/// Options for [`decode_with`]. The default decodes at full resolution —
-/// [`decode`] is exactly that.
+/// Options for [`decode_with`]. [`decode`] is `decode_with` at
+/// [`DecodeOptions::default`].
 ///
 /// Start from [`DecodeOptions::default`] and set what differs with its
 /// `with_*` method, or the field directly. The struct is `#[non_exhaustive]`,
@@ -618,7 +621,8 @@ pub struct DecodeOptions {
     /// origin; [`Image`] and [`ComponentInfo::width`] give the formula. Every
     /// component must keep at least one resolution: a reduction that consumes
     /// some component's whole pyramid is rejected as
-    /// [`Error::InvalidOptions`].
+    /// [`Error::InvalidOptions`]. [`Header::max_reduction`] gives the largest
+    /// the main header allows.
     pub resolution_reduction: u8,
     /// Return a JP2 file's codestream components as coded, without applying
     /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
@@ -676,8 +680,8 @@ pub struct DecodeOptions {
     ///
     /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
-    /// sample for the output and up to as much again while it decodes (see
-    /// [`decode`]), so a small hostile file can ask for many gigabytes. If
+    /// sample for the output, and about 1.35 to 3.2 times that in all at its
+    /// peak (see [`decode`]), so a small hostile file can ask for many gigabytes. If
     /// the allocation fails the process aborts, as Rust's allocation
     /// failures do. Only an image too large for this target to
     /// address (`isize::MAX` bytes of samples) is still refused, with
@@ -692,9 +696,8 @@ pub struct DecodeOptions {
     /// (`opj_decoder_set_strict_mode`, `opj_decompress -allow-partial`) and
     /// GDAL's `STRICT` option.
     ///
-    /// `false` relaxes two things and only these, now and later; a later
-    /// relaxation, of damaged packet headers or code-blocks say, gets an
-    /// option of its own:
+    /// `false` relaxes these two things and no others; any other relaxation
+    /// is a separate option:
     ///
     /// - **Missing data.** The input may end anywhere after the first `SOT`
     ///   marker, which ends the main header: inside a tile-part, its header or
@@ -773,9 +776,9 @@ impl Default for DecodeOptions {
 ///
 /// Each work bound scales with the size of the file, so a small file cannot
 /// ask for minutes of work, and the sample limit holds the memory a file may
-/// ask for to about 1.4 GiB for a square tile, and to about 2.6 GiB at most
-/// (see [`decode`]). A valid file can still go past
-/// a bound, when it codes many samples in very few bytes or is simply very
+/// ask for to an estimated 1.4 GiB for a square tile, and to a few GiB for a tall,
+/// narrow one (see [`decode`]). A valid file can still go past
+/// a bound, when it codes many samples in very few bytes or is very
 /// large. The decode then fails with [`Error::Limit`], and its message names
 /// the option and a [`Raised`](WorkLimit::Raised) factor. Treat the factor as
 /// a hint, not a measure of the file:
@@ -797,7 +800,7 @@ impl Default for DecodeOptions {
 /// Which value to pick:
 ///
 /// - For a file from a source you trust, use [`Unlimited`](WorkLimit::Unlimited).
-///   It is the simplest, and the decode takes as long as the file asks.
+///   The decode then takes as long as the file asks.
 /// - To keep a ceiling, use `Raised(n)` with an `n` of your own choosing,
 ///   the largest cost you will accept. Read the factor from the message to
 ///   size it: a file that needs `Raised(3)` is refused under `Raised(2)`. Do
@@ -848,9 +851,9 @@ pub enum WorkLimit {
     /// No bound. For a work bound, the decode does all the work the file
     /// asks for, however long that takes; for the sample limit, it allocates
     /// all the memory the file asks for (see [`DecodeOptions::sample_limit`]).
-    /// The other limits stay in force: the other options, the
-    /// code-block-count cap, and the cap on the memory that remembers which
-    /// packets a POC sequence has read.
+    /// The other two limits keep their own settings, and the guards with no
+    /// option (listed on [`Error::Limit`]) stay in force, as does the cap on
+    /// the memory that records which packets a POC sequence has read.
     Unlimited,
 }
 
@@ -946,9 +949,9 @@ impl DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, WorkLimit};
     ///
-    /// // Up to 2^29 samples, such as a 16384 x 16384 RGB image.
-    /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(2));
-    /// assert_eq!(options.sample_limit, WorkLimit::Raised(2));
+    /// // Up to 3 x 2^28 samples, enough for a 16384 x 16384 RGB image.
+    /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(3));
+    /// assert_eq!(options.sample_limit, WorkLimit::Raised(3));
     /// ```
     #[must_use]
     pub fn with_sample_limit(mut self, limit: WorkLimit) -> Self {
@@ -1006,7 +1009,8 @@ impl DecodeOptions {
 /// ```
 ///
 /// Failures are the same [`Error`] variants as [`decode`], plus
-/// [`Error::InvalidOptions`] for options that contradict each other or the
+/// [`Error::InvalidOptions`] for options that are invalid on their own
+/// ([`WorkLimit::Raised`]`(0)`), contradict each other, or do not fit the
 /// file.
 pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     check_options(options)?;
