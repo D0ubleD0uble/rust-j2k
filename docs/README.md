@@ -1,52 +1,60 @@
 # Project documentation
 
-This directory holds the durable design docs: what we're building, why, in what
-order, and how we know it's correct. Code comments cite the ISO section each
-module owns; these docs cover the project as a whole.
+These pages cover the project as a whole: what the decoder covers, in what
+order the work was built, and how its output is checked. Code comments cite
+the ISO section each module implements, so the detail of a single stage lives
+next to its code.
 
 ## What this project is
 
-A pure-Rust JPEG 2000 codec aiming, over time, at the same coverage as
-[OpenJPEG](https://www.openjpeg.org/) (the ISO/IEC reference implementation),
-but with no C dependency, no `unsafe` outside justified hot paths, and clean
-cross-compilation to every target.
+rust-j2k is a JPEG 2000 decoder written in pure Rust, with no C library
+underneath and no `unsafe` code in the library. The long-run aim is the
+coverage of [OpenJPEG](https://www.openjpeg.org/), the JPEG 2000 reference
+software, including an encoder. For the API and a usage example, see the
+crate [README](../README.md) and the rustdoc.
 
-We build it **GRIB2-decode-first**. The first deliverable is the exact slice of
-the standard that GRIB2 template 5.40 (`grid_jpeg`) needs, because that path
-unblocks a real downstream consumer (the fieldglass GRIB2 reader) and forces the
-hardest core (the EBCOT block coder and the wavelet transform) to be correct
-before any breadth work begins. Everything after that widens the same engine
-outward: the general Part 1 codestream decoder is done (all 23 ISO/IEC 15444-4
-conformance entries decode in class), and so is JP2 file decoding (the nine
-Part 4 JP2 reader files decode in class). HTJ2K, an encoder, and the later
-parts of the standard follow.
+It was built GRIB2-decode-first. GRIB2 weather files can store each grid as a
+raw JPEG 2000 codestream (template 5.40, `grid_jpeg`), and the first release
+decoded exactly the slice of the standard those grids use. That slice had a
+waiting user, the fieldglass GRIB2 reader, and it forced the hardest parts to
+be right early: the EBCOT block decoder and the wavelet transform. Later work
+widened the same engine. It now decodes general Part 1 codestreams (all 23
+ISO/IEC 15444-4 conformance codestreams decode within their compliance-class
+error bounds) and JP2 files (all nine JP2 reader files in the same suite do
+too). HTJ2K (the High Throughput block coder of Part 15), an encoder and the
+later parts of the standard come next.
 
-This is a real gap to fill: as of 2026 there is no production-grade pure-Rust
-JPEG 2000 codec. The usable options (`jp2k`, `openjpeg-sys`, `grokj2k-sys`) all
-bind to a C/C++ library; the one native attempt (`iszak/jpeg2000`) is partial
-and stale.
+Other ways to read JPEG 2000 from Rust exist. `jp2k`, `openjpeg-sys` and
+`grokj2k-sys` bind a C or C++ library. `hayro-jpeg2000` is a pure-Rust decoder
+that returns 8-bit images for PDF rendering. By default this crate keeps each
+sample at its coded depth, which a GRIB2 grid of more than 8 bits per value
+needs.
 
 ## The documents
 
-- [scope.md](scope.md) — the full feature inventory. Every JPEG 2000 capability
-  OpenJPEG implements, which part of the standard it belongs to, whether GRIB2
-  needs it, and which project phase delivers it.
-- [roadmap.md](roadmap.md) — the phased plan, from the initial skeleton through
-  the GRIB2 decode MVP (Phase 1, shipped in v0.1.0) and the general Part 1
-  decoder (Phase 2, shipped) to full-codec parity, with the gate for each phase.
-- [roadmap-phase1.md](roadmap-phase1.md) — the GRIB2 decode MVP broken into
-  ordered milestones, each tied to its module, its oracle, and what it unblocks.
-- [roadmap-phase2.md](roadmap-phase2.md) — the general Part 1 decoder broken into
-  ordered milestones, gated on the ISO/IEC 15444-4 conformance suite.
-- [roadmap-phase3.md](roadmap-phase3.md) — the JP2 file format decoder broken
-  into ordered milestones, gated on the ISO/IEC 15444-4 JP2 reader files.
-- [correctness.md](correctness.md) — how we know a stage is right: the oracle
-  cross-check, the ISO 15444-4 conformance suite, per-stage golden vectors,
-  fuzzing, and round-trip testing once the encoder lands.
+- [scope.md](scope.md) lists every JPEG 2000 capability OpenJPEG implements,
+  which part of the standard it belongs to, whether GRIB2 needs it, and which
+  phase delivers it.
+- [roadmap.md](roadmap.md) is the phased plan, from the GRIB2 decode MVP
+  (Phase 1, v0.1.0) through the general Part 1 decoder (Phase 2, v0.3.0) and the JP2
+  file format (Phase 3) to full-codec parity, with the gate for each phase.
+- [correctness.md](correctness.md) explains how the output is checked: the
+  conformance suite, the OpenJPEG oracle, per-stage golden tests and fuzzing.
+  It also records every place this decoder deliberately differs from
+  OpenJPEG, and why, and it states the decoder's resource limits and what
+  sRGB output produces for each kind of input.
+- [development.md](development.md) lists the tools that regenerate the oracle
+  snapshots and run the extra quality gates (cargo-deny, cargo-fuzz), with a
+  version and an install command for each. You don't need them to run the
+  tests.
+- [roadmap-phase1.md](roadmap-phase1.md), [roadmap-phase2.md](roadmap-phase2.md)
+  and [roadmap-phase3.md](roadmap-phase3.md) are the milestone plans for the
+  first three phases, each step tied to its module and its oracle. All three
+  phases are done, so these are kept as the record of how the work was built.
 
 ## Reading order
 
-New here? Read this file, then [roadmap.md](roadmap.md) for the shape of the
-work, then [scope.md](scope.md) when you need to know whether a given feature is
-in or out of the phase you're working on. Reach for [correctness.md](correctness.md)
+If you're new, read this page, then [roadmap.md](roadmap.md) for the shape of
+the work, then [scope.md](scope.md) when you need to know whether a feature is
+supported or which phase it belongs to. Read [correctness.md](correctness.md)
 before you claim a stage is done.
