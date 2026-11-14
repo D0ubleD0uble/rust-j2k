@@ -466,16 +466,6 @@ fn assemble_component(
         )));
     }
 
-    // The irreversible path arrives unrounded. `as i32` saturates, so a value
-    // outside the container cannot wrap before the clamp below sees it.
-    let samples: Vec<i32> = match samples {
-        Samples::Reversible(values) => values,
-        Samples::Irreversible(values) => values
-            .into_iter()
-            .map(|v| v.round_ties_even() as i32)
-            .collect(),
-    };
-
     // Level-shift offset and the clamp bounds, all in i64 so the `1 << 31`
     // signed-32-bit case and the unsigned `2^depth - 1` upper bound cannot
     // overflow during the computation.
@@ -495,10 +485,14 @@ fn assemble_component(
         )));
     }
 
-    let shifted: Vec<i32> = samples
-        .into_iter()
-        .map(|v| (v as i64 + shift).clamp(lo, hi) as i32)
-        .collect();
+    let shifted: Vec<i32> = match samples {
+        Samples::Reversible(values) => values
+            .into_iter()
+            .map(|v| (v as i64 + shift).clamp(lo, hi) as i32)
+            .collect(),
+        // The irreversible path arrives unrounded.
+        Samples::Irreversible(values) => round_shift_clamp(values, depth, shift, lo, hi),
+    };
 
     Ok(Component {
         width,
@@ -509,6 +503,58 @@ fn assemble_component(
         y_sampling: comp.y_sampling,
         samples: shifted,
     })
+}
+
+/// `1.5 * 2^23`. For `|x| <= 2^22`, `x + ROUND_MAGIC` lies in `[2^23, 2^24)`,
+/// where consecutive `f32` values are exactly 1 apart, so the addition itself
+/// rounds `x` to an integer, ties to even under the default rounding mode, and
+/// that integer is the sum's bit pattern minus `ROUND_MAGIC`'s.
+const ROUND_MAGIC: f32 = 12_582_912.0;
+
+/// The deepest component [`round_shift_clamp`] rounds with [`ROUND_MAGIC`].
+/// Before the level shift, a `depth`-bit component's range is
+/// `[-2^(depth-1), 2^(depth-1) - 1]` whatever its sign, which stays inside
+/// `±2^22` up to 23 bits. Deeper components take the `round_ties_even` path.
+const MAGIC_MAX_DEPTH: u8 = 23;
+
+/// Round each irreversible sample to the nearest integer, ties to even, then
+/// add the level shift `shift` and clamp to `lo..=hi`, in one pass.
+///
+/// This gives exactly what `(v.round_ties_even() as i32 as i64 + shift)
+/// .clamp(lo, hi)` gives, including NaN to `shift` and the infinities to the
+/// clamp ends, without a `rintf` call per sample: baseline x86-64 has no
+/// rounding instruction, so `round_ties_even` is a libm call there. The clamp
+/// moves ahead of the rounding, in `f32` before the shift; that is the same
+/// result because the bounds are integers and rounding is monotonic.
+fn round_shift_clamp(values: Vec<f32>, depth: u8, shift: i64, lo: i64, hi: i64) -> Vec<i32> {
+    if depth > MAGIC_MAX_DEPTH {
+        // `as i32` saturates, so a value outside the container cannot wrap
+        // before the clamp sees it.
+        return values
+            .into_iter()
+            .map(|v| (v.round_ties_even() as i32 as i64 + shift).clamp(lo, hi) as i32)
+            .collect();
+    }
+    // Exact: both bounds are at most 2^22 in magnitude here.
+    let low = (lo - shift) as f32;
+    let high = (hi - shift) as f32;
+    let shift = shift as i32;
+    let magic = ROUND_MAGIC.to_bits() as i32;
+    values
+        .into_iter()
+        .map(|v| {
+            // NaN becomes 0, as `NaN as i32` did on the general path.
+            let v = if v.is_nan() { 0.0 } else { v };
+            let v = if v < low {
+                low
+            } else if v > high {
+                high
+            } else {
+                v
+            };
+            (v + ROUND_MAGIC).to_bits() as i32 - magic + shift
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -665,6 +711,182 @@ mod tests {
         let h = header(2, 1, 16, true);
         let img = assemble(&h, vec![Samples::Irreversible(vec![1e30, -1e30])], 0).unwrap();
         assert_eq!(only(&img).samples, vec![32767, -32768]);
+    }
+
+    /// What [`round_shift_clamp`] must equal: round ties to even, saturate into
+    /// `i32`, shift, clamp.
+    fn reference(v: f32, shift: i64, lo: i64, hi: i64) -> i32 {
+        (v.round_ties_even() as i32 as i64 + shift).clamp(lo, hi) as i32
+    }
+
+    /// The level shift and clamp bounds `assemble_component` derives.
+    fn bounds(depth: u8, signed: bool) -> (i64, i64, i64) {
+        if signed {
+            (0, -(1i64 << (depth - 1)), (1i64 << (depth - 1)) - 1)
+        } else {
+            (1i64 << (depth - 1), 0, (1i64 << depth) - 1)
+        }
+    }
+
+    /// Check `values` through [`round_shift_clamp`] against [`reference`].
+    fn check_against_reference(values: Vec<f32>, depth: u8, signed: bool) {
+        let (shift, lo, hi) = bounds(depth, signed);
+        let got = round_shift_clamp(values.clone(), depth, shift, lo, hi);
+        for (v, g) in values.iter().zip(got) {
+            assert_eq!(
+                g,
+                reference(*v, shift, lo, hi),
+                "depth {depth} signed {signed} input {v:e} (bits {:#010x})",
+                v.to_bits()
+            );
+        }
+    }
+
+    /// The `f32` values within `ulps` steps of `x` on either side, `x` included.
+    fn window(x: f32, ulps: u32, out: &mut Vec<f32>) {
+        let (mut up, mut down) = (x, x);
+        out.push(x);
+        for _ in 0..ulps {
+            up = up.next_up();
+            down = down.next_down();
+            out.push(up);
+            out.push(down);
+        }
+    }
+
+    /// Values every depth must handle: zeros, NaNs, infinities, extremes, and
+    /// the neighborhoods of 2^22, 2^23 and 2^24 where `ROUND_MAGIC` stops
+    /// being exact.
+    fn special_values() -> Vec<f32> {
+        let mut v = vec![
+            0.0,
+            -0.0,
+            f32::NAN,
+            -f32::NAN,
+            f32::from_bits(0x7fc0_0001),
+            f32::from_bits(0xffbf_ffff),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MAX,
+            f32::MIN,
+            f32::MIN_POSITIVE,
+            -f32::MIN_POSITIVE,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            1e30,
+            -1e30,
+            2147483648.0,
+            -2147483648.0,
+            4294967296.0,
+        ];
+        for p in [21, 22, 23, 24, 25] {
+            let x = (1u32 << p) as f32;
+            for x in [x, -x, x + 0.5, -x - 0.5, x - 0.5, -x + 0.5] {
+                window(x, 8, &mut v);
+            }
+        }
+        v
+    }
+
+    /// Ties to even, the level shift and the clamp, bit for bit against
+    /// `round_ties_even`, over every half-integer in and around each depth's
+    /// range (with neighbors), every `f32` near the clamp ends and zero, and
+    /// the special values.
+    #[test]
+    fn round_shift_clamp_matches_round_ties_even() {
+        // 1..=16 run the ROUND_MAGIC path at every width used in practice; 22
+        // and 23 are its deepest; 24 and 32 are the fallback.
+        let depths = (1..=16).chain([22, 23, 24, 32]);
+        for depth in depths {
+            for signed in [false, true] {
+                if !signed && depth == 32 {
+                    continue; // Rejected before rounding: exceeds i32.
+                }
+                let (shift, lo, hi) = bounds(depth, signed);
+                let (low, high) = (lo - shift, hi - shift);
+                let mut values = special_values();
+                if depth <= 16 {
+                    // Every half-integer and integer across the range and two
+                    // past each end, with two f32 steps either side.
+                    for n in (2 * (low - 2))..=(2 * (high + 2)) {
+                        window(n as f32 / 2.0, 2, &mut values);
+                    }
+                }
+                // Every f32 within 256 steps of each half-integer near the
+                // clamp ends and near zero.
+                for center in [low, high, 0] {
+                    for n in (2 * (center - 4))..=(2 * (center + 4)) {
+                        window(n as f32 / 2.0, 256, &mut values);
+                    }
+                }
+                check_against_reference(values, depth, signed);
+            }
+        }
+    }
+
+    /// Spot checks through `assemble`, so a wrong result shows as a sample.
+    #[test]
+    fn irreversible_ties_and_specials_through_assemble() {
+        // 8-bit unsigned: shift 128, clamp [0, 255]; 127.5 rounds to 128 and
+        // clamps to 255, -128.5 rounds to -128 (even) and lands on 0.
+        let h = header(8, 1, 8, false);
+        let values = vec![
+            -0.0,
+            126.5,
+            127.5,
+            -127.5,
+            -128.5,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        let img = assemble(&h, vec![Samples::Irreversible(values)], 0).unwrap();
+        assert_eq!(only(&img).samples, vec![128, 254, 255, 0, 0, 128, 255, 0]);
+        // 24-bit signed takes the fallback: 2^23 - 1.5 rounds to 2^23 - 2,
+        // and 2^23 - 0.5 is not an f32, so its neighbor 2^23 - 1 is exact.
+        let h = header(3, 1, 24, true);
+        let values = vec![8_388_606.5, -8_388_607.5, 1e9];
+        let img = assemble(&h, vec![Samples::Irreversible(values)], 0).unwrap();
+        assert_eq!(only(&img).samples, vec![8_388_606, -8_388_608, 8_388_607]);
+    }
+
+    /// Every one of the 2^32 `f32` bit patterns, at each depth 1..=16 and 23,
+    /// signed and unsigned. Run with
+    /// `cargo test --release -- --ignored every_f32`.
+    #[test]
+    #[ignore = "slow: about 30 CPU-minutes on a release build, spread over all cores"]
+    fn round_shift_clamp_matches_round_ties_even_on_every_f32() {
+        const CHUNK: u32 = 1 << 20;
+        let depths: Vec<u8> = (1..=16).chain([23]).collect();
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        std::thread::scope(|scope| {
+            for t in 0..threads {
+                let depths = &depths;
+                scope.spawn(move || {
+                    let mut chunk = t as u64;
+                    while chunk < (1u64 << 32) / CHUNK as u64 {
+                        let start = chunk as u32 * CHUNK;
+                        let values: Vec<f32> =
+                            (start..=start + (CHUNK - 1)).map(f32::from_bits).collect();
+                        for &depth in depths {
+                            for signed in [false, true] {
+                                let (shift, lo, hi) = bounds(depth, signed);
+                                let got = round_shift_clamp(values.clone(), depth, shift, lo, hi);
+                                for (v, g) in values.iter().zip(got) {
+                                    assert_eq!(
+                                        g,
+                                        reference(*v, shift, lo, hi),
+                                        "depth {depth} signed {signed} bits {:#010x}",
+                                        v.to_bits()
+                                    );
+                                }
+                            }
+                        }
+                        chunk += threads as u64;
+                    }
+                });
+            }
+        });
     }
 
     #[test]
