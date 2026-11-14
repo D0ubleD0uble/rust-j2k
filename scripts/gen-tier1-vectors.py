@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate golden Tier-1 (EBCOT) code-block vectors for src/tier1/passes.rs.
+"""Generate golden Tier-1 (EBCOT) code-block vectors for src/tier1/ebcot/passes.rs.
 
 This is a developer/oracle tool. It is NOT run at `cargo test` time — the emitted
 vectors are committed and become the contract, exactly like the conformance
@@ -40,7 +40,7 @@ coefficients, so a transform or parse mistake here fails at authoring time
 rather than committing a wrong oracle.
 
 Usage:
-    scripts/gen-tier1-vectors.py            # writes src/tier1/golden_vectors.rs
+    scripts/gen-tier1-vectors.py            # writes src/tier1/ebcot/golden_vectors.rs
     scripts/gen-tier1-vectors.py -o -       # print to stdout
 """
 
@@ -479,8 +479,8 @@ def format_rust(source: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "-o", "--output", default="src/tier1/golden_vectors.rs",
-        help="output path, or - for stdout (default: src/tier1/golden_vectors.rs)",
+        "-o", "--output", default="src/tier1/ebcot/golden_vectors.rs",
+        help="output path, or - for stdout (default: src/tier1/ebcot/golden_vectors.rs)",
     )
     args = parser.parse_args()
     require_openjpeg("opj_compress", "opj_decompress")

@@ -10,8 +10,10 @@
 //! `#[doc(hidden)]` and semver-exempt: a test seam for the detached fuzz
 //! workspace, not public API. A smoke test below keeps it building in CI.
 
-use crate::tier1::mq::MqDecoder;
-use crate::tier1::passes::{BlockParams, BlockState, Orientation, decode_block, init_contexts};
+use crate::tier1::ebcot::mq::MqDecoder;
+use crate::tier1::ebcot::passes::{
+    BlockParams, BlockState, Orientation, decode_block, init_contexts,
+};
 
 /// Drive the raw MQ decoder over `data`: context transitions, BYTEIN
 /// stuffing, marker handling, and past-end synthesis, with bounded work.

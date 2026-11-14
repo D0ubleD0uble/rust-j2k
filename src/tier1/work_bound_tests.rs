@@ -4,7 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{decode_work, numbps, passes_run, work};
+use super::ebcot::passes_run;
+use super::{decode_work, numbps, work};
 use crate::tier2::{BandKind, CodeBlock, CodedData, ComponentCoded, Resolution, Subband};
 
 /// How far below its bound every committed file's block decode must stay:

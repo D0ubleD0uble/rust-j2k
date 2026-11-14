@@ -1,27 +1,65 @@
-//! Stage 3 — Tier-1 / EBCOT block coding (ISO/IEC 15444-1 Annex C-D).
+//! Stage 3 — Tier-1 block decoding.
 //!
-//! The core and the hardest part. Each code-block's coded bytes are an MQ
-//! arithmetic-coded bit-plane stream. From the most significant non-zero plane
-//! down, every plane is decoded by up to three passes — significance
-//! propagation, magnitude refinement, cleanup — each forming contexts from the
-//! 3×3 neighborhood and reading binary decisions from the [`mq`] decoder.
-//! The result is the quantized wavelet coefficients of one subband block.
+//! Each code-block's coded bytes decode to the quantized wavelet coefficients
+//! of one subband block, which this module assembles back into subbands. The
+//! block decoding itself sits behind [`BlockCoder`], the one seam between
+//! assembly and a block coder: the Part 1 coder, EBCOT (ISO/IEC 15444-1
+//! Annexes C and D), lives in [`ebcot`].
 
-pub mod mq;
-pub mod passes;
+pub(crate) mod ebcot;
 
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
 use crate::pipeline::{Band, Bands, DetailBands, SubbandCoeffs};
 use crate::quant;
-use crate::tier1::passes::{
-    BlockParams, BlockState, MAX_BIT_PLANES, Orientation, decode_block, top_coded_plane,
-};
 use crate::tier2::{BandKind, CodeBlock, CodedData, ComponentCoded, Resolution, Subband};
 use crate::{Error, Result};
 
-/// Decode every code-block's MQ/EBCOT stream into quantized subband
-/// coefficients, assembling code-blocks back into their subbands.
+/// The block coder of a tile-component, as its code-block style selects it.
+///
+/// Assembly hands each code-block to [`decode`](Self::decode), which fills
+/// the block's coefficients at the scale [`ebcot::passes::decode_block`]
+/// documents, and asks [`cost`](Self::cost) what that decode spends. Nothing
+/// else of a coder is visible to assembly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockCoder {
+    /// The Part 1 coder, with the code-block style flags and the component's
+    /// region-of-interest maxshift.
+    Ebcot { style: u8, roi_shift: u8 },
+}
+
+impl BlockCoder {
+    /// The coder of component `comp`.
+    fn of(header: &MainHeader, comp: usize) -> Self {
+        let params = &header.components[comp];
+        BlockCoder::Ebcot {
+            style: params.coding.code_block_style,
+            roi_shift: params.roi_shift,
+        }
+    }
+
+    /// Decode `block`, a code-block of a `kind` band whose magnitude
+    /// bit-plane count is `numbps`, into its coefficients, row-major over the
+    /// block, at twice their weight.
+    fn decode(self, block: &CodeBlock<'_>, kind: BandKind, numbps: u32) -> Result<Vec<i32>> {
+        match self {
+            BlockCoder::Ebcot { style, roi_shift } => {
+                ebcot::decode(block, kind, numbps, style, roi_shift)
+            }
+        }
+    }
+
+    /// The coding passes [`decode`](Self::decode) runs on `block`; each one
+    /// scans every sample of the block.
+    fn cost(self, block: &CodeBlock<'_>, numbps: u32) -> u64 {
+        match self {
+            BlockCoder::Ebcot { roi_shift, .. } => ebcot::passes_run(numbps, block, roi_shift),
+        }
+    }
+}
+
+/// Decode every code-block into quantized subband coefficients, assembling
+/// code-blocks back into their subbands.
 ///
 /// The arithmetic is integer regardless of filter — Tier-1 recovers the
 /// quantized indices — so the COD transform only fixes how those indices are
@@ -131,9 +169,10 @@ pub(crate) fn decode_work(bytes: u64) -> u64 {
 pub(crate) fn work(header: &MainHeader, coded: &CodedData<'_>, reduction: u8) -> u64 {
     let mut total = 0u64;
     for (comp, component) in coded.components.iter().enumerate() {
-        let Some(params) = header.components.get(comp) else {
+        if header.components.get(comp).is_none() {
             continue;
-        };
+        }
+        let coder = BlockCoder::of(header, comp);
         let kept = component
             .resolutions
             .len()
@@ -147,7 +186,7 @@ pub(crate) fn work(header: &MainHeader, coded: &CodedData<'_>, reduction: u8) ->
                     continue;
                 };
                 for block in &subband.blocks {
-                    let passes = passes_run(numbps, block, params.roi_shift);
+                    let passes = coder.cost(block, numbps);
                     let samples = (block.width as u64).saturating_mul(block.height as u64);
                     total = total.saturating_add(passes.saturating_mul(samples));
                 }
@@ -155,20 +194,6 @@ pub(crate) fn work(header: &MainHeader, coded: &CodedData<'_>, reduction: u8) ->
         }
     }
     total
-}
-
-/// The coding passes [`decode_block`] runs on `block`: its passes, but no
-/// more than its coded bit-planes hold, the first plane one pass and each
-/// later one three.
-fn passes_run(numbps: u32, block: &CodeBlock<'_>, roi_shift: u8) -> u64 {
-    if block.num_passes == 0 {
-        return 0;
-    }
-    let top = top_coded_plane(numbps, block.zero_bit_planes, roi_shift);
-    if !(1..=MAX_BIT_PLANES).contains(&top) {
-        return 0;
-    }
-    u64::from(block.num_passes.min(3 * top - 2))
 }
 
 /// The QCD subband index of a `kind` band in resolution `res`: LL is 0, then
@@ -202,11 +227,7 @@ where
     F: Fn(i32) -> T,
     G: Fn(usize) -> Result<F>,
 {
-    let params = BlockParams {
-        style: header.components[comp].coding.code_block_style,
-        roi_shift: header.components[comp].roi_shift,
-        last_segment_cut: false,
-    };
+    let coder = BlockCoder::of(header, comp);
     // A resolution reduction drops that many of the finest levels: their
     // packets were parsed (the codestream's framing demands it) but their
     // code-blocks never reach the bit-plane decoder. The caller has checked
@@ -225,7 +246,7 @@ where
         decode_subband(
             subband_of(resolution, kind)?,
             numbps(header, comp, band)?,
-            params,
+            coder,
             convert_for(band)?,
         )
     };
@@ -288,70 +309,21 @@ fn subband_of<'a, 'b>(res: &'a Resolution<'b>, kind: BandKind) -> Result<&'a Sub
 fn decode_subband<T, F>(
     sb: &Subband<'_>,
     numbps: u32,
-    params: BlockParams,
+    coder: BlockCoder,
     convert: F,
 ) -> Result<Band<T>>
 where
     T: Copy + Default,
     F: Fn(i32) -> T,
 {
-    let orient = match sb.kind {
-        BandKind::Ll => Orientation::Ll,
-        BandKind::Hl => Orientation::Hl,
-        BandKind::Lh => Orientation::Lh,
-        BandKind::Hh => Orientation::Hh,
-    };
-
     let mut data = vec![T::default(); sb.width * sb.height];
     for block in &sb.blocks {
         // An absent block contributes nothing; its samples stay zero.
         if block.num_passes == 0 {
             continue;
         }
-        // Maxshift lifts every region-of-interest coefficient above every
-        // background one, so the block starts `roi_shift` planes higher (ISO
-        // H.2's Kmax = Mb + s); see `top_coded_plane` for the interplay with
-        // the zero bit-planes.
-        //
-        // The double-scale reconstruction shifts `1 << top`, so reject
-        // high-dynamic-range subbands that would overflow `i32` rather than
-        // panic — the same rejection OpenJPEG makes with `bpno_plus_one >= 31`.
-        // This does not bound the maxshift itself: a block with more zero
-        // bit-planes than `Mb` keeps `top` small under any `SPrgn`, and
-        // `undo_maxshift` carries the oracle's `roishift >= 31` arm for it.
-        let top = top_coded_plane(numbps, block.zero_bit_planes, params.roi_shift);
-        if top > MAX_BIT_PLANES {
-            return Err(Error::Limit(format!(
-                "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
-            )));
-        }
-        let mut state = BlockState::new(block.width as u32, block.height as u32);
-        // Each codeword segment is decoded from its own MQ stream; a segment's
-        // bytes may still arrive in several layer-sized chunks, so they are
-        // concatenated first. Without termination there is exactly one segment.
-        let segments: Vec<(Vec<u8>, u32)> = block
-            .segments
-            .iter()
-            .map(|segment| (segment.bytes(), segment.passes))
-            .collect();
-        // A segment the layer cap cut short ends before the encoder
-        // terminated it, so it cannot be held to `predictable termination`.
-        // Only the last segment can be cut; the block's earlier segments are
-        // whole and stay checked.
-        let params = BlockParams {
-            last_segment_cut: block.cut,
-            ..params
-        };
-        decode_block(
-            &segments,
-            &mut state,
-            orient,
-            numbps,
-            block.num_passes,
-            block.zero_bit_planes,
-            params,
-        )?;
-        place_block(&mut data, sb.width, block, &state, &convert);
+        let coeffs = coder.decode(block, sb.kind, numbps)?;
+        place_block(&mut data, sb.width, block, &coeffs, &convert);
     }
 
     Ok(Band {
@@ -368,7 +340,7 @@ fn place_block<T, F>(
     data: &mut [T],
     band_width: usize,
     block: &CodeBlock<'_>,
-    state: &BlockState,
+    coeffs: &[i32],
     convert: &F,
 ) where
     F: Fn(i32) -> T,
@@ -377,13 +349,14 @@ fn place_block<T, F>(
         let dst = (block.y + row) * band_width + block.x;
         let src = row * block.width;
         for col in 0..block.width {
-            data[dst + col] = convert(state.coeffs[src + col]);
+            data[dst + col] = convert(coeffs[src + col]);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::ebcot::passes::MAX_BIT_PLANES;
     use super::*;
     use crate::tier2::{BandKind, CodeBlock, Subband};
 
@@ -439,10 +412,9 @@ mod tests {
     #[test]
     fn a_maxshift_that_overflows_the_bit_planes_is_rejected() {
         let sb = one_block_subband(1, 0);
-        let params = BlockParams {
+        let params = BlockCoder::Ebcot {
             style: 0,
             roi_shift: 1,
-            last_segment_cut: false,
         };
         let err = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, params, |q| q)
             .expect_err("MAX_BIT_PLANES + 1 planes");
@@ -561,8 +533,11 @@ mod tests {
         }
     }
 
-    fn default_params() -> BlockParams {
-        BlockParams::default()
+    fn default_params() -> BlockCoder {
+        BlockCoder::Ebcot {
+            style: 0,
+            roi_shift: 0,
+        }
     }
 }
 

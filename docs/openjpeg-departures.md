@@ -208,7 +208,7 @@ counted from its first coded plane. Under an RGN maxshift the shifted planes
 are coded planes (H.2): the first one is `top = Mb + SPrgn - zero_bit_planes`.
 Tier-2 splits the segments by pass count (10 passes, then 2, 1, 2, 1, …),
 which agrees with that count. This decoder counts from `top`
-(`src/tier1/passes.rs`, `decode_block`).
+(`src/tier1/ebcot/passes.rs`, `decode_block`).
 
 OpenJPEG's decoder starts at the same plane, `bpno_plus_one = roishift +
 cblk->numbps` (`t1.c:1990`), but tests `bpno_plus_one <= cblk->numbps - 4`
@@ -577,7 +577,7 @@ packets it finds, with no warning.
 
 Under predictable termination every MQ segment of a code-block must end as the
 termination predicts. OpenJPEG checks only the last segment and only warns
-(`decode_block` in `src/tier1/passes.rs`; see also [Segmentation
+(`decode_block` in `src/tier1/ebcot/passes.rs`; see also [Segmentation
 symbols](#segmentation-symbols)).
 
 Under `DecodeOptions::max_quality_layers`, the last segment of a block may end
