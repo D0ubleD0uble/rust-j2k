@@ -1113,13 +1113,13 @@ enum PassCoder<'a> {
 /// as `opj_t1_decode_cblk` does. Without termination there is one segment and
 /// the codeword runs unbroken.
 ///
-/// `decode_cod` admits every Part 1 style flag and rejects only the two HTJ2K
-/// bits. Most act at the segment split or the context, which Tier-2 and
-/// [`BlockState`] have already applied, so the pass cycle below is unchanged.
-/// Two reach into the passes themselves: `segmentation symbols` appends four
-/// decisions to every cleanup pass, and `bypass` (lazy) switches the
-/// significance and refinement passes of the low bit-planes from MQ-coded to raw
-/// (D.6) — see the per-segment coder choice below.
+/// Every Part 1 style flag reaches here; the HTJ2K bits do not. Most act at
+/// the segment split or the context, which Tier-2 and [`BlockState`] have
+/// already applied, so the pass cycle below is unchanged. Two reach into the
+/// passes themselves: `segmentation symbols` appends four decisions to every
+/// cleanup pass, and `bypass` (lazy) switches the significance and refinement
+/// passes of the low bit-planes from MQ-coded to raw (D.6); see the
+/// per-segment coder choice below.
 pub fn decode_block(
     segments: &[(Vec<u8>, u32)],
     state: &mut BlockState,
@@ -1136,12 +1136,15 @@ pub fn decode_block(
     } = params;
     let last_segment = segments.len().saturating_sub(1);
     use crate::codestream::markers::code_block_style::{
-        LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL,
+        HT, HT_MIXED, LAZY, PTERM, RESET, TERMALL, VCAUSAL,
     };
+    // The codestream's block-coder guard refuses both HTJ2K bits, so none
+    // reaches here. When MIXED decodes (P4.6), its Part 1 blocks carry both
+    // bits, and this relaxes to refuse only HT without MIXED.
     debug_assert_eq!(
-        style & !(LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET),
+        style & (HT | HT_MIXED),
         0,
-        "decode_cod rejects every style flag but bypass, restart, pterm, segsym, vcausal and reset",
+        "an HTJ2K code-block style reached the Part 1 block decoder",
     );
     // Vertically causal context changes how every significance/sign context is
     // formed; the pass functions read it off the state.

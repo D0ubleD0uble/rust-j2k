@@ -262,6 +262,7 @@ graded by `tests/conformance_ht.rs` with the Part 1 comparator and ratchet.
 | `file10` references | the same repo, `reference_jph/jph_10_*.pgm`, rewritten as 8-bit PGX | commit `f6b9ede0` |
 | Bounds | T.803 Annex C, Tables C.1bis, C.4bis, C.6, C.7 and C.8 | V3 (02/2024) |
 | Kakadu error, pass counts | the repo's `stats.txt`; OpenJPEG 2.5.0 with a pass-count print | — |
+| `HT_LOGS` in `src/codestream/tests.rs` (each codestream's `Ccap15` and `CPFnum`) | transcribed from the same repo's `descriptions_htj2k_profile{0,1}/*syntax.txt` logs, which are not committed here | commit `f6b9ede0` |
 
 **License.** `ht/COPYRIGHT.txt` is the same conformance-only grant as
 `COPYRIGHT`, kept verbatim. The files sit under `tests/fixtures/conformance/`,

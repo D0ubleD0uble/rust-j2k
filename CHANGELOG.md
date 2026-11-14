@@ -25,6 +25,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still read, so damage in them is still an error. `None`, the default,
   decodes every layer; `Some(0)` is `Error::InvalidOptions`.
 
+### Changed
+
+- The `CAP` and `CPF` markers are read. HTJ2K codestreams are still
+  `Error::Unsupported`, now refused for the HT code-block style of their COD
+  or COC instead of for `CAP`, so a cut header is `Error::Incomplete` up to
+  that COD or COC. A `CAP` that signals a part other than Part 15 is
+  `Unsupported`. A malformed `CAP` or `CPF` is `Error::Marker`; a repeated one,
+  or either one in a tile-part header, is `Error::Codestream`.
+
 ## [0.4.0] - 2026-11-14
 
 JP2 files now decode, with their header metadata, and can be converted to

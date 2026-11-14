@@ -43,21 +43,21 @@ fn u32_at(bytes: &[u8], at: usize) -> Option<usize> {
 /// over the main header's marker segments; `None` if `cs` is not a
 /// codestream whose main header walks to a `SOT`.
 fn first_sot(cs: &[u8]) -> Option<usize> {
-    first_marker(cs, 0xFF90)
+    walk(cs).map(|(sot, _)| sot)
 }
 
-/// The offset of the first `target` marker in a codestream's main header, or
-/// of the first `SOT` if `target` comes before none.
-fn first_marker(cs: &[u8], target: usize) -> Option<usize> {
+/// Walk a codestream's main header: the offset of its first `SOT` marker,
+/// and the end of its first `COD` or `COC` segment whose code-block style
+/// sets an HTJ2K bit (`0x40` or `0x80`, ISO/IEC 15444-15 A.4), if any.
+fn walk(cs: &[u8]) -> Option<(usize, Option<usize>)> {
     if !cs.starts_with(&[0xFF, 0x4F]) {
         return None;
     }
-    let mut at = 2;
+    let (mut at, mut csiz, mut ht) = (2, 0, None);
     loop {
         let code = u16_at(cs, at)?;
         match code {
-            _ if code == target => return Some(at),
-            0xFF90 => return Some(at),
+            0xFF90 => return Some((at, ht)),
             // The reserved range carries no length (A.1.3).
             0xFF30..=0xFF3F => at += 2,
             _ if code >> 8 == 0xFF => {
@@ -65,7 +65,25 @@ fn first_marker(cs: &[u8], target: usize) -> Option<usize> {
                 if length < 2 {
                     return None;
                 }
+                // A body past the input or too short for its field holds no
+                // style; the walk goes on, as it did before it read styles.
+                let body = cs.get(at + 4..at + 2 + length).unwrap_or(&[]);
+                // The style byte: after `Scod`, `SGcod` and three `SPcod`
+                // bytes in COD; after the component index, `Scoc` and three
+                // bytes in COC (A.6.1, A.6.2).
+                let style = match code {
+                    0xFF51 => {
+                        csiz = u16_at(body, 34).unwrap_or(0);
+                        None
+                    }
+                    0xFF52 => body.get(8),
+                    0xFF53 => body.get(if csiz < 257 { 5 } else { 6 }),
+                    _ => None,
+                };
                 at += 2 + length;
+                if ht.is_none() && style.is_some_and(|s| s & 0xC0 != 0) {
+                    ht = Some(at);
+                }
             }
             _ => return None,
         }
@@ -99,9 +117,6 @@ fn jp2c_payload(file: &[u8]) -> Option<(usize, usize)> {
     }
     None
 }
-
-/// The `CAP` marker (A.5.2, ISO/IEC 15444-15).
-const CAP: usize = 0xFF50;
 
 fn lenient() -> DecodeOptions {
     DecodeOptions::default().with_strict(false)
@@ -159,34 +174,45 @@ fn assert_cuts_are_incomplete(name: &str, bytes: &[u8], cs_at: usize, sot: usize
     }
 }
 
+/// `bytes` is refused for its HTJ2K block coder by `read_header`, a strict
+/// decode and a partial one.
+fn assert_refused_for_ht(what: &str, bytes: &[u8]) {
+    let results = [
+        read_header(bytes).map(|_| ()),
+        decode(bytes).map(|_| ()),
+        decode_with(bytes, &lenient()).map(|_| ()),
+    ];
+    for result in results {
+        assert!(
+            matches!(&result, Err(Error::Unsupported(m)) if m.contains("code-block style (HTJ2K")),
+            "{what}: {result:?}"
+        );
+    }
+}
+
 #[test]
 fn every_cut_inside_the_main_header_is_incomplete() {
     let mut paths = Vec::new();
     files(&fixtures(), &mut paths);
     paths.sort();
-    let (mut codestreams, mut jp2s) = (0, 0);
+    let (mut codestreams, mut ht_codestreams, mut jp2s) = (0, 0, 0);
     for path in &paths {
         let bytes = std::fs::read(path).unwrap();
         let name = path.strip_prefix(fixtures()).unwrap().display().to_string();
-        if let Some(sot) = first_sot(&bytes) {
-            // An HTJ2K codestream is refused as `Unsupported` as soon as its
-            // `CAP` segment has been read, so it is cut only up to the `CAP`
-            // marker.
-            match first_marker(&bytes, CAP) {
-                Some(cap) if cap < sot => {
-                    assert!(
-                        matches!(
-                            read_header(&bytes),
-                            Err(Error::Unsupported(m))
-                                if m.contains("marker `CAP` (0xFF50) is outside the decoded subset")
-                        ),
-                        "{name}: the CAP marker is no longer refused as outside the decoded \
-                         subset. Now that CAP parses, remove this carve-out so HT codestreams \
-                         are cut through to SOT"
-                    );
-                    assert_cuts_are_incomplete(&name, &bytes, 0, cap, false);
+        if let Some((sot, ht)) = walk(&bytes) {
+            match ht {
+                // An HTJ2K block coder is refused as soon as the COD or COC
+                // that selects it is read: a cut before it is `Incomplete`,
+                // and every cut that holds it, up to the whole file, is
+                // refused for the coder.
+                Some(ht_end) => {
+                    assert_cuts_are_incomplete(&name, &bytes, 0, ht_end - 2, false);
+                    for length in (ht_end..sot + 2).chain([bytes.len()]) {
+                        assert_refused_for_ht(&format!("{name} cut at {length}"), &bytes[..length]);
+                    }
+                    ht_codestreams += 1;
                 }
-                _ => assert_cuts_are_incomplete(&name, &bytes, 0, sot, true),
+                None => assert_cuts_are_incomplete(&name, &bytes, 0, sot, true),
             }
             codestreams += 1;
         } else if let Some((cs_at, box_end)) = jp2c_payload(&bytes) {
@@ -209,8 +235,13 @@ fn every_cut_inside_the_main_header_is_incomplete() {
         }
     }
     // The fixtures that ship with the crate alone give more than these.
-    eprintln!("cut {codestreams} codestreams and {jp2s} JP2 files");
+    eprintln!("cut {codestreams} codestreams ({ht_codestreams} HT) and {jp2s} JP2 files");
     assert!(codestreams >= 100, "only {codestreams} codestreams cut");
+    // The 41 HT conformance codestreams and the bare OpenJPH ones.
+    assert!(
+        ht_codestreams >= 41,
+        "only {ht_codestreams} HT codestreams cut"
+    );
     assert!(jp2s >= 30, "only {jp2s} JP2 files cut");
 }
 
@@ -489,6 +520,57 @@ fn damaged() -> Vec<(&'static str, Vec<u8>, usize)> {
     ]
 }
 
+/// `whole` with `segment` inserted after its SIZ segment, which ends at 45.
+fn after_siz(whole: &[u8], segment: &[u8]) -> Vec<u8> {
+    [&whole[..45], segment, &whole[45..]].concat()
+}
+
+/// Main headers refused with a variant other than `Codestream`, each with the
+/// length of the shortest prefix that holds the refused segment and the
+/// variant the whole file gives. An `Unsupported`, `Marker` or `Limit` held
+/// in full outranks the cut the way `Codestream` damage does.
+#[allow(clippy::type_complexity)]
+fn refused() -> Vec<(&'static str, Vec<u8>, usize, fn(&Error) -> bool)> {
+    let whole = latlon();
+    // The COD's style byte is at 57 and its wavelet at 58; the segment ends
+    // at 59.
+    vec![
+        (
+            "an HTJ2K code-block style in COD",
+            edited(&whole, &[(57, 0x40)]),
+            59,
+            |e| matches!(e, Error::Unsupported(m) if m.contains("code-block style (HTJ2K")),
+        ),
+        (
+            "a reserved wavelet in COD",
+            edited(&whole, &[(58, 2)]),
+            59,
+            |e| matches!(e, Error::Marker(_)),
+        ),
+        (
+            "a CAP that signals MULTIHT",
+            after_siz(&whole, &[0xFF, 0x50, 0, 8, 0, 2, 0, 0, 0x20, 0x03]),
+            55,
+            |e| matches!(e, Error::Unsupported(m) if m.contains("MULTIHT")),
+        ),
+        (
+            "a CAP one Ccap word short",
+            after_siz(&whole, &[0xFF, 0x50, 0, 6, 0, 2, 0, 0]),
+            53,
+            |e| matches!(e, Error::Marker(m) if m.contains("`CAP`")),
+        ),
+    ]
+}
+
+/// Each whole file of [`refused`] gives its variant.
+#[test]
+fn a_refused_main_header_gives_its_variant() {
+    for (what, bytes, _, expected) in refused() {
+        let header = read_header(&bytes);
+        assert!(header.as_ref().is_err_and(expected), "{what}: {header:?}");
+    }
+}
+
 /// A whole file whose main header has a damaged field is `Codestream`, not
 /// `Incomplete`: every byte of the header is there, so more bytes would not
 /// help.
@@ -525,7 +607,10 @@ fn a_damaged_main_header_is_codestream() {
 /// below 2), reports that walk error before it judges any segment.
 #[test]
 fn a_cut_after_a_damaged_segment_is_an_error_not_incomplete() {
-    for (what, bytes, holds) in damaged() {
+    let refused = refused()
+        .into_iter()
+        .map(|(what, bytes, holds, _)| (what, bytes, holds));
+    for (what, bytes, holds) in damaged().into_iter().chain(refused) {
         let whole = read_header(&bytes).map(|_| ());
         assert!(whole.is_err(), "{what}");
         for length in 0..=bytes.len() {

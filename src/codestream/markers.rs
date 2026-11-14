@@ -24,6 +24,7 @@ pub mod marker {
     pub const PPM: u16 = 0xFF60; // packed packet headers, main header
     pub const PPT: u16 = 0xFF61; // packed packet headers, tile-part
     pub const CRG: u16 = 0xFF63; // component registration
+    pub const CPF: u16 = 0xFF59; // corresponding profile (ISO/IEC 15444-15)
     pub const SOP: u16 = 0xFF91; // start of packet
     pub const EPH: u16 = 0xFF92; // end of packet header
     pub const COM: u16 = 0xFF64; // comment
@@ -71,6 +72,7 @@ pub mod marker {
             PPM => "`PPM`",
             PPT => "`PPT`",
             CRG => "`CRG`",
+            CPF => "`CPF`",
             SOP => "`SOP`",
             EPH => "`EPH`",
             COM => "`COM`",
@@ -114,8 +116,10 @@ pub mod marker {
 ///
 /// Each flag changes how Tier-1 reads a code-block's coded segments, so a
 /// decoder that ignores one does not decode a slightly different image — it
-/// decodes the wrong one. `decode_cod` rejects the two HTJ2K bits (`0x40`,
-/// `0x80`); the six Part 1 flags below are decoded.
+/// decodes the wrong one. The six Part 1 flags below are decoded. The two
+/// HTJ2K bits, [`HT`] and [`HT_MIXED`], are read into
+/// [`Coding`](super::Coding) and refused by the block-coder guard
+/// (`check_block_coder` in `codestream`).
 pub mod code_block_style {
     /// Bit 0: selective arithmetic coding bypass (lazy). From the fifth coded
     /// bit-plane on, the significance-propagation and magnitude-refinement passes
@@ -155,13 +159,20 @@ pub mod code_block_style {
     /// out of step with the MQ coder for every later pass.
     pub const SEGSYM: u8 = 0x20;
 
+    /// Bit 6: the tile-component's code-blocks are HT code-blocks (ISO/IEC
+    /// 15444-15 A.4, OpenJPEG's `J2K_CCP_CBLKSTY_HT`).
+    pub const HT: u8 = 0x40;
+
+    /// Bit 7: with [`HT`], each code-block may be an HT code-block or a Part 1
+    /// one (MIXED, ISO/IEC 15444-15 Table A.4; OpenJPEG's
+    /// `J2K_CCP_CBLKSTY_HTMIXED`).
+    pub const HT_MIXED: u8 = 0x80;
+
     /// Every flag of the style byte, low bit first, with the name used in error
     /// messages. All eight bits are allocated, so no value goes unnamed.
     ///
-    /// Bits `0x40` and `0x80` select the HTJ2K block coder (ISO/IEC 15444-15;
-    /// OpenJPEG's `J2K_CCP_CBLKSTY_HT` and `J2K_CCP_CBLKSTY_HTMIXED`). A
-    /// codestream that sets them also carries a `CAP` marker, which is rejected
-    /// on its own, but naming them here keeps the message accurate either way.
+    /// Bits `0x40` and `0x80` select the HTJ2K block coder ([`HT`],
+    /// [`HT_MIXED`]), so a refusal of them names the coder.
     pub const FLAGS: [(u8, &str); 8] = [
         (0x01, "selective arithmetic coding bypass"),
         (0x02, "reset context probabilities"),
@@ -607,6 +618,34 @@ pub struct Cod {
     pub multiple_component_transform: bool,
     /// `SPcod`'s tail: the coding parameters a COC can override per component.
     pub coding: Coding,
+}
+
+/// `Ccap15`: the Part 15 (HTJ2K) word of a `CAP` marker (ISO/IEC 15444-15
+/// A.3, Table A.2), kept as read.
+///
+/// It describes the codestream's code-blocks so a decoder can refuse early,
+/// but it does not decide how they are read: the code-block style of each
+/// `COD` and `COC` does (A.4). Its reserved bits and reserved coder set are
+/// kept, not refused: the standard leaves a decoder's behavior on them open,
+/// and OpenJPEG reads no field of `CAP`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ccap15(pub u16);
+
+impl Ccap15 {
+    /// Bit 13: an HT code-block may carry more than one HT set (MULTIHT,
+    /// A.3.3).
+    pub fn multiht(self) -> bool {
+        self.0 & 0x2000 != 0
+    }
+}
+
+/// `CPF`: the corresponding profile marker (ISO/IEC 15444-15 A.6), kept as
+/// its `Pcpf` words. It names the Part 1 profile a reversible transcode of
+/// the codestream would carry, and changes nothing about decoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cpf {
+    /// `Pcpf1..PcpfN`, in marker order; never empty.
+    pub words: Vec<u16>,
 }
 
 /// QCD — quantization default (ISO A.6.4): the step sizes / exponents the
