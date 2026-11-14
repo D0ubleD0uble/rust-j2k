@@ -15,7 +15,7 @@ use core::ops::Range;
 /// it could make and says here what it left out.
 ///
 /// ```
-/// use rust_j2k::{DecodeOptions, decode_with};
+/// use rust_j2k::{DecodeOptions, decode_with, read_header};
 ///
 /// let bytes = include_bytes!(concat!(
 ///     env!("CARGO_MANIFEST_DIR"),
@@ -30,8 +30,10 @@ use core::ops::Range;
 ///     for entry in &report.entries {
 ///         println!("{entry}");
 ///     }
-///     // The finest level the data already holds in full, if any.
-///     if let Some(reduction) = report.complete_reduction {
+///     // The finest level the data already holds in full, if any, and if a
+///     // decode may ask for it.
+///     let max = read_header(prefix).expect("the main header is there").max_reduction;
+///     if let Some(reduction) = report.complete_reduction.filter(|&r| r <= max) {
 ///         let options = options.with_resolution_reduction(reduction);
 ///         let coarse = decode_with(prefix, &options).expect("decodes");
 ///         assert!(coarse.report.is_complete());
@@ -53,7 +55,9 @@ pub struct DecodeReport {
     /// any larger one the file allows, gives the same samples as a decode of
     /// the whole codestream. It is counted over all of the data, whatever
     /// reduction this decode used, so one cheap decode at a coarse level says
-    /// which finer level the data can already give.
+    /// which finer level the data can already give. It can be larger than
+    /// [`Header::max_reduction`](crate::Header::max_reduction), the largest
+    /// reduction a decode may ask for.
     ///
     /// `None` when no reduction is complete: even the coarsest resolution has
     /// a packet missing, a tile is missing, or a tile has bytes left over (see

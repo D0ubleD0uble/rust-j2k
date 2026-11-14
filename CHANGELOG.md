@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Migrating from 0.3
 
 The main changes that can break a 0.3 caller or change what it sees are
-below. The first fails to compile; the others compile and behave differently.
+below. The first fails to compile. The others compile but behave differently.
 
 - Pass options by reference: `decode_with(bytes, &options)`.
   `DecodeOptions` is no longer `Copy`, so call `.clone()` where you reuse
@@ -35,27 +35,27 @@ below. The first fails to compile; the others compile and behave differently.
   input.
 - Do not match on error message text. Messages are not stable, and the
   spelling is now American ("color", not "colour").
-
-Also, the decoder now bounds its work, so a file 0.3 decoded can come back as
-`Error::Limit`. Raise the bound that was hit with
-`DecodeOptions::packet_work_limit`, `code_block_work_limit` or
-`sample_limit`, each set to a `WorkLimit` (`Unlimited` for trusted input). The
-sample limit itself is higher than in 0.3 (2^28 samples, four times
-2^26), so no image 0.3 decoded is refused on size. But the default now
-admits four times the samples, which is about 1.4 GiB peak, estimated, for
-a square single-component tile, about 1.7 GiB for a tall tile 8 samples
-wide, up to about 2.6 GiB for one 1 sample wide, and about twice the output
-for a JP2 palette.
-`WorkLimit` cannot set a lower ceiling. To keep one, check `width`,
-`height` and the component count from `read_header` before decoding.
-Adding `Image::jp2` and `Image::report` breaks no caller, since `Image` is
-`#[non_exhaustive]`. The other files that 0.3 decoded and that are now refused
-are listed in "Changed" (a code-block size past the limit in any COD or COC,
-and a POC marker that leaves out packets). Some decoded values changed with no
-error (an RGN maxshift with the bypass style, a POC in a tile's first
-tile-part header, and 9/7 output, which can move by 1 on some samples now
-that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
-0.3 can differ.
+- Expect `Error::Limit` on some files 0.3 decoded, because the decoder now
+  bounds its work. Raise the bound that was hit with
+  `DecodeOptions::packet_work_limit`, `code_block_work_limit` or
+  `sample_limit`, each set to a `WorkLimit` (`Unlimited` for trusted input).
+- Plan for more memory. The sample limit is 2^28 samples, four times 0.3's
+  2^26, so no image 0.3 decoded is refused on size. But the default now
+  admits four times the samples, which is about 1.4 GiB peak, estimated, for
+  a square single-component tile, about 1.7 GiB for a tall tile 8 samples
+  wide, up to about 2.6 GiB for one 1 sample wide, and about twice the
+  output for a JP2 palette. `WorkLimit` cannot set a lower ceiling. To keep
+  one, check `width`, `height` and the component count from `read_header`
+  before decoding.
+- Nothing to change for the new `Image::jp2` and `Image::report` fields:
+  adding them breaks no caller, because `Image` is `#[non_exhaustive]`.
+- Two more kinds of file that 0.3 decoded are now refused (see "Changed"):
+  a code-block size past the limit in any COD or COC, and a POC marker that
+  leaves out packets.
+- Some decoded values change with no error, so output snapshots from 0.3
+  can differ: an RGN maxshift with the bypass style, a POC in a tile's first
+  tile-part header, and 9/7 output, which can move by 1 on some samples now
+  that β and δ are the nearest `f32` (see "Fixed").
 
 ### Added
 
@@ -95,7 +95,8 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
   palette was applied. The expanded channels count against the same sample
   budget as the codestream (`Error::Limit`), so while the decoded components
   are still held a palette can briefly take about twice the budget: a
-  one-column palette at the full budget peaks at about 515 MiB, measured.
+  one-column palette at 2^26 samples (the 0.3 budget) peaked at about
+  515 MiB, measured.
 - A JP2 file with channel definitions (`cdef`) puts its color channels in
   color order and labels every channel on `Jp2Metadata::channels` with its
   type and association. What is accepted and the output order follow OpenJPEG:
@@ -203,10 +204,12 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
 - Every public type added in this release is `#[non_exhaustive]` except
   three, so later variants and fields (a JPX color method, an output ICC
   profile, where an `xml ` box sat) are not breaking changes. The enums
-  `ColorSpace`, `ColorOutput` and `MappingKind` need a `_` arm in a
-  `match`. The structs `Header`, `ComponentInfo`, `Jp2Metadata`,
-  `ImageHeader`, `ColorSpecification`, `FileType`, `ReaderRequirements`,
-  `StandardFeature`, `VendorFeature`, `Resolution`, `Res`, `Ratio`,
+  `ColorSpace`, `ColorOutput`, `MappingKind`, `WorkLimit` and `ReportEntry`
+  need a `_` arm in a `match` (a `ReportEntry` variant pattern also needs
+  `{ .. }`). The structs `Header`, `ComponentInfo`, `DecodeReport`,
+  `Jp2Metadata`, `ImageHeader`, `ColorSpecification`, `FileType`,
+  `ReaderRequirements`, `StandardFeature`, `VendorFeature`, `Resolution`,
+  `Res`, `Ratio`,
   `XmlBox`, `IprBox`, `UuidBox`, `UuidInfo`, `Palette`, `PaletteColumn`,
   `ChannelMapping` and `ChannelDefinitionEntry` can't be built outside the
   crate, and a pattern on them needs `{ field, .. }`. `ChannelDefinition`,
@@ -273,12 +276,9 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
 
 ### Fixed
 
-- The code-block count guard now rejects before allocating the per-band
-  geometry, matching the precinct guard. The budget is threaded through the
-  geometry walk and spent per subband, so a header pairing a large tile with
-  tiny code-blocks is refused up front instead of after its block and
-  precinct-index vectors have been materialized (~160 MiB transient in the
-  worst case).
+- A header that pairs a large tile with tiny code-blocks is now refused
+  before the code-block geometry is allocated (up to about 160 MiB), as the
+  precinct-count check already was.
 - A tile-part with `Psot = 0` (the last one) now takes its data up to the last
   two bytes of the codestream without checking that they are `EOC`, as
   OpenJPEG does. A codestream that ends in two other bytes now decodes. One
@@ -315,9 +315,9 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
   tile that replaces them.
 - A single-tile decode no longer holds two image-sized buffers at once. The
   image plane takes the tile's buffer instead of a copy, and the inverse
-  wavelet frees each level's subbands as it merges them. At the full sample
-  budget, one 9/7 tile peaked at about 580 MiB and now peaks at about
-  340 MiB.
+  wavelet frees each level's subbands as it merges them. At 2^26 samples
+  (the 0.3 budget), one 9/7 tile peaked at about 580 MiB and now peaks at
+  about 340 MiB.
 - A code-block whose coding passes never get a byte now decodes, as the
   standard allows (B.10.7) and as OpenJPEG decodes it: the passes read the
   `0xFF` fill the decoder appends (D.4.1). It was refused with "included
@@ -458,7 +458,7 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
   exceeds a decoder resource guard (image/component sample budget, precinct and
   code-block counts, bit-plane depth, progression volumes), and
   `Error::InvalidOptions` when the caller's `DecodeOptions` are invalid for
-  the codestream (a `resolution_reduction` that consumes a whole pyramid).
+  the codestream (a `resolution_reduction` past the decomposition levels).
   `Error::Unsupported` now means only a valid-but-not-decoded feature.
 - The inverse wavelet transform is faster. It applies the boundary
   extension only at the two ends of each row and column, lifts each row as
@@ -477,6 +477,13 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
 - Together, these make whole-file decodes several times faster than 0.3.0:
   1.7 to 5.3 times on the conformance and benchmark files measured,
   depending on the file. Very small files gain little.
+- After those measurements, two more stages got faster, with unchanged
+  output. 9/7 samples are rounded, level-shifted and clamped in one pass
+  instead of two, which makes a whole 9/7 decode about 4 to 9% faster.
+  Reading packet headers costs less per code-block, which matters most with
+  small code-blocks: on a file of 4x4 code-blocks and 100 layers, reading
+  the packet headers takes about 40% less time and the whole decode about
+  16% less.
 
 ## [0.3.0] - 2026-07-18
 
