@@ -46,12 +46,12 @@ whole-crate look happens.
      allocation), attacker-steered loop bounds and quadratic blowups, the CI
      and release workflows, fuzz coverage against the current feature surface.
 3. **Fix what emerges.** Triage by severity: fix-now findings land in a review
-   PR ahead of the release PR; structural work becomes issues (drafted for
-   approval first, per the conventions).
-4. **Documentation currency pass.** README (install version, feature table,
-   status), `SECURITY.md`'s supported-versions table, `docs/`, rustdoc on the
-   public surface, and CHANGELOG completeness against
-   `git log <last-tag>..HEAD`.
+   PR ahead of the release PR; structural work becomes issues.
+4. **Documentation currency pass.** README (the "What it decodes" and "What
+   it doesn't do" lists, "How it's checked"), `SECURITY.md`'s
+   supported-versions table, `docs/`, rustdoc on the public surface, and
+   CHANGELOG completeness against `git log <last-tag>..HEAD`. Check that the
+   `description` in `Cargo.toml` matches the README's opening.
 5. **Extended gate**, beyond the per-PR gates: `cargo doc` warning-free,
    `cargo publish --dry-run` (confirm the package excludes the conformance
    corpus), and a bounded fuzz smoke over the current targets.
@@ -62,8 +62,8 @@ whole-crate look happens.
    section and refresh the compare links at the bottom. Consolidate duplicate
    Keep-a-Changelog section headers that accumulated while features landed.
 2. Bump `version` in `Cargo.toml` to match.
-3. Update the README's install line (`rust-j2k = "X.Y"`) and the
-   supported-versions table in `SECURITY.md` to the new minor version.
+3. Update the supported-versions table in `SECURITY.md` to the new minor
+   version.
 4. Point the published docs at the release, so docs.rs and crates.io show
    the docs for that version rather than `main`:
    - In `src/lib.rs`, change every `rust-j2k/blob/main/` link to
