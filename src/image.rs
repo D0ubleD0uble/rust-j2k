@@ -569,7 +569,7 @@ fn round_shift_clamp(values: Vec<f32>, depth: u8, shift: i64, lo: i64, hi: i64) 
 mod tests {
     use super::*;
     use crate::codestream::markers::{
-        Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
+        Cod, Coding, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
     };
 
     /// A minimal single-component header: an image of `x_size` by `y_size` at the
@@ -596,15 +596,17 @@ mod tests {
             Cod {
                 progression: Progression::Lrcp,
                 layers: 1,
-                decomposition_levels: 0,
-                code_block_width: 4,
-                code_block_height: 4,
-                code_block_style: 0,
                 use_sop: false,
                 use_eph: false,
                 multiple_component_transform: false,
-                transform: Transform::Reversible53,
-                precinct_sizes: vec![],
+                coding: Coding {
+                    decomposition_levels: 0,
+                    code_block_width: 4,
+                    code_block_height: 4,
+                    code_block_style: 0,
+                    transform: Transform::Reversible53,
+                    precinct_sizes: vec![],
+                },
             },
             Qcd {
                 style: QuantStyle::None,
