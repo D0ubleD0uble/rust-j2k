@@ -333,9 +333,10 @@ Table A-9 constraints on the image and tile origins are enforced before any
 geometry reaches the DWT.
 
 Every failure is typed. The flat `Error` enum names the kind of failure, so a
-caller can tell a damaged codestream (`Codestream`), an illegal field
-(`Marker`), a malformed JP2 box (`FileFormat`), a feature outside what this
-decoder reads (`Unsupported`) and a resource bound (`Limit`) apart. The
+caller can tell a damaged codestream (`Codestream`), input that ends inside
+the main header (`Incomplete`), an illegal field (`Marker`), a malformed JP2
+box (`FileFormat`), a feature outside what this decoder reads
+(`Unsupported`) and a resource bound (`Limit`) apart. The
 decode path does not `unwrap` or panic on input. Review and fuzzing hold
 this, not a lint; the only `expect` calls outside tests invert constant
 matrices in `src/jp2/lcms.rs`.
@@ -344,7 +345,8 @@ Reject matrices pin the error for each kind of input this decoder refuses.
 `reject_matrix_maps_every_out_of_subset_input_to_its_typed_error` in
 `src/codestream/tests.rs` lists codestream inputs outside the decoded subset
 and pins the error a caller sees: `Codestream` for structural damage,
-`Marker` for an illegally encoded field, and `Unsupported` for valid JPEG
+`Incomplete` for input that ends inside the main header, `Marker` for an
+illegally encoded field, and `Unsupported` for valid JPEG
 2000 this decoder does not read. The JP2 box layer has its own matrix,
 `reject_matrix_maps_every_malformed_box_shape_to_its_typed_error` in
 `src/jp2/tests.rs`, where a malformed box is `FileFormat`, and the sRGB

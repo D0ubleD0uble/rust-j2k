@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Error::Incomplete`: the input ends inside the codestream's main header,
+  after the `SOC` marker and before the first `SOT` marker is whole. A caller
+  whose input streams in can wait for more bytes instead of treating the file
+  as damaged. `read_header` and `decode_with` return it whether or not
+  `strict` is set, for a raw codestream and for the codestream of a JP2 file.
+  These inputs were `Error::Codestream` before. The segments the input holds
+  in full are checked first, so a damaged one gives an error, not
+  `Incomplete`, usually the one the whole file gives.
+
 ## [0.4.0] - 2026-11-14
 
 JP2 files now decode, with their header metadata, and can be converted to
