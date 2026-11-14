@@ -22,8 +22,8 @@ use std::collections::{HashMap, HashSet};
 use crate::report::ReportEntry;
 use crate::{Error, Result};
 use markers::{
-    Cod, Coding, ComponentParams, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent,
-    TlmEntry, Transform, marker,
+    Ccap15, Cod, Coding, ComponentParams, Cpf, PocVolume, Progression, Qcd, QuantStyle, Siz,
+    SizComponent, TlmEntry, Transform, marker,
 };
 
 /// Parsed main-header decode parameters. COD/QCD carry the codestream-wide
@@ -55,6 +55,14 @@ pub struct MainHeader {
     /// step, and do not change the decoded samples — so they are recorded for a
     /// caller to act on, not resampled here (OpenJPEG likewise reads past them).
     pub crg: Vec<(u16, u16)>,
+    /// The `Ccap15` word of a `CAP` marker that signals Part 15 (HTJ2K);
+    /// `None` when the codestream carries no `CAP`, or one that signals no
+    /// Part 15 capability. It is read for MULTIHT, which is refused, and does
+    /// not decide the block coder: each component's code-block style does.
+    pub ccap15: Option<Ccap15>,
+    /// The `CPF` marker, when the codestream carries one (ISO/IEC 15444-15
+    /// A.6). Informational.
+    pub cpf: Option<Cpf>,
 }
 
 impl MainHeader {
@@ -76,6 +84,8 @@ impl MainHeader {
             components,
             poc: Vec::new(),
             crg: Vec::new(),
+            ccap15: None,
+            cpf: None,
         }
     }
 }
@@ -564,7 +574,8 @@ enum Place {
 
 /// Reads the COD, QCD, COC, QCC and RGN markers of one header into
 /// [`Overrides`], refusing a duplicate. The main header and every tile-part
-/// header read them through this one routine.
+/// header read them through this one routine, which is also where each
+/// COD's and COC's block coder meets [`check_block_coder`].
 ///
 /// A.6 allows one COD and one QCD per header, and one COC, QCC and RGN per
 /// component per header. A second one is not a later-wins override; it is a
@@ -613,6 +624,7 @@ impl<'s> OverrideReader<'s> {
                     return Err(duplicate("COD"));
                 }
                 let cod = decode_cod(body()?)?;
+                check_block_coder(&cod.coding, "`COD`")?;
                 if seen {
                     return Err(duplicate("COD"));
                 }
@@ -632,6 +644,7 @@ impl<'s> OverrideReader<'s> {
             }
             marker::COC => {
                 let (index, coding) = decode_coc(body()?, self.siz)?;
+                check_block_coder(&coding, "`COC`")?;
                 self.first_for(code, "COC", index, suffix)?;
                 self.overrides.coc.push((index, coding));
             }
@@ -1310,6 +1323,16 @@ fn read_tile_part_header(
                     "marker {m:#06X} is not permitted in a tile-part header"
                 )));
             }
+            // CAP and CPF describe the whole codestream, so they belong in the
+            // main header only (ISO/IEC 15444-1 A.5.2, ISO/IEC 15444-15 A.6);
+            // OpenJPEG reads both there only. Here, like a misplaced TLM, they
+            // are a malformed codestream.
+            marker::CAP | marker::CPF => {
+                return Err(Error::Codestream(format!(
+                    "{} is a main-header marker; it is not permitted in a tile-part header",
+                    marker::describe(m)
+                )));
+            }
             other => {
                 return Err(Error::Codestream(format!(
                     "unexpected marker {other:#06X} in tile-part header"
@@ -1595,6 +1618,9 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     let mut tlm_entries = 0usize;
     let mut poc: Vec<PocVolume> = Vec::new();
     let mut crg: Option<Vec<(u16, u16)>> = None;
+    // `CAP` and `CPF`, each at most once: `Some(ccap15)` once a CAP is read.
+    let mut cap: Option<Option<Ccap15>> = None;
+    let mut cpf: Option<Cpf> = None;
     // Packed packet headers (A.7.4), collected as `(Zppm, Ippm)` and split into
     // per-tile-part chunks after the walk by `decode_ppm_chunks`.
     let mut ppm: Vec<(u8, Vec<u8>)> = Vec::new();
@@ -1654,14 +1680,26 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
                 ppm.push((zppm, ippm.to_vec()));
             }
 
+            // Extended capabilities (ISO/IEC 15444-1 A.5.2) and the
+            // corresponding profile (ISO/IEC 15444-15 A.6): one of each per
+            // codestream.
+            marker::CAP => {
+                if cap.replace(decode_cap(body())?).is_some() {
+                    return Err(Error::Codestream("duplicate `CAP` marker".into()));
+                }
+            }
+            marker::CPF => {
+                if cpf.replace(decode_cpf(body())?).is_some() {
+                    return Err(Error::Codestream("duplicate `CPF` marker".into()));
+                }
+            }
+
             // Valid markers the decoded subset does not yet cover. Rejected
             // rather than skipped: each one changes how the codestream is
             // interpreted, so ignoring it would silently decode the wrong
-            // image. CAP announces capabilities beyond Part 1 (an HTJ2K
-            // codestream carries one), whose code-blocks this Tier-1 would
-            // misread as Part 1. PPT/SOP/EPH belong after SOD or in a tile-part
-            // header, not the main one.
-            marker::CAP | marker::PPT | marker::SOP | marker::EPH => {
+            // image. PPT/SOP/EPH belong after SOD or in a tile-part header,
+            // not the main one.
+            marker::PPT | marker::SOP | marker::EPH => {
                 return Err(Error::Unsupported(format!(
                     "marker {} is outside the decoded subset",
                     marker::describe(seg.code)
@@ -1687,9 +1725,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // its segment — that is what lets the header be traversed at all —
             // but we will not decode past it: every marker code is allocated by
             // some part of the standard, and an unknown one may well change what
-            // the packet data means (Part 15's HTJ2K block coder, later
-            // extensions). Guessing that it is ignorable would trade a clean
-            // rejection for a silently wrong image.
+            // the packet data means. Guessing that it is ignorable would trade
+            // a clean rejection for a silently wrong image.
             other => {
                 return Err(Error::Unsupported(format!(
                     "unrecognized marker {other:#06X} in the main header"
@@ -1715,6 +1752,8 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     let mut header = MainHeader::new(siz, cod, qcd);
     header.poc = poc;
     header.crg = crg.unwrap_or_default();
+    header.ccap15 = cap.flatten();
+    header.cpf = cpf;
     overrides.lay_over(&mut header.components);
 
     validate_resolved(&header)?;
@@ -1962,8 +2001,8 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
 
 /// Decode COD — default coding style (A.6.1): transform, decomposition depth,
 /// progression, layers, code-block size/style, precinct sizes. All six Part 1
-/// style flags and both color transforms are accepted; the HTJ2K style bits
-/// and Part 2's array MCT are rejected.
+/// style flags and both color transforms are accepted, and Part 2's array MCT
+/// is rejected. The HTJ2K style bits are kept for [`check_block_coder`].
 fn decode_cod(mut b: Cursor<'_>) -> Result<Cod> {
     // Scod bit 0: user-defined precincts in SPcod. Bit 1: SOP may precede each
     // packet. Bit 2: EPH follows each packet header. Bits 3-7 are reserved.
@@ -2134,21 +2173,9 @@ fn decode_coding(b: &mut Cursor<'_>, origin: &str, explicit_precincts: bool) -> 
     }
     let code_block_width = b.u8()?;
     let code_block_height = b.u8()?;
+    // Every bit is allocated (Table A-19, ISO/IEC 15444-15 A.4), so the byte
+    // is kept whole; `check_block_coder` refuses the coders not yet decoded.
     let code_block_style = b.u8()?;
-    // Each style flag changes how Tier-1 reads a code-block's coded segments.
-    // Ignoring one does not decode a slightly different image, it decodes the
-    // wrong one, so reject rather than half-decode until each lands. `bypass`,
-    // `restart`, `predictable termination`, `segmentation symbols`, `vertically
-    // causal context` and `reset context probabilities` are decoded; the two
-    // HTJ2K bits are not.
-    use markers::code_block_style::{LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
-    let undecoded = code_block_style & !(LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET);
-    if undecoded != 0 {
-        return Err(Error::Unsupported(format!(
-            "{origin} code-block style ({}) is outside the decoded subset",
-            markers::code_block_style::describe(undecoded),
-        )));
-    }
     let transform = match b.u8()? {
         0 => Transform::Irreversible97,
         1 => Transform::Reversible53,
@@ -2368,6 +2395,92 @@ fn decode_crg(mut b: Cursor<'_>, siz: &Siz) -> Result<Vec<(u16, u16)>> {
         offsets.push((x, y));
     }
     Ok(offsets)
+}
+
+/// `Pcap` bit 15, counted from the MSB: the codestream uses Part 15 (HTJ2K)
+/// capabilities (ISO/IEC 15444-15 A.3.1).
+const PCAP_PART15: u32 = 1 << (32 - 15);
+
+/// Decode CAP — extended capabilities (ISO/IEC 15444-1 A.5.2): `Pcap`, then
+/// one `Ccap` word for each bit `Pcap` sets, in bit order from the MSB. Bit
+/// `i` (from 1 at the MSB) says the codestream uses capabilities of Part `i`.
+///
+/// Returns the Part 15 word when `Pcap` sets that bit. A capability of any
+/// other part is `Unsupported`, as is MULTIHT (`Ccap15` bit 13), which no
+/// conformance codestream sets. OpenJPEG reads no field of CAP.
+fn decode_cap(mut b: Cursor<'_>) -> Result<Option<Ccap15>> {
+    let len = b.remaining();
+    let pcap = if len >= 4 { b.u32()? } else { 0 };
+    let needed = 4 + 2 * pcap.count_ones() as usize;
+    if len != needed {
+        return Err(Error::Marker(format!(
+            "`CAP` carries {len} bytes, not the {needed} its `Pcap` needs"
+        )));
+    }
+    if let Some(bit) = (1..=32).find(|&i| i != 15 && pcap & (1 << (32 - i)) != 0) {
+        // Part 1 is the baseline and has no extended capabilities, and no
+        // part past 17 exists. Such a bit names no capability this decoder
+        // knows; it is still `Unsupported`, not `Marker`, since a later
+        // edition may assign it.
+        let message = if (2..=17).contains(&bit) {
+            format!("`CAP` signals capabilities of ISO/IEC 15444-{bit}, outside the decoded subset")
+        } else {
+            format!(
+                "`CAP` sets `Pcap` bit {bit}, counted from the MSB, which names no part \
+                 of ISO/IEC 15444 with capabilities this decoder knows"
+            )
+        };
+        return Err(Error::Unsupported(message));
+    }
+    if pcap & PCAP_PART15 == 0 {
+        return Ok(None);
+    }
+    // The `Ccap` words follow `Pcap`'s bits from the MSB, so `Ccap15` is the
+    // first word only because every other part's bit was refused above. Once
+    // a Part 2 capability is read, `Ccap2` comes before it.
+    let ccap15 = Ccap15(b.u16()?);
+    if ccap15.multiht() {
+        return Err(Error::Unsupported(
+            "`CAP` signals more than one HT set per code-block (MULTIHT), outside the decoded subset"
+                .into(),
+        ));
+    }
+    Ok(Some(ccap15))
+}
+
+/// Decode CPF — the corresponding profile (ISO/IEC 15444-15 A.6): one or
+/// more 16-bit `Pcpf` words. Kept, not checked against `Rsiz` or the
+/// profile: it changes nothing about decoding, and OpenJPEG reads none of
+/// it. A body that is not whole words is malformed.
+fn decode_cpf(mut b: Cursor<'_>) -> Result<Cpf> {
+    let len = b.remaining();
+    if len == 0 || !len.is_multiple_of(2) {
+        return Err(Error::Marker(format!(
+            "`CPF` carries {len} bytes, not one or more 16-bit `Pcpf` words"
+        )));
+    }
+    let words = (0..len / 2).map(|_| b.u16()).collect::<Result<_>>()?;
+    Ok(Cpf { words })
+}
+
+/// The one guard on which block coder a COD or COC selects, run as each is
+/// read in the main header or a tile-part header ([`OverrideReader`]).
+///
+/// The style bits decide each tile-component's coder (ISO/IEC 15444-15
+/// A.4); `CAP` does not override them. An HT code-block style (`0x40`, alone
+/// or with `0x80` for MIXED) is not decoded yet, and `0x80` without `0x40`
+/// is refused with it. Because it runs per segment, a cut header that already
+/// holds such a COD or COC is refused, not reported as incomplete.
+fn check_block_coder(coding: &Coding, origin: &str) -> Result<()> {
+    use markers::code_block_style::{HT, HT_MIXED};
+    let undecoded = coding.code_block_style & (HT | HT_MIXED);
+    if undecoded != 0 {
+        return Err(Error::Unsupported(format!(
+            "{origin} code-block style ({}) is outside the decoded subset",
+            markers::code_block_style::describe(undecoded),
+        )));
+    }
+    Ok(())
 }
 
 /// Decode PLM — main-header packet lengths (A.7.2).

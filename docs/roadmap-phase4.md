@@ -302,8 +302,8 @@ the decoder can't read yet.
   Until P4.2, any code-block style with `0x40` is
   `Unsupported`.
 - Refuse MULTIHT (decision 5). The code-block style bits decide the coder of
-  each tile-component, or that it may mix both (MIXED); `CAP` is cross-checked
-  but does not override them.
+  each tile-component, or that it may mix both (MIXED). Of `CAP`, only
+  MULTIHT is checked; it does not override the style bits.
 - T.814 requires `Rsiz` bit 14 and `CAP` in every HTJ2K codestream. For HT
   code-block style without one of them, measure OpenJPEG on each shape and
   follow correctness.md's rule order.
@@ -319,6 +319,19 @@ codestreams: `ds0_ht_06_b15` has none, so its `Ccap15` is checked against its
 **Gate:** each of the 41 HT codestreams reaches the new `Unsupported` guard,
 not a parse error; the Part 1 and JP2 corpora are unchanged; the reject matrix
 passes.
+
+**Done (#340).** The guard is `check_block_coder` in `src/codestream/mod.rs`,
+over one `&Coding`, run by `OverrideReader::read` on each COD and COC of the
+main and tile-part headers as it is read, so a cut header that already holds an
+HT COD is `Unsupported`, not `Incomplete`. Later steps relax it. It sees only
+one COD or COC at a time, so it cannot see an `RGN` read later in the same
+header: P4.4 and P4.5 need state carried across the `RGN` and COD/COC reads,
+and P4.2's cleanup-only test needs the passes, known only in tier-2. The coder
+stays the raw `code_block_style` byte: a typed coder lands with the seam
+(#137), where tier-1 and tier-2 first consume it. Measured: OpenJPEG 2.5.0 decodes `ds0_ht_01_b11` and
+`ds1_ht_07_b11` with the `CAP` removed, with `Rsiz` bit 14 cleared, and with
+both, to the same samples as the files as made, so the style bits decide here
+too ([openjpeg-departures.md](openjpeg-departures.md#cap-and-cpf)).
 
 ### P4.2 — Tier-1 seam and cleanup-only HT blocks (`src/tier1/`, #137)
 
