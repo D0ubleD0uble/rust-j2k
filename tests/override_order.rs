@@ -10,6 +10,10 @@
 //! QCC out. See `tests/fixtures/override_order/README.md` and
 //! docs/openjpeg-departures.md.
 //!
+//! Component indexing (a COC or QCC applied to the wrong component) is not
+//! covered here; the Part 4 corpus does, where p0_05, p0_08 and p0_13 carry
+//! distinct per-component COC values.
+//!
 //! The images are compared with `assert!(a == b)`, not `assert_eq!`: a failure
 //! would print every sample.
 

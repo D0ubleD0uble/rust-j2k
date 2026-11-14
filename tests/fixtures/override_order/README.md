@@ -1,7 +1,7 @@
 # Override order fixtures
 
 Used by `tests/override_order.rs`. A COC or QCC applies to its component
-wherever it sits among the other markers of its header (A.6). Each file
+wherever it sits among the other markers of its header (A.6.1, A.6.2, A.6.4, A.6.5; the legal marker order is Figure A.3). Each file
 carries a COD and QCD that are wrong for every component, and one COC and QCC
 per component with the right values. The `_usual` files put the COC and QCC
 after the COD and QCD. The `_reordered` files put them before. Every file
@@ -17,7 +17,7 @@ Written by `scripts/gen-override-order-fixtures.py` from
 tile; itself a lossless OpenJPEG 2.5.0 encode, see `../README.md`). No encoder
 runs. The script changes the markers by hand:
 
-- The COD asks for 32x32 code-blocks instead of 16x16, and the QCD has two more
+- The COD sets the selective arithmetic bypass style (`SPcod` code-block style 0x01), and the QCD has two more
   guard bits and every exponent shifted by 4.
 - Three COCs (`Scoc` 0, `SPcoc` the source's `SPcod`) and three QCCs (the
   source's QCD body) restore the source's values.
@@ -32,10 +32,10 @@ the output matches the source's.
 
 | File | Markers in | Order | SHA-256 | `opj_decompress` 2.5.0 |
 | ---- | ---------- | ----- | ------- | ---------------------- |
-| `main_usual.j2k` | main header | COD QCD COC* QCC* | `c096390bcbe55011f86817fa642f672d2fa8100356e595d3064b061857c3b11a` | the source's image |
-| `main_reordered.j2k` | main header | COC* QCC* COD QCD | `573caa4279357cc2c961c8a4037f314ca6a5ff9465cbdbee0b311916f7a0cb69` | a different image, 1138 of 1152 samples wrong, no error |
-| `tile_usual.j2k` | tile-part header | COD QCD COC* QCC* | `cbc9f448cd35c67b0d443f709ef2754aaa1af98c5cfe499465391e3abd8cfb17` | the source's image |
-| `tile_reordered.j2k` | tile-part header | COC* QCC* COD QCD | `a0b09247e5eb15499230cb1564dcad0a56acdb38503876333309b7a5d9fbd41a` | a different image, 1138 of 1152 samples wrong, no error |
+| `main_usual.j2k` | main header | COD QCD COC* QCC* | `ac823fbecfbac0c947fdee29335099b18a8b32efcec05fdbb383d7453645fade` | the source's image |
+| `main_reordered.j2k` | main header | COC* QCC* COD QCD | `034a72684d89d126b9dfd9d2290c7833683dfecb2818aa51ca0399fe44b303a0` | a different image, 1152 of 1152 samples wrong, no error |
+| `tile_usual.j2k` | tile-part header | COD QCD COC* QCC* | `663a5fb9228ccdd970c3d95b2e4bbf1a3fda0debc356f69e739a9c5531137929` | the source's image |
+| `tile_reordered.j2k` | tile-part header | COC* QCC* COD QCD | `4d49b6deb5b1b9db0d14ee2b2c46030c2eeb7f044c6bbfa8519d219eed227042` | a different image, 1152 of 1152 samples wrong, no error |
 
 The grading reference is the source's decode, not `opj_decompress` on the
 `_reordered` files.

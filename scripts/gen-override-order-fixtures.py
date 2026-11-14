@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generate the override-order fixtures (issue #338) and print what OpenJPEG does.
 
-ISO/IEC 15444-1 A.6 resolves COD/COC and QCD/QCC by marker class: a COC or QCC
+ISO/IEC 15444-1 A.6.1, A.6.2, A.6.4 and A.6.5 (and Figure A.3, which
+fixes only SOC and SIZ in the header order) resolve COD/COC and QCD/QCC by marker class: a COC or QCC
 applies to its component whatever its position among the other markers of the
 same header. OpenJPEG 2.5.0 resolves by position: `opj_j2k_read_cod` and
 `opj_j2k_read_qcd` (`j2k.c:2767`, `j2k.c:3089`) copy component 0's parameters
@@ -9,7 +10,7 @@ over every component, so a COD or QCD that follows a COC or QCC wipes it out.
 
 Each stream starts from `multicomponent_lossless.j2k` (three reversible 8-bit
 components, one tile). A COD and a QCD that are wrong for every component
-(32x32 code-blocks instead of 16x16; shifted guard bits and exponents) are
+(selective arithmetic bypass on; shifted guard bits and exponents) are
 corrected by one COC and one QCC per component carrying the original values.
 The result decodes to the source image only if the COC and QCC win.
 
@@ -69,10 +70,10 @@ def build() -> dict[str, bytes]:
     assert cod_body[0] == 0 and qcd_body[0] & 0x1F == 0
     csiz = 3
 
-    # Wrong for every component: 32x32 code-blocks (xcb, ycb = 3), and shifted
+    # Wrong for every component: selective bypass (code-block style 0x01), and shifted
     # QCD guard bits and exponents.
     bad_cod = bytearray(cod_body)
-    bad_cod[6] = bad_cod[7] = 3
+    bad_cod[8] = 0x01
     bad_qcd = bytes([(((qcd_body[0] >> 5) + 2) & 7) << 5]) + bytes(
         ((((b >> 3) + 4) & 0x1F) << 3) for b in qcd_body[1:]
     )
@@ -112,6 +113,8 @@ def build() -> dict[str, bytes]:
 
 
 def opj(path: Path, tmp: Path) -> list[bytes] | str:
+    for stale in tmp.glob("out*.pgx"):
+        stale.unlink()
     run = subprocess.run(
         ["opj_decompress", "-i", str(path), "-o", str(tmp / "out.pgx")],
         capture_output=True,
