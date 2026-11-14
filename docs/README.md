@@ -42,6 +42,9 @@ If you work on the crate:
 - [`tests/fixtures/README.md`](../tests/fixtures/README.md) describes each
   test fixture, where it came from and the command that made it.
 - [`fuzz/README.md`](../fuzz/README.md) shows how to run the fuzz targets.
+- [roadmap-phase4.md](roadmap-phase4.md) is the plan for HTJ2K decode, the
+  phase in progress: its decisions, the corpora, and each step with its module,
+  oracle and gate.
 - [roadmap-phase1.md](roadmap-phase1.md),
   [roadmap-phase2.md](roadmap-phase2.md) and
   [roadmap-phase3.md](roadmap-phase3.md) are the plans of the finished phases,

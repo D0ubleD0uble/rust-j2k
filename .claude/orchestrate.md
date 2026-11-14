@@ -13,14 +13,16 @@ slots: { default: 2, max: 3 }
 models: { default: sonnet, mechanical: haiku, complex: opus }
   # complex: new parsers of untrusted input (#160), colour math (#165),
   # anything touching tier1/tier2/dwt numerics, and every review.
-focus_themes: ["phase3: milestone 'Phase 3 — JP2 file format decode'"]
+focus_themes: ["phase4: milestone 'Phase 4 — HTJ2K decode (Part 15)'"]
 standing_orders:
-  - "Keep one worker on the Phase 3 chain (#159 -> #160 -> #161..#166 -> #167) while it has an eligible issue."
+  - "Keep one worker on the HTJ2K chain (P4 steps in plan order, docs/roadmap-phase4.md) while it has an eligible issue."
+  - "Use the other slot for the streaming chain: #305 -> #215 -> #217, with #216 in parallel where its files don't overlap."
 
 labels: { decision: needs-decision, judgement: needs-judgement }
 hotspots:
-  - "src/lib.rs, src/error.rs, src/image.rs (public API: Image, DecodeOptions, Error)"
-  - "src/jp2/mod.rs until #160 has merged; afterwards per-box files may run in parallel"
+  - "src/lib.rs, src/error.rs, src/image.rs and DecodeOptions (public API; #305, #215, #216 and #217 serialize here)"
+  - "src/tier1/** while the HT seam (#137, P4.2) lands"
+  - "src/codestream/** for the CAP/CPF work (P4.1)"
   - "tests/support/mod.rs (Expected schema) and tests/fixtures/conformance/regenerate.py"
   - "fuzz/Cargo.toml and fuzz/fuzz_targets/ (one worker adding targets at a time)"
 owner_only_edits:
@@ -67,7 +69,7 @@ constraints:
   - "Pure Rust only; no C/native dependency ever; no unsafe."
   - "Never commit personal data (emails, names, machine paths)."
   - "Never edit the owner's main checkout; workers use harness-owned worktrees (Agent isolation: worktree)."
-  - "Phase 3 owner decisions in docs/roadmap-phase3.md are settled; do not re-open them."
+  - "Phase 4 decisions in docs/roadmap-phase4.md are settled; do not re-open them."
 
 local:
   protected_checkouts: ["the repo's main checkout"]
