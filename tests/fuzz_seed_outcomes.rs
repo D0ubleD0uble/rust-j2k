@@ -189,7 +189,7 @@ const TARGET_HASH: u64 = 9521446311063571855;
 /// Hash of this file's copy and its use (`const SIGNATURE` up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.
-const TEST_HASH: u64 = 4025219996760628514;
+const TEST_HASH: u64 = 13616706247914962663;
 
 fn target_hash() -> u64 {
     let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");
@@ -198,7 +198,7 @@ fn target_hash() -> u64 {
 }
 
 fn test_hash() -> u64 {
-    let this = include_str!("fuzz_seed_outcomes.rs");
+    let this = include_str!("fuzz_seed_outcomes.rs").replace('\r', "");
     let start = this.find("const SIGNATURE").expect("the copy");
     let end = this.find("\n#[test]\n").expect("the test");
     assert!(start < end, "the copy must come before the test");
