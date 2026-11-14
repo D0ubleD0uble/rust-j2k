@@ -909,7 +909,7 @@ fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
 }
 
 /// `ihdr.NC` is not held to `Csiz`: the codestream decides the image, as in
-/// OpenJPEG 2.5.0 (owner decision, 2026-11-01). Measured: `opj_decompress`
+/// OpenJPEG 2.5.0 (#164, 2026-11-01). Measured: `opj_decompress`
 /// decodes a one-component codestream under an `ihdr` with `NC` 2 or 9. A
 /// `bpcc` is still held to `NC`, so it must hold `NC` bytes, not `Csiz`.
 #[test]

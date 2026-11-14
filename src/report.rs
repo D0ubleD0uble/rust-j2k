@@ -159,7 +159,8 @@ pub enum ReportEntry {
         /// the resolutions this decode keeps.
         complete_layers: u16,
         /// The smallest reduction at which this tile has every packet, as
-        /// [`DecodeReport::complete_reduction`] counts it, or `None`.
+        /// [`DecodeReport::complete_reduction`] counts it, or `None` when even
+        /// the coarsest resolution of this tile has a packet missing.
         complete_reduction: Option<u8>,
     },
     /// The input ends inside this tile-part: its `Psot` declares more bytes
@@ -277,7 +278,7 @@ impl fmt::Display for ReportEntry {
                      {tile_part} on, not read; its samples may be wrong"
                 )
             }
-            ReportEntry::MissingEoc => write!(f, "the codestream ends without its EOC marker"),
+            ReportEntry::MissingEoc => write!(f, "the codestream ends without its `EOC` marker"),
         }
     }
 }

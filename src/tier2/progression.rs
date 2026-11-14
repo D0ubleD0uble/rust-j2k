@@ -96,7 +96,7 @@ impl PacketWalk<'_> {
         let j = (y.div_ceil(sy) >> geom.ppy) - (try0 >> geom.ppy);
         debug_assert!(
             i < geom.precincts_wide as u64 && j < geom.precincts_high as u64,
-            "precinct index ({i}, {j}) out of the {}×{} grid",
+            "precinct index ({i}, {j}) out of the {}x{} grid",
             geom.precincts_wide,
             geom.precincts_high,
         );
@@ -278,7 +278,7 @@ pub(crate) fn check_poc_coverage(
     let layers = header.cod.layers;
     poc_gaps(header, walk, |comp, res, reached| {
         Err(Error::Codestream(format!(
-            "the POC volumes of tile {tile} leave out its packets of component \
+            "the `POC` volumes of tile {tile} leave out its packets of component \
              {comp}, resolution {res}, from layer {reached} of {layers}"
         )))
     })
@@ -530,7 +530,7 @@ impl Emitted {
             Some(words) => Marks::Dense(vec![0; words]),
             None if !poc_set => {
                 return Err(Error::Limit(format!(
-                    "tile packet walk exceeds its work bound: its POC volumes hold \
+                    "tile packet walk exceeds its work bound: its `POC` volumes hold \
                      {reached} packets, past the packet bitmap"
                 )));
             }
@@ -575,7 +575,7 @@ impl Emitted {
                     .ok()
                     .and_then(|w| words.get_mut(w))
                     .ok_or_else(|| {
-                        Error::Inconsistent(format!("packet {bit} past the POC bitmap"))
+                        Error::Inconsistent(format!("packet {bit} past the `POC` bitmap"))
                     })?;
                 let mask = 1u64 << (bit % 64);
                 let new = *word & mask == 0;

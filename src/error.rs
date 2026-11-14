@@ -1,7 +1,7 @@
 //! Error type for the decoder. One flat enum; each failure maps to the variant
 //! that names its class, so a caller can tell a malformed input from an
 //! unsupported feature: [`Error::Codestream`] for structural damage,
-//! [`Error::Marker`] for an illegal field encoding, [`Error::FileFormat`] for a
+//! [`Error::Marker`] for an invalid field value, [`Error::FileFormat`] for a
 //! malformed JP2 box structure, [`Error::Unsupported`] for
 //! a valid-but-out-of-subset feature, [`Error::Limit`] for an input past a
 //! decoder resource guard, [`Error::InvalidOptions`] for bad caller options,
@@ -69,11 +69,11 @@ pub enum Error {
     /// that is not JPEG 2000 at all (empty input, text, another image
     /// format) is this variant, since it has no `SOC` marker.
     Codestream(String),
-    /// A marker segment carried an illegal field encoding (a reserved value,
-    /// a bad length, an out-of-range field).
+    /// A marker segment has an invalid field: a reserved value, a bad length
+    /// or an out-of-range value.
     Marker(String),
     /// The JP2 box structure or a box field is malformed: a truncated box, a
-    /// missing or misplaced required box, an illegal field value, or a box
+    /// missing or misplaced required box, an invalid field value, or a box
     /// that disagrees with the codestream.
     FileFormat(String),
     /// A valid-but-not-decoded feature: an HTJ2K codestream, a Part 2
@@ -102,9 +102,11 @@ pub enum Error {
     /// a measure of the file.
     ///
     /// The other guards have no option, so a file past one of them is refused
-    /// whatever the options. Among them are the caps on the code-block count,
-    /// the precinct count, the bit-plane depth and the number of progression
-    /// order change (POC) volumes. [`WorkLimit`](crate::WorkLimit) has an
+    /// whatever the options. A tile may hold at most 2^19 code-blocks and
+    /// 2^18 precincts, and 32 progression order change (POC) volumes; a
+    /// code-block may have at most 30 bit-planes; and under a `sample_limit`
+    /// of `WorkLimit::Unlimited`, an image too large for the target to
+    /// address is still refused. [`WorkLimit`](crate::WorkLimit) has an
     /// example that retries.
     Limit(String),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
@@ -126,7 +128,7 @@ impl fmt::Display for Error {
             Error::Unsupported(m) => write!(f, "unsupported: {m}"),
             Error::Limit(m) => write!(f, "limit: {m}"),
             Error::InvalidOptions(m) => write!(f, "invalid options: {m}"),
-            Error::Inconsistent(m) => write!(f, "inconsistent: {m}"),
+            Error::Inconsistent(m) => write!(f, "decoder bug (please report it): {m}"),
         }
     }
 }

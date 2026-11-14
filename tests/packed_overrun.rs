@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use rust_j2k::{DecodeOptions, Error, decode_with};
 
-const MESSAGE: &str = "a packet header runs past the end of its PPM or PPT packed headers";
+const MESSAGE: &str = "a packet header runs past the end of its `PPM` or `PPT` packed headers";
 
 fn read(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

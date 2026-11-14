@@ -11,8 +11,8 @@
 //!
 //! Each snapshot is `opj_decompress` on the `.jp2` (with `-r 1` for
 //! `<name>.srgb_r1.json`), graded within 1: OpenJPEG's formula truncates and
-//! uses 0.344 and 0.714, and the decoder rounds with the IEC constants (an
-//! owner-approved deviation). Provenance is in the fixtures README.
+//! uses 0.344 and 0.714, and the decoder rounds with the IEC constants (a
+//! deliberate deviation, #165). Provenance is in the fixtures README.
 
 mod support;
 

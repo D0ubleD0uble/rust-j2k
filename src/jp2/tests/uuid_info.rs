@@ -2,7 +2,7 @@
 //! (ISO/IEC 15444-1 I.6 and I.7.3). OpenJPEG skips both, so the samples never
 //! change; the expected metadata is read off the bytes built here. A
 //! malformed `uinf` is skipped as a whole, as OpenJPEG skips every `uinf`
-//! (owner decision, 2026-11-01; `docs/correctness.md`).
+//! (#192, 2026-11-01; see `docs/correctness.md`).
 
 use super::*;
 use crate::{UuidInfo, read_header_with};

@@ -91,8 +91,9 @@ impl PaletteColumn {
 /// Entry `j`, column `i` is `entry(j)[i]`. A value is the entry's stored
 /// bytes (the column's depth rounded up to whole bytes, at most 4) read as a
 /// big-endian unsigned number and cast to `i32`, as OpenJPEG does: a signed
-/// column's values are not sign-extended. A lookup clamps its index to
-/// `0..entry_count()`, as the decoder does.
+/// column's values are not sign-extended. The decoder clamps each index to
+/// `0..entry_count()`; [`entry`](Self::entry) does not, and returns `None`
+/// past the last entry.
 ///
 /// The table is at most 1024 entries by 255 columns of `i32`, about 1 MiB, and
 /// is bounded by the bytes the `pclr` box holds. It is `#[non_exhaustive]` and
@@ -544,7 +545,7 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
     let component = siz
         .components
         .get(usize::from(source.component()))
-        .ok_or_else(|| Error::Inconsistent("`cmap` component past SIZ".into()))?;
+        .ok_or_else(|| Error::Inconsistent("`cmap` component past `SIZ`".into()))?;
     Ok(PlannedChannel {
         source,
         bit_depth: column.bit_depth,
@@ -565,7 +566,7 @@ fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8, cap: u64)
         let index = usize::from(channel.source.component());
         let (width, height) = siz
             .component_extent_at(index, reduction)
-            .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {index}")))?;
+            .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {index}")))?;
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
     if total > cap {

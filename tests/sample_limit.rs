@@ -99,7 +99,7 @@ fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
             match result {
                 Err(Error::Limit(m)) => {
                     assert!(
-                        m.starts_with("image area 16385×16385 needs 268468225 samples, over the sample limit of 268435456"),
+                        m.starts_with("image area 16385x16385 needs 268468225 samples, over the sample limit of 268435456"),
                         "{what}: {m}"
                     );
                     assert!(m.contains("`DecodeOptions::sample_limit`"), "{what}: {m}");
@@ -184,7 +184,7 @@ fn a_reduced_image_still_over_the_limit_names_the_reduction() {
     match read_header_with(&bytes, &options) {
         Err(Error::Limit(m)) => assert!(
             m.starts_with(
-                "image area 20000×20000 at resolution reduction 1 needs 400000000 samples"
+                "image area 20000x20000 at resolution reduction 1 needs 400000000 samples"
             ) && m.contains("`WorkLimit::Raised(2)`"),
             "{m}"
         ),
@@ -206,8 +206,8 @@ fn a_sample_limit_raised_by_zero_is_invalid_options() {
                 Err(Error::InvalidOptions(m)) => {
                     assert_eq!(
                         m,
-                        "a sample limit raised by a factor of 0; the default is \
-                         `WorkLimit::Default`"
+                        "`DecodeOptions::sample_limit` is `WorkLimit::Raised(0)`, but the \
+                         factor must be at least 1"
                     );
                 }
                 other => panic!("{other:?}"),
@@ -303,7 +303,7 @@ fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
         Err(Error::Limit(m)) => {
             assert!(m.contains("`DecodeOptions::packet_work_limit`"), "{m}");
             assert!(
-                m.contains("the file needs at least `WorkLimit::Raised(2)`"),
+                m.contains("retry with at least `WorkLimit::Raised(2)`"),
                 "{m}"
             );
         }
@@ -346,10 +346,13 @@ fn the_dropped_blocks_factor_counts_the_tiles_earlier_components() {
     let bytes = many_tiles_of_empty_packets(6, 2000, 2);
     let message = refused_at_r6(&bytes, WorkLimit::Default);
     assert!(
-        message.contains("code-blocks in this component"),
+        message.contains("code-blocks in one component of tile"),
         "{message}"
     );
-    assert!(message.contains("visits already spent"), "{message}");
+    assert!(
+        message.contains("steps left of the packet work bound"),
+        "{message}"
+    );
     assert_eq!(named_factor(&message), 2, "{message}");
     let options = DecodeOptions::default()
         .with_resolution_reduction(6)
@@ -385,7 +388,7 @@ fn the_poc_factor_counts_the_dropped_blocks_charged_before_it() {
     let bytes = poc_reach_past_the_dropped_blocks();
     let message = refused_at_r6(&bytes, WorkLimit::Default);
     assert!(
-        message.contains("its POC volumes reach 16775430"),
+        message.contains("volumes of tile 0 reach 16775430"),
         "{message}"
     );
     assert_eq!(named_factor(&message), 2, "{message}");

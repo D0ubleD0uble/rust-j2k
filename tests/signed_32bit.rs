@@ -1,5 +1,5 @@
 //! Signed 32-bit components decode, although OpenJPEG 2.5.0 refuses them
-//! (`j2k.c`: a precision over 31 is an error). Owner-approved deviation; see
+//! (`j2k.c`: a precision over 31 is an error). A deliberate deviation (#167); see
 //! `docs/correctness.md`. No oracle decodes such a file, so the expected
 //! samples are derived by hand instead.
 //!

@@ -160,7 +160,7 @@ pub fn applies(signaled: bool, components: usize) -> bool {
 pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -> Result<()> {
     let [c0, c1, c2, ..] = components else {
         return Err(Error::Marker(format!(
-            "COD signals the color transform but SIZ declares {} component(s); \
+            "`COD` signals the color transform but `SIZ` declares {} component(s); \
              it is defined over the first three",
             components.len()
         )));
@@ -168,7 +168,7 @@ pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -
     for (index, comp) in [c1, c2].into_iter().enumerate() {
         if (comp.bit_depth, comp.signed) != (c0.bit_depth, c0.signed) {
             return Err(Error::Marker(format!(
-                "COD signals the color transform but component {} is {}-bit (signed {}) \
+                "`COD` signals the color transform but component {} is {}-bit (signed {}) \
                  against component 0's {}-bit (signed {})",
                 index + 1,
                 comp.bit_depth,
@@ -179,7 +179,7 @@ pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -
         }
         if (comp.x_sampling, comp.y_sampling) != (c0.x_sampling, c0.y_sampling) {
             return Err(Error::Marker(format!(
-                "COD signals the color transform but component {} sub-samples ({}, {}) \
+                "`COD` signals the color transform but component {} sub-samples ({}, {}) \
                  against component 0's ({}, {})",
                 index + 1,
                 comp.x_sampling,

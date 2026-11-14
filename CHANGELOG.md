@@ -6,484 +6,224 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+JP2 files now decode, with their header metadata, and can be converted to
+sRGB. Whole-file decodes are several times faster than 0.3.0. Each decode is
+bounded in time and memory for its file's size, so a small hostile file
+cannot take minutes or gigabytes, and a damaged codestream can be decoded in
+part on request. Some of these changes break 0.3 callers or change what they
+see: read "Migrating from 0.3" first.
+
 ### Migrating from 0.3
 
-The main changes that can break a 0.3 caller or change what it sees are
-below. The first fails to compile. The others compile but behave differently.
+Every change that can break a 0.3 caller or change what it sees is below.
+The first fails to compile; the others compile but behave differently.
 
 - Pass options by reference: `decode_with(bytes, &options)`.
   `DecodeOptions` is no longer `Copy`, so call `.clone()` where you reuse
   one by value.
-- Re-check every `match` arm on `Error::Unsupported`. `Error` is
-  `#[non_exhaustive]`, so the match still compiles, but some inputs that
-  were `Unsupported` now return another variant and fall to your wildcard
-  arm. A `resolution_reduction` past the decomposition levels is
-  `Error::InvalidOptions`. A resource guard is `Error::Limit`. A malformed
-  JP2 file is `Error::FileFormat`. `Unsupported` now means only a valid
-  feature that is not decoded. A "level not available, fall back to full
-  resolution" path should match `InvalidOptions` (`Header::max_reduction`
-  gives the largest reduction the main header allows; a decode can still
-  return `InvalidOptions` when a tile-part header allows less).
-- `decode` and `decode_with` accept JP2 files as well as raw codestreams.
-  If only a raw codestream is valid for you (GRIB2 section 7, say), refuse
-  input that does not start with SOC (`FF 4F`) before you decode. Or call
-  `read_header` first, which reads both forms, and refuse the input when
-  `header.jp2` is `Some`; that also lets you check `width`, `height` and
-  the component count before anything is allocated. Without that, input you
-  used to refuse now decodes. Some raw codestreams 0.3 refused decode too
-  (see "Fixed" and "Changed"), so do not use `decode` alone to validate
-  input.
-- Do not match on error message text. Messages are not stable, and the
-  spelling is now American ("color", not "colour").
-- Expect `Error::Limit` on some files 0.3 decoded, because the decoder now
-  bounds its work. Raise the bound that was hit with
-  `DecodeOptions::packet_work_limit`, `code_block_work_limit` or
-  `sample_limit`, each set to a `WorkLimit` (`Unlimited` for trusted input).
-- Plan for more memory. The sample limit is 2^28 samples, four times 0.3's
-  2^26, so no image 0.3 decoded is refused on size. But the default now
-  admits four times the samples, which is about 1.4 GiB peak, estimated, for
-  a square single-component tile, about 1.7 GiB for a tall tile 8 samples
-  wide, up to about 2.6 GiB for one 1 sample wide, and about twice the
-  output for a JP2 palette. `WorkLimit` cannot set a lower ceiling. To keep
-  one, check `width`, `height` and the component count from `read_header`
-  before decoding.
-- Nothing to change for the new `Image::jp2` and `Image::report` fields:
-  adding them breaks no caller, because `Image` is `#[non_exhaustive]`.
-- Two more kinds of file that 0.3 decoded are now refused (see "Changed"):
-  a code-block size past the limit in any COD or COC, and a POC marker that
-  leaves out packets.
-- Some decoded values change with no error, so output snapshots from 0.3
-  can differ: an RGN maxshift with the bypass style, a POC in a tile's first
-  tile-part header, and 9/7 output, which can move by 1 on some samples now
-  that β and δ are the nearest `f32` (see "Fixed").
+- Re-check every `match` arm on `Error::Unsupported`. Some inputs that were
+  `Unsupported` now return a new variant and fall to your wildcard arm: a
+  `resolution_reduction` past the decomposition levels is
+  `Error::InvalidOptions`, a resource guard is `Error::Limit`, and a
+  malformed JP2 file is `Error::FileFormat`. `Unsupported` now means only a
+  valid feature that is not decoded. A "level not available, fall back to
+  full resolution" path should match `InvalidOptions`; `Header::max_reduction`
+  gives the largest reduction the main header allows.
+- If only a raw codestream is valid input for you (GRIB2 section 7, say),
+  refuse JP2 files yourself, because `decode` and `decode_with` now accept
+  them. Refuse input that does not start with `SOC` (`FF 4F`), or call
+  `read_header` and refuse the input when `header.jp2` is `Some`. Some raw
+  codestreams that 0.3 refused also decode now (see "Changed" and "Fixed"),
+  so do not use `decode` alone to validate input.
+- Match on the `Error` variant, not on its message. Messages changed
+  throughout: they use American spellings ("color", not "colour"), backtick
+  marker names, and give the value and the limit.
+- Handle `Error::Limit` on files 0.3 decoded. The decoder now bounds the
+  work a file may ask for. To decode such a file, raise the bound its
+  message names with `DecodeOptions::packet_work_limit`,
+  `code_block_work_limit` or `sample_limit`, each a `WorkLimit`
+  (`Unlimited` for trusted input).
+- If you need a memory ceiling, check `width`, `height` and the component
+  count from `read_header` before decoding. The default sample limit is now
+  2^28 samples, four times 0.3's, so no image 0.3 decoded is refused for its
+  size, but one decode can take more memory. At the limit the peak is an
+  estimated 1.4 GiB for a square single-component tile, up to about 3.2 GiB
+  for a tile one sample wide, and about 2 GiB while a JP2 palette expands.
+  These are ratios measured on images of 2^24 to 2^26 samples, scaled to the
+  limit ([the sample limit](docs/correctness.md#the-sample-limit)).
+  `WorkLimit` cannot set a lower limit.
+- Expect an error on three kinds of malformed file that 0.3 decoded: a
+  code-block size past the 4096-sample limit in any `COD` or `COC`, even
+  one a later `COC` overrides (`Error::Marker`); a `POC` marker whose
+  volumes leave out packets of a tile, which 0.3 decoded with those packets
+  empty (`Error::Codestream`); and a packet header that reads past the end of
+  its `PPM` or `PPT` bytes, which 0.3 decoded to a wrong image
+  (`Error::Codestream`).
+- Regenerate output snapshots taken with 0.3 for three kinds of file, whose
+  samples change with no error: a code-block with an RGN maxshift and the
+  bypass style, a tile with a `POC` in its first tile-part header, and any
+  9/7 file, which can move by 1 on a few samples (see "Fixed").
 
 ### Added
 
 - `decode` and `decode_with` read JP2 files as well as raw codestreams,
-  telling them apart by their first bytes. The boxes are checked (signature,
-  `ftyp` with `jp2 ` compatibility, `jp2h` with an `ihdr` that matches the
-  codestream) and the first `jp2c` codestream is decoded. Files that bend the
-  box rules the way OpenJPEG tolerates decode as they do there: `ihdr`
-  anywhere in `jp2h`, a second `jp2h`, and a `jp2c` whose length is wrong
-  (past the end of the file, `LBox` 2..7, `XLBox` below 16, or shorter than
-  its codestream), since the codestream ends where its tile-parts end. A file
-  that is not JP2-compatible is `Unsupported`.
-- In a JP2 file, a `Psot = 0` last tile-part ends at the end of its `jp2c`
-  box, with or without `EOC`, when the box's length ends before the end of
-  the file and the tile's packets end exactly there. Such a file decodes as
-  in OpenJPEG, and its boxes after the codestream are reported. Otherwise
-  the tile-part is read to the end of the file, as OpenJPEG reads it, and
-  bytes after the last packet are refused. `read_header` makes the same
-  check, walking that tile's packet headers within a fixed bound; a tile
-  past the bound, or one whose POC volumes reach too many packets to walk,
-  is read to the end of the file, so the boxes after `jp2c` are not
-  reported. Bytes after a box that ends inside the codestream are never
-  reported as metadata.
-- The boxes after the codestream are read as OpenJPEG reads them after
-  decoding. Unknown boxes there are skipped, but a malformed header box is
-  `FileFormat`: a second signature or `ftyp`, a `jp2h` without `ihdr`, a bad
-  `colr`, `bpcc`, `pclr`, `cmap` or `cdef`, or a box shorter than its header.
-  That includes junk after the `EOC` of a `jp2c` with `LBox` 0, and padding
-  inside a `jp2c` that reads as a bad box.
-- A JP2 file with a palette (`pclr` + `cmap`) decodes to the palette's
-  channels, one per palette column, with each channel's depth and sign from
-  the palette. What is accepted and the output samples follow OpenJPEG, so a
-  palette channel that reads another channel's column is `Unsupported`. Two
-  differences: a palette column too deep for an `i32` sample is `Unsupported`,
-  and channels from components of different sub-sampling each keep their own
-  grid, where OpenJPEG fails. `Jp2Metadata::palette_applied` says whether the
-  palette was applied. The expanded channels count against the same sample
-  budget as the codestream (`Error::Limit`), so while the decoded components
-  are still held a palette can briefly take about twice the budget: a
-  one-column palette at 2^26 samples (the 0.3 budget) peaked at about
-  515 MiB, measured.
-- A JP2 file with channel definitions (`cdef`) puts its color channels in
-  color order and labels every channel on `Jp2Metadata::channels` with its
-  type and association. What is accepted and the output order follow OpenJPEG:
-  each color entry moves its channel to its color's position, and other
-  channels stay where the file put them. The entries describe the channels
-  after the palette. Without a `cdef` (or under `raw_channels`), only the
-  first N channels are colors, N being the color space's number of colors (3
-  for sRGB and sYCC, 1 for grayscale, the profile's for an ICC profile); any
-  channel past them is `Unspecified` with no association, since I.5.3.6 gives
-  it no meaning. When the count is not known (no `colr`, an enumerated value
-  without a listed count, or a profile too short to name its color space),
-  every channel is labeled a color, in order. This also lets a file of two
-  components, a grayscale ICC profile and no `cdef` convert under
-  `ColorOutput::Srgb` as gray plus opacity, and an sRGB file of four
-  components whose fourth differs in format from the colors passes through as
-  coded, as OpenJPEG does. Under `Srgb`, a three-component sRGB or grayscale
-  file at 4:2:0 or 4:2:2 is still refused, whatever its `cdef` labels or
-  without one, where `opj_decompress` would convert it as sYCC.
-- `DecodeOptions::raw_channels` returns a JP2 file's codestream components as
-  coded, without the palette or channel definitions. The index plane is then
-  labeled `ChannelType::Unspecified`, and only the boxes' layout is checked.
-- `read_header_with` reads the header for a given `DecodeOptions`: it fails
-  exactly when `decode_with` does for a fault in the boxes or the main header
-  (a palette `cmap` that `raw_channels` leaves unchecked, a palette that fits
-  the sample budget once the resolution is reduced, a code-block size past the
-  limit in the main-header COD or COC, a reduction past the main header's
-  decomposition levels), and its `width` and `height` follow the resolution
-  reduction. `read_header` is the same at the default options.
-- `ComponentInfo::width` and `ComponentInfo::height` give each output
-  channel's size in samples, equal to the decoded `Component`'s under the same
-  options: they follow the image origin (`ceil(x1/dx) - ceil(x0/dx)`, not
-  `ceil(width/dx)`), the resolution reduction, the palette and channel
-  definitions, and the sRGB conversion (sYCC chroma on the luma grid).
-- `Image::jp2: Option<Jp2Metadata>` says what a JP2 file's header says about
-  the samples (`None` for a raw codestream), with `ColorSpace`,
-  `ChannelDefinition`, `ChannelType`, and `Association` (`WholeImage` for
-  `Asoc` 0, `Color(n)` for 1 to 65534, `None` for 65535). The color space
-  comes from the first usable `colr` box (`METH` 1 or 2); the ICC profile
-  bytes of a `METH` 2 box are returned as they are, not applied. A `colr`
-  shorter than 3 bytes, a `METH` 1 box without its `EnumCS`, a `METH` 2 box
-  without a profile, and a `bpcc` box that is not one byte per component are
-  `FileFormat` errors, as in OpenJPEG for boxes before the codestream.
-- `Error::FileFormat` for a malformed JP2 box structure.
+  telling them apart by their first bytes, and decode the first `jp2c`
+  codestream. The boxes are checked; files that bend the box rules the way
+  OpenJPEG tolerates decode as they do there. A file that is not
+  JP2-compatible is `Error::Unsupported`. The rules for what is accepted are
+  on `decode` and in [the correctness notes](docs/correctness.md).
+- A JP2 file with a palette (`pclr` and `cmap`) decodes to the palette's
+  channels, and one with channel definitions (`cdef`) puts its color
+  channels in color order. `DecodeOptions::raw_channels` skips both and
+  returns the codestream's components as coded.
+- `Image::jp2: Option<Jp2Metadata>` returns what a JP2 file's header says:
+  the color space and any ICC profile (as bytes, not applied), a label for
+  each channel, the palette, component mapping and channel definitions, the
+  `ihdr`, `colr`, `ftyp`, `rreq` and `res ` boxes, and every top-level
+  `xml `, `uuid`, `jp2i` and `uinf` box. It is `None` for a raw codestream.
+- `DecodeOptions::color` takes a `ColorOutput`: `AsCoded` (the default) or
+  `Srgb`, which converts sYCC and restricted ICC profiles to sRGB. ICC output
+  matches OpenJPEG 2.5.0 with LittleCMS 2.14 sample for sample on platforms
+  with a correctly rounded `fma`. What
+  converts, what passes through and what is refused is listed on
+  `ColorOutput::Srgb`.
+- `read_header` and `read_header_with` return a codestream's or JP2 file's
+  `Header` (image area, each output channel's `ComponentInfo`,
+  `max_reduction` and the same `Jp2Metadata`) without decoding any tile
+  data. A header fault is the same error `decode_with` returns.
+- `DecodeOptions::strict`, `true` by default. With it off, a decode takes
+  input that is cut short or has bytes left after a tile's last packet, as
+  `opj_decompress -allow-partial` does, and says what it left out on
+  `Image::report`, a `DecodeReport` of `ReportEntry` values.
+  `DecodeReport::complete_reduction` gives the finest reduction the data
+  holds in full, so a codestream can be decoded as it streams in, and
+  `DecodeReport::is_complete` says whether anything is missing.
+- `WorkLimit`, with `DecodeOptions::packet_work_limit`,
+  `code_block_work_limit` and `sample_limit`, raises or lifts each of the
+  decode's three limits (see "Changed" and "Security"). The `Error::Limit` message names
+  the option and a `WorkLimit::Raised` factor to retry with.
+- `Error::FileFormat` for a malformed JP2 file, `Error::Limit` for an input
+  past a resource guard, and `Error::InvalidOptions` for options that are
+  invalid or do not fit the file.
+- `DecodeOptions::with_raw_channels`, `with_color`,
+  `with_packet_work_limit`, `with_code_block_work_limit`,
+  `with_sample_limit` and `with_strict` set those options, as
+  `with_resolution_reduction` does.
+- Every public type added in this release is `#[non_exhaustive]`, so match
+  it with `_` and `{ .. }`, except `ChannelDefinition`, `ChannelType` and
+  `Association`, which cover every `cdef` value and can be built and matched
+  exhaustively.
 - All nine JP2 files of the ISO/IEC 15444-4 conformance suite decode within
   their compliance class, alongside its 23 codestreams.
-- `read_header` returns a codestream's or JP2 file's `Header` (image area,
-  each output channel's `ComponentInfo`, and the same `Jp2Metadata` as
-  `decode`) without decoding any tile data, so a file whose tile data is cut
-  short still has a readable header. A header fault is the same error
-  `decode` returns.
-- `Jp2Metadata` reports the `res ` box's capture and display resolutions
-  (`Resolution`, `Res`, `Ratio`, with `Ratio::grid_points_per_meter`), and
-  every top-level `xml ` and `uuid` box verbatim (`XmlBox`, `UuidBox`),
-  including those after the codestream. A malformed `res ` never fails a
-  decode, as in OpenJPEG.
-- `Jp2Metadata::ipr` returns every top-level intellectual property box
-  (`jp2i`) verbatim as an `IprBox`, and `Jp2Metadata::uuid_info` every
-  top-level UUID info box (`uinf`) as a `UuidInfo`: the UUIDs of its `ulst`
-  box and the version, flags and location of its `url ` box, with
-  `UuidInfo::location_str` for the location as text. Both are collected before
-  and after the codestream, like `xml ` and `uuid`. A malformed `uinf` (not
-  exactly one `ulst` and one `url `, a `ulst` whose count does not match its
-  length, a `url ` under 4 bytes, or a bad box inside it) is left out and
-  never fails a decode, as OpenJPEG skips the box.
-- `Jp2Metadata` reports the rest of the JP2 header: `image_header`
-  (`ImageHeader`: the `ihdr` compression type, unknown-color-space flag and
-  `IPR` flag as `ipr_flag`), `color_specifications` (every `colr` box in file
-  order as a `ColorSpecification`, with its method, precedence, approximation
-  and the bytes after them as `payload`; the first usable one still sets
-  `color`), `file_type` (`FileType`: the `ftyp` brand, minor version and
-  compatibility list) and `reader_requirements` (`ReaderRequirements`, with
-  `StandardFeature` and `VendorFeature`: the first top-level `rreq` box's
-  masks and features). A malformed `rreq` is left out and never fails a
-  decode, as OpenJPEG skips the box.
-- `DecodeOptions::color` takes a `ColorOutput`. The default, `AsCoded`,
-  returns the samples as the file codes them. `Srgb` converts a JP2 file's
-  color channels, picked by their labels, to sRGB:
-  - sYCC to RGB, with sub-sampled chroma replicated to full resolution first.
-    This uses the IEC 61966-2-1 constants and rounds, where OpenJPEG shortens
-    the constants and truncates, so the two differ by an MSE of about 0.38 to
-    0.49 a channel; the ISO references agree with it (MSE under 0.03);
-  - a restricted ICC profile (monochrome, or three-component matrix/TRC)
-    applied at its rendering intent, with the same output as OpenJPEG 2.5.0
-    with LittleCMS 2.14, sample for sample. That holds on x86-64 Linux
-    (glibc 2.39) and on every platform whose `fma` is correctly rounded
-    (MinGW's, on `*-pc-windows-gnu`, may not be: rust-lang/rust#140515).
-    i586 targets use x87 arithmetic, which is not exact IEEE, so the output
-    there can differ too.
-
-  sRGB and grayscale pass through. So do the files OpenJPEG leaves as coded:
-  one or two channels in any color space but a monochrome profile, a profile
-  LittleCMS refuses, a profile in a color space other than RGB, gray or YCbCr,
-  and an RGB profile whose first four channels differ in format. The metadata
-  then keeps the profile. A three-channel 4:2:0 or 4:2:2 image in any color
-  space but sYCC is refused, where `opj_decompress` would convert it as sYCC.
-  Other color spaces and channel layouts are `Unsupported`, and `Srgb` with
-  `raw_channels` is `InvalidOptions`. After a conversion `Jp2Metadata::color`
-  says sRGB, or grayscale for a monochrome profile whose output is neutral. A
-  monochrome profile with a tinted white point gives three channels;
-  `read_header` doesn't predict that, and `read_header_with` with the same
-  options does. The table in `docs/correctness.md` ("sRGB output") lists every
-  case, what OpenJPEG does with it, and why this decoder follows or differs.
-- `DecodeOptions::with_raw_channels` and `DecodeOptions::with_color` set
-  those options like `with_resolution_reduction` does; the fields stay public.
-- Every public type added in this release is `#[non_exhaustive]` except
-  three, so later variants and fields (a JPX color method, an output ICC
-  profile, where an `xml ` box sat) are not breaking changes. The enums
-  `ColorSpace`, `ColorOutput`, `MappingKind`, `WorkLimit` and `ReportEntry`
-  need a `_` arm in a `match` (a `ReportEntry` variant pattern also needs
-  `{ .. }`). The structs `Header`, `ComponentInfo`, `DecodeReport`,
-  `Jp2Metadata`, `ImageHeader`, `ColorSpecification`, `FileType`,
-  `ReaderRequirements`, `StandardFeature`, `VendorFeature`, `Resolution`,
-  `Res`, `Ratio`,
-  `XmlBox`, `IprBox`, `UuidBox`, `UuidInfo`, `Palette`, `PaletteColumn`,
-  `ChannelMapping` and `ChannelDefinitionEntry` can't be built outside the
-  crate, and a pattern on them needs `{ field, .. }`. `ChannelDefinition`,
-  `ChannelType` and `Association` are exhaustive: they mirror the `cdef`
-  box's `Typ` and `Asoc`, whose every 16-bit value they already hold, so a
-  caller may build a `ChannelDefinition` and match on both enums without a
-  catch-all arm.
-- `Jp2Metadata::palette` and `Jp2Metadata::channel_mapping` give the file's
-  palette table (`Palette`, `PaletteColumn`) and component mapping
-  (`ChannelMapping`, `MappingKind`). They are set whenever a palette and a
-  `cmap` are present, also under `raw_channels`, so a caller can expand the
-  index planes itself. `Palette::entry` returns one entry's columns, or
-  `None` past the last entry.
-- `Jp2Metadata::channel_definitions` gives the `cdef` entries as written
-  (`ChannelDefinitionEntry`), and `channel_mapping` is the mapping the default
-  decode applies in both modes, OpenJPEG's single-component correction
-  included. With `raw_channels`, a caller can rebuild the default decode in
-  order from the raw one: expand the index planes through `palette` with
-  `channel_mapping`, then order them by the rule on `channel_definitions`. The
-  `raw_channels` documentation gives the recipe.
-- `src/jp2/lcms.rs` is a Rust port of parts of LittleCMS 2.14 (MIT). Its
-  notice is at the top of the file and in the README.
-- `src/jp2/math.rs` and `src/jp2/math_data.rs` are a Rust port of `pow` and
-  `log` from Arm's optimized-routines (MIT), so the ICC output does not
-  depend on the platform's `libm`. Its notice is at the top of `math.rs` and
-  in the README.
-- `DecodeOptions::packet_work_limit` and
-  `DecodeOptions::code_block_work_limit` raise or lift the decode's two
-  work bounds, for a valid file that goes past one: `WorkLimit::Default`
-  (the default), `WorkLimit::Raised(n)` for n times the bound, or
-  `WorkLimit::Unlimited`. The packet limit also bounds the walk
-  `read_header_with` makes of a `Psot = 0` tile. Raising it does not raise
-  the memory a POC sequence's packets are held in.
-- `DecodeOptions::sample_limit` (and `with_sample_limit`) raises or lifts
-  the limit on the decoded image's size, with the same `WorkLimit` values:
-  `Raised(n)` allows n times 2^28 samples, and `Unlimited` allocates what
-  the header declares, refusing only an image too large for the target to
-  address. `Raised(0)` is `InvalidOptions`. The refusal names the option and
-  the smallest `Raised` factor that admits the file.
-- The `Error::Limit` message for a work bound names a
-  `WorkLimit::Raised(n)`, worked out from the refusal alone, and points to
-  `WorkLimit::Unlimited` for trusted input. For the code-block bound it is
-  what the tiles seen so far need (exact for a file of one tile). For a POC
-  sequence that reaches too many packets it is what that reach needs; the
-  walk after the check can still run out. For the packet walk it is the
-  next factor up, and the file may need more, so double `n` on a retry. The
-  variant stays `Limit`.
-- `DecodeOptions::strict` (and `with_strict`), `true` by default. With it
-  off, the decode takes missing data and bytes left after a tile's last
-  packet, as `opj_decompress -allow-partial` does, and says what it left
-  out on `Image::report`, a `DecodeReport`. The input may end anywhere after
-  the first `SOT` marker: missing tiles are 0, packets never read add
-  nothing, a cut packet keeps each code-block's whole layers, and a `TNsot`
-  that disagrees with the tile-parts found is advisory. Every other fault,
-  and every work and sample bound, is refused as when strict. The report
-  lists `ReportEntry` values (`MissingTiles`, `MissingPackets`,
-  `TruncatedTilePart`, `TilePartCountMismatch`, `LeftoverBytes`,
-  `MissingEoc`), at most five per tile-part plus two, and
-  `complete_reduction`, the finest reduction the data holds in full, so a
-  codestream can be decoded as it streams in. A strict decode is unchanged
-  and its report is `DecodeReport::default()`.
-- `Header::max_reduction`, the largest `resolution_reduction` the main
-  header allows.
-
-### Fixed
-
-- A header that pairs a large tile with tiny code-blocks is now refused
-  before the code-block geometry is allocated (up to about 160 MiB), as the
-  precinct-count check already was.
-- A tile-part with `Psot = 0` (the last one) now takes its data up to the last
-  two bytes of the codestream without checking that they are `EOC`, as
-  OpenJPEG does. A codestream that ends in two other bytes now decodes. One
-  with no `EOC` loses its last two data bytes and fails in the tile
-  ("overruns the tile-part"); it used to be rejected as not terminated by
-  `EOC`.
-- Tile headers are checked in time proportional to their own markers. Each
-  tile's header used to be a copy of the main header, made for every tile
-  before any check, so the time grew as the tiles times the components or
-  the TLM entries. 65025 1x1 tiles over 16384 components took 46 s to be
-  refused and now take 17 ms; 65025 tiles behind 4 MB of TLM entries took
-  85 s to decode and now take 63 ms.
-- A code-block with an RGN maxshift and the bypass style now switches to raw
-  coding at its fifth coded bit-plane, counting the shifted planes, as the
-  standard and OpenJPEG's encoder do. It switched `SPrgn` planes late, as
-  OpenJPEG's decoder does, and decoded such streams wrong or refused them.
-  Streams without a maxshift decode as before.
-- A wrong segmentation symbol no longer fails the decode when the MQ decoder
-  read it from past the end of its segment on a pass the encoder did not
-  terminate. On a terminated pass (every pass under `restart`, the block's
-  last cleanup, and the bypass cleanups from the fourth coded plane down) it
-  is still an error. Rate control can cut an unterminated pass a few bytes
-  short, and `opj_compress` output with segmentation symbols and `-r` was
-  refused about once in 50 encodes. Such streams now decode as in OpenJPEG. A
-  wrong symbol read from the segment's own bytes is still a `Codestream`
-  error.
-- A POC in a tile's first tile-part header now replaces the main header's
-  POC for that tile, as the standard requires. The tile's volumes were
-  appended after the main header's, as OpenJPEG does, so a file with both
-  read its packets in the wrong order and was refused or decoded wrong. A
-  tile whose first POC is in a later tile-part, which the standard does not
-  allow, is still read as OpenJPEG reads it. The 32-volume limit counts the
-  volumes the tile walks, so the main header's no longer count against a
-  tile that replaces them.
-- A single-tile decode no longer holds two image-sized buffers at once. The
-  image plane takes the tile's buffer instead of a copy, and the inverse
-  wavelet frees each level's subbands as it merges them. At 2^26 samples
-  (the 0.3 budget), one 9/7 tile peaked at about 580 MiB and now peaks at
-  about 340 MiB.
-- A code-block whose coding passes never get a byte now decodes, as the
-  standard allows (B.10.7) and as OpenJPEG decodes it: the passes read the
-  `0xFF` fill the decoder appends (D.4.1). It was refused with "included
-  code-block has coding passes but no coded bytes". The passes still count
-  against the code-block work bound.
-- The 9/7 lifting constants β and δ are now the nearest `f32` values to the
-  standard's (Table F.4), as OpenJPEG's are. Each was one `f32` step off. 9/7
-  output moves by at most 1 on a few samples.
-- A packet header packed in a `PPM` or `PPT` marker that reads past the end
-  of its packed bytes is now a `Codestream` error, with `strict` on or off.
-  The missing bits were read as 1s and the decode returned a wrong image
-  with no error.
+- The crate now includes MIT-licensed code ported from LittleCMS 2.14 and
+  from Arm's optimized-routines (`pow` and `log`, so ICC output does not
+  depend on the platform's `libm`). The notices are in the README.
 
 ### Changed
 
+- Whole-file decodes are 1.7 to 5.3 times faster than 0.3.0, depending on
+  the file, measured on the conformance and benchmark files with the first
+  three changes below. Very small files gain little. The last three changes
+  came later and were each measured against the code before them, not
+  against 0.3.0. None of them changes the output.
+  - The inverse wavelet extends only at the ends of each row and column,
+    lifts each row as its two halves, and runs the vertical pass eight
+    columns at a time on tiles at least 16 samples wide.
+  - Code-block decoding uses a padded flag plane with a neighbor mask, so
+    contexts come from table lookups, and skips a column with nothing to
+    code in one test.
+  - Packet headers that name many code-blocks and include none step over
+    each group the inclusion tree excludes, instead of each code-block.
+    `opj_compress` writes such headers for every layer.
+  - 9/7 samples are rounded, level-shifted and clamped in one pass, which
+    makes a whole 9/7 decode about 4 to 9% faster (#321).
+  - Reading packet headers costs less per code-block. On a file of 4x4
+    code-blocks and 100 layers the whole decode takes about 16% less time
+    (#322).
+  - 9/7 dequantization runs as each code-block is placed instead of in a
+    separate pass over each band; the speed change is within measurement
+    noise (#324).
 - The decoded image may hold up to 2^28 samples (1 GiB as `i32`), up from
-  2^26, so a Sentinel-2 10 m band (10980 x 10980) and RGB images up to
-  about 89 MP decode at the defaults. The samples are counted at the
-  decode's resolution reduction, so a reduced decode of a larger image is
-  admitted when the reduced image fits. The image is now refused after the
-  whole main header is read, so a header with another fault reports that
-  fault first. The `Error::Limit` message changed: it gives the samples
-  needed and names `DecodeOptions::sample_limit`.
-- At a resolution reduction, the packet work bound
-  (`DecodeOptions::packet_work_limit`) also counts each code-block of the
-  resolutions the reduction drops, which every tile still builds, so a small
-  file of many tiles cannot take minutes to decode at a reduction. A decode
-  at full resolution spends what it did before.
-- The docs say what a caller can do about each failure. The crate docs and
-  README gained "Damaged input" and "Limits" sections, `Error` says which
-  variant to expect for non-JPEG-2000 input and that messages are not
-  stable, and `WorkLimit`, `decode_with` and `ColorOutput::Srgb` have
-  runnable examples (a retry after `Error::Limit`, a reduction with sRGB
-  output, and an 8-bit RGBA buffer).
-- The crate uses American spellings: color, gray, grayscale, -ize, behavior,
-  center. Every public name added in this release is spelled that way
-  (`ColorSpace`, `ColorSpace::Grayscale`, `ColorOutput`,
-  `ColorSpecification`, `DecodeOptions::color` and `with_color`,
-  `Jp2Metadata::color` and `color_specifications`,
-  `ImageHeader::unknown_color_space`, `ChannelType::Color`,
-  `Association::Color`, `Ratio::grid_points_per_meter`); none of these
-  existed in 0.3.0. Error messages use the same spellings, so text such as
-  "the color transform needs three components" changed from 0.3.0's
-  "colour". Box types, field names and spec titles stay as ISO writes them
-  (`colr`, `EnumCS`, "Colour Specification box").
-- Breaking: `decode_with` takes `&DecodeOptions` instead of `DecodeOptions`,
-  so one set of options serves many calls: `decode_with(bytes, &options)`.
-- Breaking: `DecodeOptions` is no longer `Copy`, so a later option can
-  carry data (an output ICC profile). It stays `Clone`; clone it where you
-  reuse one. `ColorOutput`, new in this release, is likewise `Clone` but
-  not `Copy`. For the same reason the new
-  `ComponentInfo`, `ChannelMapping`, `MappingKind`, `PaletteColumn` and
-  `ChannelDefinitionEntry` are `Clone` but not `Copy`.
-- A code-block size past the limit in any COD or COC, in the main header or
-  a tile-part header, is now refused when that header is read, even when a
-  later COC overrides it, as OpenJPEG does. `p0_02.j2k` with byte 55 set to
-  56 decoded in 0.3.0 and is now `Error::Marker`. Likewise a resolution
-  reduction past the main header's decomposition levels is checked before
-  the tile data, so a truncated file with an impossible reduction reports
-  the reduction rather than the truncation.
+  2^26, so a Sentinel-2 10 m band (10980 x 10980) and RGB images up to about
+  89 MP decode at the defaults. The samples are counted at the decode's
+  resolution reduction, and the image is refused only after the whole main
+  header is read, so another header fault is reported first.
+- `decode_with` takes `&DecodeOptions`, and `DecodeOptions` is no longer
+  `Copy`, so a later option can carry data (see "Migrating from 0.3").
+- `Error::Unsupported` no longer covers resource guards or invalid options,
+  which now have their own variants (see "Migrating from 0.3").
+- A code-block size past the limit in any `COD` or `COC` is refused when
+  that header is read, as OpenJPEG does, and a resolution reduction past the
+  main header's levels is checked before the tile data.
 - Three encoder mistakes that OpenJPEG corrects on purpose now decode as
-  they do there; each was an error in 0.3.0. A tile whose last tile-part has
-  `TPsot` equal to `TNsot` (one part more than declared, as Adobe Photoshop
-  writes them): when the first tile to have all its declared parts has one
-  more, every tile's count is raised by one. A later tile-part that repeats
-  the COD, COC, QCD or QCC already in force (as BAP Image Systems writes
-  them): it is accepted and changes nothing, while one that differs is
-  still `Error::Codestream`. And the color transform flag on an image of
-  one or two components, which is ignored.
-- A JP2 file used to be `Unsupported`; it now decodes, or fails with
-  `FileFormat` when its boxes are malformed.
-- A JP2 file whose `ihdr` component count differs from its codestream's
-  decodes, as in OpenJPEG; the codestream decides the image. An `ihdr` with a
-  zero width, height or component count, or more than 16384 components, is
-  `FileFormat`.
-- A JP2 file's header is checked before its tile data: a file with a header
-  fault and a broken codestream reports the header fault.
+  they do there; each was an error in 0.3.0: a tile with one more tile-part
+  than its `TNsot` declares (Adobe Photoshop), a later tile-part that repeats
+  the coding parameters already in force (BAP Image Systems), and the color
+  transform flag on an image of one or two components.
 - A codestream component too deep for an `i32` sample is refused as
   `Unsupported` when the main header is read, before any tile data.
-- Packet headers that name many code-blocks and include none read faster:
-  where the inclusion tag tree already puts a group of code-blocks past the
-  layer, the decode steps over the group instead of each code-block. A
-  1 KB file whose one-byte packet headers each name 2^17 code-blocks took
-  4.6 s and now takes 14 ms. `opj_compress` writes such headers for every
-  layer, so its output with small code-blocks and many layers gains too.
-- Reading the packet headers is bounded: `decode` may take 2^24 steps that
-  read no header bit, or 32 per byte of tile data when that is more,
-  counting packets, steps over code-blocks a header reads no bit for, and
-  the positions a positional progression order sweeps, for the components
-  that hold a precinct at each resolution. Past it the decode is
-  `Error::Limit`. Encoder output seen spends under 13% of it, but a
-  valid file of many layers that each include a few scattered code-blocks
-  can exceed it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
-  819 bytes took 6.5 s and a 9 KB PCRL sweep 29 s; both are now refused in
-  a fraction of a second. OpenJPEG has no such bound and decodes them.
-  `DecodeOptions::packet_work_limit` raises or lifts the bound.
-- Decoding the code-blocks is bounded: `decode` may run 2^26 sample-passes
-  (coding passes times code-block samples), or 2^15 per byte of tile data
-  when that is more. A tile past it is `Error::Limit` before any of its
-  code-blocks is decoded. Each pass scans its whole code-block however few
-  bytes it carries, so a 76 KB file of 8192^2 samples, every 64x64
-  code-block asking for 88 passes, took 19 s and is now refused in 6 ms.
-  A file just under the bound can still take about 0.5 s, or 0.25 ms a
-  byte. Encoder output seen spends up to 43% of the bound
-  (`opj_compress -n 1` on a flat 16-bit image). OpenJPEG has no such bound
-  and decodes the 76 KB file in 9 s.
-  `DecodeOptions::code_block_work_limit` raises or lifts the bound.
-- A resolution that holds no precinct costs less: it gets no band or
-  code-block geometry, and the packet walk checks no component there. A tile
-  of one sample at an odd origin has 32 such resolutions per component, so
-  64 such tiles of 16384 components (1.1 MB) decode in 10.5 s instead of
-  0.3.0's 20.9 s, and one such tile in 0.18 s instead of 0.41 s.
-- A POC marker whose volumes reach the same packets again costs a bit per
-  packet instead of about 80 bytes, and a few ns per repeat instead of
-  about 1 µs, in `decode` and in `read_header`. A 1 MB file of 31 identical
-  volumes took 5.7 s and 105 MB and now takes 0.15 s and 3.5 MB; a 10.5 MB
-  one of 160 components took 4.5 s and 824 MB and now takes 0.32 s and
-  14 MB. When every volume is LRCP or RLCP and they reach more packets than
-  the decode's work bound allows, the decode is `Error::Limit` before it
-  reads one, where 0.3.0 read on until the data ran out. With a positional
-  volume, each repeat skipped past that point counts 12 steps against the
-  bound.
-- A POC marker whose volumes leave out packets of a tile is refused as
-  `Error::Codestream`, naming the tile, component, resolution and first
-  missing layer: each resolution of each component, counting the
-  component's own levels, must be in a volume that reaches every layer. The
-  main header's and every tile-part's volumes count, and a resolution with
-  no precincts needs none. These files used to decode with the missing
-  packets left empty. OpenJPEG decodes them that way, and `opj_compress`
-  writes them when its `-POC` volumes do not cover the tile. The refusal
-  holds under a resolution reduction too. `read_header` does not check
-  coverage, so for such a file in JP2 it still reports the boxes after the
-  codestream.
-- Breaking: two new error variants split what `Error::Unsupported` used to
-  conflate. `Error` is `#[non_exhaustive]`, so a `match` still compiles,
-  but an `Unsupported` arm no longer sees these inputs; they reach your
-  other arms. Re-check each such arm. `Error::Limit` is returned when an input
-  exceeds a decoder resource guard (image/component sample budget, precinct and
-  code-block counts, bit-plane depth, progression volumes), and
-  `Error::InvalidOptions` when the caller's `DecodeOptions` are invalid for
-  the codestream (a `resolution_reduction` past the decomposition levels).
-  `Error::Unsupported` now means only a valid-but-not-decoded feature.
-- The inverse wavelet transform is faster. It applies the boundary
-  extension only at the two ends of each row and column, lifts each row as
-  its low-pass and high-pass halves, and runs the vertical pass on eight
-  columns at a time on tiles at least 16 samples wide. The output is
-  unchanged. A narrow tile of a file with coded data needs about the same
-  memory as before these changes, within a few percent. A file with no coded
-  data can peak higher on a narrow tile, because the wavelet transform now
-  allocates its work buffers per pass.
-- Code-block decoding is faster. The flag plane is padded, so the pass loops
-  need no edge tests, and it keeps each sample's neighbor mask up to date, so
-  contexts come from table lookups. The coding passes keep the arithmetic
-  decoder's registers in locals, read the state of a four-row column with
-  one load, and skip a column that has nothing to code with one test. The
-  output is unchanged.
-- Together, these make whole-file decodes several times faster than 0.3.0:
-  1.7 to 5.3 times on the conformance and benchmark files measured,
-  depending on the file. Very small files gain little.
-- After those measurements, two more stages got faster, with unchanged
-  output. 9/7 samples are rounded, level-shifted and clamped in one pass
-  instead of two, which makes a whole 9/7 decode about 4 to 9% faster.
-  Reading packet headers costs less per code-block, which matters most with
-  small code-blocks: on a file of 4x4 code-blocks and 100 layers, reading
-  the packet headers takes about 40% less time and the whole decode about
-  16% less.
+- The crate uses American spellings: color, gray, grayscale, -ize, behavior,
+  center. Box types, field names and spec titles stay as ISO writes them
+  (`colr`, `EnumCS`, "Colour Specification box").
+- Error messages give the value and the limit it broke, name the tile in
+  more cases, and put marker and field names in backticks.
+  `Error::Inconsistent` displays as "decoder bug (please report it)".
+- The crate docs and README have "Damaged input" and "Limits" sections, and
+  `WorkLimit`, `decode_with` and `ColorOutput::Srgb` have runnable examples.
+
+### Fixed
+
+- A last tile-part with `Psot = 0` takes its data up to the last two bytes
+  of the codestream without checking that they are `EOC`, as OpenJPEG does.
+  A codestream that ends in two other bytes now decodes.
+- A code-block with an RGN maxshift and the bypass style switches to raw
+  coding at its fifth coded bit-plane, counting the shifted planes, as the
+  standard and OpenJPEG's encoder do. Such streams decoded wrong or were
+  refused.
+- A wrong segmentation symbol read from past the end of its segment, on a
+  pass the encoder did not terminate, no longer fails the decode. Rate
+  control can cut such a pass short; `opj_compress` output with
+  segmentation symbols and `-r` was refused about once in 50 encodes.
+- A `POC` in a tile's first tile-part header replaces the main header's
+  `POC` for that tile, as the standard requires. It was appended, so a file
+  with both read its packets in the wrong order.
+- A code-block whose coding passes get no bytes decodes, as the standard
+  allows (B.10.7) and OpenJPEG does. It was refused.
+- The 9/7 lifting constants β and δ are the nearest `f32` values to the
+  standard's (Table F.4), as OpenJPEG's are. Each was one `f32` step off.
+- A packet header in a `PPM` or `PPT` marker that reads past the end of its
+  bytes is a `Codestream` error. The missing bits were read as 1s, and the
+  decode returned a wrong image with no error.
+- A single-tile decode no longer holds two image-sized buffers at once. At
+  2^26 samples, one 9/7 tile peaked at about 580 MiB and now peaks at about
+  340 MiB.
+
+### Security
+
+- Reading the packet headers is bounded at 2^24 steps, or 32 per byte of
+  tile data when that is more. A packet header of one byte can step over
+  every row of code-blocks in its precinct, and a progression order can
+  sweep positions that hold no packet, so a file of a few hundred bytes
+  could take minutes. At a resolution reduction, each code-block of the
+  dropped resolutions counts too, since every tile still builds them.
+- Decoding the code-blocks is bounded at 2^26 sample-passes, or 2^15 per
+  byte of tile data when that is more, checked before a tile's code-blocks
+  are decoded. Each pass scans its whole code-block however few bytes it
+  carries, so a 76 KB file could take 19 s.
+- A header that pairs a large tile with tiny code-blocks is refused before
+  the code-block geometry is allocated (up to about 160 MiB), as the
+  precinct count already was.
+- Tile headers are checked in time proportional to their own markers. Each
+  was a copy of the main header, so a header of many tiles and components,
+  or of many `TLM` entries, could take over a minute.
+- A `POC` marker whose volumes reach the same packets again costs a bit per
+  packet instead of about 80 bytes. A 10.5 MB file of 160 components took
+  824 MB and now takes 14 MB.
+- With `strict` off, each missing tile-component and each tile whose data
+  ends is charged against the packet work bound, so a short input cannot ask
+  for unbounded work.
+- [Resource bounds](docs/correctness.md#resource-bounds) gives each limit
+  and its measurements.
 
 ## [0.3.0] - 2026-07-18
 

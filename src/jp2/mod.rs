@@ -422,7 +422,7 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
     let (width, height) = siz.image_extent_at(0);
     if (ihdr.width, ihdr.height) != (width, height) {
         return Err(Error::FileFormat(format!(
-            "`ihdr` declares a {}x{} image but the codestream's SIZ declares {width}x{height}",
+            "`ihdr` declares a {}x{} image but the codestream's `SIZ` declares {width}x{height}",
             ihdr.width, ihdr.height
         )));
     }

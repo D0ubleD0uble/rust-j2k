@@ -175,7 +175,7 @@ impl State {
             }
             b"pclr" => {
                 if self.palette.is_some() {
-                    return Err(fault("a second `pclr` box".into()));
+                    return Err(fault("the file has a second `pclr` box".into()));
                 }
                 let columns = palette::Palette::parse(payload)
                     .map_err(context)?
@@ -186,10 +186,12 @@ impl State {
             }
             b"cmap" => {
                 let Some(columns) = self.palette else {
-                    return Err(fault("a `cmap` box with no `pclr` box before it".into()));
+                    return Err(fault(
+                        "the file has a `cmap` box with no `pclr` box before it".into(),
+                    ));
                 };
                 if self.mapped {
-                    return Err(fault("a second `cmap` box".into()));
+                    return Err(fault("the file has a second `cmap` box".into()));
                 }
                 if payload.len() < columns * 4 {
                     return Err(fault(format!(
@@ -202,7 +204,7 @@ impl State {
             }
             b"cdef" => {
                 if self.channel_definitions {
-                    return Err(fault("a second `cdef` box".into()));
+                    return Err(fault("the file has a second `cdef` box".into()));
                 }
                 channels::check_layout(payload).map_err(context)?;
                 self.channel_definitions = true;
@@ -238,8 +240,16 @@ pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> Result<()> {
     let mut state = State::after_decode(file, raw_channels);
     for item in &file.after_codestream {
         match &item.kind {
-            b"jP  " => return Err(fault("a signature box, which must be the first box".into())),
-            b"ftyp" => return Err(fault("an `ftyp` box, which must be the second box".into())),
+            b"jP  " => {
+                return Err(fault(
+                    "the file has a signature box, which must be the first box".into(),
+                ));
+            }
+            b"ftyp" => {
+                return Err(fault(
+                    "the file has an `ftyp` box, which must be the second box".into(),
+                ));
+            }
             b"ihdr" => {}
             b"jp2h" => {
                 let mut has_ihdr = false;

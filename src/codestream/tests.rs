@@ -412,7 +412,7 @@ fn oversize_image_area_is_a_limit() {
     let cap = crate::samples::MAX_IMAGE_SAMPLES;
     let e = crate::samples::check_codestream(&siz, 0, cap).unwrap_err();
     assert!(
-        matches!(&e, Error::Limit(m) if m.starts_with("image area 16385×16384 needs")),
+        matches!(&e, Error::Limit(m) if m.starts_with("image area 16385x16384 needs")),
         "got {e:?}"
     );
     // 16384×16384 is exactly the limit, and fits.
@@ -1332,7 +1332,7 @@ fn an_extra_part_with_another_count_is_refused() {
     let bytes = tile_parts(&default_header(), &[(0, 0, 1, vec![]), (0, 1, 2, vec![])]);
     let e = perr(&bytes);
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("declares 2 tile-parts in one SOT and 1")),
+        matches!(&e, Error::Codestream(m) if m.contains("declares 2 tile-parts in one `SOT` and 1")),
         "got {e:?}"
     );
 }
@@ -1403,25 +1403,25 @@ fn later_part_refusals() -> Vec<Refusal> {
             "a COD with another layer count",
             vec![],
             vec![seg(marker::COD, &cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1))],
-            "a COD that differs",
+            "a `COD` that differs",
         ),
         (
             "a QCD with other exponents",
             vec![],
             vec![seg(marker::QCD, &qcd_none(2, &[9; 16]))],
-            "a QCD that differs",
+            "a `QCD` that differs",
         ),
         (
             "a COC with other code-blocks",
             vec![],
             vec![seg(marker::COC, &coc_body(&[0], 0, 5, 3, 3, 0, 1))],
-            "a COC for component 0 that differs",
+            "a `COC` for component 0 that differs",
         ),
         (
             "a QCC with other exponents",
             vec![],
             vec![qcc(0, 9)],
-            "a QCC for component 0 that differs",
+            "a `QCC` for component 0 that differs",
         ),
         (
             // OpenJPEG would write the COD over the tile's COC; here the COC
@@ -1429,49 +1429,49 @@ fn later_part_refusals() -> Vec<Refusal> {
             "the main COD over a tile COC that differs from it",
             vec![seg(marker::COC, &coc_body(&[0], 0, 5, 3, 3, 0, 1))],
             vec![seg(marker::COD, &cod_default(1))],
-            "a COD that differs",
+            "a `COD` that differs",
         ),
         (
             "the main QCD over a tile QCC that differs from it",
             vec![qcc(0, 9)],
             vec![seg(marker::QCD, &qcd_none(2, &[8; 16]))],
-            "a QCD that differs",
+            "a `QCD` that differs",
         ),
         (
             "the main COD where the tile's own COD differs",
             vec![seg(marker::COD, &cod_body(0, 0, 2, 0, 5, 4, 4, 0, 1))],
             vec![seg(marker::COD, &cod_default(1))],
-            "a COD that differs",
+            "a `COD` that differs",
         ),
         (
             "the main QCD where the tile's own QCD differs",
             vec![seg(marker::QCD, &qcd_none(2, &[9; 16]))],
             vec![seg(marker::QCD, &qcd_none(2, &[8; 16]))],
-            "a QCD that differs",
+            "a `QCD` that differs",
         ),
         (
             "a COC that differs from the tile's own COD",
             vec![seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 3, 3, 0, 1))],
             vec![seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0, 1))],
-            "a COC for component 0 that differs",
+            "a `COC` for component 0 that differs",
         ),
         (
             "a COC that differs from the tile's own COC",
             vec![seg(marker::COC, &coc_body(&[0], 0, 5, 3, 3, 0, 1))],
             vec![seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0, 1))],
-            "a COC for component 0 that differs",
+            "a `COC` for component 0 that differs",
         ),
         (
             "a QCC that differs from the tile's own QCD",
             vec![seg(marker::QCD, &qcd_none(2, &[9; 16]))],
             vec![qcc(0, 8)],
-            "a QCC for component 0 that differs",
+            "a `QCC` for component 0 that differs",
         ),
         (
             "a QCC that differs from the tile's own QCC",
             vec![qcc(0, 9)],
             vec![qcc(0, 8)],
-            "a QCC for component 0 that differs",
+            "a `QCC` for component 0 that differs",
         ),
     ]
 }
@@ -1532,12 +1532,12 @@ fn a_restated_main_cod_or_qcd_over_a_main_coc_or_qcc_is_refused() {
         (
             seg(marker::COC, &coc_body(&[1], 0, 5, 3, 3, 0, 1)),
             seg(marker::COD, &cod_default(1)),
-            "a COD that differs",
+            "a `COD` that differs",
         ),
         (
             seg(marker::QCC, &qcc),
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
-            "a QCD that differs",
+            "a `QCD` that differs",
         ),
     ] {
         let mut header = vec![
@@ -1889,7 +1889,7 @@ fn many_components_exceed_the_sample_budget() {
     let cap = crate::samples::MAX_IMAGE_SAMPLES;
     let e = crate::samples::check_codestream(&header.siz, 0, cap).unwrap_err();
     assert!(
-        matches!(&e, Error::Limit(m) if m.starts_with("100 components needs 1677721600 samples")),
+        matches!(&e, Error::Limit(m) if m.starts_with("a decode of 100 components needs 1677721600 samples")),
         "got {e:?}"
     );
 

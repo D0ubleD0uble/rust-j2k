@@ -218,7 +218,7 @@ where
     let mut resolutions = coded.resolutions.iter();
     let coarsest = resolutions
         .next()
-        .ok_or_else(|| Error::Inconsistent("Tier-2 produced no resolutions to decode".into()))?;
+        .ok_or_else(|| Error::Inconsistent("tier-2 produced no resolutions to decode".into()))?;
     let decode = |res: usize, resolution: &Resolution<'_>, kind: BandKind| {
         let band = band_index(res, kind);
         decode_subband(

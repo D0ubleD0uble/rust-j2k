@@ -72,6 +72,7 @@ fn parse_layers_styled<'a>(
         data,
         body_pos: 0,
         packed: false,
+        tile: 0,
     };
     // One scratch for every layer, as the walk keeps it across packets.
     let mut scratch = Scratch::default();
@@ -2099,6 +2100,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
         data: &data,
         body_pos: 0,
         packed: false,
+        tile: 0,
     };
     // Packet index 65536 expects Nsop 0, not 65536 (which does not fit).
     parse_packet(

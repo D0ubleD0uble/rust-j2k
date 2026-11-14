@@ -70,7 +70,7 @@ pub fn half_step(header: &MainHeader, comp: usize, band: usize) -> Result<f32> {
             .siz
             .components
             .get(comp)
-            .ok_or_else(|| Error::Inconsistent(format!("SIZ declares no component {comp}")))?
+            .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {comp}")))?
             .bit_depth,
     );
     let qcd = &header
@@ -96,7 +96,7 @@ fn step_params(qcd: &Qcd, band: usize) -> Result<(u8, u16)> {
     // numerically identical.
     qcd.subband_step(band).ok_or_else(|| {
         Error::Inconsistent(format!(
-            "QCD carries {} step sizes but subband {band} needs one",
+            "`QCD` carries {} step sizes but subband {band} needs one",
             qcd.steps.len()
         ))
     })
