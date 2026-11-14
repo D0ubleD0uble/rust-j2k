@@ -4046,12 +4046,12 @@ fn duplicate_override_messages_are_pinned_for_both_headers() {
     let rows: Vec<(&str, Vec<u8>, &str)> = vec![
         (
             "main COD",
-            main_with(&[cod.clone()]),
+            main_with(std::slice::from_ref(&cod)),
             "duplicate `COD` marker",
         ),
         (
             "main QCD",
-            main_with(&[qcd.clone()]),
+            main_with(std::slice::from_ref(&qcd)),
             "duplicate `QCD` marker",
         ),
         (
@@ -4105,7 +4105,7 @@ fn duplicate_override_messages_are_pinned_for_both_headers() {
         ),
         (
             "main malformed second COD",
-            main_with(&[bad_cod.clone()]),
+            main_with(std::slice::from_ref(&bad_cod)),
             "duplicate `COD` marker",
         ),
     ];
