@@ -73,8 +73,9 @@ pub enum Error {
     /// format) is this variant, since it has no `SOC` marker.
     Codestream(String),
     /// The input ends inside the codestream's main header: after the `SOC`
-    /// marker and before the first `SOT` marker is complete. What is there
-    /// is not judged yet, so more bytes may still give a valid header.
+    /// marker and before the first `SOT` marker is complete. The header's
+    /// segments are not judged until all of them are there, so more bytes may
+    /// still give a valid header.
     ///
     /// This is the "wait for more bytes" signal for a caller whose input
     /// streams in. [`read_header`](crate::read_header) and

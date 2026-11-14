@@ -98,9 +98,9 @@ fn lenient() -> DecodeOptions {
 
 /// Every prefix of `bytes` that ends inside the codestream main header which
 /// starts at `cs_at` and whose first `SOT` is at `cs_at + sot` is
-/// `Incomplete`: from `read_header`, a strict decode and a partial one. The
-/// prefix that holds the whole `SOT` marker is not.
-fn assert_cuts_are_incomplete(name: &str, bytes: &[u8], cs_at: usize, sot: usize) {
+/// `Incomplete`: from `read_header`, a strict decode and a partial one. With
+/// `boundary`, the prefix that holds the whole `SOT` marker is not.
+fn assert_cuts_are_incomplete(name: &str, bytes: &[u8], cs_at: usize, sot: usize, boundary: bool) {
     for length in cs_at + 2..cs_at + sot + 2 {
         let prefix = &bytes[..length];
         let what = format!("{name} cut at {length}");
@@ -116,6 +116,9 @@ fn assert_cuts_are_incomplete(name: &str, bytes: &[u8], cs_at: usize, sot: usize
             Err(Error::Incomplete(_)) => {}
             other => panic!("{what}: partial decode gave {:?}", other.map(|_| ())),
         }
+    }
+    if !boundary {
+        return;
     }
     // The main header ends with the first SOT marker: a header that reads in
     // full reads from this prefix too. (A JP2 file's boxes after the
@@ -153,20 +156,24 @@ fn every_cut_inside_the_main_header_is_incomplete() {
         let bytes = std::fs::read(path).unwrap();
         let name = path.strip_prefix(fixtures()).unwrap().display().to_string();
         if let Some(sot) = first_sot(&bytes) {
-            assert_cuts_are_incomplete(&name, &bytes, 0, sot);
+            assert_cuts_are_incomplete(&name, &bytes, 0, sot, true);
             codestreams += 1;
         } else if let Some((cs_at, box_end)) = jp2c_payload(&bytes) {
             // Only files whose box layer reads, since a fault there is
-            // reported before the codestream is reached, and whose `jp2c` box
-            // holds the whole main header: one that ends inside it
-            // (`psot0/jp2_p0eoc_cut_in_com.jp2`) is cut by its own length.
+            // reported before the codestream is reached.
             let Some(sot) = first_sot(&bytes[cs_at..]) else {
                 continue;
             };
-            if read_header(&bytes).is_err() || box_end < cs_at + sot + 2 {
+            if read_header(&bytes).is_err() {
                 continue;
             }
-            assert_cuts_are_incomplete(&name, &bytes, cs_at, sot);
+            // A `jp2c` box that ends inside the main header
+            // (`psot0/jp2_p0eoc_cut_in_com.jp2`) is still `Incomplete` at the
+            // prefix through the `SOT` marker. Where its codestream ends is
+            // the box layer's call (`src/jp2/after.rs`); the whole file
+            // decodes.
+            let boundary = box_end >= cs_at + sot + 2;
+            assert_cuts_are_incomplete(&name, &bytes, cs_at, sot, boundary);
             jp2s += 1;
         }
     }
