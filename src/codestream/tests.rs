@@ -218,19 +218,33 @@ fn missing_soc_is_codestream() {
 
 #[test]
 fn siz_not_first_is_codestream() {
-    let mut bytes = be16(marker::SOC).to_vec();
-    bytes.extend_from_slice(&seg(marker::COD, &cod_default(1)));
-    assert!(matches!(err(&bytes), Error::Codestream(_)));
+    let bytes = codestream(&[seg(marker::COD, &cod_default(1))]);
+    let e = err(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.contains("first marker")),
+        "{e:?}"
+    );
 }
 
+/// A SIZ whose length promises more than the input holds: the input ends
+/// inside the main header, so more bytes may still complete it.
 #[test]
-fn truncated_segment_is_codestream() {
+fn truncated_main_header_segment_is_incomplete() {
     let mut bytes = be16(marker::SOC).to_vec();
-    // SIZ marker with a length field promising more than the buffer holds.
     bytes.extend_from_slice(&be16(marker::SIZ));
     bytes.extend_from_slice(&be16(100));
     bytes.extend_from_slice(&[0, 0, 0, 0]);
-    assert!(matches!(err(&bytes), Error::Codestream(_)));
+    assert!(matches!(err(&bytes), Error::Incomplete(_)));
+}
+
+/// A segment body too short for its own fields is all there, so it is
+/// malformed, not cut short: the main-header walk read the whole of it.
+#[test]
+fn a_segment_too_short_for_its_fields_is_codestream() {
+    let mut body = one_component();
+    body.truncate(body.len() - 1);
+    let e = err(&codestream(&[seg(marker::SIZ, &body)]));
+    assert!(matches!(e, Error::Codestream(_)), "{e:?}");
 }
 
 #[test]
@@ -1048,14 +1062,14 @@ fn non_marker_ff00_and_ffff_are_lost_sync() {
 }
 
 #[test]
-fn unknown_marker_without_a_length_is_codestream() {
+fn unknown_marker_without_a_length_is_incomplete() {
     // Stepping over an unknown marker needs its length to be there. At the very
-    // end of the header there is nothing to read, which is truncation — a
-    // malformed codestream, not merely an unsupported one.
+    // end of the input there is nothing to read: the input ends inside the main
+    // header, which more bytes may complete.
     let mut bytes = be16(marker::SOC).to_vec();
     bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
     bytes.extend_from_slice(&be16(0xFF01)); // not a marker we know
-    assert!(matches!(err(&bytes), Error::Codestream(_)));
+    assert!(matches!(err(&bytes), Error::Incomplete(_)));
 }
 
 // --- tile-part walk (issue #6) -------------------------------------------
@@ -2154,7 +2168,7 @@ fn siz_matches_opj_dump_across_the_conformance_corpus() {
 /// way to the `Unsupported` verdict its `COD` earns.
 ///
 /// A walker that read a length after `0xFF30` would consume the `SOT` and report
-/// `Codestream("truncated marker segment")` instead. That is the bug this
+/// `Incomplete` (the input ending inside the header) instead. That is the bug this
 /// codestream exists to catch, so assert the *kind* of failure: a feature
 /// rejection means the walk got there, a structural one means it did not.
 #[test]
@@ -2181,7 +2195,7 @@ fn p0_02_reserved_marker_walks_cleanly() {
 
     // The walk steps over `0xFF30` and the whole header parses: p0_02's COD, its
     // COC, and its `restart | pterm | segsym` style are all decoded. A naive
-    // walker reports `Codestream("truncated marker segment")` here instead,
+    // walker reports `Incomplete` here instead,
     // which is the regression this pins.
     let cs = parse(&bytes).expect("p0_02's main header is inside the decoded subset");
 
@@ -2195,12 +2209,14 @@ fn p0_02_reserved_marker_walks_cleanly() {
 
 /// Which typed error a caller sees, per the mapping the crate commits to:
 /// `Codestream` for structural damage (truncation, lost sync, a missing
-/// required marker), `Marker` for a field encoded illegally, `Unsupported`
+/// required marker), `Incomplete` for input that ends inside the main header,
+/// `Marker` for a field encoded illegally, `Unsupported`
 /// for valid JPEG 2000 that falls outside the decoded subset, and `Limit` for
 /// an input past one of the decoder's resource guards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Variant {
     Codestream,
+    Incomplete,
     Marker,
     Unsupported,
     Limit,
@@ -2209,6 +2225,7 @@ enum Variant {
 fn variant_of(e: &Error) -> Variant {
     match e {
         Error::Codestream(_) => Variant::Codestream,
+        Error::Incomplete(_) => Variant::Incomplete,
         Error::Marker(_) => Variant::Marker,
         Error::Unsupported(_) => Variant::Unsupported,
         Error::Limit(_) => Variant::Limit,
@@ -2365,22 +2382,18 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         ),
         (
             "SIZ not the first marker",
-            err(&{
-                let mut b = be16(marker::SOC).to_vec();
-                b.extend_from_slice(&seg(marker::COD, &cod_default(1)));
-                b
-            }),
+            err(&codestream(&[seg(marker::COD, &cod_default(1))])),
             Variant::Codestream,
         ),
         (
-            "unknown marker without a length",
+            "unknown marker without a length, at the end of the input",
             err(&{
                 let mut b = be16(marker::SOC).to_vec();
                 b.extend_from_slice(&seg(marker::SIZ, &one_component()));
                 b.extend_from_slice(&be16(0xFF01));
                 b
             }),
-            Variant::Codestream,
+            Variant::Incomplete,
         ),
         (
             "duplicate COD",
