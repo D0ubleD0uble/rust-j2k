@@ -283,12 +283,17 @@ fn a_damaged_main_header_is_codestream() {
     );
 }
 
-/// A prefix that holds a damaged segment in full gives the whole file's
-/// error, from `read_header`, a strict decode and a partial one: the
+/// A prefix that holds a damaged segment in full is an error, not
+/// `Incomplete`, from `read_header`, a strict decode and a partial one: the
 /// segments the input holds are judged before the cut is reported. A shorter
 /// prefix does not yet show it, and is `Incomplete` or `Codestream`.
+///
+/// Each case here damages one place only, so the prefix's error is exactly
+/// the whole file's. That does not hold in general: a whole file whose header
+/// is also broken later, where the walk fails (a non-marker, `SOD`, a length
+/// below 2), reports that walk error before it judges any segment.
 #[test]
-fn a_cut_after_a_damaged_segment_gives_the_whole_files_error() {
+fn a_cut_after_a_damaged_segment_is_an_error_not_incomplete() {
     for (what, bytes, holds) in damaged() {
         let whole = read_header(&bytes).map(|_| ());
         assert!(whole.is_err(), "{what}");

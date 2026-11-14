@@ -75,9 +75,9 @@ pub enum Error {
     /// format) is this variant, since it has no `SOC` marker.
     Codestream(String),
     /// The input ends inside the codestream's main header: after the `SOC`
-    /// marker and before the first `SOT` marker is complete. Every segment
-    /// the input holds in full is valid, so more bytes may still give a valid
-    /// header.
+    /// marker and before the first `SOT` marker is complete. No segment the
+    /// input holds in full was found damaged, so more bytes may still give a
+    /// valid header.
     ///
     /// This is the "wait for more bytes" signal for a caller whose input
     /// streams in. [`read_header`](crate::read_header) and
@@ -86,16 +86,20 @@ pub enum Error {
     /// needs the whole main header. In a JP2 file it is returned when the
     /// input ends inside the main header of the `jp2c` box's codestream.
     ///
-    /// The segments the input holds in full are judged first, as in a whole
-    /// file: a damaged one gives the error the whole file gives
+    /// The segments the input holds in full are judged first: a damaged one
+    /// gives an error, not this variant, usually the one the whole file gives
     /// ([`Error::Codestream`], [`Error::Marker`], [`Error::Unsupported`] or
-    /// [`Error::Limit`]), not this variant. What needs the whole header waits
-    /// for it: a missing `COD` or `QCD`, a quantization that does not cover a
-    /// component's subbands, and the order of the `PPM` markers. If no more
-    /// bytes are coming, the file is truncated. A segment length that is
-    /// damaged so that it reaches past the end of the input looks the same as
-    /// a cut, so it is this variant too. Input too short to hold the `SOC` marker (0 or 1 byte) is
-    /// [`Error::Codestream`], as is any input that does not start with it.
+    /// [`Error::Limit`]). The whole file can give another one when a later
+    /// part of its header is broken too. The checks that tie segments to each
+    /// other or to the JP2 boxes wait for the whole header (for example, a
+    /// missing `COD` or `QCD`, quantization coverage, 9/7 without
+    /// quantization, MCT geometry, `PPM` order, and `ihdr` against SIZ).
+    ///
+    /// If no more bytes are coming, the file is truncated. A segment length
+    /// that is damaged so that it reaches past the end of the input looks the
+    /// same as a cut, so it is this variant too. Input too short to hold the
+    /// `SOC` marker (0 or 1 byte) is [`Error::Codestream`], as is any input
+    /// that does not start with it.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
