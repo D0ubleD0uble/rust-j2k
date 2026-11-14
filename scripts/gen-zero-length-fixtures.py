@@ -5,7 +5,7 @@ A packet header may include a code-block with coding passes and a length of
 zero (ISO/IEC 15444-1 B.10.7). Those passes bring no bytes. A later layer can
 still bring the bytes that code them, and passes that never get any are
 decoded from the `0xFF` bytes the decoder appends (D.4.1). See
-docs/correctness.md, "Code-block contributions of zero bytes".
+docs/openjpeg-departures.md, "Code-block contributions of zero bytes".
 
 Each fixture is one 8-bit component, 8 rows high, with no wavelet level, in
 8x8 code-blocks side by side and two quality layers (LRCP, reversible 5/3).

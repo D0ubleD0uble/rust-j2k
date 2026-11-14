@@ -5,7 +5,7 @@
 //! channels: the channels labeled color 1, 2, 3 (one for grayscale). Other
 //! channels, such as opacity, pass through untouched. OpenJPEG picks the
 //! first channels by position instead; the labels follow the standard
-//! (`docs/correctness.md`, "sRGB output"). [`plan`] checks
+//! (`docs/srgb-output.md`). [`plan`] checks
 //! everything from the header before any tile is decoded; [`SrgbPlan::apply`]
 //! converts the decoded samples. No conversion changes a channel's depth.
 //!
@@ -16,7 +16,7 @@
 //!   the chroma, rounded to the nearest integer and clamped to the depth.
 //!   OpenJPEG uses 0.344 and 0.714 and truncates each product. The ISO
 //!   reference images match this formula much more closely, so it is a
-//!   documented deviation (`docs/correctness.md`). Chroma sub-sampled 2x1
+//!   documented deviation (`docs/srgb-output.md`). Chroma sub-sampled 2x1
 //!   (4:2:2) or 2x2 (4:2:0) is replicated to the luma grid first. The
 //!   replication follows `sycc422_to_rgb` and `sycc420_to_rgb` in the
 //!   oracle build, Ubuntu's OpenJPEG 2.5.0-2ubuntu0.5, sample for sample,
@@ -50,7 +50,7 @@
 //! including where it reads past a tag's size.
 //!
 //! Everything else is [`Error::Unsupported`]. The table in
-//! `docs/correctness.md` ("sRGB output", "Outcomes") gives every case, what
+//! `docs/srgb-output.md` ("Every input and its result") gives every case, what
 //! OpenJPEG does with it, and the rule behind the choice.
 
 use super::lcms::{Format, InputProfile, ToneCurve, Transform};

@@ -197,7 +197,7 @@ below. The first fails to compile. The others compile but behave differently.
   says sRGB, or grayscale for a monochrome profile whose output is neutral. A
   monochrome profile with a tinted white point gives three channels;
   `read_header` doesn't predict that, and `read_header_with` with the same
-  options does. The table in `docs/correctness.md` ("sRGB output") lists every
+  options does. The table in `docs/srgb-output.md` lists every
   case, what OpenJPEG does with it, and why this decoder follows or differs.
 - `DecodeOptions::with_raw_channels` and `DecodeOptions::with_color` set
   those options like `with_resolution_reduction` does; the fields stay public.
@@ -410,7 +410,7 @@ below. The first fails to compile. The others compile but behave differently.
   that hold a precinct at each resolution. Past it the decode is
   `Error::Limit`. Encoder output seen spends under 13% of it, but a
   valid file of many layers that each include a few scattered code-blocks
-  can exceed it (see `docs/correctness.md`). A POC-repeated CPRL sweep of
+  can exceed it (see `docs/resource-bounds.md`). A POC-repeated CPRL sweep of
   819 bytes took 6.5 s and a 9 KB PCRL sweep 29 s; both are now refused in
   a fraction of a second. OpenJPEG has no such bound and decodes them.
   `DecodeOptions::packet_work_limit` raises or lifts the bound.

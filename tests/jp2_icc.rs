@@ -974,7 +974,7 @@ fn the_afl_test_applies_where_openjpeg_cannot_convert_as_sycc() {
 /// color 3 and then as opacity, so the output keeps the coded order with
 /// color 3 last; the decode converts planes 0, 1 and 3 and leaves the
 /// opacity plane as coded. `opj_decompress -force-rgb` converts the first
-/// three positions instead, planes 0, 1 and 2 (`docs/correctness.md`).
+/// three positions instead, planes 0, 1 and 2 (`docs/srgb-output.md`).
 ///
 /// The oracle is the same codestream with a plain `cdef` that puts color 3
 /// third: OpenJPEG converts planes 0, 1 and 3 there too. The hashes are its

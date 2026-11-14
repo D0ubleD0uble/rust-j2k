@@ -122,10 +122,12 @@ so nothing needs renaming here.
 - MQ arithmetic encoder; EBCOT pass encoding.
 - Rate control / PCRD-opt; Tier-2 packetization; codestream and JP2 writing.
 
-**Gate:** round-trip (encode → decode → compare) and cross-decode (our encode
-read back by OpenJPEG, and vice versa) within target rate/quality. The
-round trip alone would be self-consistency; the cross-decode is what makes
-this gate external.
+**Gate:** round-trip (encode → decode → compare against the original within
+the path's tolerance) and cross-decode (OpenJPEG reads this encoder's output,
+and this decoder reads OpenJPEG's) within target rate/quality. The round trip
+alone would be self-consistency. Interoperating with the reference
+implementation in both directions is the real proof of encoder conformance,
+and it is what makes this gate external.
 
 ## Phase 6: Part 2 extensions + HTJ2K encode
 

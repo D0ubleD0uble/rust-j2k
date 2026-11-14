@@ -58,7 +58,7 @@
 //! 2^28 default, about 1.4 GiB for one component in one tile, though that size
 //! was not measured. A tiled image peaks lower: the 1024 x 1024-tiled
 //! Sentinel-2 band (460 MiB of samples) peaks at about 470 MiB, as
-//! `opj_decompress` does (see `docs/correctness.md`, "The sample limit").
+//! `opj_decompress` does (see `docs/resource-bounds.md`, "The sample limit").
 
 use crate::{Error, WorkLimit};
 

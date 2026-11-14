@@ -1,7 +1,8 @@
 # Development environment
 
 This page lists the tools that regenerate the oracle snapshots and run the
-extra quality gates, with the version and an install command for each.
+extra quality gates, with the version and an install command for each. It
+ends with [the checks for a new decode stage](#working-on-a-decode-stage).
 
 **You don't need these tools to run the test suite.** `cargo test` compares
 each decode against the committed snapshots (`<name>.expected.json` and the
@@ -161,3 +162,53 @@ and pass that `.j2k`. Each fixture's exact extraction and generation
 commands are recorded in
 [`tests/fixtures/README.md`](../tests/fixtures/README.md); copy them from
 there.
+
+## Working on a decode stage
+
+[correctness.md](correctness.md) explains why each of these checks matters.
+
+### Build in the order the stages can be checked
+
+Build a new stage in the order the per-stage golden tests can check it (see
+Phase 1 in [roadmap.md](roadmap.md)), so every stage has a passing isolated
+test before the next is wired on top.
+
+### When the output differs from OpenJPEG
+
+Assume first that the difference is a bug in this decoder. It almost always
+is. Two lessons from the one exception, the inverse 9/7's `2/K`
+([openjpeg-departures.md](openjpeg-departures.md#the-inverse-97s-high-pass-scale-2k)),
+carry over to any future disagreement:
+
+- A bit-exact match with OpenJPEG is evidence, not proof. It can mean the
+  decoder reproduced a defect, so check what the standard says first.
+- Emulate the oracle's convention completely or not at all. Changing `K`
+  to match `two_invK` while leaving the gain in the step makes the divergence
+  *worse*, because the factor of two is then counted twice. A half-emulation
+  looks like a refutation of a correct hypothesis.
+
+A change that departs from OpenJPEG needs the proof and the better result that
+[the rules](correctness.md#when-the-oracle-and-the-standard-disagree) ask for,
+and an entry in [openjpeg-departures.md](openjpeg-departures.md).
+
+### Check that a fixture tests the feature
+
+Before adding an entry to `IN_CLASS`, ask what about that entry would have to
+change for the new code to be wrong. If nothing would, the entry is not the
+oracle for that feature, and the milestone needs a fixture that can tell the
+difference: a multi-layer codestream to separate LRCP from RLCP, multiple
+precincts to separate RPCL from RLCP, and so on
+([correctness.md](correctness.md#a-passing-entry-is-not-proof-the-feature-works)
+has the cases that motivate this).
+
+Mutating the new code and watching the entry fail is the cheapest way to check.
+If no mutation makes it fail, the entry is not testing it. Run the mutation
+against *every* fixture, not just the one you expect to break: the fixtures
+that survive tell you which ones were never testing the feature.
+
+### What "done" means
+
+A stage is done when its isolated golden tests pass **and** it moves its
+phase's oracle or conformance gate forward, with the quality gates
+(`cargo fmt`, `clippy -D warnings`, `cargo test`, `cargo deny check`) green. Not
+before. "It looks right" is not a gate.

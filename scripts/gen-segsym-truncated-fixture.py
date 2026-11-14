@@ -8,7 +8,7 @@ estimates a truncated pass's length as `numbytes + 3` (t1.c). The decoder then
 reads the four symbol decisions from the `0xFF` fill past the segment, and they
 spell `1001` rather than `1010`. OpenJPEG decodes regardless (its comparison is
 commented out), and so must this crate: D.5 makes the symbol an error-detection
-aid. See docs/correctness.md, "Segmentation symbols".
+aid. See docs/openjpeg-departures.md, "Segmentation symbols".
 
 The input is the 128-byte raw image `SOURCE` below (64 bytes for component 0,
 32 for each of the two vertically sub-sampled components). It came from a

@@ -105,7 +105,7 @@ const FIXTURES: &[(&str, &str, Outcome)] = &[
         // cdef (0,0,1) (1,0,2) (2,0,3) (3,1,0), written by opj_compress. The
         // codestream is 9/7: 10 of its 97200 samples differ from OpenJPEG's by
         // 1, from OpenJPEG's `two_invK` in place of the exact 2/K
-        // (docs/correctness.md).
+        // (docs/openjpeg-departures.md).
         Outcome::Reference {
             channels: RGBA,
             max_abs: 1,

@@ -148,7 +148,7 @@ fn a_bad_box_after_a_psot_zero_codestream_box_is_not_read() {
 /// `LBox` 0. The box end is not where the codestream ends, so the tile-part
 /// runs to the end of the file and the boxes after it are tile data past the
 /// last packet, refused as for a raw codestream. OpenJPEG 2.5.0 decodes each
-/// of these, ignoring those bytes (a known difference, `docs/correctness.md`).
+/// of these, ignoring those bytes (a known difference, `docs/openjpeg-departures.md`).
 #[test]
 fn a_psot_zero_codestream_box_of_the_wrong_length_is_refused() {
     for name in [

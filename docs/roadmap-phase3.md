@@ -584,7 +584,7 @@ so and why we differ (or do not).
 | Neither magic | error | reject | `Codestream` ("does not start with the SOC marker") |
 | Signature box wrong length or payload | error | reject | `FileFormat` |
 | `ftyp` missing or not second | error | reject | `FileFormat` |
-| No `jp2 ` in brand or compatibility list | decodes anyway | reject | `Unsupported` (a JPX/JPM we do not read; stricter, because the spec says such a reader may not understand the file and we would be guessing; kept as a deliberate deviation by owner decision 2026-11-01, reasoning in correctness.md) |
+| No `jp2 ` in brand or compatibility list | decodes anyway | reject | `Unsupported` (a JPX/JPM we do not read; stricter, because the spec says such a reader may not understand the file and we would be guessing; kept as a deliberate deviation by owner decision 2026-11-01, reasoning in openjpeg-departures.md) |
 | Box length `< 8` (or `< 16` with `XLBox`) | error | reject | `FileFormat` |
 | Box runs past its parent or the file | error | reject | `FileFormat` (truncation) |
 | `jp2c` runs past the end of the file | decodes (the codestream is read to its end) | clamped to the file, decodes | none (match oracle); the codestream parser still rejects a codestream that is cut short |
@@ -611,11 +611,11 @@ so and why we differ (or do not).
 | `ihdr.UnkC = 1` with a `colr` | `UnkC` read, never used | `colr` value reported | none (match oracle; I.5.3.1) |
 | No `colr` at all | decodes, color unknown | decodes, `Unknown` | none (samples are unaffected) |
 | `colr METH 2` with too few bytes for a profile header | reads what is there; lcms won't open it, so no ICC conversion | accept | none; the color space and bytes are passed through as they are, and `Srgb` leaves the samples as coded (owner decision 2026-11-01, #199) |
-| Under `Srgb`: an ICC profile lcms refuses to open or build a transform from (bad header, intent 4-9 or above 15, a needed tag skipped, under 8 bytes, of the wrong type or read past the profile's end, `para` above 4, `curv` above 32767 entries) | conversion skipped, samples as coded | conversion skipped, samples as coded, `RestrictedIcc` kept | none (owner decision 2026-11-01, #199); `docs/correctness.md`, sRGB output |
+| Under `Srgb`: an ICC profile lcms refuses to open or build a transform from (bad header, intent 4-9 or above 15, a needed tag skipped, under 8 bytes, of the wrong type or read past the profile's end, `para` above 4, `curv` above 32767 entries) | conversion skipped, samples as coded | conversion skipped, samples as coded, `RestrictedIcc` kept | none (owner decision 2026-11-01, #199); `docs/srgb-output.md` |
 | Under `Srgb`: color channels of different depth, sign or sub-sampling (other than sYCC chroma at 2x1 or 2x2) | ICC: conversion skipped, samples as coded; three components with sub-sampled chroma and an sRGB or absent `colr`: converted as if sYCC | reject | `Unsupported` (owner decision 2026-11-01); `AsCoded` decodes them; row of `srgb_reject_matrix_maps_each_input_to_its_typed_error` |
 | Under `Srgb`: sYCC with sub-sampled luma or another chroma layout | "CAN NOT CONVERT", samples as coded | reject | `Unsupported` |
 | Under `Srgb`: signed sYCC | converted silently as if unsigned, then clamped (R `[-7,-62,61,114]` → `[0,0,15,0]`) | reject | `Unsupported` (owner decision 2026-11-01) |
-| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, an ICC profile lcms would apply through a LUT or the Lab PCS, a `YCbr` profile, or ICC lcms would apply on samples other than 8/16-bit (RGB) or 8-bit (gray) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit gray 15 → 18. `-force-rgb` converts CMYK (12, four channels at one sampling) to three RGB planes, CIELab (14, three channels) to 16-bit RGB, and e-sYCC (24) | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as gray, metadata as declared (`docs/correctness.md`, sRGB output) |
+| Under `Srgb`: 3+ channels with no `colr` or an enumerated space other than 16/17/18, a raw codestream of 3+ components, an ICC profile lcms would apply through a LUT or the Lab PCS, a `YCbr` profile, or ICC lcms would apply on samples other than 8/16-bit (RGB) or 8-bit (gray) unsigned | no conversion, converted by lcms, or (other depths) mis-scaled: 12-bit 4095 → 7413, 4-bit gray 15 → 18. `-force-rgb` converts CMYK (12, four channels at one sampling) to three RGB planes, CIELab (14, three channels) to 16-bit RGB, and e-sYCC (24) | reject | `Unsupported` (depths: owner decision 2026-11-01); 1 or 2 channels with no `colr` or such an enumerated space, JP2 or raw codestream, pass through as gray, metadata as declared (`docs/srgb-output.md`) |
 | `raw_channels` with `Srgb` | n/a | reject before reading | `InvalidOptions` |
 | sYCC chroma replication past the sample budget | allocates | reject before any tile | `Limit` |
 | `pclr NE = 0` or `> 1024`, `NPC = 0`, truncated entries | error | reject | `FileFormat` |
@@ -636,7 +636,7 @@ so and why we differ (or do not).
 | `cdef N = 0`, truncated, `Cn` or `Asoc-1` out of range, incomplete list | error | reject | `FileFormat`; `Cn` and `Asoc` are checked against the channels after the palette (`NPC` with `pclr` + `cmap`, else `Csiz`); under `raw_channels` only the box layout (`N = 0`, truncated, a second `cdef`) is checked, as OpenJPEG skips `opj_jp2_check_color` under its ignore flag |
 | `cdef` names a channel twice, every channel named | decodes; entries applied in order | same | none (match oracle); the channel keeps its last entry's label |
 | `cdef` color entry not at `Asoc - 1` | swapped there; later entries follow their channels | same | none (match oracle) |
-| `cdef` labels after a swap | type kept in `comps[].alpha`, written to the position named before the swap, never written out by `opj_decompress` | each channel labeled with its own entry | none: OpenJPEG has no label output to match (`docs/correctness.md`) |
+| `cdef` labels after a swap | type kept in `comps[].alpha`, written to the position named before the swap, never written out by `opj_decompress` | each channel labeled with its own entry | none: OpenJPEG has no label output to match (`docs/openjpeg-departures.md`) |
 | `cdef Typ` not 0/1/2/65535 | passed through | `Other(n)` | none |
 | Unknown box anywhere | skipped | skipped | none |
 | `res ` malformed: a `resc`/`resd` not 10 bytes, a child with a bad length or past the end of `res `, garbage contents | `res ` never read: decodes | decodes; the malformed `resc`/`resd` is reported as absent, a fault in the child walk ends that `res ` | none (match oracle); each shape measured with `opj_decompress` |
@@ -644,7 +644,7 @@ so and why we differ (or do not).
 | `uuid` shorter than its 16-byte identifier | never read | skipped, not reported | none (match oracle) |
 | `xml `/`uuid` after `jp2c` | never read | collected as far as the after-`jp2c` walk goes | none; collecting them never fails a decode |
 | `jp2i` anywhere at the top level | never read | contents returned verbatim, in file order, including after `jp2c` | none |
-| `uinf` without exactly one `ulst` and one `url `, a `ulst` whose `NU` does not match its length, a `url ` under 4 bytes, a malformed box inside it | never read | the whole `uinf` skipped, before or after `jp2c`; a well-formed one is reported | none (match oracle, owner decision 2026-11-01; `docs/correctness.md`) |
+| `uinf` without exactly one `ulst` and one `url `, a `ulst` whose `NU` does not match its length, a `url ` under 4 bytes, a malformed box inside it | never read | the whole `uinf` skipped, before or after `jp2c`; a well-formed one is reported | none (match oracle, owner decision 2026-11-01; `docs/openjpeg-departures.md`) |
 | `ihdr` W/H wrong and the codestream truncated | error at SIZ ("IHDR w(769) … vs. SIZ w(768)") | `FileFormat` | none (match oracle): the header is checked before any tile-part is read |
 | `colr`, `bpcc`, `pclr`, `cmap`, `cdef` at the top level after `jp2h` | applied ("read anyway, we already have jp2h") | recorded as `jp2h` children | none (applied) |
 | The same boxes at the top level before `jp2h` | ignored only when the box comes directly after `ftyp`; after any other box (one without a handler, such as `rreq`, or a misplaced header box it has just ignored) its unknown-box state sets the header-read bit, so the box is read as if `jp2h` had been: a `colr` there becomes the color space | ignored | differs from the oracle; follows the standard (owner decision 2026-11-11; OpenJPEG's `JP2_STATE_UNKNOWN` sets every state bit) |
@@ -697,7 +697,7 @@ part of the gate.
   that starts passing the `.jp2` gets more channels than before. Documented in
   the changelog and on `Image.jp2`.
 - **Stricter-than-oracle rows** (non-`jp2 `-compatible brand) may refuse
-  real files OpenJPEG opens. Each is one `if`; the rule from correctness.md applies: a
+  real files OpenJPEG opens. Each is one `if`; the rule from openjpeg-departures.md applies: a
   demonstrated real file relaxes the check. Where Annex I is bent in ways
   OpenJPEG tolerates (`ihdr` not first, a second `jp2h`, a `jp2c` past the end
   of the file, a header box misplaced after `jp2h`), the box layer follows
