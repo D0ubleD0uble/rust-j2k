@@ -1381,6 +1381,11 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
         .map(|(band, state)| {
             // The rectangles come from a nested loop, which gives no exact
             // length, so the vector is sized up front rather than grown.
+            debug_assert_eq!(
+                state.blocks.len(),
+                band.block_count(),
+                "one block state per code-block of the band"
+            );
             let mut blocks = Vec::with_capacity(state.blocks.len());
             blocks.extend(band.block_rects().zip(state.blocks).map(
                 |((x, y, width, height), block)| {
