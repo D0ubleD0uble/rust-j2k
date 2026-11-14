@@ -55,10 +55,17 @@ conformance/
 | Codestreams | `uclouvain/openjpeg-data` `input/conformance/` | commit `39524bd3` |
 | References (`.pgx`) | `uclouvain/openjpeg-data` `baseline/conformance/` | commit `39524bd3` |
 | PAE/MSE bounds | `uclouvain/openjpeg` `tests/conformance/CMakeLists.txt` | `C1P*_*_list` |
+| `p1_05` component 1 MSE | ITU-T T.803 Table C.7 | 9.716 |
 | Per-file features | `opj_dump -i` plus a direct marker-segment walk over each codestream | — |
 
 Every codestream, reference, and bound in `manifest.json` records where it came
 from, so the corpus regrows from these inputs alone.
+
+Every Part 1 bound is OpenJPEG's, except one. OpenJPEG's list has `p1_05`
+component 1 at an MSE of 9.816, looser than T.803's 9.716, so the manifest uses
+T.803's value (`T803_TIGHTER` in `regenerate.py`). For `p0_05` and `p1_03`
+T.803's MSE bounds are looser than OpenJPEG's, so OpenJPEG's tighter ones stay
+(the table in the HTJ2K section lists all three).
 
 ## Compliance classes
 
