@@ -287,22 +287,30 @@ fn geometry_multi_block_grid() {
 /// On grids that do not start at the canvas origin, with precincts smaller
 /// than the band, the code-blocks tile each band exactly, in raster order,
 /// and the precincts split the band's blocks between them with each block in
-/// exactly one, in raster order within the precinct.
+/// exactly one, in raster order within the precinct. A tile one row high
+/// gives bands with width but no height, which hold no blocks at all.
 #[test]
 fn blocks_tile_the_band_and_precincts_partition_them() {
-    for (offset, levels, cb, precinct) in [(0, 2, 2, 4), (3, 3, 2, 5), (17, 2, 3, 6), (5, 4, 2, 15)]
-    {
-        let mut header = header(97, 75, levels, cb);
+    let mut flat_bands = 0;
+    for (offset, levels, cb, precinct, height) in [
+        (0, 2, 2, 4, 75),
+        (3, 3, 2, 5, 75),
+        (17, 2, 3, 6, 75),
+        (5, 4, 2, 15, 75),
+        (0, 2, 2, 4, 1),
+    ] {
+        let mut header = header(97, height, levels, cb);
         header.siz.x_offset = offset;
         header.siz.y_offset = offset / 2;
         header.siz.tile_x_offset = 0;
         header.siz.tile_y_offset = 0;
         header.siz.tile_width = 97 + offset;
-        header.siz.tile_height = 75 + offset;
+        header.siz.tile_height = height + offset;
         header.components[0].coding.precinct_sizes =
             vec![(precinct, precinct); usize::from(levels) + 1];
         let geoms = geoms_of(&header, 0, 0).unwrap();
         for band in geoms.iter().flat_map(|r| &r.bands) {
+            flat_bands += usize::from(band.height == 0 && band.block_cols > 0);
             let rects: Vec<_> = band.block_rects().collect();
             assert_eq!(rects.len(), band.block_count());
             let area: usize = rects.iter().map(|&(_, _, w, h)| w * h).sum();
@@ -331,6 +339,7 @@ fn blocks_tile_the_band_and_precincts_partition_them() {
             assert!(owner.iter().all(|&n| n == 1), "each block in one precinct");
         }
     }
+    assert!(flat_bands > 0, "a band with width and no height was built");
 }
 
 /// A tile of one sample at an odd origin has a precinct at its finest
