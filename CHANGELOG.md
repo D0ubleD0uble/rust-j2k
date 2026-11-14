@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-14
+
 JP2 files now decode, with their header metadata, and can be converted to
 sRGB. Whole-file decodes are several times faster than 0.3.0. Each
 decode's work is bounded for its file's size and its image by a fixed sample
@@ -50,7 +52,7 @@ The first fails to compile; the others compile but behave differently.
   estimated 1.4 GiB for a square single-component tile, up to about 3.2 GiB
   for a tile one sample wide, and about 2 GiB while a JP2 palette expands.
   These are ratios measured on images of 2^24 to 2^26 samples, scaled to the
-  limit ([the sample limit](docs/resource-bounds.md#the-sample-limit)).
+  limit ([the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-sample-limit)).
   `WorkLimit` cannot set a lower limit.
 - Expect an error on three kinds of malformed file that 0.3 decoded: a
   code-block size past the 4096-sample limit in any `COD` or `COC`, even
@@ -71,7 +73,7 @@ The first fails to compile; the others compile but behave differently.
   codestream. The boxes are checked; files that bend the box rules the way
   OpenJPEG tolerates decode as they do there. A file that is not
   JP2-compatible is `Error::Unsupported`. The rules for what is accepted are
-  on `decode` and in [the JP2 box layer notes](docs/openjpeg-departures.md#the-jp2-box-layer).
+  on `decode` and in [the JP2 box layer notes](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/openjpeg-departures.md#the-jp2-box-layer).
 - A JP2 file with a palette (`pclr` and `cmap`) decodes to the palette's
   channels, and one with channel definitions (`cdef`) puts its color
   channels in color order. `DecodeOptions::raw_channels` skips both and
@@ -221,7 +223,7 @@ The first fails to compile; the others compile but behave differently.
 - With `strict` off, each missing tile-component and each tile whose data
   ends is charged against the packet work bound, so a short input cannot ask
   for unbounded work.
-- [Resource bounds](docs/resource-bounds.md) gives each limit
+- [Resource bounds](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md) gives each limit
   and its measurements.
 
 ## [0.3.0] - 2026-07-18
@@ -531,7 +533,8 @@ wrapper, and no multi-component or color transform. Anything outside the subset
 is rejected cleanly rather than half-decoded. Wider Part 1 coverage, the JP2 file
 format, HTJ2K, and an encoder are later-phase work; see `docs/roadmap.md`.
 
-[Unreleased]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/D0ubleD0uble/rust-j2k/releases/tag/v0.1.0
