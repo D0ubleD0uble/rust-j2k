@@ -198,11 +198,15 @@ fn input_shorter_than_soc_is_codestream() {
 fn a_damaged_main_header_is_codestream() {
     let whole = std::fs::read(fixtures().join("jpeg2000_regular_latlon.j2k")).unwrap();
     assert_eq!(first_sot(&whole), Some(116));
-    let cases: [(&str, &[(usize, u8)]); 8] = [
+    let cases: [(&str, &[(usize, u8)]); 9] = [
         ("SOC is not SOC", &[(1, 0x4E)]),
         ("Lsiz below 2", &[(5, 1)]),
         ("Lsiz one short, so the walk loses sync", &[(5, 40)]),
         ("Csiz past the SIZ segment's end", &[(41, 2)]),
+        (
+            "COD declares precinct sizes it does not carry",
+            &[(49, 0x01)],
+        ),
         ("COD's marker code is not a marker", &[(45, 0x00)]),
         ("SOD in the main header", &[(46, 0x93)]),
         ("a second SIZ", &[(46, 0x51)]),
@@ -228,7 +232,7 @@ fn a_damaged_main_header_is_codestream() {
     messages.sort();
     messages.dedup();
     assert!(
-        messages.len() >= 6,
+        messages.len() >= 8,
         "the cases are not distinct: {messages:?}"
     );
 }
