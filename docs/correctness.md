@@ -63,6 +63,12 @@ on the strength of the standard needs two things, and one is not enough:
    correct in principle while the numbers don't improve rests on an
    incomplete analysis, and it isn't earned yet.
 
+One owner-settled exception: for the inverse 9/7's high-pass scale (#104)
+the owner kept the standard's exact `2/K` on 2026-11-13, knowing OpenJPEG's
+constant scores up to 0.72% lower MSE against the ISO references, so there the
+standard wins without a better result
+([decision](https://github.com/D0ubleD0uble/rust-j2k/issues/104#issuecomment-6869324141)).
+
 Assume first that a divergence is our bug. It almost always is.
 
 "Where the decoders differ" lists every known case. The first was the
@@ -832,8 +838,14 @@ reduction into every COD and COC parse.
 The stricter checks in this section have a cost in interop: an encoder that
 produces such a stream decodes under OpenJPEG and is refused here. No
 committed fixture or conformance file trips them, but the two real files
-listed above do, and `opj_compress` writes the two tier-2 patterns. If a real file ever needs one relaxed, relax
-it to match the oracle: the protective argument loses to a demonstrated real
+listed above do, and `opj_compress` writes the two tier-2 patterns. A real
+file that needs a check relaxed is handled by two owner rules (2026-11-12).
+Rule 2 covers only OpenJPEG behavior that is deliberate error correction;
+leniency that exists because OpenJPEG never wrote a check goes behind
+`strict = false`, with an entry in the report, not into the strict default.
+The exception (#269): a lenient reading can stay in the strict default when
+the existing checks (the full packet walk, coverage, leftover bytes) would
+still catch a wrong guess. So `strict = false` is the default path for such a
 file.
 
 ### Packets a POC sequence leaves out
