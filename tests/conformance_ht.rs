@@ -609,86 +609,74 @@ fn check_passes(name: &str, passes: &support::ht::Passes) {
     );
 }
 
-/// Unknown manifest keys are rejected rather than ignored.
+/// Unknown manifest keys are rejected rather than ignored, at every level.
 #[test]
 fn the_manifests_reject_unknown_keys() {
-    fn reject<T: serde::de::DeserializeOwned>(
-        value: &serde_json::Value,
-        mutate: &dyn Fn(&mut serde_json::Value),
-        what: &str,
-    ) {
+    /// Add an unknown key to the object at JSON pointer `at` and expect `T` to
+    /// refuse it.
+    fn reject<T: serde::de::DeserializeOwned>(value: &serde_json::Value, at: &str) {
         let mut v = value.clone();
-        mutate(&mut v);
+        let object = v
+            .pointer_mut(at)
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap_or_else(|| panic!("no object at {at}"));
+        object.insert("surprise".into(), 1.into());
         let err = serde_json::from_value::<T>(v)
             .err()
-            .unwrap_or_else(|| panic!("an unknown key {what} must be rejected"));
-        assert!(err.to_string().contains("unknown field"), "{what}: {err}");
+            .unwrap_or_else(|| panic!("an unknown key at `{at}` must be rejected"));
+        assert!(err.to_string().contains("unknown field"), "{at}: {err}");
     }
     let text = std::fs::read_to_string(ht_dir().join("manifest.json")).expect("read");
     serde_json::from_str::<HtManifest>(&text).expect("committed manifest parses");
     let v: serde_json::Value = serde_json::from_str(&text).expect("json");
-    let snap = v["codestreams"]
-        .as_array()
-        .and_then(|a| a.iter().position(|c| !c["openjpeg"]["snapshot"].is_null()))
-        .expect("an entry with a snapshot");
-    let measured = v["codestreams"]
-        .as_array()
-        .and_then(|a| a.iter().position(|c| !c["passes"]["measured"].is_null()))
-        .expect("an entry with measured passes");
-    let paths: &[(
-        &str,
-        &dyn Fn(&mut serde_json::Value) -> &mut serde_json::Value,
-    )] = &[
-        ("at the top level", &|v| v),
-        ("on a codestream", &|v| &mut v["codestreams"][0]),
-        ("in bounds", &|v| &mut v["codestreams"][0]["bounds"]),
-        ("in tolerance", &|v| &mut v["codestreams"][0]["tolerance"]),
-        (
-            "in kakadu_stats",
-            &|v| &mut v["codestreams"][0]["kakadu_stats"],
-        ),
-        ("in features", &|v| &mut v["codestreams"][0]["features"]),
-        (
-            "in cblksty",
-            &|v| &mut v["codestreams"][0]["features"]["cblksty"],
-        ),
-        ("in ht", &|v| &mut v["codestreams"][0]["ht"]),
-        ("in passes", &|v| &mut v["codestreams"][0]["passes"]),
-        ("in a digest", &|v| &mut v["codestreams"][0]["file_digest"]),
-        ("in openjpeg", &|v| &mut v["codestreams"][0]["openjpeg"]),
-        ("on a JPH entry", &|v| &mut v["jph"][0]),
-        ("in a JPH openjpeg", &|v| &mut v["jph"][0]["openjpeg"]),
+    let find = |has: &str| {
+        v["codestreams"]
+            .as_array()
+            .and_then(|a| a.iter().position(|c| !c.pointer(has).unwrap().is_null()))
+            .unwrap_or_else(|| panic!("an entry with {has}"))
+    };
+    let snap = find("/openjpeg/snapshot");
+    let measured = find("/passes/measured");
+    let at = [
+        String::new(),
+        "/codestreams/0".into(),
+        "/codestreams/0/bounds".into(),
+        "/codestreams/0/tolerance".into(),
+        "/codestreams/0/tolerance/part1".into(),
+        "/codestreams/0/tolerance/additional".into(),
+        "/codestreams/0/kakadu_stats".into(),
+        "/codestreams/0/features".into(),
+        "/codestreams/0/features/cblksty".into(),
+        "/codestreams/0/ht".into(),
+        "/codestreams/0/passes".into(),
+        "/codestreams/0/file_digest".into(),
+        "/codestreams/0/reference_digests/0".into(),
+        "/codestreams/0/openjpeg".into(),
+        format!("/codestreams/{snap}/openjpeg/metrics"),
+        format!("/codestreams/{snap}/openjpeg/agreement_bound"),
+        format!("/codestreams/{snap}/openjpeg/snapshot"),
+        format!("/codestreams/{measured}/passes/measured"),
+        "/jph/0".into(),
+        "/jph/0/features".into(),
+        "/jph/0/ht".into(),
+        "/jph/0/passes".into(),
+        "/jph/0/kakadu_stats".into(),
+        "/jph/0/openjpeg".into(),
     ];
-    for (what, at) in paths {
-        reject::<HtManifest>(&v, &|v| at(v)["surprise"] = 1.into(), what);
+    for pointer in &at {
+        reject::<HtManifest>(&v, pointer);
     }
-    reject::<HtManifest>(
-        &v,
-        &|v| v["codestreams"][snap]["openjpeg"]["snapshot"]["surprise"] = 1.into(),
-        "in a snapshot",
-    );
-    reject::<HtManifest>(
-        &v,
-        &|v| v["codestreams"][snap]["openjpeg"]["agreement_bound"]["surprise"] = 1.into(),
-        "in an agreement bound",
-    );
-    reject::<HtManifest>(
-        &v,
-        &|v| v["codestreams"][measured]["passes"]["measured"]["surprise"] = 1.into(),
-        "in measured passes",
-    );
 
     let text = std::fs::read_to_string(openjph_dir().join("manifest.json")).expect("read");
     serde_json::from_str::<OpenJphManifest>(&text).expect("committed manifest parses");
     let v: serde_json::Value = serde_json::from_str(&text).expect("json");
-    reject::<OpenJphManifest>(
-        &v,
-        &|v| v["surprise"] = 1.into(),
-        "at the OpenJPH top level",
-    );
-    reject::<OpenJphManifest>(
-        &v,
-        &|v| v["entries"][0]["surprise"] = 1.into(),
-        "on an OpenJPH entry",
-    );
+    for pointer in [
+        "",
+        "/entries/0",
+        "/entries/0/features",
+        "/entries/0/ht",
+        "/entries/0/bounds",
+    ] {
+        reject::<OpenJphManifest>(&v, pointer);
+    }
 }
