@@ -21,7 +21,8 @@
         "C1P1_PEAK_list",
         "C1P1_MSE_list"
       ],
-      "note": "Class-1 (per-component) is the active grading tier upstream; the class-0 lists (C0P*) are commented out there (first component only) and are recorded per entry for reference, not used as the bar."
+      "note": "Class-1 (per-component) is the active grading tier upstream; the class-0 lists (C0P*) are commented out there (first component only) and are recorded per entry for reference, not used as the bar.",
+      "t803_override": "p1_05 component 1 MSE is 9.716, from ITU-T T.803 Table C.7; OpenJPEG's C1P1_MSE_list has 9.816. Every other bound is OpenJPEG's."
     },
     "features": {
       "tool": "opj_dump -i + direct marker-segment walk",
@@ -3468,7 +3469,7 @@
         ],
         "mse": [
           8.458,
-          9.816,
+          9.716,
           10.154
         ]
       },
