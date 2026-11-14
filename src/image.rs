@@ -505,10 +505,13 @@ fn assemble_component(
     })
 }
 
-/// `1.5 * 2^23`. For `|x| <= 2^22`, `x + ROUND_MAGIC` lies in `[2^23, 2^24)`,
-/// where consecutive `f32` values are exactly 1 apart, so the addition itself
-/// rounds `x` to an integer, ties to even under the default rounding mode, and
-/// that integer is the sum's bit pattern minus `ROUND_MAGIC`'s.
+/// `1.5 * 2^23`. For `-2^22 <= x < 2^22`, `x + ROUND_MAGIC` lies in
+/// `[2^23, 2^24]`, where consecutive `f32` values are exactly 1 apart (2^24
+/// itself is reached only by rounding up from just below it, and its bit
+/// pattern still follows on by one), so the addition itself rounds `x` to an
+/// integer, ties to even under the default rounding mode, and that integer is
+/// the sum's bit pattern minus `ROUND_MAGIC`'s. [`round_shift_clamp`] clamps
+/// first, so `x` is at most `2^22 - 1` there.
 const ROUND_MAGIC: f32 = 12_582_912.0;
 
 /// The deepest component [`round_shift_clamp`] rounds with [`ROUND_MAGIC`].
