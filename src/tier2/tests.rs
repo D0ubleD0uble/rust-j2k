@@ -73,6 +73,8 @@ fn parse_layers_styled<'a>(
         body_pos: 0,
         packed: false,
     };
+    // One scratch for every layer, as the walk keeps it across packets.
+    let mut scratch = Scratch::default();
     for layer in 0..layers {
         parse_packet(
             &mut streams,
@@ -84,6 +86,7 @@ fn parse_layers_styled<'a>(
             bands,
             0,
             &mut states,
+            &mut scratch,
             None,
         )?;
     }
@@ -196,6 +199,8 @@ fn tile(data: &[u8]) -> Tile<'_> {
 }
 
 fn single_block_band(kind: BandKind, width: usize, height: usize) -> BandGeom {
+    // One code-block cell as large as the band, at the canvas origin.
+    let exp = |side: usize| side.next_power_of_two().trailing_zeros();
     BandGeom {
         kind,
         origin: (0, 0),
@@ -203,7 +208,9 @@ fn single_block_band(kind: BandKind, width: usize, height: usize) -> BandGeom {
         height,
         block_cols: 1,
         block_rows: 1,
-        blocks: vec![(0, 0, width, height)],
+        bounds: (0, width as i64, 0, height as i64),
+        first_block: (0, 0),
+        block_exp: (exp(width), exp(height)),
         precincts: one_precinct(1, 1),
     }
 }
@@ -215,7 +222,8 @@ fn one_precinct(cols: usize, rows: usize) -> Vec<PrecinctGeom> {
     vec![PrecinctGeom {
         cols,
         rows,
-        blocks: (0..cols * rows).collect(),
+        first: 0,
+        stride: cols,
     }]
 }
 
@@ -266,11 +274,72 @@ fn geometry_multi_block_grid() {
     assert_eq!((ll.width, ll.height), (100, 100));
     // ceil(100/32) = 4 blocks each way.
     assert_eq!((ll.block_cols, ll.block_rows), (4, 4));
+    let blocks: Vec<_> = ll.block_rects().collect();
+    assert_eq!(blocks.len(), 16);
     // First block is a full 32×32 cell at the origin.
-    assert_eq!(ll.blocks[0], (0, 0, 32, 32));
+    assert_eq!(blocks[0], (0, 0, 32, 32));
+    // The last of the first row is clipped to 100 − 96 = 4 wide.
+    assert_eq!(blocks[3], (96, 0, 4, 32));
     // The bottom-right block is clipped to 100 − 96 = 4 on each axis.
-    let last = ll.blocks[ll.block_cols * ll.block_rows - 1];
-    assert_eq!(last, (96, 96, 4, 4));
+    assert_eq!(blocks[15], (96, 96, 4, 4));
+}
+
+/// On grids that do not start at the canvas origin, with precincts smaller
+/// than the band, the code-blocks tile each band exactly, in raster order,
+/// and the precincts split the band's blocks between them with each block in
+/// exactly one, in raster order within the precinct. A tile one row high
+/// gives bands with width but no height, which hold no blocks at all.
+#[test]
+fn blocks_tile_the_band_and_precincts_partition_them() {
+    let mut flat_bands = 0;
+    for (offset, levels, cb, precinct, height) in [
+        (0, 2, 2, 4, 75),
+        (3, 3, 2, 5, 75),
+        (17, 2, 3, 6, 75),
+        (5, 4, 2, 15, 75),
+        (0, 2, 2, 4, 1),
+    ] {
+        let mut header = header(97, height, levels, cb);
+        header.siz.x_offset = offset;
+        header.siz.y_offset = offset / 2;
+        header.siz.tile_x_offset = 0;
+        header.siz.tile_y_offset = 0;
+        header.siz.tile_width = 97 + offset;
+        header.siz.tile_height = height + offset;
+        header.components[0].coding.precinct_sizes =
+            vec![(precinct, precinct); usize::from(levels) + 1];
+        let geoms = geoms_of(&header, 0, 0).unwrap();
+        for band in geoms.iter().flat_map(|r| &r.bands) {
+            flat_bands += usize::from(band.height == 0 && band.block_cols > 0);
+            let rects: Vec<_> = band.block_rects().collect();
+            assert_eq!(rects.len(), band.block_count());
+            let area: usize = rects.iter().map(|&(_, _, w, h)| w * h).sum();
+            assert_eq!(area, band.width * band.height, "the blocks tile the band");
+            for (index, &(x, y, w, h)) in rects.iter().enumerate() {
+                assert!(w > 0 && h > 0 && x + w <= band.width && y + h <= band.height);
+                // Raster order: same row as the block before, or a new row.
+                if index % band.block_cols != 0 {
+                    let (px, py, pw, _) = rects[index - 1];
+                    assert_eq!((x, y), (px + pw, py));
+                }
+            }
+            let mut owner = vec![0; band.block_count()];
+            for precinct in &band.precincts {
+                for y in 0..precinct.rows {
+                    for x in 0..precinct.cols {
+                        let index = precinct.block(x, y);
+                        owner[index] += 1;
+                        // The precinct's blocks form a rectangle of the grid.
+                        let first = precinct.block(0, 0);
+                        assert_eq!(index % band.block_cols, first % band.block_cols + x);
+                        assert_eq!(index / band.block_cols, first / band.block_cols + y);
+                    }
+                }
+            }
+            assert!(owner.iter().all(|&n| n == 1), "each block in one precinct");
+        }
+    }
+    assert!(flat_bands > 0, "a band with width and no height was built");
 }
 
 /// A tile of one sample at an odd origin has a precinct at its finest
@@ -428,7 +497,7 @@ fn the_dropped_resolutions_code_blocks_are_charged_to_the_work_bound() {
     let geoms = geoms_of(&header, 0, 0).unwrap();
     let blocks: Vec<usize> = geoms
         .iter()
-        .map(|r| r.bands.iter().map(|b| b.blocks.len()).sum())
+        .map(|r| r.bands.iter().map(BandGeom::block_count).sum())
         .collect();
     assert_eq!(blocks, [16, 48, 192]);
     let precincts: usize = geoms.iter().map(ResolutionGeom::precinct_count).sum();
@@ -675,7 +744,9 @@ fn packet_two_blocks_partial_inclusion() {
         height: 8,
         block_cols: 2,
         block_rows: 1,
-        blocks: vec![(0, 0, 8, 8), (8, 0, 8, 8)],
+        bounds: (0, 16, 0, 8),
+        first_block: (0, 0),
+        block_exp: (3, 3),
         precincts: one_precinct(2, 1),
     };
     let (subbands, _next) = parse_one_packet(&data, &[band]).unwrap();
@@ -762,11 +833,11 @@ fn block_count_guard_rejects_metadata_bomb() {
     assert!(matches!(err, crate::Error::Limit(_)), "{err}");
 }
 
-/// The block budget bites *before* the band's block vector — and its per-precinct
-/// index vectors — are built, not after summing them: an 8192×8192 single-band
-/// tile-component under 4×4 blocks is ~2^22 blocks, and materializing that grid
-/// first is the ~160 MiB / multi-second cost the after-the-fact check paid. With
-/// the guard enforced inside the geometry walk this returns in microseconds.
+/// The block budget bites while the geometry is built, not after summing it:
+/// an 8192×8192 single-band tile-component under 4×4 blocks is ~2^22 blocks,
+/// and materializing per-block state for that grid first is the ~160 MiB /
+/// multi-second cost an after-the-fact check pays. With the guard enforced
+/// inside the geometry walk this returns in microseconds.
 #[test]
 fn block_count_guard_rejects_before_allocating() {
     use std::time::Instant;
@@ -786,7 +857,7 @@ fn block_count_guard_rejects_before_allocating() {
     );
     assert!(
         elapsed.as_millis() < 100,
-        "the guard must fire before the block vectors are built, not after ({elapsed:?})"
+        "the guard must fire while the geometry is built, not after ({elapsed:?})"
     );
 }
 
@@ -2040,6 +2111,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
         &bands,
         0,
         &mut states,
+        &mut Scratch::default(),
         None,
     )
     .expect("wraps to zero");
