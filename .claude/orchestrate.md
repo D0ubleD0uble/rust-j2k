@@ -15,12 +15,13 @@ models: { default: sonnet, mechanical: haiku, complex: opus }
   # anything touching tier1/tier2/dwt numerics, and every review.
 focus_themes: ["phase4: milestone 'Phase 4 — HTJ2K decode (Part 15)'"]
 standing_orders:
-  - "Keep one worker on the Phase 4 chain (P4 steps in plan order, docs/roadmap-phase4.md) while it has an eligible issue."
+  - "Keep one worker on the HTJ2K chain (P4 steps in plan order, docs/roadmap-phase4.md) while it has an eligible issue."
+  - "Use the other slot for the streaming chain: #305 -> #215 -> #217, with #216 in parallel where its files don't overlap."
 
 labels: { decision: needs-decision, judgement: needs-judgement }
 hotspots:
-  - "src/lib.rs, src/error.rs, src/image.rs (public API: Image, DecodeOptions, Error)"
-  - "src/tier1/** while the HT seam (#137) lands"
+  - "src/lib.rs, src/error.rs, src/image.rs and DecodeOptions (public API; #305, #215, #216 and #217 serialize here)"
+  - "src/tier1/** while the HT seam (#137, P4.2) lands"
   - "src/codestream/** for the CAP/CPF work (P4.1)"
   - "tests/support/mod.rs (Expected schema) and tests/fixtures/conformance/regenerate.py"
   - "fuzz/Cargo.toml and fuzz/fuzz_targets/ (one worker adding targets at a time)"
