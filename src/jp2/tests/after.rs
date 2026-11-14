@@ -539,8 +539,9 @@ fn the_packet_walk_at_the_box_end_is_bounded() {
         let cs = crate::codestream::parse_tiles(cut, parsed).unwrap();
         let header = cs.tile_header(0).unwrap();
         let mut budget = Budget::decode(u64::MAX, u64::MAX);
-        decode_packets_within(&header, &cs.tiles[0], &mut budget).expect("ends at the cut");
-        (u64::MAX - budget.visits, MAX_CODE_BLOCKS - budget.blocks)
+        let meter = crate::tier2::Meter::new(u64::MAX);
+        decode_packets_within(&header, &cs.tiles[0], &mut budget, &meter).expect("ends at the cut");
+        (meter.spent(), MAX_CODE_BLOCKS - budget.blocks)
     };
 
     for file in [
@@ -753,6 +754,7 @@ fn the_packet_walk_skips_a_poc_sequence_past_its_bitmap() {
         &header,
         &cs.tiles[0],
         &mut Budget::decode(u64::MAX, u64::MAX),
+        &crate::tier2::Meter::new(u64::MAX),
     )
     .expect("the packets end at the end");
 }
