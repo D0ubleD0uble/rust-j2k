@@ -15,7 +15,7 @@ pub struct QeEntry {
 }
 
 /// The 47-entry MQ state table (ISO/IEC 15444-1 Table C-2), identical to the
-/// constants in OpenJPEG's `mqc_states`. Indexed by [`Context::index`]; each row
+/// constants in OpenJPEG's `mqc_states`. Indexed by a context's row; each row
 /// gives the LPS probability `qe`, the next state on an MPS- or LPS-driven
 /// renormalization, and whether an LPS exchange flips the MPS sense (`switch`).
 #[rustfmt::skip]
@@ -69,12 +69,56 @@ pub const QE_TABLE: &[QeEntry] = &[
     QeEntry { qe: 0x5601, next_mps: 46, next_lps: 46, switch: false },
 ];
 
-/// Per-context state: index into [`QE_TABLE`] and the current MPS sense.
-#[derive(Debug, Clone, Copy, Default)]
+/// Per-context state: an index into [`QE_TABLE`] and the current MPS sense,
+/// packed as `2 × index + mps`, OpenJPEG's `mqc_states` numbering. One lookup
+/// in [`MQ_STATES`] then gives the state's `Qe` and both successor states,
+/// with any MPS switch already applied.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Context {
-    pub index: u8,
-    pub mps: u8,
+    state: u8,
 }
+
+impl Context {
+    /// The context at [`QE_TABLE`] row `index` with MPS sense `mps` (0 or 1).
+    pub const fn new(index: u8, mps: u8) -> Self {
+        Context {
+            state: index * 2 + mps,
+        }
+    }
+
+    /// The [`QE_TABLE`] row of the context's probability state.
+    #[cfg(test)]
+    pub fn index(self) -> u8 {
+        self.state >> 1
+    }
+
+    /// The context's current MPS sense, 0 or 1.
+    #[cfg(test)]
+    pub fn mps(self) -> u8 {
+        self.state & 1
+    }
+}
+
+/// [`QE_TABLE`] expanded to packed context states (see [`Context`]): for the
+/// two MPS senses of each row, the row's `Qe` in bits 0..16, the state after an
+/// MPS renormalization in bits 16..24, and the state after an LPS
+/// renormalization in bits 24..32, with the `switch` flip folded in. A state's
+/// MPS sense is its own low bit. The table has 256 entries so a `u8` state
+/// indexes it without a bounds check; only the first 94 are reachable.
+static MQ_STATES: [u32; 256] = {
+    let mut states = [0u32; 256];
+    let mut s = 0;
+    while s < 2 * QE_TABLE.len() {
+        let e = QE_TABLE[s / 2];
+        let mps = (s % 2) as u8;
+        let lps_mps = if e.switch { 1 - mps } else { mps };
+        let next_mps = e.next_mps * 2 + mps;
+        let next_lps = e.next_lps * 2 + lps_mps;
+        states[s] = e.qe as u32 | (next_mps as u32) << 16 | (next_lps as u32) << 24;
+        s += 1;
+    }
+    states
+};
 
 /// MQ arithmetic decoder over one code-block's coded bytes.
 ///
@@ -82,7 +126,11 @@ pub struct Context {
 /// `c`/`a` are the code and interval registers (the comparison reads the high
 /// 16 bits of `c`, `c >> 16`), `ct` counts the bits left before the next
 /// [`bytein`](Self::bytein), and `pos` is the byte pointer `BP`.
-#[derive(Debug)]
+///
+/// The pass loops clone the decoder into a local at the start of a pass and
+/// write it back at the end, so its registers stay in machine registers
+/// across the pass instead of going through memory on every decision.
+#[derive(Debug, Clone)]
 pub struct MqDecoder<'a> {
     data: &'a [u8],
     pos: usize,
@@ -113,6 +161,7 @@ impl<'a> MqDecoder<'a> {
     /// segment the decoder is fed 1-bits — the marker convention of ISO C.3.4
     /// (a terminating marker reads as `0xFF`) — which also bounds every read so
     /// a truncated or exhausted segment can never index out of `data`.
+    #[inline(always)]
     fn byte(&self, pos: usize) -> u8 {
         self.data.get(pos).copied().unwrap_or(0xFF)
     }
@@ -183,6 +232,7 @@ impl<'a> MqDecoder<'a> {
     /// A synthesized byte sets [`ran_past_end`](Self::ran_past_end). The
     /// stuffing arm never reads one: it needs a byte `<= 0x8F` after the
     /// `0xFF`, and a synthesized byte is `0xFF`.
+    #[inline]
     fn bytein(&mut self) {
         if self.byte(self.pos) == 0xFF {
             if self.byte(self.pos + 1) > 0x8F {
@@ -210,7 +260,20 @@ impl<'a> MqDecoder<'a> {
 
     /// RENORMD (ISO C.3.3): shift `a`/`c` left until `a` is renormalized,
     /// pulling a fresh byte whenever the bit count runs out.
+    ///
+    /// When `c` holds enough bits for the whole shift, which is most of the
+    /// time, the shift happens in one step. That is the standard's loop with
+    /// no `BYTEIN` in it, since `ct` stays positive until the last shift.
+    #[inline(always)]
     fn renormd(&mut self) {
+        // `a` is in `1..0x8000` here, so the shift is 1 to 15.
+        let shift = self.a.leading_zeros() as i32 - 16;
+        if self.ct >= shift {
+            self.a <<= shift;
+            self.c <<= shift;
+            self.ct -= shift;
+            return;
+        }
         loop {
             if self.ct == 0 {
                 self.bytein();
@@ -224,59 +287,47 @@ impl<'a> MqDecoder<'a> {
         }
     }
 
-    /// MPS_EXCHANGE (ISO C.16): decide and re-estimate when the MPS sub-interval
-    /// is the smaller one. `qe` is the current context's `Qe`.
-    fn mps_exchange(&mut self, cx: &mut Context, qe: u32) -> u8 {
-        let e = QE_TABLE[cx.index as usize];
-        if self.a < qe {
-            let d = 1 - cx.mps;
-            if e.switch {
-                cx.mps = 1 - cx.mps;
-            }
-            cx.index = e.next_lps;
-            d
-        } else {
-            cx.index = e.next_mps;
-            cx.mps
-        }
-    }
-
-    /// LPS_EXCHANGE (ISO C.17): decide and re-estimate on the LPS path, then set
-    /// `a` to the LPS sub-interval `qe`.
-    fn lps_exchange(&mut self, cx: &mut Context, qe: u32) -> u8 {
-        let e = QE_TABLE[cx.index as usize];
-        let d = if self.a < qe {
-            cx.index = e.next_mps;
-            cx.mps
-        } else {
-            let d = 1 - cx.mps;
-            if e.switch {
-                cx.mps = 1 - cx.mps;
-            }
-            cx.index = e.next_lps;
-            d
-        };
-        self.a = qe;
-        d
-    }
-
     /// Decode one binary decision in context `cx` (DECODE, ISO C.3.2), updating
     /// `cx`'s state. Returns the decoded bit (0 or 1).
+    ///
+    /// The two exchanges are MPS_EXCHANGE (C.16) and LPS_EXCHANGE (C.17). The
+    /// packed state's successors carry the MPS switch, so each is one store.
+    #[inline(always)]
     pub fn decode(&mut self, cx: &mut Context) -> u8 {
-        let qe = QE_TABLE[cx.index as usize].qe as u32;
+        let st = MQ_STATES[usize::from(cx.state)];
+        let qe = st & 0xFFFF;
+        let mps = cx.state & 1;
+        let next_mps = (st >> 16) as u8;
+        let next_lps = (st >> 24) as u8;
         self.a -= qe;
         if (self.c >> 16) < qe {
-            let d = self.lps_exchange(cx, qe);
+            // LPS_EXCHANGE: the decision comes from comparing the two
+            // sub-intervals, and `a` becomes the LPS sub-interval.
+            let d = if self.a < qe {
+                cx.state = next_mps;
+                mps
+            } else {
+                cx.state = next_lps;
+                1 - mps
+            };
+            self.a = qe;
             self.renormd();
             d
         } else {
             self.c -= qe << 16;
             if self.a & 0x8000 == 0 {
-                let d = self.mps_exchange(cx, qe);
+                // MPS_EXCHANGE: the MPS sub-interval is the smaller one.
+                let d = if self.a < qe {
+                    cx.state = next_lps;
+                    1 - mps
+                } else {
+                    cx.state = next_mps;
+                    mps
+                };
                 self.renormd();
                 d
             } else {
-                cx.mps
+                mps
             }
         }
     }
@@ -350,7 +401,7 @@ impl<'a> RawDecoder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Context, MqDecoder, QE_TABLE, QeEntry, RawDecoder};
+    use super::{Context, MQ_STATES, MqDecoder, QE_TABLE, QeEntry, RawDecoder};
 
     /// ISO/IEC 15444-1 Annex C / ITU-T T.88 (08/2018) §H.2 "Test sequence for
     /// arithmetic coder": these 30 coded bytes decode to [`H2_DECODED`] under a
@@ -537,6 +588,37 @@ mod tests {
         (0x0015, 43, 40, false), (0x0009, 44, 41, false), (0x0005, 45, 42, false),
         (0x0001, 45, 43, false), (0x5601, 46, 46, false),
     ];
+
+    /// Each packed state follows its Table C-2 row: its `Qe`, the row and MPS
+    /// sense after an MPS renormalization (sense kept), and after an LPS one
+    /// (sense flipped only in the `switch` rows).
+    #[test]
+    fn packed_states_follow_table_c2() {
+        for (index, e) in QE_TABLE.iter().enumerate() {
+            for mps in 0..2u8 {
+                let st = MQ_STATES[usize::from(Context::new(index as u8, mps).state)];
+                let after_mps = Context {
+                    state: (st >> 16) as u8,
+                };
+                let after_lps = Context {
+                    state: (st >> 24) as u8,
+                };
+                let lps_sense = if e.switch { 1 - mps } else { mps };
+                let at = format!("row {index}, mps {mps}");
+                assert_eq!(st & 0xFFFF, u32::from(e.qe), "{at}");
+                assert_eq!(
+                    (after_mps.index(), after_mps.mps()),
+                    (e.next_mps, mps),
+                    "{at}"
+                );
+                assert_eq!(
+                    (after_lps.index(), after_lps.mps()),
+                    (e.next_lps, lps_sense),
+                    "{at}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn table_has_47_states() {

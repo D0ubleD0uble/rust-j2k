@@ -467,6 +467,11 @@ that β and δ are the nearest `f32`; see "Fixed"), so output snapshots from
   unchanged, and 9/7 images decode about 1.3 times faster. A narrow tile
   needs about the same memory as before these changes, within a few
   percent.
+- Code-block decoding is faster. The coding passes keep the arithmetic
+  decoder's registers in locals, read the state of a four-row column with
+  one load, and skip a column that has nothing to code with one test. The
+  output is unchanged, and the benchmark set decodes 1.2 to 1.4 times
+  faster.
 
 ## [0.3.0] - 2026-07-18
 
