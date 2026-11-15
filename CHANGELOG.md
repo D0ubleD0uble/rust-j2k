@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Header::quality_layers`: the number of quality layers the main header's
+  `COD` declares, as `read_header` reads it. It is the most that
+  `DecodeOptions::max_quality_layers` can keep. A tile-part `COD` can declare
+  another count for its tile. `Header` is `#[non_exhaustive]`, so the new
+  field is not a breaking change.
 - HTJ2K codestreams decode when each code-block carries only its cleanup
   pass, in any number of quality layers, with or without placeholder
   passes before it. The output matches OpenJPEG 2.5.0 and OpenJPH on the

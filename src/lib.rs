@@ -398,6 +398,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
             height,
             components,
             max_reduction: max_reduction(&prefix.parsed.header),
+            quality_layers: prefix.parsed.header.cod.layers,
             jp2: Some(prefix.metadata),
         });
     }
@@ -412,6 +413,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
         height,
         components: ComponentInfo::of_siz(siz, reduction),
         max_reduction: max_reduction(&parsed.header),
+        quality_layers: parsed.header.cod.layers,
         jp2: None,
     })
 }
@@ -623,6 +625,9 @@ pub struct DecodeOptions {
     /// without a cap. Only their coding passes are left out. With
     /// [`strict`](Self::strict) off, a packet of a layer past the cap that
     /// the data does not reach is not reported missing.
+    ///
+    /// [`Header::quality_layers`](crate::Header::quality_layers) is the layer
+    /// count the main header declares.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, decode, decode_with};
@@ -909,6 +914,8 @@ impl DecodeOptions {
 
     /// These options with
     /// [`max_quality_layers`](Self::max_quality_layers) set to `layers`.
+    /// [`Header::quality_layers`](crate::Header::quality_layers) is how many
+    /// layers a file declares.
     ///
     /// ```
     /// use rust_j2k::DecodeOptions;
