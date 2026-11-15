@@ -117,8 +117,8 @@ pub mod marker {
 /// Each flag changes how Tier-1 reads a code-block's coded segments, so a
 /// decoder that ignores one does not decode a slightly different image — it
 /// decodes the wrong one. The six Part 1 flags below are decoded. The two
-/// HTJ2K bits, [`HT`] and [`HT_MIXED`], are read into
-/// [`Coding`](super::Coding) and refused by the block-coder guard
+/// HTJ2K bits are read into [`Coding`](super::Coding): [`HT`] alone selects
+/// the HT block coder, and [`HT_MIXED`] is refused by the block-coder guard
 /// (`check_block_coder` in `codestream`).
 pub mod code_block_style {
     /// Bit 0: selective arithmetic coding bypass (lazy). From the fifth coded

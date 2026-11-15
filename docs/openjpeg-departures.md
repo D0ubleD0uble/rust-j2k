@@ -500,9 +500,9 @@ passes cost the same against the code-block work bound as passes with bytes.
 | - | - |
 | This decoder | refuses each stream below |
 | OpenJPEG 2.5.0 | decodes it, with a warning or none, or with invented values |
-| Standard | B.11 (only whole packets may be missing), Table A-33 (POC ranges), the step count a decomposition needs |
+| Standard | B.11 (only whole packets may be missing), Table A-33 (POC ranges), the step count a decomposition needs, T.814 7.1 and 7.6 (HT cleanup segments) |
 | Rule | 3 |
-| Tests and fixtures | the reject matrix in `src/codestream/tests.rs`; `tests/fixtures/partial/tp_r.j2k` |
+| Tests and fixtures | the reject matrix in `src/codestream/tests.rs`; `tests/fixtures/partial/tp_r.j2k`; the refusal tests in `src/tier1/ht/tests.rs` |
 | Decided | the interop rules: 2026-11-12, and #269 |
 
 Three tier-2 checks reject streams OpenJPEG decodes with a warning: an `Nsop`
@@ -517,7 +517,9 @@ warn-and-continue bets the output on a parse that has already gone wrong.
 
 Three parse-time checks are stricter for a different reason: the field is
 malformed, or the codestream is missing data the standard requires and
-OpenJPEG fills the gap with invented values. The entries below give each one.
+OpenJPEG fills the gap with invented values. Four checks on HT cleanup
+segments are of the same kind ([HT cleanup segments](#ht-cleanup-segments)).
+The entries below give each one.
 
 ### SOP sequence numbers
 
@@ -629,6 +631,27 @@ A.2 and A.3 require `Rsiz` bit 14 and a `CAP` in every HTJ2K codestream, but
 OpenJPEG 2.5.0 decodes an HT codestream with its `CAP` removed, with `Rsiz`
 bit 14 cleared, or both, to the same samples as the file as made (measured on
 `ds0_ht_01_b11` and `ds1_ht_07_b11`). This decoder matches that (rule 2).
+
+### HT cleanup segments
+
+Four faults in an HT cleanup segment are refused as `Codestream` where
+OpenJPEG 2.5.0 decodes the block anyway. Each was measured on a
+single-block codestream:
+
+- A MagSgn byte after 0xFF with its stuffing bit set (T.814 7.1.2 calls it
+  an error). On a 4x2 block with one zero bit-plane in a subband of 8 and
+  the segment `FF DF 39 6F D4 A5 00`, OpenJPEG gives
+  `[0, -96, -288, -160, 0, 0, -160, -160]`.
+- A MagSgn stream read past its end, beyond the one 0xFF byte implied at
+  `Pcup` (7.1.2 calls it an error). OpenJPEG decodes on.
+- A magnitude with more bits than the block codes. Within the exponent bound
+  `U_q <= P + 2` it overflows `i32` only in a subband of 30 bit-planes, where
+  OpenJPEG wraps it (`-268435456` on the measured block).
+- A segment of 65535 bytes or more. 7.1.1 requires `Lcup < 65535`, and
+  OpenJPEG decodes a 65535-byte segment.
+
+Both decoders refuse `Scup` outside `2..=min(Lcup, 4079)`, `U_q` above
+`P + 2`, and a quad that codes a significant sample outside the block.
 
 ### Two faults in one file
 

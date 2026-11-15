@@ -1,0 +1,609 @@
+//! The HTJ2K block coder's cleanup pass (Rec. ITU-T T.814 | ISO/IEC
+//! 15444-15, clause 7).
+//!
+//! An HT code-block codes its magnitudes in one cleanup pass, optionally
+//! followed by a SigProp and a MagRef pass that refine one more bit-plane.
+//! This module decodes blocks that carry the cleanup pass alone.
+//!
+//! The cleanup segment holds three byte-streams. MagSgn runs forward from the
+//! start; MEL runs forward from `Pcup`; VLC runs backward from the end. The
+//! block is scanned in 2x2 quads, row-pairs at a time, and each quad's
+//! significance, exponent bound and magnitudes come from those three streams
+//! (7.3). The vertically causal context flag changes only the SigProp pass
+//! (7.4), so the cleanup pass ignores it.
+//!
+//! The rest of tier-1 reaches this module only through
+//! [`BlockCoder`](super::BlockCoder): [`decode`] and [`passes_run`].
+
+#[cfg(test)]
+mod tests;
+mod vlc_tables;
+
+use crate::tier2::CodeBlock;
+use crate::{Error, Result};
+use vlc_tables::{CXT_VLC_TABLE_0, CXT_VLC_TABLE_1};
+
+/// The most magnitude bit-planes a subband can have for the double-scale
+/// reconstruction to fit `i32`, the bound OpenJPEG's `opj_t1_ht_decode_cblk`
+/// applies to `Mb`.
+const MAX_BIT_PLANES: u32 = 30;
+
+/// The largest suffix length `Scup` (7.1.1).
+const MAX_SCUP: usize = 4079;
+
+/// One more than the largest cleanup segment length `Lcup` (7.1.1).
+const MAX_LCUP: usize = 65535;
+
+fn malformed(what: &str) -> Error {
+    Error::Codestream(format!("HT code-block {what}"))
+}
+
+/// Decode one HT code-block's cleanup segment into its coefficients,
+/// row-major over the block, at twice their weight like the Part 1 coder.
+///
+/// `numbps` is the subband's magnitude bit-plane count `Mb`. The cleanup
+/// pass codes the top `P + 1` of the `Mb` magnitude bit-planes, `P` being
+/// the block's zero bit-planes (`S_blk`, 7.6), so a significant sample of
+/// magnitude `mu` reconstructs to `(2 mu + 1) << (Mb - P - 1)`: `mu` at its
+/// bit-planes, plus half of the first plane not coded. OpenJPEG's
+/// `opj_t1_ht_decode_cblk` reconstructs the same way.
+pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, roi_shift: u8) -> Result<Vec<i32>> {
+    let (width, height) = (block.width, block.height);
+    let mut coeffs = vec![0i32; width * height];
+    if roi_shift != 0 {
+        return Err(Error::Unsupported(
+            "region of interest on an HT code-block is outside the decoded subset".into(),
+        ));
+    }
+    if block.num_passes > 1 {
+        return Err(Error::Unsupported(format!(
+            "HT code-block with {} coding passes; only the cleanup pass is decoded",
+            block.num_passes
+        )));
+    }
+    if block.num_passes == 0 || numbps == 0 {
+        return Ok(coeffs);
+    }
+    if numbps > MAX_BIT_PLANES {
+        return Err(Error::Limit(format!(
+            "HT code-block in a subband of {numbps} bit-planes, over the \
+             {MAX_BIT_PLANES}-plane limit"
+        )));
+    }
+    let zbp = block.zero_bit_planes;
+    // At least one bit-plane must be left to code; OpenJPEG refuses the
+    // same blocks.
+    if zbp >= numbps {
+        return Err(malformed(&format!(
+            "has {zbp} zero bit-planes in a subband of {numbps}, leaving none to code"
+        )));
+    }
+    let data: Vec<u8> = block.segments.iter().flat_map(|s| s.bytes()).collect();
+    let lcup = data.len();
+    if !(2..MAX_LCUP).contains(&lcup) {
+        return Err(malformed(&format!(
+            "cleanup segment is {lcup} bytes, outside 2..{MAX_LCUP}"
+        )));
+    }
+    let scup = 16 * usize::from(data[lcup - 1]) + usize::from(data[lcup - 2] & 0x0F);
+    if !(2..=lcup.min(MAX_SCUP)).contains(&scup) {
+        return Err(malformed(&format!(
+            "suffix length Scup = {scup} is outside 2..=min(Lcup = {lcup}, {MAX_SCUP})"
+        )));
+    }
+    let seg = Segment {
+        data: &data,
+        pcup: lcup - scup,
+    };
+    Cleanup {
+        seg,
+        magsgn: MagSgnReader::new(),
+        mel: MelDecoder::new(seg.pcup),
+        vlc: VlcReader::new(&seg),
+        width,
+        height,
+        qw: width.div_ceil(2),
+        // `mu` has at most `P + 1` bits (7.6), so its exponent, the bit
+        // length of `2 mu - 1`, is at most `P + 2`. OpenJPEG has the same
+        // bound.
+        max_u: zbp + 2,
+        shift: numbps - zbp - 1,
+    }
+    .run(&mut coeffs)?;
+    Ok(coeffs)
+}
+
+/// The coding passes [`decode`] runs on `block`: the cleanup pass, if the
+/// block has any pass at all.
+pub(super) fn passes_run(block: &CodeBlock<'_>) -> u64 {
+    u64::from(block.num_passes.min(1))
+}
+
+/// The cleanup segment `Dcup`, with `Pcup`, the length of its MagSgn part.
+#[derive(Clone, Copy)]
+struct Segment<'a> {
+    data: &'a [u8],
+    pcup: usize,
+}
+
+impl Segment<'_> {
+    /// `modDcup` (7.1.1): the segment with its last byte and the low nibble of
+    /// the one before it, which held `Scup`, read as ones.
+    fn byte(&self, pos: usize) -> u8 {
+        let lcup = self.data.len();
+        if pos == lcup - 1 {
+            0xFF
+        } else if pos == lcup - 2 {
+            self.data[pos] | 0x0F
+        } else {
+            self.data[pos]
+        }
+    }
+}
+
+/// The MagSgn bit-stream: forward from byte 0, least significant bit first,
+/// with a stuffing bit after every 0xFF (`importMagSgnBit`, 7.1.2).
+struct MagSgnReader {
+    pos: usize,
+    bits: u32,
+    tmp: u32,
+    last: u32,
+}
+
+impl MagSgnReader {
+    fn new() -> Self {
+        MagSgnReader {
+            pos: 0,
+            bits: 0,
+            tmp: 0,
+            last: 0,
+        }
+    }
+
+    fn bit(&mut self, seg: &Segment<'_>) -> Result<u32> {
+        if self.bits == 0 {
+            self.bits = if self.last == 0xFF { 7 } else { 8 };
+            if self.pos < seg.pcup {
+                self.tmp = u32::from(seg.byte(self.pos));
+                if self.tmp & (1 << self.bits) != 0 {
+                    return Err(malformed("MagSgn byte after 0xFF has its stuffing bit set"));
+                }
+            } else if self.pos == seg.pcup {
+                // One 0xFF byte the encoder may have dropped is implied.
+                self.tmp = 0xFF;
+            } else {
+                return Err(malformed("MagSgn stream runs past its end"));
+            }
+            self.last = self.tmp;
+            self.pos += 1;
+        }
+        let bit = self.tmp & 1;
+        self.tmp >>= 1;
+        self.bits -= 1;
+        Ok(bit)
+    }
+
+    /// `decodeMagSgnValue` (7.3.8): `m` bits, least significant first.
+    fn value(&mut self, seg: &Segment<'_>, m: u32) -> Result<u64> {
+        let mut val = 0u64;
+        for i in 0..m {
+            val |= u64::from(self.bit(seg)?) << i;
+        }
+        Ok(val)
+    }
+}
+
+/// The MEL bit-stream and its run-length decoder (`importMELBit`, 7.1.3, and
+/// `decodeMELSym`, 7.3.3).
+struct MelDecoder {
+    pos: usize,
+    bits: u32,
+    tmp: u32,
+    k: usize,
+    run: u32,
+    one: bool,
+}
+
+/// `MEL_E` (Table 2): the run-length exponent of each MEL state.
+const MEL_E: [u32; 13] = [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5];
+
+impl MelDecoder {
+    fn new(pcup: usize) -> Self {
+        MelDecoder {
+            pos: pcup,
+            bits: 0,
+            tmp: 0,
+            k: 0,
+            run: 0,
+            one: false,
+        }
+    }
+
+    /// Most significant bit first, with a stuffing bit after every 0xFF;
+    /// past the end of the segment the stream reads as ones.
+    fn bit(&mut self, seg: &Segment<'_>) -> u32 {
+        if self.bits == 0 {
+            self.bits = if self.tmp == 0xFF { 7 } else { 8 };
+            if self.pos < seg.data.len() {
+                self.tmp = u32::from(seg.byte(self.pos));
+                self.pos += 1;
+            } else {
+                self.tmp = 0xFF;
+            }
+        }
+        self.bits -= 1;
+        (self.tmp >> self.bits) & 1
+    }
+
+    fn symbol(&mut self, seg: &Segment<'_>) -> u32 {
+        if self.run == 0 && !self.one {
+            let mut eval = MEL_E[self.k];
+            if self.bit(seg) == 1 {
+                self.run = 1 << eval;
+                self.k = (self.k + 1).min(12);
+            } else {
+                self.run = 0;
+                while eval > 0 {
+                    self.run = 2 * self.run + self.bit(seg);
+                    eval -= 1;
+                }
+                self.k = self.k.saturating_sub(1);
+                self.one = true;
+            }
+        }
+        if self.run > 0 {
+            self.run -= 1;
+            0
+        } else {
+            self.one = false;
+            1
+        }
+    }
+}
+
+/// The VLC bit-stream: backward from byte `Lcup - 2`, least significant bit
+/// first, skipping the stuffing bit of a byte whose low seven bits are ones
+/// after a byte above 0x8F (`importVLCBit`, 7.1.4).
+struct VlcReader {
+    /// The next byte to read; below `Pcup` (or below 0) the stream is spent.
+    pos: Option<usize>,
+    bits: u32,
+    tmp: u32,
+    last: u32,
+}
+
+impl VlcReader {
+    fn new(seg: &Segment<'_>) -> Self {
+        let lcup = seg.data.len();
+        let last = u32::from(seg.byte(lcup - 2));
+        let tmp = last >> 4;
+        VlcReader {
+            pos: lcup.checked_sub(3),
+            bits: if tmp & 7 < 7 { 4 } else { 3 },
+            tmp,
+            last,
+        }
+    }
+
+    fn bit(&mut self, seg: &Segment<'_>) -> Result<u32> {
+        if self.bits == 0 {
+            let pos = self
+                .pos
+                .filter(|&pos| pos >= seg.pcup)
+                .ok_or_else(|| malformed("VLC stream runs into the MagSgn bytes"))?;
+            self.tmp = u32::from(seg.byte(pos));
+            self.bits = if self.last > 0x8F && self.tmp & 0x7F == 0x7F {
+                7
+            } else {
+                8
+            };
+            self.last = self.tmp;
+            self.pos = pos.checked_sub(1);
+        }
+        let bit = self.tmp & 1;
+        self.tmp >>= 1;
+        self.bits -= 1;
+        Ok(bit)
+    }
+
+    /// `n` bits, least significant first.
+    fn bits(&mut self, seg: &Segment<'_>, n: u32) -> Result<u32> {
+        let mut val = 0;
+        for i in 0..n {
+            val |= self.bit(seg)? << i;
+        }
+        Ok(val)
+    }
+
+    /// `decodeUPrefix` (7.3.6).
+    fn u_prefix(&mut self, seg: &Segment<'_>) -> Result<u32> {
+        if self.bit(seg)? == 1 {
+            return Ok(1);
+        }
+        if self.bit(seg)? == 1 {
+            return Ok(2);
+        }
+        Ok(if self.bit(seg)? == 1 { 3 } else { 5 })
+    }
+
+    /// `decodeUSuffix` (7.3.6).
+    fn u_suffix(&mut self, seg: &Segment<'_>, prefix: u32) -> Result<u32> {
+        match prefix {
+            0..3 => Ok(0),
+            3 => self.bit(seg),
+            _ => self.bits(seg, 5),
+        }
+    }
+
+    /// `decodeUExtension` (7.3.6).
+    fn u_extension(&mut self, seg: &Segment<'_>, suffix: u32) -> Result<u32> {
+        if suffix < 28 {
+            Ok(0)
+        } else {
+            self.bits(seg, 4)
+        }
+    }
+}
+
+/// One quad's decoded CxtVLC tuple `(rho, u_off, eps_k, eps_1)`.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+struct QuadInfo {
+    rho: u8,
+    u_off: bool,
+    e_k: u8,
+    e_1: u8,
+}
+
+/// A CxtVLC table as a lookup: `[c][len][cwd]` holds one more than the index
+/// of the row whose `len`-bit codeword is `cwd` in context `c`, or 0.
+type VlcLookup = [[[u16; 128]; 8]; 8];
+
+const fn lookup(table: &[[u8; 7]]) -> VlcLookup {
+    let mut out = [[[0u16; 128]; 8]; 8];
+    let mut i = 0;
+    while i < table.len() {
+        let [c, _, _, _, _, w, l_w] = table[i];
+        out[c as usize][l_w as usize][w as usize] = i as u16 + 1;
+        i += 1;
+    }
+    out
+}
+
+static VLC_LOOKUP_0: VlcLookup = lookup(&CXT_VLC_TABLE_0);
+static VLC_LOOKUP_1: VlcLookup = lookup(&CXT_VLC_TABLE_1);
+
+/// `decodeCxtVLC` (7.3.5): read bits until they spell a codeword of context
+/// `c` in the table of the first row of quads or of a later one.
+fn decode_cxt_vlc(
+    vlc: &mut VlcReader,
+    seg: &Segment<'_>,
+    first_row: bool,
+    c: u8,
+) -> Result<QuadInfo> {
+    let (table, lookup): (&[[u8; 7]], &VlcLookup) = if first_row {
+        (&CXT_VLC_TABLE_0, &VLC_LOOKUP_0)
+    } else {
+        (&CXT_VLC_TABLE_1, &VLC_LOOKUP_1)
+    };
+    let mut cwd = 0usize;
+    // Entry 0 of each context is for zero-bit codewords, which no row has.
+    for (len, codewords) in lookup[usize::from(c)].iter().enumerate().skip(1) {
+        cwd |= (vlc.bit(seg)? as usize) << (len - 1);
+        let hit = codewords[cwd];
+        if hit != 0 {
+            let [_, rho, u_off, e_k, e_1, _, _] = table[usize::from(hit - 1)];
+            return Ok(QuadInfo {
+                rho,
+                u_off: u_off == 1,
+                e_k,
+                e_1,
+            });
+        }
+    }
+    Err(malformed(&format!(
+        "VLC bits match no CxtVLC codeword of context {c}"
+    )))
+}
+
+/// The cleanup pass of one block: its three streams and its geometry.
+struct Cleanup<'a> {
+    seg: Segment<'a>,
+    magsgn: MagSgnReader,
+    mel: MelDecoder,
+    vlc: VlcReader,
+    width: usize,
+    height: usize,
+    /// Quads per row, `ceil(width / 2)`.
+    qw: usize,
+    /// The largest exponent bound `U_q` a quad may have.
+    max_u: u32,
+    /// The left shift from `2 mu + 1` to the double-scale coefficient.
+    shift: u32,
+}
+
+impl Cleanup<'_> {
+    /// Decode every quad into `coeffs`, row-major over the block.
+    fn run(mut self, coeffs: &mut [i32]) -> Result<()> {
+        let qw = self.qw;
+        let qh = self.height.div_ceil(2);
+        // Significance and magnitude exponent of every sample, by its
+        // quad-scan index `n = 4q + j` (7.2): `j` is 0 top-left, 1
+        // bottom-left, 2 top-right, 3 bottom-right.
+        let mut sigma = vec![false; 4 * qw * qh];
+        let mut exps = vec![0u32; 4 * qw * qh];
+        for qy in 0..qh {
+            let first_row = qy == 0;
+            for qx in (0..qw).step_by(2) {
+                let q1 = qy * qw + qx;
+                // With an odd `QW` the last pair of a row has one quad.
+                let quads = [q1, q1 + 1];
+                let pair = &quads[..if qx + 1 < qw { 2 } else { 1 }];
+                let mut info = [QuadInfo::default(); 2];
+                for (slot, &q) in pair.iter().enumerate() {
+                    let c = self.context(&sigma, q);
+                    info[slot] = self.sig_emb(first_row, c)?;
+                    for j in 0..4 {
+                        let on = info[slot].rho >> j & 1 == 1;
+                        if on && !self.inside(q, j) {
+                            return Err(malformed("codes a significant sample outside the block"));
+                        }
+                        sigma[4 * q + j] = on;
+                    }
+                }
+                let u = self.residuals(first_row, &info[..pair.len()])?;
+                for (slot, &q) in pair.iter().enumerate() {
+                    let kappa = if first_row {
+                        1
+                    } else {
+                        self.predictor(&exps, q, info[slot].rho)
+                    };
+                    let bound = kappa + u[slot];
+                    if bound > self.max_u {
+                        return Err(malformed(&format!(
+                            "exponent bound U_q = {bound} exceeds zero bit-planes + 2 = {}",
+                            self.max_u
+                        )));
+                    }
+                    self.magnitudes(q, info[slot], bound, &mut exps, coeffs)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether sample `j` of quad `q` lies inside the block.
+    fn inside(&self, q: usize, j: usize) -> bool {
+        let x = 2 * (q % self.qw) + (j >> 1);
+        let y = 2 * (q / self.qw) + (j & 1);
+        x < self.width && y < self.height
+    }
+
+    /// The context `c_q` of quad `q` from its decoded neighbors (7.3.5).
+    fn context(&self, sigma: &[bool], q: usize) -> u8 {
+        let qw = self.qw;
+        let s = |n: usize| u8::from(sigma[n]);
+        // The quad to the left, in the same row: its right column.
+        let (w, sw) = if !q.is_multiple_of(qw) {
+            (s(4 * q - 2), s(4 * q - 1))
+        } else {
+            (0, 0)
+        };
+        if q < qw {
+            let (f, sf) = if q > 0 {
+                (s(4 * q - 4), s(4 * q - 3))
+            } else {
+                (0, 0)
+            };
+            (f | sf) + 2 * w + 4 * sw
+        } else {
+            let up = 4 * (q - qw);
+            let n = s(up + 1);
+            let ne = s(up + 3);
+            let nw = if !q.is_multiple_of(qw) { s(up - 1) } else { 0 };
+            let nf = if !(q + 1).is_multiple_of(qw) {
+                s(up + 5)
+            } else {
+                0
+            };
+            (nw | n) + 2 * (w | sw) + 4 * (ne | nf)
+        }
+    }
+
+    /// `decodeSigEMB` (7.3.5): an all-zero-context quad first asks MEL
+    /// whether it is significant at all.
+    fn sig_emb(&mut self, first_row: bool, c: u8) -> Result<QuadInfo> {
+        if c == 0 && self.mel.symbol(&self.seg) == 0 {
+            return Ok(QuadInfo::default());
+        }
+        decode_cxt_vlc(&mut self.vlc, &self.seg, first_row, c)
+    }
+
+    /// The unsigned residuals `u_q` of a quad-pair (7.3.4, 7.3.6): prefixes,
+    /// then suffixes, then extensions, first quad before second.
+    fn residuals(&mut self, first_row: bool, info: &[QuadInfo]) -> Result<[u32; 2]> {
+        let seg = self.seg;
+        let both = info.len() == 2 && info[0].u_off && info[1].u_off;
+        let mut prefix = [0u32; 2];
+        let mut offset = 0;
+        if first_row && both {
+            if self.mel.symbol(&seg) == 1 {
+                offset = 2;
+                prefix = [self.vlc.u_prefix(&seg)?, self.vlc.u_prefix(&seg)?];
+            } else {
+                prefix[0] = self.vlc.u_prefix(&seg)?;
+                prefix[1] = if prefix[0] > 2 {
+                    self.vlc.bit(&seg)? + 1
+                } else {
+                    self.vlc.u_prefix(&seg)?
+                };
+            }
+        } else {
+            for (p, quad) in prefix.iter_mut().zip(info) {
+                if quad.u_off {
+                    *p = self.vlc.u_prefix(&seg)?;
+                }
+            }
+        }
+        let mut suffix = [0u32; 2];
+        for (s, &p) in suffix.iter_mut().zip(&prefix) {
+            *s = self.vlc.u_suffix(&seg, p)?;
+        }
+        let mut u = [0u32; 2];
+        for ((u, quad), (&p, &s)) in u.iter_mut().zip(info).zip(prefix.iter().zip(&suffix)) {
+            if quad.u_off {
+                *u = offset + p + s + 4 * self.vlc.u_extension(&seg, s)?;
+            }
+        }
+        Ok(u)
+    }
+
+    /// The exponent predictor `kappa_q` of quad `q` below the first row
+    /// (7.3.7), from the exponents of the row above.
+    fn predictor(&self, exps: &[u32], q: usize, rho: u8) -> u32 {
+        if rho.count_ones() < 2 {
+            return 1;
+        }
+        let qw = self.qw;
+        let up = 4 * (q - qw);
+        let mut e = exps[up + 1].max(exps[up + 3]);
+        if !q.is_multiple_of(qw) {
+            e = e.max(exps[up - 1]);
+        }
+        if !(q + 1).is_multiple_of(qw) {
+            e = e.max(exps[up + 5]);
+        }
+        e.saturating_sub(1).max(1)
+    }
+
+    /// Read quad `q`'s magnitudes and signs from MagSgn (7.3.8), record their
+    /// exponents, and write its samples.
+    fn magnitudes(
+        &mut self,
+        q: usize,
+        info: QuadInfo,
+        bound: u32,
+        exps: &mut [u32],
+        coeffs: &mut [i32],
+    ) -> Result<()> {
+        for j in 0..4 {
+            if info.rho >> j & 1 == 0 {
+                continue;
+            }
+            let k = u32::from(info.e_k >> j & 1);
+            let i = u64::from(info.e_1 >> j & 1);
+            let m = bound - k;
+            let v = self.magsgn.value(&self.seg, m)? | i << m;
+            let mu = (v >> 1) + 1;
+            exps[4 * q + j] = 64 - (2 * mu - 1).leading_zeros();
+            // Within the exponent bound, only a `mu` of `P + 2` bits, which
+            // the block cannot code (7.6), overflows `i32`, and only at
+            // `Mb = 30`.
+            let magnitude = i32::try_from((2 * mu + 1) << self.shift)
+                .map_err(|_| malformed("codes a magnitude past its bit-planes"))?;
+            let x = 2 * (q % self.qw) + (j >> 1);
+            let y = 2 * (q / self.qw) + (j & 1);
+            coeffs[y * self.width + x] = if v & 1 == 1 { -magnitude } else { magnitude };
+        }
+        Ok(())
+    }
+}

@@ -1113,7 +1113,8 @@ enum PassCoder<'a> {
 /// as `opj_t1_decode_cblk` does. Without termination there is one segment and
 /// the codeword runs unbroken.
 ///
-/// Every Part 1 style flag reaches here; the HTJ2K bits do not. Most act at
+/// Every Part 1 style flag reaches here; the HTJ2K bits do not, since an HT
+/// block goes to the HT block coder instead. Most act at
 /// the segment split or the context, which Tier-2 and [`BlockState`] have
 /// already applied, so the pass cycle below is unchanged. Two reach into the
 /// passes themselves: `segmentation symbols` appends four decisions to every
@@ -1138,9 +1139,10 @@ pub fn decode_block(
     use crate::codestream::markers::code_block_style::{
         HT, HT_MIXED, LAZY, PTERM, RESET, TERMALL, VCAUSAL,
     };
-    // The codestream's block-coder guard refuses both HTJ2K bits, so none
-    // reaches here. When MIXED decodes (P4.6), its Part 1 blocks carry both
-    // bits, and this relaxes to refuse only HT without MIXED.
+    // `BlockCoder::of` sends an HT style to the HT coder, and the
+    // codestream's block-coder guard refuses MIXED, so neither bit reaches
+    // here. When MIXED decodes (P4.6), its Part 1 blocks carry both bits,
+    // and this relaxes to refuse only HT without MIXED.
     debug_assert_eq!(
         style & (HT | HT_MIXED),
         0,

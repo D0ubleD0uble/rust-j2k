@@ -264,6 +264,13 @@ pub struct OpenJphEntry {
 
 const EXACT: Bound = Bound { pae: 0.0, mse: 0.0 };
 
+/// JPH files whose codestream holds `fileN.jp2`'s components in another
+/// order: codestream component `k` is as-coded component `order[k]`.
+/// `file2_b12` stores them reversed, although its `cdef` maps channels to
+/// colors as `file2.jp2`'s does; `opj_decompress` 2.5.0 decodes its bare
+/// codestream to the same reversed order.
+const CODESTREAM_ORDER: &[(&str, &[usize])] = &[("file2_b12", &[2, 1, 0])];
+
 /// The bound for component `index` of `bounds`, or zero when `bit_exact`, so
 /// a corpus edit cannot loosen an exact entry.
 fn bound_of(bounds: &Bounds, bit_exact: bool, index: usize) -> Bound {
@@ -411,6 +418,53 @@ impl JphEntry {
         // The JP2 grading reads `file` relative to `jp2/`; `ht/` is its sibling.
         entry.file = format!("../ht/{}", self.file);
         Some(jp2::grade_entry(jp2_dir, &entry))
+    }
+
+    /// Decode the bare `jp2c` codestream of a graded file and grade its
+    /// components bit-exactly, before any box is applied: against
+    /// `fileN.jp2`'s as-coded references, or its references where nothing
+    /// in its boxes changes the components (no palette, no shift, no color
+    /// conversion), or `file10_b12`'s own. `None` for a file not graded, or
+    /// whose components no reference holds (`file9`'s palette indices).
+    ///
+    /// This grades the HT block coder on files whose `jph ` brand the file
+    /// reader does not accept yet.
+    pub fn grade_codestream(&self, ht_dir: &Path, jp2_dir: &Path) -> Option<Grade> {
+        let graded_as = self.graded_as.as_deref()?;
+        let (dir, references) = if graded_as == "references" {
+            (ht_dir, self.references.clone())
+        } else {
+            let entry = jp2::load_manifest(jp2_dir)
+                .entries
+                .into_iter()
+                .find(|e| e.name() == graded_as)?;
+            let unchanged = entry.bit_exact
+                && entry.shift_right == 0
+                && !entry.needs_srgb
+                && !entry.boxes.jp2h.iter().any(|b| b == "pclr");
+            let mut references = match entry.as_coded {
+                Some(as_coded) => as_coded.references,
+                None if unchanged => entry.references,
+                None => return None,
+            };
+            if let Some((_, order)) = CODESTREAM_ORDER.iter().find(|(n, _)| *n == self.name) {
+                references = order.iter().map(|&i| references[i].clone()).collect();
+            }
+            (jp2_dir, references)
+        };
+        let bytes = match read(ht_dir, &self.file) {
+            Ok(bytes) => bytes,
+            Err(grade) => return Some(grade),
+        };
+        let [start, end] = self.codestream_range;
+        let Some(codestream) = bytes.get(start..end) else {
+            return Some(Grade::Failed(format!(
+                "codestream range {start}..{end} past the file"
+            )));
+        };
+        Some(part4::grade_decode(dir, codestream, 0, &references, |_| {
+            EXACT
+        }))
     }
 }
 

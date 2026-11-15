@@ -2287,6 +2287,84 @@ fn restart_segments_fill_one_pass_at_a_time_across_layers() {
     assert_eq!(next, data.len());
 }
 
+// ---- Code-block style: HT ----
+
+/// An HT block whose one contribution is its cleanup pass parses like a
+/// Part 1 block of one pass.
+#[test]
+fn an_ht_block_with_its_cleanup_pass_alone_parses() {
+    const HT: u8 = 0x40;
+    let mut w = PackedHeader::new();
+    w.bit(1);
+    w.bit(1); // included
+    w.bit(1); // zero-bitplane 0
+    w.bit(0); // 1 pass
+    w.bit(0); // Lblock stays 3
+    w.bits(2, 3);
+    let data = packets(&[(w.finish(), vec![0x62, 0x00])]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let no_delimiters = Delimiters {
+        sop: false,
+        eph: false,
+    };
+    let (subbands, next) = parse_layers_styled(&data, &bands, 1, no_delimiters, HT).unwrap();
+    let block = &subbands[0].blocks[0];
+    assert_eq!(block.num_passes, 1);
+    assert_eq!(all_bytes(block), [0x62, 0x00]);
+    assert_eq!(next, data.len());
+}
+
+/// An HT block with more than its cleanup pass, in one contribution or over
+/// two layers, is refused before its lengths are read: its placeholder and
+/// refinement passes follow other length rules.
+#[test]
+fn an_ht_block_with_more_passes_is_unsupported() {
+    const HT: u8 = 0x40;
+    let no_delimiters = Delimiters {
+        sop: false,
+        eph: false,
+    };
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+
+    // Two passes in one contribution.
+    let mut w = PackedHeader::new();
+    w.bit(1);
+    w.bit(1); // included
+    w.bit(1); // zero-bitplane 0
+    w.bits(0b10, 2); // 2 passes...
+    w.bit(0); // Lblock stays 3
+    w.bits(2, 4); // Lblock + floor(log2 2) = 4 bits
+    let data = packets(&[(w.finish(), vec![0x62, 0x00])]);
+    let e = parse_layers_styled(&data, &bands, 1, no_delimiters, HT).unwrap_err();
+    assert!(
+        matches!(&e, Error::Unsupported(m) if m.contains("more than its cleanup pass")),
+        "{e:?}"
+    );
+    // The same packet without the HT bit is an ordinary two-pass block.
+    assert!(parse_layers_styled(&data, &bands, 1, no_delimiters, 0).is_ok());
+
+    // One pass in each of two layers.
+    let mut l0 = PackedHeader::new();
+    l0.bit(1);
+    l0.bit(1); // included
+    l0.bit(1); // zero-bitplane 0
+    l0.bit(0); // 1 pass
+    l0.bit(0); // Lblock stays 3
+    l0.bits(2, 3);
+    let mut l1 = PackedHeader::new();
+    l1.bit(1);
+    l1.bit(1); // contributes
+    l1.bit(0); // 1 pass
+    l1.bit(0); // Lblock stays 3
+    l1.bits(1, 3);
+    let data = packets(&[(l0.finish(), vec![0x62, 0x00]), (l1.finish(), vec![7])]);
+    let e = parse_layers_styled(&data, &bands, 2, no_delimiters, HT).unwrap_err();
+    assert!(
+        matches!(&e, Error::Unsupported(m) if m.contains("more than its cleanup pass")),
+        "{e:?}"
+    );
+}
+
 // ---- Code-block style: bypass / lazy (issue #66) ----
 
 /// The lazy (`bypass`) split terminates at every raw/MQ boundary: the ten MQ

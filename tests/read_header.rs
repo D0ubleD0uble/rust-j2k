@@ -218,6 +218,8 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     let mut seen = [0usize; 4];
     let mut compared = [0usize; 2];
     let mut differing = Vec::new();
+    // Decodes refused for an HT pass the decoder does not read.
+    let mut ht_refused = 0;
     let mut names = Vec::new();
     for path in &all {
         let name = path
@@ -268,6 +270,14 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                         differing.push(name.clone());
                     }
                 }
+                // An HT code-block with more than its cleanup pass is found
+                // only in a packet header, so the main header reads.
+                (Ok(_), Err(Error::Unsupported(m)))
+                    if name.starts_with("conformance/ht/")
+                        && m.starts_with("HT code-block with more than its cleanup pass") =>
+                {
+                    ht_refused += 1;
+                }
                 // A reduction the main header's levels cannot take is refused
                 // by `read_header_with` too; only a tile-part COD or COC with
                 // fewer levels is found by decoding, and no fixture has one.
@@ -282,6 +292,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     assert_eq!(seen[0], 9, "the nine Part 4 JP2 files");
     assert_eq!(seen[1], 9, "the nine jp2_real files");
     assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
+    assert!(ht_refused > 0, "no HT decode refused in tier-2");
     // Every listed tile fault really differs.
     let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
     assert_eq!(differing, listed);

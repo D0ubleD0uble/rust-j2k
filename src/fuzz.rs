@@ -52,7 +52,8 @@ pub fn tier1_block(data: &[u8]) {
         // segments (raw runs never carry a cleanup pass), and this hook feeds
         // one unsplit segment — the `tile_body` target's bypass shape covers
         // it through the real tier-2 split instead. The HTJ2K bits never
-        // reach tier-1: the codestream's block-coder guard refuses them.
+        // reach this decoder: an HT block goes to the HT coder, and the
+        // codestream's block-coder guard refuses MIXED.
         style: c & (RESET | TERMALL | VCAUSAL | PTERM | SEGSYM),
         roi_shift: d & 0x3F,
         // A spare bit of the maxshift byte: whether a layer cap cut the

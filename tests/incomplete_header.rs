@@ -48,7 +48,7 @@ fn first_sot(cs: &[u8]) -> Option<usize> {
 
 /// Walk a codestream's main header: the offset of its first `SOT` marker,
 /// and the end of its first `COD` or `COC` segment whose code-block style
-/// sets an HTJ2K bit (`0x40` or `0x80`, ISO/IEC 15444-15 A.4), if any.
+/// sets the HTJ2K mixed-mode bit (`0x80`, ISO/IEC 15444-15 A.4), if any.
 fn walk(cs: &[u8]) -> Option<(usize, Option<usize>)> {
     if !cs.starts_with(&[0xFF, 0x4F]) {
         return None;
@@ -81,7 +81,7 @@ fn walk(cs: &[u8]) -> Option<(usize, Option<usize>)> {
                     _ => None,
                 };
                 at += 2 + length;
-                if ht.is_none() && style.is_some_and(|s| s & 0xC0 != 0) {
+                if ht.is_none() && style.is_some_and(|s| s & 0x80 != 0) {
                     ht = Some(at);
                 }
             }
@@ -174,8 +174,8 @@ fn assert_cuts_are_incomplete(name: &str, bytes: &[u8], cs_at: usize, sot: usize
     }
 }
 
-/// `bytes` is refused for its HTJ2K block coder by `read_header`, a strict
-/// decode and a partial one.
+/// `bytes` is refused for its HTJ2K mixed-mode block coder by `read_header`,
+/// a strict decode and a partial one.
 fn assert_refused_for_ht(what: &str, bytes: &[u8]) {
     let results = [
         read_header(bytes).map(|_| ()),
@@ -184,7 +184,7 @@ fn assert_refused_for_ht(what: &str, bytes: &[u8]) {
     ];
     for result in results {
         assert!(
-            matches!(&result, Err(Error::Unsupported(m)) if m.contains("code-block style (HTJ2K")),
+            matches!(&result, Err(Error::Unsupported(m)) if m.contains("code-block style (HTJ2K mixed-mode")),
             "{what}: {result:?}"
         );
     }
@@ -201,7 +201,7 @@ fn every_cut_inside_the_main_header_is_incomplete() {
         let name = path.strip_prefix(fixtures()).unwrap().display().to_string();
         if let Some((sot, ht)) = walk(&bytes) {
             match ht {
-                // An HTJ2K block coder is refused as soon as the COD or COC
+                // A mixed-mode block coder is refused as soon as the COD or COC
                 // that selects it is read: a cut before it is `Incomplete`,
                 // and every cut that holds it, up to the whole file, is
                 // refused for the coder.
@@ -235,12 +235,12 @@ fn every_cut_inside_the_main_header_is_incomplete() {
         }
     }
     // The fixtures that ship with the crate alone give more than these.
-    eprintln!("cut {codestreams} codestreams ({ht_codestreams} HT) and {jp2s} JP2 files");
+    eprintln!("cut {codestreams} codestreams ({ht_codestreams} mixed-mode) and {jp2s} JP2 files");
     assert!(codestreams >= 100, "only {codestreams} codestreams cut");
-    // The 41 HT conformance codestreams and the bare OpenJPH ones.
+    // The three mixed-mode HT conformance codestreams.
     assert!(
-        ht_codestreams >= 41,
-        "only {ht_codestreams} HT codestreams cut"
+        ht_codestreams >= 3,
+        "only {ht_codestreams} mixed-mode codestreams cut"
     );
     assert!(jp2s >= 30, "only {jp2s} JP2 files cut");
 }
@@ -536,10 +536,10 @@ fn refused() -> Vec<(&'static str, Vec<u8>, usize, fn(&Error) -> bool)> {
     // at 59.
     vec![
         (
-            "an HTJ2K code-block style in COD",
-            edited(&whole, &[(57, 0x40)]),
+            "an HTJ2K mixed-mode code-block style in COD",
+            edited(&whole, &[(57, 0xC0)]),
             59,
-            |e| matches!(e, Error::Unsupported(m) if m.contains("code-block style (HTJ2K")),
+            |e| matches!(e, Error::Unsupported(m) if m.contains("code-block style (HTJ2K mixed-mode")),
         ),
         (
             "a reserved wavelet in COD",

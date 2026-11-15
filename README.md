@@ -109,9 +109,10 @@ how much.
   `Vec<i32>` at the file's depth and in the file's color space, not 8-bit RGBA.
   To show an image, ask for sRGB and scale each value to 8 bits yourself (see
   [Decode a file](#decode-a-file)).
-- It doesn't **read HTJ2K**, the high-throughput variant (Part 15), or the
-  Part 2 extensions. It refuses them with `Error::Unsupported`. OpenJPEG 2.5
-  and later decode HTJ2K.
+- It doesn't **read all of HTJ2K**, the high-throughput variant (Part 15),
+  or the Part 2 extensions. It reads an HTJ2K codestream only when each
+  code-block carries its cleanup pass alone, and refuses the rest with
+  `Error::Unsupported`. OpenJPEG 2.5 and later decode HTJ2K.
 - It doesn't **open JPX, JPM or MJ2 files** unless they say they can also be
   read as JP2. Those files are refused with `Error::Unsupported`.
 - It doesn't **read unsigned 32-bit channels** or channels deeper than 32 bits,
