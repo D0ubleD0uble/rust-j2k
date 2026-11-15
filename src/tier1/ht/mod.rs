@@ -1,9 +1,7 @@
-//! The HTJ2K block coder's cleanup pass (Rec. ITU-T T.814 | ISO/IEC
-//! 15444-15, clause 7).
+//! The HTJ2K block coder (Rec. ITU-T T.814 | ISO/IEC 15444-15, clause 7).
 //!
 //! An HT code-block codes its magnitudes in one cleanup pass, optionally
 //! followed by a SigProp and a MagRef pass that refine one more bit-plane.
-//! This module decodes blocks that carry the cleanup pass alone.
 //!
 //! The cleanup segment holds three byte-streams. MagSgn runs forward from the
 //! start; MEL runs forward from `Pcup`; VLC runs backward from the end. The
@@ -11,6 +9,13 @@
 //! significance, exponent bound and magnitudes come from those three streams
 //! (7.3). The vertically causal context flag changes only the SigProp pass
 //! (7.4), so the cleanup pass ignores it.
+//!
+//! The refinement segment holds two more: SigProp runs forward from its
+//! start, MagRef backward from its end. Both passes scan the block in
+//! four-line stripes, as the Part 1 coder does. SigProp finds the samples
+//! that become significant in the next bit-plane and reads their signs
+//! (7.4); MagRef reads that bit-plane for the samples the cleanup pass found
+//! significant (7.5).
 //!
 //! The rest of tier-1 reaches this module only through
 //! [`BlockCoder`](super::BlockCoder): [`decode`] and [`passes_run`].
@@ -34,20 +39,33 @@ const MAX_SCUP: usize = 4079;
 /// One more than the largest cleanup segment length `Lcup` (7.1.1).
 const MAX_LCUP: usize = 65535;
 
+/// The most coding passes of one HT set: cleanup, SigProp and MagRef (B.1).
+const HT_SET_PASSES: u32 = 3;
+
 fn malformed(what: &str) -> Error {
     Error::Codestream(format!("HT code-block {what}"))
 }
 
-/// Decode one HT code-block's cleanup segment into its coefficients,
-/// row-major over the block, at twice their weight like the Part 1 coder.
+/// Decode one HT code-block into its coefficients, row-major over the block,
+/// at twice their weight like the Part 1 coder.
 ///
 /// `numbps` is the subband's magnitude bit-plane count `Mb`. The cleanup
 /// pass codes the top `P + 1` of the `Mb` magnitude bit-planes, `P` being
 /// the block's zero bit-planes (`S_blk`, 7.6), so a significant sample of
 /// magnitude `mu` reconstructs to `(2 mu + 1) << (Mb - P - 1)`: `mu` at its
-/// bit-planes, plus half of the first plane not coded. OpenJPEG's
+/// bit-planes, plus half of the first plane not coded. The SigProp and
+/// MagRef passes code one plane more for the samples they reach, which then
+/// reconstruct with half of the plane below that. OpenJPEG's
 /// `opj_t1_ht_decode_cblk` reconstructs the same way.
-pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, roi_shift: u8) -> Result<Vec<i32>> {
+///
+/// `causal` is the vertically causal context flag, which keeps the SigProp
+/// pass from looking at the next stripe (7.4).
+pub(super) fn decode(
+    block: &CodeBlock<'_>,
+    numbps: u32,
+    roi_shift: u8,
+    causal: bool,
+) -> Result<Vec<i32>> {
     let (width, height) = (block.width, block.height);
     let mut coeffs = vec![0i32; width * height];
     if roi_shift != 0 {
@@ -55,9 +73,11 @@ pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, roi_shift: u8) -> Resul
             "region of interest on an HT code-block is outside the decoded subset".into(),
         ));
     }
-    if block.num_passes > 1 {
+    // A decoder need decode only one HT set (8.3), and OpenJPEG decodes no
+    // more either.
+    if block.num_passes > HT_SET_PASSES {
         return Err(Error::Unsupported(format!(
-            "HT code-block with {} coding passes; only the cleanup pass is decoded",
+            "HT code-block with {} coding passes; only one HT set is decoded",
             block.num_passes
         )));
     }
@@ -78,7 +98,11 @@ pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, roi_shift: u8) -> Resul
             "has {zbp} zero bit-planes in a subband of {numbps}, leaving none to code"
         )));
     }
-    let data: Vec<u8> = block.segments.iter().flat_map(|s| s.bytes()).collect();
+    let data = block
+        .segments
+        .first()
+        .map(|s| s.bytes())
+        .unwrap_or_default();
     let lcup = data.len();
     if !(2..MAX_LCUP).contains(&lcup) {
         return Err(malformed(&format!(
@@ -95,6 +119,7 @@ pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, roi_shift: u8) -> Resul
         data: &data,
         pcup: lcup - scup,
     };
+    let shift = numbps - zbp - 1;
     Cleanup {
         seg,
         magsgn: MagSgnReader::new(),
@@ -107,16 +132,50 @@ pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, roi_shift: u8) -> Resul
         // length of `2 mu - 1`, is at most `P + 2`. OpenJPEG has the same
         // bound.
         max_u: zbp + 2,
-        shift: numbps - zbp - 1,
+        shift,
     }
     .run(&mut coeffs)?;
+    let z_blk = z_blk(block, numbps);
+    if z_blk > 1 {
+        let refinement = block.segments.get(1).map(|s| s.bytes()).unwrap_or_default();
+        Refinement {
+            width,
+            height,
+            causal,
+            shift,
+        }
+        .run(&refinement, z_blk == HT_SET_PASSES, &mut coeffs)?;
+    }
     Ok(coeffs)
 }
 
-/// The coding passes [`decode`] runs on `block`: the cleanup pass, if the
-/// block has any pass at all.
-pub(super) fn passes_run(block: &CodeBlock<'_>) -> u64 {
-    u64::from(block.num_passes.min(1))
+/// The coding passes [`decode`] runs on `block` in a subband of `numbps`
+/// magnitude bit-planes. See [`z_blk`].
+pub(super) fn passes_run(block: &CodeBlock<'_>, numbps: u32) -> u64 {
+    u64::from(z_blk(block, numbps))
+}
+
+/// The passes of `block` to decode: `Z_blk` (B.3), but only the cleanup pass
+/// where a refinement pass would code below the subband's last bit-plane.
+///
+/// `Z_blk` is the block's passes, except that a refinement segment of zero
+/// length leaves the cleanup pass alone. A block whose cleanup pass already
+/// reaches the subband's last plane, `P = Mb - 1`, has no plane left to
+/// refine: a refinement pass would give it `Nb = Mb + 1` planes (7.6).
+/// OpenJPEG decodes its cleanup pass alone, with a warning, and so does this
+/// decoder.
+fn z_blk(block: &CodeBlock<'_>, numbps: u32) -> u32 {
+    let passes = block.num_passes.min(HT_SET_PASSES);
+    let refined = block
+        .segments
+        .get(1)
+        .is_some_and(|s| s.chunks.iter().any(|c| !c.is_empty()));
+    let plane_left = numbps >= block.zero_bit_planes.saturating_add(2);
+    if passes > 1 && refined && plane_left {
+        passes
+    } else {
+        passes.min(1)
+    }
 }
 
 /// The cleanup segment `Dcup`, with `Pcup`, the length of its MagSgn part.
@@ -605,5 +664,212 @@ impl Cleanup<'_> {
             coeffs[y * self.width + x] = if v & 1 == 1 { -magnitude } else { magnitude };
         }
         Ok(())
+    }
+}
+
+/// The SigProp bit-stream: forward from byte 0 of the refinement segment,
+/// least significant bit first, with a stuffing bit after every 0xFF; past
+/// the end it reads as zeros (`importSigPropBit`, 7.1.5).
+struct SigPropReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+    bits: u32,
+    tmp: u32,
+    last: u32,
+}
+
+impl<'a> SigPropReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        SigPropReader {
+            data,
+            pos: 0,
+            bits: 0,
+            tmp: 0,
+            last: 0,
+        }
+    }
+
+    fn bit(&mut self) -> Result<u32> {
+        if self.bits == 0 {
+            self.bits = if self.last == 0xFF { 7 } else { 8 };
+            self.tmp = match self.data.get(self.pos) {
+                Some(&byte) => {
+                    self.pos += 1;
+                    u32::from(byte)
+                }
+                None => 0,
+            };
+            if self.tmp & (1 << self.bits) != 0 {
+                return Err(malformed(
+                    "SigProp byte after 0xFF has its stuffing bit set",
+                ));
+            }
+            self.last = self.tmp;
+        }
+        let bit = self.tmp & 1;
+        self.tmp >>= 1;
+        self.bits -= 1;
+        Ok(bit)
+    }
+}
+
+/// The MagRef bit-stream: backward from the last byte of the refinement
+/// segment, least significant bit first, skipping the stuffing bit of a byte
+/// whose low seven bits are ones after a byte above 0x8F (the first byte
+/// read counts as following one); before the start it reads as zeros
+/// (`importMagRefBit`, 7.1.6).
+struct MagRefReader<'a> {
+    data: &'a [u8],
+    /// The bytes not yet read; the next one is `data[left - 1]`.
+    left: usize,
+    bits: u32,
+    tmp: u32,
+    last: u32,
+}
+
+impl<'a> MagRefReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        MagRefReader {
+            data,
+            left: data.len(),
+            bits: 0,
+            tmp: 0,
+            last: 0xFF,
+        }
+    }
+
+    fn bit(&mut self) -> u32 {
+        if self.bits == 0 {
+            self.tmp = match self.left.checked_sub(1) {
+                Some(pos) => {
+                    self.left = pos;
+                    u32::from(self.data[pos])
+                }
+                None => 0,
+            };
+            self.bits = if self.last > 0x8F && self.tmp & 0x7F == 0x7F {
+                7
+            } else {
+                8
+            };
+            self.last = self.tmp;
+        }
+        let bit = self.tmp & 1;
+        self.tmp >>= 1;
+        self.bits -= 1;
+        bit
+    }
+}
+
+/// The SigProp and MagRef passes of one block, which code the plane below
+/// the cleanup pass's last (7.4, 7.5).
+struct Refinement {
+    width: usize,
+    height: usize,
+    causal: bool,
+    /// The cleanup pass's shift from `2 mu + 1`, at least 1: the plane
+    /// refined is bit `shift` of the double-scale magnitude.
+    shift: u32,
+}
+
+impl Refinement {
+    /// Run the SigProp pass over `data`, then the MagRef pass if `magref`,
+    /// on the cleanup pass's `coeffs`.
+    fn run(&self, data: &[u8], magref: bool, coeffs: &mut [i32]) -> Result<()> {
+        // `sigma_n` of the cleanup pass: its significant samples are exactly
+        // its nonzero ones.
+        let sigma: Vec<bool> = coeffs.iter().map(|&c| c != 0).collect();
+        self.sigprop(data, &sigma, coeffs)?;
+        if magref {
+            self.magref(data, &sigma, coeffs);
+        }
+        Ok(())
+    }
+
+    /// The stripe-oriented scan (7.4), by column-group: four-line stripes top
+    /// to bottom, and in each, groups of up to four columns left to right.
+    /// Each item is a group's rows `y0..y1` and columns `x0..x1`, which the
+    /// scan visits column by column, top to bottom.
+    fn groups(&self) -> impl Iterator<Item = (usize, usize, usize, usize)> + use<> {
+        let (w, h) = (self.width, self.height);
+        (0..h).step_by(4).flat_map(move |y0| {
+            (0..w)
+                .step_by(4)
+                .map(move |x0| (y0, (y0 + 4).min(h), x0, (x0 + 4).min(w)))
+        })
+    }
+
+    /// `decodeSigPropMag` and `decodeSigPropSign` (7.4). A sample the cleanup
+    /// pass left insignificant is visited when a neighbor is significant: by
+    /// the cleanup pass, or by this pass earlier in the scan. Under the
+    /// vertically causal flag the next stripe holds no neighbors. A
+    /// column-group's refinement bits come first, then the signs of the
+    /// samples they made significant. Such a sample's magnitude is the
+    /// refined plane alone, so it reconstructs to `3 << (shift - 1)`.
+    fn sigprop(&self, data: &[u8], sigma: &[bool], coeffs: &mut [i32]) -> Result<()> {
+        let w = self.width;
+        let mut sp = SigPropReader::new(data);
+        // `r_n`: the samples this pass made significant.
+        let mut r = vec![false; coeffs.len()];
+        let magnitude = 3i32 << (self.shift - 1);
+        let mut new = Vec::with_capacity(16);
+        for (y0, y1, x0, x1) in self.groups() {
+            let rows = if self.causal { y1 } else { self.height };
+            new.clear();
+            for x in x0..x1 {
+                for y in y0..y1 {
+                    let n = y * w + x;
+                    if sigma[n] {
+                        continue;
+                    }
+                    let mut mbr = false;
+                    for ny in y.saturating_sub(1)..(y + 2).min(rows) {
+                        for nx in x.saturating_sub(1)..(x + 2).min(w) {
+                            let m = ny * w + nx;
+                            mbr |= sigma[m] || r[m];
+                        }
+                    }
+                    if mbr && sp.bit()? == 1 {
+                        r[n] = true;
+                        new.push(n);
+                    }
+                }
+            }
+            for &n in &new {
+                coeffs[n] = if sp.bit()? == 1 {
+                    -magnitude
+                } else {
+                    magnitude
+                };
+            }
+        }
+        Ok(())
+    }
+
+    /// `decodeMagRefValue` (7.5): one bit for each sample the cleanup pass
+    /// found significant, in the stripe-oriented scan. The bit replaces the
+    /// half-plane the cleanup pass reconstructed with, and half of the plane
+    /// below is added.
+    fn magref(&self, data: &[u8], sigma: &[bool], coeffs: &mut [i32]) {
+        let w = self.width;
+        let mut mr = MagRefReader::new(data);
+        let (center, half) = (1i32 << self.shift, 1i32 << (self.shift - 1));
+        for (y0, y1, x0, x1) in self.groups() {
+            for x in x0..x1 {
+                for y in y0..y1 {
+                    let n = y * w + x;
+                    if !sigma[n] {
+                        continue;
+                    }
+                    let c = coeffs[n];
+                    let mut m = c.abs();
+                    if mr.bit() == 0 {
+                        m ^= center;
+                    }
+                    m |= half;
+                    coeffs[n] = if c < 0 { -m } else { m };
+                }
+            }
+        }
     }
 }

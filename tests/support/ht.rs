@@ -169,9 +169,12 @@ pub struct Walked {
 }
 
 impl Walked {
-    /// Whether every block needs at most its cleanup pass.
-    pub fn cleanup_only(&self) -> bool {
-        self.histogram.keys().all(|k| k == "0" || k == "1")
+    /// Whether every block holds at most one HT set: a cleanup pass and up
+    /// to two refinement passes.
+    pub fn one_ht_set(&self) -> bool {
+        self.histogram
+            .keys()
+            .all(|k| k.parse::<u32>().is_ok_and(|passes| passes <= 3))
     }
 }
 

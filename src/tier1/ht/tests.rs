@@ -22,7 +22,7 @@ fn block(width: usize, height: usize, zbp: u32, bytes: &[u8]) -> CodeBlock<'_> {
 
 /// The `Codestream` message of a decode that must fail as malformed.
 fn malformed_msg(block: &CodeBlock<'_>, numbps: u32) -> String {
-    match decode(block, numbps, 0) {
+    match decode(block, numbps, 0, false) {
         Err(Error::Codestream(msg)) => msg,
         other => panic!("expected a Codestream error, got {other:?}"),
     }
@@ -368,29 +368,29 @@ fn a_one_sample_block_decodes_by_hand() {
     // Byte 1 is the MEL byte (top bit 0) and the VLC nibble 0x6.
     for (sign, want) in [(0x00, 384), (0x01, -384)] {
         let data = [sign, 0x62, 0x00];
-        assert_eq!(decode(&block(1, 1, 0, &data), 8, 0).unwrap(), [want]);
+        assert_eq!(decode(&block(1, 1, 0, &data), 8, 0, false).unwrap(), [want]);
     }
     // Each zero bit-plane halves it: (2 mu + 1) << (Mb - P - 1).
     let data = [0x01, 0x62, 0x00];
-    assert_eq!(decode(&block(1, 1, 1, &data), 8, 0).unwrap(), [-192]);
-    assert_eq!(decode(&block(1, 1, 7, &data), 8, 0).unwrap(), [-3]);
+    assert_eq!(decode(&block(1, 1, 1, &data), 8, 0, false).unwrap(), [-192]);
+    assert_eq!(decode(&block(1, 1, 7, &data), 8, 0, false).unwrap(), [-3]);
 }
 
 #[test]
 fn a_block_without_passes_or_planes_is_zero() {
     let mut b = block(3, 2, 0, &[0xAA, 0xBB]);
     b.num_passes = 0;
-    assert_eq!(decode(&b, 8, 0).unwrap(), [0; 6]);
+    assert_eq!(decode(&b, 8, 0, false).unwrap(), [0; 6]);
     let b = block(3, 2, 0, &[0xAA, 0xBB]);
-    assert_eq!(decode(&b, 0, 0).unwrap(), [0; 6]);
+    assert_eq!(decode(&b, 0, 0, false).unwrap(), [0; 6]);
 }
 
 #[test]
 fn passes_run_counts_the_cleanup_pass() {
     let mut b = block(4, 4, 0, &[0, 0]);
-    assert_eq!(passes_run(&b), 1);
+    assert_eq!(passes_run(&b, 8), 1);
     b.num_passes = 0;
-    assert_eq!(passes_run(&b), 0);
+    assert_eq!(passes_run(&b, 8), 0);
 }
 
 // Refusals, one per reason.
@@ -399,7 +399,7 @@ fn passes_run_counts_the_cleanup_pass() {
 fn an_roi_shift_is_unsupported() {
     let data = [0x01, 0x62, 0x00];
     assert!(matches!(
-        decode(&block(1, 1, 0, &data), 8, 3),
+        decode(&block(1, 1, 0, &data), 8, 3, false),
         Err(Error::Unsupported(m)) if m.contains("region of interest")
     ));
 }
@@ -410,7 +410,7 @@ fn more_than_one_pass_is_unsupported() {
     let mut b = block(1, 1, 0, &data);
     b.num_passes = 2;
     assert!(matches!(
-        decode(&b, 8, 0),
+        decode(&b, 8, 0, false),
         Err(Error::Unsupported(m)) if m.contains("2 coding passes")
     ));
 }
@@ -419,10 +419,10 @@ fn more_than_one_pass_is_unsupported() {
 fn too_many_bit_planes_is_a_limit() {
     let data = [0x01, 0x62, 0x00];
     assert!(matches!(
-        decode(&block(1, 1, 0, &data), 31, 0),
+        decode(&block(1, 1, 0, &data), 31, 0, false),
         Err(Error::Limit(m)) if m.contains("31 bit-planes")
     ));
-    assert!(decode(&block(1, 1, 0, &data), 30, 0).is_ok());
+    assert!(decode(&block(1, 1, 0, &data), 30, 0, false).is_ok());
 }
 
 #[test]
@@ -446,7 +446,7 @@ fn a_segment_of_65535_bytes_is_malformed() {
     let mut data = vec![0x01];
     data.resize(65532, 0);
     data.extend([0x62, 0x00]);
-    assert_eq!(decode(&block(1, 1, 0, &data), 8, 0).unwrap(), [-384]);
+    assert_eq!(decode(&block(1, 1, 0, &data), 8, 0, false).unwrap(), [-384]);
     data.insert(1, 0);
     let msg = malformed_msg(&block(1, 1, 0, &data), 8);
     assert!(msg.contains("65535 bytes, outside 2..65535"), "{msg}");
@@ -461,12 +461,12 @@ fn scup_outside_its_range_is_malformed() {
     let msg = malformed_msg(&block(1, 1, 0, &[0x00, 0x04, 0x00]), 8);
     assert!(msg.contains("Scup = 4"), "{msg}");
     // Scup = Lcup is allowed: no MagSgn bytes at all.
-    assert!(decode(&block(1, 1, 0, &[0x62, 0x00]), 8, 0).is_ok());
+    assert!(decode(&block(1, 1, 0, &[0x62, 0x00]), 8, 0, false).is_ok());
     // Scup = 4079 is the largest allowed, and 4080 is refused even in a
     // segment long enough to hold it, as OpenJPEG 2.5.0 does.
     let mut data = vec![0; 4081];
     data[4079..].copy_from_slice(&[0x6F, 254]);
-    assert_eq!(decode(&block(1, 1, 0, &data), 8, 0).unwrap(), [384]);
+    assert_eq!(decode(&block(1, 1, 0, &data), 8, 0, false).unwrap(), [384]);
     data[4079..].copy_from_slice(&[0x60, 255]);
     let msg = malformed_msg(&block(1, 1, 0, &data), 8);
     assert!(msg.contains("Scup = 4080"), "{msg}");
@@ -515,7 +515,7 @@ fn an_exponent_bound_over_the_coded_planes_is_malformed() {
 fn an_exponent_bound_of_p_plus_2_decodes() {
     for (sign, want) in [(0x00, 448), (0x01, -448)] {
         let data = [sign, 0x27, 0xF3, 0x00];
-        assert_eq!(decode(&block(1, 1, 1, &data), 8, 0).unwrap(), [want]);
+        assert_eq!(decode(&block(1, 1, 1, &data), 8, 0, false).unwrap(), [want]);
     }
 }
 
@@ -565,7 +565,7 @@ fn random_segments_never_panic() {
         let h = 1 + (rng.next() % 16) as usize;
         let mb = (rng.next() % 32) as u32;
         let zbp = (rng.next() % 32) as u32;
-        if let Ok(c) = decode(&block(w, h, zbp, &bytes), mb, 0) {
+        if let Ok(c) = decode(&block(w, h, zbp, &bytes), mb, 0, false) {
             assert_eq!(c.len(), w * h);
             decoded += 1;
         }

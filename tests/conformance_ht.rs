@@ -36,30 +36,59 @@ use support::pgx::{Pgx, parse_pgx};
 /// The HT codestreams and JPH files that decode within their bounds today.
 const IN_CLASS: &[&str] = &[
     "ds0_ht_01_b11",
+    "ds0_ht_02_b11",
     "ds0_ht_02_b12",
+    "ds0_ht_04_b11",
     "ds0_ht_04_b12",
+    "ds0_ht_05_b11",
+    "ds0_ht_05_b12",
+    "ds0_ht_07_b11",
+    "ds0_ht_07_b15",
     "ds0_ht_07_b16",
+    "ds0_ht_08_b11",
+    "ds0_ht_08_b15",
     "ds0_ht_08_b16",
+    "ds0_ht_09_b11",
+    "ds0_ht_10_b11",
     "ds0_ht_11_b10",
+    "ds0_ht_12_b11",
+    "ds0_ht_14_b11",
     "ds0_ht_16_b11",
+    "ds1_ht_01_b11",
     "ds1_ht_01_b12",
+    "ds1_ht_02_b11",
     "ds1_ht_02_b12",
+    "ds1_ht_03_b11",
     "ds1_ht_03_b12",
     "ds1_ht_04_b9",
+    "ds1_ht_05_b11",
+    "ds1_ht_06_b11",
     "ds1_ht_07_b11",
+    "hifi_ht1_02",
 ];
 
 /// The HT codestreams that decode within the agreement bound of OpenJPEG's
 /// output today.
 const AGREES_WITH_OPENJPEG: &[&str] = &[
     "ds0_ht_01_b11",
+    "ds0_ht_09_b11",
     "ds0_ht_11_b10",
+    "ds0_ht_12_b11",
+    "ds0_ht_14_b11",
     "ds1_ht_04_b9",
+    "ds1_ht_05_b11",
+    "ds1_ht_06_b11",
     "ds1_ht_07_b11",
+    "hifi_ht1_02",
 ];
 
 /// The OpenJPH codestreams that decode within their bounds today.
 const OPENJPH_IN_CLASS: &[&str] = &[
+    "simple_dec_irv97_64x64_16bit",
+    "simple_dec_irv97_64x64_16bit_gray",
+    "simple_dec_irv97_64x64_gray_tiles",
+    "simple_dec_irv97_64x64_tiles_yuv",
+    "simple_dec_irv97_64x64_yuv",
     "simple_dec_rev53_64x64_tiles_yuv",
     "simple_dec_rev53_64x64_yuv",
     "simple_enc_irv97_64x64",
@@ -81,6 +110,7 @@ const JPH_CODESTREAM_EXACT: &[&str] = &[
     "file3_b12",
     "file4_b12",
     "file5_b12",
+    "file7_b19",
     "file8_b11",
 ];
 
@@ -150,21 +180,22 @@ fn grades_the_ht_set_by_compliance_class() {
         .codestreams
         .iter()
         .map(|c| (c.name.as_str(), &c.ht, &c.passes));
-    in_class_iff_cleanup_only(codestreams, IN_CLASS);
+    in_class_iff_decodable(codestreams, IN_CLASS);
 }
 
 /// The refusal of a MIXED code-block style.
 const MIXED: &str = "code-block style (HTJ2K mixed-mode block coding)";
 
-/// The refusal of an HT code-block with refinement passes.
-const REFINEMENT: &str = "coding passes; only the cleanup pass is decoded";
-
 /// The refusal of a region of interest on an HT code-block.
 const ROI: &str = "region of interest on an HT code-block";
 
+/// The refusal of an HT code-block with more than one HT set.
+const MULTI_SET: &str = "coding passes; only one HT set is decoded";
+
 /// Why a codestream with `ht` signaling and `passes` is not yet decoded:
 /// MIXED in its main header, then `RGN` on its HT blocks, which Tier-1
-/// refuses before it counts the passes, then refinement passes.
+/// refuses before it counts the passes, then a block of more than one HT
+/// set.
 fn refusal(ht: &HtSignaling, passes: &Passes) -> &'static str {
     if ht.coder_set == "MIXED" {
         MIXED
@@ -172,10 +203,10 @@ fn refusal(ht: &HtSignaling, passes: &Passes) -> &'static str {
         ROI
     } else {
         assert!(
-            passes.refinement == Some(true),
-            "a refused codestream without refinement passes"
+            passes.walked.as_ref().is_some_and(|w| !w.one_ht_set()),
+            "a refused codestream whose blocks hold one HT set each"
         );
-        REFINEMENT
+        MULTI_SET
     }
 }
 
@@ -192,22 +223,22 @@ fn codestream_refusals(manifest: &HtManifest) -> impl Fn(&str) -> &'static str +
     }
 }
 
-/// An entry is in `in_class` exactly when every one of its code-blocks needs
-/// at most its cleanup pass, by the Tier-2 walk's pass counts, and no `RGN`
-/// marker applies to them: the HT decoder reads the cleanup pass alone, and
-/// no ROI on an HT block. So the list is the walk's, not a guess.
-fn in_class_iff_cleanup_only<'a>(
+/// An entry is in `in_class` exactly when it is HTONLY, no `RGN` marker
+/// applies to its blocks, and each of its code-blocks holds one HT set, by
+/// the Tier-2 walk's pass counts: the HT decoder reads one HT set, and no
+/// ROI on an HT block. So the list is the walk's, not a guess.
+fn in_class_iff_decodable<'a>(
     entries: impl Iterator<Item = (&'a str, &'a HtSignaling, &'a Passes)>,
     in_class: &[&str],
 ) {
     for (name, ht, passes) in entries {
-        let decodable = ht.coder_set != "MIXED"
+        let decodable = ht.coder_set == "HTONLY"
             && !ht.rgn
-            && passes.walked.as_ref().is_some_and(|w| w.cleanup_only());
+            && passes.walked.as_ref().is_some_and(|w| w.one_ht_set());
         assert_eq!(
             in_class.contains(&name),
             decodable,
-            "{name}: in the list is not the same as needing only cleanup passes"
+            "{name}: in the list is not the same as HTONLY, without RGN, one HT set"
         );
     }
 }
@@ -270,7 +301,7 @@ fn grades_the_jph_codestreams() {
         .iter()
         .filter(|j| graded_names.contains(&j.name.as_str()))
         .map(|j| (j.name.as_str(), &j.ht, &j.passes));
-    in_class_iff_cleanup_only(files, JPH_CODESTREAM_EXACT);
+    in_class_iff_decodable(files, JPH_CODESTREAM_EXACT);
 }
 
 /// Decode every OpenJPH codestream and grade it against OpenJPEG's decode.
@@ -294,7 +325,7 @@ fn grades_the_openjph_codestreams() {
         .entries
         .iter()
         .map(|e| (e.name.as_str(), &e.ht, &e.passes));
-    in_class_iff_cleanup_only(entries, OPENJPH_IN_CLASS);
+    in_class_iff_decodable(entries, OPENJPH_IN_CLASS);
 }
 
 /// Every reference and OpenJPEG snapshot the manifests name parses, at the
@@ -994,51 +1025,72 @@ fn the_manifests_reject_unknown_keys() {
     }
 }
 
-/// A layer cap that leaves out a file's refinement passes decodes it. At caps
-/// 1 and `last`, the decode is `Ok` and has the header's dimensions. At the
-/// next cap the first refinement pass reaches Tier-1 and is refused, so under
-/// the lower caps the blocks reach Tier-1 with their cleanup pass only.
-/// No oracle grades these images: OpenJPEG loses sync on the placeholder
-/// passes, and the Part 4 references are of every layer.
+/// Under a layer cap, the `b11` and `b12` transcodes of a codestream decode
+/// bit-identically while the kept layers give `b11`'s blocks no refinement
+/// pass, and differ from the first cap that does. The two are independent
+/// transcodes of one Part 1 codestream: `b12` codes every block in a cleanup
+/// pass alone, `b11` some in a cleanup pass and two refinement passes in
+/// later layers. No oracle grades the capped images: OpenJPEG loses sync on
+/// the placeholder passes, and the Part 4 references are of every layer. So
+/// the agreement checks the cleanup-only decode, and the difference at the
+/// next cap that the refinement passes are decoded.
 #[test]
-fn a_cap_before_the_refinement_layers_decodes_cleanup_only() {
-    use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
-    for (name, last) in [
-        ("ds0_ht_02_b11", 4),
-        ("ds0_ht_04_b11", 18),
-        ("ds0_ht_05_b11", 4),
-        ("ds1_ht_01_b11", 3),
+fn a_cap_before_the_refinement_layers_agrees_across_transcodes() {
+    use rust_j2k::{DecodeOptions, decode_with, read_header};
+    for (base, last) in [
+        ("ds0_ht_02", 4),
+        ("ds0_ht_04", 18),
+        ("ds0_ht_05", 4),
+        ("ds1_ht_01", 3),
+        ("ds1_ht_02", 16),
+        ("ds1_ht_03", 1),
     ] {
-        let path = ht_dir().join(format!("codestreams/{name}.j2k"));
-        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let header = read_header(&bytes).unwrap();
-        let expected: Vec<(u32, u32)> = header
-            .components
-            .iter()
-            .map(|c| (c.width, c.height))
-            .collect();
-        let capped = |cap| {
-            decode_with(
-                &bytes,
-                &DecodeOptions::default().with_max_quality_layers(Some(cap)),
-            )
+        let read = |bound: &str| {
+            let path = ht_dir().join(format!("codestreams/{base}_{bound}.j2k"));
+            std::fs::read(&path).unwrap_or_else(|e| panic!("{base}_{bound}: {e}"))
         };
-        for cap in [1, last] {
-            let image = capped(cap).unwrap_or_else(|e| panic!("{name} at -l {cap}: {e}"));
-            let got: Vec<(u32, u32)> = image
-                .components
-                .iter()
-                .map(|c| (c.width, c.height))
-                .collect();
+        let (b11, b12) = (read("b11"), read("b12"));
+        let header = read_header(&b11).unwrap();
+        for cap in 1..=last + 1 {
+            let options = DecodeOptions::default().with_max_quality_layers(Some(cap));
+            let decode = |bytes: &[u8], bound: &str| {
+                decode_with(bytes, &options)
+                    .unwrap_or_else(|e| panic!("{base}_{bound} at -l {cap}: {e}"))
+            };
+            let (a, b) = (decode(&b11, "b11"), decode(&b12, "b12"));
             assert_eq!(
-                (image.width, image.height, got),
-                (header.width, header.height, expected.clone()),
-                "{name} at -l {cap}"
+                (a.width, a.height, a.components.len()),
+                (header.width, header.height, header.components.len()),
+                "{base}_b11 at -l {cap}"
             );
+            if cap <= last {
+                assert!(a == b, "{base} at -l {cap}: b11 and b12 differ");
+            } else {
+                assert!(a != b, "{base} at -l {cap}: b11 and b12 agree");
+            }
         }
-        match capped(last + 1) {
-            Err(Error::Unsupported(why)) => assert!(why.ends_with(REFINEMENT), "{name}: {why}"),
-            other => panic!("{name} at -l {}: {other:?}", last + 1),
-        }
+    }
+}
+
+/// `ds1_ht_04_b9`, `ds1_ht_05_b11` and `ds1_ht_06_b11` are HT transcodes of
+/// `p1_04`, `p1_05` and `p1_06` that keep every coded bit, and T.803 C.1.10
+/// and C.1.11 test that a decoder gives the same image from both ("decoded
+/// J2K and HTJ2K codestreams produce identical images"). So the HT decode
+/// must equal the Part 1 decode exactly, a stronger check than the class-1
+/// bound. `ds1_ht_05_b11` and `ds1_ht_06_b11` hold refinement segments of
+/// zero length, which T.814 B.3 makes `Z_blk = 1`: cleanup pass only.
+#[test]
+fn ht_transcodes_decode_as_their_part1_source() {
+    for (ht, part1) in [
+        ("ds1_ht_04_b9", "p1_04"),
+        ("ds1_ht_05_b11", "p1_05"),
+        ("ds1_ht_06_b11", "p1_06"),
+    ] {
+        let read = |path: PathBuf| std::fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
+        let a = rust_j2k::decode(&read(ht_dir().join(format!("codestreams/{ht}.j2k"))))
+            .unwrap_or_else(|e| panic!("{ht}: {e}"));
+        let b = rust_j2k::decode(&read(part1_dir().join(format!("codestreams/{part1}.j2k"))))
+            .unwrap_or_else(|e| panic!("{part1}: {e}"));
+        assert!(a == b, "{ht} decodes unlike {part1}");
     }
 }
