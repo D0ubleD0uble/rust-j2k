@@ -344,10 +344,10 @@ pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 ///
 /// Setting up a tile's geometry is counted only for the code-blocks of the
 /// resolutions a reduction drops (see [`Budget::reduction`]). A resolution with no precinct
-/// gets no band or code-block geometry, so its setup is a few small
-/// allocations. The costliest shape measured, 64 tiles of 16384 components
-/// with one byte of packet data each, decodes at about 10 µs a byte, about
-/// twice what OpenJPEG takes.
+/// gets no band or code-block geometry and lists no subband, so its setup
+/// allocates nothing. The costliest shape measured, 64 tiles of 16384
+/// components with one byte of packet data each, decodes at about 6 µs a
+/// byte, about 1.2 times what OpenJPEG takes.
 pub(crate) const DECODE_VISITS_PER_BYTE: u64 = 32;
 
 /// The visits a decode may spend walking the packets of tiles that hold

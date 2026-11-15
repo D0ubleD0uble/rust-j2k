@@ -187,17 +187,20 @@ At full resolution, setting up a tile's geometry is not counted. A tile of
 one sample at an odd origin has 32 resolutions per component that hold no
 precinct, and each component of each tile costs about a byte. Since #271
 those resolutions get no band or code-block geometry, and the walk checks no
-component there. Measured on release builds (`deep` in
+component there. Since #272 they list no subbands at all: Tier-1 and the
+inverse DWT pass them through from the tile-component's rectangle, with no
+buffer. Measured on release builds, decode only (`deep` in
 `scripts/gen-work-bound-fixtures.py`, a row of one-sample tiles at y = 1, 32
-levels, one layer, every packet 0x00):
+levels, one layer, every packet 0x00; OpenJPEG's time includes writing its
+output):
 
-| Shape | Size | Before #271 | After #271 | OpenJPEG 2.5.0 |
-| ----- | ---- | ----------- | ---------- | -------------- |
-| 1 tile, 16384 components | 66 KB | 0.5 s, 383 MB | 0.18 s | 0.4 s, 192 MB |
-| 64 tiles, 1024 components | 70 KB | 1.7 s | 0.41 s | 0.24 s |
-| 64 tiles, 16384 components | 1.1 MB | `Limit`, 21 s | 10.5 s, 226 MB | 5.5 s, 1.3 GB |
+| Shape | Size | Before #271 | After #271 | After #272 | OpenJPEG 2.5.0 |
+| ----- | ---- | ----------- | ---------- | ---------- | -------------- |
+| 1 tile, 16384 components | 66 KB | 0.5 s, 383 MB | 0.19 s | 0.11 s | 0.45 s, 192 MB |
+| 64 tiles, 1024 components | 70 KB | 1.7 s | 0.51 s | 0.30 s | 0.29 s |
+| 64 tiles, 16384 components | 1.1 MB | `Limit`, 21 s | 11.3 s, 226 MB | 6.9 s | 5.6 s, 1.3 GB |
 
-The last is about 10 µs a byte, twice OpenJPEG, and the slowest shape
+The last is about 6 µs a byte, 1.2 times OpenJPEG, and the slowest shape
 known per byte. The same change lets the layer orders decode 8 such
 components in one tile, and the positional orders a 16-component column
 of 2^17 rows, which were `Limit` and which OpenJPEG decodes
