@@ -1,0 +1,413 @@
+//! Decoding part of an image: `DecodeOptions::window`, `DecodeOptions::tile`
+//! and `DecodeOptions::components`.
+//!
+//! Each oracle is `opj_decompress -d`, `-t` or `-c` 2.5.0 on the same bytes;
+//! see `tests/fixtures/window/README.md`. The 5/3 oracles are the SHA-256 of
+//! the samples, graded bit-exactly. The 9/7 ones are OpenJPEG's whole decode
+//! at each reduction, as PGX: the generator checks that every `-d` and `-t`
+//! output is the matching crop of it, and the test grades the crop within the
+//! tolerance of the whole decode.
+
+mod support;
+
+use std::path::PathBuf;
+
+use rust_j2k::{
+    ColorOutput, DecodeOptions, Error, Image, ReportEntry, Window, decode, decode_with,
+    read_header_with,
+};
+use support::jp2::sha256_hex;
+use support::pgx::parse_pgx;
+
+fn dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/window")
+}
+
+fn read(name: &str) -> Vec<u8> {
+    let path = dir().join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// The image area of every fixture on the reference grid: 70 x 54 at (5, 4).
+const IMAGE: (u32, u32, u32, u32) = (5, 4, 75, 58);
+
+/// One oracle line: the `opj_decompress` arguments with the spaces taken out,
+/// the output size and the samples' hash.
+struct Case {
+    args: String,
+    options: DecodeOptions,
+    size: (u32, u32),
+    hash: String,
+}
+
+/// The options that make the decode `args` asks `opj_decompress` for.
+fn options_of(args: &str) -> DecodeOptions {
+    let mut options = DecodeOptions::default();
+    let mut rest = args;
+    while !rest.is_empty() {
+        let flag = &rest[..2];
+        let end = rest[2..].find('-').map_or(rest.len(), |i| i + 2);
+        let value = &rest[2..end];
+        let numbers: Vec<u32> = value.split(',').map(|v| v.parse().unwrap()).collect();
+        options = match flag {
+            "-d" => options.with_window(Some(Window::new(
+                numbers[0], numbers[1], numbers[2], numbers[3],
+            ))),
+            "-t" => options.with_tile(Some(numbers[0])),
+            "-r" => options.with_resolution_reduction(numbers[0] as u8),
+            "-c" => options.with_components(Some(numbers.iter().map(|&c| c as u16).collect())),
+            other => panic!("unknown flag {other} in {args}"),
+        };
+        rest = &rest[end..];
+    }
+    options
+}
+
+fn cases(name: &str) -> Vec<Case> {
+    let text = String::from_utf8(read(&format!("{name}.sha256"))).unwrap();
+    text.lines()
+        .map(|line| {
+            let mut fields = line.split(' ');
+            let args = fields.next().unwrap().to_string();
+            let (w, h) = fields.next().unwrap().split_once('x').unwrap();
+            let hash = fields.next().unwrap().to_string();
+            Case {
+                options: options_of(&args),
+                args,
+                size: (w.parse().unwrap(), h.parse().unwrap()),
+                hash,
+            }
+        })
+        .collect()
+}
+
+fn sample_bytes(image: &Image) -> Vec<u8> {
+    image
+        .components
+        .iter()
+        .flat_map(|c| c.samples.iter().flat_map(|s| s.to_le_bytes()))
+        .collect()
+}
+
+fn decode_ok(bytes: &[u8], options: &DecodeOptions, what: &str) -> Image {
+    decode_with(bytes, options).unwrap_or_else(|e| panic!("{what}: {e}"))
+}
+
+/// The reference-grid area `options` asks for, cut to the image.
+fn area_of(options: &DecodeOptions) -> (u32, u32, u32, u32) {
+    let (x0, y0, x1, y1) = IMAGE;
+    if let Some(w) = options.window {
+        return (w.x0.max(x0), w.y0.max(y0), w.x1.min(x1), w.y1.min(y1));
+    }
+    if let Some(t) = options.tile {
+        let (p, q) = (t % 3, t / 3);
+        return (
+            (3 + 24 * p).max(x0),
+            (2 + 20 * q).max(y0),
+            (3 + 24 * (p + 1)).min(x1),
+            (2 + 20 * (q + 1)).min(y1),
+        );
+    }
+    IMAGE
+}
+
+/// The samples of `plane` (`width` wide, the whole image at reduction `r`)
+/// inside the area `options` asks for.
+fn crop(plane: &[i32], width: u32, options: &DecodeOptions) -> (u32, u32, Vec<i32>) {
+    let r = options.resolution_reduction;
+    let up = |v: u32| v.div_ceil(1 << r);
+    let (x0, y0, x1, y1) = area_of(options);
+    let (ax0, ay0, ax1, ay1) = (up(x0), up(y0), up(x1), up(y1));
+    let (ox, oy) = (up(IMAGE.0), up(IMAGE.1));
+    let mut out = Vec::new();
+    for y in ay0..ay1 {
+        for x in ax0..ax1 {
+            out.push(plane[((y - oy) * width + (x - ox)) as usize]);
+        }
+    }
+    (ax1 - ax0, ay1 - ay0, out)
+}
+
+/// The components `options` returns, as SIZ indices.
+fn picked(options: &DecodeOptions) -> Vec<usize> {
+    options
+        .components
+        .as_ref()
+        .map_or_else(|| vec![0, 1, 2], |c| c.iter().map(|&c| usize::from(c)).collect())
+}
+
+/// The 5/3 codestreams decode every case to OpenJPEG's samples, bit for bit:
+/// windows off the tile grid, at the image's edges, clipped, at a reduction,
+/// single tiles, and component subsets with and without the color
+/// transform. Under the transform the oracle is the whole decode's
+/// components, since OpenJPEG's `-c` skips the transform.
+#[test]
+fn the_53_cases_match_openjpeg_bit_exactly() {
+    for name in ["tiled_53", "tiled_53_nomct"] {
+        let bytes = read(&format!("{name}.j2k"));
+        let all = cases(name);
+        assert_eq!(all.len(), 18, "{name}");
+        for case in all {
+            let what = format!("{name} {}", case.args);
+            let image = decode_ok(&bytes, &case.options, &what);
+            assert_eq!((image.width, image.height), case.size, "{what}");
+            let first = &image.components[0];
+            assert_eq!((first.width, first.height), case.size, "{what}");
+            assert_eq!(
+                image.components.len(),
+                picked(&case.options).len(),
+                "{what}"
+            );
+            assert_eq!(sha256_hex(&sample_bytes(&image)), case.hash, "{what}");
+        }
+    }
+}
+
+/// The 9/7 codestream decodes every case to the crop of OpenJPEG's whole
+/// decode, which is its `-d` and `-t` output, within 1, as the whole decode
+/// is.
+#[test]
+fn the_97_cases_match_openjpeg_within_one() {
+    let bytes = read("tiled_97.j2k");
+    for case in cases("tiled_97") {
+        let what = format!("tiled_97 {}", case.args);
+        let image = decode_ok(&bytes, &case.options, &what);
+        assert_eq!((image.width, image.height), case.size, "{what}");
+        let r = case.options.resolution_reduction;
+        for (component, &c) in image.components.iter().zip(&picked(&case.options)) {
+            let whole = parse_pgx(&read(&format!("tiled_97_r{r}_{c}.pgx"))).unwrap();
+            let (w, h, expected) = crop(&whole.samples, whole.width, &case.options);
+            assert_eq!((component.width, component.height), (w, h), "{what}");
+            let worst = component
+                .samples
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs())
+                .max()
+                .unwrap();
+            assert!(worst <= 1, "{what}: component {c} differs by {worst}");
+        }
+    }
+}
+
+/// Every case is the crop of this decoder's own whole decode at the same
+/// reduction, bit for bit, on all three codestreams: the window and the
+/// component subset change what is returned, never a sample.
+#[test]
+fn every_case_is_the_crop_of_the_whole_decode() {
+    for name in ["tiled_53", "tiled_53_nomct", "tiled_97"] {
+        let bytes = read(&format!("{name}.j2k"));
+        let wholes: Vec<Image> = (0..3)
+            .map(|r| {
+                decode_ok(
+                    &bytes,
+                    &DecodeOptions::default().with_resolution_reduction(r),
+                    name,
+                )
+            })
+            .collect();
+        for case in cases(name) {
+            let what = format!("{name} {}", case.args);
+            let image = decode_ok(&bytes, &case.options, &what);
+            let whole = &wholes[usize::from(case.options.resolution_reduction)];
+            for (component, &c) in image.components.iter().zip(&picked(&case.options)) {
+                let plane = &whole.components[c];
+                let (w, h, expected) = crop(&plane.samples, plane.width, &case.options);
+                assert_eq!((component.width, component.height), (w, h), "{what}");
+                assert_eq!(component.samples, expected, "{what}: component {c}");
+                assert_eq!(component.bit_depth, plane.bit_depth, "{what}");
+            }
+        }
+    }
+}
+
+/// `read_header_with` describes the image each case decodes to.
+#[test]
+fn the_header_describes_each_case() {
+    for name in ["tiled_53", "tiled_97"] {
+        let bytes = read(&format!("{name}.j2k"));
+        for case in cases(name) {
+            let what = format!("{name} {}", case.args);
+            let header = read_header_with(&bytes, &case.options).unwrap();
+            let image = decode_ok(&bytes, &case.options, &what);
+            assert_eq!((header.width, header.height), (image.width, image.height));
+            let sizes: Vec<_> = header.components.iter().map(|c| (c.width, c.height)).collect();
+            let decoded: Vec<_> = image.components.iter().map(|c| (c.width, c.height)).collect();
+            assert_eq!(sizes, decoded, "{what}");
+        }
+    }
+}
+
+fn invalid(bytes: &[u8], options: &DecodeOptions) -> String {
+    let header = read_header_with(bytes, options);
+    let decoded = decode_with(bytes, options);
+    match (header, decoded) {
+        (Err(Error::InvalidOptions(a)), Err(Error::InvalidOptions(b))) => {
+            assert_eq!(a, b);
+            a
+        }
+        other => panic!("{options:?}: {other:?}"),
+    }
+}
+
+/// What OpenJPEG refuses, this refuses as `Error::InvalidOptions`, from the
+/// header and from the decode alike: an empty window, one outside the image
+/// area, one that holds no sample at the reduction, a tile past the grid, and
+/// a component past SIZ's or named twice. An empty list, a window with a
+/// tile, and a subset with sRGB output contradict themselves.
+#[test]
+fn bad_options_are_invalid() {
+    let bytes = read("tiled_53.j2k");
+    let window = |x0, y0, x1, y1| DecodeOptions::default().with_window(Some(Window::new(x0, y0, x1, y1)));
+    let message = invalid(&bytes, &window(20, 10, 20, 31));
+    assert_eq!(message, "the window 20..20 by 10..31 is empty");
+    invalid(&bytes, &window(40, 10, 30, 31));
+    // `opj_decompress -d 76,10,80,20`: "is outside the image area".
+    let message = invalid(&bytes, &window(76, 10, 80, 20));
+    assert_eq!(
+        message,
+        "the window 76..80 by 10..20 is outside the image area 5..75 by 4..58"
+    );
+    // Ends before XOsiz, and at it.
+    invalid(&bytes, &window(0, 0, 4, 20));
+    invalid(&bytes, &window(0, 0, 5, 20));
+    // Starts at Xsiz.
+    invalid(&bytes, &window(75, 0, 80, 20));
+    // One column at an odd x: no sample at reduction 1, as OpenJPEG fails it.
+    let message = invalid(&bytes, &window(21, 10, 22, 31).with_resolution_reduction(1));
+    assert_eq!(
+        message,
+        "the area 21..22 by 10..31 holds no sample of component 0 at resolution reduction 1"
+    );
+    // The same column decodes at full resolution.
+    assert!(decode_with(&bytes, &window(21, 10, 22, 31)).is_ok());
+
+    let message = invalid(&bytes, &DecodeOptions::default().with_tile(Some(9)));
+    assert_eq!(message, "`DecodeOptions::tile` is 9, but the image has 9 tiles");
+    invalid(
+        &bytes,
+        &window(0, 0, 10, 10).with_tile(Some(0)),
+    );
+
+    let components = |list: Vec<u16>| DecodeOptions::default().with_components(Some(list));
+    let message = invalid(&bytes, &components(vec![3]));
+    assert_eq!(
+        message,
+        "`DecodeOptions::components` names component 3, but the image has 3"
+    );
+    let message = invalid(&bytes, &components(vec![1, 0, 1]));
+    assert_eq!(
+        message,
+        "`DecodeOptions::components` names component 1 more than once"
+    );
+    invalid(&bytes, &components(vec![]));
+    invalid(&bytes, &components(vec![0]).with_color(ColorOutput::Srgb));
+}
+
+/// A window keeps the samples it covers whatever its reduction, so a window
+/// of the whole image is the whole decode, report and all.
+#[test]
+fn a_window_of_the_whole_image_is_the_whole_decode() {
+    for name in ["tiled_53", "tiled_97"] {
+        let bytes = read(&format!("{name}.j2k"));
+        for r in 0..3 {
+            let options = DecodeOptions::default().with_resolution_reduction(r);
+            let whole = decode_ok(&bytes, &options, name);
+            let windowed = decode_ok(
+                &bytes,
+                &options.clone().with_window(Some(Window::new(0, 0, u32::MAX, u32::MAX))),
+                name,
+            );
+            assert_eq!(windowed, whole, "{name} -r {r}");
+        }
+    }
+}
+
+/// Where tile `index`'s first tile-part starts in `bytes`.
+fn sot_of(bytes: &[u8], index: u16) -> usize {
+    (0..bytes.len() - 6)
+        .find(|&at| {
+            bytes[at..at + 2] == [0xFF, 0x90]
+                && bytes[at + 2..at + 4] == [0x00, 0x0A]
+                && u16::from_be_bytes([bytes[at + 4], bytes[at + 5]]) == index
+        })
+        .unwrap_or_else(|| panic!("no SOT of tile {index}"))
+}
+
+/// With `strict` off, a codestream cut short decodes a window whose tiles are
+/// all there to the same samples as the whole codestream, with a complete
+/// report: the missing tiles outside it are not reported. A window over a
+/// missing tile reports the run of missing tiles cut to it.
+#[test]
+fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
+    let bytes = read("tiled_53.j2k");
+    let prefix = &bytes[..sot_of(&bytes, 2)];
+    let loose = DecodeOptions::default().with_strict(false);
+
+    let tile = |index| loose.clone().with_tile(Some(index));
+    let whole = decode_ok(&bytes, &DecodeOptions::default().with_tile(Some(1)), "tile 1");
+    let cut = decode_ok(prefix, &tile(1), "the prefix's tile 1");
+    assert!(cut.report.is_complete(), "{:?}", cut.report);
+    assert_eq!(cut.components, whole.components);
+    // The whole prefix misses tiles 2 to 8.
+    let all = decode_ok(prefix, &loose, "the prefix");
+    assert_eq!(missing_tiles(&all), [2..9]);
+
+    let cut = decode_ok(prefix, &tile(5), "the prefix's tile 5");
+    assert!(!cut.report.is_complete());
+    assert_eq!(missing_tiles(&cut), [5..6]);
+    assert!(cut.components.iter().all(|c| c.samples.iter().all(|&s| s == 0)));
+
+    // A window over tiles 1 and 4 reads tile 4 of the missing run.
+    let window = loose.with_window(Some(Window::new(30, 10, 40, 30)));
+    let cut = decode_ok(prefix, &window, "the prefix's window");
+    assert_eq!(missing_tiles(&cut), [4..5]);
+}
+
+/// The runs of missing tiles on `image`'s report.
+fn missing_tiles(image: &Image) -> Vec<std::ops::Range<u32>> {
+    image
+        .report
+        .entries
+        .iter()
+        .filter_map(|e| match e {
+            ReportEntry::MissingTiles { tiles, .. } => Some(tiles.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// On a JP2 file a component subset names codestream components and returns
+/// them as coded, as `raw_channels` does, and the channel labels follow the
+/// subset. A window cuts the default decode.
+#[test]
+fn a_jp2_subset_is_the_raw_components() {
+    let bytes = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jp2_cdef_rgba.jp2"),
+    )
+    .unwrap();
+    let raw = decode_ok(&bytes, &DecodeOptions::default().with_raw_channels(true), "raw");
+    let options = DecodeOptions::default().with_components(Some(vec![3, 0]));
+    let some = decode_ok(&bytes, &options, "subset");
+    assert_eq!(some.components, [raw.components[3].clone(), raw.components[0].clone()]);
+    let raw_meta = raw.jp2.unwrap();
+    let meta = some.jp2.as_ref().unwrap();
+    assert_eq!(meta.channels, [raw_meta.channels[3], raw_meta.channels[0]]);
+    assert!(!meta.palette_applied);
+    let header = read_header_with(&bytes, &options).unwrap();
+    assert_eq!(header.components.len(), 2);
+    assert_eq!(header.jp2.as_ref(), some.jp2.as_ref());
+
+    let whole = decode(&bytes).unwrap();
+    let window = DecodeOptions::default().with_window(Some(Window::new(3, 2, 11, 9)));
+    let part = decode_ok(&bytes, &window, "window");
+    assert_eq!((part.width, part.height), (8, 7));
+    assert_eq!(part.jp2, whole.jp2);
+    for (p, w) in part.components.iter().zip(&whole.components) {
+        let expected: Vec<i32> = (2..9)
+            .flat_map(|y| (3..11).map(move |x| (x, y)))
+            .map(|(x, y)| w.sample(x, y).unwrap())
+            .collect();
+        assert_eq!(p.samples, expected);
+    }
+}
