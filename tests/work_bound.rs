@@ -329,28 +329,6 @@ fn jp2_psot0(cs: &[u8], xml: &[u8]) -> Vec<u8> {
     )
 }
 
-fn old_jp2_psot0(cs: &[u8], xml: &[u8]) -> Vec<u8> {
-    let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
-    let mut ihdr = (word(12) - word(20)).to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&(word(8) - word(16)).to_be_bytes());
-    ihdr.extend_from_slice(&cs[40..42]);
-    ihdr.extend_from_slice(&[7, 7, 0, 0]);
-    let mut colr = vec![1, 0, 0];
-    colr.extend_from_slice(&17u32.to_be_bytes());
-    let mut jp2h = bx(b"ihdr", &ihdr);
-    jp2h.extend(bx(b"colr", &colr));
-    let sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
-    let mut body = cs[..sot + 6].to_vec();
-    body.extend_from_slice(&[0; 4]);
-    body.extend_from_slice(&cs[sot + 10..cs.len() - 2]);
-    let mut out = bx(b"jP  ", b"\x0d\x0a\x87\x0a");
-    out.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend(bx(b"jp2h", &jp2h));
-    out.extend(bx(b"jp2c", &body));
-    out.extend(bx(b"xml ", xml));
-    out
-}
-
 /// `read_header` walks a `Psot = 0` tile's packets to see whether its
 /// codestream ends at its box's end, holding a POC sequence's packets in a
 /// bitmap wherever the decode does. `setskip(1024, 31)` reaches 1.0e7
@@ -460,11 +438,4 @@ fn the_positional_orders_pass_over_resolutions_with_no_precinct() {
 #[test]
 fn a_walk_within_the_work_bound_decodes() {
     assert_flat("t2skip 30000", &t2skip(2048, 1024, 2048, 30000), 2048, 1024);
-}
-
-#[test]
-fn zz_identity_tests_work_bound_rs() {
-    for cs in [setskip(1024, 31), setskip(2048, 2)] {
-        assert_eq!(old_jp2_psot0(&cs, b"<a/>"), jp2_psot0(&cs, b"<a/>"));
-    }
 }

@@ -23,7 +23,7 @@
 //! PR #249 with a 2048 x 2048, 1000-layer file built the same way.
 
 mod support;
-use support::synth::seg;
+use support::synth::{self, seg};
 
 use rust_j2k::decode;
 use support::jp2::sha256_hex;
@@ -167,6 +167,8 @@ fn codestream(layers: u16, first: [Option<u16>; 3]) -> Vec<u8> {
         siz.extend_from_slice(&v.to_be_bytes());
     }
     siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let siz_new = synth::siz_body([12, 4, 0, 0, 12, 4, 0, 0], &[[7, 1, 1]]);
+    assert_eq!(siz, siz_new);
     let mut cod = vec![0, 0];
     cod.extend_from_slice(&layers.to_be_bytes());
     cod.extend_from_slice(&[0, 0, 0, 0, 0, 1]);

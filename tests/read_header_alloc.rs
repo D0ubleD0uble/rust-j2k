@@ -13,9 +13,9 @@
 
 #[path = "support/synth.rs"]
 mod synth;
-use synth::bx;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use synth::bx;
 
 struct Counting;
 
@@ -77,26 +77,6 @@ fn in_jp2(codestream: &[u8]) -> Vec<u8> {
     )
 }
 
-fn old_in_jp2(codestream: &[u8]) -> Vec<u8> {
-    let bx = |kind: &[u8; 4], payload: &[u8]| {
-        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(payload);
-        out
-    };
-    let mut ihdr = SIDE.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&SIDE.to_be_bytes());
-    ihdr.extend_from_slice(&[0, 1, 7, 7, 0, 0]);
-    let jp2h = [bx(b"ihdr", &ihdr), bx(b"colr", &[1, 0, 0, 0, 0, 0, 17])].concat();
-    [
-        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
-        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
-        bx(b"jp2h", &jp2h),
-        bx(b"jp2c", codestream),
-    ]
-    .concat()
-}
-
 #[test]
 fn read_header_allocates_nothing_sized_by_the_image() {
     let codestream = big_header();
@@ -111,12 +91,5 @@ fn read_header_allocates_nothing_sized_by_the_image() {
             peak < 64 * 1024,
             "{what}: read_header peaked at {peak} bytes"
         );
-    }
-}
-
-#[test]
-fn zz_identity_tests_read_header_alloc_rs() {
-    for cs in [&[][..], &[1, 2, 3][..], &[0xFF; 300][..]] {
-        assert_eq!(old_in_jp2(cs), in_jp2(cs));
     }
 }

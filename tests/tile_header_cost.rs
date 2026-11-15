@@ -66,6 +66,12 @@ fn tiles(components: u16, tile_cod: bool) -> Vec<u8> {
     for _ in 1..components {
         siz.extend_from_slice(&[7, 255, 255]);
     }
+    let siz_new = synth::siz_body([SIDE + 1, SIDE + 1, 1, 1, 1, 1, 1, 1], &{
+        let mut c = vec![[7, 1, 1]];
+        c.resize(usize::from(components), [7, 255, 255]);
+        c
+    });
+    assert_eq!(siz, siz_new);
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
     cs.extend(cod(0));

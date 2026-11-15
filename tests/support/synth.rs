@@ -98,3 +98,17 @@ pub fn jp2_file(
     out.extend(trailing.concat());
     out
 }
+
+/// A `SIZ` body: `Rsiz` 0, the eight grid fields (`Xsiz`, `Ysiz`, `XOsiz`,
+/// `YOsiz`, `XTsiz`, `YTsiz`, `XTOsiz`, `YTOsiz`), `Csiz` and each
+/// component's (`Ssiz`, `XRsiz`, `YRsiz`).
+pub fn siz_body(grid: [u32; 8], components: &[[u8; 3]]) -> Vec<u8> {
+    let mut out = 0u16.to_be_bytes().to_vec();
+    for field in grid {
+        out.extend_from_slice(&field.to_be_bytes());
+    }
+    let count = u16::try_from(components.len()).expect("too many components");
+    out.extend_from_slice(&count.to_be_bytes());
+    out.extend(components.concat());
+    out
+}

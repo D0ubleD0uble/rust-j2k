@@ -124,32 +124,6 @@ fn jp2_psot0(cs: &[u8]) -> Vec<u8> {
     )
 }
 
-fn old_jp2_psot0(cs: &[u8]) -> Vec<u8> {
-    let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
-    let mut ihdr = (word(12) - word(20)).to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&(word(8) - word(16)).to_be_bytes());
-    ihdr.extend_from_slice(&cs[40..42]);
-    ihdr.extend_from_slice(&[cs[42], 7, 0, 0]);
-    let mut colr = vec![1, 0, 0];
-    colr.extend_from_slice(&17u32.to_be_bytes());
-    let mut jp2h = bx(b"ihdr", &ihdr);
-    jp2h.extend(bx(b"colr", &colr));
-    // Follow the tile-part chain to the last SOT.
-    let mut sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
-    while sot + word(sot + 6) as usize + 2 < cs.len() {
-        sot += word(sot + 6) as usize;
-    }
-    let mut body = cs[..sot + 6].to_vec();
-    body.extend_from_slice(&[0; 4]);
-    body.extend_from_slice(&cs[sot + 10..cs.len() - 2]);
-    let mut out = bx(b"jP  ", b"\x0d\x0a\x87\x0a");
-    out.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend(bx(b"jp2h", &jp2h));
-    out.extend(bx(b"jp2c", &body));
-    out.extend(bx(b"xml ", b"<a/>"));
-    out
-}
-
 fn xml(metadata: Option<&rust_j2k::Jp2Metadata>) -> usize {
     metadata.unwrap().xml.len()
 }
@@ -170,12 +144,4 @@ fn read_header_reports_the_boxes_after_a_tile_with_packets_left_out() {
     let missing = jp2_psot0(&read("poc_res_missing.j2k"));
     assert_eq!(xml(read_header(&missing).unwrap().jp2.as_ref()), 1);
     assert_refused("poc_res_missing.j2k as JP2", &missing, 0, 1);
-}
-
-#[test]
-fn zz_identity_tests_poc_coverage_rs() {
-    for n in ["poc_res_covered.j2k", "poc_res_missing.j2k"] {
-        let cs = read(n);
-        assert_eq!(old_jp2_psot0(&cs), jp2_psot0(&cs), "{n}");
-    }
 }

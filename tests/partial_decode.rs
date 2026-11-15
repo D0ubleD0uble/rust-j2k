@@ -491,6 +491,11 @@ fn main_header(
     for _ in 0..components {
         siz.extend_from_slice(&[7, 1, 1]);
     }
+    let siz_new = synth::siz_body(
+        [width, height, 0, 0, tile_width, tile_height, 0, 0],
+        &vec![[7, 1, 1]; usize::from(components)],
+    );
+    assert_eq!(siz, siz_new);
     let cod = [0, 0, 0, 1, 0, levels, block, block, 0, 1];
     let mut qcd = vec![0x20];
     qcd.extend(std::iter::repeat_n(9 << 3, 3 * usize::from(levels) + 1));

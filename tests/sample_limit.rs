@@ -48,26 +48,6 @@ fn in_jp2(codestream: &[u8]) -> Vec<u8> {
     )
 }
 
-fn old_in_jp2(codestream: &[u8]) -> Vec<u8> {
-    let bx = |kind: &[u8; 4], payload: &[u8]| {
-        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(payload);
-        out
-    };
-    let mut ihdr = 16385u32.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&16385u32.to_be_bytes());
-    ihdr.extend_from_slice(&[0, 1, 7, 7, 0, 0]);
-    let jp2h = [bx(b"ihdr", &ihdr), bx(b"colr", &[1, 0, 0, 0, 0, 0, 17])].concat();
-    [
-        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
-        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
-        bx(b"jp2h", &jp2h),
-        bx(b"jp2c", codestream),
-    ]
-    .concat()
-}
-
 fn with_limit(limit: WorkLimit) -> DecodeOptions {
     DecodeOptions::default().with_sample_limit(limit)
 }
@@ -252,6 +232,11 @@ fn main_header(size: u32, tile: u32, components: u16, layers: u16, extra: &[u8])
     for _ in 0..components {
         siz.extend_from_slice(&[7, 1, 1]);
     }
+    let siz_new = synth::siz_body(
+        [size, size, 0, 0, tile, tile, 0, 0],
+        &vec![[7, 1, 1]; usize::from(components)],
+    );
+    assert_eq!(siz, siz_new);
     let mut cod = vec![0, 0];
     cod.extend_from_slice(&layers.to_be_bytes());
     cod.extend_from_slice(&[0, 6, 0, 0, 0, 1]);
@@ -634,11 +619,4 @@ fn a_palette_under_a_window_counts_the_window() {
         m.starts_with("palette expansion to 3 channels needs 270000000 samples"),
         "{m}"
     );
-}
-
-#[test]
-fn zz_identity_tests_sample_limit_rs() {
-    for cs in [&[][..], &[1, 2, 3][..], &[0xFF; 300][..]] {
-        assert_eq!(old_in_jp2(cs), in_jp2(cs));
-    }
 }

@@ -248,23 +248,6 @@ fn wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
     wrap_with(codestream, profile, &[])
 }
 
-fn old_wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
-    let header = rust_j2k::read_header(codestream).expect("codestream header");
-    let mut ihdr = header.height.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&header.width.to_be_bytes());
-    ihdr.extend_from_slice(&(header.components.len() as u16).to_be_bytes());
-    ihdr.extend_from_slice(&[header.components[0].bit_depth - 1, 7, 0, 0]);
-    let mut colr = vec![2, 0, 0];
-    colr.extend_from_slice(profile);
-    let mut jp2h = bx(b"ihdr", &ihdr);
-    jp2h.extend(bx(b"colr", &colr));
-    let mut out = b"\x00\x00\x00\x0cjP  \r\n\x87\n".to_vec();
-    out.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend(bx(b"jp2h", &jp2h));
-    out.extend(bx(b"jp2c", codestream));
-    out
-}
-
 /// Where the decoder refuses a profile, and why. OpenJPEG converts each but
 /// one. LittleCMS applies a monochrome profile to the first of three channels'
 /// worth of input; the others are forms this step does not apply: a lookup
@@ -575,16 +558,6 @@ fn rgba() -> Vec<u8> {
     bytes[start..end].to_vec()
 }
 
-fn old_cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
-    let mut payload = (entries.len() as u16).to_be_bytes().to_vec();
-    for &(cn, typ, asoc) in entries {
-        for v in [cn, typ, asoc] {
-            payload.extend_from_slice(&v.to_be_bytes());
-        }
-    }
-    bx(b"cdef", &payload)
-}
-
 /// Colors 1, 2, 3 and an opacity channel for the whole image.
 const RGBA_CDEF: &[(u16, u16, u16)] = &[(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 1, 0)];
 
@@ -608,33 +581,6 @@ fn wrap_with(codestream: &[u8], profile: &[u8], children: &[Vec<u8>]) -> Vec<u8>
     boxes.push(bx(b"colr", &synth::colr_icc(profile)));
     boxes.extend_from_slice(children);
     synth::jp2_file(&boxes, &[], codestream, &[])
-}
-
-fn old_wrap_with(codestream: &[u8], profile: &[u8], children: &[Vec<u8>]) -> Vec<u8> {
-    let header = rust_j2k::read_header(codestream).expect("codestream header");
-    let bpc: Vec<u8> = header
-        .components
-        .iter()
-        .map(|c| (c.bit_depth - 1) | if c.signed { 0x80 } else { 0 })
-        .collect();
-    let uniform = bpc.iter().all(|&b| b == bpc[0]);
-    let mut ihdr = header.height.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&header.width.to_be_bytes());
-    ihdr.extend_from_slice(&(bpc.len() as u16).to_be_bytes());
-    ihdr.extend_from_slice(&[if uniform { bpc[0] } else { 255 }, 7, 0, 0]);
-    let mut jp2h = bx(b"ihdr", &ihdr);
-    if !uniform {
-        jp2h.extend(bx(b"bpcc", &bpc));
-    }
-    let mut colr = vec![2, 0, 0];
-    colr.extend_from_slice(profile);
-    jp2h.extend(bx(b"colr", &colr));
-    jp2h.extend(children.concat());
-    let mut out = b"\x00\x00\x00\x0cjP  \r\n\x87\n".to_vec();
-    out.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend(bx(b"jp2h", &jp2h));
-    out.extend(bx(b"jp2c", codestream));
-    out
 }
 
 /// A profile from `icc/profiles.json`.
@@ -1025,40 +971,4 @@ fn srgb_picks_the_color_channels_by_their_cdef_labels() {
         image.jp2.unwrap().channels,
         [color(1), color(2), alpha, color(3)]
     );
-}
-
-#[test]
-fn zz_identity_tests_jp2_icc_rs() {
-    assert_eq!(
-        old_cdef(&[(0, 0, 1), (1, 1, 0), (7, 65535, 2)]),
-        synth::cdef(&[(0, 0, 1), (1, 1, 0), (7, 65535, 2)])
-    );
-    for n in [
-        "multilayer_lossless.j2k",
-        "cblksty_bypass_lossless.j2k",
-        "multicomponent_lossless.j2k",
-    ] {
-        let cs = read(n);
-        for p in [&[][..], &[9, 8, 7][..]] {
-            assert_eq!(old_wrap(&cs, p), wrap(&cs, p), "{n}");
-            assert_eq!(
-                old_wrap_with(&cs, p, &[vec![1, 2]]),
-                wrap_with(&cs, p, &[vec![1, 2]]),
-                "{n}"
-            );
-        }
-    }
-    for e in std::fs::read_dir(synth::fixtures("icc")).unwrap() {
-        let p = e.unwrap().path();
-        if p.extension().is_some_and(|x| x == "j2k") {
-            let cs = synth::read_file(&p);
-            assert_eq!(old_wrap(&cs, &[1]), wrap(&cs, &[1]), "{}", p.display());
-            assert_eq!(
-                old_wrap_with(&cs, &[1], &[]),
-                wrap_with(&cs, &[1], &[]),
-                "{}",
-                p.display()
-            );
-        }
-    }
 }
