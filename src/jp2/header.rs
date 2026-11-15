@@ -12,11 +12,14 @@ use crate::{Error, Result};
 /// The brand and compatibility code of a JP2 file.
 const JP2_BRAND: [u8; 4] = *b"jp2 ";
 
+/// The brand and compatibility code of a JPH file (ISO/IEC 15444-15 D.3).
+const JPH_BRAND: [u8; 4] = *b"jph ";
+
 /// Check a File Type box: `BR` (4 bytes), `MinV` (4 bytes), then any number of
-/// 4-byte compatibility codes. A file is read only if `jp2 ` is its brand or
-/// in its compatibility list (I.5.2); anything else is a JPX, JPM or MJ2 file
-/// that does not claim JP2 compatibility, and is [`Error::Unsupported`].
-/// Returns the box's fields.
+/// 4-byte compatibility codes. A file is read only if `jp2 ` or `jph ` is its
+/// brand or in its compatibility list (I.5.2, ISO/IEC 15444-15 D.3); anything
+/// else is a JPX, JPM or MJ2 file that claims neither, and is
+/// [`Error::Unsupported`]. Returns the box's fields.
 pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<FileType> {
     let payload = ftyp.payload;
     if payload.len() < 8 || !payload.len().is_multiple_of(4) {
@@ -33,11 +36,12 @@ pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<FileType> {
         .chunks_exact(4)
         .map(|code| [code[0], code[1], code[2], code[3]])
         .collect();
-    let compatible = brand == JP2_BRAND || compatibility.contains(&JP2_BRAND);
+    let readable = |code: &[u8; 4]| *code == JP2_BRAND || *code == JPH_BRAND;
+    let compatible = readable(&brand) || compatibility.iter().any(readable);
     if !compatible {
         return Err(Error::Unsupported(format!(
-            "file brand `{}` without `jp2 ` compatibility (a JPX, JPM or MJ2 file that \
-             does not claim to be readable as JP2)",
+            "file brand `{}` without `jp2 ` or `jph ` compatibility (a JPX, JPM or MJ2 \
+             file that does not claim to be readable as JP2 or JPH)",
             type_name(brand)
         )));
     }
@@ -46,6 +50,12 @@ pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<FileType> {
         minor_version,
         compatibility,
     })
+}
+
+/// Whether a file is a JPH file: `jph ` is its brand or in its
+/// compatibility list (ISO/IEC 15444-15 D.3).
+pub(crate) fn is_jph(file_type: &FileType) -> bool {
+    file_type.brand == JPH_BRAND || file_type.compatibility.contains(&JPH_BRAND)
 }
 
 /// The most components `ihdr` may declare: `NC` is 1..=16384 (I.5.3.1), the

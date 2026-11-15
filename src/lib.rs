@@ -251,9 +251,10 @@ pub use window::Window;
 /// single-component, so its images carry one component; a codestream declaring
 /// more decodes each component onto its own grid, independently.
 ///
-/// A malformed JP2 box structure is [`Error::FileFormat`]. A file whose File
-/// Type box has `jp2 ` neither as its brand nor in its compatibility list is
-/// valid JPEG 2000 but is rejected with
+/// A JPH file (a JP2-family file holding an HTJ2K codestream) decodes as a
+/// JP2 file does. A malformed box structure is [`Error::FileFormat`]. A file
+/// whose File Type box has neither `jp2 ` nor `jph ` as its brand or in its
+/// compatibility list is valid JPEG 2000 but is rejected with
 /// [`Error::Unsupported`]. Anything else outside the decoded subset is
 /// rejected the same way, never half-decoded.
 ///
@@ -1394,6 +1395,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
         options.resolution_reduction,
         cap,
         raw_channels,
+        jp2::is_jph(&file.file_type),
     )?;
     jp2::check_after_codestream(&file, raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;

@@ -1,10 +1,11 @@
 //! Stage 0 — the JP2 file format (ISO/IEC 15444-1 Annex I).
 //!
-//! A JP2 file is a sequence of boxes around one codestream:
+//! A JP2 file is a sequence of boxes around one codestream, and so is a JPH
+//! file (ISO/IEC 15444-15 Annex D), which holds an HTJ2K codestream:
 //!
 //! ```text
 //! jP   signature (12 bytes, first)
-//! ftyp file type (second): `jp2 ` as brand or in the compatibility list
+//! ftyp file type (second): `jp2 ` or `jph ` as brand or in the compatibility list
 //! jp2h header superbox: ihdr, colr, bpcc, pclr, cmap, cdef, res
 //! jp2c the codestream (the first one; later ones are ignored, I.5.4)
 //! ```
@@ -46,9 +47,9 @@
 //! Every length is checked before use and nothing is allocated from one (see
 //! [`boxes`]). Box-layer faults are [`Error::FileFormat`], and a file that
 //! ends before its codestream's main header is whole is [`Error::Incomplete`]
-//! (see [`parse`]); a file this decoder
-//! does not read (no `jp2 ` compatibility, or a palette mapping or column depth
-//! it does not decode) is [`Error::Unsupported`].
+//! (see [`parse`]); a file this decoder does not read (no `jp2 ` or `jph `
+//! compatibility, or a palette mapping or column depth it does not decode) is
+//! [`Error::Unsupported`].
 
 mod after;
 mod boxes;
@@ -87,6 +88,7 @@ use crate::{Component, ComponentInfo, Error, Result, WorkLimit};
 use after::End;
 use boxes::{Boxes, Jp2Box, type_name, walk_after_codestream};
 use channels::ChannelPlan;
+pub(crate) use header::is_jph;
 use header::{Jp2Header, check_file_type};
 use palette::PalettePlan;
 pub(crate) use srgb::SrgbPlan;
@@ -484,17 +486,19 @@ impl ChannelPlans {
     /// codestream's SIZ with its image area cut to what the decode returns
     /// (the selection's area), as the expansion covers only that.
     /// The palette is planned first, so a malformed palette reports its fault
-    /// before a malformed `cdef` does, as OpenJPEG reads them.
+    /// before a malformed `cdef` does, as OpenJPEG reads them. `jph` says
+    /// whether the file is a JPH file ([`is_jph`]).
     pub(crate) fn plan(
         header: &Jp2Header<'_>,
         siz: &Siz,
         reduction: u8,
         cap: u64,
         raw_channels: bool,
+        jph: bool,
     ) -> Result<Self> {
         let palette = palette::plan(header, siz, reduction, cap, raw_channels)?;
         let count = palette.output_channels(siz, reduction).len();
-        let channels = channels::plan(header, count, raw_channels)?;
+        let channels = channels::plan(header, count, raw_channels, jph)?;
         Ok(ChannelPlans { palette, channels })
     }
 
@@ -524,7 +528,7 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
         palette_applied: false,
         palette: None,
         channel_mapping: None,
-        channel_definitions: channels::definitions(&file.header),
+        channel_definitions: channels::definitions(&file.header, is_jph(&file.file_type)),
         resolution: resolution::read(&file.header),
         xml: passed.xml,
         uuid: passed.uuid,

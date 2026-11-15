@@ -6,7 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Migrating from 0.4
+
+- `ChannelType` and `Association` have a new variant each,
+  `ChannelType::ApplicationDefined` and `Association::ApplicationDefined(u16)`.
+  Both enums are exhaustive, so a `match` on either without a wildcard arm
+  no longer compiles; add an arm for the new variant. They are used only
+  for JPH files; a JP2 file's `cdef` channel of type 3 is still
+  `ChannelType::Other(3)` with an `Association` read as a color.
+
 ### Added
+
+- JPH files (ISO/IEC 15444-15 Annex D) decode, and `read_header` reads them:
+  a file whose File Type box has `jph ` as its brand or in its compatibility
+  list is read as a JP2 file is. In a JPH file, a `cdef` channel of type 3
+  is reported as `ChannelType::ApplicationDefined`, with its `Asoc` as
+  `Association::ApplicationDefined`. Its `Asoc` is not checked against the
+  channel count, and it moves no channel. OpenJPEG 2.5.0 refuses a file
+  whose type 3 `Asoc` is past the last channel. In a JP2 file, type 3 is
+  reserved and read as before.
 
 - `Header::quality_layers`: the number of quality layers the main header's
   `COD` declares, as `read_header` reads it. A
