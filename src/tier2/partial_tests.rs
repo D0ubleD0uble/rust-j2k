@@ -65,6 +65,13 @@ fn a_cut_packet_keeps_whole_layers_under_each_code_block_style() {
 /// every byte, and check each code-block is what a decode of the first `k`
 /// layers of the whole file gives it, for some `k`. Whether some cut left
 /// code-blocks of one resolution at two layer counts, the lower at least 1.
+///
+/// The blocks are compared but for [`CodeBlock::cut`], which is checked on
+/// its own: a block that lacks a layer the whole file gives it has a later
+/// packet of its precinct missing, so its one segment is cut, under a style
+/// that does not end segments within a block's passes. Under `restart` each
+/// segment is one pass and whole, so none is cut. `bypass` ends some
+/// segments, so it is not checked here.
 fn whole_layers(name: &str, layers: u16) -> bool {
     let bytes = std::fs::read(format!(
         "{}/tests/fixtures/{name}",
@@ -77,6 +84,13 @@ fn whole_layers(name: &str, layers: u16) -> bool {
     let header = cs.tile_header(0).unwrap().into_owned();
     let tile = &cs.tiles[0];
     assert_eq!(header.cod.layers, layers, "{name}");
+    let style = header.components[0].coding.code_block_style;
+    let restart = style & crate::codestream::markers::code_block_style::TERMALL != 0;
+    let one_segment = style
+        & (crate::codestream::markers::code_block_style::TERMALL
+            | crate::codestream::markers::code_block_style::LAZY)
+        == 0;
+    let mut cuts = 0;
 
     // The first k layers of the whole file, for k from 0 to 3: the same data
     // under a COD that declares k layers, its packets past them left over.
@@ -111,13 +125,23 @@ fn whole_layers(name: &str, layers: u16) -> bool {
         // For each block, its resolution and the layer counts it matches.
         let mut matched: Vec<(usize, Vec<u16>)> = Vec::new();
         for (b, (at, block)) in got.iter().enumerate() {
+            let uncut = CodeBlock {
+                cut: false,
+                ..(*block).clone()
+            };
             let ks: Vec<u16> = (0..=layers)
-                .filter(|&k| limited[usize::from(k)][b].1 == *block)
+                .filter(|&k| limited[usize::from(k)][b].1 == &uncut)
                 .collect();
             assert!(
                 !ks.is_empty(),
                 "{name} cut {cut}: block {b} holds part of a layer"
             );
+            if restart {
+                assert!(!block.cut, "{name} cut {cut}: block {b} is cut");
+            } else if one_segment && !block.segments.is_empty() && !ks.contains(&layers) {
+                assert!(block.cut, "{name} cut {cut}: block {b} is not cut");
+                cuts += 1;
+            }
             matched.push((*at, ks));
         }
         // A block that holds layers 1 to k but not layer k + 1, beside one of
@@ -132,6 +156,7 @@ fn whole_layers(name: &str, layers: u16) -> bool {
             }
         }
     }
+    assert!(restart || !one_segment || cuts > 0, "{name}: no block was cut");
     split
 }
 

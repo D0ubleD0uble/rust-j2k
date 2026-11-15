@@ -42,7 +42,14 @@ segment the cap leaves whole and is still decoded within its bytes, so
 OpenJPEG decodes it without a warning, and the segment the cap cuts must not
 be held to `predictable termination`.
 
-Usage: python3 scripts/gen-layer-fixtures.py
+`prefixes.sha256` holds the same kind of hash for every prefix of the
+fixtures in PREFIXES, from `opj_decompress -allow-partial`, with no cap and
+with each cap listed. Runs of prefixes that decode alike share a line:
+`<name> <cap, 0 for none> <first length> <last length> <hash>`, or `refused`
+in place of the hash where OpenJPEG writes no image. `--prefixes` writes only
+this file, from the committed codestreams.
+
+Usage: python3 scripts/gen-layer-fixtures.py [--prefixes]
 Requires OpenJPEG 2.5.0 `opj_compress` and `opj_decompress` on PATH.
 """
 
@@ -98,6 +105,12 @@ PART4 = {
     "p0_10": (2, [0]),  # LRCP, three components, two tiles
     "p0_16": (3, [0]),  # RLCP
     "p1_01": (5, [0]),  # LRCP, restart + pterm + segsym, precincts
+}
+
+# Layer fixture -> caps besides none, for `prefixes.sha256`
+PREFIXES = {
+    "pterm_cut": [1],
+    "bypass_pterm": [1],
 }
 
 # Layer fixture -> [(byte offset flipped by xor 0x10, layer count)]
@@ -206,8 +219,49 @@ def pterm_cut(tmp: Path) -> None:
         sys.exit("pterm_cut: the full decode is not the source")
 
 
+def prefix_oracles() -> None:
+    """Write `prefixes.sha256` (see the module docs)."""
+    lines = []
+    with tempfile.TemporaryDirectory() as tmp_name:
+        tmp = Path(tmp_name)
+        cut, stem = tmp / "cut.j2k", tmp / "out"
+        for name, caps in PREFIXES.items():
+            whole = (DIR / f"{name}.j2k").read_bytes()
+            for cap in [0] + caps:
+                runs: list[list] = []
+                for length in range(1, len(whole) + 1):
+                    cut.write_bytes(whole[:length])
+                    for old in tmp.glob("out_*.pgx"):
+                        old.unlink()
+                    argv = ["opj_decompress", "-allow-partial", "-i", str(cut),
+                            "-o", str(stem) + ".pgx"]
+                    if cap:
+                        argv += ["-l", str(cap)]
+                    result = subprocess.run(argv, capture_output=True, text=True)
+                    outs = sorted(tmp.glob("out_*.pgx"),
+                                  key=lambda p: int(p.stem.rsplit("_", 1)[1]))
+                    got = (hashlib.sha256(samples_of(outs)).hexdigest()
+                           if result.returncode == 0 and outs else "refused")
+                    # OpenJPEG's warning that the data ends inside a
+                    # code-block's contribution.
+                    dropped = "segment too long" in result.stdout + result.stderr
+                    got = f"{got} {'cut' if dropped else 'whole'}"
+                    if runs and runs[-1][2] == got:
+                        runs[-1][1] = length
+                    else:
+                        runs.append([length, length, got])
+                if runs[-1][2].split()[1] != "whole" or runs[-1][2].startswith("refused"):
+                    sys.exit(f"{name}: OpenJPEG does not decode the whole codestream")
+                lines += [f"{name} {cap} {a} {b} {h}" for a, b, h in runs]
+    (DIR / "prefixes.sha256").write_text("\n".join(lines) + "\n")
+    print(f"prefixes.sha256: {len(lines)} runs")
+
+
 def main() -> None:
     require_openjpeg("opj_compress", "opj_decompress")
+    if sys.argv[1:] == ["--prefixes"]:
+        prefix_oracles()
+        return
     DIR.mkdir(exist_ok=True)
     for old in DIR.glob("*.pgx"):
         old.unlink()
@@ -255,6 +309,7 @@ def main() -> None:
                 lines.append(f"{name} {offset} {n} {hashlib.sha256(got).hexdigest()}")
     (DIR / "damaged.sha256").write_text("\n".join(lines) + "\n")
     print(f"damaged.sha256: {len(lines)} oracles")
+    prefix_oracles()
 
 
 if __name__ == "__main__":

@@ -51,6 +51,7 @@ the whole codestream. The 5/3 ones are exact.
 | `cprl_irreversible_l1_r1_<c>.pgx` | `-l 1 -r 1` |
 | `part4.sha256` | for ISO/IEC 15444-4 `p0_02`, `p0_03` (also at `-r 1`), `p0_10`, `p0_16` and `p1_01`, each N from 1 to the layer count: the SHA-256 of the `opj_decompress -l N -r R` samples, every component in order, each sample a little-endian `i32` |
 | `damaged.sha256` | the same hash of `opj_decompress -l 2` on `bypass_pterm.j2k` with byte 403 xor 0x10, a flip in a segment the cap keeps whole; OpenJPEG decodes it without a warning |
+| `prefixes.sha256` | the same hash of `opj_decompress -allow-partial` on every prefix of `pterm_cut.j2k` and `bypass_pterm.j2k`, with no cap (`0`) and at `-l 1`; a run of prefixes that decode alike is one line, `<name> <cap> <first length> <last length> <hash> <flag>`. The hash is `refused` where OpenJPEG writes no image. The flag is `cut` where OpenJPEG warns `segment too long`, that is, the prefix ends inside a code-block's contribution, and `whole` otherwise. `python3 scripts/gen-layer-fixtures.py --prefixes` writes only this file |
 
 The Part 4 oracles are hashes because `layers/` ships in the crate and the
 conformance corpus does not: its license is for conformance testing only, so
