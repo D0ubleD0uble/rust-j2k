@@ -28,7 +28,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// | ------- | -------------------- |
 /// | `Codestream`, `Marker`, `FileFormat` | The file is damaged, truncated or not a JPEG 2000 image. |
 /// | `Incomplete` | The file is cut short before its header ends. If it is still arriving, try again with more of it. |
-/// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read. |
+/// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read, or a valid request it does not do: sRGB output from sub-sampled sYCC chroma on an area smaller than the image (`DecodeOptions::window`, `DecodeOptions::tile`). |
 /// | `Limit` | The file is larger or costlier than the decoder allows by default. If the message names a `DecodeOptions` limit, it can be retried with a higher [`WorkLimit`](crate::WorkLimit). |
 /// | `InvalidOptions` | The decode options are invalid, for any file (`WorkLimit::Raised(0)`, sRGB output with `raw_channels`) or for this one (a reduction past the file's levels). |
 /// | `Inconsistent` | An internal error; please file a bug. |
