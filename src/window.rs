@@ -3,9 +3,10 @@
 //! [`DecodeOptions::components`]).
 //!
 //! The tiles outside the window are not decoded, and the components left out
-//! are not decoded past the packet walk. Inside a tile the window needs, every
-//! code-block is still decoded and the wavelet still runs over the whole tile;
-//! the window is cut from the tile's samples.
+//! are not decoded past the packet walk. Inside a tile the window needs, only
+//! the code-blocks whose wavelet support reaches the window are decoded, and
+//! the wavelet runs over only the samples the window needs
+//! ([`crate::dwt::Footprint`]).
 
 use crate::codestream::markers::{Rect, Siz};
 use crate::{ColorOutput, DecodeOptions, Error, ReportEntry, Result};

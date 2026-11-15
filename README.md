@@ -97,7 +97,8 @@ how much.
   less time (`DecodeOptions::with_max_quality_layers`).
 - It can **decode part of an image**: a rectangle of it, one tile, or some of
   its components (`DecodeOptions::with_window`, `with_tile`,
-  `with_components`). Only the tiles the rectangle reaches are decoded.
+  `with_components`). Only the tiles the rectangle reaches are decoded, and in
+  them only the code-blocks it needs.
 - It can **decode a codestream that is cut short**, such as one still
   arriving, and tell you what is missing (`DecodeOptions::with_strict(false)`).
 - It reads **whole numbers up to 32 bits**: unsigned up to 31 bits and signed
