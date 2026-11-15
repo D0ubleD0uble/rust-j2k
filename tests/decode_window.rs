@@ -516,7 +516,7 @@ fn a_jp2_subset_is_the_raw_components() {
 
 /// sRGB output from sub-sampled sYCC replicates the chroma by the parity of
 /// the decoded area's origin, so part of the image would not be the crop of
-/// the whole image's conversion: a window or a tile with it is refused, from
+/// the whole image's conversion: a window smaller than the image is refused, from
 /// the header and from the decode alike. The samples as coded decode, and so
 /// does sRGB output that passes the channels through.
 #[test]
@@ -532,22 +532,18 @@ fn srgb_from_sub_sampled_sycc_refuses_a_window() {
         let bytes = std::fs::read(fixtures.join(format!("{name}.jp2"))).unwrap();
         assert!(decode_with(&bytes, &srgb).is_ok(), "{name}");
         let window = Some(Window::new(1, 1, 7, 5));
-        for options in [
-            srgb.clone().with_window(window),
-            srgb.clone().with_tile(Some(0)),
-        ] {
-            assert!(
-                matches!(decode_with(&bytes, &options), Err(Error::Unsupported(_))),
-                "{name} {options:?}"
-            );
-            assert!(
-                matches!(
-                    read_header_with(&bytes, &options),
-                    Err(Error::Unsupported(_))
-                ),
-                "{name} {options:?}"
-            );
-        }
+        let options = srgb.clone().with_window(window);
+        assert!(
+            matches!(decode_with(&bytes, &options), Err(Error::Unsupported(_))),
+            "{name}"
+        );
+        assert!(
+            matches!(
+                read_header_with(&bytes, &options),
+                Err(Error::Unsupported(_))
+            ),
+            "{name}"
+        );
         let coded = DecodeOptions::default().with_window(window);
         assert!(decode_with(&bytes, &coded).is_ok(), "{name}");
     }
@@ -566,5 +562,64 @@ fn srgb_from_sub_sampled_sycc_refuses_a_window() {
             .map(|(x, y)| w.sample(x, y).unwrap())
             .collect();
         assert_eq!(p.samples, expected);
+    }
+}
+
+/// An area equal to the image has the whole image's chroma phase, so sRGB
+/// output from sub-sampled sYCC decodes it as the plain decode does: a window
+/// clipped to the whole image, and the only tile, at any reduction. An area
+/// that differs in origin only, or in size only, is still refused, from the
+/// header and from the decode alike.
+#[test]
+fn srgb_from_sub_sampled_sycc_decodes_an_area_equal_to_the_image() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let srgb = DecodeOptions::default().with_color(ColorOutput::Srgb);
+    let everything = Some(Window::new(0, 0, u32::MAX, u32::MAX));
+    for name in [
+        "jp2_sycc_420_even",
+        "jp2_sycc_420_odd",
+        "jp2_sycc_422_even",
+        "jp2_sycc_422_odd",
+    ] {
+        let bytes = std::fs::read(fixtures.join(format!("{name}.jp2"))).unwrap();
+        for reduction in [0, 1] {
+            let plain = srgb.clone().with_resolution_reduction(reduction);
+            let whole = decode_ok(&bytes, &plain, name);
+            for options in [
+                plain.clone().with_window(everything),
+                plain.clone().with_tile(Some(0)),
+            ] {
+                let part = decode_ok(&bytes, &options, name);
+                assert_eq!((part.width, part.height), (whole.width, whole.height));
+                assert!(
+                    part.components
+                        .iter()
+                        .zip(&whole.components)
+                        .all(|(p, w)| p.samples == w.samples),
+                    "{name} r{reduction} {options:?}"
+                );
+                assert_eq!(part.jp2, whole.jp2, "{name}");
+                read_header_with(&bytes, &options).unwrap();
+            }
+        }
+        // Only the origin differs: the window runs to the image's far corner.
+        // Only the size differs: it starts at the image's origin.
+        for window in [
+            Window::new(8, 5, u32::MAX, u32::MAX),
+            Window::new(0, 0, 10, 6),
+        ] {
+            let options = srgb.clone().with_window(Some(window));
+            assert!(
+                matches!(decode_with(&bytes, &options), Err(Error::Unsupported(_))),
+                "{name} {window:?}"
+            );
+            assert!(
+                matches!(
+                    read_header_with(&bytes, &options),
+                    Err(Error::Unsupported(_))
+                ),
+                "{name} {window:?}"
+            );
+        }
     }
 }
