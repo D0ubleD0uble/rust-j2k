@@ -696,6 +696,10 @@ pub struct DecodeOptions {
     /// are not read, so damage in them is not found, as in OpenJPEG. In the
     /// tiles it reaches, only the code-blocks whose wavelet support reaches
     /// the window are decoded, so damage in the others is not found either.
+    /// Nor are the refusals of a code-block it skips: an HT code-block with
+    /// refinement passes or a region of interest, and a code-block past the
+    /// bit-plane limit. A window can therefore decode where the whole image
+    /// is refused as [`Error::Unsupported`] or [`Error::Limit`].
     ///
     /// An empty window, one with no part inside the image area, and one that
     /// holds no sample of a returned component at the reduction are
@@ -877,7 +881,9 @@ pub struct DecodeOptions {
     /// that the window does not need are not decoded, and with
     /// [`components`](Self::components) the code-blocks of the components
     /// left out are not decoded, so damage there goes unseen, as with
-    /// `opj_decompress -t` and `-d`.
+    /// `opj_decompress -t` and `-d`. So do the code-blocks a decode would
+    /// refuse, such as HT code-blocks with refinement passes: a decode that
+    /// skips them can succeed where the whole decode is refused.
     ///
     /// For a codestream as it streams in: a prefix that holds every packet of
     /// the resolutions a reduction keeps decodes at that reduction to the same
@@ -1901,14 +1907,19 @@ mod tests {
     /// support reaches it, not every code-block of the tile.
     #[test]
     fn a_window_inside_a_tile_decodes_fewer_code_blocks_than_the_tile() {
-        // `tests/fixtures/bench/` is left out of the published package.
-        let Ok(bytes) = std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/bench/tiled_2048_gray.j2k"
-        )) else {
-            eprintln!("the bench fixture is not present (packaged crate?); skipping");
+        // `tests/fixtures/bench/` is left out of the published package, so
+        // the test is skipped where the directory is not there; a file
+        // missing from a directory that is there fails it.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bench");
+        if !dir.is_dir() {
+            eprintln!(
+                "{} is not present (packaged crate?); skipping",
+                dir.display()
+            );
             return;
-        };
+        }
+        let path = dir.join("tiled_2048_gray.j2k");
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let all = DecodeOptions::default();
         // Tile 27 is 768..1024 on both axes: 256 x 256 in 64 x 64 code-blocks,
         // over four decomposition levels.
