@@ -81,8 +81,10 @@ impl BlockCoder {
 /// each finer resolution's `HL/LH/HH` triple becomes one `levels` entry,
 /// coarsest first.
 ///
-/// Returns one [`SubbandCoeffs`] per component, in SIZ order. Components are
-/// independent here: no inter-component transform is applied.
+/// Returns one [`SubbandCoeffs`] per component, in SIZ order, for each
+/// component `wanted` marks, and `None` for the rest, whose code-blocks are
+/// not decoded. Components are independent here: no inter-component
+/// transform is applied.
 ///
 /// `reduction` is the resolution reduction: that many of each component's
 /// finest resolutions are dropped from the pyramid, their code-blocks skipped
@@ -92,12 +94,16 @@ pub fn decode_code_blocks(
     header: &MainHeader,
     coded: &CodedData<'_>,
     reduction: u8,
-) -> Result<Vec<SubbandCoeffs>> {
+    wanted: &[bool],
+) -> Result<Vec<Option<SubbandCoeffs>>> {
     coded
         .components
         .iter()
         .enumerate()
         .map(|(index, component)| {
+            if !wanted.get(index).copied().unwrap_or(false) {
+                return Ok(None);
+            }
             // The wavelet is per component: a COC can put one component on 5/3
             // and another on 9/7.
             let transform = header
@@ -111,13 +117,13 @@ pub fn decode_code_blocks(
             match transform {
                 // Drop the double-scale half bit. On the reversible arm this is
                 // OpenJPEG's integer `datap[i] /= 2`, exact by construction.
-                Transform::Reversible53 => Ok(SubbandCoeffs::Reversible(assemble(
+                Transform::Reversible53 => Ok(Some(SubbandCoeffs::Reversible(assemble(
                     header,
                     index,
                     component,
                     reduction,
                     |_| Ok(|q| q / 2),
-                )?)),
+                )?))),
                 // On the irreversible arm the half bit must survive into the
                 // float: OpenJPEG multiplies by `0.5f * band->stepsize` as it
                 // copies the block into the band, so the halving happens in
@@ -125,7 +131,7 @@ pub fn decode_code_blocks(
                 // dropping its low bit here loses up to half a quantization
                 // step on every coefficient. Dequantization is that multiply,
                 // folded into placement: each band gets its own factor.
-                Transform::Irreversible97 => Ok(SubbandCoeffs::Irreversible(assemble(
+                Transform::Irreversible97 => Ok(Some(SubbandCoeffs::Irreversible(assemble(
                     header,
                     index,
                     component,
@@ -134,7 +140,7 @@ pub fn decode_code_blocks(
                         let half_step = quant::half_step(header, index, band)?;
                         Ok(move |q| q as f32 * half_step)
                     },
-                )?)),
+                )?))),
             }
         })
         .collect()
@@ -175,11 +181,17 @@ pub(crate) fn decode_work(bytes: u64) -> u64 {
 /// The passes run are the block's passes, but no more than the `3 × top − 2`
 /// its coded bit-planes hold; a block of no coded plane, or one the decode
 /// refuses for too many, runs none. The code-blocks a resolution reduction
-/// drops are not decoded and not counted.
-pub(crate) fn work(header: &MainHeader, coded: &CodedData<'_>, reduction: u8) -> u64 {
+/// drops, and those of the components `wanted` does not mark, are not
+/// decoded and not counted.
+pub(crate) fn work(
+    header: &MainHeader,
+    coded: &CodedData<'_>,
+    reduction: u8,
+    wanted: &[bool],
+) -> u64 {
     let mut total = 0u64;
     for (comp, component) in coded.components.iter().enumerate() {
-        if header.components.get(comp).is_none() {
+        if header.components.get(comp).is_none() || !wanted.get(comp).copied().unwrap_or(false) {
             continue;
         }
         let coder = BlockCoder::of(header, comp);
@@ -522,8 +534,8 @@ mod tests {
         .data[0];
         assert_ne!(q, 0);
 
-        let out = decode_code_blocks(&header, &coded, 0).unwrap();
-        let SubbandCoeffs::Irreversible(bands) = &out[0] else {
+        let out = decode_code_blocks(&header, &coded, 0, &[true]).unwrap();
+        let Some(SubbandCoeffs::Irreversible(bands)) = &out[0] else {
             panic!("expected the irreversible arm");
         };
         let got = [
