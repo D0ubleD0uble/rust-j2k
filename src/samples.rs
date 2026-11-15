@@ -6,7 +6,10 @@
 //! image area. A palette's expanded channels and sYCC or gray-to-RGB output are
 //! held to the same limit. Each is checked from SIZ and the JP2 boxes alone,
 //! before any tile is read or plane allocated, so a small file that declares a
-//! huge image is refused at the cost of reading its header.
+//! huge image is refused at the cost of reading its header. Under a window or
+//! a tile, the codestream's count is that of the tiles the decode reads
+//! ([`check_read`]), and a palette's or sRGB output's count is that of the
+//! returned area.
 //!
 //! The default limit, [`MAX_IMAGE_SAMPLES`], is 2^28 samples: 1 GiB as `i32`.
 //! It admits a Sentinel-2 10 m band (10980 x 10980, 120.6 M samples) and an
@@ -117,14 +120,64 @@ pub(crate) fn check_codestream(
     reduction: u8,
     cap: u64,
 ) -> crate::Result<()> {
+    check_extent(siz, reduction, cap, false)
+}
+
+/// Hold a decode of `selection` to `cap` samples: [`check_codestream`] when
+/// it returns the whole image, which `None` stands for too (the caller has
+/// no selection yet, and reports why later). Under a window or a tile, the
+/// count is every component of the tiles the decode reads, at `reduction`,
+/// the area [`Selection::read_rect`](crate::window::Selection::read_rect)
+/// gives.
+///
+/// That is more than the decode returns, and it has to be. The returned
+/// planes lie inside those tiles. Each tile read is reconstructed whole, in
+/// buffers sized by the tile, for every component the decode returns and
+/// the rest of a color transform's three. And the packet walk builds every
+/// component's code-block geometry in each tile read, a component subset
+/// or not; the code-blocks of the kept resolutions are charged to no work
+/// bound, as they are no more than the samples counted here / 16
+/// (`docs/resource-bounds.md`).
+pub(crate) fn check_read(
+    siz: &crate::codestream::markers::Siz,
+    selection: Option<&crate::window::Selection>,
+    reduction: u8,
+    cap: u64,
+) -> crate::Result<()> {
+    match selection {
+        Some(selection) if selection.area.image_rect() != siz.image_rect() => check_extent(
+            &siz.windowed(selection.read_rect(siz)),
+            reduction,
+            cap,
+            true,
+        ),
+        _ => check_codestream(siz, reduction, cap),
+    }
+}
+
+/// [`check_codestream`] of the image area `siz` declares, which is the area
+/// of the tiles a decode reads when `tiles` is set (the message says which).
+fn check_extent(
+    siz: &crate::codestream::markers::Siz,
+    reduction: u8,
+    cap: u64,
+    tiles: bool,
+) -> crate::Result<()> {
     // The image area, `(Xsiz - XOsiz)·(Ysiz - YOsiz)` reduced, not `Xsiz·Ysiz`,
     // so a large origin cannot inflate the count of an image that reconstructs
     // to a small canvas.
     let (width, height) = siz.image_extent_at(reduction);
-    let area = u64::from(width) * u64::from(height);
-    if area > cap {
-        let what = format!("image area {width}x{height}{}", at(reduction));
-        return Err(over(&what, area, cap));
+    let samples = u64::from(width) * u64::from(height);
+    if samples > cap {
+        let what = if tiles {
+            format!(
+                "the area of the tiles read ({width}x{height}{})",
+                at(reduction)
+            )
+        } else {
+            format!("image area {width}x{height}{}", at(reduction))
+        };
+        return Err(over(&what, samples, cap));
     }
     let mut total: u64 = 0;
     for index in 0..siz.components.len() {
@@ -135,7 +188,8 @@ pub(crate) fn check_codestream(
     }
     if total > cap {
         let what = format!(
-            "a decode of {} components{}",
+            "a decode of {}{} components{}",
+            if tiles { "the tiles read in " } else { "" },
             siz.components.len(),
             at(reduction)
         );

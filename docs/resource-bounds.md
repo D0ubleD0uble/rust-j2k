@@ -48,6 +48,22 @@ sits. The count covers the codestream's components, a palette's expanded
 channels, and the channels sRGB output adds (sYCC chroma replicated to the
 luma grid, a gray channel a monochrome profile maps to R, G and B).
 `read_header_with` makes the same check, so it refuses what the decode would.
+
+Under `DecodeOptions::window` or `DecodeOptions::tile`, the count is the
+samples of the tiles the decode reads, in every component, at the reduction.
+Those tiles cover the returned area, so the output planes fit inside the
+count. Each tile read is reconstructed whole, one tile at a time, in buffers
+sized by the tile, so the count bounds those too. And the packet walk builds
+every component's code-block geometry in each tile read, which the count
+bounds as the next sections rely on. A palette's expanded channels and the
+channels sRGB output adds are counted over the returned area only. So the
+peak stays within the same multiple of the limit as for a whole decode: a
+256x256 window of a 16385x16385 image in 4096x4096 tiles fits the default,
+while a window of one 16385x16385 tile counts the whole tile. A
+`DecodeOptions::components` subset does not lower the count, as the walk
+still builds the geometry of the components it leaves out; under a window it
+counts every component of the tiles read.
+
 OpenJPEG has no such limit: it allocates what the header declares and fails
 only when the allocation does.
 
@@ -198,8 +214,9 @@ empty byte per packet, decoded at reduction 6, took 10.3 s for 256 tiles
 Nothing else of the geometry needs a charge. Each precinct is already paid
 for: the walk reads each precinct's packet in each layer, a step each,
 whatever the reduction. The code-blocks of the kept resolutions are no more
-than the reduced image's samples / 16, which the sample limit holds to
-2^24, about a second to build. A decode at full resolution drops no
+than the reduced image's samples / 16 (under a window or a tile, the reduced
+samples of the tiles read), which the sample limit holds to 2^24, about a
+second to build. A decode at full resolution drops no
 resolution, so it spends exactly what it did before; a file built to spend
 exactly the bound (`the_layer_orders_charge_each_component_they_check` in
 `tests/work_bound.rs`) still decodes.
