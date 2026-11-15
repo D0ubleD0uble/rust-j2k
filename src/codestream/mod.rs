@@ -1811,6 +1811,23 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
 /// can break one the main header kept, so this runs for every tile header too,
 /// not just the main one.
 fn validate_resolved(header: &MainHeader) -> Result<()> {
+    // A `CAP` that says each tile-component holds one kind of code-block
+    // (HTDECLARED, ISO/IEC 15444-15 A.3.2) rules out a MIXED style. The
+    // style is per tile-component and `CAP` may follow COD or COC in the
+    // main header, so this is checked on the resolved parameters.
+    if header.ccap15.is_some_and(|c| c.ht_declared()) {
+        use markers::code_block_style::HT_MIXED;
+        if let Some(index) = header
+            .components
+            .iter()
+            .position(|p| p.coding.code_block_style & HT_MIXED != 0)
+        {
+            return Err(Error::Codestream(format!(
+                "component {index} has a MIXED code-block style, but `CAP` says each \
+                 tile-component holds one kind of code-block (`Ccap15` bits 15-14 are 10)"
+            )));
+        }
+    }
     // A quantization default or override must cover every subband its
     // component decomposes into: 3·NL + 1 entries for the none/expounded
     // styles (derived's single entry is enforced in `decode_quant`, and excess
@@ -2513,17 +2530,28 @@ fn decode_cpf(mut b: Cursor<'_>) -> Result<Cpf> {
 ///
 /// The style bits decide each tile-component's coder (ISO/IEC 15444-15
 /// A.4); `CAP` does not override them. `0x40` alone selects the HT block
-/// coder, which tier-1 decodes. MIXED (`0x40` with `0x80`) is not decoded
-/// yet, and `0x80` without `0x40` is refused with it. Because it runs per
-/// segment, a cut header that already holds such a COD or COC is refused, not
-/// reported as incomplete.
+/// coder. `0x40` with `0x80` is MIXED: each code-block is an HT block or a
+/// Part 1 block, which tier-2 tells apart. A.4 allows the Part 1 blocks
+/// there neither bypass nor termination on each pass, so a MIXED style with
+/// either bit is malformed. `0x80` without `0x40` is a Part 1 style with a
+/// reserved bit set, and is refused as outside the decoded subset. Because it
+/// runs per segment, a cut header that already holds such a COD or COC is
+/// refused, not reported as incomplete.
 fn check_block_coder(coding: &Coding, origin: &str) -> Result<()> {
-    use markers::code_block_style::HT_MIXED;
-    let undecoded = coding.code_block_style & HT_MIXED;
-    if undecoded != 0 {
+    use markers::code_block_style::{HT, HT_MIXED, LAZY, TERMALL};
+    let style = coding.code_block_style;
+    if style & (HT | HT_MIXED) == HT_MIXED {
         return Err(Error::Unsupported(format!(
             "{origin} code-block style ({}) is outside the decoded subset",
-            markers::code_block_style::describe(undecoded),
+            markers::code_block_style::describe(HT_MIXED),
+        )));
+    }
+    let terminating = style & (LAZY | TERMALL);
+    if style & HT_MIXED != 0 && terminating != 0 {
+        return Err(Error::Marker(format!(
+            "{origin} code-block style is MIXED with {}, which ISO/IEC 15444-15 A.4 \
+             does not allow its Part 1 code-blocks",
+            markers::code_block_style::describe(terminating),
         )));
     }
     Ok(())

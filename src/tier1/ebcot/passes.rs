@@ -1146,10 +1146,9 @@ pub fn decode_block(
     use crate::codestream::markers::code_block_style::{
         HT, HT_MIXED, LAZY, PTERM, RESET, TERMALL, VCAUSAL,
     };
-    // `BlockCoder::of` sends an HT style to the HT coder, and the
-    // codestream's block-coder guard refuses MIXED, so neither bit reaches
-    // here. When MIXED decodes (P4.6), its Part 1 blocks carry both bits,
-    // and this relaxes to refuse only HT without MIXED.
+    // `BlockCoder::of` sends an HT style to the HT coder, and tier-1 takes
+    // both HTJ2K bits off the style it gives the Part 1 blocks of a MIXED
+    // tile-component, so neither bit reaches here.
     debug_assert_eq!(
         style & (HT | HT_MIXED),
         0,

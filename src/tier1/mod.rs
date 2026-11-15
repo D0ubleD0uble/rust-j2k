@@ -14,12 +14,15 @@ use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
 use crate::pipeline::{Band, Bands, DetailBands, SubbandCoeffs};
 use crate::quant;
-use crate::tier2::{BandKind, CodeBlock, CodedData, ComponentCoded, Resolution, Subband};
+use crate::tier2::{BandKind, CodeBlock, CodedData, Coder, ComponentCoded, Resolution, Subband};
 use crate::{Error, Result};
 
-/// The block coder of a tile-component, as its code-block style selects it.
+/// A block coder with the parameters a tile-component gives it.
 ///
-/// Assembly hands each code-block to [`decode`](Self::decode), which fills
+/// Each code-block's coder is the one tier-2 says it was coded with
+/// ([`CodeBlock::coder`]): the tile-component's, or, under a MIXED
+/// code-block style, its own (see [`Coders`]). Assembly hands the block to
+/// [`decode`](Self::decode), which fills
 /// the block's coefficients at the scale [`ebcot::passes::decode_block`]
 /// documents, and asks [`cost`](Self::cost) what that decode spends. Nothing
 /// else of a coder is visible to assembly.
@@ -65,28 +68,52 @@ impl CleanupBound {
     }
 }
 
-impl BlockCoder {
-    /// The coder of component `comp`. The codestream guard has already
-    /// refused a MIXED style, so the HT bit alone selects the HT coder.
+/// The two block coders of a tile-component, set up from its code-block
+/// style. A block uses the one [`CodeBlock::coder`] names: under a MIXED
+/// style each block names its own, and otherwise every block names the one
+/// the style selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Coders {
+    part1: BlockCoder,
+    ht: BlockCoder,
+}
+
+impl Coders {
+    /// The coders of component `comp`. The Part 1 coder takes the style
+    /// without its HT bits; under MIXED the other bits apply to the Part 1
+    /// blocks (ISO/IEC 15444-15 Table A.4), and of them the HT blocks use
+    /// only the vertically causal context.
     fn of(header: &MainHeader, comp: usize) -> Self {
         let params = &header.components[comp];
         let style = params.coding.code_block_style;
         let roi_shift = params.roi_shift;
-        use crate::codestream::markers::code_block_style::{HT, VCAUSAL};
-        if style & HT != 0 {
-            BlockCoder::Ht {
+        use crate::codestream::markers::code_block_style::{HT, HT_MIXED, VCAUSAL};
+        Coders {
+            part1: BlockCoder::Ebcot {
+                style: style & !(HT | HT_MIXED),
+                roi_shift,
+            },
+            ht: BlockCoder::Ht {
                 roi_shift,
                 causal: style & VCAUSAL != 0,
                 bound: CleanupBound {
                     magb: header.ccap15.map(|c| c.magnitude_bound()),
                     irreversible: params.coding.transform == Transform::Irreversible97,
                 },
-            }
-        } else {
-            BlockCoder::Ebcot { style, roi_shift }
+            },
         }
     }
 
+    /// The coder of `block`.
+    fn of_block(self, block: &CodeBlock<'_>) -> BlockCoder {
+        match block.coder {
+            Coder::Part1 => self.part1,
+            Coder::Ht => self.ht,
+        }
+    }
+}
+
+impl BlockCoder {
     /// Decode `block`, a code-block of a `kind` band of decomposition level
     /// `level` whose magnitude bit-plane count is `numbps`, into its
     /// coefficients, row-major over the block, at twice their weight.
@@ -253,7 +280,7 @@ pub(crate) fn work(
         if header.components.get(comp).is_none() || !wanted.get(comp).copied().unwrap_or(false) {
             continue;
         }
-        let coder = BlockCoder::of(header, comp);
+        let coders = Coders::of(header, comp);
         let kept = component
             .resolutions
             .len()
@@ -267,7 +294,7 @@ pub(crate) fn work(
                     continue;
                 };
                 for block in &subband.blocks {
-                    let passes = coder.cost(block, numbps);
+                    let passes = coders.of_block(block).cost(block, numbps);
                     let samples = (block.width as u64).saturating_mul(block.height as u64);
                     total = total.saturating_add(passes.saturating_mul(samples));
                 }
@@ -308,7 +335,7 @@ where
     F: Fn(i32) -> T,
     G: Fn(usize) -> Result<F>,
 {
-    let coder = BlockCoder::of(header, comp);
+    let coders = Coders::of(header, comp);
     // A resolution reduction drops that many of the finest levels: their
     // packets were parsed (the codestream's framing demands it) but their
     // code-blocks never reach the bit-plane decoder. The caller has checked
@@ -335,7 +362,7 @@ where
             subband_of(resolution, kind)?,
             level,
             numbps(header, comp, band)?,
-            coder,
+            coders,
             convert_for(band)?,
         )
     };
@@ -400,7 +427,7 @@ fn decode_subband<T, F>(
     sb: &Subband<'_>,
     level: u32,
     numbps: u32,
-    coder: BlockCoder,
+    coders: Coders,
     convert: F,
 ) -> Result<Band<T>>
 where
@@ -413,7 +440,9 @@ where
         if block.num_passes == 0 {
             continue;
         }
-        let coeffs = coder.decode(block, sb.kind, level, numbps)?;
+        let coeffs = coders
+            .of_block(block)
+            .decode(block, sb.kind, level, numbps)?;
         place_block(&mut data, sb.width, block, &coeffs, &convert);
     }
 
@@ -483,6 +512,7 @@ mod tests {
                 }],
                 cut: false,
                 placeholders: 0,
+                coder: Coder::Part1,
             }],
         }
     }
@@ -504,10 +534,7 @@ mod tests {
     #[test]
     fn a_maxshift_that_overflows_the_bit_planes_is_rejected() {
         let sb = one_block_subband(1, 0);
-        let params = BlockCoder::Ebcot {
-            style: 0,
-            roi_shift: 1,
-        };
+        let params = part1_coders(1);
         let err = decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES, params, |q| q)
             .expect_err("MAX_BIT_PLANES + 1 planes");
         assert!(matches!(err, Error::Limit(_)), "got {err:?}");
@@ -644,10 +671,21 @@ mod tests {
         assert_eq!(bound(Some(31), true).bits(1), Some(31));
     }
 
-    fn default_params() -> BlockCoder {
-        BlockCoder::Ebcot {
+    fn default_params() -> Coders {
+        part1_coders(0)
+    }
+
+    /// The coders of a Part 1 tile-component of default style with maxshift
+    /// `roi_shift`. The test blocks are Part 1 blocks, so the HT coder is
+    /// never asked for.
+    fn part1_coders(roi_shift: u8) -> Coders {
+        let coder = BlockCoder::Ebcot {
             style: 0,
-            roi_shift: 0,
+            roi_shift,
+        };
+        Coders {
+            part1: coder,
+            ht: coder,
         }
     }
 }

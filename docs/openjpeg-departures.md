@@ -47,6 +47,7 @@ refusal under `ColorOutput::Srgb`).
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
 | [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes, with OpenJPEG's Part 1 maxshift threshold; OpenJPEG refuses | 1; threshold pending #377 |
+| [MIXED code-blocks](#mixed-code-blocks) | decodes; OpenJPEG refuses the code-block style | 1 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
@@ -646,16 +647,19 @@ code-block (MULTIHT), as `Unsupported`, since either can change how the
 code-blocks read. Both decoders refuse either marker
 in a tile-part header; this one as `Codestream`, as for a misplaced `TLM`.
 
-Both decoders take the block coder from the code-block style alone. T.814
+Both decoders take the block coder from the code-block style. T.814
 A.2 and A.3 require `Rsiz` bit 14 and a `CAP` in every HTJ2K codestream, but
 OpenJPEG 2.5.0 decodes an HT codestream with its `CAP` removed, with `Rsiz`
 bit 14 cleared, or both, to the same samples as the file as made (measured on
 `ds0_ht_01_b11` and `ds1_ht_07_b11`). This decoder matches that (rule 2).
 
-Two `CAP` fields bound what follows, and this decoder holds the codestream to
-them as `Codestream`. `Ccap15` bit 12 clear says no `RGN` marker is present
-(T.814 A.3.4), so an `RGN` in the main header, before or after the `CAP`, or in
-a tile-part header is refused. Bits 0 to 4 give the magnitude bound `B` (A.3.7),
+Three `CAP` fields bound what follows, and this decoder holds the codestream
+to them as `Codestream`. `Ccap15` bits 15-14 at `10` (HTDECLARED, T.814
+A.3.2) say no code-block style sets bit 7, so a MIXED style in the main header
+or a tile-part header is refused. At `00` (HTONLY), A.3.2's note allows a
+MIXED style, and every block of it is read as an HT block. `Ccap15` bit 12
+clear says no `RGN` marker is present (T.814 A.3.4), so an `RGN` in the main
+header, before or after the `CAP`, or in a tile-part header is refused. Bits 0 to 4 give the magnitude bound `B` (A.3.7),
 and an HT cleanup magnitude at or past `2^B` (or the per-level bound 8.7.3 gives
 an irreversible subband) is refused. OpenJPEG decodes on in both cases.
 
@@ -1090,6 +1094,42 @@ The same blocks bring two checks OpenJPEG does not make, since it reads no
 field of `CAP`; see [CAP and CPF](#cap-and-cpf). A block of more than 30
 bit-planes, `Mb + s` counted together, is `Error::Limit`, the bound OpenJPEG
 applies to `Mb` on an HT block.
+
+## MIXED code-blocks
+
+| | |
+| - | - |
+| This decoder | decodes a tile-component whose code-block style is MIXED (bits `0x40` and `0x80`), telling each block's coder from its first nonzero length field |
+| OpenJPEG 2.5.0 | refuses the COD or COC ("Unsupported Mixed HT code-block style found", `opj_j2k_read_SPCod_SPCoc` in `j2k.c`) |
+| Standard | T.814 A.4, B.3, and A.3.2 for `Ccap15` bits 15-14 |
+| Rule | 1 |
+| Tests and fixtures | `src/tier2/tests/ht.rs` (the MIXED section); `a_mixed_style_under_an_htdeclared_cap_is_codestream` in `src/codestream/tests.rs`; `tests/conformance_ht.rs` on `ds0_hm_06_b11`, `ds0_hm_06_b18` and `ds0_hm_15_b8` |
+| Decided | #344 |
+
+Under MIXED each code-block is an HT block or a Part 1 block (T.814 A.4). The
+two read their length fields differently, so tier-2 must know a block's coder
+before it reads the block's later fields. A.4 gives the test: an HT block's
+first nonzero length field starts with a 0 bit, and `Lblock` is above 3 there.
+A field that fails it is a Part 1 block's. A field that passes it is read as
+an HT block's, and is a Part 1 block's only if it holds a value no HT block
+can have: a cleanup length of 1, or bytes on placeholder passes. Until a block
+has a nonzero length field, both coders read its fields alike, so the choice
+waits for it, in a layer a quality-layer cap drops if need be.
+
+OpenJPEG refuses all three MIXED files at the header, and OpenJPH refuses
+MIXED too, so the Part 4 references are the only oracle. All three files are
+in class. Kakadu's figures for each against its Part 1 source (`kakadu_stats`)
+match this decoder's on all three: `ds0_hm_06_b18` and `ds0_hm_15_b8` decode
+exactly as `p0_06` and `p0_15` do, and `ds0_hm_06_b11` has the PAE and MSE
+Kakadu quotes.
+
+A Part 1 block whose encoder spent a needless `Lblock` increment can pass the
+A.4 test, and is then read as an HT block. The A.4 note says a decoder may
+try the HT reading and fall back to Part 1 when it fails. Past the length
+field, that fallback would need tier-2 to hold both readings of the block. No
+file in the corpus needs it: every Part 1 block in the three MIXED files has
+`Lblock` 3 or a leading 1 at its first nonzero field. Such a block fails as an
+HT block, with the HT decoder's error, or decodes wrongly.
 
 ## Set stuffing bits in the HT VLC and MagRef streams
 

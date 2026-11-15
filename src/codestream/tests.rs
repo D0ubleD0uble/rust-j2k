@@ -2521,8 +2521,8 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     // changes how Tier-1 reads a code-block, so none may be ignored. `bypass`,
     // `restart`, `predictable termination`, `segmentation symbols`, `vertically
     // causal context`, `reset context probabilities` and the HT bit have left
-    // this table, leaving only the HTJ2K mixed-mode bit, which
-    // `check_block_coder` refuses.
+    // this table, leaving only the HTJ2K mixed-mode bit without the HT bit,
+    // which `check_block_coder` refuses.
     use markers::code_block_style::{HT, LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
     for (bit, name) in markers::code_block_style::FLAGS {
         if bit & (LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET | HT) != 0 {
@@ -2534,6 +2534,36 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             Variant::Unsupported,
         ));
     }
+    // MIXED is decoded, but ISO/IEC 15444-15 A.4 allows its Part 1 blocks
+    // neither bypass nor termination on each pass, and a `CAP` that says each
+    // tile-component holds one kind of block (HTDECLARED) rules it out.
+    for (name, bit) in [("MIXED with bypass", LAZY), ("MIXED with termall", TERMALL)] {
+        rows.push((
+            name,
+            err(&header_with_cod(cod_body(
+                0,
+                0,
+                1,
+                0,
+                5,
+                4,
+                4,
+                0xC0 | bit,
+                1,
+            ))),
+            Variant::Marker,
+        ));
+    }
+    rows.push((
+        "MIXED under an HTDECLARED CAP",
+        err(&codestream(&[
+            seg(marker::SIZ, &one_component()),
+            seg(marker::CAP, &cap15(0x8000)),
+            seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0xC0, 1)),
+            seg(marker::QCD, &qcd_none(2, &[8; 16])),
+        ])),
+        Variant::Codestream,
+    ));
 
     let wrong: Vec<String> = rows
         .iter()
@@ -2550,9 +2580,9 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
 
 /// The decoded style bits — bypass, restart, predictable termination,
 /// segmentation symbols, vertically causal context, and reset context
-/// probabilities — parse, and so does the HT bit; only the mixed-mode bit
-/// does not, and a style byte mixing it with decoded flags still rejects,
-/// naming only the part that blocks it.
+/// probabilities — parse, and so do the HT bit and MIXED; only the
+/// mixed-mode bit without the HT bit does not, and a style byte mixing it
+/// with decoded flags still rejects, naming only the part that blocks it.
 #[test]
 fn the_decoded_styles_parse_and_the_rest_still_reject() {
     use markers::code_block_style::{HT, LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
@@ -2569,6 +2599,8 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
         LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET,
         HT,
         HT | VCAUSAL,
+        0xC0,
+        0xC0 | PTERM | SEGSYM | VCAUSAL | RESET,
     ] {
         let bytes = codestream(&[
             seg(marker::SIZ, &one_component()),
@@ -2589,7 +2621,7 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
         5,
         4,
         4,
-        VCAUSAL | RESET | 0xC0, // + HTJ2K mixed-mode block coding
+        VCAUSAL | RESET | 0x80, // + HTJ2K mixed-mode block coding
         1,
     )));
     let Error::Unsupported(message) = &e else {
@@ -2616,11 +2648,11 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
 /// caller which feature to look up rather than printing a bare bit pattern.
 #[test]
 fn code_block_style_rejection_names_the_flags() {
-    // The undecoded flag is the HTJ2K mixed-mode bit, alone or with the HT
-    // bit. The high bits select the HTJ2K block coder rather than being
-    // reserved, so it is named: with or without a CAP, the style byte decides
-    // the coder and must not read as the default style.
-    for style in [0x80u8, 0xC0] {
+    // The undecoded flag is the HTJ2K mixed-mode bit without the HT bit. The
+    // high bits select the HTJ2K block coder rather than being reserved, so
+    // it is named: with or without a CAP, the style byte decides the coder
+    // and must not read as the default style.
+    for style in [0x80u8, 0x88] {
         let e = err(&header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)));
         let Error::Unsupported(message) = &e else {
             panic!("{style:#04X}: got {e:?}")
@@ -2808,7 +2840,7 @@ fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0xC0, 1)), // HTJ2K mixed (undecoded)
+        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0x80, 1)), // mixed-mode bit alone (undecoded)
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     let e = err(&bytes);
@@ -4421,18 +4453,19 @@ fn cap_or_cpf_in_a_tile_part_header_is_codestream() {
 
 /// The block-coder guard reads the style bits alone, whether or not the
 /// codestream signals Part 15: with a CAP, and with none and `Rsiz` 0. An HT
-/// style parses either way and a mixed-mode style is refused either way.
-/// OpenJPEG 2.5.0 decodes both shapes, reading the style bits alone.
+/// or MIXED style parses either way and the mixed-mode bit without the HT
+/// bit is refused either way. OpenJPEG 2.5.0 decodes the HT shapes, reading
+/// the style bits alone.
 #[test]
-fn an_ht_style_parses_and_mixed_is_unsupported_with_or_without_cap() {
-    for style in [0x40, 0x48, 0xC0, 0x80] {
+fn an_ht_or_mixed_style_parses_and_bit_7_alone_is_unsupported_with_or_without_cap() {
+    for style in [0x40, 0x48, 0xC0, 0xC8, 0x80] {
         for cap in [None, Some(seg(marker::CAP, &cap15(0x0003)))] {
             let mut segments = vec![seg(marker::SIZ, &one_component())];
             segments.extend(cap.clone());
             segments.push(seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)));
             segments.push(seg(marker::QCD, &qcd_none(2, &[8; 16])));
             let bytes = codestream(&segments);
-            if style & 0x80 == 0 {
+            if style & 0x40 != 0 {
                 let (header, _, _) = parse_main_header(&bytes)
                     .unwrap_or_else(|e| panic!("{style:#04X}, CAP {}: {e:?}", cap.is_some()));
                 assert_eq!(header.cod.coding.code_block_style, style);
@@ -4450,34 +4483,112 @@ fn an_ht_style_parses_and_mixed_is_unsupported_with_or_without_cap() {
     }
 }
 
-/// A tile-part COD or COC goes through the same guard as the main header's.
+/// A tile-part COD or COC goes through the same guard as the main header's:
+/// the mixed-mode bit alone is `Unsupported`, and MIXED with bypass or
+/// termall is `Marker`.
 #[test]
-fn a_tile_part_mixed_style_is_unsupported() {
-    let cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0xC0, 1));
-    let coc = seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0xC0, 1));
-    for (name, tile_marker) in [("`COD`", cod), ("`COC`", coc)] {
-        let bytes = assemble_with_tile_markers(&default_header(), &[tile_marker], &[0]);
-        let e = perr(&bytes);
-        let Error::Unsupported(message) = &e else {
-            panic!("{name}: got {e:?}")
-        };
-        assert!(message.contains(name), "{message}");
-        assert!(message.contains("mixed-mode"), "{message}");
+fn a_tile_part_style_goes_through_the_block_coder_guard() {
+    for (style, unsupported) in [(0x80, true), (0xC1, false), (0xC4, false)] {
+        let cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1));
+        let coc = seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, style, 1));
+        for (name, tile_marker) in [("`COD`", cod), ("`COC`", coc)] {
+            let bytes = assemble_with_tile_markers(&default_header(), &[tile_marker], &[0]);
+            let e = perr(&bytes);
+            let message = match (&e, unsupported) {
+                (Error::Unsupported(m), true) => {
+                    assert!(m.contains("mixed-mode"), "{m}");
+                    m
+                }
+                (Error::Marker(m), false) => {
+                    assert!(m.contains("MIXED"), "{m}");
+                    m
+                }
+                _ => panic!("{style:#04X} {name}: got {e:?}"),
+            };
+            assert!(message.contains(name), "{message}");
+        }
     }
 }
 
-/// The guard runs as each segment is read, so a main header cut after a
-/// mixed-mode COD is refused for the coder, not reported as incomplete: more
+/// The guard runs as each segment is read, so a main header cut after a COD
+/// it refuses is refused for the style, not reported as incomplete: more
 /// bytes could not make it decode.
 #[test]
-fn a_cut_header_holding_a_mixed_cod_is_unsupported_not_incomplete() {
-    let mut bytes = be16(marker::SOC).to_vec();
-    bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
-    bytes.extend_from_slice(&seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0xC0, 1)));
-    // A QCD cut inside its body.
-    bytes.extend_from_slice(&seg(marker::QCD, &qcd_none(2, &[8; 16]))[..6]);
-    let e = err(&bytes);
-    assert!(matches!(e, Error::Unsupported(_)), "got {e:?}");
+fn a_cut_header_holding_a_refused_style_is_refused_not_incomplete() {
+    for style in [0x80, 0xC1] {
+        let mut bytes = be16(marker::SOC).to_vec();
+        bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
+        bytes.extend_from_slice(&seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)));
+        // A QCD cut inside its body.
+        bytes.extend_from_slice(&seg(marker::QCD, &qcd_none(2, &[8; 16]))[..6]);
+        let e = err(&bytes);
+        assert!(
+            matches!(e, Error::Unsupported(_) | Error::Marker(_)),
+            "{style:#04X}: got {e:?}"
+        );
+    }
+}
+
+/// `Ccap15` bits 15-14 at `10` (HTDECLARED, ISO/IEC 15444-15 A.3.2) say no
+/// code-block style sets bit 7, so a MIXED style under them is `Codestream`,
+/// whether `CAP` comes before or after the COD, or a COC or a tile-part
+/// marker sets it. `00` (HTONLY) allows a MIXED style (A.3.2 NOTE), and `11`
+/// and no `CAP` allow MIXED.
+#[test]
+fn a_mixed_style_under_an_htdeclared_cap_is_codestream() {
+    let cap = |ccap15| seg(marker::CAP, &cap15(ccap15));
+    let mixed_cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0xC0, 1));
+    let qcd = seg(marker::QCD, &qcd_none(2, &[8; 16]));
+    let siz = seg(marker::SIZ, &one_component());
+    let refused = |bytes: &[u8], e: Error| {
+        let Error::Codestream(message) = &e else {
+            panic!("got {e:?} for {bytes:02X?}")
+        };
+        assert!(
+            message.contains("HTDECLARED") || message.contains("15-14"),
+            "{message}"
+        );
+    };
+    for header in [
+        vec![siz.clone(), cap(0x8000), mixed_cod.clone(), qcd.clone()],
+        vec![siz.clone(), mixed_cod.clone(), cap(0x8000), qcd.clone()],
+        vec![
+            siz.clone(),
+            cap(0x8000),
+            seg(marker::COD, &cod_default(1)),
+            seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0xC0, 1)),
+            qcd.clone(),
+        ],
+    ] {
+        let bytes = codestream(&header);
+        refused(&bytes, err(&bytes));
+    }
+    // In a tile-part header: the tile's resolved style is checked.
+    let main = vec![
+        siz.clone(),
+        cap(0x8000),
+        seg(marker::COD, &cod_default(1)),
+        qcd.clone(),
+    ];
+    let tile = seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0xC0, 1));
+    let bytes = assemble_with_tile_markers(&main, &[tile], &[0]);
+    let cs = parse(&bytes).expect("parse");
+    refused(&bytes, cs.tile_header(0).expect_err("resolve tile 0"));
+    // HTDECLARED with an HT or Part 1 style is fine, and so are the other
+    // coder sets with MIXED.
+    for (ccap15, style) in [
+        (0x8000, 0x40),
+        (0x8000, 0x00),
+        (0x0000, 0xC0),
+        (0xC000, 0xC0),
+    ] {
+        parsed(&[
+            siz.clone(),
+            cap(ccap15),
+            seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)),
+            qcd.clone(),
+        ]);
+    }
 }
 
 /// `Ccap15` and `CPFnum` of the HT conformance codestreams, as the
@@ -4555,10 +4666,9 @@ fn cpf_number(cpf: &markers::Cpf) -> u64 {
 }
 
 /// Every HT conformance codestream: its CAP and CPF decode to the values its
-/// log records, and the whole header parses, or, for a mixed-mode file,
-/// reaches the block-coder guard and is refused there, not by a parse error.
+/// log records, and the whole header parses, the MIXED files' included.
 #[test]
-fn the_ht_corpus_decodes_its_cap_and_cpf_and_reaches_the_guard() {
+fn the_ht_corpus_decodes_its_cap_and_cpf_and_parses() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/conformance/ht/codestreams");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
@@ -4589,11 +4699,8 @@ fn the_ht_corpus_decodes_its_cap_and_cpf_and_reaches_the_guard() {
             .map(|s| cpf_number(&decode_cpf(Cursor::new(s.body)).expect(name)));
         decoded.insert(name.as_str(), (ccap15, cpf));
 
-        match parse_main_header(&bytes) {
-            Err(Error::Unsupported(m))
-                if name.starts_with("ds0_hm_") && m.contains("(HTJ2K mixed-mode") => {}
-            Ok(_) if !name.starts_with("ds0_hm_") => {}
-            other => panic!("{name}: {:?}", other.map(|_| ())),
+        if let Err(e) = parse_main_header(&bytes) {
+            panic!("{name}: {e:?}");
         }
     }
 

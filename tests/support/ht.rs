@@ -151,8 +151,7 @@ pub struct Passes {
     /// Whether any block has a SigProp or MagRef pass; unknown unless measured.
     pub refinement: Option<bool>,
     pub measured: Option<Measured>,
-    /// Pass counts from the crate's own Tier-2 walk; absent where the main
-    /// header is refused before it (MIXED).
+    /// Pass counts from the crate's own Tier-2 walk.
     pub walked: Option<Walked>,
 }
 
@@ -168,6 +167,10 @@ pub struct Walked {
     /// Passes past the placeholders -> number of blocks.
     pub histogram: BTreeMap<String, u64>,
     pub zero_length_refinement: u64,
+    /// Part 1 code-blocks with any pass, in a MIXED codestream; the counts
+    /// above are of its HT code-blocks.
+    #[serde(default)]
+    pub part1: u64,
 }
 
 impl Walked {

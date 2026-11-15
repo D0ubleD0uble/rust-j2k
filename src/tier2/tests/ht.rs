@@ -29,7 +29,20 @@ fn parse_ht<'a>(
     kept: u32,
     delimiters: Delimiters,
 ) -> Result<(Vec<Subband<'a>>, usize)> {
-    let mut states: Vec<BandState<'a>> = bands.iter().map(BandState::new).collect();
+    parse_styled(data, bands, layers, kept, delimiters, HT)
+}
+
+/// As [`parse_ht`], with code-block style `style` and no `CAP`.
+fn parse_styled<'a>(
+    data: &'a [u8],
+    bands: &[BandGeom],
+    layers: u32,
+    kept: u32,
+    delimiters: Delimiters,
+    style: u8,
+) -> Result<(Vec<Subband<'a>>, usize)> {
+    let coder = Coder::of_style(style, None);
+    let mut states: Vec<BandState<'a>> = bands.iter().map(|b| BandState::new(b, coder)).collect();
     let mut streams = PacketStreams {
         header: data,
         header_pos: 0,
@@ -46,7 +59,7 @@ fn parse_ht<'a>(
             layer,
             layer,
             delimiters,
-            HT,
+            style,
             bands,
             0,
             &mut states,
@@ -398,7 +411,10 @@ fn a_cut_packet_puts_back_the_ht_segment_state() {
         (later(3, &[(2, 3), (3, 4)]), vec![1, 2, 3, 4, 5]),
     ]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let mut states: Vec<BandState<'_>> = bands.iter().map(BandState::new).collect();
+    let mut states: Vec<BandState<'_>> = bands
+        .iter()
+        .map(|b| BandState::new(b, Some(Coder::Ht)))
+        .collect();
     let cut = &data[..data.len() - 1];
     let mut streams = PacketStreams {
         header: cut,
@@ -612,23 +628,293 @@ fn ds0_ht_05_b11_component_0_resolution_0_by_hand() {
     assert_eq!(segments(block), [(1, data[18..18 + 471].to_vec())]);
 }
 
+// ---- MIXED: each code-block's coder (ISO/IEC 15444-15 A.4) ----
+
+/// The MIXED code-block style: the HT bit and the mixed-mode bit.
+const MIXED: u8 = 0xC0;
+
+/// A packet header of the one block of a MIXED tile-component: first
+/// included here, with zero bit-planes `2`, when `first`; contributing
+/// `passes` passes after `lblock_up` increments of Lblock, with the length
+/// fields `lengths`, each `(value, bits)`.
+fn mixed(first: bool, passes: u32, lblock_up: u32, lengths: &[(u32, u32)]) -> Vec<u8> {
+    let mut w = PackedHeader::new();
+    w.bit(1); // nonempty
+    w.bit(1); // included: first in this layer, or contributes
+    if first {
+        w.bits(0b001, 3); // zero bit-planes 2
+    }
+    num_passes(&mut w, passes);
+    for _ in 0..lblock_up {
+        w.bit(1);
+    }
+    w.bit(0);
+    for &(value, bits) in lengths {
+        w.bits(value, bits);
+    }
+    w.finish()
+}
+
+/// The one code-block of an 8 x 8 MIXED band, after `layers` packets of
+/// `data`, the first `kept` of them kept.
+fn mixed_block(data: &[u8], layers: u32, kept: u32) -> Result<CodeBlock<'_>> {
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let (mut subbands, next) = parse_styled(data, &bands, layers, kept, NO_DELIMITERS, MIXED)?;
+    assert_eq!(next, data.len(), "the packets tile the data");
+    Ok(subbands.remove(0).blocks.remove(0))
+}
+
+/// `n` bytes counting up from 1, a body whose bytes say where they sit.
+fn body(n: u8) -> Vec<u8> {
+    (1..=n).collect()
+}
+
+/// Lblock 4 and a first length bit of 0: an HT block. Its three passes are a
+/// cleanup segment of `4 + floor(log2 1)` bits and a refinement segment of
+/// `4 + floor(log2 2)`. A Part 1 block would read one field of 5 bits, 10
+/// bytes, and the packets would not tile the data.
+#[test]
+fn a_leading_zero_at_lblock_above_3_is_an_ht_block() {
+    let data = packets(&[(mixed(true, 3, 1, &[(5, 4), (3, 5)]), body(8))]);
+    let block = mixed_block(&data, 1, 1).unwrap();
+    assert_eq!(block.coder, Coder::Ht);
+    assert_eq!(block.num_passes, 3);
+    assert_eq!(block.placeholders, 0);
+    assert_eq!(
+        segments(&block),
+        [(1, body(8)[..5].to_vec()), (2, body(8)[5..].to_vec())]
+    );
+}
+
+/// A first length bit of 1 is not an HT block's (A.4): a Part 1 block, whose
+/// three passes take one field of `4 + floor(log2 3)` bits. Read as HT, the
+/// field would be a 4-bit cleanup length of 8 and a refinement one after it.
+#[test]
+fn a_leading_one_is_a_part1_block() {
+    let data = packets(&[(mixed(true, 3, 1, &[(0b10001, 5)]), body(17))]);
+    let block = mixed_block(&data, 1, 1).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(block.num_passes, 3);
+    assert_eq!(segments(&block), [(3, body(17))]);
+}
+
+/// At Lblock 3 an HT block cannot have its first nonzero length (A.4), so
+/// the block is a Part 1 block, even with a leading 0. Read as HT, its 4-bit
+/// field `0101` would be a cleanup length of 2 and a refinement one of 4
+/// bits after it.
+#[test]
+fn a_nonzero_length_at_lblock_3_is_a_part1_block() {
+    let data = packets(&[(mixed(true, 3, 0, &[(0b0101, 4)]), body(5))]);
+    let block = mixed_block(&data, 1, 1).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(segments(&block), [(3, body(5))]);
+}
+
+/// A field an HT block cannot have makes the block a Part 1 block: a first
+/// cleanup length of 1 (B.3), and bytes on what would be placeholder passes.
+/// That is the A.4 note's failed HT processing, found in the length field.
+#[test]
+fn a_length_an_ht_block_cannot_have_is_a_part1_block() {
+    // One pass, Lblock 4: `0001` is a cleanup length of 1 as HT.
+    let data = packets(&[(mixed(true, 1, 1, &[(1, 4)]), body(1))]);
+    let block = mixed_block(&data, 1, 1).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(segments(&block), [(1, body(1))]);
+
+    // Two passes, Lblock 4: as HT the first 4 bits, `0000`, would make both
+    // placeholder passes, whose last bit, 1, would be a byte on them.
+    let data = packets(&[(mixed(true, 2, 1, &[(1, 5)]), body(1))]);
+    let block = mixed_block(&data, 1, 1).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(segments(&block), [(2, body(1))]);
+}
+
+/// A first segment of no bytes leaves the coder open: layer 0's two passes
+/// read alike either way. Layer 1 settles it as HT: with them, its two passes
+/// are a placeholder triple and the cleanup pass, one more skipped bit-plane.
+#[test]
+fn a_block_empty_in_layer_0_then_ht() {
+    let data = packets(&[
+        (mixed(true, 2, 0, &[(0, 4)]), vec![]),
+        (mixed(false, 2, 1, &[(0b00110, 5)]), body(6)),
+    ]);
+    let block = mixed_block(&data, 2, 2).unwrap();
+    assert_eq!(block.coder, Coder::Ht);
+    assert_eq!(block.num_passes, 1);
+    assert_eq!(block.placeholders, 3);
+    assert_eq!(block.zero_bit_planes, 3);
+    assert_eq!(segments(&block), [(1, body(6))]);
+}
+
+/// As above, but layer 1's field has a leading 1, so the block is a Part 1
+/// block: layer 0's two passes join layer 1's in its one MQ segment, which
+/// gets no bytes from layer 0, and no bit-plane is skipped.
+#[test]
+fn a_block_empty_in_layer_0_then_part1() {
+    let data = packets(&[
+        (mixed(true, 2, 0, &[(0, 4)]), vec![]),
+        (mixed(false, 1, 1, &[(0b1010, 4)]), body(10)),
+    ]);
+    let block = mixed_block(&data, 2, 2).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(block.num_passes, 3);
+    assert_eq!(block.placeholders, 0);
+    assert_eq!(block.zero_bit_planes, 2);
+    assert_eq!(segments(&block), [(3, body(10))]);
+    assert_eq!(block.segments[0].chunks.len(), 1, "layer 0 gave no chunk");
+}
+
+/// A block whose length fields are all zero codes nothing either way, and
+/// is read as HT, as the A.4 note says to try first: placeholder passes only.
+#[test]
+fn a_block_of_zero_lengths_only_codes_nothing() {
+    let data = packets(&[
+        (mixed(true, 2, 0, &[(0, 4)]), vec![]),
+        (mixed(false, 1, 0, &[(0, 3)]), vec![]),
+    ]);
+    let block = mixed_block(&data, 2, 2).unwrap();
+    assert_eq!(block.coder, Coder::Ht);
+    assert_eq!(block.num_passes, 0);
+    assert_eq!(block.placeholders, 3);
+    assert!(block.segments.is_empty());
+}
+
+/// A layer cap does not stop a dropped layer from settling the coder: its
+/// packet headers are read, and the kept passes are read by the coder they
+/// settle. As a Part 1 block, layer 0's two passes are MQ passes of no bytes,
+/// cut short; as an HT block, they are placeholder passes and code nothing.
+#[test]
+fn a_dropped_layer_settles_the_coder_of_the_kept_passes() {
+    let data = packets(&[
+        (mixed(true, 2, 0, &[(0, 4)]), vec![]),
+        (mixed(false, 1, 1, &[(0b1010, 4)]), body(10)),
+    ]);
+    let block = mixed_block(&data, 2, 1).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(block.num_passes, 2);
+    assert_eq!(segments(&block), [(2, vec![])]);
+    assert!(block.cut);
+
+    let data = packets(&[
+        (mixed(true, 2, 0, &[(0, 4)]), vec![]),
+        (mixed(false, 2, 1, &[(0b00110, 5)]), body(6)),
+    ]);
+    let block = mixed_block(&data, 2, 1).unwrap();
+    assert_eq!(block.coder, Coder::Ht);
+    assert_eq!(block.num_passes, 0);
+    assert_eq!(block.placeholders, 2);
+    assert!(block.segments.is_empty());
+}
+
+/// A Part 1 block of a MIXED tile-component has one codeword segment, which
+/// holds at most 109 passes, so 110 passes settled as Part 1 are refused.
+#[test]
+fn a_part1_block_past_109_passes_is_codestream() {
+    let data = packets(&[
+        (mixed(true, 108, 0, &[(0, 9)]), vec![]),
+        (mixed(false, 2, 1, &[(0b10000, 5)]), body(16)),
+    ]);
+    let e = mixed_block(&data, 2, 2).unwrap_err();
+    let Error::Codestream(message) = &e else {
+        panic!("got {e:?}")
+    };
+    assert!(message.contains("110 coding passes"), "{message}");
+}
+
+/// A packet cut short, with `strict` off, puts back the coder its header
+/// settled, so the block reads as it did before the packet: coder open, two
+/// passes of no bytes.
+#[test]
+fn a_cut_packet_puts_back_the_coder() {
+    let data = packets(&[
+        (mixed(true, 2, 0, &[(0, 4)]), vec![]),
+        (mixed(false, 1, 1, &[(0b1010, 4)]), body(10)),
+    ]);
+    let bands = [single_block_band(BandKind::Ll, 8, 8)];
+    let mut states: Vec<BandState<'_>> = bands.iter().map(|b| BandState::new(b, None)).collect();
+    let cut = &data[..data.len() - 1];
+    let mut streams = PacketStreams {
+        header: cut,
+        header_pos: 0,
+        data: cut,
+        body_pos: 0,
+        packed: false,
+        tile: 0,
+    };
+    let mut scratch = Scratch::default();
+    let mut log = Vec::new();
+    for (layer, expected) in [(0, Packet::Read), (1, Packet::Ended)] {
+        let packet = parse_packet(
+            &mut streams,
+            &Meter::new(u64::MAX),
+            layer,
+            layer,
+            NO_DELIMITERS,
+            MIXED,
+            &bands,
+            0,
+            &mut states,
+            &mut scratch,
+            true,
+            Some(&mut log),
+        )
+        .unwrap();
+        assert_eq!(packet, expected, "layer {layer}");
+    }
+    let block = &states[0].blocks[0];
+    assert_eq!(block.coder, None);
+    assert_eq!(block.num_passes, 0);
+    assert_eq!(block.segments.len(), 1);
+    assert_eq!(
+        block.segments[0].kind,
+        SegmentKind::HtCleanup { placeholders: None }
+    );
+    assert_eq!(block.segments[0].passes, 2);
+}
+
+/// A MIXED style leaves each block's coder open unless `CAP` says every
+/// code-block is an HT block (`Ccap15` bits 15-14 `00`), which A.3.2's note
+/// allows with a MIXED style. The other styles fix the coder.
+#[test]
+fn the_style_and_cap_fix_the_coder_or_leave_it_open() {
+    use crate::codestream::markers::Ccap15;
+    assert_eq!(Coder::of_style(0x00, None), Some(Coder::Part1));
+    assert_eq!(
+        Coder::of_style(0x08, Some(Ccap15(0xC000))),
+        Some(Coder::Part1)
+    );
+    assert_eq!(Coder::of_style(HT, None), Some(Coder::Ht));
+    assert_eq!(Coder::of_style(MIXED, None), None);
+    assert_eq!(Coder::of_style(MIXED, Some(Ccap15(0xC000))), None);
+    assert_eq!(
+        Coder::of_style(MIXED, Some(Ccap15(0x0000))),
+        Some(Coder::Ht)
+    );
+    assert_eq!(
+        Coder::of_style(MIXED | 0x08, Some(Ccap15(0x100B))),
+        Some(Coder::Ht)
+    );
+}
+
 // ---- The pass counts of the conformance corpus ----
 
-/// The pass counts of one codestream's code-blocks over every layer: how many
-/// blocks contribute any pass, how many of them have placeholder passes, how
-/// many have each count of passes past those, and how many have refinement
-/// passes but no refinement bytes.
+/// The pass counts of one codestream's HT code-blocks over every layer: how
+/// many blocks contribute any pass, how many of them have placeholder passes,
+/// how many have each count of passes past those, and how many have
+/// refinement passes but no refinement bytes. In a MIXED codestream, `part1`
+/// counts the Part 1 code-blocks with any pass, which the other counts leave
+/// out.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Walked {
     blocks: u64,
     placeholder: u64,
     histogram: BTreeMap<String, u64>,
     zero_length_refinement: u64,
+    part1: u64,
 }
 
 /// Walk every tile of `codestream` and count its code-blocks' passes. `None`
-/// when the walk is refused, as a MIXED code-block style is in the main
-/// header.
+/// when the walk is refused.
 fn walk_passes(codestream: &[u8]) -> Option<Walked> {
     let parsed = crate::codestream::parse_header(codestream).ok()?;
     let cs = crate::codestream::parse_tiles(codestream, parsed).ok()?;
@@ -646,6 +932,10 @@ fn walk_passes(codestream: &[u8]) -> Option<Walked> {
             .flat_map(|b| &b.blocks);
         for block in blocks {
             if block.num_passes + block.placeholders == 0 {
+                continue;
+            }
+            if block.coder == Coder::Part1 {
+                walked.part1 += 1;
                 continue;
             }
             walked.blocks += 1;
@@ -673,6 +963,7 @@ fn walked_of(entry: &serde_json::Value) -> Option<Walked> {
             .map(|(k, v)| (k.clone(), v.as_u64().unwrap()))
             .collect(),
         zero_length_refinement: walked["zero_length_refinement"].as_u64().unwrap(),
+        part1: walked.get("part1").map_or(0, |n| n.as_u64().unwrap()),
     })
 }
 

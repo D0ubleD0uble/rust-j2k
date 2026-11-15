@@ -59,6 +59,42 @@ pub enum BandKind {
     Hh,
 }
 
+/// Which block coder a code-block was coded with.
+///
+/// A tile-component's code-block style fixes it for every block, except
+/// under MIXED (style bits `0x40` and `0x80`, ISO/IEC 15444-15 A.4), where
+/// each block is an HT block or a Part 1 one. Tier-2 tells them apart by the
+/// block's first nonzero length field (see [`mixed_first_length`]), since the
+/// two read their later length fields differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coder {
+    /// The Part 1 block coder (ISO/IEC 15444-1 Annex D).
+    Part1,
+    /// The HTJ2K block coder (ISO/IEC 15444-15).
+    Ht,
+}
+
+impl Coder {
+    /// The coder of every code-block of a tile-component with code-block
+    /// style `style`, or `None` under MIXED, where each block has its own.
+    /// `ccap15` is the codestream's `Ccap15` word: when it says every
+    /// code-block is an HT block (bits 15-14 are `00`, A.3.2), a MIXED style
+    /// holds only HT blocks, as A.3.2's note allows.
+    pub(crate) fn of_style(
+        style: u8,
+        ccap15: Option<crate::codestream::markers::Ccap15>,
+    ) -> Option<Coder> {
+        use crate::codestream::markers::code_block_style::{HT, HT_MIXED};
+        if style & HT == 0 {
+            Some(Coder::Part1)
+        } else if style & HT_MIXED == 0 || ccap15.is_some_and(|c| c.ht_only()) {
+            Some(Coder::Ht)
+        } else {
+            None
+        }
+    }
+}
+
 /// One code-block's coded contribution within its subband. `num_passes` is the
 /// coding-pass count from the packet headers (0 if no layer the decode keeps
 /// includes the block) and `zero_bit_planes` the all-zero most-significant
@@ -95,6 +131,10 @@ pub struct CodeBlock<'a> {
     /// The placeholder passes of an HT block in the layers the decode keeps,
     /// which `num_passes` leaves out. Always 0 for a Part 1 block.
     pub placeholders: u32,
+    /// The block's coder. A block of a MIXED tile-component whose length
+    /// fields are all zero is an HT block of placeholder passes only, which
+    /// codes nothing (see [`mixed_first_length`]).
+    pub coder: Coder,
 }
 
 /// One codeword segment: the coding passes it carries and the bytes coding
@@ -463,10 +503,18 @@ fn walk_packets<'a>(
     // they must outlive the packet that starts them.
     let mut states: Vec<Vec<Vec<BandState<'a>>>> = geoms
         .iter()
-        .map(|component| {
+        .zip(&header.components)
+        .map(|(component, params)| {
+            let coder = Coder::of_style(params.coding.code_block_style, header.ccap15);
             component
                 .iter()
-                .map(|level| level.bands.iter().map(BandState::new).collect())
+                .map(|level| {
+                    level
+                        .bands
+                        .iter()
+                        .map(|band| BandState::new(band, coder))
+                        .collect()
+                })
                 .collect()
         })
         .collect();
@@ -664,8 +712,8 @@ enum SegmentKind {
 }
 
 /// The kind of the *next* codeword segment, and how many coding passes it may
-/// hold, given the code-block style and the last segment opened
-/// (`opj_t2_init_seg`).
+/// hold, given the block's coder, the code-block style and the last segment
+/// opened (`opj_t2_init_seg`).
 ///
 /// `termall` terminates the MQ coder after every pass, so each pass is its own
 /// segment. `bypass` (lazy) terminates at every raw/MQ boundary: the first
@@ -682,10 +730,10 @@ enum SegmentKind {
 /// instead, since where it ends depends on the placeholder passes of the
 /// contribution that holds the cleanup pass. The other style bits mean nothing
 /// to an HT block.
-fn next_segment(style: u8, last: Option<&SegmentState<'_>>) -> (SegmentKind, u32) {
-    use crate::codestream::markers::code_block_style::{HT, LAZY, TERMALL};
+fn next_segment(coder: Coder, style: u8, last: Option<&SegmentState<'_>>) -> (SegmentKind, u32) {
+    use crate::codestream::markers::code_block_style::{LAZY, TERMALL};
     let last = last.map(|s| s.kind);
-    if style & HT != 0 {
+    if coder == Coder::Ht {
         match last {
             Some(SegmentKind::HtCleanup { .. }) => (SegmentKind::HtRefinement, 2),
             _ => (
@@ -809,6 +857,108 @@ fn ht_first_cleanup(
         ));
     }
     Ok(FirstCleanup::Placeholders)
+}
+
+/// What the first length field of a contribution says about a code-block of
+/// a MIXED tile-component whose earlier length fields were all zero. See
+/// [`mixed_first_length`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MixedFirst {
+    /// The field is zero: the contribution codes no bytes, and the block's
+    /// coder is still open.
+    Empty,
+    /// The block is an HT block, and the contribution holds its cleanup pass.
+    Ht(FirstCleanup),
+    /// The block is a Part 1 block, and its one codeword segment takes
+    /// `length` bytes from the contribution.
+    Part1 { length: u32 },
+}
+
+/// Read the first length field of a contribution of `new` passes to a
+/// code-block of a MIXED tile-component, after `prior` passes whose length
+/// fields were all zero, and say which coder the block uses (ISO/IEC
+/// 15444-15 A.4).
+///
+/// The two coders read the field at different widths when the contribution
+/// holds an HT cleanup pass and refinement passes after it: an HT block's
+/// first field ends at its cleanup pass (see [`ht_first_cleanup`]), a Part 1
+/// block's one field spans all `new` passes, since A.4 allows a Part 1 block
+/// here neither bypass nor termination on each pass. Both fields start at
+/// the same bit, and A.4 requires of an HT block that the first bit of its
+/// first nonzero length field be 0 and that `Lblock` be above 3 there. So a
+/// nonzero field with `Lblock` at 3 or a leading 1 is a Part 1 block's.
+/// Otherwise the field is read as an HT block's, and a value an HT block
+/// cannot have (a cleanup length of 1, or bytes on placeholder passes) makes
+/// it a Part 1 block's: that is the A.4 note's "processing the code-block
+/// assuming it conforms to Annex B", and it fails here, in the length field,
+/// or not at all.
+///
+/// The bits read are the same whichever reading wins: a zero field is
+/// `Lblock + floor(log2(new))` bits in both, and a Part 1 field is read to
+/// that width. So the choice is made once, here, and the walk never holds
+/// two readings of a block.
+fn mixed_first_length(
+    lblock: u32,
+    prior: u32,
+    new: u32,
+    bio: &mut BitReader,
+) -> Result<MixedFirst> {
+    let width = length_bits(lblock, new);
+    // The HT reading's first field, when the contribution can hold the
+    // cleanup pass: its width, and its `placeholders` before the pass.
+    let placeholders = 3 * ((prior + new - 1) / 3);
+    let cleanup = (placeholders >= prior)
+        .then(|| (length_bits(lblock, placeholders + 1 - prior), placeholders));
+    // The Part 1 reading of the field, whose first `read` bits, of value
+    // `top`, are read already.
+    let part1 = |top: u32, read: u32, bio: &mut BitReader| match (top << (width - read))
+        | bio.read(width - read)
+    {
+        0 => MixedFirst::Empty,
+        length => MixedFirst::Part1 { length },
+    };
+    if lblock <= 3 {
+        return Ok(part1(0, 0, bio));
+    }
+    if bio.read_bit() == 1 {
+        return Ok(part1(1, 1, bio));
+    }
+    let Some((bits, placeholders)) = cleanup else {
+        return Ok(part1(0, 1, bio));
+    };
+    match bio.read(bits - 1) {
+        top @ (0 | 1) => Ok(part1(top, bits, bio)),
+        length => Ok(MixedFirst::Ht(FirstCleanup::Cleanup {
+            placeholders,
+            passes: placeholders + 1 - prior,
+            length,
+        })),
+    }
+}
+
+/// Settle a code-block of a MIXED tile-component as a Part 1 block, once
+/// `passes` passes in all have reached it. Its earlier passes, held as
+/// placeholder passes of no bytes, become passes of its one MQ codeword
+/// segment, which holds every pass a Part 1 block may have: A.4 allows it
+/// neither bypass nor termination on each pass.
+fn become_part1(block: &mut BlockState<'_>, passes: u32) -> Result<()> {
+    let (kind, max_passes) = next_segment(Coder::Part1, 0, None);
+    if passes > max_passes {
+        return Err(Error::Codestream(format!(
+            "Part 1 code-block of a MIXED tile-component has {passes} coding passes, \
+             over the {max_passes} one codeword segment can hold"
+        )));
+    }
+    block.coder = Some(Coder::Part1);
+    match block.segments.first_mut() {
+        Some(segment) => {
+            segment.kind = kind;
+            segment.max_passes = max_passes;
+            block.num_passes += segment.kept;
+        }
+        None => block.segments.push(SegmentState::new(kind, max_passes)),
+    }
+    Ok(())
 }
 
 /// Which packet delimiters `COD` signals (`Scod` bits 1 and 2).
@@ -1060,6 +1210,14 @@ fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
 /// per packet — which a single-layer decoder can get away with — desynchronizes
 /// the header bit-reader on the second layer.
 struct BlockState<'a> {
+    /// The block's coder: the tile-component's, or, under MIXED, `None`
+    /// until the block's first nonzero length field settles it (see
+    /// [`mixed_first_length`]). While it is `None` every length field read
+    /// was zero, which both coders read alike: the block's passes sit in one
+    /// open HT cleanup segment of no bytes, as placeholder passes, and become
+    /// passes of its one MQ segment if the block turns out to be a Part 1
+    /// block.
+    coder: Option<Coder>,
     included: bool,
     /// Length-indicator width, grown by a unary run of 1s and never reset.
     lblock: u32,
@@ -1129,8 +1287,9 @@ impl SegmentState<'_> {
 }
 
 impl BlockState<'_> {
-    fn new() -> Self {
+    fn new(coder: Option<Coder>) -> Self {
         BlockState {
+            coder,
             included: false,
             lblock: 3,
             zero_bit_planes: 0,
@@ -1186,7 +1345,8 @@ struct PrecinctState {
 }
 
 impl BandState<'_> {
-    fn new(band: &BandGeom) -> Self {
+    /// `coder` is the tile-component's coder, `None` under MIXED.
+    fn new(band: &BandGeom, coder: Option<Coder>) -> Self {
         BandState {
             precincts: band
                 .precincts
@@ -1197,7 +1357,9 @@ impl BandState<'_> {
                     unread: false,
                 })
                 .collect(),
-            blocks: (0..band.block_count()).map(|_| BlockState::new()).collect(),
+            blocks: (0..band.block_count())
+                .map(|_| BlockState::new(coder))
+                .collect(),
         }
     }
 }
@@ -1236,6 +1398,7 @@ enum Packet {
 struct Undo {
     band: usize,
     block: usize,
+    coder: Option<Coder>,
     included: bool,
     lblock: u32,
     zero_bit_planes: u32,
@@ -1275,6 +1438,7 @@ impl LastSegment {
 fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
     for entry in log.iter().rev() {
         let block = &mut states[entry.band].blocks[entry.block];
+        block.coder = entry.coder;
         block.included = entry.included;
         block.lblock = entry.lblock;
         block.zero_bit_planes = entry.zero_bit_planes;
@@ -1580,6 +1744,7 @@ fn parse_band_header(
             log.push(Undo {
                 band: band_index,
                 block: block_index,
+                coder: block.coder,
                 included: was_included,
                 lblock: block.lblock,
                 zero_bit_planes: block.zero_bit_planes,
@@ -1639,11 +1804,31 @@ fn parse_band_header(
         // segment at its cleanup pass, which [`ht_first_cleanup`] tells apart.
         let mut remaining = num_passes;
         let mut placeholders = 0;
-        let ht = style & crate::codestream::markers::code_block_style::HT != 0;
         let open = SegmentKind::HtCleanup { placeholders: None };
-        if ht && block.segments.first().is_none_or(|s| s.kind == open) {
-            let prior = block.segments.first().map_or(0, |s| s.passes);
-            let first = ht_first_cleanup(block.lblock, prior, num_passes, bio)?;
+        let first_open = block.segments.first().is_none_or(|s| s.kind == open);
+        let prior = block.segments.first().map_or(0, |s| s.passes);
+        // A Part 1 block's length field, when reading it settled the coder
+        // of a MIXED block.
+        let mut part1_length = None;
+        let first = match block.coder {
+            Some(Coder::Ht) if first_open => {
+                Some(ht_first_cleanup(block.lblock, prior, num_passes, bio)?)
+            }
+            Some(_) => None,
+            None => match mixed_first_length(block.lblock, prior, num_passes, bio)? {
+                MixedFirst::Empty => Some(FirstCleanup::Placeholders),
+                MixedFirst::Ht(first) => {
+                    block.coder = Some(Coder::Ht);
+                    Some(first)
+                }
+                MixedFirst::Part1 { length } => {
+                    become_part1(block, prior + num_passes)?;
+                    part1_length = Some(length);
+                    None
+                }
+            },
+        };
+        if let Some(first) = first {
             if block.segments.is_empty() {
                 block.segments.push(SegmentState::new(open, u32::MAX));
             }
@@ -1688,7 +1873,8 @@ fn parse_band_header(
                 .last()
                 .is_none_or(|s| s.passes >= s.max_passes)
             {
-                let (kind, max_passes) = next_segment(style, block.segments.last());
+                let coder = block.coder.unwrap_or(Coder::Ht);
+                let (kind, max_passes) = next_segment(coder, style, block.segments.last());
                 block.segments.push(SegmentState::new(kind, max_passes));
             }
             let segment_index = block.segments.len() - 1;
@@ -1696,7 +1882,10 @@ fn parse_band_header(
             let new_passes = remaining.min(segment.max_passes - segment.passes);
 
             // The length field's width uses *this* segment's new passes.
-            let seg_len = bio.read(length_bits(block.lblock, new_passes));
+            let seg_len = match part1_length.take() {
+                Some(length) => length,
+                None => bio.read(length_bits(block.lblock, new_passes)),
+            };
             add_length(segment, seg_len)?;
             let seg_len = seg_len as usize;
 
@@ -1822,6 +2011,7 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                     // can: then the next pass opens a new segment, and this
                     // one is whole.
                     let mut cut = false;
+                    let coder = block.coder.unwrap_or(Coder::Ht);
                     let zero_bit_planes = block.zero_bit_planes + block.skipped_planes();
                     let placeholders = block
                         .segments
@@ -1849,6 +2039,7 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                         segments,
                         cut,
                         placeholders,
+                        coder,
                     }
                 },
             ));
