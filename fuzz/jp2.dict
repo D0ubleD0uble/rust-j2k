@@ -39,6 +39,7 @@ ftbl="ftbl"
 
 # Brands and compatibility codes.
 brand_jp2="jp2 "
+brand_jph="jph "
 brand_jpx="jpx "
 brand_jpxb="jpxb"
 brand_jpm="jpm "

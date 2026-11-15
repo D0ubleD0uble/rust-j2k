@@ -8,7 +8,8 @@
 //!   of the codestream each was made from, within the T.803 Annex C bounds;
 //!   `hifi_ht1_02` against its own references (Table C.8). The highest-bound
 //!   JPH file of each set is graded as `fileN.jp2` is, and `file10_b12`
-//!   bit-exactly.
+//!   bit-exactly; the files below it as coded, within their set's bound plus
+//!   Kakadu's recorded error.
 //! - Agreement with OpenJPEG 2.5.0 on the codestreams it decodes: its output
 //!   (the ISO references where it matches them, its snapshot where not),
 //!   within the agreement bound.
@@ -27,7 +28,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use support::ht::{
-    HtManifest, HtSignaling, OpenJphManifest, Passes, load_ht_manifest, load_openjph_manifest,
+    HtManifest, HtSignaling, KAKADU_MSE_INEXACT, OpenJphManifest, Passes, kakadu_mse_slack,
+    load_ht_manifest, load_openjph_manifest,
 };
 use support::jp2::{Digest, sha256_hex};
 use support::part4::{self, Bounds, Grade, ratchet};
@@ -73,6 +75,27 @@ const IN_CLASS: &[&str] = &[
     "ds1_ht_06_b11",
     "ds1_ht_07_b11",
     "hifi_ht1_02",
+    // The JPH files.
+    "file1_b11",
+    "file1_b12",
+    "file2_b11",
+    "file2_b12",
+    "file3_b11",
+    "file3_b12",
+    "file4_b11",
+    "file4_b12",
+    "file5_b11",
+    "file5_b12",
+    "file6_b11",
+    "file6_b15",
+    "file7_b11",
+    "file7_b15",
+    "file7_b19",
+    "file8_b11",
+    "file9_b11",
+    "file9_b12",
+    "file10_b11",
+    "file10_b12",
 ];
 
 /// The HT codestreams that decode within the agreement bound of OpenJPEG's
@@ -172,18 +195,11 @@ fn grades_the_ht_set_by_compliance_class() {
         manifest
             .jph
             .iter()
-            .filter_map(|j| Some((j.name.as_str(), j.grade(&dir, &jp2)?))),
+            .map(|j| (j.name.as_str(), j.grade(&dir, &jp2, &manifest.jph))),
     );
-    assert_eq!(graded.len(), 41 + 10);
+    assert_eq!(graded.len(), 41 + 20);
     ratchet("ISO/IEC 15444-4:2024 HTJ2K class-1", &graded, IN_CLASS);
-    let reasons = codestream_refusals(&manifest);
-    pin_refusals(&graded, |name| {
-        if name.starts_with("file") {
-            "file brand `jph `"
-        } else {
-            reasons(name)
-        }
-    });
+    pin_refusals(&graded, codestream_refusals(&manifest));
     let codestreams = manifest
         .codestreams
         .iter()
@@ -707,34 +723,6 @@ fn every_jph_codestream_matches_openjpeg() {
     assert_eq!(manifest.jph.len(), 20);
 }
 
-/// The JPH files below the highest bound of their set are not graded, but
-/// each must decode or be refused as `Unsupported`, and must not panic.
-#[test]
-fn ungraded_jph_files_decode_or_are_unsupported() {
-    let dir = ht_dir();
-    let mut checked = 0;
-    for j in &load_ht_manifest(&dir).jph {
-        if let Some(outcome) = j.check_ungraded(&dir) {
-            outcome.unwrap_or_else(|why| panic!("{}: {why}", j.name));
-            checked += 1;
-        }
-    }
-    assert_eq!(checked, 10);
-}
-
-/// That check fails a panic and an error other than `Unsupported`.
-#[test]
-fn the_ungraded_check_catches_a_panic() {
-    use support::ht::decodes_or_unsupported;
-    let panicked = decodes_or_unsupported(|| panic!("forced panic"));
-    assert!(panicked.unwrap_err().contains("panicked"));
-    let other = decodes_or_unsupported(|| rust_j2k::decode(b"not a codestream"));
-    assert!(other.is_err(), "a non-Unsupported error must fail");
-    let unsupported =
-        decodes_or_unsupported(|| Err(rust_j2k::Error::Unsupported("feature".into())));
-    assert_eq!(unsupported, Ok(()));
-}
-
 /// OpenJPEG's recorded error is within the bound. For the 4 codestreams with
 /// a snapshot it is recomputed from the snapshot against the references; the
 /// 6 that matched the references when the manifest was written must record
@@ -1173,4 +1161,172 @@ fn ht_refinement_matches_kakadu_stats() {
         }
     }
     assert_eq!(refined, 17, "files with refinement passes graded");
+}
+
+/// Each JPH file's manifest entry quotes Kakadu's PAE and MSE against its
+/// source, per component, as coded: `fileN.jp2` for `file1`..`file9`, the
+/// `reference_jph/` images for `file10`. This decoder's default decode (the
+/// palette and channel definitions applied, no color conversion) must give
+/// the same PAE and the same MSE to the digits quoted, against its own
+/// decode of `fileN.jp2` (graded against the ISO references in
+/// `conformance_jp2.rs`) or against the `file10` references. At the highest
+/// bound every figure is zero, so that file decodes exactly as `fileN.jp2`
+/// does.
+#[test]
+fn jph_files_match_kakadu_stats() {
+    let dir = ht_dir();
+    let manifest = load_ht_manifest(&dir);
+    let read = |path: PathBuf| std::fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
+    let mut exact = 0;
+    let mut inexact = BTreeSet::new();
+    for j in &manifest.jph {
+        let name = &j.name;
+        let ours =
+            rust_j2k::decode(&read(dir.join(&j.file))).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let source: Vec<Vec<i32>> = if j.index == 10 {
+            let highest = manifest
+                .jph
+                .iter()
+                .find(|h| h.index == 10 && h.highest_bound)
+                .expect("file10_b12");
+            highest
+                .references
+                .iter()
+                .map(|r| read_pgx(&dir, r).samples)
+                .collect()
+        } else {
+            let path = jp2_dir().join(format!("files/file{}.jp2", j.index));
+            let image = rust_j2k::decode(&read(path)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            image.components.into_iter().map(|c| c.samples).collect()
+        };
+        let k = &j.kakadu_stats;
+        assert_eq!(ours.components.len(), source.len(), "{name}: components");
+        assert_eq!(k.pae.len(), source.len(), "{name}: Kakadu PAE figures");
+        assert_eq!(k.mse.len(), source.len(), "{name}: Kakadu MSE figures");
+        for (c, (a, b)) in ours.components.iter().zip(&source).enumerate() {
+            assert_eq!(a.samples.len(), b.len(), "{name} component {c}: samples");
+            let (pae, mse) = (k.pae[c], k.mse[c]);
+            let diffs = || a.samples.iter().zip(b).map(|(p, q)| p - q);
+            let ours_pae = diffs().map(i32::abs).max().unwrap_or(0);
+            let ours_mse =
+                diffs().map(|d| f64::from(d).powi(2)).sum::<f64>() / a.samples.len() as f64;
+            assert_eq!(f64::from(ours_pae), pae, "{name} component {c}: PAE");
+            let gap = (ours_mse - mse).abs();
+            if gap <= 1e-6 * mse.max(1.0) {
+                continue;
+            }
+            // Past the rule: only on a listed component, and only where no whole
+            // sum of squared differences over the sample count rounds to
+            // Kakadu's six decimals, so its figure is not exact. This
+            // decoder's is exact, and its codestream decode is OpenJPEG's to
+            // the bit (`every_jph_codestream_matches_openjpeg`).
+            let count = a.samples.len() as f64;
+            let six = |x: f64| format!("{x:.6}");
+            let unreachable = [(mse * count).floor(), (mse * count).ceil()]
+                .into_iter()
+                .all(|sum| six(sum / count) != six(mse));
+            assert!(
+                KAKADU_MSE_INEXACT.contains(&(name.as_str(), c))
+                    && unreachable
+                    && gap <= kakadu_mse_slack(name, c) * mse.max(1.0),
+                "{name} component {c}: MSE {ours_mse} against Kakadu's {mse}"
+            );
+            inexact.insert((name.as_str(), c));
+        }
+        if j.highest_bound {
+            exact += 1;
+        }
+    }
+    assert_eq!(exact, 10, "highest-bound files graded");
+    assert_eq!(
+        inexact,
+        KAKADU_MSE_INEXACT.iter().copied().collect(),
+        "the components whose MSE needs the wider tolerance"
+    );
+}
+
+/// `file10` has no `colr` box, which T.814 D.2 allows when `UnkC` is set, and
+/// a `cdef` box with four application-defined channels (`Typ` 3, D.6.3) whose
+/// `Asoc` values are past the last channel, then an opacity channel. Both
+/// `read_header` and `decode` report the five channels with their `Asoc` as
+/// stored and no color space; the channels keep the codestream's order.
+/// OpenJPEG 2.5.0 refuses both files ("Invalid component index 18283").
+#[test]
+fn file10_reports_application_defined_channels_and_no_color_space() {
+    use rust_j2k::{Association, ChannelDefinition, ChannelType, ColorOutput, ColorSpace};
+    let application = |asoc| ChannelDefinition {
+        kind: ChannelType::ApplicationDefined,
+        association: Association::ApplicationDefined(asoc),
+    };
+    let want = [
+        application(18284),
+        application(21100),
+        application(17004),
+        application(18284),
+        ChannelDefinition {
+            kind: ChannelType::Opacity,
+            association: Association::WholeImage,
+        },
+    ];
+    for name in ["file10_b11", "file10_b12"] {
+        let bytes = std::fs::read(ht_dir().join(format!("jph/{name}.jph"))).unwrap();
+        let header = rust_j2k::read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let image = rust_j2k::decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        for jp2 in [header.jp2.as_ref(), image.jp2.as_ref()] {
+            let jp2 = jp2.expect("JPH metadata");
+            assert_eq!(jp2.file_type.brand, *b"jph ", "{name}");
+            assert_eq!(jp2.color, ColorSpace::Unknown, "{name}");
+            assert!(jp2.color_specifications.is_empty(), "{name}: no colr");
+            assert_eq!(jp2.channels, want, "{name}");
+        }
+        assert_eq!(header.components.len(), 5, "{name}");
+        assert_eq!(image.components.len(), 5, "{name}");
+        // The channel definitions move no channel: the file decodes as its
+        // bare codestream does.
+        let [start, end] = load_ht_manifest(&ht_dir())
+            .jph
+            .iter()
+            .find(|j| j.name == name)
+            .expect("in the manifest")
+            .codestream_range;
+        let bare = rust_j2k::decode(&bytes[start..end]).unwrap();
+        assert!(image.components == bare.components, "{name}");
+        // Without a color specification there is no sRGB conversion.
+        let mut srgb = rust_j2k::DecodeOptions::default();
+        srgb.color = ColorOutput::Srgb;
+        assert!(
+            matches!(
+                rust_j2k::decode_with(&bytes, &srgb),
+                Err(rust_j2k::Error::Unsupported(m)) if m.contains("no color specification")
+            ),
+            "{name}"
+        );
+    }
+}
+
+/// The OpenJPH `.jph` files decode through the file reader to the same
+/// components as their bare `jp2c` codestreams, which
+/// `grades_the_openjph_codestreams` grades against OpenJPEG.
+#[test]
+fn openjph_jph_files_decode_as_their_codestream() {
+    let dir = openjph_dir();
+    let mut checked = 0;
+    for e in load_openjph_manifest(&dir).entries {
+        if !e.file.ends_with(".jph") {
+            continue;
+        }
+        let bytes = std::fs::read(dir.join(&e.file)).unwrap();
+        let [start, end] = e.codestream_range;
+        let file = rust_j2k::decode(&bytes).unwrap_or_else(|err| panic!("{}: {err}", e.name));
+        let bare = rust_j2k::decode(&bytes[start..end]).unwrap();
+        assert!(file.components == bare.components, "{}", e.name);
+        assert_eq!(
+            file.jp2.as_ref().map(|j| j.file_type.brand),
+            Some(*b"jph "),
+            "{}",
+            e.name
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 7);
 }

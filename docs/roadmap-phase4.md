@@ -602,6 +602,40 @@ in `tests/conformance_jp2.rs`); `opj_decompress` on the 18 it decodes; the
 
 **Gate:** all 20 JPH files in class; `byte.jph` matches OpenJPEG.
 
+**Done (#345).** `check_file_type` in `src/jp2/header.rs` takes `jph ` as
+the brand or a compatible brand; the `Typ` 3 handling is in
+`src/jp2/channels.rs` and applies only to JPH files, so a JP2 file's `Typ` 3
+is read as before. All 20 JPH files are in `IN_CLASS`. Findings:
+
+- Kakadu's `stats.txt` figures for the JPH files are of the default decode
+  (palette and `cdef` applied, no color conversion) against `fileN.jp2`'s.
+  This decoder gives the same PAE on all 20 files and the same MSE to the
+  `1e-6` rule on all but two components of `file7_b15`, where Kakadu's MSE
+  is 2.3e-6 and 4.5e-6 off. No whole sum of squared differences over the
+  sample count rounds to Kakadu's six-decimal figure there (component 0
+  needs a sum in [9809526.53, 9809526.84)), so Kakadu's figure is not an
+  exact MSE (`jph_files_match_kakadu_stats`).
+- The files below the highest bound are graded within the set's bound plus
+  Kakadu's PAE and MSE. Adding MSEs is a heuristic (the true bound on the
+  sum of two errors is `(√a + √b)²`), and `file6`'s bound, scaled down by
+  its shift, holds only through the class's +1. What pins these files is
+  `jph_files_match_kakadu_stats`.
+- The files below the highest bound are graded as coded against the set's
+  as-coded references, within the set's bound plus Kakadu's error for the
+  file. Their sRGB output can't take that bound: the ICC and sYCC
+  conversions widen the error (PAE 22 on `file5_b11`'s first channel, from
+  PAE 2 as coded), so the display decode is required only to succeed.
+- Measured with `opj_decompress` 2.5.0, outside the suite: `byte.jph`
+  (openjpeg-data `39524bd3`, SHA-256 `87841874…`) matches bit for bit.
+  On the 18 JPH files OpenJPEG decodes, the sRGB output matches bit for bit
+  on `file1`, `file4`, `file5`, `file6`, `file7` and `file9` at every bound.
+  `file2` and `file3` differ by PAE 1 (sYCC with the IEC constants, rounded)
+  and `file8` stays one gray channel where OpenJPEG writes three, as for
+  their `fileN.jp2` ([srgb-output.md](srgb-output.md)). OpenJPEG's output of
+  each highest-bound file equals its output of `fileN.jp2` byte for byte.
+- The OpenJPH `.jph` files decode through the file reader to the same
+  components as their bare codestreams.
+
 ### P4.8 — Fuzz targets and the reject matrix (`fuzz/`)
 
 **Goal:** the HT block decoder and the HT Tier-2 branch are fuzzed from the

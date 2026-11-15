@@ -11,10 +11,12 @@ use std::collections::BTreeMap;
 use std::panic;
 use std::path::Path;
 
+use rust_j2k::DecodeOptions;
 use serde::Deserialize;
 
 use super::jp2::{self, Digest};
 use super::part4::{self, Bound, Bounds, Cblksty, Grade};
+use super::pgx::parse_pgx;
 
 /// `conformance/ht/manifest.json`. `deny_unknown_fields` throughout.
 #[derive(Debug, Deserialize)]
@@ -294,6 +296,29 @@ pub struct OpenJphEntry {
 
 const EXACT: Bound = Bound { pae: 0.0, mse: 0.0 };
 
+/// The JPH file components where Kakadu's quoted MSE differs from this
+/// decoder's by more than the `1e-6` relative rule allows: components 0 and
+/// 1 of `file7_b15` (16-bit, MSE about 32, 2.3e-6 and 4.5e-6 apart, the PAE
+/// equal on every component). No whole sum of squared differences gives
+/// Kakadu's figure when divided by the sample count and rounded to its six
+/// decimals: on component 0, with 307200 samples, 31.932053 needs a sum in
+/// [9809526.53, 9809526.84), which holds no integer. So Kakadu's figure is
+/// not an exact MSE, and these components are held to `1e-5`
+/// ([`kakadu_mse_slack`]). `jph_files_match_kakadu_stats` asserts the list
+/// is exactly the components that need it.
+pub const KAKADU_MSE_INEXACT: &[(&str, usize)] = &[("file7_b15", 0), ("file7_b15", 1)];
+
+/// The relative slack on a comparison with Kakadu's MSE for `component` of
+/// the JPH file `name`: `1e-6`, as Kakadu quotes six or seven significant
+/// digits, or `1e-5` on the [`KAKADU_MSE_INEXACT`] components.
+pub fn kakadu_mse_slack(name: &str, component: usize) -> f64 {
+    if KAKADU_MSE_INEXACT.contains(&(name, component)) {
+        1e-5
+    } else {
+        1e-6
+    }
+}
+
 /// JPH files whose codestream holds `fileN.jp2`'s components in another
 /// order: codestream component `k` is as-coded component `order[k]`.
 /// `file2_b12` stores them reversed, although its `cdef` maps channels to
@@ -377,77 +402,220 @@ impl HtCodestream {
     }
 }
 
-/// Run `decode` and accept a decoded image or `Error::Unsupported`. Any other
-/// error, or a panic, is the reason returned.
-pub fn decodes_or_unsupported(
-    decode: impl FnOnce() -> Result<rust_j2k::Image, rust_j2k::Error>,
-) -> Result<(), String> {
-    match panic::catch_unwind(panic::AssertUnwindSafe(decode)) {
-        Err(_) => Err("panicked (decode must return a typed error)".into()),
-        Ok(Ok(_) | Err(rust_j2k::Error::Unsupported(_))) => Ok(()),
-        Ok(Err(e)) => Err(format!("decoder rejected a valid file: {e}")),
+/// Decode `bytes` with `options`: a panic or an error other than
+/// `Unsupported` fails the grade, and `Unsupported` is *not yet decoded*.
+fn decode_graded(bytes: &[u8], options: &DecodeOptions) -> Result<rust_j2k::Image, Grade> {
+    match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        rust_j2k::decode_with(bytes, options)
+    })) {
+        Err(_) => Err(Grade::Failed(
+            "panicked (decode must return a typed error)".into(),
+        )),
+        Ok(Err(rust_j2k::Error::Unsupported(what))) => Err(Grade::NotYetDecoded(what)),
+        Ok(Err(e)) => Err(Grade::Failed(format!("decoder rejected a valid file: {e}"))),
+        Ok(Ok(image)) => Ok(image),
     }
 }
 
-impl JphEntry {
-    /// Decode a file that is not graded, and its bare `jp2c` codestream: each
-    /// must decode or be refused as `Unsupported`, and must not panic. The
-    /// codestream is decoded on its own because the file-level brand check
-    /// can refuse the file before the codestream is read. `None` for a graded
-    /// file.
-    pub fn check_ungraded(&self, ht_dir: &Path) -> Option<Result<(), String>> {
-        if self.graded_as.is_some() {
-            return None;
-        }
-        let bytes = match std::fs::read(ht_dir.join(&self.file)) {
-            Ok(bytes) => bytes,
-            Err(e) => return Some(Err(format!("cannot read {}: {e}", self.file))),
-        };
-        let [start, end] = self.codestream_range;
-        let Some(codestream) = bytes.get(start..end) else {
-            return Some(Err(format!(
-                "codestream range {start}..{end} past the file"
-            )));
-        };
-        let outcome = decodes_or_unsupported(|| rust_j2k::decode(&bytes))
-            .map_err(|why| format!("file: {why}"))
-            .and_then(|()| {
-                decodes_or_unsupported(|| rust_j2k::decode(codestream))
-                    .map_err(|why| format!("codestream: {why}"))
-            });
-        Some(outcome)
-    }
+/// What a JPH file below the highest bound of its set is graded against: the
+/// as-coded image of the set's source, at the reference's depth.
+struct AsCodedSource<'a> {
+    dir: &'a Path,
+    references: Vec<String>,
+    /// The right shift that brings a decoded component to the reference's
+    /// depth (`file6`'s references are 8-bit, its samples 12-bit).
+    shift: u8,
+    /// The source's recorded class bound; `None` where the references are
+    /// matched exactly: `fileN.jp2`'s as-coded references (OpenJPEG's
+    /// snapshot, which `fileN.jp2` matches bit for bit) and `file10`'s.
+    bounds: Option<Bounds>,
+    /// The options the source is graded with, so the display path is decoded
+    /// too.
+    display: DecodeOptions,
+}
 
-    /// Decode and grade the file. `None` for a file that is not graded.
+impl JphEntry {
+    /// Decode and grade the file.
     ///
-    /// `file1`..`file9` are graded as `fileN.jp2` is (`jp2_dir` holds its
-    /// manifest and references), with the JPH file in its place; `file10_b12`
-    /// bit-exactly against its own references.
-    pub fn grade(&self, ht_dir: &Path, jp2_dir: &Path) -> Option<Grade> {
-        let graded_as = self.graded_as.as_deref()?;
+    /// The highest-bound file of a set is graded as `fileN.jp2` is (`jp2_dir`
+    /// holds its manifest and references), with the JPH file in its place;
+    /// `file10_b12` bit-exactly against its own references. A file below the
+    /// highest bound is lossy against its source, by the amount Kakadu's
+    /// `stats.txt` records, so it is graded as coded against the source's
+    /// as-coded image, within the source's bound plus Kakadu's error
+    /// ([`Self::grade_lower_bound`]). `set` is every JPH entry of the
+    /// manifest.
+    pub fn grade(&self, ht_dir: &Path, jp2_dir: &Path, set: &[JphEntry]) -> Grade {
+        let Some(graded_as) = self.graded_as.as_deref() else {
+            return self.grade_lower_bound(ht_dir, jp2_dir, set);
+        };
         if graded_as == "references" {
             let bytes = match read(ht_dir, &self.file) {
                 Ok(bytes) => bytes,
-                Err(grade) => return Some(grade),
+                Err(grade) => return grade,
             };
-            return Some(part4::grade_decode(
-                ht_dir,
-                &bytes,
-                0,
-                &self.references,
-                |_| EXACT,
-            ));
+            return part4::grade_decode(ht_dir, &bytes, 0, &self.references, |_| EXACT);
         }
         let Some(mut entry) = jp2::load_manifest(jp2_dir)
             .entries
             .into_iter()
             .find(|e| e.name() == graded_as)
         else {
-            return Some(Grade::Failed(format!("no JP2 entry `{graded_as}`")));
+            return Grade::Failed(format!("no JP2 entry `{graded_as}`"));
         };
         // The JP2 grading reads `file` relative to `jp2/`; `ht/` is its sibling.
         entry.file = format!("../ht/{}", self.file);
-        Some(jp2::grade_entry(jp2_dir, &entry))
+        jp2::grade_entry(jp2_dir, &entry)
+    }
+
+    /// The as-coded image of this file's set: `fileN.jp2`'s as-coded
+    /// references, or its references where its boxes change nothing a
+    /// default decode keeps (no color conversion), or `file10_b12`'s
+    /// references.
+    fn as_coded_source<'a>(
+        &self,
+        ht_dir: &'a Path,
+        jp2_dir: &'a Path,
+        set: &[JphEntry],
+    ) -> Result<AsCodedSource<'a>, Grade> {
+        let highest = set
+            .iter()
+            .find(|j| j.index == self.index && j.highest_bound)
+            .ok_or_else(|| {
+                Grade::Failed(format!("no highest-bound file for set {}", self.index))
+            })?;
+        match highest.graded_as.as_deref() {
+            Some("references") => Ok(AsCodedSource {
+                dir: ht_dir,
+                references: highest.references.clone(),
+                shift: 0,
+                bounds: None,
+                display: DecodeOptions::default(),
+            }),
+            Some(name) => {
+                let entry = jp2::load_manifest(jp2_dir)
+                    .entries
+                    .into_iter()
+                    .find(|e| e.name() == name)
+                    .ok_or_else(|| Grade::Failed(format!("no JP2 entry `{name}`")))?;
+                let display = jp2::options_for(&entry);
+                let (references, shift, bounds) = match entry.as_coded {
+                    Some(as_coded) => (as_coded.references, 0, None),
+                    None if !entry.needs_srgb => {
+                        (entry.references, entry.shift_right, Some(entry.bounds))
+                    }
+                    None => {
+                        return Err(Grade::Failed(format!(
+                            "`{name}` has no as-coded references"
+                        )));
+                    }
+                };
+                Ok(AsCodedSource {
+                    dir: jp2_dir,
+                    references,
+                    shift,
+                    bounds,
+                    display,
+                })
+            }
+            None => Err(Grade::Failed(format!(
+                "the highest-bound file of set {} is not graded",
+                self.index
+            ))),
+        }
+    }
+
+    /// Grade a file below the highest bound of its set. It is decoded as
+    /// coded (with its palette and channel definitions applied, no color
+    /// conversion), which is the image Kakadu's figures describe, and each
+    /// component is graded against the set's as-coded image within the
+    /// source's class bound plus Kakadu's PAE and MSE for this file, scaled
+    /// to the reference's depth. It is also decoded as its source is graded
+    /// (sRGB output where the source's references need it), which must
+    /// succeed.
+    fn grade_lower_bound(&self, ht_dir: &Path, jp2_dir: &Path, set: &[JphEntry]) -> Grade {
+        let source = match self.as_coded_source(ht_dir, jp2_dir, set) {
+            Ok(source) => source,
+            Err(grade) => return grade,
+        };
+        let graded = source.references.len();
+        let stats = &self.kakadu_stats;
+        if graded == 0 || stats.pae.len() != graded || stats.mse.len() != graded {
+            return Grade::Failed(format!(
+                "manifest: {graded} references but {} Kakadu PAE and {} MSE figures",
+                stats.pae.len(),
+                stats.mse.len()
+            ));
+        }
+        let bytes = match read(ht_dir, &self.file) {
+            Ok(bytes) => bytes,
+            Err(grade) => return grade,
+        };
+        let image = match decode_graded(&bytes, &DecodeOptions::default()) {
+            Ok(image) => image,
+            Err(grade) => return grade,
+        };
+        if let Err(grade) = decode_graded(&bytes, &source.display) {
+            return grade;
+        }
+        if image.components.len() != graded {
+            return Grade::Failed(format!(
+                "decoded {} components but the set grades {graded}",
+                image.components.len()
+            ));
+        }
+        let scale = f64::from(1u32 << source.shift);
+        let mut all_exact = true;
+        for (index, path) in source.references.iter().enumerate() {
+            let decoded = &image.components[index];
+            if stats.depth != Some(u32::from(decoded.bit_depth)) {
+                return Grade::Failed(format!(
+                    "component {index}: Kakadu's figures are at depth {:?}, the decode at {}",
+                    stats.depth, decoded.bit_depth
+                ));
+            }
+            let raw = match std::fs::read(source.dir.join(path)) {
+                Ok(raw) => raw,
+                Err(e) => return Grade::Failed(format!("cannot read {path}: {e}")),
+            };
+            let reference = match parse_pgx(&raw) {
+                Ok(reference) => reference,
+                Err(e) => return Grade::Failed(format!("cannot parse {path}: {e}")),
+            };
+            let base = source
+                .bounds
+                .as_ref()
+                .map_or(EXACT, |b| bound_of(b, false, index));
+            // Kakadu quotes its MSE to six or seven significant digits, so
+            // the bound carries that slack, or more on the components where
+            // its figure is not an exact MSE ([`kakadu_mse_slack`]). With an
+            // exact base (as-coded references) nothing else absorbs the
+            // rounding.
+            //
+            // This is a heuristic, not a proven bound. Adding the MSEs
+            // assumes the two errors add in energy; the true bound on their
+            // sum is `(sqrt(a) + sqrt(b))^2`. And for `file6` (shift 4),
+            // Kakadu's figures are at 12 bits and the references at 8:
+            // dividing by `scale^2` does not bound the error after the
+            // shift's rounding, which passes only through the class's +1.
+            // What pins these files is `jph_files_match_kakadu_stats`, which
+            // matches Kakadu's figures at the native depth.
+            let mse = stats.mse[index] / (scale * scale);
+            let bound = Bound {
+                pae: base.pae + (stats.pae[index] / scale).ceil(),
+                mse: base.mse + mse + kakadu_mse_slack(&self.name, index) * mse.max(1.0),
+            };
+            let component = jp2::shifted(decoded, source.shift);
+            match part4::grade_component(&component, &reference, bound) {
+                Ok(measured) => all_exact &= measured.exact(),
+                Err(why) => return Grade::Failed(format!("component {index}: {why}")),
+            }
+        }
+        if all_exact {
+            Grade::Exact
+        } else {
+            Grade::WithinClass
+        }
     }
 
     /// Decode the bare `jp2c` codestream of a graded file and grade its
@@ -456,9 +624,6 @@ impl JphEntry {
     /// in its boxes changes the components (no palette, no shift, no color
     /// conversion), or `file10_b12`'s own. `None` for a file not graded, or
     /// whose components no reference holds (`file9`'s palette indices).
-    ///
-    /// This grades the HT block coder on files whose `jph ` brand the file
-    /// reader does not accept yet.
     pub fn grade_codestream(&self, ht_dir: &Path, jp2_dir: &Path) -> Option<Grade> {
         let graded_as = self.graded_as.as_deref()?;
         let (dir, references) = if graded_as == "references" {

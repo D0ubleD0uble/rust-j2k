@@ -341,7 +341,8 @@ within PAE 1, MSE 1 for 9/7. It warns of zero-length refinement passes on
 recorded with its message.
 
 **JPH files.** T.803 G.5 gives no tolerances for JPH files, and B.2 tests a
-decoder on the highest-bound file of each set, so 10 of the 20 are graded:
+decoder on the highest-bound file of each set, so the manifest grades 10 of
+the 20 (`graded_as`):
 
 - `file1` .. `file9` at their highest bound decode, under OpenJPEG, to the same
   samples as `fileN.jp2`. They are graded as `fileN.jp2` is, against
@@ -350,7 +351,10 @@ decoder on the highest-bound file of each set, so 10 of the 20 are graded:
   `references/jph_10_K.pgx`. OpenJPEG decodes its codestream to those samples
   but refuses the file.
 
-The other 10 record why they are not graded.
+The other 10 record why T.803 does not grade them (`not_graded`). The
+harness grades them anyway, as coded against their set's as-coded references,
+within the set's bound plus the PAE and MSE Kakadu records for the file
+(`kakadu_stats`).
 
 **Passes.** For the codestreams OpenJPEG decodes in full, the manifest records
 the pass count of every HT code-block, measured with a print added to
