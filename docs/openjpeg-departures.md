@@ -661,7 +661,7 @@ an irreversible subband) is refused. OpenJPEG decodes on in both cases.
 
 ### HT cleanup segments
 
-Four faults in an HT cleanup segment are refused as `Codestream` where
+Five faults in an HT cleanup segment are refused as `Codestream` where
 OpenJPEG 2.5.0 decodes the block anyway. Each was measured on a
 single-block codestream:
 
@@ -671,6 +671,11 @@ single-block codestream:
   `[0, -96, -288, -160, 0, 0, -160, -160]`.
 - A MagSgn stream read past its end, beyond the one 0xFF byte implied at
   `Pcup` (7.1.2 calls it an error). OpenJPEG decodes on.
+- A VLC stream read past `Pcup` (`importVLCBit`, 7.1.4, calls it an
+  error). On a 4x8 8-bit block with four zero bit-planes in a subband of 5
+  and the segment `22 AB 7C 68 15 62 00`, OpenJPEG gives 129 at sample 0,
+  127 at sample 16 and 128 elsewhere. It decoded 183 of 300 random blocks
+  this decoder refuses for this.
 - A magnitude with more bits than the block codes. Within the exponent bound
   `U_q <= P + 2` it overflows `i32` only in a subband of 30 bit-planes, where
   OpenJPEG wraps it (`-268435456` on the measured block).
@@ -1099,7 +1104,7 @@ applies to `Mb` on an HT block.
 | OpenJPEG 2.5.0 | ORs a set stuffing bit into the lowest bit of the next byte, so the bits after it change |
 | Standard | T.814 7.1.4 (`initVLC`, `importVLCBit`) and 7.1.6 (`importMagRefBit`) |
 | Rule | 1 |
-| Tests and fixtures | `vlc_skips_a_set_stuffing_bit`, `a_set_vlc_stuffing_bit_does_not_change_the_block` and `magref_reads_backward_lsb_first_unstuffs_and_zero_fills` in `src/tier1/ht/tests.rs` |
+| Tests and fixtures | `vlc_skips_a_set_stuffing_bit`, `a_set_vlc_stuffing_bit_does_not_change_the_block` and `magref_reads_backward_lsb_first_unstuffs_and_zero_fills` in `src/tier1/ht/tests.rs`; `tests/ht_vlc_stuffing.rs` with the block pairs in `tests/fixtures/ht_vlc_stuffing/` |
 | Decided | 2026-11-15, follow T.814 (skip the bit) |
 
 The HT VLC and MagRef streams are read backward. A byte whose seven low bits
@@ -1134,6 +1139,15 @@ Measured with `opj_decompress` 2.5.0 on single-block codestreams:
   same. Of 150 random cleanup-only blocks with the nibble 0xF, 10 decode
   differently in OpenJPEG from their 0x7 twin, while this decoder decodes
   each pair the same.
+
+On blocks this decoder reads, it is the only cleanup-pass difference a random
+differential found (#368). Of 41,936 crafted cleanup-only blocks, OpenJPEG gave other samples on 165
+and would not decode 121 that this decoder reads. Every one had a set VLC
+stuffing bit. With the bits cleared, the two decoders gave the same samples
+on every block both decode. Each block whose samples differed decoded here
+the same as its cleared twin. A VLC reader that ORs the bit in, as OpenJPEG
+does, gives OpenJPEG's samples on the 11 such pairs in
+`tests/fixtures/ht_vlc_stuffing/`, and its refusal on the other 3.
 
 Refusing such a stream, as for a set SigProp or MagSgn stuffing bit, would go
 past the standard, which defines a decode here. Following OpenJPEG would read
