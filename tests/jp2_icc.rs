@@ -12,39 +12,23 @@
 //!   unconverted because LittleCMS refused the profile.
 
 mod support;
-use support::synth::bx;
+use support::synth::{self, bx};
+use support::{plane_hash, srgb};
 
 use std::path::PathBuf;
 
 use rust_j2k::{
-    Association, ChannelDefinition, ChannelType, ColorOutput, ColorSpace, Component, DecodeOptions,
-    Error, Image, WorkLimit, decode, decode_with, read_header_with,
+    Association, ChannelDefinition, ChannelType, ColorSpace, DecodeOptions, Error, Image,
+    WorkLimit, decode, decode_with, read_header_with,
 };
 use serde::Deserialize;
-use support::jp2::sha256_hex;
 
 fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    synth::fixtures("")
 }
 
 fn read(path: &str) -> Vec<u8> {
-    let path = fixtures().join(path);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-fn srgb() -> DecodeOptions {
-    DecodeOptions::default().with_color(ColorOutput::Srgb)
-}
-
-/// The hash the oracle script records: samples in raster order, each a
-/// 4-byte big-endian signed integer.
-fn plane_hash(component: &Component) -> String {
-    let bytes: Vec<u8> = component
-        .samples
-        .iter()
-        .flat_map(|s| s.to_be_bytes())
-        .collect();
-    sha256_hex(&bytes)
+    synth::read_file(fixtures().join(path))
 }
 
 /// Compare a decode with OpenJPEG's three output planes. A monochrome profile

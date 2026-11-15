@@ -13,7 +13,7 @@
 //! The larger shapes are built here, with the same layout.
 
 mod support;
-use support::synth::{bx, seg};
+use support::synth::{self, bx, seg};
 
 use std::path::PathBuf;
 
@@ -21,7 +21,7 @@ use rust_j2k::{Error, decode, read_header};
 use support::jp2::sha256_hex;
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/work_bound")
+    synth::fixtures("work_bound")
 }
 
 fn assert_limit(name: &str, bytes: &[u8]) {

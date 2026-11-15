@@ -10,6 +10,8 @@
 //! the codestream. When the `jp2c` box's length is right, the codestream ends
 //! at the end of the box.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::path::PathBuf;
 
 use rust_j2k::{Error, Jp2Metadata, decode, read_header};
@@ -20,7 +22,7 @@ fn xml_payloads(metadata: &Jp2Metadata) -> Vec<&[u8]> {
 }
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/psot0")
+    synth::fixtures("psot0")
 }
 
 /// The samples of an 8-bit PGM (`P5`) from `opj_decompress`: the last

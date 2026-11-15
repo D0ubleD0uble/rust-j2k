@@ -14,11 +14,11 @@ use synth::bx;
 use rust_j2k::{Error, decode, read_header};
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/poc_coverage")
+    synth::fixtures("poc_coverage")
 }
 
 fn read(name: &str) -> Vec<u8> {
-    std::fs::read(dir().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
+    synth::read_file(dir().join(name))
 }
 
 /// The source's samples, big-endian 16-bit, component after component.

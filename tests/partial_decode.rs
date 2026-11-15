@@ -12,11 +12,11 @@ use synth::seg;
 use rust_j2k::{DecodeOptions, DecodeReport, Error, Image, ReportEntry, decode_with, read_header};
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    synth::fixtures("")
 }
 
 fn read(name: &str) -> Vec<u8> {
-    std::fs::read(dir().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
+    synth::read_file(dir().join(name))
 }
 
 /// The samples of a `P5` PGM with a maximum value below 256.

@@ -7,6 +7,8 @@
 //! volume first.
 //! See `tests/fixtures/poc_precedence/README.md` and docs/openjpeg-departures.md.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::path::PathBuf;
 
 use rust_j2k::decode;
@@ -16,7 +18,7 @@ const HEIGHT: usize = 16;
 const COMPONENTS: usize = 3;
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/poc_precedence")
+    synth::fixtures("poc_precedence")
 }
 
 fn assert_round_trips(name: &str) {

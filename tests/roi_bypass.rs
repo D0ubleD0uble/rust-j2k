@@ -7,6 +7,8 @@
 //! switches to raw coding `SPrgn` planes too late. See
 //! `tests/fixtures/roi_bypass/README.md` and docs/openjpeg-departures.md.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::path::PathBuf;
 
 use rust_j2k::decode;
@@ -15,7 +17,7 @@ const WIDTH: usize = 64;
 const HEIGHT: usize = 64;
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/roi_bypass")
+    synth::fixtures("roi_bypass")
 }
 
 /// The samples of the 8-bit `P5` source image.
