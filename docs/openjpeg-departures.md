@@ -1466,7 +1466,7 @@ than drop one of them.
 
 | | |
 | - | - |
-| This decoder | refuses `ColorOutput::Srgb` with `DecodeOptions::window` or `DecodeOptions::tile` when the sYCC chroma is sub-sampled (4:2:0 or 4:2:2) and the decoded area differs from the image area on the reference grid, as `Unsupported`; an area equal to the image a window that covers the whole image, or the only tile decodes as the plain decode does, at any reduction |
+| This decoder | refuses `ColorOutput::Srgb` with `DecodeOptions::window` or `DecodeOptions::tile` when the sYCC chroma is sub-sampled (4:2:0 or 4:2:2) and the decoded area differs from the image area on the reference grid, as `Unsupported`; an area equal to the image (a window that covers the whole image, or the only tile) decodes as the plain decode does, at any reduction |
 | OpenJPEG 2.5.0 | `opj_decompress -d` or `-t` with sYCC output converts the decoded area alone: it replicates the chroma by the parity of the area's origin, so the result is not the crop of the whole image's conversion |
 | Standard | silent: the sYCC conversion and decode options are outside it |
 | Rule | 3 |
