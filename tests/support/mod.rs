@@ -522,33 +522,30 @@ impl fmt::Display for Mismatch {
 /// from its sibling `<name>.expected.json`.
 ///
 /// Fixtures are returned sorted by name for deterministic test output. A
-/// missing `dir` yields an empty list (the corpus simply has nothing yet); a
+/// directory that cannot be read is an error, not an empty corpus; a
 /// codestream whose snapshot is missing or unparseable is still returned, with
 /// the reason captured in [`Fixture::expected`].
-pub fn discover(dir: &Path) -> Vec<Fixture> {
-    let mut fixtures: Vec<Fixture> = match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|ext| ext == "j2k"))
-            .map(|codestream| {
-                let name = codestream
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("<non-utf8>")
-                    .to_string();
-                let snapshot = codestream.with_extension("expected.json");
-                let expected = load_snapshot(&snapshot);
-                Fixture {
-                    name,
-                    codestream,
-                    expected,
-                }
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
+pub fn discover(dir: &Path) -> std::io::Result<Vec<Fixture>> {
+    let mut fixtures: Vec<Fixture> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "j2k"))
+        .map(|codestream| {
+            let name = codestream
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("<non-utf8>")
+                .to_string();
+            let snapshot = codestream.with_extension("expected.json");
+            let expected = load_snapshot(&snapshot);
+            Fixture {
+                name,
+                codestream,
+                expected,
+            }
+        })
+        .collect();
     fixtures.sort_by(|a, b| a.name.cmp(&b.name));
-    fixtures
+    Ok(fixtures)
 }
 
 /// Read and parse one `<name>.expected.json`, mapping every failure to a

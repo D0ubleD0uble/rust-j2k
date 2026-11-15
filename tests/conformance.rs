@@ -26,6 +26,11 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+/// How many top-level `tests/fixtures/*.j2k` codestreams are committed. Pinned
+/// exactly so a deleted fixture cannot shrink the run silently; update it when
+/// adding or removing one on purpose.
+const TOP_LEVEL_FIXTURES: usize = 49;
+
 /// Decode every committed fixture and grade it against its oracle snapshot.
 ///
 /// Every fixture in this corpus is expected to decode: a rejection (including
@@ -34,11 +39,13 @@ fn fixtures_dir() -> PathBuf {
 /// fails the gate.
 #[test]
 fn decodes_corpus_against_oracle() {
-    let fixtures = discover(&fixtures_dir());
-    if fixtures.is_empty() {
-        eprintln!("conformance: no fixtures committed yet (see issue #4); harness is wired.");
-        return;
-    }
+    let fixtures = discover(&fixtures_dir()).expect("read tests/fixtures");
+    assert_eq!(
+        fixtures.len(),
+        TOP_LEVEL_FIXTURES,
+        "the corpus changed size: a deleted fixture must fail, and an added one \
+         must update TOP_LEVEL_FIXTURES",
+    );
 
     let mut failures = Vec::new();
     for fixture in &fixtures {
@@ -289,7 +296,7 @@ mod harness {
         write(&dir, "alpha.j2k", "\x00not-a-codestream");
         write(&dir, "alpha.expected.json", VALID_SNAPSHOT);
 
-        let found = discover(&dir);
+        let found = discover(&dir).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "alpha");
         assert!(found[0].expected.is_ok());
@@ -305,7 +312,7 @@ mod harness {
         write(&dir, "lonely.j2k", "bytes");
         // no sibling .expected.json
 
-        let found = discover(&dir);
+        let found = discover(&dir).unwrap();
         assert_eq!(found.len(), 1);
         assert!(found[0].expected.is_err());
         assert!(matches!(run_fixture(&found[0]), Outcome::LoadError(_)));
@@ -317,7 +324,7 @@ mod harness {
         write(&dir, "broken.j2k", "bytes");
         write(&dir, "broken.expected.json", "{ not valid json");
 
-        let found = discover(&dir);
+        let found = discover(&dir).unwrap();
         assert_eq!(found.len(), 1);
         assert!(found[0].expected.is_err());
         assert!(matches!(run_fixture(&found[0]), Outcome::LoadError(_)));
@@ -344,7 +351,7 @@ mod harness {
 }"#,
         );
 
-        let found = discover(&dir);
+        let found = discover(&dir).unwrap();
         assert_eq!(found.len(), 1);
         let reason = found[0].expected.as_ref().expect_err("must not load");
         assert!(
@@ -363,15 +370,19 @@ mod harness {
         write(&dir, "alpha.expected.json", VALID_SNAPSHOT);
         write(&dir, "notes.txt", "ignore me");
 
-        let names: Vec<_> = discover(&dir).into_iter().map(|f| f.name).collect();
+        let names: Vec<_> = discover(&dir)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
         assert_eq!(names, vec!["alpha", "beta"]);
     }
 
     #[test]
-    fn missing_directory_yields_empty_corpus() {
+    fn missing_directory_is_an_error() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("does-not-exist-xyz");
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(discover(&dir).is_empty());
+        assert!(discover(&dir).is_err());
     }
 
     // Touch `Fixture` directly so the type is exercised by name.
