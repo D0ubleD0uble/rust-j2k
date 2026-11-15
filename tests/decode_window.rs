@@ -366,11 +366,11 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
     assert_eq!(cut.components, whole.components);
     // The whole prefix misses tiles 2 to 8.
     let all = decode_ok(prefix, &loose, "the prefix");
-    assert_eq!(missing_tiles(&all), [2..9]);
+    assert_eq!(missing_tiles(&all), [(2, 9)]);
 
     let cut = decode_ok(prefix, &tile(5), "the prefix's tile 5");
     assert!(!cut.report.is_complete());
-    assert_eq!(missing_tiles(&cut), [5..6]);
+    assert_eq!(missing_tiles(&cut), [(5, 6)]);
     assert!(
         cut.components
             .iter()
@@ -380,17 +380,17 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
     // A window over tiles 1 and 4 reads tile 4 of the missing run.
     let window = loose.with_window(Some(Window::new(30, 10, 40, 30)));
     let cut = decode_ok(prefix, &window, "the prefix's window");
-    assert_eq!(missing_tiles(&cut), [4..5]);
+    assert_eq!(missing_tiles(&cut), [(4, 5)]);
 }
 
 /// The runs of missing tiles on `image`'s report.
-fn missing_tiles(image: &Image) -> Vec<std::ops::Range<u32>> {
+fn missing_tiles(image: &Image) -> Vec<(u32, u32)> {
     image
         .report
         .entries
         .iter()
         .filter_map(|e| match e {
-            ReportEntry::MissingTiles { tiles, .. } => Some(tiles.clone()),
+            ReportEntry::MissingTiles { tiles, .. } => Some((tiles.start, tiles.end)),
             _ => None,
         })
         .collect()
