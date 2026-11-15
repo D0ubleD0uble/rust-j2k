@@ -1082,13 +1082,16 @@ HT_PASSES = {
 # Coding passes per HT code-block, from this crate's own Tier-2 walk over every
 # packet header (`tier2::tests::ht::the_corpus_pass_counts_are_the_manifests`;
 # `cargo test --lib the_corpus_pass_counts -- --nocapture` prints them). The
-# walk needs no HT decoder, so it covers the files OpenJPEG refuses. The MIXED
-# files are left out: their main header is refused before the walk. name ->
+# walk needs no HT decoder, so it covers the files OpenJPEG refuses. name ->
 # (blocks with any pass, blocks with placeholder passes, {passes past the
 # placeholders: blocks}, blocks with refinement passes and no refinement
-# bytes). Where HT_PASSES has the file too, the two agree, which the test
-# checks.
+# bytes), counting HT blocks only; the MIXED files add a fifth count, their
+# Part 1 blocks with any pass. Where HT_PASSES has the file too, the two
+# agree, which the test checks.
 HT_WALKED = {
+    "ds0_hm_06_b11": (84, 79, {1: 60, 3: 24}, 0, 17),
+    "ds0_hm_06_b18": (84, 80, {1: 77, 3: 7}, 0, 17),
+    "ds0_hm_15_b8": (12, 7, {1: 12}, 0, 4),
     "ds0_ht_01_b11": (10, 0, {1: 10}, 0),
     "ds0_ht_02_b11": (13, 13, {1: 9, 3: 4}, 0),
     "ds0_ht_02_b12": (13, 13, {1: 13}, 0),
@@ -1446,18 +1449,21 @@ def passes_record(name: str, placeholder_bset: bool) -> dict:
             },
         )
     if walked is not None:
-        blocks, placeholder, histogram, zero_refinement = walked
+        blocks, placeholder, histogram, zero_refinement, *part1 = walked
         if sum(histogram.values()) != blocks:
             raise ValueError(f"{name}: walked histogram does not sum to {blocks}")
+        walked = {
+            "blocks": blocks,
+            "placeholder": placeholder,
+            "histogram": {str(k): v for k, v in sorted(histogram.items())},
+            "zero_length_refinement": zero_refinement,
+        }
+        if part1:
+            walked["part1"] = part1[0]
         record.update(
             placeholder=placeholder > 0,
             refinement=max(histogram) > 1,
-            walked={
-                "blocks": blocks,
-                "placeholder": placeholder,
-                "histogram": {str(k): v for k, v in sorted(histogram.items())},
-                "zero_length_refinement": zero_refinement,
-            },
+            walked=walked,
         )
     return record
 

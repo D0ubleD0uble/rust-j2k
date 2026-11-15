@@ -117,9 +117,11 @@ pub mod marker {
 /// Each flag changes how Tier-1 reads a code-block's coded segments, so a
 /// decoder that ignores one does not decode a slightly different image — it
 /// decodes the wrong one. The six Part 1 flags below are decoded. The two
-/// HTJ2K bits are read into [`Coding`](super::Coding): [`HT`] alone selects
-/// the HT block coder, and [`HT_MIXED`] is refused by the block-coder guard
-/// (`check_block_coder` in `codestream`).
+/// HTJ2K bits are read into [`Coding`](super::Coding): `HT` alone selects
+/// the HT block coder, and `HT` with `HT_MIXED` lets each code-block be
+/// an HT or a Part 1 block, which tier-2 tells apart. `HT_MIXED` without
+/// `HT` is refused by the block-coder guard (`check_block_coder` in
+/// `codestream`).
 pub mod code_block_style {
     /// Bit 0: selective arithmetic coding bypass (lazy). From the fifth coded
     /// bit-plane on, the significance-propagation and magnitude-refinement passes
@@ -672,6 +674,19 @@ pub struct Cod {
 pub struct Ccap15(pub u16);
 
 impl Ccap15 {
+    /// Bits 15-14 are `00`: every code-block is an HT code-block (HTONLY,
+    /// A.3.2).
+    pub fn ht_only(self) -> bool {
+        self.0 & 0xC000 == 0
+    }
+
+    /// Bits 15-14 are `10`: each tile-component holds HT code-blocks only or
+    /// Part 1 code-blocks only (HTDECLARED, A.3.2), so no code-block style
+    /// sets bit 7.
+    pub fn ht_declared(self) -> bool {
+        self.0 & 0xC000 == 0x8000
+    }
+
     /// Bit 13: an HT code-block may carry more than one HT set (MULTIHT,
     /// A.3.3).
     pub fn multiht(self) -> bool {

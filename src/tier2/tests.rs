@@ -67,7 +67,8 @@ fn parse_layers_styled<'a>(
     delimiters: Delimiters,
     style: u8,
 ) -> Result<(Vec<Subband<'a>>, usize)> {
-    let mut states: Vec<BandState<'a>> = bands.iter().map(BandState::new).collect();
+    let coder = Coder::of_style(style, None);
+    let mut states: Vec<BandState<'a>> = bands.iter().map(|b| BandState::new(b, coder)).collect();
     let mut streams = PacketStreams {
         header: data,
         header_pos: 0,
@@ -2101,7 +2102,10 @@ fn the_sop_sequence_number_wraps_at_65536() {
     data.extend_from_slice(&[1, 2]);
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let mut states: Vec<BandState<'_>> = bands.iter().map(BandState::new).collect();
+    let mut states: Vec<BandState<'_>> = bands
+        .iter()
+        .map(|b| BandState::new(b, Some(Coder::Part1)))
+        .collect();
     let mut streams = PacketStreams {
         header: &data,
         header_pos: 0,
@@ -2331,7 +2335,7 @@ fn lazy_segment_max_passes_follows_the_10_2_1_pattern() {
     let mut segments: Vec<SegmentState<'_>> = Vec::new();
     let mut pattern = Vec::new();
     for _ in 0..7 {
-        let (kind, max_passes) = next_segment(LAZY, segments.last());
+        let (kind, max_passes) = next_segment(Coder::Part1, LAZY, segments.last());
         pattern.push(max_passes);
         segments.push(SegmentState::new(kind, max_passes));
     }
@@ -2343,8 +2347,8 @@ fn lazy_segment_max_passes_follows_the_10_2_1_pattern() {
 #[test]
 fn non_lazy_segment_max_passes_is_unchanged() {
     const TERMALL: u8 = 0x04;
-    assert_eq!(next_segment(TERMALL, None).1, 1);
-    assert_eq!(next_segment(0, None).1, 109);
+    assert_eq!(next_segment(Coder::Part1, TERMALL, None).1, 1);
+    assert_eq!(next_segment(Coder::Part1, 0, None).1, 109);
 }
 
 /// A refusal an earlier walk recorded on the meter does not label a later
