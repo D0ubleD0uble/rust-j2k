@@ -18,6 +18,10 @@ const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lo
 
 /// `ihdr` for the fixture with the given `BPC` and `UnkC`.
 fn ihdr(bpc: u8, unk_c: u8) -> Vec<u8> {
+    bx(b"ihdr", &synth::ihdr_payload(16, 24, 3, [bpc, 7, unk_c, 0]))
+}
+
+fn old_ihdr(bpc: u8, unk_c: u8) -> Vec<u8> {
     let mut payload = 16u32.to_be_bytes().to_vec();
     payload.extend_from_slice(&24u32.to_be_bytes());
     payload.extend_from_slice(&3u16.to_be_bytes());
@@ -27,6 +31,10 @@ fn ihdr(bpc: u8, unk_c: u8) -> Vec<u8> {
 
 /// A `colr` with an enumerated color space.
 fn enum_colr(enum_cs: u32) -> Vec<u8> {
+    bx(b"colr", &synth::colr_enum(enum_cs))
+}
+
+fn old_enum_colr(enum_cs: u32) -> Vec<u8> {
     let mut payload = vec![1, 0, 0];
     payload.extend_from_slice(&enum_cs.to_be_bytes());
     bx(b"colr", &payload)
@@ -42,6 +50,12 @@ fn colr(method: u8, rest: &[u8]) -> Vec<u8> {
 /// A file with `ihdr` (`BPC` 8-bit, `UnkC` 0) and `children` in `jp2h`, then
 /// `between` at the top level, then the codestream.
 fn file_with(ihdr_box: Vec<u8>, children: &[Vec<u8>], between: &[Vec<u8>]) -> Vec<u8> {
+    let mut header = vec![ihdr_box];
+    header.extend_from_slice(children);
+    synth::jp2_file(&header, between, CODESTREAM, &[])
+}
+
+fn old_file_with(ihdr_box: Vec<u8>, children: &[Vec<u8>], between: &[Vec<u8>]) -> Vec<u8> {
     let mut out = SIGNATURE.to_vec();
     out.extend_from_slice(&bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
     let mut inner = ihdr_box;
@@ -365,5 +379,23 @@ fn a_bpcc_before_ihdr_must_be_empty() {
             vec![bpcc(&[7, 7, 7]), ihdr(255, 0)],
         ])),
         ColorSpace::Grayscale
+    );
+}
+
+#[test]
+fn zz_identity_src_jp2_color_tests_rs() {
+    for (a, b) in [(7, 0), (0, 1), (255, 2)] {
+        assert_eq!(old_ihdr(a, b), ihdr(a, b));
+    }
+    for v in [0, 16, 17, 18, 0xFFFF_FFFF] {
+        assert_eq!(old_enum_colr(v), enum_colr(v));
+    }
+    assert_eq!(
+        old_file_with(ihdr(7, 0), &[enum_colr(16), vec![1]], &[vec![2, 3]]),
+        file_with(ihdr(7, 0), &[enum_colr(16), vec![1]], &[vec![2, 3]])
+    );
+    assert_eq!(
+        old_file_with(ihdr(7, 0), &[], &[]),
+        file_with(ihdr(7, 0), &[], &[])
     );
 }
