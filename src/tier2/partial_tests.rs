@@ -61,6 +61,22 @@ fn a_cut_packet_keeps_whole_layers_under_each_code_block_style() {
     }
 }
 
+/// The same under `predictable termination`, on the layer-cap fixtures:
+/// `pterm_cut` and `bypass_pterm`, whose cut prefixes OpenJPEG decodes to
+/// other images (see `tests/max_quality_layers.rs`), and `precincts_pterm`,
+/// LRCP with several precincts in each resolution, so a block's cut flag
+/// comes from its own precinct's packets.
+#[test]
+fn a_cut_packet_keeps_whole_layers_under_predictable_termination() {
+    for (name, layers) in [
+        ("layers/pterm_cut.j2k", 2),
+        ("layers/bypass_pterm.j2k", 4),
+        ("layers/precincts_pterm.j2k", 3),
+    ] {
+        whole_layers(name, layers);
+    }
+}
+
 /// Cut the tile data of fixture `name`, of one tile and `layers` layers, at
 /// every byte, and check each code-block is what a decode of the first `k`
 /// layers of the whole file gives it, for some `k`. Whether some cut left

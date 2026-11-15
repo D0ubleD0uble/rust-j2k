@@ -30,6 +30,12 @@ whole segment: the check cannot apply to a segment the cap cuts short, and
 OpenJPEG does not make it under `-l`. The script checks that the full decode
 is the source.
 
+`pterm_poc_gap.j2k` is `pterm_cut.j2k` with a `POC` marker after `QCD` whose
+one volume ends at layer 1 (LRCP, resolution 0 to 1, component 0 to 1): the
+packets of layer 1 are left out, and their bytes are left after the last
+packet. `pterm_poc_gap_0.pgx` is its `opj_decompress -allow-partial` output,
+which the script checks is the `-l 1` decode of `pterm_cut.j2k`.
+
 For the ISO/IEC 15444-4 codestreams in PART4 (5/3, several layers), the
 decoded samples are not committed: `layers/` ships in the crate, and the
 conformance corpus is excluded from it. The script writes `part4.sha256` instead: for each codestream, N and reduction, the
@@ -45,9 +51,10 @@ be held to `predictable termination`.
 `prefixes.sha256` holds the same kind of hash for every prefix of the
 fixtures in PREFIXES, from `opj_decompress -allow-partial`, with no cap and
 with each cap listed. Runs of prefixes that decode alike share a line:
-`<name> <cap, 0 for none> <first length> <last length> <hash>`, or `refused`
-in place of the hash where OpenJPEG writes no image. `--prefixes` writes only
-this file, from the committed codestreams.
+`<name> <cap, 0 for none> <first length> <last length> <hash> <flag>`, with
+`refused` in place of the hash where OpenJPEG writes no image. The flag is
+`cut` where OpenJPEG warns `segment too long` and `whole` otherwise.
+`--prefixes` writes only this file, from the committed codestreams.
 
 Usage: python3 scripts/gen-layer-fixtures.py [--prefixes]
 Requires OpenJPEG 2.5.0 `opj_compress` and `opj_decompress` on PATH.
@@ -82,6 +89,10 @@ FIXTURES = {
     "bypass_pterm": ("gray.pgm", ["-n", "3", "-p", "LRCP", "-M", "17", "-r", "20,6,2,1"], 4),
     # 9/7 and the irreversible color transform, CPRL, three layers.
     "cprl_irreversible": ("rgb.ppm", ["-n", "3", "-p", "CPRL", "-I", "-r", "60,20,6"], 3),
+    # 5/3, LRCP, `predictable termination`, 8 x 8 precincts of 4 x 4
+    # code-blocks, so each resolution has several precincts.
+    "precincts_pterm": ("gray.pgm", ["-n", "3", "-p", "LRCP", "-M", "16", "-b", "4,4",
+                                     "-c", "[8,8]", "-r", "20,6,1"], 3),
     # Written by `pterm_cut` rather than encoded: see the module docs.
     "pterm_cut": (None, [], 2),
     # The fixtures of `gen-zero-length-fixtures.py`, read from
@@ -219,6 +230,25 @@ def pterm_cut(tmp: Path) -> None:
         sys.exit("pterm_cut: the full decode is not the source")
 
 
+def pterm_poc_gap(tmp: Path) -> None:
+    """Write `pterm_poc_gap.j2k` and its oracle (see the module docs)."""
+    whole = (DIR / "pterm_cut.j2k").read_bytes()
+    qcd = whole.index(b"\xff\x5c")
+    qcd_end = qcd + 2 + int.from_bytes(whole[qcd + 2:qcd + 4], "big")
+    # RSpoc 0, CSpoc 0, LYEpoc 1, REpoc 1, CEpoc 1, Ppoc LRCP.
+    poc = b"\xff\x5f" + struct.pack(">HBBHBBB", 9, 0, 0, 1, 1, 1, 0)
+    out = DIR / "pterm_poc_gap.j2k"
+    out.write_bytes(whole[:qcd_end] + poc + whole[qcd_end:])
+    for old in DIR.glob("pterm_poc_gap_*.pgx"):
+        old.unlink()
+    run("opj_decompress", "-allow-partial", "-i", str(out), "-o",
+        str(DIR / "pterm_poc_gap.pgx"))
+    got = samples_of([DIR / "pterm_poc_gap_0.pgx"])
+    want = samples_of(decode(DIR / "pterm_cut.j2k", tmp / "l1", 1, 0))
+    if got != want:
+        sys.exit("pterm_poc_gap: the decode is not the -l 1 decode of pterm_cut")
+
+
 def prefix_oracles() -> None:
     """Write `prefixes.sha256` (see the module docs)."""
     lines = []
@@ -309,6 +339,8 @@ def main() -> None:
                 lines.append(f"{name} {offset} {n} {hashlib.sha256(got).hexdigest()}")
     (DIR / "damaged.sha256").write_text("\n".join(lines) + "\n")
     print(f"damaged.sha256: {len(lines)} oracles")
+    with tempfile.TemporaryDirectory() as tmp:
+        pterm_poc_gap(Path(tmp))
     prefix_oracles()
 
 

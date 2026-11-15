@@ -47,10 +47,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - With `strict` off, a codestream under `predictable termination` that is
-  cut short decodes to a partial image. It was `Error::Codestream` when the
-  data ended before a later layer added passes to a code-block's last
-  segment, with or without `max_quality_layers`. That segment is no longer
-  held to the termination check; the block's earlier segments still are.
+  cut short, or whose `POC` volumes leave packets out, decodes to a partial
+  image. It was `Error::Codestream` when a missing packet of a later layer
+  would have added passes to a code-block's last segment, with or without
+  `max_quality_layers`. That segment is no longer held to the termination
+  check; the block's earlier segments still are.
 
 ## [0.4.0] - 2026-11-14
 

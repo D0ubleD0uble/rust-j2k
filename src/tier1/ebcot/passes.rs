@@ -1052,14 +1052,16 @@ pub fn top_coded_plane(numbps: u32, zero_bit_planes: u32, roi_shift: u8) -> u32 
 /// The per-component parameters a code-block decode needs beyond its own
 /// subband: the code-block style flags (`SPcod`/`SPcoc`) and the
 /// region-of-interest maxshift (`SPrgn`), and whether the block's last
-/// codeword segment was cut short by a layer cap.
+/// codeword segment may be cut short (see
+/// [`last_segment_cut`](Self::last_segment_cut)).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BlockParams {
     pub style: u8,
     pub roi_shift: u8,
-    /// The last segment ends before the encoder terminated it, because a
-    /// `max_quality_layers` cap dropped its later passes. `predictable
-    /// termination` cannot hold of it, so only that segment skips the check.
+    /// The last segment may end before the encoder terminated it: a
+    /// `max_quality_layers` cap dropped its later passes, or, with `strict`
+    /// off, a later packet of the block is missing. `predictable termination`
+    /// cannot hold of it, so only that segment skips the check.
     pub last_segment_cut: bool,
 }
 
@@ -1279,8 +1281,9 @@ pub fn decode_block(
         // only the last segment of a block and warns; checking each one costs
         // nothing and localizes the damage. The check is the MQ flush's, so it
         // applies to MQ segments only — a raw `bypass` segment ends on a byte
-        // boundary with no such guarantee. A last segment a layer cap cut
-        // short is exempt: its later passes, and the flush, were dropped.
+        // boundary with no such guarantee. A last segment that may be cut
+        // short, by a layer cap or by missing packets with `strict` off, is
+        // exempt: its later passes, and the flush, may be gone.
         let cut = last_segment_cut && index == last_segment;
         if let PassCoder::Mq(mq) = &coder {
             if style & PTERM != 0 && !cut && !mq.ends_predictably() {

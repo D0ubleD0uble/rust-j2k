@@ -79,8 +79,9 @@ pub struct CodeBlock<'a> {
     /// at each one and carries its bit-plane state across them.
     pub segments: Vec<CodedSegment<'a>>,
     /// Whether the last segment may be cut short: a layer the decode drops
-    /// adds coding passes to it, or, with `strict` off, the data ends before
-    /// a later packet of the block's precinct, which may add some. Either
+    /// adds coding passes to it, or, with `strict` off, a later packet of the
+    /// block's precinct, which may add some, is missing: the data ends
+    /// before it or the `POC` volumes leave it out. Either
     /// way the encoder may have terminated it past the passes and bytes kept
     /// here, so Tier-1 does not hold it to `predictable termination`. Only
     /// the last segment can be cut, since a layer adds passes and bytes to
@@ -489,6 +490,13 @@ fn walk_packets<'a>(
         reach.missing_from = geoms.iter().map(|c| vec![None; c.len()]).collect();
         progression::poc_gaps(header, &walk, |comp, res, layer| {
             reach.miss(comp, res, u32::from(layer));
+            // The packets left out may add passes to the last segment of
+            // any code-block of the resolution, as packets the data never
+            // reached may.
+            let bands = &mut states[comp][res];
+            for precinct in 0..bands.first().map_or(0, |b| b.precincts.len()) {
+                mark_unread(bands, precinct);
+            }
             Ok(())
         })?;
     } else if budget.poc_coverage {
@@ -966,8 +974,9 @@ struct PrecinctState {
     inclusion: TagTree,
     zero_bits: TagTree,
     /// With `strict` off: whether a packet of the precinct was not read, or
-    /// read only in part, because the data ended. Its code-blocks may then
-    /// lack passes a later layer adds to their last segment.
+    /// read only in part, because the data ended, or is one the `POC`
+    /// volumes leave out. Its code-blocks may then lack passes a later layer
+    /// adds to their last segment.
     unread: bool,
 }
 
@@ -1495,9 +1504,8 @@ fn empty_subbands<'a>(rect: Rect, nl: u32, r: u32) -> Vec<Subband<'a>> {
         .collect()
 }
 
-/// Note that a packet of `precinct` was not read whole because the data
-/// ended (see [`PrecinctState::unread`]). A packet spans every band of the
-/// resolution.
+/// Note that a packet of `precinct` was not read whole (see
+/// [`PrecinctState::unread`]). A packet spans every band of the resolution.
 fn mark_unread(bands: &mut [BandState<'_>], precinct: usize) {
     for band in bands {
         if let Some(state) = band.precincts.get_mut(precinct) {

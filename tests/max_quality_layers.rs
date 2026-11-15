@@ -74,10 +74,11 @@ fn sample_bytes(image: &Image) -> Vec<u8> {
 /// `zero_length_contribution` and `zero_length_contribution_bypass` sit in
 /// `tests/fixtures/`: a cap of 1 decodes passes whose bytes come in layer 1
 /// from the fill, as OpenJPEG does, not from those bytes.
-const SYNTHETIC: [(&str, u16, i32); 7] = [
+const SYNTHETIC: [(&str, u16, i32); 8] = [
     ("lrcp", 4, 0),
     ("rpcl", 3, 0),
     ("bypass_pterm", 4, 0),
+    ("precincts_pterm", 3, 0),
     ("pterm_cut", 2, 0),
     ("cprl_irreversible", 3, 1),
     ("zero_length_contribution", 2, 0),
@@ -361,6 +362,26 @@ fn an_uncut_last_segment_is_still_checked() {
     }
 }
 
+/// The other side of the exemption: under the default style a block has one
+/// segment, so with `strict` off a prefix that lacks a later layer does not
+/// check it, and damage in it goes unreported, as under a cap. `pterm_cut.j2k`
+/// with byte 100 flipped is refused whole, strict or not, and its 228-byte
+/// prefix, which lacks the last packet's header, decodes.
+#[test]
+fn a_cut_prefix_does_not_check_a_blocks_only_segment() {
+    let mut bad = layers_file("pterm_cut.j2k");
+    bad[100] ^= 0x10;
+    let lenient = DecodeOptions::default().with_strict(false);
+    for options in [DecodeOptions::default(), lenient.clone()] {
+        assert!(
+            matches!(decode_with(&bad, &options), Err(Error::Codestream(_))),
+            "{options:?}"
+        );
+    }
+    let image = decode_ok(&bad[..228], &lenient, "228 bytes");
+    assert!(!image.report.is_complete());
+}
+
 /// Where the single tile-part's `Psot` sits.
 fn sot_psot_offset(bytes: &[u8]) -> usize {
     let sot = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
@@ -488,6 +509,37 @@ fn every_strict_off_prefix_of_a_pterm_codestream_matches_openjpeg() {
     assert_eq!(exact + departures, 2 * (231 + 2558) - 2 * (78 + 123));
     // How many depart, so a change that widens the difference shows.
     assert_eq!((exact, departures), (3222, 1954));
+}
+
+/// Packets the `POC` volumes leave out are missing like packets the data
+/// never reached: `pterm_poc_gap.j2k` is `pterm_cut.j2k` with a `POC` that
+/// ends at layer 1, so layer 1 would add passes to each block's one segment.
+/// A strict decode refuses the gap. With `strict` off it decodes to OpenJPEG's
+/// `-allow-partial` image, bit-exactly, which is the `-l 1` image of
+/// `pterm_cut.j2k`, and reports the layer missing.
+#[test]
+fn a_segment_a_poc_gap_leaves_short_is_not_checked_with_strict_off() {
+    let bytes = layers_file("pterm_poc_gap.j2k");
+    match decode(&bytes) {
+        Err(Error::Codestream(message)) => assert!(message.contains("POC"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    let lenient = DecodeOptions::default().with_strict(false);
+    let image = decode_ok(&bytes, &lenient, "strict off");
+    let oracle = parse_pgx(&layers_file("pterm_poc_gap_0.pgx")).unwrap();
+    assert_eq!(image.components.len(), 1);
+    assert_eq!(image.components[0].samples, oracle.samples);
+    assert!(
+        image.report.entries.iter().any(|e| matches!(
+            e,
+            ReportEntry::MissingPackets {
+                complete_layers: 1,
+                ..
+            }
+        )),
+        "{:?}",
+        image.report
+    );
 }
 
 /// With `strict` off, a block whose precinct the data ended in is exempt from
