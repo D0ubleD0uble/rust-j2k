@@ -513,6 +513,7 @@ mod tests {
                 cut: false,
                 placeholders: 0,
                 coder: Coder::Part1,
+                missing_from: None,
             }],
         }
     }

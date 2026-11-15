@@ -157,10 +157,18 @@ fn whole_layers(name: &str, layers: u16) -> bool {
         for (b, (at, block)) in got.iter().enumerate() {
             let uncut = CodeBlock {
                 cut: false,
+                missing_from: None,
                 ..(*block).clone()
             };
             let ks: Vec<u16> = (0..=layers)
-                .filter(|&k| limited[usize::from(k)][b].1 == &uncut)
+                .filter(|&k| {
+                    // Where the data ends, not which layers a block holds.
+                    let layer = CodeBlock {
+                        missing_from: None,
+                        ..limited[usize::from(k)][b].1.clone()
+                    };
+                    layer == uncut
+                })
                 .collect();
             assert!(
                 !ks.is_empty(),

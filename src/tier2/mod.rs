@@ -135,6 +135,10 @@ pub struct CodeBlock<'a> {
     /// fields are all zero is an HT block of placeholder passes only, which
     /// codes nothing (see [`mixed_first_length`]).
     pub coder: Coder,
+    /// With `strict` off, the first layer whose packet of the block's
+    /// precinct was not read whole; `None` when every packet of it was read,
+    /// and always when strict.
+    pub missing_from: Option<u32>,
 }
 
 /// One codeword segment: the coding passes it carries and the bytes coding
@@ -552,7 +556,7 @@ fn walk_packets<'a>(
             // reached may.
             let bands = &mut states[comp][res];
             for precinct in 0..bands.first().map_or(0, |b| b.precincts.len()) {
-                mark_unread(bands, precinct);
+                mark_unread(bands, precinct, u32::from(layer));
             }
             Ok(())
         })?;
@@ -582,7 +586,7 @@ fn walk_packets<'a>(
                     // Past the end of the data: count the packet, not read.
                     meter.spend(1, WorkRefusal::PacketWalk)?;
                     reach.miss(component, resolution, layer);
-                    mark_unread(&mut states[component][resolution], precinct);
+                    mark_unread(&mut states[component][resolution], precinct, layer);
                     return Ok(());
                 }
             }
@@ -603,7 +607,7 @@ fn walk_packets<'a>(
             )?;
             if packet != Packet::Read {
                 ended = true;
-                mark_unread(&mut states[component][resolution], precinct);
+                mark_unread(&mut states[component][resolution], precinct, layer);
                 meter.spend(end_visits, WorkRefusal::PacketWalk)?;
                 if let Some(reach) = reach.as_deref_mut() {
                     reach.miss(component, resolution, layer);
@@ -1337,11 +1341,11 @@ struct BandState<'a> {
 struct PrecinctState {
     inclusion: TagTree,
     zero_bits: TagTree,
-    /// With `strict` off: whether a packet of the precinct was not read, or
-    /// read only in part, because the data ended, or is one the `POC`
-    /// volumes leave out. Its code-blocks may then lack passes a later layer
-    /// adds to their last segment.
-    unread: bool,
+    /// With `strict` off: the first layer whose packet of the precinct was
+    /// not read, or read only in part, because the data ended, or is one the
+    /// `POC` volumes leave out. Its code-blocks may then lack passes a later
+    /// layer adds to their last segment.
+    unread: Option<u32>,
 }
 
 impl BandState<'_> {
@@ -1354,7 +1358,7 @@ impl BandState<'_> {
                 .map(|precinct| PrecinctState {
                     inclusion: TagTree::new(precinct.cols as u32, precinct.rows as u32),
                     zero_bits: TagTree::new(precinct.cols as u32, precinct.rows as u32),
-                    unread: false,
+                    unread: None,
                 })
                 .collect(),
             blocks: (0..band.block_count())
@@ -1943,12 +1947,12 @@ fn empty_subbands<'a>(rect: Rect, nl: u32, r: u32) -> Vec<Subband<'a>> {
         .collect()
 }
 
-/// Note that a packet of `precinct` was not read whole (see
+/// Note that the packet of `precinct` in `layer` was not read whole (see
 /// [`PrecinctState::unread`]). A packet spans every band of the resolution.
-fn mark_unread(bands: &mut [BandState<'_>], precinct: usize) {
+fn mark_unread(bands: &mut [BandState<'_>], precinct: usize, layer: u32) {
     for band in bands {
         if let Some(state) = band.precincts.get_mut(precinct) {
-            state.unread = true;
+            state.unread = Some(state.unread.map_or(layer, |from| from.min(layer)));
         }
     }
 }
@@ -1977,12 +1981,12 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
             // once. A walk that read every packet allocates nothing here.
             let mut unread = Vec::new();
             for (geom, precinct) in band.precincts.iter().zip(&state.precincts) {
-                if precinct.unread {
-                    unread.resize(state.blocks.len(), false);
+                if let Some(from) = precinct.unread {
+                    unread.resize(state.blocks.len(), None);
                     for by in 0..geom.rows {
                         for bx in 0..geom.cols {
                             if let Some(flag) = unread.get_mut(geom.block(bx, by)) {
-                                *flag = true;
+                                *flag = Some(from);
                             }
                         }
                     }
@@ -1991,7 +1995,8 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
             let mut blocks = Vec::with_capacity(state.blocks.len());
             blocks.extend(band.block_rects().zip(state.blocks).enumerate().map(
                 |(index, ((x, y, width, height), block))| {
-                    let unread = unread.get(index).copied().unwrap_or(false);
+                    let missing_from = unread.get(index).copied().flatten();
+                    let unread = missing_from.is_some();
                     // Under a layer cap, the segments the kept layers never
                     // reached are left out, and the last one kept may hold
                     // only some of its passes. Without a cap every pass is
@@ -2040,6 +2045,7 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                         cut,
                         placeholders,
                         coder,
+                        missing_from,
                     }
                 },
             ));

@@ -888,7 +888,8 @@ pub struct DecodeOptions {
     /// out of order or with a gap, and every [`Error::Limit`]. The work bounds
     /// and the sample limit hold as they do when strict, counted on the data
     /// that is there. A missing tile is not walked, but each of its
-    /// tile-components is charged against the packet work bound, as are the
+    /// tile-components is charged against the packet work bound (under a
+    /// window or tile, those of the missing tiles it reads), as are the
     /// packets after the end of the data, so a short input cannot ask for
     /// unbounded work.
     ///
@@ -898,9 +899,9 @@ pub struct DecodeOptions {
     /// that the window does not need are not decoded, and with
     /// [`components`](Self::components) the code-blocks of the components
     /// left out are not decoded, so damage there goes unseen, as with
-    /// `opj_decompress -t` and `-d`. So do the code-blocks a decode would
-    /// refuse, such as HT code-blocks with refinement passes: a decode that
-    /// skips them can succeed where the whole decode is refused.
+    /// `opj_decompress -t` and `-d`. Nor is a code-block a decode skips
+    /// checked against the bit-plane limit, so it can succeed where the
+    /// whole decode is refused as [`Error::Limit`].
     ///
     /// For a codestream as it streams in: a prefix that holds every packet of
     /// the resolutions a reduction keeps decodes at that reduction to the same
@@ -1555,15 +1556,8 @@ fn decode_codestream(
             tier2::decode_packets_partial(&header, tile, &meter, poc_bitmap, reduction, layers)
                 .map(|(coded, reach)| (coded, Some(reach)))
         };
-        let mut coded = match walked {
-            Ok((coded, reach)) => {
-                if let Some(reach) = reach {
-                    let tile_complete =
-                        report_tile(&header, tile, &reach, reduction, layers, &mut entries);
-                    complete = complete.zip(tile_complete).map(|(a, b)| a.max(b));
-                }
-                coded
-            }
+        let (mut coded, reach) = match walked {
+            Ok(walked) => walked,
             Err(tier2::Refused::Work(work)) => {
                 // The meter holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
@@ -1606,24 +1600,58 @@ fn decode_codestream(
                 if !windowed || !wanted[component] {
                     return Ok(None);
                 }
-                let rect = cs.header.siz.tile_component_rect(tile.index, component);
-                let area = selection.area.component_rect(component);
-                let transform = header.components.get(component).map(|c| c.coding.transform);
-                let (Some(rect), Some(area), Some(transform)) = (rect, area, transform) else {
-                    return Err(Error::Inconsistent(format!(
-                        "no tile {} or no component {component} in `SIZ`",
-                        tile.index
-                    )));
-                };
-                dwt::Footprint::of(
-                    coded,
-                    reduction,
-                    rect.reduced(reduction),
-                    area.reduced(reduction),
-                    transform,
+                footprint_of(
+                    &cs.header, &header, selection, tile, coded, component, reduction,
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        if let Some(reach) = reach {
+            // The whole image, or a whole tile of it, is reported by packet;
+            // a part of it by the code-blocks that part needs. Whether the
+            // window covers the tile is judged at full resolution, so that
+            // the report is the same at every reduction.
+            let covers = |component: usize| {
+                let rect = cs.header.siz.tile_component_rect(tile.index, component);
+                let area = selection.area.component_rect(component);
+                matches!((rect, area), (Some(rect), Some(area)) if area.intersect(&rect) == rect)
+            };
+            let part = wanted.contains(&false)
+                || (windowed && (0..wanted.len()).any(|component| !covers(component)));
+            let tile_complete = if part {
+                let footprint_at = |component: usize, r: u8| {
+                    if r == reduction {
+                        return Ok(footprints[component].clone());
+                    }
+                    footprint_of(
+                        &cs.header,
+                        &header,
+                        selection,
+                        tile,
+                        &coded.components[component],
+                        component,
+                        r,
+                    )
+                };
+                let scope = Scope {
+                    coded: &coded,
+                    wanted: &wanted,
+                    windowed,
+                    footprint_at,
+                };
+                report_part(
+                    &header,
+                    tile,
+                    &reach,
+                    &scope,
+                    reduction,
+                    layers,
+                    &mut entries,
+                )?
+            } else {
+                report_tile(&header, tile, &reach, reduction, layers, &mut entries)
+            };
+            complete = complete.zip(tile_complete).map(|(a, b)| a.max(b));
+        }
         for (coded, footprint) in coded.components.iter_mut().zip(&footprints) {
             if let Some(footprint) = footprint {
                 footprint.prune(coded);
@@ -1747,6 +1775,147 @@ fn decode_codestream(
     Ok(image)
 }
 
+/// The footprint of `selection`'s area on `component` of `tile`, whose
+/// coded data is `coded`, at `reduction` (see [`dwt::Footprint::of`]).
+/// `main` is the main header, `header` the tile's.
+fn footprint_of(
+    main: &codestream::MainHeader,
+    header: &codestream::MainHeader,
+    selection: &window::Selection,
+    tile: &codestream::Tile<'_>,
+    coded: &tier2::ComponentCoded<'_>,
+    component: usize,
+    reduction: u8,
+) -> Result<Option<dwt::Footprint>> {
+    let rect = main.siz.tile_component_rect(tile.index, component);
+    let area = selection.area.component_rect(component);
+    let transform = header.components.get(component).map(|c| c.coding.transform);
+    let (Some(rect), Some(area), Some(transform)) = (rect, area, transform) else {
+        return Err(Error::Inconsistent(format!(
+            "no tile {} or no component {component} in `SIZ`",
+            tile.index
+        )));
+    };
+    dwt::Footprint::of(
+        coded,
+        reduction,
+        rect.reduced(reduction),
+        area.reduced(reduction),
+        transform,
+    )
+}
+
+/// The part of a tile a decode returns, for [`report_part`].
+struct Scope<'s, 'a, F> {
+    /// The tile's coded data.
+    coded: &'s tier2::CodedData<'a>,
+    /// The components reconstructed.
+    wanted: &'s [bool],
+    /// Whether the decode returns less than the image.
+    windowed: bool,
+    /// The footprint of the window on a component at a reduction: `None`
+    /// when the window needs all of its code-blocks. Asked only when
+    /// `windowed`.
+    footprint_at: F,
+}
+
+/// [`report_tile`] for a decode that returns part of `tile`: only the
+/// components `scope` reconstructs count, and of them only the code-blocks
+/// the window needs. A missing packet whose code-blocks the samples do not
+/// need is not missing from them.
+///
+/// The smallest complete reduction is the smallest `r` at which, and at
+/// every larger one the tile allows, no needed code-block lacks a packet.
+/// The window needs other code-blocks at each reduction, so each is
+/// checked, over the code-blocks with a packet missing and the components
+/// that hold them: at most one pass over them per resolution. A tile whose
+/// data ended has paid the packet work bound for each of its components'
+/// resolutions, which bounds that.
+fn report_part<F>(
+    header: &codestream::MainHeader,
+    tile: &codestream::Tile<'_>,
+    reach: &tier2::Reach,
+    scope: &Scope<'_, '_, F>,
+    reduction: u8,
+    cap: Option<u16>,
+    entries: &mut Vec<ReportEntry>,
+) -> Result<Option<u8>>
+where
+    F: Fn(usize, u8) -> Result<Option<dwt::Footprint>>,
+{
+    let layers = u32::from(cap.map_or(header.cod.layers, |cap| cap.min(header.cod.layers)));
+    let components = &scope.coded.components;
+    let kept: Vec<usize> = (0..components.len())
+        .filter(|&c| scope.wanted.get(c).copied().unwrap_or(false))
+        .collect();
+    // The code-blocks of the components reconstructed with a packet missing
+    // from a layer the decode keeps.
+    let mut missing = Vec::new();
+    for &c in &kept {
+        for (res, resolution) in components[c].resolutions.iter().enumerate() {
+            for band in &resolution.subbands {
+                for block in &band.blocks {
+                    if let Some(from) = block.missing_from.filter(|&l| l < layers) {
+                        missing.push((c, res, band.kind, block, from));
+                    }
+                }
+            }
+        }
+    }
+    let mut lacking = vec![false; components.len()];
+    for &(c, ..) in &missing {
+        lacking[c] = true;
+    }
+    let resolutions = |c: usize| components[c].resolutions.len();
+    // The most a reduction can drop of every component reconstructed.
+    let most = kept
+        .iter()
+        .map(|&c| resolutions(c).saturating_sub(1))
+        .min()
+        .unwrap_or(0);
+    // The first layer missing from a code-block the samples need at
+    // reduction `r`.
+    let first_missing = |r: u8| -> Result<Option<u32>> {
+        // Only the components with a code-block missing need a footprint.
+        let mut footprints = vec![None; components.len()];
+        if scope.windowed {
+            for &c in &kept {
+                if lacking[c] {
+                    footprints[c] = (scope.footprint_at)(c, r)?;
+                }
+            }
+        }
+        let mut first: Option<u32> = None;
+        for &(c, res, kind, block, from) in &missing {
+            let needed = res < resolutions(c).saturating_sub(usize::from(r))
+                && footprints[c]
+                    .as_ref()
+                    .is_none_or(|footprint: &dwt::Footprint| footprint.needs(res, kind, block));
+            if needed {
+                first = Some(first.map_or(from, |f| f.min(from)));
+            }
+        }
+        Ok(first)
+    };
+    let (whole, tile_complete) = if missing.is_empty() {
+        (layers, Some(0))
+    } else {
+        let mut tile_complete = None;
+        for r in (0..=most).rev() {
+            let Ok(r) = u8::try_from(r) else { continue };
+            if first_missing(r)?.is_some() {
+                break;
+            }
+            tile_complete = Some(r);
+        }
+        (first_missing(reduction)?.unwrap_or(layers), tile_complete)
+    };
+    let leftover = reach.leftover.is_some() || reach.leftover_packed.is_some();
+    let tile_complete = tile_complete.filter(|_| !leftover);
+    push_tile_entries(tile, reach, whole, layers, tile_complete, entries);
+    Ok(tile_complete)
+}
+
 /// Add what a non-strict walk of `tile` found to `entries`, and give the
 /// smallest reduction at which the tile has every packet. Under a layer cap
 /// of `cap`, only the packets of the layers it keeps count: one past it that
@@ -1783,6 +1952,20 @@ fn report_tile(
             }
         }
     }
+    push_tile_entries(tile, reach, whole, layers, tile_complete, entries);
+    tile_complete
+}
+
+/// Add to `entries` the packets missing from `tile`, when only the leading
+/// `whole` of its `layers` are whole, and the bytes its walk left over.
+fn push_tile_entries(
+    tile: &codestream::Tile<'_>,
+    reach: &tier2::Reach,
+    whole: u32,
+    layers: u32,
+    tile_complete: Option<u8>,
+    entries: &mut Vec<ReportEntry>,
+) {
     if whole < layers {
         entries.push(ReportEntry::MissingPackets {
             tile: tile.index,
@@ -1806,7 +1989,6 @@ fn report_tile(
             in_packed_headers: true,
         });
     }
-    tile_complete
 }
 
 /// The bytes of tile data the codestream's packets are read from: every

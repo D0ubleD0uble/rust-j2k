@@ -134,6 +134,7 @@ fn block(width: usize, height: usize, passes: u32) -> CodeBlock<'static> {
         cut: false,
         placeholders: 0,
         coder: crate::tier2::Coder::Part1,
+        missing_from: None,
     }
 }
 
