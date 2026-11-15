@@ -145,10 +145,18 @@ that does the same job.
 | Raise or lift the sample limit and the two work limits | Yes | `with_sample_limit`, `with_packet_work_limit`, `with_code_block_work_limit` | none |
 | Read the header without decoding any pixels | Yes | `read_header`, `read_header_with` | `opj_dump` |
 | Stop after a given number of quality layers | Yes | `with_max_quality_layers(Some(n))` | `-l` |
-| Decode one area of the image | No | none | `-d` |
-| Decode one tile | No | none | `-t` |
+| Decode one area of the image | Yes, with limits | `with_window(Some(Window::new(x0, y0, x1, y1)))` | `-d` |
+| Decode one tile | Yes | `with_tile(Some(index))` | `-t` |
+| Decode some of the components | Yes, with limits | `with_components(Some(list))` | `-c` |
 
-The last two are not in any phase of the roadmap yet. A layer cap still reads
+A window is on the reference grid, as OpenJPEG takes it, and the part of it
+outside the image is left out. Only the tiles it reaches are decoded, but each
+of those is decoded whole, every code-block and the wavelet over the whole
+tile, and the window is cut from it. So a window inside one large tile costs
+that tile's decode, and the sample limit still counts the whole image. Under
+the color transform, asking for one of components 0, 1 and 2 decodes all
+three. On a JP2 file a component subset returns the codestream components as
+coded, without the palette or channel definitions. A layer cap still reads
 the packets of the later layers, so damage in them is still an error. A partial decode
 relaxes only missing data and leftover bytes: a damaged packet header or
 code-block is still an error. The limits and what they cost a valid file are

@@ -40,6 +40,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still read, so damage in them is still an error. `None`, the default,
   decodes every layer; `Some(0)` is `Error::InvalidOptions`.
 
+- `DecodeOptions::window` (`with_window`, and the `Window` type),
+  `DecodeOptions::tile` (`with_tile`) and `DecodeOptions::components`
+  (`with_components`): decode a rectangle of the reference grid, one tile, or
+  some of the components, as `opj_decompress -d`, `-t` and `-c` do. Only the
+  tiles the rectangle reaches are decoded: a 256 x 256 window of a 2048 x 2048
+  image of 256 x 256 tiles decodes in about 3 ms against 55 ms for the whole.
+  The components left out are not decoded past the packet headers. Under the
+  color transform, asking for any of components 0, 1 and 2 decodes all three
+  and returns those components of the whole decode; OpenJPEG skips the
+  transform there instead. An empty window, one outside the image, a tile or
+  component past the image's, and a window with a tile are
+  `Error::InvalidOptions`. `read_header_with` describes the part the options
+  ask for.
+
 ### Changed
 
 - Some complete inputs now give `Error::Incomplete`, since their bytes look

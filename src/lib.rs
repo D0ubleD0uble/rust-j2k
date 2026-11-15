@@ -817,8 +817,10 @@ pub struct DecodeOptions {
     /// How many samples the decoded image may hold, against the limit
     /// described on [`decode`]: 2^28 samples (1 GiB as `i32`) by default,
     /// summed over the output channels at
-    /// [`resolution_reduction`](Self::resolution_reduction). Default
-    /// [`WorkLimit::Default`].
+    /// [`resolution_reduction`](Self::resolution_reduction). A
+    /// [`window`](Self::window), a [`tile`](Self::tile) or a
+    /// [`components`](Self::components) subset does not lower the count: it
+    /// is the whole image's. Default [`WorkLimit::Default`].
     ///
     /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per

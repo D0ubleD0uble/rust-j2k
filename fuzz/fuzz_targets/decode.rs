@@ -11,7 +11,9 @@
 //! Every input is decoded without a cap. Half of them, picked by a hash of
 //! the input, are then decoded again under a `max_quality_layers` cap of 1 to
 //! 3, so the walk that reads a layer's packets without keeping their passes is
-//! fuzzed too.
+//! fuzzed too. Another half are decoded through a window, a tile or a subset of
+//! components, all picked by the same hash, so the tile skip, the clipped
+//! placement and the per-component decode are fuzzed as well.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -23,7 +25,35 @@ fuzz_target!(|data: &[u8]| {
         let options = rust_j2k::DecodeOptions::default().with_max_quality_layers(Some(layers));
         let _ = rust_j2k::decode_with(data, &options);
     }
+    if hash & 2 == 2 {
+        let _ = rust_j2k::decode_with(data, &part(hash >> 8));
+    }
 });
+
+/// A window, a tile or a component subset, with a reduction of 0 or 1, from
+/// the bits of `bits`. The window's corners are small numbers, so that they
+/// land inside the small images the fuzzer makes.
+fn part(bits: u64) -> rust_j2k::DecodeOptions {
+    let small = |shift: u32| ((bits >> shift) & 0x3F) as u32;
+    let options =
+        rust_j2k::DecodeOptions::default().with_resolution_reduction(((bits >> 2) & 1) as u8);
+    match bits & 3 {
+        0 => {
+            let (x0, y0) = (small(4), small(10));
+            options.with_window(Some(rust_j2k::Window::new(
+                x0,
+                y0,
+                x0 + 1 + small(16),
+                y0 + 1 + small(22),
+            )))
+        }
+        1 => options.with_tile(Some(small(28))),
+        2 => options.with_components(Some(vec![(small(34) % 4) as u16])),
+        _ => options
+            .with_components(Some(vec![2, 0]))
+            .with_window(Some(rust_j2k::Window::new(small(40), small(46), 64, 64))),
+    }
+}
 
 /// FNV-1a over `bytes`.
 fn fnv1a(bytes: &[u8]) -> u64 {

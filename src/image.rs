@@ -17,7 +17,10 @@ use crate::{DecodeReport, Error, Jp2Metadata, Result};
 /// `ceil(Xsiz / 2^r) - ceil(XOsiz / 2^r)` by the same in y. A sub-sampled component covers
 /// that same area with fewer samples, so its own
 /// [`Component::width`]/[`Component::height`] can be smaller. With unit
-/// sub-sampling, the common case, they are equal.
+/// sub-sampling, the common case, they are equal. A decode of part of the
+/// image ([`window`](crate::DecodeOptions::window) or
+/// [`tile`](crate::DecodeOptions::tile)) has that part as its area, in the
+/// same formulas with the part's bounds for `XOsiz..Xsiz` and `YOsiz..Ysiz`.
 ///
 /// Components are in output-channel order. For a raw codestream that is SIZ
 /// order; a JP2 file's palette, channel definitions and sRGB option can change
@@ -39,7 +42,9 @@ pub struct Image {
     pub width: u32,
     /// The image area's height, as [`width`](Self::width).
     pub height: u32,
-    /// One entry per output channel. For a raw codestream, and for a JP2 file
+    /// One entry per output channel, or per entry of
+    /// [`components`](crate::DecodeOptions::components) when it is set. For a
+    /// raw codestream, and for a JP2 file
     /// with no palette, no channel definitions and as-coded output, that is one
     /// per SIZ component, in SIZ order. A palette makes one channel per
     /// palette column, channel definitions put the color channels in color
