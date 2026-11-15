@@ -2,9 +2,16 @@
 //!
 //! Each oracle is `opj_decompress -l N` 2.5.0 on the same bytes; see
 //! `tests/fixtures/layers/README.md`. The synthetic fixtures' oracles are
-//! committed as PGX. The ISO/IEC 15444-4 ones are committed as the SHA-256 of
-//! their samples: `layers/` ships in the crate, and the conformance corpus is
-//! excluded from it.
+//! committed as PGX, or as the SHA-256 of their samples where there are many
+//! (the prefixes of `prefixes.sha256`, which are `-allow-partial` outputs).
+//! The ISO/IEC 15444-4 ones are committed as hashes too: `layers/` ships in
+//! the crate, and the conformance corpus is excluded from it.
+//!
+//! Two tests read that corpus from `tests/fixtures/conformance/codestreams/`,
+//! so they need the repository, not the published crate:
+//! `part4_codestreams_match_openjpeg_at_each_cap` and
+//! `a_cap_at_or_past_the_layer_count_is_no_cap`. The others read only
+//! `tests/fixtures/layers/` and `tests/fixtures/`.
 
 mod support;
 
@@ -67,10 +74,11 @@ fn sample_bytes(image: &Image) -> Vec<u8> {
 /// `zero_length_contribution` and `zero_length_contribution_bypass` sit in
 /// `tests/fixtures/`: a cap of 1 decodes passes whose bytes come in layer 1
 /// from the fill, as OpenJPEG does, not from those bytes.
-const SYNTHETIC: [(&str, u16, i32); 7] = [
+const SYNTHETIC: [(&str, u16, i32); 8] = [
     ("lrcp", 4, 0),
     ("rpcl", 3, 0),
     ("bypass_pterm", 4, 0),
+    ("precincts_pterm", 3, 0),
     ("pterm_cut", 2, 0),
     ("cprl_irreversible", 3, 1),
     ("zero_length_contribution", 2, 0),
@@ -354,6 +362,26 @@ fn an_uncut_last_segment_is_still_checked() {
     }
 }
 
+/// The other side of the exemption: under the default style a block has one
+/// segment, so with `strict` off a prefix that lacks a later layer does not
+/// check it, and damage in it goes unreported, as under a cap. `pterm_cut.j2k`
+/// with byte 100 flipped is refused whole, strict or not, and its 228-byte
+/// prefix, which lacks the last packet's header, decodes.
+#[test]
+fn a_cut_prefix_does_not_check_a_blocks_only_segment() {
+    let mut bad = layers_file("pterm_cut.j2k");
+    bad[100] ^= 0x10;
+    let lenient = DecodeOptions::default().with_strict(false);
+    for options in [DecodeOptions::default(), lenient.clone()] {
+        assert!(
+            matches!(decode_with(&bad, &options), Err(Error::Codestream(_))),
+            "{options:?}"
+        );
+    }
+    let image = decode_ok(&bad[..228], &lenient, "228 bytes");
+    assert!(!image.report.is_complete());
+}
+
 /// Where the single tile-part's `Psot` sits.
 fn sot_psot_offset(bytes: &[u8]) -> usize {
     let sot = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
@@ -363,45 +391,181 @@ fn sot_psot_offset(bytes: &[u8]) -> usize {
 /// With `strict` off, a prefix that holds every packet of the layers the cap
 /// keeps is complete under that cap, and decodes as the whole codestream
 /// does under it. LRCP sends layer by layer, so each layer's packets end
-/// before the next layer's begin.
+/// before the next layer's begin. `bypass_pterm` and `pterm_cut` are under
+/// `predictable termination`: the layers past the cap that the prefix lacks
+/// would add passes to segments the prefix holds, so those segments are cut.
 #[test]
 fn a_prefix_that_holds_the_kept_layers_is_complete_under_the_cap() {
-    let whole = layers_file("lrcp.j2k");
-    for n in 1..=3u16 {
-        let full = sample_bytes(&decode_ok(&whole, &capped(n, 0), "whole"));
-        let lenient = capped(n, 0).with_strict(false);
-        let mut shortest = None;
-        for length in (100..whole.len()).rev() {
-            let prefix = &whole[..length];
-            let image = decode_ok(prefix, &lenient, &format!("-l {n}, {length} bytes"));
-            if !image.report.is_complete() {
-                // Every layer past the ones whole is reported missing.
-                for entry in &image.report.entries {
-                    if let ReportEntry::MissingPackets {
-                        complete_layers, ..
-                    } = entry
-                    {
-                        assert!(*complete_layers < n, "-l {n}, {length} bytes");
+    for (name, layers) in [("lrcp", 4u16), ("bypass_pterm", 4), ("pterm_cut", 2)] {
+        let whole = layers_file(&format!("{name}.j2k"));
+        assert_eq!(cod_layers(&whole), layers, "{name}");
+        for n in 1..layers {
+            let what = format!("{name} -l {n}");
+            let full = sample_bytes(&decode_ok(&whole, &capped(n, 0), &what));
+            let lenient = capped(n, 0).with_strict(false);
+            let mut shortest = None;
+            for length in (1..whole.len()).rev() {
+                let prefix = &whole[..length];
+                let image = decode_ok(prefix, &lenient, &format!("{what}, {length} bytes"));
+                if !image.report.is_complete() {
+                    // Every layer past the ones whole is reported missing.
+                    for entry in &image.report.entries {
+                        if let ReportEntry::MissingPackets {
+                            complete_layers, ..
+                        } = entry
+                        {
+                            assert!(*complete_layers < n, "{what}, {length} bytes");
+                        }
                     }
+                    break;
                 }
-                break;
+                assert_eq!(sample_bytes(&image), full, "{what}, {length} bytes");
+                shortest = Some(length);
             }
-            assert_eq!(sample_bytes(&image), full, "-l {n}, {length} bytes");
-            shortest = Some(length);
+            let shortest = shortest.expect("the whole codestream is complete");
+            // The prefix lacks more than the `EOC` marker.
+            assert!(shortest < whole.len() - 2, "{what}: {shortest} bytes");
+            // Without the cap, the same prefix lacks the later layers.
+            let uncapped = DecodeOptions::default().with_strict(false);
+            let image = decode_ok(&whole[..shortest], &uncapped, "no cap");
+            assert!(!image.report.is_complete(), "{what}: {shortest} bytes");
+            assert!(
+                image.report.entries.iter().any(|e| matches!(
+                    e,
+                    ReportEntry::MissingPackets { complete_layers, .. } if *complete_layers == n
+                )),
+                "{what}: {:?}",
+                image.report
+            );
         }
-        let shortest = shortest.expect("the whole codestream is complete");
-        assert!(shortest < whole.len() - 100, "-l {n}: {shortest} bytes");
-        // Without the cap, the same prefix lacks the later layers.
-        let uncapped = DecodeOptions::default().with_strict(false);
-        let image = decode_ok(&whole[..shortest], &uncapped, "no cap");
-        assert!(!image.report.is_complete(), "-l {n}: {shortest} bytes");
-        assert!(
-            image.report.entries.iter().any(|e| matches!(
-                e,
-                ReportEntry::MissingPackets { complete_layers, .. } if *complete_layers == n
-            )),
-            "-l {n}: {:?}",
-            image.report
-        );
+    }
+}
+
+/// The prefixes that end inside the header of a packet of a later layer,
+/// whose code-blocks hold earlier layers. OpenJPEG reads the missing header
+/// bits as 0 and decodes what they say; this decoder drops the packet, as
+/// B.11 drops a cut packet. Each is one run of `prefixes.sha256` that OpenJPEG
+/// flags as `whole`.
+const HEADER_CUTS: [(&str, &[usize]); 2] = [
+    ("pterm_cut", &[224, 225, 226, 227, 228]),
+    ("bypass_pterm", &[215, 733, 975, 2008, 2047]),
+];
+
+/// Every prefix of the `predictable termination` fixtures decodes with
+/// `strict` off, with no cap and with a cap of 1, once the main header and
+/// the tile-part header are there, and matches `opj_decompress
+/// -allow-partial` on the same prefix bit-exactly (both are 5/3).
+///
+/// Before that header, OpenJPEG writes no image and this decoder gives
+/// `Error::Incomplete` or an incomplete image of no tile data. Without a cap,
+/// two kinds of prefix differ, as `docs/openjpeg-departures.md` records: those
+/// that end inside a packet's body where OpenJPEG warns that a segment is too
+/// long and drops the cut code-block, its earlier layers too, while this
+/// decoder keeps those layers; and those in [`HEADER_CUTS`]. Both are graded
+/// as decoding to an incomplete image.
+#[test]
+fn every_strict_off_prefix_of_a_pterm_codestream_matches_openjpeg() {
+    let oracles = String::from_utf8(layers_file("prefixes.sha256")).unwrap();
+    let mut exact = 0;
+    let mut departures = 0;
+    for line in oracles.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [name, cap, first, last, hash, flag] = fields[..] else {
+            panic!("bad line {line:?}");
+        };
+        let whole = layers_file(&format!("{name}.j2k"));
+        let cap: u16 = cap.parse().unwrap();
+        let (first, last): (usize, usize) = (first.parse().unwrap(), last.parse().unwrap());
+        assert!(flag == "whole" || flag == "cut", "{line}");
+        let mut options = DecodeOptions::default().with_strict(false);
+        if cap > 0 {
+            options = options.with_max_quality_layers(Some(cap));
+        }
+        let header_cuts = HEADER_CUTS.iter().find(|h| h.0 == name).unwrap().1;
+        for length in first..=last {
+            let what = format!("{name} -l {cap}, {length} bytes");
+            let decoded = decode_with(&whole[..length], &options);
+            if hash == "refused" {
+                match decoded {
+                    Err(Error::Incomplete(_)) => {}
+                    Ok(image) => assert!(!image.report.is_complete(), "{what}"),
+                    Err(error) => panic!("{what}: {error}"),
+                }
+                continue;
+            }
+            let image = decoded.unwrap_or_else(|e| panic!("{what}: {e}"));
+            let got = sha256_hex(&sample_bytes(&image));
+            let departs = cap == 0 && (flag == "cut" || header_cuts.contains(&length));
+            if departs && got != hash {
+                assert!(!image.report.is_complete(), "{what}");
+                departures += 1;
+            } else {
+                assert_eq!(got, hash, "{what}");
+                exact += 1;
+            }
+        }
+    }
+    // Every prefix of both files, under both caps, is graded.
+    assert_eq!(exact + departures, 2 * (231 + 2558) - 2 * (78 + 123));
+    // How many depart, so a change that widens the difference shows.
+    assert_eq!((exact, departures), (3222, 1954));
+}
+
+/// Packets the `POC` volumes leave out are missing like packets the data
+/// never reached: `pterm_poc_gap.j2k` is `pterm_cut.j2k` with a `POC` that
+/// ends at layer 1, so layer 1 would add passes to each block's one segment.
+/// A strict decode refuses the gap. With `strict` off it decodes to OpenJPEG's
+/// `-allow-partial` image, bit-exactly, which is the `-l 1` image of
+/// `pterm_cut.j2k`, and reports the layer missing.
+#[test]
+fn a_segment_a_poc_gap_leaves_short_is_not_checked_with_strict_off() {
+    let bytes = layers_file("pterm_poc_gap.j2k");
+    match decode(&bytes) {
+        Err(Error::Codestream(message)) => assert!(message.contains("POC"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    let lenient = DecodeOptions::default().with_strict(false);
+    let image = decode_ok(&bytes, &lenient, "strict off");
+    let oracle = parse_pgx(&layers_file("pterm_poc_gap_0.pgx")).unwrap();
+    assert_eq!(image.components.len(), 1);
+    assert_eq!(image.components[0].samples, oracle.samples);
+    assert!(
+        image.report.entries.iter().any(|e| matches!(
+            e,
+            ReportEntry::MissingPackets {
+                complete_layers: 1,
+                ..
+            }
+        )),
+        "{:?}",
+        image.report
+    );
+}
+
+/// With `strict` off, a block whose precinct the data ended in is exempt from
+/// `predictable termination` only on its last segment, and only when that
+/// segment could still take passes. `bypass_pterm` with byte 188 or 128
+/// flipped damages an MQ segment of the LL block that is not its last, which
+/// layer 0 brings whole: every prefix that holds it is refused, as the whole
+/// file is, though later packets of that precinct are missing. The same
+/// prefixes of the undamaged file decode.
+#[test]
+fn a_damaged_whole_segment_before_the_data_ends_is_still_an_error() {
+    let whole = layers_file("bypass_pterm.j2k");
+    let lenient = DecodeOptions::default().with_strict(false);
+    for offset in [188, 128] {
+        let mut bad = whole.clone();
+        bad[offset] ^= 0x10;
+        let lengths = [212, 213, 214, 215, 216, 281, 282, 700, 1500, 2555];
+        for length in lengths.into_iter().chain([whole.len()]) {
+            decode_ok(&whole[..length], &lenient, &format!("{length} bytes"));
+            match decode_with(&bad[..length], &lenient) {
+                Err(Error::Codestream(message)) => assert!(
+                    message.contains("predictable termination"),
+                    "byte {offset}, {length} bytes: {message}"
+                ),
+                other => panic!("byte {offset}, {length} bytes: {other:?}"),
+            }
+        }
     }
 }

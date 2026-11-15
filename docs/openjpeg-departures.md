@@ -589,6 +589,18 @@ decoded; every earlier segment of the block is whole and is still checked.
 OpenJPEG makes no check at all when it decodes fewer layers than the
 codestream has.
 
+With `DecodeOptions::strict` off, the same holds where packets are missing:
+a block whose precinct has a packet that was not read, was cut, or is one the
+`POC` volumes leave out may lack later passes of its last segment, so that
+segment is not checked unless it holds all the passes it can (then the next
+pass would open a new segment). Every other segment is still checked, so a
+damaged whole segment is still an error
+(`a_damaged_whole_segment_before_the_data_ends_is_still_an_error` in
+`tests/max_quality_layers.rs`). OpenJPEG only warns. Under the default style a
+block has one segment, so damage in it goes unreported on a cut prefix, as it
+does under a cap: `pterm_cut.j2k` with byte 100 flipped is refused whole and
+decodes as its 228-byte prefix.
+
 ### Too few quantization steps
 
 A QCD/QCC carrying fewer than the 3·NL + 1 step entries its decomposition needs
@@ -928,13 +940,27 @@ When the data ends inside a packet's body, B.11 allows only whole packets to
 be dropped, so a cut packet has no meaning of its own. This decoder keeps each
 code-block whose contribution to the packet is all there, and for the rest
 keeps only the layers before the cut packet, so each code-block decodes as a
-codestream truncated after some whole layer would. OpenJPEG keeps the bytes
-that are there for every code-block of the cut packet, a block's data cut
-mid-layer included. The two images can differ in the code-blocks the cut
-packet reaches; the report says the tile is incomplete either way.
+codestream truncated after some whole layer would. OpenJPEG 2.5.0 warns
+`segment too long`, then drops the code-block whose contribution is cut and
+every code-block after it in the packet, with their earlier layers
+(`opj_t2_read_packet_data` in `t2.c` empties the block's chunks). The two images can differ in the code-blocks the cut packet
+reaches; they agree when those blocks have no earlier layer, as in a packet of
+layer 0. The report says the tile is incomplete either way.
 `a_cut_packet_keeps_each_code_blocks_whole_layers` in
 `src/tier2/partial_tests.rs` checks each code-block of a cut three-layer packet
 against layer-limited walks.
+
+When the data ends inside a packet header, this decoder drops the packet.
+OpenJPEG reads the missing header bits as 0 and decodes the contributions
+they describe, which can differ from both the packet and its absence.
+
+`every_strict_off_prefix_of_a_pterm_codestream_matches_openjpeg` in
+`tests/max_quality_layers.rs` grades every prefix of two layered fixtures
+under `predictable termination` against `opj_decompress -allow-partial`. At a
+cap of 1 layer every prefix with its tile-part header is bit-exact. With no
+cap, 1944 prefixes end inside a packet of layer 1 or later whose code-blocks
+hold earlier layers, and 10 inside the header of such a packet; the other
+634 are bit-exact.
 
 ### Packets a POC leaves out are zero coefficients
 
