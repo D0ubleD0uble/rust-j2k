@@ -1191,8 +1191,8 @@ return the same error as `decode` for every header fault.
 A file whose `ftyp` claims neither `jp2 ` nor `jph ` compatibility (pure JPX,
 JPM or MJ2) says a JP2 reader cannot present it correctly (composited
 codestreams, Part 2 extensions, `rreq` features), so its first codestream can
-be the wrong image with no error. Refusing it lets a later JPX reader produce the right image
-without silently changing output that already "worked".
+be the wrong image with no error. Refusing it lets a later JPX reader produce
+the right image without silently changing output that already "worked".
 
 ### `Psot = 0` at the end of `jp2c`
 
@@ -1342,7 +1342,7 @@ in format from the colors, passes through as coded ([row
 | Standard | ISO/IEC 15444-15 D.6.3: `Typ` 3 is an application-defined channel, and its `Asoc` means what the application says |
 | Rule | 1 |
 | Tests and fixtures | `file10_reports_application_defined_channels_and_no_color_space` (`tests/conformance_ht.rs`, on `file10_b11.jph` and `file10_b12.jph`); the two "cdef Typ 3 with Asoc past the last channel" rows (in a JPH file, in a JP2 file) of `every_robustness_table_row_has_its_outcome` (`src/jp2/tests/matrix.rs`); `a_jph_file_labels_application_defined_channels` and `typ_3_outside_a_jph_file_is_reserved` (`src/jp2/tests/channels.rs`) |
-| Decided | 2026-11-14, in the P4.7 plan (#345); limited to JPH files 2026-11-15 |
+| Decided | 2026-11-14 (#345); limited to JPH files 2026-11-15 |
 
 OpenJPEG holds every `Asoc` other than 0 and 65535 to the channel count
 (`opj_jp2_check_color`), whatever the type, so it refuses both `file10` files

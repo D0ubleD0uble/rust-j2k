@@ -402,8 +402,9 @@ struct AsCodedSource<'a> {
     /// The right shift that brings a decoded component to the reference's
     /// depth (`file6`'s references are 8-bit, its samples 12-bit).
     shift: u8,
-    /// The source's recorded class bound; `None` for `file10`, whose highest
-    /// bound file is graded exactly.
+    /// The source's recorded class bound; `None` where the references are
+    /// matched exactly: `fileN.jp2`'s as-coded references (OpenJPEG's
+    /// snapshot, which `fileN.jp2` matches bit for bit) and `file10`'s.
     bounds: Option<Bounds>,
     /// The options the source is graded with, so the display path is decoded
     /// too.
@@ -475,9 +476,11 @@ impl JphEntry {
                     .find(|e| e.name() == name)
                     .ok_or_else(|| Grade::Failed(format!("no JP2 entry `{name}`")))?;
                 let display = jp2::options_for(&entry);
-                let (references, shift) = match entry.as_coded {
-                    Some(as_coded) => (as_coded.references, 0),
-                    None if !entry.needs_srgb => (entry.references, entry.shift_right),
+                let (references, shift, bounds) = match entry.as_coded {
+                    Some(as_coded) => (as_coded.references, 0, None),
+                    None if !entry.needs_srgb => {
+                        (entry.references, entry.shift_right, Some(entry.bounds))
+                    }
                     None => {
                         return Err(Grade::Failed(format!(
                             "`{name}` has no as-coded references"
@@ -488,7 +491,7 @@ impl JphEntry {
                     dir: jp2_dir,
                     references,
                     shift,
-                    bounds: Some(entry.bounds),
+                    bounds,
                     display,
                 })
             }
@@ -560,12 +563,24 @@ impl JphEntry {
                 .bounds
                 .as_ref()
                 .map_or(EXACT, |b| bound_of(b, false, index));
-            // Kakadu quotes its MSE to six or seven significant digits, so
-            // the bound carries the same slack as `ht_refinement_matches_kakadu_stats`.
+            // Kakadu quotes its MSE to six or seven significant digits, and
+            // on `file7_b15` its figure is not an exact MSE (see
+            // `KAKADU_MSE_INEXACT` in `conformance_ht.rs`), so the bound
+            // carries the `1e-5` slack that list allows. With an exact base
+            // (as-coded references) nothing else absorbs the rounding.
+            //
+            // This is a heuristic, not a proven bound. Adding the MSEs
+            // assumes the two errors add in energy; the true bound on their
+            // sum is `(sqrt(a) + sqrt(b))^2`. And for `file6` (shift 4),
+            // Kakadu's figures are at 12 bits and the references at 8:
+            // dividing by `scale^2` does not bound the error after the
+            // shift's rounding, which passes only through the class's +1.
+            // What pins these files is `jph_files_match_kakadu_stats`, which
+            // matches Kakadu's figures at the native depth.
             let mse = stats.mse[index] / (scale * scale);
             let bound = Bound {
                 pae: base.pae + (stats.pae[index] / scale).ceil(),
-                mse: base.mse + mse + 1e-6 * mse.max(1.0),
+                mse: base.mse + mse + 1e-5 * mse.max(1.0),
             };
             let component = jp2::shifted(decoded, source.shift);
             match part4::grade_component(&component, &reference, bound) {

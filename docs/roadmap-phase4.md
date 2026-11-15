@@ -611,9 +611,15 @@ is read as before. All 20 JPH files are in `IN_CLASS`. Findings:
   (palette and `cdef` applied, no color conversion) against `fileN.jp2`'s.
   This decoder gives the same PAE on all 20 files and the same MSE to the
   `1e-6` rule on all but two components of `file7_b15`, where Kakadu's MSE
-  is 2.3e-6 and 4.5e-6 off; times the sample count it is 22.7 from a whole
-  number, so Kakadu's figure is the rounded one
-  (`jph_files_match_kakadu_stats`).
+  is 2.3e-6 and 4.5e-6 off. No whole sum of squared differences over the
+  sample count rounds to Kakadu's six-decimal figure there (component 0
+  needs a sum in [9809526.53, 9809526.84)), so Kakadu's figure is not an
+  exact MSE (`jph_files_match_kakadu_stats`).
+- The files below the highest bound are graded within the set's bound plus
+  Kakadu's PAE and MSE. Adding MSEs is a heuristic (the true bound on the
+  sum of two errors is `(√a + √b)²`), and `file6`'s bound, scaled down by
+  its shift, holds only through the class's +1. What pins these files is
+  `jph_files_match_kakadu_stats`.
 - The files below the highest bound are graded as coded against the set's
   as-coded references, within the set's bound plus Kakadu's error for the
   file. Their sRGB output can't take that bound: the ICC and sYCC

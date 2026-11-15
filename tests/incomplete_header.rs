@@ -237,21 +237,24 @@ fn every_cut_inside_the_main_header_is_incomplete() {
             }
         }
     }
-    // The fixtures that ship with the crate alone give more than these.
     eprintln!(
         "cut {codestreams} codestreams ({ht_codestreams} mixed-mode) and {jp2s} JP2 files \
          ({jphs} JPH)"
     );
+    // The fixtures that ship with the crate alone give more than these.
     assert!(codestreams >= 100, "only {codestreams} codestreams cut");
-    // The three mixed-mode HT conformance codestreams.
-    assert!(
-        ht_codestreams >= 3,
-        "only {ht_codestreams} mixed-mode codestreams cut"
-    );
     assert!(jp2s >= 30, "only {jp2s} JP2 files cut");
-    // The 20 Part 4 JPH files and the 7 OpenJPH ones, which hold HTJ2K
-    // codestreams.
-    assert!(jphs >= 27, "only {jphs} JPH files cut");
+    // The HT fixtures are left out of the published package, so they are
+    // counted only where their directories are there: the three mixed-mode
+    // HT conformance codestreams and the 20 Part 4 JPH files in
+    // `conformance/ht/`, and the 7 OpenJPH JPH files in `openjph/`.
+    let present = |dir: &str| fixtures().join(dir).is_dir();
+    let (iso, openjph) = (present("conformance/ht"), present("openjph"));
+    if iso {
+        assert_eq!(ht_codestreams, 3, "mixed-mode codestreams cut");
+    }
+    let want = 20 * usize::from(iso) + 7 * usize::from(openjph);
+    assert_eq!(jphs, want, "JPH files cut");
 }
 
 /// Empty input, and the first byte of `SOC` or of the JP2 signature, may

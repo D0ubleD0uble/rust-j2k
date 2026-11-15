@@ -2,10 +2,11 @@
 //!
 //! A `cdef` box says, for each output channel, what it is (`Typ`: color,
 //! opacity, premultiplied opacity, unspecified, or application-defined in a
-//! JPH file) and which color it belongs to (`Asoc`). It describes the channels after the palette, when one applies.
-//! OpenJPEG 2.5.0 (`opj_jp2_read_cdef`, `opj_jp2_check_color`,
-//! `opj_jp2_apply_cdef`) is the reference, and this module follows it on what
-//! is accepted and on the output order:
+//! JPH file) and which color it belongs to (`Asoc`). It describes the
+//! channels after the palette, when one applies. OpenJPEG 2.5.0
+//! (`opj_jp2_read_cdef`, `opj_jp2_check_color`, `opj_jp2_apply_cdef`) is the
+//! reference, and this module follows it on what is accepted and on the
+//! output order:
 //!
 //! - The box holds `N` (2 bytes), then `N` entries of `Cn`, `Typ`, `Asoc`
 //!   (2 bytes each). `N = 0`, or fewer bytes than `N` entries need, is an
@@ -327,13 +328,42 @@ mod tests {
             .collect()
     }
 
+    /// The order `place` gives, which is the same in a JPH file and in a JP2
+    /// file (where `Typ` 3 is reserved, and moves nothing either).
     fn order(triples: &[(u16, u16, u16)], channels: usize) -> Vec<usize> {
-        let entries = entries(triples);
-        check(&entries, channels).expect("valid entries");
-        match place(&entries, channels) {
-            ChannelPlan::Apply { order, .. } => order,
-            ChannelPlan::None => unreachable!(),
-        }
+        let orders: Vec<Vec<usize>> = [true, false]
+            .into_iter()
+            .map(|jph| {
+                let entries: Vec<Entry> = entries(triples)
+                    .into_iter()
+                    .map(|entry| Entry { jph, ..entry })
+                    .collect();
+                check(&entries, channels).expect("valid entries");
+                match place(&entries, channels) {
+                    ChannelPlan::Apply { order, .. } => order,
+                    ChannelPlan::None => unreachable!(),
+                }
+            })
+            .collect();
+        assert_eq!(orders[0], orders[1], "{triples:?}");
+        orders[0].clone()
+    }
+
+    /// Only in a JPH file is a `Typ` 3 `Asoc` past the last channel
+    /// accepted; elsewhere it is refused, as OpenJPEG refuses it.
+    #[test]
+    fn a_typ_3_asoc_past_the_last_channel_is_checked_outside_jph() {
+        let jph = entries(&[(0, 0, 1), (1, 0, 2), (2, 3, 18284)]);
+        check(&jph, 3).expect("a JPH file");
+        let jp2: Vec<Entry> = jph
+            .into_iter()
+            .map(|entry| Entry {
+                jph: false,
+                ..entry
+            })
+            .collect();
+        let err = check(&jp2, 3).unwrap_err();
+        assert!(matches!(err, Error::FileFormat(_)), "{err:?}");
     }
 
     /// Each order measured with `opj_decompress` 2.5.0 on a three-component
@@ -355,8 +385,7 @@ mod tests {
             // Asoc 0 and 65535 move nothing, whatever the type.
             (&[(0, 0, 0), (1, 0, 65535), (2, 0, 3)], [0, 1, 2]),
             (&[(0, 7, 1), (1, 0, 2), (2, 0, 3)], [0, 1, 2]),
-            // An application-defined channel moves nothing, whatever its
-            // `Asoc`.
+            // A `Typ` 3 channel moves nothing, whatever its `Asoc`.
             (&[(0, 3, 3), (1, 3, 1), (2, 3, 2)], [0, 1, 2]),
             (&[(0, 3, 2), (1, 3, 1), (2, 0, 3)], [0, 1, 2]),
             (

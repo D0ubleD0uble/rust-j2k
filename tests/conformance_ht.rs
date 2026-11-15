@@ -1165,9 +1165,11 @@ fn ht_refinement_matches_kakadu_stats() {
 /// JPH files where Kakadu's quoted MSE differs from this decoder's by more
 /// than the `1e-6` relative rule allows: `file7_b15` (16-bit, MSE about 32,
 /// 2.3e-6 and 4.5e-6 apart on components 0 and 1, the PAE equal on every
-/// component). Kakadu's MSE times the sample count is 22.7 from a whole
-/// number there, so its figure is not exact; those components are held to
-/// `1e-5`.
+/// component). No whole sum of squared differences gives Kakadu's figure
+/// when divided by the sample count and rounded to its six decimals: on
+/// component 0, with 307200 samples, 31.932053 needs a sum in
+/// [9809526.53, 9809526.84), which holds no integer. So Kakadu's figure is
+/// not an exact MSE, and those components are held to `1e-5`.
 const KAKADU_MSE_INEXACT: &[&str] = &["file7_b15"];
 
 /// Each JPH file's manifest entry quotes Kakadu's PAE and MSE against its
@@ -1222,15 +1224,19 @@ fn jph_files_match_kakadu_stats() {
             if gap <= 1e-6 * mse.max(1.0) {
                 continue;
             }
-            // Past the rule: only on a listed file, and only where Kakadu's
-            // figure is not a whole sum of squared differences over the
-            // sample count, so not exact. This decoder's is exact, and its
-            // codestream decode is OpenJPEG's to the bit
-            // (`every_jph_codestream_matches_openjpeg`).
-            let kakadu_sum = mse * a.samples.len() as f64;
+            // Past the rule: only on a listed file, and only where no whole
+            // sum of squared differences over the sample count rounds to
+            // Kakadu's six decimals, so its figure is not exact. This
+            // decoder's is exact, and its codestream decode is OpenJPEG's to
+            // the bit (`every_jph_codestream_matches_openjpeg`).
+            let count = a.samples.len() as f64;
+            let six = |x: f64| format!("{x:.6}");
+            let unreachable = [(mse * count).floor(), (mse * count).ceil()]
+                .into_iter()
+                .all(|sum| six(sum / count) != six(mse));
             assert!(
                 KAKADU_MSE_INEXACT.contains(&name.as_str())
-                    && (kakadu_sum - kakadu_sum.round()).abs() > 0.25
+                    && unreachable
                     && gap <= 1e-5 * mse.max(1.0),
                 "{name} component {c}: MSE {ours_mse} against Kakadu's {mse}"
             );
