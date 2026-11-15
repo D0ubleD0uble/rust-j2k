@@ -65,7 +65,8 @@ fn read_header_reports_the_layer_count_opj_dump_prints() {
         (fixtures().join("jp2_cdef_rgba.jp2"), 1),
     ];
     for (path, numlayers) in cases {
-        let header = read_header(&read(&path)).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let header =
+            read_header(&read(&path)).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(header.quality_layers, numlayers, "{}", path.display());
     }
 }
