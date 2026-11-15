@@ -51,12 +51,20 @@
 //! is the next finer level's LL; after the last level it is the
 //! full-resolution raster of that tile-component (pre level-shift), which
 //! [`crate::image::Canvas`] places into the image.
+//!
+//! A decode window that needs only part of a tile-component runs the same
+//! kernels over only the samples it needs ([`inverse_window`]); the
+//! [`Footprint`] it needs also tells Tier-1 which code-blocks to skip.
 
 use crate::Result;
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
 use crate::image::blit;
 use crate::pipeline::{Band, Bands, DetailBands, Samples, SubbandCoeffs};
+
+mod partial;
+
+pub(crate) use partial::{Footprint, inverse_window};
 
 /// 9/7 lifting coefficients (ISO/IEC 15444-1 Table F.4): the two predict
 /// (`ALPHA`, `GAMMA`) and two update (`BETA`, `DELTA`) factors.
