@@ -395,6 +395,59 @@ to decode it. The rate stays 2^15 rather than 2^14, which would refuse the
 `-n 1` files, and it is scaled by the tile bytes, packet headers included, as
 the tier-2 bound is (#278, 2026-11-12).
 
+### HT code-blocks
+
+The bound counts HT code-blocks too: `tier1::work` asks the block's coder for
+its passes (`ht::passes_run`), so an HT block costs the passes its decode
+runs over its samples. That is at most the three of one HT set (cleanup,
+SigProp and MagRef), however many passes its packets name, and one pass when
+its refinement segment is empty or has no bit-plane left to refine. The unit
+test `the_work_counts_the_passes_an_ht_block_runs` pins each case.
+
+Because an HT block runs at most 3 passes, the bound cannot refuse an HT
+file at the default. A block's work is at most 3 × 4096 = 12288 sample-passes.
+Its packet header spends at least 7 bits on it, and three passes need a
+cleanup segment of at least 2 bytes and a refinement segment of 1 byte on top
+of 14 bits of header. So the most an HT file asks for a byte is about 4700 (one
+pass over a block with no bytes) or 2600 (three passes, 5 bytes), against the
+bound's 32768, 7 to 12 times more. Only the sample limit bounds an HT decode,
+and the work under it is at most 3 sample-passes per sample: an HT file at the
+default 2^28 samples asks for 8e8 sample-passes, about 5.6 s at the rate below
+(extrapolated from the 8192x8192 row, not measured). The bound still counts
+HT blocks so that a change to what a block may cost, or to the limits, is
+checked by the same arithmetic as Part 1, and `WorkLimit::Raised` and
+`Unlimited` mean the same for both.
+
+The rate of an HT sample-pass was measured against the one the bound uses
+for Part 1 (3.3 ns where a pass finds little to code, 7 to 8 ns on the
+slowest data). `htbomb` in `tests/work_limit.rs` builds the HT shape of the
+`t1bomb` above: no wavelet level, every 64x64 code-block included with all
+three passes, the 2-byte cleanup segment `0xF2 0x00` (the shortest that
+decodes) and a 1-byte refinement segment. Release build, a shared and loaded
+machine:
+
+| Shape | Size | Sample-passes | Share of the bound | This decoder | OpenJPEG 2.5.0 |
+| ----- | ---- | ------------- | ------------------ | ------------ | -------------- |
+| `htbomb`, 1024x1024 (committed) | 1.3 KB | 3.1e6 | 4.7% (the floor) | 21 ms | 4 ms |
+| `htbomb`, 8192x8192 | 79 KB | 2.0e8 | 7.7% | 1.40 s | 0.29 s |
+
+That is 6.8 to 7.1 ns a sample-pass, as slow as Part 1's slowest data. Random
+HT segments that decode (20000 per shape, 3 passes, minimum of 5 runs of each
+block) cost a mean of 6.4 ns a sample-pass over 64x64 blocks and 5.8 to 6.0 ns
+over 1024x4 and 4x1024, and at worst 10.3, 10.0 and 9.4. A 1x1024 block costs
+a mean of 7.7 and at worst 13.7, its per-block set-up being a larger share.
+So the rate the bound assumes holds for HT blocks. This decoder takes about
+5 times as long as OpenJPEG on these files.
+
+`the_ht_bomb_spends_a_small_share_of_the_tier1_bound` (in
+`src/tier1/work_bound_tests.rs`) asserts the committed file's work and share,
+`an_ht_bomb_decodes_at_the_default_bound` (in `tests/work_limit.rs`) that it
+decodes at the default as OpenJPEG decodes it, and
+`the_large_ht_bomb_decodes_at_the_default_bound` (ignored) the 8192x8192 row.
+No file is refused by the bound for its HT blocks, so there is no public-API
+test of such a refusal; `every_committed_file_decodes_far_below_the_tier1_work_bound`
+measures every HT corpus file against it with the others.
+
 ## Bounds removed by a cheaper parse
 
 ### Tile header cost

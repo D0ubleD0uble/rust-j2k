@@ -10,10 +10,11 @@
 //!
 //! Every input is decoded without a cap. Half of them, picked by a hash of
 //! the input, are then decoded again under a `max_quality_layers` cap of 1 to
-//! 3, so the walk that reads a layer's packets without keeping their passes is
-//! fuzzed too. Another half are decoded through a window, a tile or a subset of
-//! components, all picked by the same hash, so the tile skip, the clipped
-//! placement and the per-component decode are fuzzed as well.
+//! 3, in strict mode and with `strict` off, so the walk that reads a layer's
+//! packets without keeping their passes is fuzzed too. Another half are
+//! decoded through a window, a tile or a subset of components, all picked by
+//! the same hash, so the tile skip, the clipped placement and the
+//! per-component decode are fuzzed as well.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -24,6 +25,9 @@ fuzz_target!(|data: &[u8]| {
         let layers = 1 + ((hash >> 1) % 3) as u16;
         let options = rust_j2k::DecodeOptions::default().with_max_quality_layers(Some(layers));
         let _ = rust_j2k::decode_with(data, &options);
+        // The same cap with `strict` off, where a block's last kept pass
+        // may be cut short by the cap (#358).
+        let _ = rust_j2k::decode_with(data, &options.with_strict(false));
     }
     if hash & 2 == 2 {
         let _ = rust_j2k::decode_with(data, &part(hash >> 8));

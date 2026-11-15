@@ -19,6 +19,19 @@ instead; that one is not committed, and `tests/work_limit.rs` builds it.
 | ---- | ----- | ------------- | -------------- | ---- |
 | `t1bomb_1024_64_88.j2k` (1276 B, SHA-256 `4bdd8f69…b523`) | `t1bomb(1024, 6, 88)`: one 1024^2 tile of one 8-bit component, no wavelet levels, 64x64 code-blocks, one layer, LRCP. QCD gives the band 30 bit-planes and every block is included with no zero bit-plane, 88 passes and the one byte 0x00 | 9.2e7 | decodes (samples 0, 128 and 255), 0.14 s | `Limit`; decodes under `WorkLimit::Raised(2)` to the samples OpenJPEG decodes (SHA-256 of the 8-bit samples `a20e3ada…734d`) |
 
+`htbomb_1024_64_3.j2k` (1330 B, SHA-256 `8bfe0262…75d1`) is the HT
+counterpart, written by `htbomb(1024)` in `tests/work_limit.rs`, which checks
+the committed bytes against it (no encoder, no input image): one 1024^2 tile
+of one 8-bit component, no wavelet levels, `CAP` and a COD with the HT block
+style, 64x64 code-blocks, one layer. QCD gives the band 30 bit-planes and
+every block is included with no zero bit-plane, all three passes of an HT
+set, a cleanup segment of the two bytes `0xF2 0x00` (`Scup = 2`, the fewest a
+block decodes from) and a refinement segment of the byte `0x00`. That is
+3.1e6 sample-passes, 4.7% of the bound, and about the most an HT file can ask
+for its bytes (see `docs/resource-bounds.md`). It decodes here and in
+`opj_decompress` 2.5.0 (4 ms) to a flat 128 (SHA-256 of the 8-bit samples
+`36ff3497…3534e`).
+
 ## Encoder output
 
 `opj_specks2048_16bit.j2k` (28079 B, SHA-256 `cdcaddcb…96ee`) is written by
