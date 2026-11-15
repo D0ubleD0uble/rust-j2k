@@ -35,8 +35,8 @@ marker (`0xFF50`) must follow SIZ (A.2, A.3). `Pcap` is a 32-bit mask whose
 Part 15 bit (`0x0002_0000`) must be set; it carries one 16-bit `Ccap15` word.
 A `CPF` marker (`0xFF59`) may name the Part 1 profile the codestream
 transcodes to and from (A.6). Every Part 4 HT codestream sets `Rsiz` bit 14
-and carries `CAP`; four of them leave out `CPF`. The decoder refuses `CAP` in
-the main header today.
+and carries `CAP`; four of them leave out `CPF`. The decoder reads `CAP` in
+the main header and refuses only MULTIHT.
 
 `Ccap15` (Table A.2) describes which of the constrained sets of clause 8 the
 codestream may belong to, so a decoder can refuse early what it doesn't
@@ -66,7 +66,7 @@ support:
 
 `SPcod`/`SPcoc` bit 6 (`0x40`) selects the HT block coder for the
 tile-component, and bits 6 and 7 together (`0xC0`) say its code-blocks may be
-of either kind (A.4). `decode_coding` refuses both today. Vertically causal
+of either kind (A.4). The decoder reads `0x40` and refuses `0xC0`. Vertically causal
 context (`0x08`) still applies, and four Part 4 HT codestreams and
 `byte_causal.jhc` use it. The other Part 1 style bits have no meaning for an
 HT code-block.
@@ -369,9 +369,8 @@ are in `IN_CLASS`.
 **Done (#137).** The seam is `BlockCoder` in `src/tier1/mod.rs`, an enum of
 `Ebcot` (in `src/tier1/ebcot/`) and `Ht` (in `src/tier1/ht/`), chosen by the
 style byte; `last_segment_cut` stays on the EBCOT side. The guard now refuses
-only `0x80` (MIXED), and tier-2 refuses an HT block with more than its cleanup
-pass before reading its lengths, since its later passes follow the B.2 length
-rules (P4.3). Findings:
+only `0x80` (MIXED). Tier-2 then refused an HT block with more than its
+cleanup pass, until P4.3 read the later passes by the B.2 length rules. Findings:
 
 - The reconstruction is `(2 mu + 1) << (Mb - P - 1)` at double scale, `P`
   the zero bit-planes: the cleanup pass codes the top `P + 1` of `Mb` planes
@@ -455,9 +454,9 @@ field is added. Findings:
 - A layer cap that leaves out the refinement layers now decodes files that
   are otherwise refused (`ds0_ht_02_b11` at `-l 1` to `4`, `ds0_ht_04_b11` at
   `1` to `18`, `ds0_ht_05_b11` at `1` to `4`, `ds1_ht_01_b11` at `1` to `3`).
-  These are cleanup-only reconstructions with no oracle yet:
-  `a_cap_before_the_refinement_layers_decodes_cleanup_only` checks only that
-  they decode with the right dimensions.
+  These are cleanup-only reconstructions. P4.4 checks them against the
+  `_b12` transcodes
+  (`a_cap_before_the_refinement_layers_agrees_across_transcodes`).
 - `Z_blk = 1` for a refinement segment of zero length (B.3) is left to
   P4.4: no file in the corpus needs only its cleanup pass by that rule alone.
 - The packet work count needed no change: `Meter` charges per packet, per
@@ -481,6 +480,37 @@ single-layer files without `RGN`; the Part 4 references for the rest.
 **Gate:** every HTONLY HT codestream without `RGN` is in class, and every
 codestream in the corpora that OpenJPEG decodes, with `.jph` files read as raw
 `jp2c` payloads, matches it.
+
+**Done (#342).** `BlockCoder::Ht` carries the vertically causal flag beside
+`roi_shift`. The cleanup pass reads the block's first segment and the
+refinement passes its second (`Refinement` in `src/tier1/ht/mod.rs`).
+Findings:
+
+- `Z_blk` (B.3) is 0 for an empty cleanup segment, 1 when the cleanup segment
+  is the only nonempty one, and otherwise the pass count. `ds1_ht_05_b11` and
+  `ds1_ht_06_b11` declare refinement passes with zero-length segments, which
+  B.3 allows.
+- When the cleanup pass codes the last plane (`P = Mb - 1`), a refinement
+  pass would code a plane below the least significant bit. OpenJPEG decodes
+  the cleanup pass alone with a warning, and so does this decoder. No corpus
+  file has such a block.
+- A block with more than three HT passes would hold a second HT set, which
+  only MULTIHT allows, and the `CAP` read refuses MULTIHT. So the count is
+  refused as `Codestream`, as OpenJPEG refuses it.
+- A set stuffing bit in the SigProp stream is refused where OpenJPEG decodes
+  on ([openjpeg-departures.md](openjpeg-departures.md#ht-refinement-segments)).
+- All 30 HTONLY codestreams without `RGN` are in class (18 more), the 10 that
+  OpenJPEG decodes agree with it, all 16 OpenJPH files are in class, and the
+  codestreams of all 20 JPH files decode bit for bit as OpenJPEG decodes them
+  (`every_jph_codestream_matches_openjpeg`, against digests committed by
+  `regenerate.py`).
+- `ds1_ht_04_b9`, `ds1_ht_05_b11` and `ds1_ht_06_b11` decode exactly as
+  `p1_04`, `p1_05` and `p1_06` (T.803 C.1.10, C.1.11;
+  `ht_transcodes_decode_as_their_part1_source`).
+- At a layer cap before the refinement layers, `_b11` and `_b12` decode
+  identically up to the last such cap and differ at the next one, for
+  `ds0_ht_02` (4), `ds0_ht_04` (18), `ds0_ht_05` (4), `ds1_ht_01` (3),
+  `ds1_ht_02` (16) and `ds1_ht_03` (1).
 
 ### P4.5 — ROI on HT blocks (`src/tier1/`)
 

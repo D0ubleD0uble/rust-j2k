@@ -271,13 +271,11 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                         differing.push(name.clone());
                     }
                 }
-                // An HT code-block with refinement passes, or with a region
-                // of interest, is found only past the packet headers, so the
-                // main header reads.
+                // A region of interest on an HT code-block is found only past
+                // the packet headers, so the main header reads.
                 (Ok(_), Err(Error::Unsupported(m)))
                     if name.starts_with("conformance/ht/")
-                        && (m.ends_with("coding passes; only the cleanup pass is decoded")
-                            || m.starts_with("region of interest on an HT code-block")) =>
+                        && m.starts_with("region of interest on an HT code-block") =>
                 {
                     ht_refused += 1;
                 }

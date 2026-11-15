@@ -501,7 +501,7 @@ passes cost the same against the code-block work bound as passes with bytes.
 | - | - |
 | This decoder | refuses each stream below |
 | OpenJPEG 2.5.0 | decodes it, with a warning or none, or with invented values |
-| Standard | B.11 (only whole packets may be missing), Table A-33 (POC ranges), the step count a decomposition needs, T.814 7.1 and 7.6 (HT cleanup segments) |
+| Standard | B.11 (only whole packets may be missing), Table A-33 (POC ranges), the step count a decomposition needs, T.814 7.1 and 7.6 (HT cleanup segments), T.814 7.1.5 (HT refinement segments) |
 | Rule | 3 |
 | Tests and fixtures | the reject matrix in `src/codestream/tests.rs`; `tests/fixtures/partial/tp_r.j2k`; the refusal tests in `src/tier1/ht/tests.rs` |
 | Decided | the interop rules: 2026-11-12, and #269 |
@@ -519,7 +519,9 @@ warn-and-continue bets the output on a parse that has already gone wrong.
 Three parse-time checks are stricter for a different reason: the field is
 malformed, or the codestream is missing data the standard requires and
 OpenJPEG fills the gap with invented values. Four checks on HT cleanup
-segments are of the same kind ([HT cleanup segments](#ht-cleanup-segments)).
+segments and one on HT refinement segments are of the same kind ([HT cleanup
+segments](#ht-cleanup-segments), [HT refinement
+segments](#ht-refinement-segments)).
 The entries below give each one.
 
 ### SOP sequence numbers
@@ -665,6 +667,20 @@ single-block codestream:
 
 Both decoders refuse `Scup` outside `2..=min(Lcup, 4079)`, `U_q` above
 `P + 2`, and a quad that codes a significant sample outside the block.
+
+### HT refinement segments
+
+A SigProp byte after 0xFF with its stuffing bit set is refused as
+`Codestream`; T.814 7.1.5 calls it an error. OpenJPEG 2.5.0 ORs the bit into
+the next byte's bits and decodes on. Measured on a single-block codestream: a
+4x2 block with one zero bit-plane in a subband of 8, the cleanup segment
+`52 70 63 00` and the refinement segment `FF 80`. OpenJPEG gives the same
+samples as for `FF 00`, `[224, 176, 176, 176, 80, 176, 176, 176]`.
+
+With valid refinement segments the two decoders agree on these blocks, and
+on 1x2 blocks through all three passes. Both decode a block's cleanup pass
+alone when its refinement segment is empty (`Z_blk = 1`, B.3) or when the
+cleanup pass codes the block's last bit-plane.
 
 ### Two faults in one file
 

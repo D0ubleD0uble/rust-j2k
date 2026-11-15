@@ -193,9 +193,15 @@ codestream each was transcoded from, within the T.803 Annex C bounds (the Part
 1 tolerance plus an HT allowance). `hifi_ht1_02` has its own references, and
 the highest-bound JPH file of each set is graded as its `fileN.jp2` is. Two
 more ratchets grade against OpenJPEG's decode: of the HT codestreams it
-decodes, and of 16 OpenJPH test codestreams (`tests/fixtures/openjph/`). The
-decoder does not read HT code-blocks yet, so every entry reports *not yet
-decoded* and each `IN_CLASS` list is empty.
+decodes, and of 16 OpenJPH test codestreams (`tests/fixtures/openjph/`). All
+30 HT-only codestreams without `RGN` are in class, the 10 that OpenJPEG
+decodes agree with it, and all 16 OpenJPH files are in class. The 11 others,
+the three mixed-mode files and eight more with `RGN`, are refused, and a test
+pins each refusal to its reason. Three derived files are also checked against
+their source: `ds1_ht_04_b9`, `ds1_ht_05_b11` and `ds1_ht_06_b11` must decode
+exactly as `p1_04`, `p1_05` and `p1_06` (T.803 C.1.10, C.1.11). The
+codestream inside each of the 20 JPH files decodes bit for bit as OpenJPEG
+decodes it, checked against committed digests of OpenJPEG's output.
 
 ## A passing entry is not proof the feature works
 
