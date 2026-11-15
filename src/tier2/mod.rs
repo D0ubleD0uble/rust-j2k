@@ -64,6 +64,11 @@ pub enum BandKind {
 /// includes the block) and `zero_bit_planes` the all-zero most-significant
 /// bit-plane count from the zero-bitplane tag tree. `segments` are the raw
 /// coded byte slices Tier-1 decodes (none when the block is not included).
+///
+/// An HT block's placeholder passes are in none of these: they code no bytes,
+/// and each three of them add one to `zero_bit_planes` instead (ISO/IEC
+/// 15444-15 B.3). Its segments are a cleanup segment, then, if it has
+/// refinement passes, a refinement segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeBlock<'a> {
     /// Top-left of the block within its subband, in band-relative samples.
@@ -84,6 +89,9 @@ pub struct CodeBlock<'a> {
     /// `predictable termination`. Only the last segment can be cut, since a
     /// layer adds passes and bytes to the last segment or to new ones.
     pub cut: bool,
+    /// The placeholder passes of an HT block in the layers the decode keeps,
+    /// which `num_passes` leaves out. Always 0 for a Part 1 block.
+    pub placeholders: u32,
 }
 
 /// One codeword segment: the coding passes it carries and the bytes coding
@@ -621,8 +629,30 @@ const ZBP_LIMIT: u32 = 293;
 /// read at most 31 bits, inside the `u32` [`BitReader::read`] accepts.
 const LBLOCK_MAX: u32 = 24;
 
-/// How many coding passes the *next* codeword segment may hold, given the
-/// code-block style and the segments already opened (`opj_t2_init_seg`).
+/// What a codeword segment codes. It decides how many passes the segment may
+/// hold and what the next segment is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegmentKind {
+    /// Part 1 passes the MQ coder codes: every segment of a block without
+    /// `bypass`, and the cleanup segments of one with it.
+    Mq,
+    /// The raw segment of a `bypass` block: a significance and a refinement
+    /// pass coded as raw bits.
+    Raw,
+    /// An HT cleanup segment (ISO/IEC 15444-15 B.2). A block's first one
+    /// holds `placeholders` passes before its cleanup pass, a multiple of
+    /// three; every later one holds its cleanup pass alone. `None` while every
+    /// pass read is a placeholder pass: the cleanup pass, and so the segment's
+    /// end, is still to come (B.3 NOTE 4). See [`ht_first_cleanup`].
+    HtCleanup { placeholders: Option<u32> },
+    /// An HT refinement segment: a SigProp pass and, if present, a MagRef
+    /// pass.
+    HtRefinement,
+}
+
+/// The kind of the *next* codeword segment, and how many coding passes it may
+/// hold, given the code-block style and the last segment opened
+/// (`opj_t2_init_seg`).
 ///
 /// `termall` terminates the MQ coder after every pass, so each pass is its own
 /// segment. `bypass` (lazy) terminates at every raw/MQ boundary: the first
@@ -632,24 +662,140 @@ const LBLOCK_MAX: u32 = 24;
 /// pattern OpenJPEG spells with `prev.maxpasses in {1, 10} ? 2 : 1`. Otherwise a
 /// segment takes up to 109 passes — `3 * Mb - 2` with `Mb` capped at 37 — which a
 /// code-block can never exceed, so the default never splits.
-fn segment_max_passes(style: u8, segments: &[SegmentState<'_>]) -> u32 {
-    use crate::codestream::markers::code_block_style::{LAZY, TERMALL};
-    if style & TERMALL != 0 {
-        1
+///
+/// An HT block's segments alternate by ISO/IEC 15444-15 B.2: after a cleanup
+/// segment comes a refinement segment of up to two passes, then a one-pass
+/// cleanup segment. Its first segment is opened by [`ht_first_cleanup`]
+/// instead, since where it ends depends on the placeholder passes of the
+/// contribution that holds the cleanup pass. The other style bits mean nothing
+/// to an HT block.
+fn next_segment(style: u8, last: Option<&SegmentState<'_>>) -> (SegmentKind, u32) {
+    use crate::codestream::markers::code_block_style::{HT, LAZY, TERMALL};
+    let last = last.map(|s| s.kind);
+    if style & HT != 0 {
+        match last {
+            Some(SegmentKind::HtCleanup { .. }) => (SegmentKind::HtRefinement, 2),
+            _ => (
+                SegmentKind::HtCleanup {
+                    placeholders: Some(0),
+                },
+                1,
+            ),
+        }
+    } else if style & TERMALL != 0 {
+        // Every pass ends its segment, so nothing turns on the kind.
+        (SegmentKind::Mq, 1)
     } else if style & LAZY != 0 {
-        match segments.last() {
-            None => 10,
-            Some(prev) => {
-                if prev.max_passes == 1 || prev.max_passes == 10 {
-                    2
-                } else {
-                    1
-                }
-            }
+        match last {
+            None => (SegmentKind::Mq, 10),
+            Some(SegmentKind::Mq) => (SegmentKind::Raw, 2),
+            Some(_) => (SegmentKind::Mq, 1),
         }
     } else {
-        109
+        (SegmentKind::Mq, 109)
     }
+}
+
+/// The width of a length field: `Lblock + floor(log2(n))` bits for a codeword
+/// segment of `n` passes from one packet (ISO B.10.7.1). An HT block uses the
+/// same rule for each codeword segment (ISO/IEC 15444-15 B.3), so the field of
+/// its first cleanup segment counts the placeholder passes in it too.
+fn length_bits(lblock: u32, passes: u32) -> u32 {
+    lblock + passes.ilog2()
+}
+
+/// The longest HT cleanup segment, `Lcup < 65535`, and HT refinement segment,
+/// `Lref < 2047` (ISO/IEC 15444-15 7.1.1, 7.1.2).
+const HT_CLEANUP_MAX: u64 = 65534;
+const HT_REFINEMENT_MAX: u64 = 2046;
+
+/// Add a length field's `bytes` to `segment`, which an HT segment may hold
+/// only within its limit. An HT segment's bytes are those of its codeword
+/// segments over the layers (B.3), so the limit is on the sum.
+fn add_length(segment: &mut SegmentState<'_>, bytes: u32) -> Result<()> {
+    segment.length += u64::from(bytes);
+    let (what, max) = match segment.kind {
+        SegmentKind::HtCleanup { .. } => ("cleanup", HT_CLEANUP_MAX),
+        SegmentKind::HtRefinement => ("refinement", HT_REFINEMENT_MAX),
+        SegmentKind::Mq | SegmentKind::Raw => return Ok(()),
+    };
+    if segment.length > max {
+        return Err(Error::Codestream(format!(
+            "HT {what} segment is {} bytes, over the limit of {max}",
+            segment.length
+        )));
+    }
+    Ok(())
+}
+
+/// What the first length field of an HT block's contribution is, while the
+/// block's cleanup pass is still to come. See [`ht_first_cleanup`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirstCleanup {
+    /// Every pass of the contribution is a placeholder pass.
+    Placeholders,
+    /// The contribution holds the cleanup pass, `placeholders` passes from
+    /// the block's first, and its first codeword segment has `passes` passes,
+    /// up to the cleanup pass, and `length` bytes.
+    Cleanup {
+        placeholders: u32,
+        passes: u32,
+        length: u32,
+    },
+}
+
+/// Read the first length field of an HT block's contribution of `new` passes,
+/// after `prior` passes that were all placeholders, and say whether the
+/// contribution holds the cleanup pass (ISO/IEC 15444-15 B.1 to B.3).
+///
+/// The packet with a block's first cleanup pass holds no other cleanup pass
+/// and at most two refinement passes after it (B.3). If this contribution
+/// holds it, it is pass `3 P0` (from 0), `P0 = floor((prior + new - 1) / 3)`,
+/// and the contribution's first codeword segment ends there. A contribution
+/// of placeholder passes only (NOTE 4) is one codeword segment of all `new`
+/// passes, whose length is zero, since placeholder passes carry no bytes.
+///
+/// The pass counts cannot tell the two apart, but the length can. The first
+/// cleanup segment is at least 2 bytes long (B.3), so the field read at the
+/// cleanup reading's width is nonzero exactly when the contribution holds the
+/// cleanup pass. That width is never more than the placeholder reading's, so
+/// a zero is the leading bits of an all-zero field, and the rest of it is read
+/// next. When `3 P0` falls before `prior`, the contribution cannot hold the
+/// cleanup pass, and its field is read at the placeholder width at once.
+fn ht_first_cleanup(
+    lblock: u32,
+    prior: u32,
+    new: u32,
+    bio: &mut BitReader,
+) -> Result<FirstCleanup> {
+    let placeholders = 3 * ((prior + new - 1) / 3);
+    let mut read = 0;
+    if placeholders >= prior {
+        let passes = placeholders + 1 - prior;
+        let bits = length_bits(lblock, passes);
+        match bio.read(bits) {
+            0 => read = bits,
+            1 => {
+                return Err(Error::Codestream(
+                    "HT code-block's first cleanup segment is 1 byte long; it must be at least 2"
+                        .into(),
+                ));
+            }
+            length => {
+                return Ok(FirstCleanup::Cleanup {
+                    placeholders,
+                    passes,
+                    length,
+                });
+            }
+        }
+    }
+    if bio.read(length_bits(lblock, new) - read) != 0 {
+        return Err(Error::Codestream(
+            "HT code-block placeholder passes carry bytes".into(),
+        ));
+    }
+    Ok(FirstCleanup::Placeholders)
 }
 
 /// Which packet delimiters `COD` signals (`Scod` bits 1 and 2).
@@ -904,9 +1050,11 @@ struct BlockState<'a> {
     included: bool,
     /// Length-indicator width, grown by a unary run of 1s and never reset.
     lblock: u32,
+    /// The zero bit-planes the tag tree gives, without an HT block's skipped
+    /// ones (see [`skipped_planes`](Self::skipped_planes)).
     zero_bit_planes: u32,
     /// Coding passes summed over every contributing layer the decode keeps
-    /// (see [`Budget::layers`]).
+    /// (see [`Budget::layers`]), an HT block's placeholder passes left out.
     num_passes: u32,
     /// Codeword segments in order; the last one may still take passes.
     segments: Vec<SegmentState<'a>>,
@@ -914,8 +1062,10 @@ struct BlockState<'a> {
 
 /// A codeword segment while it is being filled from successive layers.
 struct SegmentState<'a> {
+    kind: SegmentKind,
     /// Coding passes from every layer read, which decide where the next
-    /// segment starts.
+    /// segment starts. An HT block's first cleanup segment counts its
+    /// placeholder passes.
     passes: u32,
     /// The passes of [`passes`](Self::passes) from the layers the decode
     /// keeps: all of them without a layer cap. The layers past the cap only
@@ -924,10 +1074,45 @@ struct SegmentState<'a> {
     /// How many passes this segment may hold before the next one starts:
     /// 1 under `termall`, the `10, 2, 1, 2, 1, …` pattern under `bypass`,
     /// otherwise 109 — the most a code-block can carry (`3 * Mb - 2` with
-    /// `Mb <= 37`), so the default never splits. See [`segment_max_passes`],
-    /// which mirrors OpenJPEG's `opj_t2_init_seg`.
+    /// `Mb <= 37`), so the default never splits. See [`next_segment`],
+    /// which mirrors OpenJPEG's `opj_t2_init_seg`. An HT block's first
+    /// cleanup segment holds its placeholder passes and the cleanup pass,
+    /// and until the cleanup pass comes it takes any number.
     max_passes: u32,
+    /// The bytes the length fields gave it, over every layer read.
+    length: u64,
     chunks: Vec<&'a [u8]>,
+}
+
+impl SegmentState<'_> {
+    fn new(kind: SegmentKind, max_passes: u32) -> Self {
+        SegmentState {
+            kind,
+            passes: 0,
+            kept: 0,
+            max_passes,
+            length: 0,
+            chunks: Vec::new(),
+        }
+    }
+
+    /// The placeholder passes of [`kept`](Self::kept): all of them while the
+    /// cleanup pass is still to come.
+    fn kept_placeholders(&self) -> u32 {
+        match self.kind {
+            SegmentKind::HtCleanup {
+                placeholders: Some(p),
+            } => self.kept.min(p),
+            SegmentKind::HtCleanup { placeholders: None } => self.kept,
+            _ => 0,
+        }
+    }
+
+    /// The kept passes Tier-1 decodes: [`kept`](Self::kept) without the
+    /// placeholder passes, which code nothing.
+    fn coded_kept(&self) -> u32 {
+        self.kept - self.kept_placeholders()
+    }
 }
 
 impl BlockState<'_> {
@@ -938,6 +1123,25 @@ impl BlockState<'_> {
             zero_bit_planes: 0,
             num_passes: 0,
             segments: Vec::new(),
+        }
+    }
+
+    /// The magnitude bit-planes an HT block skips past those the tag tree
+    /// gives: one per three placeholder passes (`P0`, ISO/IEC 15444-15 B.3),
+    /// counted only when the decode keeps the cleanup pass after them. A
+    /// block without its cleanup pass decodes to zeros whatever the count.
+    fn skipped_planes(&self) -> u32 {
+        match self.segments.first() {
+            Some(
+                s @ SegmentState {
+                    kind:
+                        SegmentKind::HtCleanup {
+                            placeholders: Some(p),
+                        },
+                    ..
+                },
+            ) if s.coded_kept() > 0 => p / 3,
+            _ => 0,
         }
     }
 }
@@ -1017,12 +1221,33 @@ struct Undo {
     lblock: u32,
     zero_bit_planes: u32,
     num_passes: u32,
-    /// How many segments the block had, and the passes, kept passes and
-    /// chunks of the last of them.
+    /// How many segments the block had, and the state of the last of them.
     segments: usize,
-    last_passes: u32,
-    last_kept: u32,
-    last_chunks: usize,
+    last: Option<LastSegment>,
+}
+
+/// The state of a block's last segment before a packet, which the packet may
+/// add passes and bytes to, or, for an HT block's first cleanup segment, end.
+struct LastSegment {
+    kind: SegmentKind,
+    passes: u32,
+    kept: u32,
+    max_passes: u32,
+    length: u64,
+    chunks: usize,
+}
+
+impl LastSegment {
+    fn of(segment: &SegmentState<'_>) -> Self {
+        LastSegment {
+            kind: segment.kind,
+            passes: segment.passes,
+            kept: segment.kept,
+            max_passes: segment.max_passes,
+            length: segment.length,
+            chunks: segment.chunks.len(),
+        }
+    }
 }
 
 /// Put back the state of every block in `log`, latest first, so that the
@@ -1036,10 +1261,13 @@ fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
         block.zero_bit_planes = entry.zero_bit_planes;
         block.num_passes = entry.num_passes;
         block.segments.truncate(entry.segments);
-        if let Some(last) = block.segments.last_mut() {
-            last.passes = entry.last_passes;
-            last.kept = entry.last_kept;
-            last.chunks.truncate(entry.last_chunks);
+        if let (Some(last), Some(was)) = (block.segments.last_mut(), &entry.last) {
+            last.kind = was.kind;
+            last.passes = was.passes;
+            last.kept = was.kept;
+            last.max_passes = was.max_passes;
+            last.length = was.length;
+            last.chunks.truncate(was.chunks);
         }
     }
 }
@@ -1330,7 +1558,6 @@ fn parse_band_header(
         }
         if let Some(log) = log.as_deref_mut() {
             let block = &blocks[block_index];
-            let last = block.segments.last();
             log.push(Undo {
                 band: band_index,
                 block: block_index,
@@ -1339,9 +1566,7 @@ fn parse_band_header(
                 zero_bit_planes: block.zero_bit_planes,
                 num_passes: block.num_passes,
                 segments: block.segments.len(),
-                last_passes: last.map_or(0, |s| s.passes),
-                last_kept: last.map_or(0, |s| s.kept),
-                last_chunks: last.map_or(0, |s| s.chunks.len()),
+                last: block.segments.last().map(LastSegment::of),
             });
         }
 
@@ -1364,21 +1589,6 @@ fn parse_band_header(
         // `read_num_passes` always returns >= 1, so the `ilog2` below never hits
         // the zero case.
         let num_passes = read_num_passes(bio);
-
-        // An HT code-block decodes from its cleanup pass alone. More passes,
-        // in this contribution or a later one, are placeholder or refinement
-        // passes, whose lengths follow ISO/IEC 15444-15 B.2 rather than the
-        // Part 1 rule below, so the packet is refused before its lengths are
-        // read.
-        if style & crate::codestream::markers::code_block_style::HT != 0
-            && (num_passes > 1 || !blocks[block_index].segments.is_empty())
-        {
-            return Err(Error::Unsupported(
-                "HT code-block with more than its cleanup pass; only the cleanup pass is \
-                 decoded"
-                    .into(),
-            ));
-        }
 
         // Lblock grows by a unary run of 1s and carries into later layers; the
         // length field is then `Lblock + floor(log2(num_passes))` bits wide
@@ -1403,31 +1613,73 @@ fn parse_band_header(
         // length field. Without termination one segment swallows them all;
         // under `restart` each pass terminates, so each gets a segment and a
         // length of its own. OpenJPEG spells this `do { ... } while (n > 0)`.
-        if keep {
-            block.num_passes += num_passes;
-        }
+        //
+        // An HT block's segments follow ISO/IEC 15444-15 B.2 instead (see
+        // [`next_segment`]), once its first cleanup segment has ended. Until
+        // then a contribution may be placeholder passes only, or end that
+        // segment at its cleanup pass, which [`ht_first_cleanup`] tells apart.
         let mut remaining = num_passes;
-        loop {
+        let mut placeholders = 0;
+        let ht = style & crate::codestream::markers::code_block_style::HT != 0;
+        let open = SegmentKind::HtCleanup { placeholders: None };
+        if ht && block.segments.first().is_none_or(|s| s.kind == open) {
+            let prior = block.segments.first().map_or(0, |s| s.passes);
+            let first = ht_first_cleanup(block.lblock, prior, num_passes, bio)?;
+            if block.segments.is_empty() {
+                block.segments.push(SegmentState::new(open, u32::MAX));
+            }
+            let segment = &mut block.segments[0];
+            let passes = match first {
+                FirstCleanup::Placeholders => {
+                    placeholders = num_passes;
+                    num_passes
+                }
+                FirstCleanup::Cleanup {
+                    placeholders: before,
+                    passes,
+                    length,
+                } => {
+                    placeholders = before - prior;
+                    segment.kind = SegmentKind::HtCleanup {
+                        placeholders: Some(before),
+                    };
+                    segment.max_passes = before + 1;
+                    add_length(segment, length)?;
+                    contributions.push(Contribution {
+                        band: band_index,
+                        block: block_index,
+                        segment: 0,
+                        seg_len: length as usize,
+                    });
+                    passes
+                }
+            };
+            segment.passes += passes;
+            if keep {
+                segment.kept += passes;
+            }
+            remaining -= passes;
+        }
+        if keep {
+            block.num_passes += num_passes - placeholders;
+        }
+        while remaining > 0 {
             if block
                 .segments
                 .last()
                 .is_none_or(|s| s.passes >= s.max_passes)
             {
-                let max_passes = segment_max_passes(style, &block.segments);
-                block.segments.push(SegmentState {
-                    passes: 0,
-                    kept: 0,
-                    max_passes,
-                    chunks: Vec::new(),
-                });
+                let (kind, max_passes) = next_segment(style, block.segments.last());
+                block.segments.push(SegmentState::new(kind, max_passes));
             }
             let segment_index = block.segments.len() - 1;
             let segment = &mut block.segments[segment_index];
             let new_passes = remaining.min(segment.max_passes - segment.passes);
 
             // The length field's width uses *this* segment's new passes.
-            let length_bits = block.lblock + new_passes.ilog2();
-            let seg_len = bio.read(length_bits) as usize;
+            let seg_len = bio.read(length_bits(block.lblock, new_passes));
+            add_length(segment, seg_len)?;
+            let seg_len = seg_len as usize;
 
             // A layer may add coding passes and no bytes (B.10.7 sets no
             // lower bound on the length). The MQ codeword is continuous
@@ -1453,9 +1705,6 @@ fn parse_band_header(
             }
 
             remaining -= new_passes;
-            if remaining == 0 {
-                break;
-            }
         }
     }
     Ok(())
@@ -1514,15 +1763,24 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                     // Tier-1 exempts only the last segment from `predictable
                     // termination`, so an empty segment left after the cut
                     // one would have it checked and refused.
+                    // An HT block's placeholder passes code nothing, so they
+                    // count as neither passes nor a segment (see
+                    // [`SegmentState::coded_kept`]); they skip bit-planes
+                    // instead.
                     let mut cut = false;
+                    let zero_bit_planes = block.zero_bit_planes + block.skipped_planes();
+                    let placeholders = block
+                        .segments
+                        .first()
+                        .map_or(0, SegmentState::kept_placeholders);
                     let segments = block
                         .segments
                         .into_iter()
-                        .take_while(|s| s.kept > 0)
+                        .take_while(|s| s.coded_kept() > 0)
                         .map(|s| {
                             cut = s.kept < s.passes;
                             CodedSegment {
-                                passes: s.kept,
+                                passes: s.coded_kept(),
                                 chunks: s.chunks,
                             }
                         })
@@ -1533,9 +1791,10 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                         width,
                         height,
                         num_passes: block.num_passes,
-                        zero_bit_planes: block.zero_bit_planes,
+                        zero_bit_planes,
                         segments,
                         cut,
+                        placeholders,
                     }
                 },
             ));

@@ -270,11 +270,13 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                         differing.push(name.clone());
                     }
                 }
-                // An HT code-block with more than its cleanup pass is found
-                // only in a packet header, so the main header reads.
+                // An HT code-block with refinement passes, or with a region
+                // of interest, is found only past the packet headers, so the
+                // main header reads.
                 (Ok(_), Err(Error::Unsupported(m)))
                     if name.starts_with("conformance/ht/")
-                        && m.starts_with("HT code-block with more than its cleanup pass") =>
+                        && (m.ends_with("coding passes; only the cleanup pass is decoded")
+                            || m.starts_with("region of interest on an HT code-block")) =>
                 {
                     ht_refused += 1;
                 }
@@ -292,7 +294,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     assert_eq!(seen[0], 9, "the nine Part 4 JP2 files");
     assert_eq!(seen[1], 9, "the nine jp2_real files");
     assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
-    assert!(ht_refused > 0, "no HT decode refused in tier-2");
+    assert!(ht_refused > 0, "no HT decode refused past the main header");
     // Every listed tile fault really differs.
     let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
     assert_eq!(differing, listed);

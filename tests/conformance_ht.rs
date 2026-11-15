@@ -26,7 +26,9 @@ mod support;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use support::ht::{HtManifest, OpenJphManifest, load_ht_manifest, load_openjph_manifest};
+use support::ht::{
+    HtManifest, HtSignaling, OpenJphManifest, Passes, load_ht_manifest, load_openjph_manifest,
+};
 use support::jp2::{Digest, sha256_hex};
 use support::part4::{self, Bounds, Grade, ratchet};
 use support::pgx::{Pgx, parse_pgx};
@@ -34,7 +36,15 @@ use support::pgx::{Pgx, parse_pgx};
 /// The HT codestreams and JPH files that decode within their bounds today.
 const IN_CLASS: &[&str] = &[
     "ds0_ht_01_b11",
+    "ds0_ht_02_b12",
+    "ds0_ht_04_b12",
+    "ds0_ht_07_b16",
+    "ds0_ht_08_b16",
     "ds0_ht_11_b10",
+    "ds0_ht_16_b11",
+    "ds1_ht_01_b12",
+    "ds1_ht_02_b12",
+    "ds1_ht_03_b12",
     "ds1_ht_04_b9",
     "ds1_ht_07_b11",
 ];
@@ -128,22 +138,79 @@ fn grades_the_ht_set_by_compliance_class() {
     );
     assert_eq!(graded.len(), 41 + 10);
     ratchet("ISO/IEC 15444-4:2024 HTJ2K class-1", &graded, IN_CLASS);
+    let reasons = codestream_refusals(&manifest);
     pin_refusals(&graded, |name| {
-        if name.starts_with("ds0_hm") {
-            MIXED
-        } else if name.starts_with("file") {
+        if name.starts_with("file") {
             "file brand `jph `"
         } else {
-            MORE_PASSES
+            reasons(name)
         }
     });
+    let codestreams = manifest
+        .codestreams
+        .iter()
+        .map(|c| (c.name.as_str(), &c.ht, &c.passes));
+    in_class_iff_cleanup_only(codestreams, IN_CLASS);
 }
 
 /// The refusal of a MIXED code-block style.
 const MIXED: &str = "code-block style (HTJ2K mixed-mode block coding)";
 
-/// The refusal of an HT code-block with passes past its cleanup pass.
-const MORE_PASSES: &str = "HT code-block with more than its cleanup pass";
+/// The refusal of an HT code-block with refinement passes.
+const REFINEMENT: &str = "coding passes; only the cleanup pass is decoded";
+
+/// The refusal of a region of interest on an HT code-block.
+const ROI: &str = "region of interest on an HT code-block";
+
+/// Why a codestream with `ht` signaling and `passes` is not yet decoded:
+/// MIXED in its main header, then `RGN` on its HT blocks, which Tier-1
+/// refuses before it counts the passes, then refinement passes.
+fn refusal(ht: &HtSignaling, passes: &Passes) -> &'static str {
+    if ht.coder_set == "MIXED" {
+        MIXED
+    } else if ht.rgn {
+        ROI
+    } else {
+        assert!(
+            passes.refinement == Some(true),
+            "a refused codestream without refinement passes"
+        );
+        REFINEMENT
+    }
+}
+
+/// The expected refusal of each HT codestream of `manifest`, by name.
+fn codestream_refusals(manifest: &HtManifest) -> impl Fn(&str) -> &'static str + '_ {
+    |name| {
+        let c = manifest.codestreams.iter().find(|c| c.name == name);
+        let j = manifest.jph.iter().find(|j| j.name == name);
+        match (c, j) {
+            (Some(c), _) => refusal(&c.ht, &c.passes),
+            (_, Some(j)) => refusal(&j.ht, &j.passes),
+            _ => panic!("{name}: not in the manifest"),
+        }
+    }
+}
+
+/// An entry is in `in_class` exactly when every one of its code-blocks needs
+/// at most its cleanup pass, by the Tier-2 walk's pass counts, and no `RGN`
+/// marker applies to them: the HT decoder reads the cleanup pass alone, and
+/// no ROI on an HT block. So the list is the walk's, not a guess.
+fn in_class_iff_cleanup_only<'a>(
+    entries: impl Iterator<Item = (&'a str, &'a HtSignaling, &'a Passes)>,
+    in_class: &[&str],
+) {
+    for (name, ht, passes) in entries {
+        let decodable = ht.coder_set != "MIXED"
+            && !ht.rgn
+            && passes.walked.as_ref().is_some_and(|w| w.cleanup_only());
+        assert_eq!(
+            in_class.contains(&name),
+            decodable,
+            "{name}: in the list is not the same as needing only cleanup passes"
+        );
+    }
+}
 
 /// Every entry not yet decoded is refused for the reason `expected` names
 /// for it, so a refusal that moves to another stage is caught.
@@ -176,13 +243,7 @@ fn grades_agreement_with_openjpeg() {
         &graded,
         AGREES_WITH_OPENJPEG,
     );
-    pin_refusals(&graded, |name| {
-        if name.starts_with("ds0_hm") {
-            MIXED
-        } else {
-            MORE_PASSES
-        }
-    });
+    pin_refusals(&graded, codestream_refusals(&manifest));
 }
 
 /// Decode the bare codestream of every graded JPH file whose components a
@@ -202,7 +263,14 @@ fn grades_the_jph_codestreams() {
     // whose codestream holds palette indices.
     assert_eq!(graded.len(), 8);
     ratchet("JPH codestreams", &graded, JPH_CODESTREAM_EXACT);
-    pin_refusals(&graded, |_| MORE_PASSES);
+    pin_refusals(&graded, codestream_refusals(&manifest));
+    let graded_names: Vec<&str> = graded.iter().map(|g| g.0).collect();
+    let files = manifest
+        .jph
+        .iter()
+        .filter(|j| graded_names.contains(&j.name.as_str()))
+        .map(|j| (j.name.as_str(), &j.ht, &j.passes));
+    in_class_iff_cleanup_only(files, JPH_CODESTREAM_EXACT);
 }
 
 /// Decode every OpenJPH codestream and grade it against OpenJPEG's decode.
@@ -217,7 +285,16 @@ fn grades_the_openjph_codestreams() {
         .collect();
     assert_eq!(graded.len(), 16);
     ratchet("OpenJPH test codestreams", &graded, OPENJPH_IN_CLASS);
-    pin_refusals(&graded, |_| MORE_PASSES);
+    let manifest = load_openjph_manifest(&dir);
+    pin_refusals(&graded, |name| {
+        let e = manifest.entries.iter().find(|e| e.name == name).unwrap();
+        refusal(&e.ht, &e.passes)
+    });
+    let entries = manifest
+        .entries
+        .iter()
+        .map(|e| (e.name.as_str(), &e.ht, &e.passes));
+    in_class_iff_cleanup_only(entries, OPENJPH_IN_CLASS);
 }
 
 /// Every reference and OpenJPEG snapshot the manifests name parses, at the
@@ -799,35 +876,49 @@ fn the_manifest_pins_the_grading_bar() {
     }
 }
 
-/// A measured pass histogram agrees with the flags derived from it.
+/// The pass counts agree with the flags derived from them: from the Tier-2
+/// walk where there is one, otherwise from OpenJPEG's count. Where both
+/// counted, they agree.
 fn check_passes(name: &str, passes: &support::ht::Passes) {
-    let Some(m) = &passes.measured else {
-        assert!(
+    let counts = |histogram: &std::collections::BTreeMap<String, u64>, blocks: u64| {
+        let counts: Vec<(u32, u64)> = histogram
+            .iter()
+            .map(|(k, v)| (k.parse().expect("pass count"), *v))
+            .collect();
+        assert_eq!(counts.iter().map(|(_, v)| v).sum::<u64>(), blocks, "{name}");
+        counts
+    };
+    let refinement = |counts: &[(u32, u64)]| Some(counts.iter().any(|&(p, _)| p > 1));
+    if let Some(m) = &passes.measured {
+        let counts = counts(&m.histogram, m.blocks);
+        if let Some(w) = &passes.walked {
+            assert_eq!(
+                (w.blocks, &w.histogram, w.zero_length_refinement),
+                (m.blocks, &m.histogram, m.zero_length_refinement),
+                "{name}: walked and measured"
+            );
+        }
+        // OpenJPEG refuses a block with placeholder passes.
+        assert_eq!(passes.placeholder, Some(false), "{name}: placeholder");
+        assert_eq!(passes.refinement, refinement(&counts), "{name}: refinement");
+    }
+    match &passes.walked {
+        Some(w) => {
+            let counts = counts(&w.histogram, w.blocks);
+            assert!(w.placeholder <= w.blocks, "{name}");
+            assert_eq!(
+                passes.placeholder,
+                Some(w.placeholder > 0),
+                "{name}: placeholder"
+            );
+            assert_eq!(passes.refinement, refinement(&counts), "{name}: refinement");
+        }
+        None if passes.measured.is_none() => assert!(
             passes.placeholder.is_none() && passes.refinement.is_none(),
             "{name}"
-        );
-        return;
-    };
-    let counts: Vec<(u32, u64)> = m
-        .histogram
-        .iter()
-        .map(|(k, v)| (k.parse().expect("pass count"), *v))
-        .collect();
-    assert_eq!(
-        counts.iter().map(|(_, v)| v).sum::<u64>(),
-        m.blocks,
-        "{name}"
-    );
-    assert_eq!(
-        passes.placeholder,
-        Some(counts.iter().any(|&(p, _)| p > 3)),
-        "{name}: placeholder"
-    );
-    assert_eq!(
-        passes.refinement,
-        Some(counts.iter().any(|&(p, _)| p > 1)),
-        "{name}: refinement"
-    );
+        ),
+        None => {}
+    }
 }
 
 /// Unknown manifest keys are rejected rather than ignored, at every level.
@@ -877,6 +968,7 @@ fn the_manifests_reject_unknown_keys() {
         format!("/codestreams/{snap}/openjpeg/agreement_bound"),
         format!("/codestreams/{snap}/openjpeg/snapshot"),
         format!("/codestreams/{measured}/passes/measured"),
+        "/codestreams/0/passes/walked".into(),
         "/jph/0".into(),
         "/jph/0/features".into(),
         "/jph/0/ht".into(),

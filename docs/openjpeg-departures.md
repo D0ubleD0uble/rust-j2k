@@ -45,6 +45,7 @@ refusal under `ColorOutput::Srgb`).
 | [Encoder mistakes OpenJPEG corrects](#encoder-mistakes-openjpeg-corrects) | corrects as OpenJPEG does; refuses mixed counts, differing restatements, and MCT on components that differ in depth or sign | 2 |
 | [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps and packed-header overruns handled differently | 1, 3 |
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
+| [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
@@ -983,6 +984,23 @@ derives the expected samples by hand: a signed 8-bit lossless codestream with
 only `Ssiz` patched to 32 bits must decode to the same samples. That shows the
 depth is accepted and the sign, level shift and clamp are right for small
 values; it does not exercise coefficients near 2^31.
+
+## HT placeholder passes
+
+| | |
+| - | - |
+| This decoder | splits an HT block's first contribution into placeholder passes and the cleanup pass, and skips one bit-plane for every three placeholders |
+| OpenJPEG 2.5.0 | gives the first segment one pass, so it reads the length field at the wrong width and loses sync ("segment too long", "Expected EPH marker"), and refuses a block of more than 3 passes |
+| Standard | T.814 B.1 to B.3 |
+| Rule | 1 |
+| Tests and fixtures | `src/tier2/tests/ht.rs`; `tests/conformance_ht.rs` on `ds0_ht_02_b12` and the other multi-layer Part 4 files |
+| Decided | not recorded |
+
+An HTJ2K encoder that writes several quality layers can count a block's top
+bit-planes as placeholder passes, which carry no bytes (B.1). OpenJPEG's
+`opj_t2_read_packet_header` (`t2.c`) and `opj_t1_ht_decode_cblk` (`ht_dec.c`)
+do not handle them. This decoder reads them as B.3 says and matches the Part 4
+references on those files.
 
 ## The JP2 box layer
 

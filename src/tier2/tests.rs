@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 use super::geometry::ResolutionGeom;
 use super::*;
 
+mod ht;
+
 /// Every byte of a code-block, across all its codeword segments.
 fn all_bytes(block: &CodeBlock<'_>) -> Vec<u8> {
     block.segments.iter().flat_map(|s| s.bytes()).collect()
@@ -2314,56 +2316,7 @@ fn an_ht_block_with_its_cleanup_pass_alone_parses() {
     assert_eq!(next, data.len());
 }
 
-/// An HT block with more than its cleanup pass, in one contribution or over
-/// two layers, is refused before its lengths are read: its placeholder and
-/// refinement passes follow other length rules.
-#[test]
-fn an_ht_block_with_more_passes_is_unsupported() {
-    const HT: u8 = 0x40;
-    let no_delimiters = Delimiters {
-        sop: false,
-        eph: false,
-    };
-    let bands = [single_block_band(BandKind::Ll, 8, 8)];
-
-    // Two passes in one contribution.
-    let mut w = PackedHeader::new();
-    w.bit(1);
-    w.bit(1); // included
-    w.bit(1); // zero-bitplane 0
-    w.bits(0b10, 2); // 2 passes...
-    w.bit(0); // Lblock stays 3
-    w.bits(2, 4); // Lblock + floor(log2 2) = 4 bits
-    let data = packets(&[(w.finish(), vec![0x62, 0x00])]);
-    let e = parse_layers_styled(&data, &bands, 1, no_delimiters, HT).unwrap_err();
-    assert!(
-        matches!(&e, Error::Unsupported(m) if m.contains("more than its cleanup pass")),
-        "{e:?}"
-    );
-    // The same packet without the HT bit is an ordinary two-pass block.
-    assert!(parse_layers_styled(&data, &bands, 1, no_delimiters, 0).is_ok());
-
-    // One pass in each of two layers.
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bit(0); // 1 pass
-    l0.bit(0); // Lblock stays 3
-    l0.bits(2, 3);
-    let mut l1 = PackedHeader::new();
-    l1.bit(1);
-    l1.bit(1); // contributes
-    l1.bit(0); // 1 pass
-    l1.bit(0); // Lblock stays 3
-    l1.bits(1, 3);
-    let data = packets(&[(l0.finish(), vec![0x62, 0x00]), (l1.finish(), vec![7])]);
-    let e = parse_layers_styled(&data, &bands, 2, no_delimiters, HT).unwrap_err();
-    assert!(
-        matches!(&e, Error::Unsupported(m) if m.contains("more than its cleanup pass")),
-        "{e:?}"
-    );
-}
+// The rest of the HT tests are in `tests/ht.rs`.
 
 // ---- Code-block style: bypass / lazy (issue #66) ----
 
@@ -2378,14 +2331,9 @@ fn lazy_segment_max_passes_follows_the_10_2_1_pattern() {
     let mut segments: Vec<SegmentState<'_>> = Vec::new();
     let mut pattern = Vec::new();
     for _ in 0..7 {
-        let max_passes = segment_max_passes(LAZY, &segments);
+        let (kind, max_passes) = next_segment(LAZY, segments.last());
         pattern.push(max_passes);
-        segments.push(SegmentState {
-            passes: 0,
-            kept: 0,
-            max_passes,
-            chunks: Vec::new(),
-        });
+        segments.push(SegmentState::new(kind, max_passes));
     }
     assert_eq!(pattern, [10, 2, 1, 2, 1, 2, 1]);
 }
@@ -2395,8 +2343,8 @@ fn lazy_segment_max_passes_follows_the_10_2_1_pattern() {
 #[test]
 fn non_lazy_segment_max_passes_is_unchanged() {
     const TERMALL: u8 = 0x04;
-    assert_eq!(segment_max_passes(TERMALL, &[]), 1);
-    assert_eq!(segment_max_passes(0, &[]), 109);
+    assert_eq!(next_segment(TERMALL, None).1, 1);
+    assert_eq!(next_segment(0, None).1, 109);
 }
 
 /// A refusal an earlier walk recorded on the meter does not label a later

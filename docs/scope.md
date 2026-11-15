@@ -182,7 +182,8 @@ whose code-blocks carry only the cleanup pass, and refuses the rest with
 |---|---|
 | CAP marker and HTJ2K capability signaling | Yes, read; MULTIHT refused |
 | HT cleanup pass (MEL, VLC and MagSgn) | Yes |
-| HT SigProp and MagRef passes, placeholder passes | No (Phase 4) |
+| HT placeholder passes | Yes |
+| HT SigProp and MagRef passes | No (Phase 4) |
 | Mixed-mode (HT and Part 1 code-blocks in one tile-component) | No (Phase 4) |
 | Region of interest on HT code-blocks | No |
 

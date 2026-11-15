@@ -44,6 +44,18 @@ fn a_cut_packet_keeps_each_code_blocks_whole_layers() {
     );
 }
 
+/// The same for HT code-blocks: `ds0_ht_02_b11` (six layers, LRCP), whose
+/// blocks' first contributions are placeholder passes, with the cleanup pass
+/// and refinement passes in later layers. A cut HT segment is undone as a
+/// Part 1 one is.
+#[test]
+fn a_cut_packet_keeps_whole_layers_of_ht_code_blocks() {
+    assert!(
+        whole_layers("conformance/ht/codestreams/ds0_ht_02_b11.j2k", 6),
+        "no cut kept a block at an earlier layer beside a whole one"
+    );
+}
+
 /// The same under the code-block styles that end segments within a block's
 /// passes (bypass, restart) or not (the others), two layers each: a block
 /// whose layer 2 continues its layer 1 segment and opens another keeps
