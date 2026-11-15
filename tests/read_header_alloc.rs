@@ -11,6 +11,9 @@
 //! project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+#[path = "support/synth.rs"]
+mod synth;
+use synth::bx;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -65,6 +68,16 @@ fn big_header() -> Vec<u8> {
 
 /// The same codestream in a minimal JP2 file with a matching `ihdr`.
 fn in_jp2(codestream: &[u8]) -> Vec<u8> {
+    let ihdr = synth::ihdr_payload(SIDE, SIDE, 1, [7, 7, 0, 0]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        codestream,
+        &[],
+    )
+}
+
+fn old_in_jp2(codestream: &[u8]) -> Vec<u8> {
     let bx = |kind: &[u8; 4], payload: &[u8]| {
         let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
         out.extend_from_slice(kind);
@@ -98,5 +111,12 @@ fn read_header_allocates_nothing_sized_by_the_image() {
             peak < 64 * 1024,
             "{what}: read_header peaked at {peak} bytes"
         );
+    }
+}
+
+#[test]
+fn zz_identity_tests_read_header_alloc_rs() {
+    for cs in [&[][..], &[1, 2, 3][..], &[0xFF; 300][..]] {
+        assert_eq!(old_in_jp2(cs), in_jp2(cs));
     }
 }

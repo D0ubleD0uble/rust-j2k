@@ -102,6 +102,30 @@ fn a_later_tile_parts_volume_covers_the_rest() {
 /// set to 0 and no EOC, then an `xml ` box.
 fn jp2_psot0(cs: &[u8]) -> Vec<u8> {
     let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
+    let ihdr = synth::ihdr_payload(
+        word(12) - word(20),
+        word(8) - word(16),
+        u16::from_be_bytes([cs[40], cs[41]]),
+        [cs[42], 7, 0, 0],
+    );
+    // Follow the tile-part chain to the last SOT.
+    let mut sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    while sot + word(sot + 6) as usize + 2 < cs.len() {
+        sot += word(sot + 6) as usize;
+    }
+    let mut body = cs[..sot + 6].to_vec();
+    body.extend_from_slice(&[0; 4]);
+    body.extend_from_slice(&cs[sot + 10..cs.len() - 2]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        &body,
+        &[bx(b"xml ", b"<a/>")],
+    )
+}
+
+fn old_jp2_psot0(cs: &[u8]) -> Vec<u8> {
+    let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
     let mut ihdr = (word(12) - word(20)).to_be_bytes().to_vec();
     ihdr.extend_from_slice(&(word(8) - word(16)).to_be_bytes());
     ihdr.extend_from_slice(&cs[40..42]);
@@ -146,4 +170,12 @@ fn read_header_reports_the_boxes_after_a_tile_with_packets_left_out() {
     let missing = jp2_psot0(&read("poc_res_missing.j2k"));
     assert_eq!(xml(read_header(&missing).unwrap().jp2.as_ref()), 1);
     assert_refused("poc_res_missing.j2k as JP2", &missing, 0, 1);
+}
+
+#[test]
+fn zz_identity_tests_poc_coverage_rs() {
+    for n in ["poc_res_covered.j2k", "poc_res_missing.j2k"] {
+        let cs = read(n);
+        assert_eq!(old_jp2_psot0(&cs), jp2_psot0(&cs), "{n}");
+    }
 }

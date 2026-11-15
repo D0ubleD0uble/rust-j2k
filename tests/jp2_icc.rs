@@ -12,7 +12,7 @@
 //!   unconverted because LittleCMS refused the profile.
 
 mod support;
-use support::synth::{self, bx};
+use support::synth::{self, bx, cdef};
 use support::{plane_hash, srgb};
 
 use std::path::PathBuf;
@@ -245,6 +245,10 @@ fn hex(text: &str) -> Vec<u8> {
 
 /// A JP2 file around `codestream` whose `colr` box carries `profile`.
 fn wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
+    wrap_with(codestream, profile, &[])
+}
+
+fn old_wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
     let header = rust_j2k::read_header(codestream).expect("codestream header");
     let mut ihdr = header.height.to_be_bytes().to_vec();
     ihdr.extend_from_slice(&header.width.to_be_bytes());
@@ -571,8 +575,7 @@ fn rgba() -> Vec<u8> {
     bytes[start..end].to_vec()
 }
 
-/// A `cdef` box of (`Cn`, `Typ`, `Asoc`) entries.
-fn cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
+fn old_cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
     let mut payload = (entries.len() as u16).to_be_bytes().to_vec();
     for &(cn, typ, asoc) in entries {
         for v in [cn, typ, asoc] {
@@ -589,6 +592,25 @@ const RGBA_CDEF: &[(u16, u16, u16)] = &[(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 1, 
 /// `children` after it. Components that differ in depth or sign get `ihdr`
 /// BPC 255 and a `bpcc` box.
 fn wrap_with(codestream: &[u8], profile: &[u8], children: &[Vec<u8>]) -> Vec<u8> {
+    let header = rust_j2k::read_header(codestream).expect("codestream header");
+    let bpc: Vec<u8> = header
+        .components
+        .iter()
+        .map(|c| (c.bit_depth - 1) | if c.signed { 0x80 } else { 0 })
+        .collect();
+    let uniform = bpc.iter().all(|&b| b == bpc[0]);
+    let tail = [if uniform { bpc[0] } else { 255 }, 7, 0, 0];
+    let ihdr = synth::ihdr_payload(header.height, header.width, bpc.len() as u16, tail);
+    let mut boxes = vec![bx(b"ihdr", &ihdr)];
+    if !uniform {
+        boxes.push(bx(b"bpcc", &bpc));
+    }
+    boxes.push(bx(b"colr", &synth::colr_icc(profile)));
+    boxes.extend_from_slice(children);
+    synth::jp2_file(&boxes, &[], codestream, &[])
+}
+
+fn old_wrap_with(codestream: &[u8], profile: &[u8], children: &[Vec<u8>]) -> Vec<u8> {
     let header = rust_j2k::read_header(codestream).expect("codestream header");
     let bpc: Vec<u8> = header
         .components
@@ -1003,4 +1025,40 @@ fn srgb_picks_the_color_channels_by_their_cdef_labels() {
         image.jp2.unwrap().channels,
         [color(1), color(2), alpha, color(3)]
     );
+}
+
+#[test]
+fn zz_identity_tests_jp2_icc_rs() {
+    assert_eq!(
+        old_cdef(&[(0, 0, 1), (1, 1, 0), (7, 65535, 2)]),
+        synth::cdef(&[(0, 0, 1), (1, 1, 0), (7, 65535, 2)])
+    );
+    for n in [
+        "multilayer_lossless.j2k",
+        "cblksty_bypass_lossless.j2k",
+        "multicomponent_lossless.j2k",
+    ] {
+        let cs = read(n);
+        for p in [&[][..], &[9, 8, 7][..]] {
+            assert_eq!(old_wrap(&cs, p), wrap(&cs, p), "{n}");
+            assert_eq!(
+                old_wrap_with(&cs, p, &[vec![1, 2]]),
+                wrap_with(&cs, p, &[vec![1, 2]]),
+                "{n}"
+            );
+        }
+    }
+    for e in std::fs::read_dir(synth::fixtures("icc")).unwrap() {
+        let p = e.unwrap().path();
+        if p.extension().is_some_and(|x| x == "j2k") {
+            let cs = synth::read_file(&p);
+            assert_eq!(old_wrap(&cs, &[1]), wrap(&cs, &[1]), "{}", p.display());
+            assert_eq!(
+                old_wrap_with(&cs, &[1], &[]),
+                wrap_with(&cs, &[1], &[]),
+                "{}",
+                p.display()
+            );
+        }
+    }
 }

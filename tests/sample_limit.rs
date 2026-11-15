@@ -9,7 +9,7 @@
 #[path = "support/synth.rs"]
 mod synth;
 use std::path::PathBuf;
-use synth::seg;
+use synth::{bx, seg};
 
 use rust_j2k::{
     DecodeOptions, Error, Window, WorkLimit, decode, decode_with, read_header, read_header_with,
@@ -39,6 +39,16 @@ fn flat_header_only() -> Vec<u8> {
 
 /// `codestream` in a minimal JP2 file whose `ihdr` matches the flat image.
 fn in_jp2(codestream: &[u8]) -> Vec<u8> {
+    let ihdr = synth::ihdr_payload(16385, 16385, 1, [7, 7, 0, 0]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        codestream,
+        &[],
+    )
+}
+
+fn old_in_jp2(codestream: &[u8]) -> Vec<u8> {
     let bx = |kind: &[u8; 4], payload: &[u8]| {
         let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
         out.extend_from_slice(kind);
@@ -624,4 +634,11 @@ fn a_palette_under_a_window_counts_the_window() {
         m.starts_with("palette expansion to 3 channels needs 270000000 samples"),
         "{m}"
     );
+}
+
+#[test]
+fn zz_identity_tests_sample_limit_rs() {
+    for cs in [&[][..], &[1, 2, 3][..], &[0xFF; 300][..]] {
+        assert_eq!(old_in_jp2(cs), in_jp2(cs));
+    }
 }

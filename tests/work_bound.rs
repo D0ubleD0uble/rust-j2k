@@ -311,6 +311,26 @@ fn skips_from_the_poc_set_are_bounded() {
 /// where the packets end, followed here by an `xml ` box of `xml`.
 fn jp2_psot0(cs: &[u8], xml: &[u8]) -> Vec<u8> {
     let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
+    let ihdr = synth::ihdr_payload(
+        word(12) - word(20),
+        word(8) - word(16),
+        u16::from_be_bytes([cs[40], cs[41]]),
+        [7, 7, 0, 0],
+    );
+    let sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    let mut body = cs[..sot + 6].to_vec();
+    body.extend_from_slice(&[0; 4]);
+    body.extend_from_slice(&cs[sot + 10..cs.len() - 2]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        &body,
+        &[bx(b"xml ", xml)],
+    )
+}
+
+fn old_jp2_psot0(cs: &[u8], xml: &[u8]) -> Vec<u8> {
+    let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
     let mut ihdr = (word(12) - word(20)).to_be_bytes().to_vec();
     ihdr.extend_from_slice(&(word(8) - word(16)).to_be_bytes());
     ihdr.extend_from_slice(&cs[40..42]);
@@ -440,4 +460,11 @@ fn the_positional_orders_pass_over_resolutions_with_no_precinct() {
 #[test]
 fn a_walk_within_the_work_bound_decodes() {
     assert_flat("t2skip 30000", &t2skip(2048, 1024, 2048, 30000), 2048, 1024);
+}
+
+#[test]
+fn zz_identity_tests_work_bound_rs() {
+    for cs in [setskip(1024, 31), setskip(2048, 2)] {
+        assert_eq!(old_jp2_psot0(&cs, b"<a/>"), jp2_psot0(&cs, b"<a/>"));
+    }
 }

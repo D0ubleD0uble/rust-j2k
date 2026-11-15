@@ -18,7 +18,7 @@
 mod synth;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use synth::seg;
+use synth::{bx, seg};
 
 struct Counting;
 
@@ -88,6 +88,16 @@ fn pocdup(psot0: bool) -> Vec<u8> {
 /// its packets end, then an empty `free` box: `read_header` walks the packets
 /// to see that the codestream ends at the box's end.
 fn in_jp2() -> Vec<u8> {
+    let ihdr = synth::ihdr_payload(8, 8, 1, [7, 7, 0, 0]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        &pocdup(true),
+        &[bx(b"free", b"")],
+    )
+}
+
+fn old_in_jp2() -> Vec<u8> {
     let bx = |kind: &[u8; 4], payload: &[u8]| {
         let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
         out.extend_from_slice(kind);
@@ -191,4 +201,9 @@ fn repeated_poc_volumes_decode_in_a_small_heap() {
             "pocwide, {what}: decode peaked at {peak} bytes"
         );
     }
+}
+
+#[test]
+fn zz_identity_tests_poc_dedup_alloc_rs() {
+    assert_eq!(old_in_jp2(), in_jp2());
 }
