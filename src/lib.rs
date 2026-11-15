@@ -724,8 +724,9 @@ pub struct DecodeOptions {
     ///
     /// The result is the decode with [`window`](Self::window) set to the
     /// tile's rectangle on the reference grid: its size, its samples and its
-    /// failures, the refusal of sRGB output from sub-sampled sYCC included. A tile index past the tile grid is [`Error::InvalidOptions`],
-    /// and so is setting both this and [`window`](Self::window).
+    /// failures, the refusal of sRGB output from sub-sampled sYCC included.
+    /// A tile index past the tile grid is [`Error::InvalidOptions`], and so
+    /// is setting both this and [`window`](Self::window).
     pub tile: Option<u32>,
     /// Decode only these components, in this order: `Some(list)` returns one
     /// [`Component`] per entry of `list`, each the component of that SIZ

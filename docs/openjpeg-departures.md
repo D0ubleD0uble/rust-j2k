@@ -1301,7 +1301,7 @@ and 7 of the Part 4 set carry an `rreq`.
 | Standard | ISO/IEC 15444-1 G.2 (RCT) and G.3 (ICT): the image's components 0, 1 and 2 are the output of the inverse transform, which needs all three of its inputs |
 | Rule | 1 |
 | Tests and fixtures | `tests/decode_window.rs` on `tests/fixtures/window/tiled_53.j2k` and `tiled_97.j2k` |
-| Decided | 2026-11-14, #216 |
+| Decided | 2026-11-15, #216: return the full-decode values |
 
 Under `-c`, OpenJPEG writes Y, Cb and Cr where the whole decode has red, green
 and blue. `scripts/gen-window-fixtures.py` checks that its `-c` output differs
@@ -1309,6 +1309,10 @@ from the whole decode's components on both codestreams with the transform, and
 records the whole decode's components as the oracle there. On
 `tiled_53_nomct.j2k`, which has no transform, the two agree and the oracle is
 OpenJPEG's `-c` output.
+
+Kakadu's default output-component mode does the same as this decoder: a
+subset of the components comes out after the color transform. Its
+`-codestream_components` option is the opt-in for the values before it.
 
 ## A window and a tile together
 
