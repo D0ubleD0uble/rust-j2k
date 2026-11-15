@@ -393,6 +393,167 @@ fn passes_run_counts_the_cleanup_pass() {
     assert_eq!(passes_run(&b, 8), 0);
 }
 
+// Refinement passes.
+
+/// `block` with `passes` coding passes, the ones after the cleanup pass in a
+/// refinement segment of `refinement`.
+fn refined<'a>(
+    width: usize,
+    height: usize,
+    zbp: u32,
+    cleanup: &'a [u8],
+    refinement: &'a [u8],
+    passes: u32,
+) -> CodeBlock<'a> {
+    let mut b = block(width, height, zbp, cleanup);
+    b.num_passes = passes;
+    b.segments.push(CodedSegment {
+        passes: passes - 1,
+        chunks: vec![refinement],
+    });
+    b
+}
+
+/// The cleanup segment of a 1x2 block that leaves (0, 0) at +384 under
+/// `Mb = 8`, `P = 0`, and (0, 1) insignificant.
+const TOP_ONLY: [u8; 3] = [0x00, 0x62, 0x00];
+
+#[test]
+fn cleanup_and_sigprop_decode_by_hand() {
+    assert_eq!(
+        decode(&block(1, 2, 0, &TOP_ONLY), 8, 0, false).unwrap(),
+        [384, 0]
+    );
+    // SigProp visits (0, 1) beside (0, 0): bit 1 makes it significant, the
+    // next bit is its sign, and it reconstructs to 3 << (shift - 1).
+    for (byte, want) in [(0x01, 192), (0x03, -192)] {
+        let data = [byte];
+        let b = refined(1, 2, 0, &TOP_ONLY, &data, 2);
+        assert_eq!(decode(&b, 8, 0, false).unwrap(), [384, want]);
+    }
+    // A SigProp bit of 0 leaves it insignificant.
+    let b = refined(1, 2, 0, &TOP_ONLY, &[0x02], 2);
+    assert_eq!(decode(&b, 8, 0, false).unwrap(), [384, 0]);
+}
+
+#[test]
+fn all_three_passes_decode_by_hand() {
+    // SigProp reads byte 0 forward; MagRef reads byte 1 backward. MagRef's
+    // bit for (0, 0) picks (4 mu + 3) or (4 mu + 1) at the plane below.
+    for (magref, want) in [(0x01, 448), (0x00, 320)] {
+        let data = [0x01, magref];
+        let b = refined(1, 2, 0, &TOP_ONLY, &data, 3);
+        assert_eq!(decode(&b, 8, 0, false).unwrap(), [want, 192]);
+    }
+}
+
+#[test]
+fn sigprop_propagates_through_new_samples_and_signs_each_group_after() {
+    // A 4x2 block whose cleanup pass leaves only (0, 0), at +384.
+    let cleanup = [0x52, 0x70, 0x63, 0x00];
+    assert_eq!(
+        decode(&block(4, 2, 0, &cleanup), 8, 0, false).unwrap(),
+        [384, 0, 0, 0, 0, 0, 0, 0]
+    );
+    // Columns 2 and 3 have no cleanup-significant neighbor, so they are
+    // visited only through samples this pass made significant. The seven
+    // magnitude bits come first, column by column; then the seven signs, of
+    // which only the first, for (0, 1), is set.
+    let b = refined(4, 2, 0, &cleanup, &[0xFF, 0x00], 2);
+    assert_eq!(
+        decode(&b, 8, 0, false).unwrap(),
+        [384, 192, 192, 192, -192, 192, 192, 192]
+    );
+}
+
+#[test]
+fn a_set_sigprop_stuffing_bit_is_malformed() {
+    let cleanup = [0x52, 0x70, 0x63, 0x00];
+    let b = refined(4, 2, 0, &cleanup, &[0xFF, 0x80], 2);
+    assert!(malformed_msg(&b, 8).contains("stuffing bit"));
+}
+
+#[test]
+fn an_empty_refinement_segment_decodes_the_cleanup_pass() {
+    // Z_blk is 1 when the cleanup segment is the only nonempty one (B.3).
+    for passes in [2, 3] {
+        let b = refined(1, 2, 0, &TOP_ONLY, &[], passes);
+        assert_eq!(decode(&b, 8, 0, false).unwrap(), [384, 0]);
+        assert_eq!(passes_run(&b, 8), 1);
+    }
+}
+
+#[test]
+fn refinement_with_no_plane_left_decodes_the_cleanup_pass() {
+    // With P = Mb - 1 the cleanup pass codes the last plane; OpenJPEG then
+    // decodes the cleanup pass alone, and so does this.
+    let b = refined(1, 2, 7, &TOP_ONLY, &[0x01, 0x01], 3);
+    assert_eq!(decode(&b, 8, 0, false).unwrap(), [3, 0]);
+    assert_eq!(passes_run(&b, 8), 1);
+    let b = refined(1, 2, 6, &TOP_ONLY, &[0x01, 0x01], 3);
+    assert_eq!(decode(&b, 8, 0, false).unwrap(), [7, 3]);
+    assert_eq!(passes_run(&b, 8), 3);
+}
+
+#[test]
+fn passes_run_counts_the_refinement_passes() {
+    for passes in [2, 3] {
+        let b = refined(1, 2, 0, &TOP_ONLY, &[0x01], passes);
+        assert_eq!(passes_run(&b, 8), u64::from(passes));
+    }
+}
+
+#[test]
+fn the_vertically_causal_flag_hides_the_next_stripe() {
+    // A 1x5 column whose only cleanup-significant sample, (0, 4), starts the
+    // second stripe. Without the flag it makes (0, 3) a SigProp candidate.
+    let pass = Refinement {
+        width: 1,
+        height: 5,
+        causal: false,
+        shift: 7,
+    };
+    let mut coeffs = [0, 0, 0, 0, 384];
+    pass.run(&[0x01], false, &mut coeffs).unwrap();
+    assert_eq!(coeffs, [0, 0, 0, 192, 384]);
+    let pass = Refinement {
+        causal: true,
+        ..pass
+    };
+    let mut coeffs = [0, 0, 0, 0, 384];
+    pass.run(&[0x01], false, &mut coeffs).unwrap();
+    assert_eq!(coeffs, [0, 0, 0, 0, 384]);
+}
+
+#[test]
+fn sigprop_reads_lsb_first_unstuffs_and_zero_fills() {
+    let data = [0xFF, 0x7F];
+    let mut sp = SigPropReader::new(&data);
+    let bits: Vec<u32> = (0..18).map(|_| sp.bit().unwrap()).collect();
+    assert_eq!(bits[..15], [1; 15]);
+    assert_eq!(bits[15..], [0; 3]);
+    let mut sp = SigPropReader::new(&[0x02]);
+    let bits: Vec<u32> = (0..10).map(|_| sp.bit().unwrap()).collect();
+    assert_eq!(bits, [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn magref_reads_backward_lsb_first_unstuffs_and_zero_fills() {
+    // The last byte follows an implied 0xFF, so 0x7F gives seven bits; 0x80
+    // then follows 0x7F and gives eight.
+    let data = [0x80, 0x7F];
+    let mut mr = MagRefReader::new(&data);
+    let bits: Vec<u32> = (0..18).map(|_| mr.bit()).collect();
+    assert_eq!(bits[..7], [1; 7]);
+    assert_eq!(bits[7..15], [0, 0, 0, 0, 0, 0, 0, 1]);
+    assert_eq!(bits[15..], [0; 3]);
+    // After a byte at or below 0x8F there is no stuffing bit.
+    let data = [0x7F, 0x8F, 0x00];
+    let mut mr = MagRefReader::new(&data);
+    let bits: Vec<u32> = (0..24).map(|_| mr.bit()).collect();
+    assert_eq!(bits[16..], [1, 1, 1, 1, 1, 1, 1, 0]);
+}
+
 // Refusals, one per reason.
 
 #[test]
@@ -405,14 +566,12 @@ fn an_roi_shift_is_unsupported() {
 }
 
 #[test]
-fn more_than_one_pass_is_unsupported() {
-    let data = [0x01, 0x62, 0x00];
-    let mut b = block(1, 1, 0, &data);
-    b.num_passes = 2;
-    assert!(matches!(
-        decode(&b, 8, 0, false),
-        Err(Error::Unsupported(m)) if m.contains("2 coding passes")
-    ));
+fn more_than_one_ht_set_is_malformed() {
+    let data = [0x00, 0x62, 0x00];
+    let mut b = refined(1, 2, 0, &data, &[0x01], 4);
+    assert!(malformed_msg(&b, 8).contains("4 coding passes, more than the 3"));
+    b.num_passes = 3;
+    assert!(decode(&b, 8, 0, false).is_ok());
 }
 
 #[test]
@@ -565,7 +724,11 @@ fn random_segments_never_panic() {
         let h = 1 + (rng.next() % 16) as usize;
         let mb = (rng.next() % 32) as u32;
         let zbp = (rng.next() % 32) as u32;
-        if let Ok(c) = decode(&block(w, h, zbp, &bytes), mb, 0, false) {
+        let refinement: Vec<u8> = (0..rng.next() % 8).map(|_| rng.next() as u8).collect();
+        let passes = 1 + (rng.next() % 3) as u32;
+        let causal = rng.next().is_multiple_of(2);
+        let b = refined(w, h, zbp, &bytes, &refinement, passes);
+        if let Ok(c) = decode(&b, mb, 0, causal) {
             assert_eq!(c.len(), w * h);
             decoded += 1;
         }
