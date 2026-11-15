@@ -176,7 +176,7 @@ HTJ2K replaces the Tier-1 block coder with a much faster one (FBCOT) that has
 no MQ coder. Everything outside Tier-1 (codestream, Tier-2, DWT,
 quantization) is the same as Part 1. This decoder reads HTJ2K codestreams
 whose code-blocks are all HT code-blocks, each with one HT set, and refuses
-the rest with `Error::Unsupported`; OpenJPEG 2.5.0 and later decode mixed-mode
+the rest with `Error::Unsupported`. OpenJPEG 2.5.0 refuses mixed-mode
 codestreams too.
 
 | Feature | Decoded |

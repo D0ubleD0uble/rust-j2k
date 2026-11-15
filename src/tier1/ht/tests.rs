@@ -231,6 +231,42 @@ fn vlc_starts_with_three_bits_after_a_seven_and_skips_stuffing() {
     assert!(matches!(vlc.bit(&seg), Err(Error::Codestream(_))));
 }
 
+/// A set stuffing bit is skipped, not read (7.1.4): the next byte's bits
+/// start where it would have been. OpenJPEG ORs it into the next byte's
+/// lowest bit instead.
+#[test]
+fn vlc_skips_a_set_stuffing_bit() {
+    // The first nibble 0xF gives three bits and drops its top bit.
+    let data = [0x00, 0xF2, 0x00];
+    let seg = Segment {
+        data: &data,
+        pcup: 0,
+    };
+    let mut vlc = VlcReader::new(&seg);
+    assert_eq!(vlc.bits(&seg, 11).unwrap(), 0x7);
+    // 0xFF after 0x9F gives seven bits and drops its top bit.
+    let data = [0x00, 0xFF, 0x92, 0x00];
+    let seg = Segment {
+        data: &data,
+        pcup: 0,
+    };
+    let mut vlc = VlcReader::new(&seg);
+    assert_eq!(vlc.bits(&seg, 12).unwrap(), 0x7F9);
+}
+
+/// A 2x8 block whose VLC stream starts with the nibble 0xF: with its
+/// stuffing bit cleared (0x7) it decodes the same. OpenJPEG 2.5.0 decodes
+/// the 0x7 block as this does and the 0xF block differently.
+#[test]
+fn a_set_vlc_stuffing_bit_does_not_change_the_block() {
+    let set = [0x7F, 0x47, 0x93, 0xF7, 0x5C, 0xF6, 0x00];
+    let mut clear = set;
+    clear[5] = 0x76;
+    let a = decode(&block(2, 8, 2, &set), 6, 0, false).unwrap();
+    assert!(a.iter().any(|&c| c != 0));
+    assert_eq!(a, decode(&block(2, 8, 2, &clear), 6, 0, false).unwrap());
+}
+
 /// A 0x7F byte after 0x8F keeps all eight bits: only a byte above 0x8F
 /// makes the next one's top bit a stuffing bit.
 #[test]
@@ -547,6 +583,14 @@ fn magref_reads_backward_lsb_first_unstuffs_and_zero_fills() {
     assert_eq!(bits[..7], [1; 7]);
     assert_eq!(bits[7..15], [0, 0, 0, 0, 0, 0, 0, 1]);
     assert_eq!(bits[15..], [0; 3]);
+    // A set stuffing bit is skipped (7.1.6 and its note): the last byte
+    // 0xFF gives seven ones, and the next byte's bits follow. OpenJPEG ORs
+    // the skipped bit into bit 7 here.
+    let data = [0x00, 0xFF];
+    let mut mr = MagRefReader::new(&data);
+    let bits: Vec<u32> = (0..15).map(|_| mr.bit()).collect();
+    assert_eq!(bits[..7], [1; 7]);
+    assert_eq!(bits[7..], [0; 8]);
     // After a byte at or below 0x8F there is no stuffing bit.
     let data = [0x7F, 0x8F, 0x00];
     let mut mr = MagRefReader::new(&data);

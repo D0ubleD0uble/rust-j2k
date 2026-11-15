@@ -1048,8 +1048,9 @@ fn the_manifests_reject_unknown_keys() {
 /// pass alone, `b11` some in a cleanup pass and two refinement passes in
 /// later layers. No oracle grades the capped images: OpenJPEG loses sync on
 /// the placeholder passes, and the Part 4 references are of every layer. So
-/// the agreement checks the cleanup-only decode, and the difference at the
-/// next cap that the refinement passes are decoded.
+/// the agreement checks the cleanup-only decode. The difference at the next
+/// cap shows only that `b11` gains refinement passes there, not that they
+/// decode right; `ht_refinement_matches_kakadu_stats` grades those.
 #[test]
 fn a_cap_before_the_refinement_layers_agrees_across_transcodes() {
     use rust_j2k::{DecodeOptions, decode_with, read_header};
@@ -1109,4 +1110,60 @@ fn ht_transcodes_decode_as_their_part1_source() {
             .unwrap_or_else(|e| panic!("{part1}: {e}"));
         assert!(a == b, "{ht} decodes unlike {part1}");
     }
+}
+
+/// Irreversible transcodes whose figures this decoder matches although its
+/// 9/7 pipeline is not Kakadu's: on the others the float rounding differs.
+const IRREVERSIBLE_STATS_MATCH: &[&str] = &["ds0_ht_02_b11", "ds1_ht_01_b11"];
+
+/// Each HT transcode's manifest entry quotes Kakadu's PAE and MSE against
+/// its Part 1 source, per component at full resolution (`kakadu_stats`).
+/// Those figures grade the refinement passes, which no other oracle reaches
+/// on the multi-layer files: this decoder's HT decode against its own decode
+/// of the source must give the same PAE, and the same MSE to the six or
+/// seven significant digits quoted. The irreversible files are graded only
+/// where the transcode is exact (every figure zero) or in
+/// `IRREVERSIBLE_STATS_MATCH`.
+#[test]
+fn ht_refinement_matches_kakadu_stats() {
+    let manifest = load_ht_manifest(&ht_dir());
+    let read = |path: PathBuf| std::fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
+    let mut refined = 0;
+    for e in &manifest.codestreams {
+        let Some(k) = &e.kakadu_stats else { continue };
+        if !IN_CLASS.contains(&e.name.as_str()) {
+            continue;
+        }
+        let exact = k.pae.iter().all(|&p| p == 0.0);
+        if e.features.irreversible_anywhere
+            && !exact
+            && !IRREVERSIBLE_STATS_MATCH.contains(&e.name.as_str())
+        {
+            continue;
+        }
+        let ht = rust_j2k::decode(&read(ht_dir().join(&e.codestream)))
+            .unwrap_or_else(|err| panic!("{}: {err}", e.name));
+        let source = part1_dir().join(format!("codestreams/{}.j2k", e.source));
+        let part1 = rust_j2k::decode(&read(source))
+            .unwrap_or_else(|err| panic!("{}: {err}", e.source));
+        for (c, (a, b)) in ht.components.iter().zip(&part1.components).enumerate() {
+            let Some((&pae, &mse)) = k.pae.get(c).zip(k.mse.get(c)) else {
+                break;
+            };
+            let diffs = || a.samples.iter().zip(&b.samples).map(|(p, q)| p - q);
+            let ours_pae = diffs().map(i32::abs).max().unwrap_or(0);
+            let ours_mse = diffs().map(|d| f64::from(d).powi(2)).sum::<f64>() / a.samples.len() as f64;
+            assert_eq!(f64::from(ours_pae), pae, "{} component {c}: PAE", e.name);
+            assert!(
+                (ours_mse - mse).abs() <= 1e-6 * mse.max(1.0),
+                "{} component {c}: MSE {ours_mse} against Kakadu's {mse}",
+                e.name
+            );
+        }
+        let walked = e.passes.walked.as_ref().expect("walked");
+        if walked.histogram.keys().any(|n| n != "1") {
+            refined += 1;
+        }
+    }
+    assert!(refined >= 12, "only {refined} files with refinement passes graded");
 }
