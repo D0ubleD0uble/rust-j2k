@@ -2397,10 +2397,19 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
+        "placeholder": true,
+        "refinement": true,
         "measured": null,
-        "walked": null
+        "walked": {
+          "blocks": 84,
+          "placeholder": 79,
+          "histogram": {
+            "1": 60,
+            "3": 24
+          },
+          "zero_length_refinement": 0,
+          "part1": 17
+        }
       },
       "file_digest": {
         "size": 21098,
@@ -2602,10 +2611,19 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
+        "placeholder": true,
+        "refinement": true,
         "measured": null,
-        "walked": null
+        "walked": {
+          "blocks": 84,
+          "placeholder": 80,
+          "histogram": {
+            "1": 77,
+            "3": 7
+          },
+          "zero_length_refinement": 0,
+          "part1": 17
+        }
       },
       "file_digest": {
         "size": 36216,
@@ -6816,10 +6834,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
+        "placeholder": true,
+        "refinement": false,
         "measured": null,
-        "walked": null
+        "walked": {
+          "blocks": 12,
+          "placeholder": 7,
+          "histogram": {
+            "1": 12
+          },
+          "zero_length_refinement": 0,
+          "part1": 4
+        }
       },
       "file_digest": {
         "size": 17095,

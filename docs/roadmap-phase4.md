@@ -565,17 +565,74 @@ H-3) and undoes the shift with EBCOT's `undo_maxshift`. Findings:
 code-block with its own coder.
 
 **Work:** the A.4 rules for a MIXED tile-component. In an HT code-block, the
-first non-empty codeword segment's length starts with a 0 bit and `Lblock` is
-above 3; the Part 1 code-blocks use neither bypass nor termination on each
-pass. A.4's note says a decoder tells the two apart by processing the block as
-an HT block and falling back to Part 1 when that fails. Implement that choice
-and each kind's pass and segment accounting through the seam, measured
-against the three files; lift the `0x80` guard.
+first nonzero length field of a codeword segment starts with a 0 bit and
+`Lblock` is above 3 there; the Part 1 code-blocks use neither bypass nor
+termination on each pass. A.4's note says a decoder can tell the two apart by
+processing the block as an HT block (Annex B) and taking a failure to mean
+Part 1. Implement that choice and each kind's pass and segment accounting
+through the seam, measured against the three files; lift the `0x80` guard.
+
+**When the choice is fixed.** In tier-2, at the block's first nonzero length
+field, never later. The two coders read a contribution's length fields
+differently: an HT block's first field ends at its cleanup pass and a second
+one follows for its refinement passes (B.3), while a Part 1 block without
+bypass or termination has one field per contribution. So tier-2 must know the
+coder to read the block's later fields, in every layer, those a layer cap
+drops included. The A.4 rule decides at the first nonzero field:
+
+- Both readings start the field at the same bit, after the `Lblock`
+  increments. A field of zeros is read alike by both (`Lblock +
+  floor(log2(new))` bits, placeholder passes to HT, MQ passes of no bytes to
+  Part 1), so until a nonzero field the coder stays open and the block holds
+  one reading: passes of no bytes.
+- A nonzero field at `Lblock` 3, or with a leading 1, is a Part 1 block's.
+- Otherwise the field is read as an HT block's. If it gives a value an HT
+  block cannot have, a first cleanup length of 1 or bytes on placeholder
+  passes, it is a Part 1 block's, read to the Part 1 width. That is the A.4
+  note's failed processing, and it is all of it that tier-2 can settle.
+- A block whose fields are all zero codes nothing either way, and is read as
+  HT, as the note says to try first.
+
+So `SegmentState`, `kept` and `Undo` hold one reading at a time. The choice
+is a per-block `Option<Coder>` in `BlockState`, plain data, which `Undo`
+saves and restores. It needs no tier-1 fallback, except for a Part 1 block
+whose encoder spent a needless `Lblock` increment and so passes the A.4 test:
+that block is read as HT. Taking it back would need tier-2 to hold both
+readings. None of the three files needs it. Forced through the HT decoder,
+all 38 Part 1 blocks of the three files fail with `Codestream`, so such a
+block is expected to be an error, not a wrong image; the misread putting the
+rest of the packet header out of step is possible but not seen. A Part 1
+block of a MIXED tile-component is one codeword segment, of any number of
+passes, in every layer.
 
 **Oracle:** the Part 4 references for `ds0_hm_06_b11`, `ds0_hm_06_b18` and
 `ds0_hm_15_b8`. Neither OpenJPEG nor OpenJPH decodes MIXED.
 
 **Gate:** the three entries in class.
+
+**Done (#344).** `Coder` in `src/tier2/mod.rs` names each block's coder, and
+`mixed_first_length` reads a MIXED block's first nonzero field. `CodeBlock`
+carries the coder to tier-1, where `Coders` picks the block's `BlockCoder`.
+Findings:
+
+- The three files hold 180 HT blocks and 38 Part 1 blocks with any pass.
+  Every Part 1 block's first nonzero field has `Lblock` 3 or a leading 1, and
+  every HT block's has a leading 0 with `Lblock` from 4 to 12, so no block
+  falls to the HT-failure branch, and none ends with its coder open.
+- All three files are in class, and Kakadu's figures against `p0_06` and
+  `p0_15` match: `ds0_hm_06_b18` and `ds0_hm_15_b8` decode as their sources
+  do, and `ds0_hm_06_b11` gives Kakadu's PAE and MSE, irreversible though it
+  is (`ht_refinement_matches_kakadu_stats`).
+- `Ccap15` bits 15-14 at `10` (HTDECLARED) with a MIXED style is
+  `Codestream`, checked on the resolved main and tile headers since `CAP` may
+  follow COD. At `00` (HTONLY) A.3.2's note allows a MIXED style, and its
+  blocks are all read as HT. A MIXED style with bypass or termination on each
+  pass is `Marker`. A Part 1 block is one codeword segment past 109 passes
+  too, where OpenJPEG splits a Part 1 block. An HT block's `Codestream`
+  error says it was read as HT by the A.4 test.
+- The incremental decoder (#217) must carry each block's `Option<Coder>` with
+  the rest of `BlockState`: a block whose coder is still open reads its next
+  field by `mixed_first_length`.
 
 ### P4.7 — JPH file format (`src/jp2/`)
 

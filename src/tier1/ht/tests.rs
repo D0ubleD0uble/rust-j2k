@@ -17,6 +17,7 @@ fn block(width: usize, height: usize, zbp: u32, bytes: &[u8]) -> CodeBlock<'_> {
         }],
         cut: false,
         placeholders: 0,
+        coder: crate::tier2::Coder::Ht,
         missing_from: None,
     }
 }

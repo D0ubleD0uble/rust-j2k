@@ -17,6 +17,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A tile-component whose code-block style is MIXED (ISO/IEC 15444-15 A.4)
+  decodes: each code-block is read as an HT block or a Part 1 block, told
+  apart by its first nonzero length field. The three MIXED files of the
+  ISO/IEC 15444-4 HT set decode within their bounds. A MIXED style with
+  bypass or termination on each pass is `Error::Marker`, and a MIXED style
+  under a `CAP` that says each tile-component holds one kind of code-block is
+  `Error::Codestream`.
 - JPH files (ISO/IEC 15444-15 Annex D) decode, and `read_header` reads them:
   a file whose File Type box has `jph ` as its brand or in its compatibility
   list is read as a JP2 file is. In a JPH file, a `cdef` channel of type 3
@@ -41,8 +48,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the ISO/IEC 15444-4 reference images alone. Region of interest decodes on
   HT code-blocks as on Part 1 ones. An `RGN` marker in a codestream whose
   `CAP` says it has none, and an HT magnitude past the bound `CAP` signals,
-  are `Error::Codestream`. A mixed-mode code-block style and more than one HT
-  set per code-block are `Error::Unsupported`.
+  are `Error::Codestream`. More than one HT set per code-block is
+  `Error::Unsupported`.
 - `Error::Incomplete`: the input ends before the codestream's main header is
   whole, that is, before its first `SOT` marker is complete. It begins at the
   empty input and, in a JP2 file, covers the signature box, the top-level
@@ -92,9 +99,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with no `jp2c` box or with a top-level box before `jp2c` that runs past the
   end of the file (was `Error::FileFormat`). A caller that matched those
   variants should treat `Incomplete` with no more bytes coming as truncated.
-- The `CAP` and `CPF` markers are read. A mixed-mode HTJ2K codestream is
-  refused for the code-block style of its COD or COC instead of for `CAP`,
-  so a cut header is `Error::Incomplete` up to that COD or COC. A `CAP` that
+- The `CAP` and `CPF` markers are read. A `CAP` that
   signals a part other than Part 15 is `Unsupported`. A malformed `CAP` or
   `CPF` is `Error::Marker`; a repeated one, or either one in a tile-part
   header, is `Error::Codestream`.

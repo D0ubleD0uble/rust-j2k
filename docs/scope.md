@@ -37,8 +37,10 @@ Limits inside the decoded rows:
   is refused.
 - CAP may signal only Part 15 (HTJ2K). A capability of any other part, and
   more than one HT set per code-block (MULTIHT), are refused. The code-block
-  style of each COD and COC decides the block coder, so a COD or COC that
-  allows mixed-mode code-blocks is refused with or without a CAP.
+  style of each COD and COC decides the block coder. A MIXED style lets each
+  code-block be an HT or a Part 1 block; it is refused with bypass or
+  termination on each pass, and under a CAP whose `Ccap15` bits 15-14 are
+  `10`.
 - A codestream that carries both PPM and PPT packed headers is refused.
 - A tile-part COD or COC that gives a component a different wavelet from the
   main header is refused: tiles must agree on each component's wavelet.
@@ -83,7 +85,7 @@ refused.
 | Code-block style: predictable termination | Yes |
 | Code-block style: segmentation symbols | Yes |
 | Code-block style: HTJ2K block coding | Yes (see Part 15) |
-| Code-block style: HTJ2K mixed-mode block coding | No (Phase 4) |
+| Code-block style: HTJ2K mixed-mode block coding | Yes |
 
 ### Tier-2: packet decoding (Annex B)
 
@@ -188,9 +190,9 @@ and NDFD grids are complex-packed, and ECMWF uses CCSDS.
 HTJ2K replaces the Tier-1 block coder with a much faster one (FBCOT) that has
 no MQ coder. Everything outside Tier-1 (codestream, Tier-2, DWT,
 quantization) is the same as Part 1. This decoder reads HTJ2K codestreams
-whose code-blocks are all HT code-blocks, each with one HT set, and refuses
-the rest with `Error::Unsupported`. OpenJPEG 2.5.0 refuses mixed-mode
-codestreams too.
+whose code-blocks each have one HT set, including tile-components that mix
+HT and Part 1 code-blocks, and refuses more than one HT set with
+`Error::Unsupported`. OpenJPEG 2.5.0 refuses mixed-mode codestreams.
 
 | Feature | Decoded |
 |---|---|
@@ -198,7 +200,7 @@ codestreams too.
 | HT cleanup pass (MEL, VLC and MagSgn) | Yes |
 | HT placeholder passes | Yes |
 | HT SigProp and MagRef passes | Yes |
-| Mixed-mode (HT and Part 1 code-blocks in one tile-component) | No (Phase 4) |
+| Mixed-mode (HT and Part 1 code-blocks in one tile-component) | Yes |
 | Region of interest on HT code-blocks | Yes |
 | JPH file format (`jph ` brand, Annex D) | Yes |
 | JPH application-defined channels (`cdef` `Typ` 3) | Yes, reported |

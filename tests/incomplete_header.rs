@@ -174,22 +174,6 @@ fn assert_cuts_are_incomplete(name: &str, bytes: &[u8], cs_at: usize, sot: usize
     }
 }
 
-/// `bytes` is refused for its HTJ2K mixed-mode block coder by `read_header`,
-/// a strict decode and a partial one.
-fn assert_refused_for_ht(what: &str, bytes: &[u8]) {
-    let results = [
-        read_header(bytes).map(|_| ()),
-        decode(bytes).map(|_| ()),
-        decode_with(bytes, &lenient()).map(|_| ()),
-    ];
-    for result in results {
-        assert!(
-            matches!(&result, Err(Error::Unsupported(m)) if m.contains("code-block style (HTJ2K mixed-mode")),
-            "{what}: {result:?}"
-        );
-    }
-}
-
 #[test]
 fn every_cut_inside_the_main_header_is_incomplete() {
     let mut paths = Vec::new();
@@ -200,20 +184,10 @@ fn every_cut_inside_the_main_header_is_incomplete() {
         let bytes = std::fs::read(path).unwrap();
         let name = path.strip_prefix(fixtures()).unwrap().display().to_string();
         if let Some((sot, ht)) = walk(&bytes) {
-            match ht {
-                // A mixed-mode block coder is refused as soon as the COD or COC
-                // that selects it is read: a cut before it is `Incomplete`,
-                // and every cut that holds it, up to the whole file, is
-                // refused for the coder.
-                Some(ht_end) => {
-                    assert_cuts_are_incomplete(&name, &bytes, 0, ht_end - 2, false);
-                    for length in (ht_end..sot + 2).chain([bytes.len()]) {
-                        assert_refused_for_ht(&format!("{name} cut at {length}"), &bytes[..length]);
-                    }
-                    ht_codestreams += 1;
-                }
-                None => assert_cuts_are_incomplete(&name, &bytes, 0, sot, true),
-            }
+            // A mixed-mode codestream decodes, so its cuts are `Incomplete`
+            // like any other's.
+            assert_cuts_are_incomplete(&name, &bytes, 0, sot, true);
+            ht_codestreams += usize::from(ht.is_some());
             codestreams += 1;
         } else if let Some((cs_at, box_end)) = jp2c_payload(&bytes) {
             // Only files whose box layer reads, since a fault there is
@@ -548,10 +522,16 @@ fn refused() -> Vec<(&'static str, Vec<u8>, usize, fn(&Error) -> bool)> {
     // at 59.
     vec![
         (
-            "an HTJ2K mixed-mode code-block style in COD",
-            edited(&whole, &[(57, 0xC0)]),
+            "the HTJ2K mixed-mode bit without the HT bit in COD",
+            edited(&whole, &[(57, 0x80)]),
             59,
             |e| matches!(e, Error::Unsupported(m) if m.contains("code-block style (HTJ2K mixed-mode")),
+        ),
+        (
+            "a MIXED code-block style with bypass in COD",
+            edited(&whole, &[(57, 0xC1)]),
+            59,
+            |e| matches!(e, Error::Marker(m) if m.contains("MIXED")),
         ),
         (
             "a reserved wavelet in COD",

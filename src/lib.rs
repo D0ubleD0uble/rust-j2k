@@ -162,8 +162,9 @@
 //! class. That gate runs in `tests/` against committed oracle snapshots, with
 //! no external tools. Correctness is defined by cross-checking OpenJPEG, not
 //! by self-consistency. HTJ2K code-blocks decode with all three of their
-//! coding passes. An input using a feature outside the decoded set (mixed-mode
-//! code-blocks, a Part 2 extension) is rejected with [`Error::Unsupported`],
+//! coding passes, and a tile-component may mix HT and Part 1 code-blocks. An
+//! input using a feature outside the decoded set (more than one HT set per
+//! code-block, a Part 2 extension) is rejected with [`Error::Unsupported`],
 //! never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. The feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md).

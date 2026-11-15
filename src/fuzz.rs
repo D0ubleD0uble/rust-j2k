@@ -53,8 +53,8 @@ pub fn tier1_block(data: &[u8]) {
         // segments (raw runs never carry a cleanup pass), and this hook feeds
         // one unsplit segment — the `tile_body` target's bypass shape covers
         // it through the real tier-2 split instead. The HTJ2K bits never
-        // reach this decoder: an HT block goes to the HT coder, and the
-        // codestream's block-coder guard refuses MIXED.
+        // reach this decoder: an HT block goes to the HT coder, and a Part 1
+        // block of a MIXED tile-component gets the style without them.
         style: c & (RESET | TERMALL | VCAUSAL | PTERM | SEGSYM),
         roi_shift: d & 0x3F,
         // A spare bit of the maxshift byte: whether a layer cap cut the
@@ -208,6 +208,7 @@ fn run_ht_block(data: &[u8]) -> Option<((usize, usize), crate::Result<usize>)> {
         segments,
         cut: false,
         placeholders: 0,
+        coder: crate::tier2::Coder::Ht,
         missing_from: None,
     };
     let decoded =

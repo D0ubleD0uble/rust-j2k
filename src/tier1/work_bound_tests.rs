@@ -133,6 +133,7 @@ fn block(width: usize, height: usize, passes: u32) -> CodeBlock<'static> {
         segments: Vec::new(),
         cut: false,
         placeholders: 0,
+        coder: crate::tier2::Coder::Part1,
         missing_from: None,
     }
 }
@@ -243,6 +244,7 @@ fn ht_block(
     refinement: &'static [u8],
 ) -> CodeBlock<'static> {
     let mut b = block(width, height, passes);
+    b.coder = crate::tier2::Coder::Ht;
     b.segments.push(crate::tier2::CodedSegment {
         passes: 1,
         chunks: vec![cleanup],

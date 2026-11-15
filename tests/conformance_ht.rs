@@ -37,6 +37,9 @@ use support::pgx::{Pgx, parse_pgx};
 
 /// The HT codestreams and JPH files that decode within their bounds today.
 const IN_CLASS: &[&str] = &[
+    "ds0_hm_06_b11",
+    "ds0_hm_06_b18",
+    "ds0_hm_15_b8",
     "ds0_ht_01_b11",
     "ds0_ht_02_b11",
     "ds0_ht_02_b12",
@@ -207,17 +210,10 @@ fn grades_the_ht_set_by_compliance_class() {
     in_class_iff_decodable(codestreams, IN_CLASS);
 }
 
-/// The refusal of a MIXED code-block style.
-const MIXED: &str = "code-block style (HTJ2K mixed-mode block coding)";
-
-/// Why a codestream with `ht` signaling is not yet decoded: MIXED in its
-/// main header. Every other one decodes.
+/// Why a codestream with `ht` signaling is not yet decoded. Every one
+/// decodes, MIXED and HTONLY alike.
 fn refusal(ht: &HtSignaling) -> &'static str {
-    if ht.coder_set == "MIXED" {
-        MIXED
-    } else {
-        panic!("an HTONLY codestream is refused")
-    }
+    panic!("a {} codestream is refused", ht.coder_set)
 }
 
 /// The expected refusal of each HT codestream of `manifest`, by name.
@@ -233,21 +229,29 @@ fn codestream_refusals(manifest: &HtManifest) -> impl Fn(&str) -> &'static str +
     }
 }
 
-/// An entry is in `in_class` exactly when it is HTONLY and each of its
-/// code-blocks holds one HT set, by the Tier-2 walk's pass counts: the HT
-/// decoder reads one HT set, with or without `RGN`. So the list is the
-/// walk's, not a guess.
+/// An entry is in `in_class` exactly when each of its HT code-blocks holds
+/// one HT set, by the Tier-2 walk's pass counts: the HT decoder reads one HT
+/// set, with or without `RGN`, and in a MIXED codestream the Part 1 blocks
+/// beside them. So the list is the walk's, not a guess.
 fn in_class_iff_decodable<'a>(
     entries: impl Iterator<Item = (&'a str, &'a HtSignaling, &'a Passes)>,
     in_class: &[&str],
 ) {
     for (name, ht, passes) in entries {
-        let decodable =
-            ht.coder_set == "HTONLY" && passes.walked.as_ref().is_some_and(|w| w.one_ht_set());
+        let walked = passes.walked.as_ref();
+        let decodable = walked.is_some_and(|w| w.one_ht_set());
         assert_eq!(
             in_class.contains(&name),
             decodable,
-            "{name}: in the list is not the same as HTONLY, one HT set"
+            "{name}: in the list is not the same as one HT set"
+        );
+        // Only a MIXED codestream holds Part 1 code-blocks.
+        let part1 = walked.map_or(0, |w| w.part1);
+        assert_eq!(
+            part1 > 0,
+            ht.coder_set == "MIXED",
+            "{name}: {part1} Part 1 code-blocks in a {} codestream",
+            ht.coder_set
         );
     }
 }
@@ -1104,7 +1108,7 @@ fn ht_transcodes_decode_as_their_part1_source() {
 
 /// Irreversible transcodes whose figures this decoder matches although its
 /// 9/7 pipeline is not Kakadu's: on the others the float rounding differs.
-const IRREVERSIBLE_STATS_MATCH: &[&str] = &["ds0_ht_02_b11", "ds1_ht_01_b11"];
+const IRREVERSIBLE_STATS_MATCH: &[&str] = &["ds0_ht_02_b11", "ds1_ht_01_b11", "ds0_hm_06_b11"];
 
 /// Each HT transcode's manifest entry quotes Kakadu's PAE and MSE against
 /// its Part 1 source, per component at full resolution (`kakadu_stats`).
@@ -1160,7 +1164,7 @@ fn ht_refinement_matches_kakadu_stats() {
             refined += 1;
         }
     }
-    assert_eq!(refined, 17, "files with refinement passes graded");
+    assert_eq!(refined, 19, "files with refinement passes graded");
 }
 
 /// Each JPH file's manifest entry quotes Kakadu's PAE and MSE against its
