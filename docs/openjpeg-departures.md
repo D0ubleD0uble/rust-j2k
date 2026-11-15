@@ -1128,8 +1128,16 @@ A.4 test, and is then read as an HT block. The A.4 note says a decoder may
 try the HT reading and fall back to Part 1 when it fails. Past the length
 field, that fallback would need tier-2 to hold both readings of the block. No
 file in the corpus needs it: every Part 1 block in the three MIXED files has
-`Lblock` 3 or a leading 1 at its first nonzero field. Such a block fails as an
-HT block, with the HT decoder's error, or decodes wrongly.
+`Lblock` 3 or a leading 1 at its first nonzero field. Read as HT, such a block
+is expected to fail with the HT decoder's `Codestream` error, which then says
+the block was read as HT by the A.4 test: forced through the HT decoder, all 38
+Part 1 blocks of the three files fail that way. The misread could also put the
+rest of the packet header out of step, which has not been seen.
+
+A Part 1 block of a MIXED tile-component is one codeword segment of any number
+of passes, since A.4 allows it neither bypass nor termination on each pass.
+OpenJPEG splits a Part 1 block's passes at 109 into a second segment, which no
+code-block of a bit-plane count it decodes reaches; it does not decode MIXED.
 
 ## Set stuffing bits in the HT VLC and MagRef streams
 

@@ -21,10 +21,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decodes: each code-block is read as an HT block or a Part 1 block, told
   apart by its first nonzero length field. The three MIXED files of the
   ISO/IEC 15444-4 HT set decode within their bounds. A MIXED style with
-  bypass or termination on each pass is `Error::Marker`, a MIXED style under
-  a `CAP` that says each tile-component holds one kind of code-block is
-  `Error::Codestream`, and so is a Part 1 code-block of a MIXED
-  tile-component with more than 109 coding passes.
+  bypass or termination on each pass is `Error::Marker`, and a MIXED style
+  under a `CAP` that says each tile-component holds one kind of code-block is
+  `Error::Codestream`.
 - JPH files (ISO/IEC 15444-15 Annex D) decode, and `read_header` reads them:
   a file whose File Type box has `jph ` as its brand or in its compatibility
   list is read as a JP2 file is. In a JPH file, a `cdef` channel of type 3

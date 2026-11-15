@@ -940,29 +940,26 @@ fn mixed_first_length(
     }
 }
 
-/// Settle a code-block of a MIXED tile-component as a Part 1 block, once
-/// `passes` passes in all have reached it. Its earlier passes, held as
-/// placeholder passes of no bytes, become passes of its one MQ codeword
-/// segment, which holds every pass a Part 1 block may have: A.4 allows it
-/// neither bypass nor termination on each pass.
-fn become_part1(block: &mut BlockState<'_>, passes: u32) -> Result<()> {
-    let (kind, max_passes) = next_segment(Coder::Part1, 0, None);
-    if passes > max_passes {
-        return Err(Error::Codestream(format!(
-            "Part 1 code-block of a MIXED tile-component has {passes} coding passes, \
-             over the {max_passes} one codeword segment can hold"
-        )));
-    }
+/// Settle a code-block of a MIXED tile-component as a Part 1 block. Its
+/// earlier passes, held as placeholder passes of no bytes, become passes of
+/// its one MQ codeword segment. A.4 allows a Part 1 block there neither
+/// bypass nor termination on each pass, so all its passes, in every layer,
+/// are one codeword segment with one length field per contribution
+/// (ISO/IEC 15444-1 B.10.7.1). The segment has no pass limit: OpenJPEG's
+/// 109-pass split ([`next_segment`]) is for the Part 1 tile-components it
+/// decodes. A block of more passes than tier-1 can decode is refused there.
+fn become_part1(block: &mut BlockState<'_>) {
     block.coder = Some(Coder::Part1);
     match block.segments.first_mut() {
         Some(segment) => {
-            segment.kind = kind;
-            segment.max_passes = max_passes;
+            segment.kind = SegmentKind::Mq;
+            segment.max_passes = u32::MAX;
             block.num_passes += segment.kept;
         }
-        None => block.segments.push(SegmentState::new(kind, max_passes)),
+        None => block
+            .segments
+            .push(SegmentState::new(SegmentKind::Mq, u32::MAX)),
     }
-    Ok(())
 }
 
 /// Which packet delimiters `COD` signals (`Scod` bits 1 and 2).
@@ -1250,7 +1247,9 @@ struct SegmentState<'a> {
     /// 1 under `termall`, the `10, 2, 1, 2, 1, …` pattern under `bypass`,
     /// otherwise 109 — the most a code-block can carry (`3 * Mb - 2` with
     /// `Mb <= 37`), so the default never splits. See [`next_segment`],
-    /// which mirrors OpenJPEG's `opj_t2_init_seg`. An HT block's first
+    /// which mirrors OpenJPEG's `opj_t2_init_seg`. A Part 1 block of a MIXED
+    /// tile-component has one segment of any number of passes
+    /// ([`become_part1`]). An HT block's first
     /// cleanup segment holds its placeholder passes and the cleanup pass,
     /// and until the cleanup pass comes it takes any number.
     max_passes: u32,
@@ -1826,7 +1825,7 @@ fn parse_band_header(
                     Some(first)
                 }
                 MixedFirst::Part1 { length } => {
-                    become_part1(block, prior + num_passes)?;
+                    become_part1(block);
                     part1_length = Some(length);
                     None
                 }

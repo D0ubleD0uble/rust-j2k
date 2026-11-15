@@ -822,19 +822,37 @@ fn a_dropped_layer_settles_the_coder_of_the_kept_passes() {
     assert!(block.segments.is_empty());
 }
 
-/// A Part 1 block of a MIXED tile-component has one codeword segment, which
-/// holds at most 109 passes, so 110 passes settled as Part 1 are refused.
+/// A Part 1 block of a MIXED tile-component has neither bypass nor
+/// termination on each pass (A.4), so all its passes are one codeword
+/// segment, past OpenJPEG's 109-pass split too: 108 passes of no bytes, then
+/// two that settle the block, are one segment of 110 passes.
 #[test]
-fn a_part1_block_past_109_passes_is_codestream() {
+fn a_part1_block_settled_past_109_passes_is_one_segment() {
     let data = packets(&[
         (mixed(true, 108, 0, &[(0, 9)]), vec![]),
         (mixed(false, 2, 1, &[(0b10000, 5)]), body(16)),
     ]);
-    let e = mixed_block(&data, 2, 2).unwrap_err();
-    let Error::Codestream(message) = &e else {
-        panic!("got {e:?}")
-    };
-    assert!(message.contains("110 coding passes"), "{message}");
+    let block = mixed_block(&data, 2, 2).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(block.num_passes, 110);
+    assert_eq!(segments(&block), [(110, body(16))]);
+}
+
+/// As above, for a block settled as Part 1 in layer 0 that passes 109 in
+/// layer 1: layer 1's 20 passes take one length field of `3 + floor(log2
+/// 20)` bits, not 9 passes to fill a 109-pass segment and 11 in a second.
+#[test]
+fn a_part1_block_that_passes_109_in_a_later_layer_is_one_segment() {
+    let data = packets(&[
+        (mixed(true, 100, 0, &[(5, 9)]), body(5)),
+        (mixed(false, 20, 0, &[(3, 7)]), body(3)),
+    ]);
+    let block = mixed_block(&data, 2, 2).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(block.num_passes, 120);
+    let both: Vec<u8> = body(5).into_iter().chain(body(3)).collect();
+    assert_eq!(segments(&block), [(120, both)]);
+    assert_eq!(block.segments[0].chunks.len(), 2);
 }
 
 /// A packet cut short, with `strict` off, puts back the coder its header

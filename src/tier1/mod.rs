@@ -76,6 +76,9 @@ impl CleanupBound {
 struct Coders {
     part1: BlockCoder,
     ht: BlockCoder,
+    /// Whether each block's coder was told from its length fields (a MIXED
+    /// style), so an HT block's failure may be a Part 1 block misread.
+    mixed: bool,
 }
 
 impl Coders {
@@ -89,6 +92,7 @@ impl Coders {
         let roi_shift = params.roi_shift;
         use crate::codestream::markers::code_block_style::{HT, HT_MIXED, VCAUSAL};
         Coders {
+            mixed: Coder::of_style(style, header.ccap15).is_none(),
             part1: BlockCoder::Ebcot {
                 style: style & !(HT | HT_MIXED),
                 roi_shift,
@@ -109,6 +113,31 @@ impl Coders {
         match block.coder {
             Coder::Part1 => self.part1,
             Coder::Ht => self.ht,
+        }
+    }
+
+    /// Decode `block` with its coder ([`BlockCoder::decode`]). An HT block of
+    /// a MIXED tile-component that fails as malformed says how it came to be
+    /// read as HT, since a Part 1 block whose `Lblock` grew more than it
+    /// needed passes the same test.
+    fn decode(
+        self,
+        block: &CodeBlock<'_>,
+        kind: BandKind,
+        level: u32,
+        numbps: u32,
+    ) -> Result<Vec<i32>> {
+        let decoded = self.of_block(block).decode(block, kind, level, numbps);
+        match decoded {
+            Err(Error::Codestream(message)) if self.mixed && block.coder == Coder::Ht => {
+                Err(Error::Codestream(format!(
+                    "{message} (a code-block of a MIXED tile-component, read as an HT \
+                     block since its first nonzero length field starts with 0 at Lblock \
+                     above 3, ISO/IEC 15444-15 A.4; a Part 1 block whose Lblock grew \
+                     more than it needed reads this way too)"
+                )))
+            }
+            other => other,
         }
     }
 }
@@ -440,9 +469,7 @@ where
         if block.num_passes == 0 {
             continue;
         }
-        let coeffs = coders
-            .of_block(block)
-            .decode(block, sb.kind, level, numbps)?;
+        let coeffs = coders.decode(block, sb.kind, level, numbps)?;
         place_block(&mut data, sb.width, block, &coeffs, &convert);
     }
 
@@ -691,13 +718,33 @@ mod tests {
                     irreversible: false,
                 },
             },
+            mixed: true,
         };
         let mut sb = one_block_subband(1, 0);
         decode_subband::<i32, _>(&sb, 1, 1, coders, |q| q).expect("a Part 1 block");
         sb.blocks[0].coder = Coder::Ht;
         sb.blocks[0].segments[0].chunks = vec![&[0, 0][..]];
         let err = decode_subband::<i32, _>(&sb, 1, 1, coders, |q| q).expect_err("an HT block");
-        assert!(matches!(err, Error::Codestream(_)), "got {err:?}");
+        let Error::Codestream(message) = &err else {
+            panic!("got {err:?}")
+        };
+        assert!(
+            message.contains("MIXED tile-component, read as an HT block")
+                && message.contains("A.4")
+                && message.contains("Lblock grew more than it needed"),
+            "{message}"
+        );
+
+        // Outside MIXED the HT decoder's error is left as it is.
+        let plain = Coders {
+            mixed: false,
+            ..coders
+        };
+        let err = decode_subband::<i32, _>(&sb, 1, 1, plain, |q| q).expect_err("an HT block");
+        let Error::Codestream(message) = &err else {
+            panic!("got {err:?}")
+        };
+        assert!(!message.contains("MIXED"), "{message}");
     }
 
     fn default_params() -> Coders {
@@ -715,6 +762,7 @@ mod tests {
         Coders {
             part1: coder,
             ht: coder,
+            mixed: false,
         }
     }
 }

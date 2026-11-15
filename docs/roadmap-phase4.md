@@ -598,7 +598,12 @@ is a per-block `Option<Coder>` in `BlockState`, plain data, which `Undo`
 saves and restores. It needs no tier-1 fallback, except for a Part 1 block
 whose encoder spent a needless `Lblock` increment and so passes the A.4 test:
 that block is read as HT. Taking it back would need tier-2 to hold both
-readings. None of the three files needs it.
+readings. None of the three files needs it. Forced through the HT decoder,
+all 38 Part 1 blocks of the three files fail with `Codestream`, so such a
+block is expected to be an error, not a wrong image; the misread putting the
+rest of the packet header out of step is possible but not seen. A Part 1
+block of a MIXED tile-component is one codeword segment, of any number of
+passes, in every layer.
 
 **Oracle:** the Part 4 references for `ds0_hm_06_b11`, `ds0_hm_06_b18` and
 `ds0_hm_15_b8`. Neither OpenJPEG nor OpenJPH decodes MIXED.
@@ -622,7 +627,9 @@ Findings:
   `Codestream`, checked on the resolved main and tile headers since `CAP` may
   follow COD. At `00` (HTONLY) A.3.2's note allows a MIXED style, and its
   blocks are all read as HT. A MIXED style with bypass or termination on each
-  pass is `Marker`. A Part 1 block of more than 109 passes is `Codestream`.
+  pass is `Marker`. A Part 1 block is one codeword segment past 109 passes
+  too, where OpenJPEG splits a Part 1 block. An HT block's `Codestream`
+  error says it was read as HT by the A.4 test.
 - The incremental decoder (#217) must carry each block's `Option<Coder>` with
   the rest of `BlockState`: a block whose coder is still open reads its next
   field by `mixed_first_length`.
