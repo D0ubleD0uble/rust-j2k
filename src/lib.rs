@@ -270,9 +270,9 @@ pub use window::Window;
 ///   up to about 89 MP. A larger image is refused from its header alone,
 ///   before any tile is read. Under a window or a tile, only the tiles read
 ///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
-///   times the output for a square tile, an estimated 1.4 GiB at the limit, and more for a tall,
-///   narrow tile or while a palette expands (see [the sample
-///   limit][sample-limit]).
+///   times the output for a square tile, an estimated 1.4 GiB at the limit,
+///   and more for a tall, narrow tile or while a palette expands (see [the
+///   sample limit][sample-limit]).
 /// - Reading the packet headers of every tile may take
 ///   at most 2^24 steps, or 32 per byte of tile data when that is more. A
 ///   step is a packet read, a run of code-blocks a header skips without
@@ -1533,7 +1533,8 @@ fn decode_codestream(
         // every component, whether or not the tile's data runs out; a tile
         // with no data at all is not resolved. So the copies stay within
         // `tiles × components`, which SIZ's rule that no tile-component is
-        // empty holds to the image's samples, with `strict` off as with it on.
+        // empty holds to the image's samples (under a window or a tile, the
+        // samples of the tiles read), with `strict` off as with it on.
         let header = cs.tile_header(position)?;
 
         // A tile COD can give one tile a shallower pyramid than the rest, so

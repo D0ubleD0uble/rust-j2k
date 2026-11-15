@@ -136,8 +136,8 @@ pub(crate) fn check_codestream(
 /// the rest of a color transform's three. And the packet walk builds every
 /// component's code-block geometry in each tile read, a component subset
 /// or not; the code-blocks of the kept resolutions are charged to no work
-/// bound, as they are no more than the samples counted here / 16
-/// (`docs/resource-bounds.md`).
+/// bound, as they are no more than the samples counted here, and no more
+/// than 2^19 a tile (`docs/resource-bounds.md`).
 pub(crate) fn check_read(
     siz: &crate::codestream::markers::Siz,
     selection: Option<&crate::window::Selection>,

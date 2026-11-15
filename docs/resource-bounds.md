@@ -57,7 +57,11 @@ sized by the tile, so the count bounds those too. And the packet walk builds
 every component's code-block geometry in each tile read, which the count
 bounds as the next sections rely on. A palette's expanded channels and the
 channels sRGB output adds are counted over the returned area only. So the
-peak stays within the same multiple of the limit as for a whole decode: a
+sample buffers peak within the same multiple of the limit as for a whole
+decode. The parse of the tile-parts is not counted: it keeps about 440 bytes
+for each tile-part in the file, read or not, which is about 29 MB at 65535
+tiles and at most about 21 times the file's size, and a file whose whole
+image is over the limit now gets that far under a window. A
 256x256 window of a 16385x16385 image in 4096x4096 tiles fits the default,
 while a window of one 16385x16385 tile counts the whole tile. A
 `DecodeOptions::components` subset does not lower the count, as the walk
@@ -213,10 +217,13 @@ empty byte per packet, decoded at reduction 6, took 10.3 s for 256 tiles
 
 Nothing else of the geometry needs a charge. Each precinct is already paid
 for: the walk reads each precinct's packet in each layer, a step each,
-whatever the reduction. The code-blocks of the kept resolutions are no more
-than the reduced image's samples / 16 (under a window or a tile, the reduced
-samples of the tiles read), which the sample limit holds to 2^24, about a
-second to build. A decode at full resolution drops no
+whatever the reduction. Each code-block of the kept resolutions holds at
+least one sample, so there are no more of them than the reduced image's
+samples (under a window or a tile, the reduced samples of the tiles read),
+which the sample limit holds. With 4x4 code-blocks and the default precincts
+that is samples / 16, 2^24 at the limit, about a second to build. Small
+precincts can force code-blocks down to 1x1, and then it is the per-tile cap
+of 2^19 code-blocks that bounds each tile. A decode at full resolution drops no
 resolution, so it spends exactly what it did before; a file built to spend
 exactly the bound (`the_layer_orders_charge_each_component_they_check` in
 `tests/work_bound.rs`) still decodes.
