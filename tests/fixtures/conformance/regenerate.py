@@ -1359,6 +1359,13 @@ def read_pgx(raw: bytes):
     return signed, depth, arr.reshape(h, w)
 
 
+def samples_sha256(raw: bytes) -> str:
+    """The SHA-256 of a PGX file's samples, row-major, each a little-endian
+    `i32`: the digest `tests/support/ht.rs` takes of a decoded component."""
+    _, _, arr = read_pgx(raw)
+    return hashlib.sha256(arr.astype("<i4").tobytes()).hexdigest()
+
+
 def pgx_metrics(actual_raw: bytes, reference_raw: bytes, what: str):
     sa, da, a = read_pgx(actual_raw)
     sr, dr, r = read_pgx(reference_raw)
@@ -1702,6 +1709,11 @@ def build_jph_entry(n: int, bound: int, jp2_entries: dict) -> dict:
     except OpjRefused as refused:
         oracle_whole = str(refused)
     entry["openjpeg"] = {"decoded": oracle_whole is None, "message": oracle_whole}
+    # OpenJPEG's decode of the bare codestream, which it decodes for every
+    # file, as a digest per component: the test suite checks the crate's
+    # decode against it bit for bit without OpenJPEG.
+    raws, _ = opj_planes(payload, features, features["components"])
+    entry["openjpeg"]["codestream_sha256"] = [samples_sha256(raw) for raw in raws]
 
     if not highest:
         entry["not_graded"] = (
@@ -1834,7 +1846,11 @@ def main_ht():
                 "added to opj_t1_ht_decode_cblk, see HT_PASSES in regenerate.py; walked: "
                 "this crate's Tier-2 walk of every packet header, see HT_WALKED"
             ),
-            "openjpeg": "opj_decompress 2.5.0 on the bare codestream; sub-sampled files with -c K",
+            "openjpeg": (
+                "opj_decompress 2.5.0 on the bare codestream; sub-sampled files with -c K; "
+                "for each JPH file, codestream_sha256 is the SHA-256 of each component it "
+                "decodes from the bare codestream, its samples as little-endian i32"
+            ),
             "license": (
                 "Conformance-only grant; see ./COPYRIGHT.txt. Excluded from the published "
                 "crate via Cargo.toml `exclude`."

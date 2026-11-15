@@ -256,6 +256,9 @@ pub struct JphEntry {
 pub struct JphOpenJpeg {
     pub decoded: bool,
     pub message: Option<String>,
+    /// The SHA-256 of each component OpenJPEG decodes from the bare
+    /// codestream, its samples as little-endian `i32`.
+    pub codestream_sha256: Vec<String>,
 }
 
 /// `openjph/manifest.json`.

@@ -73,11 +73,12 @@ pub(super) fn decode(
             "region of interest on an HT code-block is outside the decoded subset".into(),
         ));
     }
-    // A decoder need decode only one HT set (8.3), and OpenJPEG decodes no
-    // more either.
+    // More passes would be a second HT set, which only a MULTIHT codestream
+    // holds (8.3), and the `CAP` parse refuses those. So a count past one set
+    // is a damaged one. OpenJPEG refuses it too.
     if block.num_passes > HT_SET_PASSES {
-        return Err(Error::Unsupported(format!(
-            "HT code-block with {} coding passes; only one HT set is decoded",
+        return Err(malformed(&format!(
+            "has {} coding passes, more than the {HT_SET_PASSES} of one HT set",
             block.num_passes
         )));
     }

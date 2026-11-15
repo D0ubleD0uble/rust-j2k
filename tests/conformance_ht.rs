@@ -189,24 +189,15 @@ const MIXED: &str = "code-block style (HTJ2K mixed-mode block coding)";
 /// The refusal of a region of interest on an HT code-block.
 const ROI: &str = "region of interest on an HT code-block";
 
-/// The refusal of an HT code-block with more than one HT set.
-const MULTI_SET: &str = "coding passes; only one HT set is decoded";
-
-/// Why a codestream with `ht` signaling and `passes` is not yet decoded:
-/// MIXED in its main header, then `RGN` on its HT blocks, which Tier-1
-/// refuses before it counts the passes, then a block of more than one HT
-/// set.
-fn refusal(ht: &HtSignaling, passes: &Passes) -> &'static str {
+/// Why a codestream with `ht` signaling is not yet decoded: MIXED in its
+/// main header, then `RGN` on its HT blocks. Every other one decodes.
+fn refusal(ht: &HtSignaling) -> &'static str {
     if ht.coder_set == "MIXED" {
         MIXED
     } else if ht.rgn {
         ROI
     } else {
-        assert!(
-            passes.walked.as_ref().is_some_and(|w| !w.one_ht_set()),
-            "a refused codestream whose blocks hold one HT set each"
-        );
-        MULTI_SET
+        panic!("an HTONLY codestream without RGN is refused")
     }
 }
 
@@ -216,8 +207,8 @@ fn codestream_refusals(manifest: &HtManifest) -> impl Fn(&str) -> &'static str +
         let c = manifest.codestreams.iter().find(|c| c.name == name);
         let j = manifest.jph.iter().find(|j| j.name == name);
         match (c, j) {
-            (Some(c), _) => refusal(&c.ht, &c.passes),
-            (_, Some(j)) => refusal(&j.ht, &j.passes),
+            (Some(c), _) => refusal(&c.ht),
+            (_, Some(j)) => refusal(&j.ht),
             _ => panic!("{name}: not in the manifest"),
         }
     }
@@ -319,7 +310,7 @@ fn grades_the_openjph_codestreams() {
     let manifest = load_openjph_manifest(&dir);
     pin_refusals(&graded, |name| {
         let e = manifest.entries.iter().find(|e| e.name == name).unwrap();
-        refusal(&e.ht, &e.passes)
+        refusal(&e.ht)
     });
     let entries = manifest
         .entries
@@ -687,6 +678,31 @@ fn every_bound_passes_its_cross_check() {
         ["hifi_ht1_02"]
     );
     assert_eq!(table.difference(&names).count(), 0);
+}
+
+/// The bare codestream of every JPH file, graded or not, decodes to exactly
+/// the samples OpenJPEG 2.5.0 decodes from it, by the digest of each
+/// component that `regenerate.py` recorded.
+#[test]
+fn every_jph_codestream_matches_openjpeg() {
+    let dir = ht_dir();
+    let manifest = load_ht_manifest(&dir);
+    for j in &manifest.jph {
+        let name = &j.name;
+        let bytes = std::fs::read(dir.join(&j.file)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let [start, end] = j.codestream_range;
+        let image = rust_j2k::decode(&bytes[start..end]).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let got: Vec<String> = image
+            .components
+            .iter()
+            .map(|c| {
+                let le: Vec<u8> = c.samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+                sha256_hex(&le)
+            })
+            .collect();
+        assert_eq!(got, j.openjpeg.codestream_sha256, "{name}");
+    }
+    assert_eq!(manifest.jph.len(), 20);
 }
 
 /// The JPH files below the highest bound of their set are not graded, but
