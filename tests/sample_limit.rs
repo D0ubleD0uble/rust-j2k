@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use rust_j2k::{
-    DecodeOptions, Error, WorkLimit, decode, decode_with, read_header, read_header_with,
+    DecodeOptions, Error, Window, WorkLimit, decode, decode_with, read_header, read_header_with,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -399,4 +399,233 @@ fn the_poc_factor_counts_the_dropped_blocks_charged_before_it() {
         .with_packet_work_limit(WorkLimit::Raised(2));
     let result = decode_with(&bytes, &options);
     assert!(!matches!(result, Err(Error::Limit(_))), "{result:?}");
+}
+
+// Under a window or a tile, the limit counts every component of the tiles
+// the decode reads. The flat image is 16385x16385 in a 5x5 grid of 4096x4096
+// tiles, so its last column and row of tiles are one sample wide or tall.
+
+fn window(x0: u32, y0: u32, x1: u32, y1: u32) -> DecodeOptions {
+    DecodeOptions::default().with_window(Some(Window::new(x0, y0, x1, y1)))
+}
+
+/// The message of the `Limit` that `result` must be.
+fn limit<T: std::fmt::Debug>(result: Result<T, Error>) -> String {
+    match result {
+        Err(Error::Limit(m)) => m,
+        other => panic!("expected Error::Limit, got {other:?}"),
+    }
+}
+
+/// A 256x256 window of the flat image, which is over the default limit,
+/// decodes at the default: inside one tile, across four, and at the far
+/// corner, where it reaches the one-sample tiles. The flat image is all zero,
+/// and so is `opj_decompress -d` of each window.
+#[test]
+fn a_small_window_of_an_image_over_the_limit_decodes_at_the_default() {
+    let bytes = flat();
+    for (x0, y0, x1, y1) in [
+        (1000, 1000, 1256, 1256),
+        (3968, 3968, 4224, 4224),
+        (16129, 16129, 16385, 16385),
+    ] {
+        let options = window(x0, y0, x1, y1);
+        let header = read_header_with(&bytes, &options).expect("the tiles read fit");
+        assert_eq!((header.width, header.height), (256, 256));
+        let image = decode_with(&bytes, &options).expect("the tiles read fit");
+        assert_eq!((image.width, image.height), (256, 256));
+        let [component] = &image.components[..] else {
+            panic!("{} components", image.components.len());
+        };
+        assert_eq!(component.samples.len(), 256 * 256);
+        assert!(component.samples.iter().all(|&s| s == 0));
+    }
+}
+
+/// The count is the tiles read, not the window: 16 whole tiles are exactly
+/// 2^28 samples and fit; a window of the same size one sample further in
+/// reaches all 25 tiles and is refused. A window whose own size is over the
+/// limit is refused too, and the whole image is counted as it is without a
+/// window. The header-only file fails on the missing tile data once it is
+/// past the limit, before any plane is allocated.
+#[test]
+fn a_window_is_held_to_the_samples_of_the_tiles_it_reads() {
+    let bytes = flat_header_only();
+    let sixteen = window(0, 0, 16384, 16384);
+    let header = read_header_with(&bytes, &sixteen).expect("16 tiles fit");
+    assert_eq!((header.width, header.height), (16384, 16384));
+    assert!(matches!(
+        decode_with(&bytes, &sixteen),
+        Err(Error::Codestream(_))
+    ));
+
+    let all = window(1, 1, 16385, 16385);
+    for m in [
+        limit(read_header_with(&bytes, &all)),
+        limit(decode_with(&bytes, &all)),
+    ] {
+        assert!(
+            m.starts_with(
+                "the area of the tiles read (16385x16385) needs 268468225 samples, over the \
+                 sample limit of 268435456"
+            ),
+            "{m}"
+        );
+        assert!(m.contains("`WorkLimit::Raised(2)`"), "{m}");
+    }
+    // Past the limit on its own: 20 tiles, one row of them a sample tall.
+    let m = limit(read_header_with(&bytes, &window(0, 0, 16385, 16384)));
+    assert!(
+        m.starts_with("the area of the tiles read (16385x16384) needs 268451840 samples"),
+        "{m}"
+    );
+    let m = limit(decode_with(&bytes, &window(0, 0, 20000, 20000)));
+    assert!(
+        m.starts_with("image area 16385x16385 needs 268468225 samples"),
+        "{m}"
+    );
+
+    // The tiles are counted at the reduction.
+    let reduced = all.clone().with_resolution_reduction(1);
+    let header = read_header_with(&bytes, &reduced).expect("fits at reduction 1");
+    assert_eq!((header.width, header.height), (8192, 8192));
+    // `Raised(2)` admits the window as it admits the image.
+    let raised = all.with_sample_limit(WorkLimit::Raised(2));
+    assert!(read_header_with(&bytes, &raised).is_ok());
+}
+
+/// A tile counts its own samples: one tile of the flat image fits, and one
+/// tile that is itself over the limit is refused.
+#[test]
+fn a_tile_is_held_to_its_own_samples() {
+    let bytes = flat();
+    for (tile, width, height) in [(4, 1, 4096), (24, 1, 1)] {
+        let options = DecodeOptions::default().with_tile(Some(tile));
+        let image = decode_with(&bytes, &options).expect("one tile fits");
+        assert_eq!((image.width, image.height), (width, height), "tile {tile}");
+        assert!(image.components[0].samples.iter().all(|&s| s == 0));
+    }
+    let header_only = flat_header_only();
+    let first = DecodeOptions::default().with_tile(Some(0));
+    let header = read_header_with(&header_only, &first).expect("one tile fits");
+    assert_eq!((header.width, header.height), (4096, 4096));
+    assert!(matches!(
+        decode_with(&header_only, &first),
+        Err(Error::Codestream(_))
+    ));
+
+    let mut one_tile = main_header(16385, 16385, 1, 1, &[]);
+    one_tile.extend_from_slice(&[0xFF, 0x90]);
+    for m in [
+        limit(read_header_with(&one_tile, &first)),
+        limit(decode_with(&one_tile, &first)),
+    ] {
+        assert!(
+            m.starts_with("image area 16385x16385 needs 268468225 samples"),
+            "{m}"
+        );
+    }
+}
+
+/// `bytes`, a codestream from [`main_header`], with the color transform on.
+fn with_mct(mut bytes: Vec<u8>) -> Vec<u8> {
+    let siz_end = 4 + usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+    assert_eq!(bytes[siz_end..siz_end + 2], [0xFF, 0x52]);
+    // Lcod, Scod, the progression order and the layer count, then the MCT.
+    bytes[siz_end + 8] = 1;
+    bytes
+}
+
+/// A component subset does not lower the count: the packets of every
+/// component of each tile read are walked, and the color transform needs all
+/// three. A 10240x10240 RGB image is over the limit in three components,
+/// though one of them fits. Of 100 tiles of 1024x1024, a window with one
+/// component reads one tile and decodes; the same subset of the whole image,
+/// and a window of the one large tile of a single-tile image, are refused.
+#[test]
+fn a_component_subset_counts_every_component_of_the_tiles_read() {
+    let tiled = with_mct(many_tiles_of_empty_packets(10, 1024, 3));
+    for subset in [vec![0], vec![2, 1]] {
+        let options = window(100, 200, 356, 456).with_components(Some(subset.clone()));
+        let image = decode_with(&tiled, &options).expect("one tile of three components fits");
+        assert_eq!(image.components.len(), subset.len());
+        for component in &image.components {
+            assert_eq!(component.samples.len(), 256 * 256);
+            // No coded data: the level shift of an unsigned 8-bit component.
+            assert!(component.samples.iter().all(|&s| s == 128));
+        }
+    }
+    let subset = DecodeOptions::default().with_components(Some(vec![0]));
+    let m = limit(decode_with(&tiled, &subset));
+    assert!(
+        m.starts_with("a decode of 3 components needs 314572800 samples"),
+        "{m}"
+    );
+
+    let mut single = with_mct(main_header(10240, 10240, 3, 1, &[]));
+    single.extend_from_slice(&[0xFF, 0x90]);
+    let options = window(0, 0, 10240, 10000).with_components(Some(vec![0]));
+    for m in [
+        limit(read_header_with(&single, &options)),
+        limit(decode_with(&single, &options)),
+    ] {
+        assert!(
+            m.starts_with("a decode of the tiles read in 3 components needs 314572800 samples"),
+            "{m}"
+        );
+    }
+}
+
+/// A gray JP2 file of `size` x `size`, holding `codestream`, whose palette
+/// expands its one component to three 8-bit channels.
+fn paletted_jp2(size: u32, codestream: &[u8]) -> Vec<u8> {
+    let bx = |kind: &[u8; 4], payload: &[u8]| {
+        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    };
+    let mut ihdr = size.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&size.to_be_bytes());
+    ihdr.extend_from_slice(&[0, 1, 7, 7, 0, 0]);
+    // One entry of three 8-bit columns; channel i is column i of component 0.
+    let pclr = [0, 1, 3, 7, 7, 7, 10, 20, 30];
+    let cmap = [0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 2];
+    let jp2h = [
+        bx(b"ihdr", &ihdr),
+        bx(b"colr", &[1, 0, 0, 0, 0, 0, 16]),
+        bx(b"pclr", &pclr),
+        bx(b"cmap", &cmap),
+    ]
+    .concat();
+    [
+        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
+        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        bx(b"jp2h", &jp2h),
+        bx(b"jp2c", codestream),
+    ]
+    .concat()
+}
+
+/// A palette's expanded channels count only the area the decode returns: a
+/// 10000x10000 image expanded to three channels is over the limit, and a
+/// window of it is not.
+#[test]
+fn a_palette_under_a_window_counts_the_window() {
+    let mut codestream = main_header(10000, 1024, 1, 1, &[]);
+    codestream.extend_from_slice(&[0xFF, 0x90]);
+    let file = paletted_jp2(10000, &codestream);
+    let m = limit(read_header_with(&file, &DecodeOptions::default()));
+    assert!(
+        m.starts_with("palette expansion to 3 channels needs 300000000 samples"),
+        "{m}"
+    );
+    let header = read_header_with(&file, &window(0, 0, 4096, 4096)).expect("the window fits");
+    assert_eq!((header.width, header.height), (4096, 4096));
+    assert_eq!(header.components.len(), 3);
+    let m = limit(read_header_with(&file, &window(0, 0, 10000, 9000)));
+    assert!(
+        m.starts_with("palette expansion to 3 channels needs 270000000 samples"),
+        "{m}"
+    );
 }

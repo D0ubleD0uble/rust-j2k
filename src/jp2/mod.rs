@@ -481,7 +481,9 @@ pub(crate) struct ChannelPlans {
 
 impl ChannelPlans {
     /// Plan the channels for a decode at `reduction` resolution levels down,
-    /// holding a palette's expanded channels to `cap` samples.
+    /// holding a palette's expanded channels to `cap` samples. `siz` is the
+    /// codestream's SIZ with its image area cut to what the decode returns
+    /// (the selection's area), as the expansion covers only that.
     /// The palette is planned first, so a malformed palette reports its fault
     /// before a malformed `cdef` does, as OpenJPEG reads them.
     pub(crate) fn plan(
