@@ -8,14 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `Error::Incomplete`: the input ends inside the codestream's main header,
-  after the `SOC` marker and before the first `SOT` marker is whole. A caller
-  whose input streams in can wait for more bytes instead of treating the file
-  as damaged. `read_header` and `decode_with` return it whether or not
-  `strict` is set, for a raw codestream and for the codestream of a JP2 file.
-  These inputs were `Error::Codestream` before. The segments the input holds
-  in full are checked first, so a damaged one gives an error, not
-  `Incomplete`, usually the one the whole file gives.
+- `Error::Incomplete`: the input ends before the codestream's main header is
+  whole, that is, before its first `SOT` marker is complete. It begins at the
+  empty input and, in a JP2 file, covers the signature box, the top-level
+  boxes before `jp2c` and the `jp2c` box header. A caller whose input streams
+  in can wait for more bytes instead of treating the file as damaged.
+  `read_header` and `decode_with` return it whether or not `strict` is set.
+  These inputs were `Error::Codestream` or `Error::FileFormat` before. The
+  boxes and segments the input holds in full are checked first, so a damaged
+  one gives an error, not `Incomplete`, usually the one the whole file gives.
 - `DecodeOptions::max_quality_layers` and `with_max_quality_layers`: decode
   only the first `n` quality layers of each tile, as `opj_decompress -l n`
   does. The image keeps its size and loses fidelity, and the code-block
@@ -26,6 +27,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Some complete inputs now give `Error::Incomplete`, since their bytes look
+  the same as a cut: empty input (was `Error::Codestream`), and a JP2 file
+  with no `jp2c` box or with a top-level box before `jp2c` that runs past the
+  end of the file (was `Error::FileFormat`). A caller that matched those
+  variants should treat `Incomplete` with no more bytes coming as truncated.
 - The `CAP` and `CPF` markers are read. HTJ2K codestreams are still
   `Error::Unsupported`, now refused for the HT code-block style of their COD
   or COC instead of for `CAP`, so a cut header is `Error::Incomplete` up to

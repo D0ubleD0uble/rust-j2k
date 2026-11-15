@@ -22,8 +22,13 @@
 //! short.
 //!
 //! Each fault is an [`Error::FileFormat`], and the reader stops after the
-//! first one. [`walk_after_codestream`] applies OpenJPEG's looser rule to the
-//! bytes after the codestream.
+//! first one. At the top level, where the input may still be arriving, the
+//! file ending inside a box is [`Error::Incomplete`] instead: inside its
+//! 8-byte header, its `XLBox`, or its contents (a length damaged to reach
+//! past the end of the file looks the same). Inside a superbox, whose
+//! contents are whole, a box that runs past them stays `FileFormat`.
+//! [`walk_after_codestream`] applies OpenJPEG's looser rule to the bytes
+//! after the codestream.
 
 use crate::{Error, Result};
 
@@ -34,13 +39,6 @@ pub(crate) struct Jp2Box<'a> {
     pub(crate) kind: [u8; 4],
     /// The box contents, header excluded.
     pub(crate) payload: &'a [u8],
-}
-
-impl Jp2Box<'_> {
-    /// The box type as text, for error messages.
-    pub(crate) fn name(&self) -> String {
-        type_name(self.kind)
-    }
 }
 
 /// A four-character box type as printable text: `jp2h`, `xml `, or escaped
@@ -66,6 +64,9 @@ pub(crate) struct Boxes<'a> {
     done: bool,
     /// Whether the last box read had `LBox == 0`.
     last_open_ended: bool,
+    /// The type of the box being read when the input ended inside it, once
+    /// its type field was read.
+    cut_kind: Option<[u8; 4]>,
 }
 
 impl<'a> Boxes<'a> {
@@ -78,6 +79,7 @@ impl<'a> Boxes<'a> {
             parent: "the file",
             done: false,
             last_open_ended: false,
+            cut_kind: None,
         }
     }
 
@@ -90,6 +92,7 @@ impl<'a> Boxes<'a> {
             parent,
             done: false,
             last_open_ended: false,
+            cut_kind: None,
         }
     }
 
@@ -103,12 +106,25 @@ impl<'a> Boxes<'a> {
         self.last_open_ended
     }
 
+    /// The type of the top-level box the input ended inside, when the last
+    /// read was [`Error::Incomplete`] after the box's `TBox` field. A check
+    /// that needs only the type can still be made on it.
+    pub(crate) fn cut_kind(&self) -> Option<[u8; 4]> {
+        self.cut_kind
+    }
+
     /// Read the box at `self.pos` and step past it.
     fn read(&mut self) -> Result<Jp2Box<'a>> {
         let rest = self.data.get(self.pos..).unwrap_or_default();
         let (lbox, kind) = match rest {
             [a, b, c, d, t0, t1, t2, t3, ..] => {
                 (u32::from_be_bytes([*a, *b, *c, *d]), [*t0, *t1, *t2, *t3])
+            }
+            _ if self.open_ended => {
+                return Err(Error::Incomplete(format!(
+                    "the input ends inside a box header, after {} of its 8 bytes",
+                    rest.len()
+                )));
             }
             _ => {
                 return Err(Error::FileFormat(format!(
@@ -118,6 +134,7 @@ impl<'a> Boxes<'a> {
                 )));
             }
         };
+        self.cut_kind = Some(kind);
         let name = type_name(kind);
         self.last_open_ended = lbox == 0;
         // The top-level codestream box, whose length OpenJPEG does not use.
@@ -137,6 +154,11 @@ impl<'a> Boxes<'a> {
             }
             1 => {
                 let Some(xl) = rest.get(8..16) else {
+                    if self.open_ended {
+                        return Err(Error::Incomplete(format!(
+                            "the input ends inside the 16-byte header of box `{name}`"
+                        )));
+                    }
                     return Err(Error::FileFormat(format!(
                         "box `{name}` has a 64-bit length but its `XLBox` field is truncated"
                     )));
@@ -170,6 +192,12 @@ impl<'a> Boxes<'a> {
         } else {
             length
         };
+        if length > rest.len() as u64 && self.open_ended {
+            return Err(Error::Incomplete(format!(
+                "the input ends inside box `{name}`, which is {length} bytes, after {} of them",
+                rest.len()
+            )));
+        }
         if length > rest.len() as u64 {
             return Err(Error::FileFormat(format!(
                 "box `{name}` is {length} bytes but only {} remain in {}",
@@ -187,6 +215,7 @@ impl<'a> Boxes<'a> {
             .pos
             .checked_add(length)
             .ok_or_else(|| Error::Inconsistent("box offset overflow".into()))?;
+        self.cut_kind = None;
         Ok(Jp2Box { kind, payload })
     }
 }

@@ -580,12 +580,12 @@ so and why we differ (or do not).
 | `ftyp` missing or not second | error | reject | `FileFormat` |
 | No `jp2 ` in brand or compatibility list | decodes anyway | reject | `Unsupported` (a JPX/JPM we do not read; stricter, because the spec says such a reader may not understand the file and we would be guessing; kept as a deliberate deviation (decided 2026-11-01), reasoning in openjpeg-departures.md) |
 | Box length `< 8` (or `< 16` with `XLBox`) | error | reject | `FileFormat` |
-| Box runs past its parent or the file | error | reject | `FileFormat` (truncation) |
+| Box runs past its parent or the file | error | reject | `FileFormat` past its parent; `Incomplete` past the end of the file before `jp2c`, since a cut looks the same |
 | `jp2c` runs past the end of the file | decodes (the codestream is read to its end) | clamped to the file, decodes | none (match oracle); the codestream parser still rejects a codestream that is cut short |
 | `jp2c` with `LBox` 2..7 or `XLBox < 16` | decodes (the length is not used) | decodes, the codestream read to the end of the file | none (match oracle) |
 | `jp2c` with `LBox >= 8` but shorter than its codestream | decodes (the length is not used; output identical to the raw decode) | decodes the same | none (match oracle): the codestream ends where its tile-parts end (`Psot`), not at the box end |
 | `LBox = 0` on a box that is not last | error unless `jp2c` | same | `FileFormat`; legal on the last box, including `jp2c` |
-| `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice; past the end of the file, truncation, or clamped for `jp2c` | `FileFormat` for a box other than `jp2c` past the end of the file; slice-based, nothing is allocated from the length |
+| `XLBox >= 2^32` | error ("cannot handle"), except on `jp2c`, which decodes | accept if it fits the slice; past the end of the file, truncation, or clamped for `jp2c` | `Incomplete` for a box other than `jp2c` past the end of the file; slice-based, nothing is allocated from the length |
 | `jp2h` missing | error | reject | `FileFormat` |
 | Second `jp2h` before `jp2c` | merged (its `ihdr` ignored, other children applied) | merged the same way | none (match oracle); its `pclr`/`cmap`/`cdef` are applied; each `jp2h` must hold an `ihdr`, as OpenJPEG requires |
 | `jp2c` before `jp2h` | error | reject | `FileFormat` |

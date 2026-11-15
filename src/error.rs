@@ -1,7 +1,7 @@
 //! Error type for the decoder. One flat enum; each failure maps to the variant
 //! that names its class, so a caller can tell a malformed input from an
 //! unsupported feature: [`Error::Codestream`] for structural damage,
-//! [`Error::Incomplete`] for input that ends inside the main header,
+//! [`Error::Incomplete`] for input that ends before the main header is whole,
 //! [`Error::Marker`] for an invalid field value, [`Error::FileFormat`] for a
 //! malformed JP2 box structure, [`Error::Unsupported`] for
 //! a valid-but-out-of-subset feature, [`Error::Limit`] for an input past a
@@ -19,8 +19,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 ///
 /// Match on the variant to decide what to do; the `String` inside is a
 /// diagnostic for a log. Its wording can change between releases, so do not
-/// parse it or compare it. Input that is not JPEG 2000 at all, empty input
-/// and plain text included, is [`Error::Codestream`].
+/// parse it or compare it. Input that is not JPEG 2000 at all, plain text
+/// included, is [`Error::Codestream`]; empty input is [`Error::Incomplete`].
 ///
 /// The variant also says what to tell a user:
 ///
@@ -57,7 +57,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 ///     }
 /// }
 ///
-/// let error = decode(b"").unwrap_err();
+/// let error = decode(b"hello").unwrap_err();
 /// assert!(matches!(error, Error::Codestream(_)));
 /// assert_eq!(
 ///     explain(&error),
@@ -70,36 +70,47 @@ pub enum Error {
     /// Not a JPEG 2000 codestream, or its structure is broken: a missing
     /// segment, a segment too short for its fields, lost sync, a tile-part or
     /// packet data cut short, or corrupt packet / coded data. Input that ends
-    /// inside the main header is [`Error::Incomplete`] instead. Any input
-    /// that is not JPEG 2000 at all (empty input, text, another image
-    /// format) is this variant, since it has no `SOC` marker.
+    /// before the main header is whole is [`Error::Incomplete`] instead. Any
+    /// input that is not JPEG 2000 at all (text, another image format) is
+    /// this variant, since it has no `SOC` marker.
     Codestream(String),
-    /// The input ends inside the codestream's main header: after the `SOC`
-    /// marker and before the first `SOT` marker is complete. No segment the
-    /// input holds in full was found damaged, so more bytes may still give a
-    /// valid header.
+    /// The input ends before the codestream's main header is whole, that is,
+    /// before its first `SOT` marker is complete. No top-level box or segment
+    /// the input holds in full was found damaged, so more bytes may still give
+    /// a valid header. The boxes inside a superbox (such as `ihdr` in `jp2h`)
+    /// are judged only once the superbox is whole, so a cut `jp2h` is this
+    /// variant even when its `ihdr` is already damaged.
+    ///
+    /// It begins with the empty input. A raw codestream is this variant from
+    /// 0 bytes up to its first `SOT` marker. A JP2 file is this variant from
+    /// 0 bytes as well: inside its signature box, at or inside any top-level
+    /// box before the `jp2c` box, inside the `jp2c` box header, and then in
+    /// the codestream's main header. A box inside a superbox, such as
+    /// `ihdr` in `jp2h`, is only read once the superbox is whole, so its faults
+    /// stay [`Error::FileFormat`].
     ///
     /// This is the "wait for more bytes" signal for a caller whose input
     /// streams in. [`read_header`](crate::read_header) and
     /// [`decode_with`](crate::decode_with) return it whether or not
     /// [`strict`](crate::DecodeOptions::strict) is set, since every decode
-    /// needs the whole main header. In a JP2 file it is returned when the
-    /// input ends inside the main header of the `jp2c` box's codestream.
+    /// needs the whole main header.
     ///
-    /// The segments the input holds in full are judged first: a damaged one
-    /// gives an error, not this variant, usually the one the whole file gives
-    /// ([`Error::Codestream`], [`Error::Marker`], [`Error::Unsupported`] or
-    /// [`Error::Limit`]). The whole file can give another one when a later
+    /// The boxes and segments the input holds in full are judged first: a
+    /// damaged one gives an error, not this variant, usually the one the
+    /// whole file gives ([`Error::FileFormat`], [`Error::Codestream`],
+    /// [`Error::Marker`], [`Error::Unsupported`] or [`Error::Limit`]). So is
+    /// a box cut short whose type is already wrong, such as a second box that
+    /// is not `ftyp`. The whole file can give another one when a later
     /// part of its header is broken too. The checks that tie segments to each
     /// other or to the JP2 boxes wait for the whole header (for example, a
     /// missing `COD` or `QCD`, quantization coverage, 9/7 without
     /// quantization, MCT geometry, `PPM` order, and `ihdr` against SIZ).
     ///
-    /// If no more bytes are coming, the file is truncated. A segment length
-    /// that is damaged so that it reaches past the end of the input looks the
-    /// same as a cut, so it is this variant too. Input too short to hold the
-    /// `SOC` marker (0 or 1 byte) is [`Error::Codestream`], as is any input
-    /// that does not start with it.
+    /// If no more bytes are coming, the file is truncated. A box or segment
+    /// length that is damaged so that it reaches past the end of the input
+    /// looks the same as a cut, so it is this variant too. Input that can no
+    /// longer become JPEG 2000 is [`Error::Codestream`]: a byte that is not
+    /// the start of the `SOC` marker or of the JP2 signature box, for example.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
@@ -124,7 +135,8 @@ pub enum Error {
     /// A marker segment has an invalid field: a reserved value, a bad length
     /// or an out-of-range value.
     Marker(String),
-    /// The JP2 box structure or a box field is malformed: a truncated box, a
+    /// The JP2 box structure or a box field is malformed: a box that runs past
+    /// the superbox holding it, a truncated box after the codestream, a
     /// missing or misplaced required box, an invalid field value, or a box
     /// that disagrees with the codestream.
     FileFormat(String),

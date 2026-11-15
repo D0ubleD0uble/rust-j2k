@@ -147,6 +147,17 @@ fn file_format(bytes: &[u8], fragment: &str) {
 }
 
 #[track_caller]
+fn incomplete(bytes: &[u8], fragment: &str) {
+    match decode(bytes) {
+        Err(Error::Incomplete(message)) => assert!(
+            message.contains(fragment),
+            "expected an Incomplete error mentioning {fragment:?}, got {message:?}"
+        ),
+        other => panic!("expected Incomplete mentioning {fragment:?}, got {other:?}"),
+    }
+}
+
+#[track_caller]
 fn unsupported(bytes: &[u8], fragment: &str) {
     match decode(bytes) {
         Err(Error::Unsupported(message)) => assert!(
@@ -391,12 +402,12 @@ fn a_box_length_of_1_to_7_is_rejected() {
         let bytes = file(&[jp2_ftyp(), header_only(lbox, b"zzzz"), good_jp2h(), jp2c()]);
         file_format(&bytes, "shorter than its 8-byte header");
     }
-    // `LBox = 1` announces an `XLBox`; with the file ending first, the field is
-    // truncated.
+    // `LBox = 1` announces an `XLBox`; with the file ending first, the input
+    // ends inside the box header.
     let mut truncated = file(&[jp2_ftyp(), good_jp2h()]);
     truncated.extend_from_slice(&header_only(1, b"jp2c"));
     truncated.extend_from_slice(&[0, 0, 0]);
-    file_format(&truncated, "`XLBox` field is truncated");
+    incomplete(&truncated, "inside the 16-byte header of box `jp2c`");
 }
 
 #[test]
@@ -410,13 +421,17 @@ fn an_xlbox_of_zero_or_past_the_end_is_rejected() {
         ]);
         file_format(&bytes, "shorter than its 16-byte header");
     }
-    // One byte longer than the file, and far past it: both are truncation
-    // for any box but the codestream, and nothing is allocated from the length.
+    // One byte longer than the file, and far past it: for any box but the
+    // codestream, the input ends inside the box, and nothing is allocated
+    // from the length.
     for xlbox in [16 + 4 + 1, 1 << 40, u64::MAX] {
         let mut bytes = file(&[jp2_ftyp(), good_jp2h()]);
         bytes.extend_from_slice(&xl_header_only(xlbox, b"xml "));
         bytes.extend_from_slice(b"<a/>");
-        file_format(&bytes, "remain in the file");
+        incomplete(
+            &bytes,
+            &format!("inside box `xml `, which is {xlbox} bytes, after 20"),
+        );
     }
 }
 
@@ -667,11 +682,6 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
             "signature box",
         ),
         (
-            "signature box alone",
-            SIGNATURE.to_vec(),
-            "ends after the signature",
-        ),
-        (
             "ftyp not second",
             file(&[good_jp2h(), jp2_ftyp(), jp2c()]),
             "`ftyp` box must follow the signature, not `jp2h`",
@@ -695,12 +705,6 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
             "jp2c before jp2h",
             file(&[jp2_ftyp(), jp2c(), good_jp2h()]),
             "no `jp2h` header box before its `jp2c`",
-        ),
-        ("no jp2c", file(&[jp2_ftyp(), good_jp2h()]), "no `jp2c`"),
-        (
-            "neither jp2h nor jp2c",
-            file(&[jp2_ftyp()]),
-            "no `jp2h` header box and no `jp2c`",
         ),
         (
             "empty jp2h",
@@ -813,11 +817,6 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
             "after the codestream has `XLBox` 15",
         ),
         (
-            "a box header cut short before jp2c",
-            [file(&[jp2_ftyp(), good_jp2h()]), vec![0, 0, 0]].concat(),
-            "a box header needs 8 bytes but 3 remain in the file",
-        ),
-        (
             "a jp2h child header cut short",
             file(&[jp2_ftyp(), jp2h(&[good_ihdr(), vec![0, 0, 0, 9]]), jp2c()]),
             "a box header needs 8 bytes but 4 remain in the `jp2h` box",
@@ -837,11 +836,120 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
 /// Input with neither magic is still the codestream parser's to reject.
 #[test]
 fn input_with_neither_magic_is_a_codestream_error() {
-    for bytes in [&b""[..], b"not a codestream", b"\x00\x00\x00\x0cjP"] {
+    for bytes in [
+        &b"not a codestream"[..],
+        b"\x00\x00\x00\x0cjQ",
+        b"\x01",
+        b"\xFF\x4E",
+    ] {
         assert!(
             matches!(decode(bytes), Err(Error::Codestream(_))),
             "{bytes:?}"
         );
+    }
+}
+
+/// A box cut short is still judged on its type once that has arrived: a
+/// second box that is not `ftyp`, and a `jp2c` cut inside its `XLBox` with no
+/// `jp2h` before it, are the whole file's `FileFormat`.
+#[test]
+fn a_cut_box_is_judged_on_its_type() {
+    let not_ftyp = file(&[xl_header_only(100, b"jp2h")]);
+    for length in 20..=not_ftyp.len() {
+        file_format(
+            &not_ftyp[..length],
+            "the `ftyp` box must follow the signature, not `jp2h`",
+        );
+    }
+    let no_jp2h = file(&[jp2_ftyp(), xl_header_only(100, b"jp2c")]);
+    let jp2c_at = no_jp2h.len() - 16;
+    for length in jp2c_at + 8..no_jp2h.len() {
+        file_format(&no_jp2h[..length], "no `jp2h` header box before its `jp2c`");
+    }
+    // With a `jp2h`, the same cut is only a cut.
+    let cut = file(&[jp2_ftyp(), good_jp2h(), header_only(1, b"jp2c")]);
+    incomplete(&cut, "inside the 16-byte header of box `jp2c`");
+}
+
+/// A file that ends at or inside a top-level box before `jp2c`, or inside
+/// the signature, is `Incomplete`: more bytes could still make it whole.
+/// Inside a superbox, the same shapes are `FileFormat` (above), since the
+/// superbox is whole.
+#[test]
+fn a_file_cut_before_its_codestream_is_incomplete() {
+    let rows: Vec<(&str, Vec<u8>, &str)> = vec![
+        (
+            "empty input",
+            Vec::new(),
+            "before the codestream's `SOC` marker",
+        ),
+        (
+            "one signature byte",
+            SIGNATURE[..1].to_vec(),
+            "inside the JP2 signature box",
+        ),
+        (
+            "signature box cut short",
+            SIGNATURE[..6].to_vec(),
+            "inside the JP2 signature box",
+        ),
+        (
+            "signature box but its last byte",
+            SIGNATURE[..11].to_vec(),
+            "inside the JP2 signature box",
+        ),
+        (
+            "signature box alone",
+            SIGNATURE.to_vec(),
+            "ends after the JP2 signature box",
+        ),
+        (
+            "ftyp header cut short",
+            file(&[jp2_ftyp()])[..15].to_vec(),
+            "inside a box header, after 3 of its 8 bytes",
+        ),
+        (
+            "neither jp2h nor jp2c",
+            file(&[jp2_ftyp()]),
+            "before the `jp2c` codestream box",
+        ),
+        (
+            "no jp2c",
+            file(&[jp2_ftyp(), good_jp2h()]),
+            "before the `jp2c` codestream box",
+        ),
+        (
+            "a box header cut short before jp2c",
+            [file(&[jp2_ftyp(), good_jp2h()]), vec![0, 0, 0]].concat(),
+            "inside a box header, after 3 of its 8 bytes",
+        ),
+        (
+            "jp2h cut short",
+            {
+                let whole = file(&[jp2_ftyp(), good_jp2h()]);
+                whole[..whole.len() - 1].to_vec()
+            },
+            "inside box `jp2h`",
+        ),
+        (
+            "jp2c header and one codestream byte",
+            [
+                file(&[jp2_ftyp(), good_jp2h()]),
+                header_only(0, b"jp2c"),
+                vec![0xFF],
+            ]
+            .concat(),
+            "before the codestream's `SOC` marker",
+        ),
+    ];
+    for (what, bytes, fragment) in rows {
+        match decode(&bytes) {
+            Err(Error::Incomplete(message)) => assert!(
+                message.contains(fragment),
+                "{what}: expected a message mentioning {fragment:?}, got {message:?}"
+            ),
+            other => panic!("{what}: expected Incomplete, got {:?}", other.map(|_| ())),
+        }
     }
 }
 

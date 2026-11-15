@@ -333,13 +333,23 @@ Table A-9 constraints on the image and tile origins are enforced before any
 geometry reaches the DWT.
 
 Every failure is typed. The flat `Error` enum names the kind of failure, so a
-caller can tell a damaged codestream (`Codestream`), input that ends inside
-the main header (`Incomplete`), an illegal field (`Marker`), a malformed JP2
-box (`FileFormat`), a feature outside what this decoder reads
+caller can tell a damaged codestream (`Codestream`), input that ends before
+the main header is whole (`Incomplete`), an illegal field (`Marker`), a
+malformed JP2 box (`FileFormat`), a feature outside what this decoder reads
 (`Unsupported`) and a resource bound (`Limit`) apart. The
 decode path does not `unwrap` or panic on input. Review and fuzzing hold
 this, not a lint; the only `expect` calls outside tests invert constant
 matrices in `src/jp2/lcms.rs`.
+
+`Incomplete` begins at the empty input. Every prefix of a raw codestream
+or a JP2 file that ends before the first `SOT` marker is whole is
+`Incomplete`; in a JP2 file that covers the signature box, the top-level
+boxes before `jp2c` and the `jp2c` box header too. A box or segment the
+input holds in full is judged first and keeps its own error. A length
+damaged to reach past the end of the input looks like a cut, so it is
+`Incomplete` too. `tests/incomplete_header.rs` cuts every committed
+codestream and JP2 file at each of those bytes, and checks that damaged
+boxes and main headers keep their errors.
 
 Reject matrices pin the error for each kind of input this decoder refuses.
 `reject_matrix_maps_every_out_of_subset_input_to_its_typed_error` in

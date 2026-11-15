@@ -20,6 +20,7 @@ use super::*;
 enum Outcome {
     Decodes,
     Codestream,
+    Incomplete,
     FileFormat,
     Unsupported,
     Limit,
@@ -30,6 +31,7 @@ fn outcome(result: crate::Result<Image>) -> Outcome {
     match result {
         Ok(_) => Outcome::Decodes,
         Err(Error::Codestream(_)) => Outcome::Codestream,
+        Err(Error::Incomplete(_)) => Outcome::Incomplete,
         Err(Error::FileFormat(_)) => Outcome::FileFormat,
         Err(Error::Unsupported(_)) => Outcome::Unsupported,
         Err(Error::Limit(_)) => Outcome::Limit,
@@ -293,7 +295,7 @@ fn every_robustness_table_row_has_its_outcome() {
             "box runs past the file",
             [file(&[jp2_ftyp(), good_jp2h()]), header_only(100, b"xml ")].concat(),
             Default,
-            FileFormat,
+            Incomplete,
         ),
         (
             "jp2c runs past the end of the file",
@@ -349,7 +351,7 @@ fn every_robustness_table_row_has_its_outcome() {
             ]
             .concat(),
             Default,
-            FileFormat,
+            Incomplete,
         ),
         (
             "XLBox >= 2^32 on jp2c",
