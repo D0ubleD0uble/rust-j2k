@@ -276,10 +276,12 @@ mod tests {
         "ds0_ht_12_b11",
     ];
 
-    /// Slice the code-blocks of an HT codestream into `ht_block` inputs: the
+    /// Slice the code-blocks of an HT codestream into `ht_block` inputs, each
+    /// with whether it must decode (the tall copies of a block carry bytes made
+    /// for another shape and need not): the
     /// block's shape, passes and bytes, in the layout the hook reads. A seed's
     /// `Mb` is `P + 6`, which leaves planes to code.
-    fn ht_seeds(name: &str) -> Vec<Vec<u8>> {
+    fn ht_seeds(name: &str) -> Vec<(Vec<u8>, bool)> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/conformance/ht/codestreams")
             .join(format!("{name}.j2k"));
@@ -326,13 +328,33 @@ mod tests {
                         tall[..2].copy_from_slice(&(w - 1).to_le_bytes());
                         tall[2] = (h - 1) as u8;
                         tall[12] = ((h - 1) >> 8) as u8;
-                        seeds.push(tall);
+                        seeds.push((tall, false));
                     }
                 }
-                seeds.push(seed);
+                seeds.push((seed, true));
             }
         }
         seeds
+    }
+
+    /// A one-pass block of `width` x `height` over the cleanup segment
+    /// `F2 00` (`Scup = 2`), which decodes at any shape.
+    fn tall_seed(width: u16, height: u16) -> Vec<u8> {
+        let mut seed = (width - 1).to_le_bytes().to_vec();
+        seed.extend([(height - 1) as u8, 0, 8, 0, 1, 2, 0, 0, 0, 0]);
+        seed.push(((height - 1) >> 8) as u8);
+        seed.extend([0xF2, 0x00]);
+        seed
+    }
+
+    /// The tall shapes decode: one seed for each.
+    #[test]
+    fn ht_block_tall_seeds_decode() {
+        for (w, h) in [(1u16, 1024u16), (2, 1024), (3, 1024), (4, 1024), (8, 512)] {
+            let (shape, decoded) = super::run_ht_block(&tall_seed(w, h)).unwrap();
+            assert_eq!(shape, (usize::from(w), usize::from(h)));
+            assert_eq!(decoded.unwrap(), usize::from(w) * usize::from(h), "{w}x{h}");
+        }
     }
 
     /// The seeds sliced from the HT corpus decode through the hook, so the
@@ -343,13 +365,12 @@ mod tests {
         let dir = std::env::var_os("RUST_J2K_HT_SEED_DIR").map(std::path::PathBuf::from);
         let (mut total, mut refined) = (0usize, 0usize);
         for name in HT_SEED_FILES {
-            for (i, seed) in ht_seeds(name).iter().enumerate() {
+            for (i, (seed, must_decode)) in ht_seeds(name).iter().enumerate() {
                 let width = 1 + usize::from(u16::from_le_bytes([seed[0], seed[1]]));
                 let height = 1 + usize::from(u16::from_le_bytes([seed[2], seed[12]]));
                 let (shape, decoded) = super::run_ht_block(seed).expect("a full header");
                 assert_eq!(shape, (width, height));
-                // The tall copies carry bytes made for another shape.
-                if height <= 256 && width * height <= 4096 && !(height == 512) {
+                if *must_decode {
                     assert_eq!(decoded.expect("a corpus block decodes"), width * height);
                 }
                 total += 1;
@@ -358,6 +379,11 @@ mod tests {
                     std::fs::create_dir_all(dir).unwrap();
                     std::fs::write(dir.join(format!("{name}_{i}")), seed).unwrap();
                 }
+            }
+        }
+        if let Some(dir) = &dir {
+            for (w, h) in [(1, 1024), (2, 1024), (3, 1024), (4, 1024), (8, 512)] {
+                std::fs::write(dir.join(format!("tall_{w}x{h}")), tall_seed(w, h)).unwrap();
             }
         }
         if total > 0 {

@@ -208,7 +208,7 @@ cargo +nightly fuzz run header -- -dict=fuzz/jp2.dict -max_total_time=300
 python3 scripts/gen-icc-oracles.py --fuzz-seeds
 cargo +nightly fuzz run icc_srgb -- -dict=fuzz/icc.dict -max_total_time=300
 
-# The HT block target, seeded with the code-blocks of the HT corpus (3466
+# The HT block target, seeded with the code-blocks of the HT corpus (3714
 # seeds from six conformance codestreams). `-max_len` lets the cleanup and
 # refinement segments run to the 5000 bytes each the hook allows.
 RUST_J2K_HT_SEED_DIR=fuzz/corpus/ht_block cargo test --lib ht_block_seeds

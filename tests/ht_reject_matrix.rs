@@ -278,7 +278,6 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
             },
             Want::Codestream("Scup = 1"),
         ),
-        // Tier-1: the block's bit-planes.
         (
             "Scup of 4080, past the largest 4079",
             Block {
@@ -287,6 +286,7 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
             },
             Want::Codestream("Scup = 4080"),
         ),
+        // Tier-1: the block's bit-planes.
         (
             "no bit-plane left after the zero bit-planes",
             Block {

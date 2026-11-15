@@ -195,8 +195,9 @@ fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
     let mut bytes = 0xFF4Fu16.to_be_bytes().to_vec(); // SOC
     bytes.extend_from_slice(&seg(0xFF51, &siz));
     if ht {
-        // Part 15 only, one HT set per block, no `RGN`, no magnitude bound.
-        bytes.extend_from_slice(&seg(0xFF50, &[0, 2, 0, 0, 0, 0]));
+        // Part 15 only, one HT set per block, no `RGN`, and the loosest
+        // magnitude bound (`B` = 74).
+        bytes.extend_from_slice(&seg(0xFF50, &[0, 2, 0, 0, 0, 0x1F]));
     }
     bytes.extend_from_slice(&seg(0xFF52, &cod));
     bytes.extend_from_slice(&seg(0xFF5C, &quant));

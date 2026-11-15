@@ -214,7 +214,8 @@ fn htbomb(size: u32) -> Vec<u8> {
     siz.extend_from_slice(&[0, 1, 7, 1, 1]);
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
-    // CAP: Part 15 only, one HT set per block and no magnitude bound.
+    // CAP: Part 15 only, one HT set per block, no `RGN`, and a
+    // magnitude bound of 12 bits (`Ccap15` low bits 4).
     cs.extend(seg(0xFF50, &[0, 2, 0, 0, 0, 4]));
     // COD: block style HT (0x40), 64x64 code-blocks, no wavelet level.
     cs.extend(seg(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0x40, 1]));
