@@ -903,6 +903,13 @@ fn s15_16(bytes: &[u8]) -> f64 {
 }
 
 impl SrgbPlan {
+    /// Whether the plan grows sub-sampled sYCC chroma to the luma grid. The
+    /// replication keys on the parity of the decoded area's origin, so a
+    /// window of it is not the crop of the whole image's.
+    pub(crate) fn replicates_chroma(&self) -> bool {
+        matches!(self, SrgbPlan::Sycc { layout, .. } if *layout != ChromaLayout::Full)
+    }
+
     /// Open `profile` and read the input profile for both forms, as planning
     /// does, but build no transform. The fuzz target for the ICC reader
     /// calls this for every input; building the transform costs far more.

@@ -192,6 +192,10 @@ pub(crate) struct Canvas {
     kept: Vec<bool>,
     /// The components the decode returns, in output order.
     order: Vec<usize>,
+    /// Whether the decoded area is a window smaller than the image, so a
+    /// tile may reach past it. Without one, a tile outside the canvas is a
+    /// fault.
+    windowed: bool,
 }
 
 impl Canvas {
@@ -251,6 +255,7 @@ impl Canvas {
             transforms,
             kept,
             order: order.to_vec(),
+            windowed: area.image_rect() != header.siz.image_rect(),
         })
     }
 
@@ -302,6 +307,11 @@ impl Canvas {
         // The tiles partition the image, so without a window each one falls
         // inside the canvas. A window keeps the part of a tile inside it.
         let clip = rect.intersect(canvas);
+        if !self.windowed && clip != rect {
+            return Err(Error::Inconsistent(format!(
+                "a tile's component {index} rectangle {rect:?} falls outside the canvas {canvas:?}",
+            )));
+        }
         if clip.is_empty() {
             return Ok(());
         }
@@ -1080,6 +1090,31 @@ mod tests {
                 matches!(err, Error::Inconsistent(_)),
                 "{area:?} got {err:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_tile_past_the_canvas_is_inconsistent_without_a_window() {
+        let h = header(4, 2, 8, false);
+        let mut canvas = Canvas::new(&h, 0).unwrap();
+        let err = canvas
+            .place(0, rect(2, 0, 6, 2), Samples::Reversible(vec![0; 8]))
+            .unwrap_err();
+        assert!(matches!(err, Error::Inconsistent(_)), "got {err:?}");
+        // Under a window the same tile is cut to it.
+        let mut area = h.siz.clone();
+        area.x_offset = 2;
+        let mut canvas = Canvas::over(&h, &area, 0, &[0]).unwrap();
+        canvas
+            .place(
+                0,
+                rect(0, 0, 4, 2),
+                Samples::Reversible(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+            )
+            .unwrap();
+        match canvas.into_planes().as_slice() {
+            [Samples::Reversible(plane)] => assert_eq!(plane, &[3, 4, 7, 8]),
+            other => panic!("expected one reversible plane, got {other:?}"),
         }
     }
 }

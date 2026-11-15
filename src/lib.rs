@@ -687,7 +687,9 @@ pub struct DecodeOptions {
     /// component's is the same of `ceil(x0 / dx)` and `ceil(x1 / dx)` for its
     /// sub-sampling `dx` ([`ComponentInfo::width`] gives the formula for the
     /// whole image). The samples are those of a whole decode at the same
-    /// position.
+    /// position. [`ColorOutput::Srgb`] from sYCC with sub-sampled chroma is
+    /// [`Error::Unsupported`] with a window, as the chroma replication
+    /// depends on where the decoded area starts.
     ///
     /// Only the tiles the window reaches are decoded, so a small window of a
     /// large tiled image costs a few tiles. The packets of the other tiles
@@ -722,7 +724,7 @@ pub struct DecodeOptions {
     ///
     /// The result is the decode with [`window`](Self::window) set to the
     /// tile's rectangle on the reference grid: its size, its samples and its
-    /// failures. A tile index past the tile grid is [`Error::InvalidOptions`],
+    /// failures, the refusal of sRGB output from sub-sampled sYCC included. A tile index past the tile grid is [`Error::InvalidOptions`],
     /// and so is setting both this and [`window`](Self::window).
     pub tile: Option<u32>,
     /// Decode only these components, in this order: `Some(list)` returns one
@@ -747,7 +749,9 @@ pub struct DecodeOptions {
     ///
     /// An empty list, an index named twice, an index past SIZ's component
     /// count, and a list with [`ColorOutput::Srgb`] are
-    /// [`Error::InvalidOptions`].
+    /// [`Error::InvalidOptions`]. The last holds even on a gray codestream,
+    /// where sRGB output would pass the samples through, as it does for
+    /// [`raw_channels`](Self::raw_channels).
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, decode, decode_with};
@@ -863,6 +867,12 @@ pub struct DecodeOptions {
     /// tile-components is charged against the packet work bound, as are the
     /// packets after the end of the data, so a short input cannot ask for
     /// unbounded work.
+    ///
+    /// Strict or not, only the data a decode reads is checked. With a
+    /// [`window`](Self::window) or [`tile`](Self::tile), the tiles outside it
+    /// are not read, and with [`components`](Self::components) the code-blocks
+    /// of the components left out are not decoded, so damage there goes
+    /// unseen, as with `opj_decompress -t`.
     ///
     /// For a codestream as it streams in: a prefix that holds every packet of
     /// the resolutions a reduction keeps decodes at that reduction to the same
@@ -1365,6 +1375,16 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
                 options.resolution_reduction,
                 cap,
             )?;
+            // Chroma replication keys on the parity of the area's origin, so
+            // on part of the image it would not give the crop of the whole
+            // image's conversion.
+            if plan.replicates_chroma() && (options.window.is_some() || options.tile.is_some()) {
+                return Err(Error::Unsupported(
+                    "sRGB output from sub-sampled sYCC chroma under \
+                     `DecodeOptions::window` or `DecodeOptions::tile`"
+                        .into(),
+                ));
+            }
             // A converted image is sRGB (or gray) and carries no profile, as
             // OpenJPEG reports it.
             plan.describe(&mut metadata);

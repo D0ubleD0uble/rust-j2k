@@ -51,6 +51,7 @@ refusal under `ColorOutput::Srgb`).
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
 | [Some of the components, under the color transform](#some-of-the-components-under-the-color-transform) | applies the transform; OpenJPEG skips it under `-c` | 1 |
 | [A window and a tile together](#a-window-and-a-tile-together) | refuses; OpenJPEG ignores the window | 3 |
+| [sRGB from sub-sampled sYCC in a window](#srgb-from-sub-sampled-sycc-in-a-window) | refuses; OpenJPEG converts the window on its own | 3 |
 
 None of the box entries changes the samples.
 
@@ -1297,7 +1298,7 @@ and 7 of the Part 4 set carry an `rreq`.
 | - | - |
 | This decoder | decodes components 0, 1 and 2 together when `DecodeOptions::components` asks for any of them, applies the color transform, and returns the ones asked for: those components of the whole decode |
 | OpenJPEG 2.5.0 | skips the color transform whenever a component list is set, even `-c 0,1,2`, and returns the components before it (`opj_tcd_mct_decode`, `tcd.c:2054`: `if (l_tcp->mct == 0 \|\| p_tcd->used_component != NULL) return OPJ_TRUE;`) |
-| Standard | ISO/IEC 15444-1 G.2: the image's components 0, 1 and 2 are the output of the inverse transform, which needs all three of its inputs |
+| Standard | ISO/IEC 15444-1 G.2 (RCT) and G.3 (ICT): the image's components 0, 1 and 2 are the output of the inverse transform, which needs all three of its inputs |
 | Rule | 1 |
 | Tests and fixtures | `tests/decode_window.rs` on `tests/fixtures/window/tiled_53.j2k` and `tiled_97.j2k` |
 | Decided | 2026-11-14, #216 |
@@ -1322,3 +1323,20 @@ OpenJPEG's `-c` output.
 
 The two options ask for different areas, so the decode refuses the pair rather
 than drop one of them.
+
+## sRGB from sub-sampled sYCC in a window
+
+| | |
+| - | - |
+| This decoder | refuses `ColorOutput::Srgb` with `DecodeOptions::window` or `DecodeOptions::tile` when the sYCC chroma is sub-sampled (4:2:0 or 4:2:2), as `Unsupported` |
+| OpenJPEG 2.5.0 | `opj_decompress -d` or `-t` with sYCC output converts the decoded area alone: it replicates the chroma by the parity of the area's origin, so the result is not the crop of the whole image's conversion |
+| Standard | silent: the sYCC conversion and decode options are outside it |
+| Rule | 3 |
+| Tests and fixtures | `tests/decode_window.rs` (`srgb_from_sub_sampled_sycc_refuses_a_window`), `tests/fixtures/jp2_sycc_420_*.jp2`, `jp2_sycc_422_*.jp2` |
+| Decided | 2026-11-15, #216 |
+
+A window should hold the samples of the whole decode at the same place, and
+here neither OpenJPEG's answer nor a conversion keyed on the window gives
+them. Converting with the whole image's chroma phase would; until that is
+built, the decode refuses. sRGB output that does not replicate chroma (RGB,
+gray, sYCC at full resolution, ICC) works with a window.

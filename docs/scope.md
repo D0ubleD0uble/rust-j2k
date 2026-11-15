@@ -156,7 +156,9 @@ tile, and the window is cut from it. So a window inside one large tile costs
 that tile's decode, and the sample limit still counts the whole image. Under
 the color transform, asking for one of components 0, 1 and 2 decodes all
 three. On a JP2 file a component subset returns the codestream components as
-coded, without the palette or channel definitions. A layer cap still reads
+coded, without the palette or channel definitions. sRGB output from sYCC with
+sub-sampled chroma is refused with a window or a tile, as the chroma
+replication depends on where the decoded area starts. A layer cap still reads
 the packets of the later layers, so damage in them is still an error. A partial decode
 relaxes only missing data and leftover bytes: a damaged packet header or
 code-block is still an error. The limits and what they cost a valid file are

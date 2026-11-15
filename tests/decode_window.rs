@@ -28,8 +28,44 @@ fn read(name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-/// The image area of every fixture on the reference grid: 70 x 54 at (5, 4).
-const IMAGE: (u32, u32, u32, u32) = (5, 4, 75, 58);
+/// Where a fixture's image and tiles sit on the reference grid.
+struct Geometry {
+    /// The image area, `x0, y0, x1, y1`.
+    image: (u32, u32, u32, u32),
+    tile_origin: (u32, u32),
+    tile: (u32, u32),
+    /// Tiles across.
+    columns: u32,
+    /// Each component's sub-sampling.
+    sampling: [(u32, u32); 3],
+}
+
+/// `tiled_*`: 70 x 54 at (5, 4), 24 x 20 tiles from (3, 2).
+const TILED: Geometry = Geometry {
+    image: (5, 4, 75, 58),
+    tile_origin: (3, 2),
+    tile: (24, 20),
+    columns: 3,
+    sampling: [(1, 1); 3],
+};
+
+/// `sub_*`: 67 x 51 at (7, 5), 16 x 14 tiles from (2, 3), the components
+/// sampled 1x1, 2x2 and 3x2.
+const SUB: Geometry = Geometry {
+    image: (7, 5, 74, 56),
+    tile_origin: (2, 3),
+    tile: (16, 14),
+    columns: 5,
+    sampling: [(1, 1), (2, 2), (3, 2)],
+};
+
+fn geometry(name: &str) -> &'static Geometry {
+    if name.starts_with("sub_") {
+        &SUB
+    } else {
+        &TILED
+    }
+}
 
 /// One oracle line: the `opj_decompress` arguments with the spaces taken out,
 /// the output size and the samples' hash.
@@ -94,31 +130,47 @@ fn decode_ok(bytes: &[u8], options: &DecodeOptions, what: &str) -> Image {
 }
 
 /// The reference-grid area `options` asks for, cut to the image.
-fn area_of(options: &DecodeOptions) -> (u32, u32, u32, u32) {
-    let (x0, y0, x1, y1) = IMAGE;
+fn area_of(geo: &Geometry, options: &DecodeOptions) -> (u32, u32, u32, u32) {
+    let (x0, y0, x1, y1) = geo.image;
     if let Some(w) = options.window {
         return (w.x0.max(x0), w.y0.max(y0), w.x1.min(x1), w.y1.min(y1));
     }
     if let Some(t) = options.tile {
-        let (p, q) = (t % 3, t / 3);
+        let (p, q) = (t % geo.columns, t / geo.columns);
+        let ((tx, ty), (tw, th)) = (geo.tile_origin, geo.tile);
         return (
-            (3 + 24 * p).max(x0),
-            (2 + 20 * q).max(y0),
-            (3 + 24 * (p + 1)).min(x1),
-            (2 + 20 * (q + 1)).min(y1),
+            (tx + tw * p).max(x0),
+            (ty + th * q).max(y0),
+            (tx + tw * (p + 1)).min(x1),
+            (ty + th * (q + 1)).min(y1),
         );
     }
-    IMAGE
+    geo.image
 }
 
-/// The samples of `plane` (`width` wide, the whole image at reduction `r`)
-/// inside the area `options` asks for.
-fn crop(plane: &[i32], width: u32, options: &DecodeOptions) -> (u32, u32, Vec<i32>) {
+/// The image size `options` decodes to: the area at the reduction.
+fn size_of(geo: &Geometry, options: &DecodeOptions) -> (u32, u32) {
+    let up = |v: u32| v.div_ceil(1 << options.resolution_reduction);
+    let (x0, y0, x1, y1) = area_of(geo, options);
+    (up(x1) - up(x0), up(y1) - up(y0))
+}
+
+/// The samples of component `c`'s `plane` (`width` wide, the whole image at
+/// reduction `r`) inside the area `options` asks for: on the component's
+/// grid, from `ceil(x0 / dx)` to `ceil(x1 / dx)`, then reduced.
+fn crop(
+    geo: &Geometry,
+    c: usize,
+    plane: &[i32],
+    width: u32,
+    options: &DecodeOptions,
+) -> (u32, u32, Vec<i32>) {
     let r = options.resolution_reduction;
-    let up = |v: u32| v.div_ceil(1 << r);
-    let (x0, y0, x1, y1) = area_of(options);
-    let (ax0, ay0, ax1, ay1) = (up(x0), up(y0), up(x1), up(y1));
-    let (ox, oy) = (up(IMAGE.0), up(IMAGE.1));
+    let (dx, dy) = geo.sampling[c];
+    let at = |v: u32, d: u32| v.div_ceil(d).div_ceil(1 << r);
+    let (x0, y0, x1, y1) = area_of(geo, options);
+    let (ax0, ay0, ax1, ay1) = (at(x0, dx), at(y0, dy), at(x1, dx), at(y1, dy));
+    let (ox, oy) = (at(geo.image.0, dx), at(geo.image.1, dy));
     let mut out = Vec::new();
     for y in ay0..ay1 {
         for x in ax0..ax1 {
@@ -140,17 +192,23 @@ fn picked(options: &DecodeOptions) -> Vec<usize> {
 /// windows off the tile grid, at the image's edges, clipped, at a reduction,
 /// single tiles, and component subsets with and without the color
 /// transform. Under the transform the oracle is the whole decode's
-/// components, since OpenJPEG's `-c` skips the transform.
+/// components, since OpenJPEG's `-c` skips the transform. `sub_53` has
+/// sub-sampled components and its image and tiles off the grid's origin.
 #[test]
 fn the_53_cases_match_openjpeg_bit_exactly() {
-    for name in ["tiled_53", "tiled_53_nomct"] {
+    for (name, count) in [("tiled_53", 18), ("tiled_53_nomct", 18), ("sub_53", 17)] {
         let bytes = read(&format!("{name}.j2k"));
         let all = cases(name);
-        assert_eq!(all.len(), 18, "{name}");
+        assert_eq!(all.len(), count, "{name}");
         for case in all {
             let what = format!("{name} {}", case.args);
             let image = decode_ok(&bytes, &case.options, &what);
-            assert_eq!((image.width, image.height), case.size, "{what}");
+            assert_eq!(
+                (image.width, image.height),
+                size_of(geometry(name), &case.options),
+                "{what}"
+            );
+            // The size OpenJPEG gives is its first component's.
             let first = &image.components[0];
             assert_eq!((first.width, first.height), case.size, "{what}");
             assert_eq!(
@@ -168,24 +226,36 @@ fn the_53_cases_match_openjpeg_bit_exactly() {
 /// is.
 #[test]
 fn the_97_cases_match_openjpeg_within_one() {
-    let bytes = read("tiled_97.j2k");
-    for case in cases("tiled_97") {
-        let what = format!("tiled_97 {}", case.args);
-        let image = decode_ok(&bytes, &case.options, &what);
-        assert_eq!((image.width, image.height), case.size, "{what}");
-        let r = case.options.resolution_reduction;
-        for (component, &c) in image.components.iter().zip(&picked(&case.options)) {
-            let whole = parse_pgx(&read(&format!("tiled_97_r{r}_{c}.pgx"))).unwrap();
-            let (w, h, expected) = crop(&whole.samples, whole.width, &case.options);
-            assert_eq!((component.width, component.height), (w, h), "{what}");
-            let worst = component
-                .samples
-                .iter()
-                .zip(&expected)
-                .map(|(a, b)| (a - b).abs())
-                .max()
-                .unwrap();
-            assert!(worst <= 1, "{what}: component {c} differs by {worst}");
+    for name in ["tiled_97", "sub_97"] {
+        let geo = geometry(name);
+        let bytes = read(&format!("{name}.j2k"));
+        for case in cases(name) {
+            let what = format!("{name} {}", case.args);
+            let image = decode_ok(&bytes, &case.options, &what);
+            assert_eq!(
+                (image.width, image.height),
+                size_of(geo, &case.options),
+                "{what}"
+            );
+            assert_eq!(
+                (image.components[0].width, image.components[0].height),
+                case.size,
+                "{what}"
+            );
+            let r = case.options.resolution_reduction;
+            for (component, &c) in image.components.iter().zip(&picked(&case.options)) {
+                let whole = parse_pgx(&read(&format!("{name}_r{r}_{c}.pgx"))).unwrap();
+                let (w, h, expected) = crop(geo, c, &whole.samples, whole.width, &case.options);
+                assert_eq!((component.width, component.height), (w, h), "{what}");
+                let worst = component
+                    .samples
+                    .iter()
+                    .zip(&expected)
+                    .map(|(a, b)| (a - b).abs())
+                    .max()
+                    .unwrap();
+                assert!(worst <= 1, "{what}: component {c} differs by {worst}");
+            }
         }
     }
 }
@@ -195,7 +265,8 @@ fn the_97_cases_match_openjpeg_within_one() {
 /// component subset change what is returned, never a sample.
 #[test]
 fn every_case_is_the_crop_of_the_whole_decode() {
-    for name in ["tiled_53", "tiled_53_nomct", "tiled_97"] {
+    for name in ["tiled_53", "tiled_53_nomct", "tiled_97", "sub_53", "sub_97"] {
+        let geo = geometry(name);
         let bytes = read(&format!("{name}.j2k"));
         let wholes: Vec<Image> = (0..3)
             .map(|r| {
@@ -212,7 +283,7 @@ fn every_case_is_the_crop_of_the_whole_decode() {
             let whole = &wholes[usize::from(case.options.resolution_reduction)];
             for (component, &c) in image.components.iter().zip(&picked(&case.options)) {
                 let plane = &whole.components[c];
-                let (w, h, expected) = crop(&plane.samples, plane.width, &case.options);
+                let (w, h, expected) = crop(geo, c, &plane.samples, plane.width, &case.options);
                 assert_eq!((component.width, component.height), (w, h), "{what}");
                 assert_eq!(component.samples, expected, "{what}: component {c}");
                 assert_eq!(component.bit_depth, plane.bit_depth, "{what}");
@@ -224,7 +295,7 @@ fn every_case_is_the_crop_of_the_whole_decode() {
 /// `read_header_with` describes the image each case decodes to.
 #[test]
 fn the_header_describes_each_case() {
-    for name in ["tiled_53", "tiled_97"] {
+    for name in ["tiled_53", "tiled_97", "sub_53", "sub_97"] {
         let bytes = read(&format!("{name}.j2k"));
         for case in cases(name) {
             let what = format!("{name} {}", case.args);
@@ -434,6 +505,61 @@ fn a_jp2_subset_is_the_raw_components() {
     let part = decode_ok(&bytes, &window, "window");
     assert_eq!((part.width, part.height), (8, 7));
     assert_eq!(part.jp2, whole.jp2);
+    for (p, w) in part.components.iter().zip(&whole.components) {
+        let expected: Vec<i32> = (2..9)
+            .flat_map(|y| (3..11).map(move |x| (x, y)))
+            .map(|(x, y)| w.sample(x, y).unwrap())
+            .collect();
+        assert_eq!(p.samples, expected);
+    }
+}
+
+/// sRGB output from sub-sampled sYCC replicates the chroma by the parity of
+/// the decoded area's origin, so part of the image would not be the crop of
+/// the whole image's conversion: a window or a tile with it is refused, from
+/// the header and from the decode alike. The samples as coded decode, and so
+/// does sRGB output that passes the channels through.
+#[test]
+fn srgb_from_sub_sampled_sycc_refuses_a_window() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let srgb = DecodeOptions::default().with_color(ColorOutput::Srgb);
+    for name in [
+        "jp2_sycc_420_even",
+        "jp2_sycc_420_odd",
+        "jp2_sycc_422_even",
+        "jp2_sycc_422_odd",
+    ] {
+        let bytes = std::fs::read(fixtures.join(format!("{name}.jp2"))).unwrap();
+        assert!(decode_with(&bytes, &srgb).is_ok(), "{name}");
+        let window = Some(Window::new(1, 1, 7, 5));
+        for options in [
+            srgb.clone().with_window(window),
+            srgb.clone().with_tile(Some(0)),
+        ] {
+            assert!(
+                matches!(decode_with(&bytes, &options), Err(Error::Unsupported(_))),
+                "{name} {options:?}"
+            );
+            assert!(
+                matches!(
+                    read_header_with(&bytes, &options),
+                    Err(Error::Unsupported(_))
+                ),
+                "{name} {options:?}"
+            );
+        }
+        let coded = DecodeOptions::default().with_window(window);
+        assert!(decode_with(&bytes, &coded).is_ok(), "{name}");
+    }
+
+    // RGB passes through sRGB output, so a window of it is the crop.
+    let bytes = std::fs::read(fixtures.join("jp2_cdef_rgba.jp2")).unwrap();
+    let whole = decode_ok(&bytes, &srgb, "whole");
+    let part = decode_ok(
+        &bytes,
+        &srgb.clone().with_window(Some(Window::new(3, 2, 11, 9))),
+        "window",
+    );
     for (p, w) in part.components.iter().zip(&whole.components) {
         let expected: Vec<i32> = (2..9)
             .flat_map(|y| (3..11).map(move |x| (x, y)))

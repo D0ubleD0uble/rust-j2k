@@ -12,6 +12,14 @@ The source, `rgb.ppm`, is 70 x 54, 8-bit, three components from a fixed LCG
 24 x 20 tiles from (3, 2), so the image has 3 x 3 tiles and the ones on its
 edges are partial. See CODESTREAMS for the three codestreams.
 
+The sub-sampled source, `sub.raw`, is 67 x 51, 8-bit, three components
+sampled 1x1, 2x2 and 3x2, from the same LCG (seed 2161): component c at
+(x, y) of its own grid is `(x(5 + 2c) + y(3 + c) + 60c) mod 256` plus noise
+from -8 to 8, clamped, each `ceil(67 / dx)` x `ceil(51 / dy)` as
+`opj_compress -F` reads it. It is coded with the image at (7, 5) and 16 x 14
+tiles from (2, 3), 5 x 4 tiles, as `sub_53` and `sub_97`, both with no color
+transform (SUB_CODESTREAMS, SUB_CASES).
+
 For each codestream it writes:
 
 - `<name>.sha256`: one line per case of CASES, `<case> <width>x<height>
@@ -19,7 +27,7 @@ For each codestream it writes:
   every component in order, each a little-endian `i32`. The case is the
   `opj_decompress` arguments with the spaces taken out.
 - `<name>_r<R>_<c>.pgx`: component c of the whole decode at `-r R`, for R
-  from 0 to 2, for the 9/7 codestream only, whose samples the test grades
+  from 0 to 2, for the 9/7 codestreams only, whose samples the test grades
   within a tolerance against the crop of these.
 
 It checks that every `-d` and `-t` output is the matching crop of the whole
@@ -55,6 +63,51 @@ BENCH = FIXTURES_ROOT / "bench" / "tiled_2048_gray.j2k"
 WIDTH, HEIGHT = 70, 54
 ORIGIN = (5, 4)
 GRID = ["-t", "24,20", "-T", "3,2", "-d", f"{ORIGIN[0]},{ORIGIN[1]}", "-n", "3"]
+
+
+class Geometry:
+    """Where a codestream's image and tiles sit on the reference grid."""
+
+    def __init__(self, origin, size, tile, tile_origin, sampling):
+        self.origin, self.size = origin, size
+        self.tile, self.tile_origin = tile, tile_origin
+        self.sampling = sampling
+        self.columns = math.ceil((origin[0] + size[0] - tile_origin[0]) / tile[0])
+
+
+TILED = Geometry(ORIGIN, (WIDTH, HEIGHT), (24, 20), (3, 2), [(1, 1)] * 3)
+
+SUB_WIDTH, SUB_HEIGHT = 67, 51
+SUB_SAMPLING = [(1, 1), (2, 2), (3, 2)]
+SUB = Geometry((7, 5), (SUB_WIDTH, SUB_HEIGHT), (16, 14), (2, 3), SUB_SAMPLING)
+SUB_GRID = ["-F", f"{SUB_WIDTH},{SUB_HEIGHT},3,8,u@1x1:2x2:3x2", "-t", "16,14", "-T", "2,3",
+            "-d", "7,5", "-n", "3", "-mct", "0"]
+SUB_CODESTREAMS = {
+    "sub_53": SUB_GRID,
+    "sub_97": SUB_GRID + ["-I"],
+}
+
+# Windows at odd and even bounds, so each sub-sampled component's first and
+# last samples move; tiles on the edges and inside; and component subsets.
+SUB_CASES = [
+    ["-d", "10,8,40,30"],
+    ["-d", "11,9,41,31"],
+    ["-d", "11,9,41,31", "-r", "1"],
+    ["-d", "13,7,52,44", "-r", "2"],
+    ["-d", "0,0,20,17"],
+    ["-d", "50,40,74,56"],
+    ["-d", "60,45,200,200", "-r", "1"],
+    ["-d", "34,17,50,31"],
+    ["-d", "35,20,38,22"],
+    ["-t", "0"],
+    ["-t", "7"],
+    ["-t", "19"],
+    ["-t", "12", "-r", "1"],
+    ["-c", "2,0"],
+    ["-c", "1"],
+    ["-c", "2", "-d", "11,9,41,31"],
+    ["-c", "1,2", "-t", "8", "-r", "1"],
+]
 
 # name -> (opj_compress arguments, color transform)
 CODESTREAMS = {
@@ -116,6 +169,17 @@ def rgb_ppm() -> bytes:
     return b"P6\n%d %d\n255\n" % (WIDTH, HEIGHT) + bytes(px)
 
 
+def sub_raw() -> bytes:
+    noise = lcg(2161)
+    out = bytearray()
+    for c, (dx, dy) in enumerate(SUB_SAMPLING):
+        for y in range(math.ceil(SUB_HEIGHT / dy)):
+            for x in range(math.ceil(SUB_WIDTH / dx)):
+                v = (x * (5 + 2 * c) + y * (3 + c) + 60 * c) % 256 + next(noise) % 17 - 8
+                out.append(max(0, min(255, v)))
+    return bytes(out)
+
+
 def run(*argv: str) -> None:
     result = subprocess.run(argv, capture_output=True, text=True)
     if result.returncode != 0:
@@ -157,29 +221,33 @@ def option(args: list[str], flag: str) -> str | None:
     return args[args.index(flag) + 1] if flag in args else None
 
 
-def area(args: list[str]) -> tuple[int, int, int, int]:
+def area(geo: Geometry, args: list[str]) -> tuple[int, int, int, int]:
     """The reference-grid area a case returns, clipped to the image."""
-    x0, y0 = ORIGIN
-    x1, y1 = x0 + WIDTH, y0 + HEIGHT
+    x0, y0 = geo.origin
+    x1, y1 = x0 + geo.size[0], y0 + geo.size[1]
     if (d := option(args, "-d")) is not None:
         a, b, c, e = map(int, d.split(","))
         return max(a, x0), max(b, y0), min(c, x1), min(e, y1)
     if (t := option(args, "-t")) is not None:
         t = int(t)
-        p, q = t % 3, t // 3
-        return (max(3 + 24 * p, x0), max(2 + 20 * q, y0),
-                min(3 + 24 * (p + 1), x1), min(2 + 20 * (q + 1), y1))
+        p, q = t % geo.columns, t // geo.columns
+        (tx, ty), (tw, th) = geo.tile_origin, geo.tile
+        return (max(tx + tw * p, x0), max(ty + th * q, y0),
+                min(tx + tw * (p + 1), x1), min(ty + th * (q + 1), y1))
     return x0, y0, x1, y1
 
 
-def crop(whole, args: list[str]) -> list[tuple[int, int, list[int]]]:
-    """The part of the whole decode at the case's reduction that the case returns."""
+def crop(geo: Geometry, whole, args: list[str]) -> list[tuple[int, int, list[int]]]:
+    """The part of the whole decode at the case's reduction that the case returns:
+    each component's samples from ceil(x0 / dx) to ceil(x1 / dx), then reduced."""
     r = int(option(args, "-r") or 0)
     s = 1 << r
-    ax0, ay0, ax1, ay1 = (math.ceil(v / s) for v in area(args))
-    ox, oy = (math.ceil(v / s) for v in ORIGIN)
+    x0, y0, x1, y1 = area(geo, args)
     out = []
-    for w, _, samples in whole:
+    for (w, _, samples), (dx, dy) in zip(whole, geo.sampling):
+        at = lambda v, d: math.ceil(math.ceil(v / d) / s)
+        ax0, ay0, ax1, ay1 = at(x0, dx), at(y0, dy), at(x1, dx), at(y1, dy)
+        ox, oy = at(geo.origin[0], dx), at(geo.origin[1], dy)
         rows = [samples[(y - oy) * w + (x - ox)] for y in range(ay0, ay1) for x in range(ax0, ax1)]
         out.append((ax1 - ax0, ay1 - ay0, rows))
     return out
@@ -192,17 +260,22 @@ def main_fixtures() -> None:
     (DIR / "rgb.ppm").write_bytes(rgb_ppm())
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        for name, (args, mct) in CODESTREAMS.items():
+        (DIR / "sub.raw").write_bytes(sub_raw())
+        streams = [(name, "rgb.ppm", args, mct, TILED, CASES)
+                   for name, (args, mct) in CODESTREAMS.items()]
+        streams += [(name, "sub.raw", args, False, SUB, SUB_CASES)
+                    for name, args in SUB_CODESTREAMS.items()]
+        for name, source, args, mct, geo, cases in streams:
             j2k = DIR / f"{name}.j2k"
-            run("opj_compress", "-i", str(DIR / "rgb.ppm"), "-o", str(j2k), *args)
+            run("opj_compress", "-i", str(DIR / source), "-o", str(j2k), *args)
             wholes = {r: decode(j2k, tmp, ["-r", str(r)]) for r in range(3)}
             lines = []
-            for case in CASES:
+            for case in cases:
                 got = decode(j2k, tmp, case)
                 r = int(option(case, "-r") or 0)
                 comps = option(case, "-c")
                 picked = [int(c) for c in comps.split(",")] if comps else [0, 1, 2]
-                expected = [crop(wholes[r], case)[c] for c in picked]
+                expected = [crop(geo, wholes[r], case)[c] for c in picked]
                 if comps and mct:
                     if got == expected:
                         sys.exit(f"{name} {case}: -c gives the whole decode's components; "
@@ -213,7 +286,7 @@ def main_fixtures() -> None:
                 w, h, _ = got[0]
                 lines.append(f"{''.join(case)} {w}x{h} {sample_hash(got)}")
             (DIR / f"{name}.sha256").write_text("\n".join(lines) + "\n")
-            if name == "tiled_97":
+            if name.endswith("_97"):
                 for r in range(3):
                     run("opj_decompress", "-i", str(j2k), "-o", str(tmp / "whole.pgx"),
                         "-r", str(r))
