@@ -46,6 +46,7 @@ refusal under `ColorOutput::Srgb`).
 | [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps and packed-header overruns handled differently | 1, 3 |
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
+| [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes; OpenJPEG refuses | 1 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
@@ -651,6 +652,13 @@ OpenJPEG 2.5.0 decodes an HT codestream with its `CAP` removed, with `Rsiz`
 bit 14 cleared, or both, to the same samples as the file as made (measured on
 `ds0_ht_01_b11` and `ds1_ht_07_b11`). This decoder matches that (rule 2).
 
+Two `CAP` fields bound what follows, and this decoder holds the codestream to
+them as `Codestream`. `Ccap15` bit 12 clear says no `RGN` marker is present
+(T.814 A.3.4), so an `RGN` in the main header, before or after the `CAP`, or in
+a tile-part header is refused. Bits 0 to 4 give the magnitude bound `B` (A.3.7),
+and an HT cleanup magnitude at or past `2^B` (or the per-level bound 8.7.3 gives
+an irreversible subband) is refused. OpenJPEG decodes on in both cases.
+
 ### HT cleanup segments
 
 Four faults in an HT cleanup segment are refused as `Codestream` where
@@ -1049,6 +1057,29 @@ bit-planes as placeholder passes, which carry no bytes (B.1). OpenJPEG's
 `opj_t2_read_packet_header` (`t2.c`) and `opj_t1_ht_decode_cblk` (`ht_dec.c`)
 do not handle them. This decoder reads them as B.3 says and matches the Part 4
 references on those files.
+
+## Region of interest on HT code-blocks
+
+| | |
+| - | - |
+| This decoder | decodes an `RGN` maxshift on HT code-blocks |
+| OpenJPEG 2.5.0 | refuses the block ("We do not support ROI in decoding HT codeblocks", `ht_dec.c`) |
+| Standard | T.814 7.6 and Annex H of ISO/IEC 15444-1 |
+| Rule | 1 |
+| Tests and fixtures | `an_ht_maxshift_block_decodes_by_hand` in `src/tier1/ht/tests.rs`; `tests/conformance_ht.rs` on `ds0_ht_03_b11`, `ds0_ht_03_b14`, `ds0_ht_06_b11`, `ds0_ht_06_b15`, `ds0_ht_06_b18`, `ds0_ht_13_b11`, `ds0_ht_15_b11` and `ds0_ht_15_b14` |
+| Decided | #343 |
+
+T.814 7.6 gives an HT block under a maxshift of `s` the `Mb + s` bit-planes of
+H-3, and the zero bit-planes count down from there. After the cleanup and
+refinement passes, this decoder undoes the shift exactly as it does on an EBCOT
+block, with OpenJPEG's threshold (`t1.c`). So an HT transcode of a Part 1 ROI
+codestream decodes to the same samples as its source. The eight Part 4
+references above grade within their compliance class.
+
+The same blocks bring two checks OpenJPEG does not make, since it reads no
+field of `CAP`; see [CAP and CPF](#cap-and-cpf). A block of more than 30
+bit-planes, `Mb + s` counted together, is `Error::Limit`, the bound OpenJPEG
+applies to `Mb` on an HT block.
 
 ## Set stuffing bits in the HT VLC and MagRef streams
 
