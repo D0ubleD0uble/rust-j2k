@@ -20,9 +20,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   files they decode: bit for bit on the reversible files, and within the
   conformance bounds on the irreversible ones. Neither decodes the
   multi-layer files with placeholder passes, so those are graded against
-  the ISO/IEC 15444-4 reference images alone. A mixed-mode code-block
-  style, more than one HT set per code-block, and region of interest on an
-  HT code-block are `Error::Unsupported`.
+  the ISO/IEC 15444-4 reference images alone. Region of interest decodes on
+  HT code-blocks as on Part 1 ones. An `RGN` marker in a codestream whose
+  `CAP` says it has none, and an HT magnitude past the bound `CAP` signals,
+  are `Error::Codestream`. A mixed-mode code-block style and more than one HT
+  set per code-block are `Error::Unsupported`.
 - `Error::Incomplete`: the input ends before the codestream's main header is
   whole, that is, before its first `SOT` marker is complete. It begins at the
   empty input and, in a JP2 file, covers the signature box, the top-level

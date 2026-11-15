@@ -677,6 +677,24 @@ impl Ccap15 {
     pub fn multiht(self) -> bool {
         self.0 & 0x2000 != 0
     }
+
+    /// Bit 12: `RGN` markers may be present (A.3.4). When it is 0 the
+    /// codestream holds none.
+    pub fn rgn(self) -> bool {
+        self.0 & 0x1000 != 0
+    }
+
+    /// The magnitude bound `B` that bits 0-4 signal (A.3.7). Every HT cleanup
+    /// magnitude is below `2^B`, or, in an irreversible subband, below a
+    /// bound that also depends on the subband's decomposition level (8.7.3).
+    pub fn magnitude_bound(self) -> u32 {
+        match u32::from(self.0 & 0x1F) {
+            0 => 8,
+            p @ 1..=19 => p + 8,
+            p @ 20..=30 => 4 * (p - 19) + 27,
+            _ => 74,
+        }
+    }
 }
 
 /// `CPF`: the corresponding profile marker (ISO/IEC 15444-15 A.6), kept as

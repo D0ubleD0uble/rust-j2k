@@ -38,10 +38,15 @@ const IN_CLASS: &[&str] = &[
     "ds0_ht_01_b11",
     "ds0_ht_02_b11",
     "ds0_ht_02_b12",
+    "ds0_ht_03_b11",
+    "ds0_ht_03_b14",
     "ds0_ht_04_b11",
     "ds0_ht_04_b12",
     "ds0_ht_05_b11",
     "ds0_ht_05_b12",
+    "ds0_ht_06_b11",
+    "ds0_ht_06_b15",
+    "ds0_ht_06_b18",
     "ds0_ht_07_b11",
     "ds0_ht_07_b15",
     "ds0_ht_07_b16",
@@ -52,7 +57,10 @@ const IN_CLASS: &[&str] = &[
     "ds0_ht_10_b11",
     "ds0_ht_11_b10",
     "ds0_ht_12_b11",
+    "ds0_ht_13_b11",
     "ds0_ht_14_b11",
+    "ds0_ht_15_b11",
+    "ds0_ht_15_b14",
     "ds0_ht_16_b11",
     "ds1_ht_01_b11",
     "ds1_ht_01_b12",
@@ -186,18 +194,13 @@ fn grades_the_ht_set_by_compliance_class() {
 /// The refusal of a MIXED code-block style.
 const MIXED: &str = "code-block style (HTJ2K mixed-mode block coding)";
 
-/// The refusal of a region of interest on an HT code-block.
-const ROI: &str = "region of interest on an HT code-block";
-
 /// Why a codestream with `ht` signaling is not yet decoded: MIXED in its
-/// main header, then `RGN` on its HT blocks. Every other one decodes.
+/// main header. Every other one decodes.
 fn refusal(ht: &HtSignaling) -> &'static str {
     if ht.coder_set == "MIXED" {
         MIXED
-    } else if ht.rgn {
-        ROI
     } else {
-        panic!("an HTONLY codestream without RGN is refused")
+        panic!("an HTONLY codestream is refused")
     }
 }
 
@@ -214,22 +217,21 @@ fn codestream_refusals(manifest: &HtManifest) -> impl Fn(&str) -> &'static str +
     }
 }
 
-/// An entry is in `in_class` exactly when it is HTONLY, no `RGN` marker
-/// applies to its blocks, and each of its code-blocks holds one HT set, by
-/// the Tier-2 walk's pass counts: the HT decoder reads one HT set, and no
-/// ROI on an HT block. So the list is the walk's, not a guess.
+/// An entry is in `in_class` exactly when it is HTONLY and each of its
+/// code-blocks holds one HT set, by the Tier-2 walk's pass counts: the HT
+/// decoder reads one HT set, with or without `RGN`. So the list is the
+/// walk's, not a guess.
 fn in_class_iff_decodable<'a>(
     entries: impl Iterator<Item = (&'a str, &'a HtSignaling, &'a Passes)>,
     in_class: &[&str],
 ) {
     for (name, ht, passes) in entries {
-        let decodable = ht.coder_set == "HTONLY"
-            && !ht.rgn
-            && passes.walked.as_ref().is_some_and(|w| w.one_ht_set());
+        let decodable =
+            ht.coder_set == "HTONLY" && passes.walked.as_ref().is_some_and(|w| w.one_ht_set());
         assert_eq!(
             in_class.contains(&name),
             decodable,
-            "{name}: in the list is not the same as HTONLY, without RGN, one HT set"
+            "{name}: in the list is not the same as HTONLY, one HT set"
         );
     }
 }
@@ -1150,6 +1152,10 @@ fn ht_refinement_matches_kakadu_stats() {
             let Some((&pae, &mse)) = k.pae.get(c).zip(k.mse.get(c)) else {
                 break;
             };
+            // Kakadu quotes 4-bit components at 8 bits.
+            let d = e.features.precision[c];
+            let at = f64::from(k.depth.unwrap_or(d)) - f64::from(d);
+            let (pae, mse) = (pae / 2f64.powf(at), mse / 4f64.powf(at));
             let diffs = || a.samples.iter().zip(&b.samples).map(|(p, q)| p - q);
             let ours_pae = diffs().map(i32::abs).max().unwrap_or(0);
             let ours_mse =
@@ -1166,5 +1172,5 @@ fn ht_refinement_matches_kakadu_stats() {
             refined += 1;
         }
     }
-    assert_eq!(refined, 13, "files with refinement passes graded");
+    assert_eq!(refined, 17, "files with refinement passes graded");
 }

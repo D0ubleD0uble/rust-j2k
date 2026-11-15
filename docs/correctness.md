@@ -194,10 +194,10 @@ codestream each was transcoded from, within the T.803 Annex C bounds (the Part
 the highest-bound JPH file of each set is graded as its `fileN.jp2` is. Two
 more ratchets grade against OpenJPEG's decode: of the HT codestreams it
 decodes, and of 16 OpenJPH test codestreams (`tests/fixtures/openjph/`). All
-30 HT-only codestreams without `RGN` are in class, the 10 that OpenJPEG
-decodes agree with it, and all 16 OpenJPH files are in class. The 11 others,
-the three mixed-mode files and eight more with `RGN`, are refused, and a test
-pins each refusal to its reason. Three derived files are also checked against
+38 HT-only codestreams are in class, eight of them with `RGN`, the 10 that
+OpenJPEG decodes agree with it, and all 16 OpenJPH files are in class. The
+three mixed-mode files are refused, and a test pins each refusal to its
+reason. Three derived files are also checked against
 their source: `ds1_ht_04_b9`, `ds1_ht_05_b11` and `ds1_ht_06_b11` must decode
 exactly as `p1_04`, `p1_05` and `p1_06` (T.803 C.1.10, C.1.11). Each
 transcode's error against its source must also match the PAE and MSE Kakadu

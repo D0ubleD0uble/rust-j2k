@@ -24,13 +24,15 @@
 mod tests;
 mod vlc_tables;
 
+use super::ebcot::passes::undo_maxshift;
 use crate::tier2::CodeBlock;
 use crate::{Error, Result};
 use vlc_tables::{CXT_VLC_TABLE_0, CXT_VLC_TABLE_1};
 
-/// The most magnitude bit-planes a subband can have for the double-scale
+/// The most magnitude bit-planes a code-block can have for the double-scale
 /// reconstruction to fit `i32`, the bound OpenJPEG's `opj_t1_ht_decode_cblk`
-/// applies to `Mb`.
+/// applies to `Mb`. Under a maxshift it applies to the raised count
+/// `Mb + s`.
 const MAX_BIT_PLANES: u32 = 30;
 
 /// The largest suffix length `Scup` (7.1.1).
@@ -46,33 +48,47 @@ fn malformed(what: &str) -> Error {
     Error::Codestream(format!("HT code-block {what}"))
 }
 
+/// The tile-component's parameters an HT code-block decode needs beyond the
+/// block and its subband's `Mb`.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Params {
+    /// `SPrgn`, the region-of-interest maxshift `s` (ISO/IEC 15444-1
+    /// Annex H); 0 without one.
+    pub roi_shift: u8,
+    /// The vertically causal context flag, which keeps the SigProp pass from
+    /// looking at the next stripe (7.4).
+    pub causal: bool,
+    /// The bound on the cleanup magnitudes that `CAP` signals for this
+    /// subband (A.3.7, 8.7.3), as a bit count: every `mu` is below
+    /// `2^bits`. `None` without a bound.
+    pub bound_bits: Option<u32>,
+}
+
 /// Decode one HT code-block into its coefficients, row-major over the block,
 /// at twice their weight like the Part 1 coder.
 ///
-/// `numbps` is the subband's magnitude bit-plane count `Mb`. The cleanup
-/// pass codes the top `P + 1` of the `Mb` magnitude bit-planes, `P` being
-/// the block's zero bit-planes (`S_blk`, 7.6), so a significant sample of
-/// magnitude `mu` reconstructs to `(2 mu + 1) << (Mb - P - 1)`: `mu` at its
-/// bit-planes, plus half of the first plane not coded. The SigProp and
-/// MagRef passes code one plane more for the samples they reach, which then
-/// reconstruct with half of the plane below that. OpenJPEG's
-/// `opj_t1_ht_decode_cblk` reconstructs the same way.
+/// `numbps` is the subband's magnitude bit-plane count `Mb`. A maxshift
+/// `s` raises the block's count to `Mb + s` (Annex H, H-3), and the decode
+/// runs on that count. The cleanup pass codes the top `P + 1` of those
+/// magnitude bit-planes, `P` being the block's zero bit-planes (`S_blk`,
+/// 7.6), so a significant sample of magnitude `mu` reconstructs to
+/// `(2 mu + 1) << (Mb + s - P - 1)`: `mu` at its bit-planes, plus half of
+/// the first plane not coded. The SigProp and MagRef passes code one plane
+/// more for the samples they reach, which then reconstruct with half of the
+/// plane below that. OpenJPEG's `opj_t1_ht_decode_cblk` reconstructs the
+/// same way.
 ///
-/// `causal` is the vertically causal context flag, which keeps the SigProp
-/// pass from looking at the next stripe (7.4).
-pub(super) fn decode(
-    block: &CodeBlock<'_>,
-    numbps: u32,
-    roi_shift: u8,
-    causal: bool,
-) -> Result<Vec<i32>> {
+/// Last, the maxshift is undone (7.6 hands the samples to Annex H) exactly
+/// as the Part 1 coder undoes it, with OpenJPEG's threshold: a magnitude at
+/// or above `2^s` at double scale is taken for region and comes down `s`
+/// planes; one below is background and stays. That threshold is one plane
+/// below H.1's, so a background coefficient with bit `s - 1` set comes out
+/// as 0 where H.1 keeps it (see `undo_maxshift`).
+pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Result<Vec<i32>> {
     let (width, height) = (block.width, block.height);
     let mut coeffs = vec![0i32; width * height];
-    if roi_shift != 0 {
-        return Err(Error::Unsupported(
-            "region of interest on an HT code-block is outside the decoded subset".into(),
-        ));
-    }
+    // `M'b = Mb + s` (H-3): the zero bit-planes count down from it.
+    let planes = numbps + u32::from(params.roi_shift);
     // More passes would be a second HT set, which only a MULTIHT codestream
     // holds (8.3), and the `CAP` parse refuses those. So a count past one set
     // is a damaged one. OpenJPEG refuses it too.
@@ -82,21 +98,29 @@ pub(super) fn decode(
             block.num_passes
         )));
     }
-    if block.num_passes == 0 || numbps == 0 {
+    if block.num_passes == 0 || planes == 0 {
         return Ok(coeffs);
     }
-    if numbps > MAX_BIT_PLANES {
-        return Err(Error::Limit(format!(
-            "HT code-block in a subband of {numbps} bit-planes, over the \
-             {MAX_BIT_PLANES}-plane limit"
-        )));
+    if planes > MAX_BIT_PLANES {
+        return Err(Error::Limit(if params.roi_shift == 0 {
+            format!(
+                "HT code-block in a subband of {numbps} bit-planes, over the \
+                 {MAX_BIT_PLANES}-plane limit"
+            )
+        } else {
+            format!(
+                "HT code-block of {planes} bit-planes (a subband of {numbps} and a \
+                 maxshift of {}), over the {MAX_BIT_PLANES}-plane limit",
+                params.roi_shift
+            )
+        }));
     }
     let zbp = block.zero_bit_planes;
     // At least one bit-plane must be left to code; OpenJPEG refuses the
     // same blocks.
-    if zbp >= numbps {
+    if zbp >= planes {
         return Err(malformed(&format!(
-            "has {zbp} zero bit-planes in a subband of {numbps}, leaving none to code"
+            "has {zbp} zero bit-planes in a block of {planes}, leaving none to code"
         )));
     }
     let data = block
@@ -120,7 +144,7 @@ pub(super) fn decode(
         data: &data,
         pcup: lcup - scup,
     };
-    let shift = numbps - zbp - 1;
+    let shift = planes - zbp - 1;
     Cleanup {
         seg,
         magsgn: MagSgnReader::new(),
@@ -133,38 +157,46 @@ pub(super) fn decode(
         // length of `2 mu - 1`, is at most `P + 2`. OpenJPEG has the same
         // bound.
         max_u: zbp + 2,
+        // A bound of 64 bits or more holds of every `u64`.
+        bound_bits: params.bound_bits.filter(|&bits| bits < u64::BITS),
         shift,
     }
     .run(&mut coeffs)?;
-    let z_blk = z_blk(block, numbps);
+    let z_blk = z_blk(block, planes);
     if z_blk > 1 {
         let refinement = block.segments.get(1).map(|s| s.bytes()).unwrap_or_default();
         Refinement {
             width,
             height,
-            causal,
+            causal: params.causal,
             shift,
         }
         .run(&refinement, z_blk == HT_SET_PASSES, &mut coeffs)?;
+    }
+    if params.roi_shift != 0 {
+        for c in &mut coeffs {
+            let magnitude = undo_maxshift(c.abs(), params.roi_shift);
+            *c = if *c < 0 { -magnitude } else { magnitude };
+        }
     }
     Ok(coeffs)
 }
 
 /// The coding passes [`decode`] runs on `block` in a subband of `numbps`
-/// magnitude bit-planes. See [`z_blk`].
-pub(super) fn passes_run(block: &CodeBlock<'_>, numbps: u32) -> u64 {
-    u64::from(z_blk(block, numbps))
+/// magnitude bit-planes, under a maxshift of `roi_shift`. See [`z_blk`].
+pub(super) fn passes_run(block: &CodeBlock<'_>, numbps: u32, roi_shift: u8) -> u64 {
+    u64::from(z_blk(block, numbps + u32::from(roi_shift)))
 }
 
 /// The passes of `block` to decode: `Z_blk` (B.3), but only the cleanup pass
-/// where a refinement pass would code below the subband's last bit-plane.
+/// where a refinement pass would code below the block's last bit-plane.
 ///
 /// `Z_blk` is the block's passes, except that a refinement segment of zero
 /// length leaves the cleanup pass alone. A block whose cleanup pass already
-/// reaches the subband's last plane, `P = Mb - 1`, has no plane left to
-/// refine: a refinement pass would give it `Nb = Mb + 1` planes (7.6).
-/// OpenJPEG decodes its cleanup pass alone, with a warning, and so does this
-/// decoder.
+/// reaches the last of its `numbps` planes (`Mb`, or `Mb + s` under a
+/// maxshift), `P = numbps - 1`, has no plane left to refine: a refinement
+/// pass would give it `Nb = numbps + 1` planes (7.6). OpenJPEG decodes its
+/// cleanup pass alone, with a warning, and so does this decoder.
 fn z_blk(block: &CodeBlock<'_>, numbps: u32) -> u32 {
     let passes = block.num_passes.min(HT_SET_PASSES);
     let refined = block
@@ -477,6 +509,8 @@ struct Cleanup<'a> {
     qw: usize,
     /// The largest exponent bound `U_q` a quad may have.
     max_u: u32,
+    /// The `CAP` bound on `mu` as a bit count below 64, if there is one.
+    bound_bits: Option<u32>,
     /// The left shift from `2 mu + 1` to the double-scale coefficient.
     shift: u32,
 }
@@ -654,6 +688,13 @@ impl Cleanup<'_> {
             let m = bound - k;
             let v = self.magsgn.value(&self.seg, m)? | i << m;
             let mu = (v >> 1) + 1;
+            // `CAP` promises every `mu` of the codestream is below its bound
+            // (A.3.7).
+            if let Some(bits) = self.bound_bits.filter(|&bits| mu >> bits != 0) {
+                return Err(malformed(&format!(
+                    "cleanup magnitude {mu} is not below 2^{bits}, the bound `CAP` signals"
+                )));
+            }
             exps[4 * q + j] = 64 - (2 * mu - 1).leading_zeros();
             // Within the exponent bound, only a `mu` of `P + 2` bits, which
             // the block cannot code (7.6), overflows `i32`, and only at

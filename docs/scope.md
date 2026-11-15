@@ -199,7 +199,7 @@ codestreams too.
 | HT placeholder passes | Yes |
 | HT SigProp and MagRef passes | Yes |
 | Mixed-mode (HT and Part 1 code-blocks in one tile-component) | No (Phase 4) |
-| Region of interest on HT code-blocks | No |
+| Region of interest on HT code-blocks | Yes |
 
 ## Part 2: extensions and JPX (ISO/IEC 15444-2)
 
