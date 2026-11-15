@@ -30,7 +30,9 @@ block decodes from) and a refinement segment of the byte `0x00`. That is
 3.1e6 sample-passes, 4.7% of the bound, and about the most an HT file can ask
 for its bytes (see `docs/resource-bounds.md`). It decodes here and in
 `opj_decompress` 2.5.0 (4 ms) to a flat 128 (SHA-256 of the 8-bit samples
-`36ff3497…3534e`).
+`36ff3497…3534e`). The flat image is not a check that the blocks decode
+correctly: the work test shows the three passes are counted, and the HT
+conformance corpus shows the decode is right.
 
 ## Encoder output
 

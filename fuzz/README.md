@@ -33,7 +33,7 @@ fuzz/
   common/partial.rs             # the strict-off check decode_partial and tile_body share
   fuzz_targets/tile_body.rs     # a pinned valid header (geometry steered) around fuzzed tile-part bytes
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
-  fuzz_targets/ht_block.rs      # one HT code-block: shape to 4096 samples, passes, causal flag, segments
+  fuzz_targets/ht_block.rs      # one HT code-block: shape to 4096 samples (13 header bytes), passes, causal flag, segments
   fuzz_targets/mq.rs            # the raw MQ arithmetic decoder
   fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream, also decoded as sRGB
   fuzz_targets/header.rs        # rust_j2k::read_header_with, checked against decode_with
@@ -214,6 +214,17 @@ cargo +nightly fuzz run icc_srgb -- -dict=fuzz/icc.dict -max_total_time=300
 RUST_J2K_HT_SEED_DIR=fuzz/corpus/ht_block cargo test --lib ht_block_seeds
 cargo +nightly fuzz run ht_block -- -max_total_time=60 -max_len=8192 -rss_limit_mb=4096
 
+# `decode` and `decode_partial` seeded with small HT files: the OpenJPH
+# codestreams and the HT conformance codestreams under 6 KB. `tile_body` has
+# no HT seed: its header is pinned, and bit 7 of its first byte makes the
+# body's code-blocks HT.
+for t in decode decode_partial; do
+  mkdir -p fuzz/corpus/$t
+  cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/$t/
+  find tests/fixtures/conformance/ht/codestreams -size -6k -name '*.j2k' -exec cp {} fuzz/corpus/$t/ \;
+done
+cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
+
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
 cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
@@ -235,6 +246,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-13 | `decode_partial` after the review fixes (packed headers, `Image` equality) | the same corpus | 61 s, 6 042 runs; `nice`, one job | no crash, leak, or timeout |
 | 2026-11-15 | `ht_block` (new) | the code-blocks of six HT conformance codestreams (3466 seeds) | 61 s, 739 458 runs; `nice -n 19`, one job, `-max_len=8192`; the 1-minute load was 10.6 at the start | no crash, leak, or timeout |
 | 2026-11-15 | `decode` with the strict-off capped decode | `tests/fixtures/*.j2k` (49 seeds), `j2k.dict` | 61 s, 21 641 runs; `nice -n 19`, one job; the 1-minute load was 7.6 | no crash, leak, or timeout |
+| 2026-11-15 | `decode` with the strict-off capped decode checked against the strict one (`common/partial.rs`), and the HT seeds | the 49 fixtures, the OpenJPH codestreams and the HT conformance codestreams under 6 KB, and what earlier runs kept (1197 inputs), `j2k.dict` with `CPF` and the HT style byte | 61 s, 24 746 runs; `nice -n 19`, one job; the 1-minute load was 5.8 | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

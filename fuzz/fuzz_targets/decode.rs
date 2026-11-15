@@ -18,16 +18,20 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../common/partial.rs"]
+mod partial;
+
 fuzz_target!(|data: &[u8]| {
     let _ = rust_j2k::decode(data);
     let hash = fnv1a(data);
     if hash & 1 == 1 {
         let layers = 1 + ((hash >> 1) % 3) as u16;
         let options = rust_j2k::DecodeOptions::default().with_max_quality_layers(Some(layers));
-        let _ = rust_j2k::decode_with(data, &options);
-        // The same cap with `strict` off, where a block's last kept pass
-        // may be cut short by the cap (#358).
-        let _ = rust_j2k::decode_with(data, &options.with_strict(false));
+        let strict = rust_j2k::decode_with(data, &options);
+        // The same cap with `strict` off, where a block's last kept pass may
+        // be cut short by the cap (#358). That bug gave a wrong image, not a
+        // panic, so the decode is checked against the strict one.
+        partial::check(data, &options, &strict);
     }
     if hash & 2 == 2 {
         let _ = rust_j2k::decode_with(data, &part(hash >> 8));

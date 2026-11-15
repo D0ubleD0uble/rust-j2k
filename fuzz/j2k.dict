@@ -14,6 +14,7 @@ eph="\xff\x92"
 
 # Fixed and functional marker segments.
 cap="\xff\x50"
+cpf="\xff\x59"
 siz="\xff\x51"
 cod="\xff\x52"
 coc="\xff\x53"
@@ -42,3 +43,6 @@ cbd="\xff\x78"
 # spliced buffer into a last tile-part in one mutation.
 sop_segment="\xff\x91\x00\x04\x00\x00"
 sot_segment="\xff\x90\x00\x0a\x00\x00\x00\x00\x00\x00\x00\x01"
+
+# Code-block style byte of a COD or COC: HT (0x40, ISO/IEC 15444-15 A.4).
+ht_style="\x40"

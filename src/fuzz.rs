@@ -82,9 +82,9 @@ pub fn tier1_block(data: &[u8]) {
 
 /// Decode one HT code-block whose shape, coding parameters and segments all
 /// come from `data`, straight into the HT coder, the way tier-1 hands it a
-/// block. The first 12 bytes steer; the rest are coded bytes.
+/// block. The first 13 bytes steer; the rest are coded bytes.
 ///
-/// - Bytes 0 to 2: the shape. Its width is 1 to 1024 and its height 1 to
+/// - Bytes 0 to 2 and 12: the shape. Its width is 1 to 1024 and its height 1 to
 ///   `min(1024, 4096 / width)`, so 1x1, 1x1024, 1024x4, 4x1024 and odd sizes
 ///   all occur, up to the 4096 samples a block holds. With flag bit 3 both
 ///   sides are 1 to 64 instead.
@@ -100,13 +100,14 @@ pub fn tier1_block(data: &[u8]) {
 ///   0 to 5000 when the segments are stretched, else cut to the bytes there
 ///   are.
 /// - Byte 11: the `CAP` bound, the chunk split and the `Scup` to write.
+/// - Byte 12: the high byte of the height (byte 2 is the low one).
 pub fn ht_block(data: &[u8]) {
     let _ = run_ht_block(data);
 }
 
-/// [`ht_block`], giving the samples it decoded, or `None` when `data` is too
+/// [`ht_block`], giving the block's shape and the samples it decoded, or `None` when `data` is too
 /// short to steer a block.
-fn run_ht_block(data: &[u8]) -> Option<crate::Result<usize>> {
+fn run_ht_block(data: &[u8]) -> Option<((usize, usize), crate::Result<usize>)> {
     let [
         w0,
         w1,
@@ -120,13 +121,14 @@ fn run_ht_block(data: &[u8]) -> Option<crate::Result<usize>> {
         r0,
         r1,
         extra,
+        h1,
         coded @ ..,
     ] = data
     else {
         return None;
     };
     let width = 1 + usize::from(u16::from_le_bytes([*w0, *w1]) % 1024);
-    let height = 1 + usize::from(*h) % (4096 / width).min(1024);
+    let height = 1 + usize::from(u16::from_le_bytes([*h, *h1])) % (4096 / width).min(1024);
     let (width, height) = if flags & 0x08 != 0 {
         (1 + usize::from(*w0 & 0x3F), 1 + usize::from(*h & 0x3F))
     } else {
@@ -213,7 +215,7 @@ fn run_ht_block(data: &[u8]) -> Option<crate::Result<usize>> {
     if let Ok(coefficients) = &decoded {
         assert_eq!(coefficients.len(), width * height);
     }
-    Some(decoded.map(|c| c.len()))
+    Some(((width, height), decoded.map(|c| c.len())))
 }
 
 /// Open `data` as an ICC profile and read it as a monochrome and as an RGB
@@ -243,6 +245,25 @@ mod tests {
             super::ht_block(sample);
             super::icc_profile(sample);
         }
+    }
+
+    /// The hook reaches the tall shapes the review of #360 and #367 asked for:
+    /// a height past 256 reads its second byte.
+    #[test]
+    fn ht_block_reaches_tall_shapes() {
+        let shape = |w: u16, h: u16| {
+            let mut data = vec![0u8; 13];
+            data[..2].copy_from_slice(&(w - 1).to_le_bytes());
+            data[2] = (h - 1) as u8;
+            data[12] = ((h - 1) >> 8) as u8;
+            super::run_ht_block(&data).unwrap().0
+        };
+        assert_eq!(shape(1, 1024), (1, 1024));
+        assert_eq!(shape(4, 1024), (4, 1024));
+        assert_eq!(shape(2, 1024), (2, 1024));
+        assert_eq!(shape(8, 512), (8, 512));
+        assert_eq!(shape(1024, 4), (1024, 4));
+        assert_eq!(shape(1, 1), (1, 1));
     }
 
     /// The HT conformance codestreams whose blocks seed the `ht_block` target.
@@ -295,8 +316,19 @@ mod tests {
                 seed.extend((cleanup.len() as u16).to_le_bytes());
                 seed.extend((refinement.len() as u16).to_le_bytes());
                 seed.push(0);
+                seed.push(((block.height - 1) >> 8) as u8);
                 seed.extend(&cleanup);
                 seed.extend(&refinement);
+                // The same bytes in the tall shapes the corpus lacks.
+                if seeds.len() % 64 == 0 {
+                    for (w, h) in [(1u16, 1024u16), (4, 1024), (2, 1024), (8, 512)] {
+                        let mut tall = seed.clone();
+                        tall[..2].copy_from_slice(&(w - 1).to_le_bytes());
+                        tall[2] = (h - 1) as u8;
+                        tall[12] = ((h - 1) >> 8) as u8;
+                        seeds.push(tall);
+                    }
+                }
                 seeds.push(seed);
             }
         }
@@ -313,9 +345,13 @@ mod tests {
         for name in HT_SEED_FILES {
             for (i, seed) in ht_seeds(name).iter().enumerate() {
                 let width = 1 + usize::from(u16::from_le_bytes([seed[0], seed[1]]));
-                let height = 1 + usize::from(seed[2]);
-                let decoded = super::run_ht_block(seed).expect("a full header");
-                assert_eq!(decoded.expect("a corpus block decodes"), width * height);
+                let height = 1 + usize::from(u16::from_le_bytes([seed[2], seed[12]]));
+                let (shape, decoded) = super::run_ht_block(seed).expect("a full header");
+                assert_eq!(shape, (width, height));
+                // The tall copies carry bytes made for another shape.
+                if height <= 256 && width * height <= 4096 && !(height == 512) {
+                    assert_eq!(decoded.expect("a corpus block decodes"), width * height);
+                }
                 total += 1;
                 refined += usize::from(seed[6] > 1);
                 if let Some(dir) = &dir {

@@ -299,9 +299,11 @@ fn the_work_counts_the_passes_an_ht_block_runs() {
 /// The committed HT bomb asks for about the most an HT file can for its
 /// bytes: all three passes over every sample, at about 5 bytes a block. It
 /// spends under a tenth of its bound, and so does any HT file: a block's
-/// work is at most 3 x 4096 sample-passes, and its packet header spends at
-/// least 7 bits on it, so no HT file asks for more than about 4700 a byte,
-/// against the bound's 32768 (see `docs/resource-bounds.md`).
+/// work is at most 3 x 4096 sample-passes, a pass that does work needs a
+/// cleanup segment of at least 2 bytes (a zero-length first contribution is
+/// placeholder passes only), and the packet header spends 7 to 14 bits on the
+/// block. So no HT file asks for more than about 2600 a byte, against the
+/// bound's 32768 (see `docs/resource-bounds.md`).
 #[test]
 fn the_ht_bomb_spends_a_small_share_of_the_tier1_bound() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

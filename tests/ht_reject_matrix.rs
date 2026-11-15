@@ -11,7 +11,8 @@
 //! The vectors are those the unit tests found by a seeded search over short
 //! segments, each the first to fail for its reason. Each is checked against
 //! the unit test of the same name, and a control row proves the builder
-//! writes a block that decodes. The refusals of the main header (`CAP`, `CPF`,
+//! writes a block that decodes. The CAP magnitude bound and the 4079 limit on `Scup` are rows too, the
+//! first with the smallest bound (8 bits). The refusals of the main header (`CAP`, `CPF`,
 //! MIXED) are in the matrix of `src/codestream/tests.rs`.
 
 use rust_j2k::{Error, decode};
@@ -75,6 +76,9 @@ struct Block<'a> {
     refinement: &'a [u8],
     /// A maxshift, which also signals `RGN` in `CAP`.
     roi_shift: Option<u8>,
+    /// `Ccap15` of the `CAP` marker, bit 12 (`RGN`) aside; its low five bits
+    /// are the magnitude bound `B`.
+    ccap: u16,
 }
 
 impl Default for Block<'_> {
@@ -88,6 +92,7 @@ impl Default for Block<'_> {
             cleanup: &[],
             refinement: &[],
             roi_shift: None,
+            ccap: 0x0004,
         }
     }
 }
@@ -160,11 +165,7 @@ fn ht_file(block: &Block<'_>) -> Vec<u8> {
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
     // CAP: Part 15 only, with the `RGN` bit (12) set under a maxshift.
-    let ccap: u16 = if block.roi_shift.is_some() {
-        0x1004
-    } else {
-        0x0004
-    };
+    let ccap: u16 = block.ccap | if block.roi_shift.is_some() { 0x1000 } else { 0 };
     cs.extend(seg(0xFF50, &[0, 2, 0, 0, (ccap >> 8) as u8, ccap as u8]));
     // COD: block style HT (0x40), 64x64 code-blocks, no wavelet level.
     cs.extend(seg(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0x40, 1]));
@@ -205,6 +206,10 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
     let mut long_cleanup = vec![0u8; 65533];
     long_cleanup.extend(ONE_SAMPLE);
     let long_refinement = vec![0u8; 2047];
+    // Lcup 4081 whose last two bytes give Scup = 16 * 0xFF + 0 = 4080.
+    let mut scup_4080 = vec![0u8; 4081];
+    scup_4080[4079] = 0x00;
+    scup_4080[4080] = 0xFF;
 
     let rows: Vec<(&str, Block<'_>, Want)> = vec![
         (
@@ -274,6 +279,14 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
             Want::Codestream("Scup = 1"),
         ),
         // Tier-1: the block's bit-planes.
+        (
+            "Scup of 4080, past the largest 4079",
+            Block {
+                cleanup: &scup_4080,
+                ..Block::default()
+            },
+            Want::Codestream("Scup = 4080"),
+        ),
         (
             "no bit-plane left after the zero bit-planes",
             Block {
@@ -380,6 +393,23 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
                 ..Block::default()
             },
             Want::Codestream("U_q = 62 exceeds"),
+        ),
+        (
+            "a cleanup magnitude at the bound `CAP` signals",
+            Block {
+                width: 2,
+                height: 2,
+                mb: 30,
+                zero_bit_planes: 25,
+                // `B` = 8, the smallest bound.
+                ccap: 0x0000,
+                cleanup: &[
+                    0x91, 0x74, 0x2E, 0x04, 0xD2, 0x69, 0xCF, 0x9E, 0xC7, 0x2C, 0x04, 0xEA, 0x81,
+                    0xF5, 0x00,
+                ],
+                ..Block::default()
+            },
+            Want::Codestream("is not below 2^8"),
         ),
         (
             "a magnitude past the coded bit-planes",
