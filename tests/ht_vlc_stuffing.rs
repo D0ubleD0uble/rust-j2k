@@ -100,32 +100,40 @@ fn a_set_stuffing_bit_after_a_mel_0xff_decodes_as_its_cleared_twin() {
     }
 }
 
+/// The positions of the bytes in a cleanup-only file that carry a VLC
+/// stuffing bit (7.1.4), in the order a decoder reads them. The cleanup
+/// segment ends just before EOC, and its last two bytes hold `Scup`. The VLC
+/// stream starts in the last byte but one and runs backward to `Pcup`.
+fn vlc_stuffing_bytes(name: &str, file: &[u8]) -> Vec<usize> {
+    let end = file.len() - 2;
+    assert_eq!(&file[end..], [0xFF, 0xD9], "{name}");
+    let scup = 16 * usize::from(file[end - 1]) + usize::from(file[end - 2] & 0x0F);
+    let mut stuffing = Vec::new();
+    if (file[end - 2] >> 4) & 7 == 7 {
+        stuffing.push(end - 2);
+    }
+    let mut last = file[end - 2];
+    for pos in (end - scup..end - 2).rev() {
+        if last > 0x8F && file[pos] & 0x7F == 0x7F {
+            stuffing.push(pos);
+        }
+        last = file[pos];
+    }
+    stuffing
+}
+
 /// The two files of a pair differ only in the top bit of the bytes that
-/// carry a VLC stuffing bit (7.1.4), each set in the `.set` file.
+/// carry a VLC stuffing bit (7.1.4), each set in the `.set` file, and the
+/// same bytes carry one in both, so clearing a bit did not change which
+/// bytes a decoder unstuffs.
 #[test]
 fn a_pair_differs_only_in_its_vlc_stuffing_bits() {
     for (name, _, _) in manifest() {
         let set = read(&name, "set");
         let clear = read(&name, "clear");
         assert_eq!(set.len(), clear.len(), "{name}");
-        // The cleanup segment ends just before EOC, and its last two bytes
-        // hold `Scup`. The VLC stream starts in the last byte but one and
-        // runs backward to `Pcup`.
-        let end = set.len() - 2;
-        assert_eq!(&set[end..], [0xFF, 0xD9], "{name}");
-        let scup = 16 * usize::from(set[end - 1]) + usize::from(set[end - 2] & 0x0F);
-        // The stuffing bytes as a decoder reads the `.set` file.
-        let mut stuffing = Vec::new();
-        if (set[end - 2] >> 4) & 7 == 7 {
-            stuffing.push(end - 2);
-        }
-        let mut last = set[end - 2];
-        for pos in (end - scup..end - 2).rev() {
-            if last > 0x8F && set[pos] & 0x7F == 0x7F {
-                stuffing.push(pos);
-            }
-            last = set[pos];
-        }
+        let stuffing = vlc_stuffing_bytes(&name, &set);
+        assert_eq!(stuffing, vlc_stuffing_bytes(&name, &clear), "{name}");
         let differ: Vec<usize> = (0..set.len()).filter(|&i| set[i] != clear[i]).collect();
         assert!(!differ.is_empty(), "{name}");
         for &i in &differ {

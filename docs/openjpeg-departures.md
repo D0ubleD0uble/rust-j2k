@@ -1202,9 +1202,10 @@ samples differed decoded here the same as its cleared twin. A VLC reader that
 ORs the bit in, as OpenJPEG does, gives OpenJPEG's samples on the 11 such
 pairs in `tests/fixtures/ht_vlc_stuffing/`, and refuses the 3 that OpenJPEG
 refuses as malformed. A cleared twin reads the same as its block under T.814
-unless the stuffing bytes chain (`12 34 FF FF A0 25 00`): clearing the first
-0xFF changes `VLC_last`, so the next byte is no longer one. The fixture
-generator refuses such blocks.
+unless the stuffing bytes chain, as after a 0xFF stuffing byte
+(`12 34 7F FF A0 25 00`) or a stuffing first nibble (`12 34 56 7F F4 00`):
+clearing the first bit changes `VLC_last`, so the next byte is no longer a
+stuffing byte. The fixture generator refuses such blocks.
 
 OpenJPH (master 97a9579) reads the bit the same way as OpenJPEG. This
 decoder follows T.814's text: `importVLCBit` overwrites `VLC_tmp` with the
@@ -1213,11 +1214,12 @@ next byte, and the F.4 packer writes the bit as 0.
 OpenJPEG 2.5.0 can also abort the process on such a block. `mel_init`
 (`ht_dec.c:319`) reads ahead up to the first four MEL bytes and asserts when
 a 0xFF is followed by a byte above 0x8F. In a build with assertions enabled,
-such as the Debian/Ubuntu package, it aborts; otherwise it decodes as this
-decoder does. T.814 7.1.3 (`importMELBit`) skips the MEL stuffing bit with
-no error, and this decoder decodes the block.
-In every case seen (33 of the 24,000 random-byte blocks), that 0xFF also
-carries a set VLC stuffing bit. Two are fixtures, both 5/3:
+such as the Debian/Ubuntu package, it aborts. A Release build still ORs the
+VLC and MEL stuffing bits in (`mel_init`, `ht_dec.c:328`), so it decodes such
+blocks differently in general; on the two fixtures below it decodes as this
+decoder does. T.814 7.1.3 (`importMELBit`) skips the MEL stuffing bit with no
+error, and this decoder decodes the block. In every case seen (33 of the
+24,000 random-byte blocks), that 0xFF also carries a set VLC stuffing bit. Two are fixtures, both 5/3:
 
 - A 4x16 12-bit block, 13 bit-planes with 7 zero, and the segment
   `C6 A5 D9 FF C0 1F 65 78 00`.

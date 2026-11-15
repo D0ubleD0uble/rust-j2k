@@ -27,10 +27,12 @@ fails on it, or `abort` when it dies on a signal. It exits non-zero if
 OpenJPEG decodes a `.set` file the same as its `.clear` file, since that pair
 would not show the difference.
 
-It also refuses a block whose stuffing bytes chain (a 0xFF stuffing byte
-before another, as in `12 34 FF FF A0 25 00`): clearing the first changes
-`VLC_last`, so the second is no longer a stuffing byte, and the cleared twin
-would not decode the same as the `.set` file under T.814.
+It also refuses a block whose stuffing bytes chain, where clearing one bit
+changes which bytes carry a stuffing bit: a 0xFF stuffing byte before another
+(`12 34 FF FF A0 25 00` or `12 34 7F FF A0 25 00`), or a first nibble that
+carries one before a byte that does (`12 34 56 7F F4 00`). Clearing the first
+changes `VLC_last`, so the next is no longer a stuffing byte, and the cleared
+twin would not decode the same as the `.set` file under T.814.
 
 The `abort_` rows need an `opj_decompress` built with assertions, such as the
 Debian/Ubuntu package. A Release build (`-DNDEBUG`) decodes those `.set`
@@ -234,7 +236,11 @@ def main() -> None:
                 sys.exit(f"{name}: no set VLC stuffing bit")
             cleared = clear_vlc_stuffing(seg)
             differ = [i for i in range(len(seg)) if seg[i] != cleared[i]]
-            if differ != sorted(stuffed) or any(seg[i] ^ cleared[i] != 0x80 for i in differ):
+            if (
+                differ != sorted(stuffed)
+                or any(seg[i] ^ cleared[i] != 0x80 for i in differ)
+                or vlc_stuffing_bytes(seg) != vlc_stuffing_bytes(cleared)
+            ):
                 sys.exit(f"{name}: the twins differ beyond the stuffing bits, "
                          f"or its stuffing bytes chain")
             digests = []
