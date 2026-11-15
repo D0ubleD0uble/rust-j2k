@@ -3,10 +3,12 @@
 //! Each code-block's coded bytes decode to the quantized wavelet coefficients
 //! of one subband block, which this module assembles back into subbands. The
 //! block decoding itself sits behind [`BlockCoder`], the one seam between
-//! assembly and a block coder: the Part 1 coder, EBCOT (ISO/IEC 15444-1
-//! Annexes C and D), lives in [`ebcot`].
+//! assembly and a block coder. The Part 1 coder, EBCOT (ISO/IEC 15444-1
+//! Annexes C and D), lives in [`ebcot`]; the HTJ2K coder (ISO/IEC 15444-15)
+//! lives in [`ht`].
 
 pub(crate) mod ebcot;
+mod ht;
 
 use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
@@ -26,15 +28,21 @@ pub(crate) enum BlockCoder {
     /// The Part 1 coder, with the code-block style flags and the component's
     /// region-of-interest maxshift.
     Ebcot { style: u8, roi_shift: u8 },
+    /// The HTJ2K coder, with the component's region-of-interest maxshift.
+    Ht { roi_shift: u8 },
 }
 
 impl BlockCoder {
-    /// The coder of component `comp`.
+    /// The coder of component `comp`. The codestream guard has already
+    /// refused a MIXED style, so the HT bit alone selects the HT coder.
     fn of(header: &MainHeader, comp: usize) -> Self {
         let params = &header.components[comp];
-        BlockCoder::Ebcot {
-            style: params.coding.code_block_style,
-            roi_shift: params.roi_shift,
+        let style = params.coding.code_block_style;
+        let roi_shift = params.roi_shift;
+        if style & crate::codestream::markers::code_block_style::HT != 0 {
+            BlockCoder::Ht { roi_shift }
+        } else {
+            BlockCoder::Ebcot { style, roi_shift }
         }
     }
 
@@ -46,6 +54,7 @@ impl BlockCoder {
             BlockCoder::Ebcot { style, roi_shift } => {
                 ebcot::decode(block, kind, numbps, style, roi_shift)
             }
+            BlockCoder::Ht { roi_shift } => ht::decode(block, numbps, roi_shift),
         }
     }
 
@@ -54,6 +63,7 @@ impl BlockCoder {
     fn cost(self, block: &CodeBlock<'_>, numbps: u32) -> u64 {
         match self {
             BlockCoder::Ebcot { roi_shift, .. } => ebcot::passes_run(numbps, block, roi_shift),
+            BlockCoder::Ht { .. } => ht::passes_run(block),
         }
     }
 }

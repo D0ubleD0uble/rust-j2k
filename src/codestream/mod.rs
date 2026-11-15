@@ -177,8 +177,9 @@ impl Codestream<'_> {
 
 /// Parse a raw codestream (must start with SOC, end with EOC).
 ///
-/// Rejects anything outside the decoded feature set — HTJ2K, Part 2
-/// extensions, unknown markers — with [`Error::Unsupported`]. A JP2 file is
+/// Rejects anything outside the decoded feature set, such as a mixed-mode
+/// HTJ2K code-block style, Part 2 extensions or unknown markers, with
+/// [`Error::Unsupported`]. A JP2 file is
 /// unwrapped before it gets here (see `crate::jp2`).
 ///
 /// [`Error::Unsupported`]: crate::Error::Unsupported
@@ -2473,13 +2474,14 @@ fn decode_cpf(mut b: Cursor<'_>) -> Result<Cpf> {
 /// read in the main header or a tile-part header ([`OverrideReader`]).
 ///
 /// The style bits decide each tile-component's coder (ISO/IEC 15444-15
-/// A.4); `CAP` does not override them. An HT code-block style (`0x40`, alone
-/// or with `0x80` for MIXED) is not decoded yet, and `0x80` without `0x40`
-/// is refused with it. Because it runs per segment, a cut header that already
-/// holds such a COD or COC is refused, not reported as incomplete.
+/// A.4); `CAP` does not override them. `0x40` alone selects the HT block
+/// coder, which tier-1 decodes. MIXED (`0x40` with `0x80`) is not decoded
+/// yet, and `0x80` without `0x40` is refused with it. Because it runs per
+/// segment, a cut header that already holds such a COD or COC is refused, not
+/// reported as incomplete.
 fn check_block_coder(coding: &Coding, origin: &str) -> Result<()> {
-    use markers::code_block_style::{HT, HT_MIXED};
-    let undecoded = coding.code_block_style & (HT | HT_MIXED);
+    use markers::code_block_style::HT_MIXED;
+    let undecoded = coding.code_block_style & HT_MIXED;
     if undecoded != 0 {
         return Err(Error::Unsupported(format!(
             "{origin} code-block style ({}) is outside the decoded subset",

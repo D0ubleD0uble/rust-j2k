@@ -161,9 +161,10 @@
 //! their class-1 error bounds, and its nine JP2 files within their compliance
 //! class. That gate runs in `tests/` against committed oracle snapshots, with
 //! no external tools. Correctness is defined by cross-checking OpenJPEG, not
-//! by self-consistency. An input using a
-//! feature outside the decoded set (HTJ2K, a Part 2 extension) is rejected
-//! with [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
+//! by self-consistency. HTJ2K code-blocks decode when they carry only the
+//! cleanup pass. An input using a feature outside the decoded set (HT
+//! refinement passes, mixed-mode code-blocks, a Part 2 extension) is
+//! rejected with [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. The feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md).
 #![warn(missing_docs)]
@@ -1311,8 +1312,8 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
             }
             Err(tier2::Refused::Other(error)) => return Err(error),
         };
-        // Tier-1: MQ + EBCOT bit-plane decode each code block into subband
-        // coeffs. The dropped resolutions' code-blocks are skipped, never
+        // Tier-1: the block coder (EBCOT or HT) decodes each code block into
+        // subband coeffs. The dropped resolutions' code-blocks are skipped, never
         // decoded. Their work is counted first, so a tile past the bound is
         // refused before any of it is done.
         if let Some(left) = &mut block_work {

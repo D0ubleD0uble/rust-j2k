@@ -366,6 +366,41 @@ class; the `tier1_block` and `mq` fuzz targets build unchanged or with renamed
 paths only; the HT files above match OpenJPEG, and the Part 4 ones among them
 are in `IN_CLASS`.
 
+**Done (#137).** The seam is `BlockCoder` in `src/tier1/mod.rs`, an enum of
+`Ebcot` (in `src/tier1/ebcot/`) and `Ht` (in `src/tier1/ht/`), chosen by the
+style byte; `last_segment_cut` stays on the EBCOT side. The guard now refuses
+only `0x80` (MIXED), and tier-2 refuses an HT block with more than its cleanup
+pass before reading its lengths, since its later passes follow the B.2 length
+rules (P4.3). Findings:
+
+- The reconstruction is `(2 mu + 1) << (Mb - P - 1)` at double scale, `P`
+  the zero bit-planes: the cleanup pass codes the top `P + 1` of `Mb` planes
+  (T.814 7.6, `S_blk + 1`). OpenJPEG's `opj_t1_ht_decode_cblk` agrees. A block
+  with `P >= Mb` is refused, as OpenJPEG does.
+- `U_q` is refused above `P + 2`. That is the spec's bound: `mu` has at
+  most `P + 1` bits (7.6), so the exponent, the bit length of `2 mu - 1`, is
+  at most `P + 2`. OpenJPEG has the same bound.
+- Four faults in a cleanup segment are refused where OpenJPEG decodes on
+  ([openjpeg-departures.md](openjpeg-departures.md#ht-cleanup-segments)).
+- Vertically causal context changes only the SigProp pass (7.4), not the
+  cleanup pass; `byte_causal.jhc` (style `0x48`) matches both decoders.
+- Both CxtVLC tables are complete prefix codes (Kraft sum 1 in every
+  context), so a "no codeword" result cannot happen; the check stays as a
+  guard.
+- `file2_b12.jph` codes its components in the reverse order of `file2.jp2`,
+  though their `cdef` boxes agree; OpenJPEG decodes the bare codestream the
+  same way, so the codestream grading maps the order (`tests/support/ht.rs`).
+
+The decoder is checked whole-file rather than with per-stage vectors sliced
+from the corpus. The unit tests in `src/tier1/ht/tests.rs` cover each stream
+and each refusal on hand-built segments. Measured, outside the suite: OpenJPEG
+2.5.0 and OpenJPH 0.33.0 match bit for bit on `Bretagne1_ht.j2k`,
+`byte_causal.jhc` and `byte.jph`, and within PAE 1 (MSE under 0.001) on
+`Bretagne1_ht_lossy.j2k`. In the suite: 4 Part 4 files agree with OpenJPEG
+and are in class (3 bit-exact), 11 OpenJPH files are in class (5 bit-exact),
+and 7 of the 8 graded JPH codestreams are bit-exact; the rest are refused with
+a pinned reason.
+
 ### P4.3 — Tier-2 for HT code-blocks (`src/tier2/`)
 
 **Goal:** packet headers hand Tier-1 the cleanup and refinement segments of

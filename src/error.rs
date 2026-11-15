@@ -140,8 +140,8 @@ pub enum Error {
     /// missing or misplaced required box, an invalid field value, or a box
     /// that disagrees with the codestream.
     FileFormat(String),
-    /// A valid-but-not-decoded feature: an HTJ2K codestream, a Part 2
-    /// extension, a JP2 box this decoder cannot apply, a file that is not
+    /// A valid-but-not-decoded feature: an HTJ2K feature past the cleanup
+    /// pass, a Part 2 extension, a JP2 box this decoder cannot apply, a file that is not
     /// JP2-compatible. A newer version of the decoder may accept the same
     /// input.
     Unsupported(String),

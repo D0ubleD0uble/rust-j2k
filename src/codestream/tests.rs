@@ -2500,11 +2500,12 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
     // Every code-block style flag that is not yet decoded, individually. Each
     // changes how Tier-1 reads a code-block, so none may be ignored. `bypass`,
     // `restart`, `predictable termination`, `segmentation symbols`, `vertically
-    // causal context` and `reset context probabilities` have left this table,
-    // leaving only the two HTJ2K bits, which `check_block_coder` refuses.
-    use markers::code_block_style::{LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
+    // causal context`, `reset context probabilities` and the HT bit have left
+    // this table, leaving only the HTJ2K mixed-mode bit, which
+    // `check_block_coder` refuses.
+    use markers::code_block_style::{HT, LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
     for (bit, name) in markers::code_block_style::FLAGS {
-        if bit & (LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET) != 0 {
+        if bit & (LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET | HT) != 0 {
             continue;
         }
         rows.push((
@@ -2529,13 +2530,14 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
 
 /// The decoded style bits — bypass, restart, predictable termination,
 /// segmentation symbols, vertically causal context, and reset context
-/// probabilities — parse; only the two HTJ2K bits do not, and a style byte
-/// mixing them still rejects, naming only the parts that block it.
+/// probabilities — parse, and so does the HT bit; only the mixed-mode bit
+/// does not, and a style byte mixing it with decoded flags still rejects,
+/// naming only the part that blocks it.
 #[test]
 fn the_decoded_styles_parse_and_the_rest_still_reject() {
-    use markers::code_block_style::{LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
+    use markers::code_block_style::{HT, LAZY, PTERM, RESET, SEGSYM, TERMALL, VCAUSAL};
 
-    // Every combination of the six decoded flags parses.
+    // Every combination of the decoded flags parses.
     for style in [
         0,
         LAZY,
@@ -2545,6 +2547,8 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
         VCAUSAL,
         RESET,
         LAZY | TERMALL | PTERM | SEGSYM | VCAUSAL | RESET,
+        HT,
+        HT | VCAUSAL,
     ] {
         let bytes = codestream(&[
             seg(marker::SIZ, &one_component()),
@@ -2565,14 +2569,15 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
         5,
         4,
         4,
-        VCAUSAL | RESET | 0x40, // + HTJ2K high-throughput block coding
+        VCAUSAL | RESET | 0xC0, // + HTJ2K mixed-mode block coding
         1,
     )));
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("high-throughput"), "{message}");
+    assert!(message.contains("mixed-mode"), "{message}");
     for decoded in [
+        "high-throughput",
         "selective arithmetic coding bypass",
         "vertically causal context",
         "reset context probabilities",
@@ -2591,24 +2596,20 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
 /// caller which feature to look up rather than printing a bare bit pattern.
 #[test]
 fn code_block_style_rejection_names_the_flags() {
-    // Two undecoded flags: the HTJ2K high-throughput and mixed-mode bits.
-    let bytes = header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, 0x40 | 0x80, 1));
-    let e = err(&bytes);
-    let Error::Unsupported(message) = &e else {
-        panic!("got {e:?}")
-    };
-    assert!(message.contains("high-throughput"), "{message}");
-    assert!(message.contains("mixed-mode"), "{message}");
-
-    // The high bits select the HTJ2K block coder rather than being reserved, so
-    // they are named too: with or without a CAP, the style byte decides the
-    // coder and must not read as the default style.
-    for (bit, name) in [(0x40u8, "high-throughput"), (0x80, "mixed-mode")] {
-        let e = err(&header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, bit, 1)));
+    // The undecoded flag is the HTJ2K mixed-mode bit, alone or with the HT
+    // bit. The high bits select the HTJ2K block coder rather than being
+    // reserved, so it is named: with or without a CAP, the style byte decides
+    // the coder and must not read as the default style.
+    for style in [0x80u8, 0xC0] {
+        let e = err(&header_with_cod(cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)));
         let Error::Unsupported(message) = &e else {
-            panic!("{bit:#04X}: got {e:?}")
+            panic!("{style:#04X}: got {e:?}")
         };
-        assert!(message.contains(name), "{bit:#04X}: {message}");
+        assert!(message.contains("mixed-mode"), "{style:#04X}: {message}");
+        assert!(
+            !message.contains("high-throughput"),
+            "{style:#04X}: {message}"
+        );
     }
 
     // Every bit of the style byte is allocated, so nothing goes unnamed.
@@ -2787,14 +2788,14 @@ fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
     let bytes = codestream(&[
         seg(marker::SIZ, &one_component()),
         seg(marker::COD, &cod_default(1)),
-        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0x40, 1)), // HTJ2K (undecoded)
+        seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0xC0, 1)), // HTJ2K mixed (undecoded)
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     let e = err(&bytes);
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("high-throughput"), "{message}");
+    assert!(message.contains("mixed-mode"), "{message}");
     assert!(
         message.contains("COC"),
         "the message must name the marker: {message}"
@@ -4344,23 +4345,31 @@ fn cap_or_cpf_in_a_tile_part_header_is_codestream() {
     }
 }
 
-/// An HT style is refused by the block-coder guard whether or not the
-/// codestream signals Part 15: with a CAP, and with none and `Rsiz` 0.
+/// The block-coder guard reads the style bits alone, whether or not the
+/// codestream signals Part 15: with a CAP, and with none and `Rsiz` 0. An HT
+/// style parses either way and a mixed-mode style is refused either way.
 /// OpenJPEG 2.5.0 decodes both shapes, reading the style bits alone.
 #[test]
-fn an_ht_style_is_unsupported_with_or_without_cap() {
+fn an_ht_style_parses_and_mixed_is_unsupported_with_or_without_cap() {
     for style in [0x40, 0x48, 0xC0, 0x80] {
         for cap in [None, Some(seg(marker::CAP, &cap15(0x0003)))] {
             let mut segments = vec![seg(marker::SIZ, &one_component())];
             segments.extend(cap.clone());
             segments.push(seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, style, 1)));
             segments.push(seg(marker::QCD, &qcd_none(2, &[8; 16])));
-            let e = err(&codestream(&segments));
+            let bytes = codestream(&segments);
+            if style & 0x80 == 0 {
+                let (header, _, _) = parse_main_header(&bytes)
+                    .unwrap_or_else(|e| panic!("{style:#04X}, CAP {}: {e:?}", cap.is_some()));
+                assert_eq!(header.cod.coding.code_block_style, style);
+                continue;
+            }
+            let e = err(&bytes);
             let Error::Unsupported(message) = &e else {
                 panic!("{style:#04X}, CAP {}: got {e:?}", cap.is_some())
             };
             assert!(
-                message.contains("`COD` code-block style (HTJ2K"),
+                message.contains("`COD` code-block style (HTJ2K mixed-mode"),
                 "{message}"
             );
         }
@@ -4369,9 +4378,9 @@ fn an_ht_style_is_unsupported_with_or_without_cap() {
 
 /// A tile-part COD or COC goes through the same guard as the main header's.
 #[test]
-fn a_tile_part_ht_style_is_unsupported() {
-    let cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0x40, 1));
-    let coc = seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0x40, 1));
+fn a_tile_part_mixed_style_is_unsupported() {
+    let cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0xC0, 1));
+    let coc = seg(marker::COC, &coc_body(&[0], 0, 5, 4, 4, 0xC0, 1));
     for (name, tile_marker) in [("`COD`", cod), ("`COC`", coc)] {
         let bytes = assemble_with_tile_markers(&default_header(), &[tile_marker], &[0]);
         let e = perr(&bytes);
@@ -4379,18 +4388,18 @@ fn a_tile_part_ht_style_is_unsupported() {
             panic!("{name}: got {e:?}")
         };
         assert!(message.contains(name), "{message}");
-        assert!(message.contains("high-throughput"), "{message}");
+        assert!(message.contains("mixed-mode"), "{message}");
     }
 }
 
-/// The guard runs as each segment is read, so a main header cut after an HT
-/// COD is refused for the coder, not reported as incomplete: more bytes
-/// could not make it decode.
+/// The guard runs as each segment is read, so a main header cut after a
+/// mixed-mode COD is refused for the coder, not reported as incomplete: more
+/// bytes could not make it decode.
 #[test]
-fn a_cut_header_holding_an_ht_cod_is_unsupported_not_incomplete() {
+fn a_cut_header_holding_a_mixed_cod_is_unsupported_not_incomplete() {
     let mut bytes = be16(marker::SOC).to_vec();
     bytes.extend_from_slice(&seg(marker::SIZ, &one_component()));
-    bytes.extend_from_slice(&seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0x40, 1)));
+    bytes.extend_from_slice(&seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0xC0, 1)));
     // A QCD cut inside its body.
     bytes.extend_from_slice(&seg(marker::QCD, &qcd_none(2, &[8; 16]))[..6]);
     let e = err(&bytes);
@@ -4446,8 +4455,8 @@ fn cpf_number(cpf: &markers::Cpf) -> u64 {
 }
 
 /// Every HT conformance codestream: its CAP and CPF decode to the values its
-/// log records, and the whole header reaches the block-coder guard, not a
-/// parse error.
+/// log records, and the whole header parses, or, for a mixed-mode file,
+/// reaches the block-coder guard and is refused there, not by a parse error.
 #[test]
 fn the_ht_corpus_decodes_its_cap_and_cpf_and_reaches_the_guard() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -4481,7 +4490,9 @@ fn the_ht_corpus_decodes_its_cap_and_cpf_and_reaches_the_guard() {
         decoded.insert(name.as_str(), (ccap15, cpf));
 
         match parse_main_header(&bytes) {
-            Err(Error::Unsupported(m)) if m.contains("code-block style (HTJ2K") => {}
+            Err(Error::Unsupported(m))
+                if name.starts_with("ds0_hm_") && m.contains("(HTJ2K mixed-mode") => {}
+            Ok(_) if !name.starts_with("ds0_hm_") => {}
             other => panic!("{name}: {:?}", other.map(|_| ())),
         }
     }

@@ -1365,6 +1365,21 @@ fn parse_band_header(
         // the zero case.
         let num_passes = read_num_passes(bio);
 
+        // An HT code-block decodes from its cleanup pass alone. More passes,
+        // in this contribution or a later one, are placeholder or refinement
+        // passes, whose lengths follow ISO/IEC 15444-15 B.2 rather than the
+        // Part 1 rule below, so the packet is refused before its lengths are
+        // read.
+        if style & crate::codestream::markers::code_block_style::HT != 0
+            && (num_passes > 1 || !blocks[block_index].segments.is_empty())
+        {
+            return Err(Error::Unsupported(
+                "HT code-block with more than its cleanup pass; only the cleanup pass is \
+                 decoded"
+                    .into(),
+            ));
+        }
+
         // Lblock grows by a unary run of 1s and carries into later layers; the
         // length field is then `Lblock + floor(log2(num_passes))` bits wide
         // (ISO B.10.7.5), over *this* contribution's passes, not the running

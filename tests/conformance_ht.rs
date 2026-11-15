@@ -14,6 +14,8 @@
 //!   within the agreement bound.
 //! - The OpenJPH test codestreams (`tests/fixtures/openjph/`), against
 //!   OpenJPEG's decode of each.
+//! - The bare `jp2c` codestreams of the graded JPH files, bit-exactly against
+//!   the components their references hold before any box is applied.
 //!
 //! An entry outside its `IN_CLASS` list must report *not yet decoded*
 //! (`decode` returns `Unsupported`). Any other outcome fails, and an entry that
@@ -30,14 +32,47 @@ use support::part4::{self, Bounds, Grade, ratchet};
 use support::pgx::{Pgx, parse_pgx};
 
 /// The HT codestreams and JPH files that decode within their bounds today.
-const IN_CLASS: &[&str] = &[];
+const IN_CLASS: &[&str] = &[
+    "ds0_ht_01_b11",
+    "ds0_ht_11_b10",
+    "ds1_ht_04_b9",
+    "ds1_ht_07_b11",
+];
 
 /// The HT codestreams that decode within the agreement bound of OpenJPEG's
 /// output today.
-const AGREES_WITH_OPENJPEG: &[&str] = &[];
+const AGREES_WITH_OPENJPEG: &[&str] = &[
+    "ds0_ht_01_b11",
+    "ds0_ht_11_b10",
+    "ds1_ht_04_b9",
+    "ds1_ht_07_b11",
+];
 
 /// The OpenJPH codestreams that decode within their bounds today.
-const OPENJPH_IN_CLASS: &[&str] = &[];
+const OPENJPH_IN_CLASS: &[&str] = &[
+    "simple_dec_rev53_64x64_tiles_yuv",
+    "simple_dec_rev53_64x64_yuv",
+    "simple_enc_irv97_64x64",
+    "simple_enc_irv97_64x64_16bit",
+    "simple_enc_irv97_64x64_16bit_gray",
+    "simple_enc_irv97_64x64_yuv",
+    "simple_enc_irv97_tall_narrow",
+    "simple_enc_irv97_tall_narrow1",
+    "simple_enc_rev53_64x64_yuv",
+    "simple_enc_rev53_tall_narrow",
+    "simple_enc_rev53_tall_narrow1",
+];
+
+/// The JPH files whose bare codestream decodes bit-exactly today.
+const JPH_CODESTREAM_EXACT: &[&str] = &[
+    "file10_b12",
+    "file1_b12",
+    "file2_b12",
+    "file3_b12",
+    "file4_b12",
+    "file5_b12",
+    "file8_b11",
+];
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -93,6 +128,35 @@ fn grades_the_ht_set_by_compliance_class() {
     );
     assert_eq!(graded.len(), 41 + 10);
     ratchet("ISO/IEC 15444-4:2024 HTJ2K class-1", &graded, IN_CLASS);
+    pin_refusals(&graded, |name| {
+        if name.starts_with("ds0_hm") {
+            MIXED
+        } else if name.starts_with("file") {
+            "file brand `jph `"
+        } else {
+            MORE_PASSES
+        }
+    });
+}
+
+/// The refusal of a MIXED code-block style.
+const MIXED: &str = "code-block style (HTJ2K mixed-mode block coding)";
+
+/// The refusal of an HT code-block with passes past its cleanup pass.
+const MORE_PASSES: &str = "HT code-block with more than its cleanup pass";
+
+/// Every entry not yet decoded is refused for the reason `expected` names
+/// for it, so a refusal that moves to another stage is caught.
+fn pin_refusals(graded: &[(&str, Grade)], expected: impl Fn(&str) -> &'static str) {
+    for (name, grade) in graded {
+        if let Grade::NotYetDecoded(why) = grade {
+            let want = expected(name);
+            assert!(
+                why.contains(want),
+                "{name}: refused for `{why}`, not `{want}`"
+            );
+        }
+    }
 }
 
 /// Decode every HT codestream OpenJPEG decodes, and grade it against
@@ -112,6 +176,33 @@ fn grades_agreement_with_openjpeg() {
         &graded,
         AGREES_WITH_OPENJPEG,
     );
+    pin_refusals(&graded, |name| {
+        if name.starts_with("ds0_hm") {
+            MIXED
+        } else {
+            MORE_PASSES
+        }
+    });
+}
+
+/// Decode the bare codestream of every graded JPH file whose components a
+/// reference holds, and grade it bit-exactly.
+#[test]
+fn grades_the_jph_codestreams() {
+    let dir = ht_dir();
+    let jp2 = jp2_dir();
+    let manifest = load_ht_manifest(&dir);
+    let graded: Vec<(&str, Grade)> = manifest
+        .jph
+        .iter()
+        .filter_map(|j| Some((j.name.as_str(), j.grade_codestream(&dir, &jp2)?)))
+        .collect();
+    // Every graded file but two whose codestream components no reference
+    // records: `file6_b15`, whose references are shifted, and `file9_b12`,
+    // whose codestream holds palette indices.
+    assert_eq!(graded.len(), 8);
+    ratchet("JPH codestreams", &graded, JPH_CODESTREAM_EXACT);
+    pin_refusals(&graded, |_| MORE_PASSES);
 }
 
 /// Decode every OpenJPH codestream and grade it against OpenJPEG's decode.
@@ -126,6 +217,7 @@ fn grades_the_openjph_codestreams() {
         .collect();
     assert_eq!(graded.len(), 16);
     ratchet("OpenJPH test codestreams", &graded, OPENJPH_IN_CLASS);
+    pin_refusals(&graded, |_| MORE_PASSES);
 }
 
 /// Every reference and OpenJPEG snapshot the manifests name parses, at the

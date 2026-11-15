@@ -82,7 +82,8 @@ refused.
 | Code-block style: vertically causal context | Yes |
 | Code-block style: predictable termination | Yes |
 | Code-block style: segmentation symbols | Yes |
-| Code-block style bits that signal HTJ2K | No (Phase 4) |
+| Code-block style: HTJ2K block coding | Yes, cleanup pass only (see Part 15) |
+| Code-block style: HTJ2K mixed-mode block coding | No (Phase 4) |
 
 ### Tier-2: packet decoding (Annex B)
 
@@ -173,13 +174,17 @@ and NDFD grids are complex-packed, and ECMWF uses CCSDS.
 
 HTJ2K replaces the Tier-1 block coder with a much faster one (FBCOT) that has
 no MQ coder. Everything outside Tier-1 (codestream, Tier-2, DWT,
-quantization) is the same as Part 1. This decoder refuses HTJ2K codestreams;
-OpenJPEG 2.5.0 and later decode them.
+quantization) is the same as Part 1. This decoder reads HTJ2K codestreams
+whose code-blocks carry only the cleanup pass, and refuses the rest with
+`Error::Unsupported`; OpenJPEG 2.5.0 and later decode them all.
 
 | Feature | Decoded |
 |---|---|
 | CAP marker and HTJ2K capability signaling | Yes, read; MULTIHT refused |
-| FBCOT block decoder (MEL, VLC and MagSgn) | No (Phase 4) |
+| HT cleanup pass (MEL, VLC and MagSgn) | Yes |
+| HT SigProp and MagRef passes, placeholder passes | No (Phase 4) |
+| Mixed-mode (HT and Part 1 code-blocks in one tile-component) | No (Phase 4) |
+| Region of interest on HT code-blocks | No |
 
 ## Part 2: extensions and JPX (ISO/IEC 15444-2)
 
