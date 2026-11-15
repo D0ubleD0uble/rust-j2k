@@ -592,6 +592,9 @@ struct OverrideReader<'s> {
     /// The `(marker, component)` pairs met so far, so that a header naming
     /// every component is checked in time proportional to its markers.
     named: HashSet<(u16, usize)>,
+    /// Whether the codestream's `CAP` says it holds no `RGN` (`Ccap15` bit
+    /// 12 is 0), so that an `RGN` read here is refused.
+    rgn_free: bool,
 }
 
 impl<'s> OverrideReader<'s> {
@@ -601,6 +604,19 @@ impl<'s> OverrideReader<'s> {
             place,
             overrides: Overrides::default(),
             named: HashSet::new(),
+            rgn_free: false,
+        }
+    }
+
+    /// Hold this header to a `CAP` that says the codestream holds no `RGN`
+    /// (ISO/IEC 15444-15 A.3.4): refuse an `RGN` already read, and any read
+    /// later. The main header can carry its `CAP` after an `RGN`, so the
+    /// check runs at both reads.
+    fn forbid_rgn(&mut self) -> Result<()> {
+        self.rgn_free = true;
+        match self.overrides.rgn.first() {
+            Some(&(index, _)) => Err(rgn_without_cap_bit(index)),
+            None => Ok(()),
         }
     }
 
@@ -667,6 +683,9 @@ impl<'s> OverrideReader<'s> {
                 }
                 let (index, shift) = decode_rgn(body()?, self.siz)?;
                 self.first_for(code, "RGN", index, suffix)?;
+                if self.rgn_free {
+                    return Err(rgn_without_cap_bit(index));
+                }
                 self.overrides.rgn.push((index, shift));
             }
             _ => return Ok(false),
@@ -688,6 +707,15 @@ impl<'s> OverrideReader<'s> {
     fn finish(self) -> Overrides {
         self.overrides
     }
+}
+
+/// The refusal of an `RGN` for component `index` in a codestream whose
+/// `Ccap15` bit 12 says it holds none (ISO/IEC 15444-15 A.3.4).
+fn rgn_without_cap_bit(index: usize) -> Error {
+    Error::Codestream(format!(
+        "`RGN` marker for component {index}, but `CAP` says the codestream has none \
+         (`Ccap15` bit 12 is 0)"
+    ))
 }
 
 /// What has been seen of one tile so far while the tile-parts are walked.
@@ -829,7 +857,7 @@ fn walk_tiles<'a>(
                 || part_offset
                     .checked_add(sot.psot as usize)
                     .is_none_or(|end| end > bytes.len()));
-        let (tile_header, packed) = match read_tile_part_header(&mut cur, &main.siz, first_part) {
+        let (tile_header, packed) = match read_tile_part_header(&mut cur, main, first_part) {
             Ok(read) => read,
             Err(_) if cut => {
                 if sot.psot != 0 {
@@ -1263,11 +1291,16 @@ fn check_restatement(
 /// RGN, as a malformed codestream rather than an unsupported one.
 fn read_tile_part_header(
     cur: &mut Cursor<'_>,
-    siz: &Siz,
+    main: &MainHeader,
     first_part: bool,
 ) -> Result<(TileHeader, Vec<u8>)> {
+    let siz = &main.siz;
     let mut tile = TileHeader::default();
     let mut overrides = OverrideReader::new(siz, Place::TilePart { first: first_part });
+    if main.ccap15.is_some_and(|c| !c.rgn()) {
+        // Nothing is read yet, so this cannot fail.
+        overrides.forbid_rgn()?;
+    }
     // `PPT` packet headers for this tile-part, collected as `(Zppt, bytes)` and
     // concatenated in `Zppt` order below.
     let mut ppt: Vec<(u8, Vec<u8>)> = Vec::new();
@@ -1691,8 +1724,12 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // corresponding profile (ISO/IEC 15444-15 A.6): one of each per
             // codestream.
             marker::CAP => {
-                if cap.replace(decode_cap(body())?).is_some() {
+                let ccap15 = decode_cap(body())?;
+                if cap.replace(ccap15).is_some() {
                     return Err(Error::Codestream("duplicate `CAP` marker".into()));
+                }
+                if ccap15.is_some_and(|c| !c.rgn()) {
+                    overrides.forbid_rgn()?;
                 }
             }
             marker::CPF => {
