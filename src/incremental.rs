@@ -265,7 +265,11 @@ mod tests {
     use crate::{codestream, tier1, tier2};
 
     fn fixture(name: &str) -> Vec<u8> {
-        std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+        std::fs::read(format!(
+            "{}/tests/fixtures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
     }
 
     /// The packet-visit and code-block work bounds one decode of `bytes`
@@ -274,7 +278,10 @@ mod tests {
         let parsed = codestream::parse_header(bytes).unwrap();
         let cs = codestream::parse_tiles_with(bytes, parsed, false).unwrap();
         let tile_bytes = crate::tile_bytes(&cs);
-        (tier2::decode_visits(tile_bytes), tier1::decode_work(tile_bytes))
+        (
+            tier2::decode_visits(tile_bytes),
+            tier1::decode_work(tile_bytes),
+        )
     }
 
     /// A feeder that hands over one byte at a time and refines after each
@@ -305,7 +312,10 @@ mod tests {
             let blocks = decoder.ledger.blocks.get();
             assert!(packets > 0 && blocks > 0, "{name}: nothing was decoded");
             assert_eq!(blocks, block_work, "{name}: the ledger missed block work");
-            assert!(packets <= packet_bound, "{name}: {packets} > {packet_bound}");
+            assert!(
+                packets <= packet_bound,
+                "{name}: {packets} > {packet_bound}"
+            );
             assert!(blocks <= block_bound, "{name}: {blocks} > {block_bound}");
 
             // Against the work one decode of the whole file does: the
@@ -317,7 +327,10 @@ mod tests {
             assert!(blocks < 2 * once, "{name}: {blocks} >= 2 * {once}");
 
             let log2 = usize::BITS - bytes.len().leading_zeros();
-            assert!(images > 0 && images <= log2 as usize, "{name}: {images} images");
+            assert!(
+                images > 0 && images <= log2 as usize,
+                "{name}: {images} images"
+            );
             // The last refine was at the largest power of two fed.
             assert_eq!(decoder.bytes_decoded(), 1 << (log2 - 1), "{name}");
             let (whole_samples, finished) = (whole.components, decoder.finish().unwrap());

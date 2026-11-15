@@ -172,7 +172,11 @@ fn cut(name: &str, bytes: &[u8], cuts: &[usize], rng: &mut Rng, options: &Decode
         decoder.feed(&prefix[..split]);
         decoder.feed(&prefix[split..]);
         let refined = decoder.refine();
-        assert_eq!(refined, refine_oracle(prefix, options), "{name}, cut at {at}");
+        assert_eq!(
+            refined,
+            refine_oracle(prefix, options),
+            "{name}, cut at {at}"
+        );
         check_finish(name, prefix, decoder, options);
     }
 }
@@ -282,12 +286,18 @@ fn a_pterm_file_resumes_from_a_prefix_to_the_strict_decode() {
     decoder.feed(&bytes[..226]);
     let prefix = decoder.refine().unwrap().expect("the main header is whole");
     assert!(!prefix.report.is_complete());
-    assert_eq!(Some(prefix), refine_oracle(&bytes[..226], &lenient()).unwrap());
+    assert_eq!(
+        Some(prefix),
+        refine_oracle(&bytes[..226], &lenient()).unwrap()
+    );
     decoder.feed(&bytes[226..]);
     // 231 bytes are not twice 226: no new refine until the end.
     assert_eq!(decoder.refine(), Ok(None));
     let finished = decoder.finish().unwrap();
-    assert_eq!(finished, decode_with(&bytes, &DecodeOptions::default()).unwrap());
+    assert_eq!(
+        finished,
+        decode_with(&bytes, &DecodeOptions::default()).unwrap()
+    );
     let refined = refine_oracle(&bytes, &lenient()).unwrap().unwrap();
     assert!(refined.report.is_complete());
     assert_eq!(finished.components, refined.components);
@@ -318,7 +328,10 @@ fn a_damaged_pterm_segment_is_refused() {
     for piece in bad.chunks(16) {
         decoder.feed(piece);
         if let Err(error) = decoder.refine() {
-            assert_eq!(Err(error), refine_oracle(&bad[..decoder.bytes_fed()], &lenient()));
+            assert_eq!(
+                Err(error),
+                refine_oracle(&bad[..decoder.bytes_fed()], &lenient())
+            );
         }
     }
     match decoder.finish() {

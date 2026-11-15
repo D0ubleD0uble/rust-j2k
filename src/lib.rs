@@ -202,6 +202,7 @@ pub mod fuzz;
 pub use error::{Error, Result};
 pub use header::{ComponentInfo, Header};
 pub use image::{Component, Image};
+pub use incremental::IncrementalDecoder;
 pub use jp2::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
     ColorSpace, ColorSpecification, FileType, ImageHeader, IprBox, Jp2Metadata, MappingKind,
@@ -209,7 +210,6 @@ pub use jp2::{
     UuidInfo, VendorFeature, XmlBox,
 };
 pub use report::{DecodeReport, ReportEntry};
-pub use incremental::IncrementalDecoder;
 pub use window::Window;
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
