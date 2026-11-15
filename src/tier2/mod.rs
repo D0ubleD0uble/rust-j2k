@@ -186,9 +186,72 @@ pub struct Resolution<'a> {
 /// One component's coded data, grouped by resolution (coarsest first, index 0
 /// the `NLLL` band) so Tier-1 can decode each block independently and the
 /// assembly stage can place it back.
+///
+/// A resolution that holds no precinct lists no subbands: each is empty and
+/// owns no code-block. The inverse DWT still needs their origins and sizes,
+/// which [`band`](Self::band) gives from `rect`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ComponentCoded<'a> {
     pub resolutions: Vec<Resolution<'a>>,
+    /// The tile-component's rectangle on its own grid, as the walk saw it.
+    /// `None` for coded data built by hand.
+    pub rect: Option<Rect>,
+}
+
+/// Where a subband sits and how big it is: [`Subband`] without its blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BandExtent {
+    pub origin: (u32, u32),
+    pub width: usize,
+    pub height: usize,
+}
+
+impl BandExtent {
+    /// The extent of a band on `[x0, x1) x [y0, y1)`, empty where the bounds
+    /// meet or cross.
+    fn of_bounds(x0: i64, x1: i64, y0: i64, y1: i64) -> Self {
+        BandExtent {
+            origin: (x0.max(0) as u32, y0.max(0) as u32),
+            width: (x1 - x0).max(0) as usize,
+            height: (y1 - y0).max(0) as usize,
+        }
+    }
+}
+
+impl ComponentCoded<'_> {
+    /// The origin and size of the `kind` band of resolution `r`: what the
+    /// resolution lists or, when it lists none because it holds no precinct,
+    /// what its rectangle gives (see [`geometry::band_rects`]). `None` for a
+    /// band that does not exist.
+    pub fn band(&self, r: usize, kind: BandKind) -> Option<BandExtent> {
+        let resolution = self.resolutions.get(r)?;
+        if let Some(sb) = resolution.subbands.iter().find(|s| s.kind == kind) {
+            return Some(BandExtent {
+                origin: sb.origin,
+                width: sb.width,
+                height: sb.height,
+            });
+        }
+        if !resolution.subbands.is_empty() {
+            return None;
+        }
+        let nl = u32::try_from(self.resolutions.len() - 1).ok()?;
+        geometry::band_rects(self.rect?, nl, u32::try_from(r).ok()?)
+            .find(|b| b.0 == kind)
+            .map(|(_, x0, x1, y0, y1)| BandExtent::of_bounds(x0, x1, y0, y1))
+    }
+
+    /// The `HL`, `LH` and `HH` bands of resolution `r` when it lists none
+    /// (see [`band`](Self::band)) and is not the coarsest.
+    pub fn detail_extents(&self, r: usize) -> Option<[BandExtent; 3]> {
+        if r == 0 || !self.resolutions.get(r)?.subbands.is_empty() {
+            return None;
+        }
+        let nl = u32::try_from(self.resolutions.len() - 1).ok()?;
+        let mut bands = geometry::band_rects(self.rect?, nl, u32::try_from(r).ok()?)
+            .map(|(_, x0, x1, y0, y1)| BandExtent::of_bounds(x0, x1, y0, y1));
+        Some([bands.next()?, bands.next()?, bands.next()?])
+    }
 }
 
 /// The coded byte segments for every code-block of every component, in SIZ
@@ -624,21 +687,19 @@ fn walk_packets<'a>(
             .siz
             .tile_component_rect(tile.index, comp)
             .ok_or_else(|| Error::Inconsistent(format!("no component {comp} in `SIZ`")))?;
-        let nl = (component_geoms.len() - 1) as u32;
         let mut resolutions = Vec::with_capacity(component_states.len());
-        for (r, (band_states, level)) in component_states
-            .into_iter()
-            .zip(component_geoms)
-            .enumerate()
-        {
+        for (band_states, level) in component_states.into_iter().zip(component_geoms) {
             let subbands = if level.bands.is_empty() {
-                empty_subbands(rect, nl, r as u32)
+                Vec::new()
             } else {
                 build_subbands(&level.bands, band_states)
             };
             resolutions.push(Resolution { subbands });
         }
-        components.push(ComponentCoded { resolutions });
+        components.push(ComponentCoded {
+            resolutions,
+            rect: Some(rect),
+        });
     }
 
     // Not strict, bytes left after the last packet are noted rather than
@@ -1919,31 +1980,6 @@ fn parse_band_header(
         }
     }
     Ok(())
-}
-
-/// The subbands of resolution `r` of a tile-component on `rect` with `nl`
-/// levels, when the resolution holds no precinct. Each is empty and owns no
-/// code-block, so the geometry has none of them (see
-/// [`ResolutionGeom`](geometry::ResolutionGeom)), but the inverse DWT still
-/// reads their origins and sizes. Their code-block grid is 0 x 0.
-fn empty_subbands<'a>(rect: Rect, nl: u32, r: u32) -> Vec<Subband<'a>> {
-    geometry::band_rects(rect, nl, r)
-        .map(|(kind, x0, x1, y0, y1)| {
-            debug_assert!(
-                x1 <= x0 || y1 <= y0,
-                "band of an empty resolution is not empty"
-            );
-            Subband {
-                kind,
-                origin: (x0.max(0) as u32, y0.max(0) as u32),
-                width: (x1 - x0).max(0) as usize,
-                height: (y1 - y0).max(0) as usize,
-                block_cols: 0,
-                block_rows: 0,
-                blocks: Vec::new(),
-            }
-        })
-        .collect()
 }
 
 /// Note that the packet of `precinct` in `layer` was not read whole (see

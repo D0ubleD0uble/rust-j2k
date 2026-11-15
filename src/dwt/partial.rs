@@ -170,15 +170,11 @@ impl Footprint {
             .saturating_sub(usize::from(reduction))
             .max(1);
         let (mut xo, mut xs, mut yo, mut ys) = (vec![], vec![], vec![], vec![]);
-        for (res, resolution) in coded.resolutions.iter().take(kept).enumerate() {
+        for res in 0..kept.min(coded.resolutions.len()) {
             let band = |kind| {
-                resolution
-                    .subbands
-                    .iter()
-                    .find(|s| s.kind == kind)
-                    .ok_or_else(|| {
-                        Error::Inconsistent(format!("resolution is missing its {kind:?} subband"))
-                    })
+                coded.band(res, kind).ok_or_else(|| {
+                    Error::Inconsistent(format!("resolution is missing its {kind:?} subband"))
+                })
             };
             if res == 0 {
                 let ll = band(BandKind::Ll)?;

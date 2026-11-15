@@ -233,6 +233,26 @@ fn merge_level<S: Synthesis>(
     let (low_x, low_y) = (ll.width, ll.height);
     let width = ll.width + hl.width;
     let height = ll.height + lh.height;
+    // A level with no samples has nothing to interleave or lift, and a level
+    // of one low-pass sample (even origin on both axes) passes through both
+    // 1-D kernels unchanged. Most resolutions of a tile of a few samples are
+    // like this, so they skip the grid and its buffers.
+    if width == 0 || height == 0 {
+        return Band {
+            origin: (u0, v0),
+            width,
+            height,
+            data: Vec::new(),
+        };
+    }
+    if (low_x, low_y, width, height) == (1, 1, 1, 1) && cas_x == 0 && cas_y == 0 {
+        return Band {
+            origin: (u0, v0),
+            width,
+            height,
+            data: ll.data,
+        };
+    }
     let mut grid = vec![S::Sample::default(); width * height];
     for (band, left, top) in [
         (ll, 0, 0),
