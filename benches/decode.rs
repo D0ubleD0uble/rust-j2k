@@ -19,7 +19,7 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use rust_j2k::{DecodeOptions, decode_with};
+use rust_j2k::{DecodeOptions, Window, decode_with};
 
 /// The built-in set, in the order it is printed. Paths are relative to the
 /// crate root.
@@ -32,6 +32,10 @@ const FIXTURES: &[&str] = &[
     "tests/fixtures/bench/grib2_shape_1440x721_u16.j2k",
     "tests/fixtures/jpeg2000_regular_latlon.j2k",
 ];
+
+/// A 2048 x 2048 image of 64 tiles, timed whole, through a 256 x 256 window
+/// and as one tile.
+const TILED: &str = "tests/fixtures/bench/tiled_2048_gray.j2k";
 
 fn main() {
     let iters = match std::env::var("RUST_J2K_BENCH_ITERS") {
@@ -90,34 +94,70 @@ fn main() {
                 continue;
             }
         };
-        // The warm-up decode.
-        if let Err(e) = decode_with(&bytes, &options) {
-            println!("{name:<28} skipped: decode failed ({e})");
-            continue;
-        }
-        let mut times: Vec<f64> = (0..iters)
-            .map(|_| {
-                let start = Instant::now();
-                let image = decode_with(black_box(&bytes), black_box(&options));
-                let elapsed = start.elapsed();
-                drop(black_box(image));
-                elapsed.as_secs_f64() * 1e3
-            })
-            .collect();
-        times.sort_by(f64::total_cmp);
-        let mid = times.len() / 2;
-        let median = if times.len() % 2 == 1 {
-            times[mid]
-        } else {
-            (times[mid - 1] + times[mid]) / 2.0
-        };
-        println!(
-            "{:<28} {:>9.2} {:>9.2} {:>9.2} {:>9}",
-            name,
-            median,
-            times[0],
-            times[times.len() - 1],
-            bytes.len().div_ceil(1024)
-        );
+        time(&name, &bytes, &options, iters);
     }
+
+    // A small window and one tile of a large tiled image, against its whole
+    // decode: only the tiles the window reaches are decoded.
+    let path = root.join(TILED);
+    let shown = filters.is_empty() || filters.iter().any(|f| "tiled_2048".contains(f.as_str()));
+    if shown {
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                for (label, options) in [
+                    ("tiled_2048 whole", DecodeOptions::default()),
+                    (
+                        "tiled_2048 256x256 window",
+                        DecodeOptions::default()
+                            .with_window(Some(Window::new(896, 896, 1152, 1152))),
+                    ),
+                    (
+                        "tiled_2048 tile 27",
+                        DecodeOptions::default().with_tile(Some(27)),
+                    ),
+                ] {
+                    time(label, &bytes, &options, iters);
+                }
+            }
+            Err(e) => println!(
+                "{:<28} skipped: cannot read {} ({e})",
+                "tiled_2048",
+                path.display()
+            ),
+        }
+    }
+}
+
+/// Decode `bytes` under `options` once to warm up, then `iters` times, and
+/// print the times.
+fn time(name: &str, bytes: &[u8], options: &DecodeOptions, iters: usize) {
+    // The warm-up decode.
+    if let Err(e) = decode_with(bytes, options) {
+        println!("{name:<28} skipped: decode failed ({e})");
+        return;
+    }
+    let mut times: Vec<f64> = (0..iters)
+        .map(|_| {
+            let start = Instant::now();
+            let image = decode_with(black_box(bytes), black_box(options));
+            let elapsed = start.elapsed();
+            drop(black_box(image));
+            elapsed.as_secs_f64() * 1e3
+        })
+        .collect();
+    times.sort_by(f64::total_cmp);
+    let mid = times.len() / 2;
+    let median = if times.len() % 2 == 1 {
+        times[mid]
+    } else {
+        (times[mid - 1] + times[mid]) / 2.0
+    };
+    println!(
+        "{:<28} {:>9.2} {:>9.2} {:>9.2} {:>9}",
+        name,
+        median,
+        times[0],
+        times[times.len() - 1],
+        bytes.len().div_ceil(1024)
+    );
 }

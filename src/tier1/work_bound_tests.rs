@@ -221,7 +221,10 @@ fn the_work_counts_the_passes_a_maxshift_adds() {
     let planes = numbps(&header, 0, 0).unwrap();
     let mut shifted = header.clone();
     shifted.components[0].roi_shift = 5;
-    assert_eq!(work(&header, &coded, 0, &[true; 4]), 64 * u64::from(3 * planes - 2));
+    assert_eq!(
+        work(&header, &coded, 0, &[true; 4]),
+        64 * u64::from(3 * planes - 2)
+    );
     assert_eq!(
         work(&shifted, &coded, 0, &[true]),
         64 * u64::from(3 * (planes + 5) - 2)

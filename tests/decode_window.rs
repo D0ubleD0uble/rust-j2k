@@ -130,10 +130,10 @@ fn crop(plane: &[i32], width: u32, options: &DecodeOptions) -> (u32, u32, Vec<i3
 
 /// The components `options` returns, as SIZ indices.
 fn picked(options: &DecodeOptions) -> Vec<usize> {
-    options
-        .components
-        .as_ref()
-        .map_or_else(|| vec![0, 1, 2], |c| c.iter().map(|&c| usize::from(c)).collect())
+    options.components.as_ref().map_or_else(
+        || vec![0, 1, 2],
+        |c| c.iter().map(|&c| usize::from(c)).collect(),
+    )
 }
 
 /// The 5/3 codestreams decode every case to OpenJPEG's samples, bit for bit:
@@ -231,8 +231,16 @@ fn the_header_describes_each_case() {
             let header = read_header_with(&bytes, &case.options).unwrap();
             let image = decode_ok(&bytes, &case.options, &what);
             assert_eq!((header.width, header.height), (image.width, image.height));
-            let sizes: Vec<_> = header.components.iter().map(|c| (c.width, c.height)).collect();
-            let decoded: Vec<_> = image.components.iter().map(|c| (c.width, c.height)).collect();
+            let sizes: Vec<_> = header
+                .components
+                .iter()
+                .map(|c| (c.width, c.height))
+                .collect();
+            let decoded: Vec<_> = image
+                .components
+                .iter()
+                .map(|c| (c.width, c.height))
+                .collect();
             assert_eq!(sizes, decoded, "{what}");
         }
     }
@@ -258,7 +266,8 @@ fn invalid(bytes: &[u8], options: &DecodeOptions) -> String {
 #[test]
 fn bad_options_are_invalid() {
     let bytes = read("tiled_53.j2k");
-    let window = |x0, y0, x1, y1| DecodeOptions::default().with_window(Some(Window::new(x0, y0, x1, y1)));
+    let window =
+        |x0, y0, x1, y1| DecodeOptions::default().with_window(Some(Window::new(x0, y0, x1, y1)));
     let message = invalid(&bytes, &window(20, 10, 20, 31));
     assert_eq!(message, "the window 20..20 by 10..31 is empty");
     invalid(&bytes, &window(40, 10, 30, 31));
@@ -283,11 +292,11 @@ fn bad_options_are_invalid() {
     assert!(decode_with(&bytes, &window(21, 10, 22, 31)).is_ok());
 
     let message = invalid(&bytes, &DecodeOptions::default().with_tile(Some(9)));
-    assert_eq!(message, "`DecodeOptions::tile` is 9, but the image has 9 tiles");
-    invalid(
-        &bytes,
-        &window(0, 0, 10, 10).with_tile(Some(0)),
+    assert_eq!(
+        message,
+        "`DecodeOptions::tile` is 9, but the image has 9 tiles"
     );
+    invalid(&bytes, &window(0, 0, 10, 10).with_tile(Some(0)));
 
     let components = |list: Vec<u16>| DecodeOptions::default().with_components(Some(list));
     let message = invalid(&bytes, &components(vec![3]));
@@ -315,7 +324,9 @@ fn a_window_of_the_whole_image_is_the_whole_decode() {
             let whole = decode_ok(&bytes, &options, name);
             let windowed = decode_ok(
                 &bytes,
-                &options.clone().with_window(Some(Window::new(0, 0, u32::MAX, u32::MAX))),
+                &options
+                    .clone()
+                    .with_window(Some(Window::new(0, 0, u32::MAX, u32::MAX))),
                 name,
             );
             assert_eq!(windowed, whole, "{name} -r {r}");
@@ -345,7 +356,11 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
     let loose = DecodeOptions::default().with_strict(false);
 
     let tile = |index| loose.clone().with_tile(Some(index));
-    let whole = decode_ok(&bytes, &DecodeOptions::default().with_tile(Some(1)), "tile 1");
+    let whole = decode_ok(
+        &bytes,
+        &DecodeOptions::default().with_tile(Some(1)),
+        "tile 1",
+    );
     let cut = decode_ok(prefix, &tile(1), "the prefix's tile 1");
     assert!(cut.report.is_complete(), "{:?}", cut.report);
     assert_eq!(cut.components, whole.components);
@@ -356,7 +371,11 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
     let cut = decode_ok(prefix, &tile(5), "the prefix's tile 5");
     assert!(!cut.report.is_complete());
     assert_eq!(missing_tiles(&cut), [5..6]);
-    assert!(cut.components.iter().all(|c| c.samples.iter().all(|&s| s == 0)));
+    assert!(
+        cut.components
+            .iter()
+            .all(|c| c.samples.iter().all(|&s| s == 0))
+    );
 
     // A window over tiles 1 and 4 reads tile 4 of the missing run.
     let window = loose.with_window(Some(Window::new(30, 10, 40, 30)));
@@ -386,10 +405,17 @@ fn a_jp2_subset_is_the_raw_components() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jp2_cdef_rgba.jp2"),
     )
     .unwrap();
-    let raw = decode_ok(&bytes, &DecodeOptions::default().with_raw_channels(true), "raw");
+    let raw = decode_ok(
+        &bytes,
+        &DecodeOptions::default().with_raw_channels(true),
+        "raw",
+    );
     let options = DecodeOptions::default().with_components(Some(vec![3, 0]));
     let some = decode_ok(&bytes, &options, "subset");
-    assert_eq!(some.components, [raw.components[3].clone(), raw.components[0].clone()]);
+    assert_eq!(
+        some.components,
+        [raw.components[3].clone(), raw.components[0].clone()]
+    );
     let raw_meta = raw.jp2.unwrap();
     let meta = some.jp2.as_ref().unwrap();
     assert_eq!(meta.channels, [raw_meta.channels[3], raw_meta.channels[0]]);

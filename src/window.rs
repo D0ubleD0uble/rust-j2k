@@ -156,7 +156,13 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
             if area.is_empty() {
                 return Err(Error::InvalidOptions(format!(
                     "the window {}..{} by {}..{} is outside the image area {}..{} by {}..{}",
-                    window.x0, window.x1, window.y0, window.y1, image.x0, image.x1, image.y0,
+                    window.x0,
+                    window.x1,
+                    window.y0,
+                    window.y1,
+                    image.x0,
+                    image.x1,
+                    image.y0,
                     image.y1
                 )));
             }

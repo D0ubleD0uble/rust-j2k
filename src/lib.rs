@@ -1575,8 +1575,7 @@ fn decode_codestream(
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| {
                     Error::Inconsistent(
-                        "the color transform's three components were not all reconstructed"
-                            .into(),
+                        "the color transform's three components were not all reconstructed".into(),
                     )
                 })?;
             // The wavelet picks the transform (G.1): 5/3 reconstructs integers
@@ -1775,5 +1774,51 @@ mod tests {
         let tail = format!("resolution reduction 2 discards all 2 resolutions of component {last}");
         assert_eq!(message(None), tail);
         assert_eq!(message(Some(7)), format!("{tail} in tile 7"));
+    }
+
+    /// The sample-passes the block decoder counts on a decode of `name` (in
+    /// `tests/fixtures/window/`) under `options`.
+    fn block_work(name: &str, options: &DecodeOptions) -> u64 {
+        let bytes = std::fs::read(format!(
+            "{}/tests/fixtures/window/{name}.j2k",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        BLOCK_WORK.with(|spent| spent.set(0));
+        decode_with(&bytes, options).unwrap();
+        BLOCK_WORK.with(std::cell::Cell::get)
+    }
+
+    /// A window decodes only the tiles it reaches, and a component subset
+    /// only its components' code-blocks, but every one of the color
+    /// transform's three when it asks for one of them.
+    #[test]
+    fn a_window_or_a_subset_decodes_fewer_code_blocks() {
+        let all = DecodeOptions::default();
+        for name in ["tiled_53", "tiled_53_nomct"] {
+            let whole = block_work(name, &all);
+            // Tile 4, the middle one, is a ninth of the image.
+            let tile = block_work(name, &all.clone().with_tile(Some(4)));
+            assert!(tile * 6 < whole, "{name}: {tile} of {whole}");
+            assert_eq!(
+                block_work(
+                    name,
+                    &all.clone().with_window(Some(Window::new(27, 22, 51, 42)))
+                ),
+                tile,
+                "{name}"
+            );
+            // Tiles 0, 1, 3 and 4.
+            let four = block_work(
+                name,
+                &all.clone().with_window(Some(Window::new(20, 10, 41, 31))),
+            );
+            assert!(four > tile && four * 2 < whole, "{name}: {four} of {whole}");
+        }
+        let one = all.clone().with_components(Some(vec![1]));
+        let whole = block_work("tiled_53_nomct", &all);
+        let single = block_work("tiled_53_nomct", &one);
+        assert!(single * 2 < whole, "{single} of {whole}");
+        assert_eq!(block_work("tiled_53", &one), block_work("tiled_53", &all));
     }
 }
