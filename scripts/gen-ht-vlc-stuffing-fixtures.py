@@ -7,9 +7,10 @@ Each fixture is a pair of single-block HT codestreams, cleanup pass only. The
 a stuffing bit, so this decoder reads the two files the same. OpenJPEG 2.5.0
 ORs a set bit into the next byte, so it decodes the `.set` file differently
 or refuses it as malformed, and decodes the `.clear` file as this decoder
-does. On the `abort_mel_` pairs the set bit sits after a MEL 0xFF, and
-OpenJPEG's `mel_init` assertion aborts the process on the `.set` file. See docs/openjpeg-departures.md, "Set stuffing bits in the HT VLC and
-MagRef streams".
+does. On the `abort_mel_` pairs the set bit's 0xFF is also a MEL byte followed
+by one above 0x8F, and OpenJPEG's `mel_init` assertion aborts the process on
+the `.set` file. See docs/openjpeg-departures.md, "Set stuffing bits in the HT
+VLC and MagRef streams".
 
 The blocks were picked from a random differential of crafted cleanup-only
 blocks against `opj_decompress` 2.5.0 (issue #368): every block on which the
@@ -22,8 +23,18 @@ the top bit of the bytes that carry a VLC stuffing bit, runs `opj_decompress`
 on each, and writes `manifest.tsv`: the SHA-256 of OpenJPEG's samples (each as
 a little-endian i32, as `tests/ht_vlc_stuffing.rs` hashes them) for the
 `.clear` file, and the same for the `.set` file, `refused` when OpenJPEG
-fails on it, or `abort` when it dies on a signal. It exits non-zero if OpenJPEG decodes a `.set` file the same as
-its `.clear` file, since that pair would not show the difference.
+fails on it, or `abort` when it dies on a signal. It exits non-zero if
+OpenJPEG decodes a `.set` file the same as its `.clear` file, since that pair
+would not show the difference.
+
+It also refuses a block whose stuffing bytes chain (a 0xFF stuffing byte
+before another, as in `12 34 FF FF A0 25 00`): clearing the first changes
+`VLC_last`, so the second is no longer a stuffing byte, and the cleared twin
+would not decode the same as the `.set` file under T.814.
+
+The `abort_` rows need an `opj_decompress` built with assertions, such as the
+Debian/Ubuntu package. A Release build (`-DNDEBUG`) decodes those `.set`
+files as this decoder does, and the script exits non-zero on them.
 
 Usage: python3 scripts/gen-ht-vlc-stuffing-fixtures.py
 Requires OpenJPEG 2.5.0 `opj_decompress` on PATH.
@@ -170,8 +181,9 @@ def vlc_stuffing_bytes(seg: bytes) -> list[int]:
 
 
 def clear_vlc_stuffing(seg: bytes) -> bytes:
-    """`seg` with each set VLC stuffing bit cleared, in reading order: a
-    cleared 0xFF reads as 0x7F, so the byte before it no longer carries one."""
+    """`seg` with each set VLC stuffing bit cleared, in the order a decoder
+    reads them. A cleared 0xFF reads as 0x7F, so the byte before it no longer
+    carries a stuffing bit; `main` refuses a block where that matters."""
     out = bytearray(seg)
     lcup = len(out)
     scup = 16 * out[lcup - 1] + (out[lcup - 2] & 0x0F)
@@ -223,7 +235,8 @@ def main() -> None:
             cleared = clear_vlc_stuffing(seg)
             differ = [i for i in range(len(seg)) if seg[i] != cleared[i]]
             if differ != sorted(stuffed) or any(seg[i] ^ cleared[i] != 0x80 for i in differ):
-                sys.exit(f"{name}: the twins differ beyond the stuffing bits")
+                sys.exit(f"{name}: the twins differ beyond the stuffing bits, "
+                         f"or its stuffing bytes chain")
             digests = []
             for tag, body in (("set", seg), ("clear", cleared)):
                 path = DIR / f"{name}.{tag}.j2k"

@@ -80,10 +80,11 @@ fn a_set_vlc_stuffing_bit_is_skipped_where_openjpeg_reads_it() {
 }
 
 /// Where OpenJPEG's `mel_init` assertion aborts on the `.set` file (a MEL
-/// 0xFF followed by a byte above 0x8F), the block decodes as its cleared twin
-/// does. T.814 7.1.3 would skip the MEL stuffing bit with no error; on these
-/// two blocks the MEL decode stops before that byte, which OpenJPEG reads
-/// ahead.
+/// 0xFF followed by a byte above 0x8F, in a build with assertions), the block
+/// decodes, as its cleared twin does. This pins only that: the MEL decode
+/// stops before the 0xFF, and the VLC either never reads past it (2x17) or
+/// reads next a byte whose low bit is already 1 (0xD9 on 4x16), so these
+/// pairs cannot tell skipping the stuffing bit from ORing it in.
 #[test]
 fn a_set_stuffing_bit_after_a_mel_0xff_decodes_as_its_cleared_twin() {
     let aborts: Vec<String> = manifest()
@@ -113,16 +114,17 @@ fn a_pair_differs_only_in_its_vlc_stuffing_bits() {
         let end = set.len() - 2;
         assert_eq!(&set[end..], [0xFF, 0xD9], "{name}");
         let scup = 16 * usize::from(set[end - 1]) + usize::from(set[end - 2] & 0x0F);
+        // The stuffing bytes as a decoder reads the `.set` file.
         let mut stuffing = Vec::new();
-        if (clear[end - 2] >> 4) & 7 == 7 {
+        if (set[end - 2] >> 4) & 7 == 7 {
             stuffing.push(end - 2);
         }
-        let mut last = clear[end - 2];
+        let mut last = set[end - 2];
         for pos in (end - scup..end - 2).rev() {
-            if last > 0x8F && clear[pos] & 0x7F == 0x7F {
+            if last > 0x8F && set[pos] & 0x7F == 0x7F {
                 stuffing.push(pos);
             }
-            last = clear[pos];
+            last = set[pos];
         }
         let differ: Vec<usize> = (0..set.len()).filter(|&i| set[i] != clear[i]).collect();
         assert!(!differ.is_empty(), "{name}");
