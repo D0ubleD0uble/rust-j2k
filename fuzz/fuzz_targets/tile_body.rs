@@ -26,6 +26,9 @@
 //! - the PPM / PPT packed packet-header split, each stitched from two
 //!   out-of-order marker segments (shape 7).
 //!
+//! Variant bit 7 turns any shape's code-blocks into HT ones (a `CAP` marker and
+//! the HT bit of the code-block style).
+//!
 //! Each input is decoded strict and then with `strict` off, and the two are
 //! checked against each other as `decode_partial` checks them
 //! (`common/partial.rs`).
@@ -75,7 +78,7 @@ fn steer(body: &mut &[u8]) -> u8 {
 /// widened geometry, 6 a 2×2 tile grid with interleaved tile-parts, 7 packed
 /// packet headers (bit 6 picks PPM over PPT). Shapes 4, 5, and 7 read steering
 /// bytes off the front of `body`. Every shape stays a byte-perfect header so
-/// the body reaches the packet reader.
+/// the body reaches the packet reader. Bit 7 makes the code-blocks HT.
 fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
     let reversible = variant & 1 != 0;
     // Variant bits 1-2 land on Scod bits 1 (SOP may precede packets) and 2
@@ -101,11 +104,18 @@ fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
     // vcausal, pterm, segsym). Tier-2 then builds the lazy 10, 2, 1, 2, 1, …
     // codeword-segment split from the fuzzed packet headers and hands tier-1
     // raw and MQ segments through the real decode path.
-    let style = if shape == 4 {
+    let mut style = if shape == 4 {
         0x01 | (steer(&mut body) & 0x3E)
     } else {
         0
     };
+    // Variant bit 7: the HT code-block style (0x40) with a `CAP` marker, so the
+    // body is read as HT packets (placeholder passes, cleanup and refinement
+    // segments) and reaches the HT block coder through the real tier-2 split.
+    let ht = variant & 0x80 != 0;
+    if ht {
+        style |= 0x40;
+    }
 
     // Shape 6: a 32×32 tile on the 64×64 image — a 2×2 grid, four tiles.
     let multi_tile = shape == 6;
@@ -184,6 +194,11 @@ fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
 
     let mut bytes = 0xFF4Fu16.to_be_bytes().to_vec(); // SOC
     bytes.extend_from_slice(&seg(0xFF51, &siz));
+    if ht {
+        // Part 15 only, one HT set per block, no `RGN`, and the loosest
+        // magnitude bound (`B` = 74).
+        bytes.extend_from_slice(&seg(0xFF50, &[0, 2, 0, 0, 0, 0x1F]));
+    }
     bytes.extend_from_slice(&seg(0xFF52, &cod));
     bytes.extend_from_slice(&seg(0xFF5C, &quant));
     if let Some(poc) = poc {

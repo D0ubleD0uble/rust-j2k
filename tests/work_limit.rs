@@ -156,6 +156,119 @@ fn t1bomb_tiled_with_length(size: u32, side: u32, length: u32) -> Vec<u8> {
     cs
 }
 
+/// The HT counterpart of [`t1bomb`]: one `size` x `size` tile of one 8-bit
+/// component, no wavelet levels, 64x64 HT code-blocks, one layer, each block
+/// included with all three coding passes of an HT set and the fewest bytes
+/// that decode: a cleanup segment of the two bytes `0xF2 0x00` (`Scup = 2`)
+/// and a refinement segment of the byte `0x00`. QCD gives the band 30
+/// bit-planes and no block has a zero bit-plane. A packet header spends
+/// about 14 bits on each block, so this is about as many sample-passes for
+/// the bytes as an HT file can ask for.
+fn htbomb(size: u32) -> Vec<u8> {
+    let blocks = size.div_ceil(64);
+    let mut levels = vec![(blocks, blocks)];
+    while *levels.last().unwrap() != (1, 1) {
+        let (c, r) = *levels.last().unwrap();
+        levels.push((c.div_ceil(2), r.div_ceil(2)));
+    }
+    let mut known = [
+        std::collections::HashSet::new(),
+        std::collections::HashSet::new(),
+    ];
+    let mut bits = Bits::new();
+    bits.put(1);
+    for y in 0..blocks {
+        for x in 0..blocks {
+            // Inclusion, then the zero bit-planes: every value is 0, so each
+            // node not yet known codes a 1.
+            for tree in &mut known {
+                for level in (0..levels.len() as u32).rev() {
+                    if tree.insert((level, x >> level, y >> level)) {
+                        bits.put(1);
+                    }
+                }
+            }
+            // Three passes (`11 00`, Table B.4), Lblock stays 3: the cleanup
+            // length 2 in 3 bits, the refinement length 1 in 3 + 1 bits.
+            bits.put_int(0b1100, 4);
+            bits.put(0);
+            bits.put_int(2, 3);
+            bits.put_int(1, 4);
+        }
+    }
+    let mut data = bits.finish();
+    for _ in 0..blocks * blocks {
+        data.extend_from_slice(&[0xF2, 0x00, 0x00]);
+    }
+
+    let seg = |code: u16, body: &[u8]| {
+        let mut out = code.to_be_bytes().to_vec();
+        out.extend_from_slice(&(2 + body.len() as u16).to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    };
+    let mut siz = 0u16.to_be_bytes().to_vec();
+    for v in [size, size, 0, 0, size, size, 0, 0] {
+        siz.extend_from_slice(&v.to_be_bytes());
+    }
+    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let mut cs = vec![0xFF, 0x4F];
+    cs.extend(seg(0xFF51, &siz));
+    // CAP: Part 15 only, one HT set per block, no `RGN`, and a
+    // magnitude bound of 12 bits (`Ccap15` low bits 4).
+    cs.extend(seg(0xFF50, &[0, 2, 0, 0, 0, 4]));
+    // COD: block style HT (0x40), 64x64 code-blocks, no wavelet level.
+    cs.extend(seg(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0x40, 1]));
+    cs.extend(seg(0xFF5C, &[0x40, 29 << 3]));
+    cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
+    cs.extend_from_slice(&(12 + 2 + data.len() as u32).to_be_bytes());
+    cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+    cs.extend_from_slice(&data);
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
+/// The HT bomb the work-bound table measures is the shape built here.
+#[test]
+fn the_committed_ht_bomb_is_the_shape_built_here() {
+    assert_eq!(
+        htbomb(1024),
+        fixture("tier1_work_bound/htbomb_1024_64_3.j2k")
+    );
+}
+
+/// An HT file asks the block decoder for at most 3 passes over a block's
+/// samples, and a block cannot cost under about 5 bytes of packet header and
+/// data for all three, so the bound (2^15 sample-passes a byte) is out of
+/// reach: this file, the most an HT file can ask for its bytes, decodes at
+/// the default, as OpenJPEG 2.5.0 decodes it (the hash of its samples, all 128).
+/// `every_committed_file_decodes_far_below_the_tier1_work_bound` (in
+/// `src/tier1/work_bound_tests.rs`) measures its share of the bound.
+#[test]
+fn an_ht_bomb_decodes_at_the_default_bound() {
+    let bytes = htbomb(1024);
+    let image = decode(&bytes).expect("an HT file cannot reach the tier-1 bound");
+    assert_eq!(image.components[0].samples.len(), 1024 * 1024);
+    assert_eq!(
+        sha256_hex(&samples_u8(&image)),
+        "36ff34972077a9e824cce89d6a7056a0923719b8ae884a5ed7f0ba299303534e"
+    );
+}
+
+/// The same shape at 8192^2, 79 KB: 2.0e8 sample-passes, 7.7% of its bound.
+/// Ignored for the time it takes, 1.4 s on a release build (OpenJPEG 2.5.0:
+/// see `docs/resource-bounds.md`).
+#[test]
+#[ignore = "slow: about 1.4 s on a release build"]
+fn the_large_ht_bomb_decodes_at_the_default_bound() {
+    let bytes = htbomb(8192);
+    assert_eq!(bytes.len(), 79348);
+    let start = Instant::now();
+    let image = decode(&bytes).expect("an HT file cannot reach the tier-1 bound");
+    eprintln!("htbomb(8192): {:?}", start.elapsed());
+    assert_eq!(image.components[0].samples.len(), 8192 * 8192);
+}
+
 fn assert_limit(name: &str, result: rust_j2k::Result<rust_j2k::Image>) {
     match result {
         Err(Error::Limit(m)) => assert!(m.contains("work bound"), "{name}: {m}"),

@@ -65,6 +65,26 @@ impl CleanupBound {
     }
 }
 
+/// Decode one HT code-block, for the fuzz hook (`crate::fuzz::ht_block`),
+/// which holds no [`BlockCoder`].
+pub(crate) fn decode_ht_block(
+    block: &CodeBlock<'_>,
+    numbps: u32,
+    roi_shift: u8,
+    causal: bool,
+    bound_bits: Option<u32>,
+) -> Result<Vec<i32>> {
+    ht::decode(
+        block,
+        numbps,
+        ht::Params {
+            roi_shift,
+            causal,
+            bound_bits,
+        },
+    )
+}
+
 impl BlockCoder {
     /// The coder of component `comp`. The codestream guard has already
     /// refused a MIXED style, so the HT bit alone selects the HT coder.
