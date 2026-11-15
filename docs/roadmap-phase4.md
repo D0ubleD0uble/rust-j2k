@@ -446,10 +446,18 @@ field is added. Findings:
   (`passes.measured`) on every file OpenJPEG decodes. The conformance test
   checks that an entry is in class exactly when every block needs only its
   cleanup pass and no `RGN` applies.
-- 8 more Part 4 files are in class: `ds0_ht_02_b12`, `ds0_ht_04_b12`,
-  `ds0_ht_07_b16`, `ds0_ht_08_b16`, `ds0_ht_16_b11`, `ds1_ht_01_b12`
-  (bit-exact), `ds1_ht_02_b12` and `ds1_ht_03_b12`, 12 in all. The rest are
-  refused with a pinned reason: refinement passes, ROI, MIXED.
+- 8 more Part 4 files are in class, 12 in all. `ds0_ht_02_b12`,
+  `ds0_ht_07_b16`, `ds0_ht_08_b16`, `ds0_ht_16_b11` and `ds1_ht_01_b12` are
+  bit-exact; `ds0_ht_04_b12`, `ds1_ht_02_b12` and `ds1_ht_03_b12` are within
+  class. OpenJPEG refuses all 8, so they are graded against the Part 4
+  references alone. The rest are refused with a pinned reason: refinement
+  passes, ROI, MIXED.
+- A layer cap that leaves out the refinement layers now decodes files that
+  are otherwise refused (`ds0_ht_02_b11` at `-l 1` to `4`, `ds0_ht_04_b11` at
+  `1` to `18`, `ds0_ht_05_b11` at `1` to `4`, `ds1_ht_01_b11` at `1` to `3`).
+  These are cleanup-only reconstructions with no oracle yet:
+  `a_cap_before_the_refinement_layers_decodes_cleanup_only` checks only that
+  they decode with the right dimensions.
 - `Z_blk = 1` for a refinement segment of zero length (B.3) is left to
   P4.4: no file in the corpus needs only its cleanup pass by that rule alone.
 - The packet work count needed no change: `Meter` charges per packet, per

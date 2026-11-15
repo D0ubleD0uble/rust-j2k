@@ -993,3 +993,52 @@ fn the_manifests_reject_unknown_keys() {
         reject::<OpenJphManifest>(&v, pointer);
     }
 }
+
+/// A layer cap that leaves out a file's refinement passes decodes it. At caps
+/// 1 and `last`, the decode is `Ok` and has the header's dimensions. At the
+/// next cap the first refinement pass reaches Tier-1 and is refused, so under
+/// the lower caps the blocks reach Tier-1 with their cleanup pass only.
+/// No oracle grades these images: OpenJPEG loses sync on the placeholder
+/// passes, and the Part 4 references are of every layer.
+#[test]
+fn a_cap_before_the_refinement_layers_decodes_cleanup_only() {
+    use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
+    for (name, last) in [
+        ("ds0_ht_02_b11", 4),
+        ("ds0_ht_04_b11", 18),
+        ("ds0_ht_05_b11", 4),
+        ("ds1_ht_01_b11", 3),
+    ] {
+        let path = ht_dir().join(format!("codestreams/{name}.j2k"));
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let header = read_header(&bytes).unwrap();
+        let expected: Vec<(u32, u32)> = header
+            .components
+            .iter()
+            .map(|c| (c.width, c.height))
+            .collect();
+        let capped = |cap| {
+            decode_with(
+                &bytes,
+                &DecodeOptions::default().with_max_quality_layers(Some(cap)),
+            )
+        };
+        for cap in [1, last] {
+            let image = capped(cap).unwrap_or_else(|e| panic!("{name} at -l {cap}: {e}"));
+            let got: Vec<(u32, u32)> = image
+                .components
+                .iter()
+                .map(|c| (c.width, c.height))
+                .collect();
+            assert_eq!(
+                (image.width, image.height, got),
+                (header.width, header.height, expected.clone()),
+                "{name} at -l {cap}"
+            );
+        }
+        match capped(last + 1) {
+            Err(Error::Unsupported(why)) => assert!(why.ends_with(REFINEMENT), "{name}: {why}"),
+            other => panic!("{name} at -l {}: {other:?}", last + 1),
+        }
+    }
+}

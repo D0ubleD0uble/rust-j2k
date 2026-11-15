@@ -3,9 +3,10 @@
 //! the layer cap.
 //!
 //! Two oracles. Hand-built packet headers, one field at a time, and packet
-//! headers of `ds0_ht_02_b11` and `ds0_ht_05_b11` decoded by hand below. No
-//! reference decoder grades this step: OpenJPEG 2.5.0 loses sync on
-//! placeholder passes, and OpenJPH reads one quality layer only.
+//! headers of `ds0_ht_02_b11` and `ds0_ht_05_b11` decoded by hand below.
+//! OpenJPEG 2.5.0 loses sync on placeholder passes and OpenJPH reads one
+//! quality layer only, so the whole files are graded against the Part 4
+//! references in `tests/conformance_ht.rs`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
