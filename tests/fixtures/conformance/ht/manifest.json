@@ -14,7 +14,7 @@
     },
     "references": "the Part 1 class-1 references (../references/) for ds0 and ds1; reference_class1HF_profile1/ for hifi_ht1_02, copied verbatim; reference_jph/*.pgm for file10, written as 8-bit PGX",
     "jph_grading": "the highest-bound file of each set; file1..file9 as fileN.jp2 is graded (../jp2/manifest.json), since the codestream decodes to the same samples under OpenJPEG; file10_b12 bit-exact against reference_jph",
-    "passes": "opj_decompress 2.5.0 with a print of each HT block's pass count added to opj_t1_ht_decode_cblk; see HT_PASSES in regenerate.py",
+    "passes": "measured: opj_decompress 2.5.0 with a print of each HT block's pass count added to opj_t1_ht_decode_cblk, see HT_PASSES in regenerate.py; walked: this crate's Tier-2 walk of every packet header, see HT_WALKED",
     "openjpeg": "opj_decompress 2.5.0 on the bare codestream; sub-sampled files with -c K",
     "license": "Conformance-only grant; see ./COPYRIGHT.txt. Excluded from the published crate via Cargo.toml `exclude`."
   },
@@ -138,6 +138,14 @@
         "refinement": false,
         "measured": {
           "blocks": 10,
+          "histogram": {
+            "1": 10
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 10,
+          "placeholder": 0,
           "histogram": {
             "1": 10
           },
@@ -291,9 +299,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 13,
+          "placeholder": 13,
+          "histogram": {
+            "1": 9,
+            "3": 4
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 6164,
@@ -432,9 +449,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 13,
+          "placeholder": 13,
+          "histogram": {
+            "1": 13
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 6202,
@@ -577,9 +602,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 16,
+          "placeholder": 11,
+          "histogram": {
+            "1": 12,
+            "3": 4
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 17199,
@@ -722,9 +756,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 16,
+          "placeholder": 11,
+          "histogram": {
+            "1": 16
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 19539,
@@ -894,9 +936,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 280,
+          "placeholder": 258,
+          "histogram": {
+            "1": 204,
+            "3": 76
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 266209,
@@ -1074,9 +1125,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 280,
+          "placeholder": 258,
+          "histogram": {
+            "1": 280
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 273988,
@@ -1271,9 +1330,19 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 2534,
+          "placeholder": 1944,
+          "histogram": {
+            "1": 1379,
+            "2": 531,
+            "3": 624
+          },
+          "zero_length_refinement": 1
+        }
       },
       "file_digest": {
         "size": 1375732,
@@ -1472,9 +1541,19 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 2534,
+          "placeholder": 1944,
+          "histogram": {
+            "1": 1682,
+            "2": 531,
+            "3": 321
+          },
+          "zero_length_refinement": 1
+        }
       },
       "file_digest": {
         "size": 1378249,
@@ -1676,9 +1755,19 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 98,
+          "placeholder": 93,
+          "histogram": {
+            "1": 60,
+            "2": 1,
+            "3": 37
+          },
+          "zero_length_refinement": 1
+        }
       },
       "file_digest": {
         "size": 21478,
@@ -1880,9 +1969,19 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 101,
+          "placeholder": 94,
+          "histogram": {
+            "1": 76,
+            "2": 1,
+            "3": 24
+          },
+          "zero_length_refinement": 1
+        }
       },
       "file_digest": {
         "size": 31337,
@@ -2084,9 +2183,19 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 101,
+          "placeholder": 94,
+          "histogram": {
+            "1": 93,
+            "2": 1,
+            "3": 7
+          },
+          "zero_length_refinement": 1
+        }
       },
       "file_digest": {
         "size": 36670,
@@ -2290,7 +2399,8 @@
         "t803_placeholder_bset": true,
         "placeholder": null,
         "refinement": null,
-        "measured": null
+        "measured": null,
+        "walked": null
       },
       "file_digest": {
         "size": 21098,
@@ -2494,7 +2604,8 @@
         "t803_placeholder_bset": true,
         "placeholder": null,
         "refinement": null,
-        "measured": null
+        "measured": null,
+        "walked": null
       },
       "file_digest": {
         "size": 36216,
@@ -2677,9 +2788,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 7621,
+          "placeholder": 7528,
+          "histogram": {
+            "3": 7621
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 3279290,
@@ -2858,9 +2977,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 7680,
+          "placeholder": 7671,
+          "histogram": {
+            "1": 5376,
+            "3": 2304
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 8607525,
@@ -3039,9 +3167,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 7680,
+          "placeholder": 7671,
+          "histogram": {
+            "1": 7680
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 8885403,
@@ -3220,9 +3356,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 2523,
+          "placeholder": 2517,
+          "histogram": {
+            "3": 2523
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 2445072,
@@ -3401,9 +3545,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 2523,
+          "placeholder": 2523,
+          "histogram": {
+            "1": 1741,
+            "3": 782
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 4520744,
@@ -3582,9 +3735,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 2523,
+          "placeholder": 2523,
+          "histogram": {
+            "1": 2523
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 4508876,
@@ -3732,6 +3893,14 @@
         "refinement": true,
         "measured": {
           "blocks": 14,
+          "histogram": {
+            "3": 14
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 14,
+          "placeholder": 0,
           "histogram": {
             "3": 14
           },
@@ -3915,9 +4084,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 120,
+          "placeholder": 108,
+          "histogram": {
+            "1": 84,
+            "3": 36
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 14887,
@@ -4066,6 +4244,14 @@
         "refinement": false,
         "measured": {
           "blocks": 2,
+          "histogram": {
+            "1": 2
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 2,
+          "placeholder": 0,
           "histogram": {
             "1": 2
           },
@@ -4221,6 +4407,15 @@
         "refinement": true,
         "measured": {
           "blocks": 8,
+          "histogram": {
+            "1": 6,
+            "3": 2
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 8,
+          "placeholder": 0,
           "histogram": {
             "1": 6,
             "3": 2
@@ -5943,9 +6138,18 @@
       },
       "passes": {
         "t803_placeholder_bset": false,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": false,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 256,
+          "placeholder": 0,
+          "histogram": {
+            "1": 255,
+            "3": 1
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 2985,
@@ -6134,6 +6338,15 @@
             "3": 11
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 42,
+          "placeholder": 0,
+          "histogram": {
+            "1": 31,
+            "3": 11
+          },
+          "zero_length_refinement": 0
         }
       },
       "file_digest": {
@@ -6298,9 +6511,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 16,
+          "placeholder": 11,
+          "histogram": {
+            "1": 12,
+            "3": 4
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 16977,
@@ -6442,9 +6664,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 16,
+          "placeholder": 11,
+          "histogram": {
+            "1": 16
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 19317,
@@ -6588,7 +6818,8 @@
         "t803_placeholder_bset": true,
         "placeholder": null,
         "refinement": null,
-        "measured": null
+        "measured": null,
+        "walked": null
       },
       "file_digest": {
         "size": 17095,
@@ -6724,9 +6955,17 @@
       },
       "passes": {
         "t803_placeholder_bset": false,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 10,
+          "placeholder": 7,
+          "histogram": {
+            "1": 10
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 8090,
@@ -6865,9 +7104,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 13,
+          "placeholder": 11,
+          "histogram": {
+            "1": 9,
+            "3": 4
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 4700,
@@ -7006,9 +7254,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 13,
+          "placeholder": 11,
+          "histogram": {
+            "1": 13
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 4727,
@@ -7180,9 +7436,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 280,
+          "placeholder": 259,
+          "histogram": {
+            "1": 204,
+            "3": 76
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 264763,
@@ -7362,9 +7627,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 280,
+          "placeholder": 259,
+          "histogram": {
+            "1": 280
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 272826,
@@ -7560,9 +7833,18 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 2534,
+          "placeholder": 2082,
+          "histogram": {
+            "1": 1415,
+            "3": 1119
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 1439344,
@@ -7762,9 +8044,17 @@
       },
       "passes": {
         "t803_placeholder_bset": true,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": true,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 2534,
+          "placeholder": 2292,
+          "histogram": {
+            "1": 2534
+          },
+          "zero_length_refinement": 0
+        }
       },
       "file_digest": {
         "size": 1455730,
@@ -7919,6 +8209,14 @@
         "refinement": false,
         "measured": {
           "blocks": 618,
+          "histogram": {
+            "1": 618
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 618,
+          "placeholder": 0,
           "histogram": {
             "1": 618
           },
@@ -8117,6 +8415,16 @@
         "refinement": true,
         "measured": {
           "blocks": 7485,
+          "histogram": {
+            "1": 3039,
+            "2": 2235,
+            "3": 2211
+          },
+          "zero_length_refinement": 1849
+        },
+        "walked": {
+          "blocks": 7485,
+          "placeholder": 0,
           "histogram": {
             "1": 3039,
             "2": 2235,
@@ -8344,6 +8652,16 @@
             "3": 115
           },
           "zero_length_refinement": 2
+        },
+        "walked": {
+          "blocks": 180,
+          "placeholder": 0,
+          "histogram": {
+            "1": 63,
+            "2": 2,
+            "3": 115
+          },
+          "zero_length_refinement": 2
         }
       },
       "file_digest": {
@@ -8548,6 +8866,14 @@
             "1": 30
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 30,
+          "placeholder": 0,
+          "histogram": {
+            "1": 30
+          },
+          "zero_length_refinement": 0
         }
       },
       "file_digest": {
@@ -8713,6 +9039,15 @@
         "refinement": true,
         "measured": {
           "blocks": 57,
+          "histogram": {
+            "2": 21,
+            "3": 36
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 57,
+          "placeholder": 0,
           "histogram": {
             "2": 21,
             "3": 36
@@ -8888,6 +9223,15 @@
             "3": 102
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 309,
+          "placeholder": 0,
+          "histogram": {
+            "1": 207,
+            "3": 102
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -9015,6 +9359,14 @@
         "refinement": false,
         "measured": {
           "blocks": 309,
+          "histogram": {
+            "1": 309
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 309,
+          "placeholder": 0,
           "histogram": {
             "1": 309
           },
@@ -9149,6 +9501,15 @@
             "3": 90
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 273,
+          "placeholder": 0,
+          "histogram": {
+            "1": 183,
+            "3": 90
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -9274,6 +9635,14 @@
         "refinement": false,
         "measured": {
           "blocks": 273,
+          "histogram": {
+            "1": 273
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 273,
+          "placeholder": 0,
           "histogram": {
             "1": 273
           },
@@ -9408,6 +9777,15 @@
             "3": 52
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 159,
+          "placeholder": 0,
+          "histogram": {
+            "1": 107,
+            "3": 52
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -9537,6 +9915,14 @@
             "1": 159
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 159,
+          "placeholder": 0,
+          "histogram": {
+            "1": 159
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -9655,6 +10041,15 @@
             "3": 34
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 103,
+          "placeholder": 0,
+          "histogram": {
+            "1": 69,
+            "3": 34
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -9764,6 +10159,14 @@
         "refinement": false,
         "measured": {
           "blocks": 103,
+          "histogram": {
+            "1": 103
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 103,
+          "placeholder": 0,
           "histogram": {
             "1": 103
           },
@@ -9889,6 +10292,15 @@
         "refinement": true,
         "measured": {
           "blocks": 309,
+          "histogram": {
+            "1": 207,
+            "3": 102
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 309,
+          "placeholder": 0,
           "histogram": {
             "1": 207,
             "3": 102
@@ -10023,6 +10435,14 @@
             "1": 309
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 309,
+          "placeholder": 0,
+          "histogram": {
+            "1": 309
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -10140,6 +10560,14 @@
             "3": 103
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 103,
+          "placeholder": 0,
+          "histogram": {
+            "3": 103
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -10249,6 +10677,15 @@
         "refinement": true,
         "measured": {
           "blocks": 103,
+          "histogram": {
+            "1": 69,
+            "3": 34
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 103,
+          "placeholder": 0,
           "histogram": {
             "1": 69,
             "3": 34
@@ -10379,6 +10816,14 @@
             "3": 273
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 273,
+          "placeholder": 0,
+          "histogram": {
+            "3": 273
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -10504,6 +10949,14 @@
         "refinement": true,
         "measured": {
           "blocks": 273,
+          "histogram": {
+            "3": 273
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 273,
+          "placeholder": 0,
           "histogram": {
             "3": 273
           },
@@ -10638,6 +11091,15 @@
             "3": 90
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 273,
+          "placeholder": 0,
+          "histogram": {
+            "1": 183,
+            "3": 90
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -10757,6 +11219,14 @@
             "1": 103
           },
           "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 103,
+          "placeholder": 0,
+          "histogram": {
+            "1": 103
+          },
+          "zero_length_refinement": 0
         }
       },
       "kakadu_stats": {
@@ -10866,6 +11336,15 @@
         "refinement": true,
         "measured": {
           "blocks": 103,
+          "histogram": {
+            "1": 69,
+            "3": 34
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 103,
+          "placeholder": 0,
           "histogram": {
             "1": 69,
             "3": 34
@@ -10984,6 +11463,14 @@
         "refinement": false,
         "measured": {
           "blocks": 103,
+          "histogram": {
+            "1": 103
+          },
+          "zero_length_refinement": 0
+        },
+        "walked": {
+          "blocks": 103,
+          "placeholder": 0,
           "histogram": {
             "1": 103
           },
@@ -11122,9 +11609,18 @@
       },
       "passes": {
         "t803_placeholder_bset": false,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": false,
+        "refinement": true,
+        "measured": null,
+        "walked": {
+          "blocks": 125,
+          "placeholder": 0,
+          "histogram": {
+            "1": 110,
+            "3": 15
+          },
+          "zero_length_refinement": 0
+        }
       },
       "kakadu_stats": {
         "depth": 8,
@@ -11262,9 +11758,17 @@
       },
       "passes": {
         "t803_placeholder_bset": false,
-        "placeholder": null,
-        "refinement": null,
-        "measured": null
+        "placeholder": false,
+        "refinement": false,
+        "measured": null,
+        "walked": {
+          "blocks": 125,
+          "placeholder": 0,
+          "histogram": {
+            "1": 125
+          },
+          "zero_length_refinement": 0
+        }
       },
       "kakadu_stats": {
         "depth": 8,

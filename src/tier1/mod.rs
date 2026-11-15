@@ -401,6 +401,7 @@ mod tests {
                     chunks: vec![&[0x80][..]],
                 }],
                 cut: false,
+                placeholders: 0,
             }],
         }
     }

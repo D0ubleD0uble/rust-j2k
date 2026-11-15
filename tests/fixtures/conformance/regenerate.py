@@ -1079,6 +1079,92 @@ HT_PASSES = {
     "simple_enc_rev53_tall_narrow": (51, {1: 51}, 0),
 }
 
+# Coding passes per HT code-block, from this crate's own Tier-2 walk over every
+# packet header (`tier2::tests::ht::the_corpus_pass_counts_are_the_manifests`;
+# `cargo test --lib the_corpus_pass_counts -- --nocapture` prints them). The
+# walk needs no HT decoder, so it covers the files OpenJPEG refuses. The MIXED
+# files are left out: their main header is refused before the walk. name ->
+# (blocks with any pass, blocks with placeholder passes, {passes past the
+# placeholders: blocks}, blocks with refinement passes and no refinement
+# bytes). Where HT_PASSES has the file too, the two agree, which the test
+# checks.
+HT_WALKED = {
+    "ds0_ht_01_b11": (10, 0, {1: 10}, 0),
+    "ds0_ht_02_b11": (13, 13, {1: 9, 3: 4}, 0),
+    "ds0_ht_02_b12": (13, 13, {1: 13}, 0),
+    "ds0_ht_03_b11": (16, 11, {1: 12, 3: 4}, 0),
+    "ds0_ht_03_b14": (16, 11, {1: 16}, 0),
+    "ds0_ht_04_b11": (280, 258, {1: 204, 3: 76}, 0),
+    "ds0_ht_04_b12": (280, 258, {1: 280}, 0),
+    "ds0_ht_05_b11": (2534, 1944, {1: 1379, 2: 531, 3: 624}, 1),
+    "ds0_ht_05_b12": (2534, 1944, {1: 1682, 2: 531, 3: 321}, 1),
+    "ds0_ht_06_b11": (98, 93, {1: 60, 2: 1, 3: 37}, 1),
+    "ds0_ht_06_b15": (101, 94, {1: 76, 2: 1, 3: 24}, 1),
+    "ds0_ht_06_b18": (101, 94, {1: 93, 2: 1, 3: 7}, 1),
+    "ds0_ht_07_b11": (7621, 7528, {3: 7621}, 0),
+    "ds0_ht_07_b15": (7680, 7671, {1: 5376, 3: 2304}, 0),
+    "ds0_ht_07_b16": (7680, 7671, {1: 7680}, 0),
+    "ds0_ht_08_b11": (2523, 2517, {3: 2523}, 0),
+    "ds0_ht_08_b15": (2523, 2523, {1: 1741, 3: 782}, 0),
+    "ds0_ht_08_b16": (2523, 2523, {1: 2523}, 0),
+    "ds0_ht_09_b11": (14, 0, {3: 14}, 0),
+    "ds0_ht_10_b11": (120, 108, {1: 84, 3: 36}, 0),
+    "ds0_ht_11_b10": (2, 0, {1: 2}, 0),
+    "ds0_ht_12_b11": (8, 0, {1: 6, 3: 2}, 0),
+    "ds0_ht_13_b11": (256, 0, {1: 255, 3: 1}, 0),
+    "ds0_ht_14_b11": (42, 0, {1: 31, 3: 11}, 0),
+    "ds0_ht_15_b11": (16, 11, {1: 12, 3: 4}, 0),
+    "ds0_ht_15_b14": (16, 11, {1: 16}, 0),
+    "ds0_ht_16_b11": (10, 7, {1: 10}, 0),
+    "ds1_ht_01_b11": (13, 11, {1: 9, 3: 4}, 0),
+    "ds1_ht_01_b12": (13, 11, {1: 13}, 0),
+    "ds1_ht_02_b11": (280, 259, {1: 204, 3: 76}, 0),
+    "ds1_ht_02_b12": (280, 259, {1: 280}, 0),
+    "ds1_ht_03_b11": (2534, 2082, {1: 1415, 3: 1119}, 0),
+    "ds1_ht_03_b12": (2534, 2292, {1: 2534}, 0),
+    "ds1_ht_04_b9": (618, 0, {1: 618}, 0),
+    "ds1_ht_05_b11": (7485, 0, {1: 3039, 2: 2235, 3: 2211}, 1849),
+    "ds1_ht_06_b11": (180, 0, {1: 63, 2: 2, 3: 115}, 2),
+    "ds1_ht_07_b11": (30, 0, {1: 30}, 0),
+    "hifi_ht1_02": (57, 0, {2: 21, 3: 36}, 0),
+    "file1_b11": (309, 0, {1: 207, 3: 102}, 0),
+    "file1_b12": (309, 0, {1: 309}, 0),
+    "file2_b11": (273, 0, {1: 183, 3: 90}, 0),
+    "file2_b12": (273, 0, {1: 273}, 0),
+    "file3_b11": (159, 0, {1: 107, 3: 52}, 0),
+    "file3_b12": (159, 0, {1: 159}, 0),
+    "file4_b11": (103, 0, {1: 69, 3: 34}, 0),
+    "file4_b12": (103, 0, {1: 103}, 0),
+    "file5_b11": (309, 0, {1: 207, 3: 102}, 0),
+    "file5_b12": (309, 0, {1: 309}, 0),
+    "file6_b11": (103, 0, {3: 103}, 0),
+    "file6_b15": (103, 0, {1: 69, 3: 34}, 0),
+    "file7_b11": (273, 0, {3: 273}, 0),
+    "file7_b15": (273, 0, {3: 273}, 0),
+    "file7_b19": (273, 0, {1: 183, 3: 90}, 0),
+    "file8_b11": (103, 0, {1: 103}, 0),
+    "file9_b11": (103, 0, {1: 69, 3: 34}, 0),
+    "file9_b12": (103, 0, {1: 103}, 0),
+    "file10_b11": (125, 0, {1: 110, 3: 15}, 0),
+    "file10_b12": (125, 0, {1: 125}, 0),
+    "simple_dec_irv97_64x64_16bit_gray": (39, 0, {1: 32, 3: 7}, 0),
+    "simple_dec_irv97_64x64_16bit": (40, 0, {1: 14, 2: 17, 3: 9}, 0),
+    "simple_dec_irv97_64x64_gray_tiles": (637, 0, {1: 215, 2: 250, 3: 172}, 0),
+    "simple_dec_irv97_64x64_tiles_yuv": (315, 0, {1: 110, 2: 85, 3: 120}, 0),
+    "simple_dec_irv97_64x64_yuv": (58, 0, {1: 40, 2: 7, 3: 11}, 0),
+    "simple_dec_rev53_64x64_tiles_yuv": (879, 0, {1: 879}, 0),
+    "simple_dec_rev53_64x64_yuv": (99, 0, {1: 99}, 0),
+    "simple_enc_irv97_64x64_16bit_gray": (49, 0, {1: 49}, 0),
+    "simple_enc_irv97_64x64_16bit": (96, 0, {1: 96}, 0),
+    "simple_enc_irv97_64x64": (438, 0, {1: 438}, 0),
+    "simple_enc_irv97_64x64_yuv": (73, 0, {1: 73}, 0),
+    "simple_enc_irv97_tall_narrow1": (32, 0, {1: 32}, 0),
+    "simple_enc_irv97_tall_narrow": (34, 0, {1: 34}, 0),
+    "simple_enc_rev53_64x64_yuv": (99, 0, {1: 99}, 0),
+    "simple_enc_rev53_tall_narrow1": (62, 0, {1: 62}, 0),
+    "simple_enc_rev53_tall_narrow": (51, 0, {1: 51}, 0),
+}
+
 # The JPH files: N -> the magnitude bounds provided. The highest bound of each
 # set is lossless against fileN.jp2's codestream (Kakadu's stats are 0).
 JPH_BOUNDS = {
@@ -1336,22 +1422,36 @@ def jp2c_range(data: bytes, path: str):
 def passes_record(name: str, placeholder_bset: bool) -> dict:
     """What is known about the coding passes of `name`'s HT code-blocks."""
     measured = HT_PASSES.get(name)
+    walked = HT_WALKED.get(name)
     record = {"t803_placeholder_bset": placeholder_bset}
-    if measured is None:
-        record.update(placeholder=None, refinement=None, measured=None)
-        return record
-    blocks, histogram, zero_refinement = measured
-    if sum(histogram.values()) != blocks:
-        raise ValueError(f"{name}: pass histogram does not sum to {blocks}")
-    record.update(
-        placeholder=max(histogram) > 3,
-        refinement=max(histogram) > 1,
-        measured={
-            "blocks": blocks,
-            "histogram": {str(k): v for k, v in sorted(histogram.items())},
-            "zero_length_refinement": zero_refinement,
-        },
-    )
+    record.update(placeholder=None, refinement=None, measured=None, walked=None)
+    if measured is not None:
+        blocks, histogram, zero_refinement = measured
+        if sum(histogram.values()) != blocks:
+            raise ValueError(f"{name}: pass histogram does not sum to {blocks}")
+        record.update(
+            placeholder=max(histogram) > 3,
+            refinement=max(histogram) > 1,
+            measured={
+                "blocks": blocks,
+                "histogram": {str(k): v for k, v in sorted(histogram.items())},
+                "zero_length_refinement": zero_refinement,
+            },
+        )
+    if walked is not None:
+        blocks, placeholder, histogram, zero_refinement = walked
+        if sum(histogram.values()) != blocks:
+            raise ValueError(f"{name}: walked histogram does not sum to {blocks}")
+        record.update(
+            placeholder=placeholder > 0,
+            refinement=max(histogram) > 1,
+            walked={
+                "blocks": blocks,
+                "placeholder": placeholder,
+                "histogram": {str(k): v for k, v in sorted(histogram.items())},
+                "zero_length_refinement": zero_refinement,
+            },
+        )
     return record
 
 
@@ -1730,8 +1830,9 @@ def main_ht():
                 "under OpenJPEG; file10_b12 bit-exact against reference_jph"
             ),
             "passes": (
-                "opj_decompress 2.5.0 with a print of each HT block's pass count added "
-                "to opj_t1_ht_decode_cblk; see HT_PASSES in regenerate.py"
+                "measured: opj_decompress 2.5.0 with a print of each HT block's pass count "
+                "added to opj_t1_ht_decode_cblk, see HT_PASSES in regenerate.py; walked: "
+                "this crate's Tier-2 walk of every packet header, see HT_WALKED"
             ),
             "openjpeg": "opj_decompress 2.5.0 on the bare codestream; sub-sampled files with -c K",
             "license": (

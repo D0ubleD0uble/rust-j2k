@@ -44,6 +44,18 @@ fn a_cut_packet_keeps_each_code_blocks_whole_layers() {
     );
 }
 
+/// The same for HT code-blocks: `ds0_ht_02_b11` (six layers, LRCP), whose
+/// blocks' first contributions are placeholder passes, with the cleanup pass
+/// and refinement passes in later layers. A cut HT segment is undone as a
+/// Part 1 one is.
+#[test]
+fn a_cut_packet_keeps_whole_layers_of_ht_code_blocks() {
+    assert!(
+        whole_layers("conformance/ht/codestreams/ds0_ht_02_b11.j2k", 6),
+        "no cut kept a block at an earlier layer beside a whole one"
+    );
+}
+
 /// The same under the code-block styles that end segments within a block's
 /// passes (bypass, restart) or not (the others), two layers each: a block
 /// whose layer 2 continues its layer 1 segment and opens another keeps
@@ -86,8 +98,9 @@ fn a_cut_packet_keeps_whole_layers_under_predictable_termination() {
 /// its own: a block that lacks a layer the whole file gives it has a later
 /// packet of its precinct missing, so its one segment is cut, under a style
 /// that does not end segments within a block's passes. Under `restart` each
-/// segment is one pass and whole, so none is cut. `bypass` ends some
-/// segments, so it is not checked here.
+/// segment is one pass and whole, so none is cut. `bypass` and HT end some
+/// segments (an HT cleanup segment holds every pass it can), so neither is
+/// checked here.
 fn whole_layers(name: &str, layers: u16) -> bool {
     let bytes = std::fs::read(format!(
         "{}/tests/fixtures/{name}",
@@ -104,7 +117,8 @@ fn whole_layers(name: &str, layers: u16) -> bool {
     let restart = style & crate::codestream::markers::code_block_style::TERMALL != 0;
     let one_segment = style
         & (crate::codestream::markers::code_block_style::TERMALL
-            | crate::codestream::markers::code_block_style::LAZY)
+            | crate::codestream::markers::code_block_style::LAZY
+            | crate::codestream::markers::code_block_style::HT)
         == 0;
     let mut cuts = 0;
 

@@ -16,6 +16,7 @@ fn block(width: usize, height: usize, zbp: u32, bytes: &[u8]) -> CodeBlock<'_> {
             chunks: vec![bytes],
         }],
         cut: false,
+        placeholders: 0,
     }
 }
 

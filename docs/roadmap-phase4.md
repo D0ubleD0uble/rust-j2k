@@ -104,7 +104,7 @@ backward from its end.
 
 ### Tier-2
  An HT block's passes split into segments by the rule of B.2, not by the Part 1
-`segment_max_passes` rule. In the packet with a block's first contribution, the
+rule. In the packet with a block's first contribution, the
 first segment holds the placeholder passes plus the one cleanup pass, `3k + 1`
 passes in all, and the second holds up to two refinement passes (B.3). The first
 contribution can also hold only placeholder passes (B.3 NOTE 4); the cleanup
@@ -422,6 +422,46 @@ placeholder passes, and OpenJPH reads one quality layer only.
 
 **Gate:** no HT codestream fails with a Tier-2 error; every entry that needs
 only cleanup passes is in class; the Part 1 Tier-2 fixtures are unchanged.
+
+**Done (#341).** `SegmentKind` in `src/tier2/mod.rs` names each segment
+(MQ, raw, HT cleanup, HT refinement), and `next_segment` gives the kind and
+pass limit of the next one. The HT length limits are checked as each length
+field is added. Findings:
+
+- A count alone does not say whether a first contribution holds the cleanup
+  pass: placeholder passes come in threes, so `3k + 1` passes could be
+  placeholders plus the cleanup pass, or (with earlier placeholders) only
+  placeholders. The length field decides. With `prior` passes before this
+  contribution and `new` in it, the placeholders before the cleanup pass are
+  `p = 3 floor((prior + new - 1) / 3)`. If `p >= prior`, the first
+  `Lblock + floor(log2(p + 1 - prior))` bits are the cleanup segment's length:
+  nonzero, the contribution holds the cleanup pass (a length of 1 is an
+  error, since `Scup >= 2`); zero, it holds placeholders only, and the rest of
+  its `Lblock + floor(log2(new))` bits must be zero too, since placeholder
+  passes carry no bytes. If `p < prior`, every pass is a placeholder. The
+  rule walks every HT codestream in the corpus without a Tier-2 error.
+- The walk's pass counts are in each manifest entry (`passes.walked`, from
+  `HT_WALKED` in `regenerate.py`): code-blocks, those with placeholder
+  passes, and a histogram of coded passes. They equal OpenJPEG's own counts
+  (`passes.measured`) on every file OpenJPEG decodes. The conformance test
+  checks that an entry is in class exactly when every block needs only its
+  cleanup pass and no `RGN` applies.
+- 8 more Part 4 files are in class, 12 in all. `ds0_ht_02_b12`,
+  `ds0_ht_07_b16`, `ds0_ht_08_b16`, `ds0_ht_16_b11` and `ds1_ht_01_b12` are
+  bit-exact; `ds0_ht_04_b12`, `ds1_ht_02_b12` and `ds1_ht_03_b12` are within
+  class. OpenJPEG refuses all 8, so they are graded against the Part 4
+  references alone. The rest are refused with a pinned reason: refinement
+  passes, ROI, MIXED.
+- A layer cap that leaves out the refinement layers now decodes files that
+  are otherwise refused (`ds0_ht_02_b11` at `-l 1` to `4`, `ds0_ht_04_b11` at
+  `1` to `18`, `ds0_ht_05_b11` at `1` to `4`, `ds1_ht_01_b11` at `1` to `3`).
+  These are cleanup-only reconstructions with no oracle yet:
+  `a_cap_before_the_refinement_layers_decodes_cleanup_only` checks only that
+  they decode with the right dimensions.
+- `Z_blk = 1` for a refinement segment of zero length (B.3) is left to
+  P4.4: no file in the corpus needs only its cleanup pass by that rule alone.
+- The packet work count needed no change: `Meter` charges per packet, per
+  unread span and per loop point, not per pass.
 
 ### P4.4 — SigProp and MagRef passes (`src/tier1/ht/`)
 

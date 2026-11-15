@@ -149,6 +149,30 @@ pub struct Passes {
     /// Whether any block has a SigProp or MagRef pass; unknown unless measured.
     pub refinement: Option<bool>,
     pub measured: Option<Measured>,
+    /// Pass counts from the crate's own Tier-2 walk; absent where the main
+    /// header is refused before it (MIXED).
+    pub walked: Option<Walked>,
+}
+
+/// Pass counts from the crate's Tier-2 walk of every packet header
+/// (`HT_WALKED` in `regenerate.py`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Walked {
+    /// Blocks with any pass.
+    pub blocks: u64,
+    /// Blocks with placeholder passes.
+    pub placeholder: u64,
+    /// Passes past the placeholders -> number of blocks.
+    pub histogram: BTreeMap<String, u64>,
+    pub zero_length_refinement: u64,
+}
+
+impl Walked {
+    /// Whether every block needs at most its cleanup pass.
+    pub fn cleanup_only(&self) -> bool {
+        self.histogram.keys().all(|k| k == "0" || k == "1")
+    }
 }
 
 /// Pass counts measured with OpenJPEG on a file it decodes in full.

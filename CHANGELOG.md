@@ -9,10 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - HTJ2K codestreams decode when each code-block carries only its cleanup
-  pass. The output matches OpenJPEG 2.5.0 and OpenJPH: bit for bit on the
-  reversible files, and within the conformance bounds on the irreversible
-  ones. An HT code-block with more passes, a mixed-mode code-block style,
-  and region of interest on an HT code-block are `Error::Unsupported`.
+  pass, in any number of quality layers, with or without placeholder
+  passes before it. The output matches OpenJPEG 2.5.0 and OpenJPH on the
+  files they decode: bit for bit on the reversible files, and within the
+  conformance bounds on the irreversible ones. Neither decodes the
+  multi-layer files with placeholder passes, so those are graded against
+  the ISO/IEC 15444-4 reference images alone. An HT code-block with refinement passes, a mixed-mode
+  code-block style, and region of interest on an HT code-block are
+  `Error::Unsupported`.
 - `Error::Incomplete`: the input ends before the codestream's main header is
   whole, that is, before its first `SOT` marker is complete. It begins at the
   empty input and, in a JP2 file, covers the signature box, the top-level
