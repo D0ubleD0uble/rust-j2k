@@ -536,7 +536,7 @@ def subsampled_fixtures() -> None:
 
 def sycc_fixture(
     tmp: Path, name: str, width: int, height: int, chroma: tuple[int, int],
-    origin: tuple[int, int],
+    origin: tuple[int, int], tile: tuple[int, int] | None = None,
 ) -> None:
     """A three-component sYCC file at `origin` with chroma sub-sampled by `chroma`."""
     dx, dy = chroma
@@ -553,6 +553,8 @@ def sycc_fixture(
     (tmp / "sycc.raw").write_bytes(bytes(raw))
     flags = ["-F", f"{width},{height},3,8,u@1x1:{dx}x{dy}:{dx}x{dy}", "-d", f"{x0},{y0}",
              "-mct", "0", "-n", "2"]
+    if tile:
+        flags += ["-t", f"{tile[0]},{tile[1]}"]
     run("opj_compress", "-i", str(tmp / "sycc.raw"), "-o", str(tmp / "sycc.j2k"), *flags)
     codestream = (tmp / "sycc.j2k").read_bytes()
     command = "opj_compress -i sycc.raw -o sycc.j2k " + " ".join(flags)
@@ -591,7 +593,8 @@ def sycc_fixture(
 
     # Converted: opj_decompress on the .jp2 itself applies its sYCC to RGB, at
     # full resolution and one level down (`-r 1`).
-    for suffix, flags in [("srgb", ()), ("srgb_r1", ("-r", "1"))]:
+    # The tiled file is only a decode-option fixture, so it has no snapshots.
+    for suffix, flags in [] if tile else [("srgb", ()), ("srgb_r1", ("-r", "1"))]:
         converted, _ = opj_decode(data, ".jp2", flags=flags)
         reduced = flags != ()
         size = (half(x0, luma["width"]), half(y0, luma["height"])) if reduced else (
@@ -629,6 +632,8 @@ def sycc_fixtures() -> None:
     ]:
         with tempfile.TemporaryDirectory() as tmp:
             sycc_fixture(Path(tmp), name, width, height, chroma, origin)
+    with tempfile.TemporaryDirectory() as tmp:
+        sycc_fixture(Path(tmp), "jp2_sycc_420_tiled", 14, 12, (2, 2), (5, 3), tile=(8, 8))
 
 
 def main() -> None:

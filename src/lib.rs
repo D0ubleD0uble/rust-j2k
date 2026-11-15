@@ -698,8 +698,9 @@ pub struct DecodeOptions {
     /// sub-sampling `dx` ([`ComponentInfo::width`] gives the formula for the
     /// whole image). The samples are those of a whole decode at the same
     /// position. [`ColorOutput::Srgb`] from sYCC with sub-sampled chroma is
-    /// [`Error::Unsupported`] when the window is smaller than the image area,
-    /// as the chroma replication depends on where the decoded area starts.
+    /// [`Error::Unsupported`] when the window, cut to the image area, does not
+    /// cover all of it, as the chroma replication depends on where the
+    /// decoded area starts.
     ///
     /// Only the tiles the window reaches are decoded, so a small window of a
     /// large tiled image costs a few tiles. The packets of the other tiles
@@ -740,7 +741,7 @@ pub struct DecodeOptions {
     /// The result is the decode with [`window`](Self::window) set to the
     /// tile's rectangle on the reference grid: its size, its samples and its
     /// failures, the refusal of sRGB output from sub-sampled sYCC included (unless
-    /// the tile is the whole image).
+    /// the image is one tile).
     /// A tile index past the tile grid is [`Error::InvalidOptions`], and so
     /// is setting both this and [`window`](Self::window).
     pub tile: Option<u32>,

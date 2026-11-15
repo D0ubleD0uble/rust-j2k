@@ -81,6 +81,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `strict` off, the report describes what the decode returns: the tiles it
   reads, the components it reconstructs, and the code-blocks the window's
   samples depend on. Data missing elsewhere does not make it incomplete.
+  `ColorOutput::Srgb` from sYCC with sub-sampled chroma is
+  `Error::Unsupported` when the area is not the whole image, as the chroma
+  replication depends on where the area starts.
 
 ### Changed
 

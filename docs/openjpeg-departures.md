@@ -1466,12 +1466,12 @@ than drop one of them.
 
 | | |
 | - | - |
-| This decoder | refuses `ColorOutput::Srgb` with `DecodeOptions::window` or `DecodeOptions::tile` when the sYCC chroma is sub-sampled (4:2:0 or 4:2:2) and the decoded area differs from the image area on the reference grid, as `Unsupported`; an area equal to the image (a window clipped to it, or the only tile) decodes as the plain decode does, at any reduction |
+| This decoder | refuses `ColorOutput::Srgb` with `DecodeOptions::window` or `DecodeOptions::tile` when the sYCC chroma is sub-sampled (4:2:0 or 4:2:2) and the decoded area differs from the image area on the reference grid, as `Unsupported`; an area equal to the image a window that covers the whole image, or the only tile decodes as the plain decode does, at any reduction |
 | OpenJPEG 2.5.0 | `opj_decompress -d` or `-t` with sYCC output converts the decoded area alone: it replicates the chroma by the parity of the area's origin, so the result is not the crop of the whole image's conversion |
 | Standard | silent: the sYCC conversion and decode options are outside it |
 | Rule | 3 |
-| Tests and fixtures | `tests/decode_window.rs` (`srgb_from_sub_sampled_sycc_refuses_a_window`), `tests/fixtures/jp2_sycc_420_*.jp2`, `jp2_sycc_422_*.jp2` |
-| Decided | 2026-11-15, #216 |
+| Tests and fixtures | `tests/decode_window.rs` (`srgb_from_sub_sampled_sycc_refuses_a_window`, `srgb_from_sub_sampled_sycc_decodes_an_area_equal_to_the_image`, `srgb_from_tiled_sycc_refuses_a_tile`), `tests/fixtures/jp2_sycc_420_*.jp2`, `jp2_sycc_422_*.jp2`, `jp2_sycc_420_tiled.jp2` |
+| Decided | 2026-11-15, #216, #374 |
 
 A window should hold the samples of the whole decode at the same place, and
 here neither OpenJPEG's answer nor a conversion keyed on the window gives

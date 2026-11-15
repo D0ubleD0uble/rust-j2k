@@ -623,3 +623,38 @@ fn srgb_from_sub_sampled_sycc_decodes_an_area_equal_to_the_image() {
         }
     }
 }
+
+/// On a tiled sYCC image (14x12, 4:2:0, six tiles) a window over the whole
+/// image decodes as the plain sRGB decode does, at reductions 0 and 1, and
+/// a tile, which is part of the image, is refused at reduction 0, from the
+/// header and from the decode alike.
+#[test]
+fn srgb_from_tiled_sycc_refuses_a_tile() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let bytes = std::fs::read(dir.join("jp2_sycc_420_tiled.jp2")).unwrap();
+    let srgb = DecodeOptions::default().with_color(ColorOutput::Srgb);
+    for reduction in [0, 1] {
+        let plain = srgb.clone().with_resolution_reduction(reduction);
+        let whole = decode_ok(&bytes, &plain, "plain");
+        let options = plain.with_window(Some(Window::new(0, 0, u32::MAX, u32::MAX)));
+        let part = decode_ok(&bytes, &options, "window");
+        assert_eq!((part.width, part.height), (whole.width, whole.height));
+        for (p, w) in part.components.iter().zip(&whole.components) {
+            assert_eq!(p.samples, w.samples, "r{reduction}");
+        }
+    }
+    for tile in 0..6 {
+        let options = srgb.clone().with_tile(Some(tile));
+        assert!(
+            matches!(decode_with(&bytes, &options), Err(Error::Unsupported(_))),
+            "tile {tile}"
+        );
+        assert!(
+            matches!(
+                read_header_with(&bytes, &options),
+                Err(Error::Unsupported(_))
+            ),
+            "tile {tile}"
+        );
+    }
+}
