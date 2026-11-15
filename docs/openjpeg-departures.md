@@ -50,6 +50,9 @@ refusal under `ColorOutput::Srgb`).
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
+| [Some of the components, under the color transform](#some-of-the-components-under-the-color-transform) | applies the transform; OpenJPEG skips it under `-c` | 1 |
+| [A window and a tile together](#a-window-and-a-tile-together) | refuses; OpenJPEG ignores the window | 3 |
+| [sRGB from sub-sampled sYCC in a window](#srgb-from-sub-sampled-sycc-in-a-window) | refuses; OpenJPEG converts the window on its own | 3 |
 
 None of the box entries changes the samples.
 
@@ -1355,3 +1358,56 @@ left over gives `None` and the decode goes on, as in OpenJPEG:
 `ML` to 255, to the same samples as the unmodified file. The values (an `ML`
 outside 1, 2, 4 and 8, an unknown feature) are reported, not checked. Files 5
 and 7 of the Part 4 set carry an `rreq`.
+
+## Some of the components, under the color transform
+
+| | |
+| - | - |
+| This decoder | decodes components 0, 1 and 2 together when `DecodeOptions::components` asks for any of them, applies the color transform, and returns the ones asked for: those components of the whole decode |
+| OpenJPEG 2.5.0 | skips the color transform whenever a component list is set, even `-c 0,1,2`, and returns the components before it (`opj_tcd_mct_decode`, `tcd.c:2054`: `if (l_tcp->mct == 0 \|\| p_tcd->used_component != NULL) return OPJ_TRUE;`) |
+| Standard | ISO/IEC 15444-1 G.2 (RCT) and G.3 (ICT): the image's components 0, 1 and 2 are the output of the inverse transform, which needs all three of its inputs |
+| Rule | 1 |
+| Tests and fixtures | `tests/decode_window.rs` on `tests/fixtures/window/tiled_53.j2k` and `tiled_97.j2k` |
+| Decided | 2026-11-15, #216: return the full-decode values |
+
+Under `-c`, OpenJPEG writes Y, Cb and Cr where the whole decode has red, green
+and blue. `scripts/gen-window-fixtures.py` checks that its `-c` output differs
+from the whole decode's components on both codestreams with the transform, and
+records the whole decode's components as the oracle there. On
+`tiled_53_nomct.j2k`, which has no transform, the two agree and the oracle is
+OpenJPEG's `-c` output.
+
+Kakadu's default output-component mode does the same as this decoder: a
+subset of the components comes out after the color transform. Its
+`-codestream_components` option is the opt-in for the values before it.
+
+## A window and a tile together
+
+| | |
+| - | - |
+| This decoder | refuses `DecodeOptions::window` and `DecodeOptions::tile` set together, as `InvalidOptions` |
+| OpenJPEG 2.5.0 | `opj_decompress -t 0 -d x0,y0,x1,y1` warns "-d option ignored when used together with -t" and decodes the tile |
+| Standard | silent: decode options are outside it |
+| Rule | 3 |
+| Tests and fixtures | `tests/decode_window.rs` (`bad_options_are_invalid`) |
+| Decided | 2026-11-14, #216 |
+
+The two options ask for different areas, so the decode refuses the pair rather
+than drop one of them.
+
+## sRGB from sub-sampled sYCC in a window
+
+| | |
+| - | - |
+| This decoder | refuses `ColorOutput::Srgb` with `DecodeOptions::window` or `DecodeOptions::tile` when the sYCC chroma is sub-sampled (4:2:0 or 4:2:2), as `Unsupported` |
+| OpenJPEG 2.5.0 | `opj_decompress -d` or `-t` with sYCC output converts the decoded area alone: it replicates the chroma by the parity of the area's origin, so the result is not the crop of the whole image's conversion |
+| Standard | silent: the sYCC conversion and decode options are outside it |
+| Rule | 3 |
+| Tests and fixtures | `tests/decode_window.rs` (`srgb_from_sub_sampled_sycc_refuses_a_window`), `tests/fixtures/jp2_sycc_420_*.jp2`, `jp2_sycc_422_*.jp2` |
+| Decided | 2026-11-15, #216 |
+
+A window should hold the samples of the whole decode at the same place, and
+here neither OpenJPEG's answer nor a conversion keyed on the window gives
+them. Converting with the whole image's chroma phase would; until that is
+built, the decode refuses. sRGB output that does not replicate chroma (RGB,
+gray, sYCC at full resolution, ICC) works with a window.

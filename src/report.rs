@@ -44,14 +44,20 @@ use core::ops::Range;
 #[non_exhaustive]
 pub struct DecodeReport {
     /// What was missing, skipped or irregular, in the order the decoder met
-    /// them. Empty when the codestream was whole.
+    /// them. Empty when the codestream was whole. Under a
+    /// [`window`](crate::DecodeOptions::window) or
+    /// [`tile`](crate::DecodeOptions::tile), only the tiles the decode reads
+    /// are reported, and a run of missing tiles runs from the first of them
+    /// to the last.
     ///
     /// The list is bounded by the input: at most five entries per tile-part
     /// the codestream carries, plus two. A run of missing tiles is one
     /// [`ReportEntry::MissingTiles`] entry, however many tiles it spans.
     pub entries: Vec<ReportEntry>,
     /// The smallest [`resolution_reduction`](crate::DecodeOptions::resolution_reduction)
-    /// at which every tile has every packet: a decode at this reduction, or
+    /// at which every tile has every packet (every tile the decode reads, under
+    /// a [`window`](crate::DecodeOptions::window) or
+    /// [`tile`](crate::DecodeOptions::tile)): a decode at this reduction, or
     /// any larger one the file allows, gives the same samples as a decode of
     /// the whole codestream. Under a
     /// [`max_quality_layers`](crate::DecodeOptions::max_quality_layers) cap,

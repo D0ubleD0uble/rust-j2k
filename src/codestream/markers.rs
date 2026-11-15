@@ -352,6 +352,19 @@ impl Rect {
         self.x1 <= self.x0 || self.y1 <= self.y0
     }
 
+    /// The part of this rectangle inside `other`, on the same grid. It can
+    /// be empty (see [`is_empty`](Self::is_empty)); its bounds then still
+    /// hold `x0 <= x1` and `y0 <= y1`.
+    pub fn intersect(&self, other: &Rect) -> Rect {
+        let (x0, y0) = (self.x0.max(other.x0), self.y0.max(other.y0));
+        Rect {
+            x0,
+            y0,
+            x1: self.x1.min(other.x1).max(x0),
+            y1: self.y1.min(other.y1).max(y0),
+        }
+    }
+
     /// The same rectangle on the grid `reduction` resolution levels coarser:
     /// **each bound** divided by `2^reduction`, rounding up (ISO B.5's
     /// `trx0 = ceil(tcx0 / 2^r)`). Rounding the bounds rather than the extent is
@@ -371,6 +384,33 @@ impl Rect {
 }
 
 impl Siz {
+    /// The image area on the reference grid: `XOsiz..Xsiz` by `YOsiz..Ysiz`.
+    pub fn image_rect(&self) -> Rect {
+        Rect {
+            x0: self.x_offset,
+            y0: self.y_offset,
+            x1: self.x_size,
+            y1: self.y_size,
+        }
+    }
+
+    /// This SIZ with its image area replaced by `area`, a rectangle inside
+    /// it on the reference grid: the geometry a decode of only that area
+    /// returns. Every extent and component rectangle then follows OpenJPEG's
+    /// `opj_set_decode_area`, which sets the image bounds to the area and
+    /// derives each component's from them as SIZ's are derived (B.2). Only
+    /// the output side reads it; the tiles are still decoded on the real
+    /// SIZ's grid.
+    pub fn windowed(&self, area: Rect) -> Siz {
+        Siz {
+            x_offset: area.x0,
+            y_offset: area.y0,
+            x_size: area.x1,
+            y_size: area.y1,
+            ..self.clone()
+        }
+    }
+
     /// The tile grid: how many tiles span the image horizontally and vertically
     /// (ISO/IEC 15444-1 B.3, Eq. B-5):
     ///

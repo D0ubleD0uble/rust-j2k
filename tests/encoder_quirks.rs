@@ -28,7 +28,7 @@ fn bytes(name: &str) -> Vec<u8> {
 /// Decodes, sample for sample equal to `opj_decompress`, and `read_header`
 /// describes it.
 fn matches_the_oracle(name: &str) {
-    let fixtures = discover(path(name).parent().unwrap());
+    let fixtures = discover(path(name).parent().unwrap()).expect("read tests/fixtures");
     let fixture = fixtures.iter().find(|f| f.name == name).unwrap();
     match run_fixture(fixture) {
         Outcome::Passed => {}

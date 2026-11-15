@@ -12,7 +12,8 @@
 //! input picks), at reduction 0 or 1, and checked against the strict decode
 //! of the same bytes (`common/partial.rs`): when the strict decode gives an
 //! image, the decode with `strict` off gives the same image with the
-//! complete report, and the report stays within its bound.
+//! complete report, and the report stays within its bound. A quarter of the
+//! inputs are decoded through a window.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -24,7 +25,19 @@ const MAX_CUT_INPUT: usize = 1 << 16;
 
 fuzz_target!(|data: &[u8]| {
     let hash = fnv1a(data);
-    let options = rust_j2k::DecodeOptions::default().with_resolution_reduction((hash & 1) as u8);
+    let mut options =
+        rust_j2k::DecodeOptions::default().with_resolution_reduction((hash & 1) as u8);
+    // A quarter of the inputs through a window, so the report keeps only the
+    // tiles it reads.
+    if (hash >> 40) & 3 == 0 {
+        let corner = |shift: u32| ((hash >> shift) & 0x1F) as u32;
+        options = options.with_window(Some(rust_j2k::Window::new(
+            corner(42),
+            corner(47),
+            corner(42) + 1 + corner(52),
+            corner(47) + 1 + corner(57),
+        )));
+    }
     partial::check(data, &options, &rust_j2k::decode_with(data, &options));
     if data.len() > 1 && data.len() <= MAX_CUT_INPUT {
         let cut = &data[..(hash >> 1) as usize % data.len()];
