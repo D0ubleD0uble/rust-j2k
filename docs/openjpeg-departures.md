@@ -46,6 +46,7 @@ refusal under `ColorOutput::Srgb`).
 | [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps and packed-header overruns handled differently | 1, 3 |
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
+| [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
@@ -504,7 +505,7 @@ passes cost the same against the code-block work bound as passes with bytes.
 | - | - |
 | This decoder | refuses each stream below |
 | OpenJPEG 2.5.0 | decodes it, with a warning or none, or with invented values |
-| Standard | B.11 (only whole packets may be missing), Table A-33 (POC ranges), the step count a decomposition needs, T.814 7.1 and 7.6 (HT cleanup segments) |
+| Standard | B.11 (only whole packets may be missing), Table A-33 (POC ranges), the step count a decomposition needs, T.814 7.1 and 7.6 (HT cleanup segments), T.814 7.1.5 (HT refinement segments) |
 | Rule | 3 |
 | Tests and fixtures | the reject matrix in `src/codestream/tests.rs`; `tests/fixtures/partial/tp_r.j2k`; the refusal tests in `src/tier1/ht/tests.rs` |
 | Decided | the interop rules: 2026-11-12, and #269 |
@@ -522,7 +523,9 @@ warn-and-continue bets the output on a parse that has already gone wrong.
 Three parse-time checks are stricter for a different reason: the field is
 malformed, or the codestream is missing data the standard requires and
 OpenJPEG fills the gap with invented values. Four checks on HT cleanup
-segments are of the same kind ([HT cleanup segments](#ht-cleanup-segments)).
+segments and one on HT refinement segments are of the same kind ([HT cleanup
+segments](#ht-cleanup-segments), [HT refinement
+segments](#ht-refinement-segments)).
 The entries below give each one.
 
 ### SOP sequence numbers
@@ -668,6 +671,22 @@ single-block codestream:
 
 Both decoders refuse `Scup` outside `2..=min(Lcup, 4079)`, `U_q` above
 `P + 2`, and a quad that codes a significant sample outside the block.
+
+### HT refinement segments
+
+A SigProp byte after 0xFF with its stuffing bit set is refused as
+`Codestream`; T.814 7.1.5 calls it an error. OpenJPEG 2.5.0 ORs the bit into
+the next byte's bits and decodes on. Measured on a single-block codestream: a
+4x2 block with one zero bit-plane in a subband of 8, the cleanup segment
+`52 70 63 00` and the refinement segment `FF 80`. OpenJPEG gives the same
+samples as for `FF 00`, `[224, 176, 176, 176, 80, 176, 176, 176]`.
+
+With valid refinement segments the two decoders agree on these blocks, and
+on 1x2 blocks through all three passes, except where a MagRef byte has a set
+stuffing bit ([Set stuffing bits in the HT VLC and MagRef
+streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams)). Both decode a
+block's cleanup pass alone when its refinement segment is empty
+(`Z_blk = 1`, B.3) or when the cleanup pass codes the block's last bit-plane.
 
 ### Two faults in one file
 
@@ -1030,6 +1049,54 @@ bit-planes as placeholder passes, which carry no bytes (B.1). OpenJPEG's
 `opj_t2_read_packet_header` (`t2.c`) and `opj_t1_ht_decode_cblk` (`ht_dec.c`)
 do not handle them. This decoder reads them as B.3 says and matches the Part 4
 references on those files.
+
+## Set stuffing bits in the HT VLC and MagRef streams
+
+| | |
+| - | - |
+| This decoder | skips the stuffing bit, set or not |
+| OpenJPEG 2.5.0 | ORs a set stuffing bit into the lowest bit of the next byte, so the bits after it change |
+| Standard | T.814 7.1.4 (`initVLC`, `importVLCBit`) and 7.1.6 (`importMagRefBit`) |
+| Rule | 1 |
+| Tests and fixtures | `vlc_skips_a_set_stuffing_bit`, `a_set_vlc_stuffing_bit_does_not_change_the_block` and `magref_reads_backward_lsb_first_unstuffs_and_zero_fills` in `src/tier1/ht/tests.rs` |
+| Decided | 2026-11-15, follow T.814 (skip the bit) |
+
+The HT VLC and MagRef streams are read backward. A byte whose seven low bits
+are all ones, after a byte above 0x8F, carries a stuffing bit in its top bit.
+The first MagRef byte read (the segment's last) counts as following such a
+byte. The VLC stream's first nibble (the top half of byte `Lcup - 2`) carries
+one when its three low bits are ones. The packers of the informative F.4
+(`emitVLCBits`, `emitMRBit`) write it as 0. T.814 tells the decoder to skip it:
+`importVLCBit` and `importMagRefBit` take 7 bits from such a byte, and
+`initVLC` takes 3 from such a nibble. The 7.1.6 note says "the MSB of the last
+byte in the HT MagRef byte-stream will be skipped if its seven LSBs are all
+1". Neither procedure calls `error()`, unlike `importSigPropBit` and
+`importMagSgnBit`: the standard expects a set bit may arrive and says to skip
+it.
+
+OpenJPEG's `rev_init`, `rev_read` and `rev_read_mrp` (`ht_dec.c`) shift the
+next byte in one place lower but keep the whole byte, so a set stuffing bit
+lands on the next byte's lowest bit. When that bit is 0, the two decoders read
+different values and neither warns. The F.4 packers never set the bit, so
+streams they write decode the same in both.
+
+Measured with `opj_decompress` 2.5.0 on single-block codestreams:
+
+- MagRef: a 2x33 block (style 0x48, 12-bit) whose refinement segment ends in
+  `0xFF`. OpenJPEG gives 2045 at sample 30 on the reversible path and 1936 on
+  the irreversible one, where this decoder gives 2046 and 1968. With the last
+  byte `0x7F`, which T.814 reads the same way, OpenJPEG matches this decoder.
+- VLC: a 2x8 block in a subband of 6 planes with 2 zero, 12-bit, and the
+  cleanup segment `7F 47 93 F7 5C F6 00`, whose first VLC nibble is 0xF.
+  OpenJPEG differs from this decoder on 12 of 16 samples. With the nibble 0x7
+  (`... 5C 76 00`), OpenJPEG matches this decoder, which decodes both the
+  same. Of 150 random cleanup-only blocks with the nibble 0xF, 10 decode
+  differently in OpenJPEG from their 0x7 twin, while this decoder decodes
+  each pair the same.
+
+Refusing such a stream, as for a set SigProp or MagSgn stuffing bit, would go
+past the standard, which defines a decode here. Following OpenJPEG would read
+bits that T.814 says to drop.
 
 ## The JP2 box layer
 

@@ -28,8 +28,9 @@ pub(crate) enum BlockCoder {
     /// The Part 1 coder, with the code-block style flags and the component's
     /// region-of-interest maxshift.
     Ebcot { style: u8, roi_shift: u8 },
-    /// The HTJ2K coder, with the component's region-of-interest maxshift.
-    Ht { roi_shift: u8 },
+    /// The HTJ2K coder, with the component's region-of-interest maxshift and
+    /// whether the vertically causal context flag is set.
+    Ht { roi_shift: u8, causal: bool },
 }
 
 impl BlockCoder {
@@ -39,8 +40,12 @@ impl BlockCoder {
         let params = &header.components[comp];
         let style = params.coding.code_block_style;
         let roi_shift = params.roi_shift;
-        if style & crate::codestream::markers::code_block_style::HT != 0 {
-            BlockCoder::Ht { roi_shift }
+        use crate::codestream::markers::code_block_style::{HT, VCAUSAL};
+        if style & HT != 0 {
+            BlockCoder::Ht {
+                roi_shift,
+                causal: style & VCAUSAL != 0,
+            }
         } else {
             BlockCoder::Ebcot { style, roi_shift }
         }
@@ -54,7 +59,7 @@ impl BlockCoder {
             BlockCoder::Ebcot { style, roi_shift } => {
                 ebcot::decode(block, kind, numbps, style, roi_shift)
             }
-            BlockCoder::Ht { roi_shift } => ht::decode(block, numbps, roi_shift),
+            BlockCoder::Ht { roi_shift, causal } => ht::decode(block, numbps, roi_shift, causal),
         }
     }
 
@@ -63,7 +68,7 @@ impl BlockCoder {
     fn cost(self, block: &CodeBlock<'_>, numbps: u32) -> u64 {
         match self {
             BlockCoder::Ebcot { roi_shift, .. } => ebcot::passes_run(numbps, block, roi_shift),
-            BlockCoder::Ht { .. } => ht::passes_run(block),
+            BlockCoder::Ht { .. } => ht::passes_run(block, numbps),
         }
     }
 }

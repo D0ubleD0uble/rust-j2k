@@ -14,15 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a tile that keeps that `COD`. A tile-part `COD` can declare another count
   for its tile. `Header` is `#[non_exhaustive]`, so the new
   field is not a breaking change.
-- HTJ2K codestreams decode when each code-block carries only its cleanup
-  pass, in any number of quality layers, with or without placeholder
-  passes before it. The output matches OpenJPEG 2.5.0 and OpenJPH on the
+- HTJ2K codestreams decode: the cleanup, SigProp and MagRef passes of each
+  code-block, in any number of quality layers, with or without placeholder
+  passes before them. The output matches OpenJPEG 2.5.0 and OpenJPH on the
   files they decode: bit for bit on the reversible files, and within the
   conformance bounds on the irreversible ones. Neither decodes the
   multi-layer files with placeholder passes, so those are graded against
-  the ISO/IEC 15444-4 reference images alone. An HT code-block with refinement passes, a mixed-mode
-  code-block style, and region of interest on an HT code-block are
-  `Error::Unsupported`.
+  the ISO/IEC 15444-4 reference images alone. A mixed-mode code-block
+  style, more than one HT set per code-block, and region of interest on an
+  HT code-block are `Error::Unsupported`.
 - `Error::Incomplete`: the input ends before the codestream's main header is
   whole, that is, before its first `SOT` marker is complete. It begins at the
   empty input and, in a JP2 file, covers the signature box, the top-level

@@ -114,8 +114,9 @@ how much.
   To show an image, ask for sRGB and scale each value to 8 bits yourself (see
   [Decode a file](#decode-a-file)).
 - It doesn't **read all of HTJ2K**, the high-throughput variant (Part 15),
-  or the Part 2 extensions. It reads an HTJ2K codestream only when each
-  code-block carries its cleanup pass alone, and refuses the rest with
+  or the Part 2 extensions. It refuses an HTJ2K codestream that mixes HT and
+  Part 1 code-blocks in one tile-component, carries more than one HT set per
+  code-block, or uses region of interest on HT code-blocks, with
   `Error::Unsupported`. OpenJPEG 2.5 and later decode HTJ2K.
 - It doesn't **open JPX, JPM or MJ2 files** unless they say they can also be
   read as JP2. Those files are refused with `Error::Unsupported`.

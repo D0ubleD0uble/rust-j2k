@@ -15,7 +15,7 @@
     "references": "the Part 1 class-1 references (../references/) for ds0 and ds1; reference_class1HF_profile1/ for hifi_ht1_02, copied verbatim; reference_jph/*.pgm for file10, written as 8-bit PGX",
     "jph_grading": "the highest-bound file of each set; file1..file9 as fileN.jp2 is graded (../jp2/manifest.json), since the codestream decodes to the same samples under OpenJPEG; file10_b12 bit-exact against reference_jph",
     "passes": "measured: opj_decompress 2.5.0 with a print of each HT block's pass count added to opj_t1_ht_decode_cblk, see HT_PASSES in regenerate.py; walked: this crate's Tier-2 walk of every packet header, see HT_WALKED",
-    "openjpeg": "opj_decompress 2.5.0 on the bare codestream; sub-sampled files with -c K",
+    "openjpeg": "opj_decompress 2.5.0 on the bare codestream; sub-sampled files with -c K; for each JPH file, codestream_sha256 is the SHA-256 of each component it decodes from the bare codestream, its samples as little-endian i32",
     "license": "Conformance-only grant; see ./COPYRIGHT.txt. Excluded from the published crate via Cargo.toml `exclude`."
   },
   "codestreams": [
@@ -9257,7 +9257,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "304c1089979990da7dcd2c069035409927d39b2f1b3857bc0f094804bd327bcb",
+          "9d412b03c84fdfe7837df44d78f768572a8e70a0c67892840c58a27ac2b3f762",
+          "1ee461bd3b71aca0a7c2f1400dbe91209c737d912a345e7af7625a7a9b43602c"
+        ]
       }
     },
     {
@@ -9396,7 +9401,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "a2783ac65904b6494687d82493f144e97627eabef4245aff42b7b41bef511e2c",
+          "6a78f0a7e1e484e233d35336b0d81784da2176520ae4730dba7debbedc75985a",
+          "5d5b159254e0fe737cb48b67617e1dbf077aeb1604f1a5cb94678c10b39b33e3"
+        ]
       }
     },
     {
@@ -9535,7 +9545,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "673f4d09e093995a67ee75f08a54dc90d3a0a73337163489b84f0f0a943fa284",
+          "43745d91f38ac5907fdccd57f776e757368e30ea7a185671b9e65b2da390799f",
+          "f0dad3f0aa0edd2461f1789dd5c64360512ef86cde2356f04066a32dbe325c39"
+        ]
       }
     },
     {
@@ -9672,7 +9687,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "c766bafff1517b4252f05c28316d93a770577aca2824262034c897eb5e3c29df",
+          "3a64cd6de2fe44c3affd03f05869d65928d65b68f529e61e07239866373f3f57",
+          "73a3806c919f2a4dab590c2d1e7bfbc73aa22671c4af08ce6a2e4f961bbec80b"
+        ]
       }
     },
     {
@@ -9811,7 +9831,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "f0dad3f0aa0edd2461f1789dd5c64360512ef86cde2356f04066a32dbe325c39",
+          "e7d4857e3d0321c17285ab7643d96c02e01e09ee68dc83c92c42049de6ed2c36",
+          "f2cc3ee0128dc0d7cd664a2d4247558cf1fee19b399ab644adfa6c88f85647db"
+        ]
       }
     },
     {
@@ -9948,7 +9973,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "73a3806c919f2a4dab590c2d1e7bfbc73aa22671c4af08ce6a2e4f961bbec80b",
+          "68d5213445bb8d43ab05bfecbac541267c16fc506581cd4b92e5138c8fd2f241",
+          "5fc634eb438416bc38dc4219b4b3c2a74af7af58261d8e3038bd06fb14a8ce49"
+        ]
       }
     },
     {
@@ -10071,7 +10101,10 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "fe9f21f75d66adefc6208026cacdc31510cb079665354ce4a76b120495252ddf"
+        ]
       }
     },
     {
@@ -10192,7 +10225,10 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "1a314dd6be77d444640d96bc8be15c258cac4b80626a3f2845bc873741de4300"
+        ]
       }
     },
     {
@@ -10331,7 +10367,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "ab33cc29d940ebc8ffb00636165b4edec6d201a0beeb3673632d05a413d450bd",
+          "2aef911002d2400e658bf4bcea26cfeaae69520c6be45c990624df6ced09df0e",
+          "34cbbc1bc388d8091115ff0b59859159406b3cfbf0d3bd1959cfe4624bb30621"
+        ]
       }
     },
     {
@@ -10468,7 +10509,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "ac92bfb135d8db06714be5f4ed255bb69199b0b4d5a6b1dfd24a44fa16b15265",
+          "0cb5279e15454582ab16f8a186e0dd438cbbebeef07ecfaffafe366a24cdf4e1",
+          "eb0c977660a0c4ae5c557c13a8bef8f9c64929a520940124a60577c5a7b1eb20"
+        ]
       }
     },
     {
@@ -10589,7 +10635,10 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "1116e7ceed888583cade1a569ee1d1e5f3d3fcdd05f693a01262978679c4a354"
+        ]
       }
     },
     {
@@ -10712,7 +10761,10 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "5d69a99719049a3ac0ae92e55e7a3b415e67c9e86b6402503f5aa07e28a13e1d"
+        ]
       }
     },
     {
@@ -10849,7 +10901,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "74f25a6cb46177ba3044a61a4a7d0efa74ba5eb36bed25c52f98b375cf63c79f",
+          "6a6f7b11ac514265077f4cd67bb56471d2ea485e933cb64498ec9becbe4aaa2d",
+          "0c0cc38c2906a3069db7451d3e8a32d5de8289791b7b0ddc1b4b4d4487c95061"
+        ]
       }
     },
     {
@@ -10986,7 +11043,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "15de6e98b71ec762dd6b69b5da4cf85dc828d8ef6448b14e6cc2878db3afe407",
+          "2b3a0d64631fe6ac4deeda12e3be67f074a1e9172dfb37f4102e7e95ead5f4e9",
+          "1179baa550e37e07696de684cb73e85324ac3bb2a2f2b2c1e17cfbf2e66703c3"
+        ]
       }
     },
     {
@@ -11125,7 +11187,12 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "0691c7aeb80b6ba6a28b7d7afefacdf153dae76cc8c1d3c55a5f8d0e8a5b1b7c",
+          "c09c75d7c4b2192768c4a823c67ff837b5c5d8b9231dc833d2805c9fbf4bb5e0",
+          "3b21ecebc179228f3d8f38231c157a824304e0351f7cb0c4e0304a1ec26210b0"
+        ]
       }
     },
     {
@@ -11248,7 +11315,10 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "e9e1b9ae21918b8e280afb350a842040a590238733f2801841c1a8772d8c9701"
+        ]
       }
     },
     {
@@ -11375,7 +11445,10 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "a3e1b47ead111e469220837af44a82c1e7894218ecee06f887a0a3011f3cb3b2"
+        ]
       }
     },
     {
@@ -11500,7 +11573,10 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": true,
-        "message": null
+        "message": null,
+        "codestream_sha256": [
+          "27e6bc627c2415765b417969a9443eb1d30b8847fb2cea54a6a0279410448d55"
+        ]
       }
     },
     {
@@ -11649,7 +11725,14 @@
       "reference_digests": [],
       "openjpeg": {
         "decoded": false,
-        "message": "[ERROR] Invalid component index 18283 (>= 5)."
+        "message": "[ERROR] Invalid component index 18283 (>= 5).",
+        "codestream_sha256": [
+          "7708c715e6f9059aa7adf75e05ef50d9abc5fe5aff62c2119d3c70e3875cec13",
+          "a231f953e8accf059feda310ab24b20390e1bafd50a1e6128516c98ca250d988",
+          "c2077fc28187181ffb915df17e0c3b2225c1cb9d15180d892360331b042713e6",
+          "3793ddd1f0198179ba098f65a7358e0713185cb9293626060d9f00da7a15a758",
+          "d23af1b18910c7956dc353a9e311262f6e063de90d9abafc8e4086ac1c7b95ec"
+        ]
       }
     },
     {
@@ -11824,7 +11907,14 @@
       ],
       "openjpeg": {
         "decoded": false,
-        "message": "[ERROR] Invalid component index 18283 (>= 5)."
+        "message": "[ERROR] Invalid component index 18283 (>= 5).",
+        "codestream_sha256": [
+          "23f7d009e0b489f8b9968c509cc46be43d09ad91038fa8896bdc3b39f9f47dac",
+          "7d81aceada0786ce3dd721e1ef027b8ac65da57083b9ed293874c291715b494b",
+          "5d1ffb8ba2b120f435c2058e9cadd1fa2c9e6218794ed335710e485ad6694e61",
+          "23f7d009e0b489f8b9968c509cc46be43d09ad91038fa8896bdc3b39f9f47dac",
+          "d23af1b18910c7956dc353a9e311262f6e063de90d9abafc8e4086ac1c7b95ec"
+        ]
       }
     }
   ]
