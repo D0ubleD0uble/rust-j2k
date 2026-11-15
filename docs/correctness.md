@@ -190,8 +190,10 @@ oracle for the conversion arithmetic ([srgb-output.md](srgb-output.md)).
 `tests/fixtures/conformance/ht/` with the same comparator and ratchet. The 40
 derived-set codestreams are graded against the Part 1 references of the
 codestream each was transcoded from, within the T.803 Annex C bounds (the Part
-1 tolerance plus an HT allowance). `hifi_ht1_02` has its own references, and
-the highest-bound JPH file of each set is graded as its `fileN.jp2` is. Two
+1 tolerance plus an HT allowance). `hifi_ht1_02` has its own references,
+the highest-bound JPH file of each set is graded as its `fileN.jp2` is, and
+the 10 below it as coded, within their set's bound plus the error Kakadu
+records for each. Two
 more ratchets grade against OpenJPEG's decode: of the HT codestreams it
 decodes, and of 16 OpenJPH test codestreams (`tests/fixtures/openjph/`). All
 30 HT-only codestreams without `RGN` are in class, the 10 that OpenJPEG
@@ -204,7 +206,9 @@ transcode's error against its source must also match the PAE and MSE Kakadu
 quotes in the manifest, on the reversible transcodes, the exact ones, and the
 irreversible `ds0_ht_02_b11` and `ds1_ht_01_b11`. The
 codestream inside each of the 20 JPH files decodes bit for bit as OpenJPEG
-decodes it, checked against committed digests of OpenJPEG's output.
+decodes it, checked against committed digests of OpenJPEG's output. All 20
+JPH files are in class, and each matches the PAE and MSE Kakadu quotes
+against its source.
 
 ## A passing entry is not proof the feature works
 

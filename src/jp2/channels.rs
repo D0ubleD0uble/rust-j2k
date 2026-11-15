@@ -1,8 +1,8 @@
 //! Channel definitions: the Channel Definition box (I.5.3.6, `cdef`).
 //!
 //! A `cdef` box says, for each output channel, what it is (`Typ`: color,
-//! opacity, premultiplied opacity, unspecified) and which color it belongs to
-//! (`Asoc`). It describes the channels after the palette, when one applies.
+//! opacity, premultiplied opacity, unspecified, or application-defined in a
+//! JPH file) and which color it belongs to (`Asoc`). It describes the channels after the palette, when one applies.
 //! OpenJPEG 2.5.0 (`opj_jp2_read_cdef`, `opj_jp2_check_color`,
 //! `opj_jp2_apply_cdef`) is the reference, and this module follows it on what
 //! is accepted and on the output order:
@@ -14,7 +14,10 @@
 //! - Checked against the channel count after the palette: a `Cn` past the
 //!   last channel, an `Asoc` other than 0 and 65535 whose `Asoc - 1` is past
 //!   the last channel, or a channel no entry names is an error. An entry may
-//!   repeat a channel, as long as every channel is named.
+//!   repeat a channel, as long as every channel is named. The `Asoc` of an
+//!   application-defined channel (`Typ` 3, ISO/IEC 15444-15 D.6.3) means
+//!   what the application says and is not checked; OpenJPEG checks it, and
+//!   refuses a file where it is past the last channel.
 //! - The entries are applied in order. An entry of type color (`Typ 0`)
 //!   whose channel is not yet at position `Asoc - 1` swaps it there, and the
 //!   later entries follow their channels through the swap. Nothing else
@@ -39,6 +42,9 @@ use crate::{Error, Result};
 /// The bytes of one `cdef` entry: `Cn`, `Typ`, `Asoc`.
 const ENTRY_BYTES: usize = 6;
 
+/// `Typ` 3: an application-defined channel (ISO/IEC 15444-15 D.6.3).
+const APPLICATION_DEFINED: u16 = 3;
+
 /// One `cdef` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Entry {
@@ -61,16 +67,24 @@ impl Entry {
         }
     }
 
+    /// Whether the entry is an application-defined channel (`Typ` 3), whose
+    /// `Asoc` the application gives meaning to.
+    fn application_defined(self) -> bool {
+        self.kind == APPLICATION_DEFINED
+    }
+
     fn definition(self) -> ChannelDefinition {
         ChannelDefinition {
             kind: match self.kind {
                 0 => ChannelType::Color,
                 1 => ChannelType::Opacity,
                 2 => ChannelType::PremultipliedOpacity,
+                APPLICATION_DEFINED => ChannelType::ApplicationDefined,
                 65535 => ChannelType::Unspecified,
                 other => ChannelType::Other(other),
             },
             association: match self.association {
+                n if self.application_defined() => Association::ApplicationDefined(n),
                 0 => Association::WholeImage,
                 65535 => Association::None,
                 n => Association::Color(n),
@@ -179,7 +193,9 @@ pub(crate) fn plan(
 }
 
 /// Check the entries against the channel count as `opj_jp2_check_color` does:
-/// each entry's `Cn` and `Asoc - 1` in range, then every channel named.
+/// each entry's `Cn` and `Asoc - 1` in range, then every channel named. The
+/// `Asoc` of an application-defined channel is not a color and is not
+/// checked.
 fn check(entries: &[Entry], channels: usize) -> Result<()> {
     for (i, entry) in entries.iter().enumerate() {
         if usize::from(entry.channel) >= channels {
@@ -188,7 +204,10 @@ fn check(entries: &[Entry], channels: usize) -> Result<()> {
                 entry.channel
             )));
         }
-        if !matches!(entry.association, 0 | 65535) && usize::from(entry.association) > channels {
+        if !entry.application_defined()
+            && !matches!(entry.association, 0 | 65535)
+            && usize::from(entry.association) > channels
+        {
             return Err(Error::FileFormat(format!(
                 "`cdef` entry {i} associates channel {} with color {}, but the file has \
                  {channels} channels",
@@ -322,6 +341,10 @@ mod tests {
             // Asoc 0 and 65535 move nothing, whatever the type.
             (&[(0, 0, 0), (1, 0, 65535), (2, 0, 3)], [0, 1, 2]),
             (&[(0, 7, 1), (1, 0, 2), (2, 0, 3)], [0, 1, 2]),
+            // An application-defined channel moves nothing, whatever its
+            // `Asoc`.
+            (&[(0, 3, 3), (1, 3, 1), (2, 3, 2)], [0, 1, 2]),
+            (&[(0, 3, 2), (1, 3, 1), (2, 0, 3)], [0, 1, 2]),
             (
                 &[(0, 65535, 65535), (1, 65535, 65535), (2, 65535, 65535)],
                 [0, 1, 2],
@@ -386,11 +409,21 @@ mod tests {
         assert_eq!(label(1, 0).kind, ChannelType::Opacity);
         assert_eq!(label(2, 0).kind, ChannelType::PremultipliedOpacity);
         assert_eq!(label(65535, 0).kind, ChannelType::Unspecified);
-        assert_eq!(label(3, 0).kind, ChannelType::Other(3));
+        assert_eq!(label(3, 0).kind, ChannelType::ApplicationDefined);
+        assert_eq!(label(4, 0).kind, ChannelType::Other(4));
         assert_eq!(label(65534, 0).kind, ChannelType::Other(65534));
         assert_eq!(label(0, 0).association, Association::WholeImage);
         assert_eq!(label(0, 65535).association, Association::None);
         assert_eq!(label(0, 7).association, Association::Color(7));
+        // An application-defined channel's `Asoc` is kept as stored, 0 and
+        // 65535 included.
+        for asoc in [0, 1, 18284, 65535] {
+            assert_eq!(
+                label(3, asoc).association,
+                Association::ApplicationDefined(asoc)
+            );
+        }
+        assert_eq!(label(4, 7).association, Association::Color(7));
     }
 
     #[test]

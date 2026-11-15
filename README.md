@@ -119,7 +119,7 @@ how much.
   code-block, or uses region of interest on HT code-blocks, with
   `Error::Unsupported`. OpenJPEG 2.5 and later decode HTJ2K.
 - It doesn't **open JPX, JPM or MJ2 files** unless they say they can also be
-  read as JP2. Those files are refused with `Error::Unsupported`.
+  read as JP2 or JPH. Those files are refused with `Error::Unsupported`.
 - It doesn't **read unsigned 32-bit channels** or channels deeper than 32 bits,
   because they don't fit an `i32`. The standard allows up to 38. These are
   refused with `Error::Unsupported`.

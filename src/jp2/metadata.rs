@@ -197,11 +197,11 @@ pub struct ColorSpecification {
 }
 
 /// The File Type box (`ftyp`, I.5.2), as stored. A file is read when `jp2 `
-/// is its brand or in its compatibility list.
+/// or `jph ` is its brand or in its compatibility list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FileType {
-    /// `BR`: the brand, `jp2 ` for a JP2 file.
+    /// `BR`: the brand, `jp2 ` for a JP2 file and `jph ` for a JPH file.
     pub brand: [u8; 4],
     /// `MinV`: the minor version. The standard requires 0, and a reader
     /// ignores it.
@@ -546,6 +546,10 @@ pub enum ChannelType {
     Opacity,
     /// A premultiplied opacity channel (`Typ` 2).
     PremultipliedOpacity,
+    /// An application-defined channel (`Typ` 3, ISO/IEC 15444-15 D.6.3), as
+    /// a JPH file may have. Its [`Association`] is
+    /// [`Association::ApplicationDefined`].
+    ApplicationDefined,
     /// The type is not specified (`Typ` 65535).
     Unspecified,
     /// A reserved `Typ` value, reported as is.
@@ -564,4 +568,8 @@ pub enum Association {
     Color(u16),
     /// No association (`Asoc` 65535).
     None,
+    /// The `Asoc` of an application-defined channel
+    /// ([`ChannelType::ApplicationDefined`]), as stored. The application
+    /// gives it its meaning; it is not a color of the color space.
+    ApplicationDefined(u16),
 }

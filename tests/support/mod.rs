@@ -259,6 +259,7 @@ impl Jp2Snapshot {
             ChannelType::Color => "color".to_string(),
             ChannelType::Opacity => "opacity".to_string(),
             ChannelType::PremultipliedOpacity => "premultiplied".to_string(),
+            ChannelType::ApplicationDefined => "application".to_string(),
             ChannelType::Unspecified => "unspecified".to_string(),
             ChannelType::Other(n) => format!("other({n})"),
         };
@@ -266,6 +267,7 @@ impl Jp2Snapshot {
             Association::WholeImage => "whole".to_string(),
             Association::Color(n) => n.to_string(),
             Association::None => "none".to_string(),
+            Association::ApplicationDefined(n) => format!("application({n})"),
         };
         let hex = |id: &[u8; 16]| id.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let res = |r: Option<Res>| {

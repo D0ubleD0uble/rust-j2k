@@ -190,6 +190,28 @@ fn every_channel_is_labeled_with_its_entry() {
                 definition(T::Opacity, A::WholeImage),
             ],
         ),
+        // ISO/IEC 15444-15 D.6.3: `Typ` 3 is application-defined, and its
+        // `Asoc` is kept as stored, past the last channel or not. OpenJPEG
+        // refuses the first ("Invalid component index"); this is `file10`'s
+        // layout.
+        (
+            "application-defined channels",
+            cdef_of(&[(0, 3, 18284), (1, 3, 0), (2, 3, 65535)]),
+            [
+                definition(T::ApplicationDefined, A::ApplicationDefined(18284)),
+                definition(T::ApplicationDefined, A::ApplicationDefined(0)),
+                definition(T::ApplicationDefined, A::ApplicationDefined(65535)),
+            ],
+        ),
+        (
+            "application-defined channels with a color's Asoc do not move",
+            cdef_of(&[(0, 3, 2), (1, 3, 1), (2, 0, 3)]),
+            [
+                definition(T::ApplicationDefined, A::ApplicationDefined(2)),
+                definition(T::ApplicationDefined, A::ApplicationDefined(1)),
+                definition(T::Color, A::Color(3)),
+            ],
+        ),
     ];
     for (what, cdef, want) in cases {
         let image = decode(&with_children(std::slice::from_ref(cdef))).expect(what);

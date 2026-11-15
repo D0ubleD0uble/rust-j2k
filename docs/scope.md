@@ -115,8 +115,8 @@ does not offer.
 
 Limits inside the decoded rows:
 
-- A file that does not claim `jp2 ` compatibility (a pure JPX, JPM or MJ2
-  file) is refused.
+- A file that claims neither `jp2 ` nor `jph ` compatibility (a pure JPX,
+  JPM or MJ2 file) is refused.
 - A palette channel that looks up another palette column is refused, and so
   is a palette column deeper than 31 bits unsigned or 32 bits signed.
 - sRGB output handles sYCC and the restricted ICC profiles. With three or
@@ -200,6 +200,9 @@ codestreams too.
 | HT SigProp and MagRef passes | Yes |
 | Mixed-mode (HT and Part 1 code-blocks in one tile-component) | No (Phase 4) |
 | Region of interest on HT code-blocks | No |
+| JPH file format (`jph ` brand, Annex D) | Yes |
+| JPH application-defined channels (`cdef` `Typ` 3) | Yes, reported |
+| JPH `colr` methods 3 and 5 | No (skipped, as an unknown method is) |
 
 ## Part 2: extensions and JPX (ISO/IEC 15444-2)
 

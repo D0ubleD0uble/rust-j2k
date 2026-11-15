@@ -47,7 +47,7 @@ refusal under `ColorOutput::Srgb`).
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
-| [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels | 1, 3 |
+| [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
 | [Some of the components, under the color transform](#some-of-the-components-under-the-color-transform) | applies the transform; OpenJPEG skips it under `-c` | 1 |
@@ -1136,21 +1136,21 @@ The header boxes after the codestream are read last, also before the tiles,
 where OpenJPEG reads them after decoding. This order is what lets `read_header`
 return the same error as `decode` for every header fault.
 
-### `ftyp` without `jp2 `
+### `ftyp` without `jp2 ` or `jph `
 
 | | |
 | - | - |
 | This decoder | refuses as `Unsupported` |
 | OpenJPEG 2.5.0 | decodes the first codestream |
-| Standard | a file without `jp2 ` compatibility says a JP2 reader cannot present it correctly |
+| Standard | a file without `jp2 ` compatibility says a JP2 reader cannot present it correctly; `jph ` says the same for a JPH reader (ISO/IEC 15444-15 D.3) |
 | Rule | 3 (an error over a possibly wrong image) |
-| Tests and fixtures | `a_jpx_without_jp2_compatibility_is_unsupported` (`src/jp2/tests.rs`); the "no jp2 in brand or compatibility list" row of `every_robustness_table_row_has_its_outcome` (`src/jp2/tests/matrix.rs`) |
-| Decided | 2026-11-01 |
+| Tests and fixtures | `a_jpx_jpm_or_mj2_without_jp2_or_jph_compatibility_is_unsupported` and `jph_compatibility_in_brand_or_list_is_enough` (`src/jp2/tests.rs`); the "no jp2 in brand or compatibility list", JPM, MJ2 and `jph ` rows of `every_robustness_table_row_has_its_outcome` (`src/jp2/tests/matrix.rs`) |
+| Decided | 2026-11-01; `jph ` accepted 2026-11-15 (#345) |
 
-A file whose `ftyp` does not claim `jp2 ` compatibility (pure JPX, JPM or MJ2)
-says a JP2 reader cannot present it correctly (composited codestreams, Part 2
-extensions, `rreq` features), so its first codestream can be the wrong image
-with no error. Refusing it lets a later JPX reader produce the right image
+A file whose `ftyp` claims neither `jp2 ` nor `jph ` compatibility (pure JPX,
+JPM or MJ2) says a JP2 reader cannot present it correctly (composited
+codestreams, Part 2 extensions, `rreq` features), so its first codestream can
+be the wrong image with no error. Refusing it lets a later JPX reader produce the right image
 without silently changing output that already "worked".
 
 ### `Psot = 0` at the end of `jp2c`
@@ -1291,6 +1291,27 @@ opacity ([row 20](srgb-output.md#rows-20-and-24-profiles-that-convert)), and
 an enumerated sRGB file of four components and no `cdef`, whose fourth differs
 in format from the colors, passes through as coded ([row
 6](srgb-output.md#rows-6-and-7-srgb-and-grayscale)).
+
+### Application-defined channels (`cdef` `Typ` 3)
+
+| | |
+| - | - |
+| This decoder | decodes; the channel is `ChannelType::ApplicationDefined` with its `Asoc` as stored, and moves nothing |
+| OpenJPEG 2.5.0 | refuses when the `Asoc` is past the last channel ("Invalid component index") |
+| Standard | ISO/IEC 15444-15 D.6.3: `Typ` 3 is an application-defined channel, and its `Asoc` means what the application says |
+| Rule | 1 |
+| Tests and fixtures | `file10_reports_application_defined_channels_and_no_color_space` (`tests/conformance_ht.rs`, on `file10_b11.jph` and `file10_b12.jph`); the "cdef Typ 3 with Asoc past the last channel" row of `every_robustness_table_row_has_its_outcome` (`src/jp2/tests/matrix.rs`); `every_channel_is_labeled_with_its_entry` (`src/jp2/tests/channels.rs`) |
+| Decided | 2026-11-14, in the P4.7 plan (#345) |
+
+OpenJPEG holds every `Asoc` other than 0 and 65535 to the channel count
+(`opj_jp2_check_color`), whatever the type, so it refuses both `file10` files
+of the ISO/IEC 15444-4 JPH set: four of their five channels are `Typ` 3 with
+`Asoc` values from 17004 to 21100. Their references are the five planes as
+coded, and this decoder matches them bit for bit (`file10_b12`) and within
+Kakadu's recorded error (`file10_b11`). The `Asoc` of any other type is still
+checked as OpenJPEG checks it, and only a color channel (`Typ` 0) is moved by
+its `Asoc`. In a JP2 file, `Typ` 3 is reserved (I.5.3.6); it is read the same
+way there, since the samples do not change.
 
 ## The `jp2i` and `uinf` boxes
 

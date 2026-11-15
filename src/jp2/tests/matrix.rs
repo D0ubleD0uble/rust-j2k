@@ -270,6 +270,30 @@ fn every_robustness_table_row_has_its_outcome() {
             Unsupported,
         ),
         (
+            "JPM brand without jp2 or jph compatibility",
+            file(&[ftyp(b"jpm ", &[b"jpm "]), good_jp2h(), jp2c()]),
+            Default,
+            Unsupported,
+        ),
+        (
+            "MJ2 brand without jp2 or jph compatibility",
+            file(&[ftyp(b"mjp2", &[b"mjp2", b"mj2s"]), good_jp2h(), jp2c()]),
+            Default,
+            Unsupported,
+        ),
+        (
+            "jph brand",
+            file(&[ftyp(b"jph ", &[b"jph "]), good_jp2h(), jp2c()]),
+            Default,
+            Decodes,
+        ),
+        (
+            "jph in the compatibility list of a JPX brand",
+            file(&[ftyp(b"jpx ", &[b"jpx ", b"jph "]), good_jp2h(), jp2c()]),
+            Default,
+            Decodes,
+        ),
+        (
             "box length < 8",
             file(&[jp2_ftyp(), header_only(5, b"zzzz"), good_jp2h(), jp2c()]),
             Default,
@@ -717,6 +741,24 @@ fn every_robustness_table_row_has_its_outcome() {
             children(&[cdef(&[(0, 0, 1), (1, 0, 2), (2, 7, 0)])]),
             Default,
             Decodes,
+        ),
+        (
+            "cdef Typ 3 with Asoc past the last channel",
+            children(&[cdef(&[(0, 0, 1), (1, 0, 2), (2, 3, 18284)])]),
+            Default,
+            Decodes,
+        ),
+        (
+            "cdef Typ 0 with Asoc past the last channel",
+            children(&[cdef(&[(0, 0, 1), (1, 0, 2), (2, 0, 18284)])]),
+            Default,
+            FileFormat,
+        ),
+        (
+            "cdef Typ 7 with Asoc past the last channel",
+            children(&[cdef(&[(0, 0, 1), (1, 0, 2), (2, 7, 18284)])]),
+            Default,
+            FileFormat,
         ),
         (
             "unknown box anywhere",

@@ -1,10 +1,11 @@
 //! Stage 0 — the JP2 file format (ISO/IEC 15444-1 Annex I).
 //!
-//! A JP2 file is a sequence of boxes around one codestream:
+//! A JP2 file is a sequence of boxes around one codestream, and so is a JPH
+//! file (ISO/IEC 15444-15 Annex D), which holds an HTJ2K codestream:
 //!
 //! ```text
 //! jP   signature (12 bytes, first)
-//! ftyp file type (second): `jp2 ` as brand or in the compatibility list
+//! ftyp file type (second): `jp2 ` or `jph ` as brand or in the compatibility list
 //! jp2h header superbox: ihdr, colr, bpcc, pclr, cmap, cdef, res
 //! jp2c the codestream (the first one; later ones are ignored, I.5.4)
 //! ```
@@ -46,9 +47,9 @@
 //! Every length is checked before use and nothing is allocated from one (see
 //! [`boxes`]). Box-layer faults are [`Error::FileFormat`], and a file that
 //! ends before its codestream's main header is whole is [`Error::Incomplete`]
-//! (see [`parse`]); a file this decoder
-//! does not read (no `jp2 ` compatibility, or a palette mapping or column depth
-//! it does not decode) is [`Error::Unsupported`].
+//! (see [`parse`]); a file this decoder does not read (no `jp2 ` or `jph `
+//! compatibility, or a palette mapping or column depth it does not decode) is
+//! [`Error::Unsupported`].
 
 mod after;
 mod boxes;

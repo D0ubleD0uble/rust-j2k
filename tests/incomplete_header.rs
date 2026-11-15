@@ -2,10 +2,10 @@
 //! `Error::Incomplete`, apart from a header that is all there but damaged,
 //! which keeps its own error.
 //!
-//! Each committed codestream, and each committed JP2 file, is cut at every
-//! byte from the empty input to just before the first `SOT` marker is whole:
-//! for a JP2 file that takes in its signature, its boxes before `jp2c`, the
-//! `jp2c` box header and the codestream's main header. The bounds come from
+//! Each committed codestream, and each committed JP2 or JPH file, is cut at
+//! every byte from the empty input to just before the first `SOT` marker is
+//! whole: for a JP2 file that takes in its signature, its boxes before
+//! `jp2c`, the `jp2c` box header and the codestream's main header. The bounds come from
 //! a marker and box walk written here (A.4, A.6, I.4), not from the decoder.
 
 use std::path::{Path, PathBuf};
@@ -195,7 +195,7 @@ fn every_cut_inside_the_main_header_is_incomplete() {
     let mut paths = Vec::new();
     files(&fixtures(), &mut paths);
     paths.sort();
-    let (mut codestreams, mut ht_codestreams, mut jp2s) = (0, 0, 0);
+    let (mut codestreams, mut ht_codestreams, mut jp2s, mut jphs) = (0, 0, 0, 0);
     for path in &paths {
         let bytes = std::fs::read(path).unwrap();
         let name = path.strip_prefix(fixtures()).unwrap().display().to_string();
@@ -232,10 +232,16 @@ fn every_cut_inside_the_main_header_is_incomplete() {
             let boundary = box_end >= cs_at + sot + 2;
             assert_cuts_are_incomplete(&name, &bytes, cs_at, sot, boundary);
             jp2s += 1;
+            if name.ends_with(".jph") {
+                jphs += 1;
+            }
         }
     }
     // The fixtures that ship with the crate alone give more than these.
-    eprintln!("cut {codestreams} codestreams ({ht_codestreams} mixed-mode) and {jp2s} JP2 files");
+    eprintln!(
+        "cut {codestreams} codestreams ({ht_codestreams} mixed-mode) and {jp2s} JP2 files \
+         ({jphs} JPH)"
+    );
     assert!(codestreams >= 100, "only {codestreams} codestreams cut");
     // The three mixed-mode HT conformance codestreams.
     assert!(
@@ -243,6 +249,9 @@ fn every_cut_inside_the_main_header_is_incomplete() {
         "only {ht_codestreams} mixed-mode codestreams cut"
     );
     assert!(jp2s >= 30, "only {jp2s} JP2 files cut");
+    // The 20 Part 4 JPH files and the 7 OpenJPH ones, which hold HTJ2K
+    // codestreams.
+    assert!(jphs >= 27, "only {jphs} JPH files cut");
 }
 
 /// Empty input, and the first byte of `SOC` or of the JP2 signature, may
@@ -381,8 +390,8 @@ fn damaged_boxes() -> Vec<(&'static str, Vec<u8>, Error, usize)> {
             "no jp2 in ftyp",
             edited(&whole, &[(23, b'x'), (31, b'x')]),
             Error::Unsupported(
-                "file brand `jp2x` without `jp2 ` compatibility (a JPX, JPM or MJ2 file that \
-                 does not claim to be readable as JP2)"
+                "file brand `jp2x` without `jp2 ` or `jph ` compatibility (a JPX, JPM or MJ2 \
+                 file that does not claim to be readable as JP2 or JPH)"
                     .into(),
             ),
             32,

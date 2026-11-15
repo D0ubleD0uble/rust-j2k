@@ -344,12 +344,41 @@ fn jp2_compatibility_in_brand_or_list_is_enough() {
     assert_decodes_like_raw(&file(&[ftyp(b"jp2 ", &[]), good_jp2h(), jp2c()]));
 }
 
+/// A JPH file (ISO/IEC 15444-15 D.3) is read whether `jph ` is its brand or
+/// only in its compatibility list, and the brand is reported as stored.
 #[test]
-fn a_jpx_without_jp2_compatibility_is_unsupported() {
-    unsupported(
-        &file(&[ftyp(b"jpx ", &[b"jpx ", b"jpxb"]), good_jp2h(), jp2c()]),
-        "without `jp2 ` compatibility",
-    );
+fn jph_compatibility_in_brand_or_list_is_enough() {
+    for bytes in [
+        file(&[ftyp(b"jph ", &[b"jph "]), good_jp2h(), jp2c()]),
+        file(&[ftyp(b"jph ", &[]), good_jp2h(), jp2c()]),
+        file(&[ftyp(b"jpx ", &[b"jpx ", b"jph "]), good_jp2h(), jp2c()]),
+    ] {
+        assert_decodes_like_raw(&bytes);
+    }
+    let image = decode(&file(&[ftyp(b"jph ", &[b"jph "]), good_jp2h(), jp2c()])).unwrap();
+    let file_type = &image.jp2.as_ref().expect("metadata").file_type;
+    assert_eq!(file_type.brand, *b"jph ");
+    assert_eq!(file_type.compatibility, [*b"jph "]);
+}
+
+/// The brands that claim neither `jp2 ` nor `jph ` compatibility stay
+/// refused: JPX, JPM and MJ2, and a near miss of each code.
+#[test]
+fn a_jpx_jpm_or_mj2_without_jp2_or_jph_compatibility_is_unsupported() {
+    let refused: [(&[u8; 4], &[&[u8; 4]]); 6] = [
+        (b"jpx ", &[b"jpx ", b"jpxb"]),
+        (b"jpm ", &[b"jpm "]),
+        (b"mjp2", &[b"mjp2", b"mj2s"]),
+        (b"jph2", &[b"jp2h"]),
+        (b"JPH ", &[b"JP2 "]),
+        (b"jph\0", &[b"jp2\0"]),
+    ];
+    for (brand, compatibility) in refused {
+        unsupported(
+            &file(&[ftyp(brand, compatibility), good_jp2h(), jp2c()]),
+            "without `jp2 ` or `jph ` compatibility (a JPX, JPM or MJ2 file",
+        );
+    }
 }
 
 /// A palette in `jp2h` is applied: one channel per `cmap` entry.
