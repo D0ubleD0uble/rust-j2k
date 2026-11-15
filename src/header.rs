@@ -30,13 +30,13 @@ pub struct Header {
     /// this one, but only the decode finds that.
     pub max_reduction: u8,
     /// The number of quality layers the main header's `COD` marker declares
-    /// (`SGcod`, at least 1). It is the most that
-    /// [`max_quality_layers`](crate::DecodeOptions::max_quality_layers) (set
-    /// with
+    /// (`SGcod`, at least 1). A
+    /// [`max_quality_layers`](crate::DecodeOptions::max_quality_layers) cap
+    /// (set with
     /// [`with_max_quality_layers`](crate::DecodeOptions::with_max_quality_layers))
-    /// can keep: a cap at or past it decodes every layer. A tile-part `COD`
-    /// can declare another count for its tile, and only the decode reads
-    /// that.
+    /// at or past it decodes every layer of a tile that keeps this `COD`. A
+    /// tile-part `COD` can declare another count for its tile, and only the
+    /// decode reads that.
     pub quality_layers: u16,
     /// What [`decode`](crate::decode) would put on
     /// [`Image::jp2`](crate::Image::jp2): `None` for a raw codestream.

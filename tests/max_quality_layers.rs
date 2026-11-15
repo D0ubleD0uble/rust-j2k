@@ -54,15 +54,18 @@ fn cod_layers(bytes: &[u8]) -> u16 {
 /// as `numlayers`, for raw codestreams and a JP2 file, single-layer and
 /// multi-layer. Measured with `opj_dump` 2.5.0: `layers/lrcp.j2k` 4,
 /// `layers/pterm_cut.j2k` 2, `multilayer_lossless.j2k` 3,
-/// `irreversible_lossy.j2k` 1, `jp2_cdef_rgba.jp2` 1.
+/// `irreversible_lossy.j2k` 1, `jp2_cdef_rgba.jp2` 1,
+/// `jp2_real/byte.jp2` 12, `jp2_palette_8bit.jp2` 3.
 #[test]
 fn read_header_reports_the_layer_count_opj_dump_prints() {
-    let cases: [(PathBuf, u16); 5] = [
+    let cases: [(PathBuf, u16); 7] = [
         (fixtures().join("layers/lrcp.j2k"), 4),
         (fixtures().join("layers/pterm_cut.j2k"), 2),
         (fixtures().join("multilayer_lossless.j2k"), 3),
         (fixtures().join("irreversible_lossy.j2k"), 1),
         (fixtures().join("jp2_cdef_rgba.jp2"), 1),
+        (fixtures().join("jp2_real/byte.jp2"), 12),
+        (fixtures().join("jp2_palette_8bit.jp2"), 3),
     ];
     for (path, numlayers) in cases {
         let header =

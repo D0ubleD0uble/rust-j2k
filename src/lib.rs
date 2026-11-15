@@ -915,7 +915,7 @@ impl DecodeOptions {
     /// These options with
     /// [`max_quality_layers`](Self::max_quality_layers) set to `layers`.
     /// [`Header::quality_layers`](crate::Header::quality_layers) is how many
-    /// layers a file declares.
+    /// layers the main header declares.
     ///
     /// ```
     /// use rust_j2k::DecodeOptions;
