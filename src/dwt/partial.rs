@@ -315,8 +315,15 @@ fn band_row<'a, T>(band: &'a Band<T>, row: usize, columns: &Range<usize>) -> &'a
 /// of it reaches past a band.
 fn check_shape<T>(bands: &Bands<T>, footprint: &Footprint) -> Result<()> {
     let (x, y) = (&footprint.x, &footprint.y);
-    let mut fits = bands.levels.len() == x.finest()
-        && (bands.ll.width, bands.ll.height) == (x.size[0], y.size[0])
+    let inconsistent = || {
+        Error::Inconsistent(
+            "a tile-component's subbands changed shape between Tier-1 and the wavelet".into(),
+        )
+    };
+    if bands.levels.len() != x.finest() {
+        return Err(inconsistent());
+    }
+    let mut fits = (bands.ll.width, bands.ll.height) == (x.size[0], y.size[0])
         && bands.ll.data.len() == bands.ll.width * bands.ll.height;
     for (level, detail) in bands.levels.iter().enumerate() {
         let (low_x, low_y) = (x.size[level], y.size[level]);
@@ -329,13 +336,7 @@ fn check_shape<T>(bands: &Bands<T>, footprint: &Footprint) -> Result<()> {
             fits &= (band.width, band.height) == shape && band.data.len() == shape.0 * shape.1;
         }
     }
-    if fits {
-        Ok(())
-    } else {
-        Err(Error::Inconsistent(
-            "a tile-component's subbands changed shape between Tier-1 and the wavelet".into(),
-        ))
-    }
+    if fits { Ok(()) } else { Err(inconsistent()) }
 }
 
 /// Merge the pyramid over the samples `footprint` needs, coarsest level
@@ -609,6 +610,20 @@ mod tests {
             let bands = Bands {
                 ll: band(2, 2),
                 levels: vec![],
+            };
+            assert!(matches!(
+                inverse_window(SubbandCoeffs::Reversible(bands), &footprint),
+                Err(Error::Inconsistent(_))
+            ));
+            // More levels than the footprint has.
+            let detail = || DetailBands {
+                hl: band(1, 1),
+                lh: band(1, 1),
+                hh: band(1, 1),
+            };
+            let bands = Bands {
+                ll: band(1, 1),
+                levels: (0..40).map(|_| detail()).collect(),
             };
             assert!(matches!(
                 inverse_window(SubbandCoeffs::Reversible(bands), &footprint),
