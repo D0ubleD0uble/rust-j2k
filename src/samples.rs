@@ -124,8 +124,7 @@ pub(crate) fn check_codestream(
 }
 
 /// Hold a decode of `selection` to `cap` samples: [`check_codestream`] when
-/// it returns the whole image, which `None` stands for too (the caller has
-/// no selection yet, and reports why later). Under a window or a tile, the
+/// it returns the whole image. Under a window or a tile, the
 /// count is every component of the tiles the decode reads, at `reduction`,
 /// the area [`Selection::read_rect`](crate::window::Selection::read_rect)
 /// gives.
@@ -140,19 +139,19 @@ pub(crate) fn check_codestream(
 /// than 2^19 a tile (`docs/resource-bounds.md`).
 pub(crate) fn check_read(
     siz: &crate::codestream::markers::Siz,
-    selection: Option<&crate::window::Selection>,
+    selection: &crate::window::Selection,
     reduction: u8,
     cap: u64,
 ) -> crate::Result<()> {
-    match selection {
-        Some(selection) if selection.area.image_rect() != siz.image_rect() => check_extent(
-            &siz.windowed(selection.read_rect(siz)),
-            reduction,
-            cap,
-            true,
-        ),
-        _ => check_codestream(siz, reduction, cap),
+    if selection.area.image_rect() == siz.image_rect() {
+        return check_codestream(siz, reduction, cap);
     }
+    check_extent(
+        &siz.windowed(selection.read_rect(siz)),
+        reduction,
+        cap,
+        true,
+    )
 }
 
 /// [`check_codestream`] of the image area `siz` declares, which is the area
