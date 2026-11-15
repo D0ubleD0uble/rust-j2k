@@ -1144,15 +1144,16 @@ fn ht_refinement_matches_kakadu_stats() {
         let ht = rust_j2k::decode(&read(ht_dir().join(&e.codestream)))
             .unwrap_or_else(|err| panic!("{}: {err}", e.name));
         let source = part1_dir().join(format!("codestreams/{}.j2k", e.source));
-        let part1 = rust_j2k::decode(&read(source))
-            .unwrap_or_else(|err| panic!("{}: {err}", e.source));
+        let part1 =
+            rust_j2k::decode(&read(source)).unwrap_or_else(|err| panic!("{}: {err}", e.source));
         for (c, (a, b)) in ht.components.iter().zip(&part1.components).enumerate() {
             let Some((&pae, &mse)) = k.pae.get(c).zip(k.mse.get(c)) else {
                 break;
             };
             let diffs = || a.samples.iter().zip(&b.samples).map(|(p, q)| p - q);
             let ours_pae = diffs().map(i32::abs).max().unwrap_or(0);
-            let ours_mse = diffs().map(|d| f64::from(d).powi(2)).sum::<f64>() / a.samples.len() as f64;
+            let ours_mse =
+                diffs().map(|d| f64::from(d).powi(2)).sum::<f64>() / a.samples.len() as f64;
             assert_eq!(f64::from(ours_pae), pae, "{} component {c}: PAE", e.name);
             assert!(
                 (ours_mse - mse).abs() <= 1e-6 * mse.max(1.0),
@@ -1165,5 +1166,5 @@ fn ht_refinement_matches_kakadu_stats() {
             refined += 1;
         }
     }
-    assert!(refined >= 12, "only {refined} files with refinement passes graded");
+    assert_eq!(refined, 13, "files with refinement passes graded");
 }

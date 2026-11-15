@@ -508,9 +508,20 @@ Findings:
   `p1_04`, `p1_05` and `p1_06` (T.803 C.1.10, C.1.11;
   `ht_transcodes_decode_as_their_part1_source`).
 - At a layer cap before the refinement layers, `_b11` and `_b12` decode
-  identically up to the last such cap and differ at the next one, for
-  `ds0_ht_02` (4), `ds0_ht_04` (18), `ds0_ht_05` (4), `ds1_ht_01` (3),
-  `ds1_ht_02` (16) and `ds1_ht_03` (1).
+  identically up to the last such cap, for `ds0_ht_02` (4), `ds0_ht_04`
+  (18), `ds0_ht_05` (4), `ds1_ht_01` (3), `ds1_ht_02` (16) and `ds1_ht_03`
+  (1). At the next cap they differ, which shows only that `_b11` gains
+  refinement passes there.
+- The manifest's `kakadu_stats` (Kakadu's PAE and MSE of each transcode
+  against its Part 1 source) grade the refinement passes on the multi-layer
+  files: this decoder's HT decode against its own Part 1 decode gives the
+  same figures on every reversible file and every exact transcode, 13 files
+  with refinement passes (`ht_refinement_matches_kakadu_stats`). On
+  `ds0_ht_04_b11`, `ds0_ht_05_b11`, `ds1_ht_02_b11` and `ds1_ht_03_b11`,
+  irreversible, the 9/7 rounding differs slightly from Kakadu's.
+- A set stuffing bit in the VLC or MagRef stream is skipped, as T.814 says,
+  where OpenJPEG ORs it into the next byte
+  ([openjpeg-departures.md](openjpeg-departures.md#set-stuffing-bits-in-the-ht-vlc-and-magref-streams)).
 
 ### P4.5 — ROI on HT blocks (`src/tier1/`)
 
