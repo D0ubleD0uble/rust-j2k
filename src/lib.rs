@@ -1394,23 +1394,19 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     // A component subset names codestream components, which come out as
     // coded: OpenJPEG bypasses the JP2 channel transforms under `-c`.
     let raw_channels = options.raw_channels || options.components.is_some();
-    // A palette expands the area the decode returns.
+    // A palette expands the area the decode returns. A refused selection has
+    // no area, so the plan counts nothing: its other faults are found at the
+    // same place whatever the image's size, and the selection's refusal
+    // follows them.
+    let plan_cap = if selection.is_ok() { cap } else { u64::MAX };
     let plans = jp2::ChannelPlans::plan(
         &file.header,
         selection.as_ref().map_or(siz, |selection| &selection.area),
         options.resolution_reduction,
-        cap,
+        plan_cap,
         raw_channels,
         jp2::is_jph(&file.file_type),
-    );
-    // A refused selection is reported ahead of a limit the plan counts on the
-    // whole image: no limit raised would help it.
-    if matches!(plans, Err(Error::Limit(_))) {
-        if let Err(refused) = selection {
-            return Err(refused);
-        }
-    }
-    let plans = plans?;
+    )?;
     jp2::check_after_codestream(&file, raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
     let selection = selection?;
