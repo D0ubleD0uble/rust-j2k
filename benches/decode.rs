@@ -34,7 +34,8 @@ const FIXTURES: &[&str] = &[
 ];
 
 /// A 2048 x 2048 image of 64 tiles, timed whole, through a 256 x 256 window
-/// and as one tile.
+/// across four tiles, through a 64 x 64 window inside one tile, and as one
+/// tile.
 const TILED: &str = "tests/fixtures/bench/tiled_2048_gray.j2k";
 
 fn main() {
@@ -98,7 +99,8 @@ fn main() {
     }
 
     // A small window and one tile of a large tiled image, against its whole
-    // decode: only the tiles the window reaches are decoded.
+    // decode: only the tiles the window reaches are decoded, and in them only
+    // the code-blocks and wavelet samples it needs.
     let path = root.join(TILED);
     let shown = filters.is_empty() || filters.iter().any(|f| "tiled_2048".contains(f.as_str()));
     if shown {
@@ -110,6 +112,10 @@ fn main() {
                         "tiled_2048 256x256 window",
                         DecodeOptions::default()
                             .with_window(Some(Window::new(896, 896, 1152, 1152))),
+                    ),
+                    (
+                        "tiled_2048 64x64 in a tile",
+                        DecodeOptions::default().with_window(Some(Window::new(800, 800, 864, 864))),
                     ),
                     (
                         "tiled_2048 tile 27",

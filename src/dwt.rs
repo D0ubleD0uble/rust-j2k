@@ -58,6 +58,10 @@ use crate::codestream::markers::Transform;
 use crate::image::blit;
 use crate::pipeline::{Band, Bands, DetailBands, Samples, SubbandCoeffs};
 
+mod partial;
+
+pub(crate) use partial::{Footprint, inverse_window};
+
 /// 9/7 lifting coefficients (ISO/IEC 15444-1 Table F.4): the two predict
 /// (`ALPHA`, `GAMMA`) and two update (`BETA`, `DELTA`) factors.
 /// Each value is the nearest `f32` to the ISO constant (the lifting runs in

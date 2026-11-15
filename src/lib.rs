@@ -1444,6 +1444,9 @@ fn decode_codestream(
     // not decoded.
     let mut canvas = image::Canvas::over(&cs.header, &selection.area, reduction, &selection.order)?;
     let reads = selection.tiles(&cs.header.siz);
+    // Whether the decode returns less than the image, so a tile may need
+    // only part of its samples.
+    let windowed = selection.area.image_rect() != cs.header.siz.image_rect();
     // One work bound for every tile's packet walk, and one for every tile's
     // code-blocks, in proportion to the tiles' data, so that many small
     // tiles cannot each spend a floor's worth. A POC sequence's bitmap stays
@@ -1514,7 +1517,7 @@ fn decode_codestream(
             tier2::decode_packets_partial(&header, tile, &meter, poc_bitmap, reduction, layers)
                 .map(|(coded, reach)| (coded, Some(reach)))
         };
-        let coded = match walked {
+        let mut coded = match walked {
             Ok((coded, reach)) => {
                 if let Some(reach) = reach {
                     let tile_complete =
@@ -1554,11 +1557,45 @@ fn decode_codestream(
             wanted[..3].fill(true);
         }
 
+        // Under a window, each component reconstructed needs only the samples
+        // whose wavelet support reaches the window: its footprint. `None`
+        // where the window covers the whole tile-component.
+        let footprints = coded
+            .components
+            .iter()
+            .enumerate()
+            .map(|(component, coded)| {
+                if !windowed || !wanted[component] {
+                    return Ok(None);
+                }
+                let rect = cs.header.siz.tile_component_rect(tile.index, component);
+                let area = selection.area.component_rect(component);
+                let (Some(rect), Some(area)) = (rect, area) else {
+                    return Err(Error::Inconsistent(format!(
+                        "no tile {} or no component {component} in `SIZ`",
+                        tile.index
+                    )));
+                };
+                dwt::Footprint::of(
+                    coded,
+                    reduction,
+                    rect.reduced(reduction),
+                    area.reduced(reduction),
+                    header.components[component].coding.transform,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (coded, footprint) in coded.components.iter_mut().zip(&footprints) {
+            if let Some(footprint) = footprint {
+                footprint.prune(coded);
+            }
+        }
+
         // Tier-1: the block coder (EBCOT or HT) decodes each code block into
         // subband coeffs. The dropped resolutions' code-blocks are skipped, never
-        // decoded, and so are those of the components not reconstructed. Their
-        // work is counted first, so a tile past the bound is refused before any
-        // of it is done.
+        // decoded, and so are those of the components not reconstructed and
+        // those outside a footprint. Their work is counted first, so a tile
+        // past the bound is refused before any of it is done.
         if let Some(left) = &mut block_work {
             let work = tier1::work(&header, &coded, reduction, &wanted);
             #[cfg(test)]
@@ -1574,16 +1611,24 @@ fn decode_codestream(
             };
             *left = rest;
         }
+        #[cfg(test)]
+        tests::BLOCKS
+            .with(|count| count.set(count.get() + tests::blocks(&coded, reduction, &wanted)));
         let coeffs = tier1::decode_code_blocks(&header, &coded, reduction, &wanted)?;
 
-        // Invert the DWT per resolution level into samples. Tier-1 has already
+        // Invert the DWT per resolution level into samples, over the whole
+        // tile-component or over its footprint. Tier-1 has already
         // dequantized the 9/7 coefficients as it placed each block.
         let mut samples = coeffs
             .into_iter()
+            .zip(&footprints)
             .enumerate()
-            .map(|(component, coeffs)| {
+            .map(|(component, (coeffs, footprint))| {
                 coeffs
-                    .map(|coeffs| dwt::inverse(&header, component, coeffs))
+                    .map(|coeffs| match footprint {
+                        Some(footprint) => dwt::inverse_window(coeffs, footprint),
+                        None => dwt::inverse(&header, component, coeffs),
+                    })
                     .transpose()
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1628,7 +1673,11 @@ fn decode_codestream(
                         tile.index
                     ))
                 })?;
-            canvas.place(component, rect.reduced(reduction), samples)?;
+            let rect = match footprints.get(component) {
+                Some(Some(footprint)) => footprint.rect(),
+                _ => rect.reduced(reduction),
+            };
+            canvas.place(component, rect, samples)?;
         }
     }
 
@@ -1738,6 +1787,30 @@ mod tests {
         /// The sample-passes the decodes on this thread have counted against
         /// the code-block work bound.
         pub(crate) static BLOCK_WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        /// The code-blocks with coding passes the decodes on this thread have
+        /// handed to the block decoder.
+        pub(crate) static BLOCKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The code-blocks with coding passes in the resolutions `reduction`
+    /// keeps of the components `wanted` marks: those Tier-1 decodes.
+    pub(crate) fn blocks(coded: &tier2::CodedData<'_>, reduction: u8, wanted: &[bool]) -> u64 {
+        let mut count = 0;
+        for (component, coded) in coded.components.iter().enumerate() {
+            if !wanted[component] {
+                continue;
+            }
+            let kept = coded
+                .resolutions
+                .len()
+                .saturating_sub(usize::from(reduction));
+            for resolution in coded.resolutions.iter().take(kept.max(1)) {
+                for subband in &resolution.subbands {
+                    count += subband.blocks.iter().filter(|b| b.num_passes > 0).count() as u64;
+                }
+            }
+        }
+        count
     }
 
     /// The sample-passes Tier-1 runs on `bytes` (one tile) under a layer
@@ -1807,9 +1880,66 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
+        work_of(&bytes, options)
+    }
+
+    /// The sample-passes the block decoder counts on a decode of `bytes`
+    /// under `options`.
+    fn work_of(bytes: &[u8], options: &DecodeOptions) -> u64 {
         BLOCK_WORK.with(|spent| spent.set(0));
-        decode_with(&bytes, options).unwrap();
+        BLOCKS.with(|count| count.set(0));
+        decode_with(bytes, options).unwrap();
         BLOCK_WORK.with(std::cell::Cell::get)
+    }
+
+    /// A window inside one tile decodes only the code-blocks whose wavelet
+    /// support reaches it, not every code-block of the tile.
+    #[test]
+    fn a_window_inside_a_tile_decodes_fewer_code_blocks_than_the_tile() {
+        // `tests/fixtures/bench/` is left out of the published package.
+        let Ok(bytes) = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/bench/tiled_2048_gray.j2k"
+        )) else {
+            eprintln!("the bench fixture is not present (packaged crate?); skipping");
+            return;
+        };
+        let all = DecodeOptions::default();
+        // Tile 27 is 768..1024 on both axes: 256 x 256 in 64 x 64 code-blocks,
+        // over four decomposition levels.
+        let tile = work_of(&bytes, &all.clone().with_tile(Some(27)));
+        assert!(tile > 0);
+        let blocks = || BLOCKS.with(std::cell::Cell::get);
+        // The tile's code-blocks with coding passes: the LL band's, one in
+        // each band of the three coarser levels, and six of the twelve of
+        // the finest level's 128 x 128 bands.
+        assert_eq!(blocks(), 16);
+        // Windows inside one code-block of each finest band: at the tile's
+        // top-left and bottom-right corners, and one sample in the
+        // bottom-right one. Each needs that code-block of each finest band
+        // and every coarser one; the bottom-right blocks of two finest bands
+        // have no coding pass.
+        for (window, count) in [
+            (Window::new(768, 768, 800, 800), 13),
+            (Window::new(992, 992, 1024, 1024), 11),
+            (Window::new(900, 900, 901, 901), 11),
+        ] {
+            let part = work_of(&bytes, &all.clone().with_window(Some(window)));
+            assert!(part < tile, "{window:?}: {part} of {tile}");
+            assert_eq!(blocks(), count, "{window:?}");
+        }
+        // A window across the middle of the tile, whose wavelet support
+        // reaches all four code-blocks of each finest band.
+        let middle = Window::new(880, 880, 912, 912);
+        assert_eq!(
+            work_of(&bytes, &all.clone().with_window(Some(middle))),
+            tile
+        );
+        assert_eq!(blocks(), 16);
+        // The window that is the whole tile decodes all of it.
+        let whole = Window::new(768, 768, 1024, 1024);
+        assert_eq!(work_of(&bytes, &all.clone().with_window(Some(whole))), tile);
+        assert_eq!(blocks(), 16);
     }
 
     /// A window decodes only the tiles it reaches, and a component subset
