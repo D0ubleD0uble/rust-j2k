@@ -162,13 +162,7 @@ fn codestream(layers: u16, first: [Option<u16>; 3]) -> Vec<u8> {
         data.extend(std::iter::repeat_n(0x12u8, bodies));
     }
 
-    let mut siz = vec![0, 0];
-    for v in [12u32, 4, 0, 0, 12, 4, 0, 0] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
-    let siz_new = synth::siz_body([12, 4, 0, 0, 12, 4, 0, 0], &[[7, 1, 1]]);
-    assert_eq!(siz, siz_new);
+    let siz = synth::siz_body([12, 4, 0, 0, 12, 4, 0, 0], &[[7, 1, 1]]);
     let mut cod = vec![0, 0];
     cod.extend_from_slice(&layers.to_be_bytes());
     cod.extend_from_slice(&[0, 0, 0, 0, 0, 1]);

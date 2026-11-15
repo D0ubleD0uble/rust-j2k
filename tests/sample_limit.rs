@@ -224,19 +224,10 @@ fn the_sample_limit_defaults_to_the_default_bound() {
 /// code-blocks, 5/3, no quantization, LRCP and `layers` layers, followed by
 /// `extra` (more main-header segments).
 fn main_header(size: u32, tile: u32, components: u16, layers: u16, extra: &[u8]) -> Vec<u8> {
-    let mut siz = vec![0, 0];
-    for field in [size, size, 0, 0, tile, tile, 0, 0] {
-        siz.extend_from_slice(&field.to_be_bytes());
-    }
-    siz.extend_from_slice(&components.to_be_bytes());
-    for _ in 0..components {
-        siz.extend_from_slice(&[7, 1, 1]);
-    }
-    let siz_new = synth::siz_body(
+    let siz = synth::siz_body(
         [size, size, 0, 0, tile, tile, 0, 0],
         &vec![[7, 1, 1]; usize::from(components)],
     );
-    assert_eq!(siz, siz_new);
     let mut cod = vec![0, 0];
     cod.extend_from_slice(&layers.to_be_bytes());
     cod.extend_from_slice(&[0, 6, 0, 0, 0, 1]);

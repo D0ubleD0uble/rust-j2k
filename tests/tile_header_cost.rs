@@ -57,21 +57,11 @@ fn cod(levels: u8) -> Vec<u8> {
 /// carries a COD of one level, which the main QCD's one step cannot
 /// quantize, so the tile headers are refused, at the last one.
 fn tiles(components: u16, tile_cod: bool) -> Vec<u8> {
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [SIDE + 1, SIDE + 1, 1, 1, 1, 1, 1, 1] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&components.to_be_bytes());
-    siz.extend_from_slice(&[7, 1, 1]);
-    for _ in 1..components {
-        siz.extend_from_slice(&[7, 255, 255]);
-    }
-    let siz_new = synth::siz_body([SIDE + 1, SIDE + 1, 1, 1, 1, 1, 1, 1], &{
+    let siz = synth::siz_body([SIDE + 1, SIDE + 1, 1, 1, 1, 1, 1, 1], &{
         let mut c = vec![[7, 1, 1]];
         c.resize(usize::from(components), [7, 255, 255]);
         c
     });
-    assert_eq!(siz, siz_new);
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
     cs.extend(cod(0));

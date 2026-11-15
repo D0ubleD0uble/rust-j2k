@@ -54,13 +54,7 @@ const VOLUMES: usize = 31;
 /// `Psot` is 0 and there is no EOC, as in a JP2 file whose codestream box
 /// ends where the packets end.
 fn pocdup(psot0: bool) -> Vec<u8> {
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [8u32, 8, 0, 0, 8, 8, 0, 0] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
-    let siz_new = synth::siz_body([8, 8, 0, 0, 8, 8, 0, 0], &[[7, 1, 1]]);
-    assert_eq!(siz, siz_new);
+    let siz = synth::siz_body([8, 8, 0, 0, 8, 8, 0, 0], &[[7, 1, 1]]);
     let mut cod = vec![1, 0];
     cod.extend_from_slice(&LAYERS.to_be_bytes());
     cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0x11]);
@@ -105,13 +99,7 @@ fn in_jp2() -> Vec<u8> {
 /// bitmap of 537 MB. Only the first 4096 packets are in the data (0x00
 /// each). Past the bound's 2^24 the decode holds the packets read in a set.
 fn pocwide() -> Vec<u8> {
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [512u32, 512, 0, 0, 512, 512, 0, 0] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
-    let siz_new = synth::siz_body([512, 512, 0, 0, 512, 512, 0, 0], &[[7, 1, 1]]);
-    assert_eq!(siz, siz_new);
+    let siz = synth::siz_body([512, 512, 0, 0, 512, 512, 0, 0], &[[7, 1, 1]]);
     let mut cod = vec![1, 2];
     cod.extend_from_slice(&LAYERS.to_be_bytes());
     cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0x11]);

@@ -150,21 +150,7 @@ fn ht_file(block: &Block<'_>) -> Vec<u8> {
         out.extend_from_slice(body);
         out
     };
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [
-        block.width,
-        block.height,
-        0,
-        0,
-        block.width,
-        block.height,
-        0,
-        0,
-    ] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
-    let siz_new = synth::siz_body(
+    let siz = synth::siz_body(
         [
             block.width,
             block.height,
@@ -177,7 +163,6 @@ fn ht_file(block: &Block<'_>) -> Vec<u8> {
         ],
         &[[7, 1, 1]],
     );
-    assert_eq!(siz, siz_new);
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
     // CAP: Part 15 only, with the `RGN` bit (12) set under a maxshift.

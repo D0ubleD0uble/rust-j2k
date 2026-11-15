@@ -80,14 +80,7 @@ const LEVELS: u8 = 5;
 /// `LEVELS` levels of 64x64 code-blocks, on the 9/7 wavelet (expounded steps
 /// of exponent 8) or the 5/3 (no quantization); every packet empty.
 fn single_tile(irreversible: bool) -> Vec<u8> {
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [SIDE, SIDE, 0, 0, SIDE, SIDE, 0, 0] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&1u16.to_be_bytes());
-    siz.extend_from_slice(&[7, 1, 1]);
-    let siz_new = synth::siz_body([SIDE, SIDE, 0, 0, SIDE, SIDE, 0, 0], &[[7, 1, 1]]);
-    assert_eq!(siz, siz_new);
+    let siz = synth::siz_body([SIDE, SIDE, 0, 0, SIDE, SIDE, 0, 0], &[[7, 1, 1]]);
     let bands = 1 + 3 * usize::from(LEVELS);
     let qcd = if irreversible {
         let mut body = vec![0x42];
