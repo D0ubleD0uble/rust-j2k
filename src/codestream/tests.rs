@@ -2312,6 +2312,26 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             )),
             Variant::Codestream,
         ),
+        (
+            "RGN in a codestream whose CAP says it has none",
+            err(&header_with(
+                &[
+                    seg(marker::CAP, &cap15(3)),
+                    seg(marker::RGN, &rgn_body(&[0], 0, 4)),
+                ]
+                .concat(),
+            )),
+            Variant::Codestream,
+        ),
+        (
+            "tile-part RGN in a codestream whose CAP says it has none",
+            perr(&assemble_with_tile_markers(
+                &[default_header(), vec![seg(marker::CAP, &cap15(3))]].concat(),
+                &[seg(marker::RGN, &rgn_body(&[0], 0, 4))],
+                &[0],
+            )),
+            Variant::Codestream,
+        ),
         // Multiple components are decoded, so they left this table. The
         // sample limit that bounds them depends on the caller's options, so
         // it is checked after this parse (`many_components_exceed_the_sample_budget`).
@@ -4205,6 +4225,60 @@ fn cap15(ccap15: u16) -> Vec<u8> {
     cap_body(PCAP_PART15, &[ccap15])
 }
 
+/// `Ccap15` bit 12 at 0 says the codestream holds no `RGN` (T.814 A.3.4),
+/// so a main-header `RGN` is refused, before or after the `CAP`. With the
+/// bit set, or with no Part 15 `CAP` at all, the same `RGN` is read.
+#[test]
+fn a_main_header_rgn_against_a_rgn_free_cap_is_codestream() {
+    let rgn = || seg(marker::RGN, &rgn_body(&[0], 0, 4));
+    let cap = |ccap15| seg(marker::CAP, &cap15(ccap15));
+    let [siz, cod, qcd] = <[Vec<u8>; 3]>::try_from(default_header()).unwrap();
+    for segments in [
+        [siz.clone(), cap(0x0003), rgn(), cod.clone(), qcd.clone()],
+        [siz.clone(), rgn(), cap(0x0003), cod.clone(), qcd.clone()],
+        [siz.clone(), rgn(), cod.clone(), qcd.clone(), cap(0x0003)],
+    ] {
+        let e = err(&codestream(&segments));
+        assert!(
+            matches!(&e, Error::Codestream(m) if m.contains("`Ccap15` bit 12 is 0")),
+            "got {e:?}"
+        );
+    }
+    for segments in [
+        [siz.clone(), cap(0x1003), rgn(), cod.clone(), qcd.clone()],
+        [siz.clone(), rgn(), cod.clone(), qcd.clone(), cap(0x1003)],
+    ] {
+        assert_eq!(parsed(&segments).components[0].roi_shift, 4);
+    }
+    let header = parsed(&[
+        siz.clone(),
+        seg(marker::CAP, &cap_body(0, &[])),
+        rgn(),
+        cod,
+        qcd,
+    ]);
+    assert_eq!(header.components[0].roi_shift, 4);
+}
+
+/// A tile-part `RGN` is held to the main header's `CAP` the same way.
+#[test]
+fn a_tile_part_rgn_against_a_rgn_free_cap_is_codestream() {
+    let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 4));
+    let mut header = default_header();
+    header.insert(1, seg(marker::CAP, &cap15(0x0003)));
+    let bytes = assemble_with_tile_markers(&header, std::slice::from_ref(&rgn), &[1, 2]);
+    let e = parse(&bytes).expect_err("RGN-free CAP");
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.contains("`Ccap15` bit 12 is 0")),
+        "got {e:?}"
+    );
+
+    header[1] = seg(marker::CAP, &cap15(0x1003));
+    let bytes = assemble_with_tile_markers(&header, &[rgn], &[1, 2]);
+    let cs = parse(&bytes).expect("CAP allows RGN");
+    assert_eq!(cs.tile_header(0).unwrap().components[0].roi_shift, 4);
+}
+
 /// A CAP and a CPF beside Part 1 code-blocks parse and are kept: the style
 /// bits, not CAP, decide the block coder.
 #[test]
@@ -4438,12 +4512,38 @@ const HT_LOGS: &[(&str, u16, Option<u64>)] = &[
 
 /// The magnitude bound `B` that `Ccap15` bits 0-4 signal (T.814 A.3.7).
 fn magnitude_bound(ccap15: u16) -> u32 {
-    match u32::from(ccap15 & 0x1F) {
-        0 => 8,
-        p @ 1..=19 => p + 8,
-        p @ 20..=30 => 4 * (p - 19) + 27,
-        _ => 74,
+    markers::Ccap15(ccap15).magnitude_bound()
+}
+
+/// `B` at each edge of A.3.7's cases, and in Table 4 (8.7.3): MAGB0 is 8,
+/// MAGB19 is 27, MAGB20 is 31, MAGB30 is 71 and MAGB31 is 74. The other
+/// bits do not change it.
+#[test]
+fn ccap15_magnitude_bound_follows_a_3_7() {
+    for (p, b) in [
+        (0, 8),
+        (1, 9),
+        (3, 11),
+        (19, 27),
+        (20, 31),
+        (21, 35),
+        (30, 71),
+        (31, 74),
+    ] {
+        assert_eq!(magnitude_bound(p), b, "P = {p}");
+        assert_eq!(
+            magnitude_bound(0xFFE0 | p),
+            b,
+            "P = {p} with every other bit set"
+        );
     }
+}
+
+/// `Ccap15` bit 12 alone says whether `RGN` markers may be present.
+#[test]
+fn ccap15_bit_12_is_the_rgn_bit() {
+    assert!(markers::Ccap15(0x1000).rgn());
+    assert!(!markers::Ccap15(0xEFFF).rgn());
 }
 
 /// `CPFnum = -1 + Σ Pcpf_i · 2^(16(i-1))` (T.814 A.6), for the short `CPF`s

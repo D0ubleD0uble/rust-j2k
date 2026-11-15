@@ -199,7 +199,7 @@ codestreams too.
 | HT placeholder passes | Yes |
 | HT SigProp and MagRef passes | Yes |
 | Mixed-mode (HT and Part 1 code-blocks in one tile-component) | No (Phase 4) |
-| Region of interest on HT code-blocks | No |
+| Region of interest on HT code-blocks | Yes |
 | JPH file format (`jph ` brand, Annex D) | Yes |
 | JPH application-defined channels (`cdef` `Typ` 3) | Yes, reported |
 | JPH `colr` methods 3 and 5 | No (skipped, as an unknown method is) |

@@ -538,6 +538,27 @@ files). OpenJPEG refuses ROI on HT blocks.
 
 **Gate:** those entries in class.
 
+**Done (#343).** `ht::decode` raises the block to `Mb + s` planes (T.814 7.6,
+H-3) and undoes the shift with EBCOT's `undo_maxshift`. Findings:
+
+- All eight files are in class, and all 38 HTONLY codestreams with them. On
+  the ROI files the Kakadu stats check passes once Kakadu's figures for the
+  4-bit `p0_03` and `p0_15` transcodes, quoted at 8 bits, are scaled to 4
+  bits, as the bounds check already did: 17 files with refinement passes are
+  graded.
+- `undo_maxshift` follows OpenJPEG's threshold, which is one plane below
+  H.1's. They differ on any background coefficient with bit `s - 1` set: H.1
+  keeps it, OpenJPEG zeroes it. Every stream that uses the smallest `s` H.2
+  allows can have such coefficients. The 12 ROI codestreams in the corpus
+  have none, and both rules give the same samples on the eight HT files and
+  on `p0_03`, `p0_06` and `p0_15`. Moving both coders to H.1 is #377.
+- The `B` bound (A.3.7) is checked per cleanup magnitude, as 8.7.3 states
+  it, not on the block's plane count: `S_blk` counts zero planes, and the
+  A.3.7 note allows `Mb + s` past `B`.
+- `Ccap15` bit 12 clear with any `RGN`, in the main header before or after
+  `CAP` or in a tile-part header, is `Codestream`. `Mb + s` past 30 planes is
+  `Limit`, OpenJPEG's HT bound on `Mb`.
+
 ### P4.6 — MIXED code-blocks (`src/tier1/`, `src/tier2/`)
 
 **Goal:** a tile-component with code-block style `0xC0` decodes, each

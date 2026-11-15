@@ -163,8 +163,8 @@
 //! no external tools. Correctness is defined by cross-checking OpenJPEG, not
 //! by self-consistency. HTJ2K code-blocks decode with all three of their
 //! coding passes. An input using a feature outside the decoded set (mixed-mode
-//! code-blocks, region of interest on HT code-blocks, a Part 2 extension) is
-//! rejected with [`Error::Unsupported`], never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
+//! code-blocks, a Part 2 extension) is rejected with [`Error::Unsupported`],
+//! never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
 //! directly. The feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md).
 #![warn(missing_docs)]
@@ -706,10 +706,9 @@ pub struct DecodeOptions {
     /// are not read, so damage in them is not found, as in OpenJPEG. In the
     /// tiles it reaches, only the code-blocks whose wavelet support reaches
     /// the window are decoded, so damage in the others is not found either.
-    /// Nor are the refusals of a code-block it skips: an HT code-block with
-    /// refinement passes or a region of interest, and a code-block past the
-    /// bit-plane limit. A window can therefore decode where the whole image
-    /// is refused as [`Error::Unsupported`] or [`Error::Limit`].
+    /// Nor is a code-block it skips checked against the bit-plane limit, so
+    /// a window can decode where the whole image is refused as
+    /// [`Error::Limit`].
     ///
     /// An empty window, one with no part inside the image area, and one that
     /// holds no sample of a returned component at the reduction are

@@ -996,11 +996,16 @@ fn read_segmentation_symbol(
 ///
 /// `mag` is the double-scale magnitude Tier-1 reconstructed, the value OpenJPEG
 /// holds in `datap` before `opj_t1_clbl_decode_processor` halves it. A magnitude
-/// **at or above** `2^roi_shift` was lifted there by the encoder and belongs to
-/// the region; everything strictly below is background, already on the common
-/// scale. Nothing else identifies the region — the shift is the label, which is
-/// why the boundary is `>=` and not `>`: a coefficient of exactly `2^roi_shift`
-/// is the smallest the encoder can have lifted.
+/// **at or above** `2^roi_shift` at double scale is taken for region and comes
+/// down `roi_shift` planes; everything below is background and stays. Nothing
+/// else identifies the region: the shift is the label.
+///
+/// This is OpenJPEG's threshold, and it is one plane below H.1's. At double
+/// scale `2^roi_shift` is a quantized magnitude of `2^(roi_shift - 1)`, while
+/// H.1 makes a coefficient region only from `2^roi_shift`, which is
+/// `mag >= 2^(roi_shift + 1)` here. So a background coefficient with bit
+/// `roi_shift - 1` set is shifted as if it were region and comes out as 0,
+/// where H.1 keeps it.
 ///
 /// Transliterated from `t1.c`:
 ///
@@ -1018,7 +1023,7 @@ fn read_segmentation_symbol(
 /// background. `t1.c` zeroes `datap` wholesale instead, and this follows it —
 /// changing the arm to keep the coefficients would diverge from OpenJPEG on
 /// every such stream (see `docs/openjpeg-departures.md`).
-fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
+pub(crate) fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
     if roi_shift == 0 {
         return mag;
     }
@@ -1605,8 +1610,9 @@ mod tests {
     /// if (mag >= thresh) { mag >>= roishift; }
     /// ```
     ///
-    /// so a magnitude of exactly `2^roi_shift` is the *smallest* the encoder can
-    /// have lifted, and it must come down. `>` for `>=` leaves it up by
+    /// so a magnitude of exactly `2^roi_shift` is the *smallest* taken for
+    /// region, and it must come down (OpenJPEG's rule, one plane below H.1's;
+    /// see [`undo_maxshift`]). `>` for `>=` leaves it up by
     /// `roi_shift` planes; the whole-component ROI fixture cannot see that,
     /// because it has no background coefficient below the threshold at all.
     #[test]
