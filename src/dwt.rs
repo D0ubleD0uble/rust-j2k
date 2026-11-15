@@ -1123,9 +1123,7 @@ mod tests {
 
     use super::{Samples, inverse};
     use crate::codestream::MainHeader;
-    use crate::codestream::markers::{
-        Cod, Coding, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
-    };
+    use crate::codestream::markers::{Qcd, QuantStyle, Transform};
     use crate::pipeline::SubbandCoeffs;
 
     /// A minimal single-component main header. The inverse reads only the
@@ -1138,56 +1136,6 @@ mod tests {
             steps: Vec::new(),
         };
         MainHeader::single_component((w, h), (16, false), (levels, transform), qcd)
-    }
-
-    fn old_header(transform: Transform, levels: u8, w: u32, h: u32) -> MainHeader {
-        MainHeader::new(
-            Siz {
-                x_size: w,
-                y_size: h,
-                x_offset: 0,
-                y_offset: 0,
-                tile_width: w,
-                tile_height: h,
-                tile_x_offset: 0,
-                tile_y_offset: 0,
-                components: vec![SizComponent {
-                    bit_depth: 16,
-                    signed: false,
-                    x_sampling: 1,
-                    y_sampling: 1,
-                }],
-            },
-            Cod {
-                progression: Progression::Lrcp,
-                layers: 1,
-                use_sop: false,
-                use_eph: false,
-                multiple_component_transform: false,
-                coding: Coding {
-                    decomposition_levels: levels,
-                    code_block_width: 4,
-                    code_block_height: 4,
-                    code_block_style: 0,
-                    transform,
-                    precinct_sizes: Vec::new(),
-                },
-            },
-            Qcd {
-                style: QuantStyle::None,
-                guard_bits: 2,
-                steps: Vec::new(),
-            },
-        )
-    }
-
-    #[test]
-    fn zz_identity_header() {
-        for t in [Transform::Reversible53, Transform::Irreversible97] {
-            for (l, w, h) in [(0, 1, 1), (3, 17, 9), (5, 64, 64)] {
-                assert_eq!(old_header(t, l, w, h), header(t, l, w, h));
-            }
-        }
     }
 
     /// Forward 1-D kernel down every column then across every row, in place —

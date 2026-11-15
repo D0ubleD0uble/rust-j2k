@@ -111,38 +111,10 @@ fn valid_reversible_header_parses() {
 
     assert_eq!(
         header,
-        MainHeader::new(
-            Siz {
-                x_size: 512,
-                y_size: 256,
-                x_offset: 0,
-                y_offset: 0,
-                tile_width: 512,
-                tile_height: 256,
-                tile_x_offset: 0,
-                tile_y_offset: 0,
-                components: vec![SizComponent {
-                    bit_depth: 16,
-                    signed: false,
-                    x_sampling: 1,
-                    y_sampling: 1,
-                }],
-            },
-            Cod {
-                progression: Progression::Lrcp,
-                layers: 1,
-                use_sop: false,
-                use_eph: false,
-                multiple_component_transform: false,
-                coding: Coding {
-                    decomposition_levels: 5,
-                    code_block_width: 4,
-                    code_block_height: 4,
-                    code_block_style: 0,
-                    transform: Transform::Reversible53,
-                    precinct_sizes: vec![],
-                },
-            },
+        MainHeader::single_component(
+            (512, 256),
+            (16, false),
+            (5, Transform::Reversible53),
             Qcd {
                 style: QuantStyle::None,
                 guard_bits: 2,

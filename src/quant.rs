@@ -133,49 +133,12 @@ fn half_step_of((exp, mant): (u8, u16), prec: i32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codestream::markers::{Cod, Coding, Progression, Siz, SizComponent, Transform};
+    use crate::codestream::markers::Transform;
 
     /// A `prec`-bit single-component header carrying `qcd`. Only the component
     /// depth and the QCD feed dequantization; the rest is filler.
     fn header(prec: u8, qcd: Qcd) -> MainHeader {
         MainHeader::single_component((4, 4), (prec, false), (1, Transform::Irreversible97), qcd)
-    }
-
-    fn old_header(prec: u8, qcd: Qcd) -> MainHeader {
-        MainHeader::new(
-            Siz {
-                x_size: 4,
-                y_size: 4,
-                x_offset: 0,
-                y_offset: 0,
-                tile_width: 4,
-                tile_height: 4,
-                tile_x_offset: 0,
-                tile_y_offset: 0,
-                components: vec![SizComponent {
-                    bit_depth: prec,
-                    signed: false,
-                    x_sampling: 1,
-                    y_sampling: 1,
-                }],
-            },
-            Cod {
-                progression: Progression::Lrcp,
-                layers: 1,
-                use_sop: false,
-                use_eph: false,
-                multiple_component_transform: false,
-                coding: Coding {
-                    decomposition_levels: 1,
-                    code_block_width: 4,
-                    code_block_height: 4,
-                    code_block_style: 0,
-                    transform: Transform::Irreversible97,
-                    precinct_sizes: vec![],
-                },
-            },
-            qcd,
-        )
     }
 
     /// The Annex E.1 step size, recomputed independently for the assertions.
@@ -326,25 +289,5 @@ mod tests {
         };
         let err = half_step(&header(8, qcd), 1, 0).unwrap_err();
         assert!(matches!(err, Error::Inconsistent(_)));
-    }
-
-    #[test]
-    fn zz_identity_header() {
-        for prec in [1u8, 8, 16] {
-            for qcd in [
-                Qcd {
-                    style: QuantStyle::None,
-                    guard_bits: 2,
-                    steps: vec![(8, 0)],
-                },
-                Qcd {
-                    style: QuantStyle::ScalarExpounded,
-                    guard_bits: 1,
-                    steps: vec![(9, 100), (3, 2047)],
-                },
-            ] {
-                assert_eq!(old_header(prec, qcd.clone()), header(prec, qcd));
-            }
-        }
     }
 }
