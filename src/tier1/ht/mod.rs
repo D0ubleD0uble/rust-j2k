@@ -79,9 +79,11 @@ pub(super) struct Params {
 /// same way.
 ///
 /// Last, the maxshift is undone (7.6 hands the samples to Annex H) exactly
-/// as the Part 1 coder undoes it: a magnitude at or above `2^s` at double
-/// scale is region and comes down `s` planes; one below is background and
-/// stays.
+/// as the Part 1 coder undoes it, with OpenJPEG's threshold: a magnitude at
+/// or above `2^s` at double scale is taken for region and comes down `s`
+/// planes; one below is background and stays. That threshold is one plane
+/// below H.1's, so a background coefficient with bit `s - 1` set comes out
+/// as 0 where H.1 keeps it (see `undo_maxshift`).
 pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Result<Vec<i32>> {
     let (width, height) = (block.width, block.height);
     let mut coeffs = vec![0i32; width * height];

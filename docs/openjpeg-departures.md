@@ -46,7 +46,7 @@ refusal under `ColorOutput::Srgb`).
 | [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps and packed-header overruns handled differently | 1, 3 |
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
-| [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes; OpenJPEG refuses | 1 |
+| [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes, with OpenJPEG's Part 1 maxshift threshold; OpenJPEG refuses | 1; threshold pending #377 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
@@ -1065,16 +1065,26 @@ references on those files.
 | This decoder | decodes an `RGN` maxshift on HT code-blocks |
 | OpenJPEG 2.5.0 | refuses the block ("We do not support ROI in decoding HT codeblocks", `ht_dec.c`) |
 | Standard | T.814 7.6 and Annex H of ISO/IEC 15444-1 |
-| Rule | 1 |
+| Rule | 1 for decoding the blocks; the maxshift threshold follows OpenJPEG pending a decision (#377) |
 | Tests and fixtures | `an_ht_maxshift_block_decodes_by_hand` in `src/tier1/ht/tests.rs`; `tests/conformance_ht.rs` on `ds0_ht_03_b11`, `ds0_ht_03_b14`, `ds0_ht_06_b11`, `ds0_ht_06_b15`, `ds0_ht_06_b18`, `ds0_ht_13_b11`, `ds0_ht_15_b11` and `ds0_ht_15_b14` |
 | Decided | #343 |
 
 T.814 7.6 gives an HT block under a maxshift of `s` the `Mb + s` bit-planes of
 H-3, and the zero bit-planes count down from there. After the cleanup and
 refinement passes, this decoder undoes the shift exactly as it does on an EBCOT
-block, with OpenJPEG's threshold (`t1.c`). So an HT transcode of a Part 1 ROI
-codestream decodes to the same samples as its source. The eight Part 4
-references above grade within their compliance class.
+block. So an HT transcode of a Part 1 ROI codestream decodes to the same
+samples as its source. The eight Part 4 references above grade within their
+compliance class.
+
+Both coders use OpenJPEG's threshold (`t1.c`), which is one plane below H.1's.
+H.1 makes a coefficient region when its quantized magnitude `q` is at least
+`2^s`. OpenJPEG makes it region from `2^(s-1)`, so a background coefficient
+with bit `s - 1` set is taken for region, shifted down `s` planes and comes
+out as 0. For example, an HT 1x1 block with `Mb = 5`, `s = 2`, 6 zero
+bit-planes and the segment `00 27 F3 00` holds a background `q = 3`. H.1 gives
+3; this decoder and OpenJPEG give 0. None of the ROI codestreams in the
+corpus has such a coefficient. Whether to follow H.1 instead, in both coders,
+is #377.
 
 The same blocks bring two checks OpenJPEG does not make, since it reads no
 field of `CAP`; see [CAP and CPF](#cap-and-cpf). A block of more than 30
