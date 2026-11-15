@@ -7,7 +7,8 @@ Each fixture is a pair of single-block HT codestreams, cleanup pass only. The
 a stuffing bit, so this decoder reads the two files the same. OpenJPEG 2.5.0
 ORs a set bit into the next byte, so it decodes the `.set` file differently
 or refuses it as malformed, and decodes the `.clear` file as this decoder
-does. See docs/openjpeg-departures.md, "Set stuffing bits in the HT VLC and
+does. On the `abort_mel_` pairs the set bit sits after a MEL 0xFF, and
+OpenJPEG's `mel_init` assertion aborts the process on the `.set` file. See docs/openjpeg-departures.md, "Set stuffing bits in the HT VLC and
 MagRef streams".
 
 The blocks were picked from a random differential of crafted cleanup-only
@@ -20,8 +21,8 @@ The script writes both files of each pair, checks that they differ only in
 the top bit of the bytes that carry a VLC stuffing bit, runs `opj_decompress`
 on each, and writes `manifest.tsv`: the SHA-256 of OpenJPEG's samples (each as
 a little-endian i32, as `tests/ht_vlc_stuffing.rs` hashes them) for the
-`.clear` file, and the same for the `.set` file or `refused` when OpenJPEG
-fails on it. It exits non-zero if OpenJPEG decodes a `.set` file the same as
+`.clear` file, and the same for the `.set` file, `refused` when OpenJPEG
+fails on it, or `abort` when it dies on a signal. It exits non-zero if OpenJPEG decodes a `.set` file the same as
 its `.clear` file, since that pair would not show the difference.
 
 Usage: python3 scripts/gen-ht-vlc-stuffing-fixtures.py
@@ -74,6 +75,10 @@ BLOCKS = [
      "7c637a82f2c8cbf146f800"),
     ("refused_uq_two_bits_4x18_i16", 4, 18, 16, 3, 8, True, 427, 8, 0x40,
      "8d00f98a6d32832507f0ffa85afc00"),
+    ("abort_mel_4x16_r12", 4, 16, 12, 2, 12, False, 0, 7, 0x40,
+     "c6a5d9ffc01f657800"),
+    ("abort_mel_2x17_r8", 2, 17, 8, 3, 2, False, 0, 2, 0x40,
+     "15110f857e0f95f6ffac2d6700"),
 ]
 
 
@@ -181,11 +186,14 @@ def clear_vlc_stuffing(seg: bytes) -> bytes:
 
 
 def opj_digest(path: Path, work: Path) -> str:
-    """SHA-256 of OpenJPEG's samples as little-endian i32, or `refused`."""
+    """SHA-256 of OpenJPEG's samples as little-endian i32, `refused`, or
+    `abort` when the process dies on a signal (an assertion)."""
     pgx = work / (path.stem + ".pgx")
     result = subprocess.run(["opj_decompress", "-i", str(path), "-o", str(pgx)],
                             capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
     outs = sorted(work.glob(path.stem + "*.pgx"))
+    if result.returncode < 0:
+        return "abort"
     if result.returncode != 0 or len(outs) != 1:
         return "refused"
     raw = outs[0].read_bytes()
@@ -221,8 +229,10 @@ def main() -> None:
                 path = DIR / f"{name}.{tag}.j2k"
                 path.write_bytes(codestream(w, h, depth, guard, eps, irrev, mant, zbp, style, body))
                 digests.append(opj_digest(path, work))
-            if digests[1] == "refused":
+            if digests[1] in ("refused", "abort"):
                 sys.exit(f"{name}: OpenJPEG refuses the cleared block")
+            if name.startswith("abort_") != (digests[0] == "abort"):
+                sys.exit(f"{name}: OpenJPEG gave {digests[0]} on the set block")
             if digests[0] == digests[1]:
                 sys.exit(f"{name}: OpenJPEG decodes both files the same")
             rows.append(f"{name}\t{digests[0]}\t{digests[1]}\n")

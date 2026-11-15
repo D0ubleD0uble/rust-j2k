@@ -6,7 +6,9 @@
 //! this decoder reads the two the same; OpenJPEG 2.5.0 ORs a set bit into the
 //! next byte, so it decodes the `.set` file differently or refuses it (see
 //! `docs/openjpeg-departures.md`, "Set stuffing bits in the HT VLC and MagRef
-//! streams"). On the cleared file the two decoders agree. The pairs come from
+//! streams"). On the `abort_mel_` pairs the set bit follows a MEL 0xFF, and
+//! OpenJPEG aborts on an assertion instead. On the cleared file the two
+//! decoders agree. The pairs come from
 //! a random differential of cleanup-only blocks, where every block the two
 //! decoders read differently had a set VLC stuffing bit and none differed
 //! once the bits were cleared. `manifest.tsv` holds the digests of OpenJPEG's
@@ -23,7 +25,7 @@ fn dir() -> PathBuf {
 }
 
 /// A pair's name, then OpenJPEG's digest of the `.set` file (`refused` when
-/// it fails on it) and of the `.clear` file.
+/// it fails on it, `abort` when it aborts) and of the `.clear` file.
 fn manifest() -> Vec<(String, String, String)> {
     let text = std::fs::read_to_string(dir().join("manifest.tsv")).unwrap();
     text.lines()
@@ -59,7 +61,7 @@ fn a_cleared_block_decodes_as_openjpeg_decodes_it() {
     for (name, _, clear) in &rows {
         assert_eq!(sha256_hex(&samples(name, "clear")), *clear, "{name}");
     }
-    assert_eq!(rows.len(), 14);
+    assert_eq!(rows.len(), 16);
 }
 
 /// The set bits change nothing here, and OpenJPEG's decode of the `.set`
@@ -75,6 +77,26 @@ fn a_set_vlc_stuffing_bit_is_skipped_where_openjpeg_reads_it() {
     }
     // OpenJPEG refuses three as malformed.
     assert_eq!(refused, 3);
+}
+
+/// Where OpenJPEG's `mel_init` assertion aborts on the `.set` file (a MEL
+/// 0xFF followed by a byte above 0x8F), the block decodes as its cleared twin
+/// does. T.814 7.1.3 would skip the MEL stuffing bit with no error; on these
+/// two blocks the MEL decode stops before that byte, which OpenJPEG reads
+/// ahead.
+#[test]
+fn a_set_stuffing_bit_after_a_mel_0xff_decodes_as_its_cleared_twin() {
+    let aborts: Vec<String> = manifest()
+        .into_iter()
+        .filter(|(_, set, _)| set == "abort")
+        .map(|(name, _, _)| name)
+        .collect();
+    assert_eq!(aborts, ["abort_mel_4x16_r12", "abort_mel_2x17_r8"]);
+    for name in &aborts {
+        let ours = samples(name, "set");
+        assert!(ours.iter().any(|&b| b != 0), "{name}");
+        assert_eq!(ours, samples(name, "clear"), "{name}");
+    }
 }
 
 /// The two files of a pair differ only in the top bit of the bytes that
@@ -123,7 +145,17 @@ fn the_manifest_lists_every_pair() {
         .filter(|f| f.ends_with(".j2k"))
         .collect();
     files.sort();
-    let mut want: Vec<String> = manifest()
+    let rows = manifest();
+    let digest = |d: &str| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit());
+    for (name, set, clear) in &rows {
+        assert!(
+            digest(set) || set == "refused" || set == "abort",
+            "{name}: {set}"
+        );
+        assert!(digest(clear), "{name}: {clear}");
+        assert_eq!(set == "abort", name.starts_with("abort_"), "{name}");
+    }
+    let mut want: Vec<String> = rows
         .iter()
         .flat_map(|(name, _, _)| [format!("{name}.clear.j2k"), format!("{name}.set.j2k")])
         .collect();

@@ -1199,7 +1199,24 @@ stuffing bit. With the bits cleared, the two decoders gave the same samples
 on every block both decode. Each block whose samples differed decoded here
 the same as its cleared twin. A VLC reader that ORs the bit in, as OpenJPEG
 does, gives OpenJPEG's samples on the 11 such pairs in
-`tests/fixtures/ht_vlc_stuffing/`, and its refusal on the other 3.
+`tests/fixtures/ht_vlc_stuffing/`, and refuses the 3 that OpenJPEG refuses
+as malformed.
+
+OpenJPEG 2.5.0 can also abort the process on such a block. `mel_init`
+(`ht_dec.c:319`) reads ahead up to the first four MEL bytes and asserts when
+a 0xFF is followed by a byte above 0x8F. T.814 7.1.3 (`importMELBit`) skips
+the MEL stuffing bit with no error, and this decoder decodes the block. In
+every case seen (33 of the 24,000 blocks without zeroed stuffing bits), that
+0xFF also carries a set VLC stuffing bit. Two are fixtures, both 5/3, and
+each decodes here as its cleared twin does:
+
+- A 4x16 12-bit block, 13 bit-planes with 7 zero, and the segment
+  `C6 A5 D9 FF C0 1F 65 78 00`.
+- A 2x17 8-bit block, 4 bit-planes with 2 zero, and the segment
+  `15 11 0F 85 7E 0F 95 F6 FF AC 2D 67 00`.
+
+On both, the MEL decode stops before the byte after the 0xFF, so the MEL
+stuffing rule does not change the samples.
 
 Refusing such a stream, as for a set SigProp or MagSgn stuffing bit, would go
 past the standard, which defines a decode here. Following OpenJPEG would read

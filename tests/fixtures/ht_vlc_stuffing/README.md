@@ -12,7 +12,8 @@ file differently. See `docs/openjpeg-departures.md`, "Set stuffing bits in the
 HT VLC and MagRef streams".
 
 `manifest.tsv` holds the SHA-256 of OpenJPEG's samples for each file (each
-sample a little-endian `i32`), or `refused` when it fails on the file.
+sample a little-endian `i32`), `refused` when it fails on the file, or
+`abort` when the process aborts on an assertion.
 
 ## Source and tools
 
@@ -40,7 +41,11 @@ decode.
 
 The `nibble_` pairs have the bit in the first VLC nibble, and the `byte_`
 pairs in a byte after one above 0x8F. On the `refused_` pairs OpenJPEG
-refuses the `.set` file as malformed. `nibble_2x17_i12` and
+refuses the `.set` file as malformed. On the `abort_mel_` pairs the set
+bit's 0xFF is also a MEL byte followed by one above 0x8F, and OpenJPEG's
+`mel_init` assertion (`ht_dec.c:319`) aborts the process on the `.set` file.
+They are 2 of the 33 such blocks in the random-bytes sweep, and both decode
+here as their cleared twins do. `nibble_2x17_i12` and
 `nibble_2x17_r12_causal` are the cleanup passes of `r2_230_w2h17mb9z6p3s40i`
 and `r5_217_w2h17mb7z3p2s48r`, the blocks the issue names.
 
@@ -60,5 +65,7 @@ and `r5_217_w2h17mb7z3p2s48r`, the blocks the issue names.
 | `refused_outside_2x17_i16` | 2x17, 16-bit, 9/7 | first nibble | significant samples outside the block |
 | `refused_uq_4x8_r16` | 4x8, 16-bit, 5/3 | first nibble | `U_q` too large |
 | `refused_uq_two_bits_4x18_i16` | 4x18, 16-bit, 9/7 | first nibble and one byte | `U_q` too large |
+| `abort_mel_4x16_r12` | 4x16, 12-bit, 5/3 | one byte | aborts in `mel_init` |
+| `abort_mel_2x17_r8` | 2x17, 8-bit, 5/3 | one byte | aborts in `mel_init` |
 
 The style is 0x40 (HT) unless the table says 0x48 (HT, vertically causal).

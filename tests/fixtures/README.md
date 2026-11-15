@@ -460,7 +460,7 @@ are the controls and decode to 176, as OpenJPEG gives.
 
 ### HT VLC stuffing-bit fixtures
 
-`ht_vlc_stuffing/` holds 14 pairs of one-block HT codestreams, cleanup pass
+`ht_vlc_stuffing/` holds 16 pairs of one-block HT codestreams, cleanup pass
 only: each block with a set VLC stuffing bit, and with the bit cleared.
 `tests/ht_vlc_stuffing.rs` checks them against OpenJPEG's digests in
 `manifest.tsv`. Provenance, and the differential they come from, in
