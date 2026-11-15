@@ -20,9 +20,19 @@ fn block(width: usize, height: usize, zbp: u32, bytes: &[u8]) -> CodeBlock<'_> {
     }
 }
 
+/// The parameters of a block under a maxshift of `roi_shift`, with no `CAP`
+/// bound.
+fn params(roi_shift: u8, causal: bool) -> Params {
+    Params {
+        roi_shift,
+        causal,
+        bound_bits: None,
+    }
+}
+
 /// The `Codestream` message of a decode that must fail as malformed.
 fn malformed_msg(block: &CodeBlock<'_>, numbps: u32) -> String {
-    match decode(block, numbps, 0, false) {
+    match decode(block, numbps, params(0, false)) {
         Err(Error::Codestream(msg)) => msg,
         other => panic!("expected a Codestream error, got {other:?}"),
     }
@@ -262,9 +272,12 @@ fn a_set_vlc_stuffing_bit_does_not_change_the_block() {
     let set = [0x7F, 0x47, 0x93, 0xF7, 0x5C, 0xF6, 0x00];
     let mut clear = set;
     clear[5] = 0x76;
-    let a = decode(&block(2, 8, 2, &set), 6, 0, false).unwrap();
+    let a = decode(&block(2, 8, 2, &set), 6, params(0, false)).unwrap();
     assert!(a.iter().any(|&c| c != 0));
-    assert_eq!(a, decode(&block(2, 8, 2, &clear), 6, 0, false).unwrap());
+    assert_eq!(
+        a,
+        decode(&block(2, 8, 2, &clear), 6, params(0, false)).unwrap()
+    );
 }
 
 /// A 0x7F byte after 0x8F keeps all eight bits: only a byte above 0x8F
@@ -337,6 +350,7 @@ fn cleanup<'a>(seg: Segment<'a>, width: usize, height: usize) -> Cleanup<'a> {
         height,
         qw: width.div_ceil(2),
         max_u: 30,
+        bound_bits: None,
         shift: 0,
     }
 }
@@ -404,29 +418,87 @@ fn a_one_sample_block_decodes_by_hand() {
     // Byte 1 is the MEL byte (top bit 0) and the VLC nibble 0x6.
     for (sign, want) in [(0x00, 384), (0x01, -384)] {
         let data = [sign, 0x62, 0x00];
-        assert_eq!(decode(&block(1, 1, 0, &data), 8, 0, false).unwrap(), [want]);
+        assert_eq!(
+            decode(&block(1, 1, 0, &data), 8, params(0, false)).unwrap(),
+            [want]
+        );
     }
     // Each zero bit-plane halves it: (2 mu + 1) << (Mb - P - 1).
     let data = [0x01, 0x62, 0x00];
-    assert_eq!(decode(&block(1, 1, 1, &data), 8, 0, false).unwrap(), [-192]);
-    assert_eq!(decode(&block(1, 1, 7, &data), 8, 0, false).unwrap(), [-3]);
+    assert_eq!(
+        decode(&block(1, 1, 1, &data), 8, params(0, false)).unwrap(),
+        [-192]
+    );
+    assert_eq!(
+        decode(&block(1, 1, 7, &data), 8, params(0, false)).unwrap(),
+        [-3]
+    );
+}
+
+/// HT blocks under a maxshift of `s = 3` in a subband of `Mb = 5`, worked
+/// from ISO/IEC 15444-1 Annex H and E.1 by hand. The block has `M'b = 8`
+/// planes (H-3), the cleanup pass gives `N_b = S_blk + 1` MSBs of them
+/// (T.814 7.6), and H.1 then sorts each sample into region or background.
+/// The values are at double scale: twice the reconstruction `Rq`.
+#[test]
+fn an_ht_maxshift_block_decodes_by_hand() {
+    let roi = params(3, false);
+    // `S_blk = 0`, `mu = 1`: `N_b = 1 < Mb`, so H.1 step 2 changes nothing
+    // and the one MSB is read against the `Mb = 5` planes: `q = 2^4 = 16`,
+    // and E-6 with `r = 1/2` adds `2^(Mb - N_b) / 2 = 8`. `Rq = 24`.
+    for (sign, want) in [(0x00, 48), (0x01, -48)] {
+        let data = [sign, 0x62, 0x00];
+        assert_eq!(decode(&block(1, 1, 0, &data), 5, roi).unwrap(), [want]);
+    }
+    // `S_blk = 7`, `mu = 1`: only MSB 8 is set, so the first `Mb` MSBs are
+    // zero and the sample is background (step 4). Its MSBs move up three
+    // places (H-1), `N_b = 8 - 3 = Mb` (H-2), so `q = 1` and `r = 1/2` gives
+    // `Rq = -1.5`.
+    let data = [0x01, 0x62, 0x00];
+    assert_eq!(decode(&block(1, 1, 7, &data), 5, roi).unwrap(), [-3]);
+    // `S_blk = 7`, `mu = 8`: MSB 5 is set, one of the first `Mb`, so the
+    // sample is region (step 3). `N_b` becomes `Mb`, so its value is its
+    // first five MSBs, `00001`: `q = 1`, with every plane known. This
+    // decoder, like OpenJPEG, adds no reconstruction offset there (`r = 0`,
+    // which E.1.1.2 leaves to the decoder): `Rq = 1`.
+    for (data, want) in [
+        (&[0xA6, 0x31, 0x47, 0x74, 0x00][..], 2),
+        (&[0x47, 0x47, 0xF3, 0x00][..], -2),
+    ] {
+        assert_eq!(decode(&block(1, 1, 7, data), 5, roi).unwrap(), [want]);
+    }
+    // Without the maxshift the same blocks are refused: seven zero
+    // bit-planes leave none of `Mb = 5` to code.
+    assert!(matches!(
+        decode(&block(1, 1, 7, &data), 5, params(0, false)),
+        Err(Error::Codestream(_))
+    ));
+}
+
+/// The maxshift raises the planes a refinement pass needs: a block whose
+/// cleanup pass reaches `Mb`'s last plane still has `s` planes below it.
+#[test]
+fn passes_run_counts_the_planes_a_maxshift_adds() {
+    let b = refined(1, 2, 7, &[0x00, 0x62, 0x00], &[0x01], 3);
+    assert_eq!(passes_run(&b, 8, 0), 1);
+    assert_eq!(passes_run(&b, 8, 1), 3);
 }
 
 #[test]
 fn a_block_without_passes_or_planes_is_zero() {
     let mut b = block(3, 2, 0, &[0xAA, 0xBB]);
     b.num_passes = 0;
-    assert_eq!(decode(&b, 8, 0, false).unwrap(), [0; 6]);
+    assert_eq!(decode(&b, 8, params(0, false)).unwrap(), [0; 6]);
     let b = block(3, 2, 0, &[0xAA, 0xBB]);
-    assert_eq!(decode(&b, 0, 0, false).unwrap(), [0; 6]);
+    assert_eq!(decode(&b, 0, params(0, false)).unwrap(), [0; 6]);
 }
 
 #[test]
 fn passes_run_counts_the_cleanup_pass() {
     let mut b = block(4, 4, 0, &[0, 0]);
-    assert_eq!(passes_run(&b, 8), 1);
+    assert_eq!(passes_run(&b, 8, 0), 1);
     b.num_passes = 0;
-    assert_eq!(passes_run(&b, 8), 0);
+    assert_eq!(passes_run(&b, 8, 0), 0);
 }
 
 // Refinement passes.
@@ -457,7 +529,7 @@ const TOP_ONLY: [u8; 3] = [0x00, 0x62, 0x00];
 #[test]
 fn cleanup_and_sigprop_decode_by_hand() {
     assert_eq!(
-        decode(&block(1, 2, 0, &TOP_ONLY), 8, 0, false).unwrap(),
+        decode(&block(1, 2, 0, &TOP_ONLY), 8, params(0, false)).unwrap(),
         [384, 0]
     );
     // SigProp visits (0, 1) beside (0, 0): bit 1 makes it significant, the
@@ -465,11 +537,11 @@ fn cleanup_and_sigprop_decode_by_hand() {
     for (byte, want) in [(0x01, 192), (0x03, -192)] {
         let data = [byte];
         let b = refined(1, 2, 0, &TOP_ONLY, &data, 2);
-        assert_eq!(decode(&b, 8, 0, false).unwrap(), [384, want]);
+        assert_eq!(decode(&b, 8, params(0, false)).unwrap(), [384, want]);
     }
     // A SigProp bit of 0 leaves it insignificant.
     let b = refined(1, 2, 0, &TOP_ONLY, &[0x02], 2);
-    assert_eq!(decode(&b, 8, 0, false).unwrap(), [384, 0]);
+    assert_eq!(decode(&b, 8, params(0, false)).unwrap(), [384, 0]);
 }
 
 #[test]
@@ -479,7 +551,7 @@ fn all_three_passes_decode_by_hand() {
     for (magref, want) in [(0x01, 448), (0x00, 320)] {
         let data = [0x01, magref];
         let b = refined(1, 2, 0, &TOP_ONLY, &data, 3);
-        assert_eq!(decode(&b, 8, 0, false).unwrap(), [want, 192]);
+        assert_eq!(decode(&b, 8, params(0, false)).unwrap(), [want, 192]);
     }
 }
 
@@ -488,7 +560,7 @@ fn sigprop_propagates_through_new_samples_and_signs_each_group_after() {
     // A 4x2 block whose cleanup pass leaves only (0, 0), at +384.
     let cleanup = [0x52, 0x70, 0x63, 0x00];
     assert_eq!(
-        decode(&block(4, 2, 0, &cleanup), 8, 0, false).unwrap(),
+        decode(&block(4, 2, 0, &cleanup), 8, params(0, false)).unwrap(),
         [384, 0, 0, 0, 0, 0, 0, 0]
     );
     // Columns 2 and 3 have no cleanup-significant neighbor, so they are
@@ -497,7 +569,7 @@ fn sigprop_propagates_through_new_samples_and_signs_each_group_after() {
     // which only the first, for (0, 1), is set.
     let b = refined(4, 2, 0, &cleanup, &[0xFF, 0x00], 2);
     assert_eq!(
-        decode(&b, 8, 0, false).unwrap(),
+        decode(&b, 8, params(0, false)).unwrap(),
         [384, 192, 192, 192, -192, 192, 192, 192]
     );
 }
@@ -514,8 +586,8 @@ fn an_empty_refinement_segment_decodes_the_cleanup_pass() {
     // Z_blk is 1 when the cleanup segment is the only nonempty one (B.3).
     for passes in [2, 3] {
         let b = refined(1, 2, 0, &TOP_ONLY, &[], passes);
-        assert_eq!(decode(&b, 8, 0, false).unwrap(), [384, 0]);
-        assert_eq!(passes_run(&b, 8), 1);
+        assert_eq!(decode(&b, 8, params(0, false)).unwrap(), [384, 0]);
+        assert_eq!(passes_run(&b, 8, 0), 1);
     }
 }
 
@@ -524,18 +596,18 @@ fn refinement_with_no_plane_left_decodes_the_cleanup_pass() {
     // With P = Mb - 1 the cleanup pass codes the last plane; OpenJPEG then
     // decodes the cleanup pass alone, and so does this.
     let b = refined(1, 2, 7, &TOP_ONLY, &[0x01, 0x01], 3);
-    assert_eq!(decode(&b, 8, 0, false).unwrap(), [3, 0]);
-    assert_eq!(passes_run(&b, 8), 1);
+    assert_eq!(decode(&b, 8, params(0, false)).unwrap(), [3, 0]);
+    assert_eq!(passes_run(&b, 8, 0), 1);
     let b = refined(1, 2, 6, &TOP_ONLY, &[0x01, 0x01], 3);
-    assert_eq!(decode(&b, 8, 0, false).unwrap(), [7, 3]);
-    assert_eq!(passes_run(&b, 8), 3);
+    assert_eq!(decode(&b, 8, params(0, false)).unwrap(), [7, 3]);
+    assert_eq!(passes_run(&b, 8, 0), 3);
 }
 
 #[test]
 fn passes_run_counts_the_refinement_passes() {
     for passes in [2, 3] {
         let b = refined(1, 2, 0, &TOP_ONLY, &[0x01], passes);
-        assert_eq!(passes_run(&b, 8), u64::from(passes));
+        assert_eq!(passes_run(&b, 8, 0), u64::from(passes));
     }
 }
 
@@ -600,13 +672,37 @@ fn magref_reads_backward_lsb_first_unstuffs_and_zero_fills() {
 
 // Refusals, one per reason.
 
+/// A maxshift counts against the plane limit: `Mb + s` above 30 is refused
+/// as the same `Limit`, and 30 decodes.
 #[test]
-fn an_roi_shift_is_unsupported() {
+fn a_maxshift_past_the_plane_limit_is_a_limit() {
     let data = [0x01, 0x62, 0x00];
     assert!(matches!(
-        decode(&block(1, 1, 0, &data), 8, 3, false),
-        Err(Error::Unsupported(m)) if m.contains("region of interest")
+        decode(&block(1, 1, 0, &data), 28, params(3, false)),
+        Err(Error::Limit(m)) if m.contains("31 bit-planes") && m.contains("maxshift of 3")
     ));
+    assert!(decode(&block(1, 1, 0, &data), 27, params(3, false)).is_ok());
+}
+
+/// A cleanup magnitude at the bound `CAP` signals is refused (T.814 A.3.7,
+/// 8.7.3: every `mu` is below it); one below it decodes.
+#[test]
+fn a_cleanup_magnitude_at_the_cap_bound_is_malformed() {
+    // `mu = 3`, two bits: below 2^2, not below 2^1.
+    let data = [0x00, 0x27, 0xF3, 0x00];
+    let bound = |bits| Params {
+        bound_bits: Some(bits),
+        ..params(0, false)
+    };
+    assert_eq!(decode(&block(1, 1, 1, &data), 8, bound(2)).unwrap(), [448]);
+    match decode(&block(1, 1, 1, &data), 8, bound(1)) {
+        Err(Error::Codestream(m)) => {
+            assert!(m.contains("magnitude 3 is not below 2^1"), "{m}");
+        }
+        other => panic!("expected a Codestream error, got {other:?}"),
+    }
+    // A bound of 64 bits or more holds of every magnitude.
+    assert!(decode(&block(1, 1, 1, &data), 8, bound(74)).is_ok());
 }
 
 #[test]
@@ -615,17 +711,17 @@ fn more_than_one_ht_set_is_malformed() {
     let mut b = refined(1, 2, 0, &data, &[0x01], 4);
     assert!(malformed_msg(&b, 8).contains("4 coding passes, more than the 3"));
     b.num_passes = 3;
-    assert!(decode(&b, 8, 0, false).is_ok());
+    assert!(decode(&b, 8, params(0, false)).is_ok());
 }
 
 #[test]
 fn too_many_bit_planes_is_a_limit() {
     let data = [0x01, 0x62, 0x00];
     assert!(matches!(
-        decode(&block(1, 1, 0, &data), 31, 0, false),
+        decode(&block(1, 1, 0, &data), 31, params(0, false)),
         Err(Error::Limit(m)) if m.contains("31 bit-planes")
     ));
-    assert!(decode(&block(1, 1, 0, &data), 30, 0, false).is_ok());
+    assert!(decode(&block(1, 1, 0, &data), 30, params(0, false)).is_ok());
 }
 
 #[test]
@@ -649,7 +745,10 @@ fn a_segment_of_65535_bytes_is_malformed() {
     let mut data = vec![0x01];
     data.resize(65532, 0);
     data.extend([0x62, 0x00]);
-    assert_eq!(decode(&block(1, 1, 0, &data), 8, 0, false).unwrap(), [-384]);
+    assert_eq!(
+        decode(&block(1, 1, 0, &data), 8, params(0, false)).unwrap(),
+        [-384]
+    );
     data.insert(1, 0);
     let msg = malformed_msg(&block(1, 1, 0, &data), 8);
     assert!(msg.contains("65535 bytes, outside 2..65535"), "{msg}");
@@ -664,12 +763,15 @@ fn scup_outside_its_range_is_malformed() {
     let msg = malformed_msg(&block(1, 1, 0, &[0x00, 0x04, 0x00]), 8);
     assert!(msg.contains("Scup = 4"), "{msg}");
     // Scup = Lcup is allowed: no MagSgn bytes at all.
-    assert!(decode(&block(1, 1, 0, &[0x62, 0x00]), 8, 0, false).is_ok());
+    assert!(decode(&block(1, 1, 0, &[0x62, 0x00]), 8, params(0, false)).is_ok());
     // Scup = 4079 is the largest allowed, and 4080 is refused even in a
     // segment long enough to hold it, as OpenJPEG 2.5.0 does.
     let mut data = vec![0; 4081];
     data[4079..].copy_from_slice(&[0x6F, 254]);
-    assert_eq!(decode(&block(1, 1, 0, &data), 8, 0, false).unwrap(), [384]);
+    assert_eq!(
+        decode(&block(1, 1, 0, &data), 8, params(0, false)).unwrap(),
+        [384]
+    );
     data[4079..].copy_from_slice(&[0x60, 255]);
     let msg = malformed_msg(&block(1, 1, 0, &data), 8);
     assert!(msg.contains("Scup = 4080"), "{msg}");
@@ -718,7 +820,10 @@ fn an_exponent_bound_over_the_coded_planes_is_malformed() {
 fn an_exponent_bound_of_p_plus_2_decodes() {
     for (sign, want) in [(0x00, 448), (0x01, -448)] {
         let data = [sign, 0x27, 0xF3, 0x00];
-        assert_eq!(decode(&block(1, 1, 1, &data), 8, 0, false).unwrap(), [want]);
+        assert_eq!(
+            decode(&block(1, 1, 1, &data), 8, params(0, false)).unwrap(),
+            [want]
+        );
     }
 }
 
@@ -772,7 +877,22 @@ fn random_segments_never_panic() {
         let passes = 1 + (rng.next() % 3) as u32;
         let causal = rng.next().is_multiple_of(2);
         let b = refined(w, h, zbp, &bytes, &refinement, passes);
-        if let Ok(c) = decode(&b, mb, 0, causal) {
+        // Mostly without a maxshift or a bound, so enough blocks decode.
+        let roi_shift = if rng.next().is_multiple_of(4) {
+            (rng.next() % 40) as u8
+        } else {
+            0
+        };
+        let bound_bits = rng
+            .next()
+            .is_multiple_of(4)
+            .then(|| (rng.next() % 80) as u32);
+        let p = Params {
+            roi_shift,
+            causal,
+            bound_bits,
+        };
+        if let Ok(c) = decode(&b, mb, p) {
             assert_eq!(c.len(), w * h);
             decoded += 1;
         }

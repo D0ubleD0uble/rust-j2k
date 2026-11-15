@@ -28,9 +28,41 @@ pub(crate) enum BlockCoder {
     /// The Part 1 coder, with the code-block style flags and the component's
     /// region-of-interest maxshift.
     Ebcot { style: u8, roi_shift: u8 },
-    /// The HTJ2K coder, with the component's region-of-interest maxshift and
-    /// whether the vertically causal context flag is set.
-    Ht { roi_shift: u8, causal: bool },
+    /// The HTJ2K coder, with the component's region-of-interest maxshift,
+    /// whether the vertically causal context flag is set, and the bound
+    /// `CAP` sets on its cleanup magnitudes.
+    Ht {
+        roi_shift: u8,
+        causal: bool,
+        bound: CleanupBound,
+    },
+}
+
+/// The bound a `CAP` marker sets on the HT cleanup magnitudes `mu` of a
+/// tile-component (ISO/IEC 15444-15 A.3.7, 8.7.3): `mu < 2^B`, except in an
+/// irreversible subband with `B <= 31`, where it is
+/// `mu < 2^min(31, B + n_b - 1)` for the subband's decomposition level
+/// `n_b`. A codestream without a Part 15 `CAP` sets none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CleanupBound {
+    /// `B`, from `Ccap15` bits 0-4.
+    magb: Option<u32>,
+    irreversible: bool,
+}
+
+impl CleanupBound {
+    /// The bound in a subband of decomposition level `level`, as its bit
+    /// count: every `mu` is below `2^bits`. `None` when there is no bound.
+    fn bits(self, level: u32) -> Option<u32> {
+        let b = self.magb?;
+        Some(if self.irreversible && b <= 31 {
+            // `n_b` is 0 only for the LL band of a component with no
+            // decomposition level.
+            (b + level).saturating_sub(1).min(31)
+        } else {
+            b
+        })
+    }
 }
 
 impl BlockCoder {
@@ -45,21 +77,43 @@ impl BlockCoder {
             BlockCoder::Ht {
                 roi_shift,
                 causal: style & VCAUSAL != 0,
+                bound: CleanupBound {
+                    magb: header.ccap15.map(|c| c.magnitude_bound()),
+                    irreversible: params.coding.transform == Transform::Irreversible97,
+                },
             }
         } else {
             BlockCoder::Ebcot { style, roi_shift }
         }
     }
 
-    /// Decode `block`, a code-block of a `kind` band whose magnitude
-    /// bit-plane count is `numbps`, into its coefficients, row-major over the
-    /// block, at twice their weight.
-    fn decode(self, block: &CodeBlock<'_>, kind: BandKind, numbps: u32) -> Result<Vec<i32>> {
+    /// Decode `block`, a code-block of a `kind` band of decomposition level
+    /// `level` whose magnitude bit-plane count is `numbps`, into its
+    /// coefficients, row-major over the block, at twice their weight.
+    fn decode(
+        self,
+        block: &CodeBlock<'_>,
+        kind: BandKind,
+        level: u32,
+        numbps: u32,
+    ) -> Result<Vec<i32>> {
         match self {
             BlockCoder::Ebcot { style, roi_shift } => {
                 ebcot::decode(block, kind, numbps, style, roi_shift)
             }
-            BlockCoder::Ht { roi_shift, causal } => ht::decode(block, numbps, roi_shift, causal),
+            BlockCoder::Ht {
+                roi_shift,
+                causal,
+                bound,
+            } => ht::decode(
+                block,
+                numbps,
+                ht::Params {
+                    roi_shift,
+                    causal,
+                    bound_bits: bound.bits(level),
+                },
+            ),
         }
     }
 
@@ -68,7 +122,7 @@ impl BlockCoder {
     fn cost(self, block: &CodeBlock<'_>, numbps: u32) -> u64 {
         match self {
             BlockCoder::Ebcot { roi_shift, .. } => ebcot::passes_run(numbps, block, roi_shift),
-            BlockCoder::Ht { .. } => ht::passes_run(block, numbps),
+            BlockCoder::Ht { roi_shift, .. } => ht::passes_run(block, numbps, roi_shift),
         }
     }
 }
@@ -264,14 +318,22 @@ where
         .resolutions
         .len()
         .saturating_sub(1 + usize::from(reduction));
+    // The decomposition levels: the LL band is at level `NL`, and resolution
+    // `r` above it holds the bands of level `NL + 1 - r`.
+    let levels = u32::try_from(coded.resolutions.len().saturating_sub(1)).unwrap_or(u32::MAX);
     let mut resolutions = coded.resolutions.iter();
     let coarsest = resolutions
         .next()
         .ok_or_else(|| Error::Inconsistent("tier-2 produced no resolutions to decode".into()))?;
     let decode = |res: usize, resolution: &Resolution<'_>, kind: BandKind| {
         let band = band_index(res, kind);
+        let level = match res {
+            0 => levels,
+            _ => (levels + 1).saturating_sub(res as u32),
+        };
         decode_subband(
             subband_of(resolution, kind)?,
+            level,
             numbps(header, comp, band)?,
             coder,
             convert_for(band)?,
@@ -331,10 +393,12 @@ fn subband_of<'a, 'b>(res: &'a Resolution<'b>, kind: BandKind) -> Result<&'a Sub
 }
 
 /// Decode one subband's code-blocks into a row-major coefficient [`Band`].
-/// `numbps` is the band's magnitude bit-plane count `Mb`. Absent blocks (no
-/// coding passes) are left at the band's zero fill.
+/// `level` is the band's decomposition level and `numbps` its magnitude
+/// bit-plane count `Mb`. Absent blocks (no coding passes) are left at the
+/// band's zero fill.
 fn decode_subband<T, F>(
     sb: &Subband<'_>,
+    level: u32,
     numbps: u32,
     coder: BlockCoder,
     convert: F,
@@ -349,7 +413,7 @@ where
         if block.num_passes == 0 {
             continue;
         }
-        let coeffs = coder.decode(block, sb.kind, numbps)?;
+        let coeffs = coder.decode(block, sb.kind, level, numbps)?;
         place_block(&mut data, sb.width, block, &coeffs, &convert);
     }
 
@@ -429,7 +493,7 @@ mod tests {
     #[test]
     fn excessive_bit_planes_rejected() {
         let sb = one_block_subband(1, 0);
-        let err = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES + 1, default_params(), |q| q)
+        let err = decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES + 1, default_params(), |q| q)
             .expect_err("must reject");
         assert!(matches!(err, Error::Limit(_)), "got {err:?}");
     }
@@ -444,12 +508,12 @@ mod tests {
             style: 0,
             roi_shift: 1,
         };
-        let err = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, params, |q| q)
+        let err = decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES, params, |q| q)
             .expect_err("MAX_BIT_PLANES + 1 planes");
         assert!(matches!(err, Error::Limit(_)), "got {err:?}");
 
         // One less, and the same block decodes.
-        decode_subband::<i32, _>(&sb, MAX_BIT_PLANES - 1, params, |q| q).expect("in range");
+        decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES - 1, params, |q| q).expect("in range");
     }
 
     /// More signaled zero bit-planes than the subband has magnitude planes
@@ -458,7 +522,7 @@ mod tests {
     #[test]
     fn excess_zero_bit_planes_decodes_to_zeros() {
         let sb = one_block_subband(1, 5);
-        let band = decode_subband::<i32, _>(&sb, 4, default_params(), |q| q)
+        let band = decode_subband::<i32, _>(&sb, 1, 4, default_params(), |q| q)
             .expect("saturates to zero coded planes, as the oracle does");
         assert!(band.data.iter().all(|&c| c == 0));
     }
@@ -467,7 +531,7 @@ mod tests {
     #[test]
     fn max_bit_planes_accepted() {
         let sb = one_block_subband(1, 0);
-        let band = decode_subband::<i32, _>(&sb, MAX_BIT_PLANES, default_params(), |q| q)
+        let band = decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES, default_params(), |q| q)
             .expect("in range");
         assert_eq!(band.data.len(), 1);
     }
@@ -531,6 +595,7 @@ mod tests {
         // The quantized index every band decodes to, before scaling.
         let q = decode_subband::<i32, _>(
             &coded.components[0].resolutions[0].subbands[0],
+            1,
             numbps(&header, 0, 0).unwrap(),
             default_params(),
             |q| q,
@@ -559,6 +624,24 @@ mod tests {
                 assert_ne!(got[i].to_bits(), got[j].to_bits());
             }
         }
+    }
+
+    /// The bound of T.814 8.7.3: `2^B` in a reversible subband or for
+    /// `B > 31`, else `2^min(31, B + n_b - 1)`.
+    #[test]
+    fn the_cleanup_bound_follows_8_7_3() {
+        let bound = |magb, irreversible| CleanupBound { magb, irreversible };
+        assert_eq!(bound(None, false).bits(3), None);
+        assert_eq!(bound(None, true).bits(3), None);
+        for level in [0, 1, 5] {
+            assert_eq!(bound(Some(11), false).bits(level), Some(11));
+            assert_eq!(bound(Some(35), true).bits(level), Some(35));
+        }
+        assert_eq!(bound(Some(11), true).bits(1), Some(11));
+        assert_eq!(bound(Some(11), true).bits(3), Some(13));
+        assert_eq!(bound(Some(11), true).bits(0), Some(10));
+        assert_eq!(bound(Some(30), true).bits(5), Some(31));
+        assert_eq!(bound(Some(31), true).bits(1), Some(31));
     }
 
     fn default_params() -> BlockCoder {

@@ -1018,7 +1018,7 @@ fn read_segmentation_symbol(
 /// background. `t1.c` zeroes `datap` wholesale instead, and this follows it —
 /// changing the arm to keep the coefficients would diverge from OpenJPEG on
 /// every such stream (see `docs/openjpeg-departures.md`).
-fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
+pub(crate) fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
     if roi_shift == 0 {
         return mag;
     }
