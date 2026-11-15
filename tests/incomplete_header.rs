@@ -660,7 +660,7 @@ fn incomplete_displays_where_the_input_ends() {
 fn an_ftyp_that_swallows_the_file_is_file_format() {
     let mut bytes = edited(&signed16(), &[(15, 0)]);
     // Pad to whole compatibility codes, so the `ftyp` itself reads.
-    while (bytes.len() - 20) % 4 != 0 {
+    while !(bytes.len() - 20).is_multiple_of(4) {
         bytes.push(0);
     }
     for extra in 0..16 {
