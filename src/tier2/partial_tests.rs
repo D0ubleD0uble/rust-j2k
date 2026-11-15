@@ -156,7 +156,10 @@ fn whole_layers(name: &str, layers: u16) -> bool {
             }
         }
     }
-    assert!(restart || !one_segment || cuts > 0, "{name}: no block was cut");
+    assert!(
+        restart || !one_segment || cuts > 0,
+        "{name}: no block was cut"
+    );
     split
 }
 

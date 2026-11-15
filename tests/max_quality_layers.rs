@@ -504,7 +504,8 @@ fn a_damaged_whole_segment_before_the_data_ends_is_still_an_error() {
     for offset in [188, 128] {
         let mut bad = whole.clone();
         bad[offset] ^= 0x10;
-        for length in [212, 213, 214, 215, 216, 281, 282, 700, 1500, 2555, whole.len()] {
+        let lengths = [212, 213, 214, 215, 216, 281, 282, 700, 1500, 2555];
+        for length in lengths.into_iter().chain([whole.len()]) {
             decode_ok(&whole[..length], &lenient, &format!("{length} bytes"));
             match decode_with(&bad[..length], &lenient) {
                 Err(Error::Codestream(message)) => assert!(
