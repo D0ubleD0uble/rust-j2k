@@ -48,6 +48,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `CPF` is `Error::Marker`; a repeated one, or either one in a tile-part
   header, is `Error::Codestream`.
 
+### Fixed
+
+- With `strict` off, a codestream under `predictable termination` that is
+  cut short, or whose `POC` volumes leave packets out, decodes to a partial
+  image. It was `Error::Codestream` when a missing packet of a later layer
+  would have added passes to a code-block's last segment, with or without
+  `max_quality_layers`. That segment is no longer held to the termination
+  check; the block's earlier segments still are.
+
 ## [0.4.0] - 2026-11-14
 
 JP2 files now decode, with their header metadata, and can be converted to

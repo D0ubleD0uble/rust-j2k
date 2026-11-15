@@ -60,10 +60,10 @@ pub(super) fn decode(
         .iter()
         .map(|segment| (segment.bytes(), segment.passes))
         .collect();
-    // A segment the layer cap cut short ends before the encoder terminated
-    // it, so it cannot be held to `predictable termination`. Only the last
-    // segment can be cut; the block's earlier segments are whole and stay
-    // checked.
+    // A segment the layer cap cut short, or one a missing packet may have
+    // cut with `strict` off, can end before the encoder terminated it, so it
+    // cannot be held to `predictable termination`. Only the last segment can
+    // be cut; the block's earlier segments are whole and stay checked.
     let params = BlockParams {
         style,
         roi_shift,
