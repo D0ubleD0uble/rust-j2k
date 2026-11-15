@@ -1604,8 +1604,16 @@ fn decode_codestream(
             .collect::<Result<Vec<_>>>()?;
         if let Some(reach) = reach {
             // The whole image, or a whole tile of it, is reported by packet;
-            // a part of it by the code-blocks that part needs.
-            let part = wanted.contains(&false) || footprints.iter().any(Option::is_some);
+            // a part of it by the code-blocks that part needs. Whether the
+            // window covers the tile is judged at full resolution, so that
+            // the report is the same at every reduction.
+            let covers = |component: usize| {
+                let rect = cs.header.siz.tile_component_rect(tile.index, component);
+                let area = selection.area.component_rect(component);
+                matches!((rect, area), (Some(rect), Some(area)) if area.intersect(&rect) == rect)
+            };
+            let part = wanted.contains(&false)
+                || (windowed && (0..wanted.len()).any(|component| !covers(component)));
             let tile_complete = if part {
                 let footprint_at = |component: usize, r: u8| {
                     if r == reduction {

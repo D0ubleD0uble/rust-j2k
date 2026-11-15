@@ -54,7 +54,8 @@ pub struct DecodeReport {
     /// [`ReportEntry::MissingPackets`]).
     ///
     /// The list is bounded by the input: at most five entries per tile-part
-    /// the codestream carries, plus two. A run of missing tiles is one
+    /// the codestream carries, plus two, and under a window one more per row
+    /// of missing tiles it reads. A run of missing tiles is one
     /// [`ReportEntry::MissingTiles`] entry, however many tiles it spans, or
     /// under a window one per row of tiles it reads.
     pub entries: Vec<ReportEntry>,
@@ -168,9 +169,10 @@ pub enum ReportEntry {
     /// [`components`](crate::DecodeOptions::components), only the packets
     /// that hold a code-block the returned samples depend on count: those of
     /// the components reconstructed (with a color transform, all three of
-    /// its components), and of the precincts the window's samples need. A missing packet
-    /// adds nothing to its code-blocks, so they decode from the layers that
-    /// were read, as a codestream truncated after those layers would.
+    /// its components), and of the precincts that hold a code-block the
+    /// window's samples need. A missing packet adds nothing to its
+    /// code-blocks, so they decode from the layers that were read, as a
+    /// codestream truncated after those layers would.
     ///
     /// A packet cut short keeps each code-block whose data is all there, and
     /// the rest of its code-blocks keep only their earlier layers. A packet
@@ -180,7 +182,9 @@ pub enum ReportEntry {
         /// The tile.
         tile: u32,
         /// How many of the leading quality layers are whole, counted over
-        /// the resolutions this decode keeps, and no more than its
+        /// the resolutions this decode keeps (under a window or
+        /// components, over the packets the returned samples need), and no
+        /// more than its
         /// [`max_quality_layers`](crate::DecodeOptions::max_quality_layers)
         /// cap.
         complete_layers: u16,

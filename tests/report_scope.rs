@@ -4,6 +4,7 @@
 //! depend on. Data the returned samples do not need does not make the image
 //! look incomplete, and data they do need is still reported.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use rust_j2k::{DecodeOptions, Image, ReportEntry, Window, decode_with, read_header};
@@ -87,6 +88,45 @@ fn a_window_whose_code_blocks_are_all_there_is_complete() {
     let part = decode_ok(prefix, &far, "the far window");
     assert!(!part.report.is_complete(), "{:?}", part.report);
     assert_ne!(part.components, decode_ok(&bytes, &far, "uncut").components);
+}
+
+/// A decode at reduction 1 reports the reduction-0 decode's
+/// `complete_reduction`, counted at reduction 0 over the code-blocks the
+/// window needs there, which reach finer resolutions than at reduction 1.
+#[test]
+fn complete_reduction_is_counted_with_the_finer_reductions_footprint() {
+    let bytes = read("tests/fixtures/precincts_cprl_lossless.j2k");
+    let prefix = &bytes[..32340];
+    let options = lenient()
+        .with_window(Some(Window::new(38, 67, 40, 85)))
+        .with_components(Some(vec![2, 0]));
+    let fine = decode_ok(prefix, &options, "-r 0");
+    let coarse = decode_ok(
+        prefix,
+        &options.clone().with_resolution_reduction(1),
+        "-r 1",
+    );
+    assert!(!fine.report.is_complete(), "{:?}", fine.report);
+    assert_eq!(
+        coarse.report.complete_reduction,
+        fine.report.complete_reduction
+    );
+    assert_ne!(coarse.report.complete_reduction, Some(0));
+}
+
+/// Under a layer cap, a code-block missing a packet of a layer the cap keeps
+/// is missing, whatever later layers it also lacks.
+#[test]
+fn a_layer_cap_counts_the_first_layer_missing() {
+    let bytes = read("tests/fixtures/precincts_cprl_lossless.j2k");
+    let prefix = &bytes[..133];
+    let options = lenient()
+        .with_max_quality_layers(Some(1))
+        .with_components(Some(vec![2]));
+    let part = decode_ok(prefix, &options, "cut");
+    let uncut = decode_ok(&bytes, &options, "uncut");
+    assert_ne!(part.components, uncut.components);
+    assert!(!part.report.is_complete(), "{:?}", part.report);
 }
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -202,9 +242,18 @@ fn window(rng: &mut Rng, image: (u32, u32, u32, u32)) -> Window {
     Window::new(wx0, wy0, wx1, wy1)
 }
 
+/// The uncut decode and, per cut, whether the whole image's report is
+/// complete.
+type Whole = (Image, HashMap<usize, bool>);
+
+/// One decode of a cut: its `complete_reduction`, whether it is complete,
+/// and whether its samples are the uncut ones.
+type Outcome = (Option<u8>, bool, bool);
+
 /// How the decodes of [`check`] came out.
 struct Counts {
-    /// Reported complete.
+    /// Reported complete. The counts leave out the decodes of the whole
+    /// image.
     complete: usize,
     /// Reported incomplete, with samples other than the uncut ones.
     incomplete: usize,
@@ -212,13 +261,16 @@ struct Counts {
     same_incomplete: usize,
 }
 
-/// For random windows and component subsets of `name`, each decoded from
-/// a series of cuts at reductions 0 and 1:
+/// For random windows, component subsets and layer caps of `name`, each
+/// decoded from a series of cuts at reductions 0 and 1:
 ///
 /// - the report is complete only when the samples are the uncut ones;
 /// - it is complete whenever the whole image's report at that cut is;
 /// - it is complete whenever every tile the window reads is wholly there;
 /// - once complete at a cut, it stays complete at every longer one;
+/// - its `complete_reduction` is the same at both reductions, and a
+///   reduction-1 decode that names reduction 0 is borne out by the
+///   reduction-0 decode;
 /// - few decodes that give the uncut samples are reported incomplete.
 ///
 /// Returns how the decodes came out, so the caller can check each outcome
@@ -227,45 +279,63 @@ fn check(name: &str, draws: usize, seed: u64) -> Counts {
     let bytes = read(name);
     let grid = Grid::of(&bytes);
     let ends = tile_ends(&bytes);
-    let components = read_header(&bytes).unwrap().components.len() as u16;
+    let header = read_header(&bytes).unwrap();
+    let components = header.components.len() as u16;
     let start = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap() + 14;
-    let cuts: Vec<usize> = (0..12)
-        .map(|i| start + (bytes.len() - start) * i / 12)
-        .chain([bytes.len()])
-        .collect();
     let mut rng = Rng(seed);
-    let (mut complete, mut incomplete, mut same_incomplete) = (0, 0, 0);
-    for r in 0..2u8 {
-        let base = lenient().with_resolution_reduction(r);
-        let uncut = decode_ok(&bytes, &base, name);
-        let wholes: Vec<bool> = cuts
-            .iter()
-            .map(|&at| decode_ok(&bytes[..at], &base, name).report.is_complete())
+    let mut counts = Counts {
+        complete: 0,
+        incomplete: 0,
+        same_incomplete: 0,
+    };
+    // The uncut decode and, per cut, whether the whole image is complete,
+    // for each reduction and layer cap.
+    let mut wholes: HashMap<(u8, Option<u16>), Whole> = HashMap::new();
+    for draw in 0..draws {
+        // Twelve cuts spread over the tile data, three of them in its first
+        // part, where the coarsest packets are, and the whole file.
+        let mut cuts: Vec<usize> = (0..9)
+            .map(|i| start + (bytes.len() - start) * i / 9)
+            .chain((0..3).map(|_| start + rng.below(((bytes.len() - start) / 8) as u32) as usize))
+            .chain([bytes.len()])
             .collect();
-        for _ in 0..draws {
-            let window = (rng.below(4) != 0).then(|| window(&mut rng, grid.image));
-            let subset = match rng.below(3) {
-                0 => None,
-                1 => Some(vec![rng.below(u32::from(components)) as u16]),
-                _ => Some(vec![components - 1, 0]),
-            };
+        cuts.sort_unstable();
+        cuts.dedup();
+        let window = (rng.below(4) != 0).then(|| window(&mut rng, grid.image));
+        let subset = match rng.below(3) {
+            0 => None,
+            1 => Some(vec![rng.below(u32::from(components)) as u16]),
+            _ => Some(vec![components - 1, 0]),
+        };
+        let cap = [None, Some(1), Some(2)][draw % 3];
+        let returned: Vec<usize> = subset.as_ref().map_or_else(
+            || (0..usize::from(components)).collect(),
+            |s| s.iter().map(|&c| usize::from(c)).collect(),
+        );
+        // Per reduction, per cut: the report's `complete_reduction`, whether
+        // it is complete, and whether the samples are the uncut ones. `None`
+        // where the window holds no sample at that reduction.
+        let mut outcomes: Vec<Option<Vec<Outcome>>> = Vec::new();
+        for r in 0..2u8 {
+            let base = lenient()
+                .with_resolution_reduction(r)
+                .with_max_quality_layers(cap);
+            let (uncut, whole) = wholes
+                .entry((r, cap))
+                .or_insert_with(|| (decode_ok(&bytes, &base, name), HashMap::new()));
             let options = base
                 .clone()
                 .with_window(window)
                 .with_components(subset.clone());
-            let what = format!("{name} -r {r} {window:?} {subset:?}");
-            let returned: Vec<usize> = subset.as_ref().map_or_else(
-                || (0..usize::from(components)).collect(),
-                |s| s.iter().map(|&c| usize::from(c)).collect(),
-            );
+            let what = format!("{name} -r {r} -l {cap:?} {window:?} {subset:?}");
             let expected: Vec<Vec<i32>> = returned
                 .iter()
                 .map(|&c| match window {
-                    Some(w) => crop(&uncut, c, grid.image, w, r),
+                    Some(w) => crop(uncut, c, grid.image, w, r),
                     None => uncut.components[c].samples.clone(),
                 })
                 .collect();
-            // The tiles read, and where the last of them ends.
+            // Where the last tile read ends.
             let read_end = match window {
                 Some(w) => grid
                     .tiles(w)
@@ -276,12 +346,19 @@ fn check(name: &str, draws: usize, seed: u64) -> Counts {
                 None => *ends.iter().max().unwrap(),
             };
             let mut was_complete = false;
-            for (&at, &whole_complete) in cuts.iter().zip(&wholes) {
+            let mut seen = Some(Vec::new());
+            for &at in &cuts {
+                let whole_complete = *whole
+                    .entry(at)
+                    .or_insert_with(|| decode_ok(&bytes[..at], &base, name).report.is_complete());
                 let part = match decode_with(&bytes[..at], &options) {
                     Ok(part) => part,
                     // A window holding no sample of a component at this
                     // reduction is refused, whatever the cut.
-                    Err(rust_j2k::Error::InvalidOptions(_)) => break,
+                    Err(rust_j2k::Error::InvalidOptions(_)) => {
+                        seen = None;
+                        break;
+                    }
                     Err(e) => panic!("{what} at {at}: {e}"),
                 };
                 let samples: Vec<&Vec<i32>> = part.components.iter().map(|c| &c.samples).collect();
@@ -305,33 +382,49 @@ fn check(name: &str, draws: usize, seed: u64) -> Counts {
                     "{what} at {at}: was complete at a shorter cut"
                 );
                 was_complete = is;
-                if is {
-                    complete += 1;
+                // The whole image's report is not this test's to grade.
+                if window.is_none() && subset.is_none() {
+                } else if is {
+                    counts.complete += 1;
                 } else if same {
-                    same_incomplete += 1;
+                    counts.same_incomplete += 1;
                 } else {
-                    incomplete += 1;
+                    counts.incomplete += 1;
+                }
+                if let Some(seen) = &mut seen {
+                    seen.push((report.complete_reduction, is, same));
+                }
+            }
+            outcomes.push(seen);
+        }
+        if let [Some(fine), Some(coarse)] = &outcomes[..] {
+            let what = format!("{name} -l {cap:?} {window:?} {subset:?}");
+            for ((at, f), c) in cuts.iter().zip(fine).zip(coarse) {
+                assert_eq!(
+                    f.0, c.0,
+                    "{what} at {at}: complete_reduction at -r 0 and -r 1"
+                );
+                if c.0 == Some(0) {
+                    assert!(f.1 && f.2, "{what} at {at}: -r 1 names reduction 0");
                 }
             }
         }
     }
-    Counts {
-        complete,
-        incomplete,
-        same_incomplete,
-    }
+    counts
 }
 
 /// The randomized check on fixtures with precincts and layers, with tiles,
-/// with a color transform, and on 9/7 with sub-sampled components.
+/// with a color transform, on 9/7 with sub-sampled components, and with
+/// more layers and smaller precincts and code-blocks.
 #[test]
 fn random_windows_and_subsets_of_cut_codestreams_report_what_they_return() {
     for (seed, (name, draws)) in [
-        ("tests/fixtures/precincts_cprl_lossless.j2k", 8),
+        ("tests/fixtures/precincts_cprl_lossless.j2k", 12),
         ("tests/fixtures/precincts_lrcp_lossless.j2k", 6),
-        ("tests/fixtures/precincts_tiled_cprl_lossless.j2k", 8),
+        ("tests/fixtures/precincts_tiled_cprl_lossless.j2k", 6),
         ("tests/fixtures/window/tiled_53.j2k", 6),
         ("tests/fixtures/window/sub_97.j2k", 6),
+        ("tests/fixtures/layers/precincts_pterm.j2k", 6),
     ]
     .into_iter()
     .enumerate()
