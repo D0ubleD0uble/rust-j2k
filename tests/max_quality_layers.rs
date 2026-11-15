@@ -17,7 +17,9 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use rust_j2k::{DecodeOptions, Error, Image, ReportEntry, WorkLimit, decode, decode_with};
+use rust_j2k::{
+    DecodeOptions, Error, Image, ReportEntry, WorkLimit, decode, decode_with, read_header,
+};
 use support::jp2::sha256_hex;
 use support::pgx::parse_pgx;
 
@@ -43,17 +45,32 @@ fn decode_ok(bytes: &[u8], options: &DecodeOptions, what: &str) -> Image {
     decode_with(bytes, options).unwrap_or_else(|e| panic!("{what}: {e}"))
 }
 
-/// The layer count `COD` declares in the main header (`SGcod`, A.6.1).
+/// The layer count the main header's `COD` declares, through `read_header`.
 fn cod_layers(bytes: &[u8]) -> u16 {
-    let mut at = 2;
-    loop {
-        let marker = u16::from_be_bytes([bytes[at], bytes[at + 1]]);
-        let length = usize::from(u16::from_be_bytes([bytes[at + 2], bytes[at + 3]]));
-        if marker == 0xFF52 {
-            return u16::from_be_bytes([bytes[at + 6], bytes[at + 7]]);
-        }
-        assert_ne!(marker, 0xFF90, "no COD before the first SOT");
-        at += 2 + length;
+    read_header(bytes).expect("header").quality_layers
+}
+
+/// `read_header` reports the main-header layer count that `opj_dump` prints
+/// as `numlayers`, for raw codestreams and a JP2 file, single-layer and
+/// multi-layer. Measured with `opj_dump` 2.5.0: `layers/lrcp.j2k` 4,
+/// `layers/pterm_cut.j2k` 2, `multilayer_lossless.j2k` 3,
+/// `irreversible_lossy.j2k` 1, `jp2_cdef_rgba.jp2` 1,
+/// `jp2_real/byte.jp2` 12, `jp2_palette_8bit.jp2` 3.
+#[test]
+fn read_header_reports_the_layer_count_opj_dump_prints() {
+    let cases: [(PathBuf, u16); 7] = [
+        (fixtures().join("layers/lrcp.j2k"), 4),
+        (fixtures().join("layers/pterm_cut.j2k"), 2),
+        (fixtures().join("multilayer_lossless.j2k"), 3),
+        (fixtures().join("irreversible_lossy.j2k"), 1),
+        (fixtures().join("jp2_cdef_rgba.jp2"), 1),
+        (fixtures().join("jp2_real/byte.jp2"), 12),
+        (fixtures().join("jp2_palette_8bit.jp2"), 3),
+    ];
+    for (path, numlayers) in cases {
+        let header =
+            read_header(&read(&path)).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert_eq!(header.quality_layers, numlayers, "{}", path.display());
     }
 }
 
