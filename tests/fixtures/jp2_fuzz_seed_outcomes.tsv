@@ -129,6 +129,8 @@ jp2_sycc_420_even_jp2h	ok Srgb 3
 jp2_sycc_420_even_prefix	ok Srgb 3
 jp2_sycc_420_odd_jp2h	ok Srgb 3
 jp2_sycc_420_odd_prefix	ok Srgb 3
+jp2_sycc_420_tiled_jp2h	ok Srgb 3
+jp2_sycc_420_tiled_prefix	ok Srgb 3
 jp2_sycc_422_even_jp2h	ok Srgb 3
 jp2_sycc_422_even_prefix	ok Srgb 3
 jp2_sycc_422_odd_jp2h	ok Srgb 3

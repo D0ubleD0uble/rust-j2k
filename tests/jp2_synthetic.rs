@@ -78,6 +78,7 @@ fn the_fixture_set_is_complete() {
             "jp2_signed16",
             "jp2_sycc_420_even",
             "jp2_sycc_420_odd",
+            "jp2_sycc_420_tiled",
             "jp2_sycc_422_even",
             "jp2_sycc_422_odd",
         ]
