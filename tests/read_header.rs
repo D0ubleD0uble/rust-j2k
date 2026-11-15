@@ -33,8 +33,8 @@ use rust_j2k::{
 /// work than the decode's tier-1 bound, which only the decode counts. The
 /// `tile_header/tilecomp_*` files hold components with no sample
 /// in tile 0, which only the decode's tile geometry finds. The
-/// `poc_coverage/*_missing` files and `poc_precedence/poc_tile_leaves_out_packets`
-/// carry POC volumes that leave out packets of the tile, which only the
+/// `poc_coverage/*_missing` files, `poc_precedence/poc_tile_leaves_out_packets`
+/// and `layers/pterm_poc_gap` carry POC volumes that leave out packets of the tile, which only the
 /// decode's packet walk checks. `partial/overlap.j2k` and `partial/tp_r.j2k`
 /// leave bytes after the last packet of a tile, which only the decode reads.
 /// The `packed_overrun/` files listed hold a packed packet header that runs
@@ -45,6 +45,7 @@ use rust_j2k::{
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
     ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
+    ("layers/pterm_poc_gap.j2k", "POC leaves out packets"),
     (
         "packed_overrun/ppm_short.j2k",
         "a PPM packet header runs short",
