@@ -706,6 +706,40 @@ fn missing_tiles_are_charged_against_the_work_bound() {
     }
 }
 
+/// Under a window, only the missing tiles it reads are charged. A header of
+/// 128 x 128 one-sample tiles of 2048 components, followed by nothing: the
+/// first column reads 128 tiles, 262144 tile-components, well inside the
+/// bound, while the tiles from its first to its last, 16257 of them, come to
+/// 33 million.
+#[test]
+fn a_window_charges_only_the_missing_tiles_it_reads() {
+    let mut bytes = main_header((128, 128), (1, 1), 2048, 0, 0);
+    bytes.extend_from_slice(&[0xFF, 0x90]);
+    let column = lenient(0).with_window(Some(rust_j2k::Window::new(0, 0, 1, 128)));
+    let image = decode_ok(&bytes, &column, "the first column");
+    let runs: Vec<_> = image
+        .report
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            ReportEntry::MissingTiles { tiles, .. } => Some(tiles.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        runs,
+        (0..128)
+            .map(|row| row * 128..row * 128 + 1)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        image
+            .components
+            .iter()
+            .all(|c| c.samples.iter().all(|&s| s == 0))
+    );
+}
+
 /// The end of a tile's data is charged 32 visits for each (component,
 /// resolution): 6000 empty tiles of 16 components and 6 resolutions come to
 /// 18.4 million, past the bound of 2^24, while their packets alone are 576000

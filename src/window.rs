@@ -238,28 +238,43 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
 
 /// Keep the report entries about the tiles a decode reads (`tiles`, one flag
 /// per tile index), so a tile outside the window does not make the image
-/// look incomplete. A run of missing tiles is narrowed to the first and last
-/// tile of it the decode reads; the tiles between them are missing too, even
-/// those outside the window.
+/// look incomplete. A run of missing tiles is split into the runs of it the
+/// decode reads.
+///
+/// A window reads a rectangle of tiles, so a run splits into at most one
+/// piece per row of tiles it reads, each of at least one tile read: the
+/// pieces are bounded by the tiles read, which the sample limit bounds.
 pub(crate) fn keep_entries(entries: Vec<ReportEntry>, tiles: &[bool]) -> Vec<ReportEntry> {
     let reads = |tile: u32| tiles.get(tile as usize).copied().unwrap_or(false);
-    entries
-        .into_iter()
-        .filter_map(|entry| match entry {
+    let mut kept = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match entry {
             ReportEntry::MissingTiles { tiles: run } => {
-                let first = run.clone().find(|&t| reads(t))?;
-                let last = run.clone().rev().find(|&t| reads(t))?;
-                Some(ReportEntry::MissingTiles {
-                    tiles: first..last + 1,
-                })
+                let mut tile = run.start;
+                while tile < run.end {
+                    if !reads(tile) {
+                        tile += 1;
+                        continue;
+                    }
+                    let start = tile;
+                    while tile < run.end && reads(tile) {
+                        tile += 1;
+                    }
+                    kept.push(ReportEntry::MissingTiles { tiles: start..tile });
+                }
             }
             ReportEntry::MissingPackets { tile, .. }
             | ReportEntry::TruncatedTilePart { tile, .. }
             | ReportEntry::TilePartCountMismatch { tile, .. }
-            | ReportEntry::LeftoverBytes { tile, .. } => reads(tile).then_some(entry),
-            other => Some(other),
-        })
-        .collect()
+            | ReportEntry::LeftoverBytes { tile, .. } => {
+                if reads(tile) {
+                    kept.push(entry);
+                }
+            }
+            other => kept.push(other),
+        }
+    }
+    kept
 }
 
 #[cfg(test)]
@@ -337,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_of_missing_tiles_is_narrowed_to_the_tiles_read() {
+    fn a_run_of_missing_tiles_is_split_at_the_tiles_not_read() {
         let tiles = [false, true, false, true, false, false];
         let entries = vec![
             ReportEntry::MissingTiles { tiles: 0..5 },
@@ -357,7 +372,8 @@ mod tests {
         assert_eq!(
             keep_entries(entries, &tiles),
             vec![
-                ReportEntry::MissingTiles { tiles: 1..4 },
+                ReportEntry::MissingTiles { tiles: 1..2 },
+                ReportEntry::MissingTiles { tiles: 3..4 },
                 ReportEntry::TilePartCountMismatch {
                     tile: 3,
                     declared: 2,

@@ -59,7 +59,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ask for. Under a window or a tile, the sample limit counts the samples of
   the tiles read, in every component, so a small window of a large tiled
   image decodes at the default limit. A palette's expanded channels count
-  only the window. A component subset alone counts the whole image.
+  only the window. A component subset alone counts the whole image. With
+  `strict` off, the report describes what the decode returns: the tiles it
+  reads, the components it reconstructs, and the code-blocks the window's
+  samples depend on. Data missing elsewhere does not make it incomplete.
 
 ### Changed
 

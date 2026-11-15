@@ -47,19 +47,26 @@ pub struct DecodeReport {
     /// them. Empty when the codestream was whole. Under a
     /// [`window`](crate::DecodeOptions::window) or
     /// [`tile`](crate::DecodeOptions::tile), only the tiles the decode reads
-    /// are reported, and a run of missing tiles runs from the first of them
-    /// to the last.
+    /// are reported, and a run of missing tiles is split into the runs of it
+    /// the decode reads. Under a window or
+    /// [`components`](crate::DecodeOptions::components), only the packets
+    /// the returned samples need are reported missing (see
+    /// [`ReportEntry::MissingPackets`]).
     ///
     /// The list is bounded by the input: at most five entries per tile-part
     /// the codestream carries, plus two. A run of missing tiles is one
-    /// [`ReportEntry::MissingTiles`] entry, however many tiles it spans.
+    /// [`ReportEntry::MissingTiles`] entry, however many tiles it spans, or
+    /// under a window one per row of tiles it reads.
     pub entries: Vec<ReportEntry>,
     /// The smallest [`resolution_reduction`](crate::DecodeOptions::resolution_reduction)
-    /// at which every tile has every packet (every tile the decode reads, under
-    /// a [`window`](crate::DecodeOptions::window) or
-    /// [`tile`](crate::DecodeOptions::tile)): a decode at this reduction, or
+    /// at which every tile has every packet: a decode at this reduction, or
     /// any larger one the file allows, gives the same samples as a decode of
-    /// the whole codestream. Under a
+    /// the whole codestream. Under a [`window`](crate::DecodeOptions::window),
+    /// a [`tile`](crate::DecodeOptions::tile) or
+    /// [`components`](crate::DecodeOptions::components), only the packets the
+    /// same decode returns samples from count: those of the tiles it reads,
+    /// the components it reconstructs, and the code-blocks the window's
+    /// samples depend on at that reduction. Under a
     /// [`max_quality_layers`](crate::DecodeOptions::max_quality_layers) cap,
     /// only the packets of the layers it keeps count, and the decode compared
     /// against has the same cap. It is counted over all of the data, whatever
@@ -156,7 +163,12 @@ pub enum ReportEntry {
         tiles: Range<u32>,
     },
     /// Packets of this tile that the decode keeps were never read: the data
-    /// ended first, or the `POC` volumes leave them out. A missing packet
+    /// ended first, or the `POC` volumes leave them out. Under a
+    /// [`window`](crate::DecodeOptions::window) or
+    /// [`components`](crate::DecodeOptions::components), only the packets
+    /// that hold a code-block the returned samples depend on count: those of
+    /// the components reconstructed (with a color transform, all three of
+    /// its components), and of the precincts the window's samples need. A missing packet
     /// adds nothing to its code-blocks, so they decode from the layers that
     /// were read, as a codestream truncated after those layers would.
     ///

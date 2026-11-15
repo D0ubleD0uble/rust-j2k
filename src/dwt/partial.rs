@@ -36,7 +36,7 @@ use std::ops::Range;
 use super::{Irreversible97, LANES, Reversible53, Synthesis, interleave};
 use crate::codestream::markers::{Rect, Transform};
 use crate::pipeline::{Band, Bands, DetailBands, Samples, SubbandCoeffs};
-use crate::tier2::{BandKind, ComponentCoded};
+use crate::tier2::{BandKind, CodeBlock, ComponentCoded};
 use crate::{Error, Result};
 
 /// The samples a 5/3 synthesis sample depends on, on either side: its two
@@ -262,16 +262,25 @@ impl Footprint {
             .enumerate()
         {
             for subband in &mut resolution.subbands {
-                let (columns, rows) = self.band(res, subband.kind);
+                let kind = subband.kind;
                 for block in &mut subband.blocks {
-                    if !Axis::meets(&columns, block.x, block.width)
-                        || !Axis::meets(&rows, block.y, block.height)
-                    {
+                    if !self.needs(res, kind, block) {
                         block.num_passes = 0;
                     }
                 }
             }
         }
+    }
+
+    /// Whether `block`, of the `kind` band of resolution `res`, holds a
+    /// sample the window needs. A block of a resolution the decode drops
+    /// holds none.
+    pub(crate) fn needs(&self, res: usize, kind: BandKind, block: &CodeBlock<'_>) -> bool {
+        if res >= self.x.need.len() {
+            return false;
+        }
+        let (columns, rows) = self.band(res, kind);
+        Axis::meets(&columns, block.x, block.width) && Axis::meets(&rows, block.y, block.height)
     }
 }
 
