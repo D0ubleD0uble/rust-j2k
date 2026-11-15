@@ -424,7 +424,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     if let Ok(selection) = &selection {
         samples::check_read(
             siz,
-            Some(selection),
+            selection,
             reduction,
             samples::cap(&options.sample_limit),
         )?;
@@ -1280,7 +1280,7 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     if let Ok(selection) = &selection {
         samples::check_read(
             &parsed.header.siz,
-            Some(selection),
+            selection,
             options.resolution_reduction,
             samples::cap(&options.sample_limit),
         )?;
@@ -1388,7 +1388,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let cap = samples::cap(&options.sample_limit);
     let selection = window::select(siz, options);
     if let Ok(selection) = &selection {
-        samples::check_read(siz, Some(selection), options.resolution_reduction, cap)?;
+        samples::check_read(siz, selection, options.resolution_reduction, cap)?;
     }
     jp2::check_against_siz(&file.header, siz)?;
     // A component subset names codestream components, which come out as
@@ -1402,7 +1402,13 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
         cap,
         raw_channels,
         jp2::is_jph(&file.file_type),
-    )?;
+    );
+    // A refused selection is reported ahead of a limit the plan counts on the
+    // whole image: no limit raised would help it.
+    let plans = match (plans, &selection) {
+        (Err(Error::Limit(_)), Err(_)) => return Err(selection.err().expect("matched Err")),
+        (plans, _) => plans?,
+    };
     jp2::check_after_codestream(&file, raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
     let selection = selection?;

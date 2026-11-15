@@ -115,3 +115,44 @@ fn a_valid_window_of_the_same_image_is_still_held_to_the_tiles_read() {
         }
     }
 }
+
+/// Like `in_jp2`, with a palette that expands component 0 to three 8-bit
+/// channels beside component 1, so the expanded image is over the limit.
+fn in_paletted_jp2(codestream: &[u8]) -> Vec<u8> {
+    let bx = |kind: &[u8; 4], payload: &[u8]| {
+        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    };
+    let mut ihdr = 39800u32.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&39900u32.to_be_bytes());
+    ihdr.extend_from_slice(&2u16.to_be_bytes());
+    ihdr.extend_from_slice(&[7, 7, 0, 0]);
+    let pclr = [0, 1, 3, 7, 7, 7, 10, 20, 30];
+    let cmap = [0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 2, 0, 1, 0, 0];
+    let jp2h = [
+        bx(b"ihdr", &ihdr),
+        bx(b"colr", &[1, 0, 0, 0, 0, 0, 16]),
+        bx(b"pclr", &pclr),
+        bx(b"cmap", &cmap),
+    ]
+    .concat();
+    [
+        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
+        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        bx(b"jp2h", &jp2h),
+        bx(b"jp2c", codestream),
+    ]
+    .concat()
+}
+
+#[test]
+fn a_paletted_jp2_file_reports_an_invalid_window_before_the_limit() {
+    let bytes = in_paletted_jp2(&large_header_only());
+    assert_invalid_options(read_header_with(&bytes, &empty_for_component_1()));
+    assert_invalid_options(decode_with(&bytes, &empty_for_component_1()));
+    let srgb = empty_for_component_1().with_color(rust_j2k::ColorOutput::Srgb);
+    assert_invalid_options(read_header_with(&bytes, &srgb));
+    assert_invalid_options(decode_with(&bytes, &srgb));
+}
