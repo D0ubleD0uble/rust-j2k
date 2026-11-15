@@ -60,11 +60,11 @@ fn lenient() -> DecodeOptions {
 }
 
 /// What a refine on `prefix` must give: the strict-off decode, with a main
-/// header cut short as `None`.
+/// header cut short and a limit as `None`.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
     match decode_with(prefix, &options.clone().with_strict(false)) {
         Ok(image) => Ok(Some(image)),
-        Err(Error::Incomplete(_)) => Ok(None),
+        Err(Error::Incomplete(_) | Error::Limit(_)) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -132,11 +132,8 @@ fn halves(name: &str, bytes: &[u8], options: &DecodeOptions) -> usize {
         }
         // A decode whose cost is in its geometry, not its bytes, can spend
         // most of the bound on the first half: then the refine of the whole
-        // waits, and `finish` decodes it or refuses it for work.
-        if fed == bytes.len()
-            && refined == Ok(None)
-            && matches!(expected, Ok(Some(_)) | Err(Error::Limit(_)))
-        {
+        // waits, and `finish` decodes it.
+        if fed == bytes.len() && refined == Ok(None) && matches!(expected, Ok(Some(_))) {
             continue;
         }
         assert_eq!(refined, expected, "{name}, {fed} bytes");

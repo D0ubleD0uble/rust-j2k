@@ -69,9 +69,11 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 ///
 /// An error from `refine` is the error [`decode_with`] gives with `strict`
 /// off on the same bytes, such as a marker segment with an invalid field.
-/// More bytes do not undo it, so a caller stops there. A file cut before
-/// its main header is whole is not an error for `refine`, which returns
-/// `Ok(None)` until the header has come in; for `finish`, it is.
+/// More bytes do not undo it, so a caller stops there. Two kinds of error
+/// are not final while bytes may still come, so `refine` returns `Ok(None)`
+/// for them and leaves them to `finish`: a main header cut short
+/// ([`Error::Incomplete`]), and a limit ([`Error::Limit`]), since the work
+/// bounds grow with the bytes fed.
 pub struct IncrementalDecoder {
     /// The options `finish` decodes under.
     options: DecodeOptions,
@@ -133,26 +135,24 @@ impl IncrementalDecoder {
     /// [`strict`](DecodeOptions::strict) off on all the bytes fed, and its
     /// [`report`](Image::report) lists what they do not hold yet.
     /// `Ok(None)` means there is no new image yet: too few bytes have come
-    /// in since the last decode, the main header is not whole, or the rest
-    /// of the work bound cannot cover this decode. Any other error is the
-    /// one `decode_with` gives on those bytes, and more bytes will not
-    /// clear it.
+    /// in since the last decode, the main header is not whole, or the decode
+    /// reached a limit, which may be the rest of the work bound the earlier
+    /// refines left. Any other error is the one `decode_with` gives on
+    /// those bytes, and more bytes will not clear it.
     pub fn refine(&mut self) -> Result<Option<Image>> {
         let fed = self.bytes.len();
         if fed == 0 || fed < self.tried.saturating_mul(2) {
             return Ok(None);
         }
         self.tried = fed;
-        self.ledger.capped.set(false);
         match decode_metered(&self.bytes, &self.lenient, Some(&self.ledger)) {
             Ok(image) => {
                 self.decoded = fed;
                 Ok(Some(image))
             }
-            Err(Error::Incomplete(_)) => Ok(None),
-            // The decode needed more of the bound than the earlier refines
-            // left; one decode of these bytes alone might not have.
-            Err(Error::Limit(_)) if self.ledger.capped.get() => Ok(None),
+            // More bytes can complete the header, and raise the work
+            // bounds past what the earlier refines spent.
+            Err(Error::Incomplete(_) | Error::Limit(_)) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -209,8 +209,6 @@ pub(crate) struct Ledger {
     packets: Cell<u64>,
     /// The code-block work spent.
     blocks: Cell<u64>,
-    /// Whether the last decode's bounds were cut by what was spent before.
-    capped: Cell<bool>,
 }
 
 impl Ledger {
@@ -227,10 +225,9 @@ impl Ledger {
     /// What is left of `bound` after `spent`. No bound
     /// ([`WorkLimit::Unlimited`](crate::WorkLimit::Unlimited)) stays none.
     fn left(&self, bound: u64, spent: u64) -> u64 {
-        if bound == u64::MAX || spent == 0 {
+        if bound == u64::MAX {
             return bound;
         }
-        self.capped.set(true);
         bound.saturating_sub(spent)
     }
 

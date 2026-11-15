@@ -11,8 +11,9 @@ the work is bounded, and what a later, more stateful version would change.
   `strict` off on the bytes fed so far (`bytes_decoded()` of them), report
   included. The report says which quality layers and resolutions are
   complete and which tiles are missing.
-- `refine` returns `Ok(None)` while the main header is cut short, where
-  `decode_with` gives `Error::Incomplete`. Any other error is the one
+- `refine` returns `Ok(None)` where `decode_with` gives `Error::Incomplete`
+  (the main header is cut short) or `Error::Limit`, since more bytes can
+  complete the header and raise the work bounds. Any other error is the one
   `decode_with` gives on those bytes.
 - `finish` is `decode_with` on all the bytes under the decoder's options,
   `strict` included, except that `Error::Incomplete` becomes a truncation
