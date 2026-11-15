@@ -68,6 +68,26 @@ impl CleanupBound {
     }
 }
 
+/// Decode one HT code-block, for the fuzz hook (`crate::fuzz::ht_block`),
+/// which holds no [`BlockCoder`].
+pub(crate) fn decode_ht_block(
+    block: &CodeBlock<'_>,
+    numbps: u32,
+    roi_shift: u8,
+    causal: bool,
+    bound_bits: Option<u32>,
+) -> Result<Vec<i32>> {
+    ht::decode(
+        block,
+        numbps,
+        ht::Params {
+            roi_shift,
+            causal,
+            bound_bits,
+        },
+    )
+}
+
 /// The two block coders of a tile-component, set up from its code-block
 /// style. A block uses the one [`CodeBlock::coder`] names: under a MIXED
 /// style each block names its own, and otherwise every block names the one
@@ -745,6 +765,35 @@ mod tests {
             panic!("got {err:?}")
         };
         assert!(!message.contains("MIXED"), "{message}");
+    }
+
+    /// A MIXED style marks the coders as MIXED, with no `CAP` or with
+    /// `Ccap15` bits 15-14 at `11`, but not under HTONLY (`00`), where every
+    /// block is an HT block. Neither does an HT style alone.
+    #[test]
+    fn coders_of_marks_a_mixed_tile_component() {
+        use crate::codestream::markers::Ccap15;
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/irreversible_lossy.j2k"
+        ))
+        .unwrap();
+        let mut header = crate::codestream::parse_header(&bytes).unwrap().header;
+        for (style, ccap15, mixed) in [
+            (0xC0, None, true),
+            (0xC0, Some(Ccap15(0xC000)), true),
+            (0xC0, Some(Ccap15(0x0000)), false),
+            (0x40, None, false),
+            (0x00, None, false),
+        ] {
+            header.components[0].coding.code_block_style = style;
+            header.ccap15 = ccap15;
+            assert_eq!(
+                Coders::of(&header, 0).mixed,
+                mixed,
+                "style {style:#04x}, {ccap15:?}"
+            );
+        }
     }
 
     fn default_params() -> Coders {

@@ -1136,8 +1136,12 @@ rest of the packet header out of step, which has not been seen.
 
 A Part 1 block of a MIXED tile-component is one codeword segment of any number
 of passes, since A.4 allows it neither bypass nor termination on each pass.
-OpenJPEG splits a Part 1 block's passes at 109 into a second segment, which no
-code-block of a bit-plane count it decodes reaches; it does not decode MIXED.
+OpenJPEG splits a Part 1 block's passes at 109 into a second segment, with a
+length field of its own; it does not decode MIXED. A packet header may signal
+more than 109 passes even on a block of few bit-planes, so the split can change
+how the rest of a header is read, but not which of the block's bytes are
+decoded: tier-1 decodes at most 88 passes (30 bit-planes), all in the first
+109.
 
 ## Set stuffing bits in the HT VLC and MagRef streams
 
