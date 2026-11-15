@@ -27,6 +27,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Some complete inputs now give `Error::Incomplete`, since their bytes look
+  the same as a cut: empty input (was `Error::Codestream`), and a JP2 file
+  with no `jp2c` box or with a top-level box before `jp2c` that runs past the
+  end of the file (was `Error::FileFormat`). A caller that matched those
+  variants should treat `Incomplete` with no more bytes coming as truncated.
 - The `CAP` and `CPF` markers are read. HTJ2K codestreams are still
   `Error::Unsupported`, now refused for the HT code-block style of their COD
   or COC instead of for `CAP`, so a cut header is `Error::Incomplete` up to

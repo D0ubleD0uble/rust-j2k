@@ -75,8 +75,11 @@ pub enum Error {
     /// this variant, since it has no `SOC` marker.
     Codestream(String),
     /// The input ends before the codestream's main header is whole, that is,
-    /// before its first `SOT` marker is complete. No part the input holds in
-    /// full was found damaged, so more bytes may still give a valid header.
+    /// before its first `SOT` marker is complete. No top-level box or segment
+    /// the input holds in full was found damaged, so more bytes may still give
+    /// a valid header. The boxes inside a superbox (such as `ihdr` in `jp2h`)
+    /// are judged only once the superbox is whole, so a cut `jp2h` is this
+    /// variant even when its `ihdr` is already damaged.
     ///
     /// It begins with the empty input. A raw codestream is this variant from
     /// 0 bytes up to its first `SOT` marker. A JP2 file is this variant from
@@ -133,7 +136,8 @@ pub enum Error {
     /// or an out-of-range value.
     Marker(String),
     /// The JP2 box structure or a box field is malformed: a box that runs past
-    /// the superbox holding it, a missing or misplaced required box, an invalid field value, or a box
+    /// the superbox holding it, a truncated box after the codestream, a
+    /// missing or misplaced required box, an invalid field value, or a box
     /// that disagrees with the codestream.
     FileFormat(String),
     /// A valid-but-not-decoded feature: an HTJ2K codestream, a Part 2

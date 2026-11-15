@@ -202,7 +202,7 @@ pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2F
     let mut other = Vec::new();
     // Whether a box with length 0 ("to the end of the file") was read, for the
     // message when it swallowed the boxes meant to follow it.
-    let mut open_ended = false;
+    let mut open_ended = boxes.last_was_open_ended();
     while let Some(item) = boxes.next() {
         let item = match item {
             // A `jp2c` cut inside its 16-byte header still needs a `jp2h`

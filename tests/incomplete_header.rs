@@ -652,3 +652,37 @@ fn incomplete_displays_where_the_input_ends() {
         "incomplete: the input ends inside the main header, before its first `SOT` marker"
     );
 }
+
+/// An `ftyp` of length 0 runs to the end of the file and swallows the boxes
+/// meant to follow it. The file is then complete as declared, so it and
+/// every longer one is `FileFormat`, never `Incomplete`, whatever its length.
+#[test]
+fn an_ftyp_that_swallows_the_file_is_file_format() {
+    let mut bytes = edited(&signed16(), &[(15, 0)]);
+    // Pad to whole compatibility codes, so the `ftyp` itself reads.
+    while (bytes.len() - 20) % 4 != 0 {
+        bytes.push(0);
+    }
+    for extra in 0..16 {
+        let file = [&bytes[..], &vec![0; extra]].concat();
+        for result in [
+            read_header(&file).map(|_| ()),
+            decode(&file).map(|_| ()),
+            decode_with(&file, &lenient()).map(|_| ()),
+        ] {
+            assert!(
+                matches!(result, Err(Error::FileFormat(_))),
+                "{extra} bytes past the padded file: {result:?}"
+            );
+        }
+    }
+    // With whole compatibility codes, it is the swallowed `jp2h` and `jp2c`.
+    assert_eq!(
+        read_header(&bytes).map(|_| ()),
+        Err(Error::FileFormat(
+            "the file has no `jp2h` header box and no `jp2c` codestream box: a box of length 0 \
+             (to the end of the file) swallowed the rest"
+                .into()
+        ))
+    );
+}

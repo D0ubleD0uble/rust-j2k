@@ -89,17 +89,18 @@
 //! including a JP2 file's boxes before the codestream. A cut later fails as
 //! [`Error::Codestream`], or as [`Error::FileFormat`] when it falls in a JP2
 //! box after the codestream. A codestream whose last tile-part states its
-//! length is refused without its closing `EOC` marker. A last tile-part of length 0 (`Psot = 0`, "to the end")
-//! takes the data up to the final two bytes without checking that they are
-//! `EOC`, as OpenJPEG does, so a missing `EOC` there costs the tile its last
-//! two bytes and usually fails the tile instead; in a JP2 file such a
-//! tile-part can also end where its `jp2c` box ends. Input that is not
-//! JPEG 2000 at all, plain text included, is `Codestream` too.
+//! length is refused without its closing `EOC` marker. A last tile-part of
+//! length 0 (`Psot = 0`, "to the end") takes the data up to the final two
+//! bytes without checking that they are `EOC`, as OpenJPEG does, so a
+//! missing `EOC` there costs the tile its last two bytes and usually fails
+//! the tile instead; in a JP2 file such a tile-part can also end where its
+//! `jp2c` box ends. Input that is not JPEG 2000 at all, plain text included,
+//! is `Codestream` too.
 //!
-//! Damage can show up as any variant, not only those two. A flipped bit in
-//! a header field can read as an absurd image size ([`Error::Limit`]) or an
-//! unknown marker or a feature the decoder does not read
-//! ([`Error::Unsupported`]). Do not retry a file with
+//! Damage can show up as any variant, not only the ones named here. A
+//! flipped bit in a header field can read as an absurd image size
+//! ([`Error::Limit`]) or an unknown marker or a feature the decoder does not
+//! read ([`Error::Unsupported`]). Do not retry a file with
 //! [`WorkLimit::Unlimited`] on that evidence alone.
 //!
 //! JPEG 2000 carries no checksum, so damage inside the entropy-coded data is
