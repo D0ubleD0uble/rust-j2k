@@ -364,6 +364,11 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
     let cut = decode_ok(prefix, &tile(1), "the prefix's tile 1");
     assert!(cut.report.is_complete(), "{:?}", cut.report);
     assert_eq!(cut.components, whole.components);
+    // Strict still refuses the cut codestream, whatever the tile.
+    assert!(matches!(
+        decode_with(prefix, &DecodeOptions::default().with_tile(Some(1))),
+        Err(Error::Codestream(_))
+    ));
     // The whole prefix misses tiles 2 to 8.
     let all = decode_ok(prefix, &loose, "the prefix");
     assert_eq!(missing_tiles(&all), [(2, 9)]);
