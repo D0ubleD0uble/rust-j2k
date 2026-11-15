@@ -1132,6 +1132,15 @@ mod tests {
     /// transform choice and the decomposition-level count from it (both checked
     /// against the pyramid in debug builds); the rest is filler.
     fn header(transform: Transform, levels: u8, w: u32, h: u32) -> MainHeader {
+        let qcd = Qcd {
+            style: QuantStyle::None,
+            guard_bits: 2,
+            steps: Vec::new(),
+        };
+        MainHeader::single_component((w, h), (16, false), (levels, transform), qcd)
+    }
+
+    fn old_header(transform: Transform, levels: u8, w: u32, h: u32) -> MainHeader {
         MainHeader::new(
             Siz {
                 x_size: w,
@@ -1170,6 +1179,15 @@ mod tests {
                 steps: Vec::new(),
             },
         )
+    }
+
+    #[test]
+    fn zz_identity_header() {
+        for t in [Transform::Reversible53, Transform::Irreversible97] {
+            for (l, w, h) in [(0, 1, 1), (3, 17, 9), (5, 64, 64)] {
+                assert_eq!(old_header(t, l, w, h), header(t, l, w, h));
+            }
+        }
     }
 
     /// Forward 1-D kernel down every column then across every row, in place —

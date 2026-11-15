@@ -138,6 +138,10 @@ mod tests {
     /// A `prec`-bit single-component header carrying `qcd`. Only the component
     /// depth and the QCD feed dequantization; the rest is filler.
     fn header(prec: u8, qcd: Qcd) -> MainHeader {
+        MainHeader::single_component((4, 4), (prec, false), (1, Transform::Irreversible97), qcd)
+    }
+
+    fn old_header(prec: u8, qcd: Qcd) -> MainHeader {
         MainHeader::new(
             Siz {
                 x_size: 4,
@@ -322,5 +326,25 @@ mod tests {
         };
         let err = half_step(&header(8, qcd), 1, 0).unwrap_err();
         assert!(matches!(err, Error::Inconsistent(_)));
+    }
+
+    #[test]
+    fn zz_identity_header() {
+        for prec in [1u8, 8, 16] {
+            for qcd in [
+                Qcd {
+                    style: QuantStyle::None,
+                    guard_bits: 2,
+                    steps: vec![(8, 0)],
+                },
+                Qcd {
+                    style: QuantStyle::ScalarExpounded,
+                    guard_bits: 1,
+                    steps: vec![(9, 100), (3, 2047)],
+                },
+            ] {
+                assert_eq!(old_header(prec, qcd.clone()), header(prec, qcd));
+            }
+        }
     }
 }

@@ -677,6 +677,20 @@ mod tests {
     /// origin with unit sub-sampling. Only the SIZ fields `assemble` reads
     /// matter; COD/QCD are filler. Tests tweak offsets/sampling on the result.
     fn header(x_size: u32, y_size: u32, bit_depth: u8, signed: bool) -> MainHeader {
+        let qcd = Qcd {
+            style: QuantStyle::None,
+            guard_bits: 1,
+            steps: vec![],
+        };
+        MainHeader::single_component(
+            (x_size, y_size),
+            (bit_depth, signed),
+            (0, Transform::Reversible53),
+            qcd,
+        )
+    }
+
+    fn old_header(x_size: u32, y_size: u32, bit_depth: u8, signed: bool) -> MainHeader {
         MainHeader::new(
             Siz {
                 x_size,
@@ -1115,6 +1129,13 @@ mod tests {
         match canvas.into_planes().as_slice() {
             [Samples::Reversible(plane)] => assert_eq!(plane, &[3, 4, 7, 8]),
             other => panic!("expected one reversible plane, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zz_identity_header() {
+        for (x, y, d, s) in [(1, 1, 8, false), (7, 3, 16, true), (4096, 2, 1, false)] {
+            assert_eq!(old_header(x, y, d, s), header(x, y, d, s));
         }
     }
 }

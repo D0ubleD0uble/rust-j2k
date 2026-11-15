@@ -79,36 +79,6 @@ fn file(codestream: &[u8], colr: &[u8], children: &[Vec<u8>]) -> Vec<u8> {
     synth::jp2_file(&boxes, &[], codestream, &[])
 }
 
-fn old_file(codestream: &[u8], colr: &[u8], children: &[Vec<u8>]) -> Vec<u8> {
-    let (width, height, components) = geometry(codestream);
-    let mut ihdr = height.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&components.to_be_bytes());
-    ihdr.extend_from_slice(&[7, 7, 0, 0]);
-    let mut jp2h = bx(b"ihdr", &ihdr);
-    if !colr.is_empty() {
-        jp2h.extend_from_slice(&bx(b"colr", colr));
-    }
-    jp2h.extend_from_slice(&children.concat());
-    let mut out = SIGNATURE.to_vec();
-    out.extend_from_slice(&bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend_from_slice(&bx(b"jp2h", &jp2h));
-    out.extend_from_slice(&bx(b"jp2c", codestream));
-    out
-}
-
-fn old_enumerated(value: u32) -> Vec<u8> {
-    let mut out = vec![1, 0, 0];
-    out.extend_from_slice(&value.to_be_bytes());
-    out
-}
-
-fn old_icc_colr(profile: &[u8]) -> Vec<u8> {
-    let mut out = vec![2, 0, 0];
-    out.extend_from_slice(profile);
-    out
-}
-
 fn srgb() -> DecodeOptions {
     DecodeOptions {
         color: ColorOutput::Srgb,
@@ -1059,16 +1029,6 @@ fn gray_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
         is_unsupported,
         "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
     );
-}
-
-fn old_cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
-    let mut payload = (entries.len() as u16).to_be_bytes().to_vec();
-    for &(channel, kind, association) in entries {
-        for field in [channel, kind, association] {
-            payload.extend_from_slice(&field.to_be_bytes());
-        }
-    }
-    bx(b"cdef", &payload)
 }
 
 /// The sYCC guess holds for a file declared sRGB too: a 4:2:0 or 4:2:2 file
@@ -2099,26 +2059,5 @@ fn refusals_are_ordered_as_in_openjpeg() {
         intent(&mut icc, 0);
         icc[128..132].copy_from_slice(&0u32.to_be_bytes());
         assert_passes_through(&file(ONE, &colr_icc(&icc), &columns));
-    }
-}
-
-#[test]
-fn zz_identity_src_jp2_srgb_tests_rs() {
-    for cs in [ONE, &[][..]] {
-        if cs.len() > 42 {
-            for c in [&[][..], &[1, 0, 0, 0, 0, 0, 16][..]] {
-                assert_eq!(old_file(cs, c, &[vec![9, 9]]), file(cs, c, &[vec![9, 9]]));
-            }
-        }
-    }
-    assert_eq!(
-        old_cdef(&[(0, 0, 1), (1, 1, 0), (7, 65535, 2)]),
-        synth::cdef(&[(0, 0, 1), (1, 1, 0), (7, 65535, 2)])
-    );
-    for v in [0, 16, 17, 18, 0xFFFF_FFFF] {
-        assert_eq!(old_enumerated(v), synth::colr_enum(v));
-    }
-    for p in [&[][..], &[1, 2, 3][..]] {
-        assert_eq!(old_icc_colr(p), synth::colr_icc(p));
     }
 }
