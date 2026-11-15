@@ -337,7 +337,8 @@ unbounded allocation and no infinite loops: every rejected input returns a
 typed `Error`. A malformed SIZ cannot steer the buffers into an overflowing
 or out-of-memory allocation. SIZ's declared image area,
 `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, is held to the sample limit before any tile
-is read ([The sample limit](resource-bounds.md#the-sample-limit)), and the
+is read, or under a window or a tile the area of the tiles read ([The sample
+limit](resource-bounds.md#the-sample-limit)), and the
 Table A-9 constraints on the image and tile origins are enforced before any
 geometry reaches the DWT.
 

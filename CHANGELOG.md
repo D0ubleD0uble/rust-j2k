@@ -56,7 +56,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   transform there instead. An empty window, one outside the image, a tile or
   component past the image's, and a window with a tile are
   `Error::InvalidOptions`. `read_header_with` describes the part the options
-  ask for.
+  ask for. Under a window or a tile, the sample limit counts the samples of
+  the tiles read, in every component, so a small window of a large tiled
+  image decodes at the default limit. A palette's expanded channels count
+  only the window. A component subset alone counts the whole image.
 
 ### Changed
 

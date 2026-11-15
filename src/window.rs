@@ -87,6 +87,39 @@ impl Selection {
             .map(|index| self.needs_tile(siz, index))
             .collect()
     }
+
+    /// The part of the image the tiles this decode reads cover, on the
+    /// reference grid: the area grown out to the edges of the tiles it
+    /// reaches, which [`tiles`](Self::tiles) flags. Those tiles are a block
+    /// of whole rows and columns of the grid, so their union is a rectangle.
+    /// It is the image area when the decode returns the whole image, or when
+    /// the area is not inside the tile grid, which SIZ's checks rule out.
+    pub(crate) fn read_rect(&self, siz: &Siz) -> Rect {
+        let image = siz.image_rect();
+        let area = self.area.image_rect();
+        let (across, _) = siz.tile_grid();
+        if area.is_empty() || area == image || siz.tile_width == 0 || siz.tile_height == 0 {
+            return image;
+        }
+        // The grid column of `x`, which is at or past the tile origin (A-9).
+        let column = |x: u32| (x.saturating_sub(siz.tile_x_offset)) / siz.tile_width;
+        let row = |y: u32| (y.saturating_sub(siz.tile_y_offset)) / siz.tile_height;
+        let index = |x: u32, y: u32| u64::from(row(y)) * u64::from(across) + u64::from(column(x));
+        let first = u32::try_from(index(area.x0, area.y0)).ok();
+        let last = u32::try_from(index(area.x1 - 1, area.y1 - 1)).ok();
+        match (
+            first.and_then(|i| siz.tile_rect(i)),
+            last.and_then(|i| siz.tile_rect(i)),
+        ) {
+            (Some(first), Some(last)) => Rect {
+                x0: first.x0,
+                y0: first.y0,
+                x1: last.x1,
+                y1: last.y1,
+            },
+            _ => image,
+        }
+    }
 }
 
 /// The checks of the three options that need no input.
@@ -232,6 +265,76 @@ pub(crate) fn keep_entries(entries: Vec<ReportEntry>, tiles: &[bool]) -> Vec<Rep
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codestream::markers::SizComponent;
+
+    /// `read_rect` is the union of the tiles `tiles` flags, for windows
+    /// on and off the tile grid, clipped edge tiles, and an image and tile
+    /// grid with origins of their own.
+    #[test]
+    fn the_read_rect_is_the_union_of_the_tiles_read() {
+        // A 7x5 grid of 16x14 tiles from (2, 3); the image is 101x67 at (7, 5),
+        // so the edge tiles are partial.
+        let siz = Siz {
+            x_size: 108,
+            y_size: 72,
+            x_offset: 7,
+            y_offset: 5,
+            tile_width: 16,
+            tile_height: 14,
+            tile_x_offset: 2,
+            tile_y_offset: 3,
+            components: vec![SizComponent {
+                bit_depth: 8,
+                signed: false,
+                x_sampling: 1,
+                y_sampling: 1,
+            }],
+        };
+        let image = siz.image_rect();
+        let mut checked = 0;
+        for x0 in (0..115).step_by(3) {
+            for x1 in (x0 + 1..120).step_by(7) {
+                for (y0, y1) in [(0, 80), (5, 6), (16, 17), (17, 30), (30, 72), (70, 90)] {
+                    let window = Rect { x0, y0, x1, y1 }.intersect(&image);
+                    if window.is_empty() {
+                        continue;
+                    }
+                    let selection = Selection {
+                        area: siz.windowed(window),
+                        order: vec![0],
+                        subset: false,
+                    };
+                    let tiles: Vec<Rect> = selection
+                        .tiles(&siz)
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, read)| **read)
+                        .map(|(index, _)| siz.tile_rect(index as u32).unwrap())
+                        .collect();
+                    let union = tiles.iter().fold(tiles[0], |u, t| Rect {
+                        x0: u.x0.min(t.x0),
+                        y0: u.y0.min(t.y0),
+                        x1: u.x1.max(t.x1),
+                        y1: u.y1.max(t.y1),
+                    });
+                    let area: u64 = tiles
+                        .iter()
+                        .map(|t| u64::from(t.x1 - t.x0) * u64::from(t.y1 - t.y0))
+                        .sum();
+                    let read = selection.read_rect(&siz);
+                    assert_eq!(read, union, "window {window:?}");
+                    // No gap: the tiles read fill their union.
+                    assert_eq!(
+                        area,
+                        u64::from(read.x1 - read.x0) * u64::from(read.y1 - read.y0),
+                        "window {window:?}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 500, "{checked}");
+    }
 
     #[test]
     fn a_run_of_missing_tiles_is_narrowed_to_the_tiles_read() {

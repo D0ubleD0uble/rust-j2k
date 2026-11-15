@@ -292,7 +292,8 @@ pub(crate) struct Budget {
     /// its geometry at full resolution whatever the reduction. Nothing else is
     /// charged for the geometry: each precinct is paid for by its packets'
     /// visits, and the code-blocks of the kept resolutions are no more than
-    /// the reduced tile's samples / 16, which the sample limit bounds. Without
+    /// the reduced tile's samples, which the sample limit bounds, and the
+    /// per-tile cap. Without
     /// the charge, many tiles of next to no data, each building close to the
     /// per-tile code-block cap, would make a small file take minutes to decode
     /// at a reduction. It is 0 for `read_header`'s walk.

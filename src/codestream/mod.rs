@@ -123,7 +123,8 @@ pub struct Tile<'a> {
     /// out: a tile with no tile-part at all is never resolved, and every
     /// tile that is resolved builds its geometry. A tile-component holds at
     /// least one sample (SIZ refuses an empty one), so the copies cost at most
-    /// `tiles × components`, no more than the image's samples.
+    /// `tiles × components`, no more than the image's samples (under a window
+    /// or a tile, the samples of the tiles read, as only those are resolved).
     pub header: TileHeader,
     pub data: Cow<'a, [u8]>,
     /// Where each tile-part's data ends in [`data`](Self::data), in `TPsot`

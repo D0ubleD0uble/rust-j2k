@@ -268,10 +268,11 @@ pub use window::Window;
 ///   component, a palette's expanded channels, and the channels sRGB output
 ///   adds. That admits a 10980 x 10980 Sentinel-2 band, or an RGB image of
 ///   up to about 89 MP. A larger image is refused from its header alone,
-///   before any tile is read. Peak memory is about 1.35 times the output for
-///   a square tile, an estimated 1.4 GiB at the limit, and more for a tall,
-///   narrow tile or while a palette expands (see [the sample
-///   limit][sample-limit]).
+///   before any tile is read. Under a window or a tile, only the tiles read
+///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
+///   times the output for a square tile, an estimated 1.4 GiB at the limit,
+///   and more for a tall, narrow tile or while a palette expands (see [the
+///   sample limit][sample-limit]).
 /// - Reading the packet headers of every tile may take
 ///   at most 2^24 steps, or 32 per byte of tile data when that is more. A
 ///   step is a packet read, a run of code-blocks a header skips without
@@ -413,10 +414,18 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     }
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
-    samples::check_codestream(siz, reduction, samples::cap(&options.sample_limit))?;
+    // The selection's refusals come after the checks before it, as the decode
+    // has them, but the sample limit counts the tiles it reads.
+    let selection = window::select(siz, options);
+    samples::check_read(
+        siz,
+        selection.as_ref().ok(),
+        reduction,
+        samples::cap(&options.sample_limit),
+    )?;
     check_raw_color(options, siz.components.len())?;
     check_reduction(&parsed.header, reduction, None)?;
-    let selection = window::select(siz, options)?;
+    let selection = selection?;
     let (width, height) = selection.area.image_extent_at(reduction);
     Ok(Header {
         width,
@@ -827,10 +836,17 @@ pub struct DecodeOptions {
     /// How many samples the decoded image may hold, against the limit
     /// described on [`decode`]: 2^28 samples (1 GiB as `i32`) by default,
     /// summed over the output channels at
-    /// [`resolution_reduction`](Self::resolution_reduction). A
-    /// [`window`](Self::window), a [`tile`](Self::tile) or a
-    /// [`components`](Self::components) subset does not lower the count: it
-    /// is the whole image's. Default [`WorkLimit::Default`].
+    /// [`resolution_reduction`](Self::resolution_reduction). Default
+    /// [`WorkLimit::Default`].
+    ///
+    /// Under a [`window`](Self::window) or a [`tile`](Self::tile), the count
+    /// is the samples of the tiles the decode reads, in every component, as
+    /// each of those tiles is reconstructed whole; a palette's expanded
+    /// channels and sRGB output count only the returned area. A small window
+    /// of a large tiled image therefore fits the default, but a window of
+    /// one large tile counts the whole tile. A
+    /// [`components`](Self::components) subset does not lower the count, as
+    /// the packets of every component of a tile read are still walked.
     ///
     /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
@@ -1251,14 +1267,16 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     }
     // The header checks come before the tile walk, as `read_header_with` has it.
     let parsed = codestream::parse_header(bytes)?;
-    samples::check_codestream(
+    let selection = window::select(&parsed.header.siz, options);
+    samples::check_read(
         &parsed.header.siz,
+        selection.as_ref().ok(),
         options.resolution_reduction,
         samples::cap(&options.sample_limit),
     )?;
     check_raw_color(options, parsed.header.siz.components.len())?;
     check_reduction(&parsed.header, options.resolution_reduction, None)?;
-    let selection = window::select(&parsed.header.siz, options)?;
+    let selection = selection?;
     let cs = codestream::parse_tiles_with(bytes, parsed, options.strict)?;
     decode_codestream(cs, options, &selection)
 }
@@ -1357,21 +1375,28 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
     let cap = samples::cap(&options.sample_limit);
-    samples::check_codestream(siz, options.resolution_reduction, cap)?;
+    let selection = window::select(siz, options);
+    samples::check_read(
+        siz,
+        selection.as_ref().ok(),
+        options.resolution_reduction,
+        cap,
+    )?;
     jp2::check_against_siz(&file.header, siz)?;
     // A component subset names codestream components, which come out as
     // coded: OpenJPEG bypasses the JP2 channel transforms under `-c`.
     let raw_channels = options.raw_channels || options.components.is_some();
+    // A palette expands the area the decode returns.
     let plans = jp2::ChannelPlans::plan(
         &file.header,
-        siz,
+        selection.as_ref().map_or(siz, |selection| &selection.area),
         options.resolution_reduction,
         cap,
         raw_channels,
     )?;
     jp2::check_after_codestream(&file, raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
-    let selection = window::select(siz, options)?;
+    let selection = selection?;
     if selection.subset {
         metadata.channels = pick(metadata.channels, &selection.order);
     }
@@ -1507,7 +1532,8 @@ fn decode_codestream(
         // every component, whether or not the tile's data runs out; a tile
         // with no data at all is not resolved. So the copies stay within
         // `tiles × components`, which SIZ's rule that no tile-component is
-        // empty holds to the image's samples, with `strict` off as with it on.
+        // empty holds to the image's samples (under a window or a tile, the
+        // samples of the tiles read), with `strict` off as with it on.
         let header = cs.tile_header(position)?;
 
         // A tile COD can give one tile a shallower pyramid than the rest, so
