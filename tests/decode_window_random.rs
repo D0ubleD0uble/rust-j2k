@@ -150,8 +150,9 @@ fn random_windows_of_the_window_fixtures_are_crops_of_the_whole_decode() {
 /// Larger codestreams, with many code-blocks to a band: the 2048 x 2048
 /// benchmark image (5/3, 256 x 256 tiles), and conformance codestreams on
 /// 9/7 (one tile with six levels; 128 x 128 tiles; 37 x 37 tiles of 8 x 8
-/// code-blocks) and on 5/3 (sub-sampled components). They are left out of
-/// the published package, so a missing one is skipped.
+/// code-blocks) and on 5/3 (sub-sampled components), and two HTJ2K
+/// codestreams from OpenJPH, on 9/7 and 5/3. They are left out of the
+/// published package, so a missing one is skipped.
 #[test]
 fn random_windows_of_larger_codestreams_are_crops_of_the_whole_decode() {
     let mut ran = 0;
@@ -161,6 +162,8 @@ fn random_windows_of_larger_codestreams_are_crops_of_the_whole_decode() {
         "tests/fixtures/conformance/codestreams/p1_04.j2k",
         "tests/fixtures/conformance/codestreams/p1_05.j2k",
         "tests/fixtures/conformance/codestreams/p0_05.j2k",
+        "tests/fixtures/openjph/files/simple_enc_irv97_64x64.j2c",
+        "tests/fixtures/openjph/files/simple_enc_rev53_64x64_yuv.j2c",
     ]
     .into_iter()
     .enumerate()
@@ -172,5 +175,5 @@ fn random_windows_of_larger_codestreams_are_crops_of_the_whole_decode() {
         check(path, &bytes, 16, 100 + seed as u64);
         ran += 1;
     }
-    eprintln!("{ran} of 5 larger codestreams checked");
+    eprintln!("{ran} of 7 larger codestreams checked");
 }

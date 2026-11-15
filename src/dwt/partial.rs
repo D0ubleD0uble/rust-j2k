@@ -9,8 +9,9 @@
 //!
 //! The lifting is local: after a filter's `m` lifting steps a sample depends
 //! only on the `m` samples on either side of it (`m` is 2 for 5/3 and 4 for
-//! 9/7, the half-lengths of the synthesis filters, ISO/IEC 15444-1 Tables F.2
-//! and F.3, and the `filter_width` of OpenJPEG's `opj_dwt_decode_partial_tile`).
+//! 9/7: the most extension ISO/IEC 15444-1 Tables F.2 and F.3 ask for at
+//! either end, and the `filter_width` of OpenJPEG's
+//! `opj_dwt_decode_partial_tile`).
 //! So to get the samples `a..b` of a level, the synthesis runs over
 //! `a - m..b + m`, cut to the level, with the same kernels the whole-tile
 //! synthesis uses. Where the run is cut short of the level's edge, the
@@ -20,10 +21,15 @@
 //! the same arithmetic on the same values as in the whole-tile synthesis, so
 //! the window is the crop of the whole decode exactly, on 9/7 as on 5/3.
 //!
-//! OpenJPEG grows each band's window by `filter_width` band samples at every
-//! level, mapping the window to each level directly. Growing it level by
-//! level as here asks for about the same samples, and never fewer than the
-//! synthesis reads.
+//! OpenJPEG maps the window to each band directly and grows it there by
+//! `filter_width` band samples (`opj_dwt_decode_partial_tile`), or by 2 and 3
+//! to pick code-blocks (`opj_tcd_is_subband_area_of_interest`). This module
+//! grows it by `m` samples of each resolution, level by level, so it follows
+//! what the synthesis reads and the code-blocks are picked from the same
+//! samples. The code-blocks decoded can differ from OpenJPEG's; the samples
+//! are still those of the whole decode.
+//! `tests/decode_window_random.rs` checks random windows against the whole
+//! decode.
 
 use std::ops::Range;
 
@@ -190,7 +196,11 @@ impl Footprint {
                 ys.push(ys[res - 1] + lh.height);
             }
         }
-        let finest = xo.len() - 1;
+        let Some(finest) = xo.len().checked_sub(1) else {
+            return Err(Error::Inconsistent(
+                "tier-2 produced no resolutions to decode".into(),
+            ));
+        };
         if (xo[finest], yo[finest], xs[finest], ys[finest])
             != (
                 rect.x0,
@@ -472,5 +482,138 @@ impl<T: Copy> Pass<'_, T> {
         for (dst, lanes) in out.chunks_exact_mut(self.out_width).zip(&buf[self.top..]) {
             dst[at..at + L].copy_from_slice(lanes);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codestream;
+    use crate::tier2;
+
+    /// Each sample of a span is in exactly one of its low-pass and
+    /// high-pass ranges, as sample `i / 2` of its band.
+    #[test]
+    fn low_and_high_split_a_span() {
+        for cas in 0..2 {
+            for n in 0..12 {
+                for s in 0..=n {
+                    for e in s..=n {
+                        let (l, h) = (low(&(s..e), cas), high(&(s..e), cas));
+                        let lows: Vec<usize> = (s..e).filter(|i| (i + cas) % 2 == 0).collect();
+                        let highs: Vec<usize> = (s..e).filter(|i| (i + cas) % 2 == 1).collect();
+                        assert_eq!(
+                            l.collect::<Vec<_>>(),
+                            lows.iter().map(|i| i / 2).collect::<Vec<_>>()
+                        );
+                        assert_eq!(
+                            h.collect::<Vec<_>>(),
+                            highs.iter().map(|i| i / 2).collect::<Vec<_>>()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The coded data of tile `index` of `tests/fixtures/window/{name}.j2k`
+    /// for component 0, handed to `check`.
+    fn with_tile(name: &str, index: usize, check: impl Fn(&TileComponent, ComponentCoded<'_>)) {
+        let bytes = std::fs::read(format!(
+            "{}/tests/fixtures/window/{name}.j2k",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let parsed = codestream::parse_header(&bytes).unwrap();
+        let cs = codestream::parse_tiles(&bytes, parsed).unwrap();
+        let header = cs.tile_header(index).unwrap();
+        let meter = tier2::Meter::new(u64::MAX);
+        let mut coded =
+            tier2::decode_packets_metered(&header, &cs.tiles[index], &meter, u64::MAX, 0, None)
+                .unwrap();
+        let rect = cs.header.siz.tile_component_rect(index as u32, 0).unwrap();
+        let parts = TileComponent {
+            rect,
+            transform: header.components[0].coding.transform,
+        };
+        check(&parts, coded.components.swap_remove(0));
+    }
+
+    /// Component 0 of a tile: its rectangle and wavelet.
+    struct TileComponent {
+        rect: Rect,
+        transform: Transform,
+    }
+
+    /// A window that covers the tile-component needs the whole-tile
+    /// synthesis, and one that misses it needs no sample and no
+    /// code-block.
+    #[test]
+    fn a_window_over_or_off_the_tile_component() {
+        with_tile("tiled_53", 4, |parts, mut coded| {
+            let rect = parts.rect;
+            let over = Rect {
+                x0: rect.x0 - 1,
+                y0: rect.y0,
+                x1: rect.x1 + 1,
+                y1: rect.y1 + 7,
+            };
+            assert_eq!(
+                Footprint::of(&coded, 0, rect, over, parts.transform).unwrap(),
+                None
+            );
+            let off = Rect {
+                x0: rect.x1,
+                y0: rect.y0,
+                x1: rect.x1 + 5,
+                y1: rect.y1,
+            };
+            let footprint = Footprint::of(&coded, 0, rect, off, parts.transform)
+                .unwrap()
+                .unwrap();
+            assert!(footprint.rect().is_empty());
+            assert!(coded.resolutions.iter().any(|r| {
+                r.subbands
+                    .iter()
+                    .any(|s| s.blocks.iter().any(|b| b.num_passes > 0))
+            }));
+            footprint.prune(&mut coded);
+            for resolution in &coded.resolutions {
+                for subband in &resolution.subbands {
+                    assert!(subband.blocks.iter().all(|b| b.num_passes == 0));
+                }
+            }
+        });
+    }
+
+    /// Subbands of another shape than the footprint's are refused, not
+    /// sliced past their end.
+    #[test]
+    fn subbands_of_another_shape_are_inconsistent() {
+        with_tile("tiled_53", 4, |parts, coded| {
+            let rect = parts.rect;
+            let part = Rect {
+                x1: rect.x0 + 3,
+                y1: rect.y0 + 3,
+                ..rect
+            };
+            let footprint = Footprint::of(&coded, 0, rect, part, parts.transform)
+                .unwrap()
+                .unwrap();
+            let band = |w: usize, h: usize| Band {
+                origin: (0, 0),
+                width: w,
+                height: h,
+                data: vec![0; w * h],
+            };
+            let bands = Bands {
+                ll: band(2, 2),
+                levels: vec![],
+            };
+            assert!(matches!(
+                inverse_window(SubbandCoeffs::Reversible(bands), &footprint),
+                Err(Error::Inconsistent(_))
+            ));
+        });
     }
 }

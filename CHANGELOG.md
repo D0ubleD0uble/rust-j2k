@@ -44,8 +44,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `DecodeOptions::tile` (`with_tile`) and `DecodeOptions::components`
   (`with_components`): decode a rectangle of the reference grid, one tile, or
   some of the components, as `opj_decompress -d`, `-t` and `-c` do. Only the
-  tiles the rectangle reaches are decoded: a 256 x 256 window of a 2048 x 2048
-  image of 256 x 256 tiles decodes in about 3 ms against 54 ms for the whole.
+  tiles the rectangle reaches are decoded, and in each of them only the
+  code-blocks and wavelet samples it needs: a 256 x 256 window of a
+  2048 x 2048 image of 256 x 256 tiles decodes in about 2.4 ms against 54 ms
+  for the whole.
   The components left out are not decoded past the packet headers. Under the
   color transform, asking for any of components 0, 1 and 2 decodes all three
   and returns those components of the whole decode; OpenJPEG skips the

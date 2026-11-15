@@ -693,7 +693,9 @@ pub struct DecodeOptions {
     ///
     /// Only the tiles the window reaches are decoded, so a small window of a
     /// large tiled image costs a few tiles. The packets of the other tiles
-    /// are not read, so damage in them is not found, as in OpenJPEG.
+    /// are not read, so damage in them is not found, as in OpenJPEG. In the
+    /// tiles it reaches, only the code-blocks whose wavelet support reaches
+    /// the window are decoded, so damage in the others is not found either.
     ///
     /// An empty window, one with no part inside the image area, and one that
     /// holds no sample of a returned component at the reduction are
@@ -871,9 +873,11 @@ pub struct DecodeOptions {
     ///
     /// Strict or not, only the data a decode reads is checked. With a
     /// [`window`](Self::window) or [`tile`](Self::tile), the tiles outside it
-    /// are not read, and with [`components`](Self::components) the code-blocks
-    /// of the components left out are not decoded, so damage there goes
-    /// unseen, as with `opj_decompress -t`.
+    /// are not read, with a window the code-blocks of the tiles it reaches
+    /// that the window does not need are not decoded, and with
+    /// [`components`](Self::components) the code-blocks of the components
+    /// left out are not decoded, so damage there goes unseen, as with
+    /// `opj_decompress -t` and `-d`.
     ///
     /// For a codestream as it streams in: a prefix that holds every packet of
     /// the resolutions a reduction keeps decodes at that reduction to the same
@@ -1570,7 +1574,8 @@ fn decode_codestream(
                 }
                 let rect = cs.header.siz.tile_component_rect(tile.index, component);
                 let area = selection.area.component_rect(component);
-                let (Some(rect), Some(area)) = (rect, area) else {
+                let transform = header.components.get(component).map(|c| c.coding.transform);
+                let (Some(rect), Some(area), Some(transform)) = (rect, area, transform) else {
                     return Err(Error::Inconsistent(format!(
                         "no tile {} or no component {component} in `SIZ`",
                         tile.index
@@ -1581,7 +1586,7 @@ fn decode_codestream(
                     reduction,
                     rect.reduced(reduction),
                     area.reduced(reduction),
-                    header.components[component].coding.transform,
+                    transform,
                 )
             })
             .collect::<Result<Vec<_>>>()?;

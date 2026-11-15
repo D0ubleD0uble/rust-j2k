@@ -51,6 +51,10 @@
 //! is the next finer level's LL; after the last level it is the
 //! full-resolution raster of that tile-component (pre level-shift), which
 //! [`crate::image::Canvas`] places into the image.
+//!
+//! A decode window that needs only part of a tile-component runs the same
+//! kernels over only the samples it needs ([`inverse_window`]); the
+//! [`Footprint`] it needs also tells Tier-1 which code-blocks to skip.
 
 use crate::Result;
 use crate::codestream::MainHeader;

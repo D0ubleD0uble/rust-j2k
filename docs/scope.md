@@ -150,10 +150,13 @@ that does the same job.
 | Decode some of the components | Yes, with limits | `with_components(Some(list))` | `-c` |
 
 A window is on the reference grid, as OpenJPEG takes it, and the part of it
-outside the image is left out. Only the tiles it reaches are decoded, but each
-of those is decoded whole, every code-block and the wavelet over the whole
-tile, and the window is cut from it. So a window inside one large tile costs
-that tile's decode, and the sample limit still counts the whole image. Under
+outside the image is left out. Only the tiles it reaches are decoded, and in
+each of them only the code-blocks whose wavelet support reaches the window,
+with the wavelet run over only the samples the window needs, as OpenJPEG does.
+A code-block that straddles the window's edge is still decoded whole, so a
+window inside one large tile costs only part of that tile's decode. The packets
+of the whole tile are still read, and the sample limit still counts the whole
+image. Under
 the color transform, asking for one of components 0, 1 and 2 decodes all
 three. On a JP2 file a component subset returns the codestream components as
 coded, without the palette or channel definitions. sRGB output from sYCC with
