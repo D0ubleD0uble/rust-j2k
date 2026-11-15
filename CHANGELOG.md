@@ -112,6 +112,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   would have added passes to a code-block's last segment, with or without
   `max_quality_layers`. That segment is no longer held to the termination
   check; the block's earlier segments still are.
+- A `window`, `tile` or `components` selection that does not fit the image is
+  `Error::InvalidOptions` on an image over the sample limit. It was
+  `Error::Limit`, with a hint to raise the limit that could not help.
 
 ## [0.4.0] - 2026-11-14
 

@@ -417,14 +417,18 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
     // The selection's refusals come after the checks before it, as the decode
-    // has them, but the sample limit counts the tiles it reads.
+    // has them. The sample limit counts the tiles the selection reads, so it
+    // is held only to a selection that is valid: a refused one is reported as
+    // such, as no limit raised would help it.
     let selection = window::select(siz, options);
-    samples::check_read(
-        siz,
-        selection.as_ref().ok(),
-        reduction,
-        samples::cap(&options.sample_limit),
-    )?;
+    if let Ok(selection) = &selection {
+        samples::check_read(
+            siz,
+            selection,
+            reduction,
+            samples::cap(&options.sample_limit),
+        )?;
+    }
     check_raw_color(options, siz.components.len())?;
     check_reduction(&parsed.header, reduction, None)?;
     let selection = selection?;
@@ -1273,12 +1277,14 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     // The header checks come before the tile walk, as `read_header_with` has it.
     let parsed = codestream::parse_header(bytes)?;
     let selection = window::select(&parsed.header.siz, options);
-    samples::check_read(
-        &parsed.header.siz,
-        selection.as_ref().ok(),
-        options.resolution_reduction,
-        samples::cap(&options.sample_limit),
-    )?;
+    if let Ok(selection) = &selection {
+        samples::check_read(
+            &parsed.header.siz,
+            selection,
+            options.resolution_reduction,
+            samples::cap(&options.sample_limit),
+        )?;
+    }
     check_raw_color(options, parsed.header.siz.components.len())?;
     check_reduction(&parsed.header, options.resolution_reduction, None)?;
     let selection = selection?;
@@ -1381,22 +1387,23 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let siz = &parsed.header.siz;
     let cap = samples::cap(&options.sample_limit);
     let selection = window::select(siz, options);
-    samples::check_read(
-        siz,
-        selection.as_ref().ok(),
-        options.resolution_reduction,
-        cap,
-    )?;
+    if let Ok(selection) = &selection {
+        samples::check_read(siz, selection, options.resolution_reduction, cap)?;
+    }
     jp2::check_against_siz(&file.header, siz)?;
     // A component subset names codestream components, which come out as
     // coded: OpenJPEG bypasses the JP2 channel transforms under `-c`.
     let raw_channels = options.raw_channels || options.components.is_some();
-    // A palette expands the area the decode returns.
+    // A palette expands the area the decode returns. A refused selection has
+    // no area, so the plan counts nothing: its other faults are found at the
+    // same place whatever the image's size, and the selection's refusal
+    // follows them.
+    let plan_cap = if selection.is_ok() { cap } else { u64::MAX };
     let plans = jp2::ChannelPlans::plan(
         &file.header,
         selection.as_ref().map_or(siz, |selection| &selection.area),
         options.resolution_reduction,
-        cap,
+        plan_cap,
         raw_channels,
         jp2::is_jph(&file.file_type),
     )?;
