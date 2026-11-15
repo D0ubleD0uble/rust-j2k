@@ -1405,10 +1405,12 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     );
     // A refused selection is reported ahead of a limit the plan counts on the
     // whole image: no limit raised would help it.
-    let plans = match (plans, &selection) {
-        (Err(Error::Limit(_)), Err(_)) => return Err(selection.err().expect("matched Err")),
-        (plans, _) => plans?,
-    };
+    if matches!(plans, Err(Error::Limit(_))) {
+        if let Err(refused) = selection {
+            return Err(refused);
+        }
+    }
+    let plans = plans?;
     jp2::check_after_codestream(&file, raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
     let selection = selection?;
