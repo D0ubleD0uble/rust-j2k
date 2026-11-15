@@ -672,6 +672,34 @@ mod tests {
         assert_eq!(bound(Some(31), true).bits(1), Some(31));
     }
 
+    /// Each block of a MIXED tile-component goes to the coder tier-2 chose
+    /// for it. Tier-2 settles the choice, so an HT block whose bytes fail as
+    /// an HT cleanup segment (`Scup` below 2, B.4) is `Codestream`, not
+    /// retried as a Part 1 block.
+    #[test]
+    fn a_mixed_block_goes_to_its_own_coder() {
+        let coders = Coders {
+            part1: BlockCoder::Ebcot {
+                style: 0,
+                roi_shift: 0,
+            },
+            ht: BlockCoder::Ht {
+                roi_shift: 0,
+                causal: false,
+                bound: CleanupBound {
+                    magb: None,
+                    irreversible: false,
+                },
+            },
+        };
+        let mut sb = one_block_subband(1, 0);
+        decode_subband::<i32, _>(&sb, 1, 1, coders, |q| q).expect("a Part 1 block");
+        sb.blocks[0].coder = Coder::Ht;
+        sb.blocks[0].segments[0].chunks = vec![&[0, 0][..]];
+        let err = decode_subband::<i32, _>(&sb, 1, 1, coders, |q| q).expect_err("an HT block");
+        assert!(matches!(err, Error::Codestream(_)), "got {err:?}");
+    }
+
     fn default_params() -> Coders {
         part1_coders(0)
     }

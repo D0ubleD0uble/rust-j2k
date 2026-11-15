@@ -729,6 +729,22 @@ fn a_length_an_ht_block_cannot_have_is_a_part1_block() {
     assert_eq!(segments(&block), [(2, body(1))]);
 }
 
+/// A contribution that, read as HT, would be placeholder passes only cannot
+/// carry bytes, so a nonzero field there is a Part 1 block's, even with a
+/// leading 0 at Lblock 4: layer 1's one pass is the second, and an HT block's
+/// cleanup pass would be the fourth.
+#[test]
+fn a_nonzero_length_on_placeholder_passes_is_a_part1_block() {
+    let data = packets(&[
+        (mixed(true, 1, 0, &[(0, 3)]), vec![]),
+        (mixed(false, 1, 1, &[(0b0011, 4)]), body(3)),
+    ]);
+    let block = mixed_block(&data, 2, 2).unwrap();
+    assert_eq!(block.coder, Coder::Part1);
+    assert_eq!(block.num_passes, 2);
+    assert_eq!(segments(&block), [(2, body(3))]);
+}
+
 /// A first segment of no bytes leaves the coder open: layer 0's two passes
 /// read alike either way. Layer 1 settles it as HT: with them, its two passes
 /// are a placeholder triple and the cleanup pass, one more skipped bit-plane.
