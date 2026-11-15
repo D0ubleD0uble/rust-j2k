@@ -28,7 +28,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use support::ht::{
-    HtManifest, HtSignaling, OpenJphManifest, Passes, load_ht_manifest, load_openjph_manifest,
+    HtManifest, HtSignaling, KAKADU_MSE_INEXACT, OpenJphManifest, Passes, kakadu_mse_slack,
+    load_ht_manifest, load_openjph_manifest,
 };
 use support::jp2::{Digest, sha256_hex};
 use support::part4::{self, Bounds, Grade, ratchet};
@@ -1162,16 +1163,6 @@ fn ht_refinement_matches_kakadu_stats() {
     assert_eq!(refined, 17, "files with refinement passes graded");
 }
 
-/// JPH files where Kakadu's quoted MSE differs from this decoder's by more
-/// than the `1e-6` relative rule allows: `file7_b15` (16-bit, MSE about 32,
-/// 2.3e-6 and 4.5e-6 apart on components 0 and 1, the PAE equal on every
-/// component). No whole sum of squared differences gives Kakadu's figure
-/// when divided by the sample count and rounded to its six decimals: on
-/// component 0, with 307200 samples, 31.932053 needs a sum in
-/// [9809526.53, 9809526.84), which holds no integer. So Kakadu's figure is
-/// not an exact MSE, and those components are held to `1e-5`.
-const KAKADU_MSE_INEXACT: &[&str] = &["file7_b15"];
-
 /// Each JPH file's manifest entry quotes Kakadu's PAE and MSE against its
 /// source, per component, as coded: `fileN.jp2` for `file1`..`file9`, the
 /// `reference_jph/` images for `file10`. This decoder's default decode (the
@@ -1224,7 +1215,7 @@ fn jph_files_match_kakadu_stats() {
             if gap <= 1e-6 * mse.max(1.0) {
                 continue;
             }
-            // Past the rule: only on a listed file, and only where no whole
+            // Past the rule: only on a listed component, and only where no whole
             // sum of squared differences over the sample count rounds to
             // Kakadu's six decimals, so its figure is not exact. This
             // decoder's is exact, and its codestream decode is OpenJPEG's to
@@ -1235,12 +1226,12 @@ fn jph_files_match_kakadu_stats() {
                 .into_iter()
                 .all(|sum| six(sum / count) != six(mse));
             assert!(
-                KAKADU_MSE_INEXACT.contains(&name.as_str())
+                KAKADU_MSE_INEXACT.contains(&(name.as_str(), c))
                     && unreachable
-                    && gap <= 1e-5 * mse.max(1.0),
+                    && gap <= kakadu_mse_slack(name, c) * mse.max(1.0),
                 "{name} component {c}: MSE {ours_mse} against Kakadu's {mse}"
             );
-            inexact.insert(name.as_str());
+            inexact.insert((name.as_str(), c));
         }
         if j.highest_bound {
             exact += 1;
@@ -1250,7 +1241,7 @@ fn jph_files_match_kakadu_stats() {
     assert_eq!(
         inexact,
         KAKADU_MSE_INEXACT.iter().copied().collect(),
-        "the files whose MSE needs the wider tolerance"
+        "the components whose MSE needs the wider tolerance"
     );
 }
 

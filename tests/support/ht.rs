@@ -296,6 +296,29 @@ pub struct OpenJphEntry {
 
 const EXACT: Bound = Bound { pae: 0.0, mse: 0.0 };
 
+/// The JPH file components where Kakadu's quoted MSE differs from this
+/// decoder's by more than the `1e-6` relative rule allows: components 0 and
+/// 1 of `file7_b15` (16-bit, MSE about 32, 2.3e-6 and 4.5e-6 apart, the PAE
+/// equal on every component). No whole sum of squared differences gives
+/// Kakadu's figure when divided by the sample count and rounded to its six
+/// decimals: on component 0, with 307200 samples, 31.932053 needs a sum in
+/// [9809526.53, 9809526.84), which holds no integer. So Kakadu's figure is
+/// not an exact MSE, and these components are held to `1e-5`
+/// ([`kakadu_mse_slack`]). `jph_files_match_kakadu_stats` asserts the list
+/// is exactly the components that need it.
+pub const KAKADU_MSE_INEXACT: &[(&str, usize)] = &[("file7_b15", 0), ("file7_b15", 1)];
+
+/// The relative slack on a comparison with Kakadu's MSE for `component` of
+/// the JPH file `name`: `1e-6`, as Kakadu quotes six or seven significant
+/// digits, or `1e-5` on the [`KAKADU_MSE_INEXACT`] components.
+pub fn kakadu_mse_slack(name: &str, component: usize) -> f64 {
+    if KAKADU_MSE_INEXACT.contains(&(name, component)) {
+        1e-5
+    } else {
+        1e-6
+    }
+}
+
 /// JPH files whose codestream holds `fileN.jp2`'s components in another
 /// order: codestream component `k` is as-coded component `order[k]`.
 /// `file2_b12` stores them reversed, although its `cdef` maps channels to
@@ -563,11 +586,11 @@ impl JphEntry {
                 .bounds
                 .as_ref()
                 .map_or(EXACT, |b| bound_of(b, false, index));
-            // Kakadu quotes its MSE to six or seven significant digits, and
-            // on `file7_b15` its figure is not an exact MSE (see
-            // `KAKADU_MSE_INEXACT` in `conformance_ht.rs`), so the bound
-            // carries the `1e-5` slack that list allows. With an exact base
-            // (as-coded references) nothing else absorbs the rounding.
+            // Kakadu quotes its MSE to six or seven significant digits, so
+            // the bound carries that slack, or more on the components where
+            // its figure is not an exact MSE ([`kakadu_mse_slack`]). With an
+            // exact base (as-coded references) nothing else absorbs the
+            // rounding.
             //
             // This is a heuristic, not a proven bound. Adding the MSEs
             // assumes the two errors add in energy; the true bound on their
@@ -580,7 +603,7 @@ impl JphEntry {
             let mse = stats.mse[index] / (scale * scale);
             let bound = Bound {
                 pae: base.pae + (stats.pae[index] / scale).ceil(),
-                mse: base.mse + mse + 1e-5 * mse.max(1.0),
+                mse: base.mse + mse + kakadu_mse_slack(&self.name, index) * mse.max(1.0),
             };
             let component = jp2::shifted(decoded, source.shift);
             match part4::grade_component(&component, &reference, bound) {
