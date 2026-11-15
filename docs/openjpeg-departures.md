@@ -1062,19 +1062,20 @@ The HT VLC and MagRef streams are read backward. A byte whose seven low bits
 are all ones, after a byte above 0x8F, carries a stuffing bit in its top bit.
 The first MagRef byte read (the segment's last) counts as following such a
 byte. The VLC stream's first nibble (the top half of byte `Lcup - 2`) carries
-one when its three low bits are ones. An encoder always writes the bit as 0
-(`emitVLCBits` and `emitMRBit`, F.4). T.814 tells the decoder to skip it:
+one when its three low bits are ones. The packers of the informative F.4
+(`emitVLCBits`, `emitMRBit`) write it as 0. T.814 tells the decoder to skip it:
 `importVLCBit` and `importMagRefBit` take 7 bits from such a byte, and
 `initVLC` takes 3 from such a nibble. The 7.1.6 note says "the MSB of the last
 byte in the HT MagRef byte-stream will be skipped if its seven LSBs are all
 1". Neither procedure calls `error()`, unlike `importSigPropBit` and
-`importMagSgnBit`.
+`importMagSgnBit`: the standard expects a set bit may arrive and says to skip
+it.
 
 OpenJPEG's `rev_init`, `rev_read` and `rev_read_mrp` (`ht_dec.c`) shift the
 next byte in one place lower but keep the whole byte, so a set stuffing bit
 lands on the next byte's lowest bit. When that bit is 0, the two decoders read
-different values and neither warns. Only a non-conforming stream has a set
-stuffing bit, so conforming streams decode the same in both.
+different values and neither warns. The F.4 packers never set the bit, so
+streams they write decode the same in both.
 
 Measured with `opj_decompress` 2.5.0 on single-block codestreams:
 

@@ -201,7 +201,8 @@ pins each refusal to its reason. Three derived files are also checked against
 their source: `ds1_ht_04_b9`, `ds1_ht_05_b11` and `ds1_ht_06_b11` must decode
 exactly as `p1_04`, `p1_05` and `p1_06` (T.803 C.1.10, C.1.11). Each
 transcode's error against its source must also match the PAE and MSE Kakadu
-quotes in the manifest, on the reversible and exact transcodes. The
+quotes in the manifest, on the reversible transcodes, the exact ones, and the
+irreversible `ds0_ht_02_b11` and `ds1_ht_01_b11`. The
 codestream inside each of the 20 JPH files decodes bit for bit as OpenJPEG
 decodes it, checked against committed digests of OpenJPEG's output.
 

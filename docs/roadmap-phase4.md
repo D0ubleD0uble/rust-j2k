@@ -515,7 +515,8 @@ Findings:
 - The manifest's `kakadu_stats` (Kakadu's PAE and MSE of each transcode
   against its Part 1 source) grade the refinement passes on the multi-layer
   files: this decoder's HT decode against its own Part 1 decode gives the
-  same figures on every reversible file and every exact transcode, 13 files
+  same figures on every reversible file, every exact transcode, and the
+  irreversible `ds0_ht_02_b11` and `ds1_ht_01_b11`: 13 files
   with refinement passes (`ht_refinement_matches_kakadu_stats`). On
   `ds0_ht_04_b11`, `ds0_ht_05_b11`, `ds1_ht_02_b11` and `ds1_ht_03_b11`,
   irreversible, the 9/7 rounding differs slightly from Kakadu's.
