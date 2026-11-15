@@ -379,7 +379,7 @@ cleanup pass, until P4.3 read the later passes by the B.2 length rules. Findings
 - `U_q` is refused above `P + 2`. That is the spec's bound: `mu` has at
   most `P + 1` bits (7.6), so the exponent, the bit length of `2 mu - 1`, is
   at most `P + 2`. OpenJPEG has the same bound.
-- Four faults in a cleanup segment are refused where OpenJPEG decodes on
+- Five faults in a cleanup segment are refused where OpenJPEG decodes on
   ([openjpeg-departures.md](openjpeg-departures.md#ht-cleanup-segments)).
 - Vertically causal context changes only the SigProp pass (7.4), not the
   cleanup pass; `byte_causal.jhc` (style `0x48`) matches both decoders.

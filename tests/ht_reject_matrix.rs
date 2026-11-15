@@ -339,6 +339,18 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
             Want::Codestream("VLC stream runs into"),
         ),
         (
+            "VLC stream past Pcup on a block OpenJPEG decodes",
+            Block {
+                width: 4,
+                height: 8,
+                mb: 5,
+                zero_bit_planes: 4,
+                cleanup: &[0x22, 0xAB, 0x7C, 0x68, 0x15, 0x62, 0x00],
+                ..Block::default()
+            },
+            Want::Codestream("VLC stream runs into"),
+        ),
+        (
             "MagSgn byte after 0xFF with its stuffing bit set",
             Block {
                 width: 4,

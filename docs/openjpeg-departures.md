@@ -665,7 +665,7 @@ an irreversible subband) is refused. OpenJPEG decodes on in both cases.
 
 ### HT cleanup segments
 
-Four faults in an HT cleanup segment are refused as `Codestream` where
+Five faults in an HT cleanup segment are refused as `Codestream` where
 OpenJPEG 2.5.0 decodes the block anyway. Each was measured on a
 single-block codestream:
 
@@ -675,6 +675,12 @@ single-block codestream:
   `[0, -96, -288, -160, 0, 0, -160, -160]`.
 - A MagSgn stream read past its end, beyond the one 0xFF byte implied at
   `Pcup` (7.1.2 calls it an error). OpenJPEG decodes on.
+- A VLC stream read past `Pcup` (`importVLCBit`, 7.1.4, calls it an
+  error). On a 4x8 8-bit block with four zero bit-planes in a subband of 5
+  and the segment `22 AB 7C 68 15 62 00`, OpenJPEG gives 129 at sample 0,
+  127 at sample 16 and 128 elsewhere. It decoded 183 of 300 random blocks
+  this decoder refuses for this. That block is a row of
+  `tests/ht_reject_matrix.rs`.
 - A magnitude with more bits than the block codes. Within the exponent bound
   `U_q <= P + 2` it overflows `i32` only in a subband of 30 bit-planes, where
   OpenJPEG wraps it (`-268435456` on the measured block).
@@ -1151,7 +1157,7 @@ decoded: tier-1 decodes at most 88 passes (30 bit-planes), all in the first
 | OpenJPEG 2.5.0 | ORs a set stuffing bit into the lowest bit of the next byte, so the bits after it change |
 | Standard | T.814 7.1.4 (`initVLC`, `importVLCBit`) and 7.1.6 (`importMagRefBit`) |
 | Rule | 1 |
-| Tests and fixtures | `vlc_skips_a_set_stuffing_bit`, `a_set_vlc_stuffing_bit_does_not_change_the_block` and `magref_reads_backward_lsb_first_unstuffs_and_zero_fills` in `src/tier1/ht/tests.rs` |
+| Tests and fixtures | `vlc_skips_a_set_stuffing_bit`, `a_set_vlc_stuffing_bit_does_not_change_the_block` and `magref_reads_backward_lsb_first_unstuffs_and_zero_fills` in `src/tier1/ht/tests.rs`; `tests/ht_vlc_stuffing.rs` with the block pairs in `tests/fixtures/ht_vlc_stuffing/` |
 | Decided | 2026-11-15, follow T.814 (skip the bit) |
 
 The HT VLC and MagRef streams are read backward. A byte whose seven low bits
@@ -1186,6 +1192,44 @@ Measured with `opj_decompress` 2.5.0 on single-block codestreams:
   same. Of 150 random cleanup-only blocks with the nibble 0xF, 10 decode
   differently in OpenJPEG from their 0x7 twin, while this decoder decodes
   each pair the same.
+
+On blocks this decoder reads, it is the only cleanup-pass difference a
+random differential found (#368). Of 41,936 crafted cleanup-only blocks,
+OpenJPEG gave other samples on 165 and would not decode 121 that this decoder
+reads. Every one had a set VLC stuffing bit. With the bits cleared, the two
+decoders gave the same samples on every block both decode. Each block whose
+samples differed decoded here the same as its cleared twin. A VLC reader that
+ORs the bit in, as OpenJPEG does, gives OpenJPEG's samples on the 11 such
+pairs in `tests/fixtures/ht_vlc_stuffing/`, and refuses the 3 that OpenJPEG
+refuses as malformed. A cleared twin reads the same as its block under T.814
+unless the stuffing bytes chain, as after a 0xFF stuffing byte
+(`12 34 7F FF A0 25 00`) or a stuffing first nibble (`12 34 56 7F F4 00`):
+clearing the first bit changes `VLC_last`, so the next byte is no longer a
+stuffing byte. The fixture generator refuses such blocks.
+
+OpenJPH (master 97a9579) reads the bit the same way as OpenJPEG. This
+decoder follows T.814's text: `importVLCBit` overwrites `VLC_tmp` with the
+next byte, and the F.4 packer writes the bit as 0.
+
+OpenJPEG 2.5.0 can also abort the process on such a block. `mel_init`
+(`ht_dec.c:319`) reads ahead up to the first four MEL bytes and asserts when
+a 0xFF is followed by a byte above 0x8F. In a build with assertions enabled,
+such as the Debian/Ubuntu package, it aborts. A Release build still ORs the
+VLC and MEL stuffing bits in (`mel_init`, `ht_dec.c:328`), so it decodes such
+blocks differently in general; on the two fixtures below it decodes as this
+decoder does. T.814 7.1.3 (`importMELBit`) skips the MEL stuffing bit with no
+error, and this decoder decodes the block. In every case seen (33 of the
+24,000 random-byte blocks), that 0xFF also carries a set VLC stuffing bit. Two are fixtures, both 5/3:
+
+- A 4x16 12-bit block, 13 bit-planes with 7 zero, and the segment
+  `C6 A5 D9 FF C0 1F 65 78 00`.
+- A 2x17 8-bit block, 4 bit-planes with 2 zero, and the segment
+  `15 11 0F 85 7E 0F 95 F6 FF AC 2D 67 00`.
+
+Their test pins only that the block decodes, without an abort, as its cleared
+twin does. It cannot tell skipping the bit from ORing it: the MEL decode stops
+before the 0xFF, and the VLC either never reads past it (2x17) or reads next a
+byte whose low bit is already 1 (0xD9 on 4x16).
 
 Refusing such a stream, as for a set SigProp or MagSgn stuffing bit, would go
 past the standard, which defines a decode here. Following OpenJPEG would read
