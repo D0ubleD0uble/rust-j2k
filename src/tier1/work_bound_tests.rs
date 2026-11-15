@@ -231,3 +231,88 @@ fn the_work_counts_the_passes_a_maxshift_adds() {
         64 * u64::from(3 * (planes + 5) - 2)
     );
 }
+
+/// A block of `width` x `height` with `passes` HT passes, the cleanup
+/// segment holding `cleanup` and the refinement segment `refinement` (none
+/// when empty).
+fn ht_block(
+    width: usize,
+    height: usize,
+    passes: u32,
+    cleanup: &'static [u8],
+    refinement: &'static [u8],
+) -> CodeBlock<'static> {
+    let mut b = block(width, height, passes);
+    b.segments.push(crate::tier2::CodedSegment {
+        passes: 1,
+        chunks: vec![cleanup],
+    });
+    if !refinement.is_empty() {
+        b.segments.push(crate::tier2::CodedSegment {
+            passes: passes.saturating_sub(1),
+            chunks: vec![refinement],
+        });
+    }
+    b
+}
+
+/// An HT block costs the passes its decode runs over its samples: at most
+/// the three of one HT set (cleanup, SigProp, MagRef), however many its
+/// packets name, and only the cleanup pass without refinement bytes.
+#[test]
+fn the_work_counts_the_passes_an_ht_block_runs() {
+    use crate::codestream::markers::code_block_style::HT;
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/multilayer_lossless.j2k"
+    ))
+    .unwrap();
+    let mut header = crate::codestream::parse_header(&bytes).unwrap().header;
+    header.components[0].coding.code_block_style = HT;
+    let one = |b: CodeBlock<'static>| {
+        let coded = CodedData {
+            components: vec![ComponentCoded {
+                resolutions: vec![Resolution {
+                    subbands: vec![band(BandKind::Ll, vec![b])],
+                }],
+            }],
+        };
+        work(&header, &coded, 0, &[true])
+    };
+    let (cleanup, refinement): (&'static [u8], &'static [u8]) = (&[0xF2, 0x00], &[0x00]);
+    let samples = 64 * 64;
+    assert_eq!(one(ht_block(64, 64, 1, cleanup, &[])), samples);
+    assert_eq!(one(ht_block(64, 64, 2, cleanup, refinement)), 2 * samples);
+    assert_eq!(one(ht_block(64, 64, 3, cleanup, refinement)), 3 * samples);
+    // A shape other than 64 x 64 costs its own samples.
+    assert_eq!(one(ht_block(4, 1024, 3, cleanup, refinement)), 3 * samples);
+    assert_eq!(one(ht_block(1, 1, 3, cleanup, refinement)), 3);
+    // Passes beyond one set (the decode refuses them) count as the three.
+    assert_eq!(one(ht_block(64, 64, 88, cleanup, refinement)), 3 * samples);
+    // Refinement passes named with no refinement bytes decode the cleanup
+    // pass alone.
+    assert_eq!(one(ht_block(64, 64, 3, cleanup, &[])), samples);
+    // No pass, no cost.
+    assert_eq!(one(ht_block(64, 64, 0, cleanup, &[])), 0);
+}
+
+/// The committed HT bomb asks for about the most an HT file can for its
+/// bytes: all three passes over every sample, at about 5 bytes a block. It
+/// spends under a tenth of its bound, and so does any HT file: a block's
+/// work is at most 3 x 4096 sample-passes, a pass that does work needs a
+/// cleanup segment of at least 2 bytes (a zero-length first contribution is
+/// placeholder passes only), and the packet header spends 7 to 14 bits on the
+/// block. So no HT file asks for more than about 2600 a byte, against the
+/// bound's 32768 (see `docs/resource-bounds.md`).
+#[test]
+fn the_ht_bomb_spends_a_small_share_of_the_tier1_bound() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/tier1_work_bound/htbomb_1024_64_3.j2k");
+    let (spent, data, block_bytes) = spend(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(spent, 3 * 1024 * 1024);
+    assert_eq!(block_bytes, 256 * 3);
+    let share = spent as f64 / decode_work(data) as f64;
+    assert!(share < 0.1, "{share}");
+    // Per byte of tile data, far under the bound's rate.
+    assert!(spent / data < super::DECODE_WORK_PER_BYTE / 8);
+}

@@ -89,3 +89,12 @@ path = "fuzz_targets/decode_partial.rs"
 test = false
 doc = false
 bench = false
+
+# `ht_block` drives the HTJ2K block decoder directly through the library's
+# `--cfg fuzzing` hook (rust_j2k::fuzz), over the full shape and segment range.
+[[bin]]
+name = "ht_block"
+path = "fuzz_targets/ht_block.rs"
+test = false
+doc = false
+bench = false
