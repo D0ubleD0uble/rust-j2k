@@ -1059,7 +1059,7 @@ references on those files.
 | Standard | T.814 7.1.4 (`initVLC`, `importVLCBit`) and 7.1.6 (`importMagRefBit`) |
 | Rule | 1 |
 | Tests and fixtures | `vlc_skips_a_set_stuffing_bit`, `a_set_vlc_stuffing_bit_does_not_change_the_block` and `magref_reads_backward_lsb_first_unstuffs_and_zero_fills` in `src/tier1/ht/tests.rs` |
-| Decided | pending |
+| Decided | 2026-11-15, follow T.814 (skip the bit) |
 
 The HT VLC and MagRef streams are read backward. A byte whose seven low bits
 are all ones, after a byte above 0x8F, carries a stuffing bit in its top bit.
