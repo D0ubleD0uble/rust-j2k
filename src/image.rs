@@ -177,28 +177,53 @@ impl Component {
 /// image-sized buffers for one component.
 pub(crate) struct Canvas {
     planes: Vec<Option<Samples>>,
-    /// Each component's whole grid at the decode's reduction — the rectangle a
-    /// tile's placement is measured against.
+    /// Each component's grid at the decode's reduction, over the decoded area
+    /// (the whole image, or a window of it): the rectangle a tile's placement
+    /// is clipped to.
     rects: Vec<Rect>,
     /// Each component's wavelet, which fixes its plane's arithmetic.
     transforms: Vec<Transform>,
+    /// Whether the decode returns each component. Only these get a plane.
+    kept: Vec<bool>,
+    /// The components the decode returns, in output order.
+    order: Vec<usize>,
 }
 
 impl Canvas {
+    /// A canvas of every component over the whole image, at `reduction`.
+    #[cfg(test)]
+    pub(crate) fn new(header: &MainHeader, reduction: u8) -> Result<Self> {
+        let order: Vec<usize> = (0..header.siz.components.len()).collect();
+        Self::over(header, &header.siz, reduction, &order)
+    }
+
     /// Record each component's grid at the reduced size [`assemble`] will
-    /// expect, and its wavelet.
+    /// expect, and its wavelet. `area` is the SIZ of what the decode returns:
+    /// `header`'s own, or one [`Siz::windowed`] to a window. `order` lists the
+    /// components to keep, in output order, each at most once.
     ///
     /// A plane's arithmetic follows its component's wavelet — 5/3 reconstructs
     /// exact integers, 9/7 reals — which is why `parse` rejects a codestream
     /// whose tiles disagree about a component's wavelet: it would ask one plane
     /// to hold both.
-    pub(crate) fn new(header: &MainHeader, reduction: u8) -> Result<Self> {
-        let siz = &header.siz;
-        let count = siz.components.len();
+    pub(crate) fn over(
+        header: &MainHeader,
+        area: &Siz,
+        reduction: u8,
+        order: &[usize],
+    ) -> Result<Self> {
+        let count = area.components.len();
         let (mut rects, mut transforms) = (Vec::with_capacity(count), Vec::with_capacity(count));
+        let mut kept = vec![false; count];
+        for &index in order {
+            let slot = kept.get_mut(index).ok_or_else(|| {
+                Error::Inconsistent(format!("`SIZ` declares no component {index}"))
+            })?;
+            *slot = true;
+        }
         for index in 0..count {
             rects.push(
-                siz.component_rect(index)
+                area.component_rect(index)
                     .ok_or_else(|| {
                         Error::Inconsistent(format!("`SIZ` declares no component {index}"))
                     })?
@@ -219,12 +244,21 @@ impl Canvas {
             planes: (0..count).map(|_| None).collect(),
             rects,
             transforms,
+            kept,
+            order: order.to_vec(),
         })
     }
 
-    /// Write one tile-component's reconstructed raster into its component's
-    /// plane. `rect` is the tile-component's rectangle on the component grid, at
-    /// the same reduction the canvas was built at.
+    /// Whether the decode returns component `index`.
+    pub(crate) fn keeps(&self, index: usize) -> bool {
+        self.kept.get(index).copied().unwrap_or(false)
+    }
+
+    /// Write the part of one tile-component's reconstructed raster that falls
+    /// inside its component's canvas into that plane. `rect` is the
+    /// tile-component's rectangle on the component grid, at the same
+    /// reduction the canvas was built at. A component the decode does not
+    /// return is dropped.
     pub(crate) fn place(&mut self, index: usize, rect: Rect, samples: Samples) -> Result<()> {
         let ((plane, canvas), transform) = self
             .planes
@@ -242,14 +276,6 @@ impl Canvas {
                 rect.area(),
             )));
         }
-        // The tile grid partitions the canvas, so this only fails on a header
-        // whose SIZ tiling and whose decoded geometry disagree.
-        if rect.x0 < canvas.x0 || rect.y0 < canvas.y0 || rect.x1 > canvas.x1 || rect.y1 > canvas.y1
-        {
-            return Err(Error::Inconsistent(format!(
-                "a tile's component {index} rectangle {rect:?} falls outside the canvas {canvas:?}",
-            )));
-        }
         if !matches!(
             (transform, &samples),
             (Transform::Reversible53, Samples::Reversible(_))
@@ -259,25 +285,36 @@ impl Canvas {
                 "a tile reconstructed component {index} on the other wavelet's arithmetic"
             )));
         }
+        if !self.kept.get(index).copied().unwrap_or(false) {
+            return Ok(());
+        }
         // A tile that covers the whole plane writes every sample of it, so its
         // raster is the plane.
         if rect == *canvas {
             *plane = Some(samples);
             return Ok(());
         }
+        // The tiles partition the image, so without a window each one falls
+        // inside the canvas. A window keeps the part of a tile inside it.
+        let clip = rect.intersect(canvas);
+        if clip.is_empty() {
+            return Ok(());
+        }
         let plane = plane.get_or_insert_with(|| zeroed(*transform, canvas.area() as usize));
-        let (left, top) = (
-            (rect.x0 - canvas.x0) as usize,
-            (rect.y0 - canvas.y0) as usize,
-        );
-        let stride = canvas.width() as usize;
+        let copy = Crop {
+            dst_stride: canvas.width() as usize,
+            src_stride: rect.width() as usize,
+            width: clip.width() as usize,
+            height: clip.height() as usize,
+            src: ((clip.x0 - rect.x0) as usize, (clip.y0 - rect.y0) as usize),
+            dst: (
+                (clip.x0 - canvas.x0) as usize,
+                (clip.y0 - canvas.y0) as usize,
+            ),
+        };
         match (plane, samples) {
-            (Samples::Reversible(dst), Samples::Reversible(src)) => {
-                blit(dst, stride, &src, rect.width() as usize, left, top);
-            }
-            (Samples::Irreversible(dst), Samples::Irreversible(src)) => {
-                blit(dst, stride, &src, rect.width() as usize, left, top);
-            }
+            (Samples::Reversible(dst), Samples::Reversible(src)) => copy.run(dst, &src),
+            (Samples::Irreversible(dst), Samples::Irreversible(src)) => copy.run(dst, &src),
             _ => {
                 return Err(Error::Inconsistent(format!(
                     "a tile reconstructed component {index} on the other wavelet's arithmetic"
@@ -287,17 +324,40 @@ impl Canvas {
         Ok(())
     }
 
-    /// The finished planes, in SIZ component order, ready for [`assemble`]. A
-    /// plane no tile reached is all zeros.
-    pub(crate) fn into_planes(self) -> Vec<Samples> {
-        self.planes
-            .into_iter()
-            .zip(self.rects)
-            .zip(self.transforms)
-            .map(|((plane, rect), transform)| {
-                plane.unwrap_or_else(|| zeroed(transform, rect.area() as usize))
-            })
-            .collect()
+    /// The finished planes of the components the decode returns, in output
+    /// order, ready for [`assemble`]. A plane no tile reached is all zeros.
+    pub(crate) fn into_planes(mut self) -> Vec<Samples> {
+        let mut out = Vec::with_capacity(self.order.len());
+        for &index in &self.order {
+            // `over` checked every index of `order`.
+            let plane = self.planes[index].take().unwrap_or_else(|| {
+                zeroed(self.transforms[index], self.rects[index].area() as usize)
+            });
+            out.push(plane);
+        }
+        out
+    }
+}
+
+/// A `width` by `height` rectangle copied from one raster to another, from
+/// `src` to `dst` (each the `(x, y)` of its top-left in its raster). The
+/// caller has already clipped it to both.
+struct Crop {
+    dst_stride: usize,
+    src_stride: usize,
+    width: usize,
+    height: usize,
+    src: (usize, usize),
+    dst: (usize, usize),
+}
+
+impl Crop {
+    fn run<T: Copy>(&self, dst: &mut [T], src: &[T]) {
+        for row in 0..self.height {
+            let from = (self.src.1 + row) * self.src_stride + self.src.0;
+            let to = (self.dst.1 + row) * self.dst_stride + self.dst.0;
+            dst[to..to + self.width].copy_from_slice(&src[from..from + self.width]);
+        }
     }
 }
 
@@ -351,13 +411,26 @@ pub(crate) fn blit<T: Copy>(
 /// order — [`Canvas::into_planes`] output. Each is level-shifted and clamped
 /// on its own component's depth and sign, then packed with that component's
 /// geometry.
+#[cfg(test)]
 pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8) -> Result<Image> {
-    let siz = &header.siz;
-    if samples.len() != siz.components.len() {
+    let order: Vec<usize> = (0..header.siz.components.len()).collect();
+    assemble_over(&header.siz, samples, &order, reduction)
+}
+
+/// [`assemble`] over `area`, the SIZ of what the decode returns (the
+/// codestream's own, or one [`Siz::windowed`] to a window), for the
+/// components `order` lists: `samples[i]` is component `order[i]`'s plane.
+pub(crate) fn assemble_over(
+    area: &Siz,
+    samples: Vec<Samples>,
+    order: &[usize],
+    reduction: u8,
+) -> Result<Image> {
+    if samples.len() != order.len() {
         return Err(Error::Inconsistent(format!(
-            "decoded {} components but `SIZ` declares {}",
+            "decoded {} components but the decode returns {}",
             samples.len(),
-            siz.components.len(),
+            order.len(),
         )));
     }
     if samples.is_empty() {
@@ -366,35 +439,48 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8
 
     let components = samples
         .into_iter()
-        .enumerate()
-        .map(|(index, component_samples)| {
-            assemble_component(siz, index, component_samples, reduction)
+        .zip(order)
+        .map(|(component_samples, &index)| {
+            assemble_component(area, index, component_samples, reduction)
         })
         .collect::<Result<Vec<_>>>()?;
 
     // At a reduction the image area shrinks with its components, by the same
     // halve-and-round-up per dropped level.
-    let (image_width, image_height) = siz.image_extent_at(reduction);
+    let (image_width, image_height) = area.image_extent_at(reduction);
     Ok(Image::new(image_width, image_height, components))
 }
 
 /// Set tile `tile`'s samples to 0 in every component of `image`, a decode at
-/// `reduction`: what a tile no tile-part of reached gives, after the DC level
-/// shift, as `opj_decompress -allow-partial` writes it.
-pub(crate) fn zero_tile(image: &mut Image, siz: &Siz, tile: u32, reduction: u8) {
-    for (comp, component) in image.components.iter_mut().enumerate() {
+/// `reduction` over `area` (see [`assemble_over`]) of the components `order`
+/// lists: what a tile no tile-part of reached gives, after the DC level
+/// shift, as `opj_decompress -allow-partial` writes it. `siz` is the
+/// codestream's, which places the tile.
+pub(crate) fn zero_tile(
+    image: &mut Image,
+    siz: &Siz,
+    area: &Siz,
+    order: &[usize],
+    tile: u32,
+    reduction: u8,
+) {
+    for (component, &comp) in image.components.iter_mut().zip(order) {
         let (Some(rect), Some(canvas)) = (
             siz.tile_component_rect(tile, comp),
-            siz.component_rect(comp),
+            area.component_rect(comp),
         ) else {
             continue;
         };
-        let (rect, canvas) = (rect.reduced(reduction), canvas.reduced(reduction));
+        let canvas = canvas.reduced(reduction);
+        let clip = rect.reduced(reduction).intersect(&canvas);
+        if clip.is_empty() {
+            continue;
+        }
         let width = component.width as usize;
-        let x0 = rect.x0.saturating_sub(canvas.x0) as usize;
-        let x1 = (rect.x1.saturating_sub(canvas.x0) as usize).min(width);
-        for y in rect.y0..rect.y1 {
-            let row = y.saturating_sub(canvas.y0) as usize;
+        let x0 = (clip.x0 - canvas.x0) as usize;
+        let x1 = (clip.x1 - canvas.x0) as usize;
+        for y in clip.y0..clip.y1 {
+            let row = (y - canvas.y0) as usize;
             if let Some(line) = component
                 .samples
                 .get_mut(row * width + x0..row * width + x1)

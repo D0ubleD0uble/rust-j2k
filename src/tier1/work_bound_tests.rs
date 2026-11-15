@@ -46,7 +46,7 @@ fn spend(bytes: &[u8]) -> Option<(u64, u64, u64)> {
         let header = cs.tile_header(index).ok()?;
         let mut visits = u64::MAX;
         let coded = crate::tier2::decode_packets(&header, tile, &mut visits, u64::MAX, 0).ok()?;
-        spent += work(&header, &coded, 0);
+        spent += work(&header, &coded, 0, &vec![true; coded.components.len()]);
         for component in &coded.components {
             for resolution in &component.resolutions {
                 for subband in &resolution.subbands {
@@ -194,11 +194,11 @@ fn the_work_counts_the_code_blocks_decoded() {
             ],
         }],
     };
-    assert_eq!(work(&header, &coded, 0), 64 + 256 * (2 + 3 + 4));
-    assert_eq!(work(&header, &coded, 1), 64);
+    assert_eq!(work(&header, &coded, 0, &[true; 4]), 64 + 256 * (2 + 3 + 4));
+    assert_eq!(work(&header, &coded, 1, &[true; 4]), 64);
     // A reduction past the pyramid keeps the coarsest resolution, as the
     // decode does (it refuses that reduction before this point).
-    assert_eq!(work(&header, &coded, 5), 64);
+    assert_eq!(work(&header, &coded, 5, &[true; 4]), 64);
 }
 
 /// A component's maxshift raises its blocks' top plane, so the work counts
@@ -221,9 +221,9 @@ fn the_work_counts_the_passes_a_maxshift_adds() {
     let planes = numbps(&header, 0, 0).unwrap();
     let mut shifted = header.clone();
     shifted.components[0].roi_shift = 5;
-    assert_eq!(work(&header, &coded, 0), 64 * u64::from(3 * planes - 2));
+    assert_eq!(work(&header, &coded, 0, &[true; 4]), 64 * u64::from(3 * planes - 2));
     assert_eq!(
-        work(&shifted, &coded, 0),
+        work(&shifted, &coded, 0, &[true]),
         64 * u64::from(3 * (planes + 5) - 2)
     );
 }

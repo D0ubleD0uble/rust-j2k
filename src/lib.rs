@@ -188,6 +188,7 @@ pub(crate) mod report;
 pub(crate) mod samples;
 pub(crate) mod tier1;
 pub(crate) mod tier2;
+pub(crate) mod window;
 
 // Structured fuzz entry points for the detached fuzz/ workspace. Compiled
 // unconditionally so that workspace builds under plain cargo (rust-analyzer,
@@ -206,6 +207,7 @@ pub use jp2::{
     UuidInfo, VendorFeature, XmlBox,
 };
 pub use report::{DecodeReport, ReportEntry};
+pub use window::Window;
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
@@ -387,9 +389,16 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         let prefix = read_jp2_prefix(bytes, options)?;
-        let siz = &prefix.parsed.header.siz;
-        let (width, height) = siz.image_extent_at(reduction);
-        let mut components = prefix.plans.outputs(siz, reduction)?;
+        let area = &prefix.selection.area;
+        let (width, height) = area.image_extent_at(reduction);
+        let mut components = if prefix.selection.subset {
+            pick(
+                ComponentInfo::of_siz(area, reduction),
+                &prefix.selection.order,
+            )
+        } else {
+            prefix.plans.outputs(area, reduction)?
+        };
         if let Some(srgb) = &prefix.srgb {
             srgb.describe_outputs(&mut components);
         }
@@ -407,15 +416,28 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
     samples::check_codestream(siz, reduction, samples::cap(&options.sample_limit))?;
     check_raw_color(options, siz.components.len())?;
     check_reduction(&parsed.header, reduction, None)?;
-    let (width, height) = siz.image_extent_at(reduction);
+    let selection = window::select(siz, options)?;
+    let (width, height) = selection.area.image_extent_at(reduction);
     Ok(Header {
         width,
         height,
-        components: ComponentInfo::of_siz(siz, reduction),
+        components: pick(
+            ComponentInfo::of_siz(&selection.area, reduction),
+            &selection.order,
+        ),
         max_reduction: max_reduction(&parsed.header),
         quality_layers: parsed.header.cod.layers,
         jp2: None,
     })
+}
+
+/// The entries of `all` that `order` names, in its order. Each index is in
+/// range and named once ([`window::select`] checked).
+fn pick<T: Clone>(all: Vec<T>, order: &[usize]) -> Vec<T> {
+    if order.len() == all.len() && order.iter().enumerate().all(|(i, &c)| i == c) {
+        return all;
+    }
+    order.iter().filter_map(|&c| all.get(c).cloned()).collect()
 }
 
 /// The largest reduction [`check_reduction`] lets the main header take: the
@@ -651,6 +673,99 @@ pub struct DecodeOptions {
     #[doc(alias = "layers")]
     #[doc(alias = "cp_layer")]
     pub max_quality_layers: Option<u16>,
+    /// Decode only this rectangle of the reference grid: `Some(window)`
+    /// returns the part of the image inside it, `None` (the default) the
+    /// whole image. It is OpenJPEG's `opj_set_decode_area`
+    /// (`opj_decompress -d x0,y0,x1,y1`).
+    ///
+    /// The window is in reference-grid coordinates, as SIZ declares them,
+    /// whatever the [`resolution_reduction`](Self::resolution_reduction).
+    /// The part of it outside the image area is left out, as OpenJPEG clips
+    /// it. The returned [`Image`] covers what is left, `x0..x1` by `y0..y1`:
+    /// its [`width`](Image::width) is `x1 - x0` at full resolution and
+    /// `ceil(x1 / 2^r) - ceil(x0 / 2^r)` at a reduction of `r`, and each
+    /// component's is the same of `ceil(x0 / dx)` and `ceil(x1 / dx)` for its
+    /// sub-sampling `dx` ([`ComponentInfo::width`] gives the formula for the
+    /// whole image). The samples are those of a whole decode at the same
+    /// position.
+    ///
+    /// Only the tiles the window reaches are decoded, so a small window of a
+    /// large tiled image costs a few tiles. The packets of the other tiles
+    /// are not read, so damage in them is not found, as in OpenJPEG.
+    ///
+    /// An empty window, one with no part inside the image area, and one that
+    /// holds no sample of a returned component at the reduction are
+    /// [`Error::InvalidOptions`]. It cannot be set with [`tile`](Self::tile).
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Window, decode, decode_with};
+    ///
+    /// // 32x24 at the grid's origin.
+    /// let bytes = include_bytes!(concat!(
+    ///     env!("CARGO_MANIFEST_DIR"),
+    ///     "/tests/fixtures/multilayer_lossless.j2k"
+    /// ));
+    /// let whole = decode(bytes).expect("decodes");
+    /// let options = DecodeOptions::default().with_window(Some(Window::new(8, 4, 20, 30)));
+    /// let part = decode_with(bytes, &options).expect("decodes");
+    /// // The window is cut to the image: rows 4 to 23.
+    /// assert_eq!((part.width, part.height), (12, 20));
+    /// assert_eq!(part.components[0].sample(0, 0), whole.components[0].sample(8, 4));
+    /// ```
+    #[doc(alias = "decode_area")]
+    #[doc(alias = "region")]
+    pub window: Option<Window>,
+    /// Decode only this tile: `Some(index)` returns tile `index`'s area of
+    /// the image, `None` (the default) the whole image. Tiles are numbered
+    /// in raster order from 0, as the codestream's `Isot` numbers them. It is
+    /// OpenJPEG's `opj_get_decoded_tile` (`opj_decompress -t index`).
+    ///
+    /// The result is the decode with [`window`](Self::window) set to the
+    /// tile's rectangle on the reference grid: its size, its samples and its
+    /// failures. A tile index past the tile grid is [`Error::InvalidOptions`],
+    /// and so is setting both this and [`window`](Self::window).
+    pub tile: Option<u32>,
+    /// Decode only these components, in this order: `Some(list)` returns one
+    /// [`Component`] per entry of `list`, each the component of that SIZ
+    /// index, and `None` (the default) every component. It is OpenJPEG's
+    /// `opj_set_decoded_components` (`opj_decompress -c`), which takes them
+    /// in the given order too.
+    ///
+    /// Each returned component has the samples of a whole decode. The other
+    /// components' packets are still read, as they frame the packets after
+    /// them, but their code-blocks are not decoded. Under the codestream's
+    /// color transform (RCT or ICT), components 0, 1 and 2 are decoded
+    /// together whenever one of them is asked for, since each of them needs
+    /// all three. OpenJPEG skips the color transform instead when the
+    /// components are chosen, so its `-c` returns other samples for those
+    /// three.
+    ///
+    /// On a JP2 file the list names codestream components, which come out
+    /// as coded: the palette and channel definitions are not applied, as
+    /// with [`raw_channels`](Self::raw_channels), and as OpenJPEG has it.
+    /// [`Jp2Metadata::channels`] describes the components returned.
+    ///
+    /// An empty list, an index named twice, an index past SIZ's component
+    /// count, and a list with [`ColorOutput::Srgb`] are
+    /// [`Error::InvalidOptions`].
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, decode, decode_with};
+    ///
+    /// // Three components under the irreversible color transform.
+    /// let bytes = include_bytes!(concat!(
+    ///     env!("CARGO_MANIFEST_DIR"),
+    ///     "/tests/fixtures/layers/cprl_irreversible.j2k"
+    /// ));
+    /// let whole = decode(bytes).expect("decodes");
+    /// let options = DecodeOptions::default().with_components(Some(vec![2, 0]));
+    /// let some = decode_with(bytes, &options).expect("decodes");
+    /// assert_eq!(some.components.len(), 2);
+    /// assert_eq!(some.components[0], whole.components[2]);
+    /// assert_eq!(some.components[1], whole.components[0]);
+    /// ```
+    #[doc(alias = "opj_set_decoded_components")]
+    pub components: Option<Vec<u16>>,
     /// Return a JP2 file's codestream components as coded, without applying
     /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
     /// the file decodes exactly as its codestream does on its own, in SIZ
@@ -783,12 +898,15 @@ pub struct DecodeOptions {
 }
 
 impl Default for DecodeOptions {
-    /// Full resolution, every quality layer, components as the file's boxes
-    /// shape them, color as coded, the default limits, and strict.
+    /// Full resolution, every quality layer, the whole image, components as
+    /// the file's boxes shape them, color as coded, the default limits, and strict.
     fn default() -> Self {
         DecodeOptions {
             resolution_reduction: 0,
             max_quality_layers: None,
+            window: None,
+            tile: None,
+            components: None,
             raw_channels: false,
             color: ColorOutput::default(),
             packet_work_limit: WorkLimit::default(),
@@ -926,6 +1044,49 @@ impl DecodeOptions {
     #[must_use]
     pub fn with_max_quality_layers(mut self, layers: Option<u16>) -> Self {
         self.max_quality_layers = layers;
+        self
+    }
+
+    /// These options with [`window`](Self::window) set to `window`.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Window};
+    ///
+    /// let options = DecodeOptions::default().with_window(Some(Window::new(0, 0, 64, 64)));
+    /// assert_eq!(options.window, Some(Window::new(0, 0, 64, 64)));
+    /// ```
+    #[must_use]
+    pub fn with_window(mut self, window: Option<Window>) -> Self {
+        self.window = window;
+        self
+    }
+
+    /// These options with [`tile`](Self::tile) set to `tile`.
+    ///
+    /// ```
+    /// use rust_j2k::DecodeOptions;
+    ///
+    /// let options = DecodeOptions::default().with_tile(Some(3));
+    /// assert_eq!(options.tile, Some(3));
+    /// ```
+    #[must_use]
+    pub fn with_tile(mut self, tile: Option<u32>) -> Self {
+        self.tile = tile;
+        self
+    }
+
+    /// These options with [`components`](Self::components) set to
+    /// `components`.
+    ///
+    /// ```
+    /// use rust_j2k::DecodeOptions;
+    ///
+    /// let options = DecodeOptions::default().with_components(Some(vec![0]));
+    /// assert_eq!(options.components, Some(vec![0]));
+    /// ```
+    #[must_use]
+    pub fn with_components(mut self, components: Option<Vec<u16>>) -> Self {
+        self.components = components;
         self
     }
 
@@ -1075,8 +1236,9 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     )?;
     check_raw_color(options, parsed.header.siz.components.len())?;
     check_reduction(&parsed.header, options.resolution_reduction, None)?;
+    let selection = window::select(&parsed.header.siz, options)?;
     let cs = codestream::parse_tiles_with(bytes, parsed, options.strict)?;
-    decode_codestream(cs, options)
+    decode_codestream(cs, options, &selection)
 }
 
 /// Options that contradict each other, whatever the input.
@@ -1107,7 +1269,7 @@ fn check_options(options: &DecodeOptions) -> Result<()> {
                 .into(),
         ));
     }
-    Ok(())
+    window::check_options(options)
 }
 
 /// A reduction must leave every component a resolution to decode, checked
@@ -1159,6 +1321,8 @@ struct Jp2Prefix<'a> {
     metadata: Jp2Metadata,
     /// The sRGB step, when the caller asked for it.
     srgb: Option<jp2::SrgbPlan>,
+    /// The area and components the decode returns.
+    selection: window::Selection,
 }
 
 /// Read a JP2 file up to its tile data, in OpenJPEG's order: the box walk,
@@ -1173,19 +1337,32 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let cap = samples::cap(&options.sample_limit);
     samples::check_codestream(siz, options.resolution_reduction, cap)?;
     jp2::check_against_siz(&file.header, siz)?;
+    // A component subset names codestream components, which come out as
+    // coded: OpenJPEG bypasses the JP2 channel transforms under `-c`.
+    let raw_channels = options.raw_channels || options.components.is_some();
     let plans = jp2::ChannelPlans::plan(
         &file.header,
         siz,
         options.resolution_reduction,
         cap,
-        options.raw_channels,
+        raw_channels,
     )?;
-    jp2::check_after_codestream(&file, options.raw_channels)?;
+    jp2::check_after_codestream(&file, raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
+    let selection = window::select(siz, options)?;
+    if selection.subset {
+        metadata.channels = pick(metadata.channels, &selection.order);
+    }
     let srgb = match options.color {
         ColorOutput::AsCoded => None,
         ColorOutput::Srgb => {
-            let plan = jp2::plan_srgb(&metadata, &plans, siz, options.resolution_reduction, cap)?;
+            let plan = jp2::plan_srgb(
+                &metadata,
+                &plans,
+                &selection.area,
+                options.resolution_reduction,
+                cap,
+            )?;
             // A converted image is sRGB (or gray) and carries no profile, as
             // OpenJPEG reports it.
             plan.describe(&mut metadata);
@@ -1199,6 +1376,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
         plans,
         metadata,
         srgb,
+        selection,
     })
 }
 
@@ -1207,8 +1385,14 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
 fn decode_jp2(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
     let cs = codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict)?;
-    let image = decode_codestream(cs, options)?;
-    let mut components = prefix.plans.apply(image.components)?;
+    let image = decode_codestream(cs, options, &prefix.selection)?;
+    // A subset is planned raw, so the plans would pass it through, but they
+    // are planned for every component.
+    let mut components = if prefix.selection.subset {
+        image.components
+    } else {
+        prefix.plans.apply(image.components)?
+    };
     if let Some(srgb) = &prefix.srgb {
         components = srgb.apply(components)?;
     }
@@ -1219,16 +1403,24 @@ fn decode_jp2(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     })
 }
 
-/// Decode a parsed codestream into its components.
-fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) -> Result<Image> {
+/// Decode a parsed codestream into the area and components `selection`
+/// names.
+fn decode_codestream(
+    cs: codestream::Codestream<'_>,
+    options: &DecodeOptions,
+    selection: &window::Selection,
+) -> Result<Image> {
     let reduction = options.resolution_reduction;
     let layers = options.max_quality_layers;
 
     // Each tile is a whole decode of its own: its own header, its own packets,
     // its own wavelet pyramid in its own coordinate frame. Nothing crosses a
     // tile boundary — that is what tiling is for — so the tiles meet only at the
-    // end, when each writes its rectangle of the canvas.
-    let mut canvas = image::Canvas::new(&cs.header, reduction)?;
+    // end, when each writes its rectangle of the canvas. A window keeps the
+    // part of each tile inside it, and the tiles with no part inside it are
+    // not decoded.
+    let mut canvas = image::Canvas::over(&cs.header, &selection.area, reduction, &selection.order)?;
+    let reads = selection.tiles(&cs.header.siz);
     // One work bound for every tile's packet walk, and one for every tile's
     // code-blocks, in proportion to the tiles' data, so that many small
     // tiles cannot each spend a floor's worth. A POC sequence's bitmap stays
@@ -1243,7 +1435,7 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
     let first_work = block_work.unwrap_or(0);
     // Not strict: what the codestream walk found missing, then each tile's
     // packets, and the smallest reduction every tile is complete at so far.
-    let mut entries = cs.entries.clone();
+    let mut entries = window::keep_entries(cs.entries.clone(), &reads);
     let mut complete = Some(0u8);
     // A missing tile reads no packet, but setting its samples to 0 visits
     // each of its tile-components, and a header of a few kilobytes can
@@ -1269,6 +1461,9 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         // `tiles` holds every tile when strict, so `index` is also its
         // position; not strict, a missing tile is left out.
         let index = tile.index as usize;
+        if !reads.get(index).copied().unwrap_or(false) {
+            continue;
+        }
         // The tile's own parameters: the main header with this tile's tile-part
         // header resolved over it. A tile with no markers of its own borrows the
         // main header; any other is a copy, sized by the component count, held
@@ -1319,12 +1514,32 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
             }
             Err(tier2::Refused::Other(error)) => return Err(error),
         };
+        // The components to reconstruct: those the decode returns, and with
+        // them the rest of the color transform's three, which each need all
+        // of them. It is a per-tile transform: the flag lives in COD, which a
+        // tile-part header can override. On an image of fewer than three
+        // components the flag is ignored, as OpenJPEG ignores it
+        // (`mct::applies`).
+        let mct = mct::applies(
+            header.cod.multiple_component_transform,
+            header.components.len(),
+        );
+        let mut wanted: Vec<bool> = (0..header.components.len())
+            .map(|c| canvas.keeps(c))
+            .collect();
+        if mct && wanted[..3].contains(&true) {
+            wanted[..3].fill(true);
+        }
+
         // Tier-1: the block coder (EBCOT or HT) decodes each code block into
         // subband coeffs. The dropped resolutions' code-blocks are skipped, never
-        // decoded. Their work is counted first, so a tile past the bound is
-        // refused before any of it is done.
+        // decoded, and so are those of the components not reconstructed. Their
+        // work is counted first, so a tile past the bound is refused before any
+        // of it is done.
         if let Some(left) = &mut block_work {
-            let work = tier1::work(&header, &coded, reduction);
+            let work = tier1::work(&header, &coded, reduction, &wanted);
+            #[cfg(test)]
+            tests::BLOCK_WORK.with(|spent| spent.set(spent.get() + work));
             let Some(rest) = left.checked_sub(work) else {
                 return Err(Error::Limit(limit_hint::code_blocks(
                     index,
@@ -1336,36 +1551,51 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
             };
             *left = rest;
         }
-        let coeffs = tier1::decode_code_blocks(&header, &coded, reduction)?;
+        let coeffs = tier1::decode_code_blocks(&header, &coded, reduction, &wanted)?;
 
         // Invert the DWT per resolution level into samples. Tier-1 has already
         // dequantized the 9/7 coefficients as it placed each block.
         let mut samples = coeffs
             .into_iter()
             .enumerate()
-            .map(|(component, coeffs)| dwt::inverse(&header, component, coeffs))
+            .map(|(component, coeffs)| {
+                coeffs
+                    .map(|coeffs| dwt::inverse(&header, component, coeffs))
+                    .transpose()
+            })
             .collect::<Result<Vec<_>>>()?;
 
         // Undo the inter-component decorrelation, if any, before the DC level
-        // shift (ISO/IEC 15444-1 G.1). It is a per-tile transform: the flag
-        // lives in COD, which a tile-part header can override. Components past
-        // the third are untouched. On an image of fewer than three components
-        // the flag is ignored, as OpenJPEG ignores it (`mct::applies`).
-        if mct::applies(
-            header.cod.multiple_component_transform,
-            header.components.len(),
-        ) {
+        // shift (ISO/IEC 15444-1 G.1). Components past the third are
+        // untouched.
+        if mct && wanted[0] {
+            let mut triple = samples[..3]
+                .iter_mut()
+                .map(Option::take)
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| {
+                    Error::Inconsistent(
+                        "the color transform's three components were not all reconstructed"
+                            .into(),
+                    )
+                })?;
             // The wavelet picks the transform (G.1): 5/3 reconstructs integers
             // and inverts with the reversible RCT, 9/7 reconstructs floats and
             // inverts with the irreversible ICT. All three color components
             // share the wavelet (checked at parse), so component 0's decides.
             match header.components[0].coding.transform {
-                codestream::markers::Transform::Reversible53 => mct::inverse_rct(&mut samples)?,
-                codestream::markers::Transform::Irreversible97 => mct::inverse_ict(&mut samples)?,
+                codestream::markers::Transform::Reversible53 => mct::inverse_rct(&mut triple)?,
+                codestream::markers::Transform::Irreversible97 => mct::inverse_ict(&mut triple)?,
+            }
+            for (slot, plane) in samples.iter_mut().zip(triple) {
+                *slot = Some(plane);
             }
         }
 
         for (component, samples) in samples.into_iter().enumerate() {
+            let Some(samples) = samples else {
+                continue;
+            };
             let rect = cs
                 .header
                 .siz
@@ -1380,13 +1610,25 @@ fn decode_codestream(cs: codestream::Codestream<'_>, options: &DecodeOptions) ->
         }
     }
 
-    let mut image = image::assemble(&cs.header, canvas.into_planes(), reduction)?;
+    let mut image = image::assemble_over(
+        &selection.area,
+        canvas.into_planes(),
+        &selection.order,
+        reduction,
+    )?;
     if !options.strict {
         for entry in &entries {
             if let ReportEntry::MissingTiles { tiles } = entry {
                 complete = None;
                 for tile in tiles.clone() {
-                    image::zero_tile(&mut image, &cs.header.siz, tile, reduction);
+                    image::zero_tile(
+                        &mut image,
+                        &cs.header.siz,
+                        &selection.area,
+                        &selection.order,
+                        tile,
+                        reduction,
+                    );
                 }
             }
         }
@@ -1470,6 +1712,12 @@ pub(crate) fn tile_bytes(cs: &codestream::Codestream<'_>) -> u64 {
 mod tests {
     use super::*;
 
+    thread_local! {
+        /// The sample-passes the decodes on this thread have counted against
+        /// the code-block work bound.
+        pub(crate) static BLOCK_WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
     /// The sample-passes Tier-1 runs on `bytes` (one tile) under a layer
     /// cap of `layers`, and the packet visits the walk spends.
     fn capped_work(bytes: &[u8], layers: Option<u16>) -> (u64, u64) {
@@ -1480,7 +1728,8 @@ mod tests {
         let coded =
             tier2::decode_packets_metered(&header, &cs.tiles[0], &meter, u64::MAX, 0, layers)
                 .unwrap();
-        (tier1::work(&header, &coded, 0), meter.spent())
+        let wanted = vec![true; coded.components.len()];
+        (tier1::work(&header, &coded, 0, &wanted), meter.spent())
     }
 
     /// Each layer the cap drops is Tier-1 work not done, and the packet walk
