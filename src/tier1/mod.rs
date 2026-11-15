@@ -483,6 +483,7 @@ mod tests {
                 }],
                 cut: false,
                 placeholders: 0,
+                missing_from: None,
             }],
         }
     }

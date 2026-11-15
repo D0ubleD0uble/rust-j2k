@@ -133,6 +133,7 @@ fn block(width: usize, height: usize, passes: u32) -> CodeBlock<'static> {
         segments: Vec::new(),
         cut: false,
         placeholders: 0,
+        missing_from: None,
     }
 }
 
