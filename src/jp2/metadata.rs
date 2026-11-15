@@ -546,9 +546,10 @@ pub enum ChannelType {
     Opacity,
     /// A premultiplied opacity channel (`Typ` 2).
     PremultipliedOpacity,
-    /// An application-defined channel (`Typ` 3, ISO/IEC 15444-15 D.6.3), as
-    /// a JPH file may have. Its [`Association`] is
-    /// [`Association::ApplicationDefined`].
+    /// An application-defined channel (`Typ` 3, ISO/IEC 15444-15 D.6.3) in a
+    /// JPH file. Its [`Association`] is [`Association::ApplicationDefined`].
+    /// In a file that is not JPH, `Typ` 3 is reserved and reported as
+    /// [`ChannelType::Other`].
     ApplicationDefined,
     /// The type is not specified (`Typ` 65535).
     Unspecified,

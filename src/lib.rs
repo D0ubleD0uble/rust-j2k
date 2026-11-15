@@ -1395,6 +1395,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
         options.resolution_reduction,
         cap,
         raw_channels,
+        jp2::is_jph(&file.file_type),
     )?;
     jp2::check_after_codestream(&file, raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;

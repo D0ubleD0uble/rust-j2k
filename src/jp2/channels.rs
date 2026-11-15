@@ -14,10 +14,12 @@
 //! - Checked against the channel count after the palette: a `Cn` past the
 //!   last channel, an `Asoc` other than 0 and 65535 whose `Asoc - 1` is past
 //!   the last channel, or a channel no entry names is an error. An entry may
-//!   repeat a channel, as long as every channel is named. The `Asoc` of an
+//!   repeat a channel, as long as every channel is named. In a JPH file
+//!   (`jph ` as the brand or in the compatibility list), the `Asoc` of an
 //!   application-defined channel (`Typ` 3, ISO/IEC 15444-15 D.6.3) means
 //!   what the application says and is not checked; OpenJPEG checks it, and
-//!   refuses a file where it is past the last channel.
+//!   refuses a file where it is past the last channel. In any other file
+//!   `Typ` 3 is reserved (I.5.3.6) and checked as OpenJPEG checks it.
 //! - The entries are applied in order. An entry of type color (`Typ 0`)
 //!   whose channel is not yet at position `Asoc - 1` swaps it there, and the
 //!   later entries follow their channels through the swap. Nothing else
@@ -54,6 +56,8 @@ struct Entry {
     kind: u16,
     /// `Asoc`.
     association: u16,
+    /// Whether the entry is in a JPH file, where `Typ` 3 is defined.
+    jph: bool,
 }
 
 impl Entry {
@@ -67,19 +71,20 @@ impl Entry {
         }
     }
 
-    /// Whether the entry is an application-defined channel (`Typ` 3), whose
-    /// `Asoc` the application gives meaning to.
+    /// Whether the entry is an application-defined channel: `Typ` 3 in a
+    /// JPH file, whose `Asoc` the application gives meaning to. Elsewhere
+    /// `Typ` 3 is a reserved value.
     fn application_defined(self) -> bool {
-        self.kind == APPLICATION_DEFINED
+        self.jph && self.kind == APPLICATION_DEFINED
     }
 
     fn definition(self) -> ChannelDefinition {
         ChannelDefinition {
             kind: match self.kind {
+                _ if self.application_defined() => ChannelType::ApplicationDefined,
                 0 => ChannelType::Color,
                 1 => ChannelType::Opacity,
                 2 => ChannelType::PremultipliedOpacity,
-                APPLICATION_DEFINED => ChannelType::ApplicationDefined,
                 65535 => ChannelType::Unspecified,
                 other => ChannelType::Other(other),
             },
@@ -93,9 +98,9 @@ impl Entry {
     }
 }
 
-/// Parse a `cdef` payload into its entries. The length is checked before
-/// anything is allocated.
-fn parse(payload: &[u8]) -> Result<Vec<Entry>> {
+/// Parse a `cdef` payload into its entries, for a JPH file when `jph`. The
+/// length is checked before anything is allocated.
+fn parse(payload: &[u8], jph: bool) -> Result<Vec<Entry>> {
     let &[n0, n1, ref body @ ..] = payload else {
         return Err(Error::FileFormat(format!(
             "the `cdef` box holds {} bytes, fewer than its 2-byte count",
@@ -123,15 +128,20 @@ fn parse(payload: &[u8]) -> Result<Vec<Entry>> {
             channel: u16::from_be_bytes([e[0], e[1]]),
             kind: u16::from_be_bytes([e[2], e[3]]),
             association: u16::from_be_bytes([e[4], e[5]]),
+            jph,
         })
         .collect())
 }
 
 /// The file's `cdef` entries as written, or `None` without a `cdef` box (or
-/// with one that does not parse, which planning has already refused).
-pub(super) fn definitions(header: &Jp2Header<'_>) -> Option<Vec<ChannelDefinitionEntry>> {
+/// with one that does not parse, which planning has already refused). `jph`
+/// says whether the file is a JPH file.
+pub(super) fn definitions(
+    header: &Jp2Header<'_>,
+    jph: bool,
+) -> Option<Vec<ChannelDefinitionEntry>> {
     let payload = header.cdef().first().copied()?;
-    let entries = parse(payload).ok()?;
+    let entries = parse(payload, jph).ok()?;
     Some(
         entries
             .into_iter()
@@ -145,7 +155,7 @@ pub(super) fn definitions(header: &Jp2Header<'_>) -> Option<Vec<ChannelDefinitio
 
 /// Check a `cdef` payload's layout only, as OpenJPEG reads the box.
 pub(super) fn check_layout(payload: &[u8]) -> Result<()> {
-    parse(payload).map(|_| ())
+    parse(payload, false).map(|_| ())
 }
 
 /// What the `cdef` box does to the file's channels. Computed before any tile
@@ -169,11 +179,13 @@ pub(crate) enum ChannelPlan {
 /// palette applies. The box layout is always checked; the entries are checked
 /// against `channels` only when they are applied, so a caller asking for the
 /// raw channels gets them whatever the entries say, as OpenJPEG does with its
-/// "ignore palette and channel definitions" flag.
+/// "ignore palette and channel definitions" flag. `jph` says whether the file
+/// is a JPH file, where `Typ` 3 is application-defined.
 pub(crate) fn plan(
     header: &Jp2Header<'_>,
     channels: usize,
     raw_channels: bool,
+    jph: bool,
 ) -> Result<ChannelPlan> {
     let boxes = header.cdef();
     if boxes.len() > 1 {
@@ -184,7 +196,7 @@ pub(crate) fn plan(
     let Some(payload) = boxes.first() else {
         return Ok(ChannelPlan::None);
     };
-    let entries = parse(payload)?;
+    let entries = parse(payload, jph)?;
     if raw_channels {
         return Ok(ChannelPlan::None);
     }
@@ -302,6 +314,7 @@ mod tests {
     use super::*;
     use crate::Component;
 
+    /// Entries of a JPH file.
     fn entries(triples: &[(u16, u16, u16)]) -> Vec<Entry> {
         triples
             .iter()
@@ -309,6 +322,7 @@ mod tests {
                 channel,
                 kind,
                 association,
+                jph: true,
             })
             .collect()
     }
@@ -402,6 +416,7 @@ mod tests {
                 channel: 0,
                 kind,
                 association,
+                jph: true,
             }
             .definition()
         };
@@ -424,6 +439,16 @@ mod tests {
             );
         }
         assert_eq!(label(4, 7).association, Association::Color(7));
+        // Outside a JPH file `Typ` 3 is reserved, and its `Asoc` is a color.
+        let reserved = Entry {
+            channel: 0,
+            kind: 3,
+            association: 7,
+            jph: false,
+        }
+        .definition();
+        assert_eq!(reserved.kind, ChannelType::Other(3));
+        assert_eq!(reserved.association, Association::Color(7));
     }
 
     #[test]
@@ -445,6 +470,6 @@ mod tests {
     #[test]
     fn parse_reads_entries_and_ignores_trailing_bytes() {
         let payload = [0, 1, 0, 2, 0, 1, 0, 0, 0xFF, 0xFF];
-        assert_eq!(parse(&payload).unwrap(), entries(&[(2, 1, 0)]));
+        assert_eq!(parse(&payload, true).unwrap(), entries(&[(2, 1, 0)]));
     }
 }

@@ -52,6 +52,12 @@ pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<FileType> {
     })
 }
 
+/// Whether a file is a JPH file: `jph ` is its brand or in its
+/// compatibility list (ISO/IEC 15444-15 D.3).
+pub(crate) fn is_jph(file_type: &FileType) -> bool {
+    file_type.brand == JPH_BRAND || file_type.compatibility.contains(&JPH_BRAND)
+}
+
 /// The most components `ihdr` may declare: `NC` is 1..=16384 (I.5.3.1), the
 /// same range as the codestream's `Csiz`.
 const MAX_COMPONENTS: u16 = 16384;

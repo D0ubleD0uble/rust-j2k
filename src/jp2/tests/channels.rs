@@ -50,9 +50,14 @@ pub(super) fn assert_reversed(image: &Image) {
 /// A file over the three-component fixture with these `jp2h` children after
 /// `ihdr` and `colr`.
 fn with_children(children: &[Vec<u8>]) -> Vec<u8> {
+    with_children_in(jp2_ftyp(), children)
+}
+
+/// [`with_children`] behind the `ftyp` box `ftyp`.
+fn with_children_in(ftyp: Vec<u8>, children: &[Vec<u8>]) -> Vec<u8> {
     let mut all = vec![good_ihdr(), colr()];
     all.extend_from_slice(children);
-    file(&[jp2_ftyp(), jp2h(&all), jp2c()])
+    file(&[ftyp, jp2h(&all), jp2c()])
 }
 
 /// The channels of `bytes` as indices into the bare codestream's components.
@@ -190,10 +195,22 @@ fn every_channel_is_labeled_with_its_entry() {
                 definition(T::Opacity, A::WholeImage),
             ],
         ),
-        // ISO/IEC 15444-15 D.6.3: `Typ` 3 is application-defined, and its
-        // `Asoc` is kept as stored, past the last channel or not. OpenJPEG
-        // refuses the first ("Invalid component index"); this is `file10`'s
-        // layout.
+    ];
+    for (what, cdef, want) in cases {
+        let image = decode(&with_children(std::slice::from_ref(cdef))).expect(what);
+        assert_eq!(image.jp2.expect("metadata").channels, want, "{what}");
+    }
+}
+
+/// ISO/IEC 15444-15 D.6.3: in a JPH file `Typ` 3 is application-defined, and
+/// its `Asoc` is kept as stored, past the last channel or not. OpenJPEG
+/// refuses the first case ("Invalid component index"); it is `file10`'s
+/// layout. `jph ` as the brand or only in the compatibility list both count.
+#[test]
+fn a_jph_file_labels_application_defined_channels() {
+    use Association as A;
+    use ChannelType as T;
+    let cases: &[(&str, Vec<u8>, [ChannelDefinition; 3])] = &[
         (
             "application-defined channels",
             cdef_of(&[(0, 3, 18284), (1, 3, 0), (2, 3, 65535)]),
@@ -213,9 +230,63 @@ fn every_channel_is_labeled_with_its_entry() {
             ],
         ),
     ];
+    let brands = [
+        ftyp(b"jph ", &[b"jph "]),
+        ftyp(b"jph ", &[]),
+        ftyp(b"jpx ", &[b"jp2 ", b"jph "]),
+    ];
     for (what, cdef, want) in cases {
-        let image = decode(&with_children(std::slice::from_ref(cdef))).expect(what);
-        assert_eq!(image.jp2.expect("metadata").channels, want, "{what}");
+        for brand in &brands {
+            let bytes = with_children_in(brand.clone(), std::slice::from_ref(cdef));
+            let meta = decode(&bytes).expect(what).jp2.expect("metadata");
+            // The entries as written carry the same labels, channel by channel.
+            let written: Vec<_> = meta
+                .channel_definitions
+                .expect("a cdef box")
+                .iter()
+                .map(|entry| (entry.channel, entry.definition))
+                .collect();
+            let entries: Vec<_> = (0..).zip(want.iter().copied()).collect();
+            assert_eq!(written, entries, "{what}");
+            assert_eq!(meta.channels, want, "{what}");
+        }
+    }
+}
+
+/// Outside a JPH file `Typ` 3 is a reserved value (I.5.3.6), read as
+/// OpenJPEG reads it: its `Asoc` names a color, an `Asoc` past the last
+/// channel is refused, and the channel is reported as `Other(3)`.
+#[test]
+fn typ_3_outside_a_jph_file_is_reserved() {
+    use Association as A;
+    use ChannelType as T;
+    for brand in [jp2_ftyp(), ftyp(b"jpx ", &[b"jp2 "])] {
+        let past = with_children_in(
+            brand.clone(),
+            &[cdef_of(&[(0, 3, 18284), (1, 3, 0), (2, 3, 65535)])],
+        );
+        let err = decode(&past).unwrap_err();
+        assert!(matches!(err, Error::FileFormat(_)), "{err:?}");
+        assert!(err.to_string().contains("with color 18284"), "{err}");
+
+        let within = with_children_in(brand, &[cdef_of(&[(0, 3, 2), (1, 3, 1), (2, 0, 3)])]);
+        let meta = decode(&within)
+            .expect("an in-range Typ 3 decodes")
+            .jp2
+            .expect("metadata");
+        let want = [
+            definition(T::Other(3), A::Color(2)),
+            definition(T::Other(3), A::Color(1)),
+            definition(T::Color, A::Color(3)),
+        ];
+        let written: Vec<_> = meta
+            .channel_definitions
+            .expect("a cdef box")
+            .iter()
+            .map(|entry| entry.definition)
+            .collect();
+        assert_eq!(written, want);
+        assert_eq!(meta.channels, want);
     }
 }
 

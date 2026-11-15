@@ -1296,12 +1296,12 @@ in format from the colors, passes through as coded ([row
 
 | | |
 | - | - |
-| This decoder | decodes; the channel is `ChannelType::ApplicationDefined` with its `Asoc` as stored, and moves nothing |
+| This decoder | in a JPH file, decodes; the channel is `ChannelType::ApplicationDefined` with its `Asoc` as stored, and moves nothing. In any other file, refuses as OpenJPEG does |
 | OpenJPEG 2.5.0 | refuses when the `Asoc` is past the last channel ("Invalid component index") |
 | Standard | ISO/IEC 15444-15 D.6.3: `Typ` 3 is an application-defined channel, and its `Asoc` means what the application says |
 | Rule | 1 |
-| Tests and fixtures | `file10_reports_application_defined_channels_and_no_color_space` (`tests/conformance_ht.rs`, on `file10_b11.jph` and `file10_b12.jph`); the "cdef Typ 3 with Asoc past the last channel" row of `every_robustness_table_row_has_its_outcome` (`src/jp2/tests/matrix.rs`); `every_channel_is_labeled_with_its_entry` (`src/jp2/tests/channels.rs`) |
-| Decided | 2026-11-14, in the P4.7 plan (#345) |
+| Tests and fixtures | `file10_reports_application_defined_channels_and_no_color_space` (`tests/conformance_ht.rs`, on `file10_b11.jph` and `file10_b12.jph`); the two "cdef Typ 3 with Asoc past the last channel" rows (in a JPH file, in a JP2 file) of `every_robustness_table_row_has_its_outcome` (`src/jp2/tests/matrix.rs`); `a_jph_file_labels_application_defined_channels` and `typ_3_outside_a_jph_file_is_reserved` (`src/jp2/tests/channels.rs`) |
+| Decided | 2026-11-14, in the P4.7 plan (#345); limited to JPH files 2026-11-15 |
 
 OpenJPEG holds every `Asoc` other than 0 and 65535 to the channel count
 (`opj_jp2_check_color`), whatever the type, so it refuses both `file10` files
@@ -1310,8 +1310,13 @@ of the ISO/IEC 15444-4 JPH set: four of their five channels are `Typ` 3 with
 coded, and this decoder matches them bit for bit (`file10_b12`) and within
 Kakadu's recorded error (`file10_b11`). The `Asoc` of any other type is still
 checked as OpenJPEG checks it, and only a color channel (`Typ` 0) is moved by
-its `Asoc`. In a JP2 file, `Typ` 3 is reserved (I.5.3.6); it is read the same
-way there, since the samples do not change.
+its `Asoc`.
+
+A file is a JPH file when `jph ` is its brand or in its compatibility list. In
+any other file `Typ` 3 is reserved (I.5.3.6), and it is read as OpenJPEG reads
+it: the channel is `ChannelType::Other(3)`, its `Asoc` names a color, and an
+`Asoc` past the last channel is refused. So this departure applies to JPH
+files only.
 
 ## The `jp2i` and `uinf` boxes
 

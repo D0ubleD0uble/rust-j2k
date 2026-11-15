@@ -53,9 +53,14 @@ const CLAMPED_PALETTE: &[u8] = include_bytes!("../../../tests/fixtures/jp2_palet
 
 /// A three-component file with these `jp2h` children after `ihdr` and `colr`.
 fn children(extra: &[Vec<u8>]) -> Vec<u8> {
+    children_in(jp2_ftyp(), extra)
+}
+
+/// [`children`] behind the `ftyp` box `ftyp`.
+fn children_in(ftyp: Vec<u8>, extra: &[Vec<u8>]) -> Vec<u8> {
     let mut all = vec![good_ihdr(), colr()];
     all.extend_from_slice(extra);
-    file(&[jp2_ftyp(), jp2h(&all), jp2c()])
+    file(&[ftyp, jp2h(&all), jp2c()])
 }
 
 /// A `uinf` box holding a `ulst` with these contents and an empty `url `.
@@ -743,10 +748,19 @@ fn every_robustness_table_row_has_its_outcome() {
             Decodes,
         ),
         (
-            "cdef Typ 3 with Asoc past the last channel",
-            children(&[cdef(&[(0, 0, 1), (1, 0, 2), (2, 3, 18284)])]),
+            "cdef Typ 3 with Asoc past the last channel in a JPH file",
+            children_in(
+                ftyp(b"jph ", &[b"jph "]),
+                &[cdef(&[(0, 0, 1), (1, 0, 2), (2, 3, 18284)])],
+            ),
             Default,
             Decodes,
+        ),
+        (
+            "cdef Typ 3 with Asoc past the last channel in a JP2 file",
+            children(&[cdef(&[(0, 0, 1), (1, 0, 2), (2, 3, 18284)])]),
+            Default,
+            FileFormat,
         ),
         (
             "cdef Typ 0 with Asoc past the last channel",

@@ -583,7 +583,8 @@ in `tests/conformance_jp2.rs`); `opj_decompress` on the 18 it decodes; the
 
 **Done (#345).** `check_file_type` in `src/jp2/header.rs` takes `jph ` as
 the brand or a compatible brand; the `Typ` 3 handling is in
-`src/jp2/channels.rs`. All 20 JPH files are in `IN_CLASS`. Findings:
+`src/jp2/channels.rs` and applies only to JPH files, so a JP2 file's `Typ` 3
+is read as before. All 20 JPH files are in `IN_CLASS`. Findings:
 
 - Kakadu's `stats.txt` figures for the JPH files are of the default decode
   (palette and `cdef` applied, no color conversion) against `fileN.jp2`'s.
