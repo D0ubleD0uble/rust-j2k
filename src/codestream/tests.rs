@@ -7,21 +7,18 @@
 //! parsed per-component geometry of all 23 conformance codestreams against the
 //! `opj_dump` values recorded in the corpus manifest.
 
+// One std-only builder module shared with tests/ and fuzz/; the crate has no
+// single parent for the unit tests, so each includes it by path.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use super::markers::{Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform, marker};
 use super::*;
 use crate::Error;
+use synth::seg;
 
 fn be16(v: u16) -> [u8; 2] {
     v.to_be_bytes()
-}
-
-/// Wrap a body in `marker + Lmarker + body`, with `Lmarker` counting itself.
-fn seg(m: u16, body: &[u8]) -> Vec<u8> {
-    let mut s = Vec::new();
-    s.extend_from_slice(&be16(m));
-    s.extend_from_slice(&be16((body.len() + 2) as u16));
-    s.extend_from_slice(body);
-    s
 }
 
 /// SIZ body (everything after `Lsiz`): 512x256 single tile, `csiz` components.

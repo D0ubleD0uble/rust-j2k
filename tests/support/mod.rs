@@ -25,6 +25,7 @@ pub mod ht;
 pub mod jp2;
 pub mod part4;
 pub mod pgx;
+pub mod synth;
 
 use std::fmt;
 use std::panic;

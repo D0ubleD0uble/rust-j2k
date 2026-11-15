@@ -5,17 +5,16 @@
 //! the same box shapes (see the module docs of `color`). The codestream is
 //! the committed three-component 24x16 fixture; the boxes are built here.
 
+// One std-only builder module shared with tests/ and fuzz/; the crate has no
+// single parent for the unit tests, so each includes it by path.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use super::SIGNATURE;
 use crate::{ColorSpace, Error, decode};
+use synth::bx;
 
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
-
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
 
 /// `ihdr` for the fixture with the given `BPC` and `UnkC`.
 fn ihdr(bpc: u8, unk_c: u8) -> Vec<u8> {

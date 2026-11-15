@@ -12,6 +12,7 @@
 //!   unconverted because LittleCMS refused the profile.
 
 mod support;
+use support::synth::bx;
 
 use std::path::PathBuf;
 
@@ -256,13 +257,6 @@ fn hex(text: &str) -> Vec<u8> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
         .collect()
-}
-
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
 }
 
 /// A JP2 file around `codestream` whose `colr` box carries `profile`.

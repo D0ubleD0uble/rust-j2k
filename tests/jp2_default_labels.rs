@@ -4,19 +4,13 @@
 //! the rest are unspecified.
 
 mod support;
+use support::synth::bx;
 
 use rust_j2k::{
     Association, ChannelDefinition, ChannelType, ColorOutput, Component, DecodeOptions, decode,
     decode_with, read_header_with,
 };
 use support::jp2::sha256_hex;
-
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
 
 fn srgb() -> DecodeOptions {
     DecodeOptions::default().with_color(ColorOutput::Srgb)

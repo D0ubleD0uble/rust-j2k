@@ -6,12 +6,18 @@
 //! and agree with LittleCMS 2 (Pillow's `ImageCms`, an sRGB output profile)
 //! on every value used here.
 
+// One std-only builder module shared with tests/ and fuzz/; the crate has no
+// single parent for the unit tests, so each includes it by path.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use super::SIGNATURE;
 use super::srgb::{ChromaLayout, replicate, sycc_sample};
 use crate::{
     ColorOutput, ColorSpace, DecodeOptions, Error, Image, decode, decode_with, read_header,
     read_header_with,
 };
+use synth::bx;
 
 /// Three 8-bit components at full resolution, 24x16.
 const THREE: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
@@ -37,13 +43,6 @@ const SYCC_420_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_420_odd.sr
 const SYCC_422_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_422_odd.srgb_r1.json");
 const SYCC_420_EVEN_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_420_even.srgb_r1.json");
 const SYCC_422_EVEN_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_422_even.srgb_r1.json");
-
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
 
 /// The first top-level box of `kind` in a JP2 file: its payload.
 fn top_box<'a>(file: &'a [u8], kind: &[u8; 4]) -> &'a [u8] {

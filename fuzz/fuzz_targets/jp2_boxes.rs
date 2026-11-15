@@ -42,7 +42,10 @@
 //! `scripts/gen-jp2-fuzz-seeds.py` writes seeds in both shapes from the
 //! ISO/IEC 15444-4 JP2 reader files, plus built ICC and sYCC `colr` seeds.
 
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use libfuzzer_sys::fuzz_target;
+use synth::bx;
 
 const ONE_COMPONENT: &[u8] = include_bytes!("../../tests/fixtures/regular_latlon_lossy.j2k");
 const THREE_COMPONENTS: &[u8] =
@@ -59,14 +62,6 @@ const SYCC_420_EVEN: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_420_e
 const SIGNATURE: [u8; 12] = [
     0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
 ];
-
-/// A box with a 32-bit `LBox`. The fuzz input is far below 4 GiB.
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
 
 /// An `ihdr` box matching a codestream's SIZ: the image area and `Csiz`.
 fn ihdr_for(codestream: &[u8]) -> Vec<u8> {

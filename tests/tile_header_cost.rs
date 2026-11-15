@@ -12,8 +12,11 @@
 //! project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use synth::seg;
 
 use rust_j2k::{Error, decode};
 
@@ -41,14 +44,6 @@ static ALLOCATOR: Counting = Counting;
 
 /// The tile grid's side: `SIDE^2` = 4096 tiles.
 const SIDE: u32 = 64;
-
-/// A marker segment: the code, the length, the body.
-fn seg(code: u16, body: &[u8]) -> Vec<u8> {
-    let mut out = code.to_be_bytes().to_vec();
-    out.extend_from_slice(&(2 + body.len() as u16).to_be_bytes());
-    out.extend_from_slice(body);
-    out
-}
 
 /// COD for LRCP, one layer, `levels` levels, 4x4 code-blocks, 5/3.
 fn cod(levels: u8) -> Vec<u8> {

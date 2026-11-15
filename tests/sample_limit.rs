@@ -6,7 +6,10 @@
 //! The fixtures in `tests/fixtures/sample_limit/` are written by
 //! `scripts/gen-sample-limit-fixtures.py` (see the README there).
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::path::PathBuf;
+use synth::seg;
 
 use rust_j2k::{
     DecodeOptions, Error, Window, WorkLimit, decode, decode_with, read_header, read_header_with,
@@ -226,13 +229,6 @@ fn the_sample_limit_defaults_to_the_default_bound() {
     );
 }
 
-fn segment(marker: u16, body: &[u8]) -> Vec<u8> {
-    let mut out = marker.to_be_bytes().to_vec();
-    out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
-    out.extend_from_slice(body);
-    out
-}
-
 /// The main header of a `size` x `size` image in tiles of `tile`, of
 /// `components` unsigned 8-bit components, six wavelet levels, 4x4
 /// code-blocks, 5/3, no quantization, LRCP and `layers` layers, followed by
@@ -253,9 +249,9 @@ fn main_header(size: u32, tile: u32, components: u16, layers: u16, extra: &[u8])
     let qcd = [&[0x40][..], &[8 << 3; 19]].concat();
     [
         vec![0xFF, 0x4F],
-        segment(0xFF51, &siz),
-        segment(0xFF52, &cod),
-        segment(0xFF5C, &qcd),
+        seg(0xFF51, &siz),
+        seg(0xFF52, &cod),
+        seg(0xFF5C, &qcd),
         extra.to_vec(),
     ]
     .concat()
@@ -266,7 +262,7 @@ fn tile_part(index: u32, body: &[u8]) -> Vec<u8> {
     let mut sot = (index as u16).to_be_bytes().to_vec();
     sot.extend_from_slice(&(14 + body.len() as u32).to_be_bytes());
     sot.extend_from_slice(&[0, 1]);
-    [segment(0xFF90, &sot), vec![0xFF, 0x93], body.to_vec()].concat()
+    [seg(0xFF90, &sot), vec![0xFF, 0x93], body.to_vec()].concat()
 }
 
 /// A codestream of `side` x `side` tiles of `tile` x `tile`, `components`
@@ -373,7 +369,7 @@ fn poc_reach_past_the_dropped_blocks() -> Vec<u8> {
     let mut entry = vec![0, 0];
     entry.extend_from_slice(&layers.to_be_bytes());
     entry.extend_from_slice(&[7, components as u8, 0]);
-    let poc = segment(0xFF5F, &[&entry[..], &entry[..]].concat());
+    let poc = seg(0xFF5F, &[&entry[..], &entry[..]].concat());
     let mut out = main_header(64, 64, components, layers, &poc);
     out.extend_from_slice(&tile_part(0, &[0; 16]));
     out.extend_from_slice(&[0xFF, 0xD9]);

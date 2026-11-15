@@ -14,8 +14,11 @@
 //! project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use synth::seg;
 
 struct Counting;
 
@@ -44,14 +47,6 @@ static ALLOCATOR: Counting = Counting;
 
 const LAYERS: u16 = u16::MAX;
 const VOLUMES: usize = 31;
-
-/// A marker segment: the code, the length, the body.
-fn seg(code: u16, body: &[u8]) -> Vec<u8> {
-    let mut out = code.to_be_bytes().to_vec();
-    out.extend_from_slice(&(2 + body.len() as u16).to_be_bytes());
-    out.extend_from_slice(body);
-    out
-}
 
 /// `pocdup(8, 8, 1, 65535, 31)`: one 8 x 8 tile, no wavelet levels, 2 x 2
 /// precincts, LRCP, and `VOLUMES` POC volumes over every layer, resolution

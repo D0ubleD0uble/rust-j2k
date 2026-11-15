@@ -13,6 +13,7 @@
 //! The larger shapes are built here, with the same layout.
 
 mod support;
+use support::synth::{bx, seg};
 
 use std::path::PathBuf;
 
@@ -40,14 +41,6 @@ fn assert_flat(name: &str, bytes: &[u8], width: usize, height: usize) {
     let samples = &image.components[0].samples;
     assert_eq!(samples.len(), width * height, "{name}");
     assert!(samples.iter().all(|&s| s == 128), "{name}: not flat 128");
-}
-
-/// A marker segment: the code, the length, the body.
-fn seg(code: u16, body: &[u8]) -> Vec<u8> {
-    let mut out = code.to_be_bytes().to_vec();
-    out.extend_from_slice(&(2 + body.len() as u16).to_be_bytes());
-    out.extend_from_slice(body);
-    out
 }
 
 /// A codestream of 8-bit components, one per entry of `comps` (each its
@@ -313,17 +306,6 @@ fn skips_from_the_poc_set_are_bounded() {
     assert!(image.components[0].samples.iter().all(|&s| s == 128));
 }
 
-/// A JP2 box: the length, the type, the payload.
-fn jp2_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = u32::try_from(8 + payload.len())
-        .unwrap()
-        .to_be_bytes()
-        .to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
-
 /// `cs` in a JP2 file as `jp2_psot0` in the generator writes it: its one
 /// tile-part's `Psot` set to 0 and its EOC dropped, in a `jp2c` box that ends
 /// where the packets end, followed here by an `xml ` box of `xml`.
@@ -335,17 +317,17 @@ fn jp2_psot0(cs: &[u8], xml: &[u8]) -> Vec<u8> {
     ihdr.extend_from_slice(&[7, 7, 0, 0]);
     let mut colr = vec![1, 0, 0];
     colr.extend_from_slice(&17u32.to_be_bytes());
-    let mut jp2h = jp2_box(b"ihdr", &ihdr);
-    jp2h.extend(jp2_box(b"colr", &colr));
+    let mut jp2h = bx(b"ihdr", &ihdr);
+    jp2h.extend(bx(b"colr", &colr));
     let sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
     let mut body = cs[..sot + 6].to_vec();
     body.extend_from_slice(&[0; 4]);
     body.extend_from_slice(&cs[sot + 10..cs.len() - 2]);
-    let mut out = jp2_box(b"jP  ", b"\x0d\x0a\x87\x0a");
-    out.extend(jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend(jp2_box(b"jp2h", &jp2h));
-    out.extend(jp2_box(b"jp2c", &body));
-    out.extend(jp2_box(b"xml ", xml));
+    let mut out = bx(b"jP  ", b"\x0d\x0a\x87\x0a");
+    out.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+    out.extend(bx(b"jp2h", &jp2h));
+    out.extend(bx(b"jp2c", &body));
+    out.extend(bx(b"xml ", xml));
     out
 }
 

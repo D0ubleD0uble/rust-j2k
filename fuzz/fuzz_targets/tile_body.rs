@@ -33,18 +33,13 @@
 //! checked against each other as `decode_partial` checks them
 //! (`common/partial.rs`).
 
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use libfuzzer_sys::fuzz_target;
+use synth::seg;
 
 #[path = "../common/partial.rs"]
 mod partial;
-
-/// `marker + Lmarker (counting itself) + body`.
-fn seg(marker: u16, body: &[u8]) -> Vec<u8> {
-    let mut s = marker.to_be_bytes().to_vec();
-    s.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
-    s.extend_from_slice(body);
-    s
-}
 
 /// A full `SOT` marker segment. `rest_len` is everything the tile-part holds
 /// after this segment — any tile-part-header markers, the two `SOD` bytes, and

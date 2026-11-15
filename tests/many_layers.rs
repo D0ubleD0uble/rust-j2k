@@ -23,6 +23,7 @@
 //! PR #249 with a 2048 x 2048, 1000-layer file built the same way.
 
 mod support;
+use support::synth::seg;
 
 use rust_j2k::decode;
 use support::jp2::sha256_hex;
@@ -126,13 +127,6 @@ impl TagTree {
     }
 }
 
-fn segment(marker: u16, body: &[u8]) -> Vec<u8> {
-    let mut s = marker.to_be_bytes().to_vec();
-    s.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
-    s.extend_from_slice(body);
-    s
-}
-
 /// A 12 x 4 image of one unsigned 8-bit component: one tile, no wavelet
 /// levels, three 4 x 4 code-blocks in one precinct, `layers` LRCP layers.
 /// Code-block `b` is first included at layer `first[b]`, if any, with no
@@ -177,9 +171,9 @@ fn codestream(layers: u16, first: [Option<u16>; 3]) -> Vec<u8> {
     cod.extend_from_slice(&layers.to_be_bytes());
     cod.extend_from_slice(&[0, 0, 0, 0, 0, 1]);
     let mut bytes = vec![0xFF, 0x4F];
-    bytes.extend(segment(0xFF51, &siz));
-    bytes.extend(segment(0xFF52, &cod));
-    bytes.extend(segment(0xFF5C, &[0x40, 0x40]));
+    bytes.extend(seg(0xFF51, &siz));
+    bytes.extend(seg(0xFF52, &cod));
+    bytes.extend(seg(0xFF5C, &[0x40, 0x40]));
     let psot = (12 + 2 + data.len()) as u32;
     bytes.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
     bytes.extend_from_slice(&psot.to_be_bytes());
