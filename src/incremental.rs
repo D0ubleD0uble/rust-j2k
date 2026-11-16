@@ -407,6 +407,35 @@ mod tests {
         );
     }
 
+    /// The charge for missing tiles is a work bound too: a refine whose
+    /// missing tiles cost more than the earlier refines left of the packet
+    /// bound waits, though no packet is read.
+    #[test]
+    fn a_missing_tile_charge_past_the_rest_of_the_bound_waits() {
+        let whole = fixture("partial/tiles.j2k");
+        let cut: usize = String::from_utf8(fixture("partial/tiles.cut"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let prefix = &whole[..cut];
+        let lenient = DecodeOptions::default().with_strict(false);
+        let image = decode_with(prefix, &lenient).unwrap();
+        assert!(image.report.entries.iter().any(|e| matches!(
+            e,
+            crate::ReportEntry::MissingTiles { tiles } if *tiles == (2..4)
+        )));
+
+        let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        // Nothing is left of the packet bound, so the charge for tiles 2
+        // and 3 is the first thing refused.
+        decoder.ledger.packets.set(u64::MAX);
+        decoder.feed(prefix);
+        assert_eq!(decoder.refine(), Ok(None));
+        assert!(decoder.ledger.work_refused.get());
+        assert_eq!(decoder.bytes_decoded(), 0);
+    }
+
     fn whole_strict(bytes: &[u8]) -> Image {
         decode_with(bytes, &DecodeOptions::default()).unwrap()
     }
