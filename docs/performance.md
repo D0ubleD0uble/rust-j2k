@@ -64,12 +64,13 @@ does not know, so it has no column here.
 `finish` at the end, against one `decode_with` of the same bytes. No other
 decoder here has an incremental API, so there is nothing to compare it with.
 Each row first checks that `finish` after the pieces gives the same samples as
-one decode (it does, on both files). Times are medians of 9 runs.
+one decode (it does, on both files). Times are medians of 9 runs, taken at a one-minute load average of 8.8 to 9.6
+(the machine was busy, so absolute times are higher than in the other tables).
 
 | File | One decode, ms | 64 KB pieces, ms | Ratio |
 | ---- | -------------- | ---------------- | ----- |
-| GRIB2-shaped | 100.6 | 255.5 | 2.54 |
-| `ds0_ht_05_b11` | 103.9 | 305.0 | 2.94 |
+| GRIB2-shaped | 103.9 | 266.4 | 2.56 |
+| `ds0_ht_05_b11` | 107.2 | 315.5 | 2.94 |
 
 ### Files more than 2x slower than OpenJPEG
 
@@ -77,9 +78,11 @@ None, on the medians. On the files OpenJPEG decodes, the single-thread
 command-line time of rust-j2k is between 0.5x and 1.5x of OpenJPEG's, with
 two exceptions. `hifi_ht1_02` is 1.53x, but it decodes in a few milliseconds,
 so that is within noise (see Small files below). The generated HTJ2K file is
-about 1.65x to 1.95x: 1.95x in the table (83 ms against 43 ms; in process,
-75 ms), 1.65x to 1.95x on the medians of repeat runs, and from 1.62x to 2.11x
-on single rounds. So 2x is within the noise for that file. The HTJ2K speed gap
+1.95x (83 ms against 43 ms; in process, 75 ms), from 7 runs. A review
+re-measured it at 1.65x to 1.95x on 5-run medians at a load of 2.6 to 3.7, and
+at 1.62x to 2.11x on single rounds of a 9-round probe that varied the decoder
+order. Those re-measurements are not from this page's method. So 2x is within
+the noise for that file. The HTJ2K speed gap
 is tracked in #412. The tiled 2048 file whole is 1.48x and `p1_03` is 1.29x. On
 the files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
 
@@ -110,15 +113,17 @@ the files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
   files (`p0_07`, `p0_08`) and the 16-bit GRIB2-shaped file the work it
   does is not the same work. It uses more memory than rust-j2k on every file but the tiny
   `regular_latlon`.
-- **Memory.** On the Part 1 files the peaks differ by up to 1.9x, and no
-  decoder is lowest throughout. rust-j2k is lowest on `file7.jp2` (11.8 MiB;
+- **Memory.** On the Part 1 files the peaks differ by up to 1.9x on the larger files, and no
+  decoder is lowest throughout. On the tiny `regular_latlon` Grok is 3.9x
+  rust-j2k (10.8 MiB against 2.8). rust-j2k is lowest on `file7.jp2` (11.8 MiB;
   OpenJPEG 14.0, Grok 22.1), the GRIB2-shaped file (9.5; 10.4 and 17.2) and
-  the tiled file (19.4; 22.0 and 21.8). It is level on `p0_05`. Grok is 19% to
-  23% lower on `p0_07` and `p0_08`, and OpenJPEG is 21% lower on `p1_03`. A
+  the tiled file (19.4; 22.0 and 21.8). It is level on `p0_05`. Grok is 19% lower
+  on `p0_07` (47.5 MiB against 58.7) and 27% lower on `p0_08` (23.5 against
+  32.2), and OpenJPEG is 21% lower on `p1_03`. A
   window or one tile takes about half of OpenJPEG's peak and a quarter to a
   third of Grok's. On the HTJ2K conformance files rust-j2k's peak is the
   lowest or level with Grok's: level on `ds0_ht_05_b11` (18.6 MiB each), 1.1x
-  below on `ds0_ht_07_b16`, and 1.8x to 14x below on the rest. On the
+  below on `ds0_ht_07_b16`, and 1.7x to 14x below on the rest. On the
   generated HTJ2K file it is the highest: 27.8 MiB against 22.2 for OpenJPEG,
   20.0 for Grok and 7.0 for OpenJPH.
 - **Small files.** For files that decode in a few milliseconds the
@@ -275,8 +280,8 @@ CPU: Intel Core i7-10700KF at 3.8 GHz, 8 cores and 16 threads. The CPU
 frequency governor was `powersave` (the `intel_pstate` driver); it was not
 changed, and it affects absolute times. The one-minute load average was 1.66
 when the timing started and 2.15 when it ended. The machine is shared, so
-other jobs ran. The incremental table was run afterward, at a load of 4 to 7,
-and its in-process medians matched a first run at lower load within 1%.
+other jobs ran. The incremental table was run afterward, at a load of 8.8 to
+9.6.
 
 ## Decoders and builds
 

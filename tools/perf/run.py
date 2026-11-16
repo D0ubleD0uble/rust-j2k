@@ -460,6 +460,7 @@ def check_file(f, work):
 
 
 # Lossless files: the output must match exactly.
+# A new lossless file must be added here, or it gets the lossy tolerance.
 LOSSLESS = {
     "p0_07", "p0_08", "file7.jp2", "grib2_shape", "regular_latlon", "ds0_ht_01_b11",
     "ds0_hm_15_b8", "ds0_ht_07_b16", GENERATED,
