@@ -571,3 +571,36 @@ fn a_refine_the_rest_of_the_bound_covers_decodes() {
     decoder.feed(&[]);
     assert_eq!(refine_now(&mut decoder), Ok(None), "nothing is left");
 }
+
+/// A kept walk over a `POC` sequence whose volumes repeat each other is
+/// charged, at each cut, the packet visits the one-shot walk of the same
+/// bytes spends: the packets it skips as emitted before, from the data
+/// and past its end, cost what they cost that walk.
+#[test]
+fn a_kept_walk_charges_poc_repeats_as_the_one_shot_walk_does() {
+    let bytes = fixture("work_bound/pocdup_4x4_1024_31.j2k");
+    let mut walks = Walks::default();
+    let mut checked = 0;
+    for end in every(bytes.len() / 9, bytes.len()) {
+        let prefix = &bytes[..end];
+        let Ok(parsed) = codestream::parse_header(prefix) else {
+            continue;
+        };
+        let cs = codestream::parse_tiles_with(prefix, parsed, false).unwrap();
+        let poc_bitmap = tier2::decode_visits(crate::tile_bytes(&cs));
+        for (position, tile) in cs.tiles.iter().enumerate() {
+            let header = cs.tile_header(position).unwrap();
+            let once = Meter::new(u64::MAX / 2);
+            let expected =
+                tier2::decode_packets_partial(&header, tile, &once, poc_bitmap, 0, None).is_ok();
+            let kept = Meter::new(u64::MAX / 2);
+            let walked = walks
+                .walk(&header, tile, &kept, poc_bitmap, 0, None, u64::MAX / 4)
+                .is_ok();
+            assert_eq!(walked, expected, "{end} bytes");
+            assert_eq!(kept.spent(), once.spent(), "{end} bytes");
+            checked += 1;
+        }
+    }
+    assert!(checked > 5, "{checked}");
+}

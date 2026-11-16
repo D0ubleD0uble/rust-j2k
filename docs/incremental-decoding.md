@@ -129,10 +129,11 @@ fails. So the packet bound is the one-shot bound of the bytes fed, not cut
 by what earlier refines spent. A `POC` sequence's volumes emit each
 precinct's layers from the first up, so a kept walk tells a packet emitted
 again by the precinct's count of layers read, with no packet set; its
-charges are those of the set that decode holds. The work the kept walks do is the visits
-they spend for the first time: a byte-at-a-time feeder that refines after
-every byte spends, over all its refines, the visits of one walk of the whole
-file (`a_byte_at_a_time_feeder_stays_within_one_decodes_bounds`). That count
+charges are those of the bitmap or set that decode holds. The work the kept
+walks do is the visits they spend for the first time: a byte-at-a-time
+feeder that refines after every byte spends, over all its refines, the
+visits of one walk of the whole file
+(`a_byte_at_a_time_feeder_stays_within_one_decodes_bounds`). That count
 is of distinct visits. The walks can step through each point of the order
 twice, once to read and once to count, a packet the data cuts is parsed
 again on each refine, and a tile whose walk is not kept (see below) is
