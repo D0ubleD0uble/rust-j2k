@@ -2,8 +2,8 @@
 """Write tests/fixtures/roi_h1_band/: a lossless 8x8 encode with a maxshift
 of 7 whose background coefficients sit in the band 2^(s-1)..2^s-1.
 
-`opj_compress -ROI` shifts every coefficient of the component, so it never
-makes a background value. This script encodes without ROI (`-n 1`, so the
+`opj_compress -ROI` only signals SPrgn and raises no zero bit-planes, so it
+cannot make a stream whose background sits in the band. This script encodes without ROI (`-n 1`, so the
 coefficients are the level-shifted samples), then adds the RGN marker
 (Srgn = 0, SPrgn = 7) and raises the packet's zero bit-planes by 7, which is
 what a maxshift encoder signals for a block with no region (H.2: the count

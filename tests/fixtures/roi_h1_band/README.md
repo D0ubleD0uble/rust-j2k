@@ -19,8 +19,8 @@ half have bit 6 (`s - 1`) set, the band where H.1 and OpenJPEG differ (see
   `SPrgn = 7`) and raises the packet header's zero bit-planes by 7. That is
   what a maxshift encoder signals for a block with no region (H.2 counts them
   against `Mb + s`). The coded bytes are unchanged. `opj_compress -ROI` cannot
-  make this stream: it shifts every coefficient of the component, so it has
-  no background.
+  make this stream: it only signals `SPrgn`, and writes no raised zero
+  bit-planes.
 
 ## Expected output
 

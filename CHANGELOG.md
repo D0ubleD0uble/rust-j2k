@@ -111,8 +111,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   coefficient with bit `s - 1` set decoded as 0 or a fraction of its value.
   This applies to both Part 1 and HT code-blocks. OpenJPEG makes the same
   mistake, so on such a stream the output now differs from
-  `opj_decompress` (see `docs/openjpeg-departures.md`). No stream in the
-  test corpus is affected.
+  `opj_decompress` (see `docs/openjpeg-departures.md`). No conformance ROI
+  codestream is affected.
 - With `strict` off, a codestream under `predictable termination` that is
   cut short, or whose `POC` volumes leave packets out, decodes to a partial
   image. It was `Error::Codestream` when a missing packet of a later layer

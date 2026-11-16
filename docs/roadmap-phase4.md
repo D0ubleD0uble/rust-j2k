@@ -549,7 +549,7 @@ H-3) and undoes the shift with EBCOT's `undo_maxshift`. Findings:
 - `undo_maxshift` follows H.1 (#377): a coefficient is region when `q >= 2^s`,
   at double scale `mag >= 2^(s + 1)`. OpenJPEG's threshold is one plane lower,
   so the two differ on any background coefficient with bit `s - 1` set: H.1
-  keeps it, OpenJPEG zeroes it. The 12 ROI codestreams in the corpus have
+  keeps it, OpenJPEG zeroes it. The 12 conformance ROI codestreams have
   none, and both rules give the same samples on the eight HT files and on
   `p0_03`, `p0_06`, `p0_13` and `p0_15`.
 - The `B` bound (A.3.7) is checked per cleanup magnitude, as 8.7.3 states

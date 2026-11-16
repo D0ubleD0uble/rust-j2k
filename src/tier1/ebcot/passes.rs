@@ -1306,7 +1306,7 @@ pub fn decode_block(
         }
     }
 
-    // Undo the maxshift (Annex H.2), then apply the decoded signs.
+    // Undo the maxshift (Annex H.1), then apply the decoded signs.
     //
     // The passes carried each magnitude in the mid-point reconstruction form at
     // double scale (ISO E.1.1.2, r = ½): becoming significant set
@@ -1316,9 +1316,11 @@ pub fn decode_block(
     // function's contract).
     //
     // The maxshift is undone here, before that halving, as
-    // `opj_t1_clbl_decode_processor` does it: its threshold is stated in the
-    // coefficients' own scale, and halving first would drop a region coefficient
-    // below it.
+    // `opj_t1_clbl_decode_processor` does it, with H.1's threshold stated at
+    // the coefficients' own scale (`mag >= 2^(s + 1)`). Halving first would
+    // classify the same, since `2q + 1 >= 2^(s + 1)` exactly when `q >= 2^s`,
+    // but the shift then comes off the double-scale value, so the half bit is
+    // dropped after it, as the caller's arms expect.
     for y in 0..state.height {
         for x in 0..state.width {
             let i = state.idx(x, y);
@@ -1668,20 +1670,20 @@ mod tests {
     }
 
     /// A background coefficient with bit `s - 1` set decodes as itself, from a
-    /// one-sample EBCOT block worked by hand. On the old threshold it came out
-    /// as a quarter of its value.
+    /// one-sample EBCOT block worked by hand. On the old threshold the double
+    /// scale value `6` was taken for region and came out as `6 >> 2 = 1`.
     ///
     /// `Mb = 3`, `s = 2`, `P = 3` zero bit-planes, one cleanup pass. The block
     /// starts at `top = s + Mb - P = 2` (H.2), so the one coded bit-plane is
     /// the one that holds `q = 2` (bit `s - 1`), and `q < 2^s = 4` makes it
-    /// background. The first byte is 0x00, so the MQ decoder's `Chigh = 0` is
-    /// below `A - Qe`, and `A - Qe = 0x29FF < Qe = 0x5601` takes the
-    /// conditional exchange: the first decision, significance, is 1.
-    /// Reconstruction at the mid-point (E.1.1.2, `r = 1/2`) at the coded plane gives `q = 2 + 1 = 3`,
-    /// `6` at double scale.
+    /// background. The first byte is 0x00, so `C = 0`. Context 0 starts at
+    /// state 4 (`Qe = 0x0521`, MPS 0) and `A = 0x8000`: `A - Qe = 0x7ADF`, and
+    /// `Chigh = 0 < Qe` takes LPS_EXCHANGE. There `A = 0x7ADF >= Qe`, so the
+    /// symbol is `1 - MPS = 1`: the sample is significant. Reconstruction at
+    /// the mid-point (E.1.1.2, `r = 1/2`) of the coded plane gives `q = 2 + 1
+    /// = 3`, `6` at double scale.
     ///
-    /// The old rule saw `6 >= 2^2` and shifted it to `6 >> 2 = 1`. H.1 sees
-    /// `q = 2 < 4`: background, unchanged, `6`.
+    /// H.1 sees `q = 2 < 4`: background, unchanged, `6`.
     #[test]
     fn a_background_coefficient_with_bit_s_minus_one_set_is_kept() {
         let decode = |roi_shift: u8, numbps: u32, zero_bit_planes: u32| {
