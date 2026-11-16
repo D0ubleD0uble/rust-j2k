@@ -792,21 +792,16 @@ impl Order {
             self.plan.held.iter().map(Vec::capacity).sum(),
             size_of::<usize>(),
         );
-        let pairs = lists(
-            self.pairs.capacity() * size_of::<Vec<(usize, usize)>>(),
-            self.pairs.iter().map(Vec::capacity).sum(),
+        let pair_lists = lists(
+            self.lists.capacity() * size_of::<Vec<(usize, usize)>>(),
+            self.lists.iter().map(Vec::capacity).sum(),
             size_of::<(usize, usize)>(),
-        );
-        let groups = lists(
-            self.groups.capacity() * size_of::<Vec<usize>>(),
-            self.groups.iter().map(Vec::capacity).sum(),
-            size_of::<usize>(),
         );
         self.volumes.capacity() * size_of::<Volume>()
             + self.plan.spans.capacity() * size_of::<(Option<u64>, Option<u64>)>()
             + held
-            + pairs
-            + groups
+            + pair_lists
+            + self.pairs.capacity() * size_of::<(usize, std::ops::Range<usize>)>()
     }
 
     /// The order of `header`'s packets over `walk`'s tile.
