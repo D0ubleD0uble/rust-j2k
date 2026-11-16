@@ -335,21 +335,24 @@ fn refused(meter: &Meter, error: Error) -> Refused {
 }
 
 /// The fewest visits (see [`Meter`]) a decode may spend walking its
-/// tiles' packets. A visit costs about 2 to 15 ns, so this is under a
-/// second. A packet a POC marker's volumes reach again is skipped from a
-/// bitmap without a visit, in about 4 ns; skipped from the set a sequence
-/// past the bitmap keeps, it is charged 12 visits (see
-/// `progression::for_each_packet`).
+/// tiles' packets. A visit costs about 1 to 55 ns (see
+/// [`DECODE_VISITS_PER_BYTE`]), so this is under a second. A packet a POC
+/// marker's volumes reach again is skipped from a bitmap without a visit, in
+/// about 4 ns; skipped from the set a sequence past the bitmap keeps, it is
+/// charged 12 visits (see `progression::for_each_packet`).
 pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 
 /// The visits a decode may spend per byte of its tiles' data, when that comes
-/// to more than [`DECODE_VISITS_MIN`]. At 2 to 15 ns a visit, that is up to
-/// 0.5 µs a byte, about what decoding a byte of real data costs: the
-/// conformance codestreams past 100 KB decode at 0.19 to 0.73 µs a byte (the
-/// best of five release-build decodes of each). So a file past the floor is
-/// refused in no more than about the time its decode would take. The
-/// cheapest visits, the layer orders' steps over resolutions with no
-/// precinct, refuse a file at about 0.02 to 0.06 µs a byte.
+/// to more than [`DECODE_VISITS_MIN`]. The cheapest visits, the layer
+/// orders' steps over resolutions with no precinct, refuse a file at about
+/// 0.02 to 0.06 µs a byte, 1 to 2 ns a visit. The costliest measured are a
+/// positional walk's points over 16384 components and 200 tiles, each with
+/// a packet to read: 24 to 28 ns a visit over 32 `POC` volumes and 33 to
+/// 55 ns with none, the packet reads included. So the bound comes to between
+/// about 0.02 and 1.8 µs a byte, against the 0.19 to 0.73 µs a byte the
+/// conformance codestreams past 100 KB take to decode (the best of five
+/// release-build decodes of each). At most, a file past the floor is refused
+/// in about 2.5 times the slowest conformance decode per byte.
 ///
 /// Setting up a tile's geometry is counted only for the code-blocks of the
 /// resolutions a reduction drops (see [`Budget::reduction`]). A resolution with no precinct
