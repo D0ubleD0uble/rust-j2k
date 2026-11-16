@@ -110,6 +110,9 @@ impl Walks {
             let room = image.saturating_add(walks.largest).saturating_mul(2);
             walks.kept.saturating_add(bytes) <= room
         };
+        // Whether the walk is new, so none of its visits is counted yet.
+        #[cfg(test)]
+        let fresh = !matches!(self.tiles[index], Slot::Kept(..));
         match std::mem::take(&mut self.tiles[index]) {
             Slot::Kept(walk, bytes) => self.tiles[index] = Slot::Kept(walk, bytes),
             Slot::Empty => {
@@ -141,11 +144,11 @@ impl Walks {
             );
         };
         #[cfg(test)]
-        let visits = walk.visits();
+        let visits = if fresh { 0 } else { walk.visits() };
         let walked = walk.walk(header, tile, meter, poc_bitmap);
         #[cfg(test)]
         {
-            self.visits = self.visits - visits + walk.visits();
+            self.visits = self.visits + walk.visits() - visits;
         }
         let now = walk.bytes();
         self.kept = self.kept - *bytes + now;
