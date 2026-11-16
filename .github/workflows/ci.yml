@@ -119,6 +119,12 @@ jobs:
       # whose std isn't installed on the runner.
       - name: Build all fuzz targets
         run: cargo fuzz build --target x86_64-unknown-linux-gnu
+      # HT files seed `decode`, so the smoke reaches the HT code paths.
+      - name: Seed decode with HT files
+        run: |
+          mkdir -p fuzz/corpus/decode
+          cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/decode/
+          find tests/fixtures/conformance/ht/codestreams -size -6k -name '*.j2k' -exec cp {} fuzz/corpus/decode/ \;
       # The codestream-reading targets take the J2K marker dictionary so
       # mutation can splice whole marker codes instead of rediscovering them.
       - name: Fuzz decode (60s)
@@ -129,6 +135,13 @@ jobs:
         run: cargo fuzz run tier1_block --target x86_64-unknown-linux-gnu -- -max_total_time=30 -rss_limit_mb=4096
       - name: Fuzz mq (15s)
         run: cargo fuzz run mq --target x86_64-unknown-linux-gnu -- -max_total_time=15 -rss_limit_mb=4096
+      # The HT block target starts from code-blocks sliced from the HT corpus.
+      - name: Seed the HT block fuzz corpus
+        run: |
+          mkdir -p fuzz/corpus/ht_block
+          RUST_J2K_HT_SEED_DIR=$PWD/fuzz/corpus/ht_block cargo test --lib ht_block_seeds
+      - name: Fuzz ht_block (45s)
+        run: cargo fuzz run ht_block --target x86_64-unknown-linux-gnu -- -max_total_time=45 -max_len=8192 -rss_limit_mb=4096
       # Seed the JP2 targets so the short smoke reaches the colour and header code.
       - name: Seed the JP2 fuzz corpora
         run: |
