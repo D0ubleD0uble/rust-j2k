@@ -17,6 +17,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `IncrementalDecoder` decodes a file while it arrives. `feed` appends
+  bytes, `refine` returns an image of what has come in, and `finish` decodes
+  all of it once the input ends. Each image `refine` returns is the one
+  `decode_with` gives with `strict` off on the same bytes, with a report of
+  what they do not hold yet. `refine` decodes at least each time the bytes
+  fed have doubled, and may decode more often. The packet and code-block
+  work bounds hold across all the refines together; each refine that
+  returns an image also rebuilds the whole image, as one decode does. A
+  work limit is reported only by `finish`, since more bytes raise the work
+  bounds; a limit that does not depend on the bytes, such as the sample
+  limit, is an error from `refine`. A main header still cut short at `finish` is
+  `Error::Codestream`, or `Error::FileFormat` inside a JP2 file's boxes.
 - A tile-component whose code-block style is MIXED (ISO/IEC 15444-15 A.4)
   decodes: each code-block is read as an HT block or a Part 1 block, told
   apart by its first nonzero length field. The three MIXED files of the
