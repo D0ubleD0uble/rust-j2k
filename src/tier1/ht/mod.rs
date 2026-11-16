@@ -92,7 +92,8 @@ pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Resu
 
 /// The buffers one HT code-block's decode uses, kept from block to block so
 /// a subband of many small blocks allocates them once. [`decode_into`]
-/// clears each one before a block uses it.
+/// clears each one before a block uses it, and gives the coefficients a new
+/// buffer.
 #[derive(Debug, Default)]
 pub(super) struct Scratch {
     coeffs: Vec<i32>,
@@ -141,7 +142,10 @@ pub(super) fn decode_into<'s>(
 /// The body of [`decode_into`].
 fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratch) -> Result<()> {
     let (width, height) = (block.width, block.height);
-    zeroed(&mut scratch.coeffs, width * height);
+    // The coefficients get a fresh buffer for each block, unlike the other
+    // buffers: reusing it measured 1 to 2% slower on HT files of 64x64
+    // blocks, likely from where the long-lived buffers fall in memory.
+    scratch.coeffs = vec![0i32; width * height];
     let Scratch {
         coeffs,
         cleanup,
