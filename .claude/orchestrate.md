@@ -70,6 +70,7 @@ constraints:
   - "Never commit personal data (emails, names, machine paths)."
   - "Never edit the owner's main checkout; workers use harness-owned worktrees (Agent isolation: worktree)."
   - "Phase 4 decisions in docs/roadmap-phase4.md are settled; do not re-open them."
+  - "Before removing a worker's worktree, delete its cargo build dir: run `cargo metadata --format-version 1 --no-deps` in the worktree and remove the `build_directory` it reports. That dir lives outside the worktree (about 1.5 GB each) and `git worktree remove` leaves it behind."
 
 local:
   protected_checkouts: ["the repo's main checkout"]
