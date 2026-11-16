@@ -5,30 +5,29 @@ Grok, OpenJPH and hayro-jpeg2000 on the same files. It names the release it
 measured, the machine, every version and build flag, and the commands, so you
 can repeat it. Kakadu is left out because it is commercial.
 
-Measured release: rust-j2k RELEASE (commit COMMIT).
+Measured release: rust-j2k 0.5.0, commit `1f831a2` on `main` plus this page and the tools (so the decoder is the one in `1f831a2`), hayro-jpeg2000 0.5.0.
 
 ## Results
 
-All times are milliseconds of wall time per decode, the median of RUNS runs.
-Each cell is `time / peak MiB`. A blank cell says why in the notes below the
+All times are milliseconds of wall time per decode, the median of 7 runs.
+Each cell is `time / peak MiB`; an in-process cell is the time alone. A blank cell says why in the notes below the
 table. Command-line decoders are timed as processes with their start-up and
 file I/O taken off (see [Method](#method)); the in-process rows are the decode
 call alone.
 
-TO FILL: the tables below are empty until the timing run.
 
 ### Part 1 files
 
 | File | OpenJPEG 1 thread | OpenJPEG all cores | Grok 1 thread | Grok all cores | rust-j2k CLI | rust-j2k in process | hayro CLI | hayro in process |
 | ---- | ----------------- | ------------------ | ------------- | -------------- | ------------ | ------------------- | --------- | ---------------- |
-| `p0_07` | | | | | | | | |
-| `p0_08` | | | | | | | | |
-| `p0_05` | | | | | | | | |
-| `p1_03` | | | | | | | | |
-| `file7.jp2` | | | | | | | | |
-| GRIB2-shaped | | | | | | | | |
-| `regular_latlon` | | | | | | | | |
-| tiled 2048, whole | | | | | | | | |
+| `p0_07` | 1297.2 / 57.3 | 808.8 / 57.3 | 1238.2 / 47.5 | 291.4 / 49.0 | 1320.6 / 58.7 | 1301.2 | 1191.5 / 70.3 | 1201.7 |
+| `p0_08` | 587.5 / 29.4 | 235.7 / 34.5 | 504.6 / 23.5 | 91.7 / 24.5 | 619.3 / 32.2 | 601.8 | 567.9 / 45.0 | 565.3 |
+| `p0_05` | 175.5 / 18.5 | 31.6 / 18.8 | 176.0 / 17.5 | 26.4 / 18.8 | 217.3 / 18.5 | 204.3 | 201.5 / 33.9 | 203.1 |
+| `p1_03` | 142.3 / 20.1 | 30.0 / 20.6 | 152.6 / 29.4 | 31.7 / 30.1 | 183.5 / 25.6 | 177.5 | 227.7 / 34.9 | 228.2 |
+| `file7.jp2` | 170.7 / 14.0 | 65.0 / 14.9 | 151.6 / 22.1 | 39.5 / 22.8 | 185.7 / 11.8 | 182.2 | wrong image | wrong image |
+| GRIB2-shaped | 105.5 / 10.4 | 47.1 / 10.9 | 86.8 / 17.2 | 30.7 / 18.2 | 104.4 / 9.5 | 100.6 | 98.7 / 17.0 | 96.6 |
+| `regular_latlon` | 0.3 / 5.5 | 0.3 / 5.8 | 0.6 / 10.8 | 0.4 / 11.6 | 0.2 / 2.8 | 0.2 | 0.2 / 2.5 | 0.2 |
+| tiled 2048, whole | 49.4 / 22.0 | 39.9 / 22.4 | 60.8 / 21.8 | 29.9 / 22.8 | 72.9 / 19.4 | 57.6 | 52.5 / 23.3 | 50.6 |
 
 ### Window and tile of the tiled file
 
@@ -37,24 +36,24 @@ files only, and hayro-jpeg2000 has no region decode.
 
 | Region | OpenJPEG 1 thread | OpenJPEG all cores | Grok 1 thread | Grok all cores | rust-j2k CLI | rust-j2k in process |
 | ------ | ----------------- | ------------------ | ------------- | -------------- | ------------ | ------------------- |
-| 256 x 256 window across four tiles | | | | | | |
-| 64 x 64 window inside one tile | | | | | | |
-| tile 27 | | | | | | |
+| 256 x 256 window across four tiles | 3.0 / 6.7 | 1.6 / 6.4 | 2.1 / 11.7 | 2.2 / 12.7 | 3.1 / 3.5 | 2.6 |
+| 64 x 64 window inside one tile | 1.1 / 6.2 | 1.4 / 6.1 | 0.4 / 11.0 | 1.3 / 11.8 | 1.3 / 3.2 | 1.0 |
+| tile 27 | 1.9 / 6.1 | 1.5 / 6.0 | 1.9 / 11.2 | 0.8 / 11.5 | 2.1 / 3.4 | 2.9 |
 
 ### HTJ2K files
 
 | File | OpenJPEG 1 thread | OpenJPEG all cores | Grok 1 thread | Grok all cores | OpenJPH | rust-j2k CLI | rust-j2k in process |
 | ---- | ----------------- | ------------------ | ------------- | -------------- | ------- | ------------ | ------------------- |
-| `ds0_ht_01_b11` | | | | | | | |
-| `hifi_ht1_02` | | | | | | | |
-| `ds1_ht_05_b11` | | | | | | | |
-| `ds1_ht_04_b9` | | | | | | | |
-| `ds0_hm_15_b8` (MIXED) | | | | | | | |
-| `ds0_hm_06_b11` (MIXED) | | | | | | | |
-| `ds1_ht_02_b11` | | | | | | | |
-| `ds0_ht_05_b11` | | | | | | | |
-| `ds0_ht_07_b16` | | | | | | | |
-| generated 2048 x 2048 gray | | | | | | | |
+| `ds0_ht_01_b11` | 1.6 / 5.6 | 0.5 / 5.9 | 1.3 / 11.0 | 1.0 / 11.5 | 0.0 / 5.5 | 1.8 / 2.9 | 1.0 |
+| `hifi_ht1_02` | 3.2 / 5.9 | 2.4 / 5.8 | 1.0 / 12.1 | 3.9 / 15.9 | 1.0 / 5.5 | 4.9 / 3.2 | 2.8 |
+| `ds1_ht_05_b11` | 23.8 / 11.3 | 92.3 / 11.3 | 88.3 / 47.8 | 46.6 / 88.6 | cannot decode | 30.2 / 6.4 | 27.5 |
+| `ds1_ht_04_b9` | 32.6 / 9.8 | 50.5 / 9.7 | 11.0 / 22.7 | 21.0 / 85.7 | wrong image | 16.5 / 6.9 | 11.5 |
+| `ds0_hm_15_b8` (MIXED) | cannot decode | cannot decode | 1.3 / 11.6 | 0.4 / 11.9 | cannot decode | 2.3 / 3.0 | 2.0 |
+| `ds0_hm_06_b11` (MIXED) | cannot decode | cannot decode | 2.0 / 11.9 | 2.8 / 17.8 | cannot decode | 3.5 / 3.7 | 2.9 |
+| `ds1_ht_02_b11` | cannot decode | cannot decode | 7.2 / 13.7 | 4.5 / 14.6 | cannot decode | 28.9 / 8.1 | 26.2 |
+| `ds0_ht_05_b11` | cannot decode | cannot decode | 23.2 / 18.6 | 6.8 / 19.8 | cannot decode | 110.3 / 18.6 | 104.4 |
+| `ds0_ht_07_b16` | cannot decode | cannot decode | 123.5 / 65.3 | 47.8 / 72.1 | cannot decode | 517.3 / 59.6 | 466.3 |
+| generated 2048 x 2048 gray | 42.6 / 22.2 | 22.1 / 23.8 | 18.5 / 20.0 | 9.5 / 22.3 | 13.4 / 7.0 | 83.1 / 27.8 | 74.9 |
 
 hayro-jpeg2000 does not read HTJ2K: it stops on the first code-block style it
 does not know, so it has no column here.
@@ -67,17 +66,57 @@ decoder here has an incremental API, so there is nothing to compare it with.
 
 | File | One decode, ms | 64 KB pieces, ms | Ratio |
 | ---- | -------------- | ---------------- | ----- |
-| GRIB2-shaped | | | |
-| `ds0_ht_05_b11` | | | |
+| GRIB2-shaped | 100.6 | 255.5 | 2.54 |
+| `ds0_ht_05_b11` | 103.9 | 305.0 | 2.94 |
 
 ### Files more than 2x slower than OpenJPEG
 
-TO FILL after the timing run: each file where rust-j2k's single-thread time is
-more than twice OpenJPEG's, with an explanation or the issue that tracks it.
+None. On the files OpenJPEG decodes, the single-thread command-line time of
+rust-j2k is between 0.5x and 1.5x of OpenJPEG's, except the generated HTJ2K
+file at 1.95x (83 ms against 43 ms; in process, 75 ms). That one is under 2x
+but close. The tiled 2048 file whole is 1.48x and `p1_03` is 1.29x. On the
+files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
 
 ### Notes
 
-TO FILL after the timing run.
+- **Against OpenJPEG.** On the Part 1 files rust-j2k is within 10% of
+  OpenJPEG on one thread for the large lossless files (`p0_07`, `p0_08`,
+  `file7.jp2`, GRIB2-shaped), 24% to 48% slower on `p0_05`, `p1_03` and the
+  tiled file, and 50% faster on `ds1_ht_04_b9`. Both are single-threaded in
+  this comparison; OpenJPEG with all cores is 1.2x to 5.5x faster on the larger
+  Part 1 files and slower on the multi-tile HTJ2K files (`ds1_ht_05_b11`,
+  `ds1_ht_04_b9`), where its threads cost more than they save.
+- **Against Grok.** Grok on one thread is 1.1x to 1.2x as fast as rust-j2k on
+  the Part 1 files. On four of the larger HTJ2K files it is much faster: 4.0x on
+  `ds1_ht_02_b11`, 4.8x on `ds0_ht_05_b11`, 4.2x on `ds0_ht_07_b16` and 4.5x
+  on the generated file. On `ds1_ht_04_b9` it is 1.5x faster, and on
+  `ds1_ht_05_b11` it is 2.9x slower. This decoder's HT path is the slow part
+  where it loses.
+  Nothing is filed for it from this page.
+- **Against OpenJPH.** On the generated file OpenJPH is 6.2x faster than
+  rust-j2k (13 ms against 83 ms), and uses a quarter of the memory. It
+  decodes only two conformance files, both too small to time (below).
+- **Against hayro-jpeg2000.** On the Part 1 files hayro-jpeg2000 is within
+  about 25% of rust-j2k either way: faster on `p0_07`, `p0_08`, `p0_05` and
+  the tiled file, slower on `p1_03`. Its output is 8-bit, so on the 12-bit
+  files (`p0_07`, `p0_08`) and the 16-bit GRIB2-shaped file the work it
+  does is not the same work. It uses more memory than rust-j2k on every file but the tiny
+  `regular_latlon`.
+- **Memory.** On the Part 1 files the peaks of OpenJPEG, Grok and rust-j2k
+  are within about 40% of each other. Grok is lowest on `p0_07`, `p0_08` and
+  `p0_05`, OpenJPEG on `p1_03` (rust-j2k is 27% above it), and rust-j2k on
+  `file7.jp2`, the GRIB2-shaped file and the tiled file. A window or one tile
+  takes about half of OpenJPEG's peak and a quarter to a third of Grok's. On
+  the HTJ2K files Grok's peak is 1.2x to 14x rust-j2k's.
+- **Small files.** For files that decode in a few milliseconds the
+  command-line time is mostly process start-up, and subtracting the start-up
+  run leaves noise: differences under about 2 ms there (`regular_latlon`,
+  `ds0_ht_01_b11`, `hifi_ht1_02`, `ds0_hm_*`, the windows and tile 27) mean
+  nothing, and a net of 0.0 means the decode was lost in the start-up run.
+  The in-process column is the reliable one for them.
+- **Load.** The timing started at a one-minute load of 1.66 and finished at
+  2.15. Median and minimum agree within a few percent on the files over 20
+  ms, which shows the run was quiet.
 
 ## Output check
 
@@ -184,7 +223,7 @@ manifests; none of them is in the published crate.
 
 ## Method
 
-- Every decoder is a release build. Each cell is the median of RUNS runs, with
+- Every decoder is a release build. Each cell is the median of 7 runs, with
   the decoders interleaved: one run of every decoder on a file, then the next
   round. Wall time comes from the clock around the process; peak resident
   memory comes from `/usr/bin/time -f %M`.
@@ -218,19 +257,22 @@ manifests; none of them is in the published crate.
 
 ## Machine
 
-CPU: Intel Core i7-10700KF at 3.8 GHz, 8 cores and 16 threads. The CPU frequency governor was GOVERNOR (`run.py time` prints it);
-it was not changed, and it affects absolute times. Load average
-during the timing run: LOAD (the run waits for it to be under 2).
+CPU: Intel Core i7-10700KF at 3.8 GHz, 8 cores and 16 threads. The CPU
+frequency governor was `powersave` (the `intel_pstate` driver); it was not
+changed, and it affects absolute times. The one-minute load average was 1.66
+when the timing started and 2.15 when it ended. The machine is shared, so
+other jobs ran. The incremental table was run afterward, at a load of 4 to 7,
+and its in-process medians matched a first run at lower load within 1%.
 
 ## Decoders and builds
 
 | Decoder | Version | Source | Build |
 | ------- | ------- | ------ | ----- |
-| rust-j2k | RELEASE, commit COMMIT | this repository | `cargo build --release`, Rust RUSTC, default release profile |
+| rust-j2k | 0.5.0, commit `1f831a2` | this repository | `cargo build --release`, rustc 1.100.0, default release profile |
 | OpenJPEG | 2.5.0 (`opj_decompress`) | the Ubuntu 24.04 package, `2.5.0-2ubuntu0.5` | as the distribution built it |
 | Grok | 20.4.25, commit `46ab34de` | tag `v20.4.25` of GrokImageCompression/grok, built from source | CMake, `Release` (`-O3 -DNDEBUG`), g++ 13.3, shared libraries, no sudo; LittleCMS bundled, the other libraries from the system |
 | OpenJPH | 0.33.0, commit `345a8bcd` | tag `0.33.0` of aous72/OpenJPH, built from source | CMake, `Release` (`-O3 -DNDEBUG`), g++ 13.3 |
-| hayro-jpeg2000 | 0.5.0 | crates.io | `cargo build --release`, features `std` and `simd`, same Rust as rust-j2k |
+| hayro-jpeg2000 | 0.5.0 | crates.io | `cargo build --release`, features `std` and `simd`, rustc 1.100.0, as for rust-j2k |
 
 ## Reproduce
 
