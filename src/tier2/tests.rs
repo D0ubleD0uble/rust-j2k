@@ -351,8 +351,8 @@ fn blocks_tile_the_band_and_precincts_partition_them() {
 
 /// A tile of one sample at an odd origin has a precinct at its finest
 /// resolution alone. The geometry builds no band for the 32 others, yet
-/// `decode_packets` still hands each its empty subbands at their own origins
-/// (ISO B.5, Eq. B-15), which the inverse DWT reads.
+/// `ComponentCoded::band` still gives each its empty subbands at their own
+/// origins (ISO B.5, Eq. B-15), which the inverse DWT reads.
 #[test]
 fn empty_resolutions_build_no_band_geometry() {
     let mut header = header(2, 2, 32, 6);
@@ -378,11 +378,26 @@ fn empty_resolutions_build_no_band_geometry() {
     let resolutions = &coded.components[0].resolutions;
     assert_eq!(resolutions.len(), 33);
     type Band = (BandKind, (u32, u32), usize, usize, usize);
+    // The empty resolutions list no subband; their extents come from the
+    // tile-component's rectangle.
+    assert!(resolutions[..32].iter().all(|r| r.subbands.is_empty()));
     let bands = |r: usize| -> Vec<Band> {
-        resolutions[r]
-            .subbands
+        let kinds: &[BandKind] = if r == 0 {
+            &[BandKind::Ll]
+        } else {
+            &[BandKind::Hl, BandKind::Lh, BandKind::Hh]
+        };
+        kinds
             .iter()
-            .map(|b| (b.kind, b.origin, b.width, b.height, b.blocks.len()))
+            .map(|&kind| {
+                let extent = coded.components[0].band(r, kind).unwrap();
+                let blocks = resolutions[r]
+                    .subbands
+                    .iter()
+                    .find(|b| b.kind == kind)
+                    .map_or(0, |b| b.blocks.len());
+                (kind, extent.origin, extent.width, extent.height, blocks)
+            })
             .collect()
     };
     // NLLL at level 32: [ceil(1 / 2^32), ceil(2 / 2^32)) = [1, 1) both ways.

@@ -14,7 +14,9 @@ use crate::codestream::MainHeader;
 use crate::codestream::markers::Transform;
 use crate::pipeline::{Band, Bands, DetailBands, SubbandCoeffs};
 use crate::quant;
-use crate::tier2::{BandKind, CodeBlock, CodedData, Coder, ComponentCoded, Resolution, Subband};
+use crate::tier2::{
+    BandExtent, BandKind, CodeBlock, CodedData, Coder, ComponentCoded, Resolution, Subband,
+};
 use crate::{Error, Result};
 
 /// A block coder with the parameters a tile-component gives it.
@@ -407,8 +409,18 @@ where
             0 => levels,
             _ => (levels + 1).saturating_sub(res as u32),
         };
+        let listed;
+        let sb = match subband_of(resolution, kind) {
+            Ok(sb) => sb,
+            // A resolution that holds no precinct lists none of its bands.
+            Err(_) if resolution.subbands.is_empty() => {
+                listed = empty_subband(extent_of(coded, res, kind)?, kind);
+                &listed
+            }
+            Err(error) => return Err(error),
+        };
         decode_subband(
-            subband_of(resolution, kind)?,
+            sb,
             level,
             numbps(header, comp, band)?,
             coders,
@@ -420,6 +432,24 @@ where
     let mut levels = Vec::with_capacity(keep);
     for (level, resolution) in resolutions.take(keep).enumerate() {
         let res = level + 1;
+        if resolution.subbands.iter().all(|s| s.width * s.height == 0) {
+            // No sample to decode and none to place. The bit-plane counts are
+            // still looked up, so a missing step size fails as it does for a
+            // band that holds blocks.
+            //
+            // A resolution that lists no band gets its three from one pass
+            // over its rectangle.
+            let [hl, lh, hh] = match coded.detail_extents(res) {
+                Some(extents) => extents.map(Some),
+                None => [BandKind::Hl, BandKind::Lh, BandKind::Hh].map(|k| coded.band(res, k)),
+            };
+            levels.push(DetailBands {
+                hl: empty_band(header, comp, res, BandKind::Hl, hl)?,
+                lh: empty_band(header, comp, res, BandKind::Lh, lh)?,
+                hh: empty_band(header, comp, res, BandKind::Hh, hh)?,
+            });
+            continue;
+        }
         levels.push(DetailBands {
             hl: decode(res, resolution, BandKind::Hl)?,
             lh: decode(res, resolution, BandKind::Lh)?,
@@ -428,6 +458,48 @@ where
     }
 
     Ok(Bands { ll, levels })
+}
+
+/// The origin and size of the `kind` band of resolution `res`.
+fn extent_of(coded: &ComponentCoded<'_>, res: usize, kind: BandKind) -> Result<BandExtent> {
+    coded
+        .band(res, kind)
+        .ok_or_else(|| Error::Inconsistent(format!("resolution is missing its {kind:?} subband")))
+}
+
+/// A subband of `extent` with no code-block.
+fn empty_subband(extent: BandExtent, kind: BandKind) -> Subband<'static> {
+    Subband {
+        kind,
+        origin: extent.origin,
+        width: extent.width,
+        height: extent.height,
+        block_cols: 0,
+        block_rows: 0,
+        blocks: Vec::new(),
+    }
+}
+
+/// The band of orientation `kind` of resolution `res`, which holds no sample:
+/// what [`decode_subband`] returns for it, without the buffer or the
+/// dequantization step.
+fn empty_band<T>(
+    header: &MainHeader,
+    comp: usize,
+    res: usize,
+    kind: BandKind,
+    extent: Option<BandExtent>,
+) -> Result<Band<T>> {
+    let extent = extent.ok_or_else(|| {
+        Error::Inconsistent(format!("resolution is missing its {kind:?} subband"))
+    })?;
+    numbps(header, comp, band_index(res, kind))?;
+    Ok(Band {
+        origin: extent.origin,
+        width: extent.width,
+        height: extent.height,
+        data: Vec::new(),
+    })
 }
 
 /// The magnitude bit-plane count `Mb` for subband index `band` (ISO E-2):
@@ -458,9 +530,11 @@ fn numbps(header: &MainHeader, comp: usize, band: usize) -> Result<u32> {
     Ok((u32::from(qcd.guard_bits) + u32::from(exp)).saturating_sub(1))
 }
 
-/// The subband of orientation `kind` within one resolution. Tier-2 always emits
-/// the full set for the resolution (one `Ll`, or `Hl/Lh/Hh`), so a miss is an
-/// internal inconsistency rather than malformed input.
+/// The subband of orientation `kind` listed by one resolution. Tier-2 lists
+/// the full set (one `Ll`, or `Hl/Lh/Hh`) for a resolution that holds a
+/// precinct, so a miss there is an internal inconsistency rather than
+/// malformed input. A resolution with no precinct lists none; see
+/// [`ComponentCoded::band`].
 fn subband_of<'a, 'b>(res: &'a Resolution<'b>, kind: BandKind) -> Result<&'a Subband<'b>> {
     res.subbands
         .iter()
@@ -653,6 +727,7 @@ mod tests {
         header.components[0].quant.steps = vec![(8, 0), (8, 100), (8, 700), (8, 1500)];
         let coded = CodedData {
             components: vec![ComponentCoded {
+                rect: None,
                 resolutions: vec![
                     Resolution {
                         subbands: vec![coded_subband(BandKind::Ll)],
