@@ -7,8 +7,8 @@
 > documented 9/7 gap ([the `2/K`
 > entry](openjpeg-departures.md#the-inverse-97s-high-pass-scale-2k)) of at
 > most 1. Phase 4 ships as the 0.5.0 release. The steps below are the build
-> order that was followed, and the background sections describe the plan as
-> it was written, before the decisions it records were carried out.
+> order followed, and the background sections are the plan as written before
+> the work began.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file
 covers Phase 4 alone. It breaks "decode HTJ2K codestreams" into ordered

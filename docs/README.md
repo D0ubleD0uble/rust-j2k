@@ -4,8 +4,9 @@ rust-j2k is a JPEG 2000 decoder written in pure Rust, with no C library
 underneath and no `unsafe` code in the library. It started with the part of
 JPEG 2000 that GRIB2 weather grids use, and now decodes general Part 1 and
 HTJ2K codestreams, and JP2 and JPH files. For the API and a usage example,
-see the crate [README](../README.md) and the rustdoc. The pages here cover the project as a
-whole; code comments cite the section of the standard each module implements.
+see the crate [README](../README.md) and the rustdoc. The pages here cover
+the project as a whole; code comments cite the section of the standard each
+module implements.
 
 Other ways to read JPEG 2000 from Rust exist. `jp2k`, `openjpeg-sys` and
 `grokj2k-sys` bind a C or C++ library. `hayro-jpeg2000` is a pure-Rust decoder

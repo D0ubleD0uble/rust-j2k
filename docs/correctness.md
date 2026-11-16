@@ -205,23 +205,24 @@ oracle, and Kakadu made all of them, so how a second encoder spends its
 code-blocks](openjpeg-departures.md#mixed-code-blocks)).
 
 Agreement with OpenJPEG is bit for bit on every 5/3 file. On 9/7 it is
-within 1, the [`2/K` gap](#how-close-a-decode-must-be): of the HT
+within 1, the [`2/K` gap](#how-close-a-decode-must-be). Of the HT
 codestreams OpenJPEG decodes, the 5/3 ones and the 9/7 `ds0_ht_09_b11` and
 `ds1_ht_06_b11` are graded exactly (`EXACT_WITH_OPENJPEG`), and
 `ds1_ht_04_b9`, `ds1_ht_05_b11` and `hifi_ht1_02` differ by 1. The 9/7
 OpenJPH files are graded within 1, or 5 at 16 bits, and differ by 1. Run by
 hand on 2026-11-16, the four openjpeg-data HT files, which are not
 committed, also match: `Bretagne1_ht.j2k`, `byte.jph` and `byte_causal.jhc`
-bit for bit, and the 9/7 `Bretagne1_ht_lossy.j2k` within 1. Three derived files are also checked against
-their source: `ds1_ht_04_b9`, `ds1_ht_05_b11` and `ds1_ht_06_b11` must decode
-exactly as `p1_04`, `p1_05` and `p1_06` (T.803 C.1.10, C.1.11). Each
-transcode's error against its source must also match the PAE and MSE Kakadu
-quotes in the manifest, on the reversible transcodes, the exact ones, and the
-irreversible `ds0_ht_02_b11` and `ds1_ht_01_b11`. The
-codestream inside each of the 20 JPH files decodes bit for bit as OpenJPEG
-decodes it, checked against committed digests of OpenJPEG's output. All 20
-JPH files are in class, and each matches the PAE and MSE Kakadu quotes
-against its source.
+bit for bit, and the 9/7 `Bretagne1_ht_lossy.j2k` within 1.
+
+Three derived files are also checked against their source: `ds1_ht_04_b9`,
+`ds1_ht_05_b11` and `ds1_ht_06_b11` must decode exactly as `p1_04`, `p1_05`
+and `p1_06` (T.803 C.1.10, C.1.11). Each transcode's error against its
+source must also match the PAE and MSE Kakadu quotes in the manifest, on the
+reversible transcodes, the exact ones, and the irreversible `ds0_ht_02_b11`
+and `ds1_ht_01_b11`. The codestream inside each of the 20 JPH files decodes
+bit for bit as OpenJPEG decodes it, checked against committed digests of
+OpenJPEG's output. All 20 JPH files are in class, and each matches the PAE
+and MSE Kakadu quotes against its source.
 
 ## A passing entry is not proof the feature works
 

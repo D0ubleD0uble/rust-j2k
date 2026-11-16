@@ -173,12 +173,12 @@
 //! their class-1 error bounds, and its nine JP2 files within their compliance
 //! class. So do its 41 HTJ2K codestreams and 20 JPH files. That gate runs in
 //! `tests/` against committed oracle snapshots, with no external tools.
-//! Correctness is defined by cross-checking OpenJPEG, not by
-//! self-consistency. An input using a feature outside the decoded set (more than one HT set per
+//! Correctness is defined by cross-checking OpenJPEG, not by self-consistency.
+//! An input using a feature outside the decoded set (more than one HT set per
 //! code-block, a Part 2 extension) is rejected with [`Error::Unsupported`],
-//! never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
-//! payloads, the crate's original target, are raw codestreams and decode
-//! directly. The feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md).
+//! never half-decoded. GRIB2 §5.40 (`grid_jpeg`) payloads, the crate's original
+//! target, are raw codestreams and decode directly. The feature map is in
+//! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md).
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`,
@@ -723,9 +723,10 @@ pub struct DecodeOptions {
     /// Only the tiles the window reaches are decoded, so a small window of a
     /// large tiled image costs a few tiles. The packets of the other tiles
     /// are not read, so damage in them is not found, as in OpenJPEG. With
-    /// [`strict`](Self::strict) off, a codestream cut short in a later tile
-    /// still gives the window's samples; `opj_decompress -allow-partial -d`
-    /// 2.5.0 refuses such a file, and `-t` decodes its whole tiles. In the
+    /// [`strict`](Self::strict) off, a codestream cut short after the tiles
+    /// the window reaches still gives the window's samples.
+    /// `opj_decompress -allow-partial -d` 2.5.0 refuses such a file, while
+    /// `-t` decodes each tile that arrived whole. In the
     /// tiles it reaches, only the code-blocks whose wavelet support reaches
     /// the window are decoded, so damage in the others is not found either.
     /// Nor is a code-block it skips checked against the bit-plane limit, so

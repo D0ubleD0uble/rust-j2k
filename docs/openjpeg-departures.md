@@ -1187,11 +1187,10 @@ waits for it, in a layer a quality-layer cap drops if need be.
 OpenJPEG refuses all three MIXED files at the header, and OpenJPH refuses
 MIXED too, so the Part 4 references are the only oracle, and Kakadu made all
 three. How another encoder spends its `Lblock` increments on Part 1 blocks
-is not tested by any file. All three files are
-in class. Kakadu's figures for each against its Part 1 source (`kakadu_stats`)
-match this decoder's on all three: `ds0_hm_06_b18` and `ds0_hm_15_b8` decode
-exactly as `p0_06` and `p0_15` do, and `ds0_hm_06_b11` has the PAE and MSE
-Kakadu quotes.
+is not tested by any file. All three files are in class. Kakadu's figures
+for each against its Part 1 source (`kakadu_stats`) match this decoder's on
+all three: `ds0_hm_06_b18` and `ds0_hm_15_b8` decode exactly as `p0_06` and
+`p0_15` do, and `ds0_hm_06_b11` has the PAE and MSE Kakadu quotes.
 
 A Part 1 block whose encoder spent a needless `Lblock` increment can pass the
 A.4 test, and is then read as an HT block. The A.4 note says a decoder may
@@ -1205,7 +1204,8 @@ Part 1 blocks of the three files fail that way. That is the only evidence that
 such a misread fails rather than giving a wrong image. The misread could also
 put the rest of the packet header out of step, which has not been seen.
 
-Two more cases follow from tier-2 settling only what it can:
+Two more cases follow from settling the coder at the block's first nonzero
+length field:
 
 - A block whose length fields are all zero is read as HT, as the A.4 note
   says to try first, and decodes to zeros. Had it been a Part 1 block, an MQ

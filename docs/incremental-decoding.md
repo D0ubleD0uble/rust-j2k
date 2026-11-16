@@ -152,7 +152,7 @@ walked from the start on each refine, as a one-shot decode walks it. So a
 refine is not cheaper than a decode of the same bytes, and on a file of many
 components under `POC` volumes it costs more: one refine of a whole file of
 200 tiles of 16384 components under 32 `POC` volumes takes 10.4 s, where one
-decode takes 6.9 s.
+decode takes 6.9 s (release build, 2026-11-16, PR #409's shapes).
 
 The code-block work is done again by each refine that decodes. A ledger
 keeps the code-block work every refine has spent, and each refine's
@@ -176,20 +176,32 @@ each refine walks its packets from the start. Each refine holds what
 decoder holds at most about three times one decode's peak, plus the bytes
 fed. `tests/incremental_alloc.rs` counts the bytes held on files of many
 one-sample tiles of 512 components, in LRCP order and under 32 PCRL `POC`
-volumes, fed in pieces. The decoder is `Send` and `Sync`. The
-ledger's counters live only for the length of a decode.
+volumes, fed in pieces. The decoder is `Send` and `Sync`. The ledger's
+counters live only for the length of a decode.
 
-Three costs are outside the bounds, as they are outside one decode's work
-bounds. Each refine that returns an image builds the whole image, as one
-decode does: it decodes every code-block again, allocates the samples and
-runs the inverse wavelet and color transforms over them, whatever share of
-the bytes is in. That is one image reconstruction per image, so at most
+The memory held follows the image size the file declares, not the bytes fed:
+a file of 1228 bytes that declares a 16384 x 16384 image holds about 640 MB
+between calls, until the decoder is dropped. A server that keeps many slow
+streams open should check the declared size with `read_header` before it
+feeds the rest of a file, or drop the decoders it is not refining
+([#415](https://github.com/D0ubleD0uble/rust-j2k/issues/415)).
+
+Four costs are outside the bounds. The first three are outside one decode's
+work bounds too. Each refine that returns an image builds the whole image,
+as one decode does: it decodes every code-block again, allocates the samples
+and runs the inverse wavelet and color transforms over them, whatever share
+of the bytes is in. That is one image reconstruction per image, so at most
 about `log2(n)` of them under the doubling cadence. Each refine also parses
 the main header and walks the tile-part headers again; these are linear in
 the headers, and take about 30 µs for the 16 KB of `TLM` entries of
 `tile_header/tlm_32_16k.j2k`. And for a JP2 file whose last tile-part has
 `Psot = 0`, each refine makes the walk that finds where its packets end (see
-[The `read_header` walk](resource-bounds.md#the-read_header-walk)).
+[The `read_header` walk](resource-bounds.md#the-read_header-walk)). The
+fourth is the incremental decoder's own: a tile whose walk is not kept is
+walked from the start on every refine, and nothing counts the repeats. Each
+refine is held to one decode's packet bound, but the refines together are
+not, and they have been measured at up to about 9 times the cost of one
+decode ([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)).
 
 ## What a later decoder could add
 

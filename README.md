@@ -195,9 +195,9 @@ says what was missing, and its `complete_reduction` is the finest resolution
 the data already gives in full.
 
 For a file that arrives in pieces, such as a download, use
-`IncrementalDecoder`. Feed it each piece, and `refine` gives you an image of
-what has come in so far from time to time, without reading the same packets
-again each time:
+`IncrementalDecoder`. Feed it each piece and call `refine`. From time to time
+it returns an image of what has come in so far, and over all the refines each
+packet is read about once:
 
 ```rust
 use rust_j2k::{DecodeOptions, IncrementalDecoder};

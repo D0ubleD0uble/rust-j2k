@@ -64,8 +64,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decodes, OpenJPH's test codestreams included: bit for bit on the
   reversible files, and within 1 on the irreversible ones. OpenJPEG does not
   decode the multi-layer files with placeholder passes, so those are graded
-  against the ISO/IEC 15444-4 reference images alone. Region of interest decodes on
-  HT code-blocks as on Part 1 ones. An `RGN` marker in a codestream whose
+  against the ISO/IEC 15444-4 reference images alone. Region of interest
+  decodes on HT code-blocks as on Part 1 ones. An `RGN` marker in a codestream whose
   `CAP` says it has none, and an HT magnitude past the bound `CAP` signals,
   are `Error::Codestream`. More than one HT set per code-block is
   `Error::Unsupported`.

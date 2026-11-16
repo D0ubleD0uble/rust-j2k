@@ -501,11 +501,10 @@ fn a_tile_of_a_cut_codestream_matches_openjpeg_allow_partial() {
         assert_eq!(got.samples, want, "component {c}");
     }
     assert!(
-        window
-            .report
-            .entries
-            .iter()
-            .all(|e| matches!(e, ReportEntry::MissingEoc { .. })),
+        matches!(
+            window.report.entries.as_slice(),
+            [ReportEntry::MissingEoc { .. }]
+        ),
         "{:?}",
         window.report
     );

@@ -58,6 +58,14 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// holds for the same bytes, so the decoder holds at most about three
 /// times one decode's peak memory, plus the bytes fed.
 ///
+/// That memory follows the image size the file declares, not the bytes fed:
+/// a file of 1228 bytes that declares a 16384 x 16384 image holds about
+/// 640 MB between calls, until the decoder is dropped. A server that keeps
+/// many slow streams open should check the size that
+/// [`read_header`](crate::read_header) reports before it feeds the rest of
+/// a file, or drop the decoders it is not refining
+/// ([#415](https://github.com/D0ubleD0uble/rust-j2k/issues/415)).
+///
 /// ```
 /// use rust_j2k::{DecodeOptions, IncrementalDecoder};
 ///
