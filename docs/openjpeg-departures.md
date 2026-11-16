@@ -47,7 +47,7 @@ refusal under `ColorOutput::Srgb`).
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
 | [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes; OpenJPEG refuses | 1 |
-| [Region of interest threshold (Part 1 and HT)](#region-of-interest-threshold-part-1-and-ht) | H.1: region from `q >= 2^s`; OpenJPEG from `q >= 2^(s-1)` | 1 |
+| [Region of interest threshold (Part 1 and HT)](#region-of-interest-threshold-part-1-and-ht) | H.1: region from `q >= 2^s`, and none when `s >= 31`; OpenJPEG from `q >= 2^(s-1)`, and zeroes the block when `s >= 31` | 1 |
 | [MIXED code-blocks](#mixed-code-blocks) | decodes; OpenJPEG refuses the code-block style | 1 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
@@ -1097,11 +1097,11 @@ applies to `Mb` on an HT block.
 | | |
 | - | - |
 | This decoder | a coefficient is region of interest when `q >= 2^s`, at double scale `mag >= 2^(s + 1)`, in Part 1 and HT blocks alike |
-| OpenJPEG 2.5.0 | region when `mag >= 1 << roishift` at double scale, `q >= 2^(s-1)` (`t1.c`) |
+| OpenJPEG 2.5.0 | region when `mag >= 1 << roishift` at double scale, `q >= 2^(s-1)` (`t1.c`); sets the whole block to 0 when `roishift >= 31` |
 | Standard | ISO/IEC 15444-1 Annex H.1 (ITU-T T.800 (08/2002)) |
 | Rule | 1 |
-| Tests and fixtures | `undo_maxshift_matches_h1_across_the_boundary`, `a_background_coefficient_with_bit_s_minus_one_set_is_kept` and `a_region_coefficient_at_exactly_two_to_the_s_is_unshifted` in `src/tier1/ebcot/passes.rs`; `an_ht_background_coefficient_with_bit_s_minus_one_set_is_kept` and `an_ht_region_coefficient_above_two_to_the_s_is_unshifted` in `src/tier1/ht/tests.rs`; `tests/roi_h1_band.rs` on `tests/fixtures/roi_h1_band/` |
-| Decided | #377 |
+| Tests and fixtures | `undo_maxshift_matches_h1_across_the_boundary`, `a_background_coefficient_with_bit_s_minus_one_set_is_kept` and `a_region_coefficient_at_exactly_two_to_the_s_is_unshifted` in `src/tier1/ebcot/passes.rs`; `an_ht_background_coefficient_with_bit_s_minus_one_set_is_kept` and `an_ht_region_coefficient_above_two_to_the_s_is_unshifted` in `src/tier1/ht/tests.rs`; `a_maxshift_of_31_or_more_keeps_the_coefficient` and `an_inexpressible_maxshift_on_a_decodable_block_keeps_it` in `src/tier1/ebcot/passes.rs`; `a_maxshift_of_31_keeps_every_coefficient` in `tests/roi_h1_band.rs` on `tests/fixtures/roi_h1_band/` |
+| Decided | #377, #396 |
 
 H.1 sorts each sample of a block under a maxshift of `s` (T.814 7.6 hands HT
 blocks to the same step). Step 3 reads: "If Nb(u, v) ≥ Mb and if at least one
@@ -1131,6 +1131,19 @@ background, so H.1 returns the source. `opj_decompress` 2.5.0 returns 128 for
 the 32 of 64 samples whose `|sample - 128|` is at least 64, which is every
 value in the band. This decoder returns all 64 exactly. The expected output is
 the source image, not this decoder's output.
+
+A shift of 31 or more is the same departure. `t1.c` has `if (roishift >= 31)
+datap[...] = 0;`, which zeroes the block. By H.1 a sample is region only when
+`q >= 2^s`, and no magnitude this decoder holds reaches `2^31`, so every
+coefficient is background and is kept. The reading also removes a jump:
+`s = 30` kept every coefficient below `2^30` and `s = 31` would have zeroed
+the block. `SPrgn` is a free byte, and a block whose zero bit-planes exceed
+`Mb` keeps its coded planes in range under any shift, so a crafted stream
+reaches it. `roi_band_s31.j2k` is the 8x8 stream above with `SPrgn = 31`:
+this decoder returns the source, and `opj_decompress` 2.5.0 returns 128 for
+all 64 samples. HT blocks cannot reach it, since `Mb + s` over 30 is refused as
+a `Limit`. No conformance file or encoder output is known to carry a shift this
+large.
 
 None of the conformance or HT ROI codestreams has a coefficient in the band:
 the eight HT references, `p0_03`, `p0_06`, `p0_13` and `p0_15` all decode as

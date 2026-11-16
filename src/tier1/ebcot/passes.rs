@@ -1029,27 +1029,26 @@ fn read_segmentation_symbol(
 /// returns it as 0 or a fraction of its value. This follows H.1 instead; see
 /// `docs/openjpeg-departures.md`, "Region of interest threshold (Part 1 and HT)".
 ///
-/// `t1.c` also has a `roishift >= 31` arm:
+/// `t1.c` also has a `roishift >= 31` arm that zeroes the whole block:
 ///
 /// ```text
 /// if (roishift >= 31) { datap[...] = 0; }
 /// ```
 ///
-/// It guards a shift `1i32` cannot express, and it is reachable: `SPrgn` is a
-/// free byte, and a block whose zero bit-planes exceed `Mb` keeps
-/// [`top_coded_plane`] under the [`MAX_BIT_PLANES`] check however large the
-/// shift is. Zeroing the block is the *oracle's* reading, not H.2's: a
-/// threshold of `2^31` or more is above every `i32` magnitude, so the rule
-/// above, taken literally, would keep every coefficient as background. `t1.c`
-/// zeroes `datap` wholesale instead, and this follows it; changing the arm to
-/// keep the coefficients would diverge from OpenJPEG on every such stream (see
-/// `docs/openjpeg-departures.md`).
+/// It is reachable: `SPrgn` is a free byte, and a block whose zero bit-planes
+/// exceed `Mb` keeps [`top_coded_plane`] under the [`MAX_BIT_PLANES`] check
+/// however large the shift is. H.1 gives a different answer. A sample is
+/// region only when `q >= 2^s`, and with `s >= 31` no magnitude this decoder
+/// holds can reach that, so every coefficient is background and is returned
+/// unchanged. This follows H.1, as the threshold below does, and differs from
+/// OpenJPEG on such streams (see `docs/openjpeg-departures.md`).
 pub(crate) fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
     if roi_shift == 0 {
         return mag;
     }
+    // Nothing in an `i32` reaches `2^s` for `s >= 31`: all background.
     if roi_shift >= 31 {
-        return 0;
+        return mag;
     }
     // `2^(roi_shift + 1)` is `2^31` at `roi_shift = 30`, past `i32`.
     let threshold = 1i64 << (roi_shift + 1);
@@ -1711,6 +1710,21 @@ mod tests {
         assert_eq!(undo_maxshift(1 << 30, 30), 1 << 30);
     }
 
+    /// From `s = 31` no `i32` magnitude reaches `2^s`, so H.1 keeps every
+    /// coefficient as background. OpenJPEG zeroes the block instead.
+    #[test]
+    fn a_maxshift_of_31_or_more_keeps_the_coefficient() {
+        for roi_shift in [31u8, 32, 100, 255] {
+            for mag in [0, 1, 7, 1 << 20, 1 << 30, i32::MAX] {
+                assert_eq!(
+                    undo_maxshift(mag, roi_shift),
+                    mag,
+                    "mag {mag}, s {roi_shift}"
+                );
+            }
+        }
+    }
+
     /// A magnitude one below the threshold is background and stays where it is;
     /// one at the threshold is the region and comes down. This is the single
     /// discriminating pair, spelled out so a boundary regression names itself.
@@ -1844,21 +1858,23 @@ mod tests {
 
     /// The bit-plane limit alone does not bound `SPrgn`: enough zero bit-planes
     /// pull `top` back under it whatever the shift, so an inexpressible shift
-    /// reaches `undo_maxshift`. OpenJPEG's `roishift >= 31` arm zeroes such a
-    /// block — this must do the same, not overflow `1i32 << roi_shift`.
+    /// reaches `undo_maxshift`. H.1 keeps every coefficient of such a block as
+    /// background, so it decodes as it does with no shift and the same planes.
     #[test]
-    fn an_inexpressible_maxshift_on_a_decodable_block_zeroes_it() {
+    fn an_inexpressible_maxshift_on_a_decodable_block_keeps_it() {
+        let g = &GOLDEN_BLOCKS[0];
+        let numbps = g.num_passes.div_ceil(3) + g.zero_bit_planes;
         for roi_shift in [31u8, 64, 255] {
-            let mut state = BlockState::new(4, 4);
-            // numbps 8, zero planes 8 + roi_shift − 5: top decodes 5 planes.
-            let zero_bit_planes = 8 + u32::from(roi_shift) - 5;
+            let mut state = BlockState::new(g.width, g.height);
+            // The shift raises the plane count by `s`, so the signaled zero
+            // bit-planes rise by `s` too and the block still starts at `top`.
             decode_block(
-                &[(vec![0x80, 0x27], 3)],
+                &[(g.segment.to_vec(), g.num_passes)],
                 &mut state,
-                Orientation::Ll,
-                8,
-                3,
-                zero_bit_planes,
+                g.orient,
+                numbps,
+                g.num_passes,
+                g.zero_bit_planes + u32::from(roi_shift),
                 BlockParams {
                     style: 0,
                     roi_shift,
@@ -1866,10 +1882,8 @@ mod tests {
                 },
             )
             .expect("a small top decodes whatever the maxshift");
-            assert!(
-                state.coeffs.iter().all(|&c| c == 0),
-                "roi_shift {roi_shift}: every coefficient reads as region and shifts to nothing"
-            );
+            let got: Vec<i32> = state.coeffs.iter().map(|&c| c / 2).collect();
+            assert_eq!(got, g.coeffs, "roi_shift {roi_shift}: all background");
         }
     }
 
