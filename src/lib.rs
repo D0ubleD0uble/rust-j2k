@@ -22,7 +22,7 @@
 //! color order. [`read_header`] and [`read_header_with`] read the same header
 //! without decoding any tile data. Samples come out as coded by default;
 //! [`ColorOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
-//! The [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md)
+//! The [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md)
 //! maps what is decoded and what is not.
 //!
 //! # Pipeline
@@ -131,7 +131,7 @@
 //! assert!(matches!(decode(b"hello"), Err(Error::Codestream(_))));
 //! ```
 //!
-//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams
+//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams
 //!
 //! With [`DecodeOptions::strict`] off, a codestream cut short, or one with
 //! bytes left after a tile's last packet, decodes to the image the data
@@ -178,7 +178,7 @@
 //! code-block, a Part 2 extension) is rejected with [`Error::Unsupported`],
 //! never half-decoded. GRIB2 §5.40 (`grid_jpeg`) payloads, the crate's original
 //! target, are raw codestreams and decode directly. The feature map is in
-//! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md).
+//! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`,
@@ -317,9 +317,9 @@ pub use window::Window;
 /// since the format has no checksum, and damage can show up as any variant
 /// (see the crate docs).
 ///
-/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-sample-limit
-/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-tier-2-work-bound
-/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-tier-1-work-bound
+/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit
+/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-tier-2-work-bound
+/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-tier-1-work-bound
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -635,7 +635,7 @@ pub enum ColorOutput {
     /// assert_eq!(rgba8(&gray), Some(vec![0, 0, 0, 255, 255, 255, 255, 255]));
     /// ```
     ///
-    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/srgb-output.md#every-input-and-its-result
+    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/srgb-output.md#every-input-and-its-result
     Srgb,
 }
 
@@ -876,7 +876,7 @@ pub struct DecodeOptions {
     /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output, and about 1.35 to 3.2 times that in all at its
-    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
+    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
     /// for many gigabytes. If
     /// the allocation fails the process aborts, as Rust's allocation
     /// failures do. Only an image too large for this target to
@@ -930,7 +930,8 @@ pub struct DecodeOptions {
     /// the resolutions a reduction keeps decodes at that reduction to the same
     /// samples as the whole codestream, and the report's
     /// [`complete_reduction`](DecodeReport::complete_reduction) says which
-    /// reduction that is.
+    /// reduction that is. [`IncrementalDecoder`] decodes such prefixes for
+    /// you, and over all its refines reads each packet about once.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
@@ -989,7 +990,7 @@ impl Default for DecodeOptions {
 /// Each work bound scales with the size of the file, so a small file cannot
 /// ask for minutes of work, and the sample limit holds the memory a file may
 /// ask for to an estimated 1.4 GiB for a square tile, and to a few GiB for a tall,
-/// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
+/// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
 /// a bound, when it codes many samples in very few bytes or is very
 /// large. The decode then fails with [`Error::Limit`], and its message names
 /// the option and a [`Raised`](WorkLimit::Raised) factor. Treat the factor as

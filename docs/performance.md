@@ -5,15 +5,18 @@ Grok, OpenJPH and hayro-jpeg2000 on the same files. It names the release it
 measured, the machine, every version and build flag, and the commands, so you
 can repeat it. Kakadu is left out because it is commercial.
 
-Measured release: the rust-j2k 0.5.0 release candidate, commit `1f831a2` (`Cargo.toml` still reads 0.4.0 there), and hayro-jpeg2000 0.5.0. This page and the tools were added on top of that commit and do not change the decoder.
+Measured release: the rust-j2k 0.5.0 release candidate, commit `1f831a2`
+(`Cargo.toml` still reads 0.4.0 there), and hayro-jpeg2000 0.5.0. This page
+and the tools were added on top of that commit and do not change the
+decoder.
 
 ## Results
 
 All times are milliseconds of wall time per decode, the median of 7 runs.
-Each cell is `time / peak MiB`; an in-process cell is the time alone. A blank cell says why in the notes below the
-table. Command-line decoders are timed as processes with their start-up and
-file I/O taken off (see [Method](#method)); the in-process rows are the decode
-call alone.
+Each cell is `time / peak MiB`; an in-process cell is the time alone. A
+blank cell says why in the notes below the table. Command-line decoders are
+timed as processes with their start-up and file I/O taken off (see
+[Method](#method)); the in-process rows are the decode call alone.
 
 
 ### Part 1 files
@@ -60,12 +63,13 @@ does not know, so it has no column here.
 
 ### Incremental decoder
 
-`IncrementalDecoder` fed in 64 KB pieces, with `refine` called after each, and
-`finish` at the end, against one `decode_with` of the same bytes. No other
-decoder here has an incremental API, so there is nothing to compare it with.
-Each row first checks that `finish` after the pieces gives the same samples as
-one decode (it does, on both files). Times are medians of 9 runs, taken at a one-minute load average of 8.8 to 9.6
-(the machine was busy, so absolute times are higher than in the other tables).
+`IncrementalDecoder` fed in 64 KB pieces, with `refine` called after each,
+and `finish` at the end, against one `decode_with` of the same bytes. No
+other decoder here has an incremental API, so there is nothing to compare it
+with. Each row first checks that `finish` after the pieces gives the same
+samples as one decode (it does, on both files). Times are medians of 9 runs,
+taken at a one-minute load average of 8.8 to 9.6 (the machine was busy, so
+absolute times are higher than in the other tables).
 
 | File | One decode, ms | 64 KB pieces, ms | Ratio |
 | ---- | -------------- | ---------------- | ----- |
@@ -92,10 +96,11 @@ the files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
   OpenJPEG on one thread for the large lossless files (`p0_07`, `p0_08`,
   `file7.jp2`, GRIB2-shaped), 24% to 48% slower on `p0_05`, `p1_03` and the
   tiled file. On the HTJ2K files it decodes `ds1_ht_04_b9` in half the time
-  (16.5 ms against 32.6 ms) and `ds1_ht_05_b11` in 1.27x the time. Both are single-threaded in
-  this comparison; OpenJPEG with all cores is 1.2x to 5.5x faster on the larger
-  Part 1 files and slower on the multi-tile HTJ2K files (`ds1_ht_05_b11`,
-  `ds1_ht_04_b9`), where its threads cost more than they save.
+  (16.5 ms against 32.6 ms) and `ds1_ht_05_b11` in 1.27x the time. Both are
+  single-threaded in this comparison; OpenJPEG with all cores is 1.2x to
+  5.5x faster on the larger Part 1 files and slower on the multi-tile HTJ2K
+  files (`ds1_ht_05_b11`, `ds1_ht_04_b9`), where its threads cost more than
+  they save.
 - **Against Grok.** Grok on one thread is 1.1x to 1.2x as fast as rust-j2k on
   the Part 1 files. On four of the larger HTJ2K files it is much faster: 4.0x on
   `ds1_ht_02_b11`, 4.8x on `ds0_ht_05_b11`, 4.2x on `ds0_ht_07_b16` and 4.5x
@@ -107,25 +112,26 @@ the files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
   rust-j2k (13 ms against 83 ms), and uses a quarter of the memory. It
   decodes only two conformance files, both too small to time (below).
 - **Against hayro-jpeg2000.** On the Part 1 files hayro-jpeg2000 is within
-  about 25% of rust-j2k either way, except on the tiled file where it is 1.39x
-  faster: faster on `p0_07`, `p0_08`, `p0_05`, the GRIB2-shaped file and the
-  tiled file, slower on `p1_03` (1.24x). Its output is 8-bit, so on the 12-bit
-  files (`p0_07`, `p0_08`) and the 16-bit GRIB2-shaped file the work it
-  does is not the same work. It uses more memory than rust-j2k on every file but the tiny
-  `regular_latlon`.
-- **Memory.** On the Part 1 files the peaks differ by up to 1.9x on the larger files, and no
-  decoder is lowest throughout. On the tiny `regular_latlon` Grok is 3.9x
-  rust-j2k (10.8 MiB against 2.8). rust-j2k is lowest on `file7.jp2` (11.8 MiB;
-  OpenJPEG 14.0, Grok 22.1), the GRIB2-shaped file (9.5; 10.4 and 17.2) and
-  the tiled file (19.4; 22.0 and 21.8). It is level on `p0_05`. Grok is 19% lower
-  on `p0_07` (47.5 MiB against 58.7) and 27% lower on `p0_08` (23.5 against
-  32.2), and OpenJPEG is 21% lower on `p1_03`. A
-  window or one tile takes about half of OpenJPEG's peak and a quarter to a
-  third of Grok's. On the HTJ2K conformance files rust-j2k's peak is the
-  lowest or level with Grok's: level on `ds0_ht_05_b11` (18.6 MiB each), 1.1x
-  below on `ds0_ht_07_b16`, and 1.7x to 14x below on the rest. On the
-  generated HTJ2K file it is the highest: 27.8 MiB against 22.2 for OpenJPEG,
-  20.0 for Grok and 7.0 for OpenJPH.
+  about 25% of rust-j2k either way, except on the tiled file where it is
+  1.39x faster: faster on `p0_07`, `p0_08`, `p0_05`, the GRIB2-shaped file
+  and the tiled file, slower on `p1_03` (1.24x). Its output is 8-bit, so on
+  the 12-bit files (`p0_07`, `p0_08`) and the 16-bit GRIB2-shaped file the
+  work it does is not the same work. It uses more memory than rust-j2k on
+  every file but the tiny `regular_latlon`.
+- **Memory.** On the Part 1 files the peaks differ by up to 1.9x on the
+  larger files, and no decoder is lowest throughout. On the tiny
+  `regular_latlon` Grok is 3.9x rust-j2k (10.8 MiB against 2.8). rust-j2k is
+  lowest on `file7.jp2` (11.8 MiB; OpenJPEG 14.0, Grok 22.1), the
+  GRIB2-shaped file (9.5; 10.4 and 17.2) and the tiled file (19.4; 22.0 and
+  21.8). It is level on `p0_05`. Grok is 19% lower on `p0_07` (47.5 MiB
+  against 58.7) and 27% lower on `p0_08` (23.5 against 32.2), and OpenJPEG
+  is 21% lower on `p1_03`. A window or one tile takes about half of
+  OpenJPEG's peak and a quarter to a third of Grok's. On the HTJ2K
+  conformance files rust-j2k's peak is the lowest or level with Grok's:
+  level on `ds0_ht_05_b11` (18.6 MiB each), 1.1x below on `ds0_ht_07_b16`,
+  and 1.7x to 14x below on the rest. On the generated HTJ2K file it is the
+  highest: 27.8 MiB against 22.2 for OpenJPEG, 20.0 for Grok and 7.0 for
+  OpenJPH.
 - **Small files.** For files that decode in a few milliseconds the
   command-line time is mostly process start-up, and subtracting the start-up
   run leaves noise: differences under about 2 ms there (`regular_latlon`,
@@ -134,8 +140,8 @@ the files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
   The in-process column is the reliable one for them.
 - **Load.** The method asks for a load under 2. The timing ran at a
   one-minute load of 1.66 to 2.15, and the incremental table at 4 to 7, so
-  both are slightly or well above that. Median and minimum agree within a few percent on the files over 20
-  ms, which shows the run was quiet.
+  both are slightly or well above that. Median and minimum agree within a
+  few percent on the files over 20 ms, which shows the run was quiet.
 
 ## Output check
 
@@ -144,12 +150,12 @@ decoder whose image was wrong has a note here and no time above.
 
 The oracle is `opj_decompress` 2.5.0, writing PGX. OpenJPEG 2.5.0 does not
 decode most of the HTJ2K conformance files: it refuses the MIXED code-block
-set and fails on the others listed below. For those the oracle is the ISO/IEC 15444-4
-reference image that `tests/fixtures/conformance/ht/` holds, and a lossy
-result counts as right inside the bound that manifest gives. Lossless files
-must match exactly. For a lossy file against OpenJPEG, a peak absolute error
-(PAE) of 5 or less counts as right, the loosest bound the test suite uses for
-a lossy file (16-bit).
+set and fails on the others listed below. For those the oracle is the
+ISO/IEC 15444-4 reference image that `tests/fixtures/conformance/ht/` holds,
+and a lossy result counts as right inside the bound that manifest gives.
+Lossless files must match exactly. For a lossy file against OpenJPEG, a peak
+absolute error (PAE) of 5 or less counts as right, the loosest bound the
+test suite uses for a lossy file (16-bit).
 
 `PAE n` is the largest difference of any sample, over all components.
 
