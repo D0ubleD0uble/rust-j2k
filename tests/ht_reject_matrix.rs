@@ -18,52 +18,7 @@
 #[path = "support/synth.rs"]
 mod synth;
 use rust_j2k::{Error, decode};
-
-/// Packet header bits, packed as B.10.1 has it: a byte after 0xFF carries
-/// only 7 bits.
-struct Bits {
-    out: Vec<u8>,
-    byte: u8,
-    used: u32,
-    room: u32,
-}
-
-impl Bits {
-    fn new() -> Self {
-        Bits {
-            out: Vec::new(),
-            byte: 0,
-            used: 0,
-            room: 8,
-        }
-    }
-
-    fn put(&mut self, bit: u8) {
-        self.byte = (self.byte << 1) | bit;
-        self.used += 1;
-        if self.used == self.room {
-            self.out.push(self.byte);
-            self.room = if self.byte == 0xFF { 7 } else { 8 };
-            self.byte = 0;
-            self.used = 0;
-        }
-    }
-
-    fn put_int(&mut self, value: u32, width: u32) {
-        for shift in (0..width).rev() {
-            self.put(((value >> shift) & 1) as u8);
-        }
-    }
-
-    fn finish(mut self) -> Vec<u8> {
-        if self.used > 0 {
-            self.out.push(self.byte << (self.room - self.used));
-        } else if self.out.last() == Some(&0xFF) {
-            self.out.push(0);
-        }
-        self.out
-    }
-}
+use synth::{Bits, seg};
 
 /// One HT code-block, alone in the image.
 struct Block<'a> {
@@ -144,12 +99,6 @@ fn ht_file(block: &Block<'_>) -> Vec<u8> {
     data.extend_from_slice(block.cleanup);
     data.extend_from_slice(block.refinement);
 
-    let seg = |code: u16, body: &[u8]| {
-        let mut out = code.to_be_bytes().to_vec();
-        out.extend_from_slice(&(2 + body.len() as u16).to_be_bytes());
-        out.extend_from_slice(body);
-        out
-    };
     let siz = synth::siz_body(
         [
             block.width,
@@ -169,11 +118,11 @@ fn ht_file(block: &Block<'_>) -> Vec<u8> {
     let ccap: u16 = block.ccap | if block.roi_shift.is_some() { 0x1000 } else { 0 };
     cs.extend(seg(0xFF50, &[0, 2, 0, 0, (ccap >> 8) as u8, ccap as u8]));
     // COD: block style HT (0x40), 64x64 code-blocks, no wavelet level.
-    cs.extend(seg(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0x40, 1]));
+    cs.extend(seg(0xFF52, &synth::cod_body(1, 0, 4, 0x40)));
     // QCD: two guard bits and the exponent that gives `Mb`.
     cs.extend(seg(
         0xFF5C,
-        &[0x40, (block.mb.saturating_sub(1).min(31) as u8) << 3],
+        &synth::qcd_none_body(2, &[block.mb.saturating_sub(1).min(31) as u8]),
     ));
     if let Some(shift) = block.roi_shift {
         cs.extend(seg(0xFF5E, &[0, 0, shift]));

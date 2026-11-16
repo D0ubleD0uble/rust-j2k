@@ -47,21 +47,13 @@ fn wrap(
     profile: &[u8],
 ) -> Vec<u8> {
     let (width, height) = size;
-    let mut ihdr = height.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&components.to_be_bytes());
-    ihdr.extend_from_slice(&[depth - 1, 7, 0, 0]);
-    let mut colr = vec![2, 0, 0];
-    colr.extend_from_slice(profile);
-    let mut jp2h = bx(b"ihdr", &ihdr);
-    jp2h.extend(bx(b"colr", &colr));
-    let mut file = vec![
-        0, 0, 0, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
-    ];
-    file.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    file.extend(bx(b"jp2h", &jp2h));
-    file.extend(bx(b"jp2c", codestream));
-    file
+    let ihdr = synth::ihdr_payload(height, width, components, [depth - 1, 7, 0, 0]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_icc(profile))],
+        &[],
+        codestream,
+        &[],
+    )
 }
 
 fuzz_target!(|data: &[u8]| {

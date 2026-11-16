@@ -114,3 +114,269 @@ pub fn siz_body(grid: [u32; 8], components: &[[u8; 3]]) -> Vec<u8> {
     out.extend(components.concat());
     out
 }
+
+/// A `SOT` marker segment: tile `isot`, the tile-part length `psot` (counted
+/// from the marker's first byte), part `tpsot` of `tnsot`.
+pub fn sot(isot: u16, psot: u32, tpsot: u8, tnsot: u8) -> Vec<u8> {
+    let mut body = isot.to_be_bytes().to_vec();
+    body.extend_from_slice(&psot.to_be_bytes());
+    body.extend_from_slice(&[tpsot, tnsot]);
+    seg(0xFF90, &body)
+}
+
+/// A tile-part: `SOT` for tile `isot`, part `tpsot` of `tnsot`, then `extra`
+/// (marker segments of its header), `SOD` and `data`. `Psot` covers it all.
+pub fn tile_part(isot: u16, tpsot: u8, tnsot: u8, extra: &[u8], data: &[u8]) -> Vec<u8> {
+    let psot = u32::try_from(12 + extra.len() + 2 + data.len()).expect("tile-part too long");
+    let mut out = sot(isot, psot, tpsot, tnsot);
+    out.extend_from_slice(extra);
+    out.extend_from_slice(&[0xFF, 0x93]);
+    out.extend_from_slice(data);
+    out
+}
+
+/// A `COD` body: LRCP, no color transform, the 5/3 wavelet, no precinct
+/// sizes, `layers` layers, `levels` decomposition levels, code-blocks of
+/// `4 << block` samples square (`block` is the stored exponent minus 2) and
+/// code-block style `style`.
+pub fn cod_body(layers: u16, levels: u8, block: u8, style: u8) -> Vec<u8> {
+    let mut out = vec![0, 0];
+    out.extend_from_slice(&layers.to_be_bytes());
+    out.extend_from_slice(&[0, levels, block, block, style, 1]);
+    out
+}
+
+/// A `QCD` body with no quantization: `guard` guard bits, then one exponent
+/// per subband.
+pub fn qcd_none_body(guard: u8, exponents: &[u8]) -> Vec<u8> {
+    let mut out = vec![guard << 5];
+    out.extend(exponents.iter().map(|e| e << 3));
+    out
+}
+
+/// Packet header bits, packed as B.10.1 has it: a byte after 0xFF carries
+/// only 7 bits, and the last byte is padded with 0 bits (and followed by a
+/// 0x00 if it is 0xFF).
+#[derive(Default)]
+pub struct Bits {
+    out: Vec<u8>,
+    byte: u8,
+    used: u32,
+    room: u32,
+}
+
+impl Bits {
+    pub fn new() -> Self {
+        Bits {
+            room: 8,
+            ..Bits::default()
+        }
+    }
+
+    pub fn put(&mut self, bit: u8) {
+        self.byte = (self.byte << 1) | bit;
+        self.used += 1;
+        if self.used == self.room {
+            self.out.push(self.byte);
+            self.room = if self.byte == 0xFF { 7 } else { 8 };
+            self.byte = 0;
+            self.used = 0;
+        }
+    }
+
+    /// The low `width` bits of `value`, most significant first.
+    pub fn put_int(&mut self, value: u32, width: u32) {
+        for shift in (0..width).rev() {
+            self.put(((value >> shift) & 1) as u8);
+        }
+    }
+
+    pub fn finish(mut self) -> Vec<u8> {
+        if self.used > 0 {
+            self.out.push(self.byte << (self.room - self.used));
+        } else if self.out.last() == Some(&0xFF) {
+            self.out.push(0);
+        }
+        self.out
+    }
+}
+
+/// A tag tree over a row of leaves (B.10.2), encoded as OpenJPEG's
+/// `opj_tgt_encode` does.
+pub struct TagTree {
+    /// `(parent, value, low, known)` per node, the leaves first.
+    nodes: Vec<(Option<usize>, u32, u32, bool)>,
+}
+
+impl TagTree {
+    pub fn new(leaves: &[u32]) -> Self {
+        let mut nodes: Vec<(Option<usize>, u32, u32, bool)> =
+            leaves.iter().map(|&v| (None, v, 0, false)).collect();
+        let (mut start, mut width) = (0, leaves.len());
+        while width > 1 {
+            let parents = width.div_ceil(2);
+            let first = nodes.len();
+            for p in 0..parents {
+                let value = (2 * p..(2 * p + 2).min(width))
+                    .map(|c| nodes[start + c].1)
+                    .min()
+                    .unwrap();
+                nodes.push((None, value, 0, false));
+                for c in 2 * p..(2 * p + 2).min(width) {
+                    nodes[start + c].0 = Some(first + p);
+                }
+            }
+            (start, width) = (first, parents);
+        }
+        TagTree { nodes }
+    }
+
+    pub fn encode(&mut self, bits: &mut Bits, leaf: usize, threshold: u32) {
+        let mut path = vec![leaf];
+        while let Some(parent) = self.nodes[*path.last().unwrap()].0 {
+            path.push(parent);
+        }
+        let mut low = 0;
+        for &at in path.iter().rev() {
+            let node = &mut self.nodes[at];
+            low = low.max(node.2);
+            while low < threshold {
+                if low >= node.1 {
+                    if !node.3 {
+                        bits.put(1);
+                        node.3 = true;
+                    }
+                    break;
+                }
+                bits.put(0);
+                low += 1;
+            }
+            node.2 = low;
+        }
+    }
+}
+
+/// An `ihdr` box matching a codestream's `SIZ`: the image area and `Csiz`,
+/// with 8-bit unsigned samples (`BPC` 7), `C` 7, `UnkC` 0 and `IPR` 0. The
+/// codestream must start with `SOC`, `SIZ`.
+pub fn ihdr_for(codestream: &[u8]) -> Vec<u8> {
+    let be32 = |at: usize| u32::from_be_bytes(codestream[at..at + 4].try_into().unwrap());
+    let (xsiz, ysiz, x0, y0) = (be32(8), be32(12), be32(16), be32(20));
+    let mut payload = (ysiz - y0).to_be_bytes().to_vec();
+    payload.extend_from_slice(&(xsiz - x0).to_be_bytes());
+    payload.extend_from_slice(&codestream[40..42]); // Csiz
+    payload.extend_from_slice(&[7, 7, 0, 0]); // BPC, C, UnkC, IPR
+    bx(b"ihdr", &payload)
+}
+
+/// The file the `jp2_boxes` fuzz target builds from `variant`, `body` and
+/// the codestream the variant picks: bit 2 adds the signature and `ftyp`,
+/// bit 3 (with it) a `jp2h` of a matching `ihdr` and `body`, and bits 0-1
+/// pick the `jp2c` form (32-bit `LBox`, 64-bit `XLBox`, `LBox` 0, or a
+/// `body` after it).
+pub fn wrap_jp2_boxes(variant: u8, codestream: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut file = Vec::new();
+    if variant & 0x04 != 0 {
+        file.extend_from_slice(&JP2_SIGNATURE);
+        file.extend_from_slice(&ftyp_jp2());
+        if variant & 0x08 != 0 {
+            let mut children = ihdr_for(codestream);
+            children.extend_from_slice(body);
+            file.extend_from_slice(&bx(b"jp2h", &children));
+        } else {
+            file.extend_from_slice(body);
+        }
+    } else {
+        file.extend_from_slice(body);
+    }
+    match variant & 0x03 {
+        0 => file.extend_from_slice(&bx(b"jp2c", codestream)),
+        1 => {
+            file.extend_from_slice(&1u32.to_be_bytes());
+            file.extend_from_slice(b"jp2c");
+            file.extend_from_slice(&(16 + codestream.len() as u64).to_be_bytes());
+            file.extend_from_slice(codestream);
+        }
+        2 => {
+            file.extend_from_slice(&0u32.to_be_bytes());
+            file.extend_from_slice(b"jp2c");
+            file.extend_from_slice(codestream);
+        }
+        _ => {
+            file.extend_from_slice(&bx(b"jp2c", codestream));
+            file.extend_from_slice(body);
+        }
+    }
+    file
+}
+
+// The allocator shims below are the one `unsafe` allowed in this crate, and
+// only in test code: each forwards every call to `System` unchanged and only
+// observes the sizes, so the contract the caller upholds is the contract
+// `System` needs. A test binary installs one with
+// `#[global_allocator] static ALLOCATOR: synth::PeakAlloc = synth::PeakAlloc;`.
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Bytes live now, for [`PeakAlloc`].
+pub static CURRENT: AtomicUsize = AtomicUsize::new(0);
+/// The high-water mark of [`CURRENT`]; a test resets it with a store.
+pub static PEAK: AtomicUsize = AtomicUsize::new(0);
+/// Allocations made, for [`CountAlloc`].
+pub static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+fn grow(size: usize) {
+    let now = CURRENT.fetch_add(size, Ordering::SeqCst) + size;
+    PEAK.fetch_max(now, Ordering::SeqCst);
+}
+
+/// Tracks live bytes in [`CURRENT`] and their peak in [`PEAK`]. A `realloc`
+/// counts as the new block allocated before the old one is freed.
+pub struct PeakAlloc;
+
+// SAFETY: every call forwards to `System` unchanged; the counters only
+// observe the sizes.
+unsafe impl GlobalAlloc for PeakAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        grow(layout.size());
+        // SAFETY: the caller's contract for `alloc` is passed through.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        grow(layout.size());
+        // SAFETY: the caller's contract for `alloc_zeroed` is passed through.
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        CURRENT.fetch_sub(layout.size(), Ordering::SeqCst);
+        // SAFETY: the caller's contract for `dealloc` is passed through.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        grow(new_size);
+        CURRENT.fetch_sub(layout.size(), Ordering::SeqCst);
+        // SAFETY: the caller's contract for `realloc` is passed through.
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+/// Counts allocations in [`ALLOCATIONS`].
+pub struct CountAlloc;
+
+// SAFETY: every call forwards to `System` unchanged; the counter only
+// observes the calls.
+unsafe impl GlobalAlloc for CountAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: the caller's contract for `alloc` is passed through.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: the caller's contract for `dealloc` is passed through.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}

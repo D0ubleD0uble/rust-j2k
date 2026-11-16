@@ -6,13 +6,9 @@
 //! and agree with LittleCMS 2 (Pillow's `ImageCms`, an sRGB output profile)
 //! on every value used here.
 
-// One std-only builder module shared with tests/ and fuzz/; the crate has no
-// single parent for the unit tests, so each includes it by path.
-#[allow(clippy::duplicate_mod)]
-#[path = "../../tests/support/synth.rs"]
-mod synth;
 use super::SIGNATURE;
 use super::srgb::{ChromaLayout, replicate, sycc_sample};
+use crate::synth;
 use crate::{
     ColorOutput, ColorSpace, DecodeOptions, Error, Image, decode, decode_with, read_header,
     read_header_with,

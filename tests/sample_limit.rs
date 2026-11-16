@@ -9,7 +9,7 @@
 #[path = "support/synth.rs"]
 mod synth;
 use std::path::PathBuf;
-use synth::{bx, seg};
+use synth::{bx, seg, tile_part};
 
 use rust_j2k::{
     DecodeOptions, Error, Window, WorkLimit, decode, decode_with, read_header, read_header_with,
@@ -228,11 +228,9 @@ fn main_header(size: u32, tile: u32, components: u16, layers: u16, extra: &[u8])
         [size, size, 0, 0, tile, tile, 0, 0],
         &vec![[7, 1, 1]; usize::from(components)],
     );
-    let mut cod = vec![0, 0];
-    cod.extend_from_slice(&layers.to_be_bytes());
-    cod.extend_from_slice(&[0, 6, 0, 0, 0, 1]);
+    let cod = synth::cod_body(layers, 6, 0, 0);
     // A guard of 2 and an exponent of 8 for every subband.
-    let qcd = [&[0x40][..], &[8 << 3; 19]].concat();
+    let qcd = synth::qcd_none_body(2, &[8; 19]);
     [
         vec![0xFF, 0x4F],
         seg(0xFF51, &siz),
@@ -241,14 +239,6 @@ fn main_header(size: u32, tile: u32, components: u16, layers: u16, extra: &[u8])
         extra.to_vec(),
     ]
     .concat()
-}
-
-/// One tile-part of tile `index` holding `body`.
-fn tile_part(index: u32, body: &[u8]) -> Vec<u8> {
-    let mut sot = (index as u16).to_be_bytes().to_vec();
-    sot.extend_from_slice(&(14 + body.len() as u32).to_be_bytes());
-    sot.extend_from_slice(&[0, 1]);
-    [seg(0xFF90, &sot), vec![0xFF, 0x93], body.to_vec()].concat()
 }
 
 /// A codestream of `side` x `side` tiles of `tile` x `tile`, `components`
@@ -260,7 +250,7 @@ fn many_tiles_of_empty_packets(side: u32, tile: u32, components: u16) -> Vec<u8>
     let mut out = main_header(side * tile, tile, components, 1, &[]);
     let packets = vec![0u8; 7 * usize::from(components)];
     for index in 0..side * side {
-        out.extend_from_slice(&tile_part(index, &packets));
+        out.extend_from_slice(&tile_part(index as u16, 0, 1, &[], &packets));
     }
     out.extend_from_slice(&[0xFF, 0xD9]);
     out
@@ -357,7 +347,7 @@ fn poc_reach_past_the_dropped_blocks() -> Vec<u8> {
     entry.extend_from_slice(&[7, components as u8, 0]);
     let poc = seg(0xFF5F, &[&entry[..], &entry[..]].concat());
     let mut out = main_header(64, 64, components, layers, &poc);
-    out.extend_from_slice(&tile_part(0, &[0; 16]));
+    out.extend_from_slice(&tile_part(0, 0, 1, &[], &[0; 16]));
     out.extend_from_slice(&[0xFF, 0xD9]);
     out
 }

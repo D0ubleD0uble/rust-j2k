@@ -7,47 +7,28 @@
 //! a single test: a second one running in parallel would count into the same
 //! total.
 //!
-//! A global allocator can only be written with `unsafe`. This one is a shim in
-//! a test binary that forwards every call to `System` unchanged, which the
-//! project conventions allow (`.claude/rules/conventions.md`, "Stay
+//! A global allocator can only be written with `unsafe`. The shim in
+//! `tests/support/synth.rs` forwards every call to `System` unchanged, which
+//! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
 #[path = "support/synth.rs"]
 mod synth;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
+use synth::ALLOCATIONS;
 use synth::seg;
 
 use rust_j2k::{Error, decode};
 
-struct Counting;
-
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: every call forwards to `System` unchanged; the counter only
-// observes the calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
-        // SAFETY: the caller's contract for `alloc` is passed through.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: the caller's contract for `dealloc` is passed through.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
 #[global_allocator]
-static ALLOCATOR: Counting = Counting;
+static ALLOCATOR: synth::CountAlloc = synth::CountAlloc;
 
 /// The tile grid's side: `SIDE^2` = 4096 tiles.
 const SIDE: u32 = 64;
 
 /// COD for LRCP, one layer, `levels` levels, 4x4 code-blocks, 5/3.
 fn cod(levels: u8) -> Vec<u8> {
-    seg(0xFF52, &[0, 0, 0, 1, 0, levels, 0, 0, 0, 1])
+    seg(0xFF52, &synth::cod_body(1, levels, 0, 0))
 }
 
 /// `SIDE^2` 1x1 tiles on the image `[1, SIDE + 1)^2` (`tilecomp` in
@@ -66,7 +47,7 @@ fn tiles(components: u16, tile_cod: bool) -> Vec<u8> {
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
     cs.extend(cod(0));
-    cs.extend(seg(0xFF5C, &[0x40, 0x40]));
+    cs.extend(seg(0xFF5C, &synth::qcd_none_body(2, &[8])));
     let count = SIDE * SIDE;
     for index in 0..count {
         let header = if index == count - 1 {

@@ -15,7 +15,7 @@
 //!   `tests/fixtures/jp2_fuzz_seed_outcomes.tsv`, which also fixes the set of
 //!   seed names.
 //!
-//! `wrap` and the codestream table below copy the target's; keep them in step.
+//! The codestream table below copies the target's; keep them in step.
 //! Regenerate the table after an intended change with
 //! `J2K_BLESS_SEED_OUTCOMES=1 cargo test --test fuzz_seed_outcomes`.
 //! The script needs `python3` (standard library only), run with `-I`.
@@ -26,7 +26,6 @@ use rust_j2k::{ColorOutput, ColorSpace, DecodeOptions, Error, Image, decode_with
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
-use synth::bx;
 
 const TABLE: &str = "tests/fixtures/jp2_fuzz_seed_outcomes.tsv";
 
@@ -35,21 +34,6 @@ fn fixture(name: &str) -> Vec<u8> {
         .join("tests/fixtures")
         .join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-const SIGNATURE: [u8; 12] = [
-    0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
-];
-
-/// An `ihdr` matching a codestream's SIZ (as the fuzz target writes it).
-fn ihdr_for(codestream: &[u8]) -> Vec<u8> {
-    let be32 = |at: usize| u32::from_be_bytes(codestream[at..at + 4].try_into().unwrap());
-    let (xsiz, ysiz, x0, y0) = (be32(8), be32(12), be32(16), be32(20));
-    let mut payload = (ysiz - y0).to_be_bytes().to_vec();
-    payload.extend_from_slice(&(xsiz - x0).to_be_bytes());
-    payload.extend_from_slice(&codestream[40..42]);
-    payload.extend_from_slice(&[7, 7, 0, 0]);
-    bx(b"ihdr", &payload)
 }
 
 fn jp2c_payload(file: &[u8]) -> Vec<u8> {
@@ -80,40 +64,7 @@ fn codestream(variant: u8) -> Vec<u8> {
 
 /// The file the target builds from a seed (its `wrap`).
 fn wrap(variant: u8, body: &[u8]) -> Vec<u8> {
-    let codestream = codestream(variant);
-    let mut file = Vec::new();
-    if variant & 0x04 != 0 {
-        file.extend_from_slice(&SIGNATURE);
-        file.extend_from_slice(&bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-        if variant & 0x08 != 0 {
-            let mut children = ihdr_for(&codestream);
-            children.extend_from_slice(body);
-            file.extend_from_slice(&bx(b"jp2h", &children));
-        } else {
-            file.extend_from_slice(body);
-        }
-    } else {
-        file.extend_from_slice(body);
-    }
-    match variant & 0x03 {
-        0 => file.extend_from_slice(&bx(b"jp2c", &codestream)),
-        1 => {
-            file.extend_from_slice(&1u32.to_be_bytes());
-            file.extend_from_slice(b"jp2c");
-            file.extend_from_slice(&(16 + codestream.len() as u64).to_be_bytes());
-            file.extend_from_slice(&codestream);
-        }
-        2 => {
-            file.extend_from_slice(&0u32.to_be_bytes());
-            file.extend_from_slice(b"jp2c");
-            file.extend_from_slice(&codestream);
-        }
-        _ => {
-            file.extend_from_slice(&bx(b"jp2c", &codestream));
-            file.extend_from_slice(body);
-        }
-    }
-    file
+    synth::wrap_jp2_boxes(variant, &codestream(variant), body)
 }
 
 /// The first `ihdr` in the file's top-level `jp2h`, as (height, width, NC).
@@ -180,11 +131,11 @@ fn fnv(text: &str) -> u64 {
 /// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its `synth` include to
 /// the end of the file, which this file copies. If it changed, update the
 /// copy here, then both hashes.
-const TARGET_HASH: u64 = 14497762278301260957;
+const TARGET_HASH: u64 = 12469640652930000811;
 /// Hash of this file's copy and its use (from the `synth` include up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.
-const TEST_HASH: u64 = 9643888649693307011;
+const TEST_HASH: u64 = 2861829691388837825;
 
 fn target_hash() -> u64 {
     let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");

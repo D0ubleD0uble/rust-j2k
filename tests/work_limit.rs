@@ -14,64 +14,16 @@
 
 mod support;
 
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use rust_j2k::{
     DecodeOptions, Error, WorkLimit, decode, decode_with, read_header, read_header_with,
 };
 use support::jp2::sha256_hex;
+use support::synth::{self, Bits, seg};
 
 fn fixture(path: &str) -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(path);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-/// Packet header bits, packed as B.10.1 has it: a byte after 0xFF carries
-/// only 7 bits.
-#[derive(Default)]
-struct Bits {
-    out: Vec<u8>,
-    byte: u8,
-    used: u32,
-    room: u32,
-}
-
-impl Bits {
-    fn new() -> Self {
-        Bits {
-            room: 8,
-            ..Bits::default()
-        }
-    }
-
-    fn put(&mut self, bit: u8) {
-        self.byte = (self.byte << 1) | bit;
-        self.used += 1;
-        if self.used == self.room {
-            self.out.push(self.byte);
-            self.room = if self.byte == 0xFF { 7 } else { 8 };
-            self.byte = 0;
-            self.used = 0;
-        }
-    }
-
-    fn put_int(&mut self, value: u32, width: u32) {
-        for shift in (0..width).rev() {
-            self.put(((value >> shift) & 1) as u8);
-        }
-    }
-
-    fn finish(mut self) -> Vec<u8> {
-        if self.used > 0 {
-            self.out.push(self.byte << (self.room - self.used));
-        } else if self.out.last() == Some(&0xFF) {
-            self.out.push(0);
-        }
-        self.out
-    }
+    synth::read_file(synth::fixtures(path))
 }
 
 /// `t1bomb` from the generator: one `size` x `size` tile of one 8-bit
@@ -130,21 +82,14 @@ fn t1bomb_tiled_with_length(size: u32, side: u32, length: u32) -> Vec<u8> {
     let mut data = bits.finish();
     data.resize(data.len() + (blocks * blocks * length) as usize, 0);
 
-    let seg = |code: u16, body: &[u8]| {
-        let mut out = code.to_be_bytes().to_vec();
-        out.extend_from_slice(&(2 + body.len() as u16).to_be_bytes());
-        out.extend_from_slice(body);
-        out
-    };
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [size * side, size * side, 0, 0, size, size, 0, 0] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let siz = synth::siz_body(
+        [size * side, size * side, 0, 0, size, size, 0, 0],
+        &[[7, 1, 1]],
+    );
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
-    cs.extend(seg(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0, 1]));
-    cs.extend(seg(0xFF5C, &[0x40, 29 << 3]));
+    cs.extend(seg(0xFF52, &synth::cod_body(1, 0, 4, 0)));
+    cs.extend(seg(0xFF5C, &synth::qcd_none_body(2, &[29])));
     for tile in 0..side * side {
         cs.extend_from_slice(&[0xFF, 0x90, 0, 10]);
         cs.extend_from_slice(&(tile as u16).to_be_bytes());
@@ -201,25 +146,15 @@ fn htbomb(size: u32) -> Vec<u8> {
         data.extend_from_slice(&[0xF2, 0x00, 0x00]);
     }
 
-    let seg = |code: u16, body: &[u8]| {
-        let mut out = code.to_be_bytes().to_vec();
-        out.extend_from_slice(&(2 + body.len() as u16).to_be_bytes());
-        out.extend_from_slice(body);
-        out
-    };
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [size, size, 0, 0, size, size, 0, 0] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let siz = synth::siz_body([size, size, 0, 0, size, size, 0, 0], &[[7, 1, 1]]);
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
     // CAP: Part 15 only, one HT set per block, no `RGN`, and a
     // magnitude bound of 12 bits (`Ccap15` low bits 4).
     cs.extend(seg(0xFF50, &[0, 2, 0, 0, 0, 4]));
     // COD: block style HT (0x40), 64x64 code-blocks, no wavelet level.
-    cs.extend(seg(0xFF52, &[0, 0, 0, 1, 0, 0, 4, 4, 0x40, 1]));
-    cs.extend(seg(0xFF5C, &[0x40, 29 << 3]));
+    cs.extend(seg(0xFF52, &synth::cod_body(1, 0, 4, 0x40)));
+    cs.extend(seg(0xFF5C, &synth::qcd_none_body(2, &[29])));
     cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
     cs.extend_from_slice(&(12 + 2 + data.len() as u32).to_be_bytes());
     cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);

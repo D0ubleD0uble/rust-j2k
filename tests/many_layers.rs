@@ -23,109 +23,10 @@
 //! PR #249 with a 2048 x 2048, 1000-layer file built the same way.
 
 mod support;
-use support::synth::{self, seg};
+use support::synth::{self, Bits, TagTree, seg};
 
 use rust_j2k::decode;
 use support::jp2::sha256_hex;
-
-/// A packet-header bit writer (B.10.1): after a 0xFF byte, the next byte
-/// holds only 7 bits.
-struct Bits {
-    out: Vec<u8>,
-    byte: u32,
-    room: u32,
-}
-
-impl Bits {
-    fn new() -> Self {
-        Bits {
-            out: Vec::new(),
-            byte: 0,
-            room: 8,
-        }
-    }
-
-    fn put(&mut self, bit: u32) {
-        self.byte = (self.byte << 1) | bit;
-        self.room -= 1;
-        if self.room == 0 {
-            self.out.push(self.byte as u8);
-            self.room = if self.byte == 0xFF { 7 } else { 8 };
-            self.byte = 0;
-        }
-    }
-
-    /// The header's bytes, the last one padded with 0 bits, and a 0x00
-    /// after a final 0xFF.
-    fn finish(mut self) -> Vec<u8> {
-        let full = if self.out.last() == Some(&0xFF) { 7 } else { 8 };
-        if self.room != full {
-            let room = self.room;
-            for _ in 0..room {
-                self.put(0);
-            }
-        }
-        if self.out.last() == Some(&0xFF) {
-            self.out.push(0);
-        }
-        self.out
-    }
-}
-
-/// A tag tree over a row of leaves (B.10.2), encoded as OpenJPEG's
-/// `opj_tgt_encode` does.
-struct TagTree {
-    /// `(parent, value, low, known)` per node, the leaves first.
-    nodes: Vec<(Option<usize>, u32, u32, bool)>,
-}
-
-impl TagTree {
-    fn new(leaves: &[u32]) -> Self {
-        let mut nodes: Vec<(Option<usize>, u32, u32, bool)> =
-            leaves.iter().map(|&v| (None, v, 0, false)).collect();
-        let (mut start, mut width) = (0, leaves.len());
-        while width > 1 {
-            let parents = width.div_ceil(2);
-            let first = nodes.len();
-            for p in 0..parents {
-                let value = (2 * p..(2 * p + 2).min(width))
-                    .map(|c| nodes[start + c].1)
-                    .min()
-                    .unwrap();
-                nodes.push((None, value, 0, false));
-                for c in 2 * p..(2 * p + 2).min(width) {
-                    nodes[start + c].0 = Some(first + p);
-                }
-            }
-            (start, width) = (first, parents);
-        }
-        TagTree { nodes }
-    }
-
-    fn encode(&mut self, bits: &mut Bits, leaf: usize, threshold: u32) {
-        let mut path = vec![leaf];
-        while let Some(parent) = self.nodes[*path.last().unwrap()].0 {
-            path.push(parent);
-        }
-        let mut low = 0;
-        for &at in path.iter().rev() {
-            let node = &mut self.nodes[at];
-            low = low.max(node.2);
-            while low < threshold {
-                if low >= node.1 {
-                    if !node.3 {
-                        bits.put(1);
-                        node.3 = true;
-                    }
-                    break;
-                }
-                bits.put(0);
-                low += 1;
-            }
-            node.2 = low;
-        }
-    }
-}
 
 /// A 12 x 4 image of one unsigned 8-bit component: one tile, no wavelet
 /// levels, three 4 x 4 code-blocks in one precinct, `layers` LRCP layers.
@@ -163,13 +64,11 @@ fn codestream(layers: u16, first: [Option<u16>; 3]) -> Vec<u8> {
     }
 
     let siz = synth::siz_body([12, 4, 0, 0, 12, 4, 0, 0], &[[7, 1, 1]]);
-    let mut cod = vec![0, 0];
-    cod.extend_from_slice(&layers.to_be_bytes());
-    cod.extend_from_slice(&[0, 0, 0, 0, 0, 1]);
+    let cod = synth::cod_body(layers, 0, 0, 0);
     let mut bytes = vec![0xFF, 0x4F];
     bytes.extend(seg(0xFF51, &siz));
     bytes.extend(seg(0xFF52, &cod));
-    bytes.extend(seg(0xFF5C, &[0x40, 0x40]));
+    bytes.extend(seg(0xFF5C, &synth::qcd_none_body(2, &[8])));
     let psot = (12 + 2 + data.len()) as u32;
     bytes.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
     bytes.extend_from_slice(&psot.to_be_bytes());

@@ -93,12 +93,24 @@ impl MainHeader {
 #[cfg(test)]
 impl MainHeader {
     /// A single-component header for unit tests: a `width` x `height` image at
-    /// the origin in one tile, unit sub-sampling, LRCP, one layer, 4 x 4
+    /// the origin in one tile, unit sub-sampling, LRCP, one layer, 64 x 64
     /// code-blocks, no precincts, and the given depth, wavelet and `qcd`.
     pub(crate) fn single_component(
+        size: (u32, u32),
+        depth: (u8, bool),
+        wavelet: (u8, Transform),
+        qcd: Qcd,
+    ) -> Self {
+        MainHeader::single_component_blocks(size, depth, wavelet, 6, qcd)
+    }
+
+    /// [`single_component`](Self::single_component) with code-blocks of
+    /// `1 << block_exp` samples square (`block_exp` is 2 to 10).
+    pub(crate) fn single_component_blocks(
         (width, height): (u32, u32),
         (bit_depth, signed): (u8, bool),
         (decomposition_levels, transform): (u8, Transform),
+        block_exp: u8,
         qcd: Qcd,
     ) -> Self {
         MainHeader::new(
@@ -126,8 +138,8 @@ impl MainHeader {
                 multiple_component_transform: false,
                 coding: Coding {
                     decomposition_levels,
-                    code_block_width: 4,
-                    code_block_height: 4,
+                    code_block_width: block_exp - 2,
+                    code_block_height: block_exp - 2,
                     code_block_style: 0,
                     transform,
                     precinct_sizes: vec![],

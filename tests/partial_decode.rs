@@ -7,7 +7,7 @@
 #[path = "support/synth.rs"]
 mod synth;
 use std::path::PathBuf;
-use synth::seg;
+use synth::{seg, tile_part};
 
 use rust_j2k::{DecodeOptions, DecodeReport, Error, Image, ReportEntry, decode_with, read_header};
 
@@ -486,28 +486,12 @@ fn main_header(
         [width, height, 0, 0, tile_width, tile_height, 0, 0],
         &vec![[7, 1, 1]; usize::from(components)],
     );
-    let cod = [0, 0, 0, 1, 0, levels, block, block, 0, 1];
-    let mut qcd = vec![0x20];
-    qcd.extend(std::iter::repeat_n(9 << 3, 3 * usize::from(levels) + 1));
+    let cod = synth::cod_body(1, levels, block, 0);
+    let qcd = synth::qcd_none_body(1, &vec![9; 3 * usize::from(levels) + 1]);
     let mut out = vec![0xFF, 0x4F];
     out.extend(seg(0xFF51, &siz));
     out.extend(seg(0xFF52, &cod));
     out.extend(seg(0xFF5C, &qcd));
-    out
-}
-
-/// A tile-part: `SOT` for tile `tile`, part `part` of `parts`, then `extra`
-/// (marker segments of its header), `SOD` and `data`.
-fn tile_part(tile: u16, part: u8, parts: u8, extra: &[u8], data: &[u8]) -> Vec<u8> {
-    let psot = (12 + extra.len() + 2 + data.len()) as u32;
-    let mut sot = Vec::new();
-    sot.extend_from_slice(&tile.to_be_bytes());
-    sot.extend_from_slice(&psot.to_be_bytes());
-    sot.extend_from_slice(&[part, parts]);
-    let mut out = seg(0xFF90, &sot);
-    out.extend_from_slice(extra);
-    out.extend_from_slice(&[0xFF, 0x93]);
-    out.extend_from_slice(data);
     out
 }
 
