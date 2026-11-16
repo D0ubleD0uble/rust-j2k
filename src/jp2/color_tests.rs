@@ -5,32 +5,25 @@
 //! the same box shapes (see the module docs of `color`). The codestream is
 //! the committed three-component 24x16 fixture; the boxes are built here.
 
+// One std-only builder module shared with tests/ and fuzz/; the crate has no
+// single parent for the unit tests, so each includes it by path.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use super::SIGNATURE;
 use crate::{ColorSpace, Error, decode};
+use synth::bx;
 
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
 
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
-
 /// `ihdr` for the fixture with the given `BPC` and `UnkC`.
 fn ihdr(bpc: u8, unk_c: u8) -> Vec<u8> {
-    let mut payload = 16u32.to_be_bytes().to_vec();
-    payload.extend_from_slice(&24u32.to_be_bytes());
-    payload.extend_from_slice(&3u16.to_be_bytes());
-    payload.extend_from_slice(&[bpc, 7, unk_c, 0]);
-    bx(b"ihdr", &payload)
+    bx(b"ihdr", &synth::ihdr_payload(16, 24, 3, [bpc, 7, unk_c, 0]))
 }
 
 /// A `colr` with an enumerated color space.
 fn enum_colr(enum_cs: u32) -> Vec<u8> {
-    let mut payload = vec![1, 0, 0];
-    payload.extend_from_slice(&enum_cs.to_be_bytes());
-    bx(b"colr", &payload)
+    bx(b"colr", &synth::colr_enum(enum_cs))
 }
 
 /// A `colr` with the given `METH` and bytes after `METH`, `PREC`, `APPROX`.
@@ -43,14 +36,9 @@ fn colr(method: u8, rest: &[u8]) -> Vec<u8> {
 /// A file with `ihdr` (`BPC` 8-bit, `UnkC` 0) and `children` in `jp2h`, then
 /// `between` at the top level, then the codestream.
 fn file_with(ihdr_box: Vec<u8>, children: &[Vec<u8>], between: &[Vec<u8>]) -> Vec<u8> {
-    let mut out = SIGNATURE.to_vec();
-    out.extend_from_slice(&bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    let mut inner = ihdr_box;
-    inner.extend_from_slice(&children.concat());
-    out.extend_from_slice(&bx(b"jp2h", &inner));
-    out.extend_from_slice(&between.concat());
-    out.extend_from_slice(&bx(b"jp2c", CODESTREAM));
-    out
+    let mut header = vec![ihdr_box];
+    header.extend_from_slice(children);
+    synth::jp2_file(&header, between, CODESTREAM, &[])
 }
 
 fn with(children: &[Vec<u8>]) -> Vec<u8> {

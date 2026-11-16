@@ -4,15 +4,13 @@
 //!
 //! The committed files are written by `scripts/gen-tile-header-fixtures.py`.
 
-use std::path::PathBuf;
+#[path = "support/synth.rs"]
+mod synth;
 
 use rust_j2k::{Error, decode};
 
 fn read(name: &str) -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/tile_header")
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    synth::read_file(synth::fixtures("tile_header").join(name))
 }
 
 /// 256 1x1 tiles over 256 components, 255 of them subsampled 255 times both

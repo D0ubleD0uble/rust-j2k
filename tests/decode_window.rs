@@ -9,6 +9,7 @@
 //! tolerance of the whole decode.
 
 mod support;
+use support::synth;
 
 use std::path::PathBuf;
 
@@ -20,12 +21,11 @@ use support::jp2::sha256_hex;
 use support::pgx::parse_pgx;
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/window")
+    synth::fixtures("window")
 }
 
 fn read(name: &str) -> Vec<u8> {
-    let path = dir().join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    synth::read_file(dir().join(name))
 }
 
 /// Where a fixture's image and tiles sit on the reference grid.

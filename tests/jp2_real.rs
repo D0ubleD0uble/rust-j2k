@@ -15,6 +15,7 @@
 //! through `decode` for each file that decodes.
 
 mod support;
+use support::synth;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -132,7 +133,7 @@ const fn color(n: u16) -> ChannelDefinition {
 }
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jp2_real")
+    synth::fixtures("jp2_real")
 }
 
 /// `metadata.json`: the recorded metadata of each file.

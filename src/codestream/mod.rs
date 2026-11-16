@@ -90,6 +90,54 @@ impl MainHeader {
     }
 }
 
+#[cfg(test)]
+impl MainHeader {
+    /// A single-component header for unit tests: a `width` x `height` image at
+    /// the origin in one tile, unit sub-sampling, LRCP, one layer, 4 x 4
+    /// code-blocks, no precincts, and the given depth, wavelet and `qcd`.
+    pub(crate) fn single_component(
+        (width, height): (u32, u32),
+        (bit_depth, signed): (u8, bool),
+        (decomposition_levels, transform): (u8, Transform),
+        qcd: Qcd,
+    ) -> Self {
+        MainHeader::new(
+            Siz {
+                x_size: width,
+                y_size: height,
+                x_offset: 0,
+                y_offset: 0,
+                tile_width: width,
+                tile_height: height,
+                tile_x_offset: 0,
+                tile_y_offset: 0,
+                components: vec![SizComponent {
+                    bit_depth,
+                    signed,
+                    x_sampling: 1,
+                    y_sampling: 1,
+                }],
+            },
+            Cod {
+                progression: Progression::Lrcp,
+                layers: 1,
+                use_sop: false,
+                use_eph: false,
+                multiple_component_transform: false,
+                coding: Coding {
+                    decomposition_levels,
+                    code_block_width: 4,
+                    code_block_height: 4,
+                    code_block_style: 0,
+                    transform,
+                    precinct_sizes: vec![],
+                },
+            },
+            qcd,
+        )
+    }
+}
+
 /// One tile of the image: its index in the tile grid, the decode parameters in
 /// force inside it, and its packet data.
 ///

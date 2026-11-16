@@ -12,38 +12,23 @@
 //!   unconverted because LittleCMS refused the profile.
 
 mod support;
+use support::synth::{self, bx, cdef};
+use support::{plane_hash, srgb};
 
 use std::path::PathBuf;
 
 use rust_j2k::{
-    Association, ChannelDefinition, ChannelType, ColorOutput, ColorSpace, Component, DecodeOptions,
-    Error, Image, WorkLimit, decode, decode_with, read_header_with,
+    Association, ChannelDefinition, ChannelType, ColorSpace, DecodeOptions, Error, Image,
+    WorkLimit, decode, decode_with, read_header_with,
 };
 use serde::Deserialize;
-use support::jp2::sha256_hex;
 
 fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    synth::fixtures("")
 }
 
 fn read(path: &str) -> Vec<u8> {
-    let path = fixtures().join(path);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-fn srgb() -> DecodeOptions {
-    DecodeOptions::default().with_color(ColorOutput::Srgb)
-}
-
-/// The hash the oracle script records: samples in raster order, each a
-/// 4-byte big-endian signed integer.
-fn plane_hash(component: &Component) -> String {
-    let bytes: Vec<u8> = component
-        .samples
-        .iter()
-        .flat_map(|s| s.to_be_bytes())
-        .collect();
-    sha256_hex(&bytes)
+    synth::read_file(fixtures().join(path))
 }
 
 /// Compare a decode with OpenJPEG's three output planes. A monochrome profile
@@ -258,29 +243,9 @@ fn hex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
-
 /// A JP2 file around `codestream` whose `colr` box carries `profile`.
 fn wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
-    let header = rust_j2k::read_header(codestream).expect("codestream header");
-    let mut ihdr = header.height.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&header.width.to_be_bytes());
-    ihdr.extend_from_slice(&(header.components.len() as u16).to_be_bytes());
-    ihdr.extend_from_slice(&[header.components[0].bit_depth - 1, 7, 0, 0]);
-    let mut colr = vec![2, 0, 0];
-    colr.extend_from_slice(profile);
-    let mut jp2h = bx(b"ihdr", &ihdr);
-    jp2h.extend(bx(b"colr", &colr));
-    let mut out = b"\x00\x00\x00\x0cjP  \r\n\x87\n".to_vec();
-    out.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend(bx(b"jp2h", &jp2h));
-    out.extend(bx(b"jp2c", codestream));
-    out
+    wrap_with(codestream, profile, &[])
 }
 
 /// Where the decoder refuses a profile, and why. OpenJPEG converts each but
@@ -593,17 +558,6 @@ fn rgba() -> Vec<u8> {
     bytes[start..end].to_vec()
 }
 
-/// A `cdef` box of (`Cn`, `Typ`, `Asoc`) entries.
-fn cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
-    let mut payload = (entries.len() as u16).to_be_bytes().to_vec();
-    for &(cn, typ, asoc) in entries {
-        for v in [cn, typ, asoc] {
-            payload.extend_from_slice(&v.to_be_bytes());
-        }
-    }
-    bx(b"cdef", &payload)
-}
-
 /// Colors 1, 2, 3 and an opacity channel for the whole image.
 const RGBA_CDEF: &[(u16, u16, u16)] = &[(0, 0, 1), (1, 0, 2), (2, 0, 3), (3, 1, 0)];
 
@@ -618,23 +572,15 @@ fn wrap_with(codestream: &[u8], profile: &[u8], children: &[Vec<u8>]) -> Vec<u8>
         .map(|c| (c.bit_depth - 1) | if c.signed { 0x80 } else { 0 })
         .collect();
     let uniform = bpc.iter().all(|&b| b == bpc[0]);
-    let mut ihdr = header.height.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&header.width.to_be_bytes());
-    ihdr.extend_from_slice(&(bpc.len() as u16).to_be_bytes());
-    ihdr.extend_from_slice(&[if uniform { bpc[0] } else { 255 }, 7, 0, 0]);
-    let mut jp2h = bx(b"ihdr", &ihdr);
+    let tail = [if uniform { bpc[0] } else { 255 }, 7, 0, 0];
+    let ihdr = synth::ihdr_payload(header.height, header.width, bpc.len() as u16, tail);
+    let mut boxes = vec![bx(b"ihdr", &ihdr)];
     if !uniform {
-        jp2h.extend(bx(b"bpcc", &bpc));
+        boxes.push(bx(b"bpcc", &bpc));
     }
-    let mut colr = vec![2, 0, 0];
-    colr.extend_from_slice(profile);
-    jp2h.extend(bx(b"colr", &colr));
-    jp2h.extend(children.concat());
-    let mut out = b"\x00\x00\x00\x0cjP  \r\n\x87\n".to_vec();
-    out.extend(bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend(bx(b"jp2h", &jp2h));
-    out.extend(bx(b"jp2c", codestream));
-    out
+    boxes.push(bx(b"colr", &synth::colr_icc(profile)));
+    boxes.extend_from_slice(children);
+    synth::jp2_file(&boxes, &[], codestream, &[])
 }
 
 /// A profile from `icc/profiles.json`.

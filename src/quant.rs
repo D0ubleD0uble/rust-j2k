@@ -133,45 +133,12 @@ fn half_step_of((exp, mant): (u8, u16), prec: i32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codestream::markers::{Cod, Coding, Progression, Siz, SizComponent, Transform};
+    use crate::codestream::markers::Transform;
 
     /// A `prec`-bit single-component header carrying `qcd`. Only the component
     /// depth and the QCD feed dequantization; the rest is filler.
     fn header(prec: u8, qcd: Qcd) -> MainHeader {
-        MainHeader::new(
-            Siz {
-                x_size: 4,
-                y_size: 4,
-                x_offset: 0,
-                y_offset: 0,
-                tile_width: 4,
-                tile_height: 4,
-                tile_x_offset: 0,
-                tile_y_offset: 0,
-                components: vec![SizComponent {
-                    bit_depth: prec,
-                    signed: false,
-                    x_sampling: 1,
-                    y_sampling: 1,
-                }],
-            },
-            Cod {
-                progression: Progression::Lrcp,
-                layers: 1,
-                use_sop: false,
-                use_eph: false,
-                multiple_component_transform: false,
-                coding: Coding {
-                    decomposition_levels: 1,
-                    code_block_width: 4,
-                    code_block_height: 4,
-                    code_block_style: 0,
-                    transform: Transform::Irreversible97,
-                    precinct_sizes: vec![],
-                },
-            },
-            qcd,
-        )
+        MainHeader::single_component((4, 4), (prec, false), (1, Transform::Irreversible97), qcd)
     }
 
     /// The Annex E.1 step size, recomputed independently for the assertions.

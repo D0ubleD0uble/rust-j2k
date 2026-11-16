@@ -4,16 +4,19 @@
 //! Each oracle is an `opj_decompress -allow-partial` 2.5.0 output; see
 //! `tests/fixtures/partial/README.md`.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::path::PathBuf;
+use synth::seg;
 
 use rust_j2k::{DecodeOptions, DecodeReport, Error, Image, ReportEntry, decode_with, read_header};
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    synth::fixtures("")
 }
 
 fn read(name: &str) -> Vec<u8> {
-    std::fs::read(dir().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
+    synth::read_file(dir().join(name))
 }
 
 /// The samples of a `P5` PGM with a maximum value below 256.
@@ -468,14 +471,6 @@ fn a_run_of_missing_tiles_is_one_entry() {
     assert!(samples(&image)[..32].iter().any(|&s| s != 0));
 }
 
-/// A marker segment: `code`, its length counting itself, then `body`.
-fn segment(code: u16, body: &[u8]) -> Vec<u8> {
-    let mut out = code.to_be_bytes().to_vec();
-    out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
-    out.extend_from_slice(body);
-    out
-}
-
 /// A main header: an image of `width` x `height` in tiles of `tile_width` x
 /// `tile_height`, `components` 8-bit unsigned components, `levels`
 /// decomposition levels, one layer, LRCP, the 5/3 wavelet, code-blocks of
@@ -487,22 +482,17 @@ fn main_header(
     levels: u8,
     block: u8,
 ) -> Vec<u8> {
-    let mut siz = Vec::new();
-    siz.extend_from_slice(&0u16.to_be_bytes());
-    for value in [width, height, 0, 0, tile_width, tile_height, 0, 0] {
-        siz.extend_from_slice(&value.to_be_bytes());
-    }
-    siz.extend_from_slice(&components.to_be_bytes());
-    for _ in 0..components {
-        siz.extend_from_slice(&[7, 1, 1]);
-    }
+    let siz = synth::siz_body(
+        [width, height, 0, 0, tile_width, tile_height, 0, 0],
+        &vec![[7, 1, 1]; usize::from(components)],
+    );
     let cod = [0, 0, 0, 1, 0, levels, block, block, 0, 1];
     let mut qcd = vec![0x20];
     qcd.extend(std::iter::repeat_n(9 << 3, 3 * usize::from(levels) + 1));
     let mut out = vec![0xFF, 0x4F];
-    out.extend(segment(0xFF51, &siz));
-    out.extend(segment(0xFF52, &cod));
-    out.extend(segment(0xFF5C, &qcd));
+    out.extend(seg(0xFF51, &siz));
+    out.extend(seg(0xFF52, &cod));
+    out.extend(seg(0xFF5C, &qcd));
     out
 }
 
@@ -514,7 +504,7 @@ fn tile_part(tile: u16, part: u8, parts: u8, extra: &[u8], data: &[u8]) -> Vec<u
     sot.extend_from_slice(&tile.to_be_bytes());
     sot.extend_from_slice(&psot.to_be_bytes());
     sot.extend_from_slice(&[part, parts]);
-    let mut out = segment(0xFF90, &sot);
+    let mut out = seg(0xFF90, &sot);
     out.extend_from_slice(extra);
     out.extend_from_slice(&[0xFF, 0x93]);
     out.extend_from_slice(data);
@@ -527,7 +517,7 @@ fn packed(header: &[u8], body: &[u8]) -> Vec<u8> {
     let mut ppt = vec![0];
     ppt.extend_from_slice(header);
     let mut out = main_header((8, 4), (8, 4), 1, 0, 0);
-    out.extend(tile_part(0, 0, 1, &segment(0xFF61, &ppt), body));
+    out.extend(tile_part(0, 0, 1, &seg(0xFF61, &ppt), body));
     out.extend_from_slice(&[0xFF, 0xD9]);
     out
 }
@@ -564,7 +554,7 @@ fn a_packed_header_that_runs_short_is_refused_as_strict() {
             let mut ppt = vec![0];
             ppt.extend_from_slice(&header);
             let mut out = main_header((1, 1), (1, 1), 1, 0, 4);
-            out.extend(tile_part(0, 0, 1, &segment(0xFF61, &ppt), &body));
+            out.extend(tile_part(0, 0, 1, &seg(0xFF61, &ppt), &body));
             out.extend_from_slice(&[0xFF, 0xD9]);
             out
         } else {

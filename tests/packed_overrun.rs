@@ -3,17 +3,15 @@
 //! are not in the codestream. See `tests/fixtures/README.md`, "Packed header
 //! overrun fixtures".
 
-use std::path::PathBuf;
+#[path = "support/synth.rs"]
+mod synth;
 
 use rust_j2k::{DecodeOptions, Error, decode_with};
 
 const MESSAGE: &str = "a packet header runs past the end of its `PPM` or `PPT` packed headers";
 
 fn read(name: &str) -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/packed_overrun")
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    synth::read_file(synth::fixtures("packed_overrun").join(name))
 }
 
 fn options(strict: bool, reduction: u8) -> DecodeOptions {

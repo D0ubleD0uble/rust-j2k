@@ -7,6 +7,7 @@
 //! and the reject matrix are unit tests in `src/jp2/srgb_tests.rs`.
 
 mod support;
+use support::srgb;
 
 use std::path::PathBuf;
 
@@ -22,10 +23,6 @@ fn fixtures() -> PathBuf {
 fn conformance(n: u32) -> Vec<u8> {
     let path = fixtures().join(format!("conformance/jp2/files/file{n}.jp2"));
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-fn srgb() -> DecodeOptions {
-    DecodeOptions::default().with_color(ColorOutput::Srgb)
 }
 
 /// Each sYCC fixture converts to within 1 of `opj_decompress` (OpenJPEG's
