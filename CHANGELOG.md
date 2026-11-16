@@ -27,12 +27,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one stopped, so over all the refines the packets are read about once.
   Each refine is held to the packet bound of a decode of its bytes, and the
   code-block bound holds across all the refines together; each refine that
-  returns an image also rebuilds the whole image, as one decode does. A work limit is
-  reported only by `finish`, since more bytes raise the work bounds; a
-  limit that does not depend on the bytes, such as the sample limit, is an
-  error from `refine`, and every later `refine` returns it again. The
-  decoder is `Send` and `Sync`. A main header still cut short at `finish` is
-  `Error::Codestream`, or `Error::FileFormat` inside a JP2 file's boxes.
+  returns an image also rebuilds the whole image, as one decode does. A
+  work limit is reported only by `finish`, since more bytes raise the work
+  bounds; a limit that does not depend on the bytes, such as the sample
+  limit, is an error from `refine`, and every later `refine` returns it
+  again. The decoder is `Send` and `Sync`. A main header still cut short
+  at `finish` is `Error::Codestream`, or `Error::FileFormat` inside a JP2
+  file's boxes.
   `finish` borrows the decoder and can be called again with the same
   result, and `into_bytes` returns the bytes fed, so a file that `finish`
   refuses for a work limit can be decoded again with the limit raised.

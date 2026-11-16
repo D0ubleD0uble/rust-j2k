@@ -26,8 +26,9 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// can call it after every read, however small. It decodes at least each
 /// time the bytes fed have doubled since it last decoded or tried to, and
 /// may decode more often; when it does not decode, it returns `Ok(None)`.
-/// A try that a work bound refuses counts, so the next refine waits for
-/// twice its bytes.
+/// The first refine called with at least one byte fed tries; one called
+/// with none fed returns `Ok(None)` and is not a try. A try that a work
+/// bound refuses counts, so the next refine waits for twice its bytes.
 ///
 /// The decoder keeps each tile's packet walk between refines, so a refine
 /// reads only the packets that have come in since the last one. Over all

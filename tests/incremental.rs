@@ -100,10 +100,10 @@ fn check_finish(name: &str, bytes: &[u8], decoder: IncrementalDecoder, options: 
 ///
 /// A refine must also give an image when the cadence says one is due: when
 /// the bytes fed are at least twice those of the last refine that decoded
-/// or tried to, and the decode of the bytes fed gives an image. The first
-/// refine always tries. A try that gave no image, for a main header cut
-/// short or a work bound, still counts: the next one waits for twice its
-/// bytes.
+/// or tried to, and the decode of the bytes fed gives an image. Before any
+/// try, the first refine with at least one byte fed tries. A try that gave
+/// no image, for a main header cut short or a work bound, still counts: the
+/// next one waits for twice its bytes.
 fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> usize {
     let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
     let mut fed = 0;

@@ -37,9 +37,10 @@ use super::{
 /// pass that is not kept: each decode walks its packets from the start,
 /// as a one-shot decode does.
 ///
-/// The walks do not decide when a refine decodes: the decoder tries at
-/// each doubling of the bytes fed since its last try, whether that try
-/// gave an image or was refused.
+/// The walks do not decide when a refine decodes: the decoder tries on
+/// the first refine with at least one byte fed, then at each doubling of
+/// the bytes fed since its last try, whether that try gave an image or was
+/// refused.
 #[derive(Default)]
 pub(crate) struct Walks {
     tiles: Vec<Slot>,

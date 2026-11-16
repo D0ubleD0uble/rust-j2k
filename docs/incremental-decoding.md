@@ -23,13 +23,15 @@ does again on each refine.
   `refine` returns an error, every later `refine` returns the same error
   without decoding.
 - A refine tries to decode when the bytes fed are at least twice those of
-  the last refine that decoded or tried to; the first refine always tries. A
-  refine that tries gives an image when the one-shot decode of the bytes fed
-  gives one, except when the earlier refines have spent the code-block bound
-  (see below). A try that gave no image still counts: after a main header
-  cut short, or a refusal by a work bound or the charge for missing tiles,
-  the next refine waits for twice the bytes of that try, even if the one-shot
-  decode of fewer bytes gives an image by then
+  the last refine that decoded or tried to. Before any try, the first refine
+  called with at least one byte fed tries; with none fed, `refine` returns
+  `Ok(None)` and does not count as a try. A refine that tries gives an image
+  when the one-shot decode of the bytes fed gives one, except when the
+  earlier refines have spent the code-block bound (see below). A try that
+  gave no image still counts: after a main header cut short, or a refusal
+  by a work bound or the charge for missing tiles, the next refine waits for
+  twice the bytes of that try, even if the one-shot decode of fewer bytes
+  gives an image by then
   (`a_refused_refine_puts_off_the_next_until_the_bytes_double`). Doubling
   from the last try is what bounds the work of all the refines together.
 - `finish` is `decode_with` on all the bytes under the decoder's options,
