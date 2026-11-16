@@ -20,12 +20,10 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// image is the decode of. Once the input ends, [`finish`](Self::finish)
 /// decodes all of it under the decoder's options.
 ///
-/// `refine` does not decode every time it is called. It decodes once the
-/// bytes fed have at least doubled since its last attempt, and returns
-/// `Ok(None)` the rest of the time, so a caller can call it after every
-/// read, however small. A file of `n` bytes is decoded about `log2(n)`
-/// times, on prefixes that double in length, so the work is less than
-/// twice that of one decode of the whole file.
+/// `refine` does not have to decode every time it is called, so a caller
+/// can call it after every read, however small. It decodes at least each
+/// time the bytes fed have doubled since it last decoded, and may decode
+/// more often; when it does not decode, it returns `Ok(None)`.
 ///
 /// The work bounds of [`decode`](crate::decode) hold across all the refines
 /// together: the packet visits and the code-block work every `refine` has
@@ -33,10 +31,14 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// the options say. A refine the rest of that bound cannot cover returns
 /// `Ok(None)`, so a file whose decode costs about the same however few of
 /// its bytes are there may give no image before `finish`, which is a decode
-/// of its own, under its own bound. Each
-/// decode holds no more memory than [`decode_with`] holds for the same
-/// bytes, and the decoder keeps the bytes fed, and nothing else, between
-/// calls.
+/// of its own, under its own bound. Each refine that returns an image also
+/// builds the whole image, as one decode does: it allocates the samples and
+/// runs the inverse wavelet and color transforms over them, outside the
+/// work bounds. Under the doubling cadence a file of `n` bytes gives at
+/// most about `log2(n)` images, so a large image fed in small pieces costs
+/// up to that many reconstructions. Each decode holds no more memory than
+/// [`decode_with`] holds for the same bytes, and the decoder keeps the
+/// bytes fed, and nothing else, between calls.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, IncrementalDecoder};
@@ -69,11 +71,12 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 ///
 /// An error from `refine` is the error [`decode_with`] gives with `strict`
 /// off on the same bytes, such as a marker segment with an invalid field.
-/// More bytes do not undo it, so a caller stops there. Two kinds of error
+/// More bytes do not undo it, so a caller stops there. That includes an
+/// [`Error::Limit`], such as an image past the sample limit. Two refusals
 /// are not final while bytes may still come, so `refine` returns `Ok(None)`
-/// for them and leaves them to `finish`: a main header cut short
-/// ([`Error::Incomplete`]), and a limit ([`Error::Limit`]), since the work
-/// bounds grow with the bytes fed.
+/// for them: a main header cut short ([`Error::Incomplete`]), and a work
+/// bound the earlier refines' spending cut short, which more bytes raise.
+/// `finish` gives either as an error.
 pub struct IncrementalDecoder {
     /// The options `finish` decodes under.
     options: DecodeOptions,
@@ -128,23 +131,25 @@ impl IncrementalDecoder {
         self.decoded
     }
 
-    /// Decode the bytes fed so far, if they have at least doubled since the
-    /// last time this decoded or tried to.
+    /// Decode the bytes fed so far. This decodes at least each time they
+    /// have doubled since it last decoded or tried to, and may decode more
+    /// often.
     ///
     /// The image is the one [`decode_with`] gives with
     /// [`strict`](DecodeOptions::strict) off on all the bytes fed, and its
     /// [`report`](Image::report) lists what they do not hold yet.
     /// `Ok(None)` means there is no new image yet: too few bytes have come
     /// in since the last decode, the main header is not whole, or the decode
-    /// reached a limit, which may be the rest of the work bound the earlier
-    /// refines left. Any other error is the one `decode_with` gives on
-    /// those bytes, and more bytes will not clear it.
+    /// ran out of what the earlier refines left of a work bound. Any error
+    /// is the one `decode_with` gives on those bytes, and more bytes will
+    /// not clear it.
     pub fn refine(&mut self) -> Result<Option<Image>> {
         let fed = self.bytes.len();
         if fed == 0 || fed < self.tried.saturating_mul(2) {
             return Ok(None);
         }
         self.tried = fed;
+        self.ledger.cut.set(false);
         match decode_metered(&self.bytes, &self.lenient, Some(&self.ledger)) {
             Ok(image) => {
                 self.decoded = fed;
@@ -152,7 +157,8 @@ impl IncrementalDecoder {
             }
             // More bytes can complete the header, and raise the work
             // bounds past what the earlier refines spent.
-            Err(Error::Incomplete(_) | Error::Limit(_)) => Ok(None),
+            Err(Error::Incomplete(_)) => Ok(None),
+            Err(Error::Limit(_)) if self.ledger.cut.get() => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -209,6 +215,9 @@ pub(crate) struct Ledger {
     packets: Cell<u64>,
     /// The code-block work spent.
     blocks: Cell<u64>,
+    /// Whether the last decode was refused for work that its bound, had
+    /// the earlier spending not cut it, may have allowed.
+    cut: Cell<bool>,
 }
 
 impl Ledger {
@@ -229,6 +238,12 @@ impl Ledger {
             return bound;
         }
         bound.saturating_sub(spent)
+    }
+
+    /// Record that a decode was refused for work, and whether the cut its
+    /// bound took may be why.
+    pub(crate) fn refuse(&self, by_cut: bool) {
+        self.cut.set(by_cut);
     }
 
     /// Add `work` to the code-block work spent.
@@ -286,8 +301,10 @@ mod tests {
 
     /// A feeder that hands over one byte at a time and refines after each
     /// spends, over all its refines, no more packet visits or code-block
-    /// work than one decode of the whole file is allowed, and decodes the
-    /// file about `log2(n)` times, not `n`.
+    /// work than one decode of the whole file is allowed. This holds for
+    /// any cadence, since the ledger cuts each refine's bounds by what the
+    /// earlier ones spent. The last image comes within the last doubling of
+    /// the input, as the cadence promises.
     #[test]
     fn a_byte_at_a_time_feeder_stays_within_one_decodes_bounds() {
         for name in [
@@ -317,26 +334,43 @@ mod tests {
                 "{name}: {packets} > {packet_bound}"
             );
             assert!(blocks <= block_bound, "{name}: {blocks} > {block_bound}");
-
-            // Against the work one decode of the whole file does: the
-            // doubling keeps the refines under twice that.
-            crate::tests::BLOCK_WORK.with(|spent| spent.set(0));
-            let lenient = DecodeOptions::default().with_strict(false);
-            let whole = decode_with(&bytes, &lenient).unwrap();
-            let once = crate::tests::BLOCK_WORK.with(Cell::get);
-            assert!(blocks < 2 * once, "{name}: {blocks} >= 2 * {once}");
-
-            let log2 = usize::BITS - bytes.len().leading_zeros();
+            assert!(images > 0, "{name}: no image");
             assert!(
-                images > 0 && images <= log2 as usize,
-                "{name}: {images} images"
+                2 * decoder.bytes_decoded() > bytes.len(),
+                "{name}: the last image is of {} of {} bytes",
+                decoder.bytes_decoded(),
+                bytes.len()
             );
-            // The last refine was at the largest power of two fed.
-            assert_eq!(decoder.bytes_decoded(), 1 << (log2 - 1), "{name}");
-            let (whole_samples, finished) = (whole.components, decoder.finish().unwrap());
-            assert_eq!(finished, whole_strict(&bytes), "{name}");
-            assert_eq!(finished.components, whole_samples, "{name}");
+            assert_eq!(decoder.finish().unwrap(), whole_strict(&bytes), "{name}");
         }
+    }
+
+    /// A file whose packet walk costs about the same however few of its
+    /// bytes are there, fed in two halves, still spends no more packet
+    /// visits over both refines than one decode of it is allowed: the
+    /// second refine waits, and `finish` decodes it.
+    #[test]
+    fn a_costly_walk_fed_in_halves_stays_within_one_decodes_bound() {
+        // Its walk takes about twice the default bound, at any length.
+        let bytes = fixture("work_bound/sweep_rpcl_1024_64.j2k");
+        let options = DecodeOptions::default().with_packet_work_limit(crate::WorkLimit::Raised(4));
+        let packet_bound = 4 * one_shot_bounds(&bytes).0;
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        let half = bytes.len() / 2;
+        decoder.feed(&bytes[..half]);
+        assert!(
+            decoder.refine().unwrap().is_some(),
+            "the first half decodes"
+        );
+        decoder.feed(&bytes[half..]);
+        let _ = decoder.refine().unwrap();
+        let packets = decoder.ledger.packets.get();
+        // The first refine alone spends more than half the bound, so a
+        // second at full cost would pass it.
+        assert!(2 * packets > packet_bound, "{packets} of {packet_bound}");
+        assert!(packets <= packet_bound, "{packets} > {packet_bound}");
+        let finished = decoder.finish().unwrap();
+        assert_eq!(finished, decode_with(&bytes, &options).unwrap());
     }
 
     fn whole_strict(bytes: &[u8]) -> Image {

@@ -9,7 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use rust_j2k::{DecodeOptions, Error, Image, IncrementalDecoder, decode_with, read_header};
+use rust_j2k::{
+    DecodeOptions, Error, Image, IncrementalDecoder, decode_with, read_header, read_header_with,
+};
 
 /// A splitmix64 stream: small, and the same on every platform.
 struct Rng(u64);
@@ -60,11 +62,11 @@ fn lenient() -> DecodeOptions {
 }
 
 /// What a refine on `prefix` must give: the strict-off decode, with a main
-/// header cut short and a limit as `None`.
+/// header cut short as `None`.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
     match decode_with(prefix, &options.clone().with_strict(false)) {
         Ok(image) => Ok(Some(image)),
-        Err(Error::Incomplete(_) | Error::Limit(_)) => Ok(None),
+        Err(Error::Incomplete(_)) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -84,13 +86,36 @@ fn check_finish(name: &str, bytes: &[u8], decoder: IncrementalDecoder, options: 
     }
 }
 
+/// The shortest prefix of `bytes` whose header `read_header_with` reads,
+/// if any does.
+fn header_end(bytes: &[u8], options: &DecodeOptions) -> Option<usize> {
+    read_header_with(bytes, options).ok()?;
+    let (mut lo, mut hi) = (0, bytes.len());
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if read_header_with(&bytes[..mid], options).is_ok() {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Some(lo)
+}
+
 /// Feed `bytes` in pieces whose sizes `rng` draws, refining after each:
 /// every image is the strict-off decode of the bytes fed so far, an error
 /// is that decode's error, and `finish` is the decode of the whole file.
+///
+/// A refine must also give an image when the cadence says one is due: once
+/// the bytes fed are twice those of the last image, or, before the first
+/// image, twice those the header needs, and the decode of the bytes fed
+/// gives an image.
 fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> usize {
     let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let header = header_end(bytes, options);
     let mut fed = 0;
     let mut images = 0;
+    let mut last_image = None;
     while fed < bytes.len() {
         // Pieces from 1 byte to about a sixteenth of the file.
         let piece = 1 + rng.below((bytes.len() / 16).max(1));
@@ -101,11 +126,25 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
         match decoder.refine() {
             Ok(Some(image)) => {
                 images += 1;
+                last_image = Some(fed);
                 assert_eq!(decoder.bytes_decoded(), fed, "{name}");
                 let expected = decode_with(&bytes[..fed], &options.clone().with_strict(false));
                 assert_eq!(Ok(image), expected, "{name}, {fed} bytes");
             }
-            Ok(None) => {}
+            Ok(None) => {
+                let due = match last_image {
+                    Some(last) => fed >= 2 * last,
+                    None => header.is_some_and(|end| fed >= 2 * end),
+                };
+                if due {
+                    let expected = refine_oracle(&bytes[..fed], options);
+                    assert!(
+                        !matches!(expected, Ok(Some(_))),
+                        "{name}: a refine at {fed} bytes, due after {last_image:?} and \
+                         a header of {header:?}, gave no image"
+                    );
+                }
+            }
             Err(error) => {
                 let expected = refine_oracle(&bytes[..fed], options);
                 assert_eq!(Err(error), expected, "{name}, {fed} bytes");
@@ -132,8 +171,11 @@ fn halves(name: &str, bytes: &[u8], options: &DecodeOptions) -> usize {
         }
         // A decode whose cost is in its geometry, not its bytes, can spend
         // most of the bound on the first half: then the refine of the whole
-        // waits, and `finish` decodes it.
-        if fed == bytes.len() && refined == Ok(None) && matches!(expected, Ok(Some(_))) {
+        // waits, and `finish` decodes it or refuses it for work.
+        if fed == bytes.len()
+            && refined == Ok(None)
+            && matches!(expected, Ok(Some(_)) | Err(Error::Limit(_)))
+        {
             continue;
         }
         assert_eq!(refined, expected, "{name}, {fed} bytes");
@@ -208,15 +250,28 @@ fn options_for(bytes: &[u8]) -> DecodeOptions {
 /// The fixture directories of files made to reach the work bounds.
 const COSTLY: [&str; 4] = ["work_bound/", "tier1_work_bound/", "psot0/", "budget/"];
 
-/// Every fixture, fed in pieces and cut at many points, decodes as the
+/// The fixtures the `share`-th of `SHARES` tests checks: every
+/// `SHARES`-th file, so that the costly ones spread over the tests.
+fn share(share: usize) -> Vec<PathBuf> {
+    files(&fixtures())
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % SHARES == share)
+        .map(|(_, path)| path)
+        .collect()
+}
+
+/// How many tests the fixtures are split over, so they run in parallel.
+const SHARES: usize = 4;
+
+/// Each fixture, fed in pieces and cut at many points, decodes as the
 /// one-shot decode of the same bytes does. Each refine and `finish` is
 /// checked against `decode_with`, so this covers the MIXED HT files and the
 /// PTERM, POC and multi-tile files the corpus holds.
-#[test]
-fn every_fixture_refines_to_the_one_shot_decode_of_its_prefix() {
-    let mut rng = Rng(217);
+fn check_share(index: usize) {
+    let mut rng = Rng(217 + index as u64);
     let (mut count, mut points, mut images) = (0, 0, 0);
-    for path in files(&fixtures()) {
+    for path in share(index) {
         let name = path.strip_prefix(fixtures()).unwrap().display().to_string();
         let whole = std::fs::read(&path).unwrap();
         let options = options_for(&whole);
@@ -238,8 +293,28 @@ fn every_fixture_refines_to_the_one_shot_decode_of_its_prefix() {
         count += 1;
     }
     // The fixtures in the published package alone are well over 100.
-    assert!(count > 100, "{count} fixtures");
+    assert!(count > 100 / SHARES, "{count} fixtures");
     println!("{count} fixtures, {points} cut points, {images} streamed images");
+}
+
+#[test]
+fn fixtures_0_refine_to_the_one_shot_decode_of_their_prefixes() {
+    check_share(0);
+}
+
+#[test]
+fn fixtures_1_refine_to_the_one_shot_decode_of_their_prefixes() {
+    check_share(1);
+}
+
+#[test]
+fn fixtures_2_refine_to_the_one_shot_decode_of_their_prefixes() {
+    check_share(2);
+}
+
+#[test]
+fn fixtures_3_refine_to_the_one_shot_decode_of_their_prefixes() {
+    check_share(3);
 }
 
 /// The MIXED HT files, where each code-block is an HT or a Part 1 block,
@@ -291,8 +366,11 @@ fn a_pterm_file_resumes_from_a_prefix_to_the_strict_decode() {
         refine_oracle(&bytes[..226], &lenient()).unwrap()
     );
     decoder.feed(&bytes[226..]);
-    // 231 bytes are not twice 226: no new refine until the end.
-    assert_eq!(decoder.refine(), Ok(None));
+    // Whether this refine decodes is the cadence's choice; if it does, the
+    // image is the one-shot decode of all 231 bytes.
+    if let Some(image) = decoder.refine().unwrap() {
+        assert_eq!(Some(image), refine_oracle(&bytes, &lenient()).unwrap());
+    }
     let finished = decoder.finish().unwrap();
     assert_eq!(
         finished,
@@ -373,4 +451,23 @@ fn invalid_options_are_refused_up_front() {
         IncrementalDecoder::new(options),
         Err(Error::InvalidOptions(_))
     ));
+}
+
+/// A limit more bytes cannot clear is an error from the first refine that
+/// reaches it, not a wait: an image past the sample limit is refused as
+/// soon as its header is in.
+#[test]
+fn a_limit_more_bytes_cannot_clear_is_an_error() {
+    let path = fixtures().join("sample_limit/flat_16385_tiled_lossless.j2k");
+    let bytes = std::fs::read(&path).unwrap();
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    for piece in bytes.chunks(4096) {
+        decoder.feed(piece);
+        match decoder.refine() {
+            Ok(None) => continue,
+            Err(Error::Limit(_)) => return,
+            other => panic!("{} bytes: {other:?}", decoder.bytes_fed()),
+        }
+    }
+    panic!("no refine reached the sample limit");
 }
