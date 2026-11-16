@@ -587,8 +587,8 @@ drops included. The A.4 rule decides at the first nonzero field:
   one reading: passes of no bytes.
 - A nonzero field at `Lblock` 3, or with a leading 1, is a Part 1 block's.
 - Otherwise the field is read as an HT block's. If it gives a value an HT
-  block cannot have, a first cleanup length of 1 or bytes on placeholder
-  passes, it is a Part 1 block's, read to the Part 1 width. That is the A.4
+  block cannot have (a first cleanup length of 1 or over 65534, or bytes on
+  placeholder passes), it is a Part 1 block's, read to the Part 1 width. That is the A.4
   note's failed processing, and it is all of it that tier-2 can settle.
 - A block whose fields are all zero codes nothing either way, and is read as
   HT, as the note says to try first.

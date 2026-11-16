@@ -1157,7 +1157,8 @@ before it reads the block's later fields. A.4 gives the test: an HT block's
 first nonzero length field starts with a 0 bit, and `Lblock` is above 3 there.
 A field that fails it is a Part 1 block's. A field that passes it is read as
 an HT block's, and is a Part 1 block's only if it holds a value no HT block
-can have: a cleanup length of 1, or bytes on placeholder passes. Until a block
+can have: a cleanup length of 1 or over 65534 (7.1.1), or bytes on
+placeholder passes. Until a block
 has a nonzero length field, both coders read its fields alike, so the choice
 waits for it, in a layer a quality-layer cap drops if need be.
 

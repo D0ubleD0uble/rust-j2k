@@ -729,6 +729,36 @@ fn a_length_an_ht_block_cannot_have_is_a_part1_block() {
     assert_eq!(segments(&block), [(2, body(1))]);
 }
 
+/// A first cleanup length over the HT maximum is not an HT block's (7.1.1),
+/// so a MIXED tile-component reads the block as Part 1: Lblock 18, one pass,
+/// a field of 70000 and 65535 (the first value over). An HT-only
+/// tile-component refuses the same field, and 65534, the largest cleanup
+/// length, is still an HT block's.
+#[test]
+fn a_cleanup_length_over_the_ht_maximum_is_a_part1_block() {
+    for length in [70000u32, 65535] {
+        let bytes = vec![7u8; length as usize];
+        let data = packets(&[(mixed(true, 1, 15, &[(length, 18)]), bytes.clone())]);
+        let block = mixed_block(&data, 1, 1).unwrap();
+        assert_eq!(block.coder, Coder::Part1, "{length}");
+        assert_eq!(segments(&block), [(1, bytes)], "{length}");
+
+        let bands = [single_block_band(BandKind::Ll, 8, 8)];
+        let ht = grown(15, 1, &[(length, 18)]);
+        let e = parse_ht(&ht, &bands, 1, 1, NO_DELIMITERS).err().unwrap();
+        assert!(
+            matches!(&e, Error::Codestream(m)
+                if m.contains(&format!("HT cleanup segment is {length} bytes, over the limit of 65534"))),
+            "{e:?}"
+        );
+    }
+    let bytes = vec![7u8; 65534];
+    let data = packets(&[(mixed(true, 1, 15, &[(65534, 18)]), bytes.clone())]);
+    let block = mixed_block(&data, 1, 1).unwrap();
+    assert_eq!(block.coder, Coder::Ht);
+    assert_eq!(segments(&block), [(1, bytes)]);
+}
+
 /// A contribution that, read as HT, would be placeholder passes only cannot
 /// carry bytes, so a nonzero field there is a Part 1 block's, even with a
 /// leading 0 at Lblock 4: layer 1's one pass is the second, and an HT block's
