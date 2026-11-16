@@ -332,6 +332,43 @@ fn a_refine_holds_poc_packets_as_one_decode_does() {
     assert_eq!(decoder.finish().unwrap(), decode(&bytes).unwrap());
 }
 
+/// `setskip(1650, 31)` in two tiles side by side, the first cut to one
+/// byte of packets. The decode counts the first tile's packets past its
+/// data, so the second, whose volumes reach 1.63 x 10^7 packets, finds
+/// fewer visits left than that: it holds them in the set, and its skips
+/// pass the bound, with any share of the second tile's data. A refine holds
+/// them as that decode does, and waits; one that sized the bitmap from the
+/// whole bound would decode.
+#[test]
+fn a_refine_sizes_a_later_tiles_poc_bitmap_as_one_decode_does() {
+    let layers = 1650u16;
+    let mut comps = vec![(254, 1)];
+    comps.extend([(255, 1); 64]);
+    let mut cod = vec![1, 2];
+    cod.extend_from_slice(&layers.to_be_bytes());
+    cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0x00]);
+    let body = vec![0; 216 * usize::from(layers)];
+    let width = 152 * 254;
+    let mut bytes = codestream(0, 2 * width, 1, width, &comps, &cod, &[0x40, 0x40], &body);
+    let sot = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    bytes[sot + 6..sot + 10].copy_from_slice(&15u32.to_be_bytes());
+    bytes.drain(sot + 15..sot + 14 + body.len());
+    let mut volume = vec![0, 0];
+    volume.extend_from_slice(&layers.to_be_bytes());
+    volume.extend_from_slice(&[1, 65, 2]);
+    bytes.splice(sot..sot, seg(0xFF5F, &volume.repeat(31)));
+
+    let lenient = DecodeOptions::default().with_strict(false);
+    match decode_with(&bytes, &lenient) {
+        Err(Error::Limit(m)) => assert!(m.contains("packet_work_limit"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    assert_eq!(decoder.refine().unwrap(), None);
+    assert_eq!(decoder.bytes_decoded(), 0);
+}
+
 /// `cs` in a JP2 file as `jp2_psot0` in the generator writes it: its one
 /// tile-part's `Psot` set to 0 and its EOC dropped, in a `jp2c` box that ends
 /// where the packets end, followed here by an `xml ` box of `xml`.
