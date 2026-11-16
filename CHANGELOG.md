@@ -33,6 +33,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   error from `refine`, and every later `refine` returns it again. The
   decoder is `Send` and `Sync`. A main header still cut short at `finish` is
   `Error::Codestream`, or `Error::FileFormat` inside a JP2 file's boxes.
+  `finish` borrows the decoder and can be called again with the same
+  result, and `into_bytes` returns the bytes fed, so a file that `finish`
+  refuses for a work limit can be decoded again with the limit raised.
 - A tile-component whose code-block style is MIXED (ISO/IEC 15444-15 A.4)
   decodes: each code-block is read as an HT block or a Part 1 block, told
   apart by its first nonzero length field. The three MIXED files of the
