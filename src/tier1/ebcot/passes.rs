@@ -1720,7 +1720,7 @@ mod tests {
     /// mid-point as `8 + 4 = 12` at double scale. Undoing the shift gives
     /// `12 >> 2 = 3`, which is `q = 1` with its half bit, as the encoder's
     /// `1 << 2` implies.
-        #[test]
+    #[test]
     fn a_region_coefficient_at_exactly_two_to_the_s_is_unshifted() {
         let mut state = BlockState::new(1, 1);
         decode_block(

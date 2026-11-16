@@ -46,7 +46,7 @@ refusal under `ColorOutput::Srgb`).
 | [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps and packed-header overruns handled differently | 1, 3 |
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
-| [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes, with OpenJPEG's Part 1 maxshift threshold; OpenJPEG refuses | 1; threshold pending #377 |
+| [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes; OpenJPEG refuses. Both coders use the H.1 maxshift threshold, one plane above OpenJPEG's | 1 |
 | [MIXED code-blocks](#mixed-code-blocks) | decodes; OpenJPEG refuses the code-block style | 1 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
@@ -1075,9 +1075,9 @@ references on those files.
 | This decoder | decodes an `RGN` maxshift on HT code-blocks |
 | OpenJPEG 2.5.0 | refuses the block ("We do not support ROI in decoding HT codeblocks", `ht_dec.c`) |
 | Standard | T.814 7.6 and Annex H of ISO/IEC 15444-1 |
-| Rule | 1 for decoding the blocks; the maxshift threshold follows OpenJPEG pending a decision (#377) |
-| Tests and fixtures | `an_ht_maxshift_block_decodes_by_hand` in `src/tier1/ht/tests.rs`; `tests/conformance_ht.rs` on `ds0_ht_03_b11`, `ds0_ht_03_b14`, `ds0_ht_06_b11`, `ds0_ht_06_b15`, `ds0_ht_06_b18`, `ds0_ht_13_b11`, `ds0_ht_15_b11` and `ds0_ht_15_b14` |
-| Decided | #343 |
+| Rule | 1 |
+| Tests and fixtures | `an_ht_maxshift_block_decodes_by_hand` and `an_ht_background_coefficient_with_bit_s_minus_one_set_is_kept` in `src/tier1/ht/tests.rs`; `a_background_coefficient_with_bit_s_minus_one_set_is_kept` in `src/tier1/ebcot/passes.rs`; `tests/roi_h1_band.rs` on `tests/fixtures/roi_h1_band/`; `tests/conformance_ht.rs` on `ds0_ht_03_b11`, `ds0_ht_03_b14`, `ds0_ht_06_b11`, `ds0_ht_06_b15`, `ds0_ht_06_b18`, `ds0_ht_13_b11`, `ds0_ht_15_b11` and `ds0_ht_15_b14` |
+| Decided | #343; the threshold, #377 |
 
 T.814 7.6 gives an HT block under a maxshift of `s` the `Mb + s` bit-planes of
 H-3, and the zero bit-planes count down from there. After the cleanup and
@@ -1086,15 +1086,37 @@ block. So an HT transcode of a Part 1 ROI codestream decodes to the same
 samples as its source. The eight Part 4 references above grade within their
 compliance class.
 
-Both coders use OpenJPEG's threshold (`t1.c`), which is one plane below H.1's.
-H.1 makes a coefficient region when its quantized magnitude `q` is at least
-`2^s`. OpenJPEG makes it region from `2^(s-1)`, so a background coefficient
-with bit `s - 1` set is taken for region, shifted down `s` planes and comes
-out as 0. For example, an HT 1x1 block with `Mb = 5`, `s = 2`, 6 zero
-bit-planes and the segment `00 27 F3 00` holds a background `q = 3`. H.1 gives
-3; this decoder and OpenJPEG give 0. None of the ROI codestreams in the
-corpus has such a coefficient. Whether to follow H.1 instead, in both coders,
-is #377.
+### The maxshift threshold, in both coders
+
+H.1 makes a coefficient region of interest when its quantized magnitude `q` is
+at least `2^s`, and then shifts it down `s` planes. Anything smaller is
+background and is not touched. This decoder follows that, for HT and Part 1
+blocks alike, through one function (`undo_maxshift`). At double scale the test
+is `mag >= 2^(s + 1)`. The half-bit reconstruction offset does not blur it: a
+background value is at most `2^s - 1`, which reconstructs to at most
+`2^(s + 1) - 1`, and a region value is at least `2^s`, which reconstructs to at
+least `2^(s + 1)`.
+
+OpenJPEG's `t1.c` tests `mag >= 1 << roishift` at the same scale, one plane
+lower. It takes a background coefficient with bit `s - 1` set (`q` from
+`2^(s-1)` to `2^s - 1`) for region, shifts it down `s` planes and gets 0 or a
+fraction of its value. The band is real: an encoder that picks the smallest `s`
+H.2 allows always puts background values in it. For example, an HT 1x1 block
+with `Mb = 5`, `s = 2`, 6 zero bit-planes and the segment `00 27 F3 00` holds
+a background `q = 3`. H.1 gives 3; OpenJPEG's rule gives 0.
+
+An 8x8 lossless stream with `SPrgn = 7` and no region
+(`tests/fixtures/roi_h1_band/`) shows it on a whole image. Every sample is
+background, so H.1 returns the source. `opj_decompress` 2.5.0 returns 128 for
+the 32 of 64 samples whose `|sample - 128|` is at least 64, which is every
+value in the band. This decoder returns all 64 exactly. The expected output is
+the source image, not this decoder's output.
+
+None of the ROI codestreams in the corpus has a coefficient in the band: the
+eight HT references, `p0_03`, `p0_06`, `p0_13` and `p0_15` all decode as they
+did under OpenJPEG's rule. Only a stream with background coefficients from
+`2^(s-1)` up differs, and `opj_compress -ROI` cannot make one, since it shifts
+every coefficient of the component.
 
 The same blocks bring two checks OpenJPEG does not make, since it reads no
 field of `CAP`; see [CAP and CPF](#cap-and-cpf). A block of more than 30
