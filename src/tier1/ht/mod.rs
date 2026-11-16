@@ -85,8 +85,68 @@ pub(super) struct Params {
 /// below H.1's, so a background coefficient with bit `s - 1` set comes out
 /// as 0 where H.1 keeps it (see `undo_maxshift`).
 pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Result<Vec<i32>> {
+    let mut scratch = Scratch::default();
+    decode_into(block, numbps, params, &mut scratch)?;
+    Ok(scratch.coeffs)
+}
+
+/// The buffers one HT code-block's decode uses, kept from block to block so
+/// a subband of many small blocks allocates them once. [`decode_into`]
+/// clears each one before a block uses it.
+#[derive(Debug, Default)]
+pub(super) struct Scratch {
+    coeffs: Vec<i32>,
+    cleanup: CleanupScratch,
+    refinement: RefinementScratch,
+}
+
+/// The cleanup pass's significance and magnitude exponents, by quad-scan
+/// index.
+#[derive(Debug, Default)]
+struct CleanupScratch {
+    sigma: Vec<bool>,
+    exps: Vec<u32>,
+}
+
+/// The refinement passes' buffers, row-major over the block.
+#[derive(Debug, Default)]
+struct RefinementScratch {
+    /// The samples the cleanup pass made significant.
+    sigma: Vec<bool>,
+    /// The samples SigProp made significant.
+    refined: Vec<bool>,
+    /// The samples of one column-group SigProp makes significant.
+    new: Vec<usize>,
+}
+
+/// Empty `buffer` and refill it with `len` default values, keeping its
+/// allocation.
+fn zeroed<T: Clone + Default>(buffer: &mut Vec<T>, len: usize) {
+    buffer.clear();
+    buffer.resize(len, T::default());
+}
+
+/// [`decode`] into `scratch`, whose coefficients hold the block until its
+/// next decode.
+pub(super) fn decode_into<'s>(
+    block: &CodeBlock<'_>,
+    numbps: u32,
+    params: Params,
+    scratch: &'s mut Scratch,
+) -> Result<&'s [i32]> {
+    fill(block, numbps, params, scratch)?;
+    Ok(&scratch.coeffs)
+}
+
+/// The body of [`decode_into`].
+fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratch) -> Result<()> {
     let (width, height) = (block.width, block.height);
-    let mut coeffs = vec![0i32; width * height];
+    zeroed(&mut scratch.coeffs, width * height);
+    let Scratch {
+        coeffs,
+        cleanup,
+        refinement: refine,
+    } = scratch;
     // `M'b = Mb + s` (H-3): the zero bit-planes count down from it.
     let planes = numbps + u32::from(params.roi_shift);
     // More passes would be a second HT set, which only a MULTIHT codestream
@@ -99,7 +159,7 @@ pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Resu
         )));
     }
     if block.num_passes == 0 || planes == 0 {
-        return Ok(coeffs);
+        return Ok(());
     }
     if planes > MAX_BIT_PLANES {
         return Err(Error::Limit(if params.roi_shift == 0 {
@@ -161,7 +221,7 @@ pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Resu
         bound_bits: params.bound_bits.filter(|&bits| bits < u64::BITS),
         shift,
     }
-    .run(&mut coeffs)?;
+    .run(coeffs, cleanup)?;
     let z_blk = z_blk(block, planes);
     if z_blk > 1 {
         let refinement = block.segments.get(1).map(|s| s.bytes()).unwrap_or_default();
@@ -171,15 +231,15 @@ pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Resu
             causal: params.causal,
             shift,
         }
-        .run(&refinement, z_blk == HT_SET_PASSES, &mut coeffs)?;
+        .run(&refinement, z_blk == HT_SET_PASSES, coeffs, refine)?;
     }
     if params.roi_shift != 0 {
-        for c in &mut coeffs {
+        for c in coeffs.iter_mut() {
             let magnitude = undo_maxshift(c.abs(), params.roi_shift);
             *c = if *c < 0 { -magnitude } else { magnitude };
         }
     }
-    Ok(coeffs)
+    Ok(())
 }
 
 /// The coding passes [`decode`] runs on `block` in a subband of `numbps`
@@ -516,15 +576,19 @@ struct Cleanup<'a> {
 }
 
 impl Cleanup<'_> {
-    /// Decode every quad into `coeffs`, row-major over the block.
-    fn run(mut self, coeffs: &mut [i32]) -> Result<()> {
+    /// Decode every quad into `coeffs`, row-major over the block, with
+    /// `scratch`'s buffers.
+    fn run(mut self, coeffs: &mut [i32], scratch: &mut CleanupScratch) -> Result<()> {
         let qw = self.qw;
         let qh = self.height.div_ceil(2);
         // Significance and magnitude exponent of every sample, by its
         // quad-scan index `n = 4q + j` (7.2): `j` is 0 top-left, 1
-        // bottom-left, 2 top-right, 3 bottom-right.
-        let mut sigma = vec![false; 4 * qw * qh];
-        let mut exps = vec![0u32; 4 * qw * qh];
+        // bottom-left, 2 top-right, 3 bottom-right. Both start cleared:
+        // only significant samples write an exponent.
+        let CleanupScratch { sigma, exps } = scratch;
+        zeroed(sigma, 4 * qw * qh);
+        zeroed(exps, 4 * qw * qh);
+        let (sigma, exps) = (sigma.as_mut_slice(), exps.as_mut_slice());
         for qy in 0..qh {
             let first_row = qy == 0;
             for qx in (0..qw).step_by(2) {
@@ -534,7 +598,7 @@ impl Cleanup<'_> {
                 let pair = &quads[..if qx + 1 < qw { 2 } else { 1 }];
                 let mut info = [QuadInfo::default(); 2];
                 for (slot, &q) in pair.iter().enumerate() {
-                    let c = self.context(&sigma, q);
+                    let c = self.context(sigma, q);
                     info[slot] = self.sig_emb(first_row, c)?;
                     for j in 0..4 {
                         let on = info[slot].rho >> j & 1 == 1;
@@ -549,7 +613,7 @@ impl Cleanup<'_> {
                     let kappa = if first_row {
                         1
                     } else {
-                        self.predictor(&exps, q, info[slot].rho)
+                        self.predictor(exps, q, info[slot].rho)
                     };
                     let bound = kappa + u[slot];
                     if bound > self.max_u {
@@ -558,7 +622,7 @@ impl Cleanup<'_> {
                             self.max_u
                         )));
                     }
-                    self.magnitudes(q, info[slot], bound, &mut exps, coeffs)?;
+                    self.magnitudes(q, info[slot], bound, exps, coeffs)?;
                 }
             }
         }
@@ -816,14 +880,28 @@ struct Refinement {
 
 impl Refinement {
     /// Run the SigProp pass over `data`, then the MagRef pass if `magref`,
-    /// on the cleanup pass's `coeffs`.
-    fn run(&self, data: &[u8], magref: bool, coeffs: &mut [i32]) -> Result<()> {
+    /// on the cleanup pass's `coeffs`, with `scratch`'s buffers.
+    fn run(
+        &self,
+        data: &[u8],
+        magref: bool,
+        coeffs: &mut [i32],
+        scratch: &mut RefinementScratch,
+    ) -> Result<()> {
+        let RefinementScratch {
+            sigma,
+            refined,
+            new,
+        } = scratch;
         // `sigma_n` of the cleanup pass: its significant samples are exactly
         // its nonzero ones.
-        let sigma: Vec<bool> = coeffs.iter().map(|&c| c != 0).collect();
-        self.sigprop(data, &sigma, coeffs)?;
+        sigma.clear();
+        sigma.extend(coeffs.iter().map(|&c| c != 0));
+        // `r_n`: the samples SigProp makes significant, none yet.
+        zeroed(refined, coeffs.len());
+        self.sigprop(data, sigma, refined, new, coeffs)?;
         if magref {
-            self.magref(data, &sigma, coeffs);
+            self.magref(data, sigma, coeffs);
         }
         Ok(())
     }
@@ -848,13 +926,20 @@ impl Refinement {
     /// column-group's refinement bits come first, then the signs of the
     /// samples they made significant. Such a sample's magnitude is the
     /// refined plane alone, so it reconstructs to `3 << (shift - 1)`.
-    fn sigprop(&self, data: &[u8], sigma: &[bool], coeffs: &mut [i32]) -> Result<()> {
+    ///
+    /// `r` holds `r_n`, the samples this pass made significant, and starts
+    /// all false; `new` is room for a column-group's.
+    fn sigprop(
+        &self,
+        data: &[u8],
+        sigma: &[bool],
+        r: &mut [bool],
+        new: &mut Vec<usize>,
+        coeffs: &mut [i32],
+    ) -> Result<()> {
         let w = self.width;
         let mut sp = SigPropReader::new(data);
-        // `r_n`: the samples this pass made significant.
-        let mut r = vec![false; coeffs.len()];
         let magnitude = 3i32 << (self.shift - 1);
-        let mut new = Vec::with_capacity(16);
         for (y0, y1, x0, x1) in self.groups() {
             let rows = if self.causal { y1 } else { self.height };
             new.clear();
@@ -877,7 +962,7 @@ impl Refinement {
                     }
                 }
             }
-            for &n in &new {
+            for &n in new.iter() {
                 coeffs[n] = if sp.bit()? == 1 {
                     -magnitude
                 } else {

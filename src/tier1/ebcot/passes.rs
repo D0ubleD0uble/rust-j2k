@@ -145,17 +145,34 @@ pub struct BlockState {
 
 impl BlockState {
     pub fn new(width: u32, height: u32) -> Self {
-        let n = (width * height) as usize;
-        let stripe_len = 4 * (width as usize + 2);
-        let padded = stripe_len * (height.div_ceil(4) as usize + 2);
-        BlockState {
-            width,
-            height,
-            coeffs: vec![0; n],
-            stripe_len,
-            state: vec![0; padded],
+        let mut block = BlockState {
+            width: 0,
+            height: 0,
+            coeffs: Vec::new(),
+            stripe_len: 0,
+            state: Vec::new(),
             vcausal: false,
-        }
+        };
+        block.reset(width, height);
+        block
+    }
+
+    /// Make this the state [`new`](Self::new) gives a `width × height`
+    /// block, keeping the buffers' allocations. Every word of `state` is
+    /// cleared, the padding included, and the stripe length follows the new
+    /// width: a stale neighbor bit or stripe length would change the contexts
+    /// the next block is coded under.
+    pub fn reset(&mut self, width: u32, height: u32) {
+        let n = (width * height) as usize;
+        self.width = width;
+        self.height = height;
+        self.stripe_len = 4 * (width as usize + 2);
+        let padded = self.stripe_len * (height.div_ceil(4) as usize + 2);
+        self.coeffs.clear();
+        self.coeffs.resize(n, 0);
+        self.state.clear();
+        self.state.resize(padded, 0);
+        self.vcausal = false;
     }
 
     /// Flat row-major index of an in-bounds coefficient in `coeffs`.
@@ -1128,8 +1145,8 @@ enum PassCoder<'a> {
 /// cleanup pass, and `bypass` (lazy) switches the significance and refinement
 /// passes of the low bit-planes from MQ-coded to raw (D.6); see the
 /// per-segment coder choice below.
-pub fn decode_block(
-    segments: &[(Vec<u8>, u32)],
+pub fn decode_block<S: AsRef<[u8]>>(
+    segments: &[(S, u32)],
     state: &mut BlockState,
     orient: Orientation,
     numbps: u32,
@@ -1209,6 +1226,7 @@ pub fn decode_block(
     let raw_from = top as i32 - 4;
 
     'segments: for (index, (bytes, passes)) in segments.iter().enumerate() {
+        let bytes = bytes.as_ref();
         // A codeword segment is a single terminated stream — MQ for the
         // context-coded passes, raw for the `bypass` ones. Context states and
         // `bpno` carry across segments; only the arithmetic decoder restarts.
@@ -1353,6 +1371,46 @@ mod tests {
         // `decode_block` leaves the coefficients at double scale; the golden
         // vectors are the halved, integer values the reversible arm produces.
         state.coeffs.iter().map(|&c| c / 2).collect()
+    }
+
+    /// A state reset after a decode is the state `new` makes, every word of
+    /// the padding included, at the new width's stripe length. No pass reads
+    /// a padding word today, so only this test sees one left set; it keeps a
+    /// later pass that reads one from seeing the block before.
+    #[test]
+    fn a_reset_state_is_a_new_one() {
+        let g = &GOLDEN_BLOCKS[0];
+        let mut state = BlockState::new(g.width, g.height);
+        decode_block(
+            &[(g.segment, g.num_passes)],
+            &mut state,
+            g.orient,
+            g.num_passes.div_ceil(3) + g.zero_bit_planes,
+            g.num_passes,
+            g.zero_bit_planes,
+            BlockParams {
+                style: crate::codestream::markers::code_block_style::VCAUSAL,
+                ..BlockParams::default()
+            },
+        )
+        .unwrap();
+        assert!(state.state.iter().any(|&word| word != 0));
+        for (width, height) in [
+            (g.width, g.height),
+            (g.width / 2, 3),
+            (g.width + 7, 9),
+            (1, 1),
+        ] {
+            state.reset(width, height);
+            let new = BlockState::new(width, height);
+            assert_eq!(
+                (state.width, state.height, state.stripe_len, state.vcausal),
+                (new.width, new.height, new.stripe_len, new.vcausal),
+                "{width}x{height}"
+            );
+            assert_eq!(state.coeffs, new.coeffs, "{width}x{height}");
+            assert_eq!(state.state, new.state, "{width}x{height}");
+        }
     }
 
     /// Each committed code-block segment decodes bit-exactly to its oracle
