@@ -1123,6 +1123,84 @@ mod tests {
         check_shapes_in_turn(coders, Coder::Ht, &HT_SHAPES, "HT");
     }
 
+    /// An HT block of `shape` with a cleanup segment and a refinement
+    /// segment that carries its SigProp and MagRef passes.
+    fn refined_block<'a>(
+        shape: (usize, usize),
+        cleanup: &'a [u8],
+        refinement: &'a [u8],
+    ) -> CodeBlock<'a> {
+        let mut block = shaped_block((0, 0), shape, Coder::Ht, cleanup);
+        block.num_passes = 3;
+        block.segments.push(crate::tier2::CodedSegment {
+            passes: 2,
+            chunks: vec![refinement],
+        });
+        block
+    }
+
+    /// As [`reused_buffers_decode_each_ht_block_as_alone`], with refinement
+    /// passes: each block's SigProp pass makes samples significant and its
+    /// MagRef pass changes magnitudes, so a SigProp flag left over from the
+    /// block before changes the coefficients.
+    #[test]
+    fn reused_buffers_decode_each_refined_ht_block_as_alone() {
+        let coder = BlockCoder::Ht {
+            roi_shift: 0,
+            causal: false,
+            bound: CleanupBound {
+                magb: None,
+                irreversible: false,
+            },
+        };
+        let coders = Coders {
+            part1: coder,
+            ht: coder,
+            mixed: false,
+        };
+        fn decode<'a>(
+            coders: Coders,
+            block: &CodeBlock<'a>,
+            scratch: &mut Scratch<'a>,
+        ) -> Result<Vec<i32>> {
+            coders
+                .decode(block, BandKind::Hl, 1, BUSY_PLANES, scratch)
+                .map(<[i32]>::to_vec)
+        }
+        let data: Vec<(Vec<u8>, Vec<u8>)> = HT_SHAPES
+            .iter()
+            .map(|&shape| {
+                let cleanup = busy_data(coders, Coder::Ht, shape);
+                let base = decode(
+                    coders,
+                    &shaped_block((0, 0), shape, Coder::Ht, &cleanup),
+                    &mut Scratch::default(),
+                )
+                .unwrap();
+                let refinement = (1..=10_000)
+                    .map(|seed| noise(seed, shape.0 * shape.1 + 16))
+                    .find(|refinement| {
+                        let block = refined_block(shape, &cleanup, refinement);
+                        decode(coders, &block, &mut Scratch::default()).is_ok_and(|c| {
+                            let pairs = || base.iter().zip(&c);
+                            let sigprop = pairs().filter(|&(&b, &r)| b == 0 && r != 0).count();
+                            let magref = pairs().any(|(&b, &r)| b != 0 && b != r);
+                            sigprop >= 2 && magref
+                        })
+                    })
+                    .expect("refinement noise that changes the block");
+                (cleanup, refinement)
+            })
+            .collect();
+        let mut shared = Scratch::default();
+        for (&shape, (cleanup, refinement)) in HT_SHAPES.iter().zip(&data) {
+            let block = refined_block(shape, cleanup, refinement);
+            let alone = decode(coders, &block, &mut Scratch::default()).unwrap();
+            let reused = decode(coders, &block, &mut shared).unwrap();
+            assert_eq!(reused, alone, "the refined {shape:?} block");
+        }
+    }
+
     /// The same through a subband: a 36x37 band of 32x32 code-blocks holds a
     /// full block, then partial edge blocks of 4 columns, of 5 rows, and of
     /// both, and comes out as its blocks decoded alone and placed.
