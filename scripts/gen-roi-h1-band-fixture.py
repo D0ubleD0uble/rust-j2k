@@ -3,12 +3,13 @@
 of 7 whose background coefficients sit in the band 2^(s-1)..2^s-1.
 
 `opj_compress -ROI` only signals SPrgn and raises no zero bit-planes, so it
-cannot make a stream whose background sits in the band. This script encodes without ROI (`-n 1`, so the
-coefficients are the level-shifted samples), then adds the RGN marker
-(Srgn = 0, SPrgn = 7) and raises the packet's zero bit-planes by 7, which is
-what a maxshift encoder signals for a block with no region (H.2: the count
-is against Mb + s). The coded bytes are unchanged. Every sample then has
-|sample - 128| < 2^7, so all are background and H.1 returns the source.
+cannot make a stream whose background sits in the band. This script
+encodes without ROI (`-n 1`, so the coefficients are the level-shifted
+samples), then adds the RGN marker (Srgn = 0, SPrgn = 7) and raises the
+packet's zero bit-planes by 7, which is what a maxshift encoder signals for
+a block with no region (H.2: the count is against Mb + s). The coded bytes
+are unchanged. Every sample then has |sample - 128| < 2^7, so all are
+background and H.1 returns the source.
 
 Usage: gen-roi-h1-band-fixture.py [outdir]   (needs OpenJPEG 2.5.0 opj_compress)
 """
@@ -22,7 +23,8 @@ out.mkdir(parents=True, exist_ok=True)
 
 # |v - 128| < 128 everywhere; 64, 192, 228, 255 and 200 have bit 6 (s - 1) set
 # in |v - 128|.
-vals = [128, 133, 123, 192, 64, 228, 28, 255, 1, 160, 96, 127, 129, 200, 50, 128]
+vals = [128, 133, 123, 192, 64, 228, 28, 255,
+        1, 160, 96, 127, 129, 200, 50, 128]
 rows = [(vals * 4)[i * 8:(i + 1) * 8] for i in range(8)]
 (out / "source.pgm").write_bytes(b"P5\n8 8\n255\n" + bytes(sum(rows, [])))
 base = out / "base.tmp.j2k"

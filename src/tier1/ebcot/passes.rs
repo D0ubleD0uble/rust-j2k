@@ -1010,7 +1010,7 @@ fn read_segmentation_symbol(
 /// OpenJPEG's `t1.c` is one plane lower, `thresh = 1 << roishift`, so it takes
 /// a background coefficient with bit `roi_shift - 1` set for region and
 /// returns it as 0 or a fraction of its value. This follows H.1 instead; see
-/// `docs/openjpeg-departures.md`, "Region of interest on HT code-blocks".
+/// `docs/openjpeg-departures.md`, "Region of interest threshold (Part 1 and HT)".
 ///
 /// `t1.c` also has a `roishift >= 31` arm:
 ///

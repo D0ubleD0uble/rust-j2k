@@ -1104,9 +1104,9 @@ applies to `Mb` on an HT block.
 | Decided | #377 |
 
 H.1 sorts each sample of a block under a maxshift of `s` (T.814 7.6 hands HT
-blocks to the same step). Step 3 reads: "If Nb(u, v) >= Mb and if at least one
+blocks to the same step). Step 3 reads: "If Nb(u, v) ≥ Mb and if at least one
 of the first Mb ... MSBs (i = 1, ..., Mb) is non-zero, then the value of
-Nb(u, v) is updated as Nb(u, v) = Mb." Step 4 reads: "If Nb(u, v) >= Mb and if
+Nb(u, v) is updated as Nb(u, v) = Mb." Step 4 reads: "If Nb(u, v) ≥ Mb and if
 all first Mb MSBs are equal to zero, then ... discard the first s MSBs and
 shift the remaining MSBs s places". The first `Mb` MSBs of a sample, counted
 from the top of the `Mb + s` planes, are the bits at or above `2^s`, so "at

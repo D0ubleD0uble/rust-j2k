@@ -3,7 +3,7 @@
 Used by `tests/roi_h1_band.rs`. A lossless 8x8 codestream with an RGN maxshift
 of `SPrgn = 7` and no region of interest. Every coefficient is background, and
 half have bit 6 (`s - 1`) set, the band where H.1 and OpenJPEG differ (see
-`docs/openjpeg-departures.md`, "Region of interest on HT code-blocks").
+`docs/openjpeg-departures.md`, "Region of interest threshold (Part 1 and HT)").
 
 ## Provenance
 
