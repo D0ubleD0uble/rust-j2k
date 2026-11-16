@@ -4,9 +4,10 @@
 //! refine that decodes goes on from the packet walks the earlier ones kept,
 //! and must give what `decode_with` gives with `strict` off on the bytes
 //! fed so far: the same image, or the same error. A refine that does not
-//! decode returns `Ok(None)`. After an error, every later refine gives it
-//! again, and `finish` is the decode of all the bytes under the decoder's
-//! options.
+//! decode returns `Ok(None)`. A refine due under the doubling rule must
+//! decode unless the header is cut short or the packet work bound refuses
+//! that one-shot decode. After an error, every later refine gives it again,
+//! and `finish` is the decode of all the bytes under the decoder's options.
 
 use libfuzzer_sys::fuzz_target;
 use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, WorkLimit, decode_with};
@@ -28,6 +29,8 @@ fuzz_target!(|data: &[u8]| {
     };
     let mut fed = 0;
     let mut failed = None;
+    // The bytes fed at the last refine that was due.
+    let mut tried = 0;
     while fed < data.len() {
         hash = splitmix(hash);
         // Pieces from 1 byte to about a quarter of the input.
@@ -38,6 +41,21 @@ fuzz_target!(|data: &[u8]| {
         let refined = decoder.refine();
         if let Some(error) = &failed {
             assert_eq!(refined.as_ref(), Err(error), "poisoned at {fed}");
+            continue;
+        }
+        let due = fed >= tried * 2;
+        if due {
+            tried = fed;
+            let expected = match decode_with(&data[..fed], &lenient) {
+                Ok(image) => Ok(Some(image)),
+                Err(Error::Incomplete(_)) => Ok(None),
+                Err(Error::Limit(m)) if m.contains("packet_work_limit") => Ok(None),
+                Err(error) => Err(error),
+            };
+            assert_eq!(refined, expected, "{fed} bytes, due");
+            if let Err(error) = refined {
+                failed = Some(error);
+            }
             continue;
         }
         match refined {

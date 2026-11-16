@@ -1594,7 +1594,15 @@ fn decode_codestream(
                 .map(|coded| (coded, None))
         } else if let Some(ledger) = ledger {
             ledger
-                .walk(&header, tile, &meter, poc_bitmap, reduction, layers)
+                .walk(
+                    &header,
+                    tile,
+                    &meter,
+                    poc_bitmap,
+                    reduction,
+                    layers,
+                    canvas.bytes(),
+                )
                 .map(|(coded, reach)| (coded, Some(reach)))
         } else {
             tier2::decode_packets_partial(&header, tile, &meter, poc_bitmap, reduction, layers)

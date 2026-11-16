@@ -18,21 +18,48 @@ use crate::tier2::Rect;
 use crate::{Error, Result};
 
 use super::progression::{
-    Cursor, Emitted, Order, PacketId, SET_SKIP_VISITS, Step, layer_orders, poc_gaps,
+    Cursor, Order, PacketId, SET_SKIP_VISITS, Step, layer_orders, poc_gaps, reached,
 };
 use super::{
-    BandState, Budget, CodedData, ComponentCoded, DECODE_VISITS_MIN, Delimiters, END_VISITS,
-    Journal, Meter, Packet, PacketStreams, PacketWalk, Reach, Refused, Resolution, ResolutionGeom,
-    Scratch, Undo, WorkRefusal, band_states, build_subbands, mark_gap, parse_packet, refused,
-    tile_geometry, undo,
+    BandState, Budget, CodedData, ComponentCoded, Delimiters, END_VISITS, Journal, Meter, Packet,
+    PacketStreams, PacketWalk, Reach, Refused, Resolution, ResolutionGeom, Scratch, Undo,
+    WorkRefusal, band_states, build_subbands, mark_gap, parse_packet, refused, tile_geometry, undo,
 };
 
 /// The packet walks of an incremental decode's tiles, by tile index.
+///
+/// The walks kept hold no more than about twice what one decode of the
+/// same bytes holds at its peak: its image, and the packet state of its
+/// largest tile, which it holds while it reads that tile. A tile whose
+/// walk would pass that is not kept: each decode walks its packets from
+/// the start, as a one-shot decode does.
 #[derive(Default)]
 pub(crate) struct Walks {
-    tiles: Vec<Option<TileWalk>>,
-    /// The visits of walks started again (see [`Walks::walk`]).
-    retired: u64,
+    tiles: Vec<Slot>,
+    /// The visits of the walks kept and of those let go (see
+    /// [`Walks::visits`]).
+    visits: u64,
+    /// The bytes the walks kept hold, as [`TileWalk::bytes`] counts them.
+    kept: u64,
+    /// The most bytes one tile's walk has held, kept or not.
+    largest: u64,
+}
+
+/// What is kept of one tile's walk.
+#[derive(Default)]
+enum Slot {
+    /// Nothing: the tile has had no data yet.
+    #[default]
+    Empty,
+    /// The walk, and the bytes it holds.
+    Kept(Box<TileWalk>, u64),
+    /// A walk too large to keep, of `bytes`, for the tile's header as it
+    /// was (see [`TileWalk::volumes`]).
+    Unkept {
+        bytes: u64,
+        volumes: usize,
+        packed: bool,
+    },
 }
 
 impl Walks {
@@ -42,11 +69,13 @@ impl Walks {
     /// would charge it, and the work bound refuses this walk where it
     /// refuses that one. `poc_bitmap`, `reduction` and `layers` are as
     /// [`super::decode_packets_partial`] takes them, and must be the same
-    /// on every call for a tile.
+    /// on every call for a tile. `image` is the bytes of the image the
+    /// decode returns.
     ///
     /// A tile whose later tile-part adds `POC` volumes, or packed packet
     /// headers where it had none, has another order of packets, or reads
     /// them from elsewhere: its walk is started again.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn walk<'t>(
         &mut self,
         header: &MainHeader,
@@ -55,34 +84,113 @@ impl Walks {
         poc_bitmap: u64,
         reduction: u8,
         layers: Option<u16>,
+        image: u64,
     ) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
         let index = tile.index as usize;
         if self.tiles.len() <= index {
-            self.tiles.resize_with(index + 1, || None);
+            self.tiles.resize_with(index + 1, Slot::default);
         }
+        let volumes = header.poc.len();
         let packed = !tile.packed_headers.is_empty();
-        let slot = &mut self.tiles[index];
-        if slot
-            .as_ref()
-            .is_some_and(|walk| walk.volumes != header.poc.len() || walk.packed != packed)
-        {
-            self.retired = self
-                .retired
-                .saturating_add(slot.take().map_or(0, |walk| walk.visits()));
+        let changed = match &self.tiles[index] {
+            Slot::Empty => false,
+            Slot::Kept(walk, _) => walk.volumes != volumes || walk.packed != packed,
+            Slot::Unkept {
+                volumes: v,
+                packed: p,
+                ..
+            } => *v != volumes || *p != packed,
+        };
+        if changed {
+            self.let_go(index);
+            self.tiles[index] = Slot::Empty;
         }
-        let walk = slot.get_or_insert_with(|| TileWalk::new(header, tile, reduction, layers));
-        walk.walk(header, tile, meter, poc_bitmap)
+        let fits = |walks: &Walks, bytes: u64| {
+            let room = image.saturating_add(walks.largest).saturating_mul(2);
+            walks.kept.saturating_add(bytes) <= room
+        };
+        match std::mem::take(&mut self.tiles[index]) {
+            Slot::Kept(walk, bytes) => self.tiles[index] = Slot::Kept(walk, bytes),
+            Slot::Empty => {
+                let walk = TileWalk::new(header, tile, reduction, layers);
+                let bytes = walk.bytes();
+                self.largest = self.largest.max(bytes);
+                self.tiles[index] = if fits(self, bytes) {
+                    self.kept += bytes;
+                    Slot::Kept(Box::new(walk), bytes)
+                } else {
+                    Slot::Unkept {
+                        bytes,
+                        volumes,
+                        packed,
+                    }
+                };
+            }
+            Slot::Unkept { bytes, .. } if fits(self, bytes) => {
+                let walk = TileWalk::new(header, tile, reduction, layers);
+                let bytes = walk.bytes();
+                self.kept += bytes;
+                self.tiles[index] = Slot::Kept(Box::new(walk), bytes);
+            }
+            unkept => self.tiles[index] = unkept,
+        }
+        let Slot::Kept(walk, bytes) = &mut self.tiles[index] else {
+            return super::decode_packets_partial(
+                header, tile, meter, poc_bitmap, reduction, layers,
+            );
+        };
+        let visits = walk.visits();
+        let walked = walk.walk(header, tile, meter, poc_bitmap);
+        self.visits = self.visits - visits + walk.visits();
+        let now = walk.bytes();
+        self.kept = self.kept - *bytes + now;
+        *bytes = now;
+        self.largest = self.largest.max(now);
+        // A walk that has grown past the room is let go. Its decode has
+        // what it read; the next walks of the tile go from the start.
+        if !fits(self, 0) {
+            self.let_go(index);
+            self.tiles[index] = Slot::Unkept {
+                bytes: now,
+                volumes,
+                packed,
+            };
+        }
+        walked
+    }
+
+    /// Let go of the walk of tile `index`, if one is kept. Its visits stay
+    /// counted.
+    fn let_go(&mut self, index: usize) {
+        if let Slot::Kept(_, bytes) = &self.tiles[index] {
+            self.kept -= *bytes;
+            self.tiles[index] = Slot::Empty;
+        }
+    }
+
+    /// How many tiles have a walk kept, and how many one too large to keep.
+    #[cfg(test)]
+    pub(crate) fn kept(&self) -> (usize, usize) {
+        let kept = self
+            .tiles
+            .iter()
+            .filter(|s| matches!(s, Slot::Kept(..)))
+            .count();
+        let unkept = self
+            .tiles
+            .iter()
+            .filter(|s| matches!(s, Slot::Unkept { .. }))
+            .count();
+        (kept, unkept)
     }
 
     /// The packet visits the walks have spent: the visits the decodes they
     /// stand for charge for the packets and progression points read or
-    /// counted, each counted once however many decodes charged it.
+    /// counted, each counted once however many decodes charged it. A walk
+    /// let go, or started again, keeps its count; the walks of a tile not
+    /// kept are not counted.
     pub(crate) fn visits(&self) -> u64 {
-        self.tiles
-            .iter()
-            .flatten()
-            .map(TileWalk::visits)
-            .fold(self.retired, u64::saturating_add)
+        self.visits
     }
 }
 
@@ -122,7 +230,10 @@ struct TileWalk {
     order: Order,
     /// The reading walk.
     cursor: Cursor,
-    emitted: Option<Emitted>,
+    /// Whether the order is a `POC` sequence, whose volumes may emit a
+    /// packet again: then a packet of a layer below the precinct's packets
+    /// read is one already emitted (see [`TileWalk::advance`]).
+    dedup: bool,
     /// The packets the `POC` volumes reach, and whether all of them are
     /// layer orders (see `progression::Emitted`).
     reached: u64,
@@ -144,8 +255,12 @@ struct TileWalk {
     pending_visits: u64,
     /// Whether every packet of the order has been read.
     done: bool,
+    /// Whether the walk, at its end, has let go of what reads packets.
+    shrunk: bool,
     /// Where the walk was before the packets it read ahead, if it did:
-    /// packets read whole that more data may yet read otherwise.
+    /// packets read whole that more data may yet read otherwise, from the
+    /// first that starts, with `SOP` markers, with fewer than two bytes of
+    /// the data left.
     tentative: Option<Mark>,
     read_ahead: Vec<Ahead>,
     /// What the reading walk has spent: on the points of the order, on the
@@ -179,8 +294,6 @@ struct Mark {
 /// A packet read ahead, with what puts it back.
 struct Ahead {
     id: PacketId,
-    /// Whether the walk emitted it while reading ahead.
-    emitted: bool,
     log: Vec<Undo>,
     journal: Journal,
 }
@@ -189,7 +302,6 @@ struct Ahead {
 /// each precinct, and what a walk of all of it is charged.
 struct Census {
     cursor: Cursor,
-    emitted: Option<Emitted>,
     counts: Vec<Vec<Vec<u32>>>,
     loops: u64,
     packets: u64,
@@ -246,14 +358,11 @@ impl TileWalk {
                 Ok(())
             });
         }
-        let (emitted, census_emitted, reached) = if order.volumes.len() > 1 && failure.is_none() {
-            let (emitted, reached) =
-                Emitted::sized(&order.volumes, &walk, order.max_res, DECODE_VISITS_MIN);
-            let (census, _) =
-                Emitted::sized(&order.volumes, &walk, order.max_res, DECODE_VISITS_MIN);
-            (Some(emitted), Some(census), reached)
+        let dedup = order.volumes.len() > 1;
+        let reached = if dedup && failure.is_none() {
+            reached(&order.volumes, &walk, order.max_res)
         } else {
-            (None, None, 0)
+            0
         };
         let counts: Vec<Vec<Vec<u32>>> = geoms
             .iter()
@@ -279,7 +388,7 @@ impl TileWalk {
             layer_orders: layer_orders(&order.volumes),
             order,
             cursor: Cursor::default(),
-            emitted,
+            dedup,
             reached,
             gaps,
             read: counts.clone(),
@@ -290,6 +399,7 @@ impl TileWalk {
             cut: false,
             pending_visits: 0,
             done: false,
+            shrunk: false,
             tentative: None,
             read_ahead: Vec::new(),
             loops: 0,
@@ -298,7 +408,6 @@ impl TileWalk {
             skips: 0,
             census: Census {
                 cursor: Cursor::default(),
-                emitted: census_emitted,
                 counts,
                 loops: 0,
                 packets: 0,
@@ -312,6 +421,52 @@ impl TileWalk {
             geoms,
             rect,
         }
+    }
+
+    /// The bytes the walk holds on the heap: its geometry, its packet
+    /// state and its counts. Small parts, such as the order's lists, are
+    /// left out.
+    fn bytes(&self) -> u64 {
+        use std::mem::size_of;
+        let mut bytes = size_of::<TileWalk>();
+        for resolutions in &self.geoms {
+            bytes += resolutions.capacity() * size_of::<ResolutionGeom>();
+            for resolution in resolutions {
+                bytes += resolution.heap_bytes();
+            }
+        }
+        for component in &self.states {
+            for bands in component {
+                bytes += bands.capacity() * size_of::<BandState>();
+                bytes += bands.iter().map(BandState::heap_bytes).sum::<usize>();
+            }
+        }
+        for counts in [&self.read, &self.census.counts] {
+            for component in counts {
+                bytes += component.iter().map(|r| r.capacity() * 4).sum::<usize>();
+            }
+        }
+        bytes as u64
+    }
+
+    /// Let go of what reads packets, once the walk has read them all: the
+    /// tag trees, the counts of packets read, and the buffers. What builds
+    /// the image stays.
+    fn shrink(&mut self) {
+        for component in &mut self.states {
+            for bands in component {
+                for band in bands {
+                    band.drop_trees();
+                }
+            }
+        }
+        self.read = Vec::new();
+        self.census.counts = Vec::new();
+        self.scratch = Scratch::default();
+        self.log = Vec::new();
+        self.journal = Journal::default();
+        self.read_ahead = Vec::new();
+        self.shrunk = true;
     }
 
     /// The visits this walk has spent, each point and packet of the order
@@ -339,10 +494,10 @@ impl TileWalk {
         // A packet read in part is put back, to be read again once more
         // data comes.
         self.unwind();
-        // The packets a walk at its end has emitted are not asked for again.
-        if self.done {
-            self.emitted = None;
-            self.census.emitted = None;
+        // A walk at its end reads no more packets: only what builds the
+        // image is kept.
+        if self.done && !self.shrunk {
+            self.shrink();
         }
         walked
     }
@@ -427,7 +582,7 @@ impl TileWalk {
         let meter = Meter::new(left.saturating_sub(self.loops + self.parsed));
         loop {
             let id = match self.pending {
-                Some(id) => (id, false),
+                Some(id) => id,
                 None if self.done => return Advanced::Stopped,
                 None => {
                     let walk = PacketWalk {
@@ -450,40 +605,43 @@ impl TileWalk {
                             continue;
                         }
                         Some(Step::Packet(id)) => {
-                            if let Some(emitted) = &mut self.emitted {
-                                match emitted.insert(&walk, id.layer, id.res, id.comp, id.precinct)
-                                {
-                                    Ok(true) => {}
-                                    Ok(false) => {
-                                        self.skips += 1;
-                                        continue;
-                                    }
-                                    Err(error) => {
-                                        return Advanced::Failed(error, self.loops + self.parsed);
-                                    }
+                            // Each volume emits a precinct's layers from 0
+                            // up, so the layers a `POC` sequence has emitted
+                            // of a precinct are always its first ones: those
+                            // read whole, as no packet is pending here. A
+                            // packet of a layer below them is one emitted
+                            // before, which the decode's bitmap or set
+                            // finds there.
+                            if self.dedup {
+                                let read = self.read[id.comp][id.res][id.precinct];
+                                debug_assert!(id.layer <= read, "{id:?} after {read} layers");
+                                if id.layer < read {
+                                    self.skips += 1;
+                                    continue;
                                 }
                             }
                             self.pending = Some(id);
-                            (id, self.emitted.is_some())
+                            id
                         }
                     }
                 }
             };
-            let (id, fresh) = id;
+            // With `SOP` markers, a packet that starts with fewer than two
+            // bytes of the data left may yet have an `SOP` before it, which
+            // the decode cannot see until more data comes. Read whole, it
+            // is read from what may be the marker's first byte, inline, or
+            // with no body byte to look at, packed.
             let tentative = self.tentative.is_some()
-                || (self.packed && self.delimiters.sop && tile.data.len() - self.body_pos < 2);
+                || (self.delimiters.sop && tile.data.len().saturating_sub(self.body_pos) < 2);
             let before = meter.spent();
             let (read, header_pos, body_pos) = self.parse(tile, id, &meter);
             let spent = meter.spent() - before;
             match read {
                 Ok(Packet::Read) => {
                     if tentative {
-                        // Packed headers and `SOP` markers: a packet read
-                        // with no byte of the data after it may yet have an
-                        // `SOP` before it, which more data brings. It is
-                        // read for this image, then put back.
-                        // The first is put back as the packet to read next,
-                        // so it stays emitted; the rest are emitted again.
+                        // It is read for this image, then put back.
+                        // The first is put back as the packet to read next;
+                        // the rest are emitted again.
                         let first = self.tentative.is_none();
                         if first {
                             self.tentative = Some(Mark {
@@ -500,7 +658,6 @@ impl TileWalk {
                         }
                         self.read_ahead.push(Ahead {
                             id,
-                            emitted: fresh && !first,
                             log: std::mem::take(&mut self.log),
                             journal: std::mem::take(&mut self.journal),
                         });
@@ -594,11 +751,6 @@ impl TileWalk {
             undo(&ahead.log, states);
             ahead.journal.restore(states, id.precinct);
             self.read[id.comp][id.res][id.precinct] -= 1;
-            if ahead.emitted {
-                if let Some(emitted) = &mut self.emitted {
-                    emitted.remove(&self.geoms, id.layer, id.res, id.comp, id.precinct);
-                }
-            }
         }
         self.cursor = mark.cursor;
         self.pending = mark.pending;
@@ -630,7 +782,6 @@ impl TileWalk {
             match self.order.next(&walk, &mut census.cursor) {
                 None => {
                     census.done = true;
-                    census.emitted = None;
                     return true;
                 }
                 Some(Step::Point(visits)) => {
@@ -645,17 +796,15 @@ impl TileWalk {
                         census.cursor = before;
                         return false;
                     }
-                    if let Some(emitted) = &mut census.emitted {
-                        if !emitted
-                            .insert(&walk, id.layer, id.res, id.comp, id.precinct)
-                            .unwrap_or(false)
-                        {
-                            census.skips += 1;
-                            continue;
-                        }
+                    // As in the reading walk, a packet of a layer below
+                    // the precinct's count is one already emitted.
+                    let count = &mut census.counts[id.comp][id.res][id.precinct];
+                    if self.dedup && id.layer < *count {
+                        census.skips += 1;
+                        continue;
                     }
                     meter.try_spend(1);
-                    census.counts[id.comp][id.res][id.precinct] += 1;
+                    *count += 1;
                     census.packets += 1;
                 }
             }
@@ -683,8 +832,11 @@ impl TileWalk {
             for (res, bands) in component.iter_mut().enumerate() {
                 // A precinct whose packets the data has not all brought is
                 // missing from its first packet not read.
-                let read = &self.read[comp][res];
-                let counts = &self.census.counts[comp][res];
+                let (read, counts): (&[u32], &[u32]) = if self.shrunk {
+                    (&[], &[])
+                } else {
+                    (&self.read[comp][res], &self.census.counts[comp][res])
+                };
                 for (precinct, &read) in read.iter().enumerate() {
                     let ended = (!self.done && read < counts[precinct]).then_some(read);
                     if let Some(layer) = ended {

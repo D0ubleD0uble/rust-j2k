@@ -59,6 +59,7 @@ impl PacketWalk<'_> {
     /// 64, and a coarse resolution of a deep pyramid (span past `2^32`) is a
     /// packet it emits. Gating emission on `shl32` would drop that packet and
     /// desynchronize the tile.
+    #[inline(always)]
     fn precinct_at(&self, comp: usize, res: usize, x: u64, y: u64) -> Option<usize> {
         let geom = &self.geoms[comp][res];
         if geom.precinct_count() == 0 {
@@ -221,10 +222,16 @@ impl Plan {
 
     /// The components of `range` that hold a precinct at resolution `res`.
     fn held(&self, res: usize, range: &std::ops::Range<usize>) -> &[usize] {
+        let (start, end) = self.held_range(res, range);
+        &self.held[res][start..end]
+    }
+
+    /// Where [`Plan::held`]'s components sit in `held[res]`.
+    fn held_range(&self, res: usize, range: &std::ops::Range<usize>) -> (usize, usize) {
         let comps = &self.held[res];
         let start = comps.partition_point(|&c| c < range.start);
         let end = comps.partition_point(|&c| c < range.end);
-        &comps[start..end.max(start)]
+        (start, end.max(start))
     }
 
     /// The (component, resolution) pairs of `volume` that hold a precinct,
@@ -377,38 +384,49 @@ where
         )?)
     };
     let skip_visits = emitted.as_ref().map_or(0, Emitted::skip_visits);
-    let mut cursor = Cursor::default();
-    while let Some(step) = order.next(walk, &mut cursor) {
-        let packet = match step {
-            Step::Point(visits) => {
-                meter.spend(visits, WorkRefusal::PacketWalk)?;
-                continue;
+    let mut emit = |layer: u32, res: usize, comp: usize, precinct: usize| match &mut emitted {
+        None => f(layer, res, comp, precinct),
+        // A packet skipped from the bitmap is not charged. Only a packet
+        // read is marked, and a read takes a visit and at least a byte of
+        // packet header; at most 31 later volumes can meet it again. A
+        // bitmap skip takes about 4 ns, so the skips cost at most about
+        // 0.12 µs per byte, under the 0.19 µs a byte the fastest
+        // conformance codestream past 100 KB takes to decode (best of
+        // five release builds). Charging them would refuse files
+        // OpenJPEG reads quickly, such as 31 identical volumes over 1 MB
+        // of empty packets. A skip from the set costs far more and is
+        // charged (see `SET_SKIP_VISITS`).
+        Some(emitted) => {
+            if emitted.insert(walk, layer, res, comp, precinct)? {
+                f(layer, res, comp, precinct)
+            } else if skip_visits > 0 {
+                meter.spend(skip_visits, WorkRefusal::PacketWalk)
+            } else {
+                Ok(())
             }
-            Step::Packet(packet) => packet,
-        };
-        let PacketId {
-            layer,
-            res,
-            comp,
-            precinct,
-        } = packet;
-        match &mut emitted {
-            None => f(layer, res, comp, precinct)?,
-            // A packet skipped from the bitmap is not charged. Only a packet
-            // read is marked, and a read takes a visit and at least a byte of
-            // packet header; at most 31 later volumes can meet it again. A
-            // bitmap skip takes about 4 ns, so the skips cost at most about
-            // 0.12 µs per byte, under the 0.19 µs a byte the fastest
-            // conformance codestream past 100 KB takes to decode (best of
-            // five release builds). Charging them would refuse files
-            // OpenJPEG reads quickly, such as 31 identical volumes over 1 MB
-            // of empty packets. A skip from the set costs far more and is
-            // charged (see `SET_SKIP_VISITS`).
-            Some(emitted) => {
-                if emitted.insert(walk, layer, res, comp, precinct)? {
-                    f(layer, res, comp, precinct)?;
-                } else if skip_visits > 0 {
-                    meter.spend(skip_visits, WorkRefusal::PacketWalk)?;
+        }
+    };
+    let mut cursor = Cursor::default();
+    while let Some(run) = order.next_run(walk, &mut cursor, meter)? {
+        match run {
+            Run::Layers {
+                res,
+                comp,
+                precinct,
+                layers,
+            } => {
+                for layer in layers {
+                    emit(layer, res, comp, precinct)?;
+                }
+            }
+            Run::Precincts {
+                layer,
+                res,
+                comp,
+                precincts,
+            } => {
+                for precinct in precincts {
+                    emit(layer, res, comp, precinct)?;
                 }
             }
         }
@@ -505,30 +523,6 @@ impl Emitted {
         })
     }
 
-    /// Nothing emitted yet, for `volumes` over a tile of at most
-    /// `resolutions` resolutions per component, in a bitmap when they reach
-    /// at most `dense_bits` packets and else in a set; with the packets they
-    /// reach. Nothing is refused: a walk kept across feeds of a file holds
-    /// its packets so, and charges the decode what [`Emitted::new`] would.
-    pub(crate) fn sized(
-        volumes: &[Volume],
-        walk: &PacketWalk<'_>,
-        resolutions: usize,
-        dense_bits: u64,
-    ) -> (Self, u64) {
-        let (starts, reached) = Self::layout(volumes, walk, resolutions);
-        let marks = match usize::try_from(reached.div_ceil(64)) {
-            Ok(words) if reached <= dense_bits => Marks::Dense(vec![0; words]),
-            _ => Marks::Sparse(HashSet::default()),
-        };
-        let emitted = Emitted {
-            starts,
-            resolutions,
-            marks,
-        };
-        (emitted, reached)
-    }
-
     /// Where each (component, resolution)'s bits start, and how many
     /// packets `volumes` reach in all.
     fn layout(volumes: &[Volume], walk: &PacketWalk<'_>, resolutions: usize) -> (Vec<u64>, u64) {
@@ -601,34 +595,12 @@ impl Emitted {
             Marks::Sparse(set) => Ok(set.insert(bit)),
         }
     }
+}
 
-    /// Take packet (`layer`, `res`, `comp`, `precinct`) of a tile of
-    /// geometry `geoms` out again, as if it had not been emitted.
-    pub(crate) fn remove(
-        &mut self,
-        geoms: &[Vec<ResolutionGeom>],
-        layer: u32,
-        res: usize,
-        comp: usize,
-        precinct: usize,
-    ) {
-        let start = self.starts[comp * self.resolutions + res];
-        let precincts = geoms[comp][res].precinct_count() as u64;
-        let bit = start + u64::from(layer) * precincts + precinct as u64;
-        match &mut self.marks {
-            Marks::Dense(words) => {
-                if let Some(word) = usize::try_from(bit / 64)
-                    .ok()
-                    .and_then(|w| words.get_mut(w))
-                {
-                    *word &= !(1u64 << (bit % 64));
-                }
-            }
-            Marks::Sparse(set) => {
-                set.remove(&bit);
-            }
-        }
-    }
+/// The packets `volumes` reach over `walk`'s tile, of at most
+/// `resolutions` resolutions per component: the bits [`Emitted`] holds.
+pub(crate) fn reached(volumes: &[Volume], walk: &PacketWalk<'_>, resolutions: usize) -> u64 {
+    Emitted::layout(volumes, walk, resolutions).1
 }
 
 /// Whether every one of `volumes` is a layer order, which reads all of a
@@ -685,6 +657,57 @@ pub(crate) enum Step {
     Packet(PacketId),
 }
 
+/// The packets [`Order::next_run`] reaches next: every packet left of one
+/// (component, resolution) of a point, in the order's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Run {
+    /// Layers `layers` of one precinct, in a positional order.
+    Layers {
+        res: usize,
+        comp: usize,
+        precinct: usize,
+        layers: std::ops::Range<u32>,
+    },
+    /// Precincts `precincts` of one (layer, resolution, component), in a
+    /// layer order.
+    Precincts {
+        layer: u32,
+        res: usize,
+        comp: usize,
+        precincts: std::ops::Range<usize>,
+    },
+}
+
+impl Run {
+    /// The first packet of the run.
+    fn first(&self) -> PacketId {
+        match *self {
+            Run::Layers {
+                res,
+                comp,
+                precinct,
+                ref layers,
+            } => PacketId {
+                layer: layers.start,
+                res,
+                comp,
+                precinct,
+            },
+            Run::Precincts {
+                layer,
+                res,
+                comp,
+                ref precincts,
+            } => PacketId {
+                layer,
+                res,
+                comp,
+                precinct: precincts.start,
+            },
+        }
+    }
+}
+
 /// A tile's progression: its volumes, and what a walk works out once for
 /// all of them. A [`Cursor`] holds where a walk of it is.
 pub(crate) struct Order {
@@ -716,10 +739,17 @@ pub(crate) struct Cursor {
     /// The point on the reference grid, for the positional orders.
     x: u64,
     y: u64,
+    /// The positional orders: the sweep's step, and the range of the list
+    /// [`Order::item`] reads that each of its points checks.
+    step: (u64, u64),
+    sweep: (usize, usize),
     /// Whether the point's charge has been given.
     charged: bool,
-    /// The (component, resolution) of the point being emitted from.
+    /// The (component, resolution) of the point being emitted from, and
+    /// the end of the point's: indices into the list [`Order::item`]
+    /// reads.
     item: usize,
+    end: usize,
     /// The precinct (layer orders) or layer (positional orders) next.
     inner: usize,
     /// Positional orders: whether `found` is the precinct of `item`.
@@ -831,13 +861,13 @@ impl Order {
             }
             if !cursor.charged {
                 cursor.charged = true;
-                cursor.item = 0;
+                (cursor.item, cursor.end) = self.items(cursor);
                 cursor.inner = 0;
                 cursor.entered = false;
-                return Some(Step::Point(1 + self.items(cursor)));
+                return Some(Step::Point(1 + cursor.end - cursor.item));
             }
-            if let Some(packet) = self.next_in_point(walk, volume, cursor) {
-                return Some(Step::Packet(packet));
+            if let Some(run) = self.next_in_point(walk, volume, cursor, false) {
+                return Some(Step::Packet(run.first()));
             }
             cursor.charged = false;
             if !self.next_point(walk, cursor) {
@@ -847,41 +877,123 @@ impl Order {
         }
     }
 
-    /// The (component, resolution) pairs the point at `cursor` checks.
-    fn items(&self, cursor: &Cursor) -> usize {
-        let volume = &self.volumes[cursor.volume];
-        match volume.progression {
-            Progression::Lrcp => self.plan.held(cursor.b, &volume.components).len(),
-            Progression::Rlcp | Progression::Rpcl => {
-                self.plan.held(cursor.a, &volume.components).len()
+    /// The packets after `cursor`, which it then holds past, or `None` at
+    /// the end of the order: the steps [`Order::next`] takes, with each
+    /// point spent on `meter` as it is reached, and the packets of one
+    /// (component, resolution) of a point taken at once.
+    ///
+    /// This is the one-shot decode's walk, so a sweep's points that hold no
+    /// packet are stepped over in a loop of their own, as a walk by
+    /// [`Order::next`] reaches them one by one.
+    pub(crate) fn next_run(
+        &self,
+        walk: &PacketWalk<'_>,
+        cursor: &mut Cursor,
+        meter: &Meter,
+    ) -> Result<Option<Run>> {
+        loop {
+            let Some(volume) = self.volumes.get(cursor.volume) else {
+                return Ok(None);
+            };
+            if !cursor.started {
+                cursor.started = true;
+                cursor.charged = false;
+                if !self.first_point(walk, cursor) {
+                    cursor.volume += 1;
+                    cursor.started = false;
+                    continue;
+                }
             }
-            Progression::Pcrl => self.pairs[cursor.volume].len(),
-            Progression::Cprl => {
-                let (start, end) = self.group(cursor);
-                end - start
+            if !cursor.charged {
+                cursor.charged = true;
+                (cursor.item, cursor.end) = self.items(cursor);
+                cursor.inner = 0;
+                cursor.entered = false;
+                meter.spend(1 + cursor.end - cursor.item, WorkRefusal::PacketWalk)?;
+            }
+            if let Some(run) = self.next_in_point(walk, volume, cursor, true) {
+                return Ok(Some(run));
+            }
+            let positional = !matches!(volume.progression, Progression::Lrcp | Progression::Rlcp);
+            if positional && self.sweep_points(walk, volume, cursor, meter)? {
+                continue;
+            }
+            cursor.charged = false;
+            let next = if positional {
+                self.sweep_done(walk, cursor)
+            } else {
+                self.next_point(walk, cursor)
+            };
+            if !next {
+                cursor.volume += 1;
+                cursor.started = false;
             }
         }
     }
 
-    /// Item `index` of the point at `cursor`, as (component, resolution).
-    fn item(&self, cursor: &Cursor, index: usize) -> Option<(usize, usize)> {
+    /// Step `cursor`'s sweep on from its point to the next that holds a
+    /// packet, spending each point reached on `meter`; `false` if the sweep
+    /// ends first. The cursor is then charged at that point, at the first
+    /// of its (component, resolution) pairs that has a precinct there.
+    #[inline(always)]
+    fn sweep_points(
+        &self,
+        walk: &PacketWalk<'_>,
+        volume: &Volume,
+        cursor: &mut Cursor,
+        meter: &Meter,
+    ) -> Result<bool> {
+        let (start, end) = cursor.sweep;
+        let visits = 1 + end - start;
+        let hit = match volume.progression {
+            Progression::Rpcl => {
+                let res = cursor.a;
+                let comps = &self.plan.held[res][start..end];
+                sweep_until(walk, cursor, meter, visits, |x, y| {
+                    comps.iter().enumerate().find_map(|(i, &comp)| {
+                        walk.precinct_at(comp, res, x, y).map(|p| (start + i, p))
+                    })
+                })?
+            }
+            _ => {
+                let pairs = &self.pairs[cursor.volume][start..end];
+                sweep_until(walk, cursor, meter, visits, |x, y| {
+                    pairs.iter().enumerate().find_map(|(i, &(comp, res))| {
+                        walk.precinct_at(comp, res, x, y).map(|p| (start + i, p))
+                    })
+                })?
+            }
+        };
+        let Some((index, precinct)) = hit else {
+            return Ok(false);
+        };
+        cursor.item = index;
+        cursor.end = end;
+        cursor.inner = 0;
+        cursor.entered = true;
+        cursor.found = Some(precinct);
+        Ok(true)
+    }
+
+    /// The (component, resolution) pairs the point at `cursor` checks, as
+    /// the range of the list [`Order::item`] reads.
+    fn items(&self, cursor: &Cursor) -> (usize, usize) {
         let volume = &self.volumes[cursor.volume];
         match volume.progression {
-            Progression::Lrcp => {
-                let res = cursor.b;
-                let comp = *self.plan.held(res, &volume.components).get(index)?;
-                Some((comp, res))
-            }
-            Progression::Rlcp | Progression::Rpcl => {
-                let res = cursor.a;
-                let comp = *self.plan.held(res, &volume.components).get(index)?;
-                Some((comp, res))
-            }
-            Progression::Pcrl => self.pairs[cursor.volume].get(index).copied(),
-            Progression::Cprl => {
-                let (start, end) = self.group(cursor);
-                (start + index < end).then(|| self.pairs[cursor.volume][start + index])
-            }
+            Progression::Lrcp => self.plan.held_range(cursor.b, &volume.components),
+            Progression::Rlcp => self.plan.held_range(cursor.a, &volume.components),
+            Progression::Rpcl | Progression::Pcrl | Progression::Cprl => cursor.sweep,
+        }
+    }
+
+    /// Item `index` of the point at `cursor`, as (component, resolution),
+    /// for an `index` in the range [`Order::items`] gives.
+    #[inline(always)]
+    fn item(&self, volume: &Volume, cursor: &Cursor, index: usize) -> (usize, usize) {
+        match volume.progression {
+            Progression::Lrcp => (self.plan.held[cursor.b][index], cursor.b),
+            Progression::Rlcp | Progression::Rpcl => (self.plan.held[cursor.a][index], cursor.a),
+            Progression::Pcrl | Progression::Cprl => self.pairs[cursor.volume][index],
         }
     }
 
@@ -893,53 +1005,130 @@ impl Order {
         (start, ends[cursor.a])
     }
 
-    /// The next packet of the point at `cursor`, if any is left.
+    /// The next packet of the point at `cursor`, or if `whole` every packet
+    /// left of the next (component, resolution) of the point that has one,
+    /// if any is left.
+    #[inline(always)]
     fn next_in_point(
         &self,
         walk: &PacketWalk<'_>,
         volume: &Volume,
         cursor: &mut Cursor,
-    ) -> Option<PacketId> {
-        let positional = !matches!(volume.progression, Progression::Lrcp | Progression::Rlcp);
-        loop {
-            let (comp, res) = self.item(cursor, cursor.item)?;
-            if positional {
-                if !cursor.entered {
-                    cursor.entered = true;
-                    cursor.inner = 0;
-                    cursor.found = walk.precinct_at(comp, res, cursor.x, cursor.y);
-                }
-                if let Some(precinct) = cursor.found {
-                    if (cursor.inner as u64) < u64::from(volume.layers) {
-                        let layer = cursor.inner as u32;
-                        cursor.inner += 1;
-                        return Some(PacketId {
-                            layer,
-                            res,
-                            comp,
-                            precinct,
-                        });
-                    }
-                }
-                cursor.entered = false;
-            } else {
-                if cursor.inner < walk.geoms[comp][res].precinct_count() {
-                    let precinct = cursor.inner;
-                    cursor.inner += 1;
-                    let layer = match volume.progression {
-                        Progression::Lrcp => cursor.a,
-                        _ => cursor.b,
-                    } as u32;
-                    return Some(PacketId {
-                        layer,
-                        res,
-                        comp,
-                        precinct,
-                    });
-                }
-                cursor.inner = 0;
+        whole: bool,
+    ) -> Option<Run> {
+        if !matches!(volume.progression, Progression::Lrcp | Progression::Rlcp) {
+            return self.next_at_position(walk, volume, cursor, whole);
+        }
+        let res = match volume.progression {
+            Progression::Lrcp => cursor.b,
+            _ => cursor.a,
+        };
+        let layer = match volume.progression {
+            Progression::Lrcp => cursor.a,
+            _ => cursor.b,
+        } as u32;
+        while cursor.item < cursor.end {
+            let comp = self.plan.held[res][cursor.item];
+            let precincts = walk.geoms[comp][res].precinct_count();
+            if cursor.inner < precincts {
+                let start = cursor.inner;
+                cursor.inner = if whole { precincts } else { start + 1 };
+                return Some(Run::Precincts {
+                    layer,
+                    res,
+                    comp,
+                    precincts: start..cursor.inner,
+                });
             }
+            cursor.inner = 0;
             cursor.item += 1;
+        }
+        None
+    }
+
+    /// [`Order::next_in_point`] for a positional order: the layers of the
+    /// precinct entered, then of the next (component, resolution) of the
+    /// point with a precinct there.
+    #[inline(always)]
+    fn next_at_position(
+        &self,
+        walk: &PacketWalk<'_>,
+        volume: &Volume,
+        cursor: &mut Cursor,
+        whole: bool,
+    ) -> Option<Run> {
+        let layers = volume.layers as usize;
+        if cursor.entered {
+            if let Some(precinct) = cursor.found
+                && cursor.inner < layers
+            {
+                let (comp, res) = self.item(volume, cursor, cursor.item);
+                let start = cursor.inner;
+                cursor.inner = if whole { layers } else { start + 1 };
+                return Some(Run::Layers {
+                    res,
+                    comp,
+                    precinct,
+                    layers: start as u32..cursor.inner as u32,
+                });
+            }
+            cursor.entered = false;
+            cursor.item += 1;
+        }
+        if layers == 0 {
+            cursor.item = cursor.end;
+            return None;
+        }
+        let (comp, res, precinct) = self.find(walk, volume, cursor, cursor.item)?;
+        cursor.entered = true;
+        cursor.found = Some(precinct);
+        cursor.inner = if whole { layers } else { 1 };
+        Some(Run::Layers {
+            res,
+            comp,
+            precinct,
+            layers: 0..cursor.inner as u32,
+        })
+    }
+
+    /// The first of the point's (component, resolution) pairs from `index`
+    /// on that has a precinct at the point, with that precinct; `cursor`
+    /// is left on it, or past the pairs if none has.
+    #[inline(always)]
+    fn find(
+        &self,
+        walk: &PacketWalk<'_>,
+        volume: &Volume,
+        cursor: &mut Cursor,
+        index: usize,
+    ) -> Option<(usize, usize, usize)> {
+        let (x, y, end) = (cursor.x, cursor.y, cursor.end);
+        let found = match volume.progression {
+            Progression::Rpcl => {
+                let res = cursor.a;
+                let comps = &self.plan.held[res][..end];
+                (index..end).find_map(|i| {
+                    let comp = comps[i];
+                    walk.precinct_at(comp, res, x, y).map(|p| (i, comp, res, p))
+                })
+            }
+            _ => {
+                let pairs = &self.pairs[cursor.volume][..end];
+                (index..end).find_map(|i| {
+                    let (comp, res) = pairs[i];
+                    walk.precinct_at(comp, res, x, y).map(|p| (i, comp, res, p))
+                })
+            }
+        };
+        match found {
+            Some((i, comp, res, precinct)) => {
+                cursor.item = i;
+                Some((comp, res, precinct))
+            }
+            None => {
+                cursor.item = end;
+                None
+            }
         }
     }
 
@@ -965,9 +1154,12 @@ impl Order {
                 self.rpcl_resolution(walk, cursor)
             }
             Progression::Pcrl => {
-                self.plan.step.is_some()
-                    && !self.pairs[cursor.volume].is_empty()
-                    && sweep_first(walk, cursor)
+                let Some(step) = self.plan.step else {
+                    return false;
+                };
+                cursor.step = step;
+                cursor.sweep = (0, self.pairs[cursor.volume].len());
+                cursor.sweep.1 > 0 && sweep_first(walk, cursor)
             }
             Progression::Cprl => {
                 cursor.a = 0;
@@ -1001,28 +1193,26 @@ impl Order {
                 cursor.a += 1;
                 cursor.a < res.end
             }
+            Progression::Rpcl | Progression::Pcrl | Progression::Cprl => {
+                sweep_next(walk, cursor) || self.sweep_done(walk, cursor)
+            }
+        }
+    }
+
+    /// Put `cursor`, whose sweep has passed its last point, on the first
+    /// point of the next sweep of its positional volume; `false` if none
+    /// is left.
+    fn sweep_done(&self, walk: &PacketWalk<'_>, cursor: &mut Cursor) -> bool {
+        match self.volumes[cursor.volume].progression {
             Progression::Rpcl => {
-                let Some(step) = self.plan.step else {
-                    return false;
-                };
-                if sweep_next(walk, cursor, step) {
-                    return true;
-                }
                 cursor.a += 1;
                 self.rpcl_resolution(walk, cursor)
             }
-            Progression::Pcrl => self
-                .plan
-                .step
-                .is_some_and(|step| sweep_next(walk, cursor, step)),
             Progression::Cprl => {
-                let comp = self.pairs[cursor.volume][self.group(cursor).0].0;
-                if both(self.plan.spans[comp]).is_some_and(|step| sweep_next(walk, cursor, step)) {
-                    return true;
-                }
                 cursor.a += 1;
                 self.cprl_group(walk, cursor)
             }
+            _ => false,
         }
     }
 
@@ -1032,12 +1222,13 @@ impl Order {
     /// holds a precinct at has no packet, so it is not swept.
     fn rpcl_resolution(&self, walk: &PacketWalk<'_>, cursor: &mut Cursor) -> bool {
         let volume = &self.volumes[cursor.volume];
-        if self.plan.step.is_none() {
+        let Some(step) = self.plan.step else {
             return false;
-        }
+        };
+        cursor.step = step;
         while cursor.a < volume.resolutions.end {
-            if !self.plan.held(cursor.a, &volume.components).is_empty() && sweep_first(walk, cursor)
-            {
+            cursor.sweep = self.plan.held_range(cursor.a, &volume.components);
+            if cursor.sweep.1 > cursor.sweep.0 && sweep_first(walk, cursor) {
                 return true;
             }
             cursor.a += 1;
@@ -1055,14 +1246,53 @@ impl Order {
     fn cprl_group(&self, walk: &PacketWalk<'_>, cursor: &mut Cursor) -> bool {
         let groups = self.groups[cursor.volume].len();
         while cursor.a < groups {
-            let comp = self.pairs[cursor.volume][self.group(cursor).0].0;
-            if both(self.plan.spans[comp]).is_some() && sweep_first(walk, cursor) {
-                return true;
+            cursor.sweep = self.group(cursor);
+            let comp = self.pairs[cursor.volume][cursor.sweep.0].0;
+            if let Some(step) = both(self.plan.spans[comp]) {
+                cursor.step = step;
+                if sweep_first(walk, cursor) {
+                    return true;
+                }
             }
             cursor.a += 1;
         }
         false
     }
+}
+
+/// Step `cursor`'s sweep of `walk`'s tile on from its point, spending
+/// `visits` on `meter` at each point, until `probe` finds a packet there;
+/// what it found, or `None` past the sweep's last point.
+#[inline(always)]
+fn sweep_until(
+    walk: &PacketWalk<'_>,
+    cursor: &mut Cursor,
+    meter: &Meter,
+    visits: usize,
+    mut probe: impl FnMut(u64, u64) -> Option<(usize, usize)>,
+) -> Result<Option<(usize, usize)>> {
+    let (step_x, step_y) = cursor.step;
+    let (tx0, tx1) = (u64::from(walk.tile.x0), u64::from(walk.tile.x1));
+    let ty1 = u64::from(walk.tile.y1);
+    let (mut x, mut y) = (cursor.x, cursor.y);
+    let hit = loop {
+        x += step_x - (x % step_x);
+        if x >= tx1 {
+            x = tx0;
+            y += step_y - (y % step_y);
+            if y >= ty1 {
+                break Ok(None);
+            }
+        }
+        if let Err(e) = meter.spend(visits, WorkRefusal::PacketWalk) {
+            break Err(e);
+        }
+        if let Some(hit) = probe(x, y) {
+            break Ok(Some(hit));
+        }
+    };
+    (cursor.x, cursor.y) = (x, y);
+    hit
 }
 
 /// Put `cursor` on the first point of a sweep of `walk`'s tile; `false` if
@@ -1074,8 +1304,9 @@ fn sweep_first(walk: &PacketWalk<'_>, cursor: &mut Cursor) -> bool {
 }
 
 /// Move `cursor` to the next point of a sweep of `walk`'s tile in steps of
-/// `step`, rows of `x` within columns of `y`; `false` past the last.
-fn sweep_next(walk: &PacketWalk<'_>, cursor: &mut Cursor, (step_x, step_y): (u64, u64)) -> bool {
+/// its `step`, rows of `x` within columns of `y`; `false` past the last.
+fn sweep_next(walk: &PacketWalk<'_>, cursor: &mut Cursor) -> bool {
+    let (step_x, step_y) = cursor.step;
     cursor.x += step_x - (cursor.x % step_x);
     if cursor.x < u64::from(walk.tile.x1) {
         return true;

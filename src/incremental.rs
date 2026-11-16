@@ -30,9 +30,10 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// The decoder keeps each tile's packet walk between refines, so a refine
 /// reads only the packets that have come in since the last one. Over all
 /// the refines, the packet headers are read about once, as one decode reads
-/// them. Each refine is still charged the packet visits a decode of its
-/// bytes on its own would spend, and a refine that decode is refused for
-/// returns `Ok(None)`.
+/// them; a packet the data cuts is read again by each refine. Each refine
+/// is held to the packet bound of a decode of its bytes on its own: it is
+/// charged the packet visits that decode would spend, and a refine that
+/// decode is refused for returns `Ok(None)`.
 ///
 /// The code-block work is done again by each refine that decodes, so the
 /// code-block work every `refine` has spent is held to the bound one decode
@@ -44,11 +45,15 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// the inverse wavelet and color transforms over them, outside the work
 /// bounds. Under the doubling cadence a file of `n` bytes gives at most
 /// about `log2(n)` images, so a large image fed in small pieces costs up to
-/// that many reconstructions. Each decode holds no more memory than
-/// [`decode_with`] holds for the same bytes. Between calls the decoder
-/// keeps the bytes fed and each tile's packet walk: the state of its
-/// code-blocks and tag trees, which is about what one decode of the tile
-/// holds while it reads the tile's packets.
+/// that many reconstructions.
+///
+/// Between calls the decoder keeps the bytes fed and the tiles' packet
+/// walks. The walks kept hold at most twice what one decode holds at its
+/// peak: twice the image's samples, plus twice the packet state of the
+/// largest tile. A tile whose walk would pass that is walked from the start
+/// by each refine instead. Each refine also holds what [`decode_with`]
+/// holds for the same bytes, so the decoder holds at most about three
+/// times one decode's peak memory, plus the bytes fed.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, IncrementalDecoder};
@@ -174,8 +179,11 @@ impl IncrementalDecoder {
         }
         self.tried = fed;
         // The ledger lives for the decode alone, so the decoder holds no
-        // `Cell` between calls.
-        let ledger = Ledger::over(std::mem::take(&mut self.spent));
+        // `Cell` between calls. Only the walks move into it: if the decode
+        // panics, the code-block work spent stays, and the walks start
+        // again.
+        let walks = std::mem::take(&mut self.spent.walks);
+        let ledger = Ledger::over(walks, self.spent.blocks);
         let decoded = decode_metered(&self.bytes, &self.lenient, Some(&ledger));
         self.refused = ledger.work_refused.get();
         self.spent = ledger.into_spent();
@@ -253,8 +261,6 @@ const _: () = {
 #[derive(Default)]
 struct Spent {
     walks: Walks,
-    /// The packet visits the walks have spent, each counted once.
-    packets: u64,
     /// The code-block work spent.
     blocks: u64,
 }
@@ -273,8 +279,6 @@ struct Spent {
 pub(crate) struct Ledger {
     /// The tiles' packet walks.
     walks: RefCell<Walks>,
-    /// The packet visits the walks have spent, each counted once.
-    packets: Cell<u64>,
     /// The code-block work spent.
     blocks: Cell<u64>,
     /// Whether a work bound refused the last decode.
@@ -284,7 +288,6 @@ pub(crate) struct Ledger {
 impl fmt::Debug for Ledger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ledger")
-            .field("packets", &self.packets)
             .field("blocks", &self.blocks)
             .field("work_refused", &self.work_refused)
             .finish_non_exhaustive()
@@ -292,12 +295,12 @@ impl fmt::Debug for Ledger {
 }
 
 impl Ledger {
-    /// A ledger over what the earlier decodes spent.
-    fn over(spent: Spent) -> Self {
+    /// A ledger over the walks and the code-block work of the earlier
+    /// decodes.
+    fn over(walks: Walks, blocks: u64) -> Self {
         Ledger {
-            walks: RefCell::new(spent.walks),
-            packets: Cell::new(spent.packets),
-            blocks: Cell::new(spent.blocks),
+            walks: RefCell::new(walks),
+            blocks: Cell::new(blocks),
             work_refused: Cell::new(false),
         }
     }
@@ -306,7 +309,6 @@ impl Ledger {
     fn into_spent(self) -> Spent {
         Spent {
             walks: self.walks.into_inner(),
-            packets: self.packets.get(),
             blocks: self.blocks.get(),
         }
     }
@@ -332,11 +334,11 @@ impl Ledger {
         poc_bitmap: u64,
         reduction: u8,
         layers: Option<u16>,
+        image: u64,
     ) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
-        let mut walks = self.walks.borrow_mut();
-        let walked = walks.walk(header, tile, meter, poc_bitmap, reduction, layers);
-        self.packets.set(walks.visits());
-        walked
+        self.walks
+            .borrow_mut()
+            .walk(header, tile, meter, poc_bitmap, reduction, layers, image)
     }
 
     /// Record that a work bound refused a decode: the packet walk, the

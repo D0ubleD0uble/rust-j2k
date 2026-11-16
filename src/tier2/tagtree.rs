@@ -62,6 +62,11 @@ fn level_size(width: u32, level: u32) -> usize {
 }
 
 impl TagTree {
+    /// The bytes the tree's nodes take on the heap.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.nodes.capacity() * std::mem::size_of::<Node>()
+    }
+
     /// Build a tag tree for a precinct's `width × height` code-block grid. All
     /// nodes start unresolved; values arrive through [`read`](Self::read).
     pub fn new(width: u32, height: u32) -> Self {

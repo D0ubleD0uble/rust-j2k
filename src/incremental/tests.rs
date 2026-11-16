@@ -228,6 +228,148 @@ fn stop_at(name: &str, bytes: &[u8], at: usize) {
     assert_eq!(images, 3, "{name}, cut at {at}");
 }
 
+/// A 1 x 1 sample under one wavelet level and two LRCP layers, with `SOP`
+/// markers and no `EPH`, its four packets empty: each an `SOP` and `00`.
+fn empty_packets_with_sop() -> Vec<u8> {
+    let mut cs = vec![0xFF, 0x4F];
+    // SIZ: one 1 x 1 tile of one 8-bit component.
+    cs.extend_from_slice(&[0xFF, 0x51, 0, 41, 0, 0]);
+    for v in [1u32, 1, 0, 0, 1, 1, 0, 0] {
+        cs.extend_from_slice(&v.to_be_bytes());
+    }
+    cs.extend_from_slice(&[0, 1, 7, 1, 1]);
+    // COD: SOP, LRCP, 2 layers, 1 level, 64 x 64 code-blocks, 5/3.
+    cs.extend_from_slice(&[0xFF, 0x52, 0, 12, 0x02, 0, 0, 2, 0, 1, 4, 4, 0, 1]);
+    // QCD: no quantization, for 4 bands.
+    cs.extend_from_slice(&[0xFF, 0x5C, 0, 7, 0x40, 0x40, 0x40, 0x40, 0x40]);
+    let packets: Vec<u8> = (0..4u8)
+        .flat_map(|n| [0xFF, 0x91, 0, 4, 0, n, 0x00])
+        .collect();
+    let psot = 14 + packets.len() as u32;
+    cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
+    cs.extend_from_slice(&psot.to_be_bytes());
+    cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+    cs.extend_from_slice(&packets);
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
+/// A header of 65535 one-sample tiles of 300 components, and tile 0 alone:
+/// the charge for the missing tiles' tile-components passes the packet
+/// bound, though the file is a few kilobytes.
+fn missing_tiles_past_the_bound() -> Vec<u8> {
+    let components: u16 = 300;
+    let mut cs = vec![0xFF, 0x4F, 0xFF, 0x51];
+    cs.extend_from_slice(&(38 + 3 * components).to_be_bytes());
+    cs.extend_from_slice(&[0, 0]);
+    for v in [65535u32, 1, 0, 0, 1, 1, 0, 0] {
+        cs.extend_from_slice(&v.to_be_bytes());
+    }
+    cs.extend_from_slice(&components.to_be_bytes());
+    for _ in 0..components {
+        cs.extend_from_slice(&[7, 1, 1]);
+    }
+    cs.extend_from_slice(&[0xFF, 0x52, 0, 12, 0x00, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+    cs.extend_from_slice(&[0xFF, 0x5C, 0, 4, 0x40, 0x40]);
+    cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
+    cs.extend_from_slice(&(14 + u32::from(components)).to_be_bytes());
+    cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+    cs.extend(std::iter::repeat_n(0u8, usize::from(components)));
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
+/// The charge for missing tiles is a work bound too: a refine whose
+/// missing tiles cost more than the packet bound waits, though no packet
+/// is read, as the one-shot decode of the same bytes is refused.
+#[test]
+fn a_missing_tile_charge_past_the_bound_waits() {
+    let bytes = missing_tiles_past_the_bound();
+    let lenient = DecodeOptions::default().with_strict(false);
+    match decode_with(&bytes, &lenient) {
+        Err(Error::Limit(message)) => assert!(message.contains("packet_work_limit"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    assert_eq!(decoder.refine(), Ok(None));
+    assert!(decoder.refused);
+    assert_eq!(decoder.bytes_decoded(), 0);
+}
+
+/// `tiles` tiles of one sample each in a row, with no wavelet levels and
+/// two LRCP layers, each tile's two packets empty: `00`.
+fn one_sample_tiles(tiles: u32) -> Vec<u8> {
+    let mut cs = vec![0xFF, 0x4F];
+    cs.extend_from_slice(&[0xFF, 0x51, 0, 41, 0, 0]);
+    for v in [tiles, 1, 0, 0, 1, 1, 0, 0] {
+        cs.extend_from_slice(&v.to_be_bytes());
+    }
+    cs.extend_from_slice(&[0, 1, 7, 1, 1]);
+    cs.extend_from_slice(&[0xFF, 0x52, 0, 12, 0x00, 0, 0, 2, 0, 0, 4, 4, 0, 1]);
+    cs.extend_from_slice(&[0xFF, 0x5C, 0, 4, 0x40, 0x40]);
+    for index in 0..tiles {
+        cs.extend_from_slice(&[0xFF, 0x90, 0, 10]);
+        cs.extend_from_slice(&(index as u16).to_be_bytes());
+        cs.extend_from_slice(&16u32.to_be_bytes());
+        cs.extend_from_slice(&[0, 1, 0xFF, 0x93, 0, 0]);
+    }
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
+/// A file of many tiles whose packet state is large beside the samples
+/// they hold: the decoder keeps the walks of some, within about twice what
+/// one decode holds, and walks the rest from the start on each refine,
+/// which still gives the one-shot decode of the bytes fed.
+#[test]
+fn walks_past_the_room_are_walked_again() {
+    let bytes = one_sample_tiles(64);
+    whole_strict(&bytes);
+    let options = uncut(DecodeOptions::default());
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    for end in every(7, bytes.len()) {
+        let before = decoder.bytes_fed();
+        decoder.feed(&bytes[before..end]);
+        assert_eq!(
+            refine_now(&mut decoder),
+            oracle(&bytes[..end], &options),
+            "{end}"
+        );
+    }
+    let (kept, walked) = decoder.spent.walks.kept();
+    assert!(kept > 0 && walked > 0, "{kept} kept, {walked} walked again");
+}
+
+/// A feed that ends one byte into an `SOP`, headers inline: the one-shot
+/// decode of those bytes reads the `0xFF` as an empty packet's header, and
+/// the refine does too, but puts the packet back, so that the next refine
+/// reads the marker that more data shows there.
+#[test]
+fn a_feed_can_end_one_byte_into_an_sop() {
+    let bytes = empty_packets_with_sop();
+    assert_eq!(bytes.len(), 112);
+    whole_strict(&bytes);
+    let sops = markers(&bytes, 0x91);
+    assert_eq!(sops.len(), 4);
+    let options = uncut(DecodeOptions::default());
+    for &sop in &sops {
+        refine_at(
+            "empty packets with SOP",
+            &bytes,
+            &[sop + 1, bytes.len()],
+            &options,
+        );
+    }
+    // And after every `0xFF` in turn.
+    let ends: Vec<usize> = (0..bytes.len())
+        .filter(|&i| bytes[i] == 0xFF)
+        .map(|i| i + 1)
+        .chain([bytes.len()])
+        .collect();
+    refine_at("empty packets with SOP", &bytes, &ends, &options);
+}
+
 /// A feed that ends inside a packet header: past the `SOP` of a packet,
 /// before its `EPH`.
 #[test]
@@ -322,7 +464,7 @@ fn a_byte_at_a_time_feeder_stays_within_one_decodes_bounds() {
         }
         let block_work = crate::tests::BLOCK_WORK.with(Cell::get);
         let (packet_bound, block_bound) = one_shot_bounds(&bytes);
-        let packets = decoder.spent.packets;
+        let packets = decoder.spent.walks.visits();
         let blocks = decoder.spent.blocks;
         assert!(packets > 0 && blocks > 0, "{name}: nothing was decoded");
         assert_eq!(blocks, block_work, "{name}: the ledger missed block work");
@@ -330,7 +472,7 @@ fn a_byte_at_a_time_feeder_stays_within_one_decodes_bounds() {
         let mut once = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
         once.feed(&bytes);
         assert!(once.refine().unwrap().is_some(), "{name}");
-        let one_walk = once.spent.packets;
+        let one_walk = once.spent.walks.visits();
         assert_eq!(packets, one_walk, "{name}: the walks read packets again");
         assert!(
             packets <= packet_bound,
@@ -362,7 +504,7 @@ fn a_costly_walk_fed_in_halves_walks_once() {
     let half = bytes.len() / 2;
     decoder.feed(&bytes[..half]);
     assert_eq!(decoder.refine(), oracle(&bytes[..half], &options));
-    let first = decoder.spent.packets;
+    let first = decoder.spent.walks.visits();
     assert!(4 * first > packet_bound, "{first} of {packet_bound}");
     decoder.feed(&bytes[half..]);
     let image = decoder.refine().unwrap().expect("the walk goes on");
@@ -370,7 +512,7 @@ fn a_costly_walk_fed_in_halves_walks_once() {
         image,
         decode_with(&bytes, &options.clone().with_strict(false)).unwrap()
     );
-    let packets = decoder.spent.packets;
+    let packets = decoder.spent.walks.visits();
     assert!(packets <= packet_bound, "{packets} > {packet_bound}");
     assert!(2 * first > packets, "{first}, then {packets}");
     let finished = decoder.finish().unwrap();

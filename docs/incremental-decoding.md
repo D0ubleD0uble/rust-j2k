@@ -93,10 +93,12 @@ that refine: its whole code-blocks are kept, as the one-shot decode keeps
 them. After the image is built, the packet is put back: the code-block undo
 log, a log of the tag-tree nodes it changed, and the stream positions undo
 it, and the next refine reads it again from its start. A packet read whole is
-kept, except in one case: with packed headers (`PPM` or `PPT`) and `SOP`
-markers, a packet read with fewer than two bytes of the data after its
-start may yet have an `SOP` before it once more data comes. Such a packet,
-and every packet after it, is read for the image and then put back the same
+kept, except with `SOP` markers when it starts with fewer than two bytes of
+the data left. It may yet have an `SOP` before it once more data comes:
+with headers inline, the one byte read as its header may be the first byte
+of that marker, and with packed headers (`PPM` or `PPT`) the header is read
+whole from elsewhere while the marker is still to come. Such a packet, and
+every packet after it, is read for the image and then put back the same
 way.
 
 Two kinds of packet are not read. The packets a `POC` sequence never reaches
@@ -114,7 +116,8 @@ walk starts again.
 
 ## Work and memory
 
-The work bounds of `decode` hold across all the refines together.
+Each refine is held to the packet bound of a decode of its bytes on its own.
+The code-block bound holds across all the refines together.
 
 Each refine is charged the packet visits the walk of a decode of its bytes on
 its own spends: the geometry of the resolutions a reduction drops, the
@@ -123,13 +126,17 @@ data, a visit for each packet after it, and the skips from a `POC` set. The
 charges come from the counts the kept walks hold, and a refine is refused,
 as `Ok(None)`, where that decode is refused for work, and fails where it
 fails. So the packet bound is the one-shot bound of the bytes fed, not cut
-by what earlier refines spent, and a `POC` sequence is held in the bitmap or
-the set that decode holds it in. The packet visits the walks spend are
-counted once each: a byte-at-a-time feeder that refines after every byte
-spends, over all its refines, the visits of one walk of the whole file
-(`a_byte_at_a_time_feeder_stays_within_one_decodes_bounds`). The walks can
-step through each point of the order twice, once to read and once to count,
-and read a packet the data cuts once more on each refine.
+by what earlier refines spent. A `POC` sequence's volumes emit each
+precinct's layers from the first up, so a kept walk tells a packet emitted
+again by the precinct's count of layers read, with no packet set; its
+charges are those of the set that decode holds. The work the kept walks do is the visits
+they spend for the first time: a byte-at-a-time feeder that refines after
+every byte spends, over all its refines, the visits of one walk of the whole
+file (`a_byte_at_a_time_feeder_stays_within_one_decodes_bounds`). That count
+is of distinct visits. The walks can step through each point of the order
+twice, once to read and once to count, a packet the data cuts is parsed
+again on each refine, and a tile whose walk is not kept (see below) is
+walked from the start on each refine, as a one-shot decode walks it.
 
 The code-block work is done again by each refine that decodes. A ledger
 keeps the code-block work every refine has spent, and each refine's
@@ -139,12 +146,18 @@ and waits for more bytes, which raise the bound. `finish` is one more
 decode, under its own bound, and reports a work limit as one decode of the
 whole file does.
 
-Each decode holds what `decode_with` holds for the same bytes. Between calls
-the decoder keeps the bytes fed (in a `Vec`, so up to twice their length in
-capacity) and each tile's walk: about what one decode holds while it reads
-the tile's packets, and two packet sets of at most 2^24 bits for a tile with
-several `POC` volumes. The decoder is `Send` and `Sync`. The ledger's
-counters live only for the length of a decode.
+Between calls the decoder keeps the bytes fed (in a `Vec`, so up to twice
+their length in capacity) and the tiles' packet walks: their geometry, the
+state of their code-blocks, and, until a walk has read all of its tile's
+packets, its tag trees and counts. One decode holds at its peak the samples
+of its image and the packet state of the tile it is reading. The walks kept
+hold at most twice that: twice the image's samples (4 bytes each) plus
+twice the packet state of the largest tile walked so far. A tile whose walk
+would pass that is not kept, and each refine walks its packets from the
+start. Each refine holds what `decode_with` holds for the same bytes on top
+of the walks kept, so the decoder holds at most about three times one
+decode's peak, plus the bytes fed. The decoder is `Send` and `Sync`. The
+ledger's counters live only for the length of a decode.
 
 Three costs are outside the bounds, as they are outside one decode's work
 bounds. Each refine that returns an image builds the whole image, as one

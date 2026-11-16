@@ -1450,6 +1450,41 @@ impl PrecinctState {
 }
 
 impl BandState {
+    /// The bytes the band's state holds on the heap.
+    fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let precincts = self.precincts.capacity() * size_of::<PrecinctState>()
+            + self
+                .precincts
+                .iter()
+                .map(|p| p.inclusion.heap_bytes() + p.zero_bits.heap_bytes())
+                .sum::<usize>();
+        let blocks = self.blocks.capacity() * size_of::<BlockState>()
+            + self
+                .blocks
+                .iter()
+                .map(|b| {
+                    b.segments.capacity() * size_of::<SegmentState>()
+                        + b.segments
+                            .iter()
+                            .map(|s| s.chunks.capacity() * size_of::<Range<usize>>())
+                            .sum::<usize>()
+                })
+                .sum::<usize>();
+        precincts + blocks
+    }
+
+    /// Free each precinct's tag trees, once no packet is left to read
+    /// them, and forget where the data ended.
+    fn drop_trees(&mut self) {
+        for precinct in &mut self.precincts {
+            precinct.inclusion = TagTree::new(1, 1);
+            precinct.zero_bits = TagTree::new(1, 1);
+            precinct.ended = None;
+        }
+        self.precincts.shrink_to_fit();
+    }
+
     /// `coder` is the tile-component's coder, `None` under MIXED.
     fn new(band: &BandGeom, coder: Option<Coder>) -> Self {
         BandState {
