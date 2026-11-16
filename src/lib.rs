@@ -180,6 +180,7 @@ pub(crate) mod dwt;
 pub(crate) mod error;
 pub(crate) mod header;
 pub(crate) mod image;
+pub(crate) mod incremental;
 pub(crate) mod jp2;
 pub(crate) mod limit_hint;
 pub(crate) mod mct;
@@ -201,6 +202,7 @@ pub mod fuzz;
 pub use error::{Error, Result};
 pub use header::{ComponentInfo, Header};
 pub use image::{Component, Image};
+pub use incremental::IncrementalDecoder;
 pub use jp2::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
     ColorSpace, ColorSpecification, FileType, ImageHeader, IprBox, Jp2Metadata, MappingKind,
@@ -1266,13 +1268,24 @@ impl DecodeOptions {
 /// ([`WorkLimit::Raised`]`(0)`, a [`max_quality_layers`](DecodeOptions::max_quality_layers)
 /// of `Some(0)`), contradict each other, or do not fit the file.
 pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
+    decode_metered(bytes, options, None)
+}
+
+/// [`decode_with`], with the packet walk and the code-block work also held
+/// to what `ledger` has left of their bounds, when there is one (see
+/// [`incremental::Ledger`]).
+fn decode_metered(
+    bytes: &[u8],
+    options: &DecodeOptions,
+    ledger: Option<&incremental::Ledger>,
+) -> Result<Image> {
     check_options(options)?;
     // A codestream opens with SOC; anything else that carries the signature
     // box's type is read as a JP2 file, so a damaged signature box is reported
     // as a box fault. The rest falls to the codestream parser, which reports
     // the missing SOC.
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
-        return decode_jp2(bytes, options);
+        return decode_jp2(bytes, options, ledger);
     }
     // The header checks come before the tile walk, as `read_header_with` has it.
     let parsed = codestream::parse_header(bytes)?;
@@ -1289,7 +1302,7 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     check_reduction(&parsed.header, options.resolution_reduction, None)?;
     let selection = selection?;
     let cs = codestream::parse_tiles_with(bytes, parsed, options.strict)?;
-    decode_codestream(cs, options, &selection)
+    decode_codestream(cs, options, &selection, ledger)
 }
 
 /// Options that contradict each other, whatever the input.
@@ -1454,10 +1467,14 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
 
 /// Decode a JP2 file: read it up to its tile data, decode the codestream,
 /// and apply the channel plans, then any sRGB step, to the samples.
-fn decode_jp2(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
+fn decode_jp2(
+    bytes: &[u8],
+    options: &DecodeOptions,
+    ledger: Option<&incremental::Ledger>,
+) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
     let cs = codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict)?;
-    let image = decode_codestream(cs, options, &prefix.selection)?;
+    let image = decode_codestream(cs, options, &prefix.selection, ledger)?;
     // A subset is planned raw, so the plans would pass it through, but they
     // are planned for every component.
     let mut components = if prefix.selection.subset {
@@ -1481,6 +1498,7 @@ fn decode_codestream(
     cs: codestream::Codestream<'_>,
     options: &DecodeOptions,
     selection: &window::Selection,
+    ledger: Option<&incremental::Ledger>,
 ) -> Result<Image> {
     let reduction = options.resolution_reduction;
     let layers = options.max_quality_layers;
@@ -1502,10 +1520,16 @@ fn decode_codestream(
     // within the default bound however far the caller raises it.
     let bytes = tile_bytes(&cs);
     let poc_bitmap = tier2::decode_visits(bytes);
-    let meter = tier2::Meter::new(options.packet_work_limit.apply(poc_bitmap));
+    let packet_bound = options.packet_work_limit.apply(poc_bitmap);
+    let meter = tier2::Meter::new(ledger.map_or(packet_bound, |l| l.packets_left(packet_bound)));
+    // However the decode ends, what the walk spent goes on the ledger.
+    let _record = ledger.map(|l| l.record(&meter));
     let mut block_work = match &options.code_block_work_limit {
         WorkLimit::Unlimited => None,
-        limit => Some(limit.apply(tier1::decode_work(bytes))),
+        limit => {
+            let bound = limit.apply(tier1::decode_work(bytes));
+            Some(ledger.map_or(bound, |l| l.blocks_left(bound)))
+        }
     };
     let first_work = block_work.unwrap_or(0);
     // Not strict: what the codestream walk found missing, then each tile's
@@ -1526,6 +1550,9 @@ fn decode_codestream(
         .sum();
     let cost = missing.saturating_mul(cs.header.siz.components.len() as u64);
     if !meter.try_spend(cost) {
+        if let Some(ledger) = ledger {
+            ledger.refuse();
+        }
         return Err(Error::Limit(limit_hint::missing_tiles(
             cost,
             meter.first(),
@@ -1570,6 +1597,9 @@ fn decode_codestream(
         let (mut coded, reach) = match walked {
             Ok(walked) => walked,
             Err(tier2::Refused::Work(work)) => {
+                if let Some(ledger) = ledger {
+                    ledger.refuse();
+                }
                 // The meter holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
                 // earlier tiles'.
@@ -1679,6 +1709,9 @@ fn decode_codestream(
             #[cfg(test)]
             tests::BLOCK_WORK.with(|spent| spent.set(spent.get() + work));
             let Some(rest) = left.checked_sub(work) else {
+                if let Some(ledger) = ledger {
+                    ledger.refuse();
+                }
                 return Err(Error::Limit(limit_hint::code_blocks(
                     index,
                     work,
@@ -1688,6 +1721,9 @@ fn decode_codestream(
                 )));
             };
             *left = rest;
+            if let Some(ledger) = ledger {
+                ledger.spend_blocks(work);
+            }
         }
         #[cfg(test)]
         tests::BLOCKS

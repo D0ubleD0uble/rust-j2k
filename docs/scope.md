@@ -142,6 +142,7 @@ that does the same job.
 |---|---|---|---|
 | Decode at a lower resolution | Yes | `with_resolution_reduction(n)` | `-r` |
 | Decode a cut codestream and report what is missing | Yes | `with_strict(false)`, then `Image::report` | `-allow-partial` |
+| Decode a file while it arrives, refining the image as bytes come in | Yes | `IncrementalDecoder` ([incremental-decoding.md](incremental-decoding.md)) | none |
 | Return a JP2 file's palette indexes without applying the palette | Yes | `with_raw_channels(true)` | none |
 | Convert the color channels to sRGB | Yes | `with_color(ColorOutput::Srgb)` | `-force-rgb` |
 | Raise or lift the sample limit and the two work limits | Yes | `with_sample_limit`, `with_packet_work_limit`, `with_code_block_work_limit` | none |

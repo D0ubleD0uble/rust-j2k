@@ -457,6 +457,14 @@ No file is refused by the bound for its HT blocks, so there is no public-API
 test of such a refusal; `every_committed_file_decodes_far_below_the_tier1_work_bound`
 measures every HT corpus file against it with the others.
 
+## Incremental decoding
+
+`IncrementalDecoder` holds its refines together to the two work bounds one
+decode of the bytes fed has: each refine's bounds are cut by what the earlier
+refines spent, and a refine that runs out waits for more bytes. `finish` is
+one more decode under its own bounds. See
+[incremental-decoding.md](incremental-decoding.md#work-and-memory).
+
 ## Bounds removed by a cheaper parse
 
 ### Tile header cost

@@ -1009,37 +1009,41 @@ fn read_segmentation_symbol(
     Ok(())
 }
 
-/// Undo the maxshift on one coefficient magnitude (ISO/IEC 15444-1 H.2).
+/// Undo the maxshift on one coefficient magnitude (ISO/IEC 15444-1 H.1).
 ///
 /// `mag` is the double-scale magnitude Tier-1 reconstructed, the value OpenJPEG
-/// holds in `datap` before `opj_t1_clbl_decode_processor` halves it. A magnitude
-/// **at or above** `2^roi_shift` at double scale is taken for region and comes
-/// down `roi_shift` planes; everything below is background and stays. Nothing
-/// else identifies the region: the shift is the label.
+/// holds in `datap` before `opj_t1_clbl_decode_processor` halves it. H.1 makes
+/// a sample region of interest when its quantized magnitude `q` is at least
+/// `2^roi_shift`, and shifts it down `roi_shift` planes. At double scale that
+/// is `mag >= 2^(roi_shift + 1)`. Everything below is
+/// background and stays. Nothing else identifies the region: the shift is the
+/// label.
 ///
-/// This is OpenJPEG's threshold, and it is one plane below H.1's. At double
-/// scale `2^roi_shift` is a quantized magnitude of `2^(roi_shift - 1)`, while
-/// H.1 makes a coefficient region only from `2^roi_shift`, which is
-/// `mag >= 2^(roi_shift + 1)` here. So a background coefficient with bit
-/// `roi_shift - 1` set is shifted as if it were region and comes out as 0,
-/// where H.1 keeps it.
+/// The half-bit reconstruction offset does not blur the line. A background
+/// value is at most `2^s - 1`, which reconstructs to at most `2^(s+1) - 1` at
+/// double scale. A region value is at least `2^s` after the shift, which
+/// reconstructs to at least `2^(s+1)`.
 ///
-/// Transliterated from `t1.c`:
+/// OpenJPEG's `t1.c` is one plane lower, `thresh = 1 << roishift`, so it takes
+/// a background coefficient with bit `roi_shift - 1` set for region and
+/// returns it as 0 or a fraction of its value. This follows H.1 instead; see
+/// `docs/openjpeg-departures.md`, "Region of interest threshold (Part 1 and HT)".
+///
+/// `t1.c` also has a `roishift >= 31` arm:
 ///
 /// ```text
 /// if (roishift >= 31) { datap[...] = 0; }
-/// else { thresh = 1 << roishift; if (mag >= thresh) { mag >>= roishift; } }
 /// ```
 ///
-/// The `>= 31` arm is OpenJPEG's guard for a shift `1i32` cannot express, and
-/// it is reachable: `SPrgn` is a free byte, and a block whose zero bit-planes
-/// exceed `Mb` keeps [`top_coded_plane`] under the [`MAX_BIT_PLANES`] check
-/// however large the shift is. Zeroing the block is the *oracle's* reading,
-/// not H.2's: a threshold of `2^31` or more is above every `i32` magnitude,
-/// so the rule below, taken literally, would keep every coefficient as
-/// background. `t1.c` zeroes `datap` wholesale instead, and this follows it —
-/// changing the arm to keep the coefficients would diverge from OpenJPEG on
-/// every such stream (see `docs/openjpeg-departures.md`).
+/// It guards a shift `1i32` cannot express, and it is reachable: `SPrgn` is a
+/// free byte, and a block whose zero bit-planes exceed `Mb` keeps
+/// [`top_coded_plane`] under the [`MAX_BIT_PLANES`] check however large the
+/// shift is. Zeroing the block is the *oracle's* reading, not H.2's: a
+/// threshold of `2^31` or more is above every `i32` magnitude, so the rule
+/// above, taken literally, would keep every coefficient as background. `t1.c`
+/// zeroes `datap` wholesale instead, and this follows it; changing the arm to
+/// keep the coefficients would diverge from OpenJPEG on every such stream (see
+/// `docs/openjpeg-departures.md`).
 pub(crate) fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
     if roi_shift == 0 {
         return mag;
@@ -1047,8 +1051,9 @@ pub(crate) fn undo_maxshift(mag: i32, roi_shift: u8) -> i32 {
     if roi_shift >= 31 {
         return 0;
     }
-    let threshold = 1i32 << roi_shift;
-    if mag >= threshold {
+    // `2^(roi_shift + 1)` is `2^31` at `roi_shift = 30`, past `i32`.
+    let threshold = 1i64 << (roi_shift + 1);
+    if i64::from(mag) >= threshold {
         mag >> roi_shift
     } else {
         mag
@@ -1319,7 +1324,7 @@ pub fn decode_block<S: AsRef<[u8]>>(
         }
     }
 
-    // Undo the maxshift (Annex H.2), then apply the decoded signs.
+    // Undo the maxshift (Annex H.1), then apply the decoded signs.
     //
     // The passes carried each magnitude in the mid-point reconstruction form at
     // double scale (ISO E.1.1.2, r = ½): becoming significant set
@@ -1329,9 +1334,11 @@ pub fn decode_block<S: AsRef<[u8]>>(
     // function's contract).
     //
     // The maxshift is undone here, before that halving, as
-    // `opj_t1_clbl_decode_processor` does it: its threshold is stated in the
-    // coefficients' own scale, and halving first would drop a region coefficient
-    // below it.
+    // `opj_t1_clbl_decode_processor` does it, with H.1's threshold stated at
+    // the coefficients' own scale (`mag >= 2^(s + 1)`). Halving first would
+    // classify the same, since `2q + 1 >= 2^(s + 1)` exactly when `q >= 2^s`,
+    // but the shift then comes off the double-scale value, so the half bit is
+    // dropped after it, as the caller's arms expect.
     for y in 0..state.height {
         for x in 0..state.width {
             let i = state.idx(x, y);
@@ -1660,51 +1667,48 @@ mod tests {
         decode_fill(5, 9, SEGSYM | LAZY).expect("the cleanup of plane 3 is not terminated");
     }
 
-    /// The maxshift boundary, against the reference formula. `t1.c` reads
-    ///
-    /// ```text
-    /// thresh = 1 << roishift;
-    /// if (mag >= thresh) { mag >>= roishift; }
-    /// ```
-    ///
-    /// so a magnitude of exactly `2^roi_shift` is the *smallest* taken for
-    /// region, and it must come down (OpenJPEG's rule, one plane below H.1's;
-    /// see [`undo_maxshift`]). `>` for `>=` leaves it up by
-    /// `roi_shift` planes; the whole-component ROI fixture cannot see that,
-    /// because it has no background coefficient below the threshold at all.
+    /// The maxshift boundary, against H.1 written out for a quantized value.
+    /// A sample is region when `q >= 2^s`, and then `q >> s` is the value. The
+    /// decoder holds `2q + 1` (the half-bit offset) at double scale, so it must
+    /// agree with H.1 on every `q`, and in particular at `q = 2^s - 1` (the
+    /// largest background value) and `q = 2^s` (the smallest region value).
     #[test]
-    fn undo_maxshift_matches_the_reference_formula_across_the_boundary() {
-        /// `t1.c`'s roishift block, transliterated.
-        fn reference(mag: i32, roishift: u8) -> i32 {
-            if roishift == 0 {
-                return mag;
-            }
-            let thresh = 1i32 << roishift;
-            if mag >= thresh { mag >> roishift } else { mag }
-        }
-
-        for roi_shift in 0..=12u8 {
-            let threshold = 1i32 << roi_shift;
-            // Straddle the boundary, and cover zero and the far tails.
+    fn undo_maxshift_matches_h1_across_the_boundary() {
+        for roi_shift in 1..=12u8 {
+            let s = u32::from(roi_shift);
             let cases = [
-                0,
+                0u32,
                 1,
-                threshold - 2,
-                threshold - 1,
-                threshold,
-                threshold + 1,
-                threshold * 2,
-                threshold * 1234 + 7,
-                i32::MAX,
+                (1 << (s - 1)) - 1,
+                1 << (s - 1),
+                (1 << s) - 2,
+                (1 << s) - 1,
+                1 << s,
+                (1 << s) + 1,
+                (1 << s) * 1234 + 7,
             ];
-            for mag in cases.into_iter().filter(|&m| m >= 0) {
-                assert_eq!(
-                    undo_maxshift(mag, roi_shift),
-                    reference(mag, roi_shift),
-                    "mag {mag}, roi_shift {roi_shift}"
-                );
+            for q in cases {
+                let mag = (2 * q + 1) as i32;
+                // H.1 on `q`, then the half bit: a region value `q >> s` is
+                // `2 (q >> s) + 1` at double scale, but the decoder shifts the
+                // double-scale magnitude, so compare against that.
+                let want = if q >= 1 << s { mag >> s } else { mag };
+                assert_eq!(undo_maxshift(mag, roi_shift), want, "q {q}, s {s}");
+                // Background stays exactly where it was.
+                if q < 1 << s {
+                    assert_eq!(undo_maxshift(mag, roi_shift), mag, "q {q}, s {s}");
+                }
             }
+            // The magnitude extremes, either side of `2^(s + 1)`.
+            let threshold = 1i32 << (roi_shift + 1);
+            assert_eq!(undo_maxshift(threshold - 1, roi_shift), threshold - 1);
+            assert_eq!(undo_maxshift(threshold, roi_shift), 2);
+            assert_eq!(undo_maxshift(i32::MAX, roi_shift), i32::MAX >> roi_shift);
         }
+        // The widest shift whose threshold `2^31` is past `i32`: nothing is
+        // region, and the arithmetic must not overflow.
+        assert_eq!(undo_maxshift(i32::MAX, 30), i32::MAX);
+        assert_eq!(undo_maxshift(1 << 30, 30), 1 << 30);
     }
 
     /// A magnitude one below the threshold is background and stays where it is;
@@ -1713,12 +1717,87 @@ mod tests {
     #[test]
     fn the_maxshift_threshold_separates_background_from_region() {
         let roi_shift = 6;
-        let threshold = 1i32 << roi_shift; // 64
-        assert_eq!(undo_maxshift(threshold - 1, roi_shift), 63, "background");
-        assert_eq!(undo_maxshift(threshold, roi_shift), 1, "region");
+        let threshold = 1i32 << (roi_shift + 1); // 128, double scale of q = 64
+        assert_eq!(undo_maxshift(threshold - 1, roi_shift), 127, "background");
+        assert_eq!(undo_maxshift(threshold, roi_shift), 2, "region");
+        // A background value with bit `s - 1` set, the band OpenJPEG shifts.
+        assert_eq!(undo_maxshift(64 + 32, roi_shift), 96, "background, bit 5");
         assert_eq!(undo_maxshift(0, roi_shift), 0, "zero is neither");
         // Without a shift nothing moves, whatever the magnitude.
         assert_eq!(undo_maxshift(threshold, 0), threshold);
+    }
+
+    /// A background coefficient with bit `s - 1` set decodes as itself, from a
+    /// one-sample EBCOT block worked by hand. On the old threshold the double
+    /// scale value `6` was taken for region and came out as `6 >> 2 = 1`.
+    ///
+    /// `Mb = 3`, `s = 2`, `P = 3` zero bit-planes, one cleanup pass. The block
+    /// starts at `top = s + Mb - P = 2` (H.2), so the one coded bit-plane is
+    /// the one that holds `q = 2` (bit `s - 1`), and `q < 2^s = 4` makes it
+    /// background. The first byte is 0x00, so `C = 0`. Context 0 starts at
+    /// state 4 (`Qe = 0x0521`, MPS 0) and `A = 0x8000`: `A - Qe = 0x7ADF`, and
+    /// `Chigh = 0 < Qe` takes LPS_EXCHANGE. There `A = 0x7ADF >= Qe`, so the
+    /// symbol is `1 - MPS = 1`: the sample is significant. Reconstruction at
+    /// the mid-point (E.1.1.2, `r = 1/2`) of the coded plane gives `q = 2 + 1
+    /// = 3`, `6` at double scale.
+    ///
+    /// H.1 sees `q = 2 < 4`: background, unchanged, `6`.
+    #[test]
+    fn a_background_coefficient_with_bit_s_minus_one_set_is_kept() {
+        let decode = |roi_shift: u8, numbps: u32, zero_bit_planes: u32| {
+            let mut state = BlockState::new(1, 1);
+            decode_block(
+                &[(vec![0x00, 0x00, 0x00], 1)],
+                &mut state,
+                Orientation::Ll,
+                numbps,
+                1,
+                zero_bit_planes,
+                BlockParams {
+                    style: 0,
+                    roi_shift,
+                    last_segment_cut: false,
+                },
+            )
+            .expect("a one-sample block decodes");
+            state.coeffs[0].abs()
+        };
+        // The same coded plane with no maxshift: the double-scale value is 6.
+        assert_eq!(decode(0, 3, 1), 6, "no maxshift, top 2");
+        // Under `s = 2` the block is background and must read the same.
+        assert_eq!(decode(2, 3, 3), 6, "background q = 2, s = 2");
+        // `s = 3`: `top = 3 + Mb - P` with `Mb = 4`, `P = 4` is 3, the plane of
+        // `q = 4`, below `2^3 = 8`. Double scale is `2^3 + 2^2 = 12`; the old
+        // rule shifted it to 1.
+        assert_eq!(decode(3, 4, 4), 12, "background q = 4, s = 3");
+    }
+
+    /// A region coefficient at exactly `q = 2^s` after the shift is still
+    /// un-shifted: the smallest region value, and the other side of the
+    /// threshold from the test above. `Mb = 3`, `s = 2`, `P = 2` zero
+    /// bit-planes, so `top = s + Mb - P = 3`: the one coded bit-plane holds
+    /// `q = 2^s = 4`. That is region (`4 >= 4`), and reconstructs at the
+    /// mid-point as `8 + 4 = 12` at double scale. Undoing the shift gives
+    /// `12 >> 2 = 3`, which is `q = 1` with its half bit, as the encoder's
+    /// `1 << 2` implies.
+    #[test]
+    fn a_region_coefficient_at_exactly_two_to_the_s_is_unshifted() {
+        let mut state = BlockState::new(1, 1);
+        decode_block(
+            &[(vec![0x00, 0x00, 0x00], 1)],
+            &mut state,
+            Orientation::Ll,
+            3,
+            1,
+            2,
+            BlockParams {
+                style: 0,
+                roi_shift: 2,
+                last_segment_cut: false,
+            },
+        )
+        .expect("decodes");
+        assert_eq!(state.coeffs[0].abs(), 3);
     }
 
     /// The zero bit-planes count against the raised `Mb + roi_shift` (Kmax of
