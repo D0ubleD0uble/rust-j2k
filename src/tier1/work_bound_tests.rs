@@ -182,6 +182,7 @@ fn the_work_counts_the_code_blocks_decoded() {
     let header = crate::codestream::parse_header(&bytes).unwrap().header;
     let coded = CodedData {
         components: vec![ComponentCoded {
+            rect: None,
             resolutions: vec![
                 Resolution {
                     subbands: vec![band(BandKind::Ll, vec![block(8, 8, 1)])],
@@ -215,6 +216,7 @@ fn the_work_counts_the_passes_a_maxshift_adds() {
     let header = crate::codestream::parse_header(&bytes).unwrap().header;
     let coded = CodedData {
         components: vec![ComponentCoded {
+            rect: None,
             resolutions: vec![Resolution {
                 subbands: vec![band(BandKind::Ll, vec![block(8, 8, 164)])],
             }],
@@ -274,6 +276,7 @@ fn the_work_counts_the_passes_an_ht_block_runs() {
     let one = |b: CodeBlock<'static>| {
         let coded = CodedData {
             components: vec![ComponentCoded {
+                rect: None,
                 resolutions: vec![Resolution {
                     subbands: vec![band(BandKind::Ll, vec![b])],
                 }],
