@@ -10,7 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    DecodeOptions, Error, Image, IncrementalDecoder, decode_with, read_header, read_header_with,
+    DecodeOptions, Error, Image, IncrementalDecoder, WorkLimit, decode_with, read_header,
+    read_header_with,
 };
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -516,4 +517,57 @@ fn a_work_bound_a_prefix_reaches_is_a_wait() {
         decoder.finish(),
         decode_with(&bytes, &DecodeOptions::default())
     );
+}
+
+/// A file the default code-block work bound refuses.
+fn bomb() -> Vec<u8> {
+    std::fs::read(fixtures().join("tier1_work_bound/t1bomb_1024_64_88.j2k")).unwrap()
+}
+
+/// After `finish` refuses a work limit, `into_bytes` hands the bytes back,
+/// and decoding them with the limit raised gives what `decode_with` gives.
+#[test]
+fn into_bytes_recovers_the_input_after_a_refused_work_limit() {
+    let bytes = bomb();
+    let options = DecodeOptions::default();
+    let refused = decode_with(&bytes, &options).unwrap_err();
+    assert!(is_work_limit(&refused), "{refused:?}");
+
+    let mut decoder = IncrementalDecoder::new(options).unwrap();
+    for piece in bytes.chunks(4096) {
+        decoder.feed(piece);
+    }
+    let error = decoder.finish().unwrap_err();
+    assert!(is_work_limit(&error), "{error:?}");
+
+    let recovered = decoder.into_bytes();
+    assert_eq!(recovered, bytes);
+    let raised = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Unlimited);
+    let expected = decode_with(&bytes, &raised);
+    assert!(expected.is_ok());
+    assert_eq!(decode_with(&recovered, &raised), expected);
+    let mut again = IncrementalDecoder::new(raised).unwrap();
+    again.feed(&recovered);
+    assert_eq!(again.finish(), expected);
+}
+
+/// `finish` borrows the decoder, and calling it again, also after a refine,
+/// gives the same result.
+#[test]
+fn finish_twice_gives_equal_results() {
+    let bytes = bomb();
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    let first = decoder.finish();
+    assert!(first.is_err());
+    assert_eq!(decoder.finish(), first);
+
+    let file =
+        std::fs::read(fixtures().join("tier1_work_bound/opj_flat2048_16bit_n1.j2k")).unwrap();
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&file[..file.len() / 2]);
+    let _ = decoder.refine();
+    let first = decoder.finish();
+    assert_eq!(decoder.finish(), first);
+    assert_eq!(decoder.bytes_fed(), file.len() / 2);
 }

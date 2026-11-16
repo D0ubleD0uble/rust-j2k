@@ -218,7 +218,12 @@ impl IncrementalDecoder {
     /// This is a decode of its own, also after a `refine` has returned an
     /// error: under strict options it may refuse the bytes for an earlier
     /// fault, such as the data ending, than the one `refine` found.
-    pub fn finish(self) -> Result<Image> {
+    ///
+    /// `finish` borrows the decoder and keeps nothing from the call, so it
+    /// can be called again and gives the same result. When it refuses a
+    /// work limit, [`into_bytes`](Self::into_bytes) gives the bytes back to
+    /// decode with the limit raised.
+    pub fn finish(&self) -> Result<Image> {
         match decode_with(&self.bytes, &self.options) {
             Err(Error::Incomplete(why)) => {
                 let in_boxes = !self.bytes.starts_with(&[0xFF, 0x4F])
@@ -236,6 +241,18 @@ impl IncrementalDecoder {
             }
             decoded => decoded,
         }
+    }
+}
+
+impl IncrementalDecoder {
+    /// The bytes fed, handed back and the decoder consumed.
+    ///
+    /// After [`finish`](Self::finish) refuses a work limit, decode these
+    /// with [`decode_with`], or feed them to a new decoder, under options
+    /// with the limit raised.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 }
 
