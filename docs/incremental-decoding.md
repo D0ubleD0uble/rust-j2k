@@ -12,9 +12,15 @@ the work is bounded, and what a later, more stateful version would change.
   included. The report says which quality layers and resolutions are
   complete and which tiles are missing.
 - `refine` returns `Ok(None)` where `decode_with` gives `Error::Incomplete`
-  (the main header is cut short) or `Error::Limit`, since more bytes can
-  complete the header and raise the work bounds. Any other error is the one
-  `decode_with` gives on those bytes.
+  (the main header is cut short), since more bytes can complete the header.
+  It also returns `Ok(None)` when a work bound refuses the decode and the cut
+  the ledger made to that bound may be the reason (see below), since more
+  bytes raise the bound. Any other error, including a limit more bytes cannot
+  clear such as the sample limit, is the one `decode_with` gives on those
+  bytes.
+- A refine gives an image when one is due: once the bytes fed are twice those
+  of the last image, or, before the first, twice those the header needs, and
+  the one-shot decode of the bytes fed gives an image.
 - `finish` is `decode_with` on all the bytes under the decoder's options,
   `strict` included, except that `Error::Incomplete` becomes a truncation
   error: `Error::FileFormat` when a JP2 file ends inside its boxes before
@@ -26,10 +32,11 @@ the work is bounded, and what a later, more stateful version would change.
 The correctness oracle is the crate's own one-shot strict-off decode of the
 same prefix. `tests/incremental.rs` checks it on every fixture under
 `tests/fixtures/`, fed in pieces of random sizes and cut at many points,
-including the MIXED HT files and the PTERM, POC and multi-tile files. To
-keep its time down, it feeds only the first 96 KB of a file, decodes a large
-image at a resolution reduction, and feeds the files made to reach the work
-bounds in two halves without cutting them. That
+including the MIXED HT files and the PTERM, POC and multi-tile files, and
+checks that each refine that is due gives an image. To keep its time down, it
+feeds only the first 96 KB of a file, decodes a large image at a resolution
+reduction, and feeds the files made to reach the work bounds in two halves
+without cutting them. That
 one-shot decode is not the same as OpenJPEG's `-allow-partial` on every
 prefix: on `pterm_cut.j2k` and `bypass_pterm.j2k` with no layer cap, 1954 of
 2588 prefixes differ, while all of them match at `-l 1`
@@ -37,10 +44,10 @@ prefix: on `pterm_cut.j2k` and `bypass_pterm.j2k` with no layer cap, 1954 of
 
 ## When `refine` decodes
 
-`refine` decodes the whole buffer each time it decodes, and it decodes only
-once the bytes fed have at least doubled since its last attempt. A file of
-`n` bytes is decoded about `log2(n)` times, on prefixes that double, so the
-total work is under twice one decode of the whole file. The schedule does not
+`refine` decodes at least each time the bytes fed have doubled since it last
+decoded, and may decode more often. It decodes the whole buffer each time.
+At present it decodes only at those doublings, so a file of `n` bytes is
+decoded about `log2(n)` times, on prefixes that double. The schedule does not
 look at the codestream, so a refine does not wait for a layer or a resolution
 to complete; the report of each image says how far the data reached.
 
@@ -49,9 +56,13 @@ to complete; the report of each image says how far the data reached.
 The work bounds of `decode` hold across all the refines together. A ledger
 keeps the packet visits and code-block work every refine has spent, and each
 refine's bounds are what is left of the bounds one decode of its bytes has
-(raised as the options say). A refine that runs out returns `Ok(None)` and
-waits for more bytes, which raise the bound. `finish` is one more decode,
-under its own bound. A file whose packet walk costs about the same however
+(raised as the options say). A refine refused for work that the uncut bound
+may have allowed returns `Ok(None)` and waits for more bytes, which raise the
+bound. For the packet walk that is any refusal under a cut bound, since how
+much further the walk would have gone is not known; for the code-block work
+and the charge for missing tiles, the work is known, and a refusal the uncut
+bound would make too is an error. `finish` is one more decode, under its own
+bound. A file whose packet walk costs about the same however
 few of its bytes are there, such as a positional sweep over a large grid, can
 spend most of the bound on its first refine; its later refines then wait, and
 only `finish` decodes it. The unit test
@@ -63,11 +74,17 @@ Each decode holds what `decode_with` holds for the same bytes. Between calls
 the decoder keeps only the bytes fed (in a `Vec`, so up to twice their length
 in capacity) and a few counters; the images go to the caller.
 
-Two costs are outside the ledger, as they are outside one decode's work
-bounds: parsing the headers and walking the tile-part headers, both linear in
-what they read, so also under twice one decode in total; and, for a JP2 file
-whose last tile-part has `Psot = 0`, the walk that finds where its packets end
-(see [The `read_header` walk](resource-bounds.md#the-read_header-walk)).
+Three costs are outside the ledger, as they are outside one decode's work
+bounds. Each refine that returns an image builds the whole image, as one
+decode does: it allocates the samples and runs the inverse wavelet and color
+transforms over them, whatever share of the bytes is in. That is one image
+reconstruction per image, so at most about `log2(n)` of them under the
+doubling cadence: `sample_limit/rgb_6000x4000.jp2` fed 64 bytes at a time
+gives 10 images in about 81 s against 10.5 s for one decode. Each refine also
+parses the headers and walks the tile-part headers, which is linear in what
+they read. And for a JP2 file whose last tile-part has `Psot = 0`, it makes
+the walk that finds where its packets end (see [The `read_header`
+walk](resource-bounds.md#the-read_header-walk)).
 
 ## What a stateful decoder would add
 

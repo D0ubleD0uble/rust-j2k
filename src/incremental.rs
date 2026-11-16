@@ -373,6 +373,38 @@ mod tests {
         assert_eq!(finished, decode_with(&bytes, &options).unwrap());
     }
 
+    /// The same file under a bound that covers both halves' walks: the
+    /// second refine is cut only by what the first spent, so it decodes.
+    #[test]
+    fn a_costly_walk_the_bound_covers_twice_refines_twice() {
+        let bytes = fixture("work_bound/sweep_rpcl_1024_64.j2k");
+        let options = DecodeOptions::default().with_packet_work_limit(crate::WorkLimit::Raised(8));
+        let packet_bound = 8 * one_shot_bounds(&bytes).0;
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        let half = bytes.len() / 2;
+        decoder.feed(&bytes[..half]);
+        assert!(
+            decoder.refine().unwrap().is_some(),
+            "the first half decodes"
+        );
+        let first = decoder.ledger.packets.get();
+        decoder.feed(&bytes[half..]);
+        let image = decoder
+            .refine()
+            .unwrap()
+            .expect("the rest of the bound covers it");
+        assert_eq!(
+            image,
+            decode_with(&bytes, &options.with_strict(false)).unwrap()
+        );
+        let packets = decoder.ledger.packets.get();
+        // Each walk takes about a quarter of the bound.
+        assert!(
+            4 * first > packet_bound && packets <= packet_bound,
+            "{first}, {packets}"
+        );
+    }
+
     fn whole_strict(bytes: &[u8]) -> Image {
         decode_with(bytes, &DecodeOptions::default()).unwrap()
     }
