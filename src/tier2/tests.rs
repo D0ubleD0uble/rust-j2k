@@ -72,7 +72,7 @@ fn parse_layers_styled<'a>(
     style: u8,
 ) -> Result<(Vec<Subband<'a>>, usize)> {
     let coder = Coder::of_style(style, None);
-    let mut states: Vec<BandState<'a>> = bands.iter().map(|b| BandState::new(b, coder)).collect();
+    let mut states: Vec<BandState> = bands.iter().map(|b| BandState::new(b, coder)).collect();
     let mut streams = PacketStreams {
         header: data,
         header_pos: 0,
@@ -97,9 +97,10 @@ fn parse_layers_styled<'a>(
             &mut scratch,
             true,
             None,
+            None,
         )?;
     }
-    Ok((build_subbands(bands, states), streams.body_pos))
+    Ok((build_subbands(bands, &states, data), streams.body_pos))
 }
 use crate::codestream::markers::{
     Cod, Coding, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
@@ -2121,7 +2122,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
     data.extend_from_slice(&[1, 2]);
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let mut states: Vec<BandState<'_>> = bands
+    let mut states: Vec<BandState> = bands
         .iter()
         .map(|b| BandState::new(b, Some(Coder::Part1)))
         .collect();
@@ -2146,6 +2147,7 @@ fn the_sop_sequence_number_wraps_at_65536() {
         &mut states,
         &mut Scratch::default(),
         true,
+        None,
         None,
     )
     .expect("wraps to zero");
@@ -2351,7 +2353,7 @@ fn an_ht_block_with_its_cleanup_pass_alone_parses() {
 #[test]
 fn lazy_segment_max_passes_follows_the_10_2_1_pattern() {
     const LAZY: u8 = 0x01;
-    let mut segments: Vec<SegmentState<'_>> = Vec::new();
+    let mut segments: Vec<SegmentState> = Vec::new();
     let mut pattern = Vec::new();
     for _ in 0..7 {
         let (kind, max_passes) = next_segment(Coder::Part1, LAZY, segments.last());

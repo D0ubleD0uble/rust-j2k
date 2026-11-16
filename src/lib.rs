@@ -1271,9 +1271,9 @@ pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     decode_metered(bytes, options, None)
 }
 
-/// [`decode_with`], with the packet walk and the code-block work also held
-/// to what `ledger` has left of their bounds, when there is one (see
-/// [`incremental::Ledger`]).
+/// [`decode_with`], with the code-block work also held to what `ledger`
+/// has left of its bound, and the packet walks with `strict` off kept on
+/// it, when there is one (see [`incremental::Ledger`]).
 fn decode_metered(
     bytes: &[u8],
     options: &DecodeOptions,
@@ -1521,9 +1521,11 @@ fn decode_codestream(
     let bytes = tile_bytes(&cs);
     let poc_bitmap = tier2::decode_visits(bytes);
     let packet_bound = options.packet_work_limit.apply(poc_bitmap);
-    let meter = tier2::Meter::new(ledger.map_or(packet_bound, |l| l.packets_left(packet_bound)));
-    // However the decode ends, what the walk spent goes on the ledger.
-    let _record = ledger.map(|l| l.record(&meter));
+    // The walk is not cut by what earlier decodes of an incremental decoder
+    // spent: those decodes' walks are kept, and this one goes on from them,
+    // so that what they all spend is what one walk spends (see
+    // [`incremental::Ledger`]).
+    let meter = tier2::Meter::new(packet_bound);
     let mut block_work = match &options.code_block_work_limit {
         WorkLimit::Unlimited => None,
         limit => {
@@ -1590,6 +1592,18 @@ fn decode_codestream(
         let walked = if options.strict {
             tier2::decode_packets_metered(&header, tile, &meter, poc_bitmap, reduction, layers)
                 .map(|coded| (coded, None))
+        } else if let Some(ledger) = ledger {
+            ledger
+                .walk(
+                    &header,
+                    tile,
+                    &meter,
+                    poc_bitmap,
+                    reduction,
+                    layers,
+                    canvas.bytes(),
+                )
+                .map(|(coded, reach)| (coded, Some(reach)))
         } else {
             tier2::decode_packets_partial(&header, tile, &meter, poc_bitmap, reduction, layers)
                 .map(|(coded, reach)| (coded, Some(reach)))

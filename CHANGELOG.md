@@ -22,12 +22,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all of it once the input ends. Each image `refine` returns is the one
   `decode_with` gives with `strict` off on the same bytes, with a report of
   what they do not hold yet. `refine` decodes at least each time the bytes
-  fed have doubled, and may decode more often. The packet and code-block
-  work bounds hold across all the refines together; each refine that
-  returns an image also rebuilds the whole image, as one decode does. A
-  work limit is reported only by `finish`, since more bytes raise the work
-  bounds; a limit that does not depend on the bytes, such as the sample
-  limit, is an error from `refine`. A main header still cut short at `finish` is
+  fed have doubled, and may decode more often. Each refine goes on from
+  each tile's packet walk where the last one stopped, so over all the
+  refines the packets are read about once. Each refine is held to the
+  packet bound of a decode of its bytes, and the code-block bound holds
+  across all the refines together; each refine that returns an
+  image also rebuilds the whole image, as one decode does. A work limit is
+  reported only by `finish`, since more bytes raise the work bounds; a
+  limit that does not depend on the bytes, such as the sample limit, is an
+  error from `refine`, and every later `refine` returns it again. The
+  decoder is `Send` and `Sync`. A main header still cut short at `finish` is
   `Error::Codestream`, or `Error::FileFormat` inside a JP2 file's boxes.
 - A tile-component whose code-block style is MIXED (ISO/IEC 15444-15 A.4)
   decodes: each code-block is read as an HT block or a Part 1 block, told

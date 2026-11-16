@@ -42,7 +42,7 @@ fn parse_styled<'a>(
     style: u8,
 ) -> Result<(Vec<Subband<'a>>, usize)> {
     let coder = Coder::of_style(style, None);
-    let mut states: Vec<BandState<'a>> = bands.iter().map(|b| BandState::new(b, coder)).collect();
+    let mut states: Vec<BandState> = bands.iter().map(|b| BandState::new(b, coder)).collect();
     let mut streams = PacketStreams {
         header: data,
         header_pos: 0,
@@ -66,9 +66,10 @@ fn parse_styled<'a>(
             &mut scratch,
             layer < kept,
             None,
+            None,
         )?;
     }
-    Ok((build_subbands(bands, states), streams.body_pos))
+    Ok((build_subbands(bands, &states, data), streams.body_pos))
 }
 
 /// The one code-block of an 8 x 8 band, after `layers` packets of `data`, the
@@ -411,7 +412,7 @@ fn a_cut_packet_puts_back_the_ht_segment_state() {
         (later(3, &[(2, 3), (3, 4)]), vec![1, 2, 3, 4, 5]),
     ]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let mut states: Vec<BandState<'_>> = bands
+    let mut states: Vec<BandState> = bands
         .iter()
         .map(|b| BandState::new(b, Some(Coder::Ht)))
         .collect();
@@ -426,7 +427,7 @@ fn a_cut_packet_puts_back_the_ht_segment_state() {
     };
     let mut scratch = Scratch::default();
     let mut log = Vec::new();
-    let snapshot = |states: &[BandState<'_>]| {
+    let snapshot = |states: &[BandState]| {
         let block = &states[0].blocks[0];
         let segments: Vec<_> = block
             .segments
@@ -462,6 +463,7 @@ fn a_cut_packet_puts_back_the_ht_segment_state() {
             &mut scratch,
             true,
             Some(&mut log),
+            None,
         )
         .unwrap();
         assert_eq!(packet, expected, "layer {layer}");
@@ -895,7 +897,7 @@ fn a_cut_packet_puts_back_the_coder() {
         (mixed(false, 1, 1, &[(0b1010, 4)]), body(10)),
     ]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
-    let mut states: Vec<BandState<'_>> = bands.iter().map(|b| BandState::new(b, None)).collect();
+    let mut states: Vec<BandState> = bands.iter().map(|b| BandState::new(b, None)).collect();
     let cut = &data[..data.len() - 1];
     let mut streams = PacketStreams {
         header: cut,
@@ -921,6 +923,7 @@ fn a_cut_packet_puts_back_the_coder() {
             &mut scratch,
             true,
             Some(&mut log),
+            None,
         )
         .unwrap();
         assert_eq!(packet, expected, "layer {layer}");

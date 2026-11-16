@@ -159,6 +159,16 @@ pub(crate) struct ResolutionGeom {
 }
 
 impl ResolutionGeom {
+    /// The bytes the resolution's bands hold on the heap.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.bands.capacity() * std::mem::size_of::<BandGeom>()
+            + self
+                .bands
+                .iter()
+                .map(|b| b.precincts.capacity() * std::mem::size_of::<PrecinctGeom>())
+                .sum::<usize>()
+    }
+
     /// How many packets this resolution carries per (layer, component): one per
     /// precinct, and zero when the resolution is empty.
     pub(crate) fn precinct_count(&self) -> usize {

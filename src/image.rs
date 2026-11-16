@@ -199,6 +199,17 @@ pub(crate) struct Canvas {
 }
 
 impl Canvas {
+    /// The bytes the planes of the components kept take, once each has
+    /// its samples.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.rects
+            .iter()
+            .zip(&self.kept)
+            .filter(|(_, kept)| **kept)
+            .map(|(rect, _)| rect.area().saturating_mul(4))
+            .fold(0, u64::saturating_add)
+    }
+
     /// A canvas of every component over the whole image, at `reduction`.
     #[cfg(test)]
     pub(crate) fn new(header: &MainHeader, reduction: u8) -> Result<Self> {
