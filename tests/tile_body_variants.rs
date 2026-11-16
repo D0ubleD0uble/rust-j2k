@@ -3,10 +3,8 @@
 //! change to either would leave the target fuzzing a different tier-2 path
 //! with no failure to say so.
 
-#[allow(clippy::duplicate_mod)]
 #[path = "support/synth.rs"]
 mod synth;
-#[allow(clippy::duplicate_mod)]
 #[path = "support/tile_body.rs"]
 mod tile_body;
 

@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 use super::{CodeBlock, CodedData, decode_packets_partial};
 use crate::codestream::{MainHeader, Tile};
+use crate::synth::{self, seg};
 
 /// Every code-block of `coded`, in walk order, with the index of the
 /// (component, resolution) it is in.
@@ -242,28 +243,15 @@ fn strip(coded: CodedData<'_>) -> CodedData<'static> {
 /// length 001. That is 17 bits, `F8 30 80`; the data is cut after `F8 30`.
 #[test]
 fn a_cut_inline_header_adds_nothing() {
-    fn segment(code: u16, body: &[u8]) -> Vec<u8> {
-        let mut out = code.to_be_bytes().to_vec();
-        out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
-        out.extend_from_slice(body);
-        out
-    }
-    let mut siz = vec![0, 0];
-    for value in [8u32, 4, 0, 0, 8, 4, 0, 0] {
-        siz.extend_from_slice(&value.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
     let data = [0xF8, 0x30, 0x80, 0x00];
     let mut bytes = vec![0xFF, 0x4F];
-    bytes.extend(segment(0xFF51, &siz));
-    bytes.extend(segment(0xFF52, &[0, 0, 0, 1, 0, 0, 0, 0, 0, 1]));
-    bytes.extend(segment(0xFF5C, &[0x20, 9 << 3]));
-    let mut sot = vec![0, 0];
-    sot.extend_from_slice(&(12 + 2 + data.len() as u32).to_be_bytes());
-    sot.extend_from_slice(&[0, 1]);
-    bytes.extend(segment(0xFF90, &sot));
-    bytes.extend_from_slice(&[0xFF, 0x93]);
-    bytes.extend_from_slice(&data);
+    bytes.extend(seg(
+        0xFF51,
+        &synth::siz_body([8, 4, 0, 0, 8, 4, 0, 0], &[[7, 1, 1]]),
+    ));
+    bytes.extend(seg(0xFF52, &synth::cod_body(1, 0, 0, 0)));
+    bytes.extend(seg(0xFF5C, &synth::qcd_none_body(1, &[9])));
+    bytes.extend(synth::tile_part(0, 0, 1, &[], &data));
     bytes.extend_from_slice(&[0xFF, 0xD9]);
 
     let parsed = crate::codestream::parse_header(&bytes).unwrap();

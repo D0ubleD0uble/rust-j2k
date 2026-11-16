@@ -106,90 +106,15 @@ use crate::codestream::markers::{
     Cod, Coding, PocVolume, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
 };
 use crate::codestream::{MainHeader, Tile, TileHeader};
+use crate::synth::Bits;
 use crate::tier2::bio::BitReader;
 
-/// The encode side of [`BitReader`]: MSB-first packing with the Annex B.10.1
-/// `0xFF` bit-stuffing and the matching flush, so a crafted header round-trips
-/// through the decoder exactly (the inverse of `align`).
-struct PackedHeader {
-    out: Vec<u8>,
-    buf: u32,
-    ct: i32,
-}
-
-impl PackedHeader {
-    fn new() -> Self {
-        PackedHeader {
-            out: Vec::new(),
-            buf: 0,
-            ct: 8,
-        }
-    }
-
-    fn byteout(&mut self) {
-        self.ct = if self.buf == 0xFF { 7 } else { 8 };
-        self.out.push(self.buf as u8);
-        self.buf = 0;
-    }
-
-    fn bit(&mut self, b: u32) {
-        if self.ct == 0 {
-            self.byteout();
-        }
-        self.ct -= 1;
-        self.buf |= (b & 1) << self.ct;
-    }
-
-    fn bits(&mut self, value: u32, n: u32) {
-        for i in (0..n).rev() {
-            self.bit((value >> i) & 1);
-        }
-    }
-
-    /// Flush the partial byte and the trailing stuff byte (Annex B.10.1), the
-    /// mirror of `BitReader::align`, and return the header bytes.
-    fn finish(mut self) -> Vec<u8> {
-        self.byteout();
-        if self.ct == 7 {
-            self.byteout();
-        }
-        self.out
-    }
-}
-
 fn header(x_size: u32, y_size: u32, levels: u8, cblk_exp: u8) -> MainHeader {
-    MainHeader::new(
-        Siz {
-            x_size,
-            y_size,
-            x_offset: 0,
-            y_offset: 0,
-            tile_width: x_size,
-            tile_height: y_size,
-            tile_x_offset: 0,
-            tile_y_offset: 0,
-            components: vec![SizComponent {
-                bit_depth: 8,
-                signed: false,
-                x_sampling: 1,
-                y_sampling: 1,
-            }],
-        },
-        Cod {
-            progression: Progression::Lrcp,
-            layers: 1,
-            use_sop: false,
-            use_eph: false,
-            multiple_component_transform: false,
-            coding: Coding {
-                decomposition_levels: levels,
-                code_block_width: cblk_exp - 2,
-                code_block_height: cblk_exp - 2,
-                code_block_style: 0,
-                transform: Transform::Reversible53,
-                precinct_sizes: Vec::new(),
-            },
-        },
+    MainHeader::single_component_blocks(
+        (x_size, y_size),
+        (8, false),
+        (levels, Transform::Reversible53),
+        cblk_exp,
         Qcd {
             style: QuantStyle::None,
             guard_bits: 2,
@@ -574,7 +499,7 @@ fn geometry_rejects_oversized_code_block() {
 #[test]
 fn num_passes_table() {
     // (passes, the exact bits the encoder writes for that count).
-    let cases: &[(u32, &[u32])] = &[
+    let cases: &[(u32, &[u8])] = &[
         (1, &[0]),
         (2, &[1, 0]),
         (3, &[1, 1, 0, 0]),
@@ -585,9 +510,9 @@ fn num_passes_table() {
         (164, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
     ];
     for (passes, pattern) in cases {
-        let mut w = PackedHeader::new();
+        let mut w = Bits::new();
         for &b in *pattern {
-            w.bit(b);
+            w.put(b);
         }
         let bytes = w.finish();
         let mut bio = BitReader::new(&bytes);
@@ -601,13 +526,13 @@ fn num_passes_table() {
 /// and length all decode, and the body slice is the bytes after the header.
 #[test]
 fn packet_one_included_block() {
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(1); // inclusion tag tree (1×1): value 0 → included at layer 0
-    w.bits(0b001, 3); // zero-bitplane tag tree: value 2 (two 0s then a 1)
-    w.bit(0); // num_passes = 1
-    w.bit(0); // Lblock stays 3
-    w.bits(5, 3); // length: Lblock(3) + floor(log2 1)=0 → 3 bits, value 5
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(1); // inclusion tag tree (1×1): value 0 → included at layer 0
+    w.put_int(0b001, 3); // zero-bitplane tag tree: value 2 (two 0s then a 1)
+    w.put(0); // num_passes = 1
+    w.put(0); // Lblock stays 3
+    w.put_int(5, 3); // length: Lblock(3) + floor(log2 1)=0 → 3 bits, value 5
     let mut data = w.finish();
     let header_len = data.len();
     let body = [0xDE, 0xAD, 0xBE, 0xEF, 0x42];
@@ -629,16 +554,16 @@ fn packet_one_included_block() {
 /// count in that range must parse; only a run past it is a malformed header.
 #[test]
 fn packet_zero_bitplane_count_can_exceed_the_magnitude_planes() {
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(1); // included at layer 0
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(1); // included at layer 0
     for _ in 0..292 {
-        w.bit(0); // zero-bitplane tag tree: 292 zeros...
+        w.put(0); // zero-bitplane tag tree: 292 zeros...
     }
-    w.bit(1); // ...then the terminating 1: value 292, the largest possible
-    w.bit(0); // num_passes = 1
-    w.bit(0); // Lblock stays 3
-    w.bits(5, 3); // length: 3 bits, value 5
+    w.put(1); // ...then the terminating 1: value 292, the largest possible
+    w.put(0); // num_passes = 1
+    w.put(0); // Lblock stays 3
+    w.put_int(5, 3); // length: 3 bits, value 5
     let mut data = w.finish();
     let body = [0xDE, 0xAD, 0xBE, 0xEF, 0x42];
     data.extend_from_slice(&body);
@@ -652,11 +577,11 @@ fn packet_zero_bitplane_count_can_exceed_the_magnitude_planes() {
 /// malformed header, rejected rather than walked to the end of the buffer.
 #[test]
 fn packet_zero_bitplane_run_past_the_limit_is_rejected() {
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(1); // included at layer 0
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(1); // included at layer 0
     for _ in 0..400 {
-        w.bit(0); // a zero run that never resolves inside the limit
+        w.put(0); // a zero run that never resolves inside the limit
     }
     let data = w.finish();
 
@@ -668,14 +593,14 @@ fn packet_zero_bitplane_run_past_the_limit_is_rejected() {
 /// A larger pass count widens the length field by floor(log2 passes).
 #[test]
 fn packet_length_field_width_tracks_passes() {
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(1); // included
-    w.bit(1); // zero-bitplane value 0
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(1); // included
+    w.put(1); // zero-bitplane value 0
     // num_passes = 5 → bits 1110; floor(log2 5) = 2, so length is Lblock+2 = 5 bits.
-    w.bits(0b1110, 4);
-    w.bit(0); // Lblock stays 3
-    w.bits(20, 5); // length = 20
+    w.put_int(0b1110, 4);
+    w.put(0); // Lblock stays 3
+    w.put_int(20, 5); // length = 20
     let mut data = w.finish();
     let body = vec![7u8; 20];
     data.extend_from_slice(&body);
@@ -691,13 +616,13 @@ fn packet_length_field_width_tracks_passes() {
 /// The Lblock unary run widens the length field one bit per `1`.
 #[test]
 fn packet_lblock_increment() {
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(1); // included
-    w.bit(1); // zero-bitplane value 0
-    w.bit(0); // num_passes = 1
-    w.bits(0b110, 3); // Lblock += 2 (two 1s then a 0) → Lblock = 5
-    w.bits(9, 5); // length = 5 bits, value 9
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(1); // included
+    w.put(1); // zero-bitplane value 0
+    w.put(0); // num_passes = 1
+    w.put_int(0b110, 3); // Lblock += 2 (two 1s then a 0) → Lblock = 5
+    w.put_int(9, 5); // length = 5 bits, value 9
     let mut data = w.finish();
     let body = vec![1u8; 9];
     data.extend_from_slice(&body);
@@ -710,8 +635,8 @@ fn packet_lblock_increment() {
 /// An empty packet (present bit 0) contributes nothing and is one byte long.
 #[test]
 fn packet_empty() {
-    let mut w = PackedHeader::new();
-    w.bit(0); // not present
+    let mut w = Bits::new();
+    w.put(0); // not present
     let data = w.finish();
     assert_eq!(data.len(), 1);
 
@@ -727,9 +652,9 @@ fn packet_empty() {
 /// inclusion tag tree never resolves below the layer-0 threshold.
 #[test]
 fn packet_block_not_included() {
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(0); // inclusion value ≥ 1 → not included at layer 0
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(0); // inclusion value ≥ 1 → not included at layer 0
     let data = w.finish();
 
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -749,18 +674,18 @@ fn packet_two_blocks_partial_inclusion() {
     // Root min 0. Reading block 0 at threshold 1: root `1` (min 0), node0 `0`
     // (raise to 1) → not below 1 → not included. Reading block 1: node1 `1`
     // (value 0) → included.
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(1); // inclusion root resolves to min 0
-    w.bit(0); // block 0 node: value ≥ 1 → not included
-    w.bit(1); // block 1 node: value 0 → included
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(1); // inclusion root resolves to min 0
+    w.put(0); // block 0 node: value ≥ 1 → not included
+    w.put(1); // block 1 node: value 0 → included
     // Block 1's zero-bitplane tag tree is also 2×1, so reading its leaf first
     // resolves the (fresh) root: root `1` then leaf `1` for value 0.
-    w.bit(1); // zero-bitplane root → min 0
-    w.bit(1); // zero-bitplane leaf → value 0
-    w.bit(0); // block 1 num_passes = 1
-    w.bit(0); // Lblock stays 3
-    w.bits(2, 3); // block 1 length = 2
+    w.put(1); // zero-bitplane root → min 0
+    w.put(1); // zero-bitplane leaf → value 0
+    w.put(0); // block 1 num_passes = 1
+    w.put(0); // Lblock stays 3
+    w.put_int(2, 3); // block 1 length = 2
     let mut data = w.finish();
     let body = [0xAA, 0xBB];
     data.extend_from_slice(&body);
@@ -970,20 +895,20 @@ fn packets(parts: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
 /// bit, not another inclusion tag-tree read, and its coding passes accumulate.
 #[test]
 fn layers_accumulate_passes_and_segments() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1); // present
-    l0.bit(1); // inclusion tag tree (1x1): value 0
-    l0.bits(0b001, 3); // zero-bitplane value 2
-    l0.bit(0); // num_passes = 1
-    l0.bit(0); // Lblock stays 3
-    l0.bits(3, 3); // length 3
+    let mut l0 = Bits::new();
+    l0.put(1); // present
+    l0.put(1); // inclusion tag tree (1x1): value 0
+    l0.put_int(0b001, 3); // zero-bitplane value 2
+    l0.put(0); // num_passes = 1
+    l0.put(0); // Lblock stays 3
+    l0.put_int(3, 3); // length 3
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1); // present
-    l1.bit(1); // already included, so one bit: contributes
-    l1.bit(0); // num_passes = 1
-    l1.bit(0); // Lblock stays 3
-    l1.bits(2, 3); // length 2
+    let mut l1 = Bits::new();
+    l1.put(1); // present
+    l1.put(1); // already included, so one bit: contributes
+    l1.put(0); // num_passes = 1
+    l1.put(0); // Lblock stays 3
+    l1.put_int(2, 3); // length 2
 
     let data = packets(&[(l0.finish(), vec![1, 2, 3]), (l1.finish(), vec![4, 5])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -1003,17 +928,17 @@ fn layers_accumulate_passes_and_segments() {
 /// per packet would re-read the same bit and desynchronize the header.
 #[test]
 fn a_block_first_included_in_a_later_layer() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1); // present
-    l0.bit(0); // inclusion: not yet (raises the tree's bound to 1)
+    let mut l0 = Bits::new();
+    l0.put(1); // present
+    l0.put(0); // inclusion: not yet (raises the tree's bound to 1)
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1); // present
-    l1.bit(1); // inclusion resolves: value 1 <= layer 1
-    l1.bit(1); // zero-bitplane value 0
-    l1.bit(0); // num_passes = 1
-    l1.bit(0); // Lblock stays 3
-    l1.bits(2, 3); // length 2
+    let mut l1 = Bits::new();
+    l1.put(1); // present
+    l1.put(1); // inclusion resolves: value 1 <= layer 1
+    l1.put(1); // zero-bitplane value 0
+    l1.put(0); // num_passes = 1
+    l1.put(0); // Lblock stays 3
+    l1.put_int(2, 3); // length 2
 
     let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![0xAA, 0xBB])]);
     let bands = [single_block_band(BandKind::Hl, 8, 8)];
@@ -1030,17 +955,17 @@ fn a_block_first_included_in_a_later_layer() {
 /// leaves its accumulated state alone.
 #[test]
 fn an_included_block_may_skip_a_layer() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bit(0); // 1 pass
-    l0.bit(0); // Lblock 3
-    l0.bits(2, 3); // length 2
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put(1); // zero-bitplane 0
+    l0.put(0); // 1 pass
+    l0.put(0); // Lblock 3
+    l0.put_int(2, 3); // length 2
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1); // present
-    l1.bit(0); // included, but no contribution this layer
+    let mut l1 = Bits::new();
+    l1.put(1); // present
+    l1.put(0); // included, but no contribution this layer
 
     let data = packets(&[(l0.finish(), vec![9, 9]), (l1.finish(), vec![])]);
     let bands = [single_block_band(BandKind::Lh, 8, 8)];
@@ -1057,21 +982,21 @@ fn an_included_block_may_skip_a_layer() {
 /// reset it would read the wrong number of bits and desynchronize.
 #[test]
 fn lblock_persists_across_layers() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bit(0); // 1 pass
-    l0.bit(1); // Lblock 3 -> 4
-    l0.bit(0); // end of the unary run
-    l0.bits(2, 4); // the length field is now 4 bits wide
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put(1); // zero-bitplane 0
+    l0.put(0); // 1 pass
+    l0.put(1); // Lblock 3 -> 4
+    l0.put(0); // end of the unary run
+    l0.put_int(2, 4); // the length field is now 4 bits wide
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1);
-    l1.bit(1); // contributes
-    l1.bit(0); // 1 pass
-    l1.bit(0); // no further Lblock growth
-    l1.bits(3, 4); // still 4 bits, because Lblock persisted
+    let mut l1 = Bits::new();
+    l1.put(1);
+    l1.put(1); // contributes
+    l1.put(0); // 1 pass
+    l1.put(0); // no further Lblock growth
+    l1.put_int(3, 4); // still 4 bits, because Lblock persisted
 
     let data = packets(&[(l0.finish(), vec![1, 2]), (l1.finish(), vec![3, 4, 5])]);
     let bands = [single_block_band(BandKind::Hh, 8, 8)];
@@ -1089,20 +1014,20 @@ fn lblock_persists_across_layers() {
 /// length where 4 were written, and desynchronize.
 #[test]
 fn length_field_width_uses_this_layers_passes_not_the_total() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bits(0b1100, 4); // num_passes = 3
-    l0.bit(0); // Lblock stays 3
-    l0.bits(2, 4); // length 2, in 3 + floor(log2 3) = 4 bits
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put(1); // zero-bitplane 0
+    l0.put_int(0b1100, 4); // num_passes = 3
+    l0.put(0); // Lblock stays 3
+    l0.put_int(2, 4); // length 2, in 3 + floor(log2 3) = 4 bits
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1);
-    l1.bit(1); // contributes
-    l1.bits(0b1100, 4); // num_passes = 3 again (total becomes 6)
-    l1.bit(0); // Lblock stays 3
-    l1.bits(3, 4); // still 4 bits: floor(log2 3) = 1, not floor(log2 6) = 2
+    let mut l1 = Bits::new();
+    l1.put(1);
+    l1.put(1); // contributes
+    l1.put_int(0b1100, 4); // num_passes = 3 again (total becomes 6)
+    l1.put(0); // Lblock stays 3
+    l1.put_int(3, 4); // still 4 bits: floor(log2 3) = 1, not floor(log2 6) = 2
 
     let data = packets(&[(l0.finish(), vec![1, 2]), (l1.finish(), vec![3, 4, 5])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -1118,16 +1043,16 @@ fn length_field_width_uses_this_layers_passes_not_the_total() {
 /// inclusion tree still resolves at value 0 in the next layer.
 #[test]
 fn an_empty_packet_leaves_the_tag_trees_alone() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(0); // empty packet
+    let mut l0 = Bits::new();
+    l0.put(0); // empty packet
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1);
-    l1.bit(1); // inclusion resolves at value 0 — the tree was never advanced
-    l1.bit(1); // zero-bitplane 0
-    l1.bit(0); // 1 pass
-    l1.bit(0); // Lblock 3
-    l1.bits(1, 3); // length 1
+    let mut l1 = Bits::new();
+    l1.put(1);
+    l1.put(1); // inclusion resolves at value 0 — the tree was never advanced
+    l1.put(1); // zero-bitplane 0
+    l1.put(0); // 1 pass
+    l1.put(0); // Lblock 3
+    l1.put_int(1, 3); // length 1
 
     let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![0x7F])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -1146,20 +1071,20 @@ fn an_empty_packet_leaves_the_tag_trees_alone() {
 /// codestream.
 #[test]
 fn a_layer_may_contribute_passes_without_bytes() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bit(0); // 1 pass
-    l0.bit(0); // Lblock 3
-    l0.bits(0, 3); // length 0 — no bytes this layer
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put(1); // zero-bitplane 0
+    l0.put(0); // 1 pass
+    l0.put(0); // Lblock 3
+    l0.put_int(0, 3); // length 0 — no bytes this layer
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1);
-    l1.bit(1); // contributes
-    l1.bit(0); // 1 pass
-    l1.bit(0); // Lblock 3
-    l1.bits(2, 3); // length 2 — the bytes arrive now
+    let mut l1 = Bits::new();
+    l1.put(1);
+    l1.put(1); // contributes
+    l1.put(0); // 1 pass
+    l1.put(0); // Lblock 3
+    l1.put_int(2, 3); // length 2 — the bytes arrive now
 
     let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![0xC0, 0xDE])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -1177,20 +1102,20 @@ fn a_layer_may_contribute_passes_without_bytes() {
 /// the one segment holds them both, with no chunk.
 #[test]
 fn a_block_with_passes_and_no_bytes_at_all_is_accepted() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bit(0); // 1 pass
-    l0.bit(0); // Lblock 3
-    l0.bits(0, 3); // length 0
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put(1); // zero-bitplane 0
+    l0.put(0); // 1 pass
+    l0.put(0); // Lblock 3
+    l0.put_int(0, 3); // length 0
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1);
-    l1.bit(1); // contributes
-    l1.bit(0); // 1 pass
-    l1.bit(0); // Lblock 3
-    l1.bits(0, 3); // length 0 again — no bytes ever arrive
+    let mut l1 = Bits::new();
+    l1.put(1);
+    l1.put(1); // contributes
+    l1.put(0); // 1 pass
+    l1.put(0); // Lblock 3
+    l1.put_int(0, 3); // length 0 again — no bytes ever arrive
 
     let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -1215,23 +1140,23 @@ fn a_block_with_passes_and_no_bytes_at_all_is_accepted() {
 #[test]
 fn a_zero_length_bypass_contribution_keeps_the_segments_in_step() {
     use crate::codestream::markers::code_block_style::LAZY;
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bits(0b1111, 4);
-    l0.bits(11 - 6, 5); // 11 passes
-    l0.bit(0); // Lblock 3
-    l0.bits(0, 3 + 3); // segment 0: ten passes, floor(log2 10) = 3, length 0
-    l0.bits(0, 3); // segment 1: one pass, length 0
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put(1); // zero-bitplane 0
+    l0.put_int(0b1111, 4);
+    l0.put_int(11 - 6, 5); // 11 passes
+    l0.put(0); // Lblock 3
+    l0.put_int(0, 3 + 3); // segment 0: ten passes, floor(log2 10) = 3, length 0
+    l0.put_int(0, 3); // segment 1: one pass, length 0
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1);
-    l1.bit(1); // contributes
-    l1.bits(0b10, 2); // 2 passes
-    l1.bit(0); // Lblock 3
-    l1.bits(2, 3); // segment 1: one more pass, 2 bytes
-    l1.bits(1, 3); // segment 2: one pass, 1 byte
+    let mut l1 = Bits::new();
+    l1.put(1);
+    l1.put(1); // contributes
+    l1.put_int(0b10, 2); // 2 passes
+    l1.put(0); // Lblock 3
+    l1.put_int(2, 3); // segment 1: one more pass, 2 bytes
+    l1.put_int(1, 3); // segment 2: one pass, 1 byte
 
     let data = packets(&[(l0.finish(), vec![]), (l1.finish(), vec![0x11, 0x22, 0x33])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -1259,13 +1184,13 @@ fn a_zero_length_bypass_contribution_keeps_the_segments_in_step() {
 /// a silently short decode.
 #[test]
 fn a_tile_part_shorter_than_its_layers_is_codestream() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bit(0); // 1 pass
-    l0.bit(0); // Lblock 3
-    l0.bits(1, 3); // length 1
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put(1); // zero-bitplane 0
+    l0.put(0); // 1 pass
+    l0.put(0); // Lblock 3
+    l0.put_int(1, 3); // length 1
 
     let data = packets(&[(l0.finish(), vec![0x01])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -2040,13 +1965,13 @@ fn sop_marker(nsop: u16) -> Vec<u8> {
 
 /// One included block: a header with `zero_bit_planes = 0`, one pass, length 2.
 fn one_block_header() -> Vec<u8> {
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(1); // included
-    w.bit(1); // zero-bitplane 0
-    w.bit(0); // 1 pass
-    w.bit(0); // Lblock stays 3
-    w.bits(2, 3); // length 2
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(1); // included
+    w.put(1); // zero-bitplane 0
+    w.put(0); // 1 pass
+    w.put(0); // Lblock stays 3
+    w.put_int(2, 3); // length 2
     w.finish()
 }
 
@@ -2184,8 +2109,8 @@ fn a_missing_eph_is_codestream() {
 /// empty packet has one.
 #[test]
 fn an_empty_packet_still_carries_its_eph() {
-    let mut w = PackedHeader::new();
-    w.bit(0); // empty packet
+    let mut w = Bits::new();
+    w.put(0); // empty packet
     let mut data = w.finish();
     data.extend_from_slice(&[0xFF, 0x92]);
 
@@ -2202,17 +2127,17 @@ fn an_empty_packet_still_carries_its_eph() {
 #[test]
 fn restart_splits_a_contribution_into_one_segment_per_pass() {
     const RESTART: u8 = 0x04;
-    let mut w = PackedHeader::new();
-    w.bit(1); // present
-    w.bit(1); // included
-    w.bit(1); // zero-bitplane 0
-    w.bits(0b1100, 4); // num_passes = 3
-    w.bit(0); // Lblock stays 3
+    let mut w = Bits::new();
+    w.put(1); // present
+    w.put(1); // included
+    w.put(1); // zero-bitplane 0
+    w.put_int(0b1100, 4); // num_passes = 3
+    w.put(0); // Lblock stays 3
     // Three length fields, one per pass. Each is `Lblock + floor(log2 1)` = 3
     // bits wide, because each segment takes exactly one pass.
-    w.bits(1, 3);
-    w.bits(2, 3);
-    w.bits(3, 3);
+    w.put_int(1, 3);
+    w.put_int(2, 3);
+    w.put_int(3, 3);
     let mut data = w.finish();
     data.extend_from_slice(&[0xA1]); // pass 0
     data.extend_from_slice(&[0xB1, 0xB2]); // pass 1
@@ -2247,14 +2172,14 @@ fn restart_splits_a_contribution_into_one_segment_per_pass() {
 /// field — the codeword is continuous.
 #[test]
 fn the_default_style_keeps_one_segment_for_every_pass() {
-    let mut w = PackedHeader::new();
-    w.bit(1);
-    w.bit(1); // included
-    w.bit(1); // zero-bitplane 0
-    w.bits(0b1100, 4); // num_passes = 3
-    w.bit(0); // Lblock stays 3
+    let mut w = Bits::new();
+    w.put(1);
+    w.put(1); // included
+    w.put(1); // zero-bitplane 0
+    w.put_int(0b1100, 4); // num_passes = 3
+    w.put(0); // Lblock stays 3
     // One length field, `Lblock + floor(log2 3)` = 4 bits wide.
-    w.bits(6, 4);
+    w.put_int(6, 4);
     let mut data = w.finish();
     data.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
 
@@ -2273,20 +2198,20 @@ fn the_default_style_keeps_one_segment_for_every_pass() {
 #[test]
 fn restart_segments_fill_one_pass_at_a_time_across_layers() {
     const RESTART: u8 = 0x04;
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bit(1); // zero-bitplane 0
-    l0.bit(0); // 1 pass
-    l0.bit(0); // Lblock stays 3
-    l0.bits(1, 3); // one length
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put(1); // zero-bitplane 0
+    l0.put(0); // 1 pass
+    l0.put(0); // Lblock stays 3
+    l0.put_int(1, 3); // one length
 
-    let mut l1 = PackedHeader::new();
-    l1.bit(1);
-    l1.bit(1); // contributes
-    l1.bit(0); // 1 pass — a *new* segment, since the first is full
-    l1.bit(0); // Lblock stays 3
-    l1.bits(2, 3);
+    let mut l1 = Bits::new();
+    l1.put(1);
+    l1.put(1); // contributes
+    l1.put(0); // 1 pass — a *new* segment, since the first is full
+    l1.put(0); // Lblock stays 3
+    l1.put_int(2, 3);
 
     let data = packets(&[(l0.finish(), vec![7]), (l1.finish(), vec![8, 9])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
@@ -2321,13 +2246,13 @@ fn restart_segments_fill_one_pass_at_a_time_across_layers() {
 #[test]
 fn an_ht_block_with_its_cleanup_pass_alone_parses() {
     const HT: u8 = 0x40;
-    let mut w = PackedHeader::new();
-    w.bit(1);
-    w.bit(1); // included
-    w.bit(1); // zero-bitplane 0
-    w.bit(0); // 1 pass
-    w.bit(0); // Lblock stays 3
-    w.bits(2, 3);
+    let mut w = Bits::new();
+    w.put(1);
+    w.put(1); // included
+    w.put(1); // zero-bitplane 0
+    w.put(0); // 1 pass
+    w.put(0); // Lblock stays 3
+    w.put_int(2, 3);
     let data = packets(&[(w.finish(), vec![0x62, 0x00])]);
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let no_delimiters = Delimiters {

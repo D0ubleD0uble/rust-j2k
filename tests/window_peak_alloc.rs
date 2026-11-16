@@ -8,60 +8,20 @@
 //! single test: a second one running in parallel would count into the same
 //! peak.
 //!
-//! A global allocator can only be written with `unsafe`. This one is a shim in
-//! a test binary that forwards every call to `System` unchanged, which the
-//! project conventions allow (`.claude/rules/conventions.md`, "Stay
+//! A global allocator can only be written with `unsafe`. The shim in
+//! `tests/support/alloc.rs` forwards every call to `System` unchanged, which
+//! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+#[path = "support/alloc.rs"]
+mod alloc;
+use alloc::{CURRENT, PEAK};
+use std::sync::atomic::Ordering;
 
 use rust_j2k::{DecodeOptions, Window, decode_with};
 
-struct Counting;
-
-static CURRENT: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-fn grow(size: usize) {
-    let now = CURRENT.fetch_add(size, Ordering::SeqCst) + size;
-    PEAK.fetch_max(now, Ordering::SeqCst);
-}
-
-// SAFETY: every call forwards to `System` unchanged; the counters only
-// observe the sizes.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        grow(layout.size());
-        // SAFETY: the caller's contract for `alloc` is passed through.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        grow(layout.size());
-        // SAFETY: the caller's contract for `alloc_zeroed` is passed through.
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        CURRENT.fetch_sub(layout.size(), Ordering::SeqCst);
-        // SAFETY: the caller's contract for `dealloc` is passed through.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if new_size > layout.size() {
-            grow(new_size - layout.size());
-        } else {
-            CURRENT.fetch_sub(layout.size() - new_size, Ordering::SeqCst);
-        }
-        // SAFETY: the caller's contract for `realloc` is passed through.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
 #[global_allocator]
-static ALLOCATOR: Counting = Counting;
+static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
 
 #[test]
 fn a_small_window_peaks_at_the_tile_it_reads_not_the_image() {

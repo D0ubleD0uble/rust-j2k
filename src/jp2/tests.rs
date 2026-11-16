@@ -5,12 +5,8 @@
 //! The codestream is a committed lossless fixture (24x16, three 8-bit
 //! components); the boxes around it are built here byte by byte.
 
-// One std-only builder module shared with tests/ and fuzz/; the crate has no
-// single parent for the unit tests, so each includes it by path.
-#[allow(clippy::duplicate_mod)]
-#[path = "../../tests/support/synth.rs"]
-mod synth;
 use super::SIGNATURE;
+use crate::synth;
 use crate::{
     Association, ChannelDefinition, ChannelType, ColorSpace, ColorSpecification, DecodeOptions,
     Error, FileType, Image, ImageHeader, Jp2Metadata, Ratio, Res, Resolution, UuidBox, XmlBox,

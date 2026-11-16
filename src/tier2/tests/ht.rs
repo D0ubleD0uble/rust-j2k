@@ -82,13 +82,13 @@ fn one_block(data: &[u8], layers: u32, kept: u32) -> Result<CodeBlock<'_>> {
 }
 
 /// Write a pass count (Table B.4), the inverse of [`read_num_passes`].
-fn num_passes(w: &mut PackedHeader, n: u32) {
+fn num_passes(w: &mut Bits, n: u32) {
     match n {
-        1 => w.bit(0),
-        2 => w.bits(0b10, 2),
-        3..=5 => w.bits(0b1100 | (n - 3), 4),
-        6..=36 => w.bits(0x1E0 | (n - 6), 9),
-        _ => w.bits(0xFF80 | (n - 37), 16),
+        1 => w.put(0),
+        2 => w.put_int(0b10, 2),
+        3..=5 => w.put_int(0b1100 | (n - 3), 4),
+        6..=36 => w.put_int(0x1E0 | (n - 6), 9),
+        _ => w.put_int(0xFF80 | (n - 37), 16),
     }
 }
 
@@ -96,14 +96,14 @@ fn num_passes(w: &mut PackedHeader, n: u32) {
 /// bit-planes `2`, and contributes `passes` passes with Lblock 3 and the
 /// length fields `lengths`, each `(value, bits)`.
 fn first(passes: u32, lengths: &[(u32, u32)]) -> Vec<u8> {
-    let mut w = PackedHeader::new();
-    w.bit(1); // nonempty
-    w.bit(1); // inclusion tree: included in this layer
-    w.bits(0b001, 3); // zero bit-planes 2
+    let mut w = Bits::new();
+    w.put(1); // nonempty
+    w.put(1); // inclusion tree: included in this layer
+    w.put_int(0b001, 3); // zero bit-planes 2
     num_passes(&mut w, passes);
-    w.bit(0); // Lblock stays 3
+    w.put(0); // Lblock stays 3
     for &(value, bits) in lengths {
-        w.bits(value, bits);
+        w.put_int(value, bits);
     }
     w.finish()
 }
@@ -111,13 +111,13 @@ fn first(passes: u32, lengths: &[(u32, u32)]) -> Vec<u8> {
 /// A later packet header of the same block: it contributes `passes` passes
 /// with the length fields `lengths`.
 fn later(passes: u32, lengths: &[(u32, u32)]) -> Vec<u8> {
-    let mut w = PackedHeader::new();
-    w.bit(1); // nonempty
-    w.bit(1); // included: contributes
+    let mut w = Bits::new();
+    w.put(1); // nonempty
+    w.put(1); // included: contributes
     num_passes(&mut w, passes);
-    w.bit(0); // Lblock stays 3
+    w.put(0); // Lblock stays 3
     for &(value, bits) in lengths {
-        w.bits(value, bits);
+        w.put_int(value, bits);
     }
     w.finish()
 }
@@ -211,14 +211,14 @@ fn refinement_passes_in_later_layers_fill_one_segment() {
 /// skipped.
 #[test]
 fn a_first_contribution_of_placeholders_only() {
-    let mut l0 = PackedHeader::new();
-    l0.bit(1);
-    l0.bit(1); // included
-    l0.bits(0b001, 3); // zero bit-planes 2
+    let mut l0 = Bits::new();
+    l0.put(1);
+    l0.put(1); // included
+    l0.put_int(0b001, 3); // zero bit-planes 2
     num_passes(&mut l0, 3);
-    l0.bit(0); // Lblock 3
-    l0.bits(0, 3 + 1); // floor(log2 3) = 1: one 4-bit field, zero
-    l0.bits(0b11, 2); // padding, which a misread takes for a refinement field
+    l0.put(0); // Lblock 3
+    l0.put_int(0, 3 + 1); // floor(log2 3) = 1: one 4-bit field, zero
+    l0.put_int(0b11, 2); // padding, which a misread takes for a refinement field
     let l0 = l0.finish();
     let data = packets(&[(l0, vec![]), (later(1, &[(2, 3)]), vec![1, 2])]);
 
@@ -288,17 +288,17 @@ fn placeholder_passes_with_bytes_are_codestream() {
 /// A header whose one block has Lblock `3 + grow` and contributes `passes`
 /// passes with `lengths`.
 fn grown(grow: u32, passes: u32, lengths: &[(u32, u32)]) -> Vec<u8> {
-    let mut w = PackedHeader::new();
-    w.bit(1);
-    w.bit(1);
-    w.bits(0b001, 3);
+    let mut w = Bits::new();
+    w.put(1);
+    w.put(1);
+    w.put_int(0b001, 3);
     num_passes(&mut w, passes);
     for _ in 0..grow {
-        w.bit(1);
+        w.put(1);
     }
-    w.bit(0);
+    w.put(0);
     for &(value, bits) in lengths {
-        w.bits(value, bits);
+        w.put_int(value, bits);
     }
     w.finish()
 }
@@ -329,12 +329,12 @@ fn an_ht_refinement_segment_past_its_limit_is_codestream() {
     // Lblock 11: a cleanup of 2 bytes and a SigProp pass of 2000 bytes, then
     // a MagRef pass of `magref` bytes.
     let at = |magref: u32| {
-        let mut l1 = PackedHeader::new();
-        l1.bit(1);
-        l1.bit(1);
+        let mut l1 = Bits::new();
+        l1.put(1);
+        l1.put(1);
         num_passes(&mut l1, 1);
-        l1.bit(0);
-        l1.bits(magref, 11);
+        l1.put(0);
+        l1.put_int(magref, 11);
         let data = packets(&[
             (grown(8, 2, &[(2, 11), (2000, 11)]), vec![0; 2002]),
             (l1.finish(), vec![0; magref as usize]),
@@ -640,19 +640,19 @@ const MIXED: u8 = 0xC0;
 /// `passes` passes after `lblock_up` increments of Lblock, with the length
 /// fields `lengths`, each `(value, bits)`.
 fn mixed(first: bool, passes: u32, lblock_up: u32, lengths: &[(u32, u32)]) -> Vec<u8> {
-    let mut w = PackedHeader::new();
-    w.bit(1); // nonempty
-    w.bit(1); // included: first in this layer, or contributes
+    let mut w = Bits::new();
+    w.put(1); // nonempty
+    w.put(1); // included: first in this layer, or contributes
     if first {
-        w.bits(0b001, 3); // zero bit-planes 2
+        w.put_int(0b001, 3); // zero bit-planes 2
     }
     num_passes(&mut w, passes);
     for _ in 0..lblock_up {
-        w.bit(1);
+        w.put(1);
     }
-    w.bit(0);
+    w.put(0);
     for &(value, bits) in lengths {
-        w.bits(value, bits);
+        w.put_int(value, bits);
     }
     w.finish()
 }

@@ -5,12 +5,8 @@
 //! the same box shapes (see the module docs of `color`). The codestream is
 //! the committed three-component 24x16 fixture; the boxes are built here.
 
-// One std-only builder module shared with tests/ and fuzz/; the crate has no
-// single parent for the unit tests, so each includes it by path.
-#[allow(clippy::duplicate_mod)]
-#[path = "../../tests/support/synth.rs"]
-mod synth;
 use super::SIGNATURE;
+use crate::synth;
 use crate::{ColorSpace, Error, decode};
 use synth::bx;
 

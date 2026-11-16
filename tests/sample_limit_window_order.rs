@@ -3,14 +3,10 @@
 //! raise the limit that cannot help. A valid window of the same image is
 //! still held to the tiles it reads.
 
+#[path = "support/synth.rs"]
+mod synth;
 use rust_j2k::{DecodeOptions, Error, Window, decode_with, read_header_with};
-
-fn segment(marker: u16, body: &[u8]) -> Vec<u8> {
-    let mut out = marker.to_be_bytes().to_vec();
-    out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
-    out.extend_from_slice(body);
-    out
-}
+use synth::seg;
 
 /// The main header and first `SOT` marker of a 40000x40000 image with its
 /// origin at (100, 200), in 17000x17000 tiles, of two 8-bit components:
@@ -22,21 +18,17 @@ fn large_header_only() -> Vec<u8> {
 
 /// [`large_header_only`] for a `side` x `side` image.
 fn header_only(side: u32) -> Vec<u8> {
-    let mut siz = vec![0, 0];
-    for field in [side, side, 100, 200, 17000, 17000, 0, 0] {
-        siz.extend_from_slice(&field.to_be_bytes());
-    }
-    siz.extend_from_slice(&2u16.to_be_bytes());
-    siz.extend_from_slice(&[7, 1, 1, 7, 2, 3]);
-    let mut cod = vec![0, 0];
-    cod.extend_from_slice(&1u16.to_be_bytes());
-    cod.extend_from_slice(&[0, 6, 0, 0, 0, 1]);
-    let qcd = [&[0x40][..], &[8 << 3; 19]].concat();
+    let siz = synth::siz_body(
+        [side, side, 100, 200, 17000, 17000, 0, 0],
+        &[[7, 1, 1], [7, 2, 3]],
+    );
+    let cod = synth::cod_body(1, 6, 0, 0);
+    let qcd = synth::qcd_none_body(2, &[8; 19]);
     [
         vec![0xFF, 0x4F],
-        segment(0xFF51, &siz),
-        segment(0xFF52, &cod),
-        segment(0xFF5C, &qcd),
+        seg(0xFF51, &siz),
+        seg(0xFF52, &cod),
+        seg(0xFF5C, &qcd),
         vec![0xFF, 0x90],
     ]
     .concat()
@@ -44,24 +36,9 @@ fn header_only(side: u32) -> Vec<u8> {
 
 /// `codestream` in a minimal JP2 file whose `ihdr` matches the image area.
 fn in_jp2(codestream: &[u8]) -> Vec<u8> {
-    let bx = |kind: &[u8; 4], payload: &[u8]| {
-        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(payload);
-        out
-    };
-    let mut ihdr = 39800u32.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&39900u32.to_be_bytes());
-    ihdr.extend_from_slice(&2u16.to_be_bytes());
-    ihdr.extend_from_slice(&[7, 7, 0, 0]);
-    let jp2h = [bx(b"ihdr", &ihdr), bx(b"colr", &[1, 0, 0, 0, 0, 0, 17])].concat();
-    [
-        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
-        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
-        bx(b"jp2h", &jp2h),
-        bx(b"jp2c", codestream),
-    ]
-    .concat()
+    let ihdr = synth::bx(b"ihdr", &synth::ihdr_payload(39800, 39900, 2, [7, 7, 0, 0]));
+    let colr = synth::bx(b"colr", &synth::colr_enum(17));
+    synth::jp2_file(&[ihdr, colr], &[], codestream, &[])
 }
 
 fn window(x0: u32, y0: u32, x1: u32, y1: u32) -> DecodeOptions {
