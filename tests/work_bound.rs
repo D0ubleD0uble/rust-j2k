@@ -17,7 +17,7 @@ use support::synth::{self, bx, seg};
 
 use std::path::PathBuf;
 
-use rust_j2k::{Error, decode, read_header};
+use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, decode, decode_with, read_header};
 use support::jp2::sha256_hex;
 
 fn dir() -> PathBuf {
@@ -304,6 +304,32 @@ fn skips_from_the_poc_set_are_bounded() {
     let image = decode(&setskip(2048, 1)).unwrap();
     assert_eq!(image.components.len(), 65);
     assert!(image.components[0].samples.iter().all(|&s| s == 128));
+}
+
+/// A refine after earlier refines holds a POC sequence's packets as a
+/// decode of its bytes on its own does: in the bitmap that decode's bound
+/// sizes, not in the set, whose skips cost 12 visits each. 1650 layers in
+/// 31 volumes reach 1.63 x 10^7 packets, just within the bitmap of the
+/// default bound's 2^24 visits, and the decode spends about 10^6 visits. A
+/// bitmap sized from what the earlier refines left of the bound would not
+/// hold them, and in the set the skips would take 2 x 10^8.
+#[test]
+fn a_refine_holds_poc_packets_as_one_decode_does() {
+    let bytes = setskip(1650, 31);
+    let lenient = DecodeOptions::default().with_strict(false);
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    let mut fed = 0;
+    for end in [bytes.len() / 4, bytes.len() / 2, bytes.len()] {
+        decoder.feed(&bytes[fed..end]);
+        fed = end;
+        let image = decoder.refine().unwrap();
+        assert_eq!(
+            image,
+            Some(decode_with(&bytes[..end], &lenient).unwrap()),
+            "{end}"
+        );
+    }
+    assert_eq!(decoder.finish().unwrap(), decode(&bytes).unwrap());
 }
 
 /// `cs` in a JP2 file as `jp2_psot0` in the generator writes it: its one

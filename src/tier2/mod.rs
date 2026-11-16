@@ -27,6 +27,7 @@
 pub mod bio;
 mod geometry;
 mod progression;
+pub(crate) mod resume;
 pub mod spans;
 pub mod tagtree;
 
@@ -38,10 +39,11 @@ use bio::BitReader;
 use spans::UnreadSpans;
 use std::borrow::Cow;
 use std::cell::Cell;
-use tagtree::TagTree;
+use std::ops::Range;
+use tagtree::{Saved, TagTree};
 
 pub(crate) use geometry::{
-    BandGeom, MAX_CODE_BLOCKS, MAX_PRECINCTS, PrecinctGeom, resolution_geoms,
+    BandGeom, MAX_CODE_BLOCKS, MAX_PRECINCTS, PrecinctGeom, ResolutionGeom, resolution_geoms,
 };
 pub(crate) use progression::{PacketWalk, for_each_packet};
 
@@ -545,53 +547,15 @@ fn walk_packets<'a>(
     // `meter` as each component is built (see [`Budget::reduction`]), so a
     // tile can pass the bound by at most one component's geometry, which the
     // caps bound.
-    let component_count = header.siz.components.len();
-    let mut geoms = Vec::with_capacity(component_count);
-    for c in 0..component_count {
-        let resolutions = resolution_geoms(
-            header,
-            tile.index,
-            c,
-            &mut budget.precincts,
-            &mut budget.blocks,
-        )?;
-        let kept = resolutions
-            .len()
-            .saturating_sub(usize::from(budget.reduction));
-        let dropped: usize = resolutions[kept..]
-            .iter()
-            .flat_map(|resolution| &resolution.bands)
-            .map(BandGeom::block_count)
-            .sum();
+    let geoms = tile_geometry(header, tile.index, budget, |dropped| {
         meter.spend(
             dropped,
             WorkRefusal::DroppedBlocks {
                 blocks: dropped as u64,
             },
-        )?;
-        geoms.push(resolutions);
-    }
-
-    // One state per (component, resolution, band), carried across every layer.
-    // The tag trees decode incrementally and there is a pair per *precinct*, so
-    // they must outlive the packet that starts them.
-    let mut states: Vec<Vec<Vec<BandState<'a>>>> = geoms
-        .iter()
-        .zip(&header.components)
-        .map(|(component, params)| {
-            let coder = Coder::of_style(params.coding.code_block_style, header.ccap15);
-            component
-                .iter()
-                .map(|level| {
-                    level
-                        .bands
-                        .iter()
-                        .map(|band| BandState::new(band, coder))
-                        .collect()
-                })
-                .collect()
-        })
-        .collect();
+        )
+    })?;
+    let mut states = band_states(header, &geoms);
 
     let walk = PacketWalk {
         siz: &header.siz,
@@ -624,10 +588,7 @@ fn walk_packets<'a>(
             // The packets left out may add passes to the last segment of
             // any code-block of the resolution, as packets the data never
             // reached may.
-            let bands = &mut states[comp][res];
-            for precinct in 0..bands.first().map_or(0, |b| b.precincts.len()) {
-                mark_unread(bands, precinct, u32::from(layer));
-            }
+            mark_gap(&mut states[comp][res], u32::from(layer));
             Ok(())
         })?;
     } else if budget.poc_coverage {
@@ -674,6 +635,7 @@ fn walk_packets<'a>(
                 &mut scratch,
                 budget.layers.is_none_or(|cap| layer < u32::from(cap)),
                 if strict { None } else { Some(&mut log) },
+                None,
             )?;
             if packet != Packet::Read {
                 ended = true;
@@ -689,17 +651,17 @@ fn walk_packets<'a>(
     )?;
 
     let mut components = Vec::with_capacity(states.len());
-    for (comp, (component_states, component_geoms)) in states.into_iter().zip(&geoms).enumerate() {
+    for (comp, (component_states, component_geoms)) in states.iter().zip(&geoms).enumerate() {
         let rect = header
             .siz
             .tile_component_rect(tile.index, comp)
             .ok_or_else(|| Error::Inconsistent(format!("no component {comp} in `SIZ`")))?;
         let mut resolutions = Vec::with_capacity(component_states.len());
-        for (band_states, level) in component_states.into_iter().zip(component_geoms) {
+        for (band_states, level) in component_states.iter().zip(component_geoms) {
             let subbands = if level.bands.is_empty() {
                 Vec::new()
             } else {
-                build_subbands(&level.bands, band_states)
+                build_subbands(&level.bands, band_states, data)
             };
             resolutions.push(Resolution { subbands });
         }
@@ -744,6 +706,59 @@ fn walk_packets<'a>(
     }
 
     Ok(CodedData { components })
+}
+
+/// The geometry of each component of tile `tile`, built under `budget`'s
+/// caps. After each component, `dropped` is called with the code-blocks of
+/// the resolutions `budget`'s reduction drops (see [`Budget::reduction`]),
+/// and an error from it ends the build.
+fn tile_geometry(
+    header: &MainHeader,
+    tile: u32,
+    budget: &mut Budget,
+    mut dropped: impl FnMut(usize) -> Result<()>,
+) -> Result<Vec<Vec<ResolutionGeom>>> {
+    let component_count = header.siz.components.len();
+    let mut geoms = Vec::with_capacity(component_count);
+    for c in 0..component_count {
+        let resolutions =
+            resolution_geoms(header, tile, c, &mut budget.precincts, &mut budget.blocks)?;
+        let kept = resolutions
+            .len()
+            .saturating_sub(usize::from(budget.reduction));
+        dropped(
+            resolutions[kept..]
+                .iter()
+                .flat_map(|resolution| &resolution.bands)
+                .map(BandGeom::block_count)
+                .sum(),
+        )?;
+        geoms.push(resolutions);
+    }
+    Ok(geoms)
+}
+
+/// One state per (component, resolution, band) of `geoms`, carried across
+/// every layer. The tag trees decode incrementally and there is a pair per
+/// *precinct*, so they must outlive the packet that starts them.
+fn band_states(header: &MainHeader, geoms: &[Vec<ResolutionGeom>]) -> Vec<Vec<Vec<BandState>>> {
+    geoms
+        .iter()
+        .zip(&header.components)
+        .map(|(component, params)| {
+            let coder = Coder::of_style(params.coding.code_block_style, header.ccap15);
+            component
+                .iter()
+                .map(|level| {
+                    level
+                        .bands
+                        .iter()
+                        .map(|band| BandState::new(band, coder))
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Ceiling on the zero-bitplane count: a single read above this resolves any
@@ -802,7 +817,7 @@ enum SegmentKind {
 /// instead, since where it ends depends on the placeholder passes of the
 /// contribution that holds the cleanup pass. The other style bits mean nothing
 /// to an HT block.
-fn next_segment(coder: Coder, style: u8, last: Option<&SegmentState<'_>>) -> (SegmentKind, u32) {
+fn next_segment(coder: Coder, style: u8, last: Option<&SegmentState>) -> (SegmentKind, u32) {
     use crate::codestream::markers::code_block_style::{LAZY, TERMALL};
     let last = last.map(|s| s.kind);
     if coder == Coder::Ht {
@@ -845,7 +860,7 @@ const HT_REFINEMENT_MAX: u64 = 2046;
 /// Add a length field's `bytes` to `segment`, which an HT segment may hold
 /// only within its limit. An HT segment's bytes are those of its codeword
 /// segments over the layers (B.3), so the limit is on the sum.
-fn add_length(segment: &mut SegmentState<'_>, bytes: u32) -> Result<()> {
+fn add_length(segment: &mut SegmentState, bytes: u32) -> Result<()> {
     segment.length += u64::from(bytes);
     let (what, max) = match segment.kind {
         SegmentKind::HtCleanup { .. } => ("cleanup", HT_CLEANUP_MAX),
@@ -1018,7 +1033,7 @@ fn mixed_first_length(
 /// (ISO/IEC 15444-1 B.10.7.1). The segment has no pass limit: OpenJPEG's
 /// 109-pass split ([`next_segment`]) is for the Part 1 tile-components it
 /// decodes. A block of more passes than tier-1 can decode is refused there.
-fn become_part1(block: &mut BlockState<'_>) {
+fn become_part1(block: &mut BlockState) {
     block.coder = Some(Coder::Part1);
     match block.segments.first_mut() {
         Some(segment) => {
@@ -1280,7 +1295,7 @@ fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
 /// persist, and `num_passes` and `segments` accumulate. Rebuilding any of this
 /// per packet — which a single-layer decoder can get away with — desynchronizes
 /// the header bit-reader on the second layer.
-struct BlockState<'a> {
+struct BlockState {
     /// The block's coder: the tile-component's, or, under MIXED, `None`
     /// until the block's first nonzero length field settles it (see
     /// [`mixed_first_length`]). While it is `None` every length field read
@@ -1299,11 +1314,11 @@ struct BlockState<'a> {
     /// (see [`Budget::layers`]), an HT block's placeholder passes left out.
     num_passes: u32,
     /// Codeword segments in order; the last one may still take passes.
-    segments: Vec<SegmentState<'a>>,
+    segments: Vec<SegmentState>,
 }
 
 /// A codeword segment while it is being filled from successive layers.
-struct SegmentState<'a> {
+struct SegmentState {
     kind: SegmentKind,
     /// Coding passes from every layer read, which decide where the next
     /// segment starts. An HT block's first cleanup segment counts its
@@ -1325,10 +1340,13 @@ struct SegmentState<'a> {
     max_passes: u32,
     /// The bytes the length fields gave it, over every layer read.
     length: u64,
-    chunks: Vec<&'a [u8]>,
+    /// Where each layer's bytes of it lie in the tile data, in layer order.
+    /// They are offsets, not slices, so that the state can outlive the
+    /// bytes it was read from and go on over a longer copy of them.
+    chunks: Vec<Range<usize>>,
 }
 
-impl SegmentState<'_> {
+impl SegmentState {
     fn new(kind: SegmentKind, max_passes: u32) -> Self {
         SegmentState {
             kind,
@@ -1359,7 +1377,7 @@ impl SegmentState<'_> {
     }
 }
 
-impl BlockState<'_> {
+impl BlockState {
     fn new(coder: Option<Coder>) -> Self {
         BlockState {
             coder,
@@ -1400,9 +1418,9 @@ impl BlockState<'_> {
 /// band-indexed so that [`build_subbands`] can hand the band back whole; a block
 /// is touched by exactly one precinct's packets, so the two indexings never
 /// collide.
-struct BandState<'a> {
+struct BandState {
     precincts: Vec<PrecinctState>,
-    blocks: Vec<BlockState<'a>>,
+    blocks: Vec<BlockState>,
 }
 
 /// The two tag trees one precinct runs over one subband: which code-blocks the
@@ -1410,14 +1428,28 @@ struct BandState<'a> {
 struct PrecinctState {
     inclusion: TagTree,
     zero_bits: TagTree,
+    /// With `strict` off: the first layer of the precinct whose packet the
+    /// `POC` volumes leave out. It stays missing however much data comes.
+    gap: Option<u32>,
     /// With `strict` off: the first layer whose packet of the precinct was
-    /// not read, or read only in part, because the data ended, or is one the
-    /// `POC` volumes leave out. Its code-blocks may then lack passes a later
-    /// layer adds to their last segment.
-    unread: Option<u32>,
+    /// not read, or read only in part, because the data ended. More data
+    /// may bring it.
+    ended: Option<u32>,
 }
 
-impl BandState<'_> {
+impl PrecinctState {
+    /// The first layer of the precinct whose packet was not read whole,
+    /// for either reason. Its code-blocks may then lack passes a later layer
+    /// adds to their last segment.
+    fn unread(&self) -> Option<u32> {
+        match (self.gap, self.ended) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+}
+
+impl BandState {
     /// `coder` is the tile-component's coder, `None` under MIXED.
     fn new(band: &BandGeom, coder: Option<Coder>) -> Self {
         BandState {
@@ -1427,12 +1459,52 @@ impl BandState<'_> {
                 .map(|precinct| PrecinctState {
                     inclusion: TagTree::new(precinct.cols as u32, precinct.rows as u32),
                     zero_bits: TagTree::new(precinct.cols as u32, precinct.rows as u32),
-                    unread: None,
+                    gap: None,
+                    ended: None,
                 })
                 .collect(),
             blocks: (0..band.block_count())
                 .map(|_| BlockState::new(coder))
                 .collect(),
+        }
+    }
+}
+
+/// The tag-tree nodes a packet's reads changed, as they were before, per
+/// band of its resolution: the inclusion tree's and the zero bit-plane
+/// tree's. With the block log (see [`Undo`]) and the stream positions, it
+/// undoes a packet whole, so that a walk can stop inside a packet the data
+/// cuts and read it again once more data comes.
+#[derive(Debug, Default)]
+pub(crate) struct Journal {
+    trees: Vec<[Vec<Saved>; 2]>,
+}
+
+impl Journal {
+    /// Forget what the last packet noted.
+    fn clear(&mut self) {
+        for [inclusion, zero_bits] in &mut self.trees {
+            inclusion.clear();
+            zero_bits.clear();
+        }
+    }
+
+    /// The two trees' notes for band `band`.
+    fn band(&mut self, band: usize) -> &mut [Vec<Saved>; 2] {
+        if self.trees.len() <= band {
+            self.trees.resize_with(band + 1, Default::default);
+        }
+        &mut self.trees[band]
+    }
+
+    /// Put back the trees of `precinct` in `states` as they were before the
+    /// packet that noted them.
+    fn restore(&self, states: &mut [BandState], precinct: usize) {
+        for (state, [inclusion, zero_bits]) in states.iter_mut().zip(&self.trees) {
+            if let Some(trees) = state.precincts.get_mut(precinct) {
+                trees.zero_bits.restore(zero_bits);
+                trees.inclusion.restore(inclusion);
+            }
         }
     }
 }
@@ -1493,7 +1565,7 @@ struct LastSegment {
 }
 
 impl LastSegment {
-    fn of(segment: &SegmentState<'_>) -> Self {
+    fn of(segment: &SegmentState) -> Self {
         LastSegment {
             kind: segment.kind,
             passes: segment.passes,
@@ -1508,7 +1580,7 @@ impl LastSegment {
 /// Put back the state of every block in `log`, latest first, so that the
 /// packet that logged them adds nothing to those blocks. Their earlier
 /// layers stay.
-fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
+fn undo(log: &[Undo], states: &mut [BandState]) {
     for entry in log.iter().rev() {
         let block = &mut states[entry.band].blocks[entry.block];
         block.coder = entry.coder;
@@ -1547,8 +1619,8 @@ fn undo(log: &[Undo], states: &mut [BandState<'_>]) {
 /// does when strict, a packed header that runs out included, and a packet the
 /// strict walk reads is read the same way.
 #[allow(clippy::too_many_arguments)]
-fn parse_packet<'a>(
-    streams: &mut PacketStreams<'a>,
+fn parse_packet(
+    streams: &mut PacketStreams<'_>,
     meter: &Meter,
     layer: u32,
     packet_index: u32,
@@ -1556,10 +1628,11 @@ fn parse_packet<'a>(
     style: u8,
     bands: &[BandGeom],
     precinct: usize,
-    states: &mut [BandState<'a>],
+    states: &mut [BandState],
     scratch: &mut Scratch,
     keep: bool,
     mut log: Option<&mut Vec<Undo>>,
+    mut journal: Option<&mut Journal>,
 ) -> Result<Packet> {
     meter.spend(1, WorkRefusal::PacketWalk)?;
     let partial = log.is_some();
@@ -1627,6 +1700,7 @@ fn parse_packet<'a>(
                 contributions,
                 &mut scratch.unread,
                 log.as_deref_mut(),
+                journal.as_deref_mut().map(|j| j.band(band_index)),
             );
             if let Err(error) = parsed {
                 fault = Some(error);
@@ -1722,7 +1796,7 @@ fn parse_packet<'a>(
         if keep {
             states[contribution.band].blocks[contribution.block].segments[contribution.segment]
                 .chunks
-                .push(&streams.data[streams.body_pos..end]);
+                .push(streams.body_pos..end);
         }
         streams.body_pos = end;
     }
@@ -1762,7 +1836,7 @@ fn parse_band_header(
     band_index: usize,
     precinct: &PrecinctGeom,
     trees: &mut PrecinctState,
-    blocks: &mut [BlockState<'_>],
+    blocks: &mut [BlockState],
     layer: u32,
     style: u8,
     keep: bool,
@@ -1770,6 +1844,7 @@ fn parse_band_header(
     contributions: &mut Vec<Contribution>,
     unread: &mut UnreadSpans,
     mut log: Option<&mut Vec<Undo>>,
+    mut saved: Option<&mut [Vec<Saved>; 2]>,
 ) -> Result<()> {
     let cols = precinct.cols as u32;
     let threshold = layer + 1;
@@ -1801,7 +1876,8 @@ fn parse_band_header(
             // that carries this block. Reading at `layer + 1` asks "is that
             // layer at most this one?" and leaves the tree part-decoded when it
             // is not, so the next layer resumes where this one stopped.
-            match trees.inclusion.read(bx, by, threshold, bio) {
+            let saved = saved.as_deref_mut().map(|[inclusion, _]| inclusion);
+            match trees.inclusion.read_saving(bx, by, threshold, bio, saved) {
                 Some(_) => {
                     blocks[block_index].included = true;
                     true
@@ -1831,9 +1907,10 @@ fn parse_band_header(
         // included, so a single read at the ceiling settles it. Later layers
         // never read it again.
         if !was_included {
+            let saved = saved.as_deref_mut().map(|[_, zero_bits]| zero_bits);
             blocks[block_index].zero_bit_planes = trees
                 .zero_bits
-                .read(bx, by, ZBP_LIMIT, bio)
+                .read_saving(bx, by, ZBP_LIMIT, bio, saved)
                 .ok_or_else(|| {
                     Error::Codestream(format!(
                         "code-block zero-bitplane count is over {}, the most a valid stream \
@@ -1991,12 +2068,23 @@ fn parse_band_header(
     Ok(())
 }
 
-/// Note that the packet of `precinct` in `layer` was not read whole (see
-/// [`PrecinctState::unread`]). A packet spans every band of the resolution.
-fn mark_unread(bands: &mut [BandState<'_>], precinct: usize, layer: u32) {
+/// Note that the packet of `precinct` in `layer` was not read whole because
+/// the data ended (see [`PrecinctState::ended`]). A packet spans every band
+/// of the resolution.
+fn mark_unread(bands: &mut [BandState], precinct: usize, layer: u32) {
     for band in bands {
         if let Some(state) = band.precincts.get_mut(precinct) {
-            state.unread = Some(state.unread.map_or(layer, |from| from.min(layer)));
+            state.ended = Some(state.ended.map_or(layer, |from| from.min(layer)));
+        }
+    }
+}
+
+/// Note that the `POC` volumes leave out the packets of every precinct of
+/// a resolution from `layer` on (see [`PrecinctState::gap`]).
+fn mark_gap(bands: &mut [BandState], layer: u32) {
+    for band in bands {
+        for state in &mut band.precincts {
+            state.gap = Some(state.gap.map_or(layer, |from| from.min(layer)));
         }
     }
 }
@@ -2007,7 +2095,14 @@ fn mark_unread(bands: &mut [BandState<'_>], precinct: usize, layer: u32) {
 /// or in all of them, since B.10.7 lets a contribution's length be zero. Tier-1
 /// decodes such a segment from the `0xFF` bytes D.4.1 appends, as OpenJPEG
 /// does.
-fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Subband<'a>> {
+///
+/// `data` is the tile data the segments' chunks are offsets into. The state
+/// is left as it was, so a walk can go on from it.
+fn build_subbands<'a>(
+    bands: &[BandGeom],
+    states: &[BandState],
+    data: &'a [u8],
+) -> Vec<Subband<'a>> {
     bands
         .iter()
         .zip(states)
@@ -2025,7 +2120,7 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
             // once. A walk that read every packet allocates nothing here.
             let mut unread = Vec::new();
             for (geom, precinct) in band.precincts.iter().zip(&state.precincts) {
-                if let Some(from) = precinct.unread {
+                if let Some(from) = precinct.unread() {
                     unread.resize(state.blocks.len(), None);
                     for by in 0..geom.rows {
                         for bx in 0..geom.cols {
@@ -2037,7 +2132,7 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                 }
             }
             let mut blocks = Vec::with_capacity(state.blocks.len());
-            blocks.extend(band.block_rects().zip(state.blocks).enumerate().map(
+            blocks.extend(band.block_rects().zip(&state.blocks).enumerate().map(
                 |(index, ((x, y, width, height), block))| {
                     let missing_from = unread.get(index).copied().flatten();
                     let unread = missing_from.is_some();
@@ -2068,13 +2163,13 @@ fn build_subbands<'a>(bands: &[BandGeom], states: Vec<BandState<'a>>) -> Vec<Sub
                         .map_or(0, SegmentState::kept_placeholders);
                     let segments = block
                         .segments
-                        .into_iter()
+                        .iter()
                         .take_while(|s| s.coded_kept() > 0)
                         .map(|s| {
                             cut = s.kept < s.passes || (unread && s.passes < s.max_passes);
                             CodedSegment {
                                 passes: s.coded_kept(),
-                                chunks: s.chunks,
+                                chunks: s.chunks.iter().map(|r| &data[r.clone()]).collect(),
                             }
                         })
                         .collect();

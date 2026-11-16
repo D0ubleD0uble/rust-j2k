@@ -98,3 +98,13 @@ path = "fuzz_targets/ht_block.rs"
 test = false
 doc = false
 bench = false
+
+# `incremental_decode` feeds the input to `IncrementalDecoder` in pieces and
+# checks each refine against the one-shot decode with `strict` off of the
+# same bytes.
+[[bin]]
+name = "incremental_decode"
+path = "fuzz_targets/incremental_decode.rs"
+test = false
+doc = false
+bench = false

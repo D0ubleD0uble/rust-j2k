@@ -31,6 +31,7 @@ fuzz/
   fuzz_targets/decode.rs        # the public entry point: rust_j2k::decode(&[u8])
   fuzz_targets/decode_partial.rs # decode_with, strict off, whole and cut, against the strict decode
   common/partial.rs             # the strict-off check decode_partial and tile_body share
+  fuzz_targets/incremental_decode.rs # IncrementalDecoder fed in pieces, each refine against decode_with, strict off
   fuzz_targets/tile_body.rs     # a pinned valid header (geometry steered) around fuzzed tile-part bytes
   fuzz_targets/tier1_block.rs   # one EBCOT code-block, shape and bytes fuzzed
   fuzz_targets/ht_block.rs      # one HT code-block: shape to 4096 samples (13 header bytes), passes, causal flag, segments
@@ -157,6 +158,18 @@ and a complete report must hold no missing tiles. `tile_body` makes the same
 check on each of its inputs, so the steered shapes (POC, packed headers,
 tile-parts) reach the strict-off walk too. Seed `decode_partial` as
 `decode`.
+
+`incremental_decode` feeds each input to an `IncrementalDecoder` in pieces
+whose sizes a hash of the input picks, under a layer cap or a reduction the
+hash also picks, and refines after each piece. Each refine that decodes goes
+on from the packet walks the earlier ones kept, and must give what
+`decode_with` gives with `strict` off on the bytes fed so far: the same
+image or the same error. After an error, each later refine must give it
+again, and `finish` must be the decode of the whole input. It has no
+code-block work bound, which is the one earlier refines cut, so every refine
+that decodes has an exact oracle. Each input is decoded several times, so
+seed it with small files, such as the fixtures under 3 KB, and cap the input
+length (`-max_len=4096`). The name `incremental` is one Cargo reserves.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,

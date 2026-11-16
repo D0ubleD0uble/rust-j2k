@@ -35,6 +35,13 @@ struct Node {
     low: u32,
 }
 
+/// A node as it was before a [`TagTree::read_saving`] changed it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Saved {
+    index: usize,
+    node: Node,
+}
+
 /// A quad tag tree over a `width × height` grid of leaves.
 #[derive(Debug, Clone)]
 pub struct TagTree {
@@ -110,7 +117,22 @@ impl TagTree {
     /// header bit-reader. Returns `Some(value)` if the value is now known to be
     /// below the threshold, else `None` (read again at a higher threshold in a
     /// later packet). Decode state is retained between calls.
+    #[cfg(test)]
     pub fn read(&mut self, x: u32, y: u32, threshold: u32, bio: &mut BitReader) -> Option<u32> {
+        self.read_saving(x, y, threshold, bio, None)
+    }
+
+    /// [`read`](Self::read), noting in `saved`, when it is given, each node
+    /// on the read's path as it was before, so that [`restore`](Self::restore)
+    /// can undo the read.
+    pub(crate) fn read_saving(
+        &mut self,
+        x: u32,
+        y: u32,
+        threshold: u32,
+        bio: &mut BitReader,
+        mut saved: Option<&mut Vec<Saved>>,
+    ) -> Option<u32> {
         // The caller (the packet parser) addresses an in-bounds leaf; precinct
         // geometry is validated upstream before any tree is built.
         debug_assert!(
@@ -123,6 +145,12 @@ impl TagTree {
         let mut leaf = 0;
         for (_, idx) in self.descent(x, y) {
             let node = &mut self.nodes[idx];
+            if let Some(saved) = saved.as_deref_mut() {
+                saved.push(Saved {
+                    index: idx,
+                    node: *node,
+                });
+            }
             // A child can never resolve below its parent's bound; carry the
             // larger of the two and keep them in step.
             low = low.max(node.low);
@@ -139,6 +167,13 @@ impl TagTree {
 
         let value = self.nodes[leaf].value;
         (value < threshold).then_some(value)
+    }
+
+    /// Undo the reads that noted `saved`, latest first.
+    pub(crate) fn restore(&mut self, saved: &[Saved]) {
+        for entry in saved.iter().rev() {
+            self.nodes[entry.index] = entry.node;
+        }
     }
 
     /// The leaves that a [`read`](Self::read) at `threshold` passes over
