@@ -38,6 +38,7 @@ pub(crate) struct Walks {
     tiles: Vec<Slot>,
     /// The visits of the walks kept and of those let go (see
     /// [`Walks::visits`]).
+    #[cfg(test)]
     visits: u64,
     /// The bytes the walks kept hold, as [`TileWalk::bytes`] counts them.
     kept: u64,
@@ -139,9 +140,13 @@ impl Walks {
                 header, tile, meter, poc_bitmap, reduction, layers,
             );
         };
+        #[cfg(test)]
         let visits = walk.visits();
         let walked = walk.walk(header, tile, meter, poc_bitmap);
-        self.visits = self.visits - visits + walk.visits();
+        #[cfg(test)]
+        {
+            self.visits = self.visits - visits + walk.visits();
+        }
         let now = walk.bytes();
         self.kept = self.kept - *bytes + now;
         *bytes = now;
@@ -189,6 +194,7 @@ impl Walks {
     /// counted, each counted once however many decodes charged it. A walk
     /// let go, or started again, keeps its count; the walks of a tile not
     /// kept are not counted.
+    #[cfg(test)]
     pub(crate) fn visits(&self) -> u64 {
         self.visits
     }
@@ -471,6 +477,7 @@ impl TileWalk {
 
     /// The visits this walk has spent, each point and packet of the order
     /// counted once (see [`Walks::visits`]).
+    #[cfg(test)]
     fn visits(&self) -> u64 {
         let order = (self.loops + self.packets).max(self.census.loops + self.census.packets);
         let spans = self.parsed - self.packets;

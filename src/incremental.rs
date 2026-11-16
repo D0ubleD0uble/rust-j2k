@@ -326,6 +326,7 @@ impl Ledger {
     /// Tile `tile`'s packets, as a walk with `strict` off of the bytes it
     /// holds gives them (see [`Walks::walk`]), going on from the walk the
     /// earlier decodes left.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn walk<'t>(
         &self,
         header: &MainHeader,

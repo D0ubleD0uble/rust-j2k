@@ -469,7 +469,7 @@ pub(crate) const SET_SKIP_VISITS: usize = 12;
 /// and one per byte of packet headers, about 24 bytes each, and each packet
 /// skipped from it is charged [`SET_SKIP_VISITS`]. `read_header`'s walk
 /// keeps no set: it fails with [`Error::Limit`] there.
-pub(crate) struct Emitted {
+struct Emitted {
     /// The first bit of each (component, resolution), at
     /// `component * resolutions + resolution`.
     starts: Vec<u64>,
@@ -555,7 +555,7 @@ impl Emitted {
 
     /// The visits a packet skipped as already emitted is charged: none from
     /// the bitmap, [`SET_SKIP_VISITS`] from the set.
-    pub(crate) fn skip_visits(&self) -> usize {
+    fn skip_visits(&self) -> usize {
         match self.marks {
             Marks::Dense(_) => 0,
             Marks::Sparse(_) => SET_SKIP_VISITS,
@@ -563,8 +563,10 @@ impl Emitted {
     }
 
     /// Mark packet `(layer, res, comp, precinct)` emitted; whether it was not
-    /// already.
-    pub(crate) fn insert(
+    /// already. Kept out of line: inlined into the walk's loop, it slows a
+    /// walk of many skips by about 5%.
+    #[inline(never)]
+    fn insert(
         &mut self,
         walk: &PacketWalk<'_>,
         layer: u32,
