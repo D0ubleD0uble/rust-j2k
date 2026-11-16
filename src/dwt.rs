@@ -233,6 +233,26 @@ fn merge_level<S: Synthesis>(
     let (low_x, low_y) = (ll.width, ll.height);
     let width = ll.width + hl.width;
     let height = ll.height + lh.height;
+    // A level with no samples has nothing to interleave or lift, and a level
+    // of one low-pass sample (even origin on both axes) passes through both
+    // 1-D kernels unchanged. Most resolutions of a tile of a few samples are
+    // like this, so they skip the grid and its buffers.
+    if width == 0 || height == 0 {
+        return Band {
+            origin: (u0, v0),
+            width,
+            height,
+            data: Vec::new(),
+        };
+    }
+    if (low_x, low_y, width, height) == (1, 1, 1, 1) && cas_x == 0 && cas_y == 0 {
+        return Band {
+            origin: (u0, v0),
+            width,
+            height,
+            data: ll.data,
+        };
+    }
     let mut grid = vec![S::Sample::default(); width * height];
     for (band, left, top) in [
         (ll, 0, 0),
@@ -820,8 +840,65 @@ mod edge_extension {
 mod tests {
     use super::reference::{lane_5_3, lane_9_7, lift_step, reflect};
     use super::{
-        ALPHA, BETA, Band, Bands, DELTA, DetailBands, GAMMA, Irreversible97, K, reconstruct,
+        ALPHA, BETA, Band, Bands, DELTA, DetailBands, GAMMA, Irreversible97, K, Reversible53,
+        reconstruct,
     };
+
+    fn band<T>(origin: (u32, u32), width: usize, height: usize, data: Vec<T>) -> Band<T> {
+        Band {
+            origin,
+            width,
+            height,
+            data,
+        }
+    }
+
+    /// A level whose detail bands are all empty passes its one low-pass
+    /// sample through, and a level with no sample stays empty, on both
+    /// filters.
+    #[test]
+    fn a_level_of_empty_detail_bands_passes_through() {
+        // The sample sits at (2, 4) of the finer level, so the coarser LL is at (1, 2).
+        let bands = Bands {
+            ll: band((1, 2), 1, 1, vec![-7i32]),
+            levels: vec![DetailBands {
+                hl: band((1, 2), 0, 1, vec![]),
+                lh: band((1, 2), 1, 0, vec![]),
+                hh: band((1, 2), 0, 0, vec![]),
+            }],
+        };
+        let out = reconstruct::<Reversible53>(bands);
+        assert_eq!(
+            (out.origin, out.width, out.height, out.data),
+            ((2, 4), 1, 1, vec![-7])
+        );
+        let bands = Bands {
+            ll: band((1, 2), 1, 1, vec![-7.5f32]),
+            levels: vec![DetailBands {
+                hl: band((1, 2), 0, 1, vec![]),
+                lh: band((1, 2), 1, 0, vec![]),
+                hh: band((1, 2), 0, 0, vec![]),
+            }],
+        };
+        let out = reconstruct::<Irreversible97>(bands);
+        assert_eq!(out.data, vec![-7.5]);
+
+        // No low-pass sample and no detail one: an empty level at an odd
+        // origin, which lifts nothing.
+        let bands = Bands {
+            ll: band((1, 1), 0, 0, Vec::<i32>::new()),
+            levels: vec![DetailBands {
+                hl: band((0, 1), 0, 0, vec![]),
+                lh: band((1, 0), 0, 0, vec![]),
+                hh: band((0, 0), 0, 0, vec![]),
+            }],
+        };
+        let out = reconstruct::<Reversible53>(bands);
+        assert_eq!(
+            (out.origin, out.width, out.height, out.data.len()),
+            ((1, 1), 0, 0, 0)
+        );
+    }
 
     /// Forward 5/3 lifting, the exact inverse of [`inverse_5_3`], transcribed
     /// straight from the standard's predict-then-update order. Kept in the test

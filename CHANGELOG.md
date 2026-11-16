@@ -114,6 +114,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   signals a part other than Part 15 is `Unsupported`. A malformed `CAP` or
   `CPF` is `Error::Marker`; a repeated one, or either one in a tile-part
   header, is `Error::Codestream`.
+- A tile with many components and wavelet levels but few samples decodes
+  up to 1.7 times faster (64 tiles of 16384 components, now 1.2 times
+  OpenJPEG's time, which includes writing its output): a resolution with no
+  precinct costs no allocation and no tier-1 or inverse DWT work (#272).
 
 ### Fixed
 
