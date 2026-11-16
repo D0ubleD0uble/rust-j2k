@@ -11,10 +11,7 @@ use super::synth::seg;
 /// the packet data — so `Psot` (which counts from the marker's first byte) is
 /// `12 + rest_len`.
 pub fn sot(isot: u16, tpsot: u8, tnsot: u8, rest_len: usize) -> Vec<u8> {
-    let mut body = isot.to_be_bytes().to_vec();
-    body.extend_from_slice(&((12 + rest_len) as u32).to_be_bytes());
-    body.extend_from_slice(&[tpsot, tnsot]);
-    seg(0xFF90, &body)
+    super::synth::sot(isot, (12 + rest_len) as u32, tpsot, tnsot)
 }
 
 /// Pop the first byte of `*body`, or 0 when it is exhausted, so a short input

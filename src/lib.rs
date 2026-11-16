@@ -2061,6 +2061,12 @@ pub(crate) fn tile_bytes(cs: &codestream::Codestream<'_>) -> u64 {
         .fold(0, u64::saturating_add)
 }
 
+// The synthetic-bytes builders the unit tests share with `tests/` and `fuzz/`.
+// Std only, so one `#[path]` include here serves every unit test.
+#[cfg(test)]
+#[path = "../tests/support/synth.rs"]
+mod synth;
+
 #[cfg(test)]
 mod tests {
     use super::*;

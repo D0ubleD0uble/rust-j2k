@@ -45,7 +45,6 @@
 #[path = "../../tests/support/synth.rs"]
 mod synth;
 use libfuzzer_sys::fuzz_target;
-use synth::bx;
 
 const ONE_COMPONENT: &[u8] = include_bytes!("../../tests/fixtures/regular_latlon_lossy.j2k");
 const THREE_COMPONENTS: &[u8] =
@@ -58,21 +57,6 @@ const SYCC_422: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_422_odd.jp
 const FOUR_COMPONENTS_16: &[u8] =
     include_bytes!("../../tests/fixtures/multicomponent_16bit_lossless.j2k");
 const SYCC_420_EVEN: &[u8] = include_bytes!("../../tests/fixtures/jp2_sycc_420_even.jp2");
-
-const SIGNATURE: [u8; 12] = [
-    0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
-];
-
-/// An `ihdr` box matching a codestream's SIZ: the image area and `Csiz`.
-fn ihdr_for(codestream: &[u8]) -> Vec<u8> {
-    let be32 = |at: usize| u32::from_be_bytes(codestream[at..at + 4].try_into().unwrap());
-    let (xsiz, ysiz, x0, y0) = (be32(8), be32(12), be32(16), be32(20));
-    let mut payload = (ysiz - y0).to_be_bytes().to_vec();
-    payload.extend_from_slice(&(xsiz - x0).to_be_bytes());
-    payload.extend_from_slice(&codestream[40..42]); // Csiz
-    payload.extend_from_slice(&[7, 7, 0, 0]); // BPC, C, UnkC, IPR
-    bx(b"ihdr", &payload)
-}
 
 /// The `jp2c` payload of a committed JP2 file whose boxes all have a 32-bit
 /// `LBox`.
@@ -102,42 +86,7 @@ fn codestream(variant: u8) -> &'static [u8] {
 }
 
 fn wrap(variant: u8, body: &[u8]) -> Vec<u8> {
-    let codestream = codestream(variant);
-
-    let mut file = Vec::new();
-    if variant & 0x04 != 0 {
-        file.extend_from_slice(&SIGNATURE);
-        file.extend_from_slice(&bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-        if variant & 0x08 != 0 {
-            let mut children = ihdr_for(codestream);
-            children.extend_from_slice(body);
-            file.extend_from_slice(&bx(b"jp2h", &children));
-        } else {
-            file.extend_from_slice(body);
-        }
-    } else {
-        file.extend_from_slice(body);
-    }
-
-    match variant & 0x03 {
-        0 => file.extend_from_slice(&bx(b"jp2c", codestream)),
-        1 => {
-            file.extend_from_slice(&1u32.to_be_bytes());
-            file.extend_from_slice(b"jp2c");
-            file.extend_from_slice(&(16 + codestream.len() as u64).to_be_bytes());
-            file.extend_from_slice(codestream);
-        }
-        2 => {
-            file.extend_from_slice(&0u32.to_be_bytes());
-            file.extend_from_slice(b"jp2c");
-            file.extend_from_slice(codestream);
-        }
-        _ => {
-            file.extend_from_slice(&bx(b"jp2c", codestream));
-            file.extend_from_slice(body);
-        }
-    }
-    file
+    synth::wrap_jp2_boxes(variant, codestream(variant), body)
 }
 
 fuzz_target!(|data: &[u8]| {

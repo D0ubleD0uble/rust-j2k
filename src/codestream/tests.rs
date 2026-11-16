@@ -7,14 +7,10 @@
 //! parsed per-component geometry of all 23 conformance codestreams against the
 //! `opj_dump` values recorded in the corpus manifest.
 
-// One std-only builder module shared with tests/ and fuzz/; the crate has no
-// single parent for the unit tests, so each includes it by path.
-#[allow(clippy::duplicate_mod)]
-#[path = "../../tests/support/synth.rs"]
-mod synth;
 use super::markers::{Cod, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform, marker};
 use super::*;
 use crate::Error;
+use crate::synth;
 use synth::seg;
 
 fn be16(v: u16) -> [u8; 2] {
@@ -497,7 +493,7 @@ fn with_precincts(sizes: &[u8]) -> Vec<u8> {
         seg(marker::QCD, &qcd_none(2, &[8; 7])),
     ];
     let data = [0xDE, 0xAD];
-    assemble(&header, &sot_seg(0, psot_for(&data), 0, 1), &data, true)
+    assemble(&header, &synth::sot(0, psot_for(&data), 0, 1), &data, true)
 }
 
 /// `Scod` bit 0 adds one `SPcod` byte per resolution — `NL + 1` of them, coarsest
@@ -526,7 +522,7 @@ fn an_implicit_precinct_partition_is_maximal() {
     let data = [0xDE, 0xAD];
     let bytes = assemble(
         &default_header(),
-        &sot_seg(0, psot_for(&data), 0, 1),
+        &synth::sot(0, psot_for(&data), 0, 1),
         &data,
         true,
     );
@@ -674,7 +670,7 @@ fn a_tile_color_transform_on_one_component_is_skipped() {
     for part in default_header() {
         bytes.extend_from_slice(&part);
     }
-    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&synth::sot(0, psot, 0, 1));
     bytes.extend_from_slice(&tile_cod);
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.extend_from_slice(&data);
@@ -730,7 +726,7 @@ fn a_poc_marker_parses_into_volumes() {
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ];
     let data = [0xDE, 0xAD];
-    let bytes = assemble(&header, &sot_seg(0, psot_for(&data), 0, 1), &data, true);
+    let bytes = assemble(&header, &synth::sot(0, psot_for(&data), 0, 1), &data, true);
     let cs = parse(&bytes).expect("POC parses");
     assert_eq!(cs.header.poc.len(), 1);
     let v = cs.header.poc[0];
@@ -848,7 +844,7 @@ fn a_crg_marker_records_the_registration_offsets() {
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ];
     let data = [0xDE, 0xAD];
-    let bytes = assemble(&header, &sot_seg(0, psot_for(&data), 0, 1), &data, true);
+    let bytes = assemble(&header, &synth::sot(0, psot_for(&data), 0, 1), &data, true);
     let cs = parse(&bytes).expect("CRG parses");
     assert_eq!(cs.header.crg, vec![(65424, 32558), (0, 0), (1, 0xFFFF)]);
 }
@@ -1048,16 +1044,6 @@ fn unknown_marker_without_a_length_is_incomplete() {
 // `opj_dump` cross-check on real seed codestreams lands with the fixture
 // corpus (#4); these synthetic cases pin the offset/length and reject logic.
 
-/// SOT segment: `marker + Lsot(=10) + Isot + Psot + TPsot + TNsot`.
-fn sot_seg(isot: u16, psot: u32, tpsot: u8, tnsot: u8) -> Vec<u8> {
-    let mut body = Vec::new();
-    body.extend_from_slice(&be16(isot));
-    body.extend_from_slice(&psot.to_be_bytes());
-    body.push(tpsot);
-    body.push(tnsot);
-    seg(marker::SOT, &body)
-}
-
 /// A complete, in-subset main header: SIZ + reversible COD + no-quant QCD.
 fn default_header() -> Vec<Vec<u8>> {
     vec![
@@ -1095,7 +1081,7 @@ fn perr(bytes: &[u8]) -> Error {
 #[test]
 fn valid_single_tile_part_parses() {
     let data = [0xDE, 0xAD, 0xBE, 0xEF];
-    let sot = sot_seg(0, psot_for(&data), 0, 1);
+    let sot = synth::sot(0, psot_for(&data), 0, 1);
     let bytes = assemble(&default_header(), &sot, &data, true);
 
     let cs = parse(&bytes).expect("parse");
@@ -1108,7 +1094,7 @@ fn valid_single_tile_part_parses() {
 #[test]
 fn psot_zero_runs_to_eoc() {
     let data = [1, 2, 3, 4, 5];
-    let sot = sot_seg(0, 0, 0, 1); // last tile-part: extends to EOC
+    let sot = synth::sot(0, 0, 0, 1); // last tile-part: extends to EOC
     let bytes = assemble(&default_header(), &sot, &data, true);
 
     let cs = parse(&bytes).expect("parse");
@@ -1123,7 +1109,7 @@ fn psot_zero_runs_to_eoc() {
 #[test]
 fn trailing_bytes_after_eoc_are_ignored_when_psot_declares_the_length() {
     let data = [1, 2, 3, 4, 5];
-    let sot = sot_seg(0, psot_for(&data), 0, 1);
+    let sot = synth::sot(0, psot_for(&data), 0, 1);
     let mut bytes = assemble(&default_header(), &sot, &data, true);
     bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]); // garbage ending in FF D9
     let cs = parse(&bytes).expect("trailing bytes after the declared extent");
@@ -1132,7 +1118,7 @@ fn trailing_bytes_after_eoc_are_ignored_when_psot_declares_the_length() {
     // With Psot = 0 the same tail is absorbed into the tile up to the final
     // EOC; the packet self-check downstream is what rejects it. Anchoring is
     // pinned here: the embedded FF D9 must NOT terminate the data early.
-    let sot = sot_seg(0, 0, 0, 1);
+    let sot = synth::sot(0, 0, 0, 1);
     let mut bytes = assemble(&default_header(), &sot, &data, true);
     bytes.extend_from_slice(&[0xAB, 0xCD, 0xFF, 0xD9]);
     let cs = parse(&bytes).expect("EOC anchored at the buffer end");
@@ -1141,7 +1127,7 @@ fn trailing_bytes_after_eoc_are_ignored_when_psot_declares_the_length() {
 
 #[test]
 fn empty_tile_part_data_parses() {
-    let sot = sot_seg(0, psot_for(&[]), 0, 1);
+    let sot = synth::sot(0, psot_for(&[]), 0, 1);
     let bytes = assemble(&default_header(), &sot, &[], true);
 
     let cs = parse(&bytes).expect("parse");
@@ -1158,7 +1144,7 @@ fn tile_part_header_comment_is_skipped() {
     for part in default_header() {
         bytes.extend_from_slice(&part);
     }
-    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&synth::sot(0, psot, 0, 1));
     bytes.extend_from_slice(&com);
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.extend_from_slice(&data);
@@ -1172,7 +1158,7 @@ fn tile_part_header_comment_is_skipped() {
 /// so tile 1 does not exist and the codestream is malformed.
 #[test]
 fn a_tile_index_past_the_grid_is_codestream() {
-    let sot = sot_seg(1, 0, 0, 1); // Isot = 1, but the grid holds one tile
+    let sot = synth::sot(1, 0, 0, 1); // Isot = 1, but the grid holds one tile
     let bytes = assemble(&default_header(), &sot, &[1, 2], true);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
@@ -1182,7 +1168,7 @@ fn a_tile_index_past_the_grid_is_codestream() {
 #[test]
 fn a_tnsot_the_tile_parts_do_not_add_up_to_is_codestream() {
     let data = [1, 2];
-    let sot = sot_seg(0, psot_for(&data), 0, 2); // TNsot = 2, but only one part follows
+    let sot = synth::sot(0, psot_for(&data), 0, 2); // TNsot = 2, but only one part follows
     let bytes = assemble(&default_header(), &sot, &data, true);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
@@ -1191,7 +1177,7 @@ fn a_tnsot_the_tile_parts_do_not_add_up_to_is_codestream() {
 /// first one to appear must be `TPsot = 0`. Starting at 1 means part 0 is missing.
 #[test]
 fn a_tile_part_index_out_of_order_is_codestream() {
-    let sot = sot_seg(0, 0, 1, 1); // TPsot = 1 with no part 0 before it
+    let sot = synth::sot(0, 0, 1, 1); // TPsot = 1 with no part 0 before it
     let bytes = assemble(&default_header(), &sot, &[1, 2], true);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
@@ -1203,7 +1189,7 @@ fn a_tile_part_index_out_of_order_is_codestream() {
 fn several_tile_parts_of_one_tile_are_joined_in_order() {
     let first_data = [7, 7, 7];
     // TNsot = 0 in the first part: "not stated yet", which A.4.2 allows.
-    let first = sot_seg(0, psot_for(&first_data), 0, 0);
+    let first = synth::sot(0, psot_for(&first_data), 0, 0);
 
     let mut bytes = be16(marker::SOC).to_vec();
     for part in default_header() {
@@ -1213,7 +1199,7 @@ fn several_tile_parts_of_one_tile_are_joined_in_order() {
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.extend_from_slice(&first_data);
     // The last part carries Psot = 0, so it runs to the closing EOC.
-    bytes.extend_from_slice(&sot_seg(0, 0, 1, 2));
+    bytes.extend_from_slice(&synth::sot(0, 0, 1, 2));
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.extend_from_slice(&[8, 8]);
     bytes.extend_from_slice(&be16(marker::EOC));
@@ -1235,7 +1221,7 @@ fn a_tile_with_no_tile_part_is_codestream() {
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ];
     // Only tile 0 is carried; tile 1 never appears.
-    let bytes = assemble(&header, &sot_seg(0, 0, 0, 1), &[1, 2], true);
+    let bytes = assemble(&header, &synth::sot(0, 0, 0, 1), &[1, 2], true);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
 
@@ -1254,7 +1240,7 @@ fn tile_parts(header: &[Vec<u8>], parts: &[Part]) -> Vec<u8> {
         let markers = markers.concat();
         let data = [at as u8];
         let psot = psot_for(&data) + markers.len() as u32;
-        bytes.extend_from_slice(&sot_seg(*isot, psot, *tpsot, *tnsot));
+        bytes.extend_from_slice(&synth::sot(*isot, psot, *tpsot, *tnsot));
         bytes.extend_from_slice(&markers);
         bytes.extend_from_slice(&be16(marker::SOD));
         bytes.extend_from_slice(&data);
@@ -1617,7 +1603,7 @@ fn tile_part_ppt_collects_the_packed_headers() {
     for part in default_header() {
         bytes.extend_from_slice(&part);
     }
-    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&synth::sot(0, psot, 0, 1));
     bytes.extend_from_slice(&ppt1);
     bytes.extend_from_slice(&ppt0);
     bytes.extend_from_slice(&be16(marker::SOD));
@@ -1641,7 +1627,7 @@ fn tile_part_duplicate_zppt_is_a_codestream_error() {
     for part in default_header() {
         bytes.extend_from_slice(&part);
     }
-    bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+    bytes.extend_from_slice(&synth::sot(0, psot, 0, 1));
     bytes.extend_from_slice(&a);
     bytes.extend_from_slice(&b);
     bytes.extend_from_slice(&be16(marker::SOD));
@@ -1663,7 +1649,7 @@ fn structurally_illegal_tile_header_marker_is_codestream() {
         for part in default_header() {
             bytes.extend_from_slice(&part);
         }
-        bytes.extend_from_slice(&sot_seg(0, psot, 0, 1));
+        bytes.extend_from_slice(&synth::sot(0, psot, 0, 1));
         bytes.extend_from_slice(&illegal);
         bytes.extend_from_slice(&be16(marker::SOD));
         bytes.extend_from_slice(&data);
@@ -1679,7 +1665,7 @@ fn unexpected_tile_header_marker_is_codestream() {
     for part in default_header() {
         bytes.extend_from_slice(&part);
     }
-    bytes.extend_from_slice(&sot_seg(0, 0, 0, 1));
+    bytes.extend_from_slice(&synth::sot(0, 0, 0, 1));
     bytes.extend_from_slice(&be16(0xFF30)); // reserved, not valid in a header
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
@@ -1687,7 +1673,7 @@ fn unexpected_tile_header_marker_is_codestream() {
 #[test]
 fn psot_overrun_is_codestream() {
     let data = [1, 2];
-    let sot = sot_seg(0, 9999, 0, 1); // Psot far past the buffer
+    let sot = synth::sot(0, 9999, 0, 1); // Psot far past the buffer
     let bytes = assemble(&default_header(), &sot, &data, true);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
@@ -1695,7 +1681,7 @@ fn psot_overrun_is_codestream() {
 #[test]
 fn missing_eoc_is_codestream() {
     let data = [1, 2];
-    let sot = sot_seg(0, psot_for(&data), 0, 1);
+    let sot = synth::sot(0, psot_for(&data), 0, 1);
     let bytes = assemble(&default_header(), &sot, &data, false); // no EOC
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
@@ -1703,7 +1689,7 @@ fn missing_eoc_is_codestream() {
 #[test]
 fn psot_zero_without_eoc_loses_two_bytes_but_parses() {
     let data = [1, 2, 3];
-    let sot = sot_seg(0, 0, 0, 1);
+    let sot = synth::sot(0, 0, 0, 1);
     let bytes = assemble(&default_header(), &sot, &data, false);
     // The last two bytes are taken for the EOC, as in OpenJPEG.
     let cs = parse(&bytes).expect("parse");
@@ -1712,7 +1698,7 @@ fn psot_zero_without_eoc_loses_two_bytes_but_parses() {
 
 #[test]
 fn psot_zero_with_one_byte_after_sod_is_codestream() {
-    let sot = sot_seg(0, 0, 0, 1);
+    let sot = synth::sot(0, 0, 0, 1);
     let bytes = assemble(&default_header(), &sot, &[7], false);
     assert!(matches!(perr(&bytes), Error::Codestream(_)));
 }
@@ -2785,7 +2771,7 @@ fn a_coc_carries_its_own_precinct_partition() {
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
         ];
         let data = [0xDE, 0xAD];
-        assemble(&header, &sot_seg(0, psot_for(&data), 0, 1), &data, true)
+        assemble(&header, &synth::sot(0, psot_for(&data), 0, 1), &data, true)
     };
     // Four resolutions (NL = 3), so four precinct bytes.
     let bytes = with(0x01, &[0x22, 0x33, 0x44, 0x55]);
@@ -2986,7 +2972,7 @@ fn a_wrong_length_rgn_is_rejected() {
 /// every tile-part test. `Psot` counts them as part of the tile-part header.
 fn assemble_with_tile_markers(header: &[Vec<u8>], markers: &[Vec<u8>], data: &[u8]) -> Vec<u8> {
     let markers_len: usize = markers.iter().map(Vec::len).sum();
-    let mut sot = sot_seg(0, psot_for(data) + markers_len as u32, 0, 1);
+    let mut sot = synth::sot(0, psot_for(data) + markers_len as u32, 0, 1);
     for m in markers {
         sot.extend_from_slice(m);
     }
@@ -3076,11 +3062,11 @@ fn with_later_tile_part_markers(header: &[Vec<u8>], second_markers: &[Vec<u8>]) 
     for part in header {
         bytes.extend_from_slice(part);
     }
-    bytes.extend_from_slice(&sot_seg(0, psot_for(&[1]), 0, 2));
+    bytes.extend_from_slice(&synth::sot(0, psot_for(&[1]), 0, 2));
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.push(1);
     let markers: usize = second_markers.iter().map(Vec::len).sum();
-    bytes.extend_from_slice(&sot_seg(0, psot_for(&[2]) + markers as u32, 1, 2));
+    bytes.extend_from_slice(&synth::sot(0, psot_for(&[2]) + markers as u32, 1, 2));
     for m in second_markers {
         bytes.extend_from_slice(m);
     }
@@ -3232,7 +3218,7 @@ fn a_tile_with_no_overrides_takes_the_main_header_s_resolution() {
         seg(marker::COC, &coc_body(&[0], 0, 3, 4, 4, 0, 1)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ];
-    let bytes = assemble(&header, &sot_seg(0, 0, 0, 1), &[1, 2], true);
+    let bytes = assemble(&header, &synth::sot(0, 0, 0, 1), &[1, 2], true);
 
     let cs = parse(&bytes).expect("parse");
     assert_eq!(cs.tile_header(0).unwrap().components, cs.header.components);
@@ -3251,11 +3237,11 @@ fn a_coding_override_in_a_later_tile_part_is_codestream() {
     for part in default_header() {
         bytes.extend_from_slice(&part);
     }
-    bytes.extend_from_slice(&sot_seg(0, psot_for(&first_data), 0, 2));
+    bytes.extend_from_slice(&synth::sot(0, psot_for(&first_data), 0, 2));
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.extend_from_slice(&first_data);
     // The second tile-part carries a COD, which only the first one may.
-    bytes.extend_from_slice(&sot_seg(0, 0, 1, 2));
+    bytes.extend_from_slice(&synth::sot(0, 0, 1, 2));
     bytes.extend_from_slice(&tile_cod);
     bytes.extend_from_slice(&be16(marker::SOD));
     bytes.extend_from_slice(&[8, 8]);
@@ -3993,7 +3979,7 @@ fn tile_codestream(main: &MainHeader, tile: &TileHeader) -> Vec<u8> {
     for (at, markers) in parts.iter().enumerate() {
         let markers = markers.concat();
         let psot = psot_for(&data) + markers.len() as u32;
-        bytes.extend_from_slice(&sot_seg(0, psot, at as u8, parts.len() as u8));
+        bytes.extend_from_slice(&synth::sot(0, psot, at as u8, parts.len() as u8));
         bytes.extend_from_slice(&markers);
         bytes.extend_from_slice(&be16(marker::SOD));
         bytes.extend_from_slice(&data);

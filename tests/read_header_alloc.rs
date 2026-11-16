@@ -6,41 +6,21 @@
 //! single test: a second one running in parallel would count into the same
 //! peak.
 //!
-//! A global allocator can only be written with `unsafe`. This one is a shim in
-//! a test binary that forwards every call to `System` unchanged, which the
-//! project conventions allow (`.claude/rules/conventions.md`, "Stay
+//! A global allocator can only be written with `unsafe`. The shim in
+//! `tests/support/alloc.rs` forwards every call to `System` unchanged, which
+//! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+#[path = "support/alloc.rs"]
+mod alloc;
 #[path = "support/synth.rs"]
 mod synth;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use alloc::{CURRENT, PEAK};
+use std::sync::atomic::Ordering;
 use synth::bx;
 
-struct Counting;
-
-static CURRENT: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: every call forwards to `System` unchanged; the counters only
-// observe the sizes.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let now = CURRENT.fetch_add(layout.size(), Ordering::SeqCst) + layout.size();
-        PEAK.fetch_max(now, Ordering::SeqCst);
-        // SAFETY: the caller's contract for `alloc` is passed through.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        CURRENT.fetch_sub(layout.size(), Ordering::SeqCst);
-        // SAFETY: the caller's contract for `dealloc` is passed through.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
 #[global_allocator]
-static ALLOCATOR: Counting = Counting;
+static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
 
 const SIDE: u32 = 8000;
 
