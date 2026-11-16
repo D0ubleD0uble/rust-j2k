@@ -42,6 +42,7 @@ HT = "conformance/ht/codestreams/"
 
 # name, path, kind ("p1" or "ht"), extra options for the decoders that take
 # a region or tile: (window "x0,y0,x1,y1" or None, tile or None)
+GENERATED = "ht_gen_2048_gray"
 FILES = [
     ("p0_07", fx("conformance/codestreams/p0_07.j2k"), "p1", None, None),
     ("p0_08", fx("conformance/codestreams/p0_08.j2k"), "p1", None, None),
@@ -63,11 +64,25 @@ FILES = [
     ("ds1_ht_02_b11", fx(HT + "ds1_ht_02_b11.j2k"), "ht", None, None),
     ("ds0_ht_05_b11", fx(HT + "ds0_ht_05_b11.j2k"), "ht", None, None),
     ("ds0_ht_07_b16", fx(HT + "ds0_ht_07_b16.j2k"), "ht", None, None),
+    # Made at run time by ojph_compress; see generate().
+    (GENERATED, "GENERATED", "ht", None, None),
 ]
 
 # Files for the incremental table, and the piece size.
 INCREMENTAL = ["grib2_shape", "ds0_ht_05_b11"]
 PIECE = 65536
+
+
+# Logical CPUs: what opj_decompress's ALL_CPUS means, and Grok's -H here.
+CORES = str(os.cpu_count())
+
+
+def governor():
+    try:
+        with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor") as fh:
+            return fh.read().strip()
+    except OSError:
+        return "unknown"
 
 
 def env(name, default):
@@ -111,8 +126,7 @@ def opj(threads):
 def grok(threads):
     def argv(f, out):
         a = [GROK, "-i", f[1], "-o", out + ".pgx"] + region(f)
-        if threads:
-            a += ["-H", threads]
+        a += ["-H", threads]
         return a
 
     return argv
@@ -201,9 +215,9 @@ def ht_no_region(f):
 # (label, supports, argv for checking, argv for timing, threads text)
 VARIANTS = [
     ("opj 1 thread", any_file, opj(None), opj(None), "1"),
-    ("opj all cores", any_file, opj("ALL_CPUS"), opj("ALL_CPUS"), "16"),
+    ("opj all cores", any_file, opj("ALL_CPUS"), opj("ALL_CPUS"), CORES),
     ("grok 1 thread", any_file, grok("1"), grok("1"), "1"),
-    ("grok default", any_file, grok(None), grok(None), "all cores"),
+    ("grok all cores", any_file, grok(CORES), grok(CORES), CORES),
     ("openjph", ht_no_region, ojph, ojph, "1"),
     ("rust-j2k cli", any_file, perf("rust-j2k"), perf_timed("rust-j2k"), "1"),
     ("hayro cli", p1_no_region, perf("hayro"), perf_timed("hayro"), "1"),
@@ -336,8 +350,38 @@ def clean(work, out):
 # ---------------------------------------------------------------------------
 
 
+GEN_DIR = None
+
+
+def generate():
+    """The generated HT file: the tiled 2048 x 2048 gray image, decoded by
+    opj_decompress to PGM and compressed losslessly, one layer, by
+    ojph_compress. Not a conformance file, and made fresh each run."""
+    global GEN_DIR
+    if GEN_DIR is None:
+        GEN_DIR = tempfile.mkdtemp(prefix="j2kgen-", dir="/dev/shm")
+        pgm = os.path.join(GEN_DIR, "gray.pgm")
+        subprocess.run(
+            [OPJ, "-quiet", "-i", TILED, "-o", pgm], check=True, stdout=subprocess.DEVNULL
+        )
+        subprocess.run(
+            [OJPH_COMPRESS, "-i", pgm, "-o", os.path.join(GEN_DIR, GENERATED + ".j2c"),
+             "-reversible", "true", "-num_decomps", "5"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+    return os.path.join(GEN_DIR, GENERATED + ".j2c")
+
+
 def chosen(only):
-    return [f for f in FILES if not only or only in f[0]]
+    out = []
+    for f in FILES:
+        if only and only not in f[0]:
+            continue
+        if f[1] == "GENERATED":
+            f = (f[0], generate()) + f[2:]
+        out.append(f)
+    return out
 
 
 _HT_MANIFEST = None
@@ -473,6 +517,7 @@ def cmd_time(args):
     work = work_dir()
     p1, ht = make_empty(work)
     print(f"runs per cell: {args.runs} (median); times in ms, RSS in MiB")
+    print(f"cpu governor: {governor()}; logical CPUs: {CORES}; load: {os.getloadavg()}")
     print("| file | decoder | threads | median ms | min ms | empty ms | net ms | peak MiB |")
     for f in chosen(args.only):
         label, checked = check_file(f, work)

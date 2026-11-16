@@ -54,6 +54,7 @@ files only, and hayro-jpeg2000 has no region decode.
 | `ds1_ht_02_b11` | | | | | | | |
 | `ds0_ht_05_b11` | | | | | | | |
 | `ds0_ht_07_b16` | | | | | | | |
+| generated 2048 x 2048 gray | | | | | | | |
 
 hayro-jpeg2000 does not read HTJ2K: it stops on the first code-block style it
 does not know, so it has no column here.
@@ -113,6 +114,7 @@ a lossy file (16-bit).
 | `ds1_ht_02_b11` | ISO reference | cannot decode | PAE 3, in bound | cannot decode (2+ layers) | PAE 2, in bound | cannot decode |
 | `ds0_ht_05_b11` | ISO reference | cannot decode | PAE 2, in bound | cannot decode (2+ layers) | PAE 2, in bound | cannot decode |
 | `ds0_ht_07_b16` | ISO reference | cannot decode | exact | cannot decode (2+ layers) | exact | cannot decode |
+| generated 2048 x 2048 gray | OpenJPEG | exact | exact | exact | exact | cannot decode |
 
 What the notes in the table mean:
 
@@ -164,6 +166,19 @@ components, one to 16 x 16 tiles and one to 19 layers.
 | `ds0_ht_05_b11` | 1.3 MiB | 1024 x 1024, 4 comps, 8-bit, 7 layers | 9/7, lossy | HT |
 | `ds0_ht_07_b16` | 8.5 MiB | 2048 x 2048, 3 comps, 12-bit, 16 x 16 tiles, 8 layers | 5/3, lossless | HT |
 
+One more HTJ2K file is generated, not a conformance file, so that OpenJPH has
+a large file it can decode (it decodes one layer only). `run.py` makes it
+each run from the tiled 2048 file, with the 8-bit gray image decoded to PGM
+and compressed losslessly, in one layer, by OpenJPH 0.33.0:
+
+```sh
+opj_decompress -i tests/fixtures/bench/tiled_2048_gray.j2k -o gray.pgm
+ojph_compress -i gray.pgm -o ht_gen_2048_gray.j2c -reversible true -num_decomps 5
+```
+
+Its oracle is OpenJPEG, which decodes it. The row is marked generated in the
+tables.
+
 Where each file lives is in `tests/fixtures/README.md` and the conformance
 manifests; none of them is in the published crate.
 
@@ -188,8 +203,11 @@ manifests; none of them is in the published crate.
   one decode after a warm-up decode, with the file already in memory. The peak
   memory is for the command-line run, so it includes the process and the file
   read.
-- The decoders that can use several threads are timed on one thread and, for
-  OpenJPEG (`-threads ALL_CPUS`) and Grok (its default, which used all cores here), on all cores.
+- The decoders that can use several threads are timed on one thread and on
+  all cores. OpenJPEG runs with no `-threads` option (one thread) and with
+  `-threads ALL_CPUS`. Grok runs with `-H 1` and `-H 16`. The 16 is the
+  number of logical CPUs, which is what `ALL_CPUS` means here, so both get
+  the same count.
   rust-j2k, hayro-jpeg2000 and OpenJPH decode on one thread; they have no
   thread option.
 - Each output is checked against the oracle first (see [Output
@@ -200,7 +218,8 @@ manifests; none of them is in the published crate.
 
 ## Machine
 
-CPU: Intel Core i7-10700KF at 3.8 GHz, 8 cores and 16 threads. Load average
+CPU: Intel Core i7-10700KF at 3.8 GHz, 8 cores and 16 threads. The CPU frequency governor was GOVERNOR (`run.py time` prints it);
+it was not changed, and it affects absolute times. Load average
 during the timing run: LOAD (the run waits for it to be under 2).
 
 ## Decoders and builds
