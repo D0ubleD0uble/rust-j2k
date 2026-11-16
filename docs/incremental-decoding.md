@@ -35,7 +35,10 @@ does again on each refine.
   a PTERM segment with bytes left over in a block that could still take
   passes, is refused here. `finish` decodes the bytes also after a `refine`
   error, so with `strict` on it may report an earlier fault than the one
-  `refine` found, such as the data ending before it.
+  `refine` found, such as the data ending before it. `finish` borrows the
+  decoder and can be called again, with the same result. `into_bytes`
+  consumes the decoder and returns the bytes fed, so a caller whose `finish`
+  refused a work limit can decode them again with the limit raised.
 
 The correctness oracle is the crate's own one-shot strict-off decode of the
 same prefix. `tests/incremental.rs` checks it on every fixture under
