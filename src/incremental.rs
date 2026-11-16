@@ -242,10 +242,8 @@ impl IncrementalDecoder {
             decoded => decoded,
         }
     }
-}
 
-impl IncrementalDecoder {
-    /// The bytes fed, handed back and the decoder consumed.
+    /// Consumes the decoder and returns the bytes fed.
     ///
     /// After [`finish`](Self::finish) refuses a work limit, decode these
     /// with [`decode_with`], or feed them to a new decoder, under options
