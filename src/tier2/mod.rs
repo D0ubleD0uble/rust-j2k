@@ -955,8 +955,7 @@ enum MixedFirst {
 /// nonzero field with `Lblock` at 3 or a leading 1 is a Part 1 block's.
 /// Otherwise the field is read as an HT block's, and a value an HT block
 /// cannot have (a cleanup length of 1 or over `HT_CLEANUP_MAX`, or bytes on
-/// placeholder passes) makes
-/// it a Part 1 block's: that is the A.4 note's "processing the code-block
+/// placeholder passes) makes it a Part 1 block's: that is the A.4 note's "processing the code-block
 /// assuming it conforms to Annex B", and it fails here, in the length field,
 /// or not at all.
 ///

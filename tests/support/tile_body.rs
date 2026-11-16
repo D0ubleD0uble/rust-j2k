@@ -38,7 +38,9 @@ fn steer(body: &mut &[u8]) -> u8 {
 /// widened geometry, 6 a 2×2 tile grid with interleaved tile-parts, 7 packed
 /// packet headers (bit 6 picks PPM over PPT). Shapes 4, 5, and 7 read steering
 /// bytes off the front of `body`. Every shape stays a byte-perfect header so
-/// the body reaches the packet reader. Bit 7 makes the code-blocks HT.
+/// the body reaches the packet reader. Bit 7 makes the code-blocks HT, and bit 6
+/// with it (shapes 0 to 6) makes them MIXED; MIXED shape 4 drops the bypass and
+/// terminate-each-pass flags, which A.4 forbids.
 pub fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
     let reversible = variant & 1 != 0;
     // Variant bits 1-2 land on Scod bits 1 (SOP may precede packets) and 2
@@ -77,6 +79,12 @@ pub fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
     // `CAP`'s `Ccap15` bits 15-14 `11`, so each block is HT or Part 1 as its
     // length fields say (ISO/IEC 15444-15 A.4). Shape 7 keeps bit 6 for PPM.
     let mixed = ht && shape != 7 && variant & 0x40 != 0;
+    if mixed {
+        // A.4 allows a Part 1 block of a MIXED tile-component neither bypass
+        // (LAZY) nor termination on each pass (TERMALL), and a header with
+        // either is refused. The other shape 4 flags stay.
+        style &= !0x05;
+    }
     if ht {
         style |= if mixed { 0xC0 } else { 0x40 };
     }
