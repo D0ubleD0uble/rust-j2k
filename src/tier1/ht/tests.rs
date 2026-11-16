@@ -477,6 +477,37 @@ fn an_ht_maxshift_block_decodes_by_hand() {
     ));
 }
 
+/// A background coefficient with bit `s - 1` set decodes as itself. `Mb = 5`,
+/// `s = 2`, so `M'b = 7` planes (H-3), and 6 zero bit-planes leave one MSB,
+/// `S_blk = 6`. The block `00 27 F3 00` is the one cleanup segment holding a
+/// single sample of `mu = 3`.
+///
+/// The sample's value is `q = 3` (`0b11`): bit `s - 1 = 1` is set and `q < 2^s
+/// = 4`, so H.1 makes it background and it keeps its value. At double scale
+/// that is `2 * 3 + 1 = 7`, the half-bit offset of E.1.1.2. The old threshold
+/// shifted anything from `2^s` at double scale, so `7 >= 4` took it for region
+/// and `7 >> 2 = 1` came out; with the half bit dropped by the caller, 0. The
+/// double-scale 7 is what `decode` returns, and the caller halves it to 3.
+#[test]
+fn an_ht_background_coefficient_with_bit_s_minus_one_set_is_kept() {
+    let data = [0x00, 0x27, 0xF3, 0x00];
+    let got = decode(&block(1, 1, 6, &data), 5, params(2, false)).unwrap();
+    assert_eq!(got, [7]);
+}
+
+/// One plane up the same segment is region. `Mb = 5`, `s = 2`, 5 zero
+/// bit-planes: `S_blk = 5`, so `mu = 3` sits one plane higher and the double
+/// scale value is `(2 * 3 + 1) << 1 = 14`: `q = 7` at the coded planes with its
+/// half bit, `7 >= 2^s = 4`, region. The shift comes off whole, `14 >> 2 = 3`.
+/// The exact boundary `q = 2^s` is pinned on the shared threshold and on an
+/// EBCOT block in `tier1::ebcot::passes`.
+#[test]
+fn an_ht_region_coefficient_above_two_to_the_s_is_unshifted() {
+    let data = [0x00, 0x27, 0xF3, 0x00];
+    let got = decode(&block(1, 1, 5, &data), 5, params(2, false)).unwrap();
+    assert_eq!(got, [3]);
+}
+
 /// The maxshift raises the planes a refinement pass needs: a block whose
 /// cleanup pass reaches `Mb`'s last plane still has `s` planes below it.
 #[test]
