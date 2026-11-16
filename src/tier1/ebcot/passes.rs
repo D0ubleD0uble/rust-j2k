@@ -1673,10 +1673,10 @@ mod tests {
     /// largest background value) and `q = 2^s` (the smallest region value).
     #[test]
     fn undo_maxshift_matches_h1_across_the_boundary() {
-        for roi_shift in 1..=12u8 {
+        for roi_shift in 1..=29u8 {
             let s = u32::from(roi_shift);
             let cases = [
-                0u32,
+                0u64,
                 1,
                 (1 << (s - 1)) - 1,
                 1 << (s - 1),
@@ -1687,7 +1687,10 @@ mod tests {
                 (1 << s) * 1234 + 7,
             ];
             for q in cases {
-                let mag = (2 * q + 1) as i32;
+                // Past `i32` at double scale there is no such magnitude.
+                let Ok(mag) = i32::try_from(2 * q + 1) else {
+                    continue;
+                };
                 // H.1 on `q`, then the half bit: a region value `q >> s` is
                 // `2 (q >> s) + 1` at double scale, but the decoder shifts the
                 // double-scale magnitude, so compare against that.

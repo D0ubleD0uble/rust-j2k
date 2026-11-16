@@ -1,7 +1,8 @@
 # Maxshift background in the H.1 band
 
 Used by `tests/roi_h1_band.rs`. A lossless 8x8 codestream with an RGN maxshift
-of `SPrgn = 7` and no region of interest. Every coefficient is background, and
+of `SPrgn = 7` (and `roi_band_s31.j2k`, with `SPrgn = 31`) and no region of
+interest. Every coefficient is background, and
 half have bit 6 (`s - 1`) set, the band where H.1 and OpenJPEG differ (see
 `docs/openjpeg-departures.md`, "Region of interest threshold (Part 1 and HT)").
 

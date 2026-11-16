@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Write tests/fixtures/roi_h1_band/: a lossless 8x8 encode with a maxshift
-of 7 whose background coefficients sit in the band 2^(s-1)..2^s-1.
+of S (7 or 31) whose background coefficients sit in the band 2^(s-1)..2^s-1.
 
 `opj_compress -ROI` only signals SPrgn and raises no zero bit-planes, so it
 cannot make a stream whose background sits in the band. This script

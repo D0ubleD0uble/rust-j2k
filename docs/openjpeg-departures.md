@@ -1141,8 +1141,9 @@ the block. `SPrgn` is a free byte, and a block whose zero bit-planes exceed
 `Mb` keeps its coded planes in range under any shift, so a crafted stream
 reaches it. `roi_band_s31.j2k` is the 8x8 stream above with `SPrgn = 31`:
 this decoder returns the source, and `opj_decompress` 2.5.0 returns 128 for
-all 64 samples. HT blocks cannot reach it, since `Mb + s` over 30 is refused as
-a `Limit`. No conformance file or encoder output is known to carry a shift this
+all 64 samples. HT blocks cannot reach it: one with coded passes is refused as a
+`Limit` when `Mb + s` is over 30, and one with no passes returns zeros before
+`undo_maxshift`. No conformance file or encoder output is known to carry a shift this
 large.
 
 None of the conformance or HT ROI codestreams has a coefficient in the band:
