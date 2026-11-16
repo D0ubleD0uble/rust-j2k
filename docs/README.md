@@ -31,6 +31,8 @@ If you use the crate:
 - [correctness.md](correctness.md) explains why the output can be trusted: the
   conformance suite, the reference decoders it is compared against, per-stage
   golden tests and fuzzing.
+- [performance.md](performance.md) compares decode speed and peak memory with
+  OpenJPEG, Grok, OpenJPH and hayro-jpeg2000, with the method and commands.
 
 If you work on the crate:
 

@@ -1,0 +1,21 @@
+# Comparison programs for docs/performance.md. Its own package and detached
+# workspace (the empty `[workspace]` table), so the crate's dependency graph
+# and `cargo deny check` never see hayro-jpeg2000. Cargo leaves a directory
+# that holds its own Cargo.toml out of the published crate, as with `fuzz/`.
+[package]
+name = "rust-j2k-perf"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+hayro-jpeg2000 = { version = "=0.5.0", default-features = false, features = ["std", "simd"] }
+
+[dependencies.rust-j2k]
+path = "../.."
+
+[[bin]]
+name = "perf-decode"
+path = "src/main.rs"
+
+[workspace]
