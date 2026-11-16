@@ -66,3 +66,28 @@ fn mixed_shape_4_drops_the_flags_a4_forbids() {
         rust_j2k::read_header(&bytes).unwrap_or_else(|e| panic!("{variant:#04x}: {e}"));
     }
 }
+
+/// A nonzero `roi` byte writes one `RGN` per covered component after the
+/// `QCD`; the HT variants and a zero byte write none. The header is still
+/// read.
+#[test]
+fn the_roi_byte_writes_rgn_markers() {
+    let count = |bytes: &[u8]| bytes.windows(2).filter(|w| *w == [0xFF, 0x5E]).count();
+    let rgn_at = |bytes: &[u8]| bytes.windows(2).position(|w| w == [0xFF, 0x5E]);
+    assert_eq!(count(&tile_body::wrap_roi(0x00, 0, &[])), 0);
+    assert_eq!(tile_body::wrap_roi(0x00, 0, &[1]), wrap(0x00, &[1]));
+    // One component: Lrgn 5, Crgn 0, Srgn 0, SPrgn 7.
+    let one = tile_body::wrap_roi(0x00, 7, &[]);
+    assert_eq!(count(&one), 1);
+    let at = rgn_at(&one).unwrap();
+    assert_eq!(&one[at..at + 7], [0xFF, 0x5E, 0, 5, 0, 0, 7]);
+    // Three components (shape 1), all or only the first.
+    assert_eq!(count(&tile_body::wrap_roi(1 << 3, 7, &[])), 3);
+    assert_eq!(count(&tile_body::wrap_roi(1 << 3, 0x20 | 7, &[])), 1);
+    // HT: no `RGN`.
+    assert_eq!(count(&tile_body::wrap_roi(0x80, 7, &[])), 0);
+    for variant in 0..=0x3Fu8 {
+        let bytes = tile_body::wrap_roi(variant, 0x1F, &[0xFF; 8]);
+        rust_j2k::read_header(&bytes).unwrap_or_else(|e| panic!("{variant:#04x}: {e}"));
+    }
+}

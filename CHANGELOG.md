@@ -10,8 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `ChannelType` and `Association` have a new variant each,
   `ChannelType::ApplicationDefined` and `Association::ApplicationDefined(u16)`.
-  Both enums are exhaustive, so a `match` on either without a wildcard arm
-  no longer compiles; add an arm for the new variant. They are used only
+  Both enums are now `#[non_exhaustive]`, so a `match` on either needs a
+  wildcard arm, and a later variant will not break it. They are used only
   for JPH files; a JP2 file's `cdef` channel of type 3 is still
   `ChannelType::Other(3)` with an `Association` read as a color.
 
@@ -259,9 +259,8 @@ The first fails to compile; the others compile but behave differently.
   `with_sample_limit` and `with_strict` set those options, as
   `with_resolution_reduction` does.
 - Every public type added in this release is `#[non_exhaustive]`, so match
-  it with `_` and `{ .. }`, except `ChannelDefinition`, `ChannelType` and
-  `Association`, which cover every `cdef` value and can be built and matched
-  exhaustively.
+  it with `_` and `{ .. }`, except `ChannelDefinition`, a struct that can
+  be built.
 - All nine JP2 files of the ISO/IEC 15444-4 conformance suite decode within
   their compliance class, alongside its 23 codestreams.
 - The crate now includes MIT-licensed code ported from LittleCMS 2.14 and

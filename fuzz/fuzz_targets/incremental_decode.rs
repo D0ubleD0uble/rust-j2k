@@ -8,20 +8,51 @@
 //! decode unless the header is cut short or the packet work bound refuses
 //! that one-shot decode. After an error, every later refine gives it again,
 //! and `finish` is the decode of all the bytes under the decoder's options.
+//!
+//! The options come from a hash of the input: layers, a resolution
+//! reduction, a window or a tile or a component subset, and a code-block
+//! work limit that often refuses. The decoder holds all its refines to that
+//! bound together, and a one-shot decode of the prefix holds only itself, so
+//! a refine the bound refuses (`Ok(None)`) can be checked against nothing,
+//! while a refine that decodes still equals the one-shot decode.
 
 use libfuzzer_sys::fuzz_target;
-use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, Window, WorkLimit, decode_with};
 
 fuzz_target!(|data: &[u8]| {
     let mut hash = fnv1a(data);
-    // The code-block bound is the one earlier refines cut; without it,
-    // every refine that decodes is the one-shot decode of its bytes.
-    let mut options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Unlimited);
+    // The code-block bound is the one earlier refines cut: the decoder
+    // holds all its refines to it together. Without a bound, every refine
+    // that decodes is the one-shot decode of its bytes.
+    let pick = splitmix(hash ^ 0x5eed);
+    let (limit, cut) = match pick & 3 {
+        0 => (WorkLimit::Unlimited, false),
+        1 => (WorkLimit::Default, true),
+        2 => (WorkLimit::Raised(2), true),
+        _ => (WorkLimit::Raised(4), true),
+    };
+    let mut options = DecodeOptions::default().with_code_block_work_limit(limit);
     if hash & 1 == 1 {
         options = options.with_max_quality_layers(Some(1 + ((hash >> 1) % 3) as u16));
     }
     if hash & 8 == 8 {
         options = options.with_resolution_reduction(1);
+    }
+    // The pieces of the file one refine decodes: a window, or a tile, or
+    // neither; and a subset of the components. Out-of-range choices give
+    // the same error from the decoder and the one-shot decode.
+    match (pick >> 2) % 4 {
+        0 => {
+            let (x, y) = (((pick >> 8) % 24) as u32, ((pick >> 14) % 24) as u32);
+            let (w, h) = (1 + ((pick >> 20) % 40) as u32, 1 + ((pick >> 26) % 40) as u32);
+            options = options.with_window(Some(Window::new(x, y, x + w, y + h)));
+        }
+        1 => options = options.with_tile(Some(((pick >> 8) % 5) as u32)),
+        _ => {}
+    }
+    if (pick >> 4) & 3 == 0 {
+        let subset = vec![((pick >> 32) % 3) as u16, ((pick >> 40) % 3) as u16];
+        options = options.with_components(Some(subset));
     }
     let lenient = options.clone().with_strict(false);
     let Ok(mut decoder) = IncrementalDecoder::new(options.clone()) else {
@@ -52,6 +83,10 @@ fuzz_target!(|data: &[u8]| {
                 Err(Error::Limit(m)) if m.contains("packet_work_limit") => Ok(None),
                 Err(error) => Err(error),
             };
+            // The bound may refuse a refine its one-shot decode passes.
+            if cut && refined == Ok(None) {
+                continue;
+            }
             assert_eq!(refined, expected, "{fed} bytes, due");
             if let Err(error) = refined {
                 failed = Some(error);
