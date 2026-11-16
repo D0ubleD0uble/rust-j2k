@@ -163,9 +163,10 @@ long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after 3.1 s,
 about what 10 MB of real data takes to decode. A step costs 1 to 55 ns: a
 positional walk's points over 16384 components and 200 tiles, each with a
 packet to read, take 24 to 28 ns a step over 32 POC volumes and 33 to 55 ns
-with none. The
-conformance codestreams over 100 KB decode at 0.19 (`p1_05`) to 0.73 (`p1_04`)
-µs a byte, the best of five release-build decodes of each. Over all 23 the
+with none. The conformance codestreams over 100 KB decode at 0.19 (`p1_05`) to
+0.73 (`p1_04`) µs a byte, the best of five release-build decodes of each. The
+bound comes to about 0.02 to 1.8 µs a byte, so at most a refusal takes about
+2.5 times the slowest conformance decode per byte. Over all 23 the
 range is wider, 0.06 to 0.75 µs a byte. The cheapest refusals are in the layer
 orders over resolutions with no precinct, at about 2 ns a step: `layer_edge`
 (655 KB, 33 steps a byte) is refused in 0.015 to 0.04 s, 0.02 to 0.06 µs a

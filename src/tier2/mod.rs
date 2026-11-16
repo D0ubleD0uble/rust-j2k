@@ -349,11 +349,10 @@ pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 /// positional walk's points over 16384 components and 200 tiles, each with
 /// a packet to read: 24 to 28 ns a visit over 32 `POC` volumes and 33 to
 /// 55 ns with none, the packet reads included. So the bound comes to between
-/// about 0.05 and 1.8 µs a byte, against the 0.19 to 0.73 µs a byte the
+/// about 0.02 and 1.8 µs a byte, against the 0.19 to 0.73 µs a byte the
 /// conformance codestreams past 100 KB take to decode (the best of five
-/// release-build decodes of each). A file past the floor is refused in at
-/// most about two and a half times what a decode of real data that size
-/// would take.
+/// release-build decodes of each). At most, a file past the floor is refused
+/// in about 2.5 times the slowest conformance decode per byte.
 ///
 /// Setting up a tile's geometry is counted only for the code-blocks of the
 /// resolutions a reduction drops (see [`Budget::reduction`]). A resolution with no precinct
