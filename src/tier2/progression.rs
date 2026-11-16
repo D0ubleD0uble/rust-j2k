@@ -1061,9 +1061,7 @@ impl Order {
     ) -> Option<Run> {
         let layers = volume.layers as usize;
         if cursor.entered {
-            if let Some(precinct) = cursor.found
-                && cursor.inner < layers
-            {
+            if let Some(precinct) = cursor.found.filter(|_| cursor.inner < layers) {
                 let (comp, res) = self.item(volume, cursor, cursor.item);
                 let start = cursor.inner;
                 cursor.inner = if whole { layers } else { start + 1 };
