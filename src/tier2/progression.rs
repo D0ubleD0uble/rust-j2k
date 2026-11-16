@@ -220,35 +220,82 @@ impl Plan {
         }
     }
 
-    /// The components of `range` that hold a precinct at resolution `res`.
-    fn held(&self, res: usize, range: &std::ops::Range<usize>) -> &[usize] {
-        let (start, end) = self.held_range(res, range);
-        &self.held[res][start..end]
-    }
-
-    /// Where [`Plan::held`]'s components sit in `held[res]`.
+    /// Where the components of `range` that hold a precinct at resolution
+    /// `res` sit in `held[res]`.
     fn held_range(&self, res: usize, range: &std::ops::Range<usize>) -> (usize, usize) {
         let comps = &self.held[res];
         let start = comps.partition_point(|&c| c < range.start);
         let end = comps.partition_point(|&c| c < range.end);
         (start, end.max(start))
     }
+}
 
-    /// The (component, resolution) pairs of `volume` that hold a precinct,
-    /// component first, then resolution, both ascending.
-    fn pairs(&self, volume: &Volume) -> Vec<(usize, usize)> {
-        let mut pairs: Vec<(usize, usize)> = volume
-            .resolutions
-            .clone()
-            .flat_map(|res| {
-                self.held(res, &volume.components)
-                    .iter()
-                    .map(move |&c| (c, res))
-            })
-            .collect();
-        pairs.sort_unstable();
-        pairs
+/// The pairs each PCRL or CPRL volume of `volumes` sweeps over `walk`'s
+/// tile, of at most `max_res` resolutions per component, as
+/// [`Order::lists`] and [`Order::pairs`] hold them.
+///
+/// The pairs are sorted by component, so a volume over every resolution
+/// takes a run of the whole tile's list, whatever its components: a `POC`
+/// sequence of such volumes keeps one list, not one per volume. Building
+/// one per volume up front made the heap grow and shrink about 17 times a
+/// tile on a walk of 32 volumes over 16384 components.
+fn pair_lists(
+    walk: &PacketWalk<'_>,
+    max_res: usize,
+    volumes: &[Volume],
+) -> (Vec<Vec<(usize, usize)>>, Vec<(usize, std::ops::Range<usize>)>) {
+    let swept = |v: &Volume| matches!(v.progression, Progression::Pcrl | Progression::Cprl);
+    let whole = |v: &Volume| v.resolutions.start == 0 && v.resolutions.end >= max_res;
+    // The held pairs of `components` over `resolutions`, in component order.
+    let build = |components: std::ops::Range<usize>, resolutions: &std::ops::Range<usize>| {
+        let mut list = Vec::new();
+        for comp in components {
+            let geoms = &walk.geoms[comp];
+            let end = resolutions.end.min(geoms.len());
+            for res in resolutions.start.min(end)..end {
+                if geoms[res].precinct_count() > 0 {
+                    list.push((comp, res));
+                }
+            }
+        }
+        list
+    };
+    let mut lists = Vec::new();
+    if volumes.iter().any(|v| swept(v) && whole(v)) {
+        lists.push(build(0..walk.geoms.len(), &(0..max_res)));
     }
+    // The volumes that built a list of their own, with the list.
+    let mut owners: Vec<(usize, usize)> = Vec::new();
+    let pairs = volumes
+        .iter()
+        .enumerate()
+        .map(|(index, v)| {
+            if !swept(v) {
+                return (0, 0..0);
+            }
+            if whole(v) {
+                let list = &lists[0];
+                let start = list.partition_point(|&(c, _)| c < v.components.start);
+                let end = list.partition_point(|&(c, _)| c < v.components.end);
+                return (0, start..end.max(start));
+            }
+            // A volume over fewer resolutions shares the list of an earlier
+            // one over the same ranges. There are at most 32 volumes.
+            let same = owners.iter().find(|&&(o, _)| {
+                volumes[o].resolutions == v.resolutions && volumes[o].components == v.components
+            });
+            let list = match same {
+                Some(&(_, list)) => list,
+                None => {
+                    lists.push(build(v.components.clone(), &v.resolutions));
+                    owners.push((index, lists.len() - 1));
+                    lists.len() - 1
+                }
+            };
+            (list, 0..lists[list].len())
+        })
+        .collect();
+    (lists, pairs)
 }
 
 /// Refuse a `POC` sequence that leaves out packets of the tile, with
@@ -430,6 +477,7 @@ where
                 }
             }
         }
+        order.finish_point(walk, &mut cursor, &mut emit)?;
     }
     Ok(())
 }
@@ -715,12 +763,15 @@ impl Run {
 pub(crate) struct Order {
     pub(crate) volumes: Vec<Volume>,
     plan: Plan,
-    /// Per volume, the (component, resolution) pairs that hold a precinct
-    /// ([`Plan::pairs`]), for a PCRL or CPRL volume; else empty.
-    pairs: Vec<Vec<(usize, usize)>>,
-    /// Per CPRL volume, where each component's run of `pairs` ends; else
-    /// empty.
-    groups: Vec<Vec<usize>>,
+    /// Lists of (component, resolution) pairs that hold a precinct,
+    /// component first, then resolution, both ascending. When a PCRL or
+    /// CPRL volume spans every resolution, the first is the whole tile's,
+    /// which each such volume reads a run of; a volume over fewer
+    /// resolutions has its own, shared by the volumes over the same ranges.
+    lists: Vec<Vec<(usize, usize)>>,
+    /// Per volume, the list in `lists` and the run of it that its pairs
+    /// are, for a PCRL or CPRL volume; else an empty run.
+    pairs: Vec<(usize, std::ops::Range<usize>)>,
     /// The most resolutions a component of the tile has.
     pub(crate) max_res: usize,
 }
@@ -734,8 +785,8 @@ pub(crate) struct Cursor {
     /// Whether the point below is the volume's, found by `first_point`.
     started: bool,
     /// The point's outer loop indices: layer and resolution for LRCP,
-    /// resolution and layer for RLCP, the resolution for RPCL, and the
-    /// component's group for CPRL.
+    /// resolution and layer for RLCP, the resolution for RPCL, and for
+    /// CPRL where the component's run of the volume's pairs starts.
     a: usize,
     b: usize,
     /// The point on the reference grid, for the positional orders.
@@ -789,34 +840,22 @@ impl Order {
                 .collect()
         };
         let plan = Plan::new(walk, max_res, &volumes);
-        let pairs: Vec<Vec<(usize, usize)>> = volumes
-            .iter()
-            .map(|v| match v.progression {
-                Progression::Pcrl | Progression::Cprl => plan.pairs(v),
-                _ => Vec::new(),
-            })
-            .collect();
-        let groups = volumes
-            .iter()
-            .zip(&pairs)
-            .map(|(v, pairs)| match v.progression {
-                Progression::Cprl => pairs
-                    .chunk_by(|a, b| a.0 == b.0)
-                    .scan(0, |end, group| {
-                        *end += group.len();
-                        Some(*end)
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            })
-            .collect();
+        let (lists, pairs) = pair_lists(walk, max_res, &volumes);
         Order {
             volumes,
             plan,
+            lists,
             pairs,
-            groups,
             max_res,
         }
+    }
+
+    /// The (component, resolution) pairs of volume `volume` that hold a
+    /// precinct (see [`Order::lists`]), for a PCRL or CPRL volume; else none.
+    #[inline(always)]
+    fn pairs(&self, volume: usize) -> &[(usize, usize)] {
+        let (list, run) = &self.pairs[volume];
+        self.lists.get(*list).map_or(&[], |l| &l[run.clone()])
     }
 
     /// The step after `cursor`, which it then holds, or `None` at the end of
@@ -843,7 +882,7 @@ impl Order {
     /// range.
     ///
     /// Each loop runs over the (component, resolution) pairs of the range that
-    /// hold a precinct ([`Plan::held`]): the others have no packet, and OpenJPEG's
+    /// hold a precinct ([`Plan::held_range`]): the others have no packet, and OpenJPEG's
     /// loops find none there either. A point of the loops is a
     /// [`Step::Point`], charged a step for each pair it checks and one for
     /// itself, before the packets it emits: a (layer, resolution) for LRCP
@@ -887,6 +926,7 @@ impl Order {
     /// This is the one-shot decode's walk, so a sweep's points that hold no
     /// packet are stepped over in a loop of their own, as a walk by
     /// [`Order::next`] reaches them one by one.
+    #[inline(always)]
     pub(crate) fn next_run(
         &self,
         walk: &PacketWalk<'_>,
@@ -933,6 +973,85 @@ impl Order {
         }
     }
 
+    /// Emit with `f` every packet left of the point at `cursor`, after a
+    /// run [`Order::next_run`] gave, in the order `next_run` would give
+    /// them, and leave `cursor` past them, as `next_run` would.
+    ///
+    /// This is the one-shot walk's loop within a point. Taking the rest of
+    /// a point here, rather than a run at a time through `next_run`, keeps
+    /// a point of many (component, resolution) pairs as fast as a nested
+    /// loop over them: on 16384 components in 32 `POC` volumes, about 15%
+    /// of the walk's time.
+    #[inline(always)]
+    fn finish_point(
+        &self,
+        walk: &PacketWalk<'_>,
+        cursor: &mut Cursor,
+        f: &mut impl FnMut(u32, usize, usize, usize) -> Result<()>,
+    ) -> Result<()> {
+        let Some(volume) = self.volumes.get(cursor.volume) else {
+            return Ok(());
+        };
+        let end = cursor.end;
+        match volume.progression {
+            Progression::Lrcp | Progression::Rlcp => {
+                let (layer, res) = match volume.progression {
+                    Progression::Lrcp => (cursor.a, cursor.b),
+                    _ => (cursor.b, cursor.a),
+                };
+                let comps = &self.plan.held[res][..end];
+                let mut inner = cursor.inner;
+                for &comp in &comps[cursor.item.min(end)..] {
+                    for precinct in inner..walk.geoms[comp][res].precinct_count() {
+                        f(layer as u32, res, comp, precinct)?;
+                    }
+                    inner = 0;
+                }
+            }
+            _ => {
+                let layers = volume.layers;
+                let (x, y) = (cursor.x, cursor.y);
+                let mut start = cursor.item;
+                if cursor.entered {
+                    if let Some(precinct) = cursor.found {
+                        let (comp, res) = self.item(volume, cursor, cursor.item);
+                        for layer in cursor.inner as u32..layers {
+                            f(layer, res, comp, precinct)?;
+                        }
+                    }
+                    start += 1;
+                }
+                let mut point = |comp: usize, res: usize| -> Result<()> {
+                    if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
+                        for layer in 0..layers {
+                            f(layer, res, comp, precinct)?;
+                        }
+                    }
+                    Ok(())
+                };
+                if layers > 0 {
+                    match volume.progression {
+                        Progression::Rpcl => {
+                            let res = cursor.a;
+                            for &comp in &self.plan.held[res][start.min(end)..end] {
+                                point(comp, res)?;
+                            }
+                        }
+                        _ => {
+                            for &(comp, res) in &self.pairs(cursor.volume)[start.min(end)..end] {
+                                point(comp, res)?;
+                            }
+                        }
+                    }
+                }
+                cursor.entered = false;
+            }
+        }
+        cursor.item = end;
+        cursor.inner = 0;
+        Ok(())
+    }
+
     /// Step `cursor`'s sweep on from its point to the next that holds a
     /// packet, spending each point reached on `meter`; `false` if the sweep
     /// ends first. The cursor is then charged at that point, at the first
@@ -958,7 +1077,7 @@ impl Order {
                 })?
             }
             _ => {
-                let pairs = &self.pairs[cursor.volume][start..end];
+                let pairs = &self.pairs(cursor.volume)[start..end];
                 sweep_until(walk, cursor, meter, visits, |x, y| {
                     pairs.iter().enumerate().find_map(|(i, &(comp, res))| {
                         walk.precinct_at(comp, res, x, y).map(|p| (start + i, p))
@@ -995,16 +1114,8 @@ impl Order {
         match volume.progression {
             Progression::Lrcp => (self.plan.held[cursor.b][index], cursor.b),
             Progression::Rlcp | Progression::Rpcl => (self.plan.held[cursor.a][index], cursor.a),
-            Progression::Pcrl | Progression::Cprl => self.pairs[cursor.volume][index],
+            Progression::Pcrl | Progression::Cprl => self.pairs(cursor.volume)[index],
         }
-    }
-
-    /// The range of the CPRL volume's pairs that the component group at
-    /// `cursor` covers.
-    fn group(&self, cursor: &Cursor) -> (usize, usize) {
-        let ends = &self.groups[cursor.volume];
-        let start = cursor.a.checked_sub(1).map_or(0, |g| ends[g]);
-        (start, ends[cursor.a])
     }
 
     /// The next packet of the point at `cursor`, or if `whole` every packet
@@ -1113,7 +1224,7 @@ impl Order {
                 })
             }
             _ => {
-                let pairs = &self.pairs[cursor.volume][..end];
+                let pairs = &self.pairs(cursor.volume)[..end];
                 (index..end).find_map(|i| {
                     let (comp, res) = pairs[i];
                     walk.precinct_at(comp, res, x, y).map(|p| (i, comp, res, p))
@@ -1158,7 +1269,7 @@ impl Order {
                     return false;
                 };
                 cursor.step = step;
-                cursor.sweep = (0, self.pairs[cursor.volume].len());
+                cursor.sweep = (0, self.pairs(cursor.volume).len());
                 cursor.sweep.1 > 0 && sweep_first(walk, cursor)
             }
             Progression::Cprl => {
@@ -1209,7 +1320,7 @@ impl Order {
                 self.rpcl_resolution(walk, cursor)
             }
             Progression::Cprl => {
-                cursor.a += 1;
+                cursor.a = cursor.sweep.1;
                 self.cprl_group(walk, cursor)
             }
             _ => false,
@@ -1236,25 +1347,31 @@ impl Order {
         false
     }
 
-    /// CPRL: put `cursor` on the first point of component group `cursor.a`
-    /// or the first after it whose component has a sweep step; `false` if
+    /// CPRL: put `cursor` on the first point of the component whose run of
+    /// the volume's pairs starts at `cursor.a`, or of the first after it
+    /// that has a sweep step; `false` if
     /// none is left. Component outermost, so each gets its own sweep — and
     /// its own step, the finest precinct over that component's resolutions
     /// alone. This is where CPRL parts company with PCRL: PCRL interleaves
     /// the components inside one shared sweep, CPRL finishes a component
     /// before starting the next.
     fn cprl_group(&self, walk: &PacketWalk<'_>, cursor: &mut Cursor) -> bool {
-        let groups = self.groups[cursor.volume].len();
-        while cursor.a < groups {
-            cursor.sweep = self.group(cursor);
-            let comp = self.pairs[cursor.volume][cursor.sweep.0].0;
+        let pairs = self.pairs(cursor.volume);
+        while let Some(&(comp, _)) = pairs.get(cursor.a) {
+            // A component's run of pairs is at most its 33 resolutions.
+            let end = cursor.a
+                + pairs[cursor.a..]
+                    .iter()
+                    .take_while(|&&(c, _)| c == comp)
+                    .count();
+            cursor.sweep = (cursor.a, end);
             if let Some(step) = both(self.plan.spans[comp]) {
                 cursor.step = step;
                 if sweep_first(walk, cursor) {
                     return true;
                 }
             }
-            cursor.a += 1;
+            cursor.a = end;
         }
         false
     }
