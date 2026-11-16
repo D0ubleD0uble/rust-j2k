@@ -23,20 +23,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `decode_with` gives with `strict` off on the same bytes, with a report of
   what they do not hold yet. `refine` decodes at least each time the bytes
   fed have doubled since it last decoded or tried to, and may decode more
-  often. Each refine goes on from each tile's packet walk where the last
-  one stopped, so over all the refines the packets are read about once.
-  Each refine is held to the packet bound of a decode of its bytes, and the
+  often. Each refine goes on from each tile's packet walk where the last one
+  stopped, so over all the refines the packets are read about once. Each
+  refine is held to the packet bound of a decode of its bytes, and the
   code-block bound holds across all the refines together; each refine that
-  returns an image also rebuilds the whole image, as one decode does. A
-  work limit is reported only by `finish`, since more bytes raise the work
+  returns an image also rebuilds the whole image, as one decode does. A work
+  limit is reported only by `finish`, since more bytes raise the work
   bounds; a limit that does not depend on the bytes, such as the sample
   limit, is an error from `refine`, and every later `refine` returns it
-  again. The decoder is `Send` and `Sync`. A main header still cut short
-  at `finish` is `Error::Codestream`, or `Error::FileFormat` inside a JP2
-  file's boxes.
-  `finish` borrows the decoder and can be called again with the same
-  result, and `into_bytes` returns the bytes fed, so a file that `finish`
-  refuses for a work limit can be decoded again with the limit raised.
+  again. The decoder is `Send` and `Sync`. A main header still cut short at
+  `finish` is `Error::Codestream`, or `Error::FileFormat` inside a JP2
+  file's boxes. `finish` borrows the decoder and can be called again with
+  the same result, and `into_bytes` returns the bytes fed, so a file that
+  `finish` refuses for a work limit can be decoded again with the limit
+  raised.
 - A tile-component whose code-block style is MIXED (ISO/IEC 15444-15 A.4)
   decodes: each code-block is read as an HT block or a Part 1 block, told
   apart by its first nonzero length field. The three MIXED files of the
@@ -52,7 +52,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   channel count, and it moves no channel. OpenJPEG 2.5.0 refuses a file
   whose type 3 `Asoc` is past the last channel. In a JP2 file, type 3 is
   reserved and read as before.
-
 - `Header::quality_layers`: the number of quality layers the main header's
   `COD` declares, as `read_header` reads it. A
   `DecodeOptions::max_quality_layers` cap at or past it decodes every layer of
@@ -61,11 +60,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   field is not a breaking change.
 - HTJ2K codestreams decode: the cleanup, SigProp and MagRef passes of each
   code-block, in any number of quality layers, with or without placeholder
-  passes before them. The output matches OpenJPEG 2.5.0 and OpenJPH on the
-  files they decode: bit for bit on the reversible files, and within the
-  conformance bounds on the irreversible ones. Neither decodes the
-  multi-layer files with placeholder passes, so those are graded against
-  the ISO/IEC 15444-4 reference images alone. Region of interest decodes on
+  passes before them. The output matches OpenJPEG 2.5.0 on every HT file it
+  decodes, OpenJPH's test codestreams included: bit for bit on the
+  reversible files, and within 1 on the irreversible ones. OpenJPEG does not
+  decode the multi-layer files with placeholder passes, so those are graded
+  against the ISO/IEC 15444-4 reference images alone. Region of interest decodes on
   HT code-blocks as on Part 1 ones. An `RGN` marker in a codestream whose
   `CAP` says it has none, and an HT magnitude past the bound `CAP` signals,
   are `Error::Codestream`. More than one HT set per code-block is
@@ -86,7 +85,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spends 16% of the full decode's block work. The later layers' packets are
   still read, so damage in them is still an error. `None`, the default,
   decodes every layer; `Some(0)` is `Error::InvalidOptions`.
-
 - `DecodeOptions::window` (`with_window`, and the `Window` type),
   `DecodeOptions::tile` (`with_tile`) and `DecodeOptions::components`
   (`with_components`): decode a rectangle of the reference grid, one tile, or

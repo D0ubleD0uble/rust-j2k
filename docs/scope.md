@@ -97,8 +97,7 @@ refused.
 | Precinct partitions (non-maximal precincts) | Yes |
 
 The decoder decodes every quality layer unless a decode caps them (see
-[Decode options](#decode-options)), which also lists the area and tile reads it
-does not offer.
+[Decode options](#decode-options)).
 
 ### JP2 file format (Annex I)
 
@@ -158,15 +157,16 @@ each of them only the code-blocks whose wavelet support reaches the window,
 with the wavelet run over only the samples the window needs, as OpenJPEG does.
 A code-block that straddles the window's edge is still decoded whole, so a
 window inside one large tile costs only part of that tile's decode. The packets
-of the whole tile are still read, and the sample limit still counts the whole
-image. Under
-the color transform, asking for one of components 0, 1 and 2 decodes all
-three. On a JP2 file a component subset returns the codestream components as
-coded, without the palette or channel definitions. sRGB output from sYCC with
-sub-sampled chroma is refused with a window or a tile, as the chroma
-replication depends on where the decoded area starts. A layer cap still reads
-the packets of the later layers, so damage in them is still an error. A partial decode
-relaxes only missing data and leftover bytes: a damaged packet header or
+of the whole tile are still read. Under a window or a tile the sample limit
+counts the samples of the tiles read; a component subset alone counts the
+whole image. Under the color transform, asking for one of components 0, 1
+and 2 decodes all three. On a JP2 file a component subset returns the
+codestream components as coded, without the palette or channel definitions.
+sRGB output from sYCC with sub-sampled chroma is refused with a window or a
+tile that does not cover the whole image, as the chroma replication depends
+on where the decoded area starts. A layer cap still reads the packets of the
+later layers, so damage in them is still an error. A partial decode relaxes
+only missing data and leftover bytes: a damaged packet header or
 code-block is still an error. The limits and what they cost a valid file are
 in [resource-bounds.md](resource-bounds.md).
 

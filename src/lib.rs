@@ -2,7 +2,8 @@
 //! needs no C toolchain.
 //!
 //! The decoder reads a **raw codestream** (ISO/IEC 15444-1 Annex A) or a
-//! **JP2 file** (Annex I) into **integer** samples: one grid per component,
+//! **JP2 file** (Annex I) into **integer** samples, and HTJ2K codestreams and
+//! JPH files (ISO/IEC 15444-15) the same way: one grid per component,
 //! signed up to 32 bits, unsigned up to 31 (an `i32` container), each with its
 //! own bit depth, sign, and sub-sampling. Both wavelet paths decode, the
 //! reversible 5/3 bit-exactly and the irreversible 9/7 within the standard's
@@ -10,7 +11,10 @@
 //! all five progression orders and POC changes between them, packed packet
 //! headers (PPM/PPT), every Part 1 code-block coding style, region of interest
 //! (maxshift), non-zero canvas offsets, resolution-reduced decoding, and the
-//! reversible (RCT) and irreversible (ICT) color transforms.
+//! reversible (RCT) and irreversible (ICT) color transforms. HTJ2K code-blocks
+//! decode with all three of their coding passes, and a tile-component may mix
+//! HT and Part 1 code-blocks. A decode can stop after some quality layers, or
+//! return a window, one tile or some of the components ([`DecodeOptions`]).
 //!
 //! A JP2 file's codestream decodes the same way, and the file's header comes
 //! back on [`Image::jp2`]. A palettized JP2 file decodes to the palette's
@@ -25,7 +29,7 @@
 //!
 //! ```text
 //! bytes ─▶ [jp2 boxes] ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequant
-//!          (Annex I)      (markers)     (packets)  (MQ+EBCOT) (quant)
+//!          (Annex I)      (markers)     (packets)  (EBCOT|HT) (quant)
 //!
 //!       ─▶ inverse DWT ─▶ inverse MCT ─▶ [palette, cdef, sRGB] ─▶ Image
 //!          (5/3 | 9/7)    (RCT | ICT)    (JP2 only)
@@ -139,6 +143,14 @@
 //! the decode, like [`read_header`], is [`Error::Incomplete`]. Everything else
 //! damaged is refused as when strict.
 //!
+//! For a file that arrives in pieces, use [`IncrementalDecoder`] rather than
+//! decoding each prefix again: [`feed`](IncrementalDecoder::feed) appends
+//! bytes, [`refine`](IncrementalDecoder::refine) decodes them from time to
+//! time and returns the image they hold, with its report, and
+//! [`finish`](IncrementalDecoder::finish) decodes the whole input once it
+//! ends. Each refine goes on from where the last one stopped reading
+//! packets.
+//!
 //! # Limits
 //!
 //! A valid file can still be refused with [`Error::Limit`]. The decoder caps
@@ -159,11 +171,10 @@
 //!
 //! All 23 codestreams of the ISO/IEC 15444-4 conformance suite decode within
 //! their class-1 error bounds, and its nine JP2 files within their compliance
-//! class. That gate runs in `tests/` against committed oracle snapshots, with
-//! no external tools. Correctness is defined by cross-checking OpenJPEG, not
-//! by self-consistency. HTJ2K code-blocks decode with all three of their
-//! coding passes, and a tile-component may mix HT and Part 1 code-blocks. An
-//! input using a feature outside the decoded set (more than one HT set per
+//! class. So do its 41 HTJ2K codestreams and 20 JPH files. That gate runs in
+//! `tests/` against committed oracle snapshots, with no external tools.
+//! Correctness is defined by cross-checking OpenJPEG, not by
+//! self-consistency. An input using a feature outside the decoded set (more than one HT set per
 //! code-block, a Part 2 extension) is rejected with [`Error::Unsupported`],
 //! never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
 //! payloads, the crate's original target, are raw codestreams and decode
@@ -711,7 +722,10 @@ pub struct DecodeOptions {
     ///
     /// Only the tiles the window reaches are decoded, so a small window of a
     /// large tiled image costs a few tiles. The packets of the other tiles
-    /// are not read, so damage in them is not found, as in OpenJPEG. In the
+    /// are not read, so damage in them is not found, as in OpenJPEG. With
+    /// [`strict`](Self::strict) off, a codestream cut short in a later tile
+    /// still gives the window's samples; `opj_decompress -allow-partial -d`
+    /// 2.5.0 refuses such a file, and `-t` decodes its whole tiles. In the
     /// tiles it reaches, only the code-blocks whose wavelet support reaches
     /// the window are decoded, so damage in the others is not found either.
     /// Nor is a code-block it skips checked against the bit-plane limit, so

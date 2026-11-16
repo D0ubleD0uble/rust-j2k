@@ -67,7 +67,7 @@ None of the box entries changes the samples.
 | OpenJPEG 2.5.0 | uses `two_invK = 1.625732422f`, 5.4e-5 short |
 | Standard | `1/K` (Table F.4) and the factor 2 of the subband gain (Table E-1) |
 | Rule | 1, without the better result rule 1 normally needs |
-| Tests and fixtures | `tests/irreversible_16bit.rs`; tolerances on the lossy fixtures |
+| Tests and fixtures | `tests/irreversible_16bit.rs`; tolerances on the lossy fixtures; the 9/7 agreement bounds of `tests/conformance_ht.rs` |
 | Decided | #104, 2026-11-13 ([decision](https://github.com/D0ubleD0uble/rust-j2k/issues/104#issuecomment-6869324141)) |
 
 This decoder keeps the standard's exact `2/K`, knowing that OpenJPEG's
@@ -946,6 +946,14 @@ that directory's README) and checked by `tests/partial_decode.rs`:
   packet data, so the report gives `LeftoverBytes` and the tile counts as
   incomplete at every reduction.
 
+`opj_decompress -allow-partial -d` is not an oracle for a window of a cut
+multi-tile codestream: 2.5.0 refuses the file ("Stream too short") even when
+the window lies wholly in tiles that are there. `-t` decodes those tiles, and
+this decoder's strict-off tile decodes match it bit for bit, with the window
+the crop of its tile and a report of only `MissingEoc`
+(`a_tile_of_a_cut_codestream_matches_openjpeg_allow_partial` in
+`tests/decode_window.rs`, on `tiled_53.j2k` cut at 7000 bytes).
+
 On real files from that outside corpus, not committed: openjpeg-data's
 `Marrin.jp2` (a `Psot` that covers one of two layers) and
 `kodak_2layers_lrcp.j2c` (975304 leftover bytes) are within 1 of OpenJPEG
@@ -1177,7 +1185,9 @@ has a nonzero length field, both coders read its fields alike, so the choice
 waits for it, in a layer a quality-layer cap drops if need be.
 
 OpenJPEG refuses all three MIXED files at the header, and OpenJPH refuses
-MIXED too, so the Part 4 references are the only oracle. All three files are
+MIXED too, so the Part 4 references are the only oracle, and Kakadu made all
+three. How another encoder spends its `Lblock` increments on Part 1 blocks
+is not tested by any file. All three files are
 in class. Kakadu's figures for each against its Part 1 source (`kakadu_stats`)
 match this decoder's on all three: `ds0_hm_06_b18` and `ds0_hm_15_b8` decode
 exactly as `p0_06` and `p0_15` do, and `ds0_hm_06_b11` has the PAE and MSE
@@ -1191,8 +1201,21 @@ file in the corpus needs it: every Part 1 block in the three MIXED files has
 `Lblock` 3 or a leading 1 at its first nonzero field. Read as HT, such a block
 is expected to fail with the HT decoder's `Codestream` error, which then says
 the block was read as HT by the A.4 test: forced through the HT decoder, all 38
-Part 1 blocks of the three files fail that way. The misread could also put the
-rest of the packet header out of step, which has not been seen.
+Part 1 blocks of the three files fail that way. That is the only evidence that
+such a misread fails rather than giving a wrong image. The misread could also
+put the rest of the packet header out of step, which has not been seen.
+
+Two more cases follow from tier-2 settling only what it can:
+
+- A block whose length fields are all zero is read as HT, as the A.4 note
+  says to try first, and decodes to zeros. Had it been a Part 1 block, an MQ
+  decode of its empty segments could give nonzero samples. An encoder has no
+  reason to write such a block.
+- A first contribution with a valid cleanup length and a refinement length
+  over 2046, the most an HT refinement segment holds (T.814 7.1.2), fails as
+  HT with `Error::Codestream`. It is not read again as a Part 1 block, since
+  the cleanup length already passed the A.4 test, and telling the two apart
+  would need tier-2 to go back over the packet header.
 
 A Part 1 block of a MIXED tile-component is one codeword segment of any number
 of passes, since A.4 allows it neither bypass nor termination on each pass.

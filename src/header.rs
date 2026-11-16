@@ -7,6 +7,16 @@ use crate::jp2::Jp2Metadata;
 /// An image's header: what [`decode`](crate::decode) would return, without
 /// the samples.
 ///
+/// The fields describe two things. [`width`](Self::width),
+/// [`height`](Self::height), [`components`](Self::components) and
+/// [`jp2`](Self::jp2) describe the image a decode under the same options
+/// returns, so under [`read_header_with`](crate::read_header_with) they
+/// follow the options: the reduction, window, tile, component subset and
+/// [`raw_channels`](crate::DecodeOptions::raw_channels).
+/// [`max_reduction`](Self::max_reduction) and
+/// [`quality_layers`](Self::quality_layers) describe the file's main header,
+/// and are the same whatever the options.
+///
 /// The struct is `#[non_exhaustive]`, so more of the header can be added
 /// without a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq)]

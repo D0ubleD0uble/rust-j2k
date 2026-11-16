@@ -413,7 +413,10 @@ its passes (`ht::passes_run`), so an HT block costs the passes its decode
 runs over its samples. That is at most the three of one HT set (cleanup,
 SigProp and MagRef), however many passes its packets name, and one pass when
 its refinement segment is empty or has no bit-plane left to refine. The unit
-test `the_work_counts_the_passes_an_ht_block_runs` pins each case.
+test `the_work_counts_the_passes_an_ht_block_runs` pins each case. In a
+MIXED tile-component each block costs what its own coder runs, so a Part 1
+block there costs its Part 1 passes
+(`the_work_counts_each_blocks_own_coder_in_a_mixed_tile_component`).
 
 Because an HT block runs at most 3 passes, the bound cannot refuse an HT
 file at the default. A block's work is at most 3 × 4096 = 12288

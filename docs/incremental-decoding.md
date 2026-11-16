@@ -148,7 +148,11 @@ visits of one walk of the whole file
 is of distinct visits. The walks can step through each point of the order
 twice, once to read and once to count, a packet the data cuts is parsed
 again on each refine, and a tile whose walk is not kept (see below) is
-walked from the start on each refine, as a one-shot decode walks it.
+walked from the start on each refine, as a one-shot decode walks it. So a
+refine is not cheaper than a decode of the same bytes, and on a file of many
+components under `POC` volumes it costs more: one refine of a whole file of
+200 tiles of 16384 components under 32 `POC` volumes takes 10.4 s, where one
+decode takes 6.9 s.
 
 The code-block work is done again by each refine that decodes. A ledger
 keeps the code-block work every refine has spent, and each refine's

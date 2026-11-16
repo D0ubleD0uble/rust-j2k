@@ -5,12 +5,12 @@
 [![docs.rs](https://img.shields.io/docsrs/rust-j2k)](https://docs.rs/rust-j2k)
 
 rust-j2k decodes JPEG 2000 images in pure Rust, for programs that need to read
-them without linking a C library. It reads `.jp2` files, bare `.j2k` and
-`.j2c` streams, and the JPEG 2000 grids inside GRIB2 weather files, and gives
-you each channel's values as whole numbers at the file's full depth. It has no
-dependencies, so it cross-compiles without a C toolchain. Its output is checked
-against [OpenJPEG](https://www.openjpeg.org/), an official JPEG 2000 reference
-implementation, and against the standard's own conformance tests.
+them without linking a C library. It reads `.jp2` and `.jph` files, bare
+`.j2k` and `.j2c` streams, and the JPEG 2000 grids inside GRIB2 weather files,
+and gives you each channel's values as whole numbers at the file's full depth.
+It has no dependencies, so it cross-compiles without a C toolchain. Its output
+is checked against [OpenJPEG](https://www.openjpeg.org/), an official JPEG 2000
+reference implementation, and against the standard's own conformance tests.
 
 ## Install
 
@@ -84,6 +84,9 @@ how much.
   layers, every order the data can be stored in, and regions coded at higher
   quality.
   [docs/scope.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md) lists every feature.
+- It reads **HTJ2K** (ISO/IEC 15444-15, "Part 15"), the high-throughput
+  variant, including files that mix HT and Part 1 code-blocks, and `.jph`
+  files, the HTJ2K version of `.jp2`.
 - It reads **the `.jp2` file format**: palettes, channel labels, the color
   space, the resolution, and the XML and UUID metadata boxes. It applies the
   palette and puts the color channels in order, and reports the rest on
@@ -99,8 +102,9 @@ how much.
   its components (`DecodeOptions::with_window`, `with_tile`,
   `with_components`). Only the tiles the rectangle reaches are decoded, and in
   them only the code-blocks it needs.
-- It can **decode a codestream that is cut short**, such as one still
-  arriving, and tell you what is missing (`DecodeOptions::with_strict(false)`).
+- It can **decode a codestream that is cut short** and tell you what is
+  missing (`DecodeOptions::with_strict(false)`), and decode a file while it
+  arrives (`IncrementalDecoder`).
 - It reads **whole numbers up to 32 bits**: unsigned up to 31 bits and signed
   up to 32, with or without sub-sampling.
 
@@ -113,10 +117,9 @@ how much.
   `Vec<i32>` at the file's depth and in the file's color space, not 8-bit RGBA.
   To show an image, ask for sRGB and scale each value to 8 bits yourself (see
   [Decode a file](#decode-a-file)).
-- It doesn't **read all of HTJ2K**, the high-throughput variant (Part 15),
-  or the Part 2 extensions. It refuses an HTJ2K codestream that mixes HT and
-  Part 1 code-blocks in one tile-component, or carries more than one HT set
-  per code-block, with `Error::Unsupported`. OpenJPEG 2.5 and later decode HTJ2K.
+- It doesn't **read the Part 2 extensions**, or an HTJ2K codestream that
+  carries more than one HT set per code-block. These are refused with
+  `Error::Unsupported`.
 - It doesn't **open JPX, JPM or MJ2 files** unless they say they can also be
   read as JP2 or JPH. Those files are refused with `Error::Unsupported`.
 - It doesn't **read unsigned 32-bit channels** or channels deeper than 32 bits,
@@ -128,9 +131,6 @@ how much.
   gives you the values as stored.
   [docs/srgb-output.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/srgb-output.md#every-input-and-its-result) lists
   every case.
-- It doesn't **decode part of an image**. It always decodes the whole image.
-  For a smaller image, drop resolution levels instead. OpenJPEG's
-  `opj_decompress` can decode a region (`-d`).
 - It doesn't **read GRIB2 files**. You find the JPEG 2000 bytes in the message
   and turn the decoded numbers into physical values yourself (see
   [GRIB2 grids](#grib2-grids)).
@@ -192,21 +192,31 @@ does, turn `strict` off. The codestream's header, everything before the first
 tile, must have arrived. Only missing data and extra bytes after a tile's last
 packet are let through; any other damage is still an error. `Image::report`
 says what was missing, and its `complete_reduction` is the finest resolution
-the data already gives in full, so you can decode a codestream while it
-arrives:
+the data already gives in full.
+
+For a file that arrives in pieces, such as a download, use
+`IncrementalDecoder`. Feed it each piece, and `refine` gives you an image of
+what has come in so far from time to time, without reading the same packets
+again each time:
 
 ```rust
-use rust_j2k::{DecodeOptions, decode_with};
+use rust_j2k::{DecodeOptions, IncrementalDecoder};
 
-// `prefix`: the bytes of the codestream that have arrived so far.
-fn show_missing(prefix: &[u8]) -> Result<(), rust_j2k::Error> {
-    let options = DecodeOptions::default().with_strict(false);
-    let image = decode_with(prefix, &options)?;
-    if !image.report.is_complete() {
-        for entry in &image.report.entries {
-            eprintln!("{entry}");
+// `pieces`: the parts of the file, in the order they arrive.
+fn show_as_it_arrives(pieces: &[&[u8]]) -> Result<(), rust_j2k::Error> {
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default())?;
+    for piece in pieces {
+        decoder.feed(piece);
+        if let Some(image) = decoder.refine()? {
+            // Show `image`. Its report says what is still missing.
+            for entry in &image.report.entries {
+                eprintln!("{entry}");
+            }
         }
     }
+    // The input has ended: decode all of it.
+    let image = decoder.finish()?;
+    println!("{}x{}", image.width, image.height);
     Ok(())
 }
 ```
@@ -231,9 +241,10 @@ retry.
 ## How it's checked
 
 It decodes all 23 test codestreams of the JPEG 2000 conformance suite
-(ISO/IEC 15444-4) within the error the standard allows, and the suite's nine
-JP2 files within theirs. Lossless images, including GRIB2 grids written by
-eccodes, match OpenJPEG bit for bit. The details are in
+(ISO/IEC 15444-4) within the error the standard allows, the suite's nine JP2
+files within theirs, and its 41 HTJ2K codestreams and 20 JPH files within
+theirs. Lossless images, including GRIB2 grids written by eccodes, match
+OpenJPEG bit for bit. The details are in
 [docs/correctness.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/correctness.md), and the places where this decoder
 and OpenJPEG differ on purpose are in
 [docs/openjpeg-departures.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/openjpeg-departures.md). The test suite

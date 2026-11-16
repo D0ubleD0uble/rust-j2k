@@ -169,7 +169,10 @@ again, and `finish` must be the decode of the whole input. It has no
 code-block work bound, which is the one earlier refines cut, so every refine
 that decodes has an exact oracle. Each input is decoded several times, so
 seed it with small files, such as the fixtures under 3 KB, and cap the input
-length (`-max_len=4096`). The name `incremental` is one Cargo reserves.
+length (`-max_len=4096`). Even so it is slow: about 7 runs a second under
+ASan, almost all of it in the target's own `decode_with` oracle decodes, and
+a 598-byte input once took 13 s. Give it minutes, not seconds, to find
+anything. The name `incremental` is one Cargo reserves.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
@@ -242,6 +245,12 @@ for t in decode decode_partial; do
 done
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
 
+# The incremental target, seeded with the fixtures under 3 KB.
+mkdir -p fuzz/corpus/incremental_decode
+find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \) \
+  -exec cp {} fuzz/corpus/incremental_decode/ \;
+cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
+
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
 cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
@@ -275,4 +284,9 @@ cargo +nightly fuzz tmin decode fuzz/artifacts/decode/crash-<hash>
 
 `corpus/`, `artifacts/`, `coverage/`, and `target/` are git-ignored; only the
 target and its manifest are tracked, so the corpus stays reproducible from the
-committed fixtures.
+committed fixtures. No seed corpus is committed: the commands above, and the
+CI smoke, build each one. The CI smoke (`.github/workflows/ci.yml`) seeds
+`decode` with HT files, `ht_block` with the HT corpus's code-blocks, and the
+JP2, header and ICC targets as above, and runs `decode`, `tile_body`,
+`tier1_block`, `mq`, `ht_block`, `jp2_boxes`, `header` and `icc_srgb`. It does
+not run `decode_partial` or `incremental_decode`; run those by hand.

@@ -67,6 +67,13 @@ records the whole decode's components for those cases instead, which is what
 this decoder returns (see `docs/openjpeg-departures.md`). On
 `tiled_53_nomct.j2k` the `-c` output is OpenJPEG's own.
 
+`a_tile_of_a_cut_codestream_matches_openjpeg_allow_partial` in
+`tests/decode_window.rs` holds two more hashes, made by hand on 2026-11-16
+and not by the script: `head -c 7000 tiled_53.j2k > cut.j2k`, then
+`opj_decompress -i cut.j2k -o t.pgx -allow-partial -t N` for tiles 2 and 4,
+hashed as the `.sha256` lines are. `-allow-partial -d` refuses that prefix
+("Stream too short"), so it has no window oracle.
+
 ## Benchmark fixture
 
 `../bench/tiled_2048_gray.j2k` is written by `python3
