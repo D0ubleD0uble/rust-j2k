@@ -40,6 +40,7 @@ fuzz/
   fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColorOutput::Srgb
   icc.dict                      # ICC tag and type signatures for icc_srgb
   ../tests/support/synth.rs     # std-only seg/bx builders; tile_body, jp2_boxes and icc_srgb include it by #[path]
+  ../tests/support/tile_body.rs # tile_body's header and body wrapper; tests/tile_body_variants.rs pins its variant bytes
 ```
 
 `decode` must mutate its way through a byte-perfect main header before anything
@@ -216,13 +217,15 @@ RUST_J2K_HT_SEED_DIR=fuzz/corpus/ht_block cargo test --lib ht_block_seeds
 cargo +nightly fuzz run ht_block -- -max_total_time=60 -max_len=8192 -rss_limit_mb=4096
 
 # `decode` and `decode_partial` seeded with small HT files: the OpenJPH
-# codestreams and the HT conformance codestreams under 6 KB. `tile_body` has
-# no HT seed: its header is pinned, and bit 7 of its first byte makes the
-# body's code-blocks HT.
+# codestreams and the HT conformance codestreams under 6 KB, and the smallest
+# MIXED file (`ds0_hm_15_b8.j2k`, 17 KB; the other two are larger). `tile_body`
+# needs no seed: its header is pinned, bit 7 of its first byte makes the body's
+# code-blocks HT, and bit 6 with it makes them MIXED.
 for t in decode decode_partial; do
   mkdir -p fuzz/corpus/$t
   cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/$t/
   find tests/fixtures/conformance/ht/codestreams -size -6k -name '*.j2k' -exec cp {} fuzz/corpus/$t/ \;
+  cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/$t/
 done
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
 
@@ -248,6 +251,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-15 | `ht_block` (new) | the code-blocks of six HT conformance codestreams (3466 seeds) | 61 s, 739 458 runs; `nice -n 19`, one job, `-max_len=8192`; the 1-minute load was 10.6 at the start | no crash, leak, or timeout |
 | 2026-11-15 | `decode` with the strict-off capped decode | `tests/fixtures/*.j2k` (49 seeds), `j2k.dict` | 61 s, 21 641 runs; `nice -n 19`, one job; the 1-minute load was 7.6 | no crash, leak, or timeout |
 | 2026-11-15 | `decode` with the strict-off capped decode checked against the strict one (`common/partial.rs`), and the HT seeds | the 49 fixtures, the OpenJPH codestreams and the HT conformance codestreams under 6 KB, and what earlier runs kept (1197 inputs), `j2k.dict` with `CPF` and the HT style byte | 61 s, 24 746 runs; `nice -n 19`, one job; the 1-minute load was 5.8 | no crash, leak, or timeout |
+| 2026-11-15 | `tile_body` with the MIXED variant (bit 7 and bit 6 of the first byte) | one MIXED seed, `j2k.dict` | 56 s, 64 703 runs; `nice -n 19`, one job; the 1-minute load was 8.5; 281 of 1 556 corpus inputs pick MIXED | no crash, leak, or timeout |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

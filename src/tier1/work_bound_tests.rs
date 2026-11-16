@@ -301,6 +301,41 @@ fn the_work_counts_the_passes_an_ht_block_runs() {
     assert_eq!(one(ht_block(64, 64, 0, cleanup, &[])), 0);
 }
 
+/// In a MIXED tile-component each block costs by its own coder: a Part 1
+/// block its Part 1 passes (up to 88), an HT block at most one HT set.
+#[test]
+fn the_work_counts_each_blocks_own_coder_in_a_mixed_tile_component() {
+    use crate::codestream::markers::code_block_style::{HT, HT_MIXED};
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/multilayer_lossless.j2k"
+    ))
+    .unwrap();
+    let mut header = crate::codestream::parse_header(&bytes).unwrap().header;
+    header.components[0].coding.code_block_style = HT | HT_MIXED;
+    header.ccap15 = None;
+    let planes = numbps(&header, 0, 0).unwrap();
+    let passes = 3 * planes - 2;
+    assert!(passes > 3, "{passes}");
+    let (cleanup, refinement): (&'static [u8], &'static [u8]) = (&[0xF2, 0x00], &[0x00]);
+    let one = |b: CodeBlock<'static>| {
+        let coded = CodedData {
+            components: vec![ComponentCoded {
+                rect: None,
+                resolutions: vec![Resolution {
+                    subbands: vec![band(BandKind::Ll, vec![b])],
+                }],
+            }],
+        };
+        work(&header, &coded, 0, &[true])
+    };
+    // A Part 1 block of every pass its bit-planes hold, and of more.
+    assert_eq!(one(block(8, 8, passes)), 64 * u64::from(passes));
+    assert_eq!(one(block(8, 8, 164)), 64 * u64::from(passes));
+    // An HT block of as many passes costs one set.
+    assert_eq!(one(ht_block(8, 8, passes, cleanup, refinement)), 64 * 3);
+}
+
 /// The committed HT bomb asks for about the most an HT file can for its
 /// bytes: all three passes over every sample, at about 5 bytes a block. It
 /// spends under a tenth of its bound, and so does any HT file: a block's
