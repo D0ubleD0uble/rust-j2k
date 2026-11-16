@@ -61,6 +61,11 @@ pub struct UnreadSpans {
 }
 
 impl UnreadSpans {
+    /// The bytes the buffers hold on the heap, capacity included.
+    pub fn heap_bytes(&self) -> usize {
+        (self.above.capacity() + self.below.capacity()) * std::mem::size_of::<Span>()
+    }
+
     /// Start a new pass, as [`UnreadSpans::default`] would, keeping the
     /// buffers.
     pub fn clear(&mut self) {

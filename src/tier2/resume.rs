@@ -29,10 +29,17 @@ use super::{
 /// The packet walks of an incremental decode's tiles, by tile index.
 ///
 /// The walks kept hold no more than about twice what one decode of the
-/// same bytes holds at its peak: its image, and the packet state of its
-/// largest tile, which it holds while it reads that tile. A tile whose
-/// walk would pass that is not kept: each decode walks its packets from
-/// the start, as a one-shot decode does.
+/// same bytes holds at its peak: its image, and the packet walk of its
+/// largest tile, which it holds while it reads that tile. A walk's size
+/// is every heap allocation it holds, capacity included (see
+/// [`TileWalk::bytes`]), and a walk that has read all its packets lets go
+/// of its order, tag trees, counts and buffers. A tile whose walk would
+/// pass that is not kept: each decode walks its packets from the start,
+/// as a one-shot decode does.
+///
+/// The walks do not decide when a refine decodes: the decoder tries at
+/// each doubling of the bytes fed since its last try, whether that try
+/// gave an image or was refused.
 #[derive(Default)]
 pub(crate) struct Walks {
     tiles: Vec<Slot>,
@@ -432,35 +439,51 @@ impl TileWalk {
         }
     }
 
-    /// The bytes the walk holds on the heap: its geometry, its packet
-    /// state and its counts. Small parts, such as the order's lists, are
-    /// left out.
+    /// The bytes the walk holds on the heap, capacity included: its
+    /// geometry, its packet state, its order, its counts and its buffers.
+    /// Only the message of a fault in the geometry is left out; a walk
+    /// with one holds no geometry.
     fn bytes(&self) -> u64 {
         use std::mem::size_of;
-        let mut bytes = size_of::<TileWalk>();
-        for resolutions in &self.geoms {
-            bytes += resolutions.capacity() * size_of::<ResolutionGeom>();
-            for resolution in resolutions {
-                bytes += resolution.heap_bytes();
-            }
+        /// The bytes of a list of lists: the outer list's, and the inner
+        /// lists' items.
+        fn nested<T>(lists: &Vec<Vec<T>>) -> usize {
+            lists.capacity() * size_of::<Vec<T>>()
+                + lists.iter().map(Vec::capacity).sum::<usize>() * size_of::<T>()
+        }
+        let mut bytes = size_of::<TileWalk>()
+            + self.dropped.capacity() * size_of::<u64>()
+            + self.styles.capacity()
+            + nested(&self.geoms)
+            + self.states.capacity() * size_of::<Vec<Vec<BandState>>>()
+            + nested(&self.gaps)
+            + self.order.heap_bytes()
+            + self.scratch.heap_bytes()
+            + self.log.capacity() * size_of::<Undo>()
+            + self.journal.heap_bytes()
+            + self.read_ahead.capacity() * size_of::<Ahead>();
+        for resolution in self.geoms.iter().flatten() {
+            bytes += resolution.heap_bytes();
         }
         for component in &self.states {
+            bytes += nested(component);
             for bands in component {
-                bytes += bands.capacity() * size_of::<BandState>();
                 bytes += bands.iter().map(BandState::heap_bytes).sum::<usize>();
             }
         }
         for counts in [&self.read, &self.census.counts] {
-            for component in counts {
-                bytes += component.iter().map(|r| r.capacity() * 4).sum::<usize>();
-            }
+            bytes += counts.capacity() * size_of::<Vec<Vec<u32>>>();
+            bytes += counts.iter().map(nested).sum::<usize>();
+        }
+        for ahead in &self.read_ahead {
+            bytes += ahead.log.capacity() * size_of::<Undo>() + ahead.journal.heap_bytes();
         }
         bytes as u64
     }
 
     /// Let go of what reads packets, once the walk has read them all: the
-    /// tag trees, the counts of packets read, and the buffers. What builds
-    /// the image stays.
+    /// order, the tag trees, the counts of packets read, and the buffers.
+    /// What builds the image, and the `POC` gaps its report notes, stay.
     fn shrink(&mut self) {
         for component in &mut self.states {
             for bands in component {
@@ -469,6 +492,8 @@ impl TileWalk {
                 }
             }
         }
+        self.order = Order::default();
+        self.styles = Vec::new();
         self.read = Vec::new();
         self.census.counts = Vec::new();
         self.scratch = Scratch::default();
@@ -534,7 +559,9 @@ impl TileWalk {
         if let Some(error) = &self.failure {
             return Err(Refused::Other(error.clone()));
         }
-        let sparse = if self.order.volumes.len() > 1 {
+        // `dedup` is whether the order has more than one volume; the order
+        // itself is let go once the walk is done.
+        let sparse = if self.dedup {
             if self.layer_orders && self.reached > meter.left() {
                 return Err(Refused::Work(WorkRefusal::PocReach {
                     reached: self.reached,
