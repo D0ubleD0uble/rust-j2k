@@ -230,6 +230,12 @@ impl Plan {
     }
 }
 
+/// The (component, resolution) pairs that hold a precinct, sorted.
+type PairList = Vec<(usize, usize)>;
+
+/// Where a volume's pairs sit: the index of a [`PairList`] and the run of it.
+type ListRun = (usize, std::ops::Range<usize>);
+
 /// The pairs each PCRL or CPRL volume of `volumes` sweeps over `walk`'s
 /// tile, of at most `max_res` resolutions per component, as
 /// [`Order::lists`] and [`Order::pairs`] hold them.
@@ -244,7 +250,7 @@ fn pair_lists(
     components: usize,
     max_res: usize,
     volumes: &[Volume],
-) -> (Vec<Vec<(usize, usize)>>, Vec<(usize, std::ops::Range<usize>)>) {
+) -> (Vec<PairList>, Vec<ListRun>) {
     let swept = |v: &Volume| matches!(v.progression, Progression::Pcrl | Progression::Cprl);
     let whole = |v: &Volume| v.resolutions.start == 0 && v.resolutions.end >= max_res;
     // The held pairs of `components` over `resolutions`, sorted. They are
@@ -741,10 +747,10 @@ pub(crate) struct Order {
     /// CPRL volume spans every resolution, the first is the whole tile's,
     /// which each such volume reads a run of; a volume over fewer
     /// resolutions has its own, shared by the volumes over the same ranges.
-    lists: Vec<Vec<(usize, usize)>>,
+    lists: Vec<PairList>,
     /// Per volume, the list in `lists` and the run of it that its pairs
     /// are, for a PCRL or CPRL volume; else an empty run.
-    pairs: Vec<(usize, std::ops::Range<usize>)>,
+    pairs: Vec<ListRun>,
     /// The most resolutions a component of the tile has.
     pub(crate) max_res: usize,
 }
@@ -794,7 +800,7 @@ impl Order {
             size_of::<usize>(),
         );
         let pair_lists = lists(
-            self.lists.capacity() * size_of::<Vec<(usize, usize)>>(),
+            self.lists.capacity() * size_of::<PairList>(),
             self.lists.iter().map(Vec::capacity).sum(),
             size_of::<(usize, usize)>(),
         );
@@ -802,7 +808,7 @@ impl Order {
             + self.plan.spans.capacity() * size_of::<(Option<u64>, Option<u64>)>()
             + held
             + pair_lists
-            + self.pairs.capacity() * size_of::<(usize, std::ops::Range<usize>)>()
+            + self.pairs.capacity() * size_of::<ListRun>()
     }
 
     /// The order of `header`'s packets over `walk`'s tile.
