@@ -110,7 +110,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Code-block decoding reuses one set of buffers per component, and no
   longer copies a code-block's bytes when one quality layer carried them. A
   128x128 image of 4x4 code-blocks makes 2246 allocations where it made
-  6338, and decodes about 10% faster (#299).
+  6338, and decodes about 5% faster (#299).
 
 ### Fixed
 
