@@ -36,6 +36,7 @@ use crate::codestream::{MainHeader, Tile};
 use crate::{Error, Result};
 use bio::BitReader;
 use spans::UnreadSpans;
+use std::borrow::Cow;
 use std::cell::Cell;
 use tagtree::TagTree;
 
@@ -154,10 +155,15 @@ pub struct CodedSegment<'a> {
     pub chunks: Vec<&'a [u8]>,
 }
 
-impl CodedSegment<'_> {
+impl<'a> CodedSegment<'a> {
     /// The segment's bytes, concatenated across the layers that carried them.
-    pub fn bytes(&self) -> Vec<u8> {
-        self.chunks.concat()
+    /// A segment of one chunk is borrowed from the codestream, not copied.
+    pub fn bytes(&self) -> Cow<'a, [u8]> {
+        match self.chunks[..] {
+            [] => Cow::Borrowed(&[]),
+            [chunk] => Cow::Borrowed(chunk),
+            _ => Cow::Owned(self.chunks.concat()),
+        }
     }
 }
 

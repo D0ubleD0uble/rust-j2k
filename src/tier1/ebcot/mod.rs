@@ -15,19 +15,41 @@ pub(crate) mod passes;
 use crate::tier2::{BandKind, CodeBlock};
 use crate::{Error, Result};
 use passes::{BlockParams, BlockState, MAX_BIT_PLANES, Orientation, decode_block, top_coded_plane};
+use std::borrow::Cow;
+
+/// The buffers one code-block's decode uses, kept from block to block so a
+/// subband of many small blocks allocates them once. [`decode`] resets them
+/// for each block.
+#[derive(Debug)]
+pub(super) struct Scratch<'a> {
+    state: BlockState,
+    /// The block's codeword segments, each with the passes it codes.
+    segments: Vec<(Cow<'a, [u8]>, u32)>,
+}
+
+impl Default for Scratch<'_> {
+    fn default() -> Self {
+        Scratch {
+            state: BlockState::new(0, 0),
+            segments: Vec::new(),
+        }
+    }
+}
 
 /// Decode one code-block's codeword segments into its coefficients, row-major
-/// over the block, at twice their weight (see [`decode_block`]).
+/// over the block, at twice their weight (see [`decode_block`]). The
+/// coefficients live in `scratch` until its next decode.
 ///
 /// `numbps` is the subband's magnitude bit-plane count `Mb`, `style` the
 /// code-block style flags and `roi_shift` the component's maxshift.
-pub(super) fn decode(
-    block: &CodeBlock<'_>,
+pub(super) fn decode<'s, 'a>(
+    block: &CodeBlock<'a>,
     kind: BandKind,
     numbps: u32,
     style: u8,
     roi_shift: u8,
-) -> Result<Vec<i32>> {
+    scratch: &'s mut Scratch<'a>,
+) -> Result<&'s [i32]> {
     let orient = match kind {
         BandKind::Ll => Orientation::Ll,
         BandKind::Hl => Orientation::Hl,
@@ -51,15 +73,18 @@ pub(super) fn decode(
             "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
         )));
     }
-    let mut state = BlockState::new(block.width as u32, block.height as u32);
+    let Scratch { state, segments } = scratch;
+    state.reset(block.width as u32, block.height as u32);
     // Each codeword segment is decoded from its own MQ stream; a segment's
     // bytes may still arrive in several layer-sized chunks, so they are
     // concatenated first. Without termination there is exactly one segment.
-    let segments: Vec<(Vec<u8>, u32)> = block
-        .segments
-        .iter()
-        .map(|segment| (segment.bytes(), segment.passes))
-        .collect();
+    segments.clear();
+    segments.extend(
+        block
+            .segments
+            .iter()
+            .map(|segment| (segment.bytes(), segment.passes)),
+    );
     // A segment the layer cap cut short, or one a missing packet may have
     // cut with `strict` off, can end before the encoder terminated it, so it
     // cannot be held to `predictable termination`. Only the last segment can
@@ -70,15 +95,15 @@ pub(super) fn decode(
         last_segment_cut: block.cut,
     };
     decode_block(
-        &segments,
-        &mut state,
+        segments,
+        state,
         orient,
         numbps,
         block.num_passes,
         block.zero_bit_planes,
         params,
     )?;
-    Ok(state.coeffs)
+    Ok(&state.coeffs)
 }
 
 /// The coding passes [`decode_block`] runs on `block`: its passes, but no

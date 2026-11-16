@@ -655,14 +655,26 @@ fn the_vertically_causal_flag_hides_the_next_stripe() {
         shift: 7,
     };
     let mut coeffs = [0, 0, 0, 0, 384];
-    pass.run(&[0x01], false, &mut coeffs).unwrap();
+    pass.run(
+        &[0x01],
+        false,
+        &mut coeffs,
+        &mut RefinementScratch::default(),
+    )
+    .unwrap();
     assert_eq!(coeffs, [0, 0, 0, 192, 384]);
     let pass = Refinement {
         causal: true,
         ..pass
     };
     let mut coeffs = [0, 0, 0, 0, 384];
-    pass.run(&[0x01], false, &mut coeffs).unwrap();
+    pass.run(
+        &[0x01],
+        false,
+        &mut coeffs,
+        &mut RefinementScratch::default(),
+    )
+    .unwrap();
     assert_eq!(coeffs, [0, 0, 0, 0, 384]);
 }
 

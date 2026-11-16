@@ -142,14 +142,17 @@ impl Coders {
     /// a MIXED tile-component that fails as malformed says how it came to be
     /// read as HT, since a Part 1 block whose `Lblock` grew more than it
     /// needed passes the same test.
-    fn decode(
+    fn decode<'s, 'a>(
         self,
-        block: &CodeBlock<'_>,
+        block: &CodeBlock<'a>,
         kind: BandKind,
         level: u32,
         numbps: u32,
-    ) -> Result<Vec<i32>> {
-        let decoded = self.of_block(block).decode(block, kind, level, numbps);
+        scratch: &'s mut Scratch<'a>,
+    ) -> Result<&'s [i32]> {
+        let decoded = self
+            .of_block(block)
+            .decode(block, kind, level, numbps, scratch);
         match decoded {
             Err(Error::Codestream(message)) if self.mixed && block.coder == Coder::Ht => {
                 Err(Error::Codestream(format!(
@@ -164,26 +167,37 @@ impl Coders {
     }
 }
 
+/// The buffers of both block coders, kept across the code-blocks of a
+/// component so that each block reuses them rather than allocating its own.
+/// Each coder resets the ones it uses at the start of every block.
+#[derive(Debug, Default)]
+struct Scratch<'a> {
+    ebcot: ebcot::Scratch<'a>,
+    ht: ht::Scratch,
+}
+
 impl BlockCoder {
     /// Decode `block`, a code-block of a `kind` band of decomposition level
     /// `level` whose magnitude bit-plane count is `numbps`, into its
-    /// coefficients, row-major over the block, at twice their weight.
-    fn decode(
+    /// coefficients, row-major over the block, at twice their weight. The
+    /// coefficients are `scratch`'s until its next decode.
+    fn decode<'s, 'a>(
         self,
-        block: &CodeBlock<'_>,
+        block: &CodeBlock<'a>,
         kind: BandKind,
         level: u32,
         numbps: u32,
-    ) -> Result<Vec<i32>> {
+        scratch: &'s mut Scratch<'a>,
+    ) -> Result<&'s [i32]> {
         match self {
             BlockCoder::Ebcot { style, roi_shift } => {
-                ebcot::decode(block, kind, numbps, style, roi_shift)
+                ebcot::decode(block, kind, numbps, style, roi_shift, &mut scratch.ebcot)
             }
             BlockCoder::Ht {
                 roi_shift,
                 causal,
                 bound,
-            } => ht::decode(
+            } => ht::decode_into(
                 block,
                 numbps,
                 ht::Params {
@@ -191,6 +205,7 @@ impl BlockCoder {
                     causal,
                     bound_bits: bound.bits(level),
                 },
+                &mut scratch.ht,
             ),
         }
     }
@@ -374,10 +389,10 @@ fn band_index(res: usize, kind: BandKind) -> usize {
 /// Subbands run in QCD order (see [`band_index`]), which sets each band's
 /// magnitude bit-plane count `Mb` (guard bits + quantization exponent - 1)
 /// that Tier-1 needs to place bits at their true weights.
-fn assemble<T, F, G>(
+fn assemble<'a, T, F, G>(
     header: &MainHeader,
     comp: usize,
-    coded: &ComponentCoded<'_>,
+    coded: &ComponentCoded<'a>,
     reduction: u8,
     convert_for: G,
 ) -> Result<Bands<T>>
@@ -403,7 +418,8 @@ where
     let coarsest = resolutions
         .next()
         .ok_or_else(|| Error::Inconsistent("tier-2 produced no resolutions to decode".into()))?;
-    let decode = |res: usize, resolution: &Resolution<'_>, kind: BandKind| {
+    let mut scratch = Scratch::default();
+    let mut decode = |res: usize, resolution: &Resolution<'a>, kind: BandKind| {
         let band = band_index(res, kind);
         let level = match res {
             0 => levels,
@@ -424,6 +440,7 @@ where
             level,
             numbps(header, comp, band)?,
             coders,
+            &mut scratch,
             convert_for(band)?,
         )
     };
@@ -545,12 +562,13 @@ fn subband_of<'a, 'b>(res: &'a Resolution<'b>, kind: BandKind) -> Result<&'a Sub
 /// Decode one subband's code-blocks into a row-major coefficient [`Band`].
 /// `level` is the band's decomposition level and `numbps` its magnitude
 /// bit-plane count `Mb`. Absent blocks (no coding passes) are left at the
-/// band's zero fill.
-fn decode_subband<T, F>(
-    sb: &Subband<'_>,
+/// band's zero fill. The blocks are decoded in `scratch`'s buffers.
+fn decode_subband<'a, T, F>(
+    sb: &Subband<'a>,
     level: u32,
     numbps: u32,
     coders: Coders,
+    scratch: &mut Scratch<'a>,
     convert: F,
 ) -> Result<Band<T>>
 where
@@ -563,8 +581,8 @@ where
         if block.num_passes == 0 {
             continue;
         }
-        let coeffs = coders.decode(block, sb.kind, level, numbps)?;
-        place_block(&mut data, sb.width, block, &coeffs, &convert);
+        let coeffs = coders.decode(block, sb.kind, level, numbps, scratch)?;
+        place_block(&mut data, sb.width, block, coeffs, &convert);
     }
 
     Ok(Band {
@@ -645,8 +663,15 @@ mod tests {
     #[test]
     fn excessive_bit_planes_rejected() {
         let sb = one_block_subband(1, 0);
-        let err = decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES + 1, default_params(), |q| q)
-            .expect_err("must reject");
+        let err = decode_subband::<i32, _>(
+            &sb,
+            1,
+            MAX_BIT_PLANES + 1,
+            default_params(),
+            &mut Scratch::default(),
+            |q| q,
+        )
+        .expect_err("must reject");
         assert!(matches!(err, Error::Limit(_)), "got {err:?}");
     }
 
@@ -657,12 +682,27 @@ mod tests {
     fn a_maxshift_that_overflows_the_bit_planes_is_rejected() {
         let sb = one_block_subband(1, 0);
         let params = part1_coders(1);
-        let err = decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES, params, |q| q)
-            .expect_err("MAX_BIT_PLANES + 1 planes");
+        let err = decode_subband::<i32, _>(
+            &sb,
+            1,
+            MAX_BIT_PLANES,
+            params,
+            &mut Scratch::default(),
+            |q| q,
+        )
+        .expect_err("MAX_BIT_PLANES + 1 planes");
         assert!(matches!(err, Error::Limit(_)), "got {err:?}");
 
         // One less, and the same block decodes.
-        decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES - 1, params, |q| q).expect("in range");
+        decode_subband::<i32, _>(
+            &sb,
+            1,
+            MAX_BIT_PLANES - 1,
+            params,
+            &mut Scratch::default(),
+            |q| q,
+        )
+        .expect("in range");
     }
 
     /// More signaled zero bit-planes than the subband has magnitude planes
@@ -671,8 +711,9 @@ mod tests {
     #[test]
     fn excess_zero_bit_planes_decodes_to_zeros() {
         let sb = one_block_subband(1, 5);
-        let band = decode_subband::<i32, _>(&sb, 1, 4, default_params(), |q| q)
-            .expect("saturates to zero coded planes, as the oracle does");
+        let band =
+            decode_subband::<i32, _>(&sb, 1, 4, default_params(), &mut Scratch::default(), |q| q)
+                .expect("saturates to zero coded planes, as the oracle does");
         assert!(band.data.iter().all(|&c| c == 0));
     }
 
@@ -680,8 +721,15 @@ mod tests {
     #[test]
     fn max_bit_planes_accepted() {
         let sb = one_block_subband(1, 0);
-        let band = decode_subband::<i32, _>(&sb, 1, MAX_BIT_PLANES, default_params(), |q| q)
-            .expect("in range");
+        let band = decode_subband::<i32, _>(
+            &sb,
+            1,
+            MAX_BIT_PLANES,
+            default_params(),
+            &mut Scratch::default(),
+            |q| q,
+        )
+        .expect("in range");
         assert_eq!(band.data.len(), 1);
     }
 
@@ -748,6 +796,7 @@ mod tests {
             1,
             numbps(&header, 0, 0).unwrap(),
             default_params(),
+            &mut Scratch::default(),
             |q| q,
         )
         .unwrap()
@@ -816,10 +865,12 @@ mod tests {
             mixed: true,
         };
         let mut sb = one_block_subband(1, 0);
-        decode_subband::<i32, _>(&sb, 1, 1, coders, |q| q).expect("a Part 1 block");
+        decode_subband::<i32, _>(&sb, 1, 1, coders, &mut Scratch::default(), |q| q)
+            .expect("a Part 1 block");
         sb.blocks[0].coder = Coder::Ht;
         sb.blocks[0].segments[0].chunks = vec![&[0, 0][..]];
-        let err = decode_subband::<i32, _>(&sb, 1, 1, coders, |q| q).expect_err("an HT block");
+        let err = decode_subband::<i32, _>(&sb, 1, 1, coders, &mut Scratch::default(), |q| q)
+            .expect_err("an HT block");
         let Error::Codestream(message) = &err else {
             panic!("got {err:?}")
         };
@@ -835,7 +886,8 @@ mod tests {
             mixed: false,
             ..coders
         };
-        let err = decode_subband::<i32, _>(&sb, 1, 1, plain, |q| q).expect_err("an HT block");
+        let err = decode_subband::<i32, _>(&sb, 1, 1, plain, &mut Scratch::default(), |q| q)
+            .expect_err("an HT block");
         let Error::Codestream(message) = &err else {
             panic!("got {err:?}")
         };
@@ -869,6 +921,327 @@ mod tests {
                 "style {style:#04x}, {ccap15:?}"
             );
         }
+    }
+
+    /// `len` bytes from a fixed-seed generator, none of them 0xFF so that no
+    /// marker ends the MQ data early.
+    fn noise(seed: u32, len: usize) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(2_654_435_761).max(1);
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                ((x >> 24) as u8).min(0xFE)
+            })
+            .collect()
+    }
+
+    /// The zero bit-planes of the stale-state test blocks, in a band of
+    /// [`BUSY_PLANES`] planes. An HT block's exponent bounds stay within its
+    /// zero bit-planes plus 2, which noise keeps to only when that is large.
+    fn busy_zero_planes(coder: Coder) -> u32 {
+        match coder {
+            Coder::Part1 => 0,
+            Coder::Ht => BUSY_PLANES - 2,
+        }
+    }
+
+    /// The magnitude bit-planes `Mb` of the stale-state test bands.
+    const BUSY_PLANES: u32 = 28;
+
+    /// A `width × height` code-block at `(x, y)` of `coder`, all its passes
+    /// in one segment of `data`: every pass of its bit-planes for a Part 1
+    /// block, the cleanup pass for an HT one.
+    fn shaped_block(
+        (x, y): (usize, usize),
+        (width, height): (usize, usize),
+        coder: Coder,
+        data: &[u8],
+    ) -> CodeBlock<'_> {
+        let passes = match coder {
+            Coder::Part1 => 3 * BUSY_PLANES - 2,
+            Coder::Ht => 1,
+        };
+        CodeBlock {
+            x,
+            y,
+            width,
+            height,
+            num_passes: passes,
+            zero_bit_planes: busy_zero_planes(coder),
+            segments: vec![crate::tier2::CodedSegment {
+                passes,
+                chunks: vec![data],
+            }],
+            cut: false,
+            placeholders: 0,
+            coder,
+            missing_from: None,
+        }
+    }
+
+    /// Coded bytes for a `shape` block of `coder` that decode, alone, with
+    /// many samples significant, so that the block's neighbor bits and the
+    /// padding around it are set: the first such noise. For a Part 1 block
+    /// that is over a quarter of them. Noise seldom gets far as HT data
+    /// before it breaks a rule of the cleanup pass, so for an HT block it is
+    /// as many as the shorter side. An HT cleanup segment ends in its suffix
+    /// length `Scup`, here 40.
+    fn busy_data(coders: Coders, coder: Coder, (w, h): (usize, usize)) -> Vec<u8> {
+        (1..=10_000)
+            .map(|seed| match coder {
+                Coder::Part1 => noise(seed, 2 * w * h + 64),
+                Coder::Ht => {
+                    let mut bytes = noise(seed, 4 * w * h + 64);
+                    let last = bytes.len() - 1;
+                    bytes[last - 1] = (bytes[last - 1] & 0xF0) | 8;
+                    bytes[last] = 2;
+                    bytes
+                }
+            })
+            .find(|data| {
+                let block = shaped_block((0, 0), (w, h), coder, data);
+                coders
+                    .decode(
+                        &block,
+                        BandKind::Hl,
+                        1,
+                        BUSY_PLANES,
+                        &mut Scratch::default(),
+                    )
+                    .is_ok_and(|c| {
+                        let significant = c.iter().filter(|&&c| c != 0).count();
+                        match coder {
+                            Coder::Part1 => 4 * significant > c.len(),
+                            Coder::Ht => significant >= w.min(h),
+                        }
+                    })
+            })
+            .expect("noise that codes enough")
+    }
+
+    /// The shapes the stale-state tests decode in sequence: narrow then
+    /// wider, wide then narrow, full then a partial edge block, tall then
+    /// short, and a block whose last stripe is short after one whose last
+    /// stripe is full. A narrow block comes first, since a stripe length
+    /// kept from it would not hold the wider blocks after it.
+    const SHAPES: [(usize, usize); 9] = [
+        (4, 64),
+        (64, 4),
+        (32, 32),
+        (32, 5),
+        (5, 32),
+        (64, 64),
+        (3, 7),
+        (64, 8),
+        (64, 6),
+    ];
+
+    /// [`SHAPES`] at a size noise gets through as HT data, with the same
+    /// changes from block to block, and odd widths and heights that leave
+    /// the last quads of a row or column half outside the block.
+    const HT_SHAPES: [(usize, usize); 9] = [
+        (16, 2),
+        (2, 16),
+        (8, 8),
+        (8, 3),
+        (3, 8),
+        (16, 16),
+        (3, 7),
+        (16, 4),
+        (16, 3),
+    ];
+
+    /// Decode `shapes` in turn with one set of buffers, and check each block
+    /// comes out as it does decoded alone.
+    fn check_shapes_in_turn(coders: Coders, coder: Coder, shapes: &[(usize, usize)], what: &str) {
+        let data: Vec<Vec<u8>> = shapes
+            .iter()
+            .map(|&shape| busy_data(coders, coder, shape))
+            .collect();
+        let mut shared = Scratch::default();
+        let kinds = [BandKind::Hl, BandKind::Hh, BandKind::Lh];
+        for ((&shape, data), &kind) in shapes.iter().zip(&data).zip(kinds.iter().cycle()) {
+            let block = shaped_block((0, 0), shape, coder, data);
+            let alone = coders
+                .decode(&block, kind, 1, BUSY_PLANES, &mut Scratch::default())
+                .unwrap()
+                .to_vec();
+            let reused = coders
+                .decode(&block, kind, 1, BUSY_PLANES, &mut shared)
+                .unwrap();
+            assert_eq!(reused, &alone[..], "the {shape:?} block, {what}");
+        }
+    }
+
+    /// One set of block buffers serves blocks of any shape in turn: each
+    /// block, decoded after blocks of other widths and heights, comes out as
+    /// it does decoded alone. A neighbor bit or a significance flag left
+    /// over from the block before, in the block or its padding, or a stripe
+    /// length kept from a block of another width, changes the coding
+    /// contexts and so the coefficients.
+    #[test]
+    fn reused_buffers_decode_each_part1_block_as_alone() {
+        use crate::codestream::markers::code_block_style::{RESET, VCAUSAL};
+        for style in [0, VCAUSAL, RESET] {
+            let coder = BlockCoder::Ebcot {
+                style,
+                roi_shift: 0,
+            };
+            let coders = Coders {
+                part1: coder,
+                ht: coder,
+                mixed: false,
+            };
+            check_shapes_in_turn(
+                coders,
+                Coder::Part1,
+                &SHAPES,
+                &format!("style {style:#04x}"),
+            );
+        }
+    }
+
+    /// As [`reused_buffers_decode_each_part1_block_as_alone`], for the HT
+    /// coder: its cleanup buffers carry nothing from one block to the next.
+    #[test]
+    fn reused_buffers_decode_each_ht_block_as_alone() {
+        let coder = BlockCoder::Ht {
+            roi_shift: 0,
+            causal: false,
+            bound: CleanupBound {
+                magb: None,
+                irreversible: false,
+            },
+        };
+        let coders = Coders {
+            part1: coder,
+            ht: coder,
+            mixed: false,
+        };
+        check_shapes_in_turn(coders, Coder::Ht, &HT_SHAPES, "HT");
+    }
+
+    /// An HT block of `shape` with a cleanup segment and a refinement
+    /// segment that carries its SigProp and MagRef passes.
+    fn refined_block<'a>(
+        shape: (usize, usize),
+        cleanup: &'a [u8],
+        refinement: &'a [u8],
+    ) -> CodeBlock<'a> {
+        let mut block = shaped_block((0, 0), shape, Coder::Ht, cleanup);
+        block.num_passes = 3;
+        block.segments.push(crate::tier2::CodedSegment {
+            passes: 2,
+            chunks: vec![refinement],
+        });
+        block
+    }
+
+    /// As [`reused_buffers_decode_each_ht_block_as_alone`], with refinement
+    /// passes: each block's SigProp pass makes samples significant and its
+    /// MagRef pass changes magnitudes, so a SigProp flag left over from the
+    /// block before changes the coefficients.
+    #[test]
+    fn reused_buffers_decode_each_refined_ht_block_as_alone() {
+        let coder = BlockCoder::Ht {
+            roi_shift: 0,
+            causal: false,
+            bound: CleanupBound {
+                magb: None,
+                irreversible: false,
+            },
+        };
+        let coders = Coders {
+            part1: coder,
+            ht: coder,
+            mixed: false,
+        };
+        fn decode<'a>(
+            coders: Coders,
+            block: &CodeBlock<'a>,
+            scratch: &mut Scratch<'a>,
+        ) -> Result<Vec<i32>> {
+            coders
+                .decode(block, BandKind::Hl, 1, BUSY_PLANES, scratch)
+                .map(<[i32]>::to_vec)
+        }
+        let data: Vec<(Vec<u8>, Vec<u8>)> = HT_SHAPES
+            .iter()
+            .map(|&shape| {
+                let cleanup = busy_data(coders, Coder::Ht, shape);
+                let base = decode(
+                    coders,
+                    &shaped_block((0, 0), shape, Coder::Ht, &cleanup),
+                    &mut Scratch::default(),
+                )
+                .unwrap();
+                let refinement = (1..=10_000)
+                    .map(|seed| noise(seed, shape.0 * shape.1 + 16))
+                    .find(|refinement| {
+                        let block = refined_block(shape, &cleanup, refinement);
+                        decode(coders, &block, &mut Scratch::default()).is_ok_and(|c| {
+                            let pairs = || base.iter().zip(&c);
+                            let sigprop = pairs().filter(|&(&b, &r)| b == 0 && r != 0).count();
+                            let magref = pairs().any(|(&b, &r)| b != 0 && b != r);
+                            sigprop >= 2 && magref
+                        })
+                    })
+                    .expect("refinement noise that changes the block");
+                (cleanup, refinement)
+            })
+            .collect();
+        let mut shared = Scratch::default();
+        for (&shape, (cleanup, refinement)) in HT_SHAPES.iter().zip(&data) {
+            let block = refined_block(shape, cleanup, refinement);
+            let alone = decode(coders, &block, &mut Scratch::default()).unwrap();
+            let reused = decode(coders, &block, &mut shared).unwrap();
+            assert_eq!(reused, alone, "the refined {shape:?} block");
+        }
+    }
+
+    /// The same through a subband: a 36x37 band of 32x32 code-blocks holds a
+    /// full block, then partial edge blocks of 4 columns, of 5 rows, and of
+    /// both, and comes out as its blocks decoded alone and placed.
+    #[test]
+    fn reused_buffers_decode_a_band_of_edge_blocks_as_its_blocks_alone() {
+        let coders = default_params();
+        let layout = [
+            ((0, 0), (32, 32)),
+            ((32, 0), (4, 32)),
+            ((0, 32), (32, 5)),
+            ((32, 32), (4, 5)),
+        ];
+        let data: Vec<Vec<u8>> = layout
+            .iter()
+            .map(|&(_, shape)| busy_data(coders, Coder::Part1, shape))
+            .collect();
+        let sb = Subband {
+            kind: BandKind::Hl,
+            origin: (0, 0),
+            width: 36,
+            height: 37,
+            block_cols: 2,
+            block_rows: 2,
+            blocks: layout
+                .iter()
+                .zip(&data)
+                .map(|(&(at, shape), data)| shaped_block(at, shape, Coder::Part1, data))
+                .collect(),
+        };
+        let band =
+            decode_subband::<i32, _>(&sb, 1, BUSY_PLANES, coders, &mut Scratch::default(), |q| q)
+                .unwrap();
+        let mut expected = vec![0; 36 * 37];
+        for block in &sb.blocks {
+            let alone = coders
+                .decode(block, sb.kind, 1, BUSY_PLANES, &mut Scratch::default())
+                .unwrap()
+                .to_vec();
+            place_block(&mut expected, 36, block, &alone, &|q| q);
+        }
+        assert_eq!(band.data, expected);
     }
 
     fn default_params() -> Coders {

@@ -14,7 +14,11 @@ mod ht;
 
 /// Every byte of a code-block, across all its codeword segments.
 fn all_bytes(block: &CodeBlock<'_>) -> Vec<u8> {
-    block.segments.iter().flat_map(|s| s.bytes()).collect()
+    block
+        .segments
+        .iter()
+        .flat_map(|s| s.bytes().into_owned())
+        .collect()
 }
 
 /// The byte chunks of a block's single codeword segment (the default style).
@@ -1241,7 +1245,7 @@ fn a_zero_length_bypass_contribution_keeps_the_segments_in_step() {
     let shape: Vec<(u32, Vec<u8>)> = block
         .segments
         .iter()
-        .map(|s| (s.passes, s.bytes()))
+        .map(|s| (s.passes, s.bytes().into_owned()))
         .collect();
     assert_eq!(
         shape,

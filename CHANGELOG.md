@@ -119,6 +119,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   up to 1.7 times faster (64 tiles of 16384 components, now 1.2 times
   OpenJPEG's time, which includes writing its output): a resolution with no
   precinct costs no allocation and no tier-1 or inverse DWT work (#272).
+- Code-block decoding reuses one set of buffers per component, and no
+  longer copies a code-block's bytes when one quality layer carried them. A
+  128x128 image of 4x4 code-blocks makes 2246 allocations where it made
+  6338, and decodes about 5% faster (#299).
 
 ### Fixed
 

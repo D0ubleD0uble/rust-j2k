@@ -126,7 +126,7 @@ fn segments(block: &CodeBlock<'_>) -> Vec<(u32, Vec<u8>)> {
     block
         .segments
         .iter()
-        .map(|s| (s.passes, s.bytes()))
+        .map(|s| (s.passes, s.bytes().into_owned()))
         .collect()
 }
 

@@ -320,8 +320,8 @@ mod tests {
                 seed.extend((refinement.len() as u16).to_le_bytes());
                 seed.push(0);
                 seed.push(((block.height - 1) >> 8) as u8);
-                seed.extend(&cleanup);
-                seed.extend(&refinement);
+                seed.extend(cleanup.iter());
+                seed.extend(refinement.iter());
                 // The same bytes in the tall shapes the corpus lacks.
                 if seeds.len() % 64 == 0 {
                     for (w, h) in [(1u16, 1024u16), (4, 1024), (2, 1024), (8, 512)] {

@@ -1,0 +1,8 @@
+{
+  "width": 128,
+  "height": 128,
+  "depth": 8,
+  "oracle": "opj_decompress 2.5.0",
+  "seed": 20261115,
+  "fnv1a64": "966b9ee6fb231542"
+}

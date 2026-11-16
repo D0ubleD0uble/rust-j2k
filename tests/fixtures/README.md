@@ -422,7 +422,7 @@ keeps the generated codestreams between runs. The oracles assume LittleCMS
 2.14 (Ubuntu 24.04's `liblcms2-2`) and OpenJPEG 2.5.0 on x86-64; the script
 prints the library version it loaded.
 
-### Benchmark fixture
+### Benchmark fixtures
 
 `bench/grib2_shape_1440x721_u16.j2k` is a synthetic codestream for
 `benches/decode.rs`, the size and shape of an operational GRIB2 template 5.40
@@ -441,6 +441,24 @@ python3 scripts/gen-grib2-shape-bench-fixture.py
 Both tools are OpenJPEG 2.5.0. `grib2_shape_1440x721_u16.expected.json` holds
 the FNV-1a digest of `opj_decompress`'s samples (little-endian `u16`, raster
 order). `tests/bench_fixture.rs` requires our decode to match it exactly.
+
+`bench/small_blocks_128_b4.j2k` (17095 bytes, SHA-256
+`f0f7e7559233de0855122c6ba01e986b982464d5583959151c795d9e227d8993`) is a
+decode of many small code-blocks for `tests/tier1_alloc.rs`: 128x128, one
+8-bit component, one tile, 5/3, 5 levels, 1 layer, 4x4 code-blocks, LRCP,
+lossless. The samples are a diagonal ramp plus uniform noise from a fixed
+seed (20261115); no external data.
+
+```sh
+python3 scripts/gen-small-block-fixture.py
+# which runs, on the samples as a PGM:
+#   opj_compress -n 6 -b 4,4 -p LRCP
+#   opj_decompress -i small_blocks_128_b4.j2k -o out.pgm
+```
+
+Both tools are OpenJPEG 2.5.0. `small_blocks_128_b4.expected.json` holds the
+FNV-1a digest of `opj_decompress`'s samples (bytes, raster order), which the
+test requires our decode to match.
 
 ### Packed header overrun fixtures
 
