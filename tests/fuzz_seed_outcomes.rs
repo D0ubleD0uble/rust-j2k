@@ -177,24 +177,28 @@ fn fnv(text: &str) -> u64 {
         })
 }
 
-/// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its pinned codestreams to
+/// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its `synth` include to
 /// the end of the file, which this file copies. If it changed, update the
 /// copy here, then both hashes.
-const TARGET_HASH: u64 = 1576148511108063304;
-/// Hash of this file's copy and its use (`const SIGNATURE` up to the test),
+const TARGET_HASH: u64 = 14497762278301260957;
+/// Hash of this file's copy and its use (from the `synth` include up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.
-const TEST_HASH: u64 = 13131406543205562382;
+const TEST_HASH: u64 = 9643888649693307011;
 
 fn target_hash() -> u64 {
     let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");
-    let start = target.find("const ONE_COMPONENT:").expect("target consts");
+    let start = target
+        .find("#[path = \"../../tests/support/synth.rs\"]")
+        .expect("target include");
     fnv(&target[start..])
 }
 
 fn test_hash() -> u64 {
     let this = include_str!("fuzz_seed_outcomes.rs").replace('\r', "");
-    let start = this.find("const SIGNATURE").expect("the copy");
+    let start = this
+        .find("#[path = \"support/synth.rs\"]")
+        .expect("the copy");
     let end = this.find("\n#[test]\n").expect("the test");
     assert!(start < end, "the copy must come before the test");
     let region: String = this[start..end]

@@ -6,7 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// `tests/fixtures`, or a directory under it.
+/// `tests/fixtures`, or a directory under it. It reads the including test
+/// crate's `CARGO_MANIFEST_DIR`, so fuzz targets (whose manifest is `fuzz/`)
+/// must not call it.
 pub fn fixtures(sub: &str) -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     if sub.is_empty() { root } else { root.join(sub) }
