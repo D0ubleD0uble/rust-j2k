@@ -11,8 +11,11 @@
 //! project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use synth::bx;
 
 struct Counting;
 
@@ -65,23 +68,13 @@ fn big_header() -> Vec<u8> {
 
 /// The same codestream in a minimal JP2 file with a matching `ihdr`.
 fn in_jp2(codestream: &[u8]) -> Vec<u8> {
-    let bx = |kind: &[u8; 4], payload: &[u8]| {
-        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(payload);
-        out
-    };
-    let mut ihdr = SIDE.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&SIDE.to_be_bytes());
-    ihdr.extend_from_slice(&[0, 1, 7, 7, 0, 0]);
-    let jp2h = [bx(b"ihdr", &ihdr), bx(b"colr", &[1, 0, 0, 0, 0, 0, 17])].concat();
-    [
-        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
-        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
-        bx(b"jp2h", &jp2h),
-        bx(b"jp2c", codestream),
-    ]
-    .concat()
+    let ihdr = synth::ihdr_payload(SIDE, SIDE, 1, [7, 7, 0, 0]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        codestream,
+        &[],
+    )
 }
 
 #[test]

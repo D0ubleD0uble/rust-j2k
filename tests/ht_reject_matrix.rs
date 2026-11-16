@@ -15,6 +15,8 @@
 //! first with the smallest bound (8 bits). The refusals of the main header (`CAP`, `CPF`,
 //! MIXED) are in the matrix of `src/codestream/tests.rs`.
 
+#[path = "support/synth.rs"]
+mod synth;
 use rust_j2k::{Error, decode};
 
 /// Packet header bits, packed as B.10.1 has it: a byte after 0xFF carries
@@ -148,20 +150,19 @@ fn ht_file(block: &Block<'_>) -> Vec<u8> {
         out.extend_from_slice(body);
         out
     };
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [
-        block.width,
-        block.height,
-        0,
-        0,
-        block.width,
-        block.height,
-        0,
-        0,
-    ] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let siz = synth::siz_body(
+        [
+            block.width,
+            block.height,
+            0,
+            0,
+            block.width,
+            block.height,
+            0,
+            0,
+        ],
+        &[[7, 1, 1]],
+    );
     let mut cs = vec![0xFF, 0x4F];
     cs.extend(seg(0xFF51, &siz));
     // CAP: Part 15 only, with the `RGN` bit (12) set under a maxshift.

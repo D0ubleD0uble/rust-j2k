@@ -6,7 +6,10 @@
 //! The fixtures in `tests/fixtures/sample_limit/` are written by
 //! `scripts/gen-sample-limit-fixtures.py` (see the README there).
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::path::PathBuf;
+use synth::{bx, seg};
 
 use rust_j2k::{
     DecodeOptions, Error, Window, WorkLimit, decode, decode_with, read_header, read_header_with,
@@ -36,23 +39,13 @@ fn flat_header_only() -> Vec<u8> {
 
 /// `codestream` in a minimal JP2 file whose `ihdr` matches the flat image.
 fn in_jp2(codestream: &[u8]) -> Vec<u8> {
-    let bx = |kind: &[u8; 4], payload: &[u8]| {
-        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(payload);
-        out
-    };
-    let mut ihdr = 16385u32.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&16385u32.to_be_bytes());
-    ihdr.extend_from_slice(&[0, 1, 7, 7, 0, 0]);
-    let jp2h = [bx(b"ihdr", &ihdr), bx(b"colr", &[1, 0, 0, 0, 0, 0, 17])].concat();
-    [
-        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
-        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
-        bx(b"jp2h", &jp2h),
-        bx(b"jp2c", codestream),
-    ]
-    .concat()
+    let ihdr = synth::ihdr_payload(16385, 16385, 1, [7, 7, 0, 0]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        codestream,
+        &[],
+    )
 }
 
 fn with_limit(limit: WorkLimit) -> DecodeOptions {
@@ -226,26 +219,15 @@ fn the_sample_limit_defaults_to_the_default_bound() {
     );
 }
 
-fn segment(marker: u16, body: &[u8]) -> Vec<u8> {
-    let mut out = marker.to_be_bytes().to_vec();
-    out.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
-    out.extend_from_slice(body);
-    out
-}
-
 /// The main header of a `size` x `size` image in tiles of `tile`, of
 /// `components` unsigned 8-bit components, six wavelet levels, 4x4
 /// code-blocks, 5/3, no quantization, LRCP and `layers` layers, followed by
 /// `extra` (more main-header segments).
 fn main_header(size: u32, tile: u32, components: u16, layers: u16, extra: &[u8]) -> Vec<u8> {
-    let mut siz = vec![0, 0];
-    for field in [size, size, 0, 0, tile, tile, 0, 0] {
-        siz.extend_from_slice(&field.to_be_bytes());
-    }
-    siz.extend_from_slice(&components.to_be_bytes());
-    for _ in 0..components {
-        siz.extend_from_slice(&[7, 1, 1]);
-    }
+    let siz = synth::siz_body(
+        [size, size, 0, 0, tile, tile, 0, 0],
+        &vec![[7, 1, 1]; usize::from(components)],
+    );
     let mut cod = vec![0, 0];
     cod.extend_from_slice(&layers.to_be_bytes());
     cod.extend_from_slice(&[0, 6, 0, 0, 0, 1]);
@@ -253,9 +235,9 @@ fn main_header(size: u32, tile: u32, components: u16, layers: u16, extra: &[u8])
     let qcd = [&[0x40][..], &[8 << 3; 19]].concat();
     [
         vec![0xFF, 0x4F],
-        segment(0xFF51, &siz),
-        segment(0xFF52, &cod),
-        segment(0xFF5C, &qcd),
+        seg(0xFF51, &siz),
+        seg(0xFF52, &cod),
+        seg(0xFF5C, &qcd),
         extra.to_vec(),
     ]
     .concat()
@@ -266,7 +248,7 @@ fn tile_part(index: u32, body: &[u8]) -> Vec<u8> {
     let mut sot = (index as u16).to_be_bytes().to_vec();
     sot.extend_from_slice(&(14 + body.len() as u32).to_be_bytes());
     sot.extend_from_slice(&[0, 1]);
-    [segment(0xFF90, &sot), vec![0xFF, 0x93], body.to_vec()].concat()
+    [seg(0xFF90, &sot), vec![0xFF, 0x93], body.to_vec()].concat()
 }
 
 /// A codestream of `side` x `side` tiles of `tile` x `tile`, `components`
@@ -373,7 +355,7 @@ fn poc_reach_past_the_dropped_blocks() -> Vec<u8> {
     let mut entry = vec![0, 0];
     entry.extend_from_slice(&layers.to_be_bytes());
     entry.extend_from_slice(&[7, components as u8, 0]);
-    let poc = segment(0xFF5F, &[&entry[..], &entry[..]].concat());
+    let poc = seg(0xFF5F, &[&entry[..], &entry[..]].concat());
     let mut out = main_header(64, 64, components, layers, &poc);
     out.extend_from_slice(&tile_part(0, &[0; 16]));
     out.extend_from_slice(&[0xFF, 0xD9]);

@@ -19,8 +19,11 @@
 //! bits, 64x64 RGB at 16 bits, or 64x64 gray at 8 bits (3 is RGB at 8 bits).
 //! The rest is the profile.
 
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use libfuzzer_sys::fuzz_target;
 use rust_j2k::{ColorOutput, DecodeOptions};
+use synth::bx;
 
 const RGB8: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
 const RGB16: &[u8] = include_bytes!("../../tests/fixtures/icc/rgb16_lossless.j2k");
@@ -34,13 +37,6 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
     })
-}
-
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
 }
 
 fn wrap(

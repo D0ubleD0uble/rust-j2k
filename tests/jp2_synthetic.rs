@@ -5,6 +5,7 @@
 //! bit-exactly.
 
 mod support;
+use support::synth;
 
 use std::path::{Path, PathBuf};
 
@@ -12,7 +13,7 @@ use rust_j2k::{Association, ChannelDefinition, ChannelType, DecodeOptions, decod
 use support::{Expected, compare};
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    synth::fixtures("")
 }
 
 /// Every `jp2_*.jp2` in the fixtures directory, sorted.

@@ -20,10 +20,13 @@
 //! `J2K_BLESS_SEED_OUTCOMES=1 cargo test --test fuzz_seed_outcomes`.
 //! The script needs `python3` (standard library only), run with `-I`.
 
+#[path = "support/synth.rs"]
+mod synth;
 use rust_j2k::{ColorOutput, ColorSpace, DecodeOptions, Error, Image, decode_with};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
+use synth::bx;
 
 const TABLE: &str = "tests/fixtures/jp2_fuzz_seed_outcomes.tsv";
 
@@ -37,14 +40,6 @@ fn fixture(name: &str) -> Vec<u8> {
 const SIGNATURE: [u8; 12] = [
     0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
 ];
-
-/// A box with a 32-bit `LBox`.
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
 
 /// An `ihdr` matching a codestream's SIZ (as the fuzz target writes it).
 fn ihdr_for(codestream: &[u8]) -> Vec<u8> {
@@ -182,24 +177,28 @@ fn fnv(text: &str) -> u64 {
         })
 }
 
-/// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its pinned codestreams to
+/// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its `synth` include to
 /// the end of the file, which this file copies. If it changed, update the
 /// copy here, then both hashes.
-const TARGET_HASH: u64 = 9521446311063571855;
-/// Hash of this file's copy and its use (`const SIGNATURE` up to the test),
+const TARGET_HASH: u64 = 14497762278301260957;
+/// Hash of this file's copy and its use (from the `synth` include up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.
-const TEST_HASH: u64 = 13616706247914962663;
+const TEST_HASH: u64 = 9643888649693307011;
 
 fn target_hash() -> u64 {
     let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");
-    let start = target.find("const ONE_COMPONENT:").expect("target consts");
+    let start = target
+        .find("#[path = \"../../tests/support/synth.rs\"]")
+        .expect("target include");
     fnv(&target[start..])
 }
 
 fn test_hash() -> u64 {
     let this = include_str!("fuzz_seed_outcomes.rs").replace('\r', "");
-    let start = this.find("const SIGNATURE").expect("the copy");
+    let start = this
+        .find("#[path = \"support/synth.rs\"]")
+        .expect("the copy");
     let end = this.find("\n#[test]\n").expect("the test");
     assert!(start < end, "the copy must come before the test");
     let region: String = this[start..end]

@@ -4,34 +4,13 @@
 //! the rest are unspecified.
 
 mod support;
+use support::synth::{self, bx};
+use support::{plane_hash, srgb};
 
 use rust_j2k::{
-    Association, ChannelDefinition, ChannelType, ColorOutput, Component, DecodeOptions, decode,
-    decode_with, read_header_with,
+    Association, ChannelDefinition, ChannelType, DecodeOptions, decode, decode_with,
+    read_header_with,
 };
-use support::jp2::sha256_hex;
-
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
-
-fn srgb() -> DecodeOptions {
-    DecodeOptions::default().with_color(ColorOutput::Srgb)
-}
-
-/// The hash `scripts/gen-icc-oracles.py` records: samples in raster order,
-/// each a 4-byte big-endian signed integer.
-fn plane_hash(component: &Component) -> String {
-    let bytes: Vec<u8> = component
-        .samples
-        .iter()
-        .flat_map(|s| s.to_be_bytes())
-        .collect();
-    sha256_hex(&bytes)
-}
 
 fn color(n: u16) -> ChannelDefinition {
     ChannelDefinition {
@@ -46,10 +25,7 @@ const UNSPECIFIED: ChannelDefinition = ChannelDefinition {
 };
 
 fn read(path: &str) -> Vec<u8> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(path);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    synth::read_file(synth::fixtures("").join(path))
 }
 
 fn raw() -> DecodeOptions {

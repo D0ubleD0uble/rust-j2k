@@ -6,12 +6,18 @@
 //! and agree with LittleCMS 2 (Pillow's `ImageCms`, an sRGB output profile)
 //! on every value used here.
 
+// One std-only builder module shared with tests/ and fuzz/; the crate has no
+// single parent for the unit tests, so each includes it by path.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use super::SIGNATURE;
 use super::srgb::{ChromaLayout, replicate, sycc_sample};
 use crate::{
     ColorOutput, ColorSpace, DecodeOptions, Error, Image, decode, decode_with, read_header,
     read_header_with,
 };
+use synth::{bx, cdef, colr_enum, colr_icc};
 
 /// Three 8-bit components at full resolution, 24x16.
 const THREE: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
@@ -37,13 +43,6 @@ const SYCC_420_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_420_odd.sr
 const SYCC_422_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_422_odd.srgb_r1.json");
 const SYCC_420_EVEN_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_420_even.srgb_r1.json");
 const SYCC_422_EVEN_R1: &str = include_str!("../../tests/fixtures/jp2_sycc_422_even.srgb_r1.json");
-
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
 
 /// The first top-level box of `kind` in a JP2 file: its payload.
 fn top_box<'a>(file: &'a [u8], kind: &[u8; 4]) -> &'a [u8] {
@@ -71,32 +70,13 @@ fn geometry(codestream: &[u8]) -> (u32, u32, u16) {
 /// in `jp2h`.
 fn file(codestream: &[u8], colr: &[u8], children: &[Vec<u8>]) -> Vec<u8> {
     let (width, height, components) = geometry(codestream);
-    let mut ihdr = height.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&components.to_be_bytes());
-    ihdr.extend_from_slice(&[7, 7, 0, 0]);
-    let mut jp2h = bx(b"ihdr", &ihdr);
+    let ihdr = synth::ihdr_payload(height, width, components, [7, 7, 0, 0]);
+    let mut boxes = vec![bx(b"ihdr", &ihdr)];
     if !colr.is_empty() {
-        jp2h.extend_from_slice(&bx(b"colr", colr));
+        boxes.push(bx(b"colr", colr));
     }
-    jp2h.extend_from_slice(&children.concat());
-    let mut out = SIGNATURE.to_vec();
-    out.extend_from_slice(&bx(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend_from_slice(&bx(b"jp2h", &jp2h));
-    out.extend_from_slice(&bx(b"jp2c", codestream));
-    out
-}
-
-fn enumerated(value: u32) -> Vec<u8> {
-    let mut out = vec![1, 0, 0];
-    out.extend_from_slice(&value.to_be_bytes());
-    out
-}
-
-fn icc_colr(profile: &[u8]) -> Vec<u8> {
-    let mut out = vec![2, 0, 0];
-    out.extend_from_slice(profile);
-    out
+    boxes.extend_from_slice(children);
+    synth::jp2_file(&boxes, &[], codestream, &[])
 }
 
 fn srgb() -> DecodeOptions {
@@ -498,7 +478,7 @@ fn an_rgb_profile_matches_hand_computed_values() {
         [255, 255, 255],
     ];
     let boxes = palette(&[7, 7, 7], 256, |j, i| pixels[usize::from(j) % 4][i]);
-    let bytes = file(ONE, &icc_colr(&wide_gamut()), &boxes);
+    let bytes = file(ONE, &colr_icc(&wide_gamut()), &boxes);
     let coded = decode(&bytes).expect("as coded");
     let image = decode_srgb(&bytes).expect("sRGB");
     let want: [[i32; 3]; 4] = [[160, 114, 95], [255, 80, 46], [0, 0, 0], [255, 255, 255]];
@@ -525,7 +505,7 @@ fn an_rgb_profile_matches_hand_computed_values() {
 fn a_gray_profile_matches_hand_computed_values() {
     let ramp = [0u32, 64, 128, 192, 255];
     let boxes = palette(&[7], 256, |j, _| ramp[usize::from(j) % 5]);
-    let bytes = file(ONE, &icc_colr(&gray_profile()), &boxes);
+    let bytes = file(ONE, &colr_icc(&gray_profile()), &boxes);
     let coded = decode(&bytes).expect("as coded");
     let image = decode_srgb(&bytes).expect("sRGB");
     assert_eq!(image.components.len(), 1, "one gray channel");
@@ -555,7 +535,7 @@ fn a_parametric_curve_profile_is_applied() {
     ];
     let icc = profile(b"scnr", b"RGB ", b"XYZ ", 0, &tags);
     let boxes = palette(&[7, 7, 7], 1, |_, _| 51);
-    let image = decode_srgb(&file(ONE, &icc_colr(&icc), &boxes)).expect("sRGB");
+    let image = decode_srgb(&file(ONE, &colr_icc(&icc), &boxes)).expect("sRGB");
     // Linear 0.2 encodes to 0.4845 of 255.
     for c in &image.components {
         assert!(
@@ -573,7 +553,7 @@ fn a_parametric_curve_profile_is_applied() {
 /// sRGB and grayscale files come out as coded.
 #[test]
 fn srgb_and_grayscale_pass_through() {
-    for (codestream, colr) in [(THREE, enumerated(16)), (ONE, enumerated(17))] {
+    for (codestream, colr) in [(THREE, colr_enum(16)), (ONE, colr_enum(17))] {
         let bytes = file(codestream, &colr, &[]);
         assert_eq!(
             decode_srgb(&bytes).expect("sRGB").components,
@@ -592,7 +572,7 @@ fn a_non_color_channel_is_untouched() {
         &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 2, 0, 1, 0, 0],
     );
     expect_err(
-        decode_srgb(&file(THREE, &icc_colr(&wide_gamut()), &[cdef])),
+        decode_srgb(&file(THREE, &colr_icc(&wide_gamut()), &[cdef])),
         is_unsupported,
         "needs color channels 1, 2 and 3; the file has 2",
     );
@@ -607,7 +587,7 @@ fn a_non_color_channel_is_untouched() {
     let cdef = bx(b"cdef", &[0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0]);
     let bytes = file(
         ONE,
-        &icc_colr(&gray_profile()),
+        &colr_icc(&gray_profile()),
         &[boxes[0].clone(), boxes[1].clone(), cdef],
     );
     let coded = decode(&bytes).expect("as coded");
@@ -647,9 +627,9 @@ fn a_gray_profile_on_more_than_two_channels_is_unsupported() {
         &[0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1],
     );
     let refused = [
-        file(THREE, &icc_colr(&gray_profile()), &[color_last]),
-        file(THREE, &icc_colr(&gray_profile()), &[cdef]),
-        file(ONE, &icc_colr(&gray_profile()), &three_columns),
+        file(THREE, &colr_icc(&gray_profile()), &[color_last]),
+        file(THREE, &colr_icc(&gray_profile()), &[cdef]),
+        file(ONE, &colr_icc(&gray_profile()), &three_columns),
     ];
     for bytes in &refused {
         expect_err(
@@ -669,8 +649,8 @@ fn a_gray_profile_on_more_than_two_channels_is_unsupported() {
     }
     // The same shapes at one and two channels convert.
     for (bytes, channels) in [
-        (file(ONE, &icc_colr(&gray_profile()), &[]), 1),
-        (file(ONE, &icc_colr(&gray_profile()), &two_columns), 2),
+        (file(ONE, &colr_icc(&gray_profile()), &[]), 1),
+        (file(ONE, &colr_icc(&gray_profile()), &two_columns), 2),
     ] {
         let image = decode_srgb(&bytes).expect("sRGB");
         let header = read_header_with(&bytes, &srgb()).expect("header");
@@ -686,12 +666,12 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
     let rgb_profile = |edit: &dyn Fn(&mut Vec<u8>)| {
         let mut icc = wide_gamut();
         edit(&mut icc);
-        file(THREE, &icc_colr(&icc), &[])
+        file(THREE, &colr_icc(&icc), &[])
     };
     let with_tags = |tags: Vec<(&[u8; 4], Vec<u8>)>| {
         file(
             THREE,
-            &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", 0, &tags)),
+            &colr_icc(&profile(b"scnr", b"RGB ", b"XYZ ", 0, &tags)),
             &[],
         )
     };
@@ -704,7 +684,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
     let rows: Vec<(&str, Vec<u8>, Check, &str)> = vec![
         (
             "enumerated e-sRGB",
-            file(THREE, &enumerated(20), &[]),
+            file(THREE, &colr_enum(20), &[]),
             is_unsupported,
             "enumerated color space 20",
         ),
@@ -734,7 +714,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
         ),
         (
             "gray profile, three colors",
-            file(THREE, &icc_colr(&gray_profile()), &[]),
+            file(THREE, &colr_icc(&gray_profile()), &[]),
             is_unsupported,
             "monochrome ICC profile on 3 channels",
         ),
@@ -742,7 +722,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "RGB profile on 12-bit samples",
             file(
                 ONE,
-                &icc_colr(&wide_gamut()),
+                &colr_icc(&wide_gamut()),
                 &palette(&[11, 11, 11], 4, |j, _| u32::from(j)),
             ),
             is_unsupported,
@@ -752,7 +732,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "gray profile on 12-bit samples",
             file(
                 ONE,
-                &icc_colr(&gray_profile()),
+                &colr_icc(&gray_profile()),
                 &palette(&[11], 4, |j, _| u32::from(j)),
             ),
             is_unsupported,
@@ -762,7 +742,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "palette columns of mixed depth (sRGB)",
             file(
                 ONE,
-                &enumerated(16),
+                &colr_enum(16),
                 &palette(&[7, 11, 7], 4, |j, _| u32::from(j)),
             ),
             is_unsupported,
@@ -772,7 +752,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "palette columns of mixed sign (sYCC)",
             file(
                 ONE,
-                &enumerated(18),
+                &colr_enum(18),
                 &palette(&[7, 0x87, 7], 4, |j, _| u32::from(j)),
             ),
             is_unsupported,
@@ -786,7 +766,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "RGB profile, a differing color past the first four channels",
             file(
                 ONE,
-                &icc_colr(&wide_gamut()),
+                &colr_icc(&wide_gamut()),
                 &[
                     palette(&[7, 7, 3, 7, 7], 4, |j, _| u32::from(j)),
                     vec![cdef(&[
@@ -807,7 +787,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "signed sYCC",
             file(
                 ONE,
-                &enumerated(18),
+                &colr_enum(18),
                 &palette(&[0x87, 0x87, 0x87], 4, |j, _| u32::from(j)),
             ),
             is_unsupported,
@@ -815,7 +795,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
         ),
         (
             "sRGB-declared 4:2:0",
-            file(sycc_jp2c, &enumerated(16), &[]),
+            file(sycc_jp2c, &colr_enum(16), &[]),
             is_unsupported,
             "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
         ),
@@ -823,31 +803,31 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             // OpenJPEG converts 4:2:0 and 4:2:2 as sYCC whatever color
             // space the file declares, so grayscale here converts there.
             "grayscale-declared 4:2:0 on three channels",
-            file(sycc_jp2c, &enumerated(17), &[]),
+            file(sycc_jp2c, &colr_enum(17), &[]),
             is_unsupported,
             "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
         ),
         (
             "RGB profile on 4:2:0",
-            file(sycc_jp2c, &icc_colr(&wide_gamut()), &[]),
+            file(sycc_jp2c, &colr_icc(&wide_gamut()), &[]),
             is_unsupported,
             "different sub-sampling (1x1 and 2x2)",
         ),
         (
             "RGB profile on 4:2:2",
-            file(sycc_422_jp2c, &icc_colr(&wide_gamut()), &[]),
+            file(sycc_422_jp2c, &colr_icc(&wide_gamut()), &[]),
             is_unsupported,
             "different sub-sampling (1x1 and 2x1)",
         ),
         (
             "grayscale-declared 4:2:2 on three channels",
-            file(sycc_422_jp2c, &enumerated(17), &[]),
+            file(sycc_422_jp2c, &colr_enum(17), &[]),
             is_unsupported,
             "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
         ),
         (
             "sYCC with sub-sampled luma",
-            file(ALL_SUBSAMPLED, &enumerated(18), &[]),
+            file(ALL_SUBSAMPLED, &colr_enum(18), &[]),
             is_unsupported,
             "sYCC sampled 2x2, 2x2, 2x2",
         ),
@@ -855,7 +835,7 @@ fn srgb_reject_matrix_maps_each_input_to_its_typed_error() {
             "sYCC with two color channels",
             file(
                 THREE,
-                &enumerated(18),
+                &colr_enum(18),
                 &[bx(
                     b"cdef",
                     &[0, 3, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 2, 0, 1, 0, 0],
@@ -908,7 +888,7 @@ fn an_lcms_refused_profile_on_4_2_0_or_4_2_2_is_refused() {
         let codestream = top_box(jp2, b"jp2c");
         for (name, icc) in &profiles {
             let what = format!("{layout}, {name}");
-            let bytes = file(codestream, &icc_colr(icc), &[]);
+            let bytes = file(codestream, &colr_icc(icc), &[]);
             decode(&bytes).unwrap_or_else(|e| panic!("{what}: AsCoded must decode, got {e}"));
             expect_err(decode_srgb(&bytes), is_unsupported, fragment);
             match read_header_with(&bytes, &srgb()) {
@@ -927,7 +907,7 @@ fn an_lcms_refused_profile_passes_through_outside_the_sycc_layouts() {
     let mut icc = wide_gamut();
     icc[64..68].copy_from_slice(&4u32.to_be_bytes());
     for (name, codestream) in [("full", THREE), ("all 2x2", ALL_SUBSAMPLED)] {
-        let bytes = file(codestream, &icc_colr(&icc), &[]);
+        let bytes = file(codestream, &colr_icc(&icc), &[]);
         let image = decode_srgb(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(
             image.components,
@@ -949,7 +929,7 @@ fn raw_channels_with_srgb_output_is_invalid() {
         ..DecodeOptions::default()
     };
     for bytes in [
-        file(THREE, &enumerated(16), &[]),
+        file(THREE, &colr_enum(16), &[]),
         THREE.to_vec(),
         b"junk".to_vec(),
     ] {
@@ -960,7 +940,7 @@ fn raw_channels_with_srgb_output_is_invalid() {
         );
     }
     // Each option alone is fine.
-    let file = file(THREE, &enumerated(16), &[]);
+    let file = file(THREE, &colr_enum(16), &[]);
     decode_with(&file, &srgb()).expect("sRGB alone");
     decode_with(
         &file,
@@ -1035,7 +1015,7 @@ fn gray_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
         ),
     ];
     for (what, codestream) in codestreams {
-        let bytes = file(codestream, &enumerated(17), &[]);
+        let bytes = file(codestream, &colr_enum(17), &[]);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("{what}: as coded: {e}"));
         let image = decode_srgb(&bytes).unwrap_or_else(|e| panic!("{what}: sRGB: {e}"));
         assert_eq!(image.components, coded.components, "{what}");
@@ -1045,21 +1025,10 @@ fn gray_on_three_channels_is_refused_only_where_openjpeg_converts_sycc() {
     // The sYCC guess does not depend on a `cdef`: the 4:2:0 file is refused
     // with one that labels only color 1, as without.
     expect_err(
-        decode_srgb(&file(sycc_jp2c, &enumerated(17), &[cdef])),
+        decode_srgb(&file(sycc_jp2c, &colr_enum(17), &[cdef])),
         is_unsupported,
         "4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC",
     );
-}
-
-/// A `cdef` box of these (channel, type, association) entries.
-fn cdef(entries: &[(u16, u16, u16)]) -> Vec<u8> {
-    let mut payload = (entries.len() as u16).to_be_bytes().to_vec();
-    for &(channel, kind, association) in entries {
-        for field in [channel, kind, association] {
-            payload.extend_from_slice(&field.to_be_bytes());
-        }
-    }
-    bx(b"cdef", &payload)
 }
 
 /// The sYCC guess holds for a file declared sRGB too: a 4:2:0 or 4:2:2 file
@@ -1084,7 +1053,7 @@ fn srgb_4_2_0_or_4_2_2_is_refused_whatever_cdef_labels() {
         let codestream = top_box(jp2, b"jp2c");
         for (name, cdef) in &cdefs {
             let what = format!("{layout}, {name}");
-            let bytes = file(codestream, &enumerated(16), std::slice::from_ref(cdef));
+            let bytes = file(codestream, &colr_enum(16), std::slice::from_ref(cdef));
             decode(&bytes).unwrap_or_else(|e| panic!("{what}: AsCoded must decode, got {e}"));
             expect_err(decode_srgb(&bytes), is_unsupported, fragment);
             match read_header_with(&bytes, &srgb()) {
@@ -1107,14 +1076,14 @@ fn srgb_on_one_or_two_channels_passes_through() {
     let two = |space: u32, bi: &[u8], extra: &[Vec<u8>]| {
         let mut boxes = palette(bi, 4, |j, _| u32::from(j));
         boxes.extend_from_slice(extra);
-        file(ONE, &enumerated(space), &boxes)
+        file(ONE, &colr_enum(space), &boxes)
     };
     let colors_1_2 = cdef(&[(0, 0, 1), (1, 0, 2)]);
     let rows = [
         (
             "one channel",
             ColorSpace::Srgb,
-            file(ONE, &enumerated(16), &[]),
+            file(ONE, &colr_enum(16), &[]),
         ),
         (
             "two channels, different sign",
@@ -1178,8 +1147,8 @@ fn a_gray_jp2_without_a_converted_color_space_passes_through() {
     for (codestream, colr, declared) in [
         (ONE, vec![], ColorSpace::Unknown),
         (TWO, vec![], ColorSpace::Unknown),
-        (ONE, enumerated(12), ColorSpace::Enumerated(12)),
-        (TWO, enumerated(20), ColorSpace::Enumerated(20)),
+        (ONE, colr_enum(12), ColorSpace::Enumerated(12)),
+        (TWO, colr_enum(20), ColorSpace::Enumerated(20)),
     ] {
         let bytes = file(codestream, &colr, &[]);
         let coded = decode(&bytes).expect("as coded");
@@ -1202,7 +1171,7 @@ const D65: [i32; 3] = [62290, 65536, 71369];
 fn intent_3(tags: Vec<(&[u8; 4], Vec<u8>)>) -> Vec<u8> {
     file(
         THREE,
-        &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", 3, &tags)),
+        &colr_icc(&profile(b"scnr", b"RGB ", b"XYZ ", 3, &tags)),
         &[],
     )
 }
@@ -1216,7 +1185,7 @@ fn absolute_colorimetric_with_a_d50_white_point_converts_as_relative() {
     with_d50.push((b"wtpt", xyz([63190, 65536, 54061])));
     let intent_0 = decode_srgb(&file(
         THREE,
-        &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", 0, &with_d50)),
+        &colr_icc(&profile(b"scnr", b"RGB ", b"XYZ ", 0, &with_d50)),
         &[],
     ))
     .expect("intent 0");
@@ -1236,7 +1205,7 @@ fn absolute_colorimetric_with_a_d65_white_point_scales_by_it() {
     let intent_0 = with_d65.clone();
     let relative = decode_srgb(&file(
         THREE,
-        &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", 0, &intent_0)),
+        &colr_icc(&profile(b"scnr", b"RGB ", b"XYZ ", 0, &intent_0)),
         &[],
     ))
     .expect("intent 0");
@@ -1252,9 +1221,9 @@ fn absolute_colorimetric_with_a_d65_white_point_scales_by_it() {
 /// decode report what the file declares; a pass-through keeps it too.
 #[test]
 fn converted_output_reports_its_color_space() {
-    let rgb = file(THREE, &icc_colr(&wide_gamut()), &[]);
+    let rgb = file(THREE, &colr_icc(&wide_gamut()), &[]);
     let boxes = palette(&[7], 256, |j, _| u32::from(j));
-    let gray = file(ONE, &icc_colr(&gray_profile()), &boxes);
+    let gray = file(ONE, &colr_icc(&gray_profile()), &boxes);
     let sycc = SYCC_420.to_vec();
     for (bytes, want) in [
         (&rgb, ColorSpace::Srgb),
@@ -1267,8 +1236,8 @@ fn converted_output_reports_its_color_space() {
         assert_eq!(decode_srgb(bytes).unwrap().jp2.unwrap().color, want);
     }
     for (bytes, want) in [
-        (file(THREE, &enumerated(16), &[]), ColorSpace::Srgb),
-        (file(ONE, &enumerated(17), &[]), ColorSpace::Grayscale),
+        (file(THREE, &colr_enum(16), &[]), ColorSpace::Srgb),
+        (file(ONE, &colr_enum(17), &[]), ColorSpace::Grayscale),
     ] {
         assert_eq!(decode_srgb(&bytes).unwrap().jp2.unwrap().color, want);
     }
@@ -1289,7 +1258,7 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
     put(&mut codestream, 12, 3 + 8192); // Ysiz
     put(&mut codestream, 24, 5 + 16384); // XTsiz
     put(&mut codestream, 28, 3 + 8192); // YTsiz
-    let bytes = file(&codestream, &enumerated(18), &[]);
+    let bytes = file(&codestream, &colr_enum(18), &[]);
     expect_err(
         decode_srgb(&bytes),
         |e| matches!(e, Error::Limit(_)),
@@ -1378,7 +1347,7 @@ fn assert_converts_like(bytes: &[u8], like: &[u8]) {
 fn edited(edit: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
     let mut icc = wide_gamut();
     edit(&mut icc);
-    file(THREE, &icc_colr(&icc), &[])
+    file(THREE, &colr_icc(&icc), &[])
 }
 
 fn put_u32(at: usize, value: u32) -> impl Fn(&mut Vec<u8>) {
@@ -1389,7 +1358,7 @@ fn put_u32(at: usize, value: u32) -> impl Fn(&mut Vec<u8>) {
 fn rgb_with(tags: &[(&[u8; 4], Vec<u8>)], intent: u32) -> Vec<u8> {
     file(
         THREE,
-        &icc_colr(&profile(b"scnr", b"RGB ", b"XYZ ", intent, tags)),
+        &colr_icc(&profile(b"scnr", b"RGB ", b"XYZ ", intent, tags)),
         &[],
     )
 }
@@ -1406,7 +1375,7 @@ fn replaced(name: &[u8; 4], data: Vec<u8>) -> Vec<(&'static [u8; 4], Vec<u8>)> {
 fn gray_with(tags: &[(&[u8; 4], Vec<u8>)], intent: u32) -> Vec<u8> {
     file(
         ONE,
-        &icc_colr(&profile(b"scnr", b"GRAY", b"XYZ ", intent, tags)),
+        &colr_icc(&profile(b"scnr", b"GRAY", b"XYZ ", intent, tags)),
         &[],
     )
 }
@@ -1422,10 +1391,10 @@ const CORBIS_XYZ: [u8; 4] = [0x17, 0xA5, 0x05, 0xB8];
 
 #[test]
 fn a_profile_shorter_than_its_header_passes_through() {
-    assert_passes_through(&file(THREE, &icc_colr(&[0; 100]), &[]));
-    assert_passes_through(&file(ONE, &icc_colr(&[0; 100]), &[]));
+    assert_passes_through(&file(THREE, &colr_icc(&[0; 100]), &[]));
+    assert_passes_through(&file(ONE, &colr_icc(&[0; 100]), &[]));
     // The 128-byte header, but no tag count.
-    assert_passes_through(&file(THREE, &icc_colr(&wide_gamut()[..130]), &[]));
+    assert_passes_through(&file(THREE, &colr_icc(&wide_gamut()[..130]), &[]));
 }
 
 #[test]
@@ -1647,7 +1616,7 @@ fn put(at: usize, value: &'static [u8; 4]) -> impl Fn(&mut Vec<u8>) {
 fn gray_edited(edit: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
     let mut icc = gray_profile();
     edit(&mut icc);
-    file(ONE, &icc_colr(&icc), &[])
+    file(ONE, &colr_icc(&icc), &[])
 }
 
 /// A `lut16Type` (`mft2`) table as the oracle script builds it: an identity
@@ -1731,7 +1700,7 @@ fn other_device_classes_with_a_matrix_and_curves_convert() {
     let white = |class: &[u8; 4], version: u32| {
         let mut icc = profile(class, b"RGB ", b"XYZ ", 3, &tags);
         icc[8..12].copy_from_slice(&version.to_be_bytes());
-        file(THREE, &icc_colr(&icc), &[])
+        file(THREE, &colr_icc(&icc), &[])
     };
     let no_white = intent_3(wide_gamut_tags());
     assert_ne!(
@@ -1770,14 +1739,14 @@ fn a_device_link_abstract_or_named_color_profile_passes_through() {
     }
     let mut icc = profile(b"scnr", b"RGB ", b"XYZ ", 0, &[(b"ncl2", ncl2)]);
     icc[12..16].copy_from_slice(b"nmcl");
-    assert_passes_through(&file(THREE, &icc_colr(&icc), &[]));
+    assert_passes_through(&file(THREE, &colr_icc(&icc), &[]));
     // A device link falls back to `D2B0` where an input profile does not.
     let tables = [(b"D2B0", junk_table()), (b"A2B1", lut16(3, 3, 2, [2, 2]))];
     let mut link = profile(b"link", b"RGB ", b"XYZ ", 1, &tables);
-    assert_passes_through(&file(THREE, &icc_colr(&link), &[]));
+    assert_passes_through(&file(THREE, &colr_icc(&link), &[]));
     link[12..16].copy_from_slice(b"scnr");
     expect_err(
-        decode_srgb(&file(THREE, &icc_colr(&link), &[])),
+        decode_srgb(&file(THREE, &colr_icc(&link), &[])),
         is_unsupported,
         "`A2B1` lookup table",
     );
@@ -1816,7 +1785,7 @@ fn a_color_space_openjpeg_does_not_convert_passes_through() {
     assert_passes_through(&edited(put(16, b"zzzz")));
     let mut icc = wide_gamut();
     icc[16..20].copy_from_slice(b"CMYK");
-    assert_passes_through(&file(ONE, &icc_colr(&icc), &[]));
+    assert_passes_through(&file(ONE, &colr_icc(&icc), &[]));
 }
 
 /// A lookup table LittleCMS picks but can't read, or whose channels don't
@@ -1946,7 +1915,7 @@ fn a_lookup_table_littlecms_reads_is_unsupported() {
         );
         icc[12..16].copy_from_slice(class);
         expect_err(
-            decode_srgb(&file(THREE, &icc_colr(&icc), &[])),
+            decode_srgb(&file(THREE, &colr_icc(&icc), &[])),
             is_unsupported,
             "`A2B0` lookup table",
         );
@@ -1975,7 +1944,7 @@ fn a_duplicate_whose_first_copy_is_skipped_converts() {
     let mut icc = profile(b"scnr", b"RGB ", b"XYZ ", 0, &tags);
     icc[172..176].copy_from_slice(&0u32.to_be_bytes());
     assert_converts_like(
-        &file(THREE, &icc_colr(&icc), &[]),
+        &file(THREE, &colr_icc(&icc), &[]),
         &rgb_with(&replaced(b"rTRC", gamma), 0),
     );
 }
@@ -2013,10 +1982,10 @@ fn refusals_are_ordered_as_in_openjpeg() {
         4,
         &[(b"A2B0", lut16(3, 3, 2, [2, 2]))],
     );
-    assert_passes_through(&file(THREE, &icc_colr(&lut), &[]));
+    assert_passes_through(&file(THREE, &colr_icc(&lut), &[]));
     intent(&mut lut, 0);
     expect_err(
-        decode_srgb(&file(THREE, &icc_colr(&lut), &[])),
+        decode_srgb(&file(THREE, &colr_icc(&lut), &[])),
         is_unsupported,
         "`A2B0` lookup table",
     );
@@ -2029,20 +1998,20 @@ fn refusals_are_ordered_as_in_openjpeg() {
         let mut icc = wide_gamut();
         ycbr(&mut icc);
         intent(&mut icc, value);
-        assert_passes_through(&file(ONE, &icc_colr(&icc), &[]));
+        assert_passes_through(&file(ONE, &colr_icc(&icc), &[]));
         for (coded, children) in [(THREE, vec![]), (ONE, wide16.clone())] {
-            let decoded = decode_srgb(&file(coded, &icc_colr(&icc), &children));
+            let decoded = decode_srgb(&file(coded, &colr_icc(&icc), &children));
             if value == 0 {
                 expect_err(decoded, is_unsupported, "`YCbr` color space");
             } else {
-                assert_passes_through(&file(coded, &icc_colr(&icc), &children));
+                assert_passes_through(&file(coded, &colr_icc(&icc), &children));
             }
         }
     }
     let mut missing = wide_gamut();
     ycbr(&mut missing);
     missing[128..132].copy_from_slice(&0u32.to_be_bytes());
-    assert_passes_through(&file(THREE, &icc_colr(&missing), &[]));
+    assert_passes_through(&file(THREE, &colr_icc(&missing), &[]));
     // The monochrome profile on three channels, or on one color channel of
     // three: refused at intent 0, passed through at intent 4.
     let color_first = bx(
@@ -2055,19 +2024,19 @@ fn refusals_are_ordered_as_in_openjpeg() {
     ] {
         let mut gray = gray_profile();
         expect_err(
-            decode_srgb(&file(THREE, &icc_colr(&gray), &children)),
+            decode_srgb(&file(THREE, &colr_icc(&gray), &children)),
             is_unsupported,
             fragment,
         );
         intent(&mut gray, 4);
-        assert_passes_through(&file(THREE, &icc_colr(&gray), &children));
+        assert_passes_through(&file(THREE, &colr_icc(&gray), &children));
     }
     // Palette columns of mixed depth fail OpenJPEG's AFL test, which comes
     // before the transform, so they pass through under an RGB profile
     // whatever the profile is (`pal_mixed_8_12_8` in `opj_decompress`).
     assert_passes_through(&file(
         ONE,
-        &icc_colr(&wide_gamut()),
+        &colr_icc(&wide_gamut()),
         &palette(&[7, 11, 7], 4, |j, _| u32::from(j)),
     ));
     // Sample formats this step does not apply a profile to: 12-bit RGB, 12
@@ -2080,15 +2049,15 @@ fn refusals_are_ordered_as_in_openjpeg() {
     for (depths, mut icc, fragment) in shapes {
         let columns = palette(depths, 4, |j, _| u32::from(j));
         expect_err(
-            decode_srgb(&file(ONE, &icc_colr(&icc), &columns)),
+            decode_srgb(&file(ONE, &colr_icc(&icc), &columns)),
             is_unsupported,
             fragment,
         );
         intent(&mut icc, 4);
-        assert_passes_through(&file(ONE, &icc_colr(&icc), &columns));
+        assert_passes_through(&file(ONE, &colr_icc(&icc), &columns));
         // A missing tag is a refusal of LittleCMS's too.
         intent(&mut icc, 0);
         icc[128..132].copy_from_slice(&0u32.to_be_bytes());
-        assert_passes_through(&file(ONE, &icc_colr(&icc), &columns));
+        assert_passes_through(&file(ONE, &colr_icc(&icc), &columns));
     }
 }

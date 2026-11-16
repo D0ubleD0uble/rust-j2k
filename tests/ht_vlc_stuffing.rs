@@ -15,13 +15,14 @@
 //! decodes, so the test needs no OpenJPEG at runtime.
 
 mod support;
+use support::synth;
 
 use std::path::PathBuf;
 
 use support::jp2::sha256_hex;
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ht_vlc_stuffing")
+    synth::fixtures("ht_vlc_stuffing")
 }
 
 /// A pair's name, then OpenJPEG's digest of the `.set` file (`refused` when
@@ -39,8 +40,7 @@ fn manifest() -> Vec<(String, String, String)> {
 }
 
 fn read(name: &str, tag: &str) -> Vec<u8> {
-    let path = dir().join(format!("{name}.{tag}.j2k"));
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    synth::read_file(dir().join(format!("{name}.{tag}.j2k")))
 }
 
 /// The decoded samples, each as a little-endian `i32`, as the manifest hashes

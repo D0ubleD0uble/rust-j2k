@@ -39,6 +39,7 @@ fuzz/
   fuzz_targets/header.rs        # rust_j2k::read_header_with, checked against decode_with
   fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColorOutput::Srgb
   icc.dict                      # ICC tag and type signatures for icc_srgb
+  ../tests/support/synth.rs     # std-only seg/bx builders; tile_body, jp2_boxes and icc_srgb include it by #[path]
 ```
 
 `decode` must mutate its way through a byte-perfect main header before anything

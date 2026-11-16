@@ -4,6 +4,8 @@
 //! `channel_definitions`. The recipe below is the one the `raw_channels`
 //! rustdoc gives, and uses nothing but the raw decode and its metadata.
 
+#[path = "support/synth.rs"]
+mod synth;
 use rust_j2k::{
     Association, ChannelDefinition, ChannelType, DecodeOptions, Jp2Metadata, MappingKind, decode,
     decode_with,
@@ -28,10 +30,7 @@ const FIXTURES: [&str; 12] = [
 ];
 
 fn read(name: &str) -> Vec<u8> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(format!("{name}.jp2"));
-    std::fs::read(path).unwrap()
+    synth::read_file(synth::fixtures("").join(format!("{name}.jp2")))
 }
 
 /// One rebuilt channel: its grid size, samples, label, and depth and sign.

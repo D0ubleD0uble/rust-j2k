@@ -25,13 +25,33 @@ pub mod ht;
 pub mod jp2;
 pub mod part4;
 pub mod pgx;
+pub mod synth;
 
 use std::fmt;
 use std::panic;
 use std::path::{Path, PathBuf};
 
-use rust_j2k::{Association, ChannelType, ColorSpace, Error, Image, Jp2Metadata, Res};
+use rust_j2k::{
+    Association, ChannelType, ColorOutput, ColorSpace, Component, DecodeOptions, Error, Image,
+    Jp2Metadata, Res,
+};
 use serde::{Deserialize, Serialize};
+
+/// Default options with sRGB output.
+pub fn srgb() -> DecodeOptions {
+    DecodeOptions::default().with_color(ColorOutput::Srgb)
+}
+
+/// The hash `scripts/gen-icc-oracles.py` records: samples in raster order,
+/// each a 4-byte big-endian signed integer.
+pub fn plane_hash(component: &Component) -> String {
+    let bytes: Vec<u8> = component
+        .samples
+        .iter()
+        .flat_map(|s| s.to_be_bytes())
+        .collect();
+    jp2::sha256_hex(&bytes)
+}
 
 /// One fixture's oracle snapshot: the decode a trusted reference produced, plus
 /// everything needed to grade our decode against it and to reproduce the file.

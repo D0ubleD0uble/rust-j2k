@@ -6,16 +6,19 @@
 //! source. The files are written by `scripts/gen-poc-coverage-fixtures.py`;
 //! see `tests/fixtures/poc_coverage/README.md`.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::path::PathBuf;
+use synth::bx;
 
 use rust_j2k::{Error, decode, read_header};
 
 fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/poc_coverage")
+    synth::fixtures("poc_coverage")
 }
 
 fn read(name: &str) -> Vec<u8> {
-    std::fs::read(dir().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
+    synth::read_file(dir().join(name))
 }
 
 /// The source's samples, big-endian 16-bit, component after component.
@@ -95,28 +98,16 @@ fn a_later_tile_parts_volume_covers_the_rest() {
     assert_source(name, &read(name), "res_source.raw");
 }
 
-fn jp2_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut out = u32::try_from(8 + payload.len())
-        .unwrap()
-        .to_be_bytes()
-        .to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
-
 /// A one-component JP2 file holding `cs` with its last tile-part's `Psot`
 /// set to 0 and no EOC, then an `xml ` box.
 fn jp2_psot0(cs: &[u8]) -> Vec<u8> {
     let word = |at: usize| u32::from_be_bytes(cs[at..at + 4].try_into().unwrap());
-    let mut ihdr = (word(12) - word(20)).to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&(word(8) - word(16)).to_be_bytes());
-    ihdr.extend_from_slice(&cs[40..42]);
-    ihdr.extend_from_slice(&[cs[42], 7, 0, 0]);
-    let mut colr = vec![1, 0, 0];
-    colr.extend_from_slice(&17u32.to_be_bytes());
-    let mut jp2h = jp2_box(b"ihdr", &ihdr);
-    jp2h.extend(jp2_box(b"colr", &colr));
+    let ihdr = synth::ihdr_payload(
+        word(12) - word(20),
+        word(8) - word(16),
+        u16::from_be_bytes([cs[40], cs[41]]),
+        [cs[42], 7, 0, 0],
+    );
     // Follow the tile-part chain to the last SOT.
     let mut sot = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
     while sot + word(sot + 6) as usize + 2 < cs.len() {
@@ -125,12 +116,12 @@ fn jp2_psot0(cs: &[u8]) -> Vec<u8> {
     let mut body = cs[..sot + 6].to_vec();
     body.extend_from_slice(&[0; 4]);
     body.extend_from_slice(&cs[sot + 10..cs.len() - 2]);
-    let mut out = jp2_box(b"jP  ", b"\x0d\x0a\x87\x0a");
-    out.extend(jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "));
-    out.extend(jp2_box(b"jp2h", &jp2h));
-    out.extend(jp2_box(b"jp2c", &body));
-    out.extend(jp2_box(b"xml ", b"<a/>"));
-    out
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        &body,
+        &[bx(b"xml ", b"<a/>")],
+    )
 }
 
 fn xml(metadata: Option<&rust_j2k::Jp2Metadata>) -> usize {

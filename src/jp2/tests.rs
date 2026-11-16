@@ -5,12 +5,18 @@
 //! The codestream is a committed lossless fixture (24x16, three 8-bit
 //! components); the boxes around it are built here byte by byte.
 
+// One std-only builder module shared with tests/ and fuzz/; the crate has no
+// single parent for the unit tests, so each includes it by path.
+#[allow(clippy::duplicate_mod)]
+#[path = "../../tests/support/synth.rs"]
+mod synth;
 use super::SIGNATURE;
 use crate::{
     Association, ChannelDefinition, ChannelType, ColorSpace, ColorSpecification, DecodeOptions,
     Error, FileType, Image, ImageHeader, Jp2Metadata, Ratio, Res, Resolution, UuidBox, XmlBox,
     decode, decode_with, read_header,
 };
+use synth::bx;
 
 mod after;
 mod channels;
@@ -23,15 +29,6 @@ const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lo
 const WIDTH: u32 = 24;
 const HEIGHT: u32 = 16;
 const COMPONENTS: u16 = 3;
-
-/// A box with a 32-bit `LBox`.
-fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let length = u32::try_from(8 + payload.len()).expect("test box fits LBox");
-    let mut out = length.to_be_bytes().to_vec();
-    out.extend_from_slice(kind);
-    out.extend_from_slice(payload);
-    out
-}
 
 /// A box with `LBox = 1` and a 64-bit `XLBox`.
 fn xl_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {

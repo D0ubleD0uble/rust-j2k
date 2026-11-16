@@ -14,8 +14,11 @@
 //! project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+#[path = "support/synth.rs"]
+mod synth;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use synth::{bx, seg};
 
 struct Counting;
 
@@ -45,25 +48,13 @@ static ALLOCATOR: Counting = Counting;
 const LAYERS: u16 = u16::MAX;
 const VOLUMES: usize = 31;
 
-/// A marker segment: the code, the length, the body.
-fn seg(code: u16, body: &[u8]) -> Vec<u8> {
-    let mut out = code.to_be_bytes().to_vec();
-    out.extend_from_slice(&(2 + body.len() as u16).to_be_bytes());
-    out.extend_from_slice(body);
-    out
-}
-
 /// `pocdup(8, 8, 1, 65535, 31)`: one 8 x 8 tile, no wavelet levels, 2 x 2
 /// precincts, LRCP, and `VOLUMES` POC volumes over every layer, resolution
 /// and component. Every packet is empty (0x00). With `psot0`, the tile-part's
 /// `Psot` is 0 and there is no EOC, as in a JP2 file whose codestream box
 /// ends where the packets end.
 fn pocdup(psot0: bool) -> Vec<u8> {
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [8u32, 8, 0, 0, 8, 8, 0, 0] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let siz = synth::siz_body([8, 8, 0, 0, 8, 8, 0, 0], &[[7, 1, 1]]);
     let mut cod = vec![1, 0];
     cod.extend_from_slice(&LAYERS.to_be_bytes());
     cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0x11]);
@@ -93,22 +84,13 @@ fn pocdup(psot0: bool) -> Vec<u8> {
 /// its packets end, then an empty `free` box: `read_header` walks the packets
 /// to see that the codestream ends at the box's end.
 fn in_jp2() -> Vec<u8> {
-    let bx = |kind: &[u8; 4], payload: &[u8]| {
-        let mut out = (8 + payload.len() as u32).to_be_bytes().to_vec();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(payload);
-        out
-    };
-    let ihdr = [0, 0, 0, 8, 0, 0, 0, 8, 0, 1, 7, 7, 0, 0];
-    let jp2h = [bx(b"ihdr", &ihdr), bx(b"colr", &[1, 0, 0, 0, 0, 0, 17])].concat();
-    [
-        vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A],
-        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
-        bx(b"jp2h", &jp2h),
-        bx(b"jp2c", &pocdup(true)),
-        bx(b"free", b""),
-    ]
-    .concat()
+    let ihdr = synth::ihdr_payload(8, 8, 1, [7, 7, 0, 0]);
+    synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        &pocdup(true),
+        &[bx(b"free", b"")],
+    )
 }
 
 /// `pocdup(512, 512, 1, 65535, 2, 4096, RPCL)`: one 512 x 512 tile, no
@@ -117,11 +99,7 @@ fn in_jp2() -> Vec<u8> {
 /// bitmap of 537 MB. Only the first 4096 packets are in the data (0x00
 /// each). Past the bound's 2^24 the decode holds the packets read in a set.
 fn pocwide() -> Vec<u8> {
-    let mut siz = 0u16.to_be_bytes().to_vec();
-    for v in [512u32, 512, 0, 0, 512, 512, 0, 0] {
-        siz.extend_from_slice(&v.to_be_bytes());
-    }
-    siz.extend_from_slice(&[0, 1, 7, 1, 1]);
+    let siz = synth::siz_body([512, 512, 0, 0, 512, 512, 0, 0], &[[7, 1, 1]]);
     let mut cod = vec![1, 2];
     cod.extend_from_slice(&LAYERS.to_be_bytes());
     cod.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0x11]);

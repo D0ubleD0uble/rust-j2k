@@ -669,51 +669,22 @@ fn round_shift_clamp(values: Vec<f32>, depth: u8, shift: i64, lo: i64, hi: i64) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codestream::markers::{
-        Cod, Coding, Progression, Qcd, QuantStyle, Siz, SizComponent, Transform,
-    };
+    use crate::codestream::markers::{Qcd, QuantStyle, Transform};
 
     /// A minimal single-component header: an image of `x_size` by `y_size` at the
     /// origin with unit sub-sampling. Only the SIZ fields `assemble` reads
     /// matter; COD/QCD are filler. Tests tweak offsets/sampling on the result.
     fn header(x_size: u32, y_size: u32, bit_depth: u8, signed: bool) -> MainHeader {
-        MainHeader::new(
-            Siz {
-                x_size,
-                y_size,
-                x_offset: 0,
-                y_offset: 0,
-                tile_width: x_size,
-                tile_height: y_size,
-                tile_x_offset: 0,
-                tile_y_offset: 0,
-                components: vec![SizComponent {
-                    bit_depth,
-                    signed,
-                    x_sampling: 1,
-                    y_sampling: 1,
-                }],
-            },
-            Cod {
-                progression: Progression::Lrcp,
-                layers: 1,
-                use_sop: false,
-                use_eph: false,
-                multiple_component_transform: false,
-                coding: Coding {
-                    decomposition_levels: 0,
-                    code_block_width: 4,
-                    code_block_height: 4,
-                    code_block_style: 0,
-                    transform: Transform::Reversible53,
-                    precinct_sizes: vec![],
-                },
-            },
-            Qcd {
-                style: QuantStyle::None,
-                guard_bits: 1,
-                steps: vec![],
-            },
+        let qcd = Qcd {
+            style: QuantStyle::None,
+            guard_bits: 1,
+            steps: vec![],
+        };
+        MainHeader::single_component(
+            (x_size, y_size),
+            (bit_depth, signed),
+            (0, Transform::Reversible53),
+            qcd,
         )
     }
 
