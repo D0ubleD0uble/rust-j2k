@@ -11,18 +11,18 @@
 //! total.
 //!
 //! A global allocator can only be written with `unsafe`. The shim in
-//! `tests/support/synth.rs` forwards every call to `System` unchanged, which
+//! `tests/support/alloc.rs` forwards every call to `System` unchanged, which
 //! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
-#[path = "support/synth.rs"]
-mod synth;
+#[path = "support/alloc.rs"]
+mod alloc;
+use alloc::ALLOCATIONS;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use synth::ALLOCATIONS;
 
 #[global_allocator]
-static ALLOCATOR: synth::CountAlloc = synth::CountAlloc;
+static ALLOCATOR: alloc::CountAlloc = alloc::CountAlloc;
 
 /// FNV-1a over the 8-bit samples, in raster order. The generator script
 /// computes the same digest.

@@ -10,18 +10,20 @@
 //! peak.
 //!
 //! A global allocator can only be written with `unsafe`. The shim in
-//! `tests/support/synth.rs` forwards every call to `System` unchanged, which
+//! `tests/support/alloc.rs` forwards every call to `System` unchanged, which
 //! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+#[path = "support/alloc.rs"]
+mod alloc;
 #[path = "support/synth.rs"]
 mod synth;
+use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
-use synth::{CURRENT, PEAK};
 use synth::{bx, seg};
 
 #[global_allocator]
-static ALLOCATOR: synth::PeakAlloc = synth::PeakAlloc;
+static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
 
 const LAYERS: u16 = u16::MAX;
 const VOLUMES: usize = 31;

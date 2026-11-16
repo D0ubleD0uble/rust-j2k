@@ -135,7 +135,11 @@ const TARGET_HASH: u64 = 12469640652930000811;
 /// Hash of this file's copy and its use (from the `synth` include up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.
-const TEST_HASH: u64 = 2861829691388837825;
+/// Hash of `tests/support/synth.rs` from its `ihdr_for` to the end of the
+/// file (`ihdr_for` and `wrap_jp2_boxes`), which the target and this test
+/// share. If it changed, check both callers, then update this hash.
+const SYNTH_HASH: u64 = 13200082622892353052;
+const TEST_HASH: u64 = 902390728654288137;
 
 fn target_hash() -> u64 {
     let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");
@@ -143,6 +147,14 @@ fn target_hash() -> u64 {
         .find("#[path = \"../../tests/support/synth.rs\"]")
         .expect("target include");
     fnv(&target[start..])
+}
+
+fn synth_hash() -> u64 {
+    let synth = include_str!("support/synth.rs");
+    let start = synth
+        .find("// `ihdr_for` and `wrap_jp2_boxes` must stay")
+        .expect("the shared wrap");
+    fnv(&synth[start..])
 }
 
 fn test_hash() -> u64 {
@@ -154,7 +166,11 @@ fn test_hash() -> u64 {
     assert!(start < end, "the copy must come before the test");
     let region: String = this[start..end]
         .lines()
-        .filter(|l| !l.starts_with("const TARGET_HASH") && !l.starts_with("const TEST_HASH"))
+        .filter(|l| {
+            !l.starts_with("const TARGET_HASH")
+                && !l.starts_with("const SYNTH_HASH")
+                && !l.starts_with("const TEST_HASH")
+        })
         .collect::<Vec<_>>()
         .join("\n");
     fnv(&region)
@@ -226,6 +242,11 @@ fn every_seed_decodes_as_coded_and_srgb_matches_the_table() {
         target_hash(),
         TARGET_HASH,
         "fuzz/fuzz_targets/jp2_boxes.rs changed: update the copy in tests/fuzz_seed_outcomes.rs, then both hashes"
+    );
+    assert_eq!(
+        synth_hash(),
+        SYNTH_HASH,
+        "tests/support/synth.rs's wrap_jp2_boxes or ihdr_for changed: check the target and this test, then update SYNTH_HASH and TEST_HASH"
     );
     assert_eq!(
         test_hash(),

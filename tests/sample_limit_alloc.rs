@@ -7,19 +7,19 @@
 //! peak.
 //!
 //! A global allocator can only be written with `unsafe`. The shim in
-//! `tests/support/synth.rs` forwards every call to `System` unchanged, which
+//! `tests/support/alloc.rs` forwards every call to `System` unchanged, which
 //! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
-#[path = "support/synth.rs"]
-mod synth;
+#[path = "support/alloc.rs"]
+mod alloc;
+use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
-use synth::{CURRENT, PEAK};
 
 use rust_j2k::{DecodeOptions, Error, WorkLimit, decode_with};
 
 #[global_allocator]
-static ALLOCATOR: synth::PeakAlloc = synth::PeakAlloc;
+static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
 
 /// The committed one-component codestream with its SIZ image and tile set to
 /// `side` x `side`, cut right after its first `SOT` marker.

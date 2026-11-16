@@ -384,4 +384,5 @@ that stops rejecting fails the test.
 
 The library has no `unsafe`. If a measured hot path ever needs it, it must be
 justified, isolated and fuzzed. The only `unsafe` in the repository is in the
-test binaries that count allocations.
+test binaries that count allocations
+(`tests/support/alloc.rs`).

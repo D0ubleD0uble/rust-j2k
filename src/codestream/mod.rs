@@ -105,7 +105,7 @@ impl MainHeader {
     }
 
     /// [`single_component`](Self::single_component) with code-blocks of
-    /// `1 << block_exp` samples square (`block_exp` is 2 to 10).
+    /// `1 << block_exp` samples square; the stored exponent is `block_exp - 2`.
     pub(crate) fn single_component_blocks(
         (width, height): (u32, u32),
         (bit_depth, signed): (u8, bool),

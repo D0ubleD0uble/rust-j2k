@@ -8,20 +8,22 @@
 //! total.
 //!
 //! A global allocator can only be written with `unsafe`. The shim in
-//! `tests/support/synth.rs` forwards every call to `System` unchanged, which
+//! `tests/support/alloc.rs` forwards every call to `System` unchanged, which
 //! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+#[path = "support/alloc.rs"]
+mod alloc;
 #[path = "support/synth.rs"]
 mod synth;
+use alloc::ALLOCATIONS;
 use std::sync::atomic::Ordering;
-use synth::ALLOCATIONS;
 use synth::seg;
 
 use rust_j2k::{Error, decode};
 
 #[global_allocator]
-static ALLOCATOR: synth::CountAlloc = synth::CountAlloc;
+static ALLOCATOR: alloc::CountAlloc = alloc::CountAlloc;
 
 /// The tile grid's side: `SIDE^2` = 4096 tiles.
 const SIDE: u32 = 64;
