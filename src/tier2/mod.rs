@@ -954,8 +954,8 @@ enum MixedFirst {
 /// first nonzero length field be 0 and that `Lblock` be above 3 there. So a
 /// nonzero field with `Lblock` at 3 or a leading 1 is a Part 1 block's.
 /// Otherwise the field is read as an HT block's, and a value an HT block
-/// cannot have (a cleanup length of 1, or bytes on placeholder passes) makes
-/// it a Part 1 block's: that is the A.4 note's "processing the code-block
+/// cannot have (a cleanup length of 1 or over `HT_CLEANUP_MAX`, or bytes on
+/// placeholder passes) makes it a Part 1 block's: that is the A.4 note's "processing the code-block
 /// assuming it conforms to Annex B", and it fails here, in the length field,
 /// or not at all.
 ///
@@ -994,6 +994,8 @@ fn mixed_first_length(
     };
     match bio.read(bits - 1) {
         top @ (0 | 1) => Ok(part1(top, bits, bio)),
+        // A cleanup segment over its limit (7.1.1) is not an HT block's.
+        top if u64::from(top) > HT_CLEANUP_MAX => Ok(part1(top, bits, bio)),
         length => Ok(MixedFirst::Ht(FirstCleanup::Cleanup {
             placeholders,
             passes: placeholders + 1 - prior,
