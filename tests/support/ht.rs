@@ -380,20 +380,34 @@ impl HtCodestream {
     }
 
     /// Decode and grade against OpenJPEG's output, within the agreement
-    /// bound. `None` when OpenJPEG refuses the codestream.
-    pub fn grade_agreement(&self, ht_dir: &Path) -> Option<Grade> {
+    /// bound, or bit for bit when `exact`. `None` when OpenJPEG refuses the
+    /// codestream.
+    pub fn grade_agreement(&self, ht_dir: &Path, exact: bool) -> Option<Grade> {
         let bound = self.openjpeg.agreement_bound.as_ref()?;
         let references = match &self.openjpeg.snapshot {
             Some(snapshot) => &snapshot.references,
             None => &self.references,
         };
+        // As `check_counts` does for the ISO grade: a short snapshot list
+        // must not grade fewer components.
+        if self.graded_components == 0 || references.len() != self.graded_components {
+            return Some(Grade::Failed(format!(
+                "manifest: {} graded components but {} OpenJPEG planes",
+                self.graded_components,
+                references.len()
+            )));
+        }
         let bytes = match read(ht_dir, &self.codestream) {
             Ok(bytes) => bytes,
             Err(grade) => return Some(grade),
         };
-        let bound = Bound {
-            pae: bound.pae,
-            mse: bound.mse,
+        let bound = if exact {
+            EXACT
+        } else {
+            Bound {
+                pae: bound.pae,
+                mse: bound.mse,
+            }
         };
         Some(part4::grade_decode(
             ht_dir,
