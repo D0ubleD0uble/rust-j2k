@@ -172,6 +172,7 @@ pub(crate) struct Volume {
 
 /// What a walk works out once for all of its volumes, rather than once per
 /// volume.
+#[derive(Default)]
 struct Plan {
     /// For each resolution, the components that hold a precinct there, in
     /// order. Only they can have a packet at that resolution, so a loop over
@@ -711,7 +712,9 @@ impl Run {
 }
 
 /// A tile's progression: its volumes, and what a walk works out once for
-/// all of them. A [`Cursor`] holds where a walk of it is.
+/// all of them. A [`Cursor`] holds where a walk of it is. The default is
+/// an order of no volumes, which emits nothing.
+#[derive(Default)]
 pub(crate) struct Order {
     pub(crate) volumes: Vec<Volume>,
     plan: Plan,
@@ -760,6 +763,32 @@ pub(crate) struct Cursor {
 }
 
 impl Order {
+    /// The bytes the order holds on the heap, capacity included.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let lists = |outer: usize, inner: usize, item: usize| outer + inner * item;
+        let held = lists(
+            self.plan.held.capacity() * size_of::<Vec<usize>>(),
+            self.plan.held.iter().map(Vec::capacity).sum(),
+            size_of::<usize>(),
+        );
+        let pairs = lists(
+            self.pairs.capacity() * size_of::<Vec<(usize, usize)>>(),
+            self.pairs.iter().map(Vec::capacity).sum(),
+            size_of::<(usize, usize)>(),
+        );
+        let groups = lists(
+            self.groups.capacity() * size_of::<Vec<usize>>(),
+            self.groups.iter().map(Vec::capacity).sum(),
+            size_of::<usize>(),
+        );
+        self.volumes.capacity() * size_of::<Volume>()
+            + self.plan.spans.capacity() * size_of::<(Option<u64>, Option<u64>)>()
+            + held
+            + pairs
+            + groups
+    }
+
     /// The order of `header`'s packets over `walk`'s tile.
     pub(crate) fn new(header: &MainHeader, walk: &PacketWalk<'_>) -> Self {
         let components = walk.geoms.len();

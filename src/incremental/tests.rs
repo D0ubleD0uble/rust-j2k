@@ -297,6 +297,73 @@ fn a_missing_tile_charge_past_the_bound_waits() {
     assert_eq!(decoder.bytes_decoded(), 0);
 }
 
+/// A header of 1024 one-sample tiles of 16384 components, one LRCP layer
+/// and no wavelet levels, and tile 0 alone: its 16384 empty packets, then
+/// `padding` zero bytes. The 1023 missing tiles' charge plus tile 0's walk
+/// is just past the floor of the packet bound, so a prefix is refused for
+/// work until tile 0's bytes raise the bound past it, at about 513 KB.
+fn missing_tiles_and_padding(padding: u32) -> Vec<u8> {
+    let components: u16 = 16384;
+    let mut cs = vec![0xFF, 0x4F, 0xFF, 0x51];
+    cs.extend_from_slice(&(38 + 3 * u32::from(components)).to_be_bytes()[2..]);
+    cs.extend_from_slice(&[0, 0]);
+    for v in [1024u32, 1, 0, 0, 1, 1, 0, 0] {
+        cs.extend_from_slice(&v.to_be_bytes());
+    }
+    cs.extend_from_slice(&components.to_be_bytes());
+    for _ in 0..components {
+        cs.extend_from_slice(&[7, 1, 1]);
+    }
+    cs.extend_from_slice(&[0xFF, 0x52, 0, 12, 0x00, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+    cs.extend_from_slice(&[0xFF, 0x5C, 0, 4, 0x40, 0x40]);
+    cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
+    cs.extend_from_slice(&(14 + u32::from(components) + padding).to_be_bytes());
+    cs.extend_from_slice(&[0, 1, 0xFF, 0x93]);
+    cs.extend(std::iter::repeat_n(
+        0u8,
+        usize::from(components) + padding as usize,
+    ));
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
+/// A refine the packet bound refuses still counts as a try: the next one
+/// waits until the bytes fed are twice those it tried, though the one-shot
+/// decode of fewer bytes gives an image by then.
+#[test]
+fn a_refused_refine_puts_off_the_next_until_the_bytes_double() {
+    let bytes = missing_tiles_and_padding(1 << 20);
+    let lenient = DecodeOptions::default().with_strict(false);
+    let header = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    // Fed up to `tried`, the refine is refused for work; at `between`, the
+    // one-shot decode gives an image, but the refine does not try.
+    let tried = header + (300 << 10);
+    let between = header + (600 << 10);
+    assert!(between < 2 * tried);
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes[..tried]);
+    assert_eq!(decoder.refine(), Ok(None));
+    assert!(decoder.refused);
+    assert!(matches!(
+        decode_with(&bytes[..tried], &lenient),
+        Err(Error::Limit(m)) if m.contains("packet_work_limit")
+    ));
+    decoder.feed(&bytes[tried..between]);
+    assert!(decode_with(&bytes[..between], &lenient).is_ok());
+    assert_eq!(decoder.refine(), Ok(None));
+    decoder.feed(&bytes[between..2 * tried - 1]);
+    assert_eq!(decoder.refine(), Ok(None));
+    assert_eq!(decoder.bytes_decoded(), 0);
+    decoder.feed(&bytes[2 * tried - 1..2 * tried]);
+    // The image is the one-shot decode of its bytes, as every refine's is
+    // (the tests above); decoding it again here would double the time.
+    assert!(
+        decoder.refine().unwrap().is_some(),
+        "the bytes have doubled"
+    );
+    assert_eq!(decoder.bytes_decoded(), 2 * tried);
+}
+
 /// `tiles` tiles of one sample each in a row, with no wavelet levels and
 /// two LRCP layers, each tile's two packets empty: `00`.
 fn one_sample_tiles(tiles: u32) -> Vec<u8> {

@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 
 use rust_j2k::{
     DecodeOptions, Error, Image, IncrementalDecoder, WorkLimit, decode_with, read_header,
-    read_header_with,
 };
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -95,36 +94,22 @@ fn check_finish(name: &str, bytes: &[u8], decoder: IncrementalDecoder, options: 
     }
 }
 
-/// The shortest prefix of `bytes` whose header `read_header_with` reads,
-/// if any does.
-fn header_end(bytes: &[u8], options: &DecodeOptions) -> Option<usize> {
-    read_header_with(bytes, options).ok()?;
-    let (mut lo, mut hi) = (0, bytes.len());
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if read_header_with(&bytes[..mid], options).is_ok() {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-    Some(lo)
-}
-
 /// Feed `bytes` in pieces whose sizes `rng` draws, refining after each:
 /// every image is the strict-off decode of the bytes fed so far, an error
 /// is that decode's error, and `finish` is the decode of the whole file.
 ///
-/// A refine must also give an image when the cadence says one is due: once
-/// the bytes fed are twice those of the last image, or, before the first
-/// image, twice those the header needs, and the decode of the bytes fed
-/// gives an image.
+/// A refine must also give an image when the cadence says one is due: when
+/// the bytes fed are at least twice those of the last refine that decoded
+/// or tried to, and the decode of the bytes fed gives an image. Before any
+/// try, the first refine with at least one byte fed tries. A try that gave
+/// no image, for a main header cut short or a work bound, still counts: the
+/// next one waits for twice its bytes.
 fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> usize {
     let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
-    let header = header_end(bytes, options);
     let mut fed = 0;
     let mut images = 0;
-    let mut last_image = None;
+    // The bytes fed at the last refine that decoded or tried to.
+    let mut tried = 0;
     while fed < bytes.len() {
         // Pieces from 1 byte to about a sixteenth of the file.
         let piece = 1 + rng.below((bytes.len() / 16).max(1));
@@ -132,25 +117,26 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
         decoder.feed(&bytes[fed..end]);
         fed = end;
         assert_eq!(decoder.bytes_fed(), fed);
+        let last = tried;
+        let due = fed >= 2 * last;
+        if due {
+            tried = fed;
+        }
         match decoder.refine() {
             Ok(Some(image)) => {
                 images += 1;
-                last_image = Some(fed);
+                tried = fed;
                 assert_eq!(decoder.bytes_decoded(), fed, "{name}");
                 let expected = decode_with(&bytes[..fed], &options.clone().with_strict(false));
                 assert_eq!(Ok(image), expected, "{name}, {fed} bytes");
             }
             Ok(None) => {
-                let due = match last_image {
-                    Some(last) => fed >= 2 * last,
-                    None => header.is_some_and(|end| fed >= 2 * end),
-                };
                 if due {
                     let expected = refine_oracle(&bytes[..fed], options);
                     assert!(
                         !matches!(expected, Ok(Some(_))),
-                        "{name}: a refine at {fed} bytes, due after {last_image:?} and \
-                         a header of {header:?}, gave no image"
+                        "{name}: a refine at {fed} bytes, due after a try at {last}, \
+                         gave no image"
                     );
                 }
             }

@@ -1516,6 +1516,18 @@ pub(crate) struct Journal {
 }
 
 impl Journal {
+    /// The bytes the notes hold on the heap, capacity included.
+    fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        self.trees.capacity() * size_of::<[Vec<Saved>; 2]>()
+            + self
+                .trees
+                .iter()
+                .flatten()
+                .map(|notes| notes.capacity() * size_of::<Saved>())
+                .sum::<usize>()
+    }
+
     /// Forget what the last packet noted.
     fn clear(&mut self) {
         for [inclusion, zero_bits] in &mut self.trees {
@@ -1561,6 +1573,14 @@ struct Scratch {
     contributions: Vec<Contribution>,
     /// The unread spans of one band's inclusion pass.
     unread: UnreadSpans,
+}
+
+impl Scratch {
+    /// The bytes the buffers hold on the heap, capacity included.
+    fn heap_bytes(&self) -> usize {
+        self.contributions.capacity() * std::mem::size_of::<Contribution>()
+            + self.unread.heap_bytes()
+    }
 }
 
 /// How a packet read ended, when the walk is not strict.
