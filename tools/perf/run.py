@@ -17,6 +17,7 @@ Needs python3 with numpy and /usr/bin/time (GNU).
 """
 
 import argparse
+import atexit
 import glob
 import os
 import re
@@ -337,7 +338,9 @@ def work_dir():
     if base:
         os.makedirs(base, exist_ok=True)
         return base
-    return tempfile.mkdtemp(prefix="j2kperf-", dir="/dev/shm")
+    path = tempfile.mkdtemp(prefix="j2kperf-", dir="/dev/shm")
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
 
 
 def clean(work, out):
@@ -360,6 +363,7 @@ def generate():
     global GEN_DIR
     if GEN_DIR is None:
         GEN_DIR = tempfile.mkdtemp(prefix="j2kgen-", dir="/dev/shm")
+        atexit.register(shutil.rmtree, GEN_DIR, ignore_errors=True)
         pgm = os.path.join(GEN_DIR, "gray.pgm")
         subprocess.run(
             [OPJ, "-quiet", "-i", TILED, "-o", pgm], check=True, stdout=subprocess.DEVNULL
@@ -455,12 +459,25 @@ def check_file(f, work):
     return label, cells
 
 
-def output_ok(text):
-    """Whether a check result is a right image: exact, inside the file's
-    reference bound, or within 5 of OpenJPEG (the loosest bound the project
-    uses for a lossy file, at 16 bits)."""
+# Lossless files: the output must match exactly.
+LOSSLESS = {
+    "p0_07", "p0_08", "file7.jp2", "grib2_shape", "regular_latlon", "ds0_ht_01_b11",
+    "ds0_hm_15_b8", "ds0_ht_07_b16", GENERATED,
+}
+
+
+def is_lossless(f):
+    return f[0] in LOSSLESS or f[0].startswith("tiled_2048")
+
+
+def output_ok(text, f):
+    """Whether a check result is a right image: exact; for a lossy file also
+    inside the file's reference bound, or within 5 of OpenJPEG (the loosest
+    bound the project uses for a lossy file, at 16 bits)."""
     if text == "exact" or text.startswith("exact "):
         return True
+    if is_lossless(f):
+        return False
     if " in bound" in text:
         return True
     m = re.match(r"PAE (\d+)\b", text)
@@ -525,7 +542,7 @@ def cmd_time(args):
         for v, text in checked:
             if text == "n/a" or text == "cannot decode":
                 continue
-            if output_ok(text):
+            if output_ok(text, f):
                 rows.append(v)
             else:
                 print(f"| {f[0]} | {v[0]} | {v[4]} | not timed: output check says {text[:50]} |")
@@ -588,10 +605,26 @@ def cmd_time(args):
 
 
 def cmd_incremental(args):
+    work = work_dir()
     print(f"pieces of {PIECE} bytes; medians of {args.runs} in-process runs, ms")
-    print("| file | one decode | 64 KB pieces | ratio |")
+    print("| file | output check | one decode | 64 KB pieces | ratio |")
     for name in INCREMENTAL:
-        f = next(x for x in FILES if x[0] == name)
+        f = next(x for x in chosen(name) if x[0] == name)
+        # The output check: finish() after the pieces must equal one decode.
+        one_out, inc_out = os.path.join(work, "one"), os.path.join(work, "inc")
+        base = [PERF, "rust-j2k", f[1]] + srgb(f, "rust-j2k")
+        for argv in (base + ["--out", one_out], base + ["--out", inc_out, "--incremental", str(PIECE)]):
+            subprocess.run(argv, check=True)
+        names = sorted(os.path.basename(x) for x in glob.glob(one_out + "_*.pgx"))
+        same = bool(names)
+        for n in names:
+            with open(os.path.join(work, n), "rb") as a, open(
+                os.path.join(work, n.replace("one", "inc", 1)), "rb"
+            ) as b:
+                same = same and a.read() == b.read()
+        if not same:
+            print(f"| {name} | DIFFERS | | | |")
+            continue
         one, inc = [], []
         for _ in range(args.runs):
             for lst, extra in ((one, []), (inc, ["--incremental", str(PIECE)])):
@@ -602,7 +635,7 @@ def cmd_incremental(args):
                 )
                 lst.append(float(r.stdout.split()[0]))
         a, b = statistics.median(one), statistics.median(inc)
-        print(f"| {name} | {a:.1f} | {b:.1f} | {b / a:.2f} |")
+        print(f"| {name} | identical | {a:.1f} | {b:.1f} | {b / a:.2f} |")
 
 
 def main():
@@ -611,7 +644,7 @@ def main():
     for name, fn in (("check", cmd_check), ("time", cmd_time), ("incremental", cmd_incremental)):
         s = sub.add_parser(name)
         s.add_argument("--only", default="")
-        s.add_argument("--runs", type=int, default=5)
+        s.add_argument("--runs", type=int, default=7)
         s.set_defaults(fn=fn)
     args = p.parse_args()
     args.fn(args)
