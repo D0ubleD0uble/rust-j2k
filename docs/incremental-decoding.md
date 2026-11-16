@@ -22,11 +22,18 @@ does again on each refine.
   too many bit-planes), is the one `decode_with` gives on those bytes. Once
   `refine` returns an error, every later `refine` returns the same error
   without decoding.
-- A refine gives an image when one is due: once the bytes fed are twice those
-  of the last image, or, before the first, twice those the header needs, and
-  the one-shot decode of the bytes fed gives an image. The exception is a
-  refine for which the earlier refines have spent the work bound (see
-  below).
+- A refine tries to decode when the bytes fed are at least twice those of
+  the last refine that decoded or tried to. Before any try, the first refine
+  called with at least one byte fed tries; with none fed, `refine` returns
+  `Ok(None)` and does not count as a try. A refine that tries gives an image
+  when the one-shot decode of the bytes fed gives one, except when the
+  earlier refines have spent the code-block bound (see below). A try that
+  gave no image still counts: after a main header cut short, or a refusal
+  by a work bound or the charge for missing tiles, the next refine waits for
+  twice the bytes of that try, even if the one-shot decode of fewer bytes
+  gives an image by then
+  (`a_refused_refine_puts_off_the_next_until_the_bytes_double`). Doubling
+  from the last try is what bounds the work of all the refines together.
 - `finish` is `decode_with` on all the bytes under the decoder's options,
   `strict` included, except that `Error::Incomplete` becomes a truncation
   error: `Error::FileFormat` when a JP2 file ends inside its boxes before
@@ -64,11 +71,11 @@ each refine that decodes against the same oracle.
 ## When `refine` decodes
 
 `refine` decodes at least each time the bytes fed have doubled since it last
-decoded, and may decode more often. At present it decodes only at those
-doublings, so a file of `n` bytes gives about `log2(n)` images, on prefixes
-that double. The schedule does not
-look at the codestream, so a refine does not wait for a layer or a resolution
-to complete; the report of each image says how far the data reached.
+decoded or tried to, and may decode more often. At present it tries only at
+those doublings, so a file of `n` bytes gives at most about `log2(n)` images,
+on prefixes that double. The schedule does not look at the codestream, so a
+refine does not wait for a layer or a resolution to complete; the report of
+each image says how far the data reached.
 
 ## What the decoder keeps
 
@@ -79,8 +86,9 @@ have come in since. The walk keeps:
 - the tile's geometry, and the state of its code-blocks and tag trees, which
   carry from one layer's packets to the next;
 - its place in the progression order, as a cursor that steps through the
-  same order the one-shot walk takes (`progression::Order`), and the set of
-  packets the `POC` volumes have already emitted;
+  same order the one-shot walk takes (`progression::Order`); a packet a
+  `POC` volume emits again is told by the count of its precinct's layers
+  read;
 - where it is in the packet headers and the packet bodies, and the packet
   number an `SOP` marker must carry;
 - how many packets of each precinct it has read.
@@ -152,15 +160,19 @@ whole file does.
 
 Between calls the decoder keeps the bytes fed (in a `Vec`, so up to twice
 their length in capacity) and the tiles' packet walks: their geometry, the
-state of their code-blocks, and, until a walk has read all of its tile's
-packets, its tag trees and counts. One decode holds at its peak the samples
-of its image and the packet state of the tile it is reading. The walks kept
-hold at most twice that: twice the image's samples (4 bytes each) plus
-twice the packet state of the largest tile walked so far. A tile whose walk
-would pass that is not kept, and each refine walks its packets from the
-start. Each refine holds what `decode_with` holds for the same bytes on top
-of the walks kept, so the decoder holds at most about three times one
-decode's peak, plus the bytes fed. The decoder is `Send` and `Sync`. The
+state of their code-blocks and the `POC` gaps, and, until a walk has read
+all of its tile's packets, its progression order, tag trees, counts and
+buffers. One decode holds at its peak the samples of its image and the
+packet walk of the tile it is reading. The walks kept hold at most twice
+that: twice the image's samples (4 bytes each) plus twice the walk of the
+largest tile walked so far. Each walk's size counts every heap allocation it
+holds, capacity included. A tile whose walk would pass that is not kept, and
+each refine walks its packets from the start. Each refine holds what
+`decode_with` holds for the same bytes on top of the walks kept, so the
+decoder holds at most about three times one decode's peak, plus the bytes
+fed. `tests/incremental_alloc.rs` counts the bytes held on files of many
+one-sample tiles of 512 components, in LRCP order and under 32 PCRL `POC`
+volumes, fed in pieces. The decoder is `Send` and `Sync`. The
 ledger's counters live only for the length of a decode.
 
 Three costs are outside the bounds, as they are outside one decode's work

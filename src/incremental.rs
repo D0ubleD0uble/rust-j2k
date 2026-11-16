@@ -24,8 +24,11 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 ///
 /// `refine` does not have to decode every time it is called, so a caller
 /// can call it after every read, however small. It decodes at least each
-/// time the bytes fed have doubled since it last decoded, and may decode
-/// more often; when it does not decode, it returns `Ok(None)`.
+/// time the bytes fed have doubled since it last decoded or tried to, and
+/// may decode more often; when it does not decode, it returns `Ok(None)`.
+/// The first refine called with at least one byte fed tries; one called
+/// with none fed returns `Ok(None)` and is not a try. A try that a work
+/// bound refuses counts, so the next refine waits for twice its bytes.
 ///
 /// The decoder keeps each tile's packet walk between refines, so a refine
 /// reads only the packets that have come in since the last one. Over all
@@ -49,7 +52,7 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 ///
 /// Between calls the decoder keeps the bytes fed and the tiles' packet
 /// walks. The walks kept hold at most twice what one decode holds at its
-/// peak: twice the image's samples, plus twice the packet state of the
+/// peak: twice the image's samples, plus twice the packet walk of the
 /// largest tile. A tile whose walk would pass that is walked from the start
 /// by each refine instead. Each refine also holds what [`decode_with`]
 /// holds for the same bytes, so the decoder holds at most about three
