@@ -436,6 +436,7 @@ where
             // No sample to decode and none to place. The bit-plane counts are
             // still looked up, so a missing step size fails as it does for a
             // band that holds blocks.
+            //
             // A resolution that lists no band gets its three from one pass
             // over its rectangle.
             let [hl, lh, hh] = match coded.detail_extents(res) {
@@ -529,9 +530,11 @@ fn numbps(header: &MainHeader, comp: usize, band: usize) -> Result<u32> {
     Ok((u32::from(qcd.guard_bits) + u32::from(exp)).saturating_sub(1))
 }
 
-/// The subband of orientation `kind` within one resolution. Tier-2 always emits
-/// the full set for the resolution (one `Ll`, or `Hl/Lh/Hh`), so a miss is an
-/// internal inconsistency rather than malformed input.
+/// The subband of orientation `kind` listed by one resolution. Tier-2 lists
+/// the full set (one `Ll`, or `Hl/Lh/Hh`) for a resolution that holds a
+/// precinct, so a miss there is an internal inconsistency rather than
+/// malformed input. A resolution with no precinct lists none; see
+/// [`ComponentCoded::band`].
 fn subband_of<'a, 'b>(res: &'a Resolution<'b>, kind: BandKind) -> Result<&'a Subband<'b>> {
     res.subbands
         .iter()

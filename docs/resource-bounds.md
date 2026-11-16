@@ -200,6 +200,9 @@ output):
 | 64 tiles, 1024 components | 70 KB | 1.7 s | 0.51 s | 0.30 s | 0.29 s |
 | 64 tiles, 16384 components | 1.1 MB | `Limit`, 21 s | 11.3 s, 226 MB | 6.9 s | 5.6 s, 1.3 GB |
 
+The "After #271" and "After #272" columns were measured together; the
+"Before #271" column is from an earlier session on other load.
+
 The last is about 6 µs a byte, 1.2 times OpenJPEG, and the slowest shape
 known per byte. The same change lets the layer orders decode 8 such
 components in one tile, and the positional orders a 16-component column

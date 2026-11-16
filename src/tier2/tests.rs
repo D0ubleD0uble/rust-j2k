@@ -351,8 +351,8 @@ fn blocks_tile_the_band_and_precincts_partition_them() {
 
 /// A tile of one sample at an odd origin has a precinct at its finest
 /// resolution alone. The geometry builds no band for the 32 others, yet
-/// `decode_packets` still hands each its empty subbands at their own origins
-/// (ISO B.5, Eq. B-15), which the inverse DWT reads.
+/// `ComponentCoded::band` still gives each its empty subbands at their own
+/// origins (ISO B.5, Eq. B-15), which the inverse DWT reads.
 #[test]
 fn empty_resolutions_build_no_band_geometry() {
     let mut header = header(2, 2, 32, 6);

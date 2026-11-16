@@ -177,7 +177,8 @@ pub struct Subband<'a> {
 }
 
 /// One resolution level's subbands, in packet order: `[Ll]` at the coarsest
-/// level, `[Hl, Lh, Hh]` at every finer level.
+/// level, `[Hl, Lh, Hh]` at every finer level, or none when the resolution
+/// holds no precinct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolution<'a> {
     pub subbands: Vec<Subband<'a>>,
