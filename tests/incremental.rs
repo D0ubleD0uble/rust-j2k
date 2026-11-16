@@ -61,12 +61,20 @@ fn lenient() -> DecodeOptions {
     DecodeOptions::default().with_strict(false)
 }
 
+/// Whether `error` is a refusal by the packet or code-block work bound,
+/// which more bytes raise: its message names the option that raises it.
+fn is_work_limit(error: &Error) -> bool {
+    matches!(error, Error::Limit(m)
+        if m.contains("packet_work_limit") || m.contains("code_block_work_limit"))
+}
+
 /// What a refine on `prefix` must give: the strict-off decode, with a main
-/// header cut short as `None`.
+/// header cut short and a work-bound refusal as `None`.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
     match decode_with(prefix, &options.clone().with_strict(false)) {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
+        Err(error) if is_work_limit(&error) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -171,11 +179,8 @@ fn halves(name: &str, bytes: &[u8], options: &DecodeOptions) -> usize {
         }
         // A decode whose cost is in its geometry, not its bytes, can spend
         // most of the bound on the first half: then the refine of the whole
-        // waits, and `finish` decodes it or refuses it for work.
-        if fed == bytes.len()
-            && refined == Ok(None)
-            && matches!(expected, Ok(Some(_)) | Err(Error::Limit(_)))
-        {
+        // waits, and `finish` decodes it.
+        if fed == bytes.len() && refined == Ok(None) && matches!(expected, Ok(Some(_))) {
             continue;
         }
         assert_eq!(refined, expected, "{name}, {fed} bytes");
@@ -470,4 +475,45 @@ fn a_limit_more_bytes_cannot_clear_is_an_error() {
         }
     }
     panic!("no refine reached the sample limit");
+}
+
+/// A work-bound refusal on a prefix is a wait, not an error: the bounds
+/// grow with the bytes. `t1bomb_1024_64_88.j2k` with 6000 zero bytes added
+/// to its tile-part needs more code-block work than the floor of the bound
+/// allows on some prefixes, though the whole file is within its bound.
+#[test]
+fn a_work_bound_a_prefix_reaches_is_a_wait() {
+    let path = fixtures().join("tier1_work_bound/t1bomb_1024_64_88.j2k");
+    let mut bytes = std::fs::read(&path).unwrap();
+    // The codestream ends with EOC; put the zeros before it, in the one
+    // tile-part, and grow its Psot to match.
+    assert_eq!(&bytes[bytes.len() - 2..], &[0xFF, 0xD9]);
+    let sot = bytes
+        .windows(2)
+        .position(|w| w == [0xFF, 0x90])
+        .expect("an SOT marker");
+    let psot = u32::from_be_bytes(bytes[sot + 6..sot + 10].try_into().unwrap());
+    assert_eq!(psot as usize, bytes.len() - 2 - sot, "one tile-part to EOC");
+    let eoc = bytes.len() - 2;
+    bytes.splice(eoc..eoc, std::iter::repeat_n(0u8, 6000));
+    bytes[sot + 6..sot + 10].copy_from_slice(&(psot + 6000).to_be_bytes());
+
+    let lenient = lenient();
+    // The premise: a prefix is refused for work that the whole file is not.
+    let refused = (1..=bytes.len() / 256)
+        .any(|k| decode_with(&bytes[..256 * k], &lenient).is_err_and(|e| is_work_limit(&e)));
+    assert!(refused, "no prefix reaches the work bound");
+    assert!(decode_with(&bytes, &lenient).is_ok());
+
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    for piece in bytes.chunks(256) {
+        decoder.feed(piece);
+        if let Err(error) = decoder.refine() {
+            panic!("{} bytes: {error:?}", decoder.bytes_fed());
+        }
+    }
+    assert_eq!(
+        decoder.finish(),
+        decode_with(&bytes, &DecodeOptions::default())
+    );
 }

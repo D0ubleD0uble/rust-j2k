@@ -70,13 +70,15 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// ```
 ///
 /// An error from `refine` is the error [`decode_with`] gives with `strict`
-/// off on the same bytes, such as a marker segment with an invalid field.
-/// More bytes do not undo it, so a caller stops there. That includes an
-/// [`Error::Limit`], such as an image past the sample limit. Two refusals
-/// are not final while bytes may still come, so `refine` returns `Ok(None)`
-/// for them: a main header cut short ([`Error::Incomplete`]), and a work
-/// bound the earlier refines' spending cut short, which more bytes raise.
-/// `finish` gives either as an error.
+/// off on the same bytes, such as a marker segment with an invalid field,
+/// or an [`Error::Limit`] that does not depend on how many bytes there are:
+/// an image past the sample limit, too many precincts or code-blocks, too
+/// many `POC` volumes, or too many bit-planes. More bytes do not undo
+/// these, so a caller stops there. Two refusals are not final while bytes
+/// may still come, so `refine` returns `Ok(None)` for them and only
+/// `finish` reports them: a main header cut short ([`Error::Incomplete`]),
+/// and a refusal by the packet or code-block work bound, which more bytes
+/// raise.
 pub struct IncrementalDecoder {
     /// The options `finish` decodes under.
     options: DecodeOptions,
@@ -139,17 +141,16 @@ impl IncrementalDecoder {
     /// [`strict`](DecodeOptions::strict) off on all the bytes fed, and its
     /// [`report`](Image::report) lists what they do not hold yet.
     /// `Ok(None)` means there is no new image yet: too few bytes have come
-    /// in since the last decode, the main header is not whole, or the decode
-    /// ran out of what the earlier refines left of a work bound. Any error
-    /// is the one `decode_with` gives on those bytes, and more bytes will
-    /// not clear it.
+    /// in since the last decode, the main header is not whole, or a work
+    /// bound refused the decode. Any error is the one `decode_with` gives
+    /// on those bytes, and more bytes will not clear it.
     pub fn refine(&mut self) -> Result<Option<Image>> {
         let fed = self.bytes.len();
         if fed == 0 || fed < self.tried.saturating_mul(2) {
             return Ok(None);
         }
         self.tried = fed;
-        self.ledger.cut.set(false);
+        self.ledger.work_refused.set(false);
         match decode_metered(&self.bytes, &self.lenient, Some(&self.ledger)) {
             Ok(image) => {
                 self.decoded = fed;
@@ -158,7 +159,7 @@ impl IncrementalDecoder {
             // More bytes can complete the header, and raise the work
             // bounds past what the earlier refines spent.
             Err(Error::Incomplete(_)) => Ok(None),
-            Err(Error::Limit(_)) if self.ledger.cut.get() => Ok(None),
+            Err(Error::Limit(_)) if self.ledger.work_refused.get() => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -215,9 +216,8 @@ pub(crate) struct Ledger {
     packets: Cell<u64>,
     /// The code-block work spent.
     blocks: Cell<u64>,
-    /// Whether the last decode was refused for work that its bound, had
-    /// the earlier spending not cut it, may have allowed.
-    cut: Cell<bool>,
+    /// Whether a work bound refused the last decode.
+    work_refused: Cell<bool>,
 }
 
 impl Ledger {
@@ -240,10 +240,12 @@ impl Ledger {
         bound.saturating_sub(spent)
     }
 
-    /// Record that a decode was refused for work, and whether the cut its
-    /// bound took may be why.
-    pub(crate) fn refuse(&self, by_cut: bool) {
-        self.cut.set(by_cut);
+    /// Record that a work bound refused a decode: the packet walk, the
+    /// code-block work or the charge for missing tiles. The bounds grow
+    /// with the bytes and the missing tiles shrink, so more bytes may
+    /// clear it.
+    pub(crate) fn refuse(&self) {
+        self.work_refused.set(true);
     }
 
     /// Add `work` to the code-block work spent.

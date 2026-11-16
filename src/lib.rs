@@ -1521,17 +1521,14 @@ fn decode_codestream(
     let bytes = tile_bytes(&cs);
     let poc_bitmap = tier2::decode_visits(bytes);
     let packet_bound = options.packet_work_limit.apply(poc_bitmap);
-    let packet_first = ledger.map_or(packet_bound, |l| l.packets_left(packet_bound));
-    let meter = tier2::Meter::new(packet_first);
+    let meter = tier2::Meter::new(ledger.map_or(packet_bound, |l| l.packets_left(packet_bound)));
     // However the decode ends, what the walk spent goes on the ledger.
     let _record = ledger.map(|l| l.record(&meter));
-    // The code-block work bound, and how much of it the ledger took off.
-    let (mut block_work, block_cut) = match &options.code_block_work_limit {
-        WorkLimit::Unlimited => (None, 0),
+    let mut block_work = match &options.code_block_work_limit {
+        WorkLimit::Unlimited => None,
         limit => {
             let bound = limit.apply(tier1::decode_work(bytes));
-            let first = ledger.map_or(bound, |l| l.blocks_left(bound));
-            (Some(first), bound - first)
+            Some(ledger.map_or(bound, |l| l.blocks_left(bound)))
         }
     };
     let first_work = block_work.unwrap_or(0);
@@ -1554,7 +1551,7 @@ fn decode_codestream(
     let cost = missing.saturating_mul(cs.header.siz.components.len() as u64);
     if !meter.try_spend(cost) {
         if let Some(ledger) = ledger {
-            ledger.refuse(cost <= packet_bound);
+            ledger.refuse();
         }
         return Err(Error::Limit(limit_hint::missing_tiles(
             cost,
@@ -1600,10 +1597,8 @@ fn decode_codestream(
         let (mut coded, reach) = match walked {
             Ok(walked) => walked,
             Err(tier2::Refused::Work(work)) => {
-                // Whether the walk would have gone on under the whole bound
-                // is not known, so a cut bound takes the blame.
                 if let Some(ledger) = ledger {
-                    ledger.refuse(packet_first < packet_bound);
+                    ledger.refuse();
                 }
                 // The meter holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
@@ -1715,7 +1710,7 @@ fn decode_codestream(
             tests::BLOCK_WORK.with(|spent| spent.set(spent.get() + work));
             let Some(rest) = left.checked_sub(work) else {
                 if let Some(ledger) = ledger {
-                    ledger.refuse(work <= left.saturating_add(block_cut));
+                    ledger.refuse();
                 }
                 return Err(Error::Limit(limit_hint::code_blocks(
                     index,

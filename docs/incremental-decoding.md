@@ -13,14 +13,17 @@ the work is bounded, and what a later, more stateful version would change.
   complete and which tiles are missing.
 - `refine` returns `Ok(None)` where `decode_with` gives `Error::Incomplete`
   (the main header is cut short), since more bytes can complete the header.
-  It also returns `Ok(None)` when a work bound refuses the decode and the cut
-  the ledger made to that bound may be the reason (see below), since more
-  bytes raise the bound. Any other error, including a limit more bytes cannot
-  clear such as the sample limit, is the one `decode_with` gives on those
-  bytes.
+  It also returns `Ok(None)` when the packet or code-block work bound, or the
+  charge for missing tiles, refuses the decode: those bounds grow with the
+  bytes and the missing tiles shrink, so a work limit is reported only by
+  `finish`. Any other error, including a limit that does not depend on the
+  bytes (the sample limit, too many precincts, code-blocks or `POC` volumes,
+  too many bit-planes), is the one `decode_with` gives on those bytes.
 - A refine gives an image when one is due: once the bytes fed are twice those
   of the last image, or, before the first, twice those the header needs, and
-  the one-shot decode of the bytes fed gives an image.
+  the one-shot decode of the bytes fed gives an image. The exception is a
+  refine for which the earlier refines have spent the work bound (see
+  below).
 - `finish` is `decode_with` on all the bytes under the decoder's options,
   `strict` included, except that `Error::Incomplete` becomes a truncation
   error: `Error::FileFormat` when a JP2 file ends inside its boxes before
@@ -56,13 +59,10 @@ to complete; the report of each image says how far the data reached.
 The work bounds of `decode` hold across all the refines together. A ledger
 keeps the packet visits and code-block work every refine has spent, and each
 refine's bounds are what is left of the bounds one decode of its bytes has
-(raised as the options say). A refine refused for work that the uncut bound
-may have allowed returns `Ok(None)` and waits for more bytes, which raise the
-bound. For the packet walk that is any refusal under a cut bound, since how
-much further the walk would have gone is not known; for the code-block work
-and the charge for missing tiles, the work is known, and a refusal the uncut
-bound would make too is an error. `finish` is one more decode, under its own
-bound. A file whose packet walk costs about the same however
+(raised as the options say). A refine a work bound refuses returns
+`Ok(None)` and waits for more bytes, which raise the bound. `finish` is one
+more decode, under its own bound, and reports a work limit as one decode of
+the whole file does. A file whose packet walk costs about the same however
 few of its bytes are there, such as a positional sweep over a large grid, can
 spend most of the bound on its first refine; its later refines then wait, and
 only `finish` decodes it. The unit test
