@@ -59,7 +59,6 @@ impl PacketWalk<'_> {
     /// 64, and a coarse resolution of a deep pyramid (span past `2^32`) is a
     /// packet it emits. Gating emission on `shl32` would drop that packet and
     /// desynchronize the tile.
-    #[inline(always)]
     fn precinct_at(&self, comp: usize, res: usize, x: u64, y: u64) -> Option<usize> {
         let geom = &self.geoms[comp][res];
         if geom.precinct_count() == 0 {
@@ -236,33 +235,34 @@ impl Plan {
 ///
 /// The pairs are sorted by component, so a volume over every resolution
 /// takes a run of the whole tile's list, whatever its components: a `POC`
-/// sequence of such volumes keeps one list, not one per volume. Building
-/// one per volume up front made the heap grow and shrink about 17 times a
-/// tile on a walk of 32 volumes over 16384 components.
+/// sequence of such volumes keeps one list, not one per volume. With 32
+/// volumes over 16384 components, a list each is 8 MB a tile, which the
+/// heap grows for and gives back on every tile.
 fn pair_lists(
-    walk: &PacketWalk<'_>,
+    plan: &Plan,
+    components: usize,
     max_res: usize,
     volumes: &[Volume],
 ) -> (Vec<Vec<(usize, usize)>>, Vec<(usize, std::ops::Range<usize>)>) {
     let swept = |v: &Volume| matches!(v.progression, Progression::Pcrl | Progression::Cprl);
     let whole = |v: &Volume| v.resolutions.start == 0 && v.resolutions.end >= max_res;
-    // The held pairs of `components` over `resolutions`, in component order.
-    let build = |components: std::ops::Range<usize>, resolutions: &std::ops::Range<usize>| {
-        let mut list = Vec::new();
-        for comp in components {
-            let geoms = &walk.geoms[comp];
-            let end = resolutions.end.min(geoms.len());
-            for res in resolutions.start.min(end)..end {
-                if geoms[res].precinct_count() > 0 {
-                    list.push((comp, res));
-                }
-            }
-        }
+    // The held pairs of `components` over `resolutions`, sorted. They are
+    // read from `plan.held`, which lies in one place, rather than from
+    // each component's geometry, which does not.
+    let build = |components: &std::ops::Range<usize>, resolutions: &std::ops::Range<usize>| {
+        let mut list: Vec<(usize, usize)> = resolutions
+            .clone()
+            .flat_map(|res| {
+                let (start, end) = plan.held_range(res, components);
+                plan.held[res][start..end].iter().map(move |&c| (c, res))
+            })
+            .collect();
+        list.sort_unstable();
         list
     };
     let mut lists = Vec::new();
     if volumes.iter().any(|v| swept(v) && whole(v)) {
-        lists.push(build(0..walk.geoms.len(), &(0..max_res)));
+        lists.push(build(&(0..components), &(0..max_res)));
     }
     // The volumes that built a list of their own, with the list.
     let mut owners: Vec<(usize, usize)> = Vec::new();
@@ -287,7 +287,7 @@ fn pair_lists(
             let list = match same {
                 Some(&(_, list)) => list,
                 None => {
-                    lists.push(build(v.components.clone(), &v.resolutions));
+                    lists.push(build(&v.components, &v.resolutions));
                     owners.push((index, lists.len() - 1));
                     lists.len() - 1
                 }
@@ -418,21 +418,19 @@ where
     let order = Order::new(header, walk);
     // With one volume every tuple is visited once, so the dedup is pure overhead
     // and skipped; a `POC` sequence needs it, because volumes may overlap.
-    let mut emitted = if order.volumes.len() == 1 {
-        None
-    } else {
-        Some(Emitted::new(
-            &order.volumes,
-            walk,
-            order.max_res,
-            meter,
-            poc_bitmap,
-            poc_set,
-        )?)
-    };
-    let skip_visits = emitted.as_ref().map_or(0, Emitted::skip_visits);
-    let mut emit = |layer: u32, res: usize, comp: usize, precinct: usize| match &mut emitted {
-        None => f(layer, res, comp, precinct),
+    if order.volumes.len() == 1 {
+        return order.walk_runs(walk, meter, f);
+    }
+    let mut emitted = Emitted::new(
+        &order.volumes,
+        walk,
+        order.max_res,
+        meter,
+        poc_bitmap,
+        poc_set,
+    )?;
+    let skip_visits = emitted.skip_visits();
+    order.walk_runs(walk, meter, |layer, res, comp, precinct| {
         // A packet skipped from the bitmap is not charged. Only a packet
         // read is marked, and a read takes a visit and at least a byte of
         // packet header; at most 31 later volumes can meet it again. A
@@ -443,43 +441,14 @@ where
         // OpenJPEG reads quickly, such as 31 identical volumes over 1 MB
         // of empty packets. A skip from the set costs far more and is
         // charged (see `SET_SKIP_VISITS`).
-        Some(emitted) => {
-            if emitted.insert(walk, layer, res, comp, precinct)? {
-                f(layer, res, comp, precinct)
-            } else if skip_visits > 0 {
-                meter.spend(skip_visits, WorkRefusal::PacketWalk)
-            } else {
-                Ok(())
-            }
+        if emitted.insert(walk, layer, res, comp, precinct)? {
+            f(layer, res, comp, precinct)
+        } else if skip_visits > 0 {
+            meter.spend(skip_visits, WorkRefusal::PacketWalk)
+        } else {
+            Ok(())
         }
-    };
-    let mut cursor = Cursor::default();
-    while let Some(run) = order.next_run(walk, &mut cursor, meter)? {
-        match run {
-            Run::Layers {
-                res,
-                comp,
-                precinct,
-                layers,
-            } => {
-                for layer in layers {
-                    emit(layer, res, comp, precinct)?;
-                }
-            }
-            Run::Precincts {
-                layer,
-                res,
-                comp,
-                precincts,
-            } => {
-                for precinct in precincts {
-                    emit(layer, res, comp, precinct)?;
-                }
-            }
-        }
-        order.finish_point(walk, &mut cursor, &mut emit)?;
-    }
-    Ok(())
+    })
 }
 
 /// The visits a packet skipped from [`Emitted`]'s set is charged. A lookup
@@ -840,7 +809,7 @@ impl Order {
                 .collect()
         };
         let plan = Plan::new(walk, max_res, &volumes);
-        let (lists, pairs) = pair_lists(walk, max_res, &volumes);
+        let (lists, pairs) = pair_lists(&plan, components, max_res, &volumes);
         Order {
             volumes,
             plan,
@@ -973,6 +942,45 @@ impl Order {
         }
     }
 
+    /// Walk the order from its start, calling `f(layer, resolution,
+    /// component, precinct)` for each packet: the steps of
+    /// [`Order::next_run`], with the rest of each point taken by
+    /// [`Order::finish_point`].
+    fn walk_runs(
+        &self,
+        walk: &PacketWalk<'_>,
+        meter: &Meter,
+        mut f: impl FnMut(u32, usize, usize, usize) -> Result<()>,
+    ) -> Result<()> {
+        let mut cursor = Cursor::default();
+        while let Some(run) = self.next_run(walk, &mut cursor, meter)? {
+            match run {
+                Run::Layers {
+                    res,
+                    comp,
+                    precinct,
+                    layers,
+                } => {
+                    for layer in layers {
+                        f(layer, res, comp, precinct)?;
+                    }
+                }
+                Run::Precincts {
+                    layer,
+                    res,
+                    comp,
+                    precincts,
+                } => {
+                    for precinct in precincts {
+                        f(layer, res, comp, precinct)?;
+                    }
+                }
+            }
+            self.finish_point(walk, &mut cursor, &mut f)?;
+        }
+        Ok(())
+    }
+
     /// Emit with `f` every packet left of the point at `cursor`, after a
     /// run [`Order::next_run`] gave, in the order `next_run` would give
     /// them, and leave `cursor` past them, as `next_run` would.
@@ -980,8 +988,8 @@ impl Order {
     /// This is the one-shot walk's loop within a point. Taking the rest of
     /// a point here, rather than a run at a time through `next_run`, keeps
     /// a point of many (component, resolution) pairs as fast as a nested
-    /// loop over them: on 16384 components in 32 `POC` volumes, about 15%
-    /// of the walk's time.
+    /// loop over them: a run at a time adds about 15% to a walk of 32
+    /// `POC` volumes over 16384 components.
     #[inline(always)]
     fn finish_point(
         &self,
@@ -1021,25 +1029,28 @@ impl Order {
                     }
                     start += 1;
                 }
-                let mut point = |comp: usize, res: usize| -> Result<()> {
-                    if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
-                        for layer in 0..layers {
-                            f(layer, res, comp, precinct)?;
-                        }
-                    }
-                    Ok(())
-                };
+                // The loops are written out, not shared through a closure:
+                // a closure here is not inlined, and calling it for each
+                // pair costs about a third of the loop.
                 if layers > 0 {
                     match volume.progression {
                         Progression::Rpcl => {
                             let res = cursor.a;
                             for &comp in &self.plan.held[res][start.min(end)..end] {
-                                point(comp, res)?;
+                                if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
+                                    for layer in 0..layers {
+                                        f(layer, res, comp, precinct)?;
+                                    }
+                                }
                             }
                         }
                         _ => {
                             for &(comp, res) in &self.pairs(cursor.volume)[start.min(end)..end] {
-                                point(comp, res)?;
+                                if let Some(precinct) = walk.precinct_at(comp, res, x, y) {
+                                    for layer in 0..layers {
+                                        f(layer, res, comp, precinct)?;
+                                    }
+                                }
                             }
                         }
                     }
