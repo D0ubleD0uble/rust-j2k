@@ -160,9 +160,13 @@ Measured on release builds (`scripts/gen-work-bound-fixtures.py`):
 
 The bound scales with size, so a large file of the same shape still takes as
 long as its bytes allow: `t2skip` in 153 tiles, 10 MB, is refused after 3.1 s,
-about what 10 MB of real data takes to decode. A step costs 2 to 15 ns. The
-conformance codestreams over 100 KB decode at 0.19 (`p1_05`) to 0.73 (`p1_04`)
-µs a byte, the best of five release-build decodes of each. Over all 23 the
+about what 10 MB of real data takes to decode. A step costs 1 to 55 ns: a
+positional walk's points over 16384 components and 200 tiles, each with a
+packet to read, take 24 to 28 ns a step over 32 POC volumes and 33 to 55 ns
+with none. The conformance codestreams over 100 KB decode at 0.19 (`p1_05`) to
+0.73 (`p1_04`) µs a byte, the best of five release-build decodes of each. The
+bound comes to about 0.02 to 1.8 µs a byte, so at most a refusal takes about
+2.5 times the slowest conformance decode per byte. Over all 23 the
 range is wider, 0.06 to 0.75 µs a byte. The cheapest refusals are in the layer
 orders over resolutions with no precinct, at about 2 ns a step: `layer_edge`
 (655 KB, 33 steps a byte) is refused in 0.015 to 0.04 s, 0.02 to 0.06 µs a
@@ -262,8 +266,9 @@ pass over precincts, so the decode keeps the packets read in a set, at most
 one per byte of packet headers and about 24 bytes each. The bitmap stays
 capped at the default bound's size, so raising the bound raises the time a
 file may take, not its memory: past that size the packets read go in the
-set. A skip from the set is a lookup that misses the cache, 80 to 180 ns
-against at most 15 ns for a step, so each one is charged 12 steps.
+set. A skip from the set is a lookup that misses the cache, 80 to 180 ns,
+and each one is charged 12 steps: 15 ns a step, toward the cheap end of
+what a step takes, so the charge errs high.
 
 `read_header`'s walk keeps no set: past its bitmap, only where the decode would
 keep one, it gives up. For a `Psot = 0` codestream in a JP2 file the codestream
