@@ -454,8 +454,9 @@ where
 
 /// The visits a packet skipped from [`Emitted`]'s set is charged. A lookup
 /// in a set of millions of packets misses the cache: about 80 to 180 ns,
-/// measured on the `setskip` shape of 1.4e7 packets read, against at most
-/// 15 ns for a visit, so 12 visits.
+/// measured on the `setskip` shape of 1.4e7 packets read. Twelve visits
+/// prices a visit at 15 ns, toward the cheap end of the 1 to 55 ns one
+/// takes (see `DECODE_VISITS_PER_BYTE`), so the charge errs high.
 pub(crate) const SET_SKIP_VISITS: usize = 12;
 
 /// The packets a `POC` sequence has emitted so far (see [`for_each_packet`]),
