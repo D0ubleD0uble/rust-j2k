@@ -66,7 +66,7 @@ pub(super) fn decode<'s, 'a>(
     // panic — the same rejection OpenJPEG makes with `bpno_plus_one >= 31`.
     // This does not bound the maxshift itself: a block with more zero
     // bit-planes than `Mb` keeps `top` small under any `SPrgn`, and
-    // `undo_maxshift` carries the oracle's `roishift >= 31` arm for it.
+    // `undo_maxshift` keeps every coefficient when `roi_shift >= 31`.
     let top = top_coded_plane(numbps, block.zero_bit_planes, roi_shift);
     if top > MAX_BIT_PLANES {
         return Err(Error::Limit(format!(

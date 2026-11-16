@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Write tests/fixtures/roi_h1_band/: a lossless 8x8 encode with a maxshift
-of 7 whose background coefficients sit in the band 2^(s-1)..2^s-1.
+of S (7 or 31) whose background coefficients sit in the band 2^(s-1)..2^s-1.
 
 `opj_compress -ROI` only signals SPrgn and raises no zero bit-planes, so it
 cannot make a stream whose background sits in the band. This script
@@ -11,14 +11,15 @@ a block with no region (H.2: the count is against Mb + s). The coded bytes
 are unchanged. Every sample then has |sample - 128| < 2^7, so all are
 background and H.1 returns the source.
 
-Usage: gen-roi-h1-band-fixture.py [outdir]   (needs OpenJPEG 2.5.0 opj_compress)
+Usage: gen-roi-h1-band-fixture.py [outdir [S]]   (S defaults to 7; the
+fixture also has S = 31. Needs OpenJPEG 2.5.0 opj_compress)
 """
 import subprocess
 import sys
 from pathlib import Path
 
-S = 7
 out = Path(sys.argv[1] if len(sys.argv) > 1 else "tests/fixtures/roi_h1_band")
+S = int(sys.argv[2]) if len(sys.argv) > 2 else 7
 out.mkdir(parents=True, exist_ok=True)
 
 # |v - 128| < 128 everywhere; 64, 192, 228, 255 and 200 have bit 6 (s - 1) set

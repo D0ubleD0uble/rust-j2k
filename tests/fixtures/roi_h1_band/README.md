@@ -1,7 +1,8 @@
 # Maxshift background in the H.1 band
 
 Used by `tests/roi_h1_band.rs`. A lossless 8x8 codestream with an RGN maxshift
-of `SPrgn = 7` and no region of interest. Every coefficient is background, and
+of `SPrgn = 7` (and `roi_band_s31.j2k`, with `SPrgn = 31`) and no region of
+interest. Every coefficient is background, and
 half have bit 6 (`s - 1`) set, the band where H.1 and OpenJPEG differ (see
 `docs/openjpeg-departures.md`, "Region of interest threshold (Part 1 and HT)").
 
@@ -28,3 +29,12 @@ The source image. It does not come from this decoder: the codestream is
 lossless and every coefficient is background (`q < 2^7`), so H.1 gives back
 each sample. `opj_decompress` 2.5.0 returns 128 for the eight band values
 (32 of the 64 samples): it takes them for region and shifts them away.
+
+## `roi_band_s31.j2k`
+
+The same image and generator with `SPrgn = 31`
+(`scripts/gen-roi-h1-band-fixture.py tests/fixtures/roi_h1_band 31`). SHA-256
+`9857a9ce5b48f79d85d60322a0d6a52b3b6fb8fa07a739ddcaa88fe7565386ab`. H.1 keeps
+every coefficient as background when `s >= 31`, so the expected output is
+`source.pgm`. `opj_decompress` 2.5.0 zeroes the block and returns 128 for all
+64 samples.

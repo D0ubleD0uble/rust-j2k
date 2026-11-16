@@ -34,3 +34,23 @@ fn background_values_with_bit_s_minus_one_set_decode_as_the_source() {
         "the decode differs from source.pgm"
     );
 }
+
+/// `roi_band_s31.j2k` is the same image with `SPrgn = 31`. H.1 keeps every
+/// coefficient as background from `s = 31` on, so the decode is again the
+/// source. `opj_decompress` 2.5.0 zeroes the block and returns 128 for all 64
+/// samples.
+#[test]
+fn a_maxshift_of_31_keeps_every_coefficient() {
+    let dir = synth::fixtures("roi_h1_band");
+    let source = std::fs::read(dir.join("source.pgm")).unwrap();
+    let want: Vec<i32> = source[11..].iter().map(|&b| i32::from(b)).collect();
+    assert_eq!(want.len(), 64);
+    assert!(want.iter().any(|&v| v != 128), "the source is not flat");
+
+    let image = decode(&std::fs::read(dir.join("roi_band_s31.j2k")).unwrap()).unwrap();
+    assert_eq!((image.width, image.height), (8, 8));
+    assert!(
+        image.components[0].samples == want,
+        "the decode differs from source.pgm"
+    );
+}
