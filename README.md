@@ -239,6 +239,9 @@ and OpenJPEG differ on purpose are in
 [docs/openjpeg-departures.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/openjpeg-departures.md). The test suite
 needs no external tools.
 
+The speed and memory of this decoder next to OpenJPEG, Grok, OpenJPH and
+hayro-jpeg2000 are in [docs/performance.md](docs/performance.md).
+
 ## Contributing and security
 
 To contribute, start with [CONTRIBUTING.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/CONTRIBUTING.md). It has the
