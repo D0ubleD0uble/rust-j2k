@@ -64,4 +64,4 @@ panic, hang or allocate too much, but not corrupt memory. It has no runtime
 dependencies, Rust or C, so no third-party codec brings its own memory-safety
 bugs. And it is fuzzed: cargo-fuzz targets feed arbitrary bytes to the public
 functions and to each decoding stage, and CI runs a short fuzz session on
-every pull request. [fuzz/README.md](fuzz/README.md) lists the targets.
+every pull request. [fuzz/README.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md) lists the targets.

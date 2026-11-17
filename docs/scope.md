@@ -2,7 +2,7 @@
 
 This page lists the JPEG 2000 features, grouped by part of the standard, and
 says whether this decoder reads each one today. When a feature isn't read yet,
-the table names the [roadmap](roadmap.md) phase that plans it. A file that
+the table names the [roadmap](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md) phase that plans it. A file that
 needs a feature this decoder doesn't read is refused with
 `Error::Unsupported` rather than decoded wrongly.
 

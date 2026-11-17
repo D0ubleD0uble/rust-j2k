@@ -11,10 +11,12 @@ use rust_j2k::{
     ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo, DecodeOptions,
     DecodeReport, Error, ErrorDetail, FileType, Header, Image, ImageHeader, IncrementalDecoder,
     IprBox, Jp2Metadata, LimitDetail, LimitKind, MappingKind, Palette, PaletteColumn, Ratio,
-    ReaderRequirements, Region, ReportEntry, Res, Resolution, StandardFeature, UuidBox, UuidInfo,
-    VendorFeature, Window, WorkLimit, XmlBox,
+    ReaderRequirements, Region, ReportEntry, Res, Resolution, StandardFeature, TileGrid, UuidBox,
+    UuidInfo, VendorFeature, Window, WorkLimit, XmlBox,
 };
 
+// Used only in `const _` blocks, which Rust 1.87 does not count as a use.
+#[allow(dead_code)]
 const fn holds<T: Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
 
 const _: () = {
@@ -22,6 +24,7 @@ const _: () = {
     holds::<Component>();
     holds::<Header>();
     holds::<ComponentInfo>();
+    holds::<TileGrid>();
     holds::<Error>();
     holds::<ErrorDetail>();
     holds::<LimitDetail>();
@@ -59,9 +62,15 @@ const _: () = {
     holds::<MappingKind>();
 };
 
-// `LimitKind` is a plain value a caller can copy, compare and key a map by.
+// `LimitKind` and `TileGrid` are plain values a caller can copy, compare
+// and key a map by.
+// Used only in `const _` blocks, which Rust 1.87 does not count as a use.
+#[allow(dead_code)]
 const fn plain<T: Copy + Eq + std::hash::Hash + std::fmt::Debug>() {}
-const _: () = plain::<LimitKind>();
+const _: () = {
+    plain::<LimitKind>();
+    plain::<TileGrid>();
+};
 
 // The assertions are all compile-time; this keeps the file a test target.
 #[test]

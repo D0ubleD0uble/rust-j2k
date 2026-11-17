@@ -224,6 +224,20 @@ bit for bit as OpenJPEG decodes it, checked against committed digests of
 OpenJPEG's output. All 20 JPH files are in class, and each matches the PAE
 and MSE Kakadu quotes against its source.
 
+#### Windows of HT codestreams
+
+`opj_decompress -d` is not an oracle for a window of an HT codestream.
+OpenJPEG 2.5.0 decodes there only the tiles that lie wholly inside the
+window and fills the rest of the window with mid-gray (128 at 8 bits): the
+value of zero coefficients after the DC level shift. It does so on tiled and
+untiled files alike. Against the crop of its own whole decode the error reaches 127
+at 8 bits and 32768 at 16 bits (126 on `ds0_ht_01_b11` with `-d
+10,10,60,60`). A tile-aligned window is unaffected. For an HT window, the
+oracle is OpenJPEG's whole decode, cropped. This decoder's window equals
+the crop of its own whole decode, which the ratchets above grade:
+`tests/decode_window_random.rs` checks that on two OpenJPH codestreams and
+11 ISO ones, eight HT and three MIXED. No HT test uses `-d` as its reference.
+
 ## A passing entry is not proof the feature works
 
 `IN_CLASS` growing is the goal, but it is not the same as a feature being
@@ -285,7 +299,7 @@ for both flags is weaker than one carrying `segsym` alone. Where features
 compose, the fixture that isolates each one is the one that grades it.
 
 So an entry is the oracle for a feature only if some change to that feature's
-code would make the entry fail. [development.md](development.md#check-that-a-fixture-tests-the-feature)
+code would make the entry fail. [development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md#check-that-a-fixture-tests-the-feature)
 says how to check that before adding an entry to `IN_CLASS`.
 
 ## Per-stage golden tests
@@ -305,7 +319,7 @@ golden tests, which point at the stage that broke:
   is lossy, so its samples are not a trustworthy coefficient oracle, and the
   end-to-end lossy fixtures grade the 9/7 quantization and wavelet path
   instead. Regenerate the vectors with
-  [`scripts/gen-tier1-vectors.py`](../scripts/gen-tier1-vectors.py).
+  [`scripts/gen-tier1-vectors.py`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/scripts/gen-tier1-vectors.py).
 - Tag trees and packet headers: inclusion, zero bit-planes and lengths
   decoded from hand-built packet headers.
 - Inverse DWT: 5/3 integer lifting bit-exact on known signals, and 9/7
@@ -316,7 +330,7 @@ golden tests, which point at the stage that broke:
 
 The test suite needs no reference decoder at run time. Fixtures and their
 oracle snapshots are committed, and OpenJPEG or eccodes is needed only to
-regenerate a snapshot ([development.md](development.md)). Each fixture records
+regenerate a snapshot ([development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md)). Each fixture records
 its provenance, the source file and the exact command that produced its
 oracle, so the corpus can be rebuilt.
 
@@ -350,11 +364,11 @@ A decoder parses bytes it did not produce, so malformed input is an ordinary
 case, not an edge case.
 
 This decoder is fuzzed with `cargo fuzz` (libFuzzer) in the detached
-[`fuzz/`](../fuzz/) workspace, with ten targets: `decode`, `header`,
+[`fuzz/`](https://github.com/D0ubleD0uble/rust-j2k/tree/main/fuzz) workspace, with ten targets: `decode`, `header`,
 `decode_partial` and `incremental_decode` over the public entry points, and
 `tile_body`, `tier1_block`, `ht_block`, `mq`, `jp2_boxes` and `icc_srgb` over
 single stages. See
-[`fuzz/README.md`](../fuzz/README.md) to run them. The bar is no panics, no
+[`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md) to run them. The bar is no panics, no
 unbounded allocation and no infinite loops: every rejected input returns a
 typed `Error`. A malformed SIZ cannot steer the buffers into an overflowing
 or out-of-memory allocation. SIZ's declared image area,
