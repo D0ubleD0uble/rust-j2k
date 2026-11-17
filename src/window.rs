@@ -152,13 +152,13 @@ impl Selection {
 
 /// The checks of the three options that need no input.
 pub(crate) fn check_options(options: &DecodeOptions) -> Result<()> {
-    if let Region::Window(w) = options.region
-        && (w.x0 >= w.x1 || w.y0 >= w.y1)
-    {
-        return Err(Error::InvalidOptions(format!(
-            "the window {}..{} by {}..{} is empty",
-            w.x0, w.x1, w.y0, w.y1
-        )));
+    if let Region::Window(w) = options.region {
+        if w.x0 >= w.x1 || w.y0 >= w.y1 {
+            return Err(Error::InvalidOptions(format!(
+                "the window {}..{} by {}..{} is empty",
+                w.x0, w.x1, w.y0, w.y1
+            )));
+        }
     }
     if let Some(components) = &options.components {
         if components.is_empty() {
