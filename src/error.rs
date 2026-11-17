@@ -84,7 +84,7 @@ pub enum Error {
     Codestream(ErrorDetail),
     /// The input ends before the codestream's main header is whole, that is,
     /// before its first `SOT` marker (the start of the first
-    /// [tile-part](https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds)) is complete. No top-level box or segment
+    /// [tile-part](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/README.md#what-a-jpeg-2000-file-holds)) is complete. No top-level box or segment
     /// the input holds in full was found damaged, so more bytes may still give
     /// a valid header. The boxes inside a superbox (such as `ihdr` in `jp2h`)
     /// are judged only once the superbox is whole, so a cut `jp2h` is this

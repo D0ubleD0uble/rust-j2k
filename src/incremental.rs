@@ -36,7 +36,7 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// the refines, the packet headers are read about once, as one decode reads
 /// them; a packet the data cuts is read again by each refine ([the packets
 /// a refine reads
-/// again](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
+/// again](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)).
 /// Each refine is held to the packet bound of a decode of its bytes on its
 /// own: it is charged the packet visits that decode would spend, and a
 /// refine that decode is refused for returns `Ok(None)`.

@@ -146,7 +146,7 @@ The API docs use the standard's names for the parts of a codestream:
   "Part 1"): lossless and lossy compression, images cut into tiles, quality
   layers, every order the data can be stored in, and regions coded at higher
   quality.
-  [docs/scope.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md) lists every feature.
+  [docs/scope.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/scope.md) lists every feature.
 - It reads **HTJ2K** (ISO/IEC 15444-15, "Part 15"), the high-throughput
   variant, including files that mix HT and Part 1 code-blocks, and `.jph`
   files, the HTJ2K version of `.jp2`. You don't need to know whether a file
@@ -175,7 +175,7 @@ The API docs use the standard's names for the parts of a codestream:
 ## What it doesn't do
 
 - It doesn't **encode**. It reads JPEG 2000 but can't write it. An encoder is
-  planned ([docs/roadmap.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md)). To write JPEG 2000 today, use
+  planned ([docs/roadmap.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/roadmap.md)). To write JPEG 2000 today, use
   OpenJPEG's `opj_compress`.
 - It doesn't **give you display pixels**. You get each channel as its own
   `Vec<i32>` at the file's depth and in the file's color space, not 8-bit RGBA.
@@ -193,7 +193,7 @@ The API docs use the standard's names for the parts of a codestream:
   ICC profiles that work through a lookup table or through Lab, are refused with
   `Error::Unsupported` when you ask for sRGB. Decoding without the option still
   gives you the values as stored.
-  [docs/srgb-output.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/srgb-output.md#every-input-and-its-result) lists
+  [docs/srgb-output.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/srgb-output.md#every-input-and-its-result) lists
   every case.
 - It doesn't **read GRIB2 files**. You find the JPEG 2000 bytes in the message
   and turn the decoded numbers into physical values yourself (see
@@ -223,7 +223,7 @@ never panics or hangs, whatever the input, and needs at most about 6.4 GiB of
 memory. If the machine can't supply that, the allocation fails and the process
 aborts, as in any Rust program. That figure covers the one-shot decode
 functions; `IncrementalDecoder` keeps per-tile state and can hold up to about
-three times as much (see [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
+three times as much (see [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses
 something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means
@@ -251,7 +251,7 @@ fn check(bytes: &[u8]) {
 
 By default a damaged or cut-off file is an error, never a partial image. What
 is refused, and where this decoder is stricter than OpenJPEG, is in
-[docs/openjpeg-departures.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams).
+[docs/openjpeg-departures.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams).
 
 To decode what a cut-short codestream holds, as `opj_decompress -allow-partial`
 does, turn `strict` off. The codestream's header, everything before the first
@@ -264,7 +264,7 @@ For a file that arrives in pieces, such as a download, use
 `IncrementalDecoder`. Feed it each piece and call `refine`. From time to time
 it returns an image of what has come in so far. Each refine goes on from where
 the last one stopped reading packets;
-[docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)
+[docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)
 lists the packets it reads again. Each image `refine` returns is decoded with
 `strict` off and comes with a report of what is missing. `finish` decodes
 under the options you gave the decoder, so it is strict unless you turned
@@ -341,26 +341,26 @@ It decodes all 23 test codestreams of the JPEG 2000 conformance suite
 files within theirs, and its 41 HTJ2K codestreams and 20 JPH files within
 theirs. Lossless images, including GRIB2 grids written by eccodes, match
 OpenJPEG bit for bit. The details are in
-[docs/correctness.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md), and the places where this decoder
+[docs/correctness.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/correctness.md), and the places where this decoder
 and OpenJPEG differ on purpose are in
-[docs/openjpeg-departures.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md). The test suite
+[docs/openjpeg-departures.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/openjpeg-departures.md). The test suite
 needs no external tools.
 
 The speed and memory of this decoder next to OpenJPEG, Grok, OpenJPH and
-hayro-jpeg2000 are in [docs/performance.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/performance.md).
+hayro-jpeg2000 are in [docs/performance.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/performance.md).
 
 ## Contributing and security
 
-To contribute, start with [CONTRIBUTING.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/CONTRIBUTING.md). It has the
+To contribute, start with [CONTRIBUTING.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/CONTRIBUTING.md). It has the
 workflow and the checks every pull request must pass. To report a crash, a hang
-or another vulnerability, see [SECURITY.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md).
+or another vulnerability, see [SECURITY.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/SECURITY.md).
 
 ## License
 
 Dual-licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/D0ubleD0uble/rust-j2k/blob/main/LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](https://github.com/D0ubleD0uble/rust-j2k/blob/main/LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/LICENSE-MIT))
 
 at your option.
 

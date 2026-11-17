@@ -31,8 +31,8 @@ Fixes land in the latest `0.x` release.
 
 | Version | Supported |
 | --- | --- |
-| 0.4.x | Yes |
-| < 0.4 | No |
+| 0.5.x | Yes |
+| < 0.5 | No |
 
 ## What counts as a vulnerability
 
