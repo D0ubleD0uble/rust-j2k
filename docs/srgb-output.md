@@ -4,7 +4,7 @@
 (I.5.3.3) to sRGB. The default output is as coded and is unaffected by
 everything here. The measured error against the ISO references and against
 `opj_decompress -p 8S -force-rgb` is tabulated per channel in
-[`tests/fixtures/conformance/README.md`](../tests/fixtures/conformance/README.md).
+[`tests/fixtures/conformance/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/tests/fixtures/conformance/README.md).
 
 Every outcome is decided by the three rules in
 [correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree): the
@@ -501,5 +501,5 @@ convert: CMYK (12) on four channels gives three RGB planes
 (`color_cmyk_to_rgb`), CIELab (14) on three gives 16-bit RGB
 (`color_cielab_to_rgb`), and e-sYCC (24) on three converts
 (`color_esycc_to_rgb`). This decoder has no such conversion (they are out of
-scope for JP2, [roadmap-phase3.md](roadmap-phase3.md)); without one, sRGB
+scope for JP2, [roadmap-phase3.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase3.md)); without one, sRGB
 output would be a wrong image.
