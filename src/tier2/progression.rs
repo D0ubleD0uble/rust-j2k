@@ -503,8 +503,9 @@ pub(crate) const COUNTS_SKIP_VISITS: usize = 12;
 /// `read_header`'s walk keeps no counts: it fails with [`Error::Limit`]
 /// there.
 struct Emitted {
-    /// The first bit of each (component, resolution), at
-    /// `component * resolutions + resolution`.
+    /// Where each (component, resolution)'s marks start, at `component *
+    /// resolutions + resolution`: its first bit in the bitmap, or its first
+    /// precinct's count.
     starts: Vec<u64>,
     resolutions: usize,
     marks: Marks,
@@ -512,11 +513,10 @@ struct Emitted {
 
 /// How [`Emitted`] holds the packets emitted.
 enum Marks {
-    /// A bit per packet the volumes reach, at the bits `starts` lays out.
+    /// A bit per packet the volumes reach.
     Dense(Vec<u64>),
-    /// The layers emitted of each precinct: `counts[bases[pair] +
-    /// precinct]`, with `pair` laid out as `starts` is.
-    Counts { bases: Vec<usize>, counts: Vec<u32> },
+    /// The layers emitted of each precinct of the tile.
+    Counts(Vec<u32>),
 }
 
 impl Emitted {
@@ -532,7 +532,7 @@ impl Emitted {
         dense_bits: u64,
         poc_counts: bool,
     ) -> Result<Self> {
-        let (starts, reached) = Self::layout(volumes, walk, resolutions);
+        let (mut starts, reached) = Self::layout(volumes, walk, resolutions);
         let words = usize::try_from(reached.div_ceil(64))
             .ok()
             .filter(|_| reached <= dense_bits);
@@ -556,19 +556,18 @@ impl Emitted {
             None => {
                 // The geometry holds at most `MAX_PRECINCTS` precincts across
                 // the tile's components, so the counts are at most 1 MB.
-                let mut bases = Vec::with_capacity(starts.len());
-                let mut precincts = 0usize;
-                for index in 0..starts.len() {
+                let mut precincts = 0u64;
+                for (index, start) in starts.iter_mut().enumerate() {
                     let (comp, res) = (index / resolutions, index % resolutions);
-                    bases.push(precincts);
+                    *start = precincts;
                     if let Some(geom) = walk.geoms[comp].get(res) {
-                        precincts += geom.precinct_count();
+                        precincts += geom.precinct_count() as u64;
                     }
                 }
-                Marks::Counts {
-                    bases,
-                    counts: vec![0; precincts],
-                }
+                let precincts = usize::try_from(precincts).map_err(|_| {
+                    Error::inconsistent(format!("{precincts} precincts in one tile"))
+                })?;
+                Marks::Counts(vec![0; precincts])
             }
         };
         Ok(Emitted {
@@ -613,7 +612,7 @@ impl Emitted {
     fn skip_visits(&self) -> usize {
         match self.marks {
             Marks::Dense(_) => 0,
-            Marks::Counts { .. } => COUNTS_SKIP_VISITS,
+            Marks::Counts(_) => COUNTS_SKIP_VISITS,
         }
     }
 
@@ -629,7 +628,7 @@ impl Emitted {
         comp: usize,
         precinct: usize,
     ) -> Result<bool> {
-        let pair = comp * self.resolutions + res;
+        let start = self.starts[comp * self.resolutions + res];
         let precincts = walk.geoms[comp][res].precinct_count() as u64;
         debug_assert!(
             (precinct as u64) < precincts,
@@ -637,7 +636,7 @@ impl Emitted {
         );
         match &mut self.marks {
             Marks::Dense(words) => {
-                let bit = self.starts[pair] + u64::from(layer) * precincts + precinct as u64;
+                let bit = start + u64::from(layer) * precincts + precinct as u64;
                 let word = usize::try_from(bit / 64)
                     .ok()
                     .and_then(|w| words.get_mut(w))
@@ -649,10 +648,13 @@ impl Emitted {
                 *word |= mask;
                 Ok(new)
             }
-            Marks::Counts { bases, counts } => {
-                let count = counts.get_mut(bases[pair] + precinct).ok_or_else(|| {
-                    Error::inconsistent(format!("precinct {precinct} past the `POC` counts"))
-                })?;
+            Marks::Counts(counts) => {
+                let count = usize::try_from(start + precinct as u64)
+                    .ok()
+                    .and_then(|at| counts.get_mut(at))
+                    .ok_or_else(|| {
+                        Error::inconsistent(format!("precinct {precinct} past the `POC` counts"))
+                    })?;
                 // The layers emitted of a precinct are its first ones (see
                 // [`Emitted`]), so the next one new is the count.
                 if layer < *count {

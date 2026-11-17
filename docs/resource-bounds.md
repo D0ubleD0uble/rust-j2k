@@ -286,12 +286,22 @@ the packets read (#438), where a skip was a lookup that missed the cache,
 80 to 180 ns, so 12 steps priced a step at 15 ns, toward the cheap end of
 what a step takes. The charge is kept, so the same files are refused, and
 it errs higher still. The set held an entry for each packet past the end
-too, so with `strict` off its memory grew with the bound: a 200-byte file
-at `Raised(8)` took 23.5 s and 3.6 GB before its `Limit`, and takes 4.0 s
-and 32 MB now; `pocspent_2tiles_60000_559.j2k` at `Raised(3)` took 888 MB
-and takes 3 MB, what the strict decode takes
+too, so with `strict` off its memory grew with the bound. Measured on
+release builds, each with the same result before and after:
+
+| File | Options | With the set | With the counts |
+| ---- | ------- | ------------ | --------------- |
+| A 200-byte fuzz input | `strict` off, `Raised(8)` | `Limit`, 26.7 s, 3.6 GB | `Limit`, 2.8 s, 33 MB |
+| `pocspent_2tiles_60000_559.j2k` | `strict` off, `Raised(3)` | `Limit`, 6.4 s, 887 MB | `Limit`, 0.74 s, 2.9 MB |
+| The same | strict, `Raised(3)` | `Codestream`, 0.00 s, 2.9 MB | `Codestream`, 0.01 s, 2.8 MB |
+| 2^14 precincts in RPCL, 10^7 packets in the data | `strict` off | `Limit`, 78 s, 7.1 GB | `Limit`, 5.4 s, 16 MB |
+| The same | strict | `Codestream`, 3.4 s, 237 MB | `Codestream`, 0.55 s, 16 MB |
+| `setskip(65535, 31)` | strict | `Limit`, 20.8 s, 240 MB | `Limit`, 0.72 s, 19 MB |
+
+With `strict` off a decode now holds what a strict one does
 (`packets_past_the_end_take_no_memory_under_a_raised_bound` in
-`tests/strict_off_poc_alloc.rs`).
+`tests/strict_off_poc_alloc.rs`). The timings ran beside other work, so
+they are slower than the table below for the same shapes.
 
 `read_header`'s walk keeps no counts: past its bitmap, only where the decode
 would keep them, it gives up. For a `Psot = 0` codestream in a JP2 file the codestream
