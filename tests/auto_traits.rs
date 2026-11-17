@@ -60,9 +60,13 @@ const _: () = {
     holds::<MappingKind>();
 };
 
-// `LimitKind` is a plain value a caller can copy, compare and key a map by.
+// `LimitKind` and `TileGrid` are plain values a caller can copy, compare
+// and key a map by.
 const fn plain<T: Copy + Eq + std::hash::Hash + std::fmt::Debug>() {}
-const _: () = plain::<LimitKind>();
+const _: () = {
+    plain::<LimitKind>();
+    plain::<TileGrid>();
+};
 
 // The assertions are all compile-time; this keeps the file a test target.
 #[test]

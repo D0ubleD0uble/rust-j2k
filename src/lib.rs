@@ -90,7 +90,7 @@
 //! This section and the API docs use the standard's names for the parts of
 //! a codestream: markers such as `SIZ`, `COD`, `SOT` and `EOC`, tiles and
 //! tile-parts, packets, code-blocks and the reference grid. [What a JPEG 2000
-//! file holds][terms] explains each in a line.
+//! file holds][terms] explains them.
 //!
 //! Decoding is strict by default. Truncated or inconsistent data is an
 //! error, and no partial image comes back with it. Input cut before the

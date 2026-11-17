@@ -126,8 +126,8 @@ The API docs use the standard's names for the parts of a codestream:
   means "to the end of the codestream") and the tile's number of tile-parts
   (`TNsot`). The first `SOT` marker ends the main header.
 - A tile's coded data is a series of **packets**. Each packet header says
-  which **code-blocks**, small squares of the image's wavelet transform, it
-  adds data to. Reading those headers is the **packet walk**.
+  which **code-blocks**, small blocks of the image's wavelet coefficients,
+  it adds data to. Reading those headers is the **packet walk**.
 - The `EOC` marker ends the codestream.
 
 ## What it decodes
@@ -307,7 +307,7 @@ fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
         match decode_with(bytes, &options) {
             Err(Error::Limit(limit)) => match options.with_retry(&limit) {
                 Some(raised) => options = raised,
-                // No option raises this limit: the file is refused.
+                // No option raises this limit, or it gave no factor.
                 None => return Err(Error::Limit(limit)),
             },
             result => return result,
