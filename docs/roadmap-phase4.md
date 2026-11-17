@@ -146,7 +146,7 @@ confirmed by running it on the corpora below:
 | More than 3 passes in a block (placeholder passes) | refused: "We do not support more than 3 coding passes in an HT codeblock" | `ht_dec.c` `opj_t1_ht_decode_cblk` |
 | Placeholder passes in Tier-2 | the first segment always gets one pass, so the length field is read at the wrong width and the packet parse loses sync ("segment too long", "Expected EPH marker") | `t2.c` `opj_t2_read_packet_header` |
 | ROI (maxshift) on HT blocks | refused: "We do not support ROI in decoding HT codeblocks" | `ht_dec.c` |
-| More than 30 magnitude bit-planes (`Mb > 30`) | refused | `ht_dec.c` |
+| More than 30 magnitude bit-planes (`Mb > 30`) | refused whatever the zero bit-planes; this decoder decodes it when the cleanup shift fits (see openjpeg-departures.md) | `ht_dec.c` |
 | Refinement segment of zero length with more than one pass | warns, then decodes the cleanup pass only | `ht_dec.c` |
 | SigProp and MagRef in one HT set | decoded | `ht_dec.c` |
 

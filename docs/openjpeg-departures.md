@@ -48,6 +48,7 @@ refusal under `ColorOutput::Srgb`).
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
 | [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes; OpenJPEG refuses | 1 |
 | [Region of interest threshold (Part 1 and HT)](#region-of-interest-threshold-part-1-and-ht) | H.1: region from `q >= 2^s`, and none when `s >= 31`; OpenJPEG from `q >= 2^(s-1)`, and zeroes the block when `s >= 31` | 1 |
+| [HT subbands of more than 30 bit-planes](#ht-subbands-of-more-than-30-bit-planes) | decodes when the cleanup plane's shift fits `i32`; OpenJPEG refuses any `Mb > 30` | 1 |
 | [MIXED code-blocks](#mixed-code-blocks) | decodes; OpenJPEG refuses the code-block style | 1 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
@@ -1099,6 +1100,36 @@ The same blocks bring two checks OpenJPEG does not make, since it reads no
 field of `CAP`; see [CAP and CPF](#cap-and-cpf). A block with
 `Mb + s - P` over 30 (`P` its zero bit-planes) is `Error::Limit`; OpenJPEG
 applies the bound to `Mb` on an HT block.
+
+## HT subbands of more than 30 bit-planes
+
+| | |
+| - | - |
+| This decoder | decodes an HT code-block of a subband with `Mb > 30` when `Mb + s - P` is 30 or less, `P` being its zero bit-planes (`s = 0` without a maxshift) |
+| OpenJPEG 2.5.0 | refuses every HT block with `Mb > 30`, whatever its zero bit-planes ("32 bits are not enough ... larger than 30", `ht_dec.c`); its Part 1 path decodes the same case |
+| Standard | ISO/IEC 15444-1 A.6.4 and E-2 (`Mb = G + epsilon - 1`, with `epsilon` up to 31 and `G` up to 7, so up to 37 planes); B.10.5 (zero bit-planes); T.814 7.6 |
+| Rule | 1 |
+| Tests and fixtures | `a_subband_of_more_than_30_planes_decodes_when_few_planes_are_coded` in `tests/ht_reject_matrix.rs`; `a_block_that_codes_few_planes_under_a_large_maxshift_decodes` in `src/tier1/ht/tests.rs` |
+| Decided | #417 |
+
+The standard allows a subband of up to 37 magnitude bit-planes and puts no
+HT-specific limit below that. The 30 is OpenJPEG's: its 32-bit reconstruction
+needs the cleanup plane's shift to fit. A block whose top planes are empty
+(many zero bit-planes) has a small shift whatever `Mb` is, so it fits, and
+this decoder decodes it, as it does in Part 1. A block whose shift does not
+fit is `Error::Limit`, and a magnitude that overflows `i32` is refused as
+malformed.
+
+Measured on hand-built one-block, one-sample HT files (block `00 27 F3 00`):
+
+| `Mb` | zero bit-planes | OpenJPEG 2.5.0 | this decoder |
+| - | - | - | - |
+| 30 | 28 | 135 | 135 |
+| 31 | 29 | refused | 135 |
+| 37 | 35 | refused | 135 |
+| 31 | 0 | refused | `Error::Limit` |
+
+The test builds the same files in memory.
 
 ## Region of interest threshold (Part 1 and HT)
 
