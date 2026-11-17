@@ -14,9 +14,9 @@ use crate::jp2::Jp2Metadata;
 /// follow the options: the reduction, window, tile, component subset,
 /// [`raw_channels`](crate::DecodeOptions::raw_channels) and
 /// [`color`](crate::DecodeOptions::color).
-/// [`max_reduction`](Self::max_reduction) and
-/// [`quality_layers`](Self::quality_layers) describe the file's main header,
-/// and are the same whatever the options.
+/// [`max_reduction`](Self::max_reduction),
+/// [`quality_layers`](Self::quality_layers) and [`tiles`](Self::tiles)
+/// describe the file's main header, and are the same whatever the options.
 ///
 /// The struct is `#[non_exhaustive]`, so more of the header can be added
 /// without a breaking change.
@@ -49,9 +49,88 @@ pub struct Header {
     /// tile-part `COD` can declare another count for its tile, and only the
     /// decode reads that.
     pub quality_layers: u16,
+    /// The tile grid the `SIZ` marker declares. Its
+    /// [`count`](TileGrid::count) is how many tiles
+    /// [`Region::Tile`](crate::Region::Tile) can name: `0` to `count() - 1`.
+    pub tiles: TileGrid,
     /// What [`decode`](crate::decode) would put on
     /// [`Image::jp2`](crate::Image::jp2): `None` for a raw codestream.
     pub jp2: Option<Jp2Metadata>,
+}
+
+/// How an image is cut into tiles: the grid that the `SIZ` marker declares
+/// on the reference grid, the coordinate space of the whole codestream.
+///
+/// Every tile is [`tile_width`](Self::tile_width) by
+/// [`tile_height`](Self::tile_height), and the grid starts at
+/// ([`x_offset`](Self::x_offset), [`y_offset`](Self::y_offset)). Tiles at the
+/// edges are cut to the image area, so they can be smaller. They are
+/// numbered in raster order from 0, as [`Region::Tile`](crate::Region::Tile)
+/// numbers them: tile `n` is in column `n % columns` and row `n / columns`.
+/// An image of one tile has a grid of 1 by 1.
+///
+/// The values are OpenJPEG's: `opj_dump` prints them as `tdx`, `tdy`,
+/// `tx0`, `ty0`, `tw` and `th`.
+///
+/// ```
+/// use rust_j2k::{DecodeOptions, Region, decode_with, read_header};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let bytes = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/window/tiled_53.j2k"
+/// # )).to_vec();
+/// # /*
+/// let bytes = std::fs::read("image.j2k")?;
+/// # */
+/// let tiles = read_header(&bytes)?.tiles;
+/// for index in 0..tiles.count() {
+///     let options = DecodeOptions::default().with_region(Region::Tile(index));
+///     let tile = decode_with(&bytes, &options)?;
+///     println!("tile {index}: {}x{}", tile.width, tile.height);
+/// }
+/// # assert_eq!((tiles.columns, tiles.rows), (3, 3));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct TileGrid {
+    /// Tiles across (OpenJPEG's `tw`).
+    pub columns: u32,
+    /// Tiles down (OpenJPEG's `th`).
+    pub rows: u32,
+    /// The width of a tile before the cut to the image area (`XTsiz`).
+    pub tile_width: u32,
+    /// The height of a tile before the cut to the image area (`YTsiz`).
+    pub tile_height: u32,
+    /// The left edge of the first column of tiles on the reference grid
+    /// (`XTOsiz`). It is at or left of the image area's left edge.
+    pub x_offset: u32,
+    /// The top edge of the first row of tiles on the reference grid
+    /// (`YTOsiz`). It is at or above the image area's top edge.
+    pub y_offset: u32,
+}
+
+impl TileGrid {
+    /// How many tiles the image has: `columns * rows`, at most 65535.
+    #[must_use]
+    pub const fn count(&self) -> u32 {
+        self.columns.saturating_mul(self.rows)
+    }
+
+    /// The grid `siz` declares.
+    pub(crate) fn of_siz(siz: &Siz) -> Self {
+        let (columns, rows) = siz.tile_grid();
+        TileGrid {
+            columns,
+            rows,
+            tile_width: siz.tile_width,
+            tile_height: siz.tile_height,
+            x_offset: siz.tile_x_offset,
+            y_offset: siz.tile_y_offset,
+        }
+    }
 }
 
 /// One output channel's sample format and size, as on the

@@ -211,7 +211,7 @@ pub(crate) mod window;
 pub mod fuzz;
 
 pub use error::{Error, ErrorDetail, LimitDetail, LimitKind, Result};
-pub use header::{ComponentInfo, Header};
+pub use header::{ComponentInfo, Header, TileGrid};
 pub use image::{Component, Image};
 pub use incremental::IncrementalDecoder;
 pub use jp2::{
@@ -424,6 +424,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
             components,
             max_reduction: max_reduction(&prefix.parsed.header),
             quality_layers: prefix.parsed.header.cod.layers,
+            tiles: TileGrid::of_siz(&prefix.parsed.header.siz),
             jp2: Some(prefix.metadata),
         });
     }
@@ -455,6 +456,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
         ),
         max_reduction: max_reduction(&parsed.header),
         quality_layers: parsed.header.cod.layers,
+        tiles: TileGrid::of_siz(siz),
         jp2: None,
     })
 }
@@ -766,8 +768,9 @@ pub struct DecodeOptions {
     /// them. The result is the decode of a [`Region::Window`] set to the
     /// tile's rectangle on the reference grid: its size, its samples and its
     /// failures, the refusal of sRGB output from sub-sampled sYCC included
-    /// (unless the image is one tile). A tile index past the tile grid is
-    /// [`Error::InvalidOptions`].
+    /// (unless the image is one tile). [`Header::tiles`] gives the tile grid
+    /// and [`TileGrid::count`] the number of tiles; an index at or past the
+    /// count is [`Error::InvalidOptions`].
     #[doc(alias = "decode_area")]
     #[doc(alias = "window")]
     #[doc(alias = "tile")]

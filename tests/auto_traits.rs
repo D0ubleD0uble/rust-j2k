@@ -11,8 +11,8 @@ use rust_j2k::{
     ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo, DecodeOptions,
     DecodeReport, Error, ErrorDetail, FileType, Header, Image, ImageHeader, IncrementalDecoder,
     IprBox, Jp2Metadata, LimitDetail, LimitKind, MappingKind, Palette, PaletteColumn, Ratio,
-    ReaderRequirements, Region, ReportEntry, Res, Resolution, StandardFeature, UuidBox, UuidInfo,
-    VendorFeature, Window, WorkLimit, XmlBox,
+    ReaderRequirements, Region, ReportEntry, Res, Resolution, StandardFeature, TileGrid, UuidBox,
+    UuidInfo, VendorFeature, Window, WorkLimit, XmlBox,
 };
 
 const fn holds<T: Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
@@ -22,6 +22,7 @@ const _: () = {
     holds::<Component>();
     holds::<Header>();
     holds::<ComponentInfo>();
+    holds::<TileGrid>();
     holds::<Error>();
     holds::<ErrorDetail>();
     holds::<LimitDetail>();

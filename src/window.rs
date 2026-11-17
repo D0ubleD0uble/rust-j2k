@@ -57,7 +57,9 @@ pub enum Region {
     Whole,
     /// A rectangle of the reference grid, cut to the image area.
     Window(Window),
-    /// One tile, by its index in raster order from 0.
+    /// One tile, by its index in raster order from 0. The header's
+    /// [`tiles`](crate::Header::tiles) gives the grid, and its
+    /// [`count`](crate::TileGrid::count) how many tiles there are.
     Tile(u32),
 }
 
