@@ -819,9 +819,9 @@ fn block_count_guard_rejects_before_allocating() {
 }
 
 /// A one-tile 23170 x 23170 image (just under the 2^29 default sample limit)
-/// in 32 x 32 code-blocks holds about 2^19.4 of them across its resolutions,
-/// which the tile cap admits. The same image in 16 x 16 blocks holds about
-/// 2^21.4 and is still refused.
+/// in 32 x 32 code-blocks holds 527,259 of them (2^19.01) across its
+/// resolutions, which the tile cap admits. The same image in 16 x 16 blocks
+/// holds 2,102,683 (2^21.00) and is still refused.
 #[test]
 fn a_one_tile_image_at_the_sample_limit_fits_32x32_blocks() {
     let fits = header(23170, 23170, 5, 5);

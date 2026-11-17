@@ -28,15 +28,18 @@ section also lists the valid files its bound refuses. A fourth cost, resolving
 tile headers, was removed by making the parse cheaper rather than by adding a
 cap ([Tile header cost](#tile-header-cost)).
 
-The per-tile code-block cap is 2^20. A block costs about 141 bytes of
-bookkeeping before it holds a segment and about 200 with one, from the sizes of
-`BlockState` (40), `CodeBlock` (80), `SegmentState` (56) and two tag-tree
-nodes (8 each, 4/3 per leaf), so hostile metadata reaches about 140 to 200 MiB
-a tile. The cap was 2^19 until the sample limit became 2^29: at 2^19 a one-tile
-image of 23106x23106 samples or more in 32x32 blocks was refused. At 2^20 every
-one-tile image under 2^29 samples fits in 32x32 blocks (64x64 blocks need
-132726 at the limit); one tile in 16x16 blocks or smaller near the limit is
-still refused, as in 0.4.
+The per-tile code-block cap is 2^20. The struct sizes (`BlockState` 40,
+`CodeBlock` 80, `SegmentState` 56, two tag-tree nodes of 8 each at 4/3 per
+leaf) give about 141 bytes a block, which is only a lower bound. Measured on a
+4096x4096 tile in 4x4 blocks (2^20 of them), hostile metadata takes about
+129 MiB a tile with empty blocks, and about 480 MiB of heap (about 550 MiB
+resident) with every block coded. The cap was 2^19 until the sample limit became 2^29: at 2^19 a one-tile
+image of 23106x23106 samples or more in 32x32 blocks was refused. At 2^20 a
+one-tile image at least 64 samples wide and under 2^29 samples fits in 32x32
+blocks (23170x23170 needs 527,259; 64x64 blocks need 132726 at the limit; 64 x
+2^23 needs 770,048). A thinner image is still refused (32 x 2^24 needs 1.54 M,
+1 x 2^29 needs 16.7 M), as is one tile in 16x16 blocks or smaller near the
+limit.
 
 A few fixed guards also return `Limit`, and no option lifts them: 2^18
 precincts and 2^20 code-blocks per tile, 32 POC progression volumes, 30

@@ -155,9 +155,6 @@ fn a_sentinel_2_true_color_image_is_under_the_default_limit() {
     assert!(matches!(decode(&bytes), Err(Error::Codestream(_))));
 }
 
-/// `Raised` and `Unlimited` admit the file. The header reads; the decode
-/// passes the limit and fails only on the missing tile data, before any
-/// plane is allocated, so the test stays cheap.
 /// On a 32-bit target every image over the default is also past the address
 /// cap, so it is refused as `AddressSpace`, with nothing to retry with.
 #[cfg(not(target_pointer_width = "64"))]
@@ -180,6 +177,9 @@ fn over_the_default_limit_is_refused_as_address_space() {
     }
 }
 
+/// `Raised` and `Unlimited` admit the file. The header reads; the decode
+/// passes the limit and fails only on the missing tile data, before any
+/// plane is allocated, so the test stays cheap.
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn raised_and_unlimited_admit_an_image_over_the_default() {

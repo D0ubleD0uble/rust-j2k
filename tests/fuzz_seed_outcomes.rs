@@ -331,9 +331,14 @@ fn the_fuzz_skip_fires_just_over_2_pow_28_samples_and_not_on_small_inputs() {
     assert!(budget::over(&header_only(16384, 16385)));
     // The decoder's own default limit is twice that, so this decodes on its own.
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let flat =
-        std::fs::read(fixtures.join("sample_limit/flat_32769x16385_tiled_lossless.j2k")).unwrap();
-    assert!(budget::over(&flat));
+    // On a 32-bit target this image is past the address cap, so the header
+    // does not read and the skip does not apply.
+    #[cfg(target_pointer_width = "64")]
+    {
+        let flat = std::fs::read(fixtures.join("sample_limit/flat_32769x16385_tiled_lossless.j2k"))
+            .unwrap();
+        assert!(budget::over(&flat));
+    }
     let rgb = std::fs::read(fixtures.join("sample_limit/rgb_6000x4000.jp2")).unwrap();
     assert!(!budget::over(&rgb));
     assert!(!budget::over(b"not a codestream"));

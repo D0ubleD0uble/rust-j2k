@@ -218,6 +218,7 @@ mod tests {
 
     /// The hint names the smallest factor that admits the image, up to the
     /// largest factor there is.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_hint_names_the_smallest_factor() {
         assert!(message(MAX_IMAGE_SAMPLES + 1).contains("`WorkLimit::Raised(2)`"));
