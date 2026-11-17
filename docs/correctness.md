@@ -299,7 +299,7 @@ for both flags is weaker than one carrying `segsym` alone. Where features
 compose, the fixture that isolates each one is the one that grades it.
 
 So an entry is the oracle for a feature only if some change to that feature's
-code would make the entry fail. [development.md](development.md#check-that-a-fixture-tests-the-feature)
+code would make the entry fail. [development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md#check-that-a-fixture-tests-the-feature)
 says how to check that before adding an entry to `IN_CLASS`.
 
 ## Per-stage golden tests
@@ -319,7 +319,7 @@ golden tests, which point at the stage that broke:
   is lossy, so its samples are not a trustworthy coefficient oracle, and the
   end-to-end lossy fixtures grade the 9/7 quantization and wavelet path
   instead. Regenerate the vectors with
-  [`scripts/gen-tier1-vectors.py`](../scripts/gen-tier1-vectors.py).
+  [`scripts/gen-tier1-vectors.py`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/scripts/gen-tier1-vectors.py).
 - Tag trees and packet headers: inclusion, zero bit-planes and lengths
   decoded from hand-built packet headers.
 - Inverse DWT: 5/3 integer lifting bit-exact on known signals, and 9/7
@@ -330,7 +330,7 @@ golden tests, which point at the stage that broke:
 
 The test suite needs no reference decoder at run time. Fixtures and their
 oracle snapshots are committed, and OpenJPEG or eccodes is needed only to
-regenerate a snapshot ([development.md](development.md)). Each fixture records
+regenerate a snapshot ([development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md)). Each fixture records
 its provenance, the source file and the exact command that produced its
 oracle, so the corpus can be rebuilt.
 
@@ -364,11 +364,11 @@ A decoder parses bytes it did not produce, so malformed input is an ordinary
 case, not an edge case.
 
 This decoder is fuzzed with `cargo fuzz` (libFuzzer) in the detached
-[`fuzz/`](../fuzz/) workspace, with ten targets: `decode`, `header`,
+[`fuzz/`](https://github.com/D0ubleD0uble/rust-j2k/tree/main/fuzz) workspace, with ten targets: `decode`, `header`,
 `decode_partial` and `incremental_decode` over the public entry points, and
 `tile_body`, `tier1_block`, `ht_block`, `mq`, `jp2_boxes` and `icc_srgb` over
 single stages. See
-[`fuzz/README.md`](../fuzz/README.md) to run them. The bar is no panics, no
+[`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md) to run them. The bar is no panics, no
 unbounded allocation and no infinite loops: every rejected input returns a
 typed `Error`. A malformed SIZ cannot steer the buffers into an overflowing
 or out-of-memory allocation. SIZ's declared image area,
