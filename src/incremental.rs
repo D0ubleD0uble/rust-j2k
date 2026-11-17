@@ -30,13 +30,16 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// with none fed returns `Ok(None)` and is not a try. A try that a work
 /// bound refuses counts, so the next refine waits for twice its bytes.
 ///
-/// The decoder keeps each tile's packet walk between refines, so a refine
-/// reads only the packets that have come in since the last one. Over all
+/// The decoder keeps each tile's packet walk (what it has read of the
+/// tile's packet headers so far) between refines, so a refine reads only
+/// the packets that have come in since the last one. Over all
 /// the refines, the packet headers are read about once, as one decode reads
 /// them; a packet the data cuts is read again by each refine. Each refine
 /// is held to the packet bound of a decode of its bytes on its own: it is
 /// charged the packet visits that decode would spend, and a refine that
-/// decode is refused for returns `Ok(None)`.
+/// decode is refused for returns `Ok(None)`. [Incremental
+/// decoding](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)
+/// lists the packets a refine reads again.
 ///
 /// The code-block work is done again by each refine that decodes, so the
 /// code-block work every `refine` has spent is held to the bound one decode
@@ -63,16 +66,18 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// 640 MB between calls, until the decoder is dropped. A server that keeps
 /// many slow streams open should check the size that
 /// [`read_header`](crate::read_header) reports before it feeds the rest of
-/// a file, or drop the decoders it is not refining
-/// ([#415](https://github.com/D0ubleD0uble/rust-j2k/issues/415)).
+/// a file, or drop the decoders it is not refining.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, IncrementalDecoder};
 ///
-/// let file = include_bytes!(concat!(
-///     env!("CARGO_MANIFEST_DIR"),
-///     "/tests/fixtures/layers/lrcp.j2k"
-/// ));
+/// # let file = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/layers/lrcp.j2k"
+/// # )).to_vec();
+/// # /*
+/// let file = std::fs::read("image.j2k")?;
+/// # */
 /// let mut decoder = IncrementalDecoder::new(DecodeOptions::default())?;
 /// // The file arrives 500 bytes at a time.
 /// for piece in file.chunks(500) {
@@ -92,7 +97,7 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// // The input has ended: decode all of it, strictly.
 /// let image = decoder.finish()?;
 /// assert!(image.report.is_complete());
-/// # Ok::<(), rust_j2k::Error>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// An error from `refine` is the error [`decode_with`] gives with `strict`

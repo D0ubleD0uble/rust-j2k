@@ -32,7 +32,9 @@ pub type Result<T> = core::result::Result<T, Error>;
 ///
 /// | Variant | A message for a user |
 /// | ------- | -------------------- |
-/// | `Codestream`, `Marker`, `FileFormat` | The file is damaged, truncated or not a JPEG 2000 image. |
+/// | `Codestream` | The file is damaged, cut short or not a JPEG 2000 image. |
+/// | `Marker` | The file is damaged: a header field holds a value the standard does not allow. |
+/// | `FileFormat` | The file is damaged: its JP2 boxes are malformed or disagree with the image. |
 /// | `Incomplete` | The file is cut short before its header ends. If it is still arriving, try again with more of it, or feed it to an [`IncrementalDecoder`](crate::IncrementalDecoder). |
 /// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read, or a valid request it does not do: sRGB output from sub-sampled sYCC chroma on an area smaller than the image (`DecodeOptions::region`). |
 /// | `Limit` | The file is larger or costlier than the decoder allows by default. If [`LimitDetail::retry_with`] gives a [`WorkLimit`], it can be retried with that limit raised. |
@@ -81,7 +83,8 @@ pub enum Error {
     /// this variant, since it has no `SOC` marker.
     Codestream(ErrorDetail),
     /// The input ends before the codestream's main header is whole, that is,
-    /// before its first `SOT` marker is complete. No top-level box or segment
+    /// before its first `SOT` marker (the start of the first
+    /// [tile-part](https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds)) is complete. No top-level box or segment
     /// the input holds in full was found damaged, so more bytes may still give
     /// a valid header. The boxes inside a superbox (such as `ihdr` in `jp2h`)
     /// are judged only once the superbox is whole, so a cut `jp2h` is this
@@ -125,10 +128,13 @@ pub enum Error {
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
     ///
-    /// let bytes = include_bytes!(concat!(
-    ///     env!("CARGO_MANIFEST_DIR"),
-    ///     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
-    /// ));
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
     /// // The first 40 bytes end inside the main header: wait for more.
     /// assert!(matches!(read_header(&bytes[..40]), Err(Error::Incomplete(_))));
     /// let options = DecodeOptions::default().with_strict(false);
@@ -140,6 +146,7 @@ pub enum Error {
     /// // `strict` off gives the image the data holds.
     /// assert!(read_header(&bytes[..600]).is_ok());
     /// assert!(decode_with(&bytes[..600], &options).is_ok());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     Incomplete(ErrorDetail),
     /// A marker segment has an invalid field: a reserved value, a bad length
@@ -150,9 +157,12 @@ pub enum Error {
     /// missing or misplaced required box, an invalid field value, or a box
     /// that disagrees with the codestream.
     FileFormat(ErrorDetail),
-    /// A valid-but-not-decoded feature: an HTJ2K feature past the cleanup
-    /// pass, a Part 2 extension, a JP2 box this decoder cannot apply, a file that is not
-    /// JP2-compatible. A newer version of the decoder may accept the same
+    /// A valid-but-not-decoded feature: more than one HT set per code-block
+    /// (signaled by `MULTIHT` in the `CAP` marker), a Part 2 extension, a
+    /// marker or coding style outside the decoded subset, a JP2 box this
+    /// decoder cannot apply, a file that is not JP2-compatible. It is also a
+    /// request the decoder does not do, such as sRGB output from a file it
+    /// cannot convert. A newer version of the decoder may accept the same
     /// input.
     Unsupported(ErrorDetail),
     /// The input exceeded one of the decoder's resource guards: a hostile or
@@ -374,19 +384,30 @@ impl fmt::Display for ErrorDetail {
 /// use rust_j2k::{DecodeOptions, Error, LimitKind, decode, decode_with};
 ///
 /// // A valid 1 KB file that asks for far more work than its size allows.
-/// let bytes = include_bytes!(concat!(
-///     env!("CARGO_MANIFEST_DIR"),
-///     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
-/// ));
-/// let Err(Error::Limit(limit)) = decode(bytes) else {
+/// # let bytes = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
+/// # )).to_vec();
+/// # /*
+/// let bytes = std::fs::read("image.j2k")?;
+/// # */
+/// let Err(Error::Limit(limit)) = decode(&bytes) else {
 ///     panic!("expected the code-block work bound to refuse this file");
 /// };
 /// assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
-/// assert!(limit.kind().is_adjustable());
-/// let options = DecodeOptions::default()
-///     .with_retry(&limit)
-///     .expect("an option raises this limit");
-/// assert!(decode_with(bytes, &options).is_ok());
+/// # assert!(DecodeOptions::default().with_retry(&limit).is_some());
+/// match DecodeOptions::default().with_retry(&limit) {
+///     // An option raises this limit: retry with it raised.
+///     Some(options) => {
+///         let image = decode_with(&bytes, &options)?;
+///         println!("{}x{}", image.width, image.height);
+///     }
+///     // No option raises this limit (`limit.kind().is_adjustable()` is
+///     // false), or the refusal gave no factor: the file is refused
+///     // whatever the options.
+///     None => eprintln!("refused: {limit}"),
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
