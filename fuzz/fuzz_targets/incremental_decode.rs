@@ -158,7 +158,9 @@ fuzz_target!(|input: &[u8]| {
                 zero.feed(&data[..fed]);
                 zeroed = keyed(zero.refine());
                 assert_eq!(zeroed, expected, "{fed} bytes, nothing spent");
-                (&zeroed, incremental_code_block_work(&zero).0)
+                let (work, zero_bound) = incremental_code_block_work(&zero);
+                assert_eq!(zero_bound, bound, "{fed} bytes, nothing spent");
+                (&zeroed, work)
             } else {
                 assert_eq!(refined, expected, "{fed} bytes, due");
                 let work = after
@@ -259,13 +261,15 @@ impl Cut<'_> {
             Some(bound) => bound.saturating_sub(spent),
         };
         let total = spent.saturating_add(self.work);
-        let decodes = *self.fresh != Ok(None);
-        if decodes && self.work > left {
+        // Whether the decoder with nothing spent gave an image or an error:
+        // it passed every cut, so this try's work is all of `work`.
+        let answered = *self.fresh != Ok(None);
+        if answered && self.work > left {
             assert_eq!(refined, &Ok(None), "{what}: {} past {left}", self.work);
         } else {
             assert_eq!(refined, self.fresh, "{what}: {} within {left}", self.work);
         }
-        if decodes && self.work <= left {
+        if answered && self.work <= left {
             assert_eq!(after, total, "{what}: {spent} and {}", self.work);
         } else {
             assert!(
