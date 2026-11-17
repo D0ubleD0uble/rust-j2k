@@ -5,7 +5,7 @@ what each check catches, how to run it, what it costs and when it runs.
 [RELEASING.md](../RELEASING.md) holds the release steps. This page explains
 the checks behind them, including the ones RELEASING.md does not list.
 
-The checks fall into eight layers. Each layer catches a kind of problem the
+The checks fall into nine layers. Each layer catches a kind of problem the
 others miss, so a release runs all of them:
 
 | # | Layer | Catches | Runs |
@@ -17,14 +17,16 @@ others miss, so a release runs all of them:
 | 5 | [Readiness check](#5-readiness-check) | a release that would fail to build or publish, or a breaking change the CHANGELOG does not list | once per release |
 | 6 | [Manual rounds](#6-manual-rounds) | problems only a real user, a real file or a person's eye finds | once per release, on the final candidate |
 | 7 | [Package contents](#7-package-contents) | files in the `.crate` that should not ship | once per release; the conformance-corpus rule also runs on every PR (`package-hygiene`) |
-| 8 | [Differential checks](#8-differential-checks) | undocumented changes since the last release, and inputs that exceed the resource bounds | once per release, on the final candidate |
+| 8 | [Differential checks](#8-differential-checks) | undocumented changes since the last release, inputs that exceed the resource bounds, a different answer on malformed input, on a 32-bit target, or from a second HTJ2K decoder | once per release, on the final candidate |
+| 9 | [Mutation testing](#9-mutation-testing) | tests that do not fail when new code is broken | once per release, on the code added since the last one |
 
 Layers 1 to 3 run on every PR (layer 3 as a short smoke). For a release, a
 coordinator (an agent or the maintainer) starts the agents that run layers 4
-to 8 and triages what they find. The order is: the whole-crate reviews (4),
+to 9 and triages what they find. The order is: the whole-crate reviews (4),
 then the readiness check (5, which includes the pre-release fuzz run and the
-package contents review), then the manual rounds (6) and the differential
-checks (8) on the final candidate. The final candidate is `main` once every
+package contents review), then the manual rounds (6), the differential
+checks (8) and the mutation run (9) on the final candidate. The final
+candidate is `main` once every
 fix from layers 4 and 5 has merged, before the release PR. [Routing
 findings](#routing-findings) says where each finding goes.
 
@@ -306,8 +308,10 @@ job checks the conformance rule on every PR.
 
 ## 8. Differential checks
 
-Two checks run once per release, on the final candidate. They compare it with
-a fixed reference: the last release, or the documented resource budgets.
+Five checks run once per release, on the final candidate. Each compares it
+with a fixed reference: the last release, the documented resource budgets,
+OpenJPEG on malformed input, the same tests on a 32-bit target, or a second
+HTJ2K decoder.
 
 ### Against the last release
 
@@ -353,6 +357,93 @@ sample-passes](resource-bounds.md#the-tier-1-work-bound)). If it fits, the
 report is expected. If it does not, a bound is wrong, and that is a finding.
 
 **Cost:** a few minutes per target.
+
+### Malformed input against OpenJPEG
+
+**Catches:** a file this decoder decodes or refuses differently from
+`opj_decompress` that [openjpeg-departures.md](openjpeg-departures.md) does not
+explain, and a panic on hostile input.
+
+**Run:** feed every input in the local `decode` fuzz corpus (and the other
+corpora that hold whole files) to this decoder and to `opj_decompress`, the
+latter under a memory cap. Compare the image, or the fact of a refusal. Look
+each difference up in the departures page. One the page does not list is a
+finding.
+
+**Found in 0.5.0:** no difference that was this decoder's fault, and no
+panic. Some inputs differed because OpenJPEG refuses a tile height of
+`0xFFFFFFFF` on a small image through an integer overflow of its own, which is
+now a [departures
+entry](openjpeg-departures.md#a-tile-size-that-overflows-openjpegs-tile-count).
+The check found no bug here, but it found a departure the page lacked and it
+costs one session, so it stays.
+
+**Cost:** one agent session.
+
+### The 32-bit target
+
+**Catches:** code that works only where `usize` is 64 bits: a size computed in
+`usize`, an index cast, or a limit that differs by word size.
+
+**Run:** the whole test suite under `wasm32-wasip1`, not only the two test
+binaries CI runs there, then the corpus hash from [Against the last
+release](#against-the-last-release) on both targets:
+
+```sh
+CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir=$PWD::$PWD" \
+  cargo test --target wasm32-wasip1
+```
+
+Print a hash of each corpus input's output (or its error text) from a small
+program built for each target, and compare the two lists.
+
+**Found in 0.5.0:** nothing. The tests pass, and the 32-bit and 64-bit
+outputs were identical on every corpus input. The run guards a blind spot that
+no other layer covers, and it costs one build, so it stays.
+
+**Cost:** one agent session; the wasm run is slower than a native one.
+
+### A second HTJ2K oracle
+
+**Catches:** a wrong HTJ2K image that no oracle flags. OpenJPEG refuses 31 of
+the HT conformance files, so those are graded only against the ISO/IEC 15444-4
+reference images.
+
+**Run:** decode each HT conformance file with Grok (`grk_decompress`) and
+compare it with this decoder's output: bit for bit on a reversible file,
+within the bound on an irreversible one. Grok is not a dependency and is not
+needed by `cargo test`; this check runs it by hand.
+
+**Found in 0.5.0:** every HT file decodes in both. The reversible ones match
+bit for bit. Some irreversible files differ, and the cause is a bug in how
+Grok applies a region of interest, not this decoder. The check gives the 31
+files OpenJPEG refuses a second opinion for the price of one tool, so it
+stays, and it runs when a release changes the HT code.
+
+**Cost:** one agent session, plus installing Grok.
+
+## 9. Mutation testing
+
+**Catches:** a branch of new code that no test pins. A mutant that survives is
+a change to the code that the tests do not notice.
+
+**Run:** `cargo-mutants` on the code added since the last release:
+
+```sh
+git diff <last release tag>..HEAD > scratch/release.diff
+nice -n 19 ionice -c3 cargo mutants --in-diff scratch/release.diff -j 2
+```
+
+Read each missed mutant. A test for it, or a note on why it is equivalent, is a
+fix before the tag.
+
+**Found in 0.5.0:** most mutants on the new surface were caught. One missed
+mutant was a real gap: no test covered the `Samples` arm of
+`DecodeOptions::with_retry` (fixed in #440). The rest were harmless. The run
+found a gap the reviews missed, so it stays.
+
+**Cost:** one agent session; a run over a release's changes is long, so use `-j
+2` and the shared-CPU budget.
 
 ## Routing findings
 
@@ -403,15 +494,9 @@ passed on the final candidate.
 ## Open ideas
 
 Checks that are not part of a release today. Each is a candidate to try. One
-that finds real problems joins the layers above:
+that finds real problems joins the layers above, as the malformed-input
+differential, the 32-bit run, the second HTJ2K oracle and the mutation run did.
 
-- Differential decoding of a large set of malformed files against
-  `opj_decompress`, comparing the image or the refusal.
-- The whole test suite on a 32-bit target (`wasm32-wasip1` under wasmtime),
-  not only the `math_tests` and `jp2_icc` tests.
-- A second HTJ2K oracle, such as Grok or Kakadu, for the files
-  `opj_decompress` refuses.
-- `cargo-mutants` on the code added in the release.
 - Property tests: a `Region` decode equals the crop of the whole image, and
   retrying with `DecodeOptions::with_retry` after each `Error::Limit` never
   loops and ends at the same image as a decode with the limit already
