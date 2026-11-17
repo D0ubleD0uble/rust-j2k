@@ -1,6 +1,7 @@
 //! What [`read_header`](crate::read_header) returns: an image's shape and
 //! metadata, read without decoding any tile data.
 
+use crate::Window;
 use crate::codestream::markers::Siz;
 use crate::jp2::Jp2Metadata;
 
@@ -14,6 +15,7 @@ use crate::jp2::Jp2Metadata;
 /// follow the options: the reduction, window, tile, component subset,
 /// [`raw_channels`](crate::DecodeOptions::raw_channels) and
 /// [`color`](crate::DecodeOptions::color).
+/// [`image_area`](Self::image_area), [`tiles`](Self::tiles),
 /// [`max_reduction`](Self::max_reduction) and
 /// [`quality_layers`](Self::quality_layers) describe the file's main header,
 /// and are the same whatever the options.
@@ -49,9 +51,136 @@ pub struct Header {
     /// tile-part `COD` can declare another count for its tile, and only the
     /// decode reads that.
     pub quality_layers: u16,
+    /// The image area on the reference grid, as the `SIZ` marker declares
+    /// it: `XOsiz..Xsiz` by `YOsiz..Ysiz`, at full resolution. A
+    /// [`Region::Window`](crate::Region::Window) is in the same coordinates,
+    /// so a window of the image's top-left 64 x 64 samples starts at
+    /// `(image_area.x0, image_area.y0)`, not at `(0, 0)`.
+    pub image_area: Window,
+    /// The tile grid the `SIZ` marker declares. Its
+    /// [`count`](TileGrid::count) is how many tiles
+    /// [`Region::Tile`](crate::Region::Tile) can name: `0` to `count() - 1`.
+    pub tiles: TileGrid,
     /// What [`decode`](crate::decode) would put on
     /// [`Image::jp2`](crate::Image::jp2): `None` for a raw codestream.
     pub jp2: Option<Jp2Metadata>,
+}
+
+/// How an image is cut into tiles: the grid that the `SIZ` marker declares
+/// on the reference grid, the coordinate space of the whole codestream.
+///
+/// Every tile is [`tile_width`](Self::tile_width) by
+/// [`tile_height`](Self::tile_height), and the grid starts at
+/// ([`x_offset`](Self::x_offset), [`y_offset`](Self::y_offset)). Tiles at the
+/// edges are cut to the image area, so they can be smaller. They are
+/// numbered in raster order from 0, as [`Region::Tile`](crate::Region::Tile)
+/// numbers them: tile `n` is in column `n % columns` and row `n / columns`.
+/// An image of one tile has a grid of 1 by 1.
+///
+/// The grid follows ISO/IEC 15444-1 B.3: `columns` is `ceil((Xsiz - XTOsiz)
+/// / XTsiz)` (Eq. B-5), `rows` the same down, and [`tile`](Self::tile) gives
+/// each tile's rectangle (Eq. B-7). On ordinary files the values match what
+/// `opj_dump` prints as `tw`, `th`, `tdx`, `tdy`, `tx0` and `ty0`.
+///
+/// ```
+/// use rust_j2k::{DecodeOptions, Region, decode_with, read_header};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let bytes = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/window/tiled_53.j2k"
+/// # )).to_vec();
+/// # /*
+/// let bytes = std::fs::read("image.j2k")?;
+/// # */
+/// let tiles = read_header(&bytes)?.tiles;
+/// for index in 0..tiles.count() {
+///     let area = tiles.tile(index).expect("the index is below the count");
+///     let options = DecodeOptions::default().with_region(Region::Tile(index));
+///     let tile = decode_with(&bytes, &options)?;
+///     assert_eq!((tile.width, tile.height), (area.x1 - area.x0, area.y1 - area.y0));
+///     println!("tile {index} at ({}, {}): {}x{}", area.x0, area.y0, tile.width, tile.height);
+/// }
+/// # assert_eq!((tiles.columns, tiles.rows), (3, 3));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct TileGrid {
+    /// Tiles across.
+    pub columns: u32,
+    /// Tiles down.
+    pub rows: u32,
+    /// The width of a tile before the cut to the image area (`XTsiz`).
+    pub tile_width: u32,
+    /// The height of a tile before the cut to the image area (`YTsiz`).
+    pub tile_height: u32,
+    /// The left edge of the first column of tiles on the reference grid
+    /// (`XTOsiz`). It is at or left of the image area's left edge.
+    pub x_offset: u32,
+    /// The top edge of the first row of tiles on the reference grid
+    /// (`YTOsiz`). It is at or above the image area's top edge.
+    pub y_offset: u32,
+    /// The image area, which cuts the edge tiles.
+    image: Window,
+}
+
+impl TileGrid {
+    /// How many tiles the image has: `columns * rows`, at most 65535.
+    #[must_use]
+    pub const fn count(&self) -> u32 {
+        self.columns.saturating_mul(self.rows)
+    }
+
+    /// Tile `index`'s rectangle on the reference grid, cut to the image
+    /// area: the area [`Region::Tile`](crate::Region::Tile)`(index)` decodes.
+    /// `None` when `index` is at or past [`count`](Self::count).
+    ///
+    /// Column `p = index % columns` and row `q = index / columns` span
+    /// `max(x_offset + p * tile_width, x0)..min(x_offset + (p + 1) *
+    /// tile_width, x1)` across, for the image area `x0..x1`, and the same
+    /// down (ISO/IEC 15444-1 Eq. B-7).
+    #[must_use]
+    pub fn tile(&self, index: u32) -> Option<Window> {
+        if index >= self.count() {
+            return None;
+        }
+        let (p, q) = (
+            u64::from(index % self.columns),
+            u64::from(index / self.columns),
+        );
+        let (w, h) = (u64::from(self.tile_width), u64::from(self.tile_height));
+        let (xo, yo) = (u64::from(self.x_offset), u64::from(self.y_offset));
+        let image = self.image;
+        // Each end is clamped into the image area, which is u32.
+        let clamp = |v: u64, lo: u32, hi: u32| v.clamp(u64::from(lo), u64::from(hi)) as u32;
+        Some(Window::new(
+            clamp(xo + p * w, image.x0, image.x1),
+            clamp(yo + q * h, image.y0, image.y1),
+            clamp(xo + (p + 1) * w, image.x0, image.x1),
+            clamp(yo + (q + 1) * h, image.y0, image.y1),
+        ))
+    }
+
+    /// The grid `siz` declares.
+    pub(crate) fn of_siz(siz: &Siz) -> Self {
+        let (columns, rows) = siz.tile_grid();
+        TileGrid {
+            columns,
+            rows,
+            tile_width: siz.tile_width,
+            tile_height: siz.tile_height,
+            x_offset: siz.tile_x_offset,
+            y_offset: siz.tile_y_offset,
+            image: image_area(siz),
+        }
+    }
+}
+
+/// The image area `siz` declares.
+pub(crate) fn image_area(siz: &Siz) -> Window {
+    Window::new(siz.x_offset, siz.y_offset, siz.x_size, siz.y_size)
 }
 
 /// One output channel's sample format and size, as on the

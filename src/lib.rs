@@ -13,7 +13,8 @@
 //! (maxshift), non-zero canvas offsets, resolution-reduced decoding, and the
 //! reversible (RCT) and irreversible (ICT) color transforms. HTJ2K code-blocks
 //! decode with all three of their coding passes, and a tile-component may mix
-//! HT and Part 1 code-blocks. A decode can stop after some quality layers, or
+//! HT and Part 1 code-blocks. An HTJ2K file takes the same call and options
+//! as any other. A decode can stop after some quality layers, or
 //! return a window, one tile or some of the components ([`DecodeOptions`]).
 //!
 //! A JP2 file's codestream decodes the same way, and the file's header comes
@@ -85,6 +86,11 @@
 //!
 //! # Damaged input
 //!
+//! This section and the API docs use the standard's names for the parts of
+//! a codestream: markers such as `SIZ`, `COD`, `SOT` and `EOC`, tiles and
+//! tile-parts, packets, code-blocks and the reference grid. [What a JPEG 2000
+//! file holds][terms] explains them.
+//!
 //! Decoding is strict by default. Truncated or inconsistent data is an
 //! error, and no partial image comes back with it. Input cut before the
 //! codestream's main header is whole, that is, before its first `SOT` marker,
@@ -116,11 +122,14 @@
 //! ```
 //! use rust_j2k::{Error, decode};
 //!
-//! let bytes = include_bytes!(concat!(
-//!     env!("CARGO_MANIFEST_DIR"),
-//!     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
-//! ));
-//! assert!(decode(bytes).is_ok());
+//! # let bytes = include_bytes!(concat!(
+//! #     env!("CARGO_MANIFEST_DIR"),
+//! #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+//! # )).to_vec();
+//! # /*
+//! let bytes = std::fs::read("image.j2k")?;
+//! # */
+//! assert!(decode(&bytes).is_ok());
 //!
 //! // Cut short: an error, not a partial image.
 //! let cut = &bytes[..bytes.len() / 2];
@@ -129,8 +138,10 @@
 //! assert!(decode(&bytes[..bytes.len() - 2]).is_err());
 //! // Not JPEG 2000 at all.
 //! assert!(matches!(decode(b"hello"), Err(Error::Codestream(_))));
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! [terms]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds
 //! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams
 //!
 //! With [`DecodeOptions::strict`] off, a codestream cut short, or one with
@@ -174,8 +185,8 @@
 //! class. So do its 41 HTJ2K codestreams and 20 JPH files. That gate runs in
 //! `tests/` against committed oracle snapshots, with no external tools.
 //! Correctness is defined by cross-checking OpenJPEG, not by self-consistency.
-//! An input using a feature outside the decoded set (more than one HT set per
-//! code-block, a Part 2 extension) is rejected with [`Error::Unsupported`],
+//! An input using a feature outside the decoded set (an HTJ2K code-block that
+//! needs more than one HT coding pass set, a Part 2 extension) is rejected with [`Error::Unsupported`],
 //! never half-decoded. GRIB2 §5.40 (`grid_jpeg`) payloads, the crate's original
 //! target, are raw codestreams and decode directly. The feature map is in
 //! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
@@ -211,7 +222,7 @@ pub(crate) mod window;
 pub mod fuzz;
 
 pub use error::{Error, ErrorDetail, LimitDetail, LimitKind, Result};
-pub use header::{ComponentInfo, Header};
+pub use header::{ComponentInfo, Header, TileGrid};
 pub use image::{Component, Image};
 pub use incremental::IncrementalDecoder;
 pub use jp2::{
@@ -226,7 +237,9 @@ pub use window::{Region, Window};
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
 /// output channel, each on its own sample grid. For a raw codestream that is
-/// one per SIZ component, in SIZ order. A JP2 file can change the channels:
+/// one per component of the `SIZ` marker, in `SIZ` order. [What a JPEG 2000
+/// file holds](https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds)
+/// explains the codestream's parts. A JP2 file can change the channels:
 /// its palette and channel definitions (below), and, through [`decode_with`],
 /// the sRGB output option.
 ///
@@ -424,6 +437,8 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
             components,
             max_reduction: max_reduction(&prefix.parsed.header),
             quality_layers: prefix.parsed.header.cod.layers,
+            image_area: header::image_area(&prefix.parsed.header.siz),
+            tiles: TileGrid::of_siz(&prefix.parsed.header.siz),
             jp2: Some(prefix.metadata),
         });
     }
@@ -455,6 +470,8 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
         ),
         max_reduction: max_reduction(&parsed.header),
         quality_layers: parsed.header.cod.layers,
+        image_area: header::image_area(siz),
+        tiles: TileGrid::of_siz(siz),
         jp2: None,
     })
 }
@@ -620,12 +637,16 @@ pub enum ColorOutput {
     ///     Some(out)
     /// }
     ///
-    /// let bytes = include_bytes!(concat!(
-    ///     env!("CARGO_MANIFEST_DIR"),
-    ///     "/tests/fixtures/jp2_cdef_rgba.jp2"
-    /// ));
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/jp2_cdef_rgba.jp2"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.jp2")?;
+    /// # */
+    /// // For a 16x12 RGBA file.
     /// let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
-    /// let image = decode_with(bytes, &options).expect("a 16x12 RGBA file");
+    /// let image = decode_with(&bytes, &options).expect("a 16x12 RGBA file");
     /// let rgba = rgba8(&image).expect("red, green, blue and opacity");
     /// assert_eq!(rgba.len(), 16 * 12 * 4);
     ///
@@ -633,6 +654,7 @@ pub enum ColorOutput {
     /// use rust_j2k::Component;
     /// let gray = Image::new(2, 1, vec![Component::new(2, 1, 12, false, 1, 1, vec![0, 4095])]);
     /// assert_eq!(rgba8(&gray), Some(vec![0, 0, 0, 255, 255, 255, 255, 255]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/srgb-output.md#every-input-and-its-result
@@ -682,21 +704,25 @@ pub struct DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, decode, decode_with};
     ///
-    /// // 32x24, in three quality layers, the last one lossless.
-    /// let bytes = include_bytes!(concat!(
-    ///     env!("CARGO_MANIFEST_DIR"),
-    ///     "/tests/fixtures/multilayer_lossless.j2k"
-    /// ));
-    /// let whole = decode(bytes).expect("decodes");
-    /// let first = decode_with(bytes, &DecodeOptions::default().with_max_quality_layers(Some(1)))
+    /// // For a 32x24 file in three quality layers, the last one lossless.
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/multilayer_lossless.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// let whole = decode(&bytes).expect("decodes");
+    /// let first = decode_with(&bytes, &DecodeOptions::default().with_max_quality_layers(Some(1)))
     ///     .expect("decodes");
     /// // The same size, from fewer coding passes.
     /// assert_eq!((first.width, first.height), (whole.width, whole.height));
     /// assert_ne!(first.components[0].samples, whole.components[0].samples);
     /// // A cap at or past the layer count is the whole decode.
-    /// let all = decode_with(bytes, &DecodeOptions::default().with_max_quality_layers(Some(3)))
+    /// let all = decode_with(&bytes, &DecodeOptions::default().with_max_quality_layers(Some(3)))
     ///     .expect("decodes");
     /// assert_eq!(all.components[0].samples, whole.components[0].samples);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[doc(alias = "layers")]
     #[doc(alias = "cp_layer")]
@@ -713,6 +739,8 @@ pub struct DecodeOptions {
     /// A [`Region::Window`] returns the part of the image inside it. It is in
     /// reference-grid coordinates, as SIZ declares them, whatever the
     /// [`resolution_reduction`](Self::resolution_reduction).
+    /// [`Header::image_area`] gives the image area in those coordinates,
+    /// and [`TileGrid::tile`] each tile's rectangle.
     /// The part of it outside the image area is left out, as OpenJPEG clips
     /// it. The returned [`Image`] covers what is left, `x0..x1` by `y0..y1`:
     /// its [`width`](Image::width) is `x1 - x0` at full resolution and
@@ -746,17 +774,21 @@ pub struct DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, Region, Window, decode, decode_with};
     ///
-    /// // 32x24 at the grid's origin.
-    /// let bytes = include_bytes!(concat!(
-    ///     env!("CARGO_MANIFEST_DIR"),
-    ///     "/tests/fixtures/multilayer_lossless.j2k"
-    /// ));
-    /// let whole = decode(bytes).expect("decodes");
+    /// // For a 32x24 file with its image area at the grid's origin.
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/multilayer_lossless.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// let whole = decode(&bytes).expect("decodes");
     /// let options = DecodeOptions::default().with_region(Region::Window(Window::new(8, 4, 20, 30)));
-    /// let part = decode_with(bytes, &options).expect("decodes");
+    /// let part = decode_with(&bytes, &options).expect("decodes");
     /// // The window is cut to the image: rows 4 to 23.
     /// assert_eq!((part.width, part.height), (12, 20));
     /// assert_eq!(part.components[0].sample(0, 0), whole.components[0].sample(8, 4));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Tile
@@ -766,8 +798,9 @@ pub struct DecodeOptions {
     /// them. The result is the decode of a [`Region::Window`] set to the
     /// tile's rectangle on the reference grid: its size, its samples and its
     /// failures, the refusal of sRGB output from sub-sampled sYCC included
-    /// (unless the image is one tile). A tile index past the tile grid is
-    /// [`Error::InvalidOptions`].
+    /// (unless the image is one tile). [`Header::tiles`] gives the tile grid
+    /// and [`TileGrid::count`] the number of tiles; an index at or past the
+    /// count is [`Error::InvalidOptions`].
     #[doc(alias = "decode_area")]
     #[doc(alias = "window")]
     #[doc(alias = "tile")]
@@ -801,17 +834,21 @@ pub struct DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, decode, decode_with};
     ///
-    /// // Three components under the irreversible color transform.
-    /// let bytes = include_bytes!(concat!(
-    ///     env!("CARGO_MANIFEST_DIR"),
-    ///     "/tests/fixtures/layers/cprl_irreversible.j2k"
-    /// ));
-    /// let whole = decode(bytes).expect("decodes");
+    /// // For a file of three components under the irreversible color transform.
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/layers/cprl_irreversible.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// let whole = decode(&bytes).expect("decodes");
     /// let options = DecodeOptions::default().with_components(Some(vec![2, 0]));
-    /// let some = decode_with(bytes, &options).expect("decodes");
+    /// let some = decode_with(&bytes, &options).expect("decodes");
     /// assert_eq!(some.components.len(), 2);
     /// assert_eq!(some.components[0], whole.components[2]);
     /// assert_eq!(some.components[1], whole.components[0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[doc(alias = "opj_set_decoded_components")]
     pub components: Option<Vec<u16>>,
@@ -900,10 +937,10 @@ pub struct DecodeOptions {
     /// `false` relaxes these two things and no others; any other relaxation
     /// is a separate option:
     ///
-    /// - The input may end anywhere after the first `SOT`
-    ///   marker, which ends the main header (input that ends before it is
-    ///   [`Error::Incomplete`], as when strict): inside a tile-part, its header or
-    ///   its packets, with or without the `EOC` marker. Tiles with no
+    /// - The input may end anywhere after the first `SOT` marker, which ends
+    ///   the main header: inside a tile-part, its header or its packets, with or without the `EOC`
+    ///   marker. Input that ends before the first `SOT` is
+    ///   [`Error::Incomplete`], as when strict. Tiles with no
     ///   tile-part are filled with 0, and packets that were never read (cut
     ///   off, or left out by the `POC` volumes) add nothing to their
     ///   code-blocks. A tile-part count (`TNsot`) that
@@ -943,10 +980,13 @@ pub struct DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
     ///
-    /// let bytes = include_bytes!(concat!(
-    ///     env!("CARGO_MANIFEST_DIR"),
-    ///     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
-    /// ));
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
     /// let prefix = &bytes[..bytes.len() - 20];
     /// // Strict, the default: a cut codestream is an error.
     /// assert!(matches!(
@@ -963,6 +1003,7 @@ pub struct DecodeOptions {
     ///     let coarse = decode_with(prefix, &options.with_resolution_reduction(r)).expect("decodes");
     ///     assert!(coarse.report.is_complete());
     /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[doc(alias = "allow_partial")]
     #[doc(alias = "allow-partial")]
@@ -1035,12 +1076,15 @@ impl Default for DecodeOptions {
 /// ```
 /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode, decode_with};
 ///
-/// // A valid 1 KB file that asks for far more work than its size allows.
-/// let bytes = include_bytes!(concat!(
-///     env!("CARGO_MANIFEST_DIR"),
-///     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
-/// ));
-/// let image = match decode(bytes) {
+/// // A file that asks for far more work than its size allows.
+/// # let bytes = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
+/// # )).to_vec();
+/// # /*
+/// let bytes = std::fs::read("image.j2k")?;
+/// # */
+/// let image = match decode(&bytes) {
 ///     // The example fails if the bomb is ever admitted by default.
 ///     Ok(_) => panic!("expected the work bound to refuse this file"),
 ///     // Past a limit. `limit.kind()` says which, and `limit.retry_with()`
@@ -1053,11 +1097,12 @@ impl Default for DecodeOptions {
 ///             .with_sample_limit(WorkLimit::Unlimited)
 ///             .with_code_block_work_limit(WorkLimit::Unlimited)
 ///             .with_packet_work_limit(WorkLimit::Unlimited);
-///         decode_with(bytes, &options).expect("a valid file decodes once the limits are lifted")
+///         decode_with(&bytes, &options).expect("a valid file decodes once the limits are lifted")
 ///     }
 ///     Err(e) => panic!("not a work-bound failure: {e}"),
 /// };
 /// assert_eq!((image.width, image.height), (1024, 1024));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1235,13 +1280,18 @@ impl DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode};
     ///
-    /// let bytes = include_bytes!(concat!(
-    ///     env!("CARGO_MANIFEST_DIR"),
-    ///     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
-    /// ));
-    /// let Err(Error::Limit(limit)) = decode(bytes) else { panic!() };
+    /// // A file that asks for far more work than its size allows.
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// let Err(Error::Limit(limit)) = decode(&bytes) else { panic!() };
     /// let options = DecodeOptions::default().with_retry(&limit).unwrap();
     /// assert_eq!(options.code_block_work_limit, WorkLimit::Raised(2));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
     pub fn with_retry(&self, limit: &LimitDetail) -> Option<Self> {
@@ -1281,16 +1331,19 @@ impl DecodeOptions {
 /// ```
 /// use rust_j2k::{ColorOutput, DecodeOptions, Error, decode_with};
 ///
-/// let bytes = include_bytes!(concat!(
-///     env!("CARGO_MANIFEST_DIR"),
-///     "/tests/fixtures/jp2_cdef_rgba.jp2"
-/// ));
+/// # let bytes = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/jp2_cdef_rgba.jp2"
+/// # )).to_vec();
+/// # /*
+/// let bytes = std::fs::read("image.jp2")?;
+/// # */
 /// let options = DecodeOptions::default()
 ///     .with_resolution_reduction(1)
 ///     .with_color(ColorOutput::Srgb);
-/// match decode_with(bytes, &options) {
+/// match decode_with(&bytes, &options) {
 ///     Ok(image) => {
-///         // The file is 16x12; one level discarded halves each side.
+///         // For a 16x12 file, one level discarded halves each side.
 ///         assert_eq!((image.width, image.height), (8, 6));
 ///         // Red, green, blue and opacity.
 ///         assert_eq!(image.components.len(), 4);
@@ -1302,6 +1355,7 @@ impl DecodeOptions {
 ///     Err(Error::InvalidOptions(why) | Error::Unsupported(why)) => panic!("{why}"),
 ///     Err(e) => panic!("decode failed: {e}"),
 /// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// Failures are the same [`Error`] variants as [`decode`], plus
