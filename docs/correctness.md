@@ -224,6 +224,20 @@ bit for bit as OpenJPEG decodes it, checked against committed digests of
 OpenJPEG's output. All 20 JPH files are in class, and each matches the PAE
 and MSE Kakadu quotes against its source.
 
+#### Windows of HT codestreams
+
+`opj_decompress -d` is not an oracle for a window of an HT codestream.
+OpenJPEG 2.5.0 decodes there only the tiles that lie wholly inside the
+window and fills the rest of the window with mid-gray (128 at 8 bits): the
+value of zero coefficients after the DC level shift. It does so on tiled and
+untiled files alike. Against the crop of its own whole decode the error reaches 127
+at 8 bits and 32768 at 16 bits (126 on `ds0_ht_01_b11` with `-d
+10,10,60,60`). A tile-aligned window is unaffected. For an HT window, the
+oracle is OpenJPEG's whole decode, cropped. This decoder's window equals
+the crop of its own whole decode, which the ratchets above grade:
+`tests/decode_window_random.rs` checks that on two OpenJPH codestreams and
+11 ISO ones, eight HT and three MIXED. No HT test uses `-d` as its reference.
+
 ## A passing entry is not proof the feature works
 
 `IN_CLASS` growing is the goal, but it is not the same as a feature being

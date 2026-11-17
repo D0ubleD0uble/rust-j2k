@@ -38,6 +38,19 @@ from (2, 3): 5 x 4 tiles. Neither codestream has a color transform.
 | `sub_53.j2k` | `opj_compress -i sub.raw -o sub_53.j2k -F 67,51,3,8,u@1x1:2x2:3x2 -t 16,14 -T 2,3 -d 7,5 -n 3 -mct 0` (5/3) |
 | `sub_97.j2k` | the same with `-I` (9/7) |
 
+## A large image offset
+
+`offset_300.j2k` is `rgb.ppm` placed at (300, 300) with 32 x 32 tiles from
+(290, 295), so the area is 300..370 by 300..354 in 3 x 2 tiles, and a window
+from the grid's origin misses it. `tests/tile_grid.rs` checks `read_header`'s
+image area and tile grid against `opj_dump -i offset_300.j2k` (OpenJPEG
+2.5.0) and each tile's size against `opj_decompress -t N`; it has no sample
+oracle.
+
+| File | Command |
+| ---- | ------- |
+| `offset_300.j2k` | `opj_compress -i rgb.ppm -o offset_300.j2k -d 300,300 -t 32,32 -T 290,295 -n 2` (OpenJPEG 2.5.0, 5/3, RCT; SHA-256 `e4b0d140349fbbebd42026d4568cb500ebcf06fd3b2547b0d88f04bfe4d1f255`) |
+
 ## Oracles
 
 | File | Content |

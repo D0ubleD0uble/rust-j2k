@@ -17,10 +17,13 @@ use core::ops::Range;
 /// ```
 /// use rust_j2k::{DecodeOptions, decode_with, read_header};
 ///
-/// let bytes = include_bytes!(concat!(
-///     env!("CARGO_MANIFEST_DIR"),
-///     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
-/// ));
+/// # let bytes = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+/// # )).to_vec();
+/// # /*
+/// let bytes = std::fs::read("image.j2k")?;
+/// # */
 /// // Only the first part of the codestream has arrived.
 /// let prefix = &bytes[..bytes.len() * 3 / 4];
 /// let options = DecodeOptions::default().with_strict(false);
@@ -39,6 +42,7 @@ use core::ops::Range;
 ///         assert!(coarse.report.is_complete());
 ///     }
 /// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

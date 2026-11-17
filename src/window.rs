@@ -57,7 +57,9 @@ pub enum Region {
     Whole,
     /// A rectangle of the reference grid, cut to the image area.
     Window(Window),
-    /// One tile, by its index in raster order from 0.
+    /// One tile, by its index in raster order from 0. The header's
+    /// [`tiles`](crate::Header::tiles) gives the grid, and its
+    /// [`count`](crate::TileGrid::count) how many tiles there are.
     Tile(u32),
 }
 
@@ -225,11 +227,15 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
             Some(area)
         }
         Region::Tile(tile) => Some(siz.tile_rect(tile).ok_or_else(|| {
-            Error::invalid_options(format!(
-                "tile {tile} is past the image's {} tiles (0 to {})",
-                siz.num_tiles(),
-                siz.num_tiles().saturating_sub(1)
-            ))
+            let tiles = siz.num_tiles();
+            Error::invalid_options(if tiles == 1 {
+                format!("tile {tile} is past the image's 1 tile (tile 0)")
+            } else {
+                format!(
+                    "tile {tile} is past the image's {tiles} tiles (0 to {})",
+                    tiles.saturating_sub(1)
+                )
+            })
         })?),
     };
     let Some(area) = area else {
