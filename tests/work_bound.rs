@@ -299,7 +299,7 @@ fn setskip(layers: u16, volumes: usize) -> Vec<u8> {
 /// past the bound for their 442 KB. With one volume, nothing is skipped and
 /// it decodes. OpenJPEG 2.5.0 decodes both to a flat 128.
 #[test]
-fn skips_from_the_poc_set_are_bounded() {
+fn skips_from_the_poc_counts_are_bounded() {
     assert_limit("setskip 31 volumes", &setskip(2048, 31));
     let image = decode(&setskip(2048, 1)).unwrap();
     assert_eq!(image.components.len(), 65);

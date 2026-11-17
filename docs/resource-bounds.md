@@ -301,7 +301,9 @@ release builds, each with the same result before and after:
 With `strict` off a decode now holds what a strict one does
 (`packets_past_the_end_take_no_memory_under_a_raised_bound` in
 `tests/strict_off_poc_alloc.rs`). The timings ran beside other work, so
-they are slower than the table below for the same shapes.
+the "With the set" column is slower than the table below for the same
+shapes; that table's memory for the shapes past the bitmap is from before
+the counts.
 
 `read_header`'s walk keeps no counts: past its bitmap, only where the decode
 would keep them, it gives up. For a `Psot = 0` codestream in a JP2 file the codestream
@@ -323,8 +325,8 @@ the `Psot = 0` JP2 form):
 | 160 components, 65535 layers, 2 volumes | 10.5 MB | 4.5 s, 824 MB | 0.32 s, 14 MB | 4.2 s, 824 MB | 0.33 s, 14 MB | 0.57 s, 37 MB |
 | 160 precincts, 65535 layers, 32 volumes | 10.5 MB | 65 s, 824 MB | 1.5 s, 14 MB | 71 s, 824 MB | 1.5 s, 14 MB | refused, 32 POCs |
 | 2^14 precincts, 65535 layers, 2 volumes, 10^7 packets in the data | 10 MB | `Codestream`, 1.7 s, 828 MB | `Limit`, 0.003 s, 16 MB | 1.8 s, 828 MB | 0.003 s, 16 MB | 53 s, 2.1 GB |
-| The same in RPCL | 10 MB | `Codestream`, 1.9 s, 828 MB | `Codestream`, 1.2 s, 238 MB | 2.0 s, 828 MB | not walked, 0.004 s, 16 MB | 153 s, 2.1 GB |
-| `setskip(65535, 31)`: RPCL, 6.5e8 packets reached, 1.4e7 read | 14 MB | decodes, 46.7 s, 240 MB | `Limit`, 5.5 s, 240 MB | 44 s | not walked, 0.003 s, 19 MB | |
+| The same in RPCL | 10 MB | `Codestream`, 1.9 s, 828 MB | `Codestream`, 1.2 s, 238 MB (before #438) | 2.0 s, 828 MB | not walked, 0.004 s, 16 MB | 153 s, 2.1 GB |
+| `setskip(65535, 31)`: RPCL, 6.5e8 packets reached, 1.4e7 read | 14 MB | decodes, 46.7 s, 240 MB | `Limit`, 5.5 s, 240 MB (before #438) | 44 s | not walked, 0.003 s, 19 MB | |
 
 ### Valid files the bound refuses
 
@@ -356,7 +358,7 @@ the bitmap may hold, so the packets read are held as counts, and every volume
 after the first skips each of them at 12 steps. With 2048 layers (442 KB)
 one volume decodes and 31 are `Limit` after 0.05 s; OpenJPEG decodes both
 in 0.14 s or less. `setskip` in `scripts/gen-work-bound-fixtures.py`
-writes the shape, and `skips_from_the_poc_set_are_bounded` in
+writes the shape, and `skips_from_the_poc_counts_are_bounded` in
 `tests/work_bound.rs` builds it. It was found in #261.
 
 ### The `read_header` walk

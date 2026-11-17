@@ -429,7 +429,7 @@ pub(crate) struct Budget {
 impl Budget {
     /// The decode's budget for one tile: the geometry guards, and a POC
     /// bitmap of no more bits than `visits`, the visits left on the decode's
-    /// [`Meter`], or `poc_bitmap`, then a set. A walk that
+    /// [`Meter`], or `poc_bitmap`, then a count per precinct. A walk that
     /// reads every packet takes a visit for each, so a bitmap of more bits
     /// than the visits left would be wasted. `poc_bitmap` is the decode's
     /// default bound, so a raised bound does not raise the bitmap's memory.

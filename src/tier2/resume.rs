@@ -648,8 +648,8 @@ impl TileWalk {
                             // of a precinct are always its first ones: those
                             // read whole, as no packet is pending here. A
                             // packet of a layer below them is one emitted
-                            // before, which the decode's bitmap or set
-                            // finds there.
+                            // before, which the decode's bitmap or counts
+                            // find there.
                             if self.dedup {
                                 let read = self.read[id.comp][id.res][id.precinct];
                                 debug_assert!(id.layer <= read, "{id:?} after {read} layers");

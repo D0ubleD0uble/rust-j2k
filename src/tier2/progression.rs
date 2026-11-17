@@ -502,7 +502,7 @@ pub(crate) const COUNTS_SKIP_VISITS: usize = 12;
 /// the packets emitted grew by one for each such packet, up to the bound.)
 /// `read_header`'s walk keeps no counts: it fails with [`Error::Limit`]
 /// there.
-struct Emitted {
+pub(super) struct Emitted {
     /// Where each (component, resolution)'s marks start, at `component *
     /// resolutions + resolution`: its first bit in the bitmap, or its first
     /// precinct's count.
@@ -524,7 +524,7 @@ impl Emitted {
     /// `resolutions` resolutions per component, with `meter` for the
     /// walk; a bitmap when the volumes reach at most `dense_bits` packets,
     /// else counts if `poc_counts`.
-    fn new(
+    pub(super) fn new(
         volumes: &[Volume],
         walk: &PacketWalk<'_>,
         resolutions: usize,
@@ -620,7 +620,7 @@ impl Emitted {
     /// already. Kept out of line: inlined into the walk's loop, it slows a
     /// walk of many skips by about 5%.
     #[inline(never)]
-    fn insert(
+    pub(super) fn insert(
         &mut self,
         walk: &PacketWalk<'_>,
         layer: u32,
