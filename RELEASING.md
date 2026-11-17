@@ -33,8 +33,8 @@ After this, every later release goes through the workflow with no token.
 Every release starts with a full-project review, before any version bump. The
 point is production completeness: the tag should never be the first time a
 whole-crate look happens. [docs/release-validation.md](docs/release-validation.md)
-describes every check a release runs, including the manual rounds and
-differential checks that are not listed here.
+describes every check a release runs, including the manual rounds,
+differential checks and mutation testing that are not listed here.
 
 1. **Pre-flight.** `rustup update stable` (CI uses the newest stable), clean
    tree on an up-to-date `main`, latest `main` CI run green.

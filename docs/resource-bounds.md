@@ -362,7 +362,9 @@ a `LeftoverBytes` entry. Under `WorkLimit::Raised(2)` both decode completely,
 with an empty report. OpenJPEG reads every such tile-part to the end of the
 file and ignores the bytes left after the last packet, whatever its walk costs
 ([`Psot = 0` at the end of
-`jp2c`](openjpeg-departures.md#psot--0-at-the-end-of-jp2c)).
+`jp2c`](openjpeg-departures.md#psot--0-at-the-end-of-jp2c)), and decodes the
+first file. It fails on the second for another reason ("segment too long" in a
+code-block).
 
 ## The tier-1 work bound
 

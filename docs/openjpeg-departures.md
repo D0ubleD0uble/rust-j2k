@@ -1361,7 +1361,7 @@ bits that T.814 says to drop.
 | Standard | ISO/IEC 15444-2 defines `NLT` as a non-linearity applied to the samples; Part 1 has no such marker |
 | Rule | 3 (an error over a wrong image) |
 | Tests and fixtures | the `NLT` row of `reject_matrix_maps_every_out_of_subset_input_to_its_typed_error` (`src/codestream/tests.rs`) |
-| Decided | #435; Part 2 markers are outside the supported subset ([scope.md](scope.md)) |
+| Decided | #78 (Part 2 markers refused); entry added in #435 |
 
 `NLT` changes the decoded values, so a decoder that skips it returns samples
 that are not the image the encoder meant, with no error. OpenJPEG does that:
@@ -1375,11 +1375,11 @@ refuses the file, as it does the other Part 2 markers (`MCT`, `MCC`, `MCO`,
 | | |
 | - | - |
 | This decoder | decodes the tile grid the SIZ gives |
-| OpenJPEG 2.5.0 | refuses ("Invalid number of tiles : 1 x 4294967233 (maximum fixed by jpeg2000 norm is 65535 tiles)") |
+| OpenJPEG 2.5.0 | refuses ("Invalid number of tiles : 1 x 4294967233 (maximum fixed by jpeg2000 norm is 65535 tiles)", for a 65-row image; the number depends on the image height) |
 | Standard | Eq. B-5 gives the tile count as ceil((Ysiz - YTOsiz) / YTsiz), which is 1 when `YTsiz` exceeds the image |
 | Rule | 1 |
 | Tests and fixtures | none committed; measured on a small fixture with `YTsiz` set to `0xFFFFFFFF` |
-| Decided | #435 |
+| Decided | not recorded |
 
 `opj_j2k_read_siz` computes the tile count with `opj_int_ceildiv` on values it
 casts to `OPJ_INT32` (`j2k.c:2336`). A `YTsiz` of `0xFFFFFFFF` is -1 as a signed

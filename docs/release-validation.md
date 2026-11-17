@@ -496,7 +496,6 @@ passed on the final candidate.
 Checks that are not part of a release today. Each is a candidate to try. One
 that finds real problems joins the layers above, as the malformed-input
 differential, the 32-bit run, the second HTJ2K oracle and the mutation run did.
-
 - Property tests: a `Region` decode equals the crop of the whole image, and
   retrying with `DecodeOptions::with_retry` after each `Error::Limit` never
   loops and ends at the same image as a decode with the limit already
