@@ -6,10 +6,6 @@
 //! The fixtures in `tests/fixtures/sample_limit/` are written by
 //! `scripts/gen-sample-limit-fixtures.py` (see the README there).
 
-// Over-limit images are past a 32-bit target's address cap, so the
-// refusals here differ there.
-#![cfg(target_pointer_width = "64")]
-
 #[path = "support/synth.rs"]
 mod synth;
 use std::path::PathBuf;
@@ -86,6 +82,7 @@ fn a_6000x4000_rgb_image_decodes_at_defaults_and_matches_openjpeg() {
 /// Over the default limit, the decode and the header read are refused with
 /// [`Error::Limit`], and the message names the option to raise and the
 /// factor that would admit the file.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
     for (what, bytes) in [
@@ -122,11 +119,13 @@ fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
 }
 
 /// The typed hint from a sample-limit refusal sets the option: `with_retry`
-/// gives `Raised(2)` for the flat file, and the retried decode succeeds (the
-/// image is all zero, as `opj_decompress` decodes it).
+/// gives `Raised(2)` for the flat file, and the retried decode gets past the
+/// limit. It runs on the header-only file, so it fails only on the missing
+/// tile data, as `raised_and_unlimited_admit...` does.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_retry_with_the_typed_hint_admits_the_flat_file() {
-    let bytes = flat();
+    let bytes = flat_header_only();
     let Err(Error::Limit(detail)) = decode(&bytes) else {
         panic!("expected a limit refusal at the default");
     };
@@ -135,9 +134,12 @@ fn a_retry_with_the_typed_hint_admits_the_flat_file() {
         .with_retry(&detail)
         .expect("a retry for the sample limit");
     assert_eq!(options.sample_limit, WorkLimit::Raised(2));
-    let image = decode_with(&bytes, &options).expect("admitted under the retry");
-    assert_eq!((image.width, image.height), (32769, 16385));
-    assert!(image.components[0].samples.iter().all(|&s| s == 0));
+    let header = read_header_with(&bytes, &options).expect("the header reads under the retry");
+    assert_eq!((header.width, header.height), (32769, 16385));
+    assert!(matches!(
+        decode_with(&bytes, &options),
+        Err(Error::Codestream(_))
+    ));
 }
 
 /// A Sentinel-2 true-color image (10980x10980, three 8-bit components, 361.7 M
@@ -156,6 +158,29 @@ fn a_sentinel_2_true_color_image_is_under_the_default_limit() {
 /// `Raised` and `Unlimited` admit the file. The header reads; the decode
 /// passes the limit and fails only on the missing tile data, before any
 /// plane is allocated, so the test stays cheap.
+/// On a 32-bit target every image over the default is also past the address
+/// cap, so it is refused as `AddressSpace`, with nothing to retry with.
+#[cfg(not(target_pointer_width = "64"))]
+#[test]
+fn over_the_default_limit_is_refused_as_address_space() {
+    for (what, bytes) in [
+        ("header only", flat_header_only()),
+        ("JP2 header only", in_jp2(&flat_header_only())),
+        ("file", flat()),
+    ] {
+        for result in [decode(&bytes).map(|_| ()), read_header(&bytes).map(|_| ())] {
+            match result {
+                Err(Error::Limit(m)) => {
+                    assert_eq!(m.kind(), LimitKind::AddressSpace, "{what}: {m}");
+                    assert_eq!(m.retry_with(), None, "{what}");
+                }
+                other => panic!("{what}: {other:?}"),
+            }
+        }
+    }
+}
+
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn raised_and_unlimited_admit_an_image_over_the_default() {
     let codestream = flat_header_only();
@@ -210,6 +235,7 @@ fn a_reduced_decode_of_an_image_over_the_limit_is_admitted() {
 
 /// The reduction's own levels appear in the message when the reduced image is
 /// still over the limit.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_reduced_image_still_over_the_limit_names_the_reduction() {
     // 50000 x 50000 at one level down is 25000 x 25000: 6.25e8 samples.
@@ -485,6 +511,7 @@ fn a_small_window_of_an_image_over_the_limit_decodes_at_the_default() {
 /// limit is refused too, and the whole image is counted as it is without a
 /// window. The header-only file fails on the missing tile data once it is
 /// past the limit, before any plane is allocated.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_window_is_held_to_the_samples_of_the_tiles_it_reads() {
     let bytes = flat_header_only();

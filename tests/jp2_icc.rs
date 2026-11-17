@@ -429,13 +429,8 @@ fn a_tinted_gray_profile_gives_three_color_channels() {
     }
 }
 
-/// A tinted gray profile triples the gray channel, and the sample limit
-/// counts the three: the same file grown to 14000x14000 is 1.96e8 samples as
-/// coded, under the 2^29 default, but 5.88e8 in sRGB, so sRGB output is
-/// refused from the header unless the limit is raised.
-#[cfg(target_pointer_width = "64")]
-#[test]
-fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
+/// The tinted-gray file grown to 14000x14000 (see below).
+fn tinted_gray_14000() -> Vec<u8> {
     let v = variants()
         .into_iter()
         .find(|v| v.file == "files/file8.jp2" && v.variant == "intent3_d65")
@@ -456,6 +451,17 @@ fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
     for at in [8, 12, 24, 28] {
         bytes[soc + at..soc + at + 4].copy_from_slice(&side);
     }
+    bytes
+}
+
+/// A tinted gray profile triples the gray channel, and the sample limit
+/// counts the three: the same file grown to 14000x14000 is 1.96e8 samples as
+/// coded, under the 2^29 default, but 5.88e8 in sRGB, so sRGB output is
+/// refused from the header unless the limit is raised.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
+    let bytes = tinted_gray_14000();
     match read_header_with(&bytes, &srgb()) {
         Err(Error::Limit(m)) => assert!(
             m.message().starts_with(
@@ -472,6 +478,22 @@ fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
         read_header_with(&bytes, &raised).unwrap().components.len(),
         3
     );
+}
+
+/// On a 32-bit target the sRGB count is past the address cap, so the refusal
+/// is `AddressSpace` with nothing to retry with; as coded, the file reads.
+#[cfg(not(target_pointer_width = "64"))]
+#[test]
+fn a_tinted_gray_profile_past_the_address_cap_is_refused() {
+    let bytes = tinted_gray_14000();
+    match read_header_with(&bytes, &srgb()) {
+        Err(Error::Limit(m)) => {
+            assert_eq!(m.kind(), rust_j2k::LimitKind::AddressSpace, "{m}");
+            assert_eq!(m.retry_with(), None);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(read_header_with(&bytes, &DecodeOptions::default()).is_ok());
 }
 
 /// Two components, a monochrome ICC profile and no `cdef`: OpenJPEG reads the

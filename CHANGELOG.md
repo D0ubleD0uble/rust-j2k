@@ -177,8 +177,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The default sample limit is 2^29 samples (2 GiB as `i32`), up from 2^28,
   so a Sentinel-2 true-color image of 10980 x 10980 x 3 (361.7 M samples)
   decodes at the defaults, as does an RGB image of up to about 179 MP. The
-  limit counts what the image holds, whatever its coding, so `Raised(n)` now
-  allows n x 2^29 samples (#436).
+  limit is still counted in decoded samples, so `Raised(n)` now allows
+  n x 2^29 samples (#436).
 - Some complete inputs now give `Error::Incomplete`, since their bytes look
   the same as a cut: empty input (was `Error::Codestream`), and a JP2 file
   with no `jp2c` box or with a top-level box before `jp2c` that runs past the

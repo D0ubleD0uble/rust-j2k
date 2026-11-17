@@ -7,8 +7,8 @@
   file is small and quick to decode: red steps every 256 columns, green every
   256 rows, and blue is a checkerboard of 512 x 512 squares.
 - `flat_32769x16385_tiled_lossless.j2k`: a flat (all zero) 32769x16385 8-bit
-  gray image (just over 2^29 samples) in 4096x4096 tiles with 4 wavelet
-  levels, so it decodes cheaply at a resolution reduction. Its tile grid is 9
+  gray image (just over 2^29 samples) in 4096x4096 tiles with 3 wavelet
+  levels (`-n 4` is 4 resolutions), so it decodes cheaply at a resolution reduction. Its tile grid is 9
   by 5, and the last column and row of tiles are one sample wide or tall.
 
 It checks that `opj_decompress` decodes the RGB file to exactly the picture

@@ -11,10 +11,6 @@
 //! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
-// Over-limit images are past a 32-bit target's address cap, so the
-// refusals here differ there.
-#![cfg(target_pointer_width = "64")]
-
 #[path = "support/alloc.rs"]
 mod alloc;
 use alloc::{CURRENT, PEAK};
@@ -51,6 +47,7 @@ fn header(side: u32) -> Vec<u8> {
 fn a_huge_declared_image_is_refused_without_allocating_it() {
     let cases = [
         // 24000^2 = 5.76e8 samples, 2.3 GB as i32: over the default.
+        #[cfg(target_pointer_width = "64")]
         (
             "over the default",
             header(24_000),

@@ -100,14 +100,14 @@ memory from `/usr/bin/time -v`):
 | `T31UDQ_20240105T105339_AOT_10m.jp2`, 10980x10980, 690 KB | full, bit-exact | 4.2 to 4.6 s | 470 MiB | 3.6 to 4.4 s | 471 MiB |
 | the same | reduction 2 (2745x2745) | 0.78 s | 32 MiB | | 36 MiB |
 | `single_block_32769_16385.jp2` | reduction 3, bit-exact | 1.05 s | 86 MiB | 0.25 s | 92 MiB |
-| `T31UDQ_20220811T105631_TCI.jp2`, 10980x10980x3, 125 MB, 256x256 tiles | full, bit-exact | 26.1 s | 1.47 GiB | 22.1 s | 1.38 GiB |
+| `T31UDQ_20220811T105631_TCI.jp2`, 10980x10980x3, 125 MB, 256x256 tiles | full, bit-exact | 26.8 s | 1.47 GiB | 22.9 s | 1.38 GiB |
 | a lossless 23170x23170 one-tile 5/3 image of 5 levels, 286 MiB (536.8 M samples) | full | 83.5 s | 2.90 GiB | 53.0 s | 2.34 GiB |
 
 The TCI is the one the default refused at 2^28 (#436). It is the 10 m true-color
 image of Sentinel-2 tile 31UDQ, sensed 2022-08-11 (public bucket
 `gcp-public-data-sentinel-2`); all three planes match `opj_decompress`
-sample for sample. The TCI rows were measured on a machine at load 14 to 20,
-so the times are loose; OpenJPEG ran under `MemoryMax=16G`. The last row is
+sample for sample. The TCI times are wall time from `/usr/bin/time` of one
+run each, on a machine at load 14 to 20, so they are loose; OpenJPEG ran under `MemoryMax=16G`. The last row is
 the largest one-tile image the default admits, made by `opj_compress -n 5` from
 a pseudo-random gradient; it is where the 1.35 times below stops being
 an extrapolation.
