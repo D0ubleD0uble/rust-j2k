@@ -127,6 +127,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longer copies a code-block's bytes when one quality layer carried them. A
   128x128 image of 4x4 code-blocks makes 2246 allocations where it made
   6338, and decodes about 5% faster (#299).
+- An HT code-block of a subband with more than 30 bit-planes decodes when
+  its zero bit-planes keep the cleanup plane's shift under 30, as Part 1
+  already did, including under a maxshift. It was refused as `Error::Limit`. OpenJPEG refuses any such
+  HT block.
 
 ### Fixed
 

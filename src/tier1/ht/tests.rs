@@ -717,8 +717,8 @@ fn magref_reads_backward_lsb_first_unstuffs_and_zero_fills() {
 
 // Refusals, one per reason.
 
-/// A maxshift counts against the plane limit: `Mb + s` above 30 is refused
-/// as the same `Limit`, and 30 decodes.
+/// A maxshift counts against the plane limit: `Mb + s - P` above 30 (here
+/// `P = 0`) is refused as the same `Limit`, and 30 decodes.
 #[test]
 fn a_maxshift_past_the_plane_limit_is_a_limit() {
     let data = [0x01, 0x62, 0x00];
@@ -727,6 +727,63 @@ fn a_maxshift_past_the_plane_limit_is_a_limit() {
         Err(Error::Limit(m)) if m.contains("31 bit-planes") && m.contains("maxshift of 3")
     ));
     assert!(decode(&block(1, 1, 0, &data), 27, params(3, false)).is_ok());
+}
+
+/// The plane limit is on `Mb + s - P`, not on `Mb + s`. The block
+/// `00 27 F3 00` holds one sample of `mu = 3`. With `Mb = 20`, `s = 11` and
+/// `P = 29` zero bit-planes it has `M'b = 31` planes (H-3), so the cleanup
+/// plane's shift is `31 - 29 - 1 = 1` and the sample is `(2 * 3 + 1) << 1 =
+/// 14` at double scale (7.6), background under `2^(s + 1)`, and kept (H.1).
+/// The Part 1 coder starts the same block at `top_coded_plane(20, 29, 11) =
+/// 2`, as it does `Mb = 19` with 28 zero bit-planes, which gives the same 14.
+#[test]
+fn a_large_maxshift_decodes_with_a_small_cleanup_shift() {
+    let data = [0x00, 0x27, 0xF3, 0x00];
+    let roi = params(11, false);
+    assert_eq!(decode(&block(1, 1, 28, &data), 19, roi).unwrap(), [14]);
+    assert_eq!(decode(&block(1, 1, 29, &data), 20, roi).unwrap(), [14]);
+    // Without the maxshift, too, a subband of 31 planes decodes when its
+    // cleanup shift is small: `mu = 3` at `Mb = 31` with 29 zero planes.
+    assert_eq!(
+        decode(&block(1, 1, 29, &data), 31, params(0, false)).unwrap(),
+        [14]
+    );
+}
+
+/// A block whose `Mb + s - P` is over 30 is still refused under a maxshift,
+/// with or without zero bit-planes.
+#[test]
+fn a_maxshift_past_the_plane_limit_with_zero_bit_planes_is_a_limit() {
+    let data = [0x00, 0x27, 0xF3, 0x00];
+    let roi = params(11, false);
+    for (numbps, zbp) in [(20, 0), (21, 1), (25, 5)] {
+        assert!(
+            matches!(
+                decode(&block(1, 1, zbp, &data), numbps, roi),
+                Err(Error::Limit(_))
+            ),
+            "Mb {numbps}, zbp {zbp}"
+        );
+    }
+    // At `Mb + s - P = 30` the limit passes, and the per-sample guard refuses
+    // the magnitude `7 << 29`, which does not fit `i32`.
+    assert!(matches!(
+        decode(&block(1, 1, 1, &data), 20, roi),
+        Err(Error::Codestream(_))
+    ));
+}
+
+/// With many zero bit-planes under a maxshift, the exponent bound `P + 2`
+/// would pass 64 and overflow the shifts that build a magnitude. It is capped
+/// at the limit, so the block is refused instead of panicking.
+#[test]
+fn many_zero_bit_planes_under_a_maxshift_do_not_overflow_a_shift() {
+    let data = [
+        0xA1, 0x58, 0xF8, 0xDE, 0xB0, 0x6E, 0x9C, 0x09, 0x24, 0xD7, 0x83, 0xC9, 0x8A, 0x7F, 0x72,
+        0xAB, 0xCD, 0xED, 0x43, 0x73, 0xE0, 0x2E, 0x91, 0xD3, 0xFC, 0x60, 0x5A, 0x00,
+    ];
+    let got = decode(&block(4, 2, 66, &data), 37, params(30, false));
+    assert!(matches!(got, Err(Error::Codestream(_))), "{got:?}");
 }
 
 /// A cleanup magnitude at the bound `CAP` signals is refused (T.814 A.3.7,
@@ -943,4 +1000,22 @@ fn random_segments_never_panic() {
         }
     }
     assert!(decoded > 100, "only {decoded} random blocks decoded");
+}
+
+/// The exponent bound is capped at 32, the `P + 2` of a block with 30 zero
+/// bit-planes, however many zero bit-planes there are. Here `Mb = 32` and
+/// `P = 31`, so the cleanup plane's shift is 0 and the cap is what binds.
+/// One sample whose exponent is 31 (a magnitude of 31 bits) decodes; the
+/// same kind of block with `U_q = 33` is refused. Both found by a seeded
+/// search over short segments.
+#[test]
+fn the_exponent_bound_cap_is_32() {
+    let fits = [0xB8, 0x05, 0x2B, 0x99, 0x2A, 0x1A, 0xCC, 0x87, 0x75, 0x00];
+    assert_eq!(
+        decode(&block(1, 1, 31, &fits), 32, params(0, false)).unwrap(),
+        [1_495_991_739]
+    );
+    let over = [0x30, 0x26, 0xE6, 0x4D, 0x3D, 0x87, 0x74, 0x00];
+    let msg = malformed_msg(&block(1, 1, 31, &over), 32);
+    assert!(msg.contains("U_q = 33 exceeds 32"), "{msg}");
 }

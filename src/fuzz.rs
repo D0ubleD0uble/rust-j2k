@@ -95,7 +95,8 @@ pub fn tier1_block(data: &[u8]) {
 ///   the cleanup segment's last two bytes into a valid `Scup`.
 /// - Bytes 4 and 5: `Mb` and `P`, each 0 to 39, past the 30-plane limit.
 /// - Byte 6: the coding passes (0 to 4, one more than a set holds) and, from
-///   bit 3, the maxshift.
+///   bit 3, the maxshift: 0 to 30, or with 31 the whole of byte 12, 0 to 255.
+///   With the maxshift flag, byte 5 is the zero bit-planes up to 255.
 /// - Bytes 7 to 10: the cleanup length `Lcup` and the refinement length, each
 ///   0 to 5000 when the segments are stretched, else cut to the bytes there
 ///   are.
@@ -135,10 +136,19 @@ fn run_ht_block(data: &[u8]) -> Option<((usize, usize), crate::Result<usize>)> {
         (width, height)
     };
     let numbps = u32::from(*mb) % 40;
-    let zero_bit_planes = u32::from(*zbp) % 40;
+    // Under a maxshift the zero bit-planes reach the 255 a byte holds, past
+    // `Mb + s`'s usual range, as the packet header allows up to 293.
+    let zero_bit_planes = if flags & 0x20 != 0 {
+        u32::from(*zbp)
+    } else {
+        u32::from(*zbp) % 40
+    };
     let num_passes = u32::from(pr & 7) % 5;
     let roi_shift = if flags & 0x20 != 0 {
-        (pr >> 3) & 0x1F
+        match (pr >> 3) & 0x1F {
+            31 => *h1,
+            s => s,
+        }
     } else {
         0
     };
