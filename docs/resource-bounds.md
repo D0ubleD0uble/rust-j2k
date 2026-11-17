@@ -37,7 +37,7 @@ resident) with every block coded. The cap was 2^19 until the sample limit
 became 2^29: at 2^19 a one-tile image of 23106x23106 samples or more in 32x32
 blocks was refused. At 2^20 a one-tile image at least 72 samples wide and under
 2^29 samples fits in 32x32 blocks (23170x23170 needs 527,259; 64x64 blocks need
-132726 at the limit; 72 x 2^23 fits). A thinner image is still refused (66 x
+132726 at the limit; 64 x 2^23 needs 770,048). A thinner image is still refused (66 x
 8,134,407 needs 1,128,027; 32 x 2^24 needs 1.54 M; 1 x 2^29 needs 16.7 M), as
 is one tile in 16x16 blocks or smaller near the limit.
 
