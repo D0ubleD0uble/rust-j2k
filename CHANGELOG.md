@@ -196,6 +196,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- With `strict` off, a `POC` sequence's packets past the end of the data
+  no longer take memory that grows with the packet work bound. The packets
+  emitted past the bitmap are now held as a count per precinct, at most
+  1 MB, not as a set of every packet. A 200-byte file at
+  `WorkLimit::Raised(8)` took 3.6 GB before its `Error::Limit` and now
+  takes 33 MB; a 10 MB file at the default bound took 7.1 GB and now
+  takes 16 MB. Strict decodes of such sequences use less memory too. Every
+  decoded image, report and refusal is unchanged (#438).
 - A region-of-interest maxshift now treats a coefficient as region only from
   `2^s`, as ISO/IEC 15444-1 H.1 says. It was one plane lower, so a background
   coefficient with bit `s - 1` set decoded as 0 or a fraction of its value.

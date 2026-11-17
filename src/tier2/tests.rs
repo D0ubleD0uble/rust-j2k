@@ -1634,7 +1634,7 @@ fn overlapping_volumes() -> MainHeader {
 
 /// Volumes that overlap, in part and in full and in every order, emit each
 /// packet once, where the first volume to reach it puts it, whether the
-/// sequence's packets are held in a bitmap or in a set. The reference walks
+/// sequence's packets are held in a bitmap or as counts. The reference walks
 /// each volume on its own (one volume takes no dedup) and keeps the first
 /// time each packet comes.
 #[test]
@@ -1725,7 +1725,7 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
     assert_eq!(read, 0);
 
     // A positional volume may pass over precincts, so it is walked, unless
-    // the walk keeps no set, as `read_header`'s does not, and the packets
+    // the walk keeps no counts, as `read_header`'s does not, and the packets
     // are more than its bitmap may hold.
     header.poc[1].progression = Progression::Rpcl;
     let (result, read) = walk_with(&header, 11, None);
@@ -1737,11 +1737,11 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
     assert!(read > 0, "{result:?}");
 }
 
-/// A packet skipped from the set is charged `SET_SKIP_VISITS` (12) visits,
+/// A packet skipped by the counts is charged `COUNTS_SKIP_VISITS` (12) visits,
 /// one skipped from the bitmap none: two identical RPCL volumes spend 12
-/// visits more per packet read when the packets are held in a set.
+/// visits more per packet read when the packets are held as counts.
 #[test]
-fn only_a_skip_from_the_set_is_charged() {
+fn only_a_skip_by_the_counts_is_charged() {
     let mut header = overlapping_volumes();
     let full = PocVolume {
         res_start: 0,
@@ -1778,10 +1778,50 @@ fn only_a_skip_from_the_set_is_charged() {
         (visits.spent(), read)
     };
     let (bitmap, read) = spent(u64::MAX);
-    let (set, read_from_set) = spent(0);
-    assert_eq!(read, read_from_set);
+    let (counts, read_by_counts) = spent(0);
+    assert_eq!(read, read_by_counts);
     assert!(read > 100, "{read} packets");
-    assert_eq!(set - bitmap, 12 * read);
+    assert_eq!(counts - bitmap, 12 * read);
+}
+
+/// The counts hold that each volume emits a precinct's layers from 0 up. A
+/// layer above its precinct's count breaks that, and is an internal error
+/// rather than a packet taken as new: a count moved past the layers between
+/// would take them as emitted.
+#[test]
+fn a_layer_past_its_precincts_count_is_inconsistent() {
+    let mut header = overlapping_volumes();
+    let full = PocVolume {
+        res_start: 0,
+        res_end: 3,
+        comp_start: 0,
+        comp_end: 3,
+        layer_end: 4,
+        progression: Progression::Rpcl,
+    };
+    header.poc = vec![full, full];
+    let geoms: Vec<Vec<ResolutionGeom>> = (0..header.siz.components.len())
+        .map(|c| geoms_of(&header, 0, c).expect("geometry"))
+        .collect();
+    let walk = PacketWalk {
+        siz: &header.siz,
+        tile: header.siz.tile_rect(0).expect("tile 0"),
+        geoms: &geoms,
+    };
+    let order = super::progression::Order::new(&header, &walk);
+    let meter = super::Meter::new(u64::MAX);
+    // No bitmap bits, so the packets are held as counts.
+    let mut emitted =
+        super::progression::Emitted::new(&order.volumes, &walk, order.max_res, &meter, 0, true)
+            .unwrap();
+    assert!(emitted.insert(&walk, 0, 0, 0, 0).unwrap());
+    assert!(!emitted.insert(&walk, 0, 0, 0, 0).unwrap());
+    assert!(matches!(
+        emitted.insert(&walk, 2, 0, 0, 0),
+        Err(Error::Inconsistent(_))
+    ));
+    // The count did not move: layer 1 is still the next one new.
+    assert!(emitted.insert(&walk, 1, 0, 0, 0).unwrap());
 }
 
 // ---- POC coverage (issue #260) ----

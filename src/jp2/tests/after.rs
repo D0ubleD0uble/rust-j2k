@@ -727,7 +727,7 @@ fn setskip(layers: u16, volumes: usize) -> Vec<u8> {
 
 /// The walk holds a POC sequence's packets in a bitmap wherever the decode
 /// does: 31 volumes reaching 1.0e7 packets, under the decode's 2^24 visits,
-/// are walked. Past that, where the decode keeps a set, the walk gives up:
+/// are walked. Past that, where the decode keeps counts, the walk gives up:
 /// 2 volumes reaching 2.0e7 packets are not walked, though a decode with no
 /// work bound finishes them. With one volume nothing is held, and it is
 /// walked.
