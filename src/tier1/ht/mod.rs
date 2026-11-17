@@ -630,10 +630,12 @@ impl Cleanup<'_> {
                     };
                     let bound = kappa + u[slot];
                     if bound > self.max_u {
-                        // `max_u` is `P + 2`, or the cap when `P` is large.
+                        // `max_u` is `P + 2`, at most the cap; the cap's message also holds
+                        // when `P` is exactly 30 and nothing was capped.
                         return Err(malformed(&if self.max_u == MAX_BIT_PLANES + 2 {
                             format!(
-                                "exponent bound U_q = {bound} exceeds the cap of {} bits",
+                                "exponent bound U_q = {bound} exceeds {}, the most a block can code (zero \
+                                 bit-planes + 2, at most {0})",
                                 self.max_u
                             )
                         } else {

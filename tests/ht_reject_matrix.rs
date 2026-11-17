@@ -436,7 +436,7 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
 /// decoders (the reference is `opj_decompress` 2.5.0 on the same hand-built
 /// one-block files).
 #[test]
-fn a_subband_of_more_than_30_planes_decodes_when_few_planes_are_coded() {
+fn a_subband_of_more_than_30_planes_decodes_with_a_small_cleanup_shift() {
     let data = [0x00, 0x27, 0xF3, 0x00];
     for (mb, zero_bit_planes) in [(30, 28), (31, 29), (37, 35)] {
         let image = decode(&ht_file(&Block {

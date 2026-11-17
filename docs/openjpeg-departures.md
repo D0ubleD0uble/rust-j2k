@@ -1109,16 +1109,16 @@ applies the bound to `Mb` on an HT block.
 | OpenJPEG 2.5.0 | refuses every HT block with `Mb > 30`, whatever its zero bit-planes ("32 bits are not enough ... larger than 30", `ht_dec.c`); its Part 1 path decodes the same case |
 | Standard | ISO/IEC 15444-1 A.6.4 and E-2 (`Mb = G + epsilon - 1`, with `epsilon` up to 31 and `G` up to 7, so up to 37 planes); B.10.5 (zero bit-planes); T.814 7.6 |
 | Rule | 1 |
-| Tests and fixtures | `a_subband_of_more_than_30_planes_decodes_when_few_planes_are_coded` in `tests/ht_reject_matrix.rs`; `a_block_that_codes_few_planes_under_a_large_maxshift_decodes` in `src/tier1/ht/tests.rs` |
+| Tests and fixtures | `a_subband_of_more_than_30_planes_decodes_with_a_small_cleanup_shift` in `tests/ht_reject_matrix.rs`; `a_large_maxshift_decodes_with_a_small_cleanup_shift` in `src/tier1/ht/tests.rs` |
 | Decided | #417 |
 
 The standard allows a subband of up to 37 magnitude bit-planes and puts no
-HT-specific limit below that. The 30 is OpenJPEG's: its 32-bit reconstruction
-needs the cleanup plane's shift to fit. A block whose top planes are empty
-(many zero bit-planes) has a small shift whatever `Mb` is, so it fits, and
-this decoder decodes it, as it does in Part 1. A block whose shift does not
-fit is `Error::Limit`, and a magnitude that overflows `i32` is refused as
-malformed.
+HT-specific limit below that. OpenJPEG checks `Mb > 30` itself, whatever the
+zero bit-planes. The bound here is on the cleanup plane's shift, `Mb + s - P`
+less one: this decoder keeps its double-scale values in `i32`, so that shift
+must stay under 30. A block whose zero bit-planes keep it there decodes, as in
+Part 1, whatever `Mb` is. A block whose shift is over the bound is
+`Error::Limit`, and a magnitude that overflows `i32` is refused as malformed.
 
 Measured on hand-built one-block, one-sample HT files (block `00 27 F3 00`):
 
