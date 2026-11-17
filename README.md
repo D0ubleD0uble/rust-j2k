@@ -84,7 +84,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The image's top-left 256 × 256. The image area can start away from
     // the grid's origin, so place the window from it.
     let area = header.image_area;
-    let window = Region::Window(Window::new(area.x0, area.y0, area.x0 + 256, area.y0 + 256));
+    let (x1, y1) = (area.x0.saturating_add(256), area.y0.saturating_add(256));
+    let window = Region::Window(Window::new(area.x0, area.y0, x1, y1));
     let part = decode_with(&bytes, &DecodeOptions::default().with_region(window))?;
     println!("window: {}x{}", part.width, part.height);
 
