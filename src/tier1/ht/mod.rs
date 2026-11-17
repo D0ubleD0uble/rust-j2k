@@ -29,10 +29,12 @@ use crate::tier2::CodeBlock;
 use crate::{Error, Result};
 use vlc_tables::{CXT_VLC_TABLE_0, CXT_VLC_TABLE_1};
 
-/// The most magnitude bit-planes a code-block can have for the double-scale
-/// reconstruction to fit `i32`, the bound OpenJPEG's `opj_t1_ht_decode_cblk`
-/// applies to `Mb`. Under a maxshift it applies to the raised count
-/// `Mb + s`.
+/// The most `Mb + s - P` a block can have for the double-scale reconstruction
+/// to fit `i32`, with `P` its zero bit-planes (`Mb` when there is no maxshift
+/// and `P = 0`). The cleanup pass codes the top `P + 1` planes, so
+/// `Mb + s - P` is one more than the cleanup plane's shift: this bounds that
+/// shift, not a count of coded planes. The Part 1 coder limits the same
+/// quantity, where it is the count of coded planes (`top_coded_plane`).
 const MAX_BIT_PLANES: u32 = 30;
 
 /// The largest suffix length `Scup` (7.1.1).
@@ -163,20 +165,6 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
     if block.num_passes == 0 || planes == 0 {
         return Ok(());
     }
-    if planes > MAX_BIT_PLANES {
-        return Err(Error::Limit(if params.roi_shift == 0 {
-            format!(
-                "HT code-block in a subband of {numbps} bit-planes, over the \
-                 {MAX_BIT_PLANES}-plane limit"
-            )
-        } else {
-            format!(
-                "HT code-block of {planes} bit-planes (a subband of {numbps} and a \
-                 maxshift of {}), over the {MAX_BIT_PLANES}-plane limit",
-                params.roi_shift
-            )
-        }));
-    }
     let zbp = block.zero_bit_planes;
     // At least one bit-plane must be left to code; OpenJPEG refuses the
     // same blocks.
@@ -184,6 +172,27 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
         return Err(malformed(&format!(
             "has {zbp} zero bit-planes in a block of {planes}, leaving none to code"
         )));
+    }
+    // `Mb + s - P` bounds the cleanup plane's shift, as `top_coded_plane`
+    // does in the Part 1 coder; `Mb + s` alone does not, since a block with
+    // many zero bit-planes keeps the shift small under any maxshift. The
+    // per-sample `try_from` in the cleanup pass still refuses any magnitude
+    // that does not fit.
+    let coded = planes - zbp;
+    if coded > MAX_BIT_PLANES {
+        return Err(Error::Limit(if params.roi_shift == 0 {
+            format!(
+                "HT code-block of {coded} bit-planes (a subband of {numbps} and {zbp} \
+                 zero bit-planes), over the {MAX_BIT_PLANES}-plane limit"
+            )
+        } else {
+            format!(
+                "HT code-block of {coded} bit-planes (a subband of {numbps}, a \
+                 maxshift of {} and {zbp} zero bit-planes), over the \
+                 {MAX_BIT_PLANES}-plane limit",
+                params.roi_shift
+            )
+        }));
     }
     let data = block
         .segments
@@ -217,8 +226,10 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
         qw: width.div_ceil(2),
         // `mu` has at most `P + 1` bits (7.6), so its exponent, the bit
         // length of `2 mu - 1`, is at most `P + 2`. OpenJPEG has the same
-        // bound.
-        max_u: zbp + 2,
+        // bound. The cap at `MAX_BIT_PLANES + 2` keeps the shifts below in
+        // range when `P` is large under a maxshift; a magnitude that fits
+        // `i32` has an exponent of at most 31.
+        max_u: (zbp + 2).min(MAX_BIT_PLANES + 2),
         // A bound of 64 bits or more holds of every `u64`.
         bound_bits: params.bound_bits.filter(|&bits| bits < u64::BITS),
         shift,
@@ -619,10 +630,20 @@ impl Cleanup<'_> {
                     };
                     let bound = kappa + u[slot];
                     if bound > self.max_u {
-                        return Err(malformed(&format!(
-                            "exponent bound U_q = {bound} exceeds zero bit-planes + 2 = {}",
-                            self.max_u
-                        )));
+                        // `max_u` is `P + 2`, at most the cap; the cap's message also holds
+                        // when `P` is exactly 30 and nothing was capped.
+                        return Err(malformed(&if self.max_u == MAX_BIT_PLANES + 2 {
+                            format!(
+                                "exponent bound U_q = {bound} exceeds {}, the most a block can code (zero \
+                                 bit-planes + 2, at most {0})",
+                                self.max_u
+                            )
+                        } else {
+                            format!(
+                                "exponent bound U_q = {bound} exceeds zero bit-planes + 2 = {}",
+                                self.max_u
+                            )
+                        }));
                     }
                     self.magnitudes(q, info[slot], bound, exps, coeffs)?;
                 }
@@ -762,9 +783,9 @@ impl Cleanup<'_> {
                 )));
             }
             exps[4 * q + j] = 64 - (2 * mu - 1).leading_zeros();
-            // Within the exponent bound, only a `mu` of `P + 2` bits, which
-            // the block cannot code (7.6), overflows `i32`, and only at
-            // `Mb = 30`.
+            // Within the exponent bound, a `mu` with more bits than the block
+            // codes (7.6) can still overflow `i32`, shifted up by the
+            // cleanup plane.
             let magnitude = i32::try_from((2 * mu + 1) << self.shift)
                 .map_err(|_| malformed("codes a magnitude past its bit-planes"))?;
             let x = 2 * (q % self.qw) + (j >> 1);

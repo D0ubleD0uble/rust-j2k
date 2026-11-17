@@ -119,10 +119,13 @@ fn ht_file(block: &Block<'_>) -> Vec<u8> {
     cs.extend(seg(0xFF50, &[0, 2, 0, 0, (ccap >> 8) as u8, ccap as u8]));
     // COD: block style HT (0x40), 64x64 code-blocks, no wavelet level.
     cs.extend(seg(0xFF52, &synth::cod_body(1, 0, 4, 0x40)));
-    // QCD: two guard bits and the exponent that gives `Mb`.
+    // QCD: the exponent (at most 31) and guard bits (2, or up to 7 for a
+    // subband of 33 to 37 planes) that give `Mb = G + exponent - 1` (E-2).
+    let exponent = block.mb.saturating_sub(1).min(31);
+    let guard = 2 + block.mb.saturating_sub(1).saturating_sub(exponent).min(5);
     cs.extend(seg(
         0xFF5C,
-        &synth::qcd_none_body(2, &[block.mb.saturating_sub(1).min(31) as u8]),
+        &synth::qcd_none_body(guard as u8, &[exponent as u8]),
     ));
     if let Some(shift) = block.roi_shift {
         cs.extend(seg(0xFF5E, &[0, 0, shift]));
@@ -422,4 +425,34 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
         wrong.len(),
         wrong.join("\n")
     );
+}
+
+/// A subband of more than 30 magnitude bit-planes decodes when the zero
+/// bit-planes leave the cleanup plane's shift within `i32`, as in Part 1.
+/// OpenJPEG 2.5.0 refuses every HT block with `Mb > 30` ("32 bits are not
+/// enough ... larger than 30", `ht_dec.c`), whatever its zero bit-planes; see
+/// docs/openjpeg-departures.md. The block `00 27 F3 00` is one sample of
+/// `mu = 3` and decodes to 135 with `Mb` 30 and 28 zero bit-planes in both
+/// decoders (the reference is `opj_decompress` 2.5.0 on the same hand-built
+/// one-block files).
+#[test]
+fn a_subband_of_more_than_30_planes_decodes_with_a_small_cleanup_shift() {
+    let data = [0x00, 0x27, 0xF3, 0x00];
+    for (mb, zero_bit_planes) in [(30, 28), (31, 29), (37, 35)] {
+        let image = decode(&ht_file(&Block {
+            mb,
+            zero_bit_planes,
+            cleanup: &data,
+            ..Block::default()
+        }))
+        .unwrap_or_else(|e| panic!("Mb {mb}, zbp {zero_bit_planes}: {e:?}"));
+        assert_eq!(image.components[0].samples, [135], "Mb {mb}");
+    }
+    // With the planes coded past the limit it is still refused.
+    let refused = decode(&ht_file(&Block {
+        mb: 31,
+        cleanup: &data,
+        ..Block::default()
+    }));
+    assert!(matches!(refused, Err(Error::Limit(_))), "{refused:?}");
 }
