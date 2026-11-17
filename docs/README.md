@@ -1,11 +1,12 @@
 # Project documentation
 
 rust-j2k is a JPEG 2000 decoder written in pure Rust, with no C library
-underneath and no `unsafe` code in the library. It started with the part of
-JPEG 2000 that GRIB2 weather grids use, and now decodes general Part 1
-codestreams and JP2 files. For the API and a usage example, see the crate
-[README](../README.md) and the rustdoc. The pages here cover the project as a
-whole; code comments cite the section of the standard each module implements.
+underneath and no `unsafe` code in the library. It decodes general Part 1
+and HTJ2K codestreams, and JP2 and JPH files; it started with the part of
+JPEG 2000 that GRIB2 weather grids use. For the API and a usage example,
+see the crate [README](../README.md) and the rustdoc. The pages here cover
+the project as a whole; code comments cite the section of the standard each
+module implements.
 
 Other ways to read JPEG 2000 from Rust exist. `jp2k`, `openjpeg-sys` and
 `grokj2k-sys` bind a C or C++ library. `hayro-jpeg2000` is a pure-Rust decoder
@@ -26,6 +27,9 @@ If you use the crate:
 - [resource-bounds.md](resource-bounds.md) gives the memory and work limits,
   how each is counted and what it costs a valid file. Start here if a file is
   refused with `Error::Limit`.
+- [incremental-decoding.md](incremental-decoding.md) explains how
+  `IncrementalDecoder` decodes a file while it arrives, and what each refine
+  costs.
 - [srgb-output.md](srgb-output.md) gives what sRGB output produces for each
   kind of input, and the evidence for each case.
 - [correctness.md](correctness.md) explains why the output can be trusted: the
@@ -44,11 +48,9 @@ If you work on the crate:
 - [`tests/fixtures/README.md`](../tests/fixtures/README.md) describes each
   test fixture, where it came from and the command that made it.
 - [`fuzz/README.md`](../fuzz/README.md) shows how to run the fuzz targets.
-- [roadmap-phase4.md](roadmap-phase4.md) is the plan for HTJ2K decode, the
-  phase in progress: its decisions, the corpora, and each step with its module,
-  oracle and gate.
 - [roadmap-phase1.md](roadmap-phase1.md),
-  [roadmap-phase2.md](roadmap-phase2.md) and
-  [roadmap-phase3.md](roadmap-phase3.md) are the plans of the finished phases,
+  [roadmap-phase2.md](roadmap-phase2.md),
+  [roadmap-phase3.md](roadmap-phase3.md) and
+  [roadmap-phase4.md](roadmap-phase4.md) are the plans of the finished phases,
   with each step tied to its module and the oracle that checked it. They are
   kept as the record of how the decoder was built.

@@ -199,16 +199,30 @@ decodes, and of 16 OpenJPH test codestreams (`tests/fixtures/openjph/`). All
 38 HT-only codestreams are in class, eight of them with `RGN`, the 10 that
 OpenJPEG decodes agree with it, and all 16 OpenJPH files are in class. The
 three MIXED files are in class too, and Kakadu's figures for each against
-its Part 1 source match this decoder's. Three derived files are also checked against
-their source: `ds1_ht_04_b9`, `ds1_ht_05_b11` and `ds1_ht_06_b11` must decode
-exactly as `p1_04`, `p1_05` and `p1_06` (T.803 C.1.10, C.1.11). Each
-transcode's error against its source must also match the PAE and MSE Kakadu
-quotes in the manifest, on the reversible transcodes, the exact ones, and the
-irreversible `ds0_ht_02_b11` and `ds1_ht_01_b11`. The
-codestream inside each of the 20 JPH files decodes bit for bit as OpenJPEG
-decodes it, checked against committed digests of OpenJPEG's output. All 20
-JPH files are in class, and each matches the PAE and MSE Kakadu quotes
-against its source.
+its Part 1 source match this decoder's. Those three files are the only MIXED
+oracle, and Kakadu made all of them, so how a second encoder spends its
+`Lblock` increments on Part 1 blocks is untested ([MIXED
+code-blocks](openjpeg-departures.md#mixed-code-blocks)).
+
+Agreement with OpenJPEG is bit for bit on every 5/3 file. On 9/7 it is
+within 1, the [`2/K` gap](#how-close-a-decode-must-be). Of the HT
+codestreams OpenJPEG decodes, the 5/3 ones and the 9/7 `ds0_ht_09_b11` and
+`ds1_ht_06_b11` are graded exactly (`EXACT_WITH_OPENJPEG`), and
+`ds1_ht_04_b9`, `ds1_ht_05_b11` and `hifi_ht1_02` differ by 1. The 9/7
+OpenJPH files are graded within 1, or 5 at 16 bits, and differ by 1. Run by
+hand on 2026-11-16, the four openjpeg-data HT files, which are not
+committed, also match: `Bretagne1_ht.j2k`, `byte.jph` and `byte_causal.jhc`
+bit for bit, and the 9/7 `Bretagne1_ht_lossy.j2k` within 1.
+
+Three derived files are also checked against their source: `ds1_ht_04_b9`,
+`ds1_ht_05_b11` and `ds1_ht_06_b11` must decode exactly as `p1_04`, `p1_05`
+and `p1_06` (T.803 C.1.10, C.1.11). Each transcode's error against its
+source must also match the PAE and MSE Kakadu quotes in the manifest, on the
+reversible transcodes, the exact ones, and the irreversible `ds0_ht_02_b11`
+and `ds1_ht_01_b11`. The codestream inside each of the 20 JPH files decodes
+bit for bit as OpenJPEG decodes it, checked against committed digests of
+OpenJPEG's output. All 20 JPH files are in class, and each matches the PAE
+and MSE Kakadu quotes against its source.
 
 ## A passing entry is not proof the feature works
 
@@ -325,7 +339,10 @@ The corpus holds:
   decode in class;
 - the ISO/IEC 15444-4 JP2 reader files, synthetic `.jp2` files and real
   `.jp2` files from GDAL's test data, which gated Phase 3 ([The JP2
-  corpus](#the-jp2-corpus)).
+  corpus](#the-jp2-corpus));
+- the ISO/IEC 15444-4 HTJ2K codestreams and JPH files, and 16 OpenJPH test
+  codestreams, which gated Phase 4 ([The HTJ2K
+  corpus](#the-htj2k-corpus)).
 
 ## Robustness (the input is untrusted)
 
@@ -333,9 +350,10 @@ A decoder parses bytes it did not produce, so malformed input is an ordinary
 case, not an edge case.
 
 This decoder is fuzzed with `cargo fuzz` (libFuzzer) in the detached
-[`fuzz/`](../fuzz/) workspace, with eight targets: `decode`, `header` and
-`decode_partial` over the public entry points, and `tile_body`,
-`tier1_block`, `mq`, `jp2_boxes` and `icc_srgb` over single stages. See
+[`fuzz/`](../fuzz/) workspace, with ten targets: `decode`, `header`,
+`decode_partial` and `incremental_decode` over the public entry points, and
+`tile_body`, `tier1_block`, `ht_block`, `mq`, `jp2_boxes` and `icc_srgb` over
+single stages. See
 [`fuzz/README.md`](../fuzz/README.md) to run them. The bar is no panics, no
 unbounded allocation and no infinite loops: every rejected input returns a
 typed `Error`. A malformed SIZ cannot steer the buffers into an overflowing
