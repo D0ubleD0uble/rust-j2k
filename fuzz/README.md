@@ -170,7 +170,9 @@ whose sizes a hash of the file picks, and refines after each piece. The first
 six input bytes steer the options, so a small mutation of the file keeps them:
 a layer cap, a resolution reduction, a window, a tile, a component subset of
 one or two distinct indices, and a code-block work limit. The rest is the
-file, so seed it with six zero bytes in front (no limit, no other option). Each
+file, so seed it with six zero bytes in front (the default limit, no other
+option), or with a plain fixture: an input that starts with `FF 4F` or the JP2
+signature box is the whole file with all-zero control bytes. Each
 refine that decodes goes on from the packet walks the earlier ones kept, and
 must give what `decode_with` gives with `strict` off on the bytes fed so far:
 the same image or the same error. After an error, each later refine must give

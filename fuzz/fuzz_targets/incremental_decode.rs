@@ -11,8 +11,11 @@
 //!
 //! The first six input bytes steer the options, as `tile_body`'s first bytes
 //! steer its shape, so a small mutation of the file keeps them; the rest is
-//! the file (seed it with six zero bytes in front, which mean no limit and no
-//! other option). The bytes pick: a layer cap, a resolution reduction, a
+//! the file (seed it with six zero bytes in front, which mean the default
+//! code-block limit and no other option). An input that starts with a
+//! codestream's `SOC` (`FF 4F`) or the JP2 signature box is instead the whole
+//! file with all-zero control bytes, so plain fixtures are valid seeds. The
+//! bytes pick: a layer cap, a resolution reduction, a
 //! window (from the last four bytes), a tile, a component subset of one or
 //! two distinct indices, and a code-block work limit. The decoder holds all
 //! its refines to that limit together, and a one-shot decode of the prefix
@@ -26,16 +29,23 @@ use libfuzzer_sys::fuzz_target;
 use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, Window, WorkLimit, decode_with};
 
 fuzz_target!(|input: &[u8]| {
-    let Some((control, data)) = input.split_first_chunk::<6>() else {
-        return;
+    const JP2_SIGNATURE: [u8; 8] = [0, 0, 0, 12, b'j', b'P', b' ', b' '];
+    let (control, data) = if input.starts_with(&[0xFF, 0x4F]) || input.starts_with(&JP2_SIGNATURE)
+    {
+        (&[0u8; 6], input)
+    } else {
+        let Some((control, data)) = input.split_first_chunk::<6>() else {
+            return;
+        };
+        (control, data)
     };
     let mut hash = fnv1a(data);
     // The code-block bound is the one earlier refines cut: the decoder
     // holds all its refines to it together. Without a bound, every refine
     // that decodes is the one-shot decode of its bytes.
     let (limit, cut) = match control[0] & 3 {
-        0 => (WorkLimit::Unlimited, false),
-        1 => (WorkLimit::Default, true),
+        0 => (WorkLimit::Default, true),
+        1 => (WorkLimit::Unlimited, false),
         2 => (WorkLimit::Raised(2), true),
         _ => (WorkLimit::Raised(4), true),
     };
