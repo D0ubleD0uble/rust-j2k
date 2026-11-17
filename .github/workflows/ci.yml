@@ -128,20 +128,33 @@ jobs:
       # The codestream-reading targets take the J2K marker dictionary so
       # mutation can splice whole marker codes instead of rediscovering them.
       - name: Fuzz decode (60s)
-        run: cargo fuzz run decode --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
+        run: cargo fuzz run decode --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
+      # The partial-decode and incremental-decode targets read the same
+      # codestreams, so they start from the decode corpus. An input that
+      # starts with SOC or the JP2 signature is read whole by
+      # incremental_decode, so the raw fixtures are valid seeds there.
+      - name: Seed decode_partial and incremental_decode from the decode corpus
+        run: |
+          mkdir -p fuzz/corpus/decode_partial fuzz/corpus/incremental_decode
+          cp fuzz/corpus/decode/* fuzz/corpus/decode_partial/
+          cp fuzz/corpus/decode/* fuzz/corpus/incremental_decode/
+      - name: Fuzz decode_partial (30s)
+        run: cargo fuzz run decode_partial --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
+      - name: Fuzz incremental_decode (45s)
+        run: cargo fuzz run incremental_decode --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=45 -rss_limit_mb=4096 -timeout=30
       - name: Fuzz tile_body (45s)
-        run: cargo fuzz run tile_body --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=45 -rss_limit_mb=4096
+        run: cargo fuzz run tile_body --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=45 -rss_limit_mb=4096 -timeout=30
       - name: Fuzz tier1_block (30s)
-        run: cargo fuzz run tier1_block --target x86_64-unknown-linux-gnu -- -max_total_time=30 -rss_limit_mb=4096
+        run: cargo fuzz run tier1_block --target x86_64-unknown-linux-gnu -- -max_total_time=30 -rss_limit_mb=4096 -timeout=30
       - name: Fuzz mq (15s)
-        run: cargo fuzz run mq --target x86_64-unknown-linux-gnu -- -max_total_time=15 -rss_limit_mb=4096
+        run: cargo fuzz run mq --target x86_64-unknown-linux-gnu -- -max_total_time=15 -rss_limit_mb=4096 -timeout=30
       # The HT block target starts from code-blocks sliced from the HT corpus.
       - name: Seed the HT block fuzz corpus
         run: |
           mkdir -p fuzz/corpus/ht_block
           RUST_J2K_HT_SEED_DIR=$PWD/fuzz/corpus/ht_block cargo test --lib ht_block_seeds
       - name: Fuzz ht_block (45s)
-        run: cargo fuzz run ht_block --target x86_64-unknown-linux-gnu -- -max_total_time=45 -max_len=8192 -rss_limit_mb=4096
+        run: cargo fuzz run ht_block --target x86_64-unknown-linux-gnu -- -max_total_time=45 -max_len=8192 -rss_limit_mb=4096 -timeout=30
       # Seed the JP2 targets so the short smoke reaches the colour and header code.
       - name: Seed the JP2 fuzz corpora
         run: |
@@ -150,15 +163,15 @@ jobs:
           cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 fuzz/corpus/header/
       # The JP2 box target takes the box dictionary instead.
       - name: Fuzz jp2_boxes (30s)
-        run: cargo fuzz run jp2_boxes --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096
+        run: cargo fuzz run jp2_boxes --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
       # The header target checks read_header against decode on the same input.
       - name: Fuzz header (30s)
-        run: cargo fuzz run header --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096
+        run: cargo fuzz run header --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
       # The ICC target reads a fuzzed profile; the oracle cases' profiles seed it.
       - name: Seed the ICC fuzz corpus
         run: python3 scripts/gen-icc-oracles.py --fuzz-seeds
       - name: Fuzz icc_srgb (30s)
-        run: cargo fuzz run icc_srgb --target x86_64-unknown-linux-gnu -- -dict=fuzz/icc.dict -max_total_time=30 -rss_limit_mb=4096
+        run: cargo fuzz run icc_srgb --target x86_64-unknown-linux-gnu -- -dict=fuzz/icc.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
 
   # The ICC output is documented as identical on every platform where fma is
   # correctly rounded. Every job above is x86-64, so run the full suite on
