@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-17
+
 ### Migrating from 0.4
 
 - The default sample limit is 2^29 samples (2 GiB as `i32`), up from 2^28, so
@@ -765,7 +767,8 @@ wrapper, and no multi-component or color transform. Anything outside the subset
 is rejected cleanly rather than half-decoded. Wider Part 1 coverage, the JP2 file
 format, HTJ2K, and an encoder are later-phase work; see `docs/roadmap.md`.
 
-[Unreleased]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/D0ubleD0uble/rust-j2k/compare/v0.1.0...v0.2.0
