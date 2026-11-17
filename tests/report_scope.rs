@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use rust_j2k::{DecodeOptions, Image, ReportEntry, Window, decode_with, read_header};
+use rust_j2k::{DecodeOptions, Image, Region, ReportEntry, Window, decode_with, read_header};
 
 fn read(path: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
@@ -72,7 +72,9 @@ fn a_window_whose_code_blocks_are_all_there_is_complete() {
     let bytes = read("tests/fixtures/precincts_cprl_lossless.j2k");
     let prefix = cut(&bytes, 15);
     let first = lenient().with_components(Some(vec![0]));
-    let window = first.clone().with_window(Some(Window::new(0, 0, 8, 8)));
+    let window = first
+        .clone()
+        .with_region(Region::Window(Window::new(0, 0, 8, 8)));
     let part = decode_ok(prefix, &window, "the window");
     assert_eq!(
         part.components,
@@ -84,7 +86,7 @@ fn a_window_whose_code_blocks_are_all_there_is_complete() {
     assert!(!all.report.is_complete());
     // A window over the bottom-right corner needs the last precincts of
     // component 0, which the cut leaves out.
-    let far = first.with_window(Some(Window::new(100, 80, 128, 96)));
+    let far = first.with_region(Region::Window(Window::new(100, 80, 128, 96)));
     let part = decode_ok(prefix, &far, "the far window");
     assert!(!part.report.is_complete(), "{:?}", part.report);
     assert_ne!(part.components, decode_ok(&bytes, &far, "uncut").components);
@@ -98,7 +100,7 @@ fn complete_reduction_is_counted_with_the_finer_reductions_footprint() {
     let bytes = read("tests/fixtures/precincts_cprl_lossless.j2k");
     let prefix = &bytes[..32340];
     let options = lenient()
-        .with_window(Some(Window::new(38, 67, 40, 85)))
+        .with_region(Region::Window(Window::new(38, 67, 40, 85)))
         .with_components(Some(vec![2, 0]));
     let fine = decode_ok(prefix, &options, "-r 0");
     let coarse = decode_ok(
@@ -325,7 +327,7 @@ fn check(name: &str, draws: usize, seed: u64) -> Counts {
                 .or_insert_with(|| (decode_ok(&bytes, &base, name), HashMap::new()));
             let options = base
                 .clone()
-                .with_window(window)
+                .with_region(window.map_or(Region::Whole, Region::Window))
                 .with_components(subset.clone());
             let what = format!("{name} -r {r} -l {cap:?} {window:?} {subset:?}");
             let expected: Vec<Vec<i32>> = returned
@@ -472,7 +474,7 @@ fn a_run_of_missing_tiles_is_split_at_the_tiles_a_window_does_not_read() {
     let bytes = read("tests/fixtures/window/tiled_53.j2k");
     let ends = tile_ends(&bytes);
     let prefix = &bytes[..ends[2]];
-    let window = lenient().with_window(Some(Window::new(5, 4, 20, 58)));
+    let window = lenient().with_region(Region::Window(Window::new(5, 4, 20, 58)));
     let part = decode_ok(prefix, &window, "the first column");
     assert_eq!(missing_tiles(&part), [(3, 4), (6, 7)]);
     assert!(!part.report.is_complete());

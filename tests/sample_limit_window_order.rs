@@ -5,7 +5,7 @@
 
 #[path = "support/synth.rs"]
 mod synth;
-use rust_j2k::{DecodeOptions, Error, Window, decode_with, read_header_with};
+use rust_j2k::{DecodeOptions, Error, Region, Window, decode_with, read_header_with};
 use synth::seg;
 
 /// The main header and first `SOT` marker of a 40000x40000 image with its
@@ -42,7 +42,7 @@ fn in_jp2(codestream: &[u8]) -> Vec<u8> {
 }
 
 fn window(x0: u32, y0: u32, x1: u32, y1: u32) -> DecodeOptions {
-    DecodeOptions::default().with_window(Some(Window::new(x0, y0, x1, y1)))
+    DecodeOptions::default().with_region(Region::Window(Window::new(x0, y0, x1, y1)))
 }
 
 /// Holds no sample of component 1, which is sub-sampled 2x3.
@@ -212,7 +212,7 @@ fn a_fault_of_a_paletted_file_comes_before_a_refused_window_on_any_size() {
 fn a_missing_tile_or_component_is_invalid_options_on_a_large_image() {
     let codestream = large_header_only();
     let jp2 = in_jp2(&codestream);
-    let tile = DecodeOptions::default().with_tile(Some(99));
+    let tile = DecodeOptions::default().with_region(Region::Tile(99));
     let component = DecodeOptions::default().with_components(Some(vec![5]));
     for bytes in [&codestream, &jp2] {
         for options in [&tile, &component] {

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use rust_j2k::{DecodeOptions, Error, Image, Window, decode_with, read_header};
+use rust_j2k::{DecodeOptions, Error, Image, Region, Window, decode_with, read_header};
 
 /// A splitmix64 stream: small, and the same on every platform.
 struct Rng(u64);
@@ -109,7 +109,7 @@ fn check_with(name: &str, bytes: &[u8], windows: usize, seed: u64, base: &Decode
             );
             let window = window(&mut rng, image);
             let what = format!("{name} -r {r} {window:?}");
-            let part = match decode_with(bytes, &all.clone().with_window(Some(window))) {
+            let part = match decode_with(bytes, &all.clone().with_region(Region::Window(window))) {
                 Ok(part) => part,
                 // A window that holds no sample of some component at this
                 // reduction is refused; that is `decode_window.rs`'s to test.

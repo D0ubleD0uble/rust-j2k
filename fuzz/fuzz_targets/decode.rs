@@ -48,18 +48,18 @@ fn part(bits: u64) -> rust_j2k::DecodeOptions {
     match bits & 3 {
         0 => {
             let (x0, y0) = (small(4), small(10));
-            options.with_window(Some(rust_j2k::Window::new(
+            options.with_region(rust_j2k::Region::Window(rust_j2k::Window::new(
                 x0,
                 y0,
                 x0 + 1 + small(16),
                 y0 + 1 + small(22),
             )))
         }
-        1 => options.with_tile(Some(small(28))),
+        1 => options.with_region(rust_j2k::Region::Tile(small(28))),
         2 => options.with_components(Some(vec![(small(34) % 4) as u16])),
         _ => options
             .with_components(Some(vec![2, 0]))
-            .with_window(Some(rust_j2k::Window::new(small(40), small(46), 64, 64))),
+            .with_region(rust_j2k::Region::Window(rust_j2k::Window::new(small(40), small(46), 64, 64))),
     }
 }
 

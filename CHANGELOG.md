@@ -84,19 +84,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spends 16% of the full decode's block work. The later layers' packets are
   still read, so damage in them is still an error. `None`, the default,
   decodes every layer; `Some(0)` is `Error::InvalidOptions`.
-- `DecodeOptions::window` (`with_window`, and the `Window` type),
-  `DecodeOptions::tile` (`with_tile`) and `DecodeOptions::components`
-  (`with_components`): decode a rectangle of the reference grid, one tile, or
-  some of the components, as `opj_decompress -d`, `-t` and `-c` do. Only the
+- `DecodeOptions::region` (`with_region`, and the `Region` and `Window`
+  types) and `DecodeOptions::components` (`with_components`): decode a
+  rectangle of the reference grid (`Region::Window`), one tile
+  (`Region::Tile`), or some of the components, as `opj_decompress -d`, `-t`
+  and `-c` do. One `Region` holds the window or the tile, so both cannot be
+  asked for. Only the
   tiles the rectangle reaches are decoded, and in each of them only the
   code-blocks and wavelet samples it needs: a 256 x 256 window of a
   2048 x 2048 image of 256 x 256 tiles decodes in about 2.4 ms against 54 ms
   for the whole. The components left out are not decoded past the packet headers.
   Under the color transform, asking for any of components 0, 1 and 2 decodes
   all three and returns those components of the whole decode; OpenJPEG skips
-  the transform there instead. An empty window, one outside the image, a tile
-  or component past the image's, and a window with a tile are
-  `Error::InvalidOptions`. `read_header_with` describes the part the options
+  the transform there instead. An empty window, one outside the image, and a tile
+  or component past the image's are `Error::InvalidOptions`. `read_header_with` describes the part the options
   ask for. Under a window or a tile, the sample limit counts the samples of
   the tiles read, in every component, so a small window of a large tiled image
   decodes at the default limit. A palette's expanded channels count only the
@@ -145,7 +146,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   would have added passes to a code-block's last segment, with or without
   `max_quality_layers`. That segment is no longer held to the termination
   check; the block's earlier segments still are.
-- A `window`, `tile` or `components` selection that does not fit the image is
+- A window, tile or `components` selection that does not fit the image is
   `Error::InvalidOptions` on an image over the sample limit. It was
   `Error::Limit`, with a hint to raise the limit that could not help.
 

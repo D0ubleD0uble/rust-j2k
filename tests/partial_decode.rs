@@ -689,7 +689,9 @@ fn missing_tiles_are_charged_against_the_work_bound() {
 fn a_window_charges_only_the_missing_tiles_it_reads() {
     let mut bytes = main_header((128, 128), (1, 1), 2048, 0, 0);
     bytes.extend_from_slice(&[0xFF, 0x90]);
-    let column = lenient(0).with_window(Some(rust_j2k::Window::new(0, 0, 1, 128)));
+    let column = lenient(0).with_region(rust_j2k::Region::Window(rust_j2k::Window::new(
+        0, 0, 1, 128,
+    )));
     let image = decode_ok(&bytes, &column, "the first column");
     let runs: Vec<_> = image
         .report

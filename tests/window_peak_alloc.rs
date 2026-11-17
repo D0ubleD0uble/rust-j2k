@@ -18,7 +18,7 @@ mod alloc;
 use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
 
-use rust_j2k::{DecodeOptions, Window, decode_with};
+use rust_j2k::{DecodeOptions, Region, Window, decode_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -30,7 +30,8 @@ fn a_small_window_peaks_at_the_tile_it_reads_not_the_image() {
         "/tests/fixtures/sample_limit/flat_16385_tiled_lossless.j2k"
     );
     let bytes = std::fs::read(path).expect("read the fixture");
-    let options = DecodeOptions::default().with_window(Some(Window::new(1000, 1000, 1256, 1256)));
+    let options =
+        DecodeOptions::default().with_region(Region::Window(Window::new(1000, 1000, 1256, 1256)));
     let before = CURRENT.load(Ordering::SeqCst);
     PEAK.store(before, Ordering::SeqCst);
     let image = decode_with(&bytes, &options).expect("the window decodes");

@@ -45,8 +45,7 @@ use core::ops::Range;
 pub struct DecodeReport {
     /// What was missing, skipped or irregular, in the order the decoder met
     /// them. Empty when the codestream was whole. Under a
-    /// [`window`](crate::DecodeOptions::window) or
-    /// [`tile`](crate::DecodeOptions::tile), only the tiles the decode reads
+    /// [`region`](crate::DecodeOptions::region) of a window or a tile, only the tiles the decode reads
     /// are reported, and a run of missing tiles is split into the runs of it
     /// the decode reads. Under a window or
     /// [`components`](crate::DecodeOptions::components), only the packets
@@ -62,8 +61,8 @@ pub struct DecodeReport {
     /// The smallest [`resolution_reduction`](crate::DecodeOptions::resolution_reduction)
     /// at which every tile has every packet: a decode at this reduction, or
     /// any larger one the file allows, gives the same samples as a decode of
-    /// the whole codestream. Under a [`window`](crate::DecodeOptions::window),
-    /// a [`tile`](crate::DecodeOptions::tile) or
+    /// the whole codestream. Under a window or a tile
+    /// ([`region`](crate::DecodeOptions::region)) or
     /// [`components`](crate::DecodeOptions::components), only the packets the
     /// same decode returns samples from count: those of the tiles it reads,
     /// the components it reconstructs, and the code-blocks the window's
@@ -165,7 +164,7 @@ pub enum ReportEntry {
     },
     /// Packets of this tile that the decode keeps were never read: the data
     /// ended first, or the `POC` volumes leave them out. Under a
-    /// [`window`](crate::DecodeOptions::window) or
+    /// [`region`](crate::DecodeOptions::region) of a window or
     /// [`components`](crate::DecodeOptions::components), only the packets
     /// that hold a code-block the returned samples depend on count: those of
     /// the components reconstructed (with a color transform, all three of

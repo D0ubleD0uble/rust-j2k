@@ -1,5 +1,5 @@
 //! Decoding part of an image: a window on the reference grid, one tile, or
-//! some of the components ([`DecodeOptions::window`], [`DecodeOptions::tile`],
+//! some of the components ([`DecodeOptions::region`],
 //! [`DecodeOptions::components`]).
 //!
 //! The tiles outside the window are not decoded, and the components left out
@@ -12,7 +12,7 @@ use crate::codestream::markers::{Rect, Siz};
 use crate::{ColorOutput, DecodeOptions, Error, ReportEntry, Result};
 
 /// A rectangle on the image's reference grid, `x0..x1` by `y0..y1`, for
-/// [`DecodeOptions::window`]. The bounds are half-open: `x1` and `y1` are one
+/// [`Region::Window`]. The bounds are half-open: `x1` and `y1` are one
 /// past the last column and row.
 ///
 /// The reference grid is the one SIZ declares, so the image area is
@@ -31,6 +31,32 @@ pub struct Window {
     pub x1: u32,
     /// One past the bottom edge.
     pub y1: u32,
+}
+
+/// The area of the image a decode returns, for [`DecodeOptions::region`].
+///
+/// One value holds the choice, so a window and a tile cannot be asked for
+/// together. The enum is `#[non_exhaustive]`, so a new kind of area is not a
+/// breaking change.
+///
+/// ```
+/// use rust_j2k::{DecodeOptions, Region, Window};
+///
+/// assert_eq!(Region::default(), Region::Whole);
+/// let options = DecodeOptions::default().with_region(Region::Window(Window::new(0, 0, 8, 8)));
+/// assert_eq!(options.region, Region::Window(Window::new(0, 0, 8, 8)));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+#[doc(alias = "decode_area")]
+pub enum Region {
+    /// The whole image. This is the default.
+    #[default]
+    Whole,
+    /// A rectangle of the reference grid, cut to the image area.
+    Window(Window),
+    /// One tile, by its index in raster order from 0.
+    Tile(u32),
 }
 
 impl Window {
@@ -124,14 +150,9 @@ impl Selection {
 
 /// The checks of the three options that need no input.
 pub(crate) fn check_options(options: &DecodeOptions) -> Result<()> {
-    if options.window.is_some() && options.tile.is_some() {
-        return Err(Error::InvalidOptions(
-            "`DecodeOptions::window` and `DecodeOptions::tile` are both set; a decode \
-             returns one area"
-                .into(),
-        ));
-    }
-    if let Some(w) = options.window.filter(|w| w.x0 >= w.x1 || w.y0 >= w.y1) {
+    if let Region::Window(w) = options.region
+        && (w.x0 >= w.x1 || w.y0 >= w.y1)
+    {
         return Err(Error::InvalidOptions(format!(
             "the window {}..{} by {}..{} is empty",
             w.x0, w.x1, w.y0, w.y1
@@ -184,8 +205,9 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
             list.iter().map(|&c| usize::from(c)).collect()
         }
     };
-    let area = match (options.window, options.tile) {
-        (Some(window), _) => {
+    let area = match options.region {
+        Region::Whole => None,
+        Region::Window(window) => {
             let area = window.rect().intersect(&image);
             if area.is_empty() {
                 return Err(Error::InvalidOptions(format!(
@@ -202,13 +224,12 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
             }
             Some(area)
         }
-        (None, Some(tile)) => Some(siz.tile_rect(tile).ok_or_else(|| {
+        Region::Tile(tile) => Some(siz.tile_rect(tile).ok_or_else(|| {
             Error::InvalidOptions(format!(
-                "`DecodeOptions::tile` is {tile}, but the image has {} tiles",
+                "the tile index is {tile}, but the image has {} tiles",
                 siz.num_tiles()
             ))
         })?),
-        (None, None) => None,
     };
     let Some(area) = area else {
         return Ok(Selection {

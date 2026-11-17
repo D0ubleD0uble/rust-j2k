@@ -32,7 +32,7 @@ use std::hint::black_box;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
 
-use rust_j2k::{ColorOutput, DecodeOptions, IncrementalDecoder, Window, decode_with};
+use rust_j2k::{ColorOutput, DecodeOptions, IncrementalDecoder, Region, Window, decode_with};
 
 struct Args {
     engine: String,
@@ -85,6 +85,9 @@ fn parse() -> Result<Args, String> {
             other => return Err(format!("unknown flag {other}")),
         }
     }
+    if a.window.is_some() && a.tile.is_some() {
+        return Err("--window and --tile ask for different areas; give one".into());
+    }
     Ok(a)
 }
 
@@ -128,8 +131,11 @@ fn options(a: &Args) -> DecodeOptions {
         ColorOutput::AsCoded
     };
     DecodeOptions::default()
-        .with_window(a.window)
-        .with_tile(a.tile)
+        .with_region(match (a.window, a.tile) {
+            (Some(window), _) => Region::Window(window),
+            (None, Some(tile)) => Region::Tile(tile),
+            (None, None) => Region::Whole,
+        })
         .with_color(color)
 }
 
