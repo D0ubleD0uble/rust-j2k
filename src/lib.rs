@@ -13,9 +13,8 @@
 //! (maxshift), non-zero canvas offsets, resolution-reduced decoding, and the
 //! reversible (RCT) and irreversible (ICT) color transforms. HTJ2K code-blocks
 //! decode with all three of their coding passes, and a tile-component may mix
-//! HT and Part 1 code-blocks. [`decode`] tells HT and Part 1 code-blocks apart
-//! itself, so an HTJ2K file takes the same call and the same options as any
-//! other. A decode can stop after some quality layers, or
+//! HT and Part 1 code-blocks. An HTJ2K file takes the same call and options
+//! as any other. A decode can stop after some quality layers, or
 //! return a window, one tile or some of the components ([`DecodeOptions`]).
 //!
 //! A JP2 file's codestream decodes the same way, and the file's header comes
@@ -186,8 +185,8 @@
 //! class. So do its 41 HTJ2K codestreams and 20 JPH files. That gate runs in
 //! `tests/` against committed oracle snapshots, with no external tools.
 //! Correctness is defined by cross-checking OpenJPEG, not by self-consistency.
-//! An input using a feature outside the decoded set (more than one HT set per
-//! code-block, a Part 2 extension) is rejected with [`Error::Unsupported`],
+//! An input using a feature outside the decoded set (an HTJ2K code-block that
+//! needs more than one HT coding pass set, a Part 2 extension) is rejected with [`Error::Unsupported`],
 //! never half-decoded. GRIB2 §5.40 (`grid_jpeg`) payloads, the crate's original
 //! target, are raw codestreams and decode directly. The feature map is in
 //! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
@@ -238,8 +237,9 @@ pub use window::{Region, Window};
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
 /// output channel, each on its own sample grid. For a raw codestream that is
-/// one per component of the `SIZ` marker, in `SIZ` order (the codestream's
-/// parts are explained in [What a JPEG 2000 file holds](https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds)). A JP2 file can change the channels:
+/// one per component of the `SIZ` marker, in `SIZ` order. [What a JPEG 2000
+/// file holds](https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds)
+/// explains the codestream's parts. A JP2 file can change the channels:
 /// its palette and channel definitions (below), and, through [`decode_with`],
 /// the sRGB output option.
 ///
@@ -437,6 +437,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
             components,
             max_reduction: max_reduction(&prefix.parsed.header),
             quality_layers: prefix.parsed.header.cod.layers,
+            image_area: header::image_area(&prefix.parsed.header.siz),
             tiles: TileGrid::of_siz(&prefix.parsed.header.siz),
             jp2: Some(prefix.metadata),
         });
@@ -469,6 +470,7 @@ pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header>
         ),
         max_reduction: max_reduction(&parsed.header),
         quality_layers: parsed.header.cod.layers,
+        image_area: header::image_area(siz),
         tiles: TileGrid::of_siz(siz),
         jp2: None,
     })
@@ -642,6 +644,7 @@ pub enum ColorOutput {
     /// # /*
     /// let bytes = std::fs::read("image.jp2")?;
     /// # */
+    /// // For a 16x12 RGBA file.
     /// let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
     /// let image = decode_with(&bytes, &options).expect("a 16x12 RGBA file");
     /// let rgba = rgba8(&image).expect("red, green, blue and opacity");
@@ -701,7 +704,7 @@ pub struct DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, decode, decode_with};
     ///
-    /// // 32x24, in three quality layers, the last one lossless.
+    /// // For a 32x24 file in three quality layers, the last one lossless.
     /// # let bytes = include_bytes!(concat!(
     /// #     env!("CARGO_MANIFEST_DIR"),
     /// #     "/tests/fixtures/multilayer_lossless.j2k"
@@ -736,6 +739,8 @@ pub struct DecodeOptions {
     /// A [`Region::Window`] returns the part of the image inside it. It is in
     /// reference-grid coordinates, as SIZ declares them, whatever the
     /// [`resolution_reduction`](Self::resolution_reduction).
+    /// [`Header::image_area`] gives the image area in those coordinates,
+    /// and [`TileGrid::tile`] each tile's rectangle.
     /// The part of it outside the image area is left out, as OpenJPEG clips
     /// it. The returned [`Image`] covers what is left, `x0..x1` by `y0..y1`:
     /// its [`width`](Image::width) is `x1 - x0` at full resolution and
@@ -769,7 +774,7 @@ pub struct DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, Region, Window, decode, decode_with};
     ///
-    /// // 32x24 at the grid's origin.
+    /// // For a 32x24 file with its image area at the grid's origin.
     /// # let bytes = include_bytes!(concat!(
     /// #     env!("CARGO_MANIFEST_DIR"),
     /// #     "/tests/fixtures/multilayer_lossless.j2k"
@@ -829,7 +834,7 @@ pub struct DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, decode, decode_with};
     ///
-    /// // Three components under the irreversible color transform.
+    /// // For a file of three components under the irreversible color transform.
     /// # let bytes = include_bytes!(concat!(
     /// #     env!("CARGO_MANIFEST_DIR"),
     /// #     "/tests/fixtures/layers/cprl_irreversible.j2k"
@@ -933,9 +938,7 @@ pub struct DecodeOptions {
     /// is a separate option:
     ///
     /// - The input may end anywhere after the first `SOT` marker, which ends
-    ///   the main header (the codestream's parts are explained in [What a
-    ///   JPEG 2000 file holds](https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds)): inside a
-    ///   tile-part, its header or its packets, with or without the `EOC`
+    ///   the main header: inside a tile-part, its header or its packets, with or without the `EOC`
     ///   marker. Input that ends before the first `SOT` is
     ///   [`Error::Incomplete`], as when strict. Tiles with no
     ///   tile-part are filled with 0, and packets that were never read (cut
@@ -1073,7 +1076,7 @@ impl Default for DecodeOptions {
 /// ```
 /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode, decode_with};
 ///
-/// // A valid 1 KB file that asks for far more work than its size allows.
+/// // A file that asks for far more work than its size allows.
 /// # let bytes = include_bytes!(concat!(
 /// #     env!("CARGO_MANIFEST_DIR"),
 /// #     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
@@ -1277,6 +1280,7 @@ impl DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode};
     ///
+    /// // A file that asks for far more work than its size allows.
     /// # let bytes = include_bytes!(concat!(
     /// #     env!("CARGO_MANIFEST_DIR"),
     /// #     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
@@ -1339,7 +1343,7 @@ impl DecodeOptions {
 ///     .with_color(ColorOutput::Srgb);
 /// match decode_with(&bytes, &options) {
 ///     Ok(image) => {
-///         // The file is 16x12; one level discarded halves each side.
+///         // For a 16x12 file, one level discarded halves each side.
 ///         assert_eq!((image.width, image.height), (8, 6));
 ///         // Red, green, blue and opacity.
 ///         assert_eq!(image.components.len(), 4);

@@ -157,13 +157,12 @@ pub enum Error {
     /// missing or misplaced required box, an invalid field value, or a box
     /// that disagrees with the codestream.
     FileFormat(ErrorDetail),
-    /// A valid-but-not-decoded feature: more than one HT set per code-block
-    /// (signaled by `MULTIHT` in the `CAP` marker), a Part 2 extension, a
-    /// marker or coding style outside the decoded subset, a JP2 box this
-    /// decoder cannot apply, a file that is not JP2-compatible. It is also a
-    /// request the decoder does not do, such as sRGB output from a file it
-    /// cannot convert. A newer version of the decoder may accept the same
-    /// input.
+    /// A valid-but-not-decoded feature: an HTJ2K code-block that needs more
+    /// than one HT coding pass set (`MULTIHT` in the `CAP` marker), a Part 2
+    /// extension, a marker or coding style outside the decoded subset, a JP2
+    /// box this decoder cannot apply, a file that is not JP2-compatible. It
+    /// is also a request the decoder does not do, such as sRGB output from a
+    /// file it cannot convert.
     Unsupported(ErrorDetail),
     /// The input exceeded one of the decoder's resource guards: a hostile or
     /// absurd declaration (code-block count, precinct count, bit-plane depth)
@@ -383,7 +382,7 @@ impl fmt::Display for ErrorDetail {
 /// ```
 /// use rust_j2k::{DecodeOptions, Error, LimitKind, decode, decode_with};
 ///
-/// // A valid 1 KB file that asks for far more work than its size allows.
+/// // A file that asks for far more work than its size allows.
 /// # let bytes = include_bytes!(concat!(
 /// #     env!("CARGO_MANIFEST_DIR"),
 /// #     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"

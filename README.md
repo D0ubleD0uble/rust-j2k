@@ -62,13 +62,16 @@ such as a smaller image. To learn the size and channels without decoding, call
 `read_header`. The [API docs](https://docs.rs/rust-j2k) cover each one.
 
 A bare `.j2k` or `.j2c` stream has no boxes, so `image.jp2` is `None` and the
-file says nothing about its color space. One or two channels are usually gray
-(and transparency); for three or more, you have to know what they mean.
+file says nothing about its color space. One channel is usually gray, and two
+are gray plus transparency; for three or more, you have to know what they
+mean.
 
 ### Decode part of an image
 
-`read_header` reads the size and the tile grid without decoding. Pass a
-rectangle or a tile number to `decode_with` to decode only that part:
+`read_header` reads the size, the image area and the tile grid without
+decoding. Pass a rectangle or a tile number to `decode_with` to decode only
+that part. Tiles and the reference grid are explained in [What a JPEG 2000
+file holds](#what-a-jpeg-2000-file-holds).
 
 ```rust
 use rust_j2k::{DecodeOptions, Region, Window, decode_with, read_header};
@@ -78,12 +81,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let header = read_header(&bytes)?;
     println!("{}x{}, {} tiles", header.width, header.height, header.tiles.count());
 
-    // A 256 × 256 rectangle from the top-left corner of the grid.
-    let window = Region::Window(Window::new(0, 0, 256, 256));
+    // The image's top-left 256 × 256. The image area can start away from
+    // the grid's origin, so place the window from it.
+    let area = header.image_area;
+    let window = Region::Window(Window::new(area.x0, area.y0, area.x0 + 256, area.y0 + 256));
     let part = decode_with(&bytes, &DecodeOptions::default().with_region(window))?;
     println!("window: {}x{}", part.width, part.height);
 
-    // The last tile. Tiles are numbered row by row from 0.
+    // The last tile. Tiles are numbered row by row from 0, and
+    // `header.tiles.tile(n)` gives tile n's rectangle.
     let last = Region::Tile(header.tiles.count() - 1);
     let tile = decode_with(&bytes, &DecodeOptions::default().with_region(last))?;
     println!("last tile: {}x{}", tile.width, tile.height);
@@ -91,8 +97,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The rectangle is on the reference grid (see below), and the part outside the
-image is cut off.
+The rectangle is on the reference grid. It must overlap the image area, or
+`decode_with` returns `Error::InvalidOptions`; the part of it outside the
+image area is cut off.
 
 ## What a JPEG 2000 file holds
 
@@ -118,13 +125,15 @@ own. A file with no tiling is one tile.
 
 The API docs use the standard's names for the parts of a codestream:
 
-- A **marker** is a two-byte code that starts each part. The main header,
-  before any tile, holds `SIZ` (the image size, tile size and channels) and
-  `COD` (how the image is coded), among others.
+- A **marker** is a two-byte code that names the header segment after it,
+  or marks a boundary. The main header, before any tile, holds `SIZ` (the
+  image size, tile size and channels) and `COD` (how the image is coded),
+  among others.
 - Each tile is stored as one or more **tile-parts**. Each tile-part starts
-  with an `SOT` marker, which gives its tile, its length (`Psot`, where 0
-  means "to the end of the codestream") and the tile's number of tile-parts
-  (`TNsot`). The first `SOT` marker ends the main header.
+  with an `SOT` marker, which gives its tile and its length (`Psot`; 0 means
+  "to the end of the codestream"), and can give the tile's number of
+  tile-parts (`TNsot`; 0 means not declared). The first `SOT` marker ends
+  the main header.
 - A tile's coded data is a series of **packets**. Each packet header says
   which **code-blocks**, small blocks of the image's wavelet coefficients,
   it adds data to. Reading those headers is the **packet walk**.
@@ -140,8 +149,7 @@ The API docs use the standard's names for the parts of a codestream:
 - It reads **HTJ2K** (ISO/IEC 15444-15, "Part 15"), the high-throughput
   variant, including files that mix HT and Part 1 code-blocks, and `.jph`
   files, the HTJ2K version of `.jp2`. You don't need to know whether a file
-  uses it: `decode` tells HT and Part 1 code-blocks apart itself, so you pass
-  the same bytes and options either way.
+  uses it: the same call and options decode either kind.
 - It reads **the `.jp2` file format**: palettes, channel labels, the color
   space, the resolution, and the XML and UUID metadata boxes. It applies the
   palette and puts the color channels in order, and reports the rest on
@@ -173,7 +181,7 @@ The API docs use the standard's names for the parts of a codestream:
   To show an image, ask for sRGB and scale each value to 8 bits yourself (see
   [Decode a file](#decode-a-file)).
 - It doesn't **read the Part 2 extensions**, or an HTJ2K codestream that
-  carries more than one HT set per code-block. These are refused with
+  needs more than one HT coding pass set per code-block. These are refused with
   `Error::Unsupported`.
 - It doesn't **open JPX, JPM or MJ2 files** unless they say they can also be
   read as JP2 or JPH. Those files are refused with `Error::Unsupported`.
@@ -255,8 +263,9 @@ it returns an image of what has come in so far. Each refine goes on from where
 the last one stopped reading packets;
 [docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)
 lists the packets it reads again. Each image `refine` returns is decoded with
-`strict` off and comes with a report of what is missing; only `finish` is
-strict:
+`strict` off and comes with a report of what is missing. `finish` decodes
+under the options you gave the decoder, so it is strict unless you turned
+`strict` off:
 
 ```rust
 use rust_j2k::{DecodeOptions, IncrementalDecoder};

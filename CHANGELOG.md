@@ -53,6 +53,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ```
 
   `Error` is still `Clone`, `Send`, `Sync` and unwind-safe.
+- For the same reason, a type of your own that derives `PartialEq` or `Eq`
+  and holds a `rust_j2k::Error` no longer compiles. Drop the derive, or
+  compare that field by its variant or by `message()` in a hand-written
+  `PartialEq`.
+- A codestream with HT code-blocks (`COD` code-block style bit `0x40`) used
+  to give `Error::Unsupported`. It now decodes, or fails as another variant
+  if it is damaged. Code that matched `Unsupported` to detect or refuse
+  HTJ2K must change.
 
 ### Added
 
@@ -96,10 +104,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a tile that keeps that `COD`. A tile-part `COD` can declare another count
   for its tile. `Header` is `#[non_exhaustive]`, so the new field is not a
   breaking change.
-- `Header::tiles`, a `TileGrid`: the tile grid the `SIZ` marker declares,
-  with its columns and rows, the tile size and the grid's offset on the
-  reference grid. `TileGrid::count` is how many tiles `Region::Tile` can
-  name. The values match what `opj_dump` prints.
+- `Header::image_area`, a `Window`: the image area on the reference grid,
+  `XOsiz..Xsiz` by `YOsiz..Ysiz`, so a window can be placed relative to the
+  image.
+- `Header::tiles`, a `TileGrid`: the tile grid the `SIZ` marker declares
+  (ISO/IEC 15444-1 Eq. B-5), with its columns and rows, the tile size and
+  the grid's offset on the reference grid. `TileGrid::count` is how many
+  tiles `Region::Tile` can name, and `TileGrid::tile` gives a tile's
+  rectangle, cut to the image area: the area `Region::Tile` decodes. On
+  ordinary files the values match what `opj_dump` prints.
 - HTJ2K codestreams decode: the cleanup, SigProp and MagRef passes of each
   code-block, in any number of quality layers, with or without placeholder
   passes before them. The output matches OpenJPEG 2.5.0 on every HT file it

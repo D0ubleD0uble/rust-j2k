@@ -34,12 +34,12 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 /// tile's packet headers so far) between refines, so a refine reads only
 /// the packets that have come in since the last one. Over all
 /// the refines, the packet headers are read about once, as one decode reads
-/// them; a packet the data cuts is read again by each refine. Each refine
-/// is held to the packet bound of a decode of its bytes on its own: it is
-/// charged the packet visits that decode would spend, and a refine that
-/// decode is refused for returns `Ok(None)`. [Incremental
-/// decoding](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)
-/// lists the packets a refine reads again.
+/// them; a packet the data cuts is read again by each refine ([the packets
+/// a refine reads
+/// again](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
+/// Each refine is held to the packet bound of a decode of its bytes on its
+/// own: it is charged the packet visits that decode would spend, and a
+/// refine that decode is refused for returns `Ok(None)`.
 ///
 /// The code-block work is done again by each refine that decodes, so the
 /// code-block work every `refine` has spent is held to the bound one decode
@@ -94,7 +94,8 @@ use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, 
 ///         );
 ///     }
 /// }
-/// // The input has ended: decode all of it, strictly.
+/// // The input has ended: decode all of it, under the decoder's options
+/// // (strict here).
 /// let image = decoder.finish()?;
 /// assert!(image.report.is_complete());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
