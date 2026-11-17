@@ -1,10 +1,10 @@
 # Roadmap
 
-Next is Phase 4, decoding HTJ2K (Part 15) codestreams. After it come a Part 1
-encoder (Phase 5), then the Part 2 extensions and an HTJ2K encoder (Phase 6),
-then the rest of the standard's parts (Phase 7). Phases 0 to 3, which built a
-decoder for Part 1 codestreams and JP2 files, are finished, and Phase 3 ships
-as the 0.4.0 release.
+Next is a Part 1 encoder (Phase 5), then the Part 2 extensions and an HTJ2K
+encoder (Phase 6), then the rest of the standard's parts (Phase 7). Phases 0
+to 4, which built a decoder for Part 1 and HTJ2K codestreams, JP2 and JPH
+files, are finished. Phase 3 shipped as the 0.4.0 release, and Phase 4 ships
+as 0.5.0.
 
 Each phase has a goal, the work it contains and a gate: the test that must
 pass before the phase counts as done. A gate always compares against an
@@ -26,30 +26,16 @@ conformance codestreams within their compliance-class bounds, with a clean
 fuzzing run. It shipped in v0.3.0 ([plan](roadmap-phase2.md)). Phase 3 added
 the JP2 file format; its gate was the nine ISO/IEC 15444-4 JP2 reader files
 within their compliance bounds and a set of real `.jp2` files matching
-OpenJPEG ([plan](roadmap-phase3.md)). Each plan ties every step to its module
-and the oracle that checked it.
-
-## Phase 4: HTJ2K decode (Part 15)
-
-The goal is to decode High Throughput (Part 15) codestreams. HTJ2K swaps the
-Tier-1 block coder for a faster one, so the work is in four places:
-
-- the CAP marker and HTJ2K capability signaling;
-- the FBCOT block decoder (MEL, VLC and MagSgn) as a second Tier-1, with the
-  rest of the pipeline shared with Part 1;
-- Tier-2 packet parsing for HT code-blocks (placeholder passes and the two
-  segments);
-- the JPH file format (`jph ` brand).
-
-The gate is every ISO/IEC 15444-4 HT codestream and JPH file within its ISO
-bounds, MIXED code-blocks included, plus bit-exact agreement with OpenJPEG
-2.5.0 wherever OpenJPEG decodes the file, apart from the departures listed in
-[openjpeg-departures.md](openjpeg-departures.md), including any this phase
-adds with the spec text that justifies it. OpenJPEG decodes only part of the
-HT set; where it and the standard disagree, the standard wins. The phase ships
-as 0.5.0, together with the streaming and partial-decode work in the same
-milestone. The [plan](roadmap-phase4.md) breaks it into steps, each with its
-oracle.
+OpenJPEG ([plan](roadmap-phase3.md)). Phase 4 added HTJ2K (Part 15): the
+`CAP` marker, the HT block decoder beside EBCOT, tier-2 for HT code-blocks,
+MIXED tile-components and the JPH file format. Its gate was the 41 ISO/IEC
+15444-4 HT codestreams and 20 JPH files within their bounds, and agreement
+with OpenJPEG 2.5.0 on every HT file it decodes: bit for bit on the 5/3
+files, and within the documented 9/7 gap on the others
+([plan](roadmap-phase4.md)). It ships as 0.5.0, with decoding a window, a
+tile, some components or some quality layers, and a decoder for files that
+arrive in pieces. Each plan ties every step to its module and the oracle that
+checked it.
 
 ## Phase 5: Part 1 encoder
 
@@ -85,13 +71,6 @@ corpora.
 Motion JPEG 2000 (Part 3, the MJ2 container), JPIP interactive streaming
 (Part 9) and JPWL wireless error protection (Part 11). They are sequenced by
 demand, and none blocks the phases above.
-
-## Not in a phase yet
-
-Two decode options that `opj_decompress` has are not planned in any phase:
-decoding one area of the image (`-d`) and decoding one tile (`-t`). The
-decoder always decodes every tile over the whole image. Stopping after a given
-number of quality layers (`-l`) is `DecodeOptions::max_quality_layers`.
 
 ## Rules for every phase
 

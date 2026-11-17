@@ -1,5 +1,15 @@
 # Phase 4 roadmap — HTJ2K decode (Part 15)
 
+> **Status: complete.** P4.0 to P4.9 have landed. All 41 Part 4 HT
+> codestreams and 20 JPH files decode within their bounds (`IN_CLASS` in
+> `tests/conformance_ht.rs`), MIXED included. Every HT file in the corpora
+> that OpenJPEG 2.5.0 decodes matches it bit for bit, apart from the
+> documented 9/7 gap ([the `2/K`
+> entry](openjpeg-departures.md#the-inverse-97s-high-pass-scale-2k)) of at
+> most 1. Phase 4 ships as the 0.5.0 release. The steps below are the build
+> order followed, and the background sections are the plan as written before
+> the work began.
+
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file
 covers Phase 4 alone. It breaks "decode HTJ2K codestreams" into ordered
 steps, each tied to the module it changes, the oracle that checks it and the

@@ -169,7 +169,11 @@ again, and `finish` must be the decode of the whole input. It has no
 code-block work bound, which is the one earlier refines cut, so every refine
 that decodes has an exact oracle. Each input is decoded several times, so
 seed it with small files, such as the fixtures under 3 KB, and cap the input
-length (`-max_len=4096`). The name `incremental` is one Cargo reserves.
+length (`-max_len=4096`). Even so it can be slow, since almost all its time
+goes to its own `decode_with` oracle decodes: from the fixtures under 3 KB
+it runs about 230 inputs a second, but on a corpus grown by earlier runs it
+has dropped to about 7 a second under ASan, and one 598-byte input took 13
+s. The name `incremental` is one Cargo reserves.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
@@ -242,6 +246,12 @@ for t in decode decode_partial; do
 done
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
 
+# The incremental target, seeded with the fixtures under 3 KB.
+mkdir -p fuzz/corpus/incremental_decode
+find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \) \
+  -exec cp {} fuzz/corpus/incremental_decode/ \;
+cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
+
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
 cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
@@ -262,6 +272,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-13 | `decode_partial`, and `tile_body` with the strict-off check | `decode`'s seeding (923 inputs after earlier runs), and `tile_body`'s corpus (1 478 inputs), `j2k.dict` not passed | 61 s each; 7 256 and 27 382 runs; `nice`, one job | no crash, leak, or timeout. An earlier `decode_partial` run saved a slow unit: a 1 MiB codestream of a 2048 x 2048 image whose tile 37 is cut, which the partial decode reads in 0.54 s (release) and the instrumented build in 12 s over its four decodes |
 | 2026-11-13 | `decode_partial` after the review fixes (packed headers, `Image` equality) | the same corpus | 61 s, 6 042 runs; `nice`, one job | no crash, leak, or timeout |
 | 2026-11-15 | `ht_block` (new) | the code-blocks of six HT conformance codestreams (3466 seeds) | 61 s, 739 458 runs; `nice -n 19`, one job, `-max_len=8192`; the 1-minute load was 10.6 at the start | no crash, leak, or timeout |
+| 2026-11-16 | the pre-release smoke: all ten targets, one after another: `decode`, `decode_partial`, `incremental_decode`, `header`, `tile_body`, `tier1_block`, `ht_block`, `mq`, `jp2_boxes`, `icc_srgb` | the fixtures, OpenJPH files and HT files under 6 KB for `decode` and `decode_partial` (68 seeds); the fixtures under 3 KB for `incremental_decode` (49, `-max_len=4096`); the fixtures for `header` (68); `ht_block_seeds` (3 719, `-max_len=8192`); `gen-jp2-fuzz-seeds.py` (162); `gen-icc-oracles.py --fuzz-seeds` (696); none for the other three | 61 s each; 18 279, 10 017, 13 826, 42 007, 69 498, 94 377, 724 122, 3 276 003, 34 884 and 40 010 runs; `nice -n 19`, one job; the 1-minute load was 4.8 to 10.2 | no crash, leak, or timeout |
 | 2026-11-15 | `decode` with the strict-off capped decode | `tests/fixtures/*.j2k` (49 seeds), `j2k.dict` | 61 s, 21 641 runs; `nice -n 19`, one job; the 1-minute load was 7.6 | no crash, leak, or timeout |
 | 2026-11-15 | `decode` with the strict-off capped decode checked against the strict one (`common/partial.rs`), and the HT seeds | the 49 fixtures, the OpenJPH codestreams and the HT conformance codestreams under 6 KB, and what earlier runs kept (1197 inputs), `j2k.dict` with `CPF` and the HT style byte | 61 s, 24 746 runs; `nice -n 19`, one job; the 1-minute load was 5.8 | no crash, leak, or timeout |
 | 2026-11-15 | `tile_body` with the MIXED variant (bit 7 and bit 6 of the first byte) | one MIXED seed, `j2k.dict` | 56 s, 64 703 runs; `nice -n 19`, one job; the 1-minute load was 8.5; 281 of 1 556 corpus inputs pick MIXED | no crash, leak, or timeout |
@@ -275,4 +286,10 @@ cargo +nightly fuzz tmin decode fuzz/artifacts/decode/crash-<hash>
 
 `corpus/`, `artifacts/`, `coverage/`, and `target/` are git-ignored; only the
 target and its manifest are tracked, so the corpus stays reproducible from the
-committed fixtures.
+committed fixtures. No seed corpus is committed: the commands above, and the CI
+smoke, build each one. The CI smoke (`.github/workflows/ci.yml`) seeds `decode`
+with the fixtures and small HT files, `ht_block` with the HT corpus's
+code-blocks, and the JP2, header and ICC targets as above, and runs `decode`,
+`tile_body`, `tier1_block`, `mq`, `ht_block`, `jp2_boxes`, `header` and
+`icc_srgb`. It does not run `decode_partial` or `incremental_decode`; run those
+by hand.

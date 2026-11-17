@@ -66,19 +66,22 @@ whole-crate look happens.
    version.
 4. Point the published docs at the release, so docs.rs and crates.io show
    the docs for that version rather than `main`:
-   - In `src/lib.rs`, change every `rust-j2k/blob/main/` link to
-     `rust-j2k/blob/vX.Y.Z/`
-     (`sed -i 's#rust-j2k/blob/main/#rust-j2k/blob/vX.Y.Z/#g' src/lib.rs`).
+   - In `src/` and `README.md`, change every `rust-j2k/blob/main/` link, and
+     every link pinned at an older tag, to `rust-j2k/blob/vX.Y.Z/`
+     (`sed -i -E 's#rust-j2k/blob/(main|v[0-9]+\.[0-9]+\.[0-9]+)/#rust-j2k/blob/vX.Y.Z/#g' $(grep -rlE 'rust-j2k/blob/' src README.md)`;
+     this is GNU sed, and BSD or macOS sed needs `sed -i '' -E` instead).
    - In `README.md`, make each relative link (`docs/...`, `CONTRIBUTING.md`,
      `SECURITY.md`, the license files) absolute at the tag:
      `https://github.com/D0ubleD0uble/rust-j2k/blob/vX.Y.Z/<path>`.
 
    The tag does not exist yet when the PR is written, but it does by the time
    docs.rs builds the published crate. Afterwards, both
-   `grep -n 'blob/main' src/lib.rs` and
+   `grep -rnoE 'rust-j2k/blob/[^/]+/' src README.md | grep -v 'blob/vX.Y.Z/'`
+   (with the new version in place of `vX.Y.Z`; `-o` prints each link on its
+   own, so a stale link on the same line as a new one still shows) and
    `grep -nE '\]\((docs|[A-Z][A-Za-z-]*\.md|LICENSE)' README.md` should print
-   nothing. Between releases, new links may use `main` or relative paths; the
-   next release pins them.
+   nothing. Between releases, new links use `main` or relative paths, and
+   links left at the last tag go back to `main`; the next release pins them.
 5. Open a PR with those changes; merge once CI is green.
 6. Tag the merged commit and push the tag:
    ```sh

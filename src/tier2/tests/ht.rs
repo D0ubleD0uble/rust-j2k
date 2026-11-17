@@ -812,8 +812,9 @@ fn a_block_empty_in_layer_0_then_part1() {
     assert_eq!(block.segments[0].chunks.len(), 1, "layer 0 gave no chunk");
 }
 
-/// A block whose length fields are all zero codes nothing either way, and
-/// is read as HT, as the A.4 note says to try first: placeholder passes only.
+/// A block whose length fields are all zero is read as HT, as the A.4 note
+/// says to try first: placeholder passes only, so it codes nothing. (Read as
+/// Part 1, an MQ decode of its empty segments could give nonzero samples.)
 #[test]
 fn a_block_of_zero_lengths_only_codes_nothing() {
     let data = packets(&[

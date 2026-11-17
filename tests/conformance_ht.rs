@@ -116,6 +116,20 @@ const AGREES_WITH_OPENJPEG: &[&str] = &[
     "hifi_ht1_02",
 ];
 
+/// The HT codestreams of [`AGREES_WITH_OPENJPEG`] that match OpenJPEG's
+/// output bit for bit: every 5/3 one, and the 9/7 `ds0_ht_09_b11` and
+/// `ds1_ht_06_b11`. The other 9/7 ones differ by 1 at most, the documented
+/// gap of the inverse 9/7's `2/K` scale (`docs/openjpeg-departures.md`).
+const EXACT_WITH_OPENJPEG: &[&str] = &[
+    "ds0_ht_01_b11",
+    "ds0_ht_09_b11",
+    "ds0_ht_11_b10",
+    "ds0_ht_12_b11",
+    "ds0_ht_14_b11",
+    "ds1_ht_06_b11",
+    "ds1_ht_07_b11",
+];
+
 /// The OpenJPH codestreams that decode within their bounds today.
 const OPENJPH_IN_CLASS: &[&str] = &[
     "simple_dec_irv97_64x64_16bit",
@@ -279,9 +293,25 @@ fn grades_agreement_with_openjpeg() {
     let graded: Vec<(&str, Grade)> = manifest
         .codestreams
         .iter()
-        .filter_map(|c| Some((c.name.as_str(), c.grade_agreement(&dir)?)))
+        .filter_map(|c| {
+            let exact = EXACT_WITH_OPENJPEG.contains(&c.name.as_str());
+            Some((c.name.as_str(), c.grade_agreement(&dir, exact)?))
+        })
         .collect();
     assert_eq!(graded.len(), 10);
+    // Every exact entry is one OpenJPEG decodes, and every 5/3 one is exact.
+    for name in EXACT_WITH_OPENJPEG {
+        assert!(AGREES_WITH_OPENJPEG.contains(name), "{name}");
+    }
+    for c in &manifest.codestreams {
+        if c.openjpeg.decoded && !c.features.irreversible_anywhere {
+            assert!(
+                EXACT_WITH_OPENJPEG.contains(&c.name.as_str()),
+                "{}: a 5/3 codestream must match OpenJPEG exactly",
+                c.name
+            );
+        }
+    }
     ratchet(
         "HTJ2K agreement with OpenJPEG 2.5.0",
         &graded,

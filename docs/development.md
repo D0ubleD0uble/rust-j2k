@@ -173,7 +173,7 @@ cargo install cargo-deny
 
 ### cargo-fuzz
 
-libFuzzer-based fuzzing of the decoder: eight targets, from the public
+libFuzzer-based fuzzing of the decoder: ten targets, from the public
 `decode` entry point down to the MQ coder. It needs a nightly toolchain, an
 LLVM sanitizer runtime and a C++ compiler, and runs on x86-64 and aarch64
 Unix only. The targets live in the separate [`fuzz/`](../fuzz/) workspace,

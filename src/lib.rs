@@ -2,7 +2,8 @@
 //! needs no C toolchain.
 //!
 //! The decoder reads a **raw codestream** (ISO/IEC 15444-1 Annex A) or a
-//! **JP2 file** (Annex I) into **integer** samples: one grid per component,
+//! **JP2 file** (Annex I) into **integer** samples, and HTJ2K codestreams and
+//! JPH files (ISO/IEC 15444-15) the same way: one grid per component,
 //! signed up to 32 bits, unsigned up to 31 (an `i32` container), each with its
 //! own bit depth, sign, and sub-sampling. Both wavelet paths decode, the
 //! reversible 5/3 bit-exactly and the irreversible 9/7 within the standard's
@@ -10,7 +11,10 @@
 //! all five progression orders and POC changes between them, packed packet
 //! headers (PPM/PPT), every Part 1 code-block coding style, region of interest
 //! (maxshift), non-zero canvas offsets, resolution-reduced decoding, and the
-//! reversible (RCT) and irreversible (ICT) color transforms.
+//! reversible (RCT) and irreversible (ICT) color transforms. HTJ2K code-blocks
+//! decode with all three of their coding passes, and a tile-component may mix
+//! HT and Part 1 code-blocks. A decode can stop after some quality layers, or
+//! return a window, one tile or some of the components ([`DecodeOptions`]).
 //!
 //! A JP2 file's codestream decodes the same way, and the file's header comes
 //! back on [`Image::jp2`]. A palettized JP2 file decodes to the palette's
@@ -18,14 +22,14 @@
 //! color order. [`read_header`] and [`read_header_with`] read the same header
 //! without decoding any tile data. Samples come out as coded by default;
 //! [`ColorOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
-//! The [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md)
+//! The [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md)
 //! maps what is decoded and what is not.
 //!
 //! # Pipeline
 //!
 //! ```text
 //! bytes ─▶ [jp2 boxes] ─▶ codestream ─▶ tier-2 ─▶ tier-1 ─▶ dequant
-//!          (Annex I)      (markers)     (packets)  (MQ+EBCOT) (quant)
+//!          (Annex I)      (markers)     (packets)  (EBCOT|HT) (quant)
 //!
 //!       ─▶ inverse DWT ─▶ inverse MCT ─▶ [palette, cdef, sRGB] ─▶ Image
 //!          (5/3 | 9/7)    (RCT | ICT)    (JP2 only)
@@ -127,7 +131,7 @@
 //! assert!(matches!(decode(b"hello"), Err(Error::Codestream(_))));
 //! ```
 //!
-//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams
+//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams
 //!
 //! With [`DecodeOptions::strict`] off, a codestream cut short, or one with
 //! bytes left after a tile's last packet, decodes to the image the data
@@ -138,6 +142,14 @@
 //! level the data already gives in full. Until the main header has arrived,
 //! the decode, like [`read_header`], is [`Error::Incomplete`]. Everything else
 //! damaged is refused as when strict.
+//!
+//! For a file that arrives in pieces, use [`IncrementalDecoder`] rather than
+//! decoding each prefix again: [`feed`](IncrementalDecoder::feed) appends
+//! bytes, [`refine`](IncrementalDecoder::refine) decodes them from time to
+//! time and returns the image they hold, with its report, and
+//! [`finish`](IncrementalDecoder::finish) decodes the whole input once it
+//! ends. Each refine goes on from where the last one stopped reading
+//! packets.
 //!
 //! # Limits
 //!
@@ -159,15 +171,14 @@
 //!
 //! All 23 codestreams of the ISO/IEC 15444-4 conformance suite decode within
 //! their class-1 error bounds, and its nine JP2 files within their compliance
-//! class. That gate runs in `tests/` against committed oracle snapshots, with
-//! no external tools. Correctness is defined by cross-checking OpenJPEG, not
-//! by self-consistency. HTJ2K code-blocks decode with all three of their
-//! coding passes, and a tile-component may mix HT and Part 1 code-blocks. An
-//! input using a feature outside the decoded set (more than one HT set per
+//! class. So do its 41 HTJ2K codestreams and 20 JPH files. That gate runs in
+//! `tests/` against committed oracle snapshots, with no external tools.
+//! Correctness is defined by cross-checking OpenJPEG, not by self-consistency.
+//! An input using a feature outside the decoded set (more than one HT set per
 //! code-block, a Part 2 extension) is rejected with [`Error::Unsupported`],
-//! never half-decoded. GRIB2 §5.40 (`grid_jpeg`)
-//! payloads, the crate's original target, are raw codestreams and decode
-//! directly. The feature map is in [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/scope.md).
+//! never half-decoded. GRIB2 §5.40 (`grid_jpeg`) payloads, the crate's original
+//! target, are raw codestreams and decode directly. The feature map is in
+//! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`,
@@ -306,9 +317,9 @@ pub use window::Window;
 /// since the format has no checksum, and damage can show up as any variant
 /// (see the crate docs).
 ///
-/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-sample-limit
-/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-tier-2-work-bound
-/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-tier-1-work-bound
+/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit
+/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-tier-2-work-bound
+/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-tier-1-work-bound
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -624,7 +635,7 @@ pub enum ColorOutput {
     /// assert_eq!(rgba8(&gray), Some(vec![0, 0, 0, 255, 255, 255, 255, 255]));
     /// ```
     ///
-    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/srgb-output.md#every-input-and-its-result
+    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/srgb-output.md#every-input-and-its-result
     Srgb,
 }
 
@@ -711,7 +722,12 @@ pub struct DecodeOptions {
     ///
     /// Only the tiles the window reaches are decoded, so a small window of a
     /// large tiled image costs a few tiles. The packets of the other tiles
-    /// are not read, so damage in them is not found, as in OpenJPEG. In the
+    /// are not read, so damage in them is not found, as in OpenJPEG. With
+    /// [`strict`](Self::strict) off, a codestream cut short after the tiles
+    /// the window reaches still gives the window's samples.
+    /// `opj_decompress -allow-partial -d` 2.5.0 refuses such a file, while
+    /// `-t` decodes each tile, the cut one included, as this decoder does. In
+    /// the
     /// tiles it reaches, only the code-blocks whose wavelet support reaches
     /// the window are decoded, so damage in the others is not found either.
     /// Nor is a code-block it skips checked against the bit-plane limit, so
@@ -861,7 +877,7 @@ pub struct DecodeOptions {
     /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output, and about 1.35 to 3.2 times that in all at its
-    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
+    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
     /// for many gigabytes. If
     /// the allocation fails the process aborts, as Rust's allocation
     /// failures do. Only an image too large for this target to
@@ -915,7 +931,10 @@ pub struct DecodeOptions {
     /// the resolutions a reduction keeps decodes at that reduction to the same
     /// samples as the whole codestream, and the report's
     /// [`complete_reduction`](DecodeReport::complete_reduction) says which
-    /// reduction that is.
+    /// reduction that is. [`IncrementalDecoder`] decodes such prefixes for
+    /// you: each refine goes on from where the last one stopped reading
+    /// packets. The packets it reads again are listed in
+    /// [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md).
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
@@ -974,7 +993,7 @@ impl Default for DecodeOptions {
 /// Each work bound scales with the size of the file, so a small file cannot
 /// ask for minutes of work, and the sample limit holds the memory a file may
 /// ask for to an estimated 1.4 GiB for a square tile, and to a few GiB for a tall,
-/// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.4.0/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
+/// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
 /// a bound, when it codes many samples in very few bytes or is very
 /// large. The decode then fails with [`Error::Limit`], and its message names
 /// the option and a [`Raised`](WorkLimit::Raised) factor. Treat the factor as
