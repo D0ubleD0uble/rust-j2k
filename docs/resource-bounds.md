@@ -364,6 +364,23 @@ walk's geometry bound of 2^14 code-blocks: `read_header` allocates for its
 walk, and a geometry bound at the decode's 2^19 code-blocks would let
 `read_header` hold about 75 MB for a 66 KB file.
 
+The walk to the box end also changes what a decode returns, not only how long
+it takes. When it gives up at the default bound, the tile-part runs to the end
+of the file, and the boxes after `jp2c` count as bytes left after the last
+packet. A raised `packet_work_limit` lets the walk finish and end at the box.
+So raising the limit can change the outcome of a decode without any
+`Error::Limit` having asked for it. At the default,
+`tests/fixtures/psot0/jp2_t2_sweep_cprl_poc.jp2` and
+`tests/fixtures/work_bound/jp2_t2skip_512_20000.jp2` give
+`Codestream: tile 0 has 6 byte(s) left after the last packet`, and with `strict` off, a report with
+a `LeftoverBytes` entry. Under `WorkLimit::Raised(2)` both decode completely,
+with an empty report. OpenJPEG reads every such tile-part to the end of the
+file and ignores the bytes left after the last packet, whatever its walk costs
+([`Psot = 0` at the end of
+`jp2c`](openjpeg-departures.md#psot--0-at-the-end-of-jp2c)), and decodes the
+first file. It fails on the second for another reason ("segment too long" in a
+code-block).
+
 ## The tier-1 work bound
 
 Each coding pass of a code-block scans all of the block's samples, however few
