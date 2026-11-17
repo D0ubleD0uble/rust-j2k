@@ -32,7 +32,9 @@ After this, every later release goes through the workflow with no token.
 
 Every release starts with a full-project review, before any version bump. The
 point is production completeness: the tag should never be the first time a
-whole-crate look happens.
+whole-crate look happens. [docs/release-validation.md](docs/release-validation.md)
+describes every check a release runs, including the manual rounds and
+differential checks that are not listed here.
 
 1. **Pre-flight.** `rustup update stable` (CI uses the newest stable), clean
    tree on an up-to-date `main`, latest `main` CI run green.
@@ -61,7 +63,10 @@ whole-crate look happens.
 1. Update `CHANGELOG.md`: move items from `[Unreleased]` into a new dated version
    section and refresh the compare links at the bottom. Consolidate duplicate
    Keep-a-Changelog section headers that accumulated while features landed.
-2. Bump `version` in `Cargo.toml` to match.
+2. Bump `version` in `Cargo.toml` to match, and the `rust-j2k` entry in both
+   lockfiles. Cargo updates `Cargo.lock` on the next build, but not
+   `fuzz/Cargo.lock`, which belongs to the detached fuzz workspace, so edit
+   its `version` line by hand.
 3. Update the supported-versions table in `SECURITY.md` to the new minor
    version.
 4. Point the published docs at the release, so docs.rs and crates.io show

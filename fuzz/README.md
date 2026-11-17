@@ -302,8 +302,7 @@ cargo +nightly fuzz tmin decode fuzz/artifacts/decode/crash-<hash>
 target and its manifest are tracked, so the corpus stays reproducible from the
 committed fixtures. No seed corpus is committed: the commands above, and the CI
 smoke, build each one. The CI smoke (`.github/workflows/ci.yml`) seeds `decode`
-with the fixtures and small HT files, `ht_block` with the HT corpus's
-code-blocks, and the JP2, header and ICC targets as above, and runs `decode`,
-`tile_body`, `tier1_block`, `mq`, `ht_block`, `jp2_boxes`, `header` and
-`icc_srgb`. It does not run `decode_partial` or `incremental_decode`; run those
-by hand.
+with the fixtures and small HT files, `decode_partial` and `incremental_decode`
+from the `decode` corpus, `ht_block` with the HT corpus's code-blocks, and the
+JP2, header and ICC targets as above. It runs all ten targets for 15 to 60 s
+each, with `-timeout=30` and `-rss_limit_mb=4096`.

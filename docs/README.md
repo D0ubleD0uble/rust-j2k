@@ -48,6 +48,9 @@ If you work on the crate:
 - [`tests/fixtures/README.md`](../tests/fixtures/README.md) describes each
   test fixture, where it came from and the command that made it.
 - [`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md) shows how to run the fuzz targets.
+- [release-validation.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/release-validation.md)
+  lists the checks a release runs before it is tagged: what each catches, how
+  to run it, its cost and when it runs.
 - [roadmap-phase1.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase1.md),
   [roadmap-phase2.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase2.md),
   [roadmap-phase3.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase3.md) and
