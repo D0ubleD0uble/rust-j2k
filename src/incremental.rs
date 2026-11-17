@@ -260,6 +260,21 @@ impl IncrementalDecoder {
         }
     }
 
+    /// A decoder whose earlier refines spent `blocks` of the code-block
+    /// work, as the unit tests set it up (see [`crate::fuzz`]).
+    pub(crate) fn with_code_block_work_spent(options: DecodeOptions, blocks: u64) -> Result<Self> {
+        let mut decoder = Self::new(options)?;
+        decoder.spent.blocks = blocks;
+        Ok(decoder)
+    }
+
+    /// The code-block work the refines have spent, and the code-block
+    /// bound of the last decode a refine tried, when that decode read the
+    /// main header and has a bound (see [`crate::fuzz`]).
+    pub(crate) fn code_block_work(&self) -> (u64, Option<u64>) {
+        (self.spent.blocks, self.spent.bound)
+    }
+
     /// Consumes the decoder and returns the bytes fed.
     ///
     /// After [`finish`](Self::finish) refuses a work limit, decode these
@@ -295,6 +310,8 @@ struct Spent {
     walks: Walks,
     /// The code-block work spent.
     blocks: u64,
+    /// The code-block bound of the last decode, when it had one.
+    bound: Option<u64>,
 }
 
 /// What the decodes of an [`IncrementalDecoder`] keep between them, so
@@ -313,6 +330,8 @@ pub(crate) struct Ledger {
     walks: RefCell<Walks>,
     /// The code-block work spent.
     blocks: Cell<u64>,
+    /// The code-block bound of this decode, once it is known.
+    bound: Cell<Option<u64>>,
     /// Whether a work bound refused the last decode.
     work_refused: Cell<bool>,
 }
@@ -321,6 +340,7 @@ impl fmt::Debug for Ledger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ledger")
             .field("blocks", &self.blocks)
+            .field("bound", &self.bound)
             .field("work_refused", &self.work_refused)
             .finish_non_exhaustive()
     }
@@ -333,6 +353,7 @@ impl Ledger {
         Ledger {
             walks: RefCell::new(walks),
             blocks: Cell::new(blocks),
+            bound: Cell::new(None),
             work_refused: Cell::new(false),
         }
     }
@@ -342,13 +363,16 @@ impl Ledger {
         Spent {
             walks: self.walks.into_inner(),
             blocks: self.blocks.get(),
+            bound: self.bound.get(),
         }
     }
 
     /// The code-block work a decode whose own bound is `bound` may spend:
     /// what is left of it after the earlier decodes. No bound
     /// ([`WorkLimit::Unlimited`](crate::WorkLimit::Unlimited)) stays none.
+    /// The ledger keeps `bound` as this decode's.
     pub(crate) fn blocks_left(&self, bound: u64) -> u64 {
+        self.bound.set(Some(bound));
         if bound == u64::MAX {
             return bound;
         }

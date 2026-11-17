@@ -237,8 +237,59 @@ pub fn icc_profile(data: &[u8]) {
     crate::jp2::SrgbPlan::read_profile(data);
 }
 
+/// An [`IncrementalDecoder`](crate::IncrementalDecoder) as if its earlier
+/// refines had spent `blocks` of the code-block work, so the
+/// `incremental_decode` target reaches the cut that bound makes without
+/// inputs large enough to spend it. Otherwise it is
+/// [`IncrementalDecoder::new`](crate::IncrementalDecoder::new).
+pub fn incremental_with_code_block_work_spent(
+    options: crate::DecodeOptions,
+    blocks: u64,
+) -> crate::Result<crate::IncrementalDecoder> {
+    crate::IncrementalDecoder::with_code_block_work_spent(options, blocks)
+}
+
+/// The code-block work `decoder`'s refines have spent, and the code-block
+/// bound of the last decode a refine tried: `None` when that decode did not
+/// get as far as the bound, or the options set none.
+pub fn incremental_code_block_work(decoder: &crate::IncrementalDecoder) -> (u64, Option<u64>) {
+    decoder.code_block_work()
+}
+
 #[cfg(test)]
 mod tests {
+    /// A decoder started with work spent is cut by what is left of the
+    /// bound: a refine whose work just fits decodes, and one more unit of
+    /// work spent refuses it. The hooks report the work and the bound.
+    #[test]
+    fn incremental_hooks_cut_the_code_block_bound() {
+        use crate::{DecodeOptions, decode_with};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/layers/lrcp.j2k");
+        let bytes = std::fs::read(path).unwrap();
+        let start = |spent: u64| {
+            let mut decoder =
+                super::incremental_with_code_block_work_spent(DecodeOptions::default(), spent)
+                    .unwrap();
+            decoder.feed(&bytes);
+            let refined = decoder.refine().unwrap();
+            (refined, super::incremental_code_block_work(&decoder))
+        };
+        let (image, (work, bound)) = start(0);
+        let bound = bound.unwrap();
+        assert!(work > 0 && work < bound, "{work} of {bound}");
+        let lenient = DecodeOptions::default().with_strict(false);
+        assert_eq!(image.unwrap(), decode_with(&bytes, &lenient).unwrap());
+
+        let (fits, (spent, _)) = start(bound - work);
+        assert!(fits.is_some());
+        assert_eq!(spent, bound);
+        let (cut, (spent, seen)) = start(bound - work + 1);
+        assert_eq!(cut, None);
+        assert_eq!(seen, Some(bound));
+        assert_eq!(spent, bound - work + 1, "a refused tile spends nothing");
+    }
+
     /// Smoke-run every hook so the fuzz surface builds and stays panic-free in
     /// CI, where `--cfg fuzzing` never is set.
     #[test]

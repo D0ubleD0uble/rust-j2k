@@ -178,10 +178,14 @@ must give what `decode_with` gives with `strict` off on the bytes fed so far:
 the same image or the same error. After an error, each later refine must give
 it again, and `finish` must be the decode of the whole input. The decoder holds
 all its refines to the code-block limit together, and a one-shot decode holds
-only itself, so after an earlier refine has spent some of it a refine the limit
-refuses (`Ok(None)`) is checked against a new decoder fed the same bytes. The
-limit is at least 2^26 sample passes, so inputs of a few kilobytes do not
-reach that cut (#425). Each input is decoded several times, so
+only itself. So each refine that was due is checked by the decoder's own rule:
+it refuses (`Ok(None)`) if and only if the code-block work a decoder with
+nothing spent spends on the same bytes passes what is left of the bound after
+the work spent before it. The limit is at least 2^26 sample passes, which
+inputs of a few kilobytes do not come near, so each due refine also starts a
+probe decoder with work already spent (`rust_j2k::fuzz`), drawn around the most
+that leaves the refine room, and checks it by the same rule. Each input is
+decoded several times, so
 seed it with small files, such as the fixtures under 3 KB, and cap the input
 length (`-max_len=4096`). Even so it can be slow, since almost all its time
 goes to its own `decode_with` oracle decodes: from the fixtures under 3 KB
