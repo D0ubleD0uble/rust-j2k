@@ -28,8 +28,18 @@ section also lists the valid files its bound refuses. A fourth cost, resolving
 tile headers, was removed by making the parse cheaper rather than by adding a
 cap ([Tile header cost](#tile-header-cost)).
 
+The per-tile code-block cap is 2^20. A block costs about 141 bytes of
+bookkeeping before it holds a segment and about 200 with one, from the sizes of
+`BlockState` (40), `CodeBlock` (80), `SegmentState` (56) and two tag-tree
+nodes (8 each, 4/3 per leaf), so hostile metadata reaches about 140 to 200 MiB
+a tile. The cap was 2^19 until the sample limit became 2^29: at 2^19 a one-tile
+image of 23106x23106 samples or more in 32x32 blocks was refused. At 2^20 every
+one-tile image under 2^29 samples fits in 32x32 blocks (64x64 blocks need
+132726 at the limit); one tile in 16x16 blocks or smaller near the limit is
+still refused, as in 0.4.
+
 A few fixed guards also return `Limit`, and no option lifts them: 2^18
-precincts and 2^19 code-blocks per tile, 32 POC progression volumes, 30
+precincts and 2^20 code-blocks per tile, 32 POC progression volumes, 30
 coded bit-planes per code-block, and an image too large for the target to
 address, under any sample limit. Their `retry_with()` is `None`, and
 `LimitKind::is_adjustable()` is false.
@@ -256,7 +266,7 @@ that is samples / 16, 2^25 at the limit, about 1 to 2.3 seconds to build at
 30 to 70 ns each (arithmetic from the per-block cost, not measured at that
 count). Small
 precincts can force code-blocks down to 1x1, and then it is the per-tile cap
-of 2^19 code-blocks that bounds each tile. A decode at full resolution drops no
+of 2^20 code-blocks that bounds each tile. A decode at full resolution drops no
 resolution, so it spends exactly what it did before; a file built to spend
 exactly the bound (`the_layer_orders_charge_each_component_they_check` in
 `tests/work_bound.rs`) still decodes.
@@ -361,8 +371,8 @@ then walks the tile again under a fresh bound, so it can spend about 1.25 times
 the decode's bound (`jp2_t2_sweep_cprl_tall` in
 `tests/fixtures/psot0/README.md`). The decode's bound does not replace that
 walk's geometry bound of 2^14 code-blocks: `read_header` allocates for its
-walk, and a geometry bound at the decode's 2^19 code-blocks would let
-`read_header` hold about 75 MB for a 66 KB file.
+walk, and a geometry bound at the decode's 2^20 code-blocks would let
+`read_header` hold about 150 MB for a 66 KB file.
 
 The walk to the box end also changes what a decode returns, not only how long
 it takes. When it gives up at the default bound, the tile-part runs to the end

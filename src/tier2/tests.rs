@@ -778,8 +778,8 @@ fn malformed_tile_data_never_panics() {
 /// is read; the block-count guard rejects it up front instead.
 #[test]
 fn block_count_guard_rejects_metadata_bomb() {
-    // 4096×4096 with 4×4 blocks: ~1.4M blocks across the ladder, over the 2^19 cap.
-    let h = header(4096, 4096, 1, 2);
+    // 8192×4096 with 4×4 blocks: ~2.1M blocks across the ladder, over the 2^20 cap.
+    let h = header(8192, 4096, 1, 2);
     let t = tile(&[]);
     let err = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX, 0)
         .map_err(Error::from)
@@ -815,6 +815,28 @@ fn block_count_guard_rejects_before_allocating() {
     assert!(
         elapsed.as_millis() < 100,
         "the guard must fire while the geometry is built, not after ({elapsed:?})"
+    );
+}
+
+/// A one-tile 23170 x 23170 image (just under the 2^29 default sample limit)
+/// in 32 x 32 code-blocks holds about 2^19.4 of them across its resolutions,
+/// which the tile cap admits. The same image in 16 x 16 blocks holds about
+/// 2^21.4 and is still refused.
+#[test]
+fn a_one_tile_image_at_the_sample_limit_fits_32x32_blocks() {
+    let fits = header(23170, 23170, 5, 5);
+    let mut budget = super::MAX_PRECINCTS;
+    let mut block_budget = super::MAX_CODE_BLOCKS;
+    resolution_geoms(&fits, 0, 0, &mut budget, &mut block_budget)
+        .expect("32x32 blocks of a 23170x23170 tile fit the cap");
+
+    let too_many = header(23170, 23170, 5, 4);
+    let mut budget = super::MAX_PRECINCTS;
+    let mut block_budget = super::MAX_CODE_BLOCKS;
+    let result = resolution_geoms(&too_many, 0, 0, &mut budget, &mut block_budget);
+    assert!(
+        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::TileCodeBlocks)),
+        "16x16 blocks of the same tile are over the cap"
     );
 }
 
@@ -2312,7 +2334,7 @@ fn non_lazy_segment_max_passes_is_unchanged() {
 /// geometry's `Limit`, not `Refused::Work`, however the meter was left.
 #[test]
 fn a_stale_refusal_does_not_relabel_a_geometry_limit() {
-    let h = header(4096, 4096, 1, 2);
+    let h = header(8192, 4096, 1, 2);
     let t = tile(&[]);
     let stale = || {
         let meter = super::Meter::new(u64::MAX);

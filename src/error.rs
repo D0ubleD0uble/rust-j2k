@@ -186,7 +186,7 @@ pub enum Error {
     /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file.
     ///
     /// The other guards have no option, so a file past one of them is refused
-    /// whatever the options. A tile may hold at most 2^19 code-blocks and
+    /// whatever the options. A tile may hold at most 2^20 code-blocks and
     /// 2^18 precincts, and 32 progression order change (POC) volumes; a
     /// code-block may have at most 30 bit-planes; and under a `sample_limit`
     /// of `WorkLimit::Unlimited`, an image too large for the target to
@@ -480,7 +480,7 @@ pub enum LimitKind {
     /// An image of more samples than the target can address, refused under
     /// any sample limit.
     AddressSpace,
-    /// A tile of more than 2^19 code-blocks.
+    /// A tile of more than 2^20 code-blocks.
     TileCodeBlocks,
     /// A tile of more than 2^18 precincts.
     TilePrecincts,

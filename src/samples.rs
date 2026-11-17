@@ -144,7 +144,7 @@ pub(crate) fn check_codestream(
 /// component's code-block geometry in each tile read, a component subset
 /// or not; the code-blocks of the kept resolutions are charged to no work
 /// bound, as they are no more than the samples counted here, and no more
-/// than 2^19 a tile (`docs/resource-bounds.md`).
+/// than 2^20 a tile (`docs/resource-bounds.md`).
 pub(crate) fn check_read(
     siz: &crate::codestream::markers::Siz,
     selection: &crate::window::Selection,
