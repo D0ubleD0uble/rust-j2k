@@ -186,7 +186,7 @@ fn siz_not_first_is_codestream() {
     let bytes = codestream(&[seg(marker::COD, &cod_default(1))]);
     let e = err(&bytes);
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("first marker")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("first marker")),
         "{e:?}"
     );
 }
@@ -393,7 +393,7 @@ fn oversize_image_area_is_a_limit() {
     let cap = crate::samples::MAX_IMAGE_SAMPLES;
     let e = crate::samples::check_codestream(&siz, 0, cap).unwrap_err();
     assert!(
-        matches!(&e, Error::Limit(m) if m.starts_with("image area 16385x16384 needs")),
+        matches!(&e, Error::Limit(m) if m.message().starts_with("image area 16385x16384 needs")),
         "got {e:?}"
     );
     // 16384×16384 is exactly the limit, and fits.
@@ -784,13 +784,19 @@ fn a_poc_past_the_volume_guard_is_a_limit() {
     );
 
     let one_marker = codestream(&header(&[seg(marker::POC, &poc_volumes(33))]));
-    assert!(matches!(err(&one_marker), Error::Limit(_)));
+    assert!(crate::error::is_fixed_limit(
+        &err(&one_marker),
+        crate::LimitKind::PocVolumes
+    ));
 
     let split = codestream(&header(&[
         seg(marker::POC, &poc_volumes(20)),
         seg(marker::POC, &poc_volumes(13)),
     ]));
-    assert!(matches!(err(&split), Error::Limit(_)));
+    assert!(crate::error::is_fixed_limit(
+        &err(&split),
+        crate::LimitKind::PocVolumes
+    ));
 }
 
 /// The guard bounds the list a tile walks. A tile POC replaces the main
@@ -816,7 +822,10 @@ fn the_poc_guard_binds_the_volumes_a_tile_walks() {
     ];
     let bytes = assemble_with_tile_markers(&header, &split, &[1, 2]);
     let error = parse(&bytes).expect_err("33 tile volumes should reject");
-    assert!(matches!(error, Error::Limit(_)));
+    assert!(crate::error::is_fixed_limit(
+        &error,
+        crate::LimitKind::PocVolumes
+    ));
 }
 
 /// `Xcrg`/`Ycrg` big-endian per component — the `CRG` body (A.9.1).
@@ -1291,7 +1300,7 @@ fn the_extra_part_is_looked_for_only_when_the_first_tile_completes() {
     );
     let e = perr(&bytes);
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("tile-part 1 of a declared 1")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("tile-part 1 of a declared 1")),
         "got {e:?}"
     );
 }
@@ -1303,7 +1312,7 @@ fn an_extra_part_with_another_count_is_refused() {
     let bytes = tile_parts(&default_header(), &[(0, 0, 1, vec![]), (0, 1, 2, vec![])]);
     let e = perr(&bytes);
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("declares 2 tile-parts in one `SOT` and 1")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("declares 2 tile-parts in one `SOT` and 1")),
         "got {e:?}"
     );
 }
@@ -1318,7 +1327,7 @@ fn a_raised_count_is_still_held_to_the_parts() {
     );
     let e = perr(&bytes);
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("tile 1 declares 2 tile-parts but carries 1")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("tile 1 declares 2 tile-parts but carries 1")),
         "got {e:?}"
     );
 }
@@ -1459,7 +1468,7 @@ fn a_later_tile_part_that_changes_a_value_in_force_is_refused() {
         let bytes = tile_parts(&default_header(), &[(0, 0, 2, first), (0, 1, 2, later)]);
         let e = perr(&bytes);
         assert!(
-            matches!(&e, Error::Codestream(m) if m.contains(names) && m.contains("tile 0")),
+            matches!(&e, Error::Codestream(m) if m.message().contains(names) && m.message().contains("tile 0")),
             "{case}: got {e:?}"
         );
     }
@@ -1524,7 +1533,7 @@ fn a_restated_main_cod_or_qcd_over_a_main_coc_or_qcc_is_refused() {
         header.push(extra);
         let e = perr(&tile_parts(&header, &parts));
         assert!(
-            matches!(&e, Error::Codestream(m) if m.contains(names)),
+            matches!(&e, Error::Codestream(m) if m.message().contains(names)),
             "got {e:?}"
         );
     }
@@ -1535,7 +1544,9 @@ fn a_restated_main_cod_or_qcd_over_a_main_coc_or_qcc_is_refused() {
 fn a_later_tile_part_rgn_is_still_refused() {
     let later = vec![seg(marker::RGN, &rgn_body(&[0], 0, 0))];
     let bytes = tile_parts(&default_header(), &[(0, 0, 2, vec![]), (0, 1, 2, later)]);
-    assert!(matches!(perr(&bytes), Error::Codestream(m) if m.contains("other than the first")));
+    assert!(
+        matches!(perr(&bytes), Error::Codestream(m) if m.message().contains("other than the first"))
+    );
 }
 
 /// PPM's payload frames one packet-header chunk per tile-part with a 4-byte
@@ -1863,7 +1874,7 @@ fn many_components_exceed_the_sample_budget() {
     let cap = crate::samples::MAX_IMAGE_SAMPLES;
     let e = crate::samples::check_codestream(&header.siz, 0, cap).unwrap_err();
     assert!(
-        matches!(&e, Error::Limit(m) if m.starts_with("a decode of 100 components needs 1677721600 samples")),
+        matches!(&e, Error::Limit(m) if m.message().starts_with("a decode of 100 components needs 1677721600 samples")),
         "got {e:?}"
     );
 
@@ -1934,7 +1945,7 @@ fn unknown_marker_segments_are_walked_then_reported_unsupported() {
         // Interpreting the header then refuses to guess what it meant.
         let e = err(&bytes);
         assert!(
-            matches!(&e, Error::Unsupported(m) if m.contains("unrecognized")),
+            matches!(&e, Error::Unsupported(m) if m.message().contains("unrecognized")),
             "{code:#06X}: got {e:?}",
         );
     }
@@ -2582,7 +2593,7 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("mixed-mode"), "{message}");
+    assert!(message.message().contains("mixed-mode"), "{message}");
     for decoded in [
         "high-throughput",
         "selective arithmetic coding bypass",
@@ -2593,7 +2604,7 @@ fn the_decoded_styles_parse_and_the_rest_still_reject() {
         "predictable termination",
     ] {
         assert!(
-            !message.contains(decoded),
+            !message.message().contains(decoded),
             "{decoded} is decoded and must not be named as a blocker: {message}"
         );
     }
@@ -2612,9 +2623,12 @@ fn code_block_style_rejection_names_the_flags() {
         let Error::Unsupported(message) = &e else {
             panic!("{style:#04X}: got {e:?}")
         };
-        assert!(message.contains("mixed-mode"), "{style:#04X}: {message}");
         assert!(
-            !message.contains("high-throughput"),
+            message.message().contains("mixed-mode"),
+            "{style:#04X}: {message}"
+        );
+        assert!(
+            !message.message().contains("high-throughput"),
             "{style:#04X}: {message}"
         );
     }
@@ -2802,9 +2816,9 @@ fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("mixed-mode"), "{message}");
+    assert!(message.message().contains("mixed-mode"), "{message}");
     assert!(
-        message.contains("COC"),
+        message.message().contains("COC"),
         "the message must name the marker: {message}"
     );
 }
@@ -2839,7 +2853,7 @@ fn a_coc_moving_a_color_component_to_the_97_wavelet_is_unsupported() {
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("component 1"), "{message}");
+    assert!(message.message().contains("component 1"), "{message}");
 
     // A fourth component on 9/7 is outside the transform, so it is allowed.
     let siz = siz_body(4, &[(15, 1, 1); 4]);
@@ -2869,8 +2883,8 @@ fn a_malformed_qcc_names_qcc_and_not_qcd() {
     let Error::Codestream(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("QCC"), "{message}");
-    assert!(!message.contains("QCD"), "{message}");
+    assert!(message.message().contains("QCC"), "{message}");
+    assert!(!message.message().contains("QCD"), "{message}");
 }
 
 // --- RGN: region of interest, maxshift (issue #77) --------------------------
@@ -3103,7 +3117,10 @@ fn a_poc_first_seen_in_a_later_tile_part_appends_to_the_main_header_poc() {
 
     let bytes = with_later_tile_part_markers(&header(32), &[tile_poc]);
     let error = parse(&bytes).expect_err("33 walked volumes should reject");
-    assert!(matches!(error, Error::Limit(_)));
+    assert!(crate::error::is_fixed_limit(
+        &error,
+        crate::LimitKind::PocVolumes
+    ));
 }
 
 /// A tile with no POC of its own keeps the main header's volumes.
@@ -4064,7 +4081,7 @@ fn a_second_tile_part_coc_or_qcc_for_one_component_is_a_codestream_error() {
         let bytes =
             assemble_with_tile_markers(&default_header(), &[marker.clone(), marker], &[1, 2]);
         match perr(&bytes) {
-            Error::Codestream(m) => assert!(m.contains("duplicate"), "{name}: {m}"),
+            Error::Codestream(m) => assert!(m.message().contains("duplicate"), "{name}: {m}"),
             other => panic!("{name}: {other}"),
         }
     }
@@ -4079,7 +4096,7 @@ fn tlm_implied_indices_count_across_markers() {
     segments.push(seg(marker::TLM, &tlm_body(0x00, &[0x12, 0x34])));
     segments.push(seg(marker::TLM, &tlm_body(0x00, &[0x12, 0x34])));
     match err(&codestream(&segments)) {
-        Error::Marker(m) => assert!(m.contains("names tile 1"), "{m}"),
+        Error::Marker(m) => assert!(m.message().contains("names tile 1"), "{m}"),
         other => panic!("{other}"),
     }
 }
@@ -4183,12 +4200,12 @@ fn duplicate_override_messages_are_pinned_for_both_headers() {
     ];
     for (name, bytes, expected) in rows {
         match crate::decode(&bytes) {
-            Err(Error::Codestream(m)) => assert_eq!(m, expected, "{name}"),
+            Err(Error::Codestream(m)) => assert_eq!(m.message(), expected, "{name}"),
             other => panic!("{name}: {other:?}"),
         }
     }
     match crate::decode(&tile_with(&[cod, bad_cod])) {
-        Err(Error::Marker(m)) => assert_eq!(m, "reserved progression order 9"),
+        Err(Error::Marker(m)) => assert_eq!(m.message(), "reserved progression order 9"),
         other => panic!("tile malformed second COD: {other:?}"),
     }
 }
@@ -4227,7 +4244,7 @@ fn a_main_header_rgn_against_a_rgn_free_cap_is_codestream() {
     ] {
         let e = err(&codestream(&segments));
         assert!(
-            matches!(&e, Error::Codestream(m) if m.contains("`Ccap15` bit 12 is 0")),
+            matches!(&e, Error::Codestream(m) if m.message().contains("`Ccap15` bit 12 is 0")),
             "got {e:?}"
         );
     }
@@ -4256,7 +4273,7 @@ fn a_tile_part_rgn_against_a_rgn_free_cap_is_codestream() {
     let bytes = assemble_with_tile_markers(&header, std::slice::from_ref(&rgn), &[1, 2]);
     let e = parse(&bytes).expect_err("RGN-free CAP");
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("`Ccap15` bit 12 is 0")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("`Ccap15` bit 12 is 0")),
         "got {e:?}"
     );
 
@@ -4307,7 +4324,7 @@ fn a_cap_whose_length_disagrees_with_pcap_is_marker() {
         let Error::Marker(message) = &e else {
             panic!("{body:?}: got {e:?}")
         };
-        assert!(message.contains("`CAP`"), "{message}");
+        assert!(message.message().contains("`CAP`"), "{message}");
     }
 }
 
@@ -4320,7 +4337,9 @@ fn a_cap_signaling_another_part_is_unsupported_naming_it() {
             panic!("{pcap:#010X}: got {e:?}")
         };
         assert!(
-            message.contains(&format!("ISO/IEC 15444-{part},")),
+            message
+                .message()
+                .contains(&format!("ISO/IEC 15444-{part},")),
             "{message}"
         );
     }
@@ -4333,7 +4352,7 @@ fn a_cap_signaling_another_part_is_unsupported_naming_it() {
             panic!("{pcap:#010X}: got {e:?}")
         };
         assert!(
-            message.contains(&format!(
+            message.message().contains(&format!(
                 "`Pcap` bit {bit}, counted from the MSB, which names no part"
             )),
             "{message}"
@@ -4349,7 +4368,7 @@ fn multiht_is_unsupported_and_every_other_ccap15_is_kept() {
     let Error::Unsupported(message) = &e else {
         panic!("got {e:?}")
     };
-    assert!(message.contains("MULTIHT"), "{message}");
+    assert!(message.message().contains("MULTIHT"), "{message}");
 
     for ccap15 in [0x0000, 0x8000, 0xC000, 0x4000, 0x07C0, 0xDFFF] {
         let header = parsed(&[
@@ -4370,7 +4389,7 @@ fn a_second_cap_or_cpf_is_codestream() {
         let Error::Codestream(message) = &e else {
             panic!("{code:#06X}: got {e:?}")
         };
-        assert!(message.contains("duplicate"), "{message}");
+        assert!(message.message().contains("duplicate"), "{message}");
     }
 }
 
@@ -4381,7 +4400,7 @@ fn a_cpf_that_is_not_whole_words_is_marker() {
         let Error::Marker(message) = &e else {
             panic!("{body:?}: got {e:?}")
         };
-        assert!(message.contains("`CPF`"), "{message}");
+        assert!(message.message().contains("`CPF`"), "{message}");
     }
     // Several words, the last zero, are read as they are: T.814 A.6 asks the
     // encoder for the shortest form, and the profile changes no sample.
@@ -4402,7 +4421,7 @@ fn cap_or_cpf_in_a_tile_part_header_is_codestream() {
         let Error::Codestream(message) = &e else {
             panic!("{code:#06X}: got {e:?}")
         };
-        assert!(message.contains("tile-part header"), "{message}");
+        assert!(message.message().contains("tile-part header"), "{message}");
     }
 }
 
@@ -4431,7 +4450,9 @@ fn an_ht_or_mixed_style_parses_and_bit_7_alone_is_unsupported_with_or_without_ca
                 panic!("{style:#04X}, CAP {}: got {e:?}", cap.is_some())
             };
             assert!(
-                message.contains("`COD` code-block style (HTJ2K mixed-mode"),
+                message
+                    .message()
+                    .contains("`COD` code-block style (HTJ2K mixed-mode"),
                 "{message}"
             );
         }
@@ -4451,16 +4472,16 @@ fn a_tile_part_style_goes_through_the_block_coder_guard() {
             let e = perr(&bytes);
             let message = match (&e, unsupported) {
                 (Error::Unsupported(m), true) => {
-                    assert!(m.contains("mixed-mode"), "{m}");
+                    assert!(m.message().contains("mixed-mode"), "{m}");
                     m
                 }
                 (Error::Marker(m), false) => {
-                    assert!(m.contains("MIXED"), "{m}");
+                    assert!(m.message().contains("MIXED"), "{m}");
                     m
                 }
                 _ => panic!("{style:#04X} {name}: got {e:?}"),
             };
-            assert!(message.contains(name), "{message}");
+            assert!(message.message().contains(name), "{message}");
         }
     }
 }
@@ -4500,7 +4521,7 @@ fn a_mixed_style_under_an_htdeclared_cap_is_codestream() {
             panic!("got {e:?} for {bytes:02X?}")
         };
         assert!(
-            message.contains("HTDECLARED") || message.contains("15-14"),
+            message.message().contains("HTDECLARED") || message.message().contains("15-14"),
             "{message}"
         );
     };

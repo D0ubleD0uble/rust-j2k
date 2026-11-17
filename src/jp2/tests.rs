@@ -132,7 +132,7 @@ fn assert_decodes_like_raw(bytes: &[u8]) {
 fn file_format(bytes: &[u8], fragment: &str) {
     match decode(bytes) {
         Err(Error::FileFormat(message)) => assert!(
-            message.contains(fragment),
+            message.message().contains(fragment),
             "expected a FileFormat error mentioning {fragment:?}, got {message:?}"
         ),
         other => panic!("expected FileFormat mentioning {fragment:?}, got {other:?}"),
@@ -143,7 +143,7 @@ fn file_format(bytes: &[u8], fragment: &str) {
 fn incomplete(bytes: &[u8], fragment: &str) {
     match decode(bytes) {
         Err(Error::Incomplete(message)) => assert!(
-            message.contains(fragment),
+            message.message().contains(fragment),
             "expected an Incomplete error mentioning {fragment:?}, got {message:?}"
         ),
         other => panic!("expected Incomplete mentioning {fragment:?}, got {other:?}"),
@@ -154,7 +154,7 @@ fn incomplete(bytes: &[u8], fragment: &str) {
 fn unsupported(bytes: &[u8], fragment: &str) {
     match decode(bytes) {
         Err(Error::Unsupported(message)) => assert!(
-            message.contains(fragment),
+            message.message().contains(fragment),
             "expected an Unsupported error mentioning {fragment:?}, got {message:?}"
         ),
         other => panic!("expected Unsupported mentioning {fragment:?}, got {other:?}"),
@@ -847,7 +847,7 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
     for (what, bytes, fragment) in rows {
         match decode(&bytes) {
             Err(Error::FileFormat(message)) => assert!(
-                message.contains(fragment),
+                message.message().contains(fragment),
                 "{what}: expected a message mentioning {fragment:?}, got {message:?}"
             ),
             other => panic!("{what}: expected FileFormat, got {other:?}"),
@@ -967,7 +967,7 @@ fn a_file_cut_before_its_codestream_is_incomplete() {
     for (what, bytes, fragment) in rows {
         match decode(&bytes) {
             Err(Error::Incomplete(message)) => assert!(
-                message.contains(fragment),
+                message.message().contains(fragment),
                 "{what}: expected a message mentioning {fragment:?}, got {message:?}"
             ),
             other => panic!("{what}: expected Incomplete, got {:?}", other.map(|_| ())),
@@ -1361,13 +1361,17 @@ fn read_header_reads_no_tile_data() {
     let jp2c_at = minimal().len() - CODESTREAM.len();
     for cut in [sot + 2, sot + 6, sot + 20, CODESTREAM.len() - 1] {
         let bytes = file(&[jp2_ftyp(), good_jp2h(), bx(b"jp2c", &CODESTREAM[..cut])]);
-        assert_eq!(read_header(&bytes).as_ref(), Ok(&whole), "cut at {cut}");
+        assert_eq!(
+            crate::error::keyed(read_header(&bytes)),
+            Ok(whole.clone()),
+            "cut at {cut}"
+        );
         assert!(decode(&bytes).is_err(), "cut at {cut}");
         // Clamped `jp2c` and raw codestream alike.
         let clamped = &minimal()[..jp2c_at + cut];
         assert_eq!(
-            read_header(clamped).as_ref(),
-            Ok(&whole),
+            crate::error::keyed(read_header(clamped)),
+            Ok(whole.clone()),
             "clamped at {cut}"
         );
         let raw = read_header(&CODESTREAM[..cut]).expect("raw header");

@@ -325,7 +325,7 @@ fn any_uinf_contents_leave_the_decode_unchanged() {
         assert_eq!(image.components, without.components, "round {round}");
         let metadata = image.jp2.unwrap();
         assert_eq!(
-            read_header(&bytes).map(|h| h.jp2),
+            crate::error::keyed(read_header(&bytes).map(|h| h.jp2)),
             Ok(Some(metadata.clone())),
             "round {round}"
         );

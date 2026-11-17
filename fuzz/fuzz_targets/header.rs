@@ -101,7 +101,11 @@ fn check(
     }
     let decoded = rust_j2k::decode_with(data, options);
     match (&header, &decoded) {
-        (Err(h), _) => assert_eq!(decoded.as_ref().err(), Some(h), "the same error"),
+        (Err(h), _) => assert_eq!(
+            decoded.as_ref().err().map(|e| format!("{e:?}")),
+            Some(format!("{h:?}")),
+            "the same error"
+        ),
         (Ok(header), Ok(image)) => {
             assert_eq!((header.width, header.height), (image.width, image.height));
             assert_eq!(header.components.len(), image.components.len());

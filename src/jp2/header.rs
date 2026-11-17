@@ -23,7 +23,7 @@ const JPH_BRAND: [u8; 4] = *b"jph ";
 pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<FileType> {
     let payload = ftyp.payload;
     if payload.len() < 8 || !payload.len().is_multiple_of(4) {
-        return Err(Error::FileFormat(format!(
+        return Err(Error::file_format(format!(
             "the `ftyp` box holds {} bytes; it needs a brand, a version, and whole \
              4-byte compatibility codes",
             payload.len()
@@ -39,7 +39,7 @@ pub(crate) fn check_file_type(ftyp: &Jp2Box<'_>) -> Result<FileType> {
     let readable = |code: &[u8; 4]| *code == JP2_BRAND || *code == JPH_BRAND;
     let compatible = readable(&brand) || compatibility.iter().any(readable);
     if !compatible {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::unsupported(format!(
             "file brand `{}` without `jp2 ` or `jph ` compatibility (a JPX, JPM or MJ2 \
              file that does not claim to be readable as JP2 or JPH)",
             type_name(brand)
@@ -86,7 +86,7 @@ pub(crate) struct Ihdr {
 impl Ihdr {
     fn parse(payload: &[u8]) -> Result<Self> {
         let &[h0, h1, h2, h3, w0, w1, w2, w3, n0, n1, bpc, c, unk_c, ipr] = payload else {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "the `ihdr` box holds {} bytes, not 14",
                 payload.len()
             )));
@@ -98,13 +98,13 @@ impl Ihdr {
         let components = u16::from_be_bytes([n0, n1]);
         // OpenJPEG's `opj_jp2_read_ihdr` limits, checked as the box is read.
         if height == 0 || width == 0 || components == 0 {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "the `ihdr` box declares a {width}x{height} image of {components} components; \
                  none may be 0"
             )));
         }
         if components > MAX_COMPONENTS {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "the `ihdr` box declares {components} components; a file holds at most \
                  {MAX_COMPONENTS}"
             )));
@@ -201,7 +201,7 @@ impl<'a> Jp2Header<'a> {
                 ihdr_at,
                 children,
             }),
-            _ => Err(Error::FileFormat("a `jp2h` box has no `ihdr` box".into())),
+            _ => Err(Error::file_format("a `jp2h` box has no `ihdr` box")),
         }
     }
 

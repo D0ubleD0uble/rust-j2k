@@ -428,7 +428,9 @@ fn decode_graded(bytes: &[u8], options: &DecodeOptions) -> Result<rust_j2k::Imag
         Err(_) => Err(Grade::Failed(
             "panicked (decode must return a typed error)".into(),
         )),
-        Ok(Err(rust_j2k::Error::Unsupported(what))) => Err(Grade::NotYetDecoded(what)),
+        Ok(Err(rust_j2k::Error::Unsupported(what))) => {
+            Err(Grade::NotYetDecoded(what.message().to_owned()))
+        }
         Ok(Err(e)) => Err(Grade::Failed(format!("decoder rejected a valid file: {e}"))),
         Ok(Ok(image)) => Ok(image),
     }

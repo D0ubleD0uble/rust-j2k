@@ -43,7 +43,7 @@ pub(crate) fn check_bpcc(header: &Jp2Header<'_>) -> Result<()> {
             usize::from(header.ihdr.components)
         };
         if child.payload.len() != components {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "a `bpcc` box holds {} bytes; it needs one per component ({components}{})",
                 child.payload.len(),
                 if before_ihdr {
@@ -67,7 +67,7 @@ pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColorSpace> {
     let mut first = None;
     for payload in header.colr() {
         if payload.len() < 3 {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "a `colr` box holds {} bytes; it needs at least 3 (`METH`, `PREC`, `APPROX`)",
                 payload.len()
             )));
@@ -87,7 +87,7 @@ pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColorSpace>> {
     match method {
         ENUMERATED => {
             let Some(&[a, b, c, d]) = rest.first_chunk::<4>() else {
-                return Err(Error::FileFormat(format!(
+                return Err(Error::file_format(format!(
                     "a `colr` box with `METH` 1 holds {} bytes; it needs 7 for the \
                      enumerated color space",
                     payload.len()
@@ -102,8 +102,8 @@ pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColorSpace>> {
         }
         RESTRICTED_ICC => {
             if rest.is_empty() {
-                return Err(Error::FileFormat(
-                    "a `colr` box with `METH` 2 holds no ICC profile".into(),
+                return Err(Error::file_format(
+                    "a `colr` box with `METH` 2 holds no ICC profile",
                 ));
             }
             Ok(Some(ColorSpace::RestrictedIcc(rest.to_vec())))

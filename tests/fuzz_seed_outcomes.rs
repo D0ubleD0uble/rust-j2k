@@ -131,7 +131,7 @@ fn fnv(text: &str) -> u64 {
 /// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its `synth` include to
 /// the end of the file, which this file copies. If it changed, update the
 /// copy here, then both hashes.
-const TARGET_HASH: u64 = 12469640652930000811;
+const TARGET_HASH: u64 = 5019425586612062705;
 /// Hash of this file's copy and its use (from the `synth` include up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.

@@ -73,7 +73,10 @@ fn psot_zero_without_eoc_fails_in_the_tile() {
     ] {
         match decode_file(name) {
             Err(Error::Codestream(m)) => {
-                assert!(m.contains("overruns the data of tile"), "{name}: {m}");
+                assert!(
+                    m.message().contains("overruns the data of tile"),
+                    "{name}: {m}"
+                );
             }
             other => panic!("{name}: expected a codestream error, got {other:?}"),
         }
@@ -86,7 +89,7 @@ fn psot_zero_without_eoc_fails_in_the_tile() {
 fn psot_zero_with_no_room_for_the_tail_is_codestream() {
     assert!(matches!(
         decode_file("single_psot0_one_byte_after_sod.j2k"),
-        Err(Error::Codestream(m)) if m.contains("fewer than two bytes")
+        Err(Error::Codestream(m)) if m.message().contains("fewer than two bytes")
     ));
 }
 
@@ -108,7 +111,10 @@ fn assert_jp2_decodes(name: &str, expected: &str) -> rust_j2k::Jp2Metadata {
 fn assert_leftover(name: &str) {
     match decode_file(name) {
         Err(Error::Codestream(m)) => {
-            assert!(m.contains("left after the last packet"), "{name}: {m}");
+            assert!(
+                m.message().contains("left after the last packet"),
+                "{name}: {m}"
+            );
         }
         other => panic!("{name}: expected a codestream error, got {other:?}"),
     }
@@ -273,7 +279,9 @@ fn a_raw_psot_zero_codestream_with_bytes_after_its_packets_is_refused() {
     let mut bytes = std::fs::read(dir().join("single_psot0_no_eoc.j2k")).unwrap();
     bytes.extend_from_slice(b"\x00\x00\x00\x14xml <a>hello</a>");
     match decode(&bytes) {
-        Err(Error::Codestream(m)) => assert!(m.contains("left after the last packet"), "{m}"),
+        Err(Error::Codestream(m)) => {
+            assert!(m.message().contains("left after the last packet"), "{m}")
+        }
         other => panic!("expected a codestream error, got {other:?}"),
     }
 }
@@ -312,7 +320,7 @@ fn a_psot_zero_tile_too_costly_to_walk_reads_to_the_end() {
         assert!(header.jp2.is_some_and(|m| m.xml.is_empty()), "{name}");
         if name == "jp2_t2_sweep_cprl_tall.jp2" {
             match decode(&bytes) {
-                Err(Error::Limit(m)) => assert!(m.contains("work bound"), "{name}: {m}"),
+                Err(Error::Limit(m)) => assert!(m.message().contains("work bound"), "{name}: {m}"),
                 other => panic!("{name}: expected the work bound, got {other:?}"),
             }
         } else {

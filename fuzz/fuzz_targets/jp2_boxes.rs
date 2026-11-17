@@ -129,7 +129,7 @@ fuzz_target!(|data: &[u8]| {
         match &raw {
             Ok(raw) => assert_eq!(raw.components, coded.components, "raw channels"),
             Err(e) => assert!(
-                matches!(e, rust_j2k::Error::FileFormat(m) if m.starts_with("after the codestream")),
+                matches!(e, rust_j2k::Error::FileFormat(m) if m.message().starts_with("after the codestream")),
                 "raw-only error: {e:?}"
             ),
         }

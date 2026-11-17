@@ -181,7 +181,7 @@ pub fn grade_entry(dir: &Path, entry: &Jp2Entry) -> Grade {
         Err(_) => Err(Grade::Failed(
             "panicked (decode must return a typed error)".into(),
         )),
-        Ok(Err(Error::Unsupported(what))) => Err(Grade::NotYetDecoded(what)),
+        Ok(Err(Error::Unsupported(what))) => Err(Grade::NotYetDecoded(what.message().to_owned())),
         Ok(Err(e)) => Err(Grade::Failed(format!("decoder rejected a valid file: {e}"))),
         Ok(Ok(image)) => Ok(image),
     };

@@ -155,7 +155,7 @@ impl Coders {
             .decode(block, kind, level, numbps, scratch);
         match decoded {
             Err(Error::Codestream(message)) if self.mixed && block.coder == Coder::Ht => {
-                Err(Error::Codestream(format!(
+                Err(Error::codestream(format!(
                     "{message} (a code-block of a MIXED tile-component, read as an HT \
                      block since its first nonzero length field starts with 0 at Lblock \
                      above 3, ISO/IEC 15444-15 A.4; a Part 1 block whose Lblock grew \
@@ -262,7 +262,7 @@ pub fn decode_code_blocks(
                 .components
                 .get(index)
                 .ok_or_else(|| {
-                    Error::Inconsistent(format!("no coding parameters for component {index}"))
+                    Error::inconsistent(format!("no coding parameters for component {index}"))
                 })?
                 .coding
                 .transform;
@@ -422,7 +422,7 @@ where
     let mut resolutions = coded.resolutions.iter();
     let coarsest = resolutions
         .next()
-        .ok_or_else(|| Error::Inconsistent("tier-2 produced no resolutions to decode".into()))?;
+        .ok_or_else(|| Error::inconsistent("tier-2 produced no resolutions to decode"))?;
     let mut scratch = Scratch::default();
     let mut decode = |res: usize, resolution: &Resolution<'a>, kind: BandKind| {
         let band = band_index(res, kind);
@@ -486,7 +486,7 @@ where
 fn extent_of(coded: &ComponentCoded<'_>, res: usize, kind: BandKind) -> Result<BandExtent> {
     coded
         .band(res, kind)
-        .ok_or_else(|| Error::Inconsistent(format!("resolution is missing its {kind:?} subband")))
+        .ok_or_else(|| Error::inconsistent(format!("resolution is missing its {kind:?} subband")))
 }
 
 /// A subband of `extent` with no code-block.
@@ -513,7 +513,7 @@ fn empty_band<T>(
     extent: Option<BandExtent>,
 ) -> Result<Band<T>> {
     let extent = extent.ok_or_else(|| {
-        Error::Inconsistent(format!("resolution is missing its {kind:?} subband"))
+        Error::inconsistent(format!("resolution is missing its {kind:?} subband"))
     })?;
     numbps(header, comp, band_index(res, kind))?;
     Ok(Band {
@@ -539,10 +539,10 @@ fn numbps(header: &MainHeader, comp: usize, band: usize) -> Result<u32> {
     let qcd = &header
         .components
         .get(comp)
-        .ok_or_else(|| Error::Inconsistent(format!("no coding parameters for component {comp}")))?
+        .ok_or_else(|| Error::inconsistent(format!("no coding parameters for component {comp}")))?
         .quant;
     let (exp, _) = qcd.subband_step(band).ok_or_else(|| {
-        Error::Inconsistent(format!(
+        Error::inconsistent(format!(
             "component {comp} carries {} step sizes but subband {band} needs one",
             qcd.steps.len()
         ))
@@ -561,7 +561,7 @@ fn subband_of<'a, 'b>(res: &'a Resolution<'b>, kind: BandKind) -> Result<&'a Sub
     res.subbands
         .iter()
         .find(|s| s.kind == kind)
-        .ok_or_else(|| Error::Inconsistent(format!("resolution is missing its {kind:?} subband")))
+        .ok_or_else(|| Error::inconsistent(format!("resolution is missing its {kind:?} subband")))
 }
 
 /// Decode one subband's code-blocks into a row-major coefficient [`Band`].
@@ -880,9 +880,13 @@ mod tests {
             panic!("got {err:?}")
         };
         assert!(
-            message.contains("MIXED tile-component, read as an HT block")
-                && message.contains("A.4")
-                && message.contains("Lblock grew more than it needed"),
+            message
+                .message()
+                .contains("MIXED tile-component, read as an HT block")
+                && message.message().contains("A.4")
+                && message
+                    .message()
+                    .contains("Lblock grew more than it needed"),
             "{message}"
         );
 
@@ -896,7 +900,7 @@ mod tests {
         let Error::Codestream(message) = &err else {
             panic!("got {err:?}")
         };
-        assert!(!message.contains("MIXED"), "{message}");
+        assert!(!message.message().contains("MIXED"), "{message}");
     }
 
     /// A MIXED style marks the coders as MIXED, with no `CAP` or with

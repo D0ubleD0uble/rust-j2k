@@ -175,7 +175,7 @@ fn check(bytes: &[u8]) {
     match decode(bytes) {
         Ok(image) => println!("decoded {} channels", image.components.len()),
         Err(Error::Unsupported(what)) => eprintln!("not decoded: {what}"),
-        Err(Error::Limit(what)) => eprintln!("past a limit: {what}"),
+        Err(Error::Limit(limit)) => eprintln!("past a limit: {limit}"),
         Err(e) => eprintln!("damaged or not JPEG 2000: {e}"),
     }
 }
@@ -236,7 +236,9 @@ Three limits can be raised: `sample_limit`, `packet_work_limit` and
 `WorkLimit::Unlimited`. The process then aborts if memory runs out, instead of
 returning an error. Damage can also look like a limit, since one flipped bit
 in the header can declare an absurd size, so don't lift the limits on that
-evidence alone. The [`WorkLimit`
+evidence alone. The error says which limit refused the file and what to
+raise it to, as data: `LimitDetail::kind` and `LimitDetail::retry_with`. The
+[`WorkLimit`
 docs](https://docs.rs/rust-j2k/latest/rust_j2k/enum.WorkLimit.html) show a
 retry.
 

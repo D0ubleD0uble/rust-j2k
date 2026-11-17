@@ -456,7 +456,7 @@ fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
     }
     match read_header_with(&bytes, &srgb()) {
         Err(Error::Limit(m)) => assert!(
-            m.starts_with(
+            m.message().starts_with(
                 "sRGB output from a monochrome ICC profile that maps gray to color needs \
                  432000000 samples"
             ),
@@ -784,7 +784,7 @@ fn the_afl_test_comes_before_this_decoders_refusals() {
         ),
     ] {
         match decode_with(&bytes, &srgb()) {
-            Err(Error::Unsupported(e)) => assert!(e.contains(fragment), "{e}"),
+            Err(Error::Unsupported(e)) => assert!(e.message().contains(fragment), "{e}"),
             other => panic!("expected {fragment:?}, got {other:?}"),
         }
     }
@@ -855,7 +855,7 @@ fn the_afl_test_covers_only_rgb_profiles_and_four_channels() {
     ycbr[16..20].copy_from_slice(b"YCbr");
     let signed = with_ssiz(&rgba(), 3, SIGNED_8);
     match decode_with(&wrap_with(&signed, &ycbr, &[cdef(RGBA_CDEF)]), &srgb()) {
-        Err(Error::Unsupported(e)) => assert!(e.contains("`YCbr` color space"), "{e}"),
+        Err(Error::Unsupported(e)) => assert!(e.message().contains("`YCbr` color space"), "{e}"),
         other => panic!("expected the YCbCr refusal, got {other:?}"),
     }
 }

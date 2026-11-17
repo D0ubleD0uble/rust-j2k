@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use synth::{bx, seg, tile_part};
 
 use rust_j2k::{
-    DecodeOptions, Error, Region, Window, WorkLimit, decode, decode_with, read_header,
-    read_header_with,
+    DecodeOptions, Error, LimitDetail, LimitKind, Region, Window, WorkLimit, decode, decode_with,
+    read_header, read_header_with,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -93,12 +93,23 @@ fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
             match result {
                 Err(Error::Limit(m)) => {
                     assert!(
-                        m.starts_with("image area 16385x16385 needs 268468225 samples, over the sample limit of 268435456"),
+                        m.message().starts_with("image area 16385x16385 needs 268468225 samples, over the sample limit of 268435456"),
                         "{what}: {m}"
                     );
-                    assert!(m.contains("`DecodeOptions::sample_limit`"), "{what}: {m}");
-                    assert!(m.contains("`WorkLimit::Raised(2)`"), "{what}: {m}");
-                    assert!(m.contains("`WorkLimit::Unlimited`"), "{what}: {m}");
+                    assert!(
+                        m.message().contains("`DecodeOptions::sample_limit`"),
+                        "{what}: {m}"
+                    );
+                    assert!(
+                        m.message().contains("`WorkLimit::Raised(2)`"),
+                        "{what}: {m}"
+                    );
+                    assert!(
+                        m.message().contains("`WorkLimit::Unlimited`"),
+                        "{what}: {m}"
+                    );
+                    assert_eq!(m.kind(), LimitKind::Samples, "{what}");
+                    assert_eq!(m.retry_with(), Some(WorkLimit::Raised(2)), "{what}");
                 }
                 other => panic!("{what}: {other:?}"),
             }
@@ -177,9 +188,9 @@ fn a_reduced_image_still_over_the_limit_names_the_reduction() {
     let options = DecodeOptions::default().with_resolution_reduction(1);
     match read_header_with(&bytes, &options) {
         Err(Error::Limit(m)) => assert!(
-            m.starts_with(
+            m.message().starts_with(
                 "image area 20000x20000 at resolution reduction 1 needs 400000000 samples"
-            ) && m.contains("`WorkLimit::Raised(2)`"),
+            ) && m.message().contains("`WorkLimit::Raised(2)`"),
             "{m}"
         ),
         other => panic!("{other:?}"),
@@ -199,7 +210,7 @@ fn a_sample_limit_raised_by_zero_is_invalid_options() {
             match result {
                 Err(Error::InvalidOptions(m)) => {
                     assert_eq!(
-                        m,
+                        m.message(),
                         "`DecodeOptions::sample_limit` is `WorkLimit::Raised(0)`, but the \
                          factor must be at least 1"
                     );
@@ -274,9 +285,13 @@ fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
     assert_eq!((header.width, header.height), (307, 307));
     match decode_with(&bytes, &reduced) {
         Err(Error::Limit(m)) => {
-            assert!(m.contains("`DecodeOptions::packet_work_limit`"), "{m}");
             assert!(
-                m.contains("retry with at least `WorkLimit::Raised(2)`"),
+                m.message().contains("`DecodeOptions::packet_work_limit`"),
+                "{m}"
+            );
+            assert!(
+                m.message()
+                    .contains("retry with at least `WorkLimit::Raised(2)`"),
                 "{m}"
             );
         }
@@ -290,16 +305,24 @@ fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
     assert!(image.components[0].samples.iter().all(|&s| s == 128));
 }
 
-/// The factor `Raised(n)` a `Limit` message names.
-fn named_factor(message: &str) -> u32 {
-    let (_, rest) = message
-        .split_once("`WorkLimit::Raised(")
-        .unwrap_or_else(|| panic!("no factor named: {message}"));
-    rest.split_once(')').unwrap().0.parse().unwrap()
+/// The factor `Raised(n)` a packet work refusal gives, read from its data.
+/// The message names the same one.
+fn named_factor(limit: &LimitDetail) -> u32 {
+    assert_eq!(limit.kind(), LimitKind::PacketWork, "{limit}");
+    let Some(WorkLimit::Raised(n)) = limit.retry_with() else {
+        panic!("no factor given: {limit:?}");
+    };
+    assert!(
+        limit
+            .message()
+            .contains(&format!("`WorkLimit::Raised({n})`")),
+        "{limit}"
+    );
+    n
 }
 
-/// The message of a decode refused for work under `limit` at `-r 6`.
-fn refused_at_r6(bytes: &[u8], limit: WorkLimit) -> String {
+/// The refusal of a decode refused for work under `limit` at `-r 6`.
+fn refused_at_r6(bytes: &[u8], limit: WorkLimit) -> LimitDetail {
     let options = DecodeOptions::default()
         .with_resolution_reduction(6)
         .with_packet_work_limit(limit);
@@ -319,11 +342,15 @@ fn the_dropped_blocks_factor_counts_the_tiles_earlier_components() {
     let bytes = many_tiles_of_empty_packets(6, 2000, 2);
     let message = refused_at_r6(&bytes, WorkLimit::Default);
     assert!(
-        message.contains("code-blocks in one component of tile"),
+        message
+            .message()
+            .contains("code-blocks in one component of tile"),
         "{message}"
     );
     assert!(
-        message.contains("steps left of the packet work bound"),
+        message
+            .message()
+            .contains("steps left of the packet work bound"),
         "{message}"
     );
     assert_eq!(named_factor(&message), 2, "{message}");
@@ -361,7 +388,9 @@ fn the_poc_factor_counts_the_dropped_blocks_charged_before_it() {
     let bytes = poc_reach_past_the_dropped_blocks();
     let message = refused_at_r6(&bytes, WorkLimit::Default);
     assert!(
-        message.contains("volumes of tile 0 reach 16775430"),
+        message
+            .message()
+            .contains("volumes of tile 0 reach 16775430"),
         "{message}"
     );
     assert_eq!(named_factor(&message), 2, "{message}");
@@ -385,7 +414,7 @@ fn window(x0: u32, y0: u32, x1: u32, y1: u32) -> DecodeOptions {
 /// The message of the `Limit` that `result` must be.
 fn limit<T: std::fmt::Debug>(result: Result<T, Error>) -> String {
     match result {
-        Err(Error::Limit(m)) => m,
+        Err(Error::Limit(m)) => m.message().to_owned(),
         other => panic!("expected Error::Limit, got {other:?}"),
     }
 }

@@ -173,7 +173,7 @@ impl Footprint {
         for res in 0..kept.min(coded.resolutions.len()) {
             let band = |kind| {
                 coded.band(res, kind).ok_or_else(|| {
-                    Error::Inconsistent(format!("resolution is missing its {kind:?} subband"))
+                    Error::inconsistent(format!("resolution is missing its {kind:?} subband"))
                 })
             };
             if res == 0 {
@@ -193,8 +193,8 @@ impl Footprint {
             }
         }
         let Some(finest) = xo.len().checked_sub(1) else {
-            return Err(Error::Inconsistent(
-                "tier-2 produced no resolutions to decode".into(),
+            return Err(Error::inconsistent(
+                "tier-2 produced no resolutions to decode",
             ));
         };
         if (xo[finest], yo[finest], xs[finest], ys[finest])
@@ -205,7 +205,7 @@ impl Footprint {
                 rect.height() as usize,
             )
         {
-            return Err(Error::Inconsistent(format!(
+            return Err(Error::inconsistent(format!(
                 "a tile-component's subbands do not make up its rectangle {rect:?}"
             )));
         }
@@ -321,8 +321,8 @@ fn band_row<'a, T>(band: &'a Band<T>, row: usize, columns: &Range<usize>) -> &'a
 fn check_shape<T>(bands: &Bands<T>, footprint: &Footprint) -> Result<()> {
     let (x, y) = (&footprint.x, &footprint.y);
     let inconsistent = || {
-        Error::Inconsistent(
-            "a tile-component's subbands changed shape between Tier-1 and the wavelet".into(),
+        Error::inconsistent(
+            "a tile-component's subbands changed shape between Tier-1 and the wavelet",
         )
     };
     if bands.levels.len() != x.finest() {

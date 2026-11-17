@@ -35,7 +35,7 @@ fn params(roi_shift: u8, causal: bool) -> Params {
 /// The `Codestream` message of a decode that must fail as malformed.
 fn malformed_msg(block: &CodeBlock<'_>, numbps: u32) -> String {
     match decode(block, numbps, params(0, false)) {
-        Err(Error::Codestream(msg)) => msg,
+        Err(Error::Codestream(msg)) => msg.message().to_owned(),
         other => panic!("expected a Codestream error, got {other:?}"),
     }
 }
@@ -724,8 +724,13 @@ fn a_maxshift_past_the_plane_limit_is_a_limit() {
     let data = [0x01, 0x62, 0x00];
     assert!(matches!(
         decode(&block(1, 1, 0, &data), 28, params(3, false)),
-        Err(Error::Limit(m)) if m.contains("31 bit-planes") && m.contains("maxshift of 3")
+        Err(Error::Limit(m)) if m.message().contains("31 bit-planes") && m.message().contains("maxshift of 3")
     ));
+    let refused = decode(&block(1, 1, 0, &data), 28, params(3, false)).unwrap_err();
+    assert!(
+        crate::error::is_fixed_limit(&refused, crate::LimitKind::BitPlanes),
+        "{refused:?}"
+    );
     assert!(decode(&block(1, 1, 0, &data), 27, params(3, false)).is_ok());
 }
 
@@ -799,7 +804,7 @@ fn a_cleanup_magnitude_at_the_cap_bound_is_malformed() {
     assert_eq!(decode(&block(1, 1, 1, &data), 8, bound(2)).unwrap(), [448]);
     match decode(&block(1, 1, 1, &data), 8, bound(1)) {
         Err(Error::Codestream(m)) => {
-            assert!(m.contains("magnitude 3 is not below 2^1"), "{m}");
+            assert!(m.message().contains("magnitude 3 is not below 2^1"), "{m}");
         }
         other => panic!("expected a Codestream error, got {other:?}"),
     }
@@ -821,8 +826,13 @@ fn too_many_bit_planes_is_a_limit() {
     let data = [0x01, 0x62, 0x00];
     assert!(matches!(
         decode(&block(1, 1, 0, &data), 31, params(0, false)),
-        Err(Error::Limit(m)) if m.contains("31 bit-planes")
+        Err(Error::Limit(m)) if m.message().contains("31 bit-planes")
     ));
+    let refused = decode(&block(1, 1, 0, &data), 31, params(0, false)).unwrap_err();
+    assert!(
+        crate::error::is_fixed_limit(&refused, crate::LimitKind::BitPlanes),
+        "{refused:?}"
+    );
     assert!(decode(&block(1, 1, 0, &data), 30, params(0, false)).is_ok());
 }
 

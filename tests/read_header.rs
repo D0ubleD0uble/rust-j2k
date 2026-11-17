@@ -16,6 +16,12 @@ use rust_j2k::{
     read_header_with,
 };
 
+/// `result` with its error as its `Debug` text, so that two results compare
+/// by variant, data and message: `Error` has no `PartialEq`.
+fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
+    result.map_err(|error| format!("{error:?}"))
+}
+
 /// Files where `decode` fails on tile data while `read_header` succeeds, and
 /// why. `rgb16_ecwsdk.jp2`'s codestream has no EOC: `decode` fails on its
 /// packets ("overruns the data of tile"; OpenJPEG fails there too), while its
@@ -245,8 +251,8 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
             let decoded = decode_with(&bytes, &options);
             if reduction == 0 {
                 assert_eq!(
-                    header,
-                    read_header(&bytes),
+                    keyed(header.clone()),
+                    keyed(read_header(&bytes)),
                     "{name}: read_header is the default"
                 );
             }
@@ -259,7 +265,9 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     );
                     compared[reduction as usize] += 1;
                 }
-                (Err(h), Err(d)) => assert_eq!(h, d, "{name}: the same error"),
+                (Err(h), Err(d)) => {
+                    assert_eq!(format!("{h:?}"), format!("{d:?}"), "{name}: the same error")
+                }
                 (Ok(_), Err(Error::Codestream(_) | Error::Limit(_))) => {
                     assert!(
                         TILE_FAULTS.iter().any(|(listed, _)| *listed == name),
@@ -390,8 +398,12 @@ fn a_component_too_deep_for_i32_is_refused_from_the_header() {
     bytes[42] = 31; // unsigned, 32 bits
     let refused = |bytes: &[u8]| match read_header(bytes) {
         Err(Error::Unsupported(message)) => {
-            assert!(message.contains("exceeds the i32"), "{message}");
-            assert_eq!(rust_j2k::decode(bytes), Err(Error::Unsupported(message)));
+            assert!(message.message().contains("exceeds the i32"), "{message}");
+            assert!(
+                matches!(rust_j2k::decode(bytes), Err(Error::Unsupported(decoded))
+                    if decoded.message() == message.message()),
+                "{message}"
+            );
         }
         other => panic!("expected Unsupported, got {other:?}"),
     };
@@ -464,7 +476,10 @@ fn an_oversized_code_block_in_the_main_header_is_refused_by_both() {
     bytes[59] = 119;
     let header = read_header(&bytes);
     assert!(matches!(header, Err(Error::Marker(_))), "{header:?}");
-    assert_eq!(header.map(|_| ()), rust_j2k::decode(&bytes).map(|_| ()));
+    assert_eq!(
+        keyed(header.map(|_| ())),
+        keyed(rust_j2k::decode(&bytes).map(|_| ()))
+    );
 }
 
 /// A reduction past the main header's decomposition levels is refused by
@@ -479,7 +494,7 @@ fn a_reduction_past_the_main_header_levels_is_refused_by_both() {
         "{header:?}"
     );
     assert_eq!(
-        header.map(|_| ()),
-        decode_with(&bytes, &options).map(|_| ())
+        keyed(header.map(|_| ())),
+        keyed(decode_with(&bytes, &options).map(|_| ()))
     );
 }

@@ -2,7 +2,8 @@
 //! one-shot decodes of the same bytes.
 
 use super::*;
-use crate::{WorkLimit, codestream, tier1, tier2};
+use crate::error::keyed;
+use crate::{LimitKind, WorkLimit, codestream, tier1, tier2};
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!(
@@ -35,7 +36,7 @@ fn oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>> {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
         Err(Error::Limit(m))
-            if m.contains("packet_work_limit") || m.contains("code_block_work_limit") =>
+            if matches!(m.kind(), LimitKind::PacketWork | LimitKind::CodeBlockWork) =>
         {
             Ok(None)
         }
@@ -65,10 +66,10 @@ fn refine_at(name: &str, bytes: &[u8], ends: &[usize], options: &DecodeOptions) 
     for &end in ends {
         let before = decoder.bytes_fed();
         decoder.feed(&bytes[before..end]);
-        let refined = refine_now(&mut decoder);
+        let refined = keyed(refine_now(&mut decoder));
         assert_eq!(
             refined,
-            oracle(&bytes[..end], options),
+            keyed(oracle(&bytes[..end], options)),
             "{name}, {end} bytes after {before}"
         );
         match refined {
@@ -76,7 +77,11 @@ fn refine_at(name: &str, bytes: &[u8], ends: &[usize], options: &DecodeOptions) 
             Ok(None) => {}
             Err(error) => {
                 decoder.feed(&bytes[end..]);
-                assert_eq!(refine_now(&mut decoder), Err(error), "{name}, poisoned");
+                assert_eq!(
+                    keyed(refine_now(&mut decoder)),
+                    Err(error),
+                    "{name}, poisoned"
+                );
                 return images;
             }
         }
@@ -287,12 +292,14 @@ fn a_missing_tile_charge_past_the_bound_waits() {
     let bytes = missing_tiles_past_the_bound();
     let lenient = DecodeOptions::default().with_strict(false);
     match decode_with(&bytes, &lenient) {
-        Err(Error::Limit(message)) => assert!(message.contains("packet_work_limit"), "{message}"),
+        Err(Error::Limit(message)) => {
+            assert_eq!(message.kind(), LimitKind::PacketWork, "{message}")
+        }
         other => panic!("{other:?}"),
     }
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes);
-    assert_eq!(decoder.refine(), Ok(None));
+    assert!(matches!(decoder.refine(), Ok(None)));
     assert!(decoder.refused);
     assert_eq!(decoder.bytes_decoded(), 0);
 }
@@ -342,17 +349,17 @@ fn a_refused_refine_puts_off_the_next_until_the_bytes_double() {
     assert!(between < 2 * tried);
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes[..tried]);
-    assert_eq!(decoder.refine(), Ok(None));
+    assert!(matches!(decoder.refine(), Ok(None)));
     assert!(decoder.refused);
     assert!(matches!(
         decode_with(&bytes[..tried], &lenient),
-        Err(Error::Limit(m)) if m.contains("packet_work_limit")
+        Err(Error::Limit(m)) if m.kind() == LimitKind::PacketWork
     ));
     decoder.feed(&bytes[tried..between]);
     assert!(decode_with(&bytes[..between], &lenient).is_ok());
-    assert_eq!(decoder.refine(), Ok(None));
+    assert!(matches!(decoder.refine(), Ok(None)));
     decoder.feed(&bytes[between..2 * tried - 1]);
-    assert_eq!(decoder.refine(), Ok(None));
+    assert!(matches!(decoder.refine(), Ok(None)));
     assert_eq!(decoder.bytes_decoded(), 0);
     decoder.feed(&bytes[2 * tried - 1..2 * tried]);
     // The image is the one-shot decode of its bytes, as every refine's is
@@ -399,8 +406,8 @@ fn walks_past_the_room_are_walked_again() {
         let before = decoder.bytes_fed();
         decoder.feed(&bytes[before..end]);
         assert_eq!(
-            refine_now(&mut decoder),
-            oracle(&bytes[..end], &options),
+            keyed(refine_now(&mut decoder)),
+            keyed(oracle(&bytes[..end], &options)),
             "{end}"
         );
     }
@@ -492,15 +499,16 @@ fn a_refine_error_poisons_the_later_refines() {
     let error = oracle(&bytes, &DecodeOptions::default()).unwrap_err();
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes);
-    assert_eq!(decoder.refine(), Err(error.clone()));
+    let error = format!("{error:?}");
+    assert_eq!(keyed(decoder.refine()), Err(error.clone()));
     for _ in 0..3 {
         decoder.feed(&[0; 64]);
-        assert_eq!(refine_now(&mut decoder), Err(error.clone()));
+        assert_eq!(keyed(refine_now(&mut decoder)), Err(error.clone()));
     }
     let more = [&bytes[..], &[0; 192]].concat();
     assert_eq!(
-        decoder.finish(),
-        decode_with(&more, &DecodeOptions::default())
+        keyed(decoder.finish()),
+        keyed(decode_with(&more, &DecodeOptions::default()))
     );
 }
 
@@ -570,7 +578,10 @@ fn a_costly_walk_fed_in_halves_walks_once() {
     let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
     let half = bytes.len() / 2;
     decoder.feed(&bytes[..half]);
-    assert_eq!(decoder.refine(), oracle(&bytes[..half], &options));
+    assert_eq!(
+        keyed(decoder.refine()),
+        keyed(oracle(&bytes[..half], &options))
+    );
     let first = decoder.spent.walks.visits();
     assert!(4 * first > packet_bound, "{first} of {packet_bound}");
     decoder.feed(&bytes[half..]);
@@ -593,7 +604,7 @@ fn a_walk_past_the_packet_bound_waits() {
     let bytes = fixture("work_bound/sweep_rpcl_1024_64.j2k");
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes);
-    assert_eq!(decoder.refine(), Ok(None));
+    assert!(matches!(decoder.refine(), Ok(None)));
     assert!(decoder.refused);
     assert_eq!(decoder.bytes_decoded(), 0);
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(4));
@@ -636,7 +647,10 @@ fn a_refine_the_rest_of_the_bound_covers_decodes() {
     );
     assert_eq!(decoder.spent.blocks, block_bound);
     decoder.feed(&[]);
-    assert_eq!(refine_now(&mut decoder), Ok(None), "nothing is left");
+    assert!(
+        matches!(refine_now(&mut decoder), Ok(None)),
+        "nothing is left"
+    );
 }
 
 /// A kept walk over a `POC` sequence whose volumes repeat each other is

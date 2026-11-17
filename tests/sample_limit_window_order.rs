@@ -90,7 +90,11 @@ fn a_valid_window_of_the_same_image_is_still_held_to_the_tiles_read() {
         ] {
             match result {
                 Err(Error::Limit(m)) => {
-                    assert!(m.contains("the area of the tiles read (16900x16800"), "{m}")
+                    assert!(
+                        m.message()
+                            .contains("the area of the tiles read (16900x16800"),
+                        "{m}"
+                    )
                 }
                 other => panic!("expected Error::Limit, got {other:?}"),
             }

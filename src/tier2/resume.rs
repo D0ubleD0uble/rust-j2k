@@ -342,7 +342,7 @@ impl TileWalk {
             let rect = header
                 .siz
                 .tile_rect(tile.index)
-                .ok_or_else(|| Error::Inconsistent(format!("no tile {} in `SIZ`", tile.index)))?;
+                .ok_or_else(|| Error::inconsistent(format!("no tile {} in `SIZ`", tile.index)))?;
             Ok((geoms, rect))
         });
         let (geoms, rect, failure) = match built {
@@ -865,7 +865,7 @@ impl TileWalk {
             let rect = header
                 .siz
                 .tile_component_rect(tile.index, comp)
-                .ok_or_else(|| Error::Inconsistent(format!("no component {comp} in `SIZ`")))?;
+                .ok_or_else(|| Error::inconsistent(format!("no component {comp} in `SIZ`")))?;
             let mut resolutions = Vec::with_capacity(component.len());
             for (res, bands) in component.iter_mut().enumerate() {
                 // A precinct whose packets the data has not all brought is

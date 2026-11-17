@@ -175,7 +175,7 @@ impl State {
             }
             b"pclr" => {
                 if self.palette.is_some() {
-                    return Err(fault("the file has a second `pclr` box".into()));
+                    return Err(fault("the file has a second `pclr` box"));
                 }
                 let columns = palette::Palette::parse(payload)
                     .map_err(context)?
@@ -187,11 +187,11 @@ impl State {
             b"cmap" => {
                 let Some(columns) = self.palette else {
                     return Err(fault(
-                        "the file has a `cmap` box with no `pclr` box before it".into(),
+                        "the file has a `cmap` box with no `pclr` box before it",
                     ));
                 };
                 if self.mapped {
-                    return Err(fault("the file has a second `cmap` box".into()));
+                    return Err(fault("the file has a second `cmap` box"));
                 }
                 if payload.len() < columns * 4 {
                     return Err(fault(format!(
@@ -204,7 +204,7 @@ impl State {
             }
             b"cdef" => {
                 if self.channel_definitions {
-                    return Err(fault("the file has a second `cdef` box".into()));
+                    return Err(fault("the file has a second `cdef` box"));
                 }
                 channels::check_layout(payload).map_err(context)?;
                 self.channel_definitions = true;
@@ -216,8 +216,8 @@ impl State {
 }
 
 /// A box fault after the codestream.
-fn fault(message: String) -> Error {
-    Error::FileFormat(format!("after the codestream, {message}"))
+fn fault(message: impl core::fmt::Display) -> Error {
+    Error::file_format(format!("after the codestream, {message}"))
 }
 
 /// Mark a box reader's error as found after the codestream.
@@ -242,12 +242,12 @@ pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> Result<()> {
         match &item.kind {
             b"jP  " => {
                 return Err(fault(
-                    "the file has a signature box, which must be the first box".into(),
+                    "the file has a signature box, which must be the first box",
                 ));
             }
             b"ftyp" => {
                 return Err(fault(
-                    "the file has an `ftyp` box, which must be the second box".into(),
+                    "the file has an `ftyp` box, which must be the second box",
                 ));
             }
             b"ihdr" => {}
@@ -262,7 +262,7 @@ pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> Result<()> {
                     }
                 }
                 if !has_ihdr {
-                    return Err(fault("a `jp2h` box has no `ihdr` box".into()));
+                    return Err(fault("a `jp2h` box has no `ihdr` box"));
                 }
             }
             _ => state.read(item)?,

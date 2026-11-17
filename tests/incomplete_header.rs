@@ -12,6 +12,12 @@ use std::path::{Path, PathBuf};
 
 use rust_j2k::{DecodeOptions, Error, decode, decode_with, read_header};
 
+/// `result` with its error as its `Display` text, the variant's prefix and
+/// the message, so that it compares: `Error` has no `PartialEq`.
+fn shown<T>(result: Result<T, Error>) -> Result<T, String> {
+    result.map_err(|error| error.to_string())
+}
+
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -257,10 +263,8 @@ fn input_shorter_than_a_magic_is_incomplete_while_it_could_still_match() {
             decode_with(bytes, &lenient()).map(|_| ()),
         ] {
             assert_eq!(
-                result,
-                Err(Error::Codestream(
-                    "does not start with the `SOC` marker".into()
-                )),
+                shown(result),
+                Err("codestream: does not start with the `SOC` marker".into()),
                 "{bytes:02X?}"
             );
         }
@@ -294,8 +298,8 @@ fn incomplete_before_the_main_header_says_where_the_input_ends() {
     ];
     for (length, message) in cases {
         assert_eq!(
-            read_header(&file[..length]).map(|_| ()),
-            Err(Error::Incomplete(message.into())),
+            shown(read_header(&file[..length]).map(|_| ())),
+            Err(format!("incomplete: {message}")),
             "cut at {length}"
         );
     }
@@ -320,9 +324,11 @@ fn signed16() -> Vec<u8> {
 /// Damaged JP2 box headers and fields before the codestream, each with the
 /// error the whole file gives today and the length of the shortest prefix
 /// that holds the damage.
-fn damaged_boxes() -> Vec<(&'static str, Vec<u8>, Error, usize)> {
+///
+/// The error is its `Display` text.
+fn damaged_boxes() -> Vec<(&'static str, Vec<u8>, String, usize)> {
     let whole = signed16();
-    let file_format = |message: &str| Error::FileFormat(message.into());
+    let file_format = |message: &str| format!("file format: {message}");
     vec![
         (
             "signature contents wrong",
@@ -366,11 +372,9 @@ fn damaged_boxes() -> Vec<(&'static str, Vec<u8>, Error, usize)> {
         (
             "no jp2 in ftyp",
             edited(&whole, &[(23, b'x'), (31, b'x')]),
-            Error::Unsupported(
-                "file brand `jp2x` without `jp2 ` or `jph ` compatibility (a JPX, JPM or MJ2 \
-                 file that does not claim to be readable as JP2 or JPH)"
-                    .into(),
-            ),
+            "unsupported: file brand `jp2x` without `jp2 ` or `jph ` compatibility (a JPX, \
+             JPM or MJ2 file that does not claim to be readable as JP2 or JPH)"
+                .into(),
             32,
         ),
         (
@@ -428,7 +432,7 @@ fn a_damaged_box_before_the_codestream_keeps_its_error() {
                 decode_with(prefix, &lenient()).map(|_| ()),
             ] {
                 if length >= holds {
-                    assert_eq!(result, Err(error.clone()), "{what}, cut at {length}");
+                    assert_eq!(shown(result), Err(error.clone()), "{what}, cut at {length}");
                 } else if length < 8 && !SIGNATURE.starts_with(prefix) {
                     assert!(
                         matches!(result, Err(Error::Codestream(_))),
@@ -525,13 +529,13 @@ fn refused() -> Vec<(&'static str, Vec<u8>, usize, fn(&Error) -> bool)> {
             "the HTJ2K mixed-mode bit without the HT bit in COD",
             edited(&whole, &[(57, 0x80)]),
             59,
-            |e| matches!(e, Error::Unsupported(m) if m.contains("code-block style (HTJ2K mixed-mode")),
+            |e| matches!(e, Error::Unsupported(m) if m.message().contains("code-block style (HTJ2K mixed-mode")),
         ),
         (
             "a MIXED code-block style with bypass in COD",
             edited(&whole, &[(57, 0xC1)]),
             59,
-            |e| matches!(e, Error::Marker(m) if m.contains("MIXED")),
+            |e| matches!(e, Error::Marker(m) if m.message().contains("MIXED")),
         ),
         (
             "a reserved wavelet in COD",
@@ -543,13 +547,13 @@ fn refused() -> Vec<(&'static str, Vec<u8>, usize, fn(&Error) -> bool)> {
             "a CAP that signals MULTIHT",
             after_siz(&whole, &[0xFF, 0x50, 0, 8, 0, 2, 0, 0, 0x20, 0x03]),
             55,
-            |e| matches!(e, Error::Unsupported(m) if m.contains("MULTIHT")),
+            |e| matches!(e, Error::Unsupported(m) if m.message().contains("MULTIHT")),
         ),
         (
             "a CAP one Ccap word short",
             after_siz(&whole, &[0xFF, 0x50, 0, 6, 0, 2, 0, 0]),
             53,
-            |e| matches!(e, Error::Marker(m) if m.contains("`CAP`")),
+            |e| matches!(e, Error::Marker(m) if m.message().contains("`CAP`")),
         ),
     ]
 }
@@ -576,9 +580,9 @@ fn a_damaged_main_header_is_codestream() {
         };
         for options in [DecodeOptions::default(), lenient()] {
             let decoded = decode_with(&bytes, &options).map(|_| ());
-            assert_eq!(decoded, Err(header.clone().unwrap_err()), "{what}");
+            assert_eq!(shown(decoded), shown(header.clone().map(|_| ())), "{what}");
         }
-        messages.push(message.clone());
+        messages.push(message.message().to_owned());
     }
     messages.sort();
     messages.dedup();
@@ -603,7 +607,7 @@ fn a_cut_after_a_damaged_segment_is_an_error_not_incomplete() {
         .into_iter()
         .map(|(what, bytes, holds, _)| (what, bytes, holds));
     for (what, bytes, holds) in damaged().into_iter().chain(refused) {
-        let whole = read_header(&bytes).map(|_| ());
+        let whole = shown(read_header(&bytes).map(|_| ()));
         assert!(whole.is_err(), "{what}");
         for length in 0..=bytes.len() {
             let prefix = &bytes[..length];
@@ -614,11 +618,11 @@ fn a_cut_after_a_damaged_segment_is_an_error_not_incomplete() {
             ];
             for result in results {
                 if length >= holds {
-                    assert_eq!(result, whole, "{what}, cut at {length}");
+                    assert_eq!(shown(result), whole, "{what}, cut at {length}");
                 } else if length >= 2 {
                     // Under 2 bytes there is no SOC, which some whole-file
                     // messages ("truncated marker segment") share.
-                    assert_ne!(result, whole, "{what}, cut at {length}");
+                    assert_ne!(shown(result.clone()), whole, "{what}, cut at {length}");
                     assert!(
                         matches!(result, Err(Error::Incomplete(_) | Error::Codestream(_))),
                         "{what}, cut at {length}: {result:?}"
@@ -670,11 +674,11 @@ fn an_ftyp_that_swallows_the_file_is_file_format() {
     }
     // With whole compatibility codes, it is the swallowed `jp2h` and `jp2c`.
     assert_eq!(
-        read_header(&bytes).map(|_| ()),
-        Err(Error::FileFormat(
-            "the file has no `jp2h` header box and no `jp2c` codestream box: a box of length 0 \
-             (to the end of the file) swallowed the rest"
+        shown(read_header(&bytes).map(|_| ())),
+        Err(
+            "file format: the file has no `jp2h` header box and no `jp2c` codestream box: a box \
+             of length 0 (to the end of the file) swallowed the rest"
                 .into()
-        ))
+        )
     );
 }

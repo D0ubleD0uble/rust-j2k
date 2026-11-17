@@ -146,12 +146,12 @@ pub(crate) fn plan(
         ColorSpace::Enumerated(_) | ColorSpace::Unknown if outputs.len() <= 2 => {
             Ok(SrgbPlan::PassThrough)
         }
-        ColorSpace::Enumerated(value) => Err(Error::Unsupported(format!(
+        ColorSpace::Enumerated(value) => Err(Error::unsupported(format!(
             "sRGB output from the enumerated color space {value}; only sRGB, grayscale, \
              sYCC and restricted ICC profiles are converted"
         ))),
-        ColorSpace::Unknown => Err(Error::Unsupported(
-            "sRGB output from a file with no color specification".into(),
+        ColorSpace::Unknown => Err(Error::unsupported(
+            "sRGB output from a file with no color specification",
         )),
     }
 }
@@ -173,9 +173,7 @@ fn converted_as_sycc(outputs: &[ComponentInfo]) -> bool {
 
 /// The refusal of a file [`converted_as_sycc`] holds for.
 fn converted_as_sycc_error() -> Error {
-    Error::Unsupported(
-        "sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC".into(),
-    )
+    Error::unsupported("sRGB output from a 4:2:0 or 4:2:2 file, which OpenJPEG converts as sYCC")
 }
 
 /// OpenJPEG's "AFL test" (`color.c:495-519`): before it builds a transform
@@ -225,7 +223,7 @@ fn uniform(colors: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
     for &at in &colors[1..] {
         let other = &outputs[at];
         if (other.x_sampling, other.y_sampling) != (first.x_sampling, first.y_sampling) {
-            return Err(Error::Unsupported(format!(
+            return Err(Error::unsupported(format!(
                 "sRGB output from color channels of different sub-sampling ({}x{} and {}x{})",
                 first.x_sampling, first.y_sampling, other.x_sampling, other.y_sampling
             )));
@@ -243,7 +241,7 @@ fn same_format(colors: &[usize], outputs: &[ComponentInfo]) -> Result<()> {
     for &at in &colors[1..] {
         let other = &outputs[at];
         if (other.bit_depth, other.signed) != (first.bit_depth, first.signed) {
-            return Err(Error::Unsupported(format!(
+            return Err(Error::unsupported(format!(
                 "sRGB output from color channels of different formats ({}-bit {} and \
                  {}-bit {})",
                 first.bit_depth,
@@ -268,7 +266,7 @@ fn three_colors(
 ) -> Result<[usize; 3]> {
     let found = color_channels(channels, outputs, 3);
     <[usize; 3]>::try_from(found.as_slice()).map_err(|_| {
-        Error::Unsupported(format!(
+        Error::unsupported(format!(
             "sRGB output from {what} needs color channels 1, 2 and 3; the file has {}",
             found.len()
         ))
@@ -286,9 +284,7 @@ fn plan_sycc(
     same_format(&colors, outputs)?;
     let [y, cb, cr] = colors.map(|at| &outputs[at]);
     if y.signed {
-        return Err(Error::Unsupported(
-            "sRGB output from signed sYCC samples".into(),
-        ));
+        return Err(Error::unsupported("sRGB output from signed sYCC samples"));
     }
     let sampling = |c: &ComponentInfo| (c.x_sampling, c.y_sampling);
     let layout = match (sampling(y), sampling(cb), sampling(cr)) {
@@ -296,7 +292,7 @@ fn plan_sycc(
         ((1, 1), (2, 1), (2, 1)) => ChromaLayout::Horizontal,
         ((1, 1), (2, 2), (2, 2)) => ChromaLayout::Both,
         (y, cb, cr) => {
-            return Err(Error::Unsupported(format!(
+            return Err(Error::unsupported(format!(
                 "sRGB output from sYCC sampled {}x{}, {}x{}, {}x{}; only luma at full \
                  resolution with chroma at 1x1, 2x1 or 2x2 is converted",
                 y.0, y.1, cb.0, cb.1, cr.0, cr.1
@@ -328,7 +324,7 @@ fn check_budget(
             luma
         } else {
             siz.sampled_extent_at(info.x_sampling, info.y_sampling, reduction)
-                .ok_or_else(|| Error::Inconsistent("a channel has a zero sub-sampling".into()))?
+                .ok_or_else(|| Error::inconsistent("a channel has a zero sub-sampling"))?
         };
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
@@ -389,7 +385,7 @@ fn plan_icc_or_refuse(
             let input = icc.input_profile(Form::Gray)?;
             let colors = color_channels(channels, outputs, 0);
             let [channel] = colors[..] else {
-                return Err(Error::Unsupported(format!(
+                return Err(Error::unsupported(format!(
                     "sRGB output from a monochrome ICC profile needs one color channel; \
                      the file has {}",
                     colors.len()
@@ -399,7 +395,7 @@ fn plan_icc_or_refuse(
             // OpenJPEG feeds three or more channels to a gray transform as if
             // they were RGB, so there is no real conversion to match.
             if outputs.len() > 2 {
-                return Err(Error::Unsupported(format!(
+                return Err(Error::unsupported(format!(
                     "sRGB output from a monochrome ICC profile on {} channels; only one \
                      channel, or one plus opacity, is converted",
                     outputs.len()
@@ -476,7 +472,7 @@ fn check_gray_budget(
     for (at, info) in outputs.iter().enumerate() {
         let (width, height) = siz
             .sampled_extent_at(info.x_sampling, info.y_sampling, reduction)
-            .ok_or_else(|| Error::Inconsistent("a channel has a zero sub-sampling".into()))?;
+            .ok_or_else(|| Error::inconsistent("a channel has a zero sub-sampling"))?;
         let copies = if at == channel { 3 } else { 1 };
         total = total.saturating_add(copies * u64::from(width) * u64::from(height));
     }
@@ -503,7 +499,7 @@ fn validated_version([major, minor, _, _]: [u8; 4]) -> u32 {
 /// result is wrong, so this decoder refuses them.
 fn check_icc_format(info: &ComponentInfo, depths: &[u8], form: &str) -> Result<()> {
     if info.signed || !depths.contains(&info.bit_depth) {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::unsupported(format!(
             "sRGB output through a {form} ICC profile from {}-bit {} samples",
             info.bit_depth,
             sign(info.signed)
@@ -543,7 +539,7 @@ impl From<Error> for Icc {
 
 /// A profile of a form this step does not apply.
 fn unsupported_profile(what: &str) -> Icc {
-    Icc::Error(Error::Unsupported(format!(
+    Icc::Error(Error::unsupported(format!(
         "sRGB output through an ICC profile {what}; only the monochrome and \
          three-component matrix/TRC input profiles of Annex I are applied"
     )))
@@ -1074,7 +1070,7 @@ fn same_grid(channels: &[&Component]) -> Result<()> {
         if (other.width, other.height) != (first.width, first.height)
             || other.samples.len() != first.samples.len()
         {
-            return Err(Error::Inconsistent(format!(
+            return Err(Error::inconsistent(format!(
                 "color channels decoded at {}x{} and {}x{}",
                 first.width, first.height, other.width, other.height
             )));
@@ -1108,7 +1104,7 @@ fn sycc_to_rgb(
     odd_y: bool,
 ) -> Result<[Component; 3]> {
     if (cb.width, cb.height, cb.samples.len()) != (cr.width, cr.height, cr.samples.len()) {
-        return Err(Error::Inconsistent(format!(
+        return Err(Error::inconsistent(format!(
             "sYCC chroma channels decoded at {}x{} and {}x{}",
             cb.width, cb.height, cr.width, cr.height
         )));

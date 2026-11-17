@@ -14,6 +14,45 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wildcard arm, and a later variant will not break it. They are used only
   for JPH files; a JP2 file's `cdef` channel of type 3 is still
   `ChannelType::Other(3)` with an `Association` read as a color.
+- `Error`'s variants no longer hold a `String`. `Error::Limit` holds a
+  `LimitDetail`, and every other variant an `ErrorDetail`. Both give the
+  message with `message()` and `Display`, and `Error`'s `Display` is
+  unchanged. A `LimitDetail` also says which limit refused the input,
+  `kind()`, a `LimitKind`, and what to retry with, `retry_with()`: the
+  `WorkLimit` the message names, or `None` for a guard that no option
+  raises (`LimitKind::is_adjustable` is false for those).
+  `DecodeOptions::with_retry` sets the option a `LimitDetail` names to its
+  `retry_with`. `Error::message()` gives any error's text without its
+  prefix. A match on `Error::Codestream(_)` and the like needs no change.
+  Code that bound the `String` reads `message()` instead:
+
+  ```rust
+  // 0.4
+  Err(Error::Limit(why)) => {
+      // The factor was only in the text.
+      eprintln!("refused: {why}");
+  }
+  // 0.5
+  Err(Error::Limit(limit)) => {
+      eprintln!("refused: {}", limit.message());
+      if let Some(raised) = options.with_retry(&limit) {
+          options = raised;
+      }
+  }
+  ```
+- `Error` no longer implements `PartialEq` or `Eq`. Equality compared the
+  message, whose wording can change between releases. Test the variant with
+  `matches!`, and a limit by its kind:
+
+  ```rust
+  // 0.4
+  assert_eq!(result, Err(Error::Marker("reserved progression order 9".into())));
+  // 0.5
+  assert!(matches!(result, Err(Error::Marker(_))));
+  assert!(matches!(&result, Err(Error::Limit(l)) if l.kind() == LimitKind::Samples));
+  ```
+
+  `Error` is still `Clone`, `Send`, `Sync` and unwind-safe.
 
 ### Added
 

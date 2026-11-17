@@ -260,11 +260,15 @@ fn every_fixture_decodes_like_its_oracle() {
                 let raw = decode(first_jp2c(&bytes));
                 match &file {
                     Err(Error::Codestream(message)) => {
-                        assert!(message.contains(what), "{name}: {message:?}")
+                        assert!(message.message().contains(what), "{name}: {message:?}")
                     }
                     other => panic!("{name}: expected Codestream({what}), got {other:?}"),
                 }
-                assert_eq!(file, raw, "{name}: the same error as the raw codestream");
+                assert_eq!(
+                    format!("{:?}", file.err()),
+                    format!("{:?}", raw.err()),
+                    "{name}: the same error as the raw codestream"
+                );
             }
         }
     }

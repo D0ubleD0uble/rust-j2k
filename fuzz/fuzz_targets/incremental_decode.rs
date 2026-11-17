@@ -26,12 +26,19 @@
 //! passes, so inputs this small do not reach the cut (see #425).
 
 use libfuzzer_sys::fuzz_target;
-use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, Region, Window, WorkLimit, decode_with};
+use rust_j2k::{
+    decode_with, DecodeOptions, Error, IncrementalDecoder, LimitKind, Region, Window, WorkLimit,
+};
+
+/// `result` with its error as its `Debug` text, so that two results compare
+/// by variant, data and message: `Error` has no `PartialEq`.
+fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
+    result.map_err(|error| format!("{error:?}"))
+}
 
 fuzz_target!(|input: &[u8]| {
     const JP2_SIGNATURE: [u8; 8] = [0, 0, 0, 12, b'j', b'P', b' ', b' '];
-    let (control, data) = if input.starts_with(&[0xFF, 0x4F]) || input.starts_with(&JP2_SIGNATURE)
-    {
+    let (control, data) = if input.starts_with(&[0xFF, 0x4F]) || input.starts_with(&JP2_SIGNATURE) {
         (&[0u8; 6], input)
     } else {
         let Some((control, data)) = input.split_first_chunk::<6>() else {
@@ -63,7 +70,10 @@ fuzz_target!(|input: &[u8]| {
     match control[1] & 3 {
         1 => {
             let (x, y) = (u32::from(control[2] % 24), u32::from(control[3] % 24));
-            let (w, h) = (1 + u32::from(control[4] % 40), 1 + u32::from(control[5] % 40));
+            let (w, h) = (
+                1 + u32::from(control[4] % 40),
+                1 + u32::from(control[5] % 40),
+            );
             options = options.with_region(Region::Window(Window::new(x, y, x + w, y + h)));
         }
         2 => {
@@ -102,7 +112,7 @@ fuzz_target!(|input: &[u8]| {
         let end = (fed + piece).min(data.len());
         decoder.feed(&data[fed..end]);
         fed = end;
-        let refined = decoder.refine();
+        let refined = keyed(decoder.refine());
         if let Some(error) = &failed {
             assert_eq!(refined.as_ref(), Err(error), "poisoned at {fed}");
             continue;
@@ -115,23 +125,23 @@ fuzz_target!(|input: &[u8]| {
             if !matches!(one_shot, Err(Error::Incomplete(_))) {
                 fresh = false;
             }
-            let expected = match one_shot {
+            let expected = keyed(match one_shot {
                 Ok(image) => Ok(Some(image)),
                 Err(Error::Incomplete(_)) => Ok(None),
                 Err(Error::Limit(m))
-                    if m.contains("packet_work_limit") || m.contains("code_block_work_limit") =>
+                    if matches!(m.kind(), LimitKind::PacketWork | LimitKind::CodeBlockWork) =>
                 {
                     Ok(None)
                 }
                 Err(error) => Err(error),
-            };
+            });
             // The bound may refuse a refine its one-shot decode passes, but
             // only once earlier refines have spent some of it. A decoder
             // with nothing spent must give what this one does.
             if cut && refined == Ok(None) && !was_fresh {
                 let mut zero = IncrementalDecoder::new(options.clone()).unwrap();
                 zero.feed(&data[..fed]);
-                assert_eq!(zero.refine(), expected, "{fed} bytes, nothing spent");
+                assert_eq!(keyed(zero.refine()), expected, "{fed} bytes, nothing spent");
                 continue;
             }
             assert_eq!(refined, expected, "{fed} bytes, due");
@@ -143,15 +153,20 @@ fuzz_target!(|input: &[u8]| {
         match refined {
             Ok(None) => {}
             Ok(Some(image)) => {
-                let expected = decode_with(&data[..fed], &lenient);
+                let expected = keyed(decode_with(&data[..fed], &lenient));
                 assert_eq!(Ok(&image), expected.as_ref(), "{fed} bytes");
             }
             Err(error) => {
                 match decode_with(&data[..fed], &lenient) {
-                    Err(expected) => assert_eq!(error, expected, "{fed} bytes"),
-                    Ok(_) => panic!("{fed} bytes: {error:?}, where the decode gives an image"),
+                    Err(expected) => {
+                        assert_eq!(error, format!("{expected:?}"), "{fed} bytes");
+                        assert!(
+                            !matches!(expected, Error::Incomplete(_)),
+                            "{fed} bytes: {error}"
+                        );
+                    }
+                    Ok(_) => panic!("{fed} bytes: {error}, where the decode gives an image"),
                 }
-                assert!(!matches!(error, Error::Incomplete(_)), "{fed} bytes: {error:?}");
                 failed = Some(error);
             }
         }
@@ -160,10 +175,12 @@ fuzz_target!(|input: &[u8]| {
     match decode_with(data, &options) {
         // A header cut short is a truncation once the input has ended.
         Err(Error::Incomplete(why)) => match finished {
-            Err(Error::Codestream(m) | Error::FileFormat(m)) => assert!(m.contains(&why), "{m}"),
+            Err(Error::Codestream(m) | Error::FileFormat(m)) => {
+                assert!(m.message().contains(why.message()), "{m}")
+            }
             other => panic!("{other:?}, where the header is cut short"),
         },
-        expected => assert_eq!(finished, expected),
+        expected => assert_eq!(keyed(finished), keyed(expected)),
     }
 });
 

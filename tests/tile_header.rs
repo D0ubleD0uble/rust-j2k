@@ -26,7 +26,11 @@ fn many_tiles_over_many_components_are_refused_at_tile_0() {
     ] {
         match decode(&read(name)) {
             Err(Error::Codestream(m)) => {
-                assert_eq!(m, "tile 0 has an empty area on component 1", "{name}")
+                assert_eq!(
+                    m.message(),
+                    "tile 0 has an empty area on component 1",
+                    "{name}"
+                )
             }
             other => panic!("{name}: expected the empty tile 0, got {other:?}"),
         }

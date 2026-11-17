@@ -268,7 +268,7 @@ fn a_one_byte_first_cleanup_segment_is_codestream() {
     let data = packets(&[(first(1, &[(1, 3)]), vec![1])]);
     let e = one_block(&data, 1, 1).unwrap_err();
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("first cleanup segment is 1 byte")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("first cleanup segment is 1 byte")),
         "{e:?}"
     );
 }
@@ -280,7 +280,7 @@ fn placeholder_passes_with_bytes_are_codestream() {
     let data = packets(&[(first(3, &[(0, 3), (1, 1)]), vec![1])]);
     let e = one_block(&data, 1, 1).unwrap_err();
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("placeholder passes carry bytes")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("placeholder passes carry bytes")),
         "{e:?}"
     );
 }
@@ -311,12 +311,12 @@ fn an_ht_cleanup_segment_past_its_limit_is_codestream() {
     let at = |length| parse_ht(&grown(13, 1, &[(length, 16)]), &bands, 1, 1, NO_DELIMITERS).err();
     let e = at(65535).unwrap();
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("HT cleanup segment is 65535 bytes")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("HT cleanup segment is 65535 bytes")),
         "{e:?}"
     );
     // At the limit the field reads, and the body is what runs short.
     assert!(
-        matches!(at(65534), Some(Error::Codestream(m)) if m.contains("overruns")),
+        matches!(at(65534), Some(Error::Codestream(m)) if m.message().contains("overruns")),
         "the limit is 65534"
     );
 }
@@ -344,7 +344,7 @@ fn an_ht_refinement_segment_past_its_limit_is_codestream() {
     assert!(at(46).is_ok());
     let e = at(47).unwrap_err();
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("HT refinement segment is 2047 bytes")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("HT refinement segment is 2047 bytes")),
         "{e:?}"
     );
 }
@@ -750,7 +750,7 @@ fn a_cleanup_length_over_the_ht_maximum_is_a_part1_block() {
         let e = parse_ht(&ht, &bands, 1, 1, NO_DELIMITERS).err().unwrap();
         assert!(
             matches!(&e, Error::Codestream(m)
-                if m.contains(&format!("HT cleanup segment is {length} bytes, over the limit of 65534"))),
+                if m.message().contains(&format!("HT cleanup segment is {length} bytes, over the limit of 65534"))),
             "{e:?}"
         );
     }

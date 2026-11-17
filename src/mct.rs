@@ -44,7 +44,7 @@ use crate::{Error, Result};
 pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
     let count = components.len();
     let [c0, c1, c2, ..] = components else {
-        return Err(Error::Inconsistent(format!(
+        return Err(Error::inconsistent(format!(
             "the color transform needs three components, found {count}"
         )));
     };
@@ -54,13 +54,13 @@ pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
         Samples::Reversible(c2),
     ] = [c0, c1, c2]
     else {
-        return Err(Error::Inconsistent(
-            "the reversible color transform needs integer samples; the 9/7 path is ICT".into(),
+        return Err(Error::inconsistent(
+            "the reversible color transform needs integer samples; the 9/7 path is ICT",
         ));
     };
     if c0.len() != c1.len() || c0.len() != c2.len() {
-        return Err(Error::Inconsistent(
-            "the color transform needs three components of equal size".into(),
+        return Err(Error::inconsistent(
+            "the color transform needs three components of equal size",
         ));
     }
 
@@ -97,7 +97,7 @@ pub fn inverse_rct(components: &mut [Samples]) -> Result<()> {
 pub fn inverse_ict(components: &mut [Samples]) -> Result<()> {
     let count = components.len();
     let [c0, c1, c2, ..] = components else {
-        return Err(Error::Inconsistent(format!(
+        return Err(Error::inconsistent(format!(
             "the color transform needs three components, found {count}"
         )));
     };
@@ -107,13 +107,13 @@ pub fn inverse_ict(components: &mut [Samples]) -> Result<()> {
         Samples::Irreversible(c2),
     ] = [c0, c1, c2]
     else {
-        return Err(Error::Inconsistent(
-            "the irreversible color transform needs float samples; the 5/3 path is RCT".into(),
+        return Err(Error::inconsistent(
+            "the irreversible color transform needs float samples; the 5/3 path is RCT",
         ));
     };
     if c0.len() != c1.len() || c0.len() != c2.len() {
-        return Err(Error::Inconsistent(
-            "the color transform needs three components of equal size".into(),
+        return Err(Error::inconsistent(
+            "the color transform needs three components of equal size",
         ));
     }
 
@@ -159,7 +159,7 @@ pub fn applies(signaled: bool, components: usize) -> bool {
 /// the transform cannot express.
 pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -> Result<()> {
     let [c0, c1, c2, ..] = components else {
-        return Err(Error::Marker(format!(
+        return Err(Error::marker(format!(
             "`COD` signals the color transform but `SIZ` declares {} component(s); \
              it is defined over the first three",
             components.len()
@@ -167,7 +167,7 @@ pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -
     };
     for (index, comp) in [c1, c2].into_iter().enumerate() {
         if (comp.bit_depth, comp.signed) != (c0.bit_depth, c0.signed) {
-            return Err(Error::Marker(format!(
+            return Err(Error::marker(format!(
                 "`COD` signals the color transform but component {} is {}-bit (signed {}) \
                  against component 0's {}-bit (signed {})",
                 index + 1,
@@ -178,7 +178,7 @@ pub fn check_geometry(components: &[crate::codestream::markers::SizComponent]) -
             )));
         }
         if (comp.x_sampling, comp.y_sampling) != (c0.x_sampling, c0.y_sampling) {
-            return Err(Error::Marker(format!(
+            return Err(Error::marker(format!(
                 "`COD` signals the color transform but component {} sub-samples ({}, {}) \
                  against component 0's ({}, {})",
                 index + 1,

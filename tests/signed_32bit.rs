@@ -72,7 +72,7 @@ fn unsigned_32_bit_and_deeper_stay_refused() {
             read_header(&bytes).map(|_| ()),
         ] {
             assert!(
-                matches!(&result, Err(Error::Unsupported(m)) if m.contains("i32")),
+                matches!(&result, Err(Error::Unsupported(m)) if m.message().contains("i32")),
                 "Ssiz {ssiz:#04x}: {result:?}"
             );
         }

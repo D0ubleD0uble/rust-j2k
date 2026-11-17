@@ -260,21 +260,21 @@ pub(crate) fn resolution_geoms(
     let cod = &header
         .components
         .get(comp)
-        .ok_or_else(|| Error::Inconsistent(format!("no coding parameters for component {comp}")))?
+        .ok_or_else(|| Error::inconsistent(format!("no coding parameters for component {comp}")))?
         .coding;
 
     let nl = cod.decomposition_levels as i64;
     if nl > 32 {
-        return Err(Error::Inconsistent(format!(
+        return Err(Error::inconsistent(format!(
             "{nl} decomposition levels exceed the 32-level maximum"
         )));
     }
 
     let rect = siz.tile_component_rect(tile, comp).ok_or_else(|| {
-        Error::Inconsistent(format!("no tile {tile} or no component {comp} in `SIZ`"))
+        Error::inconsistent(format!("no tile {tile} or no component {comp} in `SIZ`"))
     })?;
     if rect.is_empty() {
-        return Err(Error::Codestream(format!(
+        return Err(Error::codestream(format!(
             "tile {tile} has an empty area on component {comp}"
         )));
     }
@@ -288,7 +288,7 @@ pub(crate) fn resolution_geoms(
     let xcb = cod.code_block_width as u32 + 2;
     let ycb = cod.code_block_height as u32 + 2;
     if xcb > 10 || ycb > 10 || xcb + ycb > 12 {
-        return Err(Error::Marker(format!(
+        return Err(Error::marker(format!(
             "code-block size 2^{xcb} x 2^{ycb} is over the 4096-sample limit"
         )));
     }
@@ -328,9 +328,12 @@ pub(crate) fn resolution_geoms(
             // only asks whether the walk succeeds and drops this error, so
             // every message a caller sees names the decode's limit.
             None => {
-                return Err(Error::Limit(format!(
-                    "tile {tile} holds more than {MAX_PRECINCTS} precincts, the limit for a tile"
-                )));
+                return Err(Error::limit_fixed(
+                    crate::LimitKind::TilePrecincts,
+                    format!(
+                        "tile {tile} holds more than {MAX_PRECINCTS} precincts, the limit for a tile"
+                    ),
+                ));
             }
         }
 
@@ -461,9 +464,12 @@ fn band_geom(
     {
         Some(n) => *block_budget -= n,
         None => {
-            return Err(Error::Limit(format!(
-                "tile {tile} holds more than {MAX_CODE_BLOCKS} code-blocks, the limit for a tile"
-            )));
+            return Err(Error::limit_fixed(
+                crate::LimitKind::TileCodeBlocks,
+                format!(
+                    "tile {tile} holds more than {MAX_CODE_BLOCKS} code-blocks, the limit for a tile"
+                ),
+            ));
         }
     }
 

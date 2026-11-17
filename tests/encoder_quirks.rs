@@ -79,7 +79,7 @@ fn a_changed_restatement_is_refused(marker: [u8; 2], offset: usize, bits: u8, na
     changed[at] ^= bits;
     let e = decode(&changed).expect_err("a restatement that differs");
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains(names)),
+        matches!(&e, Error::Codestream(m) if m.message().contains(names)),
         "got {e:?}"
     );
 }
