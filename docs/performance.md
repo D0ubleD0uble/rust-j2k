@@ -139,7 +139,7 @@ the files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
   nothing, and a net of 0.0 means the decode was lost in the start-up run.
   The in-process column is the reliable one for them.
 - **Load.** The method asks for a load under 2. The timing ran at a
-  one-minute load of 1.66 to 2.15, and the incremental table at 4 to 7, so
+  one-minute load of 1.66 to 2.15, and the incremental table at 8.8 to 9.6, so
   both are slightly or well above that. Median and minimum agree within a
   few percent on the files over 20 ms, which shows the run was quiet.
 

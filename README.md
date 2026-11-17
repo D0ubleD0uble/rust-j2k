@@ -196,8 +196,10 @@ the data already gives in full.
 
 For a file that arrives in pieces, such as a download, use
 `IncrementalDecoder`. Feed it each piece and call `refine`. From time to time
-it returns an image of what has come in so far, and over all the refines each
-packet is read about once:
+it returns an image of what has come in so far. Each refine goes on from where
+the last one stopped reading packets;
+[docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)
+lists the packets it reads again:
 
 ```rust
 use rust_j2k::{DecodeOptions, IncrementalDecoder};

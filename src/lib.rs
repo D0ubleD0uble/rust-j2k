@@ -726,7 +726,8 @@ pub struct DecodeOptions {
     /// [`strict`](Self::strict) off, a codestream cut short after the tiles
     /// the window reaches still gives the window's samples.
     /// `opj_decompress -allow-partial -d` 2.5.0 refuses such a file, while
-    /// `-t` decodes each tile that arrived whole. In the
+    /// `-t` decodes each tile, the cut one included, as this decoder does. In
+    /// the
     /// tiles it reaches, only the code-blocks whose wavelet support reaches
     /// the window are decoded, so damage in the others is not found either.
     /// Nor is a code-block it skips checked against the bit-plane limit, so
@@ -931,7 +932,9 @@ pub struct DecodeOptions {
     /// samples as the whole codestream, and the report's
     /// [`complete_reduction`](DecodeReport::complete_reduction) says which
     /// reduction that is. [`IncrementalDecoder`] decodes such prefixes for
-    /// you, and over all its refines reads each packet about once.
+    /// you: each refine goes on from where the last one stopped reading
+    /// packets. The packets it reads again are listed in
+    /// [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md).
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};

@@ -199,9 +199,9 @@ the headers, and take about 30 µs for the 16 KB of `TLM` entries of
 [The `read_header` walk](resource-bounds.md#the-read_header-walk)). The
 fourth is the incremental decoder's own: a tile whose walk is not kept is
 walked from the start on every refine, and nothing counts the repeats. Each
-refine is held to one decode's packet bound, but the refines together are
-not, and they have been measured at up to about 9 times the cost of one
-decode ([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)).
+refine is held to one decode's packet bound, but nothing bounds the refines
+together. On one file made for it, the refines cost 9.3 times one decode
+([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)).
 
 ## What a later decoder could add
 

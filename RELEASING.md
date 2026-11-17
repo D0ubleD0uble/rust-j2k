@@ -68,15 +68,17 @@ whole-crate look happens.
    the docs for that version rather than `main`:
    - In `src/` and `README.md`, change every `rust-j2k/blob/main/` link, and
      every link pinned at an older tag, to `rust-j2k/blob/vX.Y.Z/`
-     (`sed -i -E 's#rust-j2k/blob/(main|v[0-9]+\.[0-9]+\.[0-9]+)/#rust-j2k/blob/vX.Y.Z/#g' $(grep -rlE 'rust-j2k/blob/' src README.md)`).
+     (`sed -i -E 's#rust-j2k/blob/(main|v[0-9]+\.[0-9]+\.[0-9]+)/#rust-j2k/blob/vX.Y.Z/#g' $(grep -rlE 'rust-j2k/blob/' src README.md)`;
+     this is GNU sed, and BSD or macOS sed needs `sed -i '' -E` instead).
    - In `README.md`, make each relative link (`docs/...`, `CONTRIBUTING.md`,
      `SECURITY.md`, the license files) absolute at the tag:
      `https://github.com/D0ubleD0uble/rust-j2k/blob/vX.Y.Z/<path>`.
 
    The tag does not exist yet when the PR is written, but it does by the time
    docs.rs builds the published crate. Afterwards, both
-   `grep -rnE 'rust-j2k/blob/' src README.md | grep -v 'blob/vX.Y.Z/'` (with
-   the new version in place of `vX.Y.Z`) and
+   `grep -rnoE 'rust-j2k/blob/[^/]+/' src README.md | grep -v 'blob/vX.Y.Z/'`
+   (with the new version in place of `vX.Y.Z`; `-o` prints each link on its
+   own, so a stale link on the same line as a new one still shows) and
    `grep -nE '\]\((docs|[A-Z][A-Za-z-]*\.md|LICENSE)' README.md` should print
    nothing. Between releases, new links use `main` or relative paths, and
    links left at the last tag go back to `main`; the next release pins them.

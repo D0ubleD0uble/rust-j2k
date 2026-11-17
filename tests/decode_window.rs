@@ -462,7 +462,7 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
 /// With `strict` off, a tile of a cut codestream decodes to what
 /// `opj_decompress -allow-partial -t` 2.5.0 gives on the same prefix. The
 /// prefix is `tiled_53.j2k` cut at 7000 bytes, inside tile 6, so tiles 0 to
-/// 5 are whole. `-allow-partial -d` refuses the same prefix ("Stream too
+/// 5 are whole and tile 6 is cut. `-allow-partial -d` refuses the same prefix ("Stream too
 /// short"), even for a window inside tile 2, so `-t` is the oracle here and a
 /// window is checked as the crop of its tile.
 #[test]
@@ -471,7 +471,8 @@ fn a_tile_of_a_cut_codestream_matches_openjpeg_allow_partial() {
     let prefix = &bytes[..7000];
     let loose = DecodeOptions::default().with_strict(false);
     // `opj_decompress -i cut.j2k -o t.pgx -allow-partial -t N`, hashed as
-    // the `.sha256` lines are. Tile 4's is the uncut file's `-t4` line.
+    // the `.sha256` lines are. Tile 4's is the uncut file's `-t4` line;
+    // tile 6 is the cut one.
     for (tile, hash) in [
         (
             2,
@@ -481,12 +482,16 @@ fn a_tile_of_a_cut_codestream_matches_openjpeg_allow_partial() {
             4,
             "0888ba413060d42436dcb8c831a7ac278d96a566bd1e4bb2bfc3838a6334c940",
         ),
+        (
+            6,
+            "22bdd0ff24cdd365337be614620bf80a1eb60401ee437c9c0710c57acaa67dbb",
+        ),
     ] {
         let image = decode_ok(prefix, &loose.clone().with_tile(Some(tile)), "tile");
         assert_eq!(sha256_hex(&sample_bytes(&image)), hash, "tile {tile}");
     }
 
-    // A window inside tile 2 (x 51..75, y 2..22) returns that tile's samples
+    // A window inside tile 2 (x 51..75, y 4..22) returns that tile's samples
     // and reports only the missing end of the codestream.
     let options = loose.clone().with_window(Some(Window::new(52, 5, 74, 21)));
     let window = decode_ok(prefix, &options, "window");
