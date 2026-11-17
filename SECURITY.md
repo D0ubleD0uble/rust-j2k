@@ -51,8 +51,8 @@ for a tile one sample wide (scaled from measurements on smaller images; see the
 [`decode` docs](https://docs.rs/rust-j2k/latest/rust_j2k/fn.decode.html)). A
 file past a limit is refused with `Error::Limit`, which is the guard working,
 not a bug. These figures cover the one-shot decode functions. An
-`IncrementalDecoder` keeps per-tile state between calls and can hold about
-twice as much (see "Work and memory" in
+`IncrementalDecoder` keeps per-tile state between calls and can hold up to about
+three times as much (see "Work and memory" in
 [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits

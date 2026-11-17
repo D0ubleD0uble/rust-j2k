@@ -222,8 +222,8 @@ Every failure comes back as an `Error`. With the default limits, decoding
 never panics or hangs, whatever the input, and needs at most about 6.4 GiB of
 memory. If the machine can't supply that, the allocation fails and the process
 aborts, as in any Rust program. That figure covers the one-shot decode
-functions; `IncrementalDecoder` keeps per-tile state and can hold about twice
-as much (see [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
+functions; `IncrementalDecoder` keeps per-tile state and can hold up to about
+three times as much (see [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses
 something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means

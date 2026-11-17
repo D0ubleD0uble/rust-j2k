@@ -184,8 +184,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decodes at the defaults, as does an RGB image of up to about 179 MP. The
   limit is still counted in decoded samples, so `Raised(n)` now allows
   n x 2^29 samples (#436). A tile may now hold 2^20 code-blocks, up from 2^19,
-  so a one-tile image under 2^29 samples and at least 64 samples wide decodes in
-  32 x 32 blocks; a tile
+  so a one-tile image under 2^29 samples and at least 72 samples wide decodes
+  in 32 x 32 blocks; a tile
   of more than 2^20 is still `Error::Limit` with `LimitKind::TileCodeBlocks`.
 - Some complete inputs now give `Error::Incomplete`, since their bytes look
   the same as a cut: empty input (was `Error::Codestream`), and a JP2 file
