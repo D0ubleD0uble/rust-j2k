@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! perf-decode ENGINE INPUT [--out PREFIX | --out8 FILE | --iters N]
-//!             [--window X0,Y0,X1,Y1] [--tile N] [--incremental BYTES] [--srgb]
+//!             [--window X0,Y0,X1,Y1 | --tile N] [--incremental BYTES] [--srgb]
 //! ```
 //!
 //! `ENGINE` is `rust-j2k` or `hayro`.

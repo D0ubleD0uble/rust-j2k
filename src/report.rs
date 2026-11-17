@@ -45,8 +45,8 @@ use core::ops::Range;
 pub struct DecodeReport {
     /// What was missing, skipped or irregular, in the order the decoder met
     /// them. Empty when the codestream was whole. Under a
-    /// [`region`](crate::DecodeOptions::region) of a window or a tile, only the tiles the decode reads
-    /// are reported, and a run of missing tiles is split into the runs of it
+    /// [`region`](crate::DecodeOptions::region) of a window or a tile, only
+    /// the tiles the decode reads are reported, and a run of missing tiles is split into the runs of it
     /// the decode reads. Under a window or
     /// [`components`](crate::DecodeOptions::components), only the packets
     /// the returned samples need are reported missing (see

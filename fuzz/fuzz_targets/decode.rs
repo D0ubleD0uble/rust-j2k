@@ -59,7 +59,12 @@ fn part(bits: u64) -> rust_j2k::DecodeOptions {
         2 => options.with_components(Some(vec![(small(34) % 4) as u16])),
         _ => options
             .with_components(Some(vec![2, 0]))
-            .with_region(rust_j2k::Region::Window(rust_j2k::Window::new(small(40), small(46), 64, 64))),
+            .with_region(rust_j2k::Region::Window(rust_j2k::Window::new(
+                small(40),
+                small(46),
+                64,
+                64,
+            ))),
     }
 }
 

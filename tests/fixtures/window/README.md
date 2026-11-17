@@ -1,7 +1,7 @@
 # Window, tile and component fixtures
 
 Used by `tests/decode_window.rs`, which decodes these with
-`DecodeOptions::window`, `DecodeOptions::tile` and `DecodeOptions::components`
+`DecodeOptions::region` (a window or a tile) and `DecodeOptions::components`
 set and compares the samples with `opj_decompress -d`, `-t` and `-c` on the
 same bytes.
 

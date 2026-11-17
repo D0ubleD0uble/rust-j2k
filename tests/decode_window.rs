@@ -1,4 +1,4 @@
-//! Decoding part of an image: `DecodeOptions::window`, `DecodeOptions::tile`
+//! Decoding part of an image: `DecodeOptions::region` (a window or a tile)
 //! and `DecodeOptions::components`.
 //!
 //! Each oracle is `opj_decompress -d`, `-t` or `-c` 2.5.0 on the same bytes;
@@ -367,7 +367,7 @@ fn bad_options_are_invalid() {
         &bytes,
         &DecodeOptions::default().with_region(Region::Tile(9)),
     );
-    assert_eq!(message, "the tile index is 9, but the image has 9 tiles");
+    assert_eq!(message, "tile 9 is past the image's 9 tiles (0 to 8)");
 
     let components = |list: Vec<u16>| DecodeOptions::default().with_components(Some(list));
     let message = invalid(&bytes, &components(vec![3]));

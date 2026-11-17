@@ -710,8 +710,9 @@ pub struct DecodeOptions {
     ///
     /// # Window
     ///
-    /// A [`Region::Window`] returns the part of the image inside it. It is in reference-grid coordinates, as
-    /// SIZ declares them, whatever the [`resolution_reduction`](Self::resolution_reduction).
+    /// A [`Region::Window`] returns the part of the image inside it. It is in
+    /// reference-grid coordinates, as SIZ declares them, whatever the
+    /// [`resolution_reduction`](Self::resolution_reduction).
     /// The part of it outside the image area is left out, as OpenJPEG clips
     /// it. The returned [`Image`] covers what is left, `x0..x1` by `y0..y1`:
     /// its [`width`](Image::width) is `x1 - x0` at full resolution and
@@ -1125,7 +1126,7 @@ impl DecodeOptions {
     /// let options = DecodeOptions::default().with_region(Region::Tile(3));
     /// assert_eq!(options.region, Region::Tile(3));
     /// let window = Region::Window(Window::new(0, 0, 64, 64));
-    /// assert_eq!(DecodeOptions::default().with_region(window).region, window);
+    /// assert_eq!(DecodeOptions::default().with_region(window.clone()).region, window);
     /// ```
     #[must_use]
     pub fn with_region(mut self, region: Region) -> Self {

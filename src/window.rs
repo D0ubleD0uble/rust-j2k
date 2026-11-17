@@ -20,7 +20,6 @@ use crate::{ColorOutput, DecodeOptions, Error, ReportEntry, Result};
 /// image's top-left when the image has an offset. This is the rectangle
 /// OpenJPEG's `opj_set_decode_area` and `opj_decompress -d x0,y0,x1,y1` take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[doc(alias = "region")]
 #[doc(alias = "decode_area")]
 pub struct Window {
     /// The left edge.
@@ -35,6 +34,9 @@ pub struct Window {
 
 /// The area of the image a decode returns, for [`DecodeOptions::region`].
 ///
+/// It selects the decode area. It is not the JPEG 2000 region of interest
+/// (`RGN`), which the decoder applies on its own.
+///
 /// One value holds the choice, so a window and a tile cannot be asked for
 /// together. The enum is `#[non_exhaustive]`, so a new kind of area is not a
 /// breaking change.
@@ -46,7 +48,7 @@ pub struct Window {
 /// let options = DecodeOptions::default().with_region(Region::Window(Window::new(0, 0, 8, 8)));
 /// assert_eq!(options.region, Region::Window(Window::new(0, 0, 8, 8)));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 #[doc(alias = "decode_area")]
 pub enum Region {
@@ -226,8 +228,9 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
         }
         Region::Tile(tile) => Some(siz.tile_rect(tile).ok_or_else(|| {
             Error::InvalidOptions(format!(
-                "the tile index is {tile}, but the image has {} tiles",
-                siz.num_tiles()
+                "tile {tile} is past the image's {} tiles (0 to {})",
+                siz.num_tiles(),
+                siz.num_tiles().saturating_sub(1)
             ))
         })?),
     };
