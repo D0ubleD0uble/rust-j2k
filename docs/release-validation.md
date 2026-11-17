@@ -123,8 +123,7 @@ inputs against a tighter limit.
 
 Before a release, every target runs locally for 60 s, one after another,
 seeded as fuzz/README.md describes. This is the pre-release fuzz run, which
-RELEASING.md and fuzz/README.md call the pre-release smoke. The CI smoke does
-not replace it. Record the result in the "Recorded runs" table in
+fuzz/README.md calls the pre-release smoke. The CI smoke does not replace it. Record the result in the "Recorded runs" table in
 [fuzz/README.md](../fuzz/README.md#recorded-runs).
 
 **Cost:** about 6 minutes of fuzzing per push in CI, plus the build. The
