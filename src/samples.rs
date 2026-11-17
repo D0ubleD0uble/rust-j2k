@@ -250,7 +250,9 @@ mod tests {
         }
     }
 
-    /// The hint is data as well as words: the kind and the factor.
+    /// The hint is data as well as words: the kind and the factor. A multiple
+    /// of 2^29 is past a 32-bit target's address cap.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_hint_is_typed() {
         let Error::Limit(limit) = over("image area", MAX_IMAGE_SAMPLES * 3, MAX_IMAGE_SAMPLES)

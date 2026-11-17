@@ -384,6 +384,7 @@ fn the_tile_grid_covers_the_image_with_clipped_edge_tiles() {
     assert_eq!(area, 40 * 40);
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn oversize_image_area_is_a_limit() {
     // 32769×16384 is just past the 2^29 default sample limit. The parse
@@ -403,6 +404,7 @@ fn oversize_image_area_is_a_limit() {
 }
 
 /// The SIZ of a `width` x `height` single-component image, one tile.
+#[cfg(target_pointer_width = "64")]
 fn siz_of_geom(width: u32, height: u32) -> Siz {
     decode_siz(Cursor::new(&siz_geom(
         width, height, 0, 0, width, height, 0, 0,

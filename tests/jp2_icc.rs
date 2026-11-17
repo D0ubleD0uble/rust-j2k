@@ -17,6 +17,7 @@ use support::{plane_hash, srgb};
 
 use std::path::PathBuf;
 
+#[cfg_attr(not(target_pointer_width = "64"), allow(unused_imports))]
 use rust_j2k::{
     Association, ChannelDefinition, ChannelType, ColorSpace, DecodeOptions, Error, Image,
     WorkLimit, decode, decode_with, read_header_with,
@@ -432,6 +433,7 @@ fn a_tinted_gray_profile_gives_three_color_channels() {
 /// counts the three: the same file grown to 14000x14000 is 1.96e8 samples as
 /// coded, under the 2^29 default, but 5.88e8 in sRGB, so sRGB output is
 /// refused from the header unless the limit is raised.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
     let v = variants()

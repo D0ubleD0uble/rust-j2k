@@ -11,6 +11,10 @@
 //! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
 
+// Over-limit images are past a 32-bit target's address cap, so the
+// refusals here differ there.
+#![cfg(target_pointer_width = "64")]
+
 #[path = "support/alloc.rs"]
 mod alloc;
 use alloc::{CURRENT, PEAK};

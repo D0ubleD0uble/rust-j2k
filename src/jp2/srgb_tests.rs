@@ -1248,6 +1248,7 @@ fn converted_output_reports_its_color_space() {
 /// is refused before any tile is read. The 4:2:0 fixture's SIZ is widened to
 /// 16384x16384: as coded that is 1.5 x 2^28 samples, under the 2^29 limit, but
 /// sRGB output is 3 x 2^28.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn chroma_replication_past_the_sample_budget_is_a_limit() {
     let mut codestream = top_box(SYCC_420, b"jp2c").to_vec();

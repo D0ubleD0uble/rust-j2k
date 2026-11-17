@@ -107,9 +107,9 @@ fn jp2c_payload(file: &[u8]) -> Option<(usize, usize)> {
         let (header, length) = match u32_at(file, at)? {
             0 => (8, file.len() - at),
             1 => {
-                let high = u32_at(file, at + 8)?;
-                let low = u32_at(file, at + 12)?;
-                (16, (high << 32) | low)
+                let high = u32_at(file, at + 8)? as u64;
+                let low = u32_at(file, at + 12)? as u64;
+                (16, usize::try_from((high << 32) | low).ok()?)
             }
             n => (8, n),
         };

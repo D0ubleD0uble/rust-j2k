@@ -1061,6 +1061,7 @@ fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
 /// palette channel that looks up another column is checked unless
 /// `raw_channels` asks for the index plane, and a palette's expansion fits the
 /// sample limit only once a resolution reduction shrinks the image.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn read_header_with_agrees_with_decode_with_under_the_same_options() {
     use crate::{DecodeOptions, read_header, read_header_with};

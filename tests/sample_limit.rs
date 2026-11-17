@@ -6,6 +6,10 @@
 //! The fixtures in `tests/fixtures/sample_limit/` are written by
 //! `scripts/gen-sample-limit-fixtures.py` (see the README there).
 
+// Over-limit images are past a 32-bit target's address cap, so the
+// refusals here differ there.
+#![cfg(target_pointer_width = "64")]
+
 #[path = "support/synth.rs"]
 mod synth;
 use std::path::PathBuf;
@@ -115,6 +119,25 @@ fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
             }
         }
     }
+}
+
+/// The typed hint from a sample-limit refusal sets the option: `with_retry`
+/// gives `Raised(2)` for the flat file, and the retried decode succeeds (the
+/// image is all zero, as `opj_decompress` decodes it).
+#[test]
+fn a_retry_with_the_typed_hint_admits_the_flat_file() {
+    let bytes = flat();
+    let Err(Error::Limit(detail)) = decode(&bytes) else {
+        panic!("expected a limit refusal at the default");
+    };
+    assert_eq!(detail.kind(), LimitKind::Samples);
+    let options = DecodeOptions::default()
+        .with_retry(&detail)
+        .expect("a retry for the sample limit");
+    assert_eq!(options.sample_limit, WorkLimit::Raised(2));
+    let image = decode_with(&bytes, &options).expect("admitted under the retry");
+    assert_eq!((image.width, image.height), (32769, 16385));
+    assert!(image.components[0].samples.iter().all(|&s| s == 0));
 }
 
 /// A Sentinel-2 true-color image (10980x10980, three 8-bit components, 361.7 M
