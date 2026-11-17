@@ -10,8 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    DecodeOptions, Error, Image, IncrementalDecoder, Region, Window, WorkLimit, decode_with,
-    read_header,
+    DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Region, Window, WorkLimit,
+    decode_with, read_header,
 };
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -65,8 +65,8 @@ fn lenient() -> DecodeOptions {
 /// Whether `error` is a refusal by the packet or code-block work bound,
 /// which more bytes raise: its message names the option that raises it.
 fn is_work_limit(error: &Error) -> bool {
-    matches!(error, Error::Limit(m)
-        if m.contains("packet_work_limit") || m.contains("code_block_work_limit"))
+    matches!(error, Error::Limit(limit)
+        if matches!(limit.kind(), LimitKind::PacketWork | LimitKind::CodeBlockWork))
 }
 
 /// What a refine on `prefix` must give: the strict-off decode, with a main
@@ -80,6 +80,12 @@ fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>
     }
 }
 
+/// `result` with its error as its `Debug` text, so that two results compare
+/// by variant, data and message: `Error` has no `PartialEq`.
+fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
+    result.map_err(|error| format!("{error:?}"))
+}
+
 /// Whether `finish` on `bytes` gives what `decode_with` gives under
 /// `options`, with `Incomplete` turned into a truncation error.
 fn check_finish(name: &str, bytes: &[u8], decoder: IncrementalDecoder, options: &DecodeOptions) {
@@ -87,11 +93,20 @@ fn check_finish(name: &str, bytes: &[u8], decoder: IncrementalDecoder, options: 
     match decode_with(bytes, options) {
         Err(Error::Incomplete(why)) => match finished {
             Err(Error::Codestream(m) | Error::FileFormat(m)) => {
-                assert!(m.contains(&why), "{name}, {} bytes: {m}", bytes.len());
+                assert!(
+                    m.message().contains(why.message()),
+                    "{name}, {} bytes: {m}",
+                    bytes.len()
+                );
             }
             other => panic!("{name}, {} bytes: {other:?}", bytes.len()),
         },
-        expected => assert_eq!(finished, expected, "{name}, {} bytes", bytes.len()),
+        expected => assert_eq!(
+            keyed(finished),
+            keyed(expected),
+            "{name}, {} bytes",
+            bytes.len()
+        ),
     }
 }
 
@@ -129,7 +144,7 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
                 tried = fed;
                 assert_eq!(decoder.bytes_decoded(), fed, "{name}");
                 let expected = decode_with(&bytes[..fed], &options.clone().with_strict(false));
-                assert_eq!(Ok(image), expected, "{name}, {fed} bytes");
+                assert_eq!(Ok(image), keyed(expected), "{name}, {fed} bytes");
             }
             Ok(None) => {
                 if due {
@@ -143,7 +158,7 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
             }
             Err(error) => {
                 let expected = refine_oracle(&bytes[..fed], options);
-                assert_eq!(Err(error), expected, "{name}, {fed} bytes");
+                assert_eq!(keyed(Err(error)), keyed(expected), "{name}, {fed} bytes");
                 // A refine error is final, so the whole input must err too:
                 // a decoder that gave up for good on a prefix of a file
                 // that decodes would pass the check above.
@@ -167,8 +182,8 @@ fn halves(name: &str, bytes: &[u8], options: &DecodeOptions) -> usize {
     let mut images = 0;
     for fed in [bytes.len() / 2, bytes.len()] {
         decoder.feed(&bytes[decoder.bytes_fed()..fed]);
-        let refined = decoder.refine();
-        let expected = refine_oracle(&bytes[..fed], options);
+        let refined = keyed(decoder.refine());
+        let expected = keyed(refine_oracle(&bytes[..fed], options));
         if matches!(refined, Ok(Some(_))) {
             images += 1;
         }
@@ -215,8 +230,8 @@ fn cut(name: &str, bytes: &[u8], cuts: &[usize], rng: &mut Rng, options: &Decode
         decoder.feed(&prefix[split..]);
         let refined = decoder.refine();
         assert_eq!(
-            refined,
-            refine_oracle(prefix, options),
+            keyed(refined),
+            keyed(refine_oracle(prefix, options)),
             "{name}, cut at {at}"
         );
         check_finish(name, prefix, decoder, options);
@@ -421,7 +436,9 @@ fn a_damaged_pterm_segment_is_refused() {
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bad[..300]);
     match decoder.refine() {
-        Err(Error::Codestream(m)) => assert!(m.contains("predictable termination"), "{m}"),
+        Err(Error::Codestream(m)) => {
+            assert!(m.message().contains("predictable termination"), "{m}")
+        }
         other => panic!("{other:?}"),
     }
 
@@ -435,13 +452,15 @@ fn a_damaged_pterm_segment_is_refused() {
         decoder.feed(piece);
         if let Err(error) = decoder.refine() {
             assert_eq!(
-                Err(error),
-                refine_oracle(&bad[..decoder.bytes_fed()], &lenient())
+                keyed(Err(error)),
+                keyed(refine_oracle(&bad[..decoder.bytes_fed()], &lenient()))
             );
         }
     }
     match decoder.finish() {
-        Err(Error::Codestream(m)) => assert!(m.contains("predictable termination"), "{m}"),
+        Err(Error::Codestream(m)) => {
+            assert!(m.message().contains("predictable termination"), "{m}")
+        }
         other => panic!("{other:?}"),
     }
 }
@@ -460,10 +479,10 @@ fn finish_refuses_a_header_cut_short() {
     ] {
         let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
         decoder.feed(&bytes[..cut]);
-        assert_eq!(decoder.refine(), Ok(None));
+        assert!(matches!(decoder.refine(), Ok(None)));
         match (decoder.finish(), box_layer) {
             (Err(Error::Codestream(m)), false) | (Err(Error::FileFormat(m)), true) => {
-                assert!(m.starts_with("the input is truncated: "), "{m}");
+                assert!(m.message().starts_with("the input is truncated: "), "{m}");
             }
             other => panic!("{cut} bytes: {other:?}"),
         }
@@ -536,8 +555,8 @@ fn a_work_bound_a_prefix_reaches_is_a_wait() {
         }
     }
     assert_eq!(
-        decoder.finish(),
-        decode_with(&bytes, &DecodeOptions::default())
+        keyed(decoder.finish()),
+        keyed(decode_with(&bytes, &DecodeOptions::default()))
     );
 }
 
@@ -567,10 +586,13 @@ fn into_bytes_recovers_the_input_after_a_refused_work_limit() {
     let raised = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Unlimited);
     let expected = decode_with(&bytes, &raised);
     assert!(expected.is_ok());
-    assert_eq!(decode_with(&recovered, &raised), expected);
+    assert_eq!(
+        keyed(decode_with(&recovered, &raised)),
+        keyed(expected.clone())
+    );
     let mut again = IncrementalDecoder::new(raised).unwrap();
     again.feed(&recovered);
-    assert_eq!(again.finish(), expected);
+    assert_eq!(keyed(again.finish()), keyed(expected));
 }
 
 /// `finish` borrows the decoder, and calling it again, also after a refine,
@@ -582,7 +604,7 @@ fn finish_twice_gives_equal_results() {
     decoder.feed(&bytes);
     let first = decoder.finish();
     assert!(first.is_err());
-    assert_eq!(decoder.finish(), first);
+    assert_eq!(keyed(decoder.finish()), keyed(first));
 
     let file =
         std::fs::read(fixtures().join("tier1_work_bound/opj_flat2048_16bit_n1.j2k")).unwrap();
@@ -590,6 +612,6 @@ fn finish_twice_gives_equal_results() {
     decoder.feed(&file[..file.len() / 2]);
     let _ = decoder.refine();
     let first = decoder.finish();
-    assert_eq!(decoder.finish(), first);
+    assert_eq!(keyed(decoder.finish()), keyed(first));
     assert_eq!(decoder.bytes_fed(), file.len() / 2);
 }

@@ -279,7 +279,9 @@ fn a_cap_of_zero_is_invalid_options() {
     let bytes = layers_file("lrcp.j2k");
     let options = DecodeOptions::default().with_max_quality_layers(Some(0));
     match decode_with(&bytes, &options) {
-        Err(Error::InvalidOptions(why)) => assert!(why.contains("max_quality_layers"), "{why}"),
+        Err(Error::InvalidOptions(why)) => {
+            assert!(why.message().contains("max_quality_layers"), "{why}")
+        }
         other => panic!("{other:?}"),
     }
     assert!(matches!(
@@ -329,7 +331,7 @@ fn a_damaged_whole_segment_before_a_cut_is_still_an_error() {
         match decode_with(&bad, &capped(layers, 0)) {
             Err(Error::Codestream(message)) => {
                 assert!(
-                    message.contains("predictable termination"),
+                    message.message().contains("predictable termination"),
                     "byte {offset}: {message}"
                 );
             }
@@ -372,7 +374,10 @@ fn an_uncut_last_segment_is_still_checked() {
     for options in [DecodeOptions::default(), capped(2, 0)] {
         match decode_with(&bad, &options) {
             Err(Error::Codestream(message)) => {
-                assert!(message.contains("predictable termination"), "{message}");
+                assert!(
+                    message.message().contains("predictable termination"),
+                    "{message}"
+                );
             }
             other => panic!("{options:?}: {other:?}"),
         }
@@ -538,7 +543,7 @@ fn every_strict_off_prefix_of_a_pterm_codestream_matches_openjpeg() {
 fn a_segment_a_poc_gap_leaves_short_is_not_checked_with_strict_off() {
     let bytes = layers_file("pterm_poc_gap.j2k");
     match decode(&bytes) {
-        Err(Error::Codestream(message)) => assert!(message.contains("POC"), "{message}"),
+        Err(Error::Codestream(message)) => assert!(message.message().contains("POC"), "{message}"),
         other => panic!("{other:?}"),
     }
     let lenient = DecodeOptions::default().with_strict(false);
@@ -578,7 +583,7 @@ fn a_damaged_whole_segment_before_the_data_ends_is_still_an_error() {
             decode_ok(&whole[..length], &lenient, &format!("{length} bytes"));
             match decode_with(&bad[..length], &lenient) {
                 Err(Error::Codestream(message)) => assert!(
-                    message.contains("predictable termination"),
+                    message.message().contains("predictable termination"),
                     "byte {offset}, {length} bytes: {message}"
                 ),
                 other => panic!("byte {offset}, {length} bytes: {other:?}"),

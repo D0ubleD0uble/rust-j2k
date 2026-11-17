@@ -565,7 +565,7 @@ fn walk_packets<'a>(
         tile: header
             .siz
             .tile_rect(tile.index)
-            .ok_or_else(|| Error::Inconsistent(format!("no tile {} in `SIZ`", tile.index)))?,
+            .ok_or_else(|| Error::inconsistent(format!("no tile {} in `SIZ`", tile.index)))?,
         geoms: &geoms,
     };
     let delimiters = Delimiters {
@@ -658,7 +658,7 @@ fn walk_packets<'a>(
         let rect = header
             .siz
             .tile_component_rect(tile.index, comp)
-            .ok_or_else(|| Error::Inconsistent(format!("no component {comp} in `SIZ`")))?;
+            .ok_or_else(|| Error::inconsistent(format!("no component {comp} in `SIZ`")))?;
         let mut resolutions = Vec::with_capacity(component_states.len());
         for (band_states, level) in component_states.iter().zip(component_geoms) {
             let subbands = if level.bands.is_empty() {
@@ -692,7 +692,7 @@ fn walk_packets<'a>(
     // closing EOC. Any remainder means a misread field — a dropped layer shows up
     // here as leftover bytes (this doubles as the parse self-check).
     if streams.body_pos != data.len() {
-        return Err(Error::Codestream(format!(
+        return Err(Error::codestream(format!(
             "tile {} has {} byte(s) left after the last packet",
             tile.index,
             data.len() - streams.body_pos
@@ -701,7 +701,7 @@ fn walk_packets<'a>(
     // The packed headers must be exhausted too: a leftover header byte is the
     // same kind of misread, caught on the header stream instead of the body.
     if packed && streams.header_pos != streams.header.len() {
-        return Err(Error::Codestream(format!(
+        return Err(Error::codestream(format!(
             "tile {} has {} byte(s) of packed packet headers left after the last packet",
             tile.index,
             streams.header.len() - streams.header_pos
@@ -871,7 +871,7 @@ fn add_length(segment: &mut SegmentState, bytes: u32) -> Result<()> {
         SegmentKind::Mq | SegmentKind::Raw => return Ok(()),
     };
     if segment.length > max {
-        return Err(Error::Codestream(format!(
+        return Err(Error::codestream(format!(
             "HT {what} segment is {} bytes, over the limit of {max}",
             segment.length
         )));
@@ -927,9 +927,8 @@ fn ht_first_cleanup(
         match bio.read(bits) {
             0 => read = bits,
             1 => {
-                return Err(Error::Codestream(
-                    "HT code-block's first cleanup segment is 1 byte long; it must be at least 2"
-                        .into(),
+                return Err(Error::codestream(
+                    "HT code-block's first cleanup segment is 1 byte long; it must be at least 2",
                 ));
             }
             length => {
@@ -942,8 +941,8 @@ fn ht_first_cleanup(
         }
     }
     if bio.read(length_bits(lblock, new) - read) != 0 {
-        return Err(Error::Codestream(
-            "HT code-block placeholder passes carry bytes".into(),
+        return Err(Error::codestream(
+            "HT code-block placeholder passes carry bytes",
         ));
     }
     Ok(FirstCleanup::Placeholders)
@@ -1134,7 +1133,7 @@ pub(crate) enum Refused {
 impl From<Refused> for Error {
     fn from(refused: Refused) -> Error {
         match refused {
-            Refused::Work(work) => Error::Limit(work.why()),
+            Refused::Work(work) => Error::limit(crate::LimitKind::PacketWork, None, work.why()),
             Refused::Other(error) => error,
         }
     }
@@ -1218,7 +1217,7 @@ impl Meter {
     /// to fail it with.
     pub(crate) fn refuse(&self, why: WorkRefusal) -> Error {
         self.refusal.set(Some(why));
-        Error::Limit(why.why())
+        Error::limit(crate::LimitKind::PacketWork, None, why.why())
     }
 }
 
@@ -1239,9 +1238,7 @@ const END_VISITS: usize = 32;
 /// The error for a packed packet header that reads past the end of the
 /// `PPM` or `PPT` bytes it is packed in.
 fn packed_overrun() -> Error {
-    Error::Codestream(
-        "a packet header runs past the end of its `PPM` or `PPT` packed headers".into(),
-    )
+    Error::codestream("a packet header runs past the end of its `PPM` or `PPT` packed headers")
 }
 
 /// The two-byte marker at `pos`, or `None` if it would run past the end.
@@ -1270,11 +1267,11 @@ fn peek_marker(data: &[u8], pos: usize) -> Option<u16> {
 fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
     let end = pos + 6;
     if end > data.len() {
-        return Err(Error::Codestream("truncated `SOP` marker segment".into()));
+        return Err(Error::codestream("truncated `SOP` marker segment"));
     }
     let lsop = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
     if lsop != 4 {
-        return Err(Error::Codestream(format!(
+        return Err(Error::codestream(format!(
             "`SOP` declares `Lsop` {lsop}, expected 4"
         )));
     }
@@ -1282,7 +1279,7 @@ fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
     // Nsop is 16 bits and wraps; a tile with more than 65536 packets restarts it.
     let expected = (packet_index % 65536) as u16;
     if nsop != expected {
-        return Err(Error::Codestream(format!(
+        return Err(Error::codestream(format!(
             "`SOP` sequence number {nsop} for packet {packet_index}, expected {expected}"
         )));
     }
@@ -1725,7 +1722,7 @@ fn parse_packet(
         if partial {
             return Ok(Packet::Ended);
         }
-        return Err(Error::Codestream(format!(
+        return Err(Error::codestream(format!(
             "the data of tile {} ends before the last packet",
             streams.tile
         )));
@@ -1816,8 +1813,8 @@ fn parse_packet(
     }
     if delimiters.eph {
         if peek_marker(streams.header, streams.header_pos) != Some(marker::EPH) {
-            return Err(Error::Codestream(
-                "`COD` signals `EPH` but the packet header is not followed by one".into(),
+            return Err(Error::codestream(
+                "`COD` signals `EPH` but the packet header is not followed by one",
             ));
         }
         streams.header_pos += 2;
@@ -1845,7 +1842,7 @@ fn parse_packet(
                     undo(&log[from..], states);
                     return Ok(Packet::Ended);
                 }
-                return Err(Error::Codestream(format!(
+                return Err(Error::codestream(format!(
                     "a packet body segment overruns the data of tile {}",
                     streams.tile
                 )));
@@ -1970,7 +1967,7 @@ fn parse_band_header(
                 .zero_bits
                 .read_saving(bx, by, ZBP_LIMIT, bio, saved)
                 .ok_or_else(|| {
-                    Error::Codestream(format!(
+                    Error::codestream(format!(
                         "code-block zero-bitplane count is over {}, the most a valid stream \
                          can signal",
                         ZBP_LIMIT - 1
@@ -1996,7 +1993,7 @@ fn parse_band_header(
         while bio.read_bit() == 1 {
             block.lblock += 1;
             if block.lblock > LBLOCK_MAX {
-                return Err(Error::Codestream(format!(
+                return Err(Error::codestream(format!(
                     "code-block `Lblock` grows past the limit of {LBLOCK_MAX}"
                 )));
             }

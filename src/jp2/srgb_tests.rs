@@ -636,7 +636,8 @@ fn a_gray_profile_on_more_than_two_channels_is_unsupported() {
         match read_header_with(bytes, &srgb()) {
             Err(Error::Unsupported(what)) => {
                 assert!(
-                    what.contains("monochrome ICC profile on 3 channels"),
+                    what.message()
+                        .contains("monochrome ICC profile on 3 channels"),
                     "{what}"
                 )
             }
@@ -888,7 +889,9 @@ fn an_lcms_refused_profile_on_4_2_0_or_4_2_2_is_refused() {
             decode(&bytes).unwrap_or_else(|e| panic!("{what}: AsCoded must decode, got {e}"));
             expect_err(decode_srgb(&bytes), is_unsupported, fragment);
             match read_header_with(&bytes, &srgb()) {
-                Err(Error::Unsupported(e)) => assert!(e.contains(fragment), "{what}: {e}"),
+                Err(Error::Unsupported(e)) => {
+                    assert!(e.message().contains(fragment), "{what}: {e}")
+                }
                 other => panic!("{what}: read_header_with gave {other:?}"),
             }
         }
@@ -1053,7 +1056,9 @@ fn srgb_4_2_0_or_4_2_2_is_refused_whatever_cdef_labels() {
             decode(&bytes).unwrap_or_else(|e| panic!("{what}: AsCoded must decode, got {e}"));
             expect_err(decode_srgb(&bytes), is_unsupported, fragment);
             match read_header_with(&bytes, &srgb()) {
-                Err(Error::Unsupported(e)) => assert!(e.contains(fragment), "{what}: {e}"),
+                Err(Error::Unsupported(e)) => {
+                    assert!(e.message().contains(fragment), "{what}: {e}")
+                }
                 other => panic!("{what}: read_header_with gave {other:?}"),
             }
         }

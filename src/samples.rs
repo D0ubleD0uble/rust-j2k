@@ -87,16 +87,24 @@ pub(crate) fn cap(limit: &WorkLimit) -> u64 {
 /// [`WorkLimit::Unlimited`]), or says that the target cannot address that many.
 pub(crate) fn over(what: &str, total: u64, cap: u64) -> Error {
     if total > ADDRESSABLE_SAMPLES {
-        return Error::Limit(format!(
-            "{what} needs {total} samples, more than this target can address \
+        return Error::limit(
+            crate::LimitKind::AddressSpace,
+            None,
+            format!(
+                "{what} needs {total} samples, more than this target can address \
              ({ADDRESSABLE_SAMPLES})"
-        ));
+            ),
+        );
     }
-    Error::Limit(format!(
-        "{what} needs {total} samples, over the sample limit of {cap} (see \
-         `DecodeOptions::sample_limit`); {}",
-        crate::limit_hint::samples(total, MAX_IMAGE_SAMPLES)
-    ))
+    let (retry, advice) = crate::limit_hint::samples(total, MAX_IMAGE_SAMPLES);
+    Error::limit(
+        crate::LimitKind::Samples,
+        Some(retry),
+        format!(
+            "{what} needs {total} samples, over the sample limit of {cap} (see \
+             `DecodeOptions::sample_limit`); {advice}"
+        ),
+    )
 }
 
 /// " at resolution reduction `reduction`", or nothing at full resolution:
@@ -182,7 +190,7 @@ fn check_extent(
     for index in 0..siz.components.len() {
         let (width, height) = siz
             .component_extent_at(index, reduction)
-            .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {index}")))?;
+            .ok_or_else(|| Error::inconsistent(format!("`SIZ` declares no component {index}")))?;
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
     if total > cap {
@@ -203,7 +211,7 @@ mod tests {
 
     fn message(total: u64) -> String {
         match over("image area", total, MAX_IMAGE_SAMPLES) {
-            Error::Limit(m) => m,
+            Error::Limit(m) => m.message().to_owned(),
             other => panic!("{other:?}"),
         }
     }
@@ -234,6 +242,33 @@ mod tests {
             let m = message(total);
             assert!(!m.contains("Raised"), "{m}");
             assert!(m.contains("only `WorkLimit::Unlimited` admits it"), "{m}");
+            let Error::Limit(limit) = over("image area", total, MAX_IMAGE_SAMPLES) else {
+                unreachable!()
+            };
+            assert_eq!(limit.kind(), crate::LimitKind::Samples);
+            assert_eq!(limit.retry_with(), Some(WorkLimit::Unlimited));
         }
+    }
+
+    /// The hint is data as well as words: the kind and the factor.
+    #[test]
+    fn the_hint_is_typed() {
+        let Error::Limit(limit) = over("image area", MAX_IMAGE_SAMPLES * 3, MAX_IMAGE_SAMPLES)
+        else {
+            unreachable!()
+        };
+        assert_eq!(limit.kind(), crate::LimitKind::Samples);
+        assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(3)));
+    }
+
+    /// Past what the target can address, no option admits the image, so the
+    /// refusal gives nothing to retry with.
+    #[test]
+    fn past_the_address_space_there_is_no_retry() {
+        let error = over("image area", ADDRESSABLE_SAMPLES + 1, MAX_IMAGE_SAMPLES);
+        assert!(
+            crate::error::is_fixed_limit(&error, crate::LimitKind::AddressSpace),
+            "{error:?}"
+        );
     }
 }

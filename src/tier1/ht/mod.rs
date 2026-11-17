@@ -47,7 +47,7 @@ const MAX_LCUP: usize = 65535;
 const HT_SET_PASSES: u32 = 3;
 
 fn malformed(what: &str) -> Error {
-    Error::Codestream(format!("HT code-block {what}"))
+    Error::codestream(format!("HT code-block {what}"))
 }
 
 /// The tile-component's parameters an HT code-block decode needs beyond the
@@ -180,19 +180,23 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
     // that does not fit.
     let coded = planes - zbp;
     if coded > MAX_BIT_PLANES {
-        return Err(Error::Limit(if params.roi_shift == 0 {
-            format!(
-                "HT code-block of {coded} bit-planes (a subband of {numbps} and {zbp} \
+        return Err(Error::limit(
+            crate::LimitKind::BitPlanes,
+            None,
+            if params.roi_shift == 0 {
+                format!(
+                    "HT code-block of {coded} bit-planes (a subband of {numbps} and {zbp} \
                  zero bit-planes), over the {MAX_BIT_PLANES}-plane limit"
-            )
-        } else {
-            format!(
-                "HT code-block of {coded} bit-planes (a subband of {numbps}, a \
+                )
+            } else {
+                format!(
+                    "HT code-block of {coded} bit-planes (a subband of {numbps}, a \
                  maxshift of {} and {zbp} zero bit-planes), over the \
                  {MAX_BIT_PLANES}-plane limit",
-                params.roi_shift
-            )
-        }));
+                    params.roi_shift
+                )
+            },
+        ));
     }
     let data = block
         .segments

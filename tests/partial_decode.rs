@@ -548,10 +548,14 @@ fn a_packed_header_that_runs_short_is_refused_as_strict() {
             let strict_error = decode_with(&bytes, &strict(0)).expect_err(what);
             let partial_error = decode_with(&bytes, &lenient(0)).expect_err(what);
             assert!(
-                matches!(&partial_error, Error::Codestream(m) if m.contains("packed headers")),
+                matches!(&partial_error, Error::Codestream(m) if m.message().contains("packed headers")),
                 "{what}: {partial_error}"
             );
-            assert_eq!(strict_error, partial_error, "{what}");
+            assert_eq!(
+                format!("{strict_error:?}"),
+                format!("{partial_error:?}"),
+                "{what}"
+            );
             continue;
         }
         let strict = decode_ok(&bytes, &strict(0), what);
@@ -660,10 +664,10 @@ fn a_damaged_packet_header_is_refused_with_strict_off() {
     let strict_error = decode_with(&bytes, &strict(0)).expect_err("strict refuses");
     let partial_error = decode_with(&bytes, &lenient(0)).expect_err("partial refuses");
     assert!(
-        matches!(&partial_error, Error::Codestream(m) if m.contains("Lblock")),
+        matches!(&partial_error, Error::Codestream(m) if m.message().contains("Lblock")),
         "{partial_error}"
     );
-    assert_eq!(strict_error, partial_error);
+    assert_eq!(format!("{strict_error:?}"), format!("{partial_error:?}"));
 }
 
 /// Each tile-component of a missing tile is charged against the packet work
@@ -675,7 +679,9 @@ fn missing_tiles_are_charged_against_the_work_bound() {
     let mut bytes = main_header((65535, 1), (1, 1), 257, 0, 0);
     bytes.extend_from_slice(&[0xFF, 0x90]);
     match decode_with(&bytes, &lenient(0)) {
-        Err(Error::Limit(message)) => assert!(message.contains("missing tiles"), "{message}"),
+        Err(Error::Limit(message)) => {
+            assert!(message.message().contains("missing tiles"), "{message}")
+        }
         other => panic!("expected Limit: {other:?}"),
     }
 }
@@ -729,7 +735,7 @@ fn the_end_of_each_tiles_data_is_charged_against_the_work_bound() {
     bytes.extend_from_slice(&[0xFF, 0xD9]);
     match decode_with(&bytes, &lenient(0)) {
         Err(Error::Limit(message)) => {
-            assert!(message.contains("packet_work_limit"), "{message}")
+            assert!(message.message().contains("packet_work_limit"), "{message}")
         }
         other => panic!("expected Limit: {other:?}"),
     }

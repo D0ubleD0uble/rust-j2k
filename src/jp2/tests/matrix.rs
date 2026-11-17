@@ -1031,7 +1031,7 @@ fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
     for (what, bytes) in open_last_part_then_more() {
         match decode(&bytes) {
             Err(Error::Codestream(message)) => assert!(
-                message.contains("left after the last packet"),
+                message.message().contains("left after the last packet"),
                 "{what}: {message}"
             ),
             other => panic!("{what}: expected Codestream, got {other:?}"),

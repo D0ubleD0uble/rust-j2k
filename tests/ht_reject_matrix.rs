@@ -407,8 +407,12 @@ fn every_ht_block_refusal_reaches_the_caller_as_its_typed_error() {
         let result = decode(&ht_file(block));
         let ok = match (want, &result) {
             (Want::Decodes, Ok(_)) => true,
-            (Want::Codestream(text), Err(Error::Codestream(m))) => m.contains(text),
-            (Want::Limit(text), Err(Error::Limit(m))) => m.contains(text),
+            (Want::Codestream(text), Err(Error::Codestream(m))) => m.message().contains(text),
+            (Want::Limit(text), Err(Error::Limit(m))) => {
+                m.message().contains(text)
+                    && m.kind() == rust_j2k::LimitKind::BitPlanes
+                    && m.retry_with().is_none()
+            }
             _ => false,
         };
         if !ok {

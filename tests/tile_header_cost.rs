@@ -79,7 +79,7 @@ fn allocations(bytes: &[u8]) -> usize {
     let made = ALLOCATIONS.load(Ordering::SeqCst) - before;
     match result {
         Err(Error::Marker(m)) => assert!(
-            m.contains("1 decomposition levels need 4"),
+            m.message().contains("1 decomposition levels need 4"),
             "refused for another reason: {m}"
         ),
         other => panic!("expected the last tile's COD refused, got {other:?}"),

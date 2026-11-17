@@ -70,13 +70,13 @@ pub fn half_step(header: &MainHeader, comp: usize, band: usize) -> Result<f32> {
             .siz
             .components
             .get(comp)
-            .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {comp}")))?
+            .ok_or_else(|| Error::inconsistent(format!("`SIZ` declares no component {comp}")))?
             .bit_depth,
     );
     let qcd = &header
         .components
         .get(comp)
-        .ok_or_else(|| Error::Inconsistent(format!("no coding parameters for component {comp}")))?
+        .ok_or_else(|| Error::inconsistent(format!("no coding parameters for component {comp}")))?
         .quant;
     Ok(half_step_of(step_params(qcd, band)?, prec))
 }
@@ -87,15 +87,15 @@ pub fn half_step(header: &MainHeader, comp: usize, band: usize) -> Result<f32> {
 /// `ε_b = max(ε_0 − ⌊(b−1)/3⌋, 0)`), keeping the single mantissa.
 fn step_params(qcd: &Qcd, band: usize) -> Result<(u8, u16)> {
     if qcd.style == QuantStyle::None {
-        return Err(Error::Inconsistent(
-            "irreversible transform needs scalar quantization, found QuantStyle::None".into(),
+        return Err(Error::inconsistent(
+            "irreversible transform needs scalar quantization, found QuantStyle::None",
         ));
     }
     // The per-subband exponent/mantissa mapping (expounded lookup or derived
     // per-level drop) is shared with Tier-1's bit-plane count so the two stay
     // numerically identical.
     qcd.subband_step(band).ok_or_else(|| {
-        Error::Inconsistent(format!(
+        Error::inconsistent(format!(
             "`QCD` carries {} step sizes but subband {band} needs one",
             qcd.steps.len()
         ))

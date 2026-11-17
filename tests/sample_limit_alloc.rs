@@ -69,7 +69,7 @@ fn a_huge_declared_image_is_refused_without_allocating_it() {
         let result = decode_with(&bytes, &options);
         let peak = PEAK.load(Ordering::SeqCst) - before;
         match result {
-            Err(Error::Limit(m)) => assert!(m.contains(says), "{what}: {m}"),
+            Err(Error::Limit(m)) => assert!(m.message().contains(says), "{what}: {m}"),
             other => panic!("{what}: {:?}", other.map(|i| (i.width, i.height))),
         }
         assert!(

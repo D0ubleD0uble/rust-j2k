@@ -16,6 +16,7 @@
 //! bound's unit a step, as the public docs do; the code calls it a visit.
 
 use crate::tier2::WorkRefusal;
+use crate::{Error, LimitKind, WorkLimit};
 
 /// The smallest `Raised` factor for `needed` against a `default` bound.
 fn factor(needed: u64, default: u64) -> u32 {
@@ -25,7 +26,7 @@ fn factor(needed: u64, default: u64) -> u32 {
 
 const TRUSTED: &str = "or with `WorkLimit::Unlimited` for trusted input";
 
-/// The message for tile `tile`, whose packet walk was refused for `work`
+/// The [`Error::Limit`] for tile `tile`, whose packet walk was refused for `work`
 /// after `spent` of the `allowed` steps (visits) the decode started with were
 /// spent. `default` is the default bound.
 ///
@@ -39,70 +40,98 @@ pub(crate) fn packet(
     spent: u64,
     allowed: u64,
     default: u64,
-) -> String {
+) -> Error {
     const OPTION: &str = "(see `DecodeOptions::packet_work_limit`)";
     let left = allowed.saturating_sub(spent);
     match work {
         WorkRefusal::PacketWalk => {
             let n = factor(allowed.saturating_add(1), default);
-            format!(
-                "reading the packet headers of tile {tile} goes past the packet work bound of \
+            packet_work(
+                n,
+                format!(
+                    "reading the packet headers of tile {tile} goes past the packet work bound of \
                  {allowed} steps {OPTION}; retry with at least `WorkLimit::Raised({n})` (the \
                  file may need more), {TRUSTED}"
+                ),
             )
         }
         WorkRefusal::PocReach { reached } => {
             let n = factor(spent.saturating_add(reached), default);
-            format!(
-                "the `POC` volumes of tile {tile} reach {reached} packets, a step each, more than the {left} \
+            packet_work(
+                n,
+                format!(
+                    "the `POC` volumes of tile {tile} reach {reached} packets, a step each, more than the {left} \
                  steps left of the packet work bound of {allowed} {OPTION}; retry with at \
                  least `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
+                ),
             )
         }
         WorkRefusal::DroppedBlocks { blocks } => {
             let n = factor(spent.saturating_add(blocks), default);
-            format!(
-                "the resolutions the reduction drops hold {blocks} code-blocks in one \
+            packet_work(
+                n,
+                format!(
+                    "the resolutions the reduction drops hold {blocks} code-blocks in one \
                  component of tile {tile}, a step each, more than the {left} steps left of the \
                  packet work bound of {allowed} {OPTION}; retry with at least \
                  `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
+                ),
             )
         }
     }
 }
 
-/// The message for a decode with `strict` off whose missing tiles have
+/// The [`Error::Limit`] for a decode with `strict` off whose missing tiles have
 /// `cost` tile-components, a step each, more than the `allowed` steps.
 /// `default` is the default bound.
-pub(crate) fn missing_tiles(cost: u64, allowed: u64, default: u64) -> String {
+pub(crate) fn missing_tiles(cost: u64, allowed: u64, default: u64) -> Error {
     let n = factor(cost, default);
-    format!(
-        "the missing tiles cost {cost} steps, one for each tile-component, more than the \
+    packet_work(
+        n,
+        format!(
+            "the missing tiles cost {cost} steps, one for each tile-component, more than the \
          packet work bound of {allowed} steps (see `DecodeOptions::packet_work_limit`); retry \
          with at least `WorkLimit::Raised({n})`, {TRUSTED}"
+        ),
     )
+}
+
+/// A packet work refusal that names `Raised(n)`.
+fn packet_work(n: u32, message: String) -> Error {
+    Error::limit(LimitKind::PacketWork, Some(WorkLimit::Raised(n)), message)
 }
 
 /// The advice for an image of `total` samples against a sample limit whose
 /// default is `default`: the smallest factor that admits it, or, past
 /// `u32::MAX` times the default, where no `Raised` factor does, only
-/// `Unlimited`.
-pub(crate) fn samples(total: u64, default: u64) -> String {
+/// `Unlimited`. The [`WorkLimit`] it names, and the words that name it.
+pub(crate) fn samples(total: u64, default: u64) -> (WorkLimit, String) {
     match u32::try_from(total.div_ceil(default.max(1))) {
-        Ok(n) => format!("retry with at least `WorkLimit::Raised({n})`, {TRUSTED}"),
-        Err(_) => "only `WorkLimit::Unlimited` admits it, for trusted input".into(),
+        Ok(n) => (
+            WorkLimit::Raised(n),
+            format!("retry with at least `WorkLimit::Raised({n})`, {TRUSTED}"),
+        ),
+        Err(_) => (
+            WorkLimit::Unlimited,
+            "only `WorkLimit::Unlimited` admits it, for trusted input".into(),
+        ),
     }
 }
 
-/// The message for a tile whose code-blocks need `work` sample-passes when
+/// The [`Error::Limit`] for a tile whose code-blocks need `work` sample-passes when
 /// `left` of the bound were left, after earlier tiles spent `spent`.
-pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, default: u64) -> String {
+pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, default: u64) -> Error {
     let n = factor(spent.saturating_add(work), default);
-    format!(
+    let message = format!(
         "tile {index} needs {work} sample-passes to decode its code-blocks, more than the \
          {left} left of the code-block work bound (see \
          `DecodeOptions::code_block_work_limit`); retry with at least \
          `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
+    );
+    Error::limit(
+        LimitKind::CodeBlockWork,
+        Some(WorkLimit::Raised(n)),
+        message,
     )
 }
 
@@ -110,9 +139,22 @@ pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, defaul
 mod tests {
     use super::*;
 
-    fn named(message: &str) -> u32 {
-        let (_, rest) = message.split_once("`WorkLimit::Raised(").unwrap();
-        rest.split_once(')').unwrap().0.parse().unwrap()
+    /// The factor `error` names, read from its data, after checking that
+    /// its message names the same one.
+    fn named(error: &Error) -> u32 {
+        let Error::Limit(limit) = error else {
+            panic!("{error:?}");
+        };
+        let Some(WorkLimit::Raised(n)) = limit.retry_with() else {
+            panic!("{error:?}");
+        };
+        assert!(
+            limit
+                .message()
+                .contains(&format!("`WorkLimit::Raised({n})`")),
+            "{error:?}"
+        );
+        n
     }
 
     /// The code-block factor counts what earlier tiles spent.

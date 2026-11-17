@@ -54,7 +54,7 @@ fn color_of(bytes: &[u8]) -> ColorSpace {
 fn refused(bytes: &[u8], fragment: &str) {
     match decode(bytes) {
         Err(Error::FileFormat(message)) => assert!(
-            message.contains(fragment),
+            message.message().contains(fragment),
             "expected a FileFormat error mentioning {fragment:?}, got {message:?}"
         ),
         other => panic!("expected FileFormat mentioning {fragment:?}, got {other:?}"),

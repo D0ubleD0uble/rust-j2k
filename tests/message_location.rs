@@ -33,7 +33,7 @@ fn set_psot(data: &mut [u8], sot: usize, value: u32) {
 
 fn codestream_error(data: &[u8]) -> String {
     match decode(data) {
-        Err(Error::Codestream(m)) => m,
+        Err(Error::Codestream(m)) => m.message().to_owned(),
         other => panic!("expected Error::Codestream, got {other:?}"),
     }
 }

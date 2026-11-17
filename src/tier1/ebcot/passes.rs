@@ -1001,7 +1001,7 @@ fn read_segmentation_symbol(
         symbol = (symbol << 1) | mq.decode(&mut cx[CTX_UNI as usize]);
     }
     if symbol != 0b1010 && (terminated || !mq.ran_past_end()) {
-        return Err(Error::Codestream(format!(
+        return Err(Error::codestream(format!(
             "segmentation symbol at the end of a cleanup pass is {symbol:#06b}, expected 0b1010; \
              the coded data is corrupt"
         )));
@@ -1202,9 +1202,11 @@ pub fn decode_block<S: AsRef<[u8]>>(
     // zero bit-planes keep `top` small under any `SPrgn`, which is why
     // `undo_maxshift` carries its own `roi_shift >= 31` arm.
     if top > MAX_BIT_PLANES {
-        return Err(Error::Limit(format!(
-            "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
-        )));
+        return Err(Error::limit(
+            crate::LimitKind::BitPlanes,
+            None,
+            format!("code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"),
+        ));
     }
     if top < 1 {
         return Ok(()); // no coded magnitude planes: the block stays zero
@@ -1313,7 +1315,7 @@ pub fn decode_block<S: AsRef<[u8]>>(
         let cut = last_segment_cut && index == last_segment;
         if let PassCoder::Mq(mq) = &coder {
             if style & PTERM != 0 && !cut && !mq.ends_predictably() {
-                return Err(Error::Codestream(format!(
+                return Err(Error::codestream(format!(
                     "code-block style declares predictable termination, but a codeword segment \
                      leaves {} of its {} byte(s) unconsumed; the coded data is corrupt",
                     mq.unconsumed(),
@@ -1584,7 +1586,10 @@ mod tests {
         let Error::Codestream(message) = &err else {
             panic!("{err:?}")
         };
-        assert!(message.contains("segmentation symbol"), "{message}");
+        assert!(
+            message.message().contains("segmentation symbol"),
+            "{message}"
+        );
     }
 
     /// Decode one 4x4 code-block whose only segment is empty, so every
@@ -1612,7 +1617,10 @@ mod tests {
         let Error::Codestream(message) = &err else {
             panic!("{err:?}")
         };
-        assert!(message.contains("segmentation symbol"), "{message}");
+        assert!(
+            message.message().contains("segmentation symbol"),
+            "{message}"
+        );
     }
 
     /// A wrong symbol read from the fill past the segment end decodes on a

@@ -245,9 +245,9 @@ impl IncrementalDecoder {
                     );
                 let why = format!("the input is truncated: {why}");
                 Err(if in_boxes {
-                    Error::FileFormat(why)
+                    Error::file_format(why)
                 } else {
-                    Error::Codestream(why)
+                    Error::codestream(why)
                 })
             }
             decoded => decoded,

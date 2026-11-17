@@ -289,13 +289,17 @@ fn malformed_header_boxes_after_the_codestream_are_rejected() {
     for (what, bytes, fragment) in rows {
         match decode(&bytes) {
             Err(Error::FileFormat(message)) => assert!(
-                message.contains(fragment),
+                message.message().contains(fragment),
                 "{what}: expected a message mentioning {fragment:?}, got {message:?}"
             ),
             other => panic!("{what}: expected FileFormat, got {other:?}"),
         }
         // `read_header` reads the same boxes and agrees.
-        assert_eq!(read_header(&bytes).err(), decode(&bytes).err(), "{what}");
+        assert_eq!(
+            format!("{:?}", read_header(&bytes).err()),
+            format!("{:?}", decode(&bytes).err()),
+            "{what}"
+        );
     }
 }
 
@@ -409,13 +413,13 @@ fn the_raw_channels_keep_the_header_palette_and_definitions() {
     ]);
     assert!(decode(&cdef_twice).is_ok());
     assert!(
-        matches!(decode_raw(&cdef_twice), Err(Error::FileFormat(m)) if m.contains("a second `cdef`"))
+        matches!(decode_raw(&cdef_twice), Err(Error::FileFormat(m)) if m.message().contains("a second `cdef`"))
     );
 
     let pclr_twice = one_component(&[pclr_box()], &[pclr_box()]);
     assert!(decode(&pclr_twice).is_ok());
     assert!(
-        matches!(decode_raw(&pclr_twice), Err(Error::FileFormat(m)) if m.contains("a second `pclr`"))
+        matches!(decode_raw(&pclr_twice), Err(Error::FileFormat(m)) if m.message().contains("a second `pclr`"))
     );
 
     // A header palette without `cmap` is kept under the raw channels, so a

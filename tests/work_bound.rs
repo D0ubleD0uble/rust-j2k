@@ -26,7 +26,7 @@ fn dir() -> PathBuf {
 
 fn assert_limit(name: &str, bytes: &[u8]) {
     match decode(bytes) {
-        Err(Error::Limit(m)) => assert!(m.contains("work bound"), "{name}: {m}"),
+        Err(Error::Limit(m)) => assert!(m.message().contains("work bound"), "{name}: {m}"),
         Err(e) => panic!("{name}: expected the work bound, got {e}"),
         Ok(_) => panic!("{name}: expected the work bound, got an image"),
     }
@@ -360,7 +360,7 @@ fn a_refine_sizes_a_later_tiles_poc_bitmap_as_one_decode_does() {
 
     let lenient = DecodeOptions::default().with_strict(false);
     match decode_with(&bytes, &lenient) {
-        Err(Error::Limit(m)) => assert!(m.contains("packet_work_limit"), "{m}"),
+        Err(Error::Limit(m)) => assert_eq!(m.kind(), rust_j2k::LimitKind::PacketWork, "{m}"),
         other => panic!("{other:?}"),
     }
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
@@ -425,7 +425,9 @@ fn a_psot_zero_poc_sequence_ends_at_its_box_within_the_decodes_bitmap() {
     let file = jp2_psot0(&setskip(2048, 2), b"<a/>");
     assert!(xml(read_header(&file).unwrap().jp2.as_ref().unwrap()).is_empty());
     match decode(&file) {
-        Err(Error::Codestream(m)) => assert!(m.contains("left after the last packet"), "{m}"),
+        Err(Error::Codestream(m)) => {
+            assert!(m.message().contains("left after the last packet"), "{m}")
+        }
         other => panic!("expected a codestream error, got {other:?}"),
     }
 }

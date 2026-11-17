@@ -32,8 +32,9 @@ fn source(name: &str) -> Vec<i32> {
 fn assert_refused(name: &str, bytes: &[u8], component: usize, resolution: usize) {
     match decode(bytes) {
         Err(Error::Codestream(m)) => assert!(
-            m.contains("leave out")
-                && m.contains(&format!("component {component}, resolution {resolution},")),
+            m.message().contains("leave out")
+                && m.message()
+                    .contains(&format!("component {component}, resolution {resolution},")),
             "{name}: {m}"
         ),
         Err(e) => panic!("{name}: expected a codestream error, got {e}"),

@@ -322,8 +322,8 @@ fn invalid(bytes: &[u8], options: &DecodeOptions) -> String {
     let decoded = decode_with(bytes, options);
     match (header, decoded) {
         (Err(Error::InvalidOptions(a)), Err(Error::InvalidOptions(b))) => {
-            assert_eq!(a, b);
-            a
+            assert_eq!(a.message(), b.message());
+            a.message().to_owned()
         }
         other => panic!("{options:?}: {other:?}"),
     }

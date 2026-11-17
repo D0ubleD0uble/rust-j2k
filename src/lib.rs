@@ -160,12 +160,12 @@
 //! [`DecodeOptions::packet_work_limit`] for reading the packet headers and
 //! [`DecodeOptions::code_block_work_limit`] for decoding the code-blocks.
 //! The other guards have no option; the list is on [`Error::Limit`]. The
-//! message says which guard the file hit. For one of the three it also
-//! names a [`WorkLimit::Raised`] factor (see [`WorkLimit`] for how far to
-//! trust it).
+//! error's [`LimitDetail`] says which guard the file hit, as a
+//! [`LimitKind`]. For one of the three it also gives the [`WorkLimit`] to
+//! retry with (see [`WorkLimit`] for how far to trust it).
 //!
-//! For a file from a source you trust, lift all three. [`WorkLimit`] has an
-//! example that retries after an `Error::Limit`.
+//! For a file from a source you trust, lift all three. [`WorkLimit`] and
+//! [`LimitDetail`] have examples that retry after an `Error::Limit`.
 //!
 //! # Conformance
 //!
@@ -210,7 +210,7 @@ pub(crate) mod window;
 #[doc(hidden)]
 pub mod fuzz;
 
-pub use error::{Error, Result};
+pub use error::{Error, ErrorDetail, LimitDetail, LimitKind, Result};
 pub use header::{ComponentInfo, Header};
 pub use image::{Component, Image};
 pub use incremental::IncrementalDecoder;
@@ -304,11 +304,11 @@ pub use window::{Region, Window};
 /// [`decode_with`] can raise or lift each of the three, for a file from a
 /// source you trust: see [`DecodeOptions::sample_limit`],
 /// [`DecodeOptions::packet_work_limit`] and
-/// [`DecodeOptions::code_block_work_limit`]. The message of an
-/// [`Error::Limit`] from one of them names the option and a
-/// [`WorkLimit::Raised`] factor; [`WorkLimit`] shows a retry and how far to
-/// trust the factor. The guards with no option are listed on
-/// [`Error::Limit`].
+/// [`DecodeOptions::code_block_work_limit`]. An [`Error::Limit`] from one
+/// of them names the option, as [`LimitDetail::kind`], and the
+/// [`WorkLimit`] to retry with, as [`LimitDetail::retry_with`]; its message
+/// names both too. [`WorkLimit`] shows a retry and how far to trust the
+/// factor. The guards with no option are listed on [`Error::Limit`].
 ///
 /// Decoding is strict by default: damaged or truncated data is an
 /// [`Error`], not a partial image. With [`DecodeOptions::strict`] off,
@@ -998,9 +998,10 @@ impl Default for DecodeOptions {
 /// ask for to an estimated 1.4 GiB for a square tile, and to a few GiB for a tall,
 /// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
 /// a bound, when it codes many samples in very few bytes or is very
-/// large. The decode then fails with [`Error::Limit`], and its message names
-/// the option and a [`Raised`](WorkLimit::Raised) factor. Treat the factor as
-/// a hint, not a measure of the file:
+/// large. The decode then fails with [`Error::Limit`]. Its
+/// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`]
+/// gives a [`Raised`](WorkLimit::Raised) factor, which the message names
+/// too. Treat the factor as a hint, not a measure of the file:
 ///
 /// - For the sample limit it is exact for the check it names: the image's
 ///   samples are known from its header. Palette expansion or sRGB output is
@@ -1020,9 +1021,10 @@ impl Default for DecodeOptions {
 /// - For a file from a source you trust, use [`Unlimited`](WorkLimit::Unlimited).
 ///   The decode then takes as long as the file asks.
 /// - To keep a ceiling, use `Raised(n)` with an `n` of your own choosing,
-///   the largest cost you will accept. Read the factor from the message to
-///   size it: a file that needs `Raised(3)` is refused under `Raised(2)`. Do
-///   not parse the message in code; it is a diagnostic, not a stable format.
+///   the largest cost you will accept. Read the factor from
+///   [`LimitDetail::retry_with`] to size it: a file that needs `Raised(3)` is
+///   refused under `Raised(2)`. Do not parse the message; it is a
+///   diagnostic, not a stable format.
 ///
 /// Only these three limits can be changed. The other guards also end in
 /// [`Error::Limit`], and no option here raises them (see [`Error::Limit`]).
@@ -1040,9 +1042,10 @@ impl Default for DecodeOptions {
 /// let image = match decode(bytes) {
 ///     // The example fails if the bomb is ever admitted by default.
 ///     Ok(_) => panic!("expected the work bound to refuse this file"),
-///     // Past a limit. The message says which, and the factor.
-///     Err(Error::Limit(why)) => {
-///         println!("refused: {why}");
+///     // Past a limit. `limit.kind()` says which, and `limit.retry_with()`
+///     // the factor.
+///     Err(Error::Limit(limit)) => {
+///         println!("refused: {limit}");
 ///         // The file is trusted here, so lift all three limits. To keep a
 ///         // ceiling, use `WorkLimit::Raised(n)` for the one named instead.
 ///         let options = DecodeOptions::default()
@@ -1318,10 +1321,9 @@ fn decode_metered(
 /// Options that contradict each other, whatever the input.
 fn check_options(options: &DecodeOptions) -> Result<()> {
     if options.color == ColorOutput::Srgb && options.raw_channels {
-        return Err(Error::InvalidOptions(
+        return Err(Error::invalid_options(
             "`raw_channels` returns the channels as coded, so it cannot be combined with \
-             `ColorOutput::Srgb`"
-                .into(),
+             `ColorOutput::Srgb`",
         ));
     }
     for (name, limit) in [
@@ -1330,17 +1332,16 @@ fn check_options(options: &DecodeOptions) -> Result<()> {
         ("sample_limit", &options.sample_limit),
     ] {
         if *limit == WorkLimit::Raised(0) {
-            return Err(Error::InvalidOptions(format!(
+            return Err(Error::invalid_options(format!(
                 "`DecodeOptions::{name}` is `WorkLimit::Raised(0)`, but the factor must be \
                  at least 1"
             )));
         }
     }
     if options.max_quality_layers == Some(0) {
-        return Err(Error::InvalidOptions(
+        return Err(Error::invalid_options(
             "`DecodeOptions::max_quality_layers` is `Some(0)`, but a decode keeps at least \
-             one layer"
-                .into(),
+             one layer",
         ));
     }
     window::check_options(options)
@@ -1362,7 +1363,7 @@ fn check_reduction(
         let resolutions = u32::from(params.coding.decomposition_levels) + 1;
         if u32::from(reduction) >= resolutions {
             let place = tile.map_or_else(String::new, |index| format!(" in tile {index}"));
-            return Err(Error::InvalidOptions(format!(
+            return Err(Error::invalid_options(format!(
                 "resolution reduction {reduction} discards all {resolutions} resolutions \
                  of component {component}{place}"
             )));
@@ -1376,7 +1377,7 @@ fn check_reduction(
 /// or more have nothing to convert from, so sRGB output refuses them.
 fn check_raw_color(options: &DecodeOptions, components: usize) -> Result<()> {
     if options.color == ColorOutput::Srgb && components > 2 {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::unsupported(format!(
             "sRGB output from a raw codestream of {components} components, which declares \
              no color space"
         )));
@@ -1452,10 +1453,9 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
             // of the whole image's conversion. An area equal to the image
             // (a window clipped to it, or the only tile) is the whole image.
             if plan.replicates_chroma() && selection.area.image_rect() != siz.image_rect() {
-                return Err(Error::Unsupported(
+                return Err(Error::unsupported(
                     "sRGB output from sub-sampled sYCC chroma on an area smaller than the \
-                     image, under `DecodeOptions::region`"
-                        .into(),
+                     image, under `DecodeOptions::region`",
                 ));
             }
             // A converted image is sRGB (or gray) and carries no profile, as
@@ -1565,11 +1565,7 @@ fn decode_codestream(
         if let Some(ledger) = ledger {
             ledger.refuse();
         }
-        return Err(Error::Limit(limit_hint::missing_tiles(
-            cost,
-            meter.first(),
-            poc_bitmap,
-        )));
+        return Err(limit_hint::missing_tiles(cost, meter.first(), poc_bitmap));
     }
     for (position, tile) in cs.tiles.iter().enumerate() {
         // `tiles` holds every tile when strict, so `index` is also its
@@ -1627,13 +1623,13 @@ fn decode_codestream(
                 // The meter holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
                 // earlier tiles'.
-                return Err(Error::Limit(limit_hint::packet(
+                return Err(limit_hint::packet(
                     work,
                     index,
                     meter.spent(),
                     meter.first(),
                     poc_bitmap,
-                )));
+                ));
             }
             Err(tier2::Refused::Other(error)) => return Err(error),
         };
@@ -1736,13 +1732,13 @@ fn decode_codestream(
                 if let Some(ledger) = ledger {
                     ledger.refuse();
                 }
-                return Err(Error::Limit(limit_hint::code_blocks(
+                return Err(limit_hint::code_blocks(
                     index,
                     work,
                     *left,
                     first_work.saturating_sub(*left),
                     tier1::decode_work(bytes),
-                )));
+                ));
             };
             *left = rest;
             if let Some(ledger) = ledger {
@@ -1780,8 +1776,8 @@ fn decode_codestream(
                 .map(Option::take)
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| {
-                    Error::Inconsistent(
-                        "the color transform's three components were not all reconstructed".into(),
+                    Error::inconsistent(
+                        "the color transform's three components were not all reconstructed",
                     )
                 })?;
             // The wavelet picks the transform (G.1): 5/3 reconstructs integers
@@ -1806,7 +1802,7 @@ fn decode_codestream(
                 .siz
                 .tile_component_rect(tile.index, component)
                 .ok_or_else(|| {
-                    Error::Inconsistent(format!(
+                    Error::inconsistent(format!(
                         "no tile {} or no component {component} in `SIZ`",
                         tile.index
                     ))
@@ -1862,7 +1858,7 @@ fn footprint_of(
     let area = selection.area.component_rect(component);
     let transform = header.components.get(component).map(|c| c.coding.transform);
     let (Some(rect), Some(area), Some(transform)) = (rect, area, transform) else {
-        return Err(Error::Inconsistent(format!(
+        return Err(Error::inconsistent(format!(
             "no tile {} or no component {component} in `SIZ`",
             tile.index
         )));
@@ -2162,7 +2158,7 @@ mod tests {
         header.components[last].coding.decomposition_levels = 1;
         assert!(check_reduction(&header, 1, None).is_ok());
         let message = |tile| match check_reduction(&header, 2, tile) {
-            Err(Error::InvalidOptions(m)) => m,
+            Err(Error::InvalidOptions(m)) => m.message().to_owned(),
             other => panic!("{other:?}"),
         };
         let tail = format!("resolution reduction 2 discards all 2 resolutions of component {last}");

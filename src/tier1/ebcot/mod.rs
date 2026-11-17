@@ -69,9 +69,11 @@ pub(super) fn decode<'s, 'a>(
     // `undo_maxshift` keeps every coefficient when `roi_shift >= 31`.
     let top = top_coded_plane(numbps, block.zero_bit_planes, roi_shift);
     if top > MAX_BIT_PLANES {
-        return Err(Error::Limit(format!(
-            "code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"
-        )));
+        return Err(Error::limit(
+            crate::LimitKind::BitPlanes,
+            None,
+            format!("code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"),
+        ));
     }
     let Scratch { state, segments } = scratch;
     state.reset(block.width as u32, block.height as u32);

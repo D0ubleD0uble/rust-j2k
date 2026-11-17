@@ -115,24 +115,24 @@ impl Palette {
     /// then `NE` rows of `NPC` entries (see [`PaletteColumn::entry_bytes`]).
     pub(super) fn parse(payload: &[u8]) -> Result<Self> {
         let &[ne0, ne1, npc, ref rest @ ..] = payload else {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "the `pclr` box holds {} bytes, fewer than its 3-byte header",
                 payload.len()
             )));
         };
         let entries = u16::from_be_bytes([ne0, ne1]);
         if !(1..=MAX_ENTRIES).contains(&entries) {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "the `pclr` box declares {entries} entries; a palette holds 1 to {MAX_ENTRIES}"
             )));
         }
         if npc == 0 {
-            return Err(Error::FileFormat(
-                "the `pclr` box declares 0 palette columns".into(),
+            return Err(Error::file_format(
+                "the `pclr` box declares 0 palette columns",
             ));
         }
         let Some((bi, table)) = rest.split_at_checked(usize::from(npc)) else {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "the `pclr` box declares {npc} columns but ends inside their `Bi` bytes"
             )));
         };
@@ -146,11 +146,11 @@ impl Palette {
 
         // Bound the table by the bytes the box holds before allocating it.
         let row_bytes: usize = columns.iter().map(|c| c.entry_bytes()).sum();
-        let needed = row_bytes.checked_mul(usize::from(entries)).ok_or_else(|| {
-            Error::FileFormat("the `pclr` box's entry table size overflows".into())
-        })?;
+        let needed = row_bytes
+            .checked_mul(usize::from(entries))
+            .ok_or_else(|| Error::file_format("the `pclr` box's entry table size overflows"))?;
         if table.len() < needed {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "the `pclr` box's {entries} x {npc} entries need {needed} bytes but it holds {}",
                 table.len()
             )));
@@ -163,7 +163,7 @@ impl Palette {
                 let width = column.entry_bytes();
                 let bytes = table
                     .get(at..at + width)
-                    .ok_or_else(|| Error::Inconsistent("palette entry past its table".into()))?;
+                    .ok_or_else(|| Error::inconsistent("palette entry past its table"))?;
                 at += width;
                 values.push(entry_value(bytes));
             }
@@ -351,26 +351,22 @@ pub(crate) fn plan(
 ) -> Result<PalettePlan> {
     let (pclrs, cmaps) = (header.pclr(), header.cmap());
     if pclrs.len() > 1 {
-        return Err(Error::FileFormat(
-            "the file has more than one `pclr` box".into(),
-        ));
+        return Err(Error::file_format("the file has more than one `pclr` box"));
     }
     if cmaps.len() > 1 {
-        return Err(Error::FileFormat(
-            "the file has more than one `cmap` box".into(),
-        ));
+        return Err(Error::file_format("the file has more than one `cmap` box"));
     }
     let Some(pclr) = pclrs.first() else {
         if cmaps.is_empty() {
             return Ok(PalettePlan::None);
         }
-        return Err(Error::FileFormat(
-            "the file has a `cmap` box but no `pclr` box".into(),
+        return Err(Error::file_format(
+            "the file has a `cmap` box but no `pclr` box",
         ));
     };
     if cmap_before_pclr(header) {
-        return Err(Error::FileFormat(
-            "the `cmap` box comes before the `pclr` box it maps".into(),
+        return Err(Error::file_format(
+            "the `cmap` box comes before the `pclr` box it maps",
         ));
     }
     let palette = Palette::parse(pclr)?;
@@ -424,7 +420,7 @@ fn cmap_before_pclr(header: &Jp2Header<'_>) -> bool {
 fn parse_cmap(payload: &[u8], count: usize) -> Result<Vec<(u16, u8, u8)>> {
     let needed = count * 4;
     let Some(body) = payload.get(..needed) else {
-        return Err(Error::FileFormat(format!(
+        return Err(Error::file_format(format!(
             "the `cmap` box holds {} bytes; mapping {count} palette columns needs {needed}",
             payload.len()
         )));
@@ -454,28 +450,28 @@ fn map_channels(
     let mut used = vec![false; columns];
     for (i, &(component, mtyp, pcol)) in entries.iter().enumerate() {
         if usize::from(component) >= components {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "`cmap` channel {i} maps component {component}, but the codestream has {components}"
             )));
         }
         let column = usize::from(pcol);
         if mtyp > 1 {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "`cmap` channel {i} has mapping type {mtyp}; only 0 (direct) and 1 (palette) exist"
             )));
         }
         if column >= columns {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "`cmap` channel {i} names palette column {pcol}, but the palette has {columns}"
             )));
         }
         if mtyp == 1 && used[column] {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "`cmap` maps palette column {pcol} twice"
             )));
         }
         if mtyp == 0 && pcol != 0 {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "`cmap` channel {i} uses component {component} directly but names palette \
                  column {pcol}; a direct channel's `PCOL` must be 0"
             )));
@@ -484,14 +480,14 @@ fn map_channels(
     }
     for (i, &(_, mtyp, _)) in entries.iter().enumerate() {
         if mtyp != 0 && !used[i] {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "`cmap` channel {i} is a palette channel but palette column {i} is not mapped"
             )));
         }
     }
     for (i, &(_, mtyp, pcol)) in entries.iter().enumerate() {
         if mtyp == 1 && usize::from(pcol) != i {
-            return Err(Error::Unsupported(format!(
+            return Err(Error::unsupported(format!(
                 "`cmap` channel {i} looks up palette column {pcol}; only channel i from \
                  column i is decoded"
             )));
@@ -508,7 +504,7 @@ fn map_channels(
         .map(|(i, &(component, mtyp, pcol))| {
             Ok(if correct {
                 let column = u8::try_from(i).map_err(|_| {
-                    Error::Inconsistent(format!("palette column {i} exceeds `NPC`"))
+                    Error::inconsistent(format!("palette column {i} exceeds `NPC`"))
                 })?;
                 Source::Palette { component, column }
             } else if mtyp == 0 {
@@ -535,9 +531,9 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
     let column = palette
         .columns
         .get(label)
-        .ok_or_else(|| Error::Inconsistent(format!("no palette column {label}")))?;
+        .ok_or_else(|| Error::inconsistent(format!("no palette column {label}")))?;
     if !column.fits_i32() {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::unsupported(format!(
             "palette channel {i} has depth {} ({}), which exceeds the i32 sample container",
             column.bit_depth,
             if column.signed { "signed" } else { "unsigned" }
@@ -546,7 +542,7 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
     let component = siz
         .components
         .get(usize::from(source.component()))
-        .ok_or_else(|| Error::Inconsistent("`cmap` component past `SIZ`".into()))?;
+        .ok_or_else(|| Error::inconsistent("`cmap` component past `SIZ`"))?;
     Ok(PlannedChannel {
         source,
         bit_depth: column.bit_depth,
@@ -567,7 +563,7 @@ fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8, cap: u64)
         let index = usize::from(channel.source.component());
         let (width, height) = siz
             .component_extent_at(index, reduction)
-            .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {index}")))?;
+            .ok_or_else(|| Error::inconsistent(format!("`SIZ` declares no component {index}")))?;
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
     if total > cap {
@@ -617,7 +613,7 @@ impl PalettePlan {
         for channel in channels {
             let index = usize::from(channel.source.component());
             let slot = reads_left.get_mut(index).ok_or_else(|| {
-                Error::Inconsistent(format!(
+                Error::inconsistent(format!(
                     "`cmap` names component {index}, which was not decoded"
                 ))
             })?;

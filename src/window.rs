@@ -154,7 +154,7 @@ impl Selection {
 pub(crate) fn check_options(options: &DecodeOptions) -> Result<()> {
     if let Region::Window(w) = options.region {
         if w.x0 >= w.x1 || w.y0 >= w.y1 {
-            return Err(Error::InvalidOptions(format!(
+            return Err(Error::invalid_options(format!(
                 "the window {}..{} by {}..{} is empty",
                 w.x0, w.x1, w.y0, w.y1
             )));
@@ -162,25 +162,23 @@ pub(crate) fn check_options(options: &DecodeOptions) -> Result<()> {
     }
     if let Some(components) = &options.components {
         if components.is_empty() {
-            return Err(Error::InvalidOptions(
+            return Err(Error::invalid_options(
                 "`DecodeOptions::components` is `Some` of no component; a decode returns \
-                 at least one"
-                    .into(),
+                 at least one",
             ));
         }
         let mut sorted = components.clone();
         sorted.sort_unstable();
         if let Some(pair) = sorted.windows(2).find(|pair| pair[0] == pair[1]) {
-            return Err(Error::InvalidOptions(format!(
+            return Err(Error::invalid_options(format!(
                 "`DecodeOptions::components` names component {} more than once",
                 pair[0]
             )));
         }
         if options.color == ColorOutput::Srgb {
-            return Err(Error::InvalidOptions(
+            return Err(Error::invalid_options(
                 "`DecodeOptions::components` returns the components as coded, so it cannot \
-                 be combined with `ColorOutput::Srgb`"
-                    .into(),
+                 be combined with `ColorOutput::Srgb`",
             ));
         }
     }
@@ -199,7 +197,7 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
         None => (0..count).collect(),
         Some(list) => {
             if let Some(&past) = list.iter().find(|&&c| usize::from(c) >= count) {
-                return Err(Error::InvalidOptions(format!(
+                return Err(Error::invalid_options(format!(
                     "`DecodeOptions::components` names component {past}, but the image has \
                      {count}"
                 )));
@@ -212,7 +210,7 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
         Region::Window(window) => {
             let area = window.rect().intersect(&image);
             if area.is_empty() {
-                return Err(Error::InvalidOptions(format!(
+                return Err(Error::invalid_options(format!(
                     "the window {}..{} by {}..{} is outside the image area {}..{} by {}..{}",
                     window.x0,
                     window.x1,
@@ -227,7 +225,7 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
             Some(area)
         }
         Region::Tile(tile) => Some(siz.tile_rect(tile).ok_or_else(|| {
-            Error::InvalidOptions(format!(
+            Error::invalid_options(format!(
                 "tile {tile} is past the image's {} tiles (0 to {})",
                 siz.num_tiles(),
                 siz.num_tiles().saturating_sub(1)
@@ -246,7 +244,7 @@ pub(crate) fn select(siz: &Siz, options: &DecodeOptions) -> Result<Selection> {
     for &comp in &order {
         let (width, height) = area.component_extent_at(comp, reduction).unwrap_or((0, 0));
         if width == 0 || height == 0 {
-            return Err(Error::InvalidOptions(format!(
+            return Err(Error::invalid_options(format!(
                 "the area {}..{} by {}..{} holds no sample of component {comp} at resolution \
                  reduction {reduction}",
                 area.x_offset, area.x_size, area.y_offset, area.y_size

@@ -17,7 +17,8 @@ mod support;
 use std::time::{Duration, Instant};
 
 use rust_j2k::{
-    DecodeOptions, Error, WorkLimit, decode, decode_with, read_header, read_header_with,
+    DecodeOptions, Error, LimitDetail, LimitKind, WorkLimit, decode, decode_with, read_header,
+    read_header_with,
 };
 use support::jp2::sha256_hex;
 use support::synth::{self, Bits, seg};
@@ -206,7 +207,7 @@ fn the_large_ht_bomb_decodes_at_the_default_bound() {
 
 fn assert_limit(name: &str, result: rust_j2k::Result<rust_j2k::Image>) {
     match result {
-        Err(Error::Limit(m)) => assert!(m.contains("work bound"), "{name}: {m}"),
+        Err(Error::Limit(m)) => assert!(m.message().contains("work bound"), "{name}: {m}"),
         Err(e) => panic!("{name}: expected the work bound, got {e}"),
         Ok(_) => panic!("{name}: expected the work bound, got an image"),
     }
@@ -399,18 +400,24 @@ fn a_limit_raised_by_zero_is_invalid_options() {
     assert_limit("Raised(1)", decode_with(&bytes, &one));
 }
 
-/// The factor a `Limit` message names, as `WorkLimit::Raised(n)`.
-fn named_factor(message: &str) -> u32 {
-    let (_, rest) = message
-        .split_once("`WorkLimit::Raised(")
-        .unwrap_or_else(|| panic!("no factor named: {message}"));
-    let (digits, _) = rest.split_once(')').unwrap();
-    digits.parse().unwrap()
+/// The factor a `Limit` refusal gives as `WorkLimit::Raised(n)`, read from
+/// its data. The message names the same one.
+fn named_factor(limit: &LimitDetail) -> u32 {
+    let Some(WorkLimit::Raised(n)) = limit.retry_with() else {
+        panic!("no factor given: {limit:?}");
+    };
+    assert!(
+        limit
+            .message()
+            .contains(&format!("`WorkLimit::Raised({n})`")),
+        "{limit}"
+    );
+    n
 }
 
-fn limit_message(result: rust_j2k::Result<rust_j2k::Image>) -> String {
+fn limit_detail(result: rust_j2k::Result<rust_j2k::Image>) -> LimitDetail {
     match result {
-        Err(Error::Limit(m)) => m,
+        Err(Error::Limit(limit)) => limit,
         other => panic!("expected the work bound, got {other:?}"),
     }
 }
@@ -435,13 +442,49 @@ fn the_named_factor_is_the_smallest_that_admits_the_file() {
     ];
     for (name, set, expected) in cases {
         let bytes = fixture(name);
-        let message = limit_message(decode(&bytes));
-        let factor = named_factor(&message);
-        assert_eq!(factor, expected, "{name}: {message}");
+        let limit = limit_detail(decode(&bytes));
+        let factor = named_factor(&limit);
+        assert_eq!(factor, expected, "{name}: {limit}");
         let options = set(DecodeOptions::default(), WorkLimit::Raised(factor));
         decode_with(&bytes, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
         let one_less = set(DecodeOptions::default(), WorkLimit::Raised(factor - 1));
         assert_limit(name, decode_with(&bytes, &one_less));
+    }
+}
+
+/// The option a `Limit` refusal names, raised to what it says to retry
+/// with; `None` for a limit no option raises.
+fn raised(options: DecodeOptions, limit: &LimitDetail) -> Option<DecodeOptions> {
+    let retry = limit.retry_with()?;
+    Some(match limit.kind() {
+        LimitKind::Samples => options.with_sample_limit(retry),
+        LimitKind::PacketWork => options.with_packet_work_limit(retry),
+        LimitKind::CodeBlockWork => options.with_code_block_work_limit(retry),
+        _ => return None,
+    })
+}
+
+/// A caller can retry a refused file from the typed data alone, without
+/// reading the message: the kind names the option, and `retry_with` the
+/// limit to set it to. One retry admits each of these.
+#[test]
+fn a_retry_with_the_typed_hint_admits_the_file() {
+    for (name, kind) in [
+        (
+            "tier1_work_bound/t1bomb_1024_64_88.j2k",
+            LimitKind::CodeBlockWork,
+        ),
+        (
+            "work_bound/t2skip_2048x1024_40000.j2k",
+            LimitKind::PacketWork,
+        ),
+    ] {
+        let bytes = fixture(name);
+        let limit = limit_detail(decode(&bytes));
+        assert_eq!(limit.kind(), kind, "{name}");
+        let options = raised(DecodeOptions::default(), &limit)
+            .unwrap_or_else(|| panic!("{name}: no retry for {limit:?}"));
+        decode_with(&bytes, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
 }
 
@@ -452,8 +495,11 @@ fn the_message_names_unlimited_for_trusted_input() {
         "tier1_work_bound/t1bomb_1024_64_88.j2k",
         "work_bound/t2skip_2048x1024_40000.j2k",
     ] {
-        let message = limit_message(decode(&fixture(name)));
-        assert!(message.contains("`WorkLimit::Unlimited`"), "{message}");
+        let limit = limit_detail(decode(&fixture(name)));
+        assert!(
+            limit.message().contains("`WorkLimit::Unlimited`"),
+            "{limit}"
+        );
     }
 }
 
@@ -462,8 +508,8 @@ fn the_message_names_unlimited_for_trusted_input() {
 fn a_raised_limit_that_is_too_small_names_a_larger_factor() {
     let bytes = fixture("work_bound/sweep_rpcl_1024_64.j2k");
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
-    let message = limit_message(decode_with(&bytes, &options));
-    assert_eq!(named_factor(&message), 3, "{message}");
+    let limit = limit_detail(decode_with(&bytes, &options));
+    assert_eq!(named_factor(&limit), 3, "{limit}");
 }
 
 /// The packet bound shows only that a walk ran out, so its message names the
@@ -472,9 +518,9 @@ fn a_raised_limit_that_is_too_small_names_a_larger_factor() {
 #[test]
 fn the_packet_factor_is_the_next_one_up_not_what_the_file_needs() {
     let bytes = fixture("work_bound/cprl_tall_poc31.j2k");
-    let message = limit_message(decode(&bytes));
-    assert_eq!(named_factor(&message), 2, "{message}");
-    assert!(message.contains("may need more"), "{message}");
+    let limit = limit_detail(decode(&bytes));
+    assert_eq!(named_factor(&limit), 2, "{limit}");
+    assert!(limit.message().contains("may need more"), "{limit}");
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
     assert_limit("Raised(2)", decode_with(&bytes, &options));
 }
@@ -487,11 +533,11 @@ fn the_packet_factor_is_the_next_one_up_not_what_the_file_needs() {
 #[test]
 fn poc_volumes_name_the_factor_they_need() {
     let bytes = fixture("work_bound/pocvol_1024x512_1000_2.j2k");
-    let message = limit_message(decode(&bytes));
-    assert_eq!(named_factor(&message), 8, "{message}");
+    let limit = limit_detail(decode(&bytes));
+    assert_eq!(named_factor(&limit), 8, "{limit}");
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(7));
     assert_eq!(
-        named_factor(&limit_message(decode_with(&bytes, &options))),
+        named_factor(&limit_detail(decode_with(&bytes, &options))),
         8
     );
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(8));
@@ -509,9 +555,9 @@ fn poc_volumes_name_the_factor_they_need() {
 #[test]
 fn the_code_block_factor_counts_the_tiles_before_the_refused_one() {
     let bytes = t1bomb_tiled(512, 2);
-    let message = limit_message(decode(&bytes));
-    assert!(message.contains("tile 2 needs"), "{message}");
-    assert_eq!(named_factor(&message), 2, "{message}");
+    let limit = limit_detail(decode(&bytes));
+    assert!(limit.message().contains("tile 2 needs"), "{limit}");
+    assert_eq!(named_factor(&limit), 2, "{limit}");
     let options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Raised(2));
     decode_with(&bytes, &options).expect("within twice the bound");
 }
@@ -523,11 +569,11 @@ fn the_code_block_factor_counts_the_tiles_before_the_refused_one() {
 #[test]
 fn the_poc_factor_counts_the_visits_of_the_tiles_before_the_refused_one() {
     let bytes = fixture("work_bound/pocspent_2tiles_60000_559.j2k");
-    let message = limit_message(decode(&bytes));
-    assert_eq!(named_factor(&message), 3, "{message}");
+    let limit = limit_detail(decode(&bytes));
+    assert_eq!(named_factor(&limit), 3, "{limit}");
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
     assert_eq!(
-        named_factor(&limit_message(decode_with(&bytes, &options))),
+        named_factor(&limit_detail(decode_with(&bytes, &options))),
         3
     );
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(3));

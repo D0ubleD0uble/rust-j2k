@@ -403,7 +403,7 @@ fn geometry_rejects_a_precinct_bomb_before_allocating() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(result, Err(crate::Error::Limit(_))),
+        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::Precincts)),
         "a 1×2^24 tile-component at a 2^1 precinct must be rejected"
     );
     assert!(
@@ -432,7 +432,8 @@ fn the_precinct_budget_is_shared_across_components() {
     let first = resolution_geoms(&header, 0, 0, &mut budget, &mut block_budget);
     let second = resolution_geoms(&header, 0, 1, &mut budget, &mut block_budget);
     assert!(
-        first.is_err() || matches!(second, Err(crate::Error::Limit(_))),
+        first.is_err()
+            || matches!(&second, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::Precincts)),
         "two components sharing the budget must not both allocate their precincts"
     );
 }
@@ -783,7 +784,10 @@ fn block_count_guard_rejects_metadata_bomb() {
     let err = decode_packets(&h, &t, &mut decode_visits(0), u64::MAX, 0)
         .map_err(Error::from)
         .expect_err("guard fires before any packet parse");
-    assert!(matches!(err, crate::Error::Limit(_)), "{err}");
+    assert!(
+        crate::error::is_fixed_limit(&err, crate::LimitKind::CodeBlocks),
+        "{err}"
+    );
 }
 
 /// The block budget bites while the geometry is built, not after summing it:
@@ -805,7 +809,7 @@ fn block_count_guard_rejects_before_allocating() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(result, Err(crate::Error::Limit(_))),
+        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::CodeBlocks)),
         "an 8192×8192 single-band tile-component under 4×4 blocks must be rejected"
     );
     assert!(
@@ -1706,7 +1710,10 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
     };
     let (result, read) = walk_with(&header, 11, None);
     match result {
-        Err(Error::Limit(m)) => assert!(m.contains("work bound") && m.contains("12"), "{m}"),
+        Err(Error::Limit(m)) => assert!(
+            m.message().contains("work bound") && m.message().contains("12"),
+            "{m}"
+        ),
         other => panic!("expected the work bound, got {other:?}"),
     }
     assert_eq!(read, 0);
@@ -1822,7 +1829,7 @@ fn poc_volumes_must_cover_every_packet_of_the_tile() {
         volumes.clone(),
     ) {
         Err(Error::Codestream(m)) => assert!(
-            m.contains(&format!(
+            m.message().contains(&format!(
                 "component {comp}, resolution {res}, from layer {layer} of 3"
             )),
             "{volumes:?}: {m}"
@@ -1905,7 +1912,9 @@ fn poc_coverage_counts_each_components_own_resolutions() {
 
     header.poc[1].res_end = 1;
     match coverage(&header) {
-        Err(Error::Codestream(m)) => assert!(m.contains("component 1, resolution 1,"), "{m}"),
+        Err(Error::Codestream(m)) => {
+            assert!(m.message().contains("component 1, resolution 1,"), "{m}")
+        }
         other => panic!("expected a codestream error, got {other:?}"),
     }
 }
@@ -1937,7 +1946,8 @@ fn the_poc_coverage_error_names_the_tile() {
     match decode_packets(&header, &second, &mut decode_visits(0), u64::MAX, 0).map_err(Error::from)
     {
         Err(Error::Codestream(m)) => assert!(
-            m.contains("tile 1 leave out its packets of component 0, resolution 2,"),
+            m.message()
+                .contains("tile 1 leave out its packets of component 0, resolution 2,"),
             "{m}"
         ),
         Err(e) => panic!("expected a codestream error, got {e}"),
@@ -2014,7 +2024,7 @@ fn a_wrong_sop_sequence_number_is_codestream() {
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let e = parse_layers_with(&data, &bands, 1, SOP).unwrap_err();
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("sequence number")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("sequence number")),
         "got {e:?}"
     );
 }
@@ -2029,7 +2039,7 @@ fn a_malformed_sop_segment_is_codestream() {
     data.extend_from_slice(&[1, 2]);
     let e = parse_layers_with(&data, &bands, 1, SOP).unwrap_err();
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("Lsop")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("Lsop")),
         "got {e:?}"
     );
 
@@ -2100,7 +2110,7 @@ fn a_missing_eph_is_codestream() {
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
     let e = parse_layers_with(&data, &bands, 1, EPH).unwrap_err();
     assert!(
-        matches!(&e, Error::Codestream(m) if m.contains("EPH")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("EPH")),
         "got {e:?}"
     );
 }

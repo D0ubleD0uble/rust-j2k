@@ -379,7 +379,7 @@ fn malformed_channel_definitions_are_file_format_errors() {
     for (what, bytes, fragment) in rows {
         match decode(&bytes) {
             Err(Error::FileFormat(message)) => assert!(
-                message.contains(fragment),
+                message.message().contains(fragment),
                 "{what}: expected a message mentioning {fragment:?}, got {message:?}"
             ),
             other => panic!("{what}: expected FileFormat, got {other:?}"),
@@ -456,7 +456,9 @@ fn raw_channels_skips_the_channel_definitions() {
         ),
     ] {
         match decode_with(&bytes, &options) {
-            Err(Error::FileFormat(message)) => assert!(message.contains(fragment), "{message}"),
+            Err(Error::FileFormat(message)) => {
+                assert!(message.message().contains(fragment), "{message}")
+            }
             other => panic!("expected FileFormat, got {other:?}"),
         }
     }

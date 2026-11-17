@@ -24,7 +24,7 @@ fn options(strict: bool, reduction: u8) -> DecodeOptions {
 fn assert_refused(bytes: &[u8], what: &str) {
     for strict in [true, false] {
         match decode_with(bytes, &options(strict, 0)) {
-            Err(Error::Codestream(message)) => assert_eq!(message, MESSAGE, "{what}"),
+            Err(Error::Codestream(message)) => assert_eq!(message.message(), MESSAGE, "{what}"),
             other => panic!("{what}, strict {strict}: expected Codestream, got {other:?}"),
         }
     }

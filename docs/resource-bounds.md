@@ -7,8 +7,10 @@ asks for, so a file of under a kilobyte can make it run for many seconds
 allocate gigabytes. This decoder caps three such costs: the samples it
 allocates, the packet-header walk (tier 2) and the code-block decoding
 (tier 1). A file past a cap is refused with `Error::Limit` before the work
-is done. The `Limit` message names the option that raises the cap and the
-smallest `WorkLimit::Raised(n)` that admits the file.
+is done. The error's `LimitDetail` says which cap it was (`kind()`, a
+`LimitKind`) and gives the smallest `WorkLimit::Raised(n)` that admits the
+file (`retry_with()`), and its message names both. A caller can retry from
+those two without reading the message.
 
 | Bound | Default | Option in `DecodeOptions` | Margin over encoder output | Tests |
 | ----- | ------- | ------------------------- | -------------------------- | ----- |
@@ -24,7 +26,7 @@ cap ([Tile header cost](#tile-header-cost)).
 
 A few fixed guards also return `Limit`, and no option lifts them: 2^18
 precincts and 2^19 code-blocks per tile, 32 POC progression volumes, and 30
-coded bit-planes per code-block.
+coded bit-planes per code-block. Their `retry_with()` is `None`.
 
 The caps count work, not time: samples, packet-walk steps and code-block
 sample-passes, each defined below. The times on this page were measured on

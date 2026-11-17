@@ -19,7 +19,12 @@ pub fn check(bytes: &[u8], options: &DecodeOptions, strict: &Result<Image>) {
         let partial = lenient.as_ref().expect("strict decodes, so partial does");
         assert_eq!(
             (image.width, image.height, &image.components, &image.jp2),
-            (partial.width, partial.height, &partial.components, &partial.jp2),
+            (
+                partial.width,
+                partial.height,
+                &partial.components,
+                &partial.jp2
+            ),
             "the same image"
         );
         assert_eq!(partial.report, rust_j2k::DecodeReport::default());

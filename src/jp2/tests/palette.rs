@@ -247,7 +247,7 @@ fn every_validation_row_is_a_file_format_error() {
     for (what, bytes, fragment) in rows {
         match decode(&bytes) {
             Err(Error::FileFormat(message)) => assert!(
-                message.contains(fragment),
+                message.message().contains(fragment),
                 "{what}: expected a message mentioning {fragment:?}, got {message:?}"
             ),
             other => panic!("{what}: expected FileFormat, got {other:?}"),

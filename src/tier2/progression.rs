@@ -338,7 +338,7 @@ pub(crate) fn check_poc_coverage(
 ) -> Result<()> {
     let layers = header.cod.layers;
     poc_gaps(header, walk, |comp, res, reached| {
-        Err(Error::Codestream(format!(
+        Err(Error::codestream(format!(
             "the `POC` volumes of tile {tile} leave out its packets of component \
              {comp}, resolution {res}, from layer {reached} of {layers}"
         )))
@@ -534,10 +534,14 @@ impl Emitted {
             }
             Some(words) => Marks::Dense(vec![0; words]),
             None if !poc_set => {
-                return Err(Error::Limit(format!(
-                    "tile packet walk exceeds its work bound: its `POC` volumes hold \
+                return Err(Error::limit(
+                    crate::LimitKind::PacketWork,
+                    None,
+                    format!(
+                        "tile packet walk exceeds its work bound: its `POC` volumes hold \
                      {reached} packets, past the packet bitmap"
-                )));
+                    ),
+                ));
             }
             None => Marks::Sparse(HashSet::default()),
         };
@@ -612,7 +616,7 @@ impl Emitted {
                     .ok()
                     .and_then(|w| words.get_mut(w))
                     .ok_or_else(|| {
-                        Error::Inconsistent(format!("packet {bit} past the `POC` bitmap"))
+                        Error::inconsistent(format!("packet {bit} past the `POC` bitmap"))
                     })?;
                 let mask = 1u64 << (bit % 64);
                 let new = *word & mask == 0;

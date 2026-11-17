@@ -254,7 +254,7 @@ mod harness {
     #[test]
     fn decode_error_classifies_as_failed() {
         let want = snapshot(geometry(1, 1), Tolerance::Exact, vec![42]);
-        let decoded = Ok(Err(Error::Unsupported("nope".into())));
+        let decoded = Ok(Err(rust_j2k::decode(b"nope").unwrap_err()));
         assert!(matches!(
             classify(decoded, &want),
             Outcome::Failed(Mismatch::DecodeError(_))

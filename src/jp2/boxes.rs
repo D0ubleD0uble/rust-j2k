@@ -121,13 +121,13 @@ impl<'a> Boxes<'a> {
                 (u32::from_be_bytes([*a, *b, *c, *d]), [*t0, *t1, *t2, *t3])
             }
             _ if self.open_ended => {
-                return Err(Error::Incomplete(format!(
+                return Err(Error::incomplete(format!(
                     "the input ends inside a box header, after {} of its 8 bytes",
                     rest.len()
                 )));
             }
             _ => {
-                return Err(Error::FileFormat(format!(
+                return Err(Error::file_format(format!(
                     "a box header needs 8 bytes but {} remain in {}",
                     rest.len(),
                     self.parent
@@ -146,7 +146,7 @@ impl<'a> Boxes<'a> {
         let (length, header): (u64, usize) = match lbox {
             0 if self.open_ended => (rest.len() as u64, 8),
             0 => {
-                return Err(Error::FileFormat(format!(
+                return Err(Error::file_format(format!(
                     "box `{name}` in {} has length 0 (to the end of the file), which only the \
                      last box of the file may use",
                     self.parent
@@ -155,11 +155,11 @@ impl<'a> Boxes<'a> {
             1 => {
                 let Some(xl) = rest.get(8..16) else {
                     if self.open_ended {
-                        return Err(Error::Incomplete(format!(
+                        return Err(Error::incomplete(format!(
                             "the input ends inside the 16-byte header of box `{name}`"
                         )));
                     }
-                    return Err(Error::FileFormat(format!(
+                    return Err(Error::file_format(format!(
                         "box `{name}` has a 64-bit length but its `XLBox` field is truncated"
                     )));
                 };
@@ -169,7 +169,7 @@ impl<'a> Boxes<'a> {
                 match xlbox {
                     0..16 if codestream => (rest.len() as u64, 16),
                     0..16 => {
-                        return Err(Error::FileFormat(format!(
+                        return Err(Error::file_format(format!(
                             "box `{name}` has `XLBox` {xlbox}, shorter than its 16-byte header"
                         )));
                     }
@@ -178,7 +178,7 @@ impl<'a> Boxes<'a> {
             }
             2..=7 if codestream => (rest.len() as u64, 8),
             2..=7 => {
-                return Err(Error::FileFormat(format!(
+                return Err(Error::file_format(format!(
                     "box `{name}` has length {lbox}, shorter than its 8-byte header"
                 )));
             }
@@ -193,13 +193,13 @@ impl<'a> Boxes<'a> {
             length
         };
         if length > rest.len() as u64 && self.open_ended {
-            return Err(Error::Incomplete(format!(
+            return Err(Error::incomplete(format!(
                 "the input ends inside box `{name}`, which is {length} bytes, after {} of them",
                 rest.len()
             )));
         }
         if length > rest.len() as u64 {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "box `{name}` is {length} bytes but only {} remain in {}",
                 rest.len(),
                 self.parent
@@ -209,12 +209,12 @@ impl<'a> Boxes<'a> {
         // in bounds; `header <= length` was checked per form above.
         let length = length as usize;
         let payload = rest.get(header..length).ok_or_else(|| {
-            Error::Inconsistent(format!("box `{name}` bounds checked but not sliceable"))
+            Error::inconsistent(format!("box `{name}` bounds checked but not sliceable"))
         })?;
         self.pos = self
             .pos
             .checked_add(length)
-            .ok_or_else(|| Error::Inconsistent("box offset overflow".into()))?;
+            .ok_or_else(|| Error::inconsistent("box offset overflow"))?;
         self.cut_kind = None;
         Ok(Jp2Box { kind, payload })
     }
@@ -243,7 +243,7 @@ pub(crate) const READ_BY_OPENJPEG: [&[u8; 4]; 9] = [
 
 /// What [`walk_after_codestream`] found: the whole boxes it stepped over, in
 /// file order, and the length fault that ended it, if one did.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct AfterCodestream<'a> {
     /// The boxes walked, in file order.
     pub(crate) boxes: Vec<Jp2Box<'a>>,
@@ -292,7 +292,7 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
         }
         if (length as usize) < header {
             let field = if lbox == 1 { "`XLBox`" } else { "length" };
-            break Some(Error::FileFormat(format!(
+            break Some(Error::file_format(format!(
                 "box `{}` after the codestream has {field} {length}, shorter than its \
                  {header}-byte header",
                 type_name(kind)
@@ -300,7 +300,7 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
         }
         let Some(payload) = rest.get(header..length as usize) else {
             if READ_BY_OPENJPEG.contains(&&kind) {
-                break Some(Error::FileFormat(format!(
+                break Some(Error::file_format(format!(
                     "box `{}` after the codestream is {length} bytes but only {} remain in \
                      the file",
                     type_name(kind),

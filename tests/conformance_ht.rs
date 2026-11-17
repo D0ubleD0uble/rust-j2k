@@ -1331,7 +1331,7 @@ fn file10_reports_application_defined_channels_and_no_color_space() {
         assert!(
             matches!(
                 rust_j2k::decode_with(&bytes, &srgb),
-                Err(rust_j2k::Error::Unsupported(m)) if m.contains("no color specification")
+                Err(rust_j2k::Error::Unsupported(m)) if m.message().contains("no color specification")
             ),
             "{name}"
         );

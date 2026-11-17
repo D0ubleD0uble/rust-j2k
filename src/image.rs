@@ -237,7 +237,7 @@ impl Canvas {
         let mut kept = vec![false; count];
         for &index in order {
             let slot = kept.get_mut(index).ok_or_else(|| {
-                Error::Inconsistent(format!("`SIZ` declares no component {index}"))
+                Error::inconsistent(format!("`SIZ` declares no component {index}"))
             })?;
             *slot = true;
         }
@@ -245,7 +245,7 @@ impl Canvas {
             rects.push(
                 area.component_rect(index)
                     .ok_or_else(|| {
-                        Error::Inconsistent(format!("`SIZ` declares no component {index}"))
+                        Error::inconsistent(format!("`SIZ` declares no component {index}"))
                     })?
                     .reduced(reduction),
             );
@@ -254,7 +254,7 @@ impl Canvas {
                     .components
                     .get(index)
                     .ok_or_else(|| {
-                        Error::Inconsistent(format!("no coding parameters for component {index}"))
+                        Error::inconsistent(format!("no coding parameters for component {index}"))
                     })?
                     .coding
                     .transform,
@@ -286,9 +286,9 @@ impl Canvas {
             .get_mut(index)
             .zip(self.rects.get(index))
             .zip(self.transforms.get(index))
-            .ok_or_else(|| Error::Inconsistent(format!("no canvas plane for component {index}")))?;
+            .ok_or_else(|| Error::inconsistent(format!("no canvas plane for component {index}")))?;
         if samples.len() as u64 != rect.area() {
-            return Err(Error::Inconsistent(format!(
+            return Err(Error::inconsistent(format!(
                 "component {index} of a tile reconstructed {} samples but its {}x{} rectangle \
                  holds {}",
                 samples.len(),
@@ -302,7 +302,7 @@ impl Canvas {
             (Transform::Reversible53, Samples::Reversible(_))
                 | (Transform::Irreversible97, Samples::Irreversible(_))
         ) {
-            return Err(Error::Inconsistent(format!(
+            return Err(Error::inconsistent(format!(
                 "a tile reconstructed component {index} on the other wavelet's arithmetic"
             )));
         }
@@ -319,7 +319,7 @@ impl Canvas {
         // inside the canvas. A window keeps the part of a tile inside it.
         let clip = rect.intersect(canvas);
         if !self.windowed && clip != rect {
-            return Err(Error::Inconsistent(format!(
+            return Err(Error::inconsistent(format!(
                 "a tile's component {index} rectangle {rect:?} falls outside the canvas {canvas:?}",
             )));
         }
@@ -342,7 +342,7 @@ impl Canvas {
             (Samples::Reversible(dst), Samples::Reversible(src)) => copy.run(dst, &src),
             (Samples::Irreversible(dst), Samples::Irreversible(src)) => copy.run(dst, &src),
             _ => {
-                return Err(Error::Inconsistent(format!(
+                return Err(Error::inconsistent(format!(
                     "a tile reconstructed component {index} on the other wavelet's arithmetic"
                 )));
             }
@@ -453,14 +453,14 @@ pub(crate) fn assemble_over(
     reduction: u8,
 ) -> Result<Image> {
     if samples.len() != order.len() {
-        return Err(Error::Inconsistent(format!(
+        return Err(Error::inconsistent(format!(
             "decoded {} components but the decode returns {}",
             samples.len(),
             order.len(),
         )));
     }
     if samples.is_empty() {
-        return Err(Error::Inconsistent("`SIZ` declares no components".into()));
+        return Err(Error::inconsistent("`SIZ` declares no components"));
     }
 
     let components = samples
@@ -551,7 +551,7 @@ fn assemble_component(
     let comp = siz
         .components
         .get(index)
-        .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {index}")))?;
+        .ok_or_else(|| Error::inconsistent(format!("`SIZ` declares no component {index}")))?;
 
     let depth = comp.bit_depth;
     // The standard allows 1..=38 (Table A-11) and `decode_siz` enforces it;
@@ -560,12 +560,12 @@ fn assemble_component(
     // does not fit the i32 sample container (33..=38, and unsigned 32) fall
     // through to the container check, which rejects them as Unsupported.
     if !(1..=38).contains(&depth) {
-        return Err(Error::Marker(format!(
+        return Err(Error::marker(format!(
             "component {index} has bit depth {depth}, outside the standard's range of 1 to 38"
         )));
     }
     if comp.x_sampling == 0 || comp.y_sampling == 0 {
-        return Err(Error::Marker(format!(
+        return Err(Error::marker(format!(
             "component {index} sub-sampling factor is zero"
         )));
     }
@@ -573,11 +573,11 @@ fn assemble_component(
     // Safe now that the zero-factor case above is excluded.
     let (width, height) = siz
         .component_extent_at(index, reduction)
-        .ok_or_else(|| Error::Inconsistent(format!("`SIZ` declares no component {index}")))?;
+        .ok_or_else(|| Error::inconsistent(format!("`SIZ` declares no component {index}")))?;
 
     let expected = (width as usize) * (height as usize);
     if samples.len() != expected {
-        return Err(Error::Inconsistent(format!(
+        return Err(Error::inconsistent(format!(
             "component {index} decoded {} samples but its geometry is {width}x{height} = {expected}",
             samples.len()
         )));
@@ -596,7 +596,7 @@ fn assemble_component(
     // represented (e.g. unsigned 32-bit, whose max is `2^32 - 1`). Checked once
     // so the per-sample cast below is always exact.
     if hi > i32::MAX as i64 || lo < i32::MIN as i64 {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::unsupported(format!(
             "component {index} depth {depth} ({}) exceeds the i32 sample container",
             if comp.signed { "signed" } else { "unsigned" }
         )));

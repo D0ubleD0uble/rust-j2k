@@ -103,22 +103,22 @@ impl Entry {
 /// length is checked before anything is allocated.
 fn parse(payload: &[u8], jph: bool) -> Result<Vec<Entry>> {
     let &[n0, n1, ref body @ ..] = payload else {
-        return Err(Error::FileFormat(format!(
+        return Err(Error::file_format(format!(
             "the `cdef` box holds {} bytes, fewer than its 2-byte count",
             payload.len()
         )));
     };
     let count = u16::from_be_bytes([n0, n1]);
     if count == 0 {
-        return Err(Error::FileFormat(
-            "the `cdef` box declares 0 channel definitions".into(),
+        return Err(Error::file_format(
+            "the `cdef` box declares 0 channel definitions",
         ));
     }
     let needed = usize::from(count)
         .checked_mul(ENTRY_BYTES)
-        .ok_or_else(|| Error::FileFormat("the `cdef` box's size overflows".into()))?;
+        .ok_or_else(|| Error::file_format("the `cdef` box's size overflows"))?;
     let Some(entries) = body.get(..needed) else {
-        return Err(Error::FileFormat(format!(
+        return Err(Error::file_format(format!(
             "the `cdef` box declares {count} channel definitions ({needed} bytes) but holds {}",
             body.len()
         )));
@@ -190,9 +190,7 @@ pub(crate) fn plan(
 ) -> Result<ChannelPlan> {
     let boxes = header.cdef();
     if boxes.len() > 1 {
-        return Err(Error::FileFormat(
-            "the file has more than one `cdef` box".into(),
-        ));
+        return Err(Error::file_format("the file has more than one `cdef` box"));
     }
     let Some(payload) = boxes.first() else {
         return Ok(ChannelPlan::None);
@@ -212,7 +210,7 @@ pub(crate) fn plan(
 fn check(entries: &[Entry], channels: usize) -> Result<()> {
     for (i, entry) in entries.iter().enumerate() {
         if usize::from(entry.channel) >= channels {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "`cdef` entry {i} describes channel {}, but the file has {channels}",
                 entry.channel
             )));
@@ -221,7 +219,7 @@ fn check(entries: &[Entry], channels: usize) -> Result<()> {
             && !matches!(entry.association, 0 | 65535)
             && usize::from(entry.association) > channels
         {
-            return Err(Error::FileFormat(format!(
+            return Err(Error::file_format(format!(
                 "`cdef` entry {i} associates channel {} with color {}, but the file has \
                  {channels} channels",
                 entry.channel, entry.association
@@ -236,7 +234,7 @@ fn check(entries: &[Entry], channels: usize) -> Result<()> {
         }
     }
     if let Some(missing) = named.iter().position(|&n| !n) {
-        return Err(Error::FileFormat(format!(
+        return Err(Error::file_format(format!(
             "the `cdef` box does not define channel {missing}; it must define every channel"
         )));
     }
@@ -285,7 +283,7 @@ impl ChannelPlan {
             return Ok(components);
         };
         if order.len() != components.len() {
-            return Err(Error::Inconsistent(format!(
+            return Err(Error::inconsistent(format!(
                 "the `cdef` plan covers {} channels but {} were decoded",
                 order.len(),
                 components.len()
@@ -296,7 +294,7 @@ impl ChannelPlan {
             .iter()
             .map(|&from| {
                 slots.get_mut(from).and_then(Option::take).ok_or_else(|| {
-                    Error::Inconsistent(format!("`cdef` places channel {from} twice"))
+                    Error::inconsistent(format!("`cdef` places channel {from} twice"))
                 })
             })
             .collect()

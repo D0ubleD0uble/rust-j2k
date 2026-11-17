@@ -400,7 +400,9 @@ pub fn grade_decode(
     }));
     let image = match decoded {
         Err(_) => return Grade::Failed("panicked (decode must return a typed error)".into()),
-        Ok(Err(Error::Unsupported(what))) => return Grade::NotYetDecoded(what),
+        Ok(Err(Error::Unsupported(what))) => {
+            return Grade::NotYetDecoded(what.message().to_owned());
+        }
         Ok(Err(e)) => return Grade::Failed(format!("decoder rejected a valid codestream: {e}")),
         Ok(Ok(image)) => image,
     };
