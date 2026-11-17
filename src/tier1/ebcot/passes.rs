@@ -1202,9 +1202,8 @@ pub fn decode_block<S: AsRef<[u8]>>(
     // zero bit-planes keep `top` small under any `SPrgn`, which is why
     // `undo_maxshift` carries its own `roi_shift >= 31` arm.
     if top > MAX_BIT_PLANES {
-        return Err(Error::limit(
+        return Err(Error::limit_fixed(
             crate::LimitKind::BitPlanes,
-            None,
             format!("code-block needs {top} bit-planes, over the {MAX_BIT_PLANES}-plane limit"),
         ));
     }

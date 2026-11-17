@@ -403,7 +403,7 @@ fn geometry_rejects_a_precinct_bomb_before_allocating() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::Precincts)),
+        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::TilePrecincts)),
         "a 1×2^24 tile-component at a 2^1 precinct must be rejected"
     );
     assert!(
@@ -433,7 +433,7 @@ fn the_precinct_budget_is_shared_across_components() {
     let second = resolution_geoms(&header, 0, 1, &mut budget, &mut block_budget);
     assert!(
         first.is_err()
-            || matches!(&second, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::Precincts)),
+            || matches!(&second, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::TilePrecincts)),
         "two components sharing the budget must not both allocate their precincts"
     );
 }
@@ -785,7 +785,7 @@ fn block_count_guard_rejects_metadata_bomb() {
         .map_err(Error::from)
         .expect_err("guard fires before any packet parse");
     assert!(
-        crate::error::is_fixed_limit(&err, crate::LimitKind::CodeBlocks),
+        crate::error::is_fixed_limit(&err, crate::LimitKind::TileCodeBlocks),
         "{err}"
     );
 }
@@ -809,7 +809,7 @@ fn block_count_guard_rejects_before_allocating() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::CodeBlocks)),
+        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::TileCodeBlocks)),
         "an 8192×8192 single-band tile-component under 4×4 blocks must be rejected"
     );
     assert!(

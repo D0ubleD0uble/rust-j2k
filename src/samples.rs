@@ -87,9 +87,8 @@ pub(crate) fn cap(limit: &WorkLimit) -> u64 {
 /// [`WorkLimit::Unlimited`]), or says that the target cannot address that many.
 pub(crate) fn over(what: &str, total: u64, cap: u64) -> Error {
     if total > ADDRESSABLE_SAMPLES {
-        return Error::limit(
+        return Error::limit_fixed(
             crate::LimitKind::AddressSpace,
-            None,
             format!(
                 "{what} needs {total} samples, more than this target can address \
              ({ADDRESSABLE_SAMPLES})"
@@ -97,9 +96,9 @@ pub(crate) fn over(what: &str, total: u64, cap: u64) -> Error {
         );
     }
     let (retry, advice) = crate::limit_hint::samples(total, MAX_IMAGE_SAMPLES);
-    Error::limit(
+    Error::limit_retry(
         crate::LimitKind::Samples,
-        Some(retry),
+        retry,
         format!(
             "{what} needs {total} samples, over the sample limit of {cap} (see \
              `DecodeOptions::sample_limit`); {advice}"

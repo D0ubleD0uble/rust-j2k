@@ -2195,9 +2195,8 @@ fn resolved_poc_len(main: &MainHeader, tile: &TileHeader) -> usize {
 /// Reject a progression-volume count past [`MAX_POC_VOLUMES`].
 fn check_poc_budget(volumes: usize) -> Result<()> {
     if volumes > MAX_POC_VOLUMES {
-        return Err(Error::limit(
+        return Err(Error::limit_fixed(
             crate::LimitKind::PocVolumes,
-            None,
             format!(
                 "the `POC` markers declare {volumes} progression volumes for a tile, over the \
              limit of {MAX_POC_VOLUMES}"

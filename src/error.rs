@@ -209,6 +209,29 @@ impl fmt::Display for Error {
     }
 }
 
+impl Error {
+    /// The diagnostic, without the prefix that `Display` adds for the
+    /// variant. Its wording can change between releases, so do not parse it
+    /// or compare it.
+    ///
+    /// ```
+    /// let error = rust_j2k::decode(b"hello").unwrap_err();
+    /// assert_eq!(error.to_string(), format!("codestream: {}", error.message()));
+    /// ```
+    pub fn message(&self) -> &str {
+        match self {
+            Error::Codestream(d)
+            | Error::Incomplete(d)
+            | Error::Marker(d)
+            | Error::FileFormat(d)
+            | Error::Unsupported(d)
+            | Error::InvalidOptions(d)
+            | Error::Inconsistent(d) => d.message(),
+            Error::Limit(d) => d.message(),
+        }
+    }
+}
+
 impl std::error::Error for Error {}
 
 /// The constructors the decoder uses, one for each variant.
@@ -241,14 +264,31 @@ impl Error {
         Error::Inconsistent(ErrorDetail::new(message))
     }
 
-    /// An [`Error::Limit`] for `kind`, where `retry_with` is the limit that
-    /// may admit the input, when an option raises `kind`.
-    pub(crate) fn limit(
+    /// An [`Error::Limit`] for a `kind` that no option raises.
+    pub(crate) fn limit_fixed(kind: LimitKind, message: impl Into<String>) -> Error {
+        debug_assert!(!kind.is_adjustable(), "{kind:?} has an option");
+        Error::limit(kind, None, message.into())
+    }
+
+    /// An [`Error::Limit`] for an adjustable `kind`, where `retry_with` is
+    /// the limit that may admit the input.
+    pub(crate) fn limit_retry(
         kind: LimitKind,
-        retry_with: Option<WorkLimit>,
+        retry_with: WorkLimit,
         message: impl Into<String>,
     ) -> Error {
-        let message = message.into();
+        debug_assert!(kind.is_adjustable(), "{kind:?} has no option");
+        Error::limit(kind, Some(retry_with), message.into())
+    }
+
+    /// An [`Error::Limit`] for an adjustable `kind` whose refusal shows no
+    /// limit to retry with.
+    pub(crate) fn limit_unhinted(kind: LimitKind, message: impl Into<String>) -> Error {
+        debug_assert!(kind.is_adjustable(), "{kind:?} has no option");
+        Error::limit(kind, None, message.into())
+    }
+
+    fn limit(kind: LimitKind, retry_with: Option<WorkLimit>, message: String) -> Error {
         debug_assert!(
             names_its_data(kind, retry_with.as_ref(), &message),
             "{kind:?}, {retry_with:?}: {message}"
@@ -342,8 +382,10 @@ impl fmt::Display for ErrorDetail {
 ///     panic!("expected the code-block work bound to refuse this file");
 /// };
 /// assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
-/// let retry = limit.retry_with().expect("an option raises this limit");
-/// let options = DecodeOptions::default().with_code_block_work_limit(retry);
+/// assert!(limit.kind().is_adjustable());
+/// let options = DecodeOptions::default()
+///     .with_retry(&limit)
+///     .expect("an option raises this limit");
 /// assert!(decode_with(bytes, &options).is_ok());
 /// ```
 #[derive(Debug, Clone)]
@@ -369,8 +411,13 @@ impl LimitDetail {
     /// [`Unlimited`](WorkLimit::Unlimited) for an image past every factor.
     /// It is worked out from what the refusal shows, so a retry with it can
     /// still be refused, by this limit later in the file or by another
-    /// limit (see [`WorkLimit`]). It is also `None` for a packet work
-    /// refusal that shows no factor, such as one while reading the header.
+    /// limit (see [`WorkLimit`]), or fail with another error once past it,
+    /// such as damage the limit stopped the decode before. It is also
+    /// `None` for a packet work refusal that shows no factor, such as one
+    /// while reading the header.
+    ///
+    /// [`DecodeOptions::with_retry`](crate::DecodeOptions::with_retry)
+    /// applies it to the option `kind` names.
     pub fn retry_with(&self) -> Option<WorkLimit> {
         self.retry_with.clone()
     }
@@ -414,13 +461,28 @@ pub enum LimitKind {
     /// any sample limit.
     AddressSpace,
     /// A tile of more than 2^19 code-blocks.
-    CodeBlocks,
+    TileCodeBlocks,
     /// A tile of more than 2^18 precincts.
-    Precincts,
-    /// A tile of more than 32 progression order change (`POC`) volumes.
+    TilePrecincts,
+    /// A tile's progression order change (`POC`) volumes past a fixed cap:
+    /// more than 32 of them, or more packets than the decoder tracks for
+    /// them.
     PocVolumes,
     /// A code-block of more than 30 bit-planes.
     BitPlanes,
+}
+
+impl LimitKind {
+    /// Whether a [`DecodeOptions`](crate::DecodeOptions) limit raises this
+    /// one: true for [`Samples`](Self::Samples),
+    /// [`PacketWork`](Self::PacketWork) and
+    /// [`CodeBlockWork`](Self::CodeBlockWork).
+    pub fn is_adjustable(self) -> bool {
+        matches!(
+            self,
+            LimitKind::Samples | LimitKind::PacketWork | LimitKind::CodeBlockWork
+        )
+    }
 }
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -435,4 +497,50 @@ pub(crate) fn keyed<T>(result: Result<T>) -> core::result::Result<T, String> {
 #[cfg(test)]
 pub(crate) fn is_fixed_limit(error: &Error, kind: LimitKind) -> bool {
     matches!(error, Error::Limit(limit) if limit.kind() == kind && limit.retry_with().is_none())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `keyed` compares errors by their `Debug` text, so that text must hold
+    // the variant, the message and a limit's data.
+    #[test]
+    fn debug_shows_the_variant_the_data_and_the_message() {
+        assert_eq!(
+            format!("{:?}", crate::decode(b"hello").unwrap_err()),
+            "Codestream(\"does not start with the `SOC` marker\")"
+        );
+        let limit = Error::limit_fixed(LimitKind::BitPlanes, "31 bit-planes");
+        assert_eq!(
+            format!("{limit:?}"),
+            "Limit(LimitDetail { kind: BitPlanes, retry_with: None, message: \"31 bit-planes\" })"
+        );
+    }
+
+    #[test]
+    fn message_drops_the_prefix() {
+        let error = Error::marker("reserved");
+        assert_eq!(error.to_string(), "marker: reserved");
+        assert_eq!(error.message(), "reserved");
+        let limit = Error::limit_fixed(LimitKind::PocVolumes, "33 volumes");
+        assert_eq!(limit.message(), "33 volumes");
+    }
+
+    #[test]
+    fn the_three_options_are_the_adjustable_kinds() {
+        use LimitKind::*;
+        for kind in [Samples, PacketWork, CodeBlockWork] {
+            assert!(kind.is_adjustable(), "{kind:?}");
+        }
+        for kind in [
+            AddressSpace,
+            TileCodeBlocks,
+            TilePrecincts,
+            PocVolumes,
+            BitPlanes,
+        ] {
+            assert!(!kind.is_adjustable(), "{kind:?}");
+        }
+    }
 }

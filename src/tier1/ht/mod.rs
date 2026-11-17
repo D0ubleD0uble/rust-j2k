@@ -180,9 +180,8 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
     // that does not fit.
     let coded = planes - zbp;
     if coded > MAX_BIT_PLANES {
-        return Err(Error::limit(
+        return Err(Error::limit_fixed(
             crate::LimitKind::BitPlanes,
-            None,
             if params.roi_shift == 0 {
                 format!(
                     "HT code-block of {coded} bit-planes (a subband of {numbps} and {zbp} \

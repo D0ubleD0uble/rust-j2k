@@ -534,9 +534,8 @@ impl Emitted {
             }
             Some(words) => Marks::Dense(vec![0; words]),
             None if !poc_set => {
-                return Err(Error::limit(
-                    crate::LimitKind::PacketWork,
-                    None,
+                return Err(Error::limit_fixed(
+                    crate::LimitKind::PocVolumes,
                     format!(
                         "tile packet walk exceeds its work bound: its `POC` volumes hold \
                      {reached} packets, past the packet bitmap"

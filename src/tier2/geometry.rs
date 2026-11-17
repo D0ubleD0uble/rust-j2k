@@ -328,9 +328,8 @@ pub(crate) fn resolution_geoms(
             // only asks whether the walk succeeds and drops this error, so
             // every message a caller sees names the decode's limit.
             None => {
-                return Err(Error::limit(
-                    crate::LimitKind::Precincts,
-                    None,
+                return Err(Error::limit_fixed(
+                    crate::LimitKind::TilePrecincts,
                     format!(
                         "tile {tile} holds more than {MAX_PRECINCTS} precincts, the limit for a tile"
                     ),
@@ -465,9 +464,8 @@ fn band_geom(
     {
         Some(n) => *block_budget -= n,
         None => {
-            return Err(Error::limit(
-                crate::LimitKind::CodeBlocks,
-                None,
+            return Err(Error::limit_fixed(
+                crate::LimitKind::TileCodeBlocks,
                 format!(
                     "tile {tile} holds more than {MAX_CODE_BLOCKS} code-blocks, the limit for a tile"
                 ),

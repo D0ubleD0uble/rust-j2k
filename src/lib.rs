@@ -1022,7 +1022,8 @@ impl Default for DecodeOptions {
 ///   The decode then takes as long as the file asks.
 /// - To keep a ceiling, use `Raised(n)` with an `n` of your own choosing,
 ///   the largest cost you will accept. Read the factor from
-///   [`LimitDetail::retry_with`] to size it: a file that needs `Raised(3)` is
+///   [`LimitDetail::retry_with`] to size it, or let
+///   [`DecodeOptions::with_retry`] set it: a file that needs `Raised(3)` is
 ///   refused under `Raised(2)`. Do not parse the message; it is a
 ///   diagnostic, not a stable format.
 ///
@@ -1225,6 +1226,33 @@ impl DecodeOptions {
     pub fn with_sample_limit(mut self, limit: WorkLimit) -> Self {
         self.sample_limit = limit;
         self
+    }
+
+    /// These options with the limit that refused a decode set to the one
+    /// it gave to retry with, or `None` if no option raises it or the
+    /// refusal gave none ([`LimitDetail::retry_with`]).
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode};
+    ///
+    /// let bytes = include_bytes!(concat!(
+    ///     env!("CARGO_MANIFEST_DIR"),
+    ///     "/tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k"
+    /// ));
+    /// let Err(Error::Limit(limit)) = decode(bytes) else { panic!() };
+    /// let options = DecodeOptions::default().with_retry(&limit).unwrap();
+    /// assert_eq!(options.code_block_work_limit, WorkLimit::Raised(2));
+    /// ```
+    #[must_use]
+    pub fn with_retry(&self, limit: &LimitDetail) -> Option<Self> {
+        let retry = limit.retry_with()?;
+        let options = self.clone();
+        match limit.kind() {
+            LimitKind::Samples => Some(options.with_sample_limit(retry)),
+            LimitKind::PacketWork => Some(options.with_packet_work_limit(retry)),
+            LimitKind::CodeBlockWork => Some(options.with_code_block_work_limit(retry)),
+            _ => None,
+        }
     }
 
     /// These options with [`strict`](Self::strict) set to `strict`.

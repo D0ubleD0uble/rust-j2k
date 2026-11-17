@@ -98,7 +98,7 @@ pub(crate) fn missing_tiles(cost: u64, allowed: u64, default: u64) -> Error {
 
 /// A packet work refusal that names `Raised(n)`.
 fn packet_work(n: u32, message: String) -> Error {
-    Error::limit(LimitKind::PacketWork, Some(WorkLimit::Raised(n)), message)
+    Error::limit_retry(LimitKind::PacketWork, WorkLimit::Raised(n), message)
 }
 
 /// The advice for an image of `total` samples against a sample limit whose
@@ -128,11 +128,7 @@ pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, defaul
          `DecodeOptions::code_block_work_limit`); retry with at least \
          `WorkLimit::Raised({n})` (later tiles may need more), {TRUSTED}"
     );
-    Error::limit(
-        LimitKind::CodeBlockWork,
-        Some(WorkLimit::Raised(n)),
-        message,
-    )
+    Error::limit_retry(LimitKind::CodeBlockWork, WorkLimit::Raised(n), message)
 }
 
 #[cfg(test)]

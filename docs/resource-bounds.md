@@ -8,9 +8,13 @@ allocate gigabytes. This decoder caps three such costs: the samples it
 allocates, the packet-header walk (tier 2) and the code-block decoding
 (tier 1). A file past a cap is refused with `Error::Limit` before the work
 is done. The error's `LimitDetail` says which cap it was (`kind()`, a
-`LimitKind`) and gives the smallest `WorkLimit::Raised(n)` that admits the
-file (`retry_with()`), and its message names both. A caller can retry from
-those two without reading the message.
+`LimitKind`) and gives a `WorkLimit::Raised(n)` to retry with
+(`retry_with()`), and its message names both. For the samples and the
+code-blocks it is the smallest factor that admits what the decode has seen;
+for the packet walk it is the next factor up, and the file may need more.
+It is `None` when the refusal shows no factor. A caller can retry from those
+two without reading the message, and `DecodeOptions::with_retry` sets the
+option. A retry can still fail with another error once past the cap.
 
 | Bound | Default | Option in `DecodeOptions` | Margin over encoder output | Tests |
 | ----- | ------- | ------------------------- | -------------------------- | ----- |
@@ -25,8 +29,10 @@ tile headers, was removed by making the parse cheaper rather than by adding a
 cap ([Tile header cost](#tile-header-cost)).
 
 A few fixed guards also return `Limit`, and no option lifts them: 2^18
-precincts and 2^19 code-blocks per tile, 32 POC progression volumes, and 30
-coded bit-planes per code-block. Their `retry_with()` is `None`.
+precincts and 2^19 code-blocks per tile, 32 POC progression volumes, 30
+coded bit-planes per code-block, and an image too large for the target to
+address, under any sample limit. Their `retry_with()` is `None`, and
+`LimitKind::is_adjustable()` is false.
 
 The caps count work, not time: samples, packet-walk steps and code-block
 sample-passes, each defined below. The times on this page were measured on

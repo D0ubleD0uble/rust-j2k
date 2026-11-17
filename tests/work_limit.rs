@@ -455,13 +455,8 @@ fn the_named_factor_is_the_smallest_that_admits_the_file() {
 /// The option a `Limit` refusal names, raised to what it says to retry
 /// with; `None` for a limit no option raises.
 fn raised(options: DecodeOptions, limit: &LimitDetail) -> Option<DecodeOptions> {
-    let retry = limit.retry_with()?;
-    Some(match limit.kind() {
-        LimitKind::Samples => options.with_sample_limit(retry),
-        LimitKind::PacketWork => options.with_packet_work_limit(retry),
-        LimitKind::CodeBlockWork => options.with_code_block_work_limit(retry),
-        _ => return None,
-    })
+    assert!(limit.kind().is_adjustable());
+    options.with_retry(limit)
 }
 
 /// A caller can retry a refused file from the typed data alone, without

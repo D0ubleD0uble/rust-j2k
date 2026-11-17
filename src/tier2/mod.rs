@@ -1133,7 +1133,7 @@ pub(crate) enum Refused {
 impl From<Refused> for Error {
     fn from(refused: Refused) -> Error {
         match refused {
-            Refused::Work(work) => Error::limit(crate::LimitKind::PacketWork, None, work.why()),
+            Refused::Work(work) => Error::limit_unhinted(crate::LimitKind::PacketWork, work.why()),
             Refused::Other(error) => error,
         }
     }
@@ -1217,7 +1217,7 @@ impl Meter {
     /// to fail it with.
     pub(crate) fn refuse(&self, why: WorkRefusal) -> Error {
         self.refusal.set(Some(why));
-        Error::limit(crate::LimitKind::PacketWork, None, why.why())
+        Error::limit_unhinted(crate::LimitKind::PacketWork, why.why())
     }
 }
 

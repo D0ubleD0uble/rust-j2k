@@ -9,10 +9,10 @@
 use rust_j2k::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
     ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo, DecodeOptions,
-    DecodeReport, Error, FileType, Header, Image, ImageHeader, IncrementalDecoder, IprBox,
-    Jp2Metadata, MappingKind, Palette, PaletteColumn, Ratio, ReaderRequirements, Region,
-    ReportEntry, Res, Resolution, StandardFeature, UuidBox, UuidInfo, VendorFeature, Window,
-    WorkLimit, XmlBox,
+    DecodeReport, Error, ErrorDetail, FileType, Header, Image, ImageHeader, IncrementalDecoder,
+    IprBox, Jp2Metadata, LimitDetail, LimitKind, MappingKind, Palette, PaletteColumn, Ratio,
+    ReaderRequirements, Region, ReportEntry, Res, Resolution, StandardFeature, UuidBox, UuidInfo,
+    VendorFeature, Window, WorkLimit, XmlBox,
 };
 
 const fn holds<T: Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
@@ -23,6 +23,9 @@ const _: () = {
     holds::<Header>();
     holds::<ComponentInfo>();
     holds::<Error>();
+    holds::<ErrorDetail>();
+    holds::<LimitDetail>();
+    holds::<LimitKind>();
     holds::<DecodeOptions>();
     holds::<DecodeReport>();
     holds::<ReportEntry>();
@@ -55,6 +58,10 @@ const _: () = {
     holds::<ChannelMapping>();
     holds::<MappingKind>();
 };
+
+// `LimitKind` is a plain value a caller can copy, compare and key a map by.
+const fn plain<T: Copy + Eq + std::hash::Hash + std::fmt::Debug>() {}
+const _: () = plain::<LimitKind>();
 
 // The assertions are all compile-time; this keeps the file a test target.
 #[test]

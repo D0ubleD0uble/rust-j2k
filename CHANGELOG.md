@@ -20,7 +20,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unchanged. A `LimitDetail` also says which limit refused the input,
   `kind()`, a `LimitKind`, and what to retry with, `retry_with()`: the
   `WorkLimit` the message names, or `None` for a guard that no option
-  raises. A match on `Error::Codestream(_)` and the like needs no change.
+  raises (`LimitKind::is_adjustable` is false for those).
+  `DecodeOptions::with_retry` sets the option a `LimitDetail` names to its
+  `retry_with`. `Error::message()` gives any error's text without its
+  prefix. A match on `Error::Codestream(_)` and the like needs no change.
   Code that bound the `String` reads `message()` instead:
 
   ```rust
@@ -32,8 +35,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   // 0.5
   Err(Error::Limit(limit)) => {
       eprintln!("refused: {}", limit.message());
-      if let (LimitKind::CodeBlockWork, Some(retry)) = (limit.kind(), limit.retry_with()) {
-          options = options.with_code_block_work_limit(retry);
+      if let Some(raised) = options.with_retry(&limit) {
+          options = raised;
       }
   }
   ```
