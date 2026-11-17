@@ -685,3 +685,37 @@ fn a_kept_walk_charges_poc_repeats_as_the_one_shot_walk_does() {
     }
     assert!(checked > 5, "{checked}");
 }
+
+/// A refine the code-block bound refuses at its second tile is charged the
+/// work of the first tile, which it did, and not the work of the tile it
+/// refused.
+#[test]
+fn a_refused_refine_is_charged_the_tiles_before_the_cut() {
+    let bytes = fixture("tiles_even_origin_lossless.j2k");
+    let work_of = |region: Option<crate::Region>| {
+        let mut options = DecodeOptions::default();
+        if let Some(region) = region {
+            options = options.with_region(region);
+        }
+        let mut decoder = IncrementalDecoder::new(options).unwrap();
+        decoder.feed(&bytes);
+        assert!(decoder.refine().unwrap().is_some());
+        (decoder.spent.blocks, decoder.spent.bound.unwrap())
+    };
+    let (whole, bound) = work_of(None);
+    let (first, tile_bound) = work_of(Some(crate::Region::Tile(0)));
+    let (second, _) = work_of(Some(crate::Region::Tile(1)));
+    assert_eq!(tile_bound, bound);
+    assert!(
+        first > 0 && second > 0 && first + second <= whole,
+        "{first} {second} {whole}"
+    );
+
+    // What is left of the bound covers the first tile and no more.
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.spent.blocks = bound - first;
+    decoder.feed(&bytes);
+    assert_eq!(decoder.refine().unwrap(), None);
+    assert!(decoder.refused);
+    assert_eq!(decoder.spent.blocks, bound, "{first} of tile 0 is charged");
+}
