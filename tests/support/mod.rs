@@ -282,12 +282,14 @@ impl Jp2Snapshot {
             ChannelType::ApplicationDefined => "application".to_string(),
             ChannelType::Unspecified => "unspecified".to_string(),
             ChannelType::Other(n) => format!("other({n})"),
+            other => panic!("no snapshot name for {other:?}"),
         };
         let association = |a: Association| match a {
             Association::WholeImage => "whole".to_string(),
             Association::Color(n) => n.to_string(),
             Association::None => "none".to_string(),
             Association::ApplicationDefined(n) => format!("application({n})"),
+            other => panic!("no snapshot name for {other:?}"),
         };
         let hex = |id: &[u8; 16]| id.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let res = |r: Option<Res>| {

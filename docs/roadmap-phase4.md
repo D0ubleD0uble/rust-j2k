@@ -658,10 +658,11 @@ brands.
 A `Typ` 3 channel reports as a new `ChannelType::ApplicationDefined`, and its
 `Asoc` as a new `Association::ApplicationDefined(u16)` carrying the value as
 stored. Neither existing variant fits: `Other(3)` reads as a reserved type, and
-`Color(n)` means color `n` of the color space. Both enums stay exhaustive, so
+`Color(n)` means color `n` of the color space. Both enums were exhaustive, so
 adding the variants is a breaking change for callers that match on them. A
 0.x minor release allows that, and P4.7 lists both in the 0.5.0 CHANGELOG's
-Migrating section.
+Migrating section. They are now `#[non_exhaustive]`, so a later variant is
+not breaking.
 
 **Oracle:** the Part 4 JP2 references for `file1`..`file9` (sRGB conversion as
 in `tests/conformance_jp2.rs`); `opj_decompress` on the 18 it decodes; the

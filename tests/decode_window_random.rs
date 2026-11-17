@@ -272,6 +272,10 @@ fn random_windows_of_larger_codestreams_are_crops_of_the_whole_decode() {
         (HT, "ds0_ht_05_b11.j2k"),
         (HT, "ds1_ht_04_b9.j2k"),
         (HT, "ds0_ht_12_b11.j2k"),
+        // MIXED: each block is HT or Part 1 as its lengths say.
+        (HT, "ds0_hm_06_b11.j2k"),
+        (HT, "ds0_hm_06_b18.j2k"),
+        (HT, "ds0_hm_15_b8.j2k"),
     ]
     .into_iter()
     .enumerate()

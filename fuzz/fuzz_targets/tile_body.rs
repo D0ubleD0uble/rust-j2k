@@ -32,6 +32,12 @@
 //! its length fields say; shape 7 keeps bit 6 for PPM, so it has no MIXED
 //! variant.
 //!
+//! The second input byte adds a region of interest: with bit 7 set it writes
+//! an `RGN` marker (the maxshift, 0 to 19 from its low 5 bits, on one
+//! component or all), so the packets are read under a shifted bit-plane
+//! count; with bit 7 clear it writes none. It is not written for the HT
+//! variants.
+//!
 //! Each input is decoded strict and then with `strict` off, and the two are
 //! checked against each other as `decode_partial` checks them
 //! (`common/partial.rs`).
@@ -43,18 +49,22 @@ mod synth;
 #[path = "../../tests/support/tile_body.rs"]
 mod tile_body;
 use libfuzzer_sys::fuzz_target;
-use tile_body::wrap;
+use tile_body::wrap_roi;
 
 #[path = "../common/partial.rs"]
 mod partial;
 
 fuzz_target!(|data: &[u8]| {
-    let Some((&variant, body)) = data.split_first() else {
+    let Some((&variant, rest)) = data.split_first() else {
         return;
     };
+    // The second byte steers a region of interest: bit 7 writes an `RGN`
+    // (see `wrap_roi`), so the body is read under a maxshift; with it clear
+    // none is written.
+    let (&roi, body) = rest.split_first().unwrap_or((&0, &[]));
     // The strict decode, then the same bytes with `strict` off, which reads
     // a body that runs short or long instead of refusing it.
-    let bytes = wrap(variant, body);
+    let bytes = wrap_roi(variant, roi, body);
     let options = rust_j2k::DecodeOptions::default();
     let strict = rust_j2k::decode_with(&bytes, &options);
     partial::check(&bytes, &options, &strict);
