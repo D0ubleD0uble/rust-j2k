@@ -566,8 +566,8 @@ H-3) and undoes the shift with EBCOT's `undo_maxshift`. Findings:
   it, not on the block's plane count: `S_blk` counts zero planes, and the
   A.3.7 note allows `Mb + s` past `B`.
 - `Ccap15` bit 12 clear with any `RGN`, in the main header before or after
-  `CAP` or in a tile-part header, is `Codestream`. More than 30 coded
-  planes (`Mb + s` less the zero bit-planes) is `Limit`.
+  `CAP` or in a tile-part header, is `Codestream`. `Mb + s - P` past 30
+  (`P` the zero bit-planes) is `Limit`.
 
 ### P4.6 — MIXED code-blocks (`src/tier1/`, `src/tier2/`)
 

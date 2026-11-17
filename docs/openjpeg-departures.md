@@ -683,8 +683,8 @@ single-block codestream:
   this decoder refuses for this. That block is a row of
   `tests/ht_reject_matrix.rs`.
 - A magnitude with more bits than the block codes. Within the exponent bound
-  `U_q <= P + 2` it overflows `i32` only in a subband of 30 bit-planes, where
-  OpenJPEG wraps it (`-268435456` on the measured block).
+  `U_q <= P + 2` it can overflow `i32` when the cleanup plane's shift is
+  high, where OpenJPEG wraps it (`-268435456` on the measured block).
 - A segment of 65535 bytes or more. 7.1.1 requires `Lcup < 65535`, and
   OpenJPEG decodes a 65535-byte segment.
 
@@ -1096,9 +1096,9 @@ samples as its source. The eight Part 4 references above grade within their
 compliance class.
 
 The same blocks bring two checks OpenJPEG does not make, since it reads no
-field of `CAP`; see [CAP and CPF](#cap-and-cpf). A block of more than 30
-bit-planes, `Mb + s` counted together, is `Error::Limit`, the bound OpenJPEG
-applies to `Mb` on an HT block.
+field of `CAP`; see [CAP and CPF](#cap-and-cpf). A block with
+`Mb + s - P` over 30 (`P` its zero bit-planes) is `Error::Limit`; OpenJPEG
+applies the bound to `Mb` on an HT block.
 
 ## Region of interest threshold (Part 1 and HT)
 

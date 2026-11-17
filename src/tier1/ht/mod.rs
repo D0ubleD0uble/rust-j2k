@@ -29,9 +29,12 @@ use crate::tier2::CodeBlock;
 use crate::{Error, Result};
 use vlc_tables::{CXT_VLC_TABLE_0, CXT_VLC_TABLE_1};
 
-/// The most bit-planes a code-block can code for the double-scale
-/// reconstruction to fit `i32`: `Mb + s` less the zero bit-planes (`Mb` when
-/// there is no maxshift), the same count the Part 1 coder limits.
+/// The most `Mb + s - P` a block can have for the double-scale reconstruction
+/// to fit `i32`, with `P` its zero bit-planes (`Mb` when there is no maxshift
+/// and `P = 0`). The cleanup pass codes the top `P + 1` planes, so
+/// `Mb + s - P` is one more than the cleanup plane's shift: this bounds that
+/// shift, not a count of coded planes. The Part 1 coder limits the same
+/// quantity, where it is the count of coded planes (`top_coded_plane`).
 const MAX_BIT_PLANES: u32 = 30;
 
 /// The largest suffix length `Scup` (7.1.1).
@@ -170,10 +173,11 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
             "has {zbp} zero bit-planes in a block of {planes}, leaving none to code"
         )));
     }
-    // Only the coded planes count against the limit, as in the Part 1 coder
-    // (`top_coded_plane`): a background-only block under a large maxshift
-    // codes few planes however large `Mb + s` is. The per-sample `try_from`
-    // in the cleanup pass still refuses any magnitude that does not fit.
+    // `Mb + s - P` bounds the cleanup plane's shift, as `top_coded_plane`
+    // does in the Part 1 coder; `Mb + s` alone does not, since a block with
+    // many zero bit-planes keeps the shift small under any maxshift. The
+    // per-sample `try_from` in the cleanup pass still refuses any magnitude
+    // that does not fit.
     let coded = planes - zbp;
     if coded > MAX_BIT_PLANES {
         return Err(Error::Limit(if params.roi_shift == 0 {
@@ -222,8 +226,10 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
         qw: width.div_ceil(2),
         // `mu` has at most `P + 1` bits (7.6), so its exponent, the bit
         // length of `2 mu - 1`, is at most `P + 2`. OpenJPEG has the same
-        // bound.
-        max_u: zbp + 2,
+        // bound. The cap at `MAX_BIT_PLANES + 2` keeps the shifts below in
+        // range when `P` is large under a maxshift; a magnitude that fits
+        // `i32` has an exponent of at most 31.
+        max_u: (zbp + 2).min(MAX_BIT_PLANES + 2),
         // A bound of 64 bits or more holds of every `u64`.
         bound_bits: params.bound_bits.filter(|&bits| bits < u64::BITS),
         shift,
@@ -624,10 +630,18 @@ impl Cleanup<'_> {
                     };
                     let bound = kappa + u[slot];
                     if bound > self.max_u {
-                        return Err(malformed(&format!(
-                            "exponent bound U_q = {bound} exceeds zero bit-planes + 2 = {}",
-                            self.max_u
-                        )));
+                        // `max_u` is `P + 2`, or the cap when `P` is large.
+                        return Err(malformed(&if self.max_u == MAX_BIT_PLANES + 2 {
+                            format!(
+                                "exponent bound U_q = {bound} exceeds the cap of {} bits",
+                                self.max_u
+                            )
+                        } else {
+                            format!(
+                                "exponent bound U_q = {bound} exceeds zero bit-planes + 2 = {}",
+                                self.max_u
+                            )
+                        }));
                     }
                     self.magnitudes(q, info[slot], bound, exps, coeffs)?;
                 }
@@ -767,9 +781,9 @@ impl Cleanup<'_> {
                 )));
             }
             exps[4 * q + j] = 64 - (2 * mu - 1).leading_zeros();
-            // Within the exponent bound, only a `mu` of `P + 2` bits, which
-            // the block cannot code (7.6), overflows `i32`, and only at
-            // `Mb = 30`.
+            // Within the exponent bound, a `mu` with more bits than the block
+            // codes (7.6) can still overflow `i32`, shifted up by the
+            // cleanup plane.
             let magnitude = i32::try_from((2 * mu + 1) << self.shift)
                 .map_err(|_| malformed("codes a magnitude past its bit-planes"))?;
             let x = 2 * (q % self.qw) + (j >> 1);

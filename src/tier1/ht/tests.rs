@@ -717,8 +717,8 @@ fn magref_reads_backward_lsb_first_unstuffs_and_zero_fills() {
 
 // Refusals, one per reason.
 
-/// A maxshift counts against the plane limit: `Mb + s` above 30 is refused
-/// as the same `Limit`, and 30 decodes.
+/// A maxshift counts against the plane limit: `Mb + s - P` above 30 (here
+/// `P = 0`) is refused as the same `Limit`, and 30 decodes.
 #[test]
 fn a_maxshift_past_the_plane_limit_is_a_limit() {
     let data = [0x01, 0x62, 0x00];
@@ -771,6 +771,19 @@ fn a_block_that_codes_past_the_plane_limit_under_a_maxshift_is_a_limit() {
         decode(&block(1, 1, 1, &data), 20, roi),
         Err(Error::Codestream(_))
     ));
+}
+
+/// With many zero bit-planes under a maxshift, the exponent bound `P + 2`
+/// would pass 64 and overflow the shifts that build a magnitude. It is capped
+/// at the limit, so the block is refused instead of panicking.
+#[test]
+fn many_zero_bit_planes_under_a_maxshift_do_not_overflow_a_shift() {
+    let data = [
+        0xA1, 0x58, 0xF8, 0xDE, 0xB0, 0x6E, 0x9C, 0x09, 0x24, 0xD7, 0x83, 0xC9, 0x8A, 0x7F, 0x72,
+        0xAB, 0xCD, 0xED, 0x43, 0x73, 0xE0, 0x2E, 0x91, 0xD3, 0xFC, 0x60, 0x5A, 0x00,
+    ];
+    let got = decode(&block(4, 2, 66, &data), 37, params(30, false));
+    assert!(matches!(got, Err(Error::Codestream(_))), "{got:?}");
 }
 
 /// A cleanup magnitude at the bound `CAP` signals is refused (T.814 A.3.7,
