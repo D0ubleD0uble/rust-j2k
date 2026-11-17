@@ -46,11 +46,10 @@ fn header(side: u32) -> Vec<u8> {
 #[test]
 fn a_huge_declared_image_is_refused_without_allocating_it() {
     let cases = [
-        // 20000^2 = 4e8 samples, 1.6 GB as i32: over the default, and
-        // addressable on a 32-bit target too.
+        // 24000^2 = 5.76e8 samples, 2.3 GB as i32: over the default.
         (
             "over the default",
-            header(20_000),
+            header(24_000),
             WorkLimit::Default,
             "sample limit",
         ),

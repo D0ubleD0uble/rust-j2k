@@ -26,6 +26,10 @@
 //! passes, so inputs this small do not reach the cut (see #425).
 
 use libfuzzer_sys::fuzz_target;
+
+#[path = "../common/budget.rs"]
+mod budget;
+
 use rust_j2k::{
     decode_with, DecodeOptions, Error, IncrementalDecoder, LimitKind, Region, Window, WorkLimit,
 };
@@ -46,6 +50,9 @@ fuzz_target!(|input: &[u8]| {
         };
         (control, data)
     };
+    if budget::over(data) {
+        return;
+    }
     let mut hash = fnv1a(data);
     // The code-block bound is the one earlier refines cut: the decoder
     // holds all its refines to it together. Without a bound, every refine

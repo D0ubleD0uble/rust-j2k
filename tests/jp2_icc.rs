@@ -429,8 +429,8 @@ fn a_tinted_gray_profile_gives_three_color_channels() {
 }
 
 /// A tinted gray profile triples the gray channel, and the sample limit
-/// counts the three: the same file grown to 12000x12000 is 1.44e8 samples as
-/// coded, under the 2^28 default, but 4.32e8 in sRGB, so sRGB output is
+/// counts the three: the same file grown to 14000x14000 is 1.96e8 samples as
+/// coded, under the 2^29 default, but 5.88e8 in sRGB, so sRGB output is
 /// refused from the header unless the limit is raised.
 #[test]
 fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
@@ -441,7 +441,7 @@ fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
     let mut bytes = read("conformance/jp2/files/file8.jp2");
     let (start, end) = profile_span(&bytes);
     patch(&mut bytes[start..end], v.intent, v.white);
-    let side = 12_000u32.to_be_bytes();
+    let side = 14_000u32.to_be_bytes();
     // `ihdr`: HEIGHT, then WIDTH.
     let ihdr = bytes.windows(4).position(|w| w == b"ihdr").unwrap() + 4;
     bytes[ihdr..ihdr + 4].copy_from_slice(&side);
@@ -458,7 +458,7 @@ fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
         Err(Error::Limit(m)) => assert!(
             m.message().starts_with(
                 "sRGB output from a monochrome ICC profile that maps gray to color needs \
-                 432000000 samples"
+                 588000000 samples"
             ),
             "{m}"
         ),

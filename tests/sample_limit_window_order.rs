@@ -9,7 +9,7 @@ use rust_j2k::{DecodeOptions, Error, Region, Window, decode_with, read_header_wi
 use synth::seg;
 
 /// The main header and first `SOT` marker of a 40000x40000 image with its
-/// origin at (100, 200), in 17000x17000 tiles, of two 8-bit components:
+/// origin at (100, 200), in 24000x24000 tiles, of two 8-bit components:
 /// component 0 at full size, component 1 sub-sampled 2x3. The image area is
 /// 39900x39800, over the default sample limit.
 fn large_header_only() -> Vec<u8> {
@@ -19,7 +19,7 @@ fn large_header_only() -> Vec<u8> {
 /// [`large_header_only`] for a `side` x `side` image.
 fn header_only(side: u32) -> Vec<u8> {
     let siz = synth::siz_body(
-        [side, side, 100, 200, 17000, 17000, 0, 0],
+        [side, side, 100, 200, 24000, 24000, 0, 0],
         &[[7, 1, 1], [7, 2, 3]],
     );
     let cod = synth::cod_body(1, 6, 0, 0);
@@ -81,7 +81,7 @@ fn a_jp2_file_reports_an_invalid_window_before_the_limit() {
 fn a_valid_window_of_the_same_image_is_still_held_to_the_tiles_read() {
     let codestream = large_header_only();
     let jp2 = in_jp2(&codestream);
-    // Inside the first tile, which is 16900x16800: over the limit by itself.
+    // Inside the first tile, which is 23900x23800: over the limit by itself.
     let options = window(200, 300, 300, 400);
     for bytes in [&codestream, &jp2] {
         for result in [
@@ -92,7 +92,7 @@ fn a_valid_window_of_the_same_image_is_still_held_to_the_tiles_read() {
                 Err(Error::Limit(m)) => {
                     assert!(
                         m.message()
-                            .contains("the area of the tiles read (16900x16800"),
+                            .contains("the area of the tiles read (23900x23800"),
                         "{m}"
                     )
                 }

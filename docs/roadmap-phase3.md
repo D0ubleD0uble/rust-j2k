@@ -646,7 +646,7 @@ so and why we differ (or do not).
 | Second `jp2c` | never read | ignored | none (I.5.4) |
 | Deeply nested superboxes | n/a | only `jp2h`, `res ` and `uinf` are entered | no recursion, so no depth bomb |
 | 10 000 unknown boxes before `jp2h` and after `jp2c` | skipped | skipped | none; each box is one step of a linear walk: about 1.2 ms more per `decode` + `read_header` than the bare file (release build), linear up to 100 000 boxes |
-| Palette expansion over the sample budget (`NPC` planes totaling more than 2^26 samples; 2^28 by default since #287) | decodes if it can allocate | reject before any tile is decoded | `Limit` |
+| Palette expansion over the sample budget (`NPC` planes totaling more than 2^26 samples; 2^29 by default since #436) | decodes if it can allocate | reject before any tile is decoded | `Limit` |
 | Metadata boxes totaling more than the file | impossible by construction | copies bounded by input length | none |
 
 Allocation discipline: no buffer is sized from a box field. Palette tables are
@@ -657,9 +657,9 @@ the Phase 2 sample budget per plane; the total is checked against the same
 components are held while the expanded channels are built from them, so the
 peak is about twice the budget: computed, roughly 512 MiB; measured on a
 one-column palette at the full budget, about 515 MiB. (Since #287,
-the budget is the image sample limit, 2^28 samples or 1 GiB as `i32` by
+the budget is the image sample limit, 2^29 samples or 2 GiB as `i32` by
 default and adjustable with `DecodeOptions::sample_limit`, so the peak at the
-default is about four times these figures.) The codestream stage
+default is about eight times these figures.) The codestream stage
 keeps all its existing guards, since `jp2c` is handed to it as a slice.
 
 Fuzzing: the `jp2_boxes` target (P3.7) plus the existing `decode` target with

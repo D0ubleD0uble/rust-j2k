@@ -219,7 +219,7 @@ has the value R, which is how eccodes and NCEP's g2clib read it.
 ## When a file won't decode
 
 Every failure comes back as an `Error`. With the default limits, decoding
-never panics or hangs, whatever the input, and needs at most about 3.2 GiB of
+never panics or hangs, whatever the input, and needs at most about 6.4 GiB of
 memory. If the machine can't supply that, the allocation fails and the process
 aborts, as in any Rust program.
 
@@ -294,9 +294,9 @@ fn show_as_it_arrives(pieces: &[&[u8]]) -> Result<(), rust_j2k::Error> {
 
 A valid file can be refused with `Error::Limit` when it is very large or very
 costly to decode. The limits protect you from a small hostile file that asks
-for gigabytes of memory or minutes of work. By default an image may hold 2^28
-values (1 GiB as `i32`): a 10980 × 10980 satellite band, or an RGB image of
-about 89 megapixels.
+for gigabytes of memory or minutes of work. By default an image may hold 2^29
+values (2 GiB as `i32`): a 10980 × 10980 three-band satellite image, or an RGB
+image of about 179 megapixels.
 
 Three limits can be raised: `sample_limit`, `packet_work_limit` and
 `code_block_work_limit` on `DecodeOptions`. For a file you trust, set them to

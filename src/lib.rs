@@ -290,15 +290,15 @@ pub use window::{Region, Window};
 /// size. Past any of them the decode fails with [`Error::Limit`]. OpenJPEG has none of
 /// them.
 ///
-/// - The decoded image may hold at most 2^28 samples (1 GiB
+/// - The decoded image may hold at most 2^29 samples (2 GiB
 ///   as `i32`), summed over its output channels at the decode's
 ///   [`resolution_reduction`](DecodeOptions::resolution_reduction): every
 ///   component, a palette's expanded channels, and the channels sRGB output
-///   adds. That admits a 10980 x 10980 Sentinel-2 band, or an RGB image of
-///   up to about 89 MP. A larger image is refused from its header alone,
+///   adds. That admits a 10980 x 10980 Sentinel-2 true-color image (three
+///   components), or an RGB image of up to about 179 MP. A larger image is refused from its header alone,
 ///   before any tile is read. Under a window or a tile, only the tiles read
 ///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
-///   times the output for a square tile, an estimated 1.4 GiB at the limit,
+///   times the output for a square tile, about 2.7 GiB at the limit,
 ///   and more for a tall, narrow tile or while a palette expands (see [the
 ///   sample limit][sample-limit]).
 /// - Reading the packet headers of every tile may take
@@ -901,7 +901,7 @@ pub struct DecodeOptions {
     /// described on [`decode`]. Default [`WorkLimit::Default`].
     pub code_block_work_limit: WorkLimit,
     /// How many samples the decoded image may hold, against the limit
-    /// described on [`decode`]: 2^28 samples (1 GiB as `i32`) by default,
+    /// described on [`decode`]: 2^29 samples (2 GiB as `i32`) by default,
     /// summed over the output channels at
     /// [`resolution_reduction`](Self::resolution_reduction). Default
     /// [`WorkLimit::Default`].
@@ -915,7 +915,7 @@ pub struct DecodeOptions {
     /// [`components`](Self::components) subset does not lower the count, as
     /// the packets of every component of a tile read are still walked.
     ///
-    /// `Raised(n)` allows `n` times 2^28 samples. `Unlimited` lifts the
+    /// `Raised(n)` allows `n` times 2^29 samples. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output, and about 1.35 to 3.2 times that in all at its
     /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
@@ -1036,7 +1036,7 @@ impl Default for DecodeOptions {
 ///
 /// Each work bound scales with the size of the file, so a small file cannot
 /// ask for minutes of work, and the sample limit holds the memory a file may
-/// ask for to an estimated 1.4 GiB for a square tile, and to a few GiB for a tall,
+/// ask for to about 2.7 GiB for a square tile, and to several GiB for a tall,
 /// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
 /// a bound, when it codes many samples in very few bytes or is very
 /// large. The decode then fails with [`Error::Limit`]. Its
@@ -1263,7 +1263,7 @@ impl DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, WorkLimit};
     ///
-    /// // Up to 3 x 2^28 samples, enough for a 16384 x 16384 RGB image.
+    /// // Up to 3 x 2^29 samples, enough for a 20000 x 20000 RGB image.
     /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(3));
     /// assert_eq!(options.sample_limit, WorkLimit::Raised(3));
     /// ```
