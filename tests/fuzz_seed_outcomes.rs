@@ -302,3 +302,45 @@ fn every_seed_decodes_as_coded_and_srgb_matches_the_table() {
         diffs.join("\n")
     );
 }
+
+// The fuzz targets `decode`, `decode_partial` and `incremental_decode` skip an
+// input that declares too many samples, so a run stays under the RSS limit.
+// No CI seed is near that size, so a skip that always or never fired would
+// pass the smoke; this pins it from both sides.
+#[path = "../fuzz/common/budget.rs"]
+mod budget;
+
+/// A codestream main header and first `SOT` marker of one component,
+/// `width` x `height`, in one tile.
+fn header_only(width: u32, height: u32) -> Vec<u8> {
+    let siz = synth::siz_body([width, height, 0, 0, width, height, 0, 0], &[[7, 1, 1]]);
+    [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 6, 0, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 19])),
+        vec![0xFF, 0x90],
+    ]
+    .concat()
+}
+
+#[test]
+fn the_fuzz_skip_fires_just_over_2_pow_28_samples_and_not_on_small_inputs() {
+    // 2^28 samples is not over; one more row is.
+    assert!(!budget::over(&header_only(16384, 16384)));
+    assert!(budget::over(&header_only(16384, 16385)));
+    // The decoder's own default limit is twice that, so this decodes on its own.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    // On a 32-bit target this image is past the address cap, so the header
+    // does not read and the skip does not apply.
+    #[cfg(target_pointer_width = "64")]
+    {
+        let flat = std::fs::read(fixtures.join("sample_limit/flat_32769x16385_tiled_lossless.j2k"))
+            .unwrap();
+        assert!(budget::over(&flat));
+    }
+    let rgb = std::fs::read(fixtures.join("sample_limit/rgb_6000x4000.jp2")).unwrap();
+    assert!(!budget::over(&rgb));
+    assert!(!budget::over(b"not a codestream"));
+    assert!(!budget::over(&[]));
+}

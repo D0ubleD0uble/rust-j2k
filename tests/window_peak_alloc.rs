@@ -1,7 +1,7 @@
 //! A small window of an image over the sample limit holds the tiles it reads
 //! in heap, not the image: a 256x256 window inside one 4096x4096 tile of the
-//! flat 16385x16385 image (`tests/fixtures/sample_limit/`), whose whole
-//! decode would hold 1 GiB of samples, peaks within what that one tile's
+//! flat 32769x16385 image (`tests/fixtures/sample_limit/`), whose whole
+//! decode would hold 2 GiB of samples, peaks within what that one tile's
 //! samples admit.
 //!
 //! The peak is measured with a counting global allocator, so this file holds a
@@ -27,7 +27,7 @@ static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
 fn a_small_window_peaks_at_the_tile_it_reads_not_the_image() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/sample_limit/flat_16385_tiled_lossless.j2k"
+        "/tests/fixtures/sample_limit/flat_32769x16385_tiled_lossless.j2k"
     );
     let bytes = std::fs::read(path).expect("read the fixture");
     let options =
@@ -39,7 +39,7 @@ fn a_small_window_peaks_at_the_tile_it_reads_not_the_image() {
     assert_eq!((image.width, image.height), (256, 256));
     // One tile's 4-byte samples, and the whole image's.
     let tile = 4096 * 4096 * 4;
-    let image_bytes = 16385 * 16385 * 4;
+    let image_bytes = 32769usize * 16385 * 4;
     eprintln!(
         "peak {peak} bytes: {:.2} times one tile's samples, {:.3} times the image's",
         peak as f64 / tile as f64,

@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Migrating from 0.4
 
+- The default sample limit is 2^29 samples (2 GiB as `i32`), up from 2^28, so
+  a 10980 x 10980 Sentinel-2 true-color image (361.7 M samples) decodes at the
+  defaults. `WorkLimit::Raised(n)` on `DecodeOptions::sample_limit` now
+  means n x 2^29 samples, not n x 2^28: a `Raised(n)` you set to admit one
+  file admits twice as much, and needs half the factor for the same file. A
+  decode may now allocate up to about 2.7 GiB for a square tile, and up to
+  about 6.4 GiB for a tile one sample wide, before it is refused.
 - `ChannelType` and `Association` have a new variant each,
   `ChannelType::ApplicationDefined` and `Association::ApplicationDefined(u16)`.
   Both enums are now `#[non_exhaustive]`, so a `match` on either needs a
@@ -172,6 +179,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The default sample limit is 2^29 samples (2 GiB as `i32`), up from 2^28,
+  so a Sentinel-2 true-color image of 10980 x 10980 x 3 (361.7 M samples)
+  decodes at the defaults, as does an RGB image of up to about 179 MP. The
+  limit is still counted in decoded samples, so `Raised(n)` now allows
+  n x 2^29 samples (#436). A tile may now hold 2^20 code-blocks, up from 2^19,
+  so a one-tile image under 2^29 samples and at least 72 samples wide decodes
+  in 32 x 32 blocks; a tile
+  of more than 2^20 is still `Error::Limit` with `LimitKind::TileCodeBlocks`.
 - Some complete inputs now give `Error::Incomplete`, since their bytes look
   the same as a cut: empty input (was `Error::Codestream`), and a JP2 file
   with no `jp2c` box or with a top-level box before `jp2c` that runs past the

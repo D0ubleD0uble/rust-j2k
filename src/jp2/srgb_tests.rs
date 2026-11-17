@@ -1246,8 +1246,9 @@ fn converted_output_reports_its_color_space() {
 
 /// sYCC chroma replication that would grow the output past the sample limit
 /// is refused before any tile is read. The 4:2:0 fixture's SIZ is widened to
-/// 16384x8192: as coded that is 1.5 x 2^27 samples, under the 2^28 limit, but
-/// sRGB output is 3 x 2^27.
+/// 16384x16384: as coded that is 1.5 x 2^28 samples, under the 2^29 limit, but
+/// sRGB output is 3 x 2^28.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn chroma_replication_past_the_sample_budget_is_a_limit() {
     let mut codestream = top_box(SYCC_420, b"jp2c").to_vec();
@@ -1256,14 +1257,14 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
     let put =
         |cs: &mut Vec<u8>, at: usize, v: u32| cs[at..at + 4].copy_from_slice(&v.to_be_bytes());
     put(&mut codestream, 8, 5 + 16384); // Xsiz
-    put(&mut codestream, 12, 3 + 8192); // Ysiz
+    put(&mut codestream, 12, 3 + 16384); // Ysiz
     put(&mut codestream, 24, 5 + 16384); // XTsiz
-    put(&mut codestream, 28, 3 + 8192); // YTsiz
+    put(&mut codestream, 28, 3 + 16384); // YTsiz
     let bytes = file(&codestream, &colr_enum(18), &[]);
     expect_err(
         decode_srgb(&bytes),
         |e| matches!(e, Error::Limit(_)),
-        "sYCC chroma replicated needs 402653184 samples",
+        "sYCC chroma replicated needs 805306368 samples",
     );
     // A raised limit admits the replicated chroma: the header reads.
     let raised = crate::DecodeOptions::default()

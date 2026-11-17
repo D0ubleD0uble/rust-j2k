@@ -17,6 +17,8 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../common/budget.rs"]
+mod budget;
 #[path = "../common/partial.rs"]
 mod partial;
 
@@ -24,6 +26,9 @@ mod partial;
 const MAX_CUT_INPUT: usize = 1 << 16;
 
 fuzz_target!(|data: &[u8]| {
+    if budget::over(data) {
+        return;
+    }
     let hash = fnv1a(data);
     let mut options =
         rust_j2k::DecodeOptions::default().with_resolution_reduction((hash & 1) as u8);

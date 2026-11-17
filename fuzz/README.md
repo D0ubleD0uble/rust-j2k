@@ -215,9 +215,11 @@ mkdir -p fuzz/corpus/decode
 cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode/
 
 # Time-boxed run (CI-friendly: no panics, no OOM, no hangs). A small input
-# may declare an image at the 2^28-sample default limit, which peaks at about
-# 1.4 GiB for a square tile, up to about 2.6 GiB for a tile one sample wide,
-# or about 2 GiB while a palette expands, so give it 4 GiB as CI does.
+# may declare an image at the 2^29-sample default limit, which would peak
+# at about 2.7 GiB for a square tile and up to about 6.4 GiB for a tile one
+# sample wide. The `decode`, `decode_partial` and `incremental_decode` targets
+# skip an input that declares more than 2^28 samples (`common/budget.rs`), so
+# what they decode peaks at about half that, and 4 GiB is enough, as CI gives.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
 # The same with strict off, against the strict decode.

@@ -40,17 +40,20 @@ rust-j2k is a decoder: it reads binary input it did not produce, and that
 input may be hostile. With the default limits, the public functions (`decode`,
 `decode_with`, `read_header` and `read_header_with`) return either a result or
 a typed `Error` for any input. They never panic, read out of bounds or hang,
-and they allocate at most what the limits allow, about 3.2 GiB at peak. If the
+and they allocate at most what the limits allow, about 6.4 GiB at peak. If the
 machine can't supply that, the process aborts, as any Rust program does; that
 is not a bug. If a panic, an out-of-bounds read, a hang or a larger allocation
 happens, report it as above.
 
-By default the decoded image may hold 2^28 samples (1 GiB as `i32`). A decode
-peaks at an estimated 1.4 GiB for a square tile, and at up to about 3.2 GiB
+By default the decoded image may hold 2^29 samples (2 GiB as `i32`). A decode
+peaks at about 2.7 GiB for a square tile, and at up to about 6.4 GiB
 for a tile one sample wide (scaled from measurements on smaller images; see the
 [`decode` docs](https://docs.rs/rust-j2k/latest/rust_j2k/fn.decode.html)). A
 file past a limit is refused with `Error::Limit`, which is the guard working,
-not a bug.
+not a bug. These figures cover the one-shot decode functions. An
+`IncrementalDecoder` keeps per-tile state between calls and can hold up to about
+three times as much (see "Work and memory" in
+[`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits
 (`WorkLimit::Raised`) or remove them (`WorkLimit::Unlimited`). A decode under

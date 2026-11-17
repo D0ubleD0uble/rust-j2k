@@ -505,7 +505,7 @@ fn invalid_options_are_refused_up_front() {
 /// soon as its header is in.
 #[test]
 fn a_limit_more_bytes_cannot_clear_is_an_error() {
-    let path = fixtures().join("sample_limit/flat_16385_tiled_lossless.j2k");
+    let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
     let bytes = std::fs::read(&path).unwrap();
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     for piece in bytes.chunks(4096) {

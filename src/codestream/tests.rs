@@ -384,25 +384,27 @@ fn the_tile_grid_covers_the_image_with_clipped_edge_tiles() {
     assert_eq!(area, 40 * 40);
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn oversize_image_area_is_a_limit() {
-    // 16385×16384 is just past the 2^28 default sample limit. The parse
+    // 32769×16384 is just past the 2^29 default sample limit. The parse
     // itself leaves the area to the limit, which knows the caller's options.
     let n = 16384;
-    let siz = siz_of_geom(n + 1, n);
+    let siz = siz_of_geom(2 * n + 1, n);
     let cap = crate::samples::MAX_IMAGE_SAMPLES;
     let e = crate::samples::check_codestream(&siz, 0, cap).unwrap_err();
     assert!(
-        matches!(&e, Error::Limit(m) if m.message().starts_with("image area 16385x16384 needs")),
+        matches!(&e, Error::Limit(m) if m.message().starts_with("image area 32769x16384 needs")),
         "got {e:?}"
     );
-    // 16384×16384 is exactly the limit, and fits.
-    assert!(crate::samples::check_codestream(&siz_of_geom(n, n), 0, cap).is_ok());
+    // 32768×16384 is exactly the limit, and fits.
+    assert!(crate::samples::check_codestream(&siz_of_geom(2 * n, n), 0, cap).is_ok());
     // One level down the area is a quarter, and fits.
     assert!(crate::samples::check_codestream(&siz, 1, cap).is_ok());
 }
 
 /// The SIZ of a `width` x `height` single-component image, one tile.
+#[cfg(target_pointer_width = "64")]
 fn siz_of_geom(width: u32, height: u32) -> Siz {
     decode_siz(Cursor::new(&siz_geom(
         width, height, 0, 0, width, height, 0, 0,

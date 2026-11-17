@@ -104,7 +104,7 @@ fn big_one_component() -> Vec<u8> {
 }
 
 /// A file whose palette expands a 2048x2048 index plane into 255 channels:
-/// 255 * 2^22 samples, over the 2^28 sample limit.
+/// 255 * 2^22 samples, over the 2^29 sample limit.
 fn palette_over_budget() -> Vec<u8> {
     palette_255_over(&big_one_component())
 }
@@ -1061,6 +1061,7 @@ fn an_open_last_tile_part_fails_only_on_the_bytes_after_its_packets() {
 /// palette channel that looks up another column is checked unless
 /// `raw_channels` asks for the index plane, and a palette's expansion fits the
 /// sample limit only once a resolution reduction shrinks the image.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn read_header_with_agrees_with_decode_with_under_the_same_options() {
     use crate::{DecodeOptions, read_header, read_header_with};
@@ -1080,20 +1081,21 @@ fn read_header_with_agrees_with_decode_with_under_the_same_options() {
     assert_eq!(header.jp2, image.jp2);
 
     // A real 2048x2048 flat image behind a 255-column palette: 255 * 2^22
-    // samples over the 2^28 limit, 255 * 2^18 under it at reduction 2.
+    // samples over the 2^29 limit, 255 * 2^18 under it at reduction 2.
     let flat = include_bytes!("../../../tests/fixtures/budget/flat_2048_lossless.j2k");
     let big = palette_255_over(flat);
     let reduced = DecodeOptions::default().with_resolution_reduction(2);
     assert!(matches!(read_header(&big), Err(Error::Limit(_))));
     assert!(matches!(decode(&big), Err(Error::Limit(_))));
-    // 255 * 2^22 is 3.98 times 2^28, so `Raised(4)` admits the expansion
-    // (`Raised(3)` does not); the header is all this test reads at full size.
+    // 255 * 2^22 is 1.99 times 2^29, so `Raised(2)` admits the expansion
+    // (`Raised(1)`, the default, does not); the header is all this test reads
+    // at full size.
     let raised = |n| DecodeOptions::default().with_sample_limit(crate::WorkLimit::Raised(n));
     assert!(matches!(
-        read_header_with(&big, &raised(3)),
+        read_header_with(&big, &raised(1)),
         Err(Error::Limit(_))
     ));
-    let header = read_header_with(&big, &raised(4)).expect("fits a raised limit");
+    let header = read_header_with(&big, &raised(2)).expect("fits a raised limit");
     assert_eq!(header.components.len(), 255);
     let header = read_header_with(&big, &reduced).expect("fits once reduced");
     assert_eq!((header.width, header.height), (512, 512));

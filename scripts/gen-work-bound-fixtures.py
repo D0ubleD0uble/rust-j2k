@@ -336,7 +336,7 @@ BIG = {
     "t2bomb_512_65535.j2k": lambda: t2bomb(512, 512, 65535),
     # 64 code-blocks, 65535 layers.
     "t2bomb_32_65535.j2k": lambda: t2bomb(32, 32, 65535),
-    # 2^19 code-blocks, the most the geometry admits, and 65535 layers.
+    # 2^19 code-blocks (half the geometry's cap of 2^20), and 65535 layers.
     "t2bomb_2896_65535.j2k": lambda: t2bomb(2896, 2896, 65535),
     # The 65535-layer 512^2 bomb padded to 10 MB of tile data.
     "t2bomb_512_65535_10mb.j2k": lambda: t2bomb(512, 512, 65535, 10_000_000 - 65535),

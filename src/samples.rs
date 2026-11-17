@@ -11,9 +11,9 @@
 //! ([`check_read`]), and a palette's or sRGB output's count is that of the
 //! returned area.
 //!
-//! The default limit, [`MAX_IMAGE_SAMPLES`], is 2^28 samples: 1 GiB as `i32`.
-//! It admits a Sentinel-2 10 m band (10980 x 10980, 120.6 M samples) and an
-//! RGB image of up to about 89 MP. OpenJPEG has no such limit; it allocates
+//! The default limit, [`MAX_IMAGE_SAMPLES`], is 2^29 samples: 2 GiB as `i32`.
+//! It admits a Sentinel-2 true-color image (10980 x 10980 x 3, 361.7 M
+//! samples) and an RGB image of up to about 179 MP. OpenJPEG has no such limit; it allocates
 //! what the header declares.
 //!
 //! While a palette expands, the index plane and the columns are held together,
@@ -58,15 +58,16 @@
 //! table are at 5 levels. The coded-data figures include
 //! the caller's input bytes, so they grow with the file: a 38 MB lossless
 //! 8192 x 8192 file peaks at about 380 MiB. The ratios carry over to the
-//! 2^28 default, about 1.4 GiB for one component in one tile, though that size
-//! was not measured. A tiled image peaks lower: the 1024 x 1024-tiled
-//! Sentinel-2 band (460 MiB of samples) peaks at about 470 MiB, as
+//! 2^29 default, about 2.7 GiB for one component in one tile: a 23170 x 23170
+//! one-tile 5/3 image (lossless, 286 MiB of input) peaks at 2.9 GiB, about 1.3
+//! times its 2 GiB of output plus the input. A tiled image peaks lower: the
+//! 1024 x 1024-tiled Sentinel-2 band (460 MiB of samples) peaks at about 470 MiB, as
 //! `opj_decompress` does (see `docs/resource-bounds.md`, "The sample limit").
 
 use crate::{Error, WorkLimit};
 
-/// The default sample limit: 2^28 samples, 1 GiB as `i32`.
-pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 28;
+/// The default sample limit: 2^29 samples, 2 GiB as `i32`.
+pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 29;
 
 /// The most samples one buffer can hold on this target. Every sample buffer
 /// holds 4-byte samples (`i32` or `f32`), and an allocation may not pass
@@ -143,7 +144,7 @@ pub(crate) fn check_codestream(
 /// component's code-block geometry in each tile read, a component subset
 /// or not; the code-blocks of the kept resolutions are charged to no work
 /// bound, as they are no more than the samples counted here, and no more
-/// than 2^19 a tile (`docs/resource-bounds.md`).
+/// than 2^20 a tile (`docs/resource-bounds.md`).
 pub(crate) fn check_read(
     siz: &crate::codestream::markers::Siz,
     selection: &crate::window::Selection,
@@ -217,6 +218,7 @@ mod tests {
 
     /// The hint names the smallest factor that admits the image, up to the
     /// largest factor there is.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_hint_names_the_smallest_factor() {
         assert!(message(MAX_IMAGE_SAMPLES + 1).contains("`WorkLimit::Raised(2)`"));
@@ -231,13 +233,13 @@ mod tests {
     }
 
     /// Past what any `Raised` factor admits, but within what the target can
-    /// address, the hint names only `Unlimited`. A 2^60-sample image, such as
-    /// GDAL's `dimensions_above_31bit.jp2` at reduction 2, is one.
+    /// address, the hint names only `Unlimited`. The largest image the target
+    /// can address (2^61 - 1 samples on a 64-bit one) is one.
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn past_every_factor_the_hint_names_only_unlimited() {
         let largest = u64::from(u32::MAX) * MAX_IMAGE_SAMPLES;
-        for total in [largest + 1, 1 << 60] {
+        for total in [largest + 1, ADDRESSABLE_SAMPLES] {
             let m = message(total);
             assert!(!m.contains("Raised"), "{m}");
             assert!(m.contains("only `WorkLimit::Unlimited` admits it"), "{m}");
@@ -249,7 +251,9 @@ mod tests {
         }
     }
 
-    /// The hint is data as well as words: the kind and the factor.
+    /// The hint is data as well as words: the kind and the factor. A multiple
+    /// of 2^29 is past a 32-bit target's address cap.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_hint_is_typed() {
         let Error::Limit(limit) = over("image area", MAX_IMAGE_SAMPLES * 3, MAX_IMAGE_SAMPLES)

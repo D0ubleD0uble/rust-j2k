@@ -18,10 +18,15 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../common/budget.rs"]
+mod budget;
 #[path = "../common/partial.rs"]
 mod partial;
 
 fuzz_target!(|data: &[u8]| {
+    if budget::over(data) {
+        return;
+    }
     let _ = rust_j2k::decode(data);
     let hash = fnv1a(data);
     if hash & 1 == 1 {

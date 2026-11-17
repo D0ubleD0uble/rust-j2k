@@ -18,7 +18,7 @@ option. A retry can still fail with another error once past the cap.
 
 | Bound | Default | Option in `DecodeOptions` | Margin over encoder output | Tests |
 | ----- | ------- | ------------------------- | -------------------------- | ----- |
-| [Samples](#the-sample-limit) | 2^28 samples at the decode's reduction | `sample_limit` | about 2.2 times (a Sentinel-2 10 m band) | `tests/sample_limit.rs`, `tests/sample_limit_alloc.rs` |
+| [Samples](#the-sample-limit) | 2^29 samples at the decode's reduction | `sample_limit` | about 1.5 times (a Sentinel-2 true-color image) | `tests/sample_limit.rs`, `tests/sample_limit_alloc.rs` |
 | [Tier-2 steps](#the-tier-2-work-bound) | max(2^24, 32 × the tiles' data bytes) | `packet_work_limit` | about 7.8 times (largest share 12.8%) | `tests/work_bound.rs`, `src/tier2/work_bound_tests.rs` |
 | [Tier-1 sample-passes](#the-tier-1-work-bound) | max(2^26, 2^15 × the tiles' data bytes) | `code_block_work_limit` | about 2.35 times | `tests/work_limit.rs`, `src/tier1/work_bound_tests.rs` |
 
@@ -28,8 +28,21 @@ section also lists the valid files its bound refuses. A fourth cost, resolving
 tile headers, was removed by making the parse cheaper rather than by adding a
 cap ([Tile header cost](#tile-header-cost)).
 
+The per-tile code-block cap is 2^20. The struct sizes (`BlockState` 40,
+`CodeBlock` 80, `SegmentState` 56, two tag-tree nodes of 8 each at 4/3 per
+leaf) give about 141 bytes a block, which is only a lower bound. Measured on a
+4096x4096 tile in 4x4 blocks (2^20 of them), hostile metadata takes about
+129 MiB a tile with empty blocks, and about 480 MiB of heap (about 550 MiB
+resident) with every block coded. The cap was 2^19 until the sample limit
+became 2^29: at 2^19 a one-tile image of 23106x23106 samples or more in 32x32
+blocks was refused. At 2^20 a one-tile image at least 72 samples wide and under
+2^29 samples fits in 32x32 blocks (23170x23170 needs 527,259; 64x64 blocks need
+132726 at the limit; 64 x 2^23 needs 770,048). A thinner image is still
+refused (66 x 8,134,407 needs 1,128,027; 32 x 2^24 needs 1.54 M; 1 x 2^29
+needs 16.7 M), as is one tile in 16x16 blocks or smaller near the limit.
+
 A few fixed guards also return `Limit`, and no option lifts them: 2^18
-precincts and 2^19 code-blocks per tile, 32 POC progression volumes, 30
+precincts and 2^20 code-blocks per tile, 32 POC progression volumes, 30
 coded bit-planes per code-block, and an image too large for the target to
 address, under any sample limit. Their `retry_with()` is `None`, and
 `LimitKind::is_adjustable()` is false.
@@ -49,7 +62,7 @@ grows with the sum of the component areas, not with the file. A file of a
 few hundred bytes can declare a 65536x65536 image, 16 GiB of `i32`
 samples. The decode counts the samples of every output channel, at the
 resolution reduction asked for, from SIZ and the JP2 boxes alone, and
-refuses an image of more than 2^28 samples (1 GiB as `i32`) with `Limit`
+refuses an image of more than 2^29 samples (2 GiB as `i32`) with `Limit`
 before it reads a tile. The image area counted is SIZ's
 `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, wherever on the reference grid the origin
 sits. The count covers the codestream's components, a palette's expanded
@@ -70,8 +83,8 @@ decode. The parse of the tile-parts is not counted: it keeps about 440 bytes
 for each tile-part in the file, read or not, which is about 29 MB at 65535
 tiles and at most about 21 times the file's size, and a file whose whole
 image is over the limit now gets that far under a window. A
-256x256 window of a 16385x16385 image in 4096x4096 tiles fits the default,
-while a window of one 16385x16385 tile counts the whole tile. A
+256x256 window of a 32769x16385 image in 4096x4096 tiles fits the default,
+while a window of one 23171x23171 tile counts the whole tile. A
 `DecodeOptions::components` subset does not lower the count, as the walk
 still builds the geometry of the components it leaves out; under a window it
 counts every component of the tiles read.
@@ -80,15 +93,15 @@ OpenJPEG has no such limit: it allocates what the header declares and fails
 only when the allocation does.
 
 `DecodeOptions::sample_limit` raises the limit (`WorkLimit::Raised(n)`,
-n times 2^28) or lifts it (`WorkLimit::Unlimited`). The refusal names the
+n times 2^29) or lifts it (`WorkLimit::Unlimited`). The refusal names the
 option and the smallest `Raised` factor that admits the file. Even
 `Unlimited` refuses an image whose 4-byte samples would pass `isize::MAX`
 bytes, so the buffer sizes cannot overflow `usize`, on 32-bit targets
 included. Below that, under `Unlimited`, an allocation the system cannot
 satisfy aborts the process.
 
-The default admits a Sentinel-2 10 m band (10980x10980, 120.6 M samples)
-and RGB images up to about 89 MP, and a reduced decode of a larger image
+The default admits a Sentinel-2 true-color image (10980x10980 in three
+components, 361.7 M samples) and RGB images up to about 179 MP, and a reduced decode of a larger image
 when the reduced image fits: GDAL's `single_block_32769_16385.jp2` (537 M
 samples) decodes at reduction 3 (4097x2049), bit-exact against
 `opj_decompress -r 3` (#281, 2026-11-12). Measured on a release build against
@@ -100,11 +113,24 @@ memory from `/usr/bin/time -v`):
 | `T31UDQ_20240105T105339_AOT_10m.jp2`, 10980x10980, 690 KB | full, bit-exact | 4.2 to 4.6 s | 470 MiB | 3.6 to 4.4 s | 471 MiB |
 | the same | reduction 2 (2745x2745) | 0.78 s | 32 MiB | | 36 MiB |
 | `single_block_32769_16385.jp2` | reduction 3, bit-exact | 1.05 s | 86 MiB | 0.25 s | 92 MiB |
+| `T31UDQ_20220811T105631_TCI.jp2`, 10980x10980x3, 125 MB, 256x256 tiles | full, bit-exact | 26.8 s | 1.47 GiB | 22.9 s | 1.38 GiB |
+| a lossless 23170x23170 one-tile 5/3 image of 5 levels, 286 MiB (536.8 M samples) | full | 83.5 s | 2.90 GiB | 53.0 s | 2.34 GiB |
+
+The TCI is the one the default refused at 2^28 (#436). It is the 10 m true-color
+image of Sentinel-2 tile 31UDQ, sensed 2022-08-11 (public bucket
+`gcp-public-data-sentinel-2`); all three planes match `opj_decompress`
+sample for sample. The TCI times are wall time from `/usr/bin/time` of one
+run each, on a machine at load 14 to 20, so they are loose; OpenJPEG ran under `MemoryMax=16G`. The last row is
+the largest one-tile image the default admits, made by `opj_compress -n 5` from
+a pseudo-random gradient; it is where the 1.35 times below stops being
+an extrapolation.
 
 The peak is about 1.0 times the 4-byte output for the Sentinel-2 band (460
-MiB of samples) and about 1.35 times for one square tile of one component
-(see the table in `src/samples.rs`), so at the default a square tile would
-peak at about 1.4 GiB (extrapolated, not measured). A tall, narrow tile peaks
+MiB of samples), and about 1.1 times for the TCI (1.35 GiB of samples, 119 MiB
+of input in memory). It is about 1.35 times for one square tile of one
+component (see the table in `src/samples.rs`), so at the default a square
+tile peaks at about 2.7 GiB, plus the input: 2.9 GiB measured in the last row
+above. A tall, narrow tile peaks
 higher: about 1.5 to 1.7 times when it is 8 to 1024 samples wide, and about
 2.6 times when it is one sample wide (at 2^24 samples, 3 levels). The
 multiple grows with the wavelet levels, as the code-blocks' fixed overhead
@@ -239,9 +265,11 @@ whatever the reduction. Each code-block of the kept resolutions holds at
 least one sample, so there are no more of them than the reduced image's
 samples (under a window or a tile, the reduced samples of the tiles read),
 which the sample limit holds. With 4x4 code-blocks and the default precincts
-that is samples / 16, 2^24 at the limit, about a second to build. Small
+that is samples / 16, 2^25 at the limit, about 1 to 2.3 seconds to build at
+30 to 70 ns each (arithmetic from the per-block cost, not measured at that
+count). Small
 precincts can force code-blocks down to 1x1, and then it is the per-tile cap
-of 2^19 code-blocks that bounds each tile. A decode at full resolution drops no
+of 2^20 code-blocks that bounds each tile. A decode at full resolution drops no
 resolution, so it spends exactly what it did before; a file built to spend
 exactly the bound (`the_layer_orders_charge_each_component_they_check` in
 `tests/work_bound.rs`) still decodes.
@@ -373,8 +401,8 @@ then walks the tile again under a fresh bound, so it can spend about 1.25 times
 the decode's bound (`jp2_t2_sweep_cprl_tall` in
 `tests/fixtures/psot0/README.md`). The decode's bound does not replace that
 walk's geometry bound of 2^14 code-blocks: `read_header` allocates for its
-walk, and a geometry bound at the decode's 2^19 code-blocks would let
-`read_header` hold about 75 MB for a 66 KB file.
+walk, and a geometry bound at the decode's 2^20 code-blocks would let
+`read_header` hold about 150 MB for a 66 KB file.
 
 The walk to the box end also changes what a decode returns, not only how long
 it takes. When it gives up at the default bound, the tile-part runs to the end
@@ -479,9 +507,9 @@ pass, 11 for two, 14 for three) that is about 1400 sample-passes a byte for
 one pass, 1900 for two and 2600 for three. So the most an HT file asks for a
 byte is about 2600, against the bound's 32768, 12.6 times more. Only the
 sample limit bounds an HT decode, and the work under it is at most 3
-sample-passes per sample: an image of 2^28 samples asks for 8e8 sample-passes.
+sample-passes per sample: an image of 2^29 samples asks for 1.6e9 sample-passes.
 The worst case is a one-column image, which makes 1x1024 blocks, at the
-slowest rates below (10 to 13.7 ns): 8 to 11 s (extrapolated, not
+slowest rates below (10 to 13.7 ns): 16 to 22 s (extrapolated, not
 measured). The bound still counts HT blocks, so a change to what a block may
 cost is checked by the same arithmetic as Part 1, and `WorkLimit::Raised` and
 `Unlimited` mean the same for both.
