@@ -729,6 +729,50 @@ fn a_maxshift_past_the_plane_limit_is_a_limit() {
     assert!(decode(&block(1, 1, 0, &data), 27, params(3, false)).is_ok());
 }
 
+/// Only the coded planes count against the plane limit, as in the Part 1
+/// coder. The block `00 27 F3 00` holds one sample of `mu = 3`. With `Mb = 20`,
+/// `s = 11` and 29 zero bit-planes it has `M'b = 31` planes (H-3) but codes
+/// `31 - 29 = 2` of them, so the sample is `(2 * 3 + 1) << 1 = 14` at double
+/// scale (7.6), background under `2^(s + 1)`, and kept (H.1). The Part 1
+/// coder starts the same block at `top_coded_plane(20, 29, 11) = 2`, as it
+/// does `Mb = 19` with 28 zero bit-planes, which gives the same 14.
+#[test]
+fn a_block_that_codes_few_planes_under_a_large_maxshift_decodes() {
+    let data = [0x00, 0x27, 0xF3, 0x00];
+    let roi = params(11, false);
+    assert_eq!(decode(&block(1, 1, 28, &data), 19, roi).unwrap(), [14]);
+    assert_eq!(decode(&block(1, 1, 29, &data), 20, roi).unwrap(), [14]);
+    // Without the maxshift, too, a subband of 31 planes decodes when it
+    // codes few: `mu = 3` at `Mb = 31` with 29 zero planes.
+    assert_eq!(
+        decode(&block(1, 1, 29, &data), 31, params(0, false)).unwrap(),
+        [14]
+    );
+}
+
+/// A block that codes more than 30 planes is still refused under a maxshift,
+/// with or without zero bit-planes.
+#[test]
+fn a_block_that_codes_past_the_plane_limit_under_a_maxshift_is_a_limit() {
+    let data = [0x00, 0x27, 0xF3, 0x00];
+    let roi = params(11, false);
+    for (numbps, zbp) in [(20, 0), (21, 1), (25, 5)] {
+        assert!(
+            matches!(
+                decode(&block(1, 1, zbp, &data), numbps, roi),
+                Err(Error::Limit(_))
+            ),
+            "Mb {numbps}, zbp {zbp}"
+        );
+    }
+    // At 30 coded planes the limit passes, and the per-sample guard refuses
+    // the magnitude `7 << 29`, which does not fit `i32`.
+    assert!(matches!(
+        decode(&block(1, 1, 1, &data), 20, roi),
+        Err(Error::Codestream(_))
+    ));
+}
+
 /// A cleanup magnitude at the bound `CAP` signals is refused (T.814 A.3.7,
 /// 8.7.3: every `mu` is below it); one below it decodes.
 #[test]

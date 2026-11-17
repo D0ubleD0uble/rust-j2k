@@ -29,10 +29,9 @@ use crate::tier2::CodeBlock;
 use crate::{Error, Result};
 use vlc_tables::{CXT_VLC_TABLE_0, CXT_VLC_TABLE_1};
 
-/// The most magnitude bit-planes a code-block can have for the double-scale
-/// reconstruction to fit `i32`, the bound OpenJPEG's `opj_t1_ht_decode_cblk`
-/// applies to `Mb`. Under a maxshift it applies to the raised count
-/// `Mb + s`.
+/// The most bit-planes a code-block can code for the double-scale
+/// reconstruction to fit `i32`: `Mb + s` less the zero bit-planes (`Mb` when
+/// there is no maxshift), the same count the Part 1 coder limits.
 const MAX_BIT_PLANES: u32 = 30;
 
 /// The largest suffix length `Scup` (7.1.1).
@@ -163,20 +162,6 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
     if block.num_passes == 0 || planes == 0 {
         return Ok(());
     }
-    if planes > MAX_BIT_PLANES {
-        return Err(Error::Limit(if params.roi_shift == 0 {
-            format!(
-                "HT code-block in a subband of {numbps} bit-planes, over the \
-                 {MAX_BIT_PLANES}-plane limit"
-            )
-        } else {
-            format!(
-                "HT code-block of {planes} bit-planes (a subband of {numbps} and a \
-                 maxshift of {}), over the {MAX_BIT_PLANES}-plane limit",
-                params.roi_shift
-            )
-        }));
-    }
     let zbp = block.zero_bit_planes;
     // At least one bit-plane must be left to code; OpenJPEG refuses the
     // same blocks.
@@ -184,6 +169,26 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
         return Err(malformed(&format!(
             "has {zbp} zero bit-planes in a block of {planes}, leaving none to code"
         )));
+    }
+    // Only the coded planes count against the limit, as in the Part 1 coder
+    // (`top_coded_plane`): a background-only block under a large maxshift
+    // codes few planes however large `Mb + s` is. The per-sample `try_from`
+    // in the cleanup pass still refuses any magnitude that does not fit.
+    let coded = planes - zbp;
+    if coded > MAX_BIT_PLANES {
+        return Err(Error::Limit(if params.roi_shift == 0 {
+            format!(
+                "HT code-block of {coded} bit-planes (a subband of {numbps} and {zbp} \
+                 zero bit-planes), over the {MAX_BIT_PLANES}-plane limit"
+            )
+        } else {
+            format!(
+                "HT code-block of {coded} bit-planes (a subband of {numbps}, a \
+                 maxshift of {} and {zbp} zero bit-planes), over the \
+                 {MAX_BIT_PLANES}-plane limit",
+                params.roi_shift
+            )
+        }));
     }
     let data = block
         .segments
