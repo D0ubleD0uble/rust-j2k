@@ -270,16 +270,31 @@ walk in layer orders that reaches more packets than its steps left cannot
 finish and is `Limit` before it starts.
 
 With more packets than the bitmap holds, a walk with a positional order can
-pass over precincts, so the decode keeps the packets read in a set, at most
-one per byte of packet headers and about 24 bytes each. The bitmap stays
-capped at the default bound's size, so raising the bound raises the time a
-file may take, not its memory: past that size the packets read go in the
-set. A skip from the set is a lookup that misses the cache, 80 to 180 ns,
-and each one is charged 12 steps: 15 ns a step, toward the cheap end of
-what a step takes, so the charge errs high.
+pass over precincts, so the decode instead keeps a count per precinct of
+the layers emitted. Each volume emits a precinct's layers from 0 up, so a
+packet was emitted before exactly when its layer is below that count. The
+counts take 4 bytes per precinct of the tile, at most 1 MB under the
+geometry's cap of 2^18 precincts, whatever the packet count. The bitmap
+stays capped at the default bound's size and the counts do not grow as the
+walk goes, so raising the bound raises the time a file may take, not its
+memory. That holds with `strict` off too, where the walk counts every
+packet past the end of the data, a step each, without reading it: those
+packets take no memory of their own.
 
-`read_header`'s walk keeps no set: past its bitmap, only where the decode would
-keep one, it gives up. For a `Psot = 0` codestream in a JP2 file the codestream
+Each skip by the counts is charged 12 steps. The counts replaced a set of
+the packets read (#438), where a skip was a lookup that missed the cache,
+80 to 180 ns, so 12 steps priced a step at 15 ns, toward the cheap end of
+what a step takes. The charge is kept, so the same files are refused, and
+it errs higher still. The set held an entry for each packet past the end
+too, so with `strict` off its memory grew with the bound: a 200-byte file
+at `Raised(8)` took 23.5 s and 3.6 GB before its `Limit`, and takes 4.0 s
+and 32 MB now; `pocspent_2tiles_60000_559.j2k` at `Raised(3)` took 888 MB
+and takes 3 MB, what the strict decode takes
+(`packets_past_the_end_take_no_memory_under_a_raised_bound` in
+`tests/strict_off_poc_alloc.rs`).
+
+`read_header`'s walk keeps no counts: past its bitmap, only where the decode
+would keep them, it gives up. For a `Psot = 0` codestream in a JP2 file the codestream
 then runs to the end of the file, like the other tiles too costly to walk
 (`a_psot_zero_tile_too_costly_to_walk_reads_to_the_end` in
 `tests/psot_zero.rs`): boxes after `jp2c` are not reported, and the decode
@@ -322,12 +337,12 @@ At 2048x2048 or more it passes the bound from about 600 to 800 layers:
 OpenJPEG decodes all three. No encoder in the corpus writes this shape; the
 files were built by hand for #235.
 
-The charge on skips from a POC sequence's set refuses another class. Take
+The charge on skips past a POC sequence's bitmap refuses another class. Take
 one 38608x1 tile in RPCL, no wavelet levels, 1x1 precincts, one
 component at `XRsiz` 254 and 64 at 255. The first sets the sweep's step to
 254, which meets only the first of each other component's 152 precincts,
 so the volumes reach 9880 packets a layer but read 216. That is more than
-the bitmap may hold, so the packets read go in a set, and every volume
+the bitmap may hold, so the packets read are held as counts, and every volume
 after the first skips each of them at 12 steps. With 2048 layers (442 KB)
 one volume decodes and 31 are `Limit` after 0.05 s; OpenJPEG decodes both
 in 0.14 s or less. `setskip` in `scripts/gen-work-bound-fixtures.py`

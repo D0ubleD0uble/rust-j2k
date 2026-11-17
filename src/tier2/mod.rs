@@ -287,8 +287,8 @@ pub struct CodedData<'a> {
 /// The walk spends `meter`, what is left of the decode's work bound (see
 /// [`decode_visits`]), and fails with [`Error::Limit`] once it is gone. A
 /// POC sequence's packets are held in a bitmap of at most `poc_bitmap`
-/// bits, and no more than the visits left, and past it in a set (see
-/// [`for_each_packet`]). The code-blocks of the resolutions that
+/// bits, and no more than the visits left, and past it as a count per
+/// precinct (see [`for_each_packet`]). The code-blocks of the resolutions that
 /// `reduction` drops are charged to `meter` too (see
 /// [`Budget::reduction`]). The packets of the layers past `layers` are read
 /// but add nothing to their code-blocks (see [`Budget::layers`]).
@@ -338,8 +338,8 @@ fn refused(meter: &Meter, error: Error) -> Refused {
 /// tiles' packets. A visit costs about 1 to 55 ns (see
 /// [`DECODE_VISITS_PER_BYTE`]), so this is under a second. A packet a POC
 /// marker's volumes reach again is skipped from a bitmap without a visit, in
-/// about 4 ns; skipped from the set a sequence past the bitmap keeps, it is
-/// charged 12 visits (see `progression::for_each_packet`).
+/// about 4 ns; skipped by the per-precinct counts a sequence past the bitmap
+/// keeps, it is charged 12 visits (see `progression::for_each_packet`).
 pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 
 /// The visits a decode may spend per byte of its tiles' data, when that comes
@@ -397,9 +397,9 @@ pub(crate) struct Budget {
     /// [`for_each_packet`]).
     pub(crate) poc_bitmap: u64,
     /// Whether a POC sequence whose packets are more than
-    /// [`poc_bitmap`](Self::poc_bitmap) holds them in a set; if not, its
-    /// walk fails.
-    pub(crate) poc_set: bool,
+    /// [`poc_bitmap`](Self::poc_bitmap) holds them as a count per precinct;
+    /// if not, its walk fails.
+    pub(crate) poc_counts: bool,
     /// Whether a POC sequence that leaves out packets of the tile is refused
     /// before the walk (see `progression::check_poc_coverage`). The decode
     /// sets it. `read_header`'s walk of a `Psot = 0` tile does not: it asks
@@ -442,7 +442,7 @@ impl Budget {
             } else {
                 poc_bitmap
             },
-            poc_set: true,
+            poc_counts: true,
             poc_coverage: true,
             reduction: 0,
             layers: None,
@@ -613,7 +613,7 @@ fn walk_packets<'a>(
         &walk,
         meter,
         budget.poc_bitmap,
-        budget.poc_set,
+        budget.poc_counts,
         |layer, resolution, component, precinct| {
             if let Some(reach) = reach.as_deref_mut() {
                 if ended {

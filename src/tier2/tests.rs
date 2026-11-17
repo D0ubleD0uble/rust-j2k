@@ -1634,7 +1634,7 @@ fn overlapping_volumes() -> MainHeader {
 
 /// Volumes that overlap, in part and in full and in every order, emit each
 /// packet once, where the first volume to reach it puts it, whether the
-/// sequence's packets are held in a bitmap or in a set. The reference walks
+/// sequence's packets are held in a bitmap or as counts. The reference walks
 /// each volume on its own (one volume takes no dedup) and keeps the first
 /// time each packet comes.
 #[test]
@@ -1725,7 +1725,7 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
     assert_eq!(read, 0);
 
     // A positional volume may pass over precincts, so it is walked, unless
-    // the walk keeps no set, as `read_header`'s does not, and the packets
+    // the walk keeps no counts, as `read_header`'s does not, and the packets
     // are more than its bitmap may hold.
     header.poc[1].progression = Progression::Rpcl;
     let (result, read) = walk_with(&header, 11, None);
@@ -1737,9 +1737,9 @@ fn layer_order_volumes_past_the_visits_left_are_refused_at_once() {
     assert!(read > 0, "{result:?}");
 }
 
-/// A packet skipped from the set is charged `SET_SKIP_VISITS` (12) visits,
+/// A packet skipped by the counts is charged `COUNTS_SKIP_VISITS` (12) visits,
 /// one skipped from the bitmap none: two identical RPCL volumes spend 12
-/// visits more per packet read when the packets are held in a set.
+/// visits more per packet read when the packets are held as counts.
 #[test]
 fn only_a_skip_from_the_set_is_charged() {
     let mut header = overlapping_volumes();

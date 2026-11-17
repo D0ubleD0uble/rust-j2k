@@ -6,9 +6,6 @@
 //! the reference grid rather than counting, so this module needs the canvas
 //! coordinates the per-component [`ResolutionGeom`] has already divided away.
 
-use std::collections::HashSet;
-use std::hash::{BuildHasherDefault, Hasher};
-
 use crate::codestream::MainHeader;
 use crate::codestream::markers::{PocVolume, Progression, Rect, Siz};
 use crate::{Error, Result};
@@ -408,15 +405,16 @@ fn mask_below(n: u32) -> u64 {
 /// points that hold no packet included, so a walk under a bound stops however
 /// sparse its packets are.
 ///
-/// `poc_bitmap` and `poc_set` are how a `POC` sequence's packets are held
+/// `poc_bitmap` and `poc_counts` are how a `POC` sequence's packets are held
 /// (see [`Emitted`]): in a bitmap when they are no more than `poc_bitmap`,
-/// and else in a set if `poc_set`, or the walk is [`crate::Error::Limit`].
+/// and else as a count per precinct if `poc_counts`, or the walk is
+/// [`crate::Error::Limit`].
 pub(crate) fn for_each_packet<F>(
     header: &MainHeader,
     walk: &PacketWalk<'_>,
     meter: &Meter,
     poc_bitmap: u64,
-    poc_set: bool,
+    poc_counts: bool,
     mut f: F,
 ) -> Result<()>
 where
@@ -434,7 +432,7 @@ where
         order.max_res,
         meter,
         poc_bitmap,
-        poc_set,
+        poc_counts,
     )?;
     let skip_visits = emitted.skip_visits();
     order.walk_runs(walk, meter, |layer, res, comp, precinct| {
@@ -446,8 +444,8 @@ where
         // conformance codestream past 100 KB takes to decode (best of
         // five release builds). Charging them would refuse files
         // OpenJPEG reads quickly, such as 31 identical volumes over 1 MB
-        // of empty packets. A skip from the set costs far more and is
-        // charged (see `SET_SKIP_VISITS`).
+        // of empty packets. A skip by the counts is charged (see
+        // `COUNTS_SKIP_VISITS`).
         if emitted.insert(walk, layer, res, comp, precinct)? {
             f(layer, res, comp, precinct)
         } else if skip_visits > 0 {
@@ -458,12 +456,15 @@ where
     })
 }
 
-/// The visits a packet skipped from [`Emitted`]'s set is charged. A lookup
-/// in a set of millions of packets misses the cache: about 80 to 180 ns,
-/// measured on the `setskip` shape of 1.4e7 packets read. Twelve visits
-/// prices a visit at 15 ns, toward the cheap end of the 1 to 55 ns one
-/// takes (see `DECODE_VISITS_PER_BYTE`), so the charge errs high.
-pub(crate) const SET_SKIP_VISITS: usize = 12;
+/// The visits a packet skipped by [`Emitted`]'s per-precinct counts is
+/// charged. The packets read were once kept in a hash set, where a lookup
+/// among millions missed the cache: about 80 to 180 ns, measured on the
+/// `setskip` shape of 1.4e7 packets read. Twelve visits priced a visit at
+/// 15 ns, toward the cheap end of the 1 to 55 ns one takes (see
+/// `DECODE_VISITS_PER_BYTE`). A count is cheaper to look up than a set
+/// entry, so the charge, kept so that the same files are refused, errs
+/// higher still.
+pub(crate) const COUNTS_SKIP_VISITS: usize = 12;
 
 /// The packets a `POC` sequence has emitted so far (see [`for_each_packet`]),
 /// as OpenJPEG's `include` array holds them.
@@ -490,10 +491,17 @@ pub(crate) const SET_SKIP_VISITS: usize = 12;
 ///
 /// When there are more, a positional order can pass over precincts, as
 /// OpenJPEG's does (see [`PacketWalk::spans`]), so the walk might still
-/// finish; the packets read are then kept in a set, at most one per visit
-/// and one per byte of packet headers, about 24 bytes each, and each packet
-/// skipped from it is charged [`SET_SKIP_VISITS`]. `read_header`'s walk
-/// keeps no set: it fails with [`Error::Limit`] there.
+/// finish. The packets emitted are then held as a count per precinct, and
+/// each packet skipped is charged [`COUNTS_SKIP_VISITS`]. Each volume emits a
+/// precinct's layers from 0 up, so the layers emitted of a precinct are
+/// always its first ones, and a packet is one emitted before exactly when
+/// its layer is below its precinct's count. The counts take 4 bytes per
+/// precinct of the tile, at most 1 MB under the geometry's cap, however
+/// many packets the walk reaches: packets past the end of the data, which
+/// a walk with `strict` off counts without reading, take no more. (A set of
+/// the packets emitted grew by one for each such packet, up to the bound.)
+/// `read_header`'s walk keeps no counts: it fails with [`Error::Limit`]
+/// there.
 struct Emitted {
     /// The first bit of each (component, resolution), at
     /// `component * resolutions + resolution`.
@@ -502,24 +510,27 @@ struct Emitted {
     marks: Marks,
 }
 
-/// How [`Emitted`] holds its bits.
+/// How [`Emitted`] holds the packets emitted.
 enum Marks {
+    /// A bit per packet the volumes reach, at the bits `starts` lays out.
     Dense(Vec<u64>),
-    Sparse(HashSet<u64, BuildHasherDefault<PacketHasher>>),
+    /// The layers emitted of each precinct: `counts[bases[pair] +
+    /// precinct]`, with `pair` laid out as `starts` is.
+    Counts { bases: Vec<usize>, counts: Vec<u32> },
 }
 
 impl Emitted {
     /// Nothing emitted yet, for `volumes` over a tile of at most
     /// `resolutions` resolutions per component, with `meter` for the
     /// walk; a bitmap when the volumes reach at most `dense_bits` packets,
-    /// else a set if `poc_set`.
+    /// else counts if `poc_counts`.
     fn new(
         volumes: &[Volume],
         walk: &PacketWalk<'_>,
         resolutions: usize,
         meter: &Meter,
         dense_bits: u64,
-        poc_set: bool,
+        poc_counts: bool,
     ) -> Result<Self> {
         let (starts, reached) = Self::layout(volumes, walk, resolutions);
         let words = usize::try_from(reached.div_ceil(64))
@@ -533,7 +544,7 @@ impl Emitted {
                 return Err(meter.refuse(WorkRefusal::PocReach { reached }));
             }
             Some(words) => Marks::Dense(vec![0; words]),
-            None if !poc_set => {
+            None if !poc_counts => {
                 return Err(Error::limit_fixed(
                     crate::LimitKind::PocVolumes,
                     format!(
@@ -542,7 +553,23 @@ impl Emitted {
                     ),
                 ));
             }
-            None => Marks::Sparse(HashSet::default()),
+            None => {
+                // The geometry holds at most `MAX_PRECINCTS` precincts across
+                // the tile's components, so the counts are at most 1 MB.
+                let mut bases = Vec::with_capacity(starts.len());
+                let mut precincts = 0usize;
+                for index in 0..starts.len() {
+                    let (comp, res) = (index / resolutions, index % resolutions);
+                    bases.push(precincts);
+                    if let Some(geom) = walk.geoms[comp].get(res) {
+                        precincts += geom.precinct_count();
+                    }
+                }
+                Marks::Counts {
+                    bases,
+                    counts: vec![0; precincts],
+                }
+            }
         };
         Ok(Emitted {
             starts,
@@ -582,11 +609,11 @@ impl Emitted {
     }
 
     /// The visits a packet skipped as already emitted is charged: none from
-    /// the bitmap, [`SET_SKIP_VISITS`] from the set.
+    /// the bitmap, [`COUNTS_SKIP_VISITS`] from the counts.
     fn skip_visits(&self) -> usize {
         match self.marks {
             Marks::Dense(_) => 0,
-            Marks::Sparse(_) => SET_SKIP_VISITS,
+            Marks::Counts { .. } => COUNTS_SKIP_VISITS,
         }
     }
 
@@ -602,15 +629,15 @@ impl Emitted {
         comp: usize,
         precinct: usize,
     ) -> Result<bool> {
-        let start = self.starts[comp * self.resolutions + res];
+        let pair = comp * self.resolutions + res;
         let precincts = walk.geoms[comp][res].precinct_count() as u64;
         debug_assert!(
             (precinct as u64) < precincts,
             "precinct {precinct} of {precincts}"
         );
-        let bit = start + u64::from(layer) * precincts + precinct as u64;
         match &mut self.marks {
             Marks::Dense(words) => {
+                let bit = self.starts[pair] + u64::from(layer) * precincts + precinct as u64;
                 let word = usize::try_from(bit / 64)
                     .ok()
                     .and_then(|w| words.get_mut(w))
@@ -622,7 +649,23 @@ impl Emitted {
                 *word |= mask;
                 Ok(new)
             }
-            Marks::Sparse(set) => Ok(set.insert(bit)),
+            Marks::Counts { bases, counts } => {
+                let count = counts.get_mut(bases[pair] + precinct).ok_or_else(|| {
+                    Error::inconsistent(format!("precinct {precinct} past the `POC` counts"))
+                })?;
+                // The layers emitted of a precinct are its first ones (see
+                // [`Emitted`]), so the next one new is the count.
+                if layer < *count {
+                    Ok(false)
+                } else if layer == *count {
+                    *count += 1;
+                    Ok(true)
+                } else {
+                    Err(Error::inconsistent(format!(
+                        "layer {layer} of a precinct emitted before layer {count}"
+                    )))
+                }
+            }
         }
     }
 }
@@ -639,32 +682,6 @@ pub(crate) fn layer_orders(volumes: &[Volume]) -> bool {
     volumes
         .iter()
         .all(|v| matches!(v.progression, Progression::Lrcp | Progression::Rlcp))
-}
-
-/// The hash of a packet's bit in [`Emitted`]'s set: SplitMix64's finalizer,
-/// which spreads neighboring bits over every bucket. It is a bijection, so
-/// two packets never hash alike, and the bits are laid out by the tile's
-/// geometry, not chosen one by one.
-#[derive(Default)]
-struct PacketHasher(u64);
-
-impl Hasher for PacketHasher {
-    fn finish(&self) -> u64 {
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.0 = (self.0 << 8) | u64::from(b);
-        }
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.0 = value;
-    }
 }
 
 /// One packet of a tile: the layer, resolution, component and precinct that

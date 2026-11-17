@@ -342,7 +342,7 @@ fn locate_codestream<'a>(
 /// the decode's does: at most 2 MB, or 4 bytes per byte of tile data when
 /// that is more, so for a file of several MB this part grows with the file.
 /// A tile whose volumes reach more packets than that, where the decode would
-/// keep a set, is not walked (see `tier2::progression`).
+/// keep per-precinct counts, is not walked (see `tier2::progression`).
 const PROBE_GEOMETRY: usize = 1 << 14;
 
 /// The most tiles, and the most components, a codestream may have for
@@ -439,7 +439,7 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
         // the decode's bound for the same tile data, and past it gives up
         // rather than keep a set.
         poc_bitmap: crate::tier2::decode_visits(crate::tile_bytes(&cs)),
-        poc_set: false,
+        poc_counts: false,
         // Volumes that leave out packets do not move where the packets they
         // reach end; the decode refuses them.
         poc_coverage: false,

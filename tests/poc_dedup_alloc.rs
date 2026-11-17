@@ -77,7 +77,8 @@ fn in_jp2() -> Vec<u8> {
 /// wavelet levels, 2 x 2 precincts (65536 of them), 65535 layers and two
 /// RPCL POC volumes over all of them, so the volumes reach 4.3e9 packets, a
 /// bitmap of 537 MB. Only the first 4096 packets are in the data (0x00
-/// each). Past the bound's 2^24 the decode holds the packets read in a set.
+/// each). Past the bound's 2^24 the decode holds the packets read as a count
+/// per precinct.
 fn pocwide() -> Vec<u8> {
     let siz = synth::siz_body([512, 512, 0, 0, 512, 512, 0, 0], &[[7, 1, 1]]);
     let mut cod = vec![1, 2];
