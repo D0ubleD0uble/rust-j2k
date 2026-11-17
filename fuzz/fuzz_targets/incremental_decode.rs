@@ -17,21 +17,30 @@
 //! file with all-zero control bytes, so plain fixtures are valid seeds. The
 //! bytes pick: a layer cap, a resolution reduction, a
 //! window (from the last four bytes), a tile, a component subset of one or
-//! two distinct indices, and a code-block work limit. The decoder holds all
-//! its refines to that limit together, and a one-shot decode of the prefix
-//! holds only itself, so once earlier refines have spent some of it, a refine
-//! it refuses (`Ok(None)`) is checked against a fresh decoder instead of the
-//! one-shot decode; before that, and for every refine that decodes, the
-//! result equals the one-shot decode. The limit is at least 2^26 sample
-//! passes, so inputs this small do not reach the cut (see #425).
+//! two distinct indices, and a code-block work limit.
+//!
+//! The decoder holds all its refines to that limit together, and a one-shot
+//! decode of the prefix holds only itself. A due refine with nothing spent
+//! gives the one-shot decode, and the code-block work that refine spends
+//! and the bound it had say exactly whether a decoder with more work spent
+//! refuses it (`Ok(None)`) or gives the same result. Each due refine is
+//! checked by that rule, with a decoder that has nothing spent standing in
+//! where the refine itself gives `Ok(None)`. The limit is at least 2^26
+//! sample passes, which inputs this small do not come near, so each due
+//! refine also starts a probe decoder with work already spent, drawn around
+//! the most that leaves the refine room
+//! (`rust_j2k::fuzz::incremental_with_code_block_work_spent`), and checks
+//! it by the same rule.
 
 use libfuzzer_sys::fuzz_target;
 
 #[path = "../common/budget.rs"]
 mod budget;
 
+use rust_j2k::fuzz::{incremental_code_block_work, incremental_with_code_block_work_spent};
 use rust_j2k::{
-    decode_with, DecodeOptions, Error, IncrementalDecoder, LimitKind, Region, Window, WorkLimit,
+    decode_with, DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Region, Window,
+    WorkLimit,
 };
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -57,11 +66,11 @@ fuzz_target!(|input: &[u8]| {
     // The code-block bound is the one earlier refines cut: the decoder
     // holds all its refines to it together. Without a bound, every refine
     // that decodes is the one-shot decode of its bytes.
-    let (limit, cut) = match control[0] & 3 {
-        0 => (WorkLimit::Default, true),
-        1 => (WorkLimit::Unlimited, false),
-        2 => (WorkLimit::Raised(2), true),
-        _ => (WorkLimit::Raised(4), true),
+    let limit = match control[0] & 3 {
+        0 => WorkLimit::Default,
+        1 => WorkLimit::Unlimited,
+        2 => WorkLimit::Raised(2),
+        _ => WorkLimit::Raised(4),
     };
     let mut options = DecodeOptions::default().with_code_block_work_limit(limit);
     if control[0] & 4 != 0 {
@@ -109,9 +118,6 @@ fuzz_target!(|input: &[u8]| {
     let mut failed = None;
     // The bytes fed at the last refine that was due.
     let mut tried = 0;
-    // No one-shot decode of a prefix has yet got past the main header, so
-    // no code-block work is spent.
-    let mut fresh = true;
     while fed < data.len() {
         hash = splitmix(hash);
         // Pieces from 1 byte to about a quarter of the input.
@@ -119,6 +125,7 @@ fuzz_target!(|input: &[u8]| {
         let end = (fed + piece).min(data.len());
         decoder.feed(&data[fed..end]);
         fed = end;
+        let (spent, _) = incremental_code_block_work(&decoder);
         let refined = keyed(decoder.refine());
         if let Some(error) = &failed {
             assert_eq!(refined.as_ref(), Err(error), "poisoned at {fed}");
@@ -128,10 +135,6 @@ fuzz_target!(|input: &[u8]| {
         if due {
             tried = fed;
             let one_shot = decode_with(&data[..fed], &lenient);
-            let was_fresh = fresh;
-            if !matches!(one_shot, Err(Error::Incomplete(_))) {
-                fresh = false;
-            }
             let expected = keyed(match one_shot {
                 Ok(image) => Ok(Some(image)),
                 Err(Error::Incomplete(_)) => Ok(None),
@@ -142,16 +145,49 @@ fuzz_target!(|input: &[u8]| {
                 }
                 Err(error) => Err(error),
             });
-            // The bound may refuse a refine its one-shot decode passes, but
-            // only once earlier refines have spent some of it. A decoder
-            // with nothing spent must give what this one does.
-            if cut && refined == Ok(None) && !was_fresh {
+            // The work this try spends, and what it gives with nothing spent:
+            // the one-shot decode. A refine that decodes, or errs, has passed
+            // every cut a decoder with nothing spent would pass, so it is
+            // what that decoder gives and spends. One that gives `Ok(None)`
+            // once the bound is known may be refused for what earlier
+            // refines spent, so a decoder with nothing spent is asked.
+            let (after, bound) = incremental_code_block_work(&decoder);
+            let zeroed;
+            let (fresh, work) = if refined == Ok(None) && bound.is_some() {
                 let mut zero = IncrementalDecoder::new(options.clone()).unwrap();
                 zero.feed(&data[..fed]);
-                assert_eq!(keyed(zero.refine()), expected, "{fed} bytes, nothing spent");
-                continue;
+                zeroed = keyed(zero.refine());
+                assert_eq!(zeroed, expected, "{fed} bytes, nothing spent");
+                (&zeroed, incremental_code_block_work(&zero).0)
+            } else {
+                assert_eq!(refined, expected, "{fed} bytes, due");
+                let work = after
+                    .checked_sub(spent)
+                    .expect("the work spent never falls");
+                (&refined, work)
+            };
+            let cut = Cut { fresh, work, bound };
+            cut.check(&decoder, spent, &refined, "due");
+            // A decoder that starts with work spent, drawn around the most
+            // that leaves this refine's work room.
+            if let Some(bound) = bound {
+                hash = splitmix(hash);
+                let room = bound.saturating_sub(work);
+                let spare = (hash >> 8) % work.saturating_add(1);
+                let spent = match hash % 8 {
+                    0 => room.saturating_sub(1),
+                    1 | 2 => room,
+                    3 | 4 => room.saturating_add(1),
+                    5 => room.saturating_sub(spare),
+                    6 => room.saturating_add(1).saturating_add(spare),
+                    _ => u64::MAX - (hash >> 8) % 2,
+                };
+                let mut probe =
+                    incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
+                probe.feed(&data[..fed]);
+                let probed = keyed(probe.refine());
+                cut.check(&probe, spent, &probed, "probe");
             }
-            assert_eq!(refined, expected, "{fed} bytes, due");
             if let Err(error) = refined {
                 failed = Some(error);
             }
@@ -190,6 +226,55 @@ fuzz_target!(|input: &[u8]| {
         expected => assert_eq!(keyed(finished), keyed(expected)),
     }
 });
+
+/// What a decoder with nothing spent gives on some bytes: its result, the
+/// code-block work its refine spent and the bound that refine had.
+struct Cut<'a> {
+    fresh: &'a Result<Option<Image>, String>,
+    work: u64,
+    bound: Option<u64>,
+}
+
+impl Cut<'_> {
+    /// Check `refined`, what `decoder` gave on the same bytes after `spent`
+    /// of the code-block work, by the ledger's rule: the decode may spend
+    /// what is left of the bound after `spent` (all of it, when the bound
+    /// is `u64::MAX`), and a tile whose work passes what is left refuses the
+    /// refine. The work comes in tile by tile, so the refine refuses if and
+    /// only if this try's work, all of it, passes what is left; then it
+    /// spends at most that work, and otherwise all of it. A refine that a
+    /// decoder with nothing spent gives `Ok(None)` for gives it too.
+    fn check(
+        &self,
+        decoder: &IncrementalDecoder,
+        spent: u64,
+        refined: &Result<Option<Image>, String>,
+        what: &str,
+    ) {
+        let (after, bound) = incremental_code_block_work(decoder);
+        assert_eq!(bound, self.bound, "{what}");
+        let left = match self.bound {
+            None => u64::MAX,
+            Some(u64::MAX) => u64::MAX,
+            Some(bound) => bound.saturating_sub(spent),
+        };
+        let total = spent.saturating_add(self.work);
+        let decodes = *self.fresh != Ok(None);
+        if decodes && self.work > left {
+            assert_eq!(refined, &Ok(None), "{what}: {} past {left}", self.work);
+        } else {
+            assert_eq!(refined, self.fresh, "{what}: {} within {left}", self.work);
+        }
+        if decodes && self.work <= left {
+            assert_eq!(after, total, "{what}: {spent} and {}", self.work);
+        } else {
+            assert!(
+                spent <= after && after <= total,
+                "{what}: {spent} to {after} of {total}"
+            );
+        }
+    }
+}
 
 fn splitmix(x: u64) -> u64 {
     let mut z = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
