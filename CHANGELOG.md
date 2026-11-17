@@ -10,8 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `ChannelType` and `Association` have a new variant each,
   `ChannelType::ApplicationDefined` and `Association::ApplicationDefined(u16)`.
-  Both enums are exhaustive, so a `match` on either without a wildcard arm
-  no longer compiles; add an arm for the new variant. They are used only
+  Both enums are now `#[non_exhaustive]`, so a `match` on either needs a
+  wildcard arm, and a later variant will not break it. They are used only
   for JPH files; a JP2 file's `cdef` channel of type 3 is still
   `ChannelType::Other(3)` with an `Association` read as a color.
 

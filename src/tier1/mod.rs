@@ -330,11 +330,16 @@ pub(crate) fn decode_work(bytes: u64) -> u64 {
 /// header of a few bits per code-block can ask for up to 88 passes over
 /// 4096 samples each.
 ///
-/// The passes run are the block's passes, but no more than the `3 × top − 2`
-/// its coded bit-planes hold; a block of no coded plane, or one the decode
-/// refuses for too many, runs none. The code-blocks a resolution reduction
-/// drops, and those of the components `wanted` does not mark, are not
-/// decoded and not counted.
+/// For a Part 1 block the passes run are the block's passes, but no more than
+/// the `3 × top − 2` its coded bit-planes hold; a block of no coded plane, or
+/// one the decode refuses for too many, runs none. An HT block is counted by
+/// the passes the HT decoder would run (its cleanup pass, and its refinement
+/// passes when the block has a non-empty refinement segment and a plane left
+/// to refine), also when the decode then refuses it for too many zero
+/// bit-planes, more than 30 planes, more than 3 passes, or a malformed `Lcup`
+/// or `Scup`: its count is the work the bound is charged, not the work done. The
+/// code-blocks a resolution reduction drops, and those of the components
+/// `wanted` does not mark, are not decoded and not counted.
 pub(crate) fn work(
     header: &MainHeader,
     coded: &CodedData<'_>,

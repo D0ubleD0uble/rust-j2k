@@ -509,10 +509,10 @@ pub enum ColorSpace {
 
 /// What one output channel is: its type and the color it belongs to.
 ///
-/// It mirrors a `cdef` entry's `Typ` and `Asoc`, and both enums already hold
-/// every 16-bit value, so the struct and its enums are not
-/// `#[non_exhaustive]`: a caller may build one, and match on both enums
-/// without a catch-all arm.
+/// It mirrors a `cdef` entry's `Typ` and `Asoc`. The struct is not
+/// `#[non_exhaustive]`, so a caller may build one. Both enums are
+/// `#[non_exhaustive]`, because a later part of the standard may give a
+/// reserved value a name: match them with a catch-all arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelDefinition {
     /// The channel's type.
@@ -539,6 +539,7 @@ pub struct ChannelDefinitionEntry {
 
 /// A channel's type, from a channel definition (`Typ`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChannelType {
     /// A color channel (`Typ` 0).
     Color,
@@ -560,6 +561,7 @@ pub enum ChannelType {
 /// The color a channel is associated with, from a channel definition
 /// (`Asoc`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Association {
     /// The channel applies to the whole image (`Asoc` 0), as an opacity
     /// channel usually does.

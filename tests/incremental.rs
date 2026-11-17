@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    DecodeOptions, Error, Image, IncrementalDecoder, WorkLimit, decode_with, read_header,
+    DecodeOptions, Error, Image, IncrementalDecoder, Window, WorkLimit, decode_with, read_header,
 };
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -143,6 +143,13 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
             Err(error) => {
                 let expected = refine_oracle(&bytes[..fed], options);
                 assert_eq!(Err(error), expected, "{name}, {fed} bytes");
+                // A refine error is final, so the whole input must err too:
+                // a decoder that gave up for good on a prefix of a file
+                // that decodes would pass the check above.
+                assert!(
+                    decode_with(bytes, &options.clone().with_strict(false)).is_err(),
+                    "{name}: refine failed for good at {fed} bytes, but the whole input decodes"
+                );
                 return images;
             }
         }
@@ -239,6 +246,20 @@ fn options_for(bytes: &[u8]) -> DecodeOptions {
     DecodeOptions::default().with_resolution_reduction(reduction)
 }
 
+/// `options` with a window over the middle of the image, in the image's
+/// grid, or `None` when the header is not whole.
+fn windowed(bytes: &[u8], options: &DecodeOptions) -> Option<DecodeOptions> {
+    let header = read_header(bytes).ok()?;
+    let (w, h) = (header.width, header.height);
+    let window = Window::new(
+        w / 4,
+        h / 4,
+        (w - w / 4).max(w / 4 + 1),
+        (h - h / 4).max(h / 4 + 1),
+    );
+    Some(options.clone().with_window(Some(window)))
+}
+
 /// The fixture directories of files made to reach the work bounds.
 const COSTLY: [&str; 4] = ["work_bound/", "tier1_work_bound/", "psot0/", "budget/"];
 
@@ -279,6 +300,20 @@ fn check_share(index: usize) {
             continue;
         }
         images += stream(&name, bytes, &mut rng, &options);
+        // Every third file also streams to a window, and every third to a
+        // component subset, which keeps the added time small.
+        match count % 3 {
+            0 => {
+                if let Some(options) = windowed(bytes, &options) {
+                    images += stream(&name, bytes, &mut rng, &options);
+                }
+            }
+            1 => {
+                let subset = options.clone().with_components(Some(vec![0]));
+                images += stream(&name, bytes, &mut rng, &subset);
+            }
+            _ => {}
+        }
         let cuts = cuts(bytes.len(), &mut rng);
         points += cuts.len();
         cut(&name, bytes, &cuts, &mut rng, &options);

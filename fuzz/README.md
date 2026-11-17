@@ -51,6 +51,12 @@ header so every execution reaches the packet reader, and `tier1_block`/`mq`
 call hidden hooks the library exposes (`rust_j2k::fuzz`, `#[doc(hidden)]` and
 not public API) to drive the EBCOT block decoder and MQ coder directly.
 
+`tile_body`'s second input byte steers a region of interest: with bit 7 set
+it writes an `RGN` marker (a maxshift of 0 to 19 from the low 5 bits, on
+component 0 only when bit 5 is set, else on every component), so the packets
+are read under a shifted bit-plane count; with bit 7 clear it writes none, and
+the HT variants never write one. The body starts after both bytes.
+
 `tile_body`'s first input byte also steers the codestream shape, so one run
 reaches the widened tier-2 paths, not only the single-component single-layer
 default: three components with the color transform, three quality layers, an
@@ -160,14 +166,22 @@ tile-parts) reach the strict-off walk too. Seed `decode_partial` as
 `decode`.
 
 `incremental_decode` feeds each input to an `IncrementalDecoder` in pieces
-whose sizes a hash of the input picks, under a layer cap or a reduction the
-hash also picks, and refines after each piece. Each refine that decodes goes
-on from the packet walks the earlier ones kept, and must give what
-`decode_with` gives with `strict` off on the bytes fed so far: the same
-image or the same error. After an error, each later refine must give it
-again, and `finish` must be the decode of the whole input. It has no
-code-block work bound, which is the one earlier refines cut, so every refine
-that decodes has an exact oracle. Each input is decoded several times, so
+whose sizes a hash of the file picks, and refines after each piece. The first
+six input bytes steer the options, so a small mutation of the file keeps them:
+a layer cap, a resolution reduction, a window, a tile, a component subset of
+one or two distinct indices, and a code-block work limit. The rest is the
+file, so seed it with six zero bytes in front (the default limit, no other
+option), or with a plain fixture: an input that starts with `FF 4F` or the JP2
+signature box is the whole file with all-zero control bytes. Each
+refine that decodes goes on from the packet walks the earlier ones kept, and
+must give what `decode_with` gives with `strict` off on the bytes fed so far:
+the same image or the same error. After an error, each later refine must give
+it again, and `finish` must be the decode of the whole input. The decoder holds
+all its refines to the code-block limit together, and a one-shot decode holds
+only itself, so after an earlier refine has spent some of it a refine the limit
+refuses (`Ok(None)`) is checked against a new decoder fed the same bytes. The
+limit is at least 2^26 sample passes, so inputs of a few kilobytes do not
+reach that cut (#425). Each input is decoded several times, so
 seed it with small files, such as the fixtures under 3 KB, and cap the input
 length (`-max_len=4096`). Even so it can be slow, since almost all its time
 goes to its own `decode_with` oracle decodes: from the fixtures under 3 KB

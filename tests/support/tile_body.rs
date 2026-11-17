@@ -38,7 +38,20 @@ fn steer(body: &mut &[u8]) -> u8 {
 /// the body reaches the packet reader. Bit 7 makes the code-blocks HT, and bit 6
 /// with it (shapes 0 to 6) makes them MIXED; MIXED shape 4 drops the bypass and
 /// terminate-each-pass flags, which A.4 forbids.
-pub fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
+pub fn wrap(variant: u8, body: &[u8]) -> Vec<u8> {
+    wrap_roi(variant, 0, body)
+}
+
+/// `wrap` with a region of interest: when `roi` bit 7 is set and the variant
+/// is not HT (a `CAP` that says an `RGN` may be present is a header this does
+/// not build), the main header gets one `RGN` marker segment (`Srgn` 0, the
+/// maxshift) after the `QCD`. `SPrgn` is the low 5 bits of `roi` modulo 20, so
+/// 0 to 19; bit 5 limits the marker to component 0, and otherwise every
+/// component gets one. With bit 7 clear nothing is written. Packets then read as
+/// they do for any coded region, with the shift raising each block's
+/// bit-plane count, so the body reaches the ROI path through the real packet
+/// reader.
+pub fn wrap_roi(variant: u8, roi: u8, mut body: &[u8]) -> Vec<u8> {
     let reversible = variant & 1 != 0;
     // Variant bits 1-2 land on Scod bits 1 (SOP may precede packets) and 2
     // (EPH shall follow packet headers) directly, so the delimiter choice is
@@ -171,6 +184,14 @@ pub fn wrap(variant: u8, mut body: &[u8]) -> Vec<u8> {
     }
     bytes.extend_from_slice(&seg(0xFF52, &cod));
     bytes.extend_from_slice(&seg(0xFF5C, &quant));
+    if roi & 0x80 != 0 && !ht {
+        let shift = (roi & 0x1F) % 20;
+        let covered = if roi & 0x20 != 0 { 1 } else { components };
+        for component in 0..covered {
+            // `Crgn` is one byte below 257 components.
+            bytes.extend_from_slice(&seg(0xFF5E, &[component as u8, 0, shift]));
+        }
+    }
     if let Some(poc) = poc {
         bytes.extend_from_slice(&seg(0xFF5F, &poc));
     }
