@@ -51,6 +51,8 @@ refusal under `ColorOutput::Srgb`).
 | [HT subbands of more than 30 bit-planes](#ht-subbands-of-more-than-30-bit-planes) | decodes when the cleanup plane's shift fits `i32`; OpenJPEG refuses any `Mb > 30` | 1 |
 | [MIXED code-blocks](#mixed-code-blocks) | decodes; OpenJPEG refuses the code-block style | 1 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
+| [The `NLT` marker](#the-nlt-marker) | refuses as `Unsupported`; OpenJPEG skips it and decodes | 3 |
+| [A tile size that overflows OpenJPEG's tile count](#a-tile-size-that-overflows-openjpegs-tile-count) | decodes one tile; OpenJPEG refuses | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
@@ -662,7 +664,15 @@ MIXED style, and every block of it is read as an HT block. `Ccap15` bit 12
 clear says no `RGN` marker is present (T.814 A.3.4), so an `RGN` in the main
 header, before or after the `CAP`, or in a tile-part header is refused. Bits 0 to 4 give the magnitude bound `B` (A.3.7),
 and an HT cleanup magnitude at or past `2^B` (or the per-level bound 8.7.3 gives
-an irreversible subband) is refused. OpenJPEG decodes on in both cases.
+an irreversible subband) is refused.
+
+OpenJPEG treats the two refusals differently. Past the magnitude bound it decodes
+on. An `RGN` on HT code-blocks it refuses ("We do not support ROI in decoding
+HT codeblocks", `ht_dec.c:1143`) whatever the `CAP` says, so the two decoders
+give the same outcome on the `RGN` case. Grok does not refuse it. `grk_compress -R c=0,U=8 -M 64 -H 2` (grok
+19cbf05) writes an `RGN` with `Ccap15` bit 12 clear, and `grk_decompress`
+decodes the file. A file with the bit set decodes here
+([Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks)).
 
 ### HT cleanup segments
 
@@ -1341,6 +1351,42 @@ byte whose low bit is already 1 (0xD9 on 4x16).
 Refusing such a stream, as for a set SigProp or MagSgn stuffing bit, would go
 past the standard, which defines a decode here. Following OpenJPEG would read
 bits that T.814 says to drop.
+
+## The `NLT` marker
+
+| | |
+| - | - |
+| This decoder | refuses a codestream with an `NLT` marker (ISO/IEC 15444-2) as `Unsupported` |
+| OpenJPEG 2.5.0 | skips the marker as an unknown one and decodes |
+| Standard | ISO/IEC 15444-2 defines `NLT` as a non-linearity applied to the samples; Part 1 has no such marker |
+| Rule | 3 (an error over a wrong image) |
+| Tests and fixtures | the `NLT` row of `reject_matrix_maps_every_out_of_subset_input_to_its_typed_error` (`src/codestream/tests.rs`) |
+| Decided | #78 (Part 2 markers refused); entry added in #435 |
+
+`NLT` changes the decoded values, so a decoder that skips it returns samples
+that are not the image the encoder meant, with no error. OpenJPEG does that:
+a Part 1 codestream with an `NLT` segment added to the main header decodes to
+the same bytes as without it. This decoder
+refuses the file, as it does the other Part 2 markers (`MCT`, `MCC`, `MCO`,
+`CBD`).
+
+## A tile size that overflows OpenJPEG's tile count
+
+| | |
+| - | - |
+| This decoder | decodes the tile grid the SIZ gives |
+| OpenJPEG 2.5.0 | refuses ("Invalid number of tiles : 1 x 4294967233 (maximum fixed by jpeg2000 norm is 65535 tiles)", for a 65-row image; the number depends on the image height) |
+| Standard | Eq. B-5 gives the tile count as ceil((Ysiz - YTOsiz) / YTsiz), which is 1 when `YTsiz` exceeds the image |
+| Rule | 1 |
+| Tests and fixtures | none committed; measured on a small fixture with `YTsiz` set to `0xFFFFFFFF` |
+| Decided | not recorded |
+
+`opj_j2k_read_siz` computes the tile count with `opj_int_ceildiv` on values it
+casts to `OPJ_INT32` (`j2k.c:2336`). A `YTsiz` of `0xFFFFFFFF` is -1 as a signed
+int, so the quotient is negative, wraps to a huge unsigned count, and the file
+fails the 65535-tile check. This decoder does the sum in wider integers and finds
+one tile. The output is byte-identical to OpenJPEG's decode of the same file
+with `YTsiz` patched to the image height.
 
 ## The JP2 box layer
 

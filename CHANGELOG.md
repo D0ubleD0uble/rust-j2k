@@ -133,6 +133,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   These inputs were `Error::Codestream` or `Error::FileFormat` before. The
   boxes and segments the input holds in full are checked first, so a damaged
   one gives an error, not `Incomplete`, usually the one the whole file gives.
+  The same check changes one `Error::FileFormat` message. A JP2 file whose
+  first box after the signature is cut short and is not `ftyp` now gives
+  `the ftyp box must follow the signature, not ...`, where it gave `box ... is
+  N bytes but only M remain`. The variant is the same. Inputs in the fuzz
+  corpus changed this way.
 - `DecodeOptions::max_quality_layers` and `with_max_quality_layers`: decode
   only the first `n` quality layers of each tile, as `opj_decompress -l n`
   does. The image keeps its size and loses fidelity, and the code-block

@@ -896,6 +896,17 @@ pub struct DecodeOptions {
     ///
     /// This also bounds the walk of a `Psot = 0` tile that [`read_header_with`]
     /// describes, so [`read_header_with`] takes the same option.
+    ///
+    /// That walk, in a JP2 file whose last tile-part has `Psot = 0`, decides
+    /// where the tile ends: at the end of the `jp2c` box if the packets end
+    /// exactly there, otherwise at the end of the file. A walk that stops at
+    /// the default bound reads to the end of the file, so the box's trailing
+    /// bytes count as left after the last packet. Raising the limit can let
+    /// the walk finish. The same file can then decode in full where the
+    /// default gives [`Error::Codestream`] (or, with
+    /// [`strict`](Self::strict) off, a report with a
+    /// [`ReportEntry::LeftoverBytes`]), and no [`Error::Limit`] ever
+    /// suggested the change.
     pub packet_work_limit: WorkLimit,
     /// How much work decoding the code-blocks may take, against the bound
     /// described on [`decode`]. Default [`WorkLimit::Default`].

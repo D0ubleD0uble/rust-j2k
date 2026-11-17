@@ -135,9 +135,9 @@ fn repeated_poc_volumes_decode_in_a_small_heap() {
     assert!(peak < LIMIT, "read_header peaked at {peak} bytes");
 
     // Lifting the packet work limit does not lift the bitmap's cap: volumes
-    // that reach more packets than the default bound are still held in a
-    // set of the packets read, not a 537 MB bitmap: about 15 MB, the
-    // geometry of 65536 precincts.
+    // that reach more packets than the default bound are still held as a
+    // count per precinct, not a 537 MB bitmap: about 15 MB, the geometry
+    // of 65536 precincts.
     let wide = pocwide();
     let lifted =
         rust_j2k::DecodeOptions::default().with_packet_work_limit(rust_j2k::WorkLimit::Unlimited);
