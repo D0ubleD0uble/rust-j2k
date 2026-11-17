@@ -18,8 +18,8 @@ use crate::{DecodeReport, Error, Jp2Metadata, Result};
 /// that same area with fewer samples, so its own
 /// [`Component::width`]/[`Component::height`] can be smaller. With unit
 /// sub-sampling, the common case, they are equal. A decode of part of the
-/// image ([`window`](crate::DecodeOptions::window) or
-/// [`tile`](crate::DecodeOptions::tile)) has that part as its area, in the
+/// image (a window or a tile in
+/// [`region`](crate::DecodeOptions::region)) has that part as its area, in the
 /// same formulas with the part's bounds for `XOsiz..Xsiz` and `YOsiz..Ysiz`.
 ///
 /// Components are in output-channel order. For a raw codestream that is SIZ

@@ -10,8 +10,9 @@ use rust_j2k::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
     ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo, DecodeOptions,
     DecodeReport, Error, FileType, Header, Image, ImageHeader, IncrementalDecoder, IprBox,
-    Jp2Metadata, MappingKind, Palette, PaletteColumn, Ratio, ReaderRequirements, ReportEntry, Res,
-    Resolution, StandardFeature, UuidBox, UuidInfo, VendorFeature, Window, WorkLimit, XmlBox,
+    Jp2Metadata, MappingKind, Palette, PaletteColumn, Ratio, ReaderRequirements, Region,
+    ReportEntry, Res, Resolution, StandardFeature, UuidBox, UuidInfo, VendorFeature, Window,
+    WorkLimit, XmlBox,
 };
 
 const fn holds<T: Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
@@ -26,6 +27,7 @@ const _: () = {
     holds::<DecodeReport>();
     holds::<ReportEntry>();
     holds::<Window>();
+    holds::<Region>();
     holds::<WorkLimit>();
     holds::<ColorOutput>();
     holds::<IncrementalDecoder>();

@@ -19,7 +19,7 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use rust_j2k::{DecodeOptions, Window, decode_with};
+use rust_j2k::{DecodeOptions, Region, Window, decode_with};
 
 /// The built-in set, in the order it is printed. Paths are relative to the
 /// crate root.
@@ -111,15 +111,16 @@ fn main() {
                     (
                         "tiled_2048 256x256 window",
                         DecodeOptions::default()
-                            .with_window(Some(Window::new(896, 896, 1152, 1152))),
+                            .with_region(Region::Window(Window::new(896, 896, 1152, 1152))),
                     ),
                     (
                         "tiled_2048 64x64 in a tile",
-                        DecodeOptions::default().with_window(Some(Window::new(800, 800, 864, 864))),
+                        DecodeOptions::default()
+                            .with_region(Region::Window(Window::new(800, 800, 864, 864))),
                     ),
                     (
                         "tiled_2048 tile 27",
-                        DecodeOptions::default().with_tile(Some(27)),
+                        DecodeOptions::default().with_region(Region::Tile(27)),
                     ),
                 ] {
                     time(label, &bytes, &options, iters);

@@ -31,7 +31,7 @@ fuzz_target!(|data: &[u8]| {
     // tiles it reads.
     if (hash >> 40) & 3 == 0 {
         let corner = |shift: u32| ((hash >> shift) & 0x1F) as u32;
-        options = options.with_window(Some(rust_j2k::Window::new(
+        options = options.with_region(rust_j2k::Region::Window(rust_j2k::Window::new(
             corner(42),
             corner(47),
             corner(42) + 1 + corner(52),

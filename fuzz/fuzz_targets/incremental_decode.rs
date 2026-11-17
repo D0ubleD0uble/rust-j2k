@@ -26,7 +26,7 @@
 //! passes, so inputs this small do not reach the cut (see #425).
 
 use libfuzzer_sys::fuzz_target;
-use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, Window, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, Region, Window, WorkLimit, decode_with};
 
 fuzz_target!(|input: &[u8]| {
     const JP2_SIGNATURE: [u8; 8] = [0, 0, 0, 12, b'j', b'P', b' ', b' '];
@@ -64,12 +64,12 @@ fuzz_target!(|input: &[u8]| {
         1 => {
             let (x, y) = (u32::from(control[2] % 24), u32::from(control[3] % 24));
             let (w, h) = (1 + u32::from(control[4] % 40), 1 + u32::from(control[5] % 40));
-            options = options.with_window(Some(Window::new(x, y, x + w, y + h)));
+            options = options.with_region(Region::Window(Window::new(x, y, x + w, y + h)));
         }
         2 => {
             // Tile 0 is the common one.
             let tile = [0, 0, 0, 0, 1, 1, 2, 3][usize::from((control[1] >> 2) & 7)];
-            options = options.with_tile(Some(tile));
+            options = options.with_region(Region::Tile(tile));
         }
         _ => {}
     }

@@ -147,8 +147,8 @@ that does the same job.
 | Raise or lift the sample limit and the two work limits | Yes | `with_sample_limit`, `with_packet_work_limit`, `with_code_block_work_limit` | none |
 | Read the header without decoding any pixels | Yes | `read_header`, `read_header_with` | `opj_dump` |
 | Stop after a given number of quality layers | Yes | `with_max_quality_layers(Some(n))` | `-l` |
-| Decode one area of the image | Yes, with limits | `with_window(Some(Window::new(x0, y0, x1, y1)))` | `-d` |
-| Decode one tile | Yes | `with_tile(Some(index))` | `-t` |
+| Decode one area of the image | Yes, with limits | `with_region(Region::Window(Window::new(x0, y0, x1, y1)))` | `-d` |
+| Decode one tile | Yes | `with_region(Region::Tile(index))` | `-t` |
 | Decode some of the components | Yes, with limits | `with_components(Some(list))` | `-c` |
 
 A window is on the reference grid, as OpenJPEG takes it, and the part of it

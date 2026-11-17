@@ -1,4 +1,4 @@
-//! Decoding part of an image: `DecodeOptions::window`, `DecodeOptions::tile`
+//! Decoding part of an image: `DecodeOptions::region` (a window or a tile)
 //! and `DecodeOptions::components`.
 //!
 //! Each oracle is `opj_decompress -d`, `-t` or `-c` 2.5.0 on the same bytes;
@@ -14,7 +14,7 @@ use support::synth;
 use std::path::PathBuf;
 
 use rust_j2k::{
-    ColorOutput, DecodeOptions, Error, Image, ReportEntry, Window, decode, decode_with,
+    ColorOutput, DecodeOptions, Error, Image, Region, ReportEntry, Window, decode, decode_with,
     read_header_with,
 };
 use support::jp2::sha256_hex;
@@ -86,10 +86,10 @@ fn options_of(args: &str) -> DecodeOptions {
         let value = &rest[2..end];
         let numbers: Vec<u32> = value.split(',').map(|v| v.parse().unwrap()).collect();
         options = match flag {
-            "-d" => options.with_window(Some(Window::new(
+            "-d" => options.with_region(Region::Window(Window::new(
                 numbers[0], numbers[1], numbers[2], numbers[3],
             ))),
-            "-t" => options.with_tile(Some(numbers[0])),
+            "-t" => options.with_region(Region::Tile(numbers[0])),
             "-r" => options.with_resolution_reduction(numbers[0] as u8),
             "-c" => options.with_components(Some(numbers.iter().map(|&c| c as u16).collect())),
             other => panic!("unknown flag {other} in {args}"),
@@ -132,10 +132,10 @@ fn decode_ok(bytes: &[u8], options: &DecodeOptions, what: &str) -> Image {
 /// The reference-grid area `options` asks for, cut to the image.
 fn area_of(geo: &Geometry, options: &DecodeOptions) -> (u32, u32, u32, u32) {
     let (x0, y0, x1, y1) = geo.image;
-    if let Some(w) = options.window {
+    if let Region::Window(w) = options.region {
         return (w.x0.max(x0), w.y0.max(y0), w.x1.min(x1), w.y1.min(y1));
     }
-    if let Some(t) = options.tile {
+    if let Region::Tile(t) = options.region {
         let (p, q) = (t % geo.columns, t / geo.columns);
         let ((tx, ty), (tw, th)) = (geo.tile_origin, geo.tile);
         return (
@@ -337,8 +337,9 @@ fn invalid(bytes: &[u8], options: &DecodeOptions) -> String {
 #[test]
 fn bad_options_are_invalid() {
     let bytes = read("tiled_53.j2k");
-    let window =
-        |x0, y0, x1, y1| DecodeOptions::default().with_window(Some(Window::new(x0, y0, x1, y1)));
+    let window = |x0, y0, x1, y1| {
+        DecodeOptions::default().with_region(Region::Window(Window::new(x0, y0, x1, y1)))
+    };
     let message = invalid(&bytes, &window(20, 10, 20, 31));
     assert_eq!(message, "the window 20..20 by 10..31 is empty");
     invalid(&bytes, &window(40, 10, 30, 31));
@@ -362,12 +363,11 @@ fn bad_options_are_invalid() {
     // The same column decodes at full resolution.
     assert!(decode_with(&bytes, &window(21, 10, 22, 31)).is_ok());
 
-    let message = invalid(&bytes, &DecodeOptions::default().with_tile(Some(9)));
-    assert_eq!(
-        message,
-        "`DecodeOptions::tile` is 9, but the image has 9 tiles"
+    let message = invalid(
+        &bytes,
+        &DecodeOptions::default().with_region(Region::Tile(9)),
     );
-    invalid(&bytes, &window(0, 0, 10, 10).with_tile(Some(0)));
+    assert_eq!(message, "tile 9 is past the image's 9 tiles (0 to 8)");
 
     let components = |list: Vec<u16>| DecodeOptions::default().with_components(Some(list));
     let message = invalid(&bytes, &components(vec![3]));
@@ -397,7 +397,7 @@ fn a_window_of_the_whole_image_is_the_whole_decode() {
                 &bytes,
                 &options
                     .clone()
-                    .with_window(Some(Window::new(0, 0, u32::MAX, u32::MAX))),
+                    .with_region(Region::Window(Window::new(0, 0, u32::MAX, u32::MAX))),
                 name,
             );
             assert_eq!(windowed, whole, "{name} -r {r}");
@@ -426,10 +426,10 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
     let prefix = &bytes[..sot_of(&bytes, 2)];
     let loose = DecodeOptions::default().with_strict(false);
 
-    let tile = |index| loose.clone().with_tile(Some(index));
+    let tile = |index| loose.clone().with_region(Region::Tile(index));
     let whole = decode_ok(
         &bytes,
-        &DecodeOptions::default().with_tile(Some(1)),
+        &DecodeOptions::default().with_region(Region::Tile(1)),
         "tile 1",
     );
     let cut = decode_ok(prefix, &tile(1), "the prefix's tile 1");
@@ -437,7 +437,10 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
     assert_eq!(cut.components, whole.components);
     // Strict still refuses the cut codestream, whatever the tile.
     assert!(matches!(
-        decode_with(prefix, &DecodeOptions::default().with_tile(Some(1))),
+        decode_with(
+            prefix,
+            &DecodeOptions::default().with_region(Region::Tile(1))
+        ),
         Err(Error::Codestream(_))
     ));
     // The whole prefix misses tiles 2 to 8.
@@ -454,7 +457,7 @@ fn a_cut_codestream_reports_only_the_tiles_a_window_reads() {
     );
 
     // A window over tiles 1 and 4 reads tile 4 of the missing run.
-    let window = loose.with_window(Some(Window::new(30, 10, 40, 30)));
+    let window = loose.with_region(Region::Window(Window::new(30, 10, 40, 30)));
     let cut = decode_ok(prefix, &window, "the prefix's window");
     assert_eq!(missing_tiles(&cut), [(4, 5)]);
 }
@@ -487,15 +490,21 @@ fn a_tile_of_a_cut_codestream_matches_openjpeg_allow_partial() {
             "22bdd0ff24cdd365337be614620bf80a1eb60401ee437c9c0710c57acaa67dbb",
         ),
     ] {
-        let image = decode_ok(prefix, &loose.clone().with_tile(Some(tile)), "tile");
+        let image = decode_ok(
+            prefix,
+            &loose.clone().with_region(Region::Tile(tile)),
+            "tile",
+        );
         assert_eq!(sha256_hex(&sample_bytes(&image)), hash, "tile {tile}");
     }
 
     // A window inside tile 2 (x 51..75, y 4..22) returns that tile's samples
     // and reports only the missing end of the codestream.
-    let options = loose.clone().with_window(Some(Window::new(52, 5, 74, 21)));
+    let options = loose
+        .clone()
+        .with_region(Region::Window(Window::new(52, 5, 74, 21)));
     let window = decode_ok(prefix, &options, "window");
-    let tile = decode_ok(prefix, &loose.with_tile(Some(2)), "tile 2");
+    let tile = decode_ok(prefix, &loose.with_region(Region::Tile(2)), "tile 2");
     // Tile 2's area is x 51..75 by y 4..22, so the window is its columns
     // 1..23 and rows 1..17.
     for (c, (got, of)) in window.components.iter().zip(&tile.components).enumerate() {
@@ -558,7 +567,7 @@ fn a_jp2_subset_is_the_raw_components() {
     assert_eq!(header.jp2.as_ref(), some.jp2.as_ref());
 
     let whole = decode(&bytes).unwrap();
-    let window = DecodeOptions::default().with_window(Some(Window::new(3, 2, 11, 9)));
+    let window = DecodeOptions::default().with_region(Region::Window(Window::new(3, 2, 11, 9)));
     let part = decode_ok(&bytes, &window, "window");
     assert_eq!((part.width, part.height), (8, 7));
     assert_eq!(part.jp2, whole.jp2);
@@ -588,8 +597,8 @@ fn srgb_from_sub_sampled_sycc_refuses_a_window() {
     ] {
         let bytes = std::fs::read(fixtures.join(format!("{name}.jp2"))).unwrap();
         assert!(decode_with(&bytes, &srgb).is_ok(), "{name}");
-        let window = Some(Window::new(1, 1, 7, 5));
-        let options = srgb.clone().with_window(window);
+        let window = Window::new(1, 1, 7, 5);
+        let options = srgb.clone().with_region(Region::Window(window));
         assert!(
             matches!(decode_with(&bytes, &options), Err(Error::Unsupported(_))),
             "{name}"
@@ -601,7 +610,7 @@ fn srgb_from_sub_sampled_sycc_refuses_a_window() {
             ),
             "{name}"
         );
-        let coded = DecodeOptions::default().with_window(window);
+        let coded = DecodeOptions::default().with_region(Region::Window(window));
         assert!(decode_with(&bytes, &coded).is_ok(), "{name}");
     }
 
@@ -610,7 +619,9 @@ fn srgb_from_sub_sampled_sycc_refuses_a_window() {
     let whole = decode_ok(&bytes, &srgb, "whole");
     let part = decode_ok(
         &bytes,
-        &srgb.clone().with_window(Some(Window::new(3, 2, 11, 9))),
+        &srgb
+            .clone()
+            .with_region(Region::Window(Window::new(3, 2, 11, 9))),
         "window",
     );
     for (p, w) in part.components.iter().zip(&whole.components) {
@@ -631,7 +642,7 @@ fn srgb_from_sub_sampled_sycc_refuses_a_window() {
 fn srgb_from_sub_sampled_sycc_decodes_an_area_equal_to_the_image() {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let srgb = DecodeOptions::default().with_color(ColorOutput::Srgb);
-    let everything = Some(Window::new(0, 0, u32::MAX, u32::MAX));
+    let everything = Window::new(0, 0, u32::MAX, u32::MAX);
     for name in [
         "jp2_sycc_420_even",
         "jp2_sycc_420_odd",
@@ -643,8 +654,8 @@ fn srgb_from_sub_sampled_sycc_decodes_an_area_equal_to_the_image() {
             let plain = srgb.clone().with_resolution_reduction(reduction);
             let whole = decode_ok(&bytes, &plain, name);
             for options in [
-                plain.clone().with_window(everything),
-                plain.clone().with_tile(Some(0)),
+                plain.clone().with_region(Region::Window(everything)),
+                plain.clone().with_region(Region::Tile(0)),
             ] {
                 let part = decode_ok(&bytes, &options, name);
                 assert_eq!((part.width, part.height), (whole.width, whole.height));
@@ -665,7 +676,7 @@ fn srgb_from_sub_sampled_sycc_decodes_an_area_equal_to_the_image() {
             Window::new(8, 5, u32::MAX, u32::MAX),
             Window::new(0, 0, 10, 6),
         ] {
-            let options = srgb.clone().with_window(Some(window));
+            let options = srgb.clone().with_region(Region::Window(window));
             assert!(
                 matches!(decode_with(&bytes, &options), Err(Error::Unsupported(_))),
                 "{name} {window:?}"
@@ -693,7 +704,7 @@ fn srgb_from_tiled_sycc_refuses_a_tile() {
     for reduction in [0, 1] {
         let plain = srgb.clone().with_resolution_reduction(reduction);
         let whole = decode_ok(&bytes, &plain, "plain");
-        let options = plain.with_window(Some(Window::new(0, 0, u32::MAX, u32::MAX)));
+        let options = plain.with_region(Region::Window(Window::new(0, 0, u32::MAX, u32::MAX)));
         let part = decode_ok(&bytes, &options, "window");
         assert_eq!((part.width, part.height), (whole.width, whole.height));
         for (p, w) in part.components.iter().zip(&whole.components) {
@@ -701,7 +712,7 @@ fn srgb_from_tiled_sycc_refuses_a_tile() {
         }
     }
     for tile in 0..6 {
-        let options = srgb.clone().with_tile(Some(tile));
+        let options = srgb.clone().with_region(Region::Tile(tile));
         assert!(
             matches!(decode_with(&bytes, &options), Err(Error::Unsupported(_))),
             "tile {tile}"

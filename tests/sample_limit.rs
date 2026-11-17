@@ -12,7 +12,8 @@ use std::path::PathBuf;
 use synth::{bx, seg, tile_part};
 
 use rust_j2k::{
-    DecodeOptions, Error, Window, WorkLimit, decode, decode_with, read_header, read_header_with,
+    DecodeOptions, Error, Region, Window, WorkLimit, decode, decode_with, read_header,
+    read_header_with,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -378,7 +379,7 @@ fn the_poc_factor_counts_the_dropped_blocks_charged_before_it() {
 // tiles, so its last column and row of tiles are one sample wide or tall.
 
 fn window(x0: u32, y0: u32, x1: u32, y1: u32) -> DecodeOptions {
-    DecodeOptions::default().with_window(Some(Window::new(x0, y0, x1, y1)))
+    DecodeOptions::default().with_region(Region::Window(Window::new(x0, y0, x1, y1)))
 }
 
 /// The message of the `Limit` that `result` must be.
@@ -472,13 +473,13 @@ fn a_window_is_held_to_the_samples_of_the_tiles_it_reads() {
 fn a_tile_is_held_to_its_own_samples() {
     let bytes = flat();
     for (tile, width, height) in [(4, 1, 4096), (24, 1, 1)] {
-        let options = DecodeOptions::default().with_tile(Some(tile));
+        let options = DecodeOptions::default().with_region(Region::Tile(tile));
         let image = decode_with(&bytes, &options).expect("one tile fits");
         assert_eq!((image.width, image.height), (width, height), "tile {tile}");
         assert!(image.components[0].samples.iter().all(|&s| s == 0));
     }
     let header_only = flat_header_only();
-    let first = DecodeOptions::default().with_tile(Some(0));
+    let first = DecodeOptions::default().with_region(Region::Tile(0));
     let header = read_header_with(&header_only, &first).expect("one tile fits");
     assert_eq!((header.width, header.height), (4096, 4096));
     assert!(matches!(

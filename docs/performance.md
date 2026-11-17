@@ -278,7 +278,7 @@ manifests; none of them is in the published crate.
   check](#output-check)). A decoder with a wrong image gets no time.
 - This crate decodes with default `DecodeOptions`, except that JP2 files ask
   for sRGB output, since `opj_decompress` and Grok convert to sRGB by default.
-  A window or tile is a `DecodeOptions` window or tile.
+  A window or tile is a `DecodeOptions::region` of that kind.
 
 ## Machine
 

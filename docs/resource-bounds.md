@@ -49,7 +49,7 @@ channels, and the channels sRGB output adds (sYCC chroma replicated to the
 luma grid, a gray channel a monochrome profile maps to R, G and B).
 `read_header_with` makes the same check, so it refuses what the decode would.
 
-Under `DecodeOptions::window` or `DecodeOptions::tile`, the count is the
+Under a window or a tile (`DecodeOptions::region`), the count is the
 samples of the tiles the decode reads, in every component, at the reduction.
 Those tiles cover the returned area, so the output planes fit inside the
 count. Each tile read is reconstructed whole, one tile at a time, in buffers

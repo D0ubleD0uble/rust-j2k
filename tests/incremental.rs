@@ -10,7 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    DecodeOptions, Error, Image, IncrementalDecoder, Window, WorkLimit, decode_with, read_header,
+    DecodeOptions, Error, Image, IncrementalDecoder, Region, Window, WorkLimit, decode_with,
+    read_header,
 };
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -257,7 +258,7 @@ fn windowed(bytes: &[u8], options: &DecodeOptions) -> Option<DecodeOptions> {
         (w - w / 4).max(w / 4 + 1),
         (h - h / 4).max(h / 4 + 1),
     );
-    Some(options.clone().with_window(Some(window)))
+    Some(options.clone().with_region(Region::Window(window)))
 }
 
 /// The fixture directories of files made to reach the work bounds.

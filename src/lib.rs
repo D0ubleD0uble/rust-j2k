@@ -221,7 +221,7 @@ pub use jp2::{
     UuidInfo, VendorFeature, XmlBox,
 };
 pub use report::{DecodeReport, ReportEntry};
-pub use window::Window;
+pub use window::{Region, Window};
 
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
@@ -701,13 +701,18 @@ pub struct DecodeOptions {
     #[doc(alias = "layers")]
     #[doc(alias = "cp_layer")]
     pub max_quality_layers: Option<u16>,
-    /// Decode only this rectangle of the reference grid: `Some(window)`
-    /// returns the part of the image inside it, `None` (the default) the
-    /// whole image. It is OpenJPEG's `opj_set_decode_area`
-    /// (`opj_decompress -d x0,y0,x1,y1`).
+    /// The area to decode: [`Region::Whole`] (the default) the whole image,
+    /// [`Region::Window`] a rectangle of the reference grid, and
+    /// [`Region::Tile`] one tile. One field holds all three, so a window and a
+    /// tile cannot be asked for together. A window is OpenJPEG's
+    /// `opj_set_decode_area` (`opj_decompress -d x0,y0,x1,y1`); a tile is its
+    /// `opj_get_decoded_tile` (`opj_decompress -t index`).
     ///
-    /// The window is in reference-grid coordinates, as SIZ declares them,
-    /// whatever the [`resolution_reduction`](Self::resolution_reduction).
+    /// # Window
+    ///
+    /// A [`Region::Window`] returns the part of the image inside it. It is in
+    /// reference-grid coordinates, as SIZ declares them, whatever the
+    /// [`resolution_reduction`](Self::resolution_reduction).
     /// The part of it outside the image area is left out, as OpenJPEG clips
     /// it. The returned [`Image`] covers what is left, `x0..x1` by `y0..y1`:
     /// its [`width`](Image::width) is `x1 - x0` at full resolution and
@@ -736,10 +741,10 @@ pub struct DecodeOptions {
     ///
     /// An empty window, one with no part inside the image area, and one that
     /// holds no sample of a returned component at the reduction are
-    /// [`Error::InvalidOptions`]. It cannot be set with [`tile`](Self::tile).
+    /// [`Error::InvalidOptions`].
     ///
     /// ```
-    /// use rust_j2k::{DecodeOptions, Window, decode, decode_with};
+    /// use rust_j2k::{DecodeOptions, Region, Window, decode, decode_with};
     ///
     /// // 32x24 at the grid's origin.
     /// let bytes = include_bytes!(concat!(
@@ -747,27 +752,26 @@ pub struct DecodeOptions {
     ///     "/tests/fixtures/multilayer_lossless.j2k"
     /// ));
     /// let whole = decode(bytes).expect("decodes");
-    /// let options = DecodeOptions::default().with_window(Some(Window::new(8, 4, 20, 30)));
+    /// let options = DecodeOptions::default().with_region(Region::Window(Window::new(8, 4, 20, 30)));
     /// let part = decode_with(bytes, &options).expect("decodes");
     /// // The window is cut to the image: rows 4 to 23.
     /// assert_eq!((part.width, part.height), (12, 20));
     /// assert_eq!(part.components[0].sample(0, 0), whole.components[0].sample(8, 4));
     /// ```
-    #[doc(alias = "decode_area")]
-    #[doc(alias = "region")]
-    pub window: Option<Window>,
-    /// Decode only this tile: `Some(index)` returns tile `index`'s area of
-    /// the image, `None` (the default) the whole image. Tiles are numbered
-    /// in raster order from 0, as the codestream's `Isot` numbers them. It is
-    /// OpenJPEG's `opj_get_decoded_tile` (`opj_decompress -t index`).
     ///
-    /// The result is the decode with [`window`](Self::window) set to the
+    /// # Tile
+    ///
+    /// [`Region::Tile`] returns tile `index`'s area of the image. Tiles are
+    /// numbered in raster order from 0, as the codestream's `Isot` numbers
+    /// them. The result is the decode of a [`Region::Window`] set to the
     /// tile's rectangle on the reference grid: its size, its samples and its
-    /// failures, the refusal of sRGB output from sub-sampled sYCC included (unless
-    /// the image is one tile).
-    /// A tile index past the tile grid is [`Error::InvalidOptions`], and so
-    /// is setting both this and [`window`](Self::window).
-    pub tile: Option<u32>,
+    /// failures, the refusal of sRGB output from sub-sampled sYCC included
+    /// (unless the image is one tile). A tile index past the tile grid is
+    /// [`Error::InvalidOptions`].
+    #[doc(alias = "decode_area")]
+    #[doc(alias = "window")]
+    #[doc(alias = "tile")]
+    pub region: Region,
     /// Decode only these components, in this order: `Some(list)` returns one
     /// [`Component`] per entry of `list`, each the component of that SIZ
     /// index, and `None` (the default) every component. It is OpenJPEG's
@@ -865,7 +869,7 @@ pub struct DecodeOptions {
     /// [`resolution_reduction`](Self::resolution_reduction). Default
     /// [`WorkLimit::Default`].
     ///
-    /// Under a [`window`](Self::window) or a [`tile`](Self::tile), the count
+    /// Under a window or a tile ([`region`](Self::region)), the count
     /// is the samples of the tiles the decode reads, in every component, as
     /// each of those tiles is reconstructed whole; a palette's expanded
     /// channels and sRGB output count only the returned area. A small window
@@ -918,7 +922,7 @@ pub struct DecodeOptions {
     /// unbounded work.
     ///
     /// Strict or not, only the data a decode reads is checked. With a
-    /// [`window`](Self::window) or [`tile`](Self::tile), the tiles outside it
+    /// [`region`](Self::region) of a window or a tile, the tiles outside it
     /// are not read, with a window the code-blocks of the tiles it reaches
     /// that the window does not need are not decoded, and with
     /// [`components`](Self::components) the code-blocks of the components
@@ -972,8 +976,7 @@ impl Default for DecodeOptions {
         DecodeOptions {
             resolution_reduction: 0,
             max_quality_layers: None,
-            window: None,
-            tile: None,
+            region: Region::Whole,
             components: None,
             raw_channels: false,
             color: ColorOutput::default(),
@@ -1115,31 +1118,19 @@ impl DecodeOptions {
         self
     }
 
-    /// These options with [`window`](Self::window) set to `window`.
+    /// These options with [`region`](Self::region) set to `region`.
     ///
     /// ```
-    /// use rust_j2k::{DecodeOptions, Window};
+    /// use rust_j2k::{DecodeOptions, Region, Window};
     ///
-    /// let options = DecodeOptions::default().with_window(Some(Window::new(0, 0, 64, 64)));
-    /// assert_eq!(options.window, Some(Window::new(0, 0, 64, 64)));
-    /// ```
-    #[must_use]
-    pub fn with_window(mut self, window: Option<Window>) -> Self {
-        self.window = window;
-        self
-    }
-
-    /// These options with [`tile`](Self::tile) set to `tile`.
-    ///
-    /// ```
-    /// use rust_j2k::DecodeOptions;
-    ///
-    /// let options = DecodeOptions::default().with_tile(Some(3));
-    /// assert_eq!(options.tile, Some(3));
+    /// let options = DecodeOptions::default().with_region(Region::Tile(3));
+    /// assert_eq!(options.region, Region::Tile(3));
+    /// let window = Region::Window(Window::new(0, 0, 64, 64));
+    /// assert_eq!(DecodeOptions::default().with_region(window.clone()).region, window);
     /// ```
     #[must_use]
-    pub fn with_tile(mut self, tile: Option<u32>) -> Self {
-        self.tile = tile;
+    pub fn with_region(mut self, region: Region) -> Self {
+        self.region = region;
         self
     }
 
@@ -1463,7 +1454,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
             if plan.replicates_chroma() && selection.area.image_rect() != siz.image_rect() {
                 return Err(Error::Unsupported(
                     "sRGB output from sub-sampled sYCC chroma on an area smaller than the \
-                     image, under `DecodeOptions::window` or `DecodeOptions::tile`"
+                     image, under `DecodeOptions::region`"
                         .into(),
                 ));
             }
@@ -2219,7 +2210,7 @@ mod tests {
         let all = DecodeOptions::default();
         // Tile 27 is 768..1024 on both axes: 256 x 256 in 64 x 64 code-blocks,
         // over four decomposition levels.
-        let tile = work_of(&bytes, &all.clone().with_tile(Some(27)));
+        let tile = work_of(&bytes, &all.clone().with_region(Region::Tile(27)));
         assert!(tile > 0);
         let blocks = || BLOCKS.with(std::cell::Cell::get);
         // The tile's code-blocks with coding passes: the LL band's, one in
@@ -2236,7 +2227,7 @@ mod tests {
             (Window::new(992, 992, 1024, 1024), 11),
             (Window::new(900, 900, 901, 901), 11),
         ] {
-            let part = work_of(&bytes, &all.clone().with_window(Some(window)));
+            let part = work_of(&bytes, &all.clone().with_region(Region::Window(window)));
             assert!(part < tile, "{window:?}: {part} of {tile}");
             assert_eq!(blocks(), count, "{window:?}");
         }
@@ -2244,13 +2235,16 @@ mod tests {
         // reaches all four code-blocks of each finest band.
         let middle = Window::new(880, 880, 912, 912);
         assert_eq!(
-            work_of(&bytes, &all.clone().with_window(Some(middle))),
+            work_of(&bytes, &all.clone().with_region(Region::Window(middle))),
             tile
         );
         assert_eq!(blocks(), 16);
         // The window that is the whole tile decodes all of it.
         let whole = Window::new(768, 768, 1024, 1024);
-        assert_eq!(work_of(&bytes, &all.clone().with_window(Some(whole))), tile);
+        assert_eq!(
+            work_of(&bytes, &all.clone().with_region(Region::Window(whole))),
+            tile
+        );
         assert_eq!(blocks(), 16);
     }
 
@@ -2263,12 +2257,13 @@ mod tests {
         for name in ["tiled_53", "tiled_53_nomct"] {
             let whole = block_work(name, &all);
             // Tile 4, the middle one, is a ninth of the image.
-            let tile = block_work(name, &all.clone().with_tile(Some(4)));
+            let tile = block_work(name, &all.clone().with_region(Region::Tile(4)));
             assert!(tile * 6 < whole, "{name}: {tile} of {whole}");
             assert_eq!(
                 block_work(
                     name,
-                    &all.clone().with_window(Some(Window::new(27, 22, 51, 42)))
+                    &all.clone()
+                        .with_region(Region::Window(Window::new(27, 22, 51, 42)))
                 ),
                 tile,
                 "{name}"
@@ -2276,7 +2271,8 @@ mod tests {
             // Tiles 0, 1, 3 and 4.
             let four = block_work(
                 name,
-                &all.clone().with_window(Some(Window::new(20, 10, 41, 31))),
+                &all.clone()
+                    .with_region(Region::Window(Window::new(20, 10, 41, 31))),
             );
             assert!(four > tile && four * 2 < whole, "{name}: {four} of {whole}");
         }

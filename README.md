@@ -99,7 +99,7 @@ how much.
 - It can **decode fewer quality layers**, for a coarser image at full size in
   less time (`DecodeOptions::with_max_quality_layers`).
 - It can **decode part of an image**: a rectangle of it, one tile, or some of
-  its components (`DecodeOptions::with_window`, `with_tile`,
+  its components (`DecodeOptions::with_region`,
   `with_components`). Only the tiles the rectangle reaches are decoded, and in
   them only the code-blocks it needs.
 - It can **decode a codestream that is cut short** and tell you what is

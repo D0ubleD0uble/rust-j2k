@@ -55,7 +55,6 @@ refusal under `ColorOutput::Srgb`).
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
 | [Some of the components, under the color transform](#some-of-the-components-under-the-color-transform) | applies the transform; OpenJPEG skips it under `-c` | 1 |
-| [A window and a tile together](#a-window-and-a-tile-together) | refuses; OpenJPEG ignores the window | 3 |
 | [sRGB from sub-sampled sYCC in a window](#srgb-from-sub-sampled-sycc-in-a-window) | refuses; OpenJPEG converts the window on its own | 3 |
 
 None of the box entries changes the samples.
@@ -1652,25 +1651,11 @@ Kakadu's default output-component mode does the same as this decoder: a
 subset of the components comes out after the color transform. Its
 `-codestream_components` option is the opt-in for the values before it.
 
-## A window and a tile together
-
-| | |
-| - | - |
-| This decoder | refuses `DecodeOptions::window` and `DecodeOptions::tile` set together, as `InvalidOptions` |
-| OpenJPEG 2.5.0 | `opj_decompress -t 0 -d x0,y0,x1,y1` warns "-d option ignored when used together with -t" and decodes the tile |
-| Standard | silent: decode options are outside it |
-| Rule | 3 |
-| Tests and fixtures | `tests/decode_window.rs` (`bad_options_are_invalid`) |
-| Decided | 2026-11-14, #216 |
-
-The two options ask for different areas, so the decode refuses the pair rather
-than drop one of them.
-
 ## sRGB from sub-sampled sYCC in a window
 
 | | |
 | - | - |
-| This decoder | refuses `ColorOutput::Srgb` with `DecodeOptions::window` or `DecodeOptions::tile` when the sYCC chroma is sub-sampled (4:2:0 or 4:2:2) and the decoded area differs from the image area on the reference grid, as `Unsupported`; an area equal to the image (a window that covers the whole image, or the only tile) decodes as the plain decode does, at any reduction |
+| This decoder | refuses `ColorOutput::Srgb` with a `DecodeOptions::region` of a window or a tile when the sYCC chroma is sub-sampled (4:2:0 or 4:2:2) and the decoded area differs from the image area on the reference grid, as `Unsupported`; an area equal to the image (a window that covers the whole image, or the only tile) decodes as the plain decode does, at any reduction |
 | OpenJPEG 2.5.0 | `opj_decompress -d` or `-t` with sYCC output converts the decoded area alone: it replicates the chroma by the parity of the area's origin, so the result is not the crop of the whole image's conversion |
 | Standard | silent: the sYCC conversion and decode options are outside it |
 | Rule | 3 |
