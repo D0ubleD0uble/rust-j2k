@@ -18,7 +18,7 @@ use crate::tier2::Rect;
 use crate::{Error, Result};
 
 use super::progression::{
-    Cursor, Order, PacketId, SET_SKIP_VISITS, Step, layer_orders, poc_gaps, reached,
+    COUNTS_SKIP_VISITS, Cursor, Order, PacketId, Step, layer_orders, poc_gaps, reached,
 };
 use super::{
     BandState, Budget, CodedData, ComponentCoded, Delimiters, END_VISITS, Journal, Meter, Packet,
@@ -572,7 +572,7 @@ impl TileWalk {
         } else {
             false
         };
-        let skip = if sparse { SET_SKIP_VISITS as u64 } else { 0 };
+        let skip = if sparse { COUNTS_SKIP_VISITS as u64 } else { 0 };
         // Each walk here spends no more than the decode's own: each step
         // it takes is one the decode takes. So a walk short of what the
         // decode has left is refused with it.
@@ -648,8 +648,8 @@ impl TileWalk {
                             // of a precinct are always its first ones: those
                             // read whole, as no packet is pending here. A
                             // packet of a layer below them is one emitted
-                            // before, which the decode's bitmap or set
-                            // finds there.
+                            // before, which the decode's bitmap or counts
+                            // find there.
                             if self.dedup {
                                 let read = self.read[id.comp][id.res][id.precinct];
                                 debug_assert!(id.layer <= read, "{id:?} after {read} layers");

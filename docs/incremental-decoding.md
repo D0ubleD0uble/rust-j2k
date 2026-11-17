@@ -133,14 +133,14 @@ The code-block bound holds across all the refines together.
 Each refine is charged the packet visits the walk of a decode of its bytes on
 its own spends: the geometry of the resolutions a reduction drops, the
 progression's loops, the visits each packet read spends, the end of the
-data, a visit for each packet after it, and the skips from a `POC` set. The
+data, a visit for each packet after it, and the skips past a `POC` bitmap. The
 charges come from the counts the kept walks hold, and a refine is refused,
 as `Ok(None)`, where that decode is refused for work, and fails where it
 fails. So the packet bound is the one-shot bound of the bytes fed, not cut
 by what earlier refines spent. A `POC` sequence's volumes emit each
 precinct's layers from the first up, so a kept walk tells a packet emitted
-again by the precinct's count of layers read, with no packet set; its
-charges are those of the bitmap or set that decode holds. The work the kept
+again by the precinct's count of layers read; its charges are those of
+the bitmap or counts that decode holds. The work the kept
 walks do is the visits they spend for the first time: a byte-at-a-time
 feeder that refines after every byte spends, over all its refines, the
 visits of one walk of the whole file

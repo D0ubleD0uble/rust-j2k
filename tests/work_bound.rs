@@ -294,12 +294,12 @@ fn setskip(layers: u16, volumes: usize) -> Vec<u8> {
 }
 
 /// More packets reached than the bitmap may hold, in a positional order, so
-/// the packets read are kept in a set, and each one skipped from it is
+/// the packets read are held as per-precinct counts, and each one they skip is
 /// charged 12 steps: 2048 layers in 31 volumes skip 1.3 x 10^7 packets,
 /// past the bound for their 442 KB. With one volume, nothing is skipped and
 /// it decodes. OpenJPEG 2.5.0 decodes both to a flat 128.
 #[test]
-fn skips_from_the_poc_set_are_bounded() {
+fn skips_from_the_poc_counts_are_bounded() {
     assert_limit("setskip 31 volumes", &setskip(2048, 31));
     let image = decode(&setskip(2048, 1)).unwrap();
     assert_eq!(image.components.len(), 65);
@@ -308,11 +308,11 @@ fn skips_from_the_poc_set_are_bounded() {
 
 /// A refine after earlier refines holds a POC sequence's packets as a
 /// decode of its bytes on its own does: in the bitmap that decode's bound
-/// sizes, not in the set, whose skips cost 12 visits each. 1650 layers in
+/// sizes, not as counts, whose skips cost 12 visits each. 1650 layers in
 /// 31 volumes reach 1.63 x 10^7 packets, just within the bitmap of the
 /// default bound's 2^24 visits, and the decode spends about 10^6 visits. A
 /// bitmap sized from what the earlier refines left of the bound would not
-/// hold them, and in the set the skips would take 2 x 10^8.
+/// hold them, and as counts the skips would take 2 x 10^8.
 #[test]
 fn a_refine_holds_poc_packets_as_one_decode_does() {
     let bytes = setskip(1650, 31);
@@ -335,7 +335,7 @@ fn a_refine_holds_poc_packets_as_one_decode_does() {
 /// `setskip(1650, 31)` in two tiles side by side, the first cut to one
 /// byte of packets. The decode counts the first tile's packets past its
 /// data, so the second, whose volumes reach 1.63 x 10^7 packets, finds
-/// fewer visits left than that: it holds them in the set, and its skips
+/// fewer visits left than that: it holds them as counts, and its skips
 /// pass the bound, with any share of the second tile's data. A refine holds
 /// them as that decode does, and waits; one that sized the bitmap from the
 /// whole bound would decode.
@@ -398,7 +398,7 @@ fn jp2_psot0(cs: &[u8], xml: &[u8]) -> Vec<u8> {
 /// packets, under the decode's 2^24 visits: the codestream ends at its box,
 /// and the `xml ` box after it is reported by both calls. OpenJPEG 2.5.0
 /// decodes it to a flat 128. `setskip(2048, 2)` reaches 2.0e7, so the decode
-/// would keep a set, and the walk gives up: the codestream runs to the end
+/// would keep counts, and the walk gives up: the codestream runs to the end
 /// of the file, the `xml ` box is not reported, and the decode refuses its
 /// bytes as left after the last packet, as for the files of
 /// `a_psot_zero_tile_too_costly_to_walk_reads_to_the_end` in
