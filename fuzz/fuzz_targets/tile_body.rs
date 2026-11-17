@@ -32,10 +32,11 @@
 //! its length fields say; shape 7 keeps bit 6 for PPM, so it has no MIXED
 //! variant.
 //!
-//! The second input byte adds a region of interest: 0 writes none, any other
-//! value writes an `RGN` marker (the maxshift, from its low 5 bits, on one
+//! The second input byte adds a region of interest: with bit 7 set it writes
+//! an `RGN` marker (the maxshift, 0 to 19 from its low 5 bits, on one
 //! component or all), so the packets are read under a shifted bit-plane
-//! count. It is not written for the HT variants.
+//! count; with bit 7 clear it writes none. It is not written for the HT
+//! variants.
 //!
 //! Each input is decoded strict and then with `strict` off, and the two are
 //! checked against each other as `decode_partial` checks them
@@ -57,8 +58,9 @@ fuzz_target!(|data: &[u8]| {
     let Some((&variant, rest)) = data.split_first() else {
         return;
     };
-    // The second byte steers a region of interest: 0 writes no `RGN`, any
-    // other value one (see `wrap_roi`), so the body is read under a maxshift.
+    // The second byte steers a region of interest: bit 7 writes an `RGN`
+    // (see `wrap_roi`), so the body is read under a maxshift; with it clear
+    // none is written.
     let (&roi, body) = rest.split_first().unwrap_or((&0, &[]));
     // The strict decode, then the same bytes with `strict` off, which reads
     // a body that runs short or long instead of refusing it.

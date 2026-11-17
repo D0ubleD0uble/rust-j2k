@@ -42,11 +42,12 @@ pub fn wrap(variant: u8, body: &[u8]) -> Vec<u8> {
     wrap_roi(variant, 0, body)
 }
 
-/// `wrap` with a region of interest: when `roi` is not 0 and the variant is
-/// not HT (a `CAP` that says an `RGN` may be present is a header this does not
-/// build), the main header gets one `RGN` marker segment (`Srgn` 0, the
-/// maxshift) after the `QCD`. Its low 5 bits are `SPrgn`; bit 5 limits it to
-/// component 0, and otherwise every component gets one. Packets then read as
+/// `wrap` with a region of interest: when `roi` bit 7 is set and the variant
+/// is not HT (a `CAP` that says an `RGN` may be present is a header this does
+/// not build), the main header gets one `RGN` marker segment (`Srgn` 0, the
+/// maxshift) after the `QCD`. `SPrgn` is the low 5 bits of `roi` modulo 20, so
+/// 0 to 19; bit 5 limits the marker to component 0, and otherwise every
+/// component gets one. With bit 7 clear nothing is written. Packets then read as
 /// they do for any coded region, with the shift raising each block's
 /// bit-plane count, so the body reaches the ROI path through the real packet
 /// reader.
@@ -183,8 +184,8 @@ pub fn wrap_roi(variant: u8, roi: u8, mut body: &[u8]) -> Vec<u8> {
     }
     bytes.extend_from_slice(&seg(0xFF52, &cod));
     bytes.extend_from_slice(&seg(0xFF5C, &quant));
-    if roi != 0 && !ht {
-        let shift = roi & 0x1F;
+    if roi & 0x80 != 0 && !ht {
+        let shift = (roi & 0x1F) % 20;
         let covered = if roi & 0x20 != 0 { 1 } else { components };
         for component in 0..covered {
             // `Crgn` is one byte below 257 components.
