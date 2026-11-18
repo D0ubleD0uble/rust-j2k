@@ -260,11 +260,11 @@ pub fn incremental_code_block_work(decoder: &crate::IncrementalDecoder) -> (u64,
 /// the refines of an incremental decoder before their bound refuses one.
 pub const REPEAT_BOUNDS: u64 = crate::tier2::resume::REPEAT_BOUNDS;
 
-/// What the walks an [`IncrementalDecoder`](crate::IncrementalDecoder) does
-/// from a tile's start again have spent: the walks of tiles not kept, the
-/// walks started or built again, and the first walk of a tile whose walk
-/// was let go when the options changed. The first walk of a tile kept from
-/// its start is not one of them.
+/// What an [`IncrementalDecoder`](crate::IncrementalDecoder) has charged
+/// for the walks that read a tile from its start again: the walks of tiles
+/// not kept, the walks started or built again, and the first walk of a
+/// tile whose walk was let go when the options changed. The first walk of
+/// a tile kept from its start is not charged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepeatWork {
     /// The packet visits those walks have spent over all the refines.
@@ -278,7 +278,7 @@ pub struct RepeatWork {
     pub not_kept: usize,
 }
 
-/// What `decoder`'s walks from a tile's start again have spent (see
+/// What `decoder` has charged for the walks that read a tile again (see
 /// [`RepeatWork`]).
 pub fn incremental_repeat_work(decoder: &crate::IncrementalDecoder) -> RepeatWork {
     let (visits, refused, not_kept) = decoder.repeat_work();
