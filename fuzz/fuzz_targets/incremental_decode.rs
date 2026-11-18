@@ -8,16 +8,30 @@
 //! decode unless the header is cut short, the packet work bound refuses
 //! that one-shot decode, or the bound on the walks of tiles not kept, which
 //! all the refines spend together, refuses the refine
-//! (`rust_j2k::fuzz::incremental_refused_by_repeats`). That refusal may
-//! stand where the one-shot decode gives an image or an error; a decoder
-//! with nothing spent then gives the one-shot result. After an error, every
-//! later refine gives it again, and `finish` is the decode of all the bytes
-//! under the decoder's options.
+//! (`rust_j2k::fuzz::incremental_repeat_work`). That refusal may stand where
+//! the one-shot decode gives an image or an error. It must come with the
+//! walks' visits past `REPEAT_BOUNDS` times that refine's packet bound, and
+//! a decoder with nothing spent then gives the one-shot result, and charges
+//! nothing for its walks when it kept every one: a single refine walks each
+//! tile once, and the first walk of a tile it keeps is not charged. After an
+//! error, every later refine gives it again, and `finish` is the decode of
+//! all the bytes under the decoder's options.
+//!
+//! With bit 6 of the first control byte, the input also changes the
+//! decoder's options before some refines: the reduction (0 to 2, or 33,
+//! past the 32 levels a file may have), the layer cap (none, or 1 to 3), or
+//! the region (the whole image, a window, tile 0 or 1), as a hash of the
+//! file picks. Each refine after is checked under the options as they are
+//! then. A layer cap of `Some(0)` or an empty window must be refused and
+//! leave the options as they were. Any real change of an option clears the
+//! error, even a change back to the options that gave it, and the refines
+//! after it give `Ok(None)` until the next one due decodes again.
 //!
 //! The first six input bytes steer the options, as `tile_body`'s first bytes
 //! steer its shape, so a small mutation of the file keeps them; the rest is
 //! the file (seed it with six zero bytes in front, which mean the default
-//! code-block limit and no other option). An input that starts with a
+//! code-block limit and no other option, or with `40 00 00 00 00 00` to
+//! change the options between refines). An input that starts with a
 //! codestream's `SOC` (`FF 4F`) or the JP2 signature box is instead the whole
 //! file with all-zero control bytes, so plain fixtures are valid seeds. The
 //! bytes pick: a layer cap, a resolution reduction, a
@@ -43,8 +57,8 @@ use libfuzzer_sys::fuzz_target;
 mod budget;
 
 use rust_j2k::fuzz::{
-    incremental_code_block_work, incremental_refused_by_repeats,
-    incremental_with_code_block_work_spent,
+    incremental_code_block_work, incremental_repeat_work, incremental_with_code_block_work_spent,
+    REPEAT_BOUNDS,
 };
 use rust_j2k::{
     decode_with, DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Region, Window,
@@ -118,7 +132,8 @@ fuzz_target!(|input: &[u8]| {
         _ => None,
     };
     options = options.with_components(subset);
-    let lenient = options.clone().with_strict(false);
+    let changes = control[0] & 0x40 != 0;
+    let mut lenient = options.clone().with_strict(false);
     let Ok(mut decoder) = IncrementalDecoder::new(options.clone()) else {
         return;
     };
@@ -133,6 +148,13 @@ fuzz_target!(|input: &[u8]| {
         let end = (fed + piece).min(data.len());
         decoder.feed(&data[fed..end]);
         fed = end;
+        if changes {
+            hash = splitmix(hash);
+            if change(&mut decoder, &mut options, hash) {
+                lenient = options.clone().with_strict(false);
+                failed = None;
+            }
+        }
         let (spent, _) = incremental_code_block_work(&decoder);
         let refined = keyed(decoder.refine());
         if let Some(error) = &failed {
@@ -162,7 +184,16 @@ fuzz_target!(|input: &[u8]| {
             // is one when the bound on the walks of tiles not kept refused
             // the refine: the code-block rule below does not hold for it.
             let (after, bound) = incremental_code_block_work(&decoder);
-            let repeats = refined == Ok(None) && incremental_refused_by_repeats(&decoder);
+            let repeat_work = incremental_repeat_work(&decoder);
+            let repeats = refined == Ok(None) && repeat_work.refused.is_some();
+            if let Some(packet_bound) = repeat_work.refused {
+                // The refusal is the bound's: the walks have spent past it.
+                assert!(
+                    repeat_work.visits > packet_bound.saturating_mul(REPEAT_BOUNDS),
+                    "{fed} bytes: refused at {} visits, of {packet_bound}",
+                    repeat_work.visits
+                );
+            }
             let zeroed;
             let (fresh, work) = if refined == Ok(None) && (bound.is_some() || repeats) {
                 let mut zero = IncrementalDecoder::new(options.clone()).unwrap();
@@ -171,6 +202,16 @@ fuzz_target!(|input: &[u8]| {
                 assert_eq!(zeroed, expected, "{fed} bytes, nothing spent");
                 let (work, zero_bound) = incremental_code_block_work(&zero);
                 assert_eq!(zero_bound, bound, "{fed} bytes, nothing spent");
+                // One refine walks each tile once, so it charges only the
+                // walks of the tiles it does not keep.
+                let zero_repeats = incremental_repeat_work(&zero);
+                assert_eq!(zero_repeats.refused, None, "{fed} bytes, nothing spent");
+                if zero_repeats.not_kept == 0 {
+                    assert_eq!(
+                        zero_repeats.visits, 0,
+                        "{fed} bytes, nothing spent: a kept walk was charged"
+                    );
+                }
                 (&zeroed, work)
             } else {
                 assert_eq!(refined, expected, "{fed} bytes, due");
@@ -241,6 +282,49 @@ fuzz_target!(|input: &[u8]| {
         expected => assert_eq!(keyed(finished), keyed(expected)),
     }
 });
+
+/// Change one of `decoder`'s options as `hash` picks, or none, through the
+/// setters, and `options` with it. Whether an option changed.
+fn change(decoder: &mut IncrementalDecoder, options: &mut DecodeOptions, hash: u64) -> bool {
+    let pick = hash >> 8;
+    let wanted = match hash % 8 {
+        0 => options
+            .clone()
+            .with_resolution_reduction([0, 1, 2, 33][(pick % 4) as usize]),
+        1 => options.clone().with_max_quality_layers(
+            [None, Some(0), Some(1), Some(2), Some(3)][(pick % 5) as usize],
+        ),
+        2 => {
+            let (x, y) = ((pick >> 3) as u32 % 24, (pick >> 8) as u32 % 24);
+            let (w, h) = (1 + (pick >> 13) as u32 % 40, 1 + (pick >> 19) as u32 % 40);
+            let region = match pick % 6 {
+                0 => Region::Whole,
+                1 | 2 => Region::Window(Window::new(x, y, x + w, y + h)),
+                3 => Region::Tile(0),
+                4 => Region::Tile(1),
+                _ => Region::Window(Window::new(x, y, x, y + h)),
+            };
+            options.clone().with_region(region)
+        }
+        _ => return false,
+    };
+    let set = match hash % 8 {
+        0 => decoder.set_resolution_reduction(wanted.resolution_reduction),
+        1 => decoder.set_max_quality_layers(wanted.max_quality_layers),
+        _ => decoder.set_region(wanted.region.clone()),
+    };
+    let empty = matches!(wanted.region, Region::Window(w) if w.x0 >= w.x1 || w.y0 >= w.y1);
+    if wanted.max_quality_layers == Some(0) || empty {
+        assert!(matches!(set, Err(Error::InvalidOptions(_))), "{set:?}");
+        return false;
+    }
+    set.expect("valid options are set");
+    let changed = wanted.resolution_reduction != options.resolution_reduction
+        || wanted.max_quality_layers != options.max_quality_layers
+        || wanted.region != options.region;
+    *options = wanted;
+    changed
+}
 
 /// What a decoder with nothing spent gives on some bytes: its result, the
 /// code-block work its refine spent and the bound that refine had.

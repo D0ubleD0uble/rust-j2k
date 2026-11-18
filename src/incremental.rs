@@ -158,6 +158,8 @@ pub struct IncrementalDecoder {
     refused: bool,
     /// Whether the bound on the walks of tiles not kept refused it.
     refused_by_repeats: bool,
+    /// The packet bound of that refine, when that bound refused it.
+    repeat_bound: u64,
     /// The error a refine returned, which every later call returns.
     failed: Option<Error>,
 }
@@ -182,6 +184,7 @@ impl IncrementalDecoder {
             spent: Spent::default(),
             refused: false,
             refused_by_repeats: false,
+            repeat_bound: 0,
             failed: None,
         })
     }
@@ -333,6 +336,7 @@ impl IncrementalDecoder {
         let decoded = decode_metered(&self.bytes, &self.lenient, Some(&ledger));
         self.refused = ledger.work_refused.get();
         self.refused_by_repeats = ledger.repeats.refused.get();
+        self.repeat_bound = ledger.repeats.bound.get();
         self.spent = ledger.into_spent();
         match decoded {
             Ok(image) => {
@@ -405,11 +409,13 @@ impl IncrementalDecoder {
         (self.spent.blocks, self.spent.bound)
     }
 
-    /// Whether the bound on the walks of tiles not kept, which the refines
-    /// spend together, refused the last refine that tried (see
-    /// [`crate::fuzz`]).
-    pub(crate) fn refused_by_repeats(&self) -> bool {
-        self.refused_by_repeats
+    /// The packet visits the walks of tiles not kept have spent over the
+    /// refines; the packet bound of the last refine that tried, when the
+    /// bound on those walks refused it; and how many tiles have a walk too
+    /// large to keep (see [`crate::fuzz`]).
+    pub(crate) fn repeat_work(&self) -> (u64, Option<u64>, usize) {
+        let bound = self.refused_by_repeats.then_some(self.repeat_bound);
+        (self.spent.repeats, bound, self.spent.walks.kept().1)
     }
 
     /// Consumes the decoder and returns the bytes fed.

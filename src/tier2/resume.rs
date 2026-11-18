@@ -271,7 +271,7 @@ impl Walks {
         // of the tile read, so its first walk is charged as a walk of a
         // tile not kept.
         if walk.restarted && past_repeats(meter, repeats) {
-            return Err(repeats.refuse());
+            return Err(repeats.refuse(meter));
         }
         #[cfg(test)]
         let visits = if fresh { 0 } else { walk.visits() };
@@ -311,7 +311,6 @@ impl Walks {
     }
 
     /// How many tiles have a walk kept, and how many one too large to keep.
-    #[cfg(test)]
     pub(crate) fn kept(&self) -> (usize, usize) {
         let kept = self
             .tiles
@@ -358,7 +357,7 @@ fn walk_again<'t>(
     repeats: &Repeats,
 ) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
     if past_repeats(meter, repeats) {
-        return Err(repeats.refuse());
+        return Err(repeats.refuse(meter));
     }
     let left = meter.left();
     let walked = super::decode_packets_partial(header, tile, meter, poc_bitmap, reduction, layers);
@@ -385,7 +384,7 @@ fn charge_repeat<T>(
         .visits
         .set(repeats.visits.get().saturating_add(spent));
     match walked {
-        Ok(_) if past_repeats(meter, repeats) => Err(repeats.refuse()),
+        Ok(_) if past_repeats(meter, repeats) => Err(repeats.refuse(meter)),
         walked => walked,
     }
 }
@@ -398,6 +397,8 @@ pub(crate) struct Repeats {
     pub(crate) visits: Cell<u64>,
     /// Whether their bound refused a walk of this decode.
     pub(crate) refused: Cell<bool>,
+    /// The packet bound of the decode whose walk their bound refused, or 0.
+    pub(crate) bound: Cell<u64>,
 }
 
 impl Repeats {
@@ -406,12 +407,15 @@ impl Repeats {
         Repeats {
             visits: Cell::new(visits),
             refused: Cell::new(false),
+            bound: Cell::new(0),
         }
     }
 
-    /// Refuse a walk for work, and note that their bound refused it.
-    fn refuse(&self) -> Refused {
+    /// Refuse a walk for work in the decode `meter` meters, and note that
+    /// their bound refused it, and that decode's packet bound.
+    fn refuse(&self, meter: &Meter) -> Refused {
         self.refused.set(true);
+        self.bound.set(meter.first());
         Refused::Work(WorkRefusal::PacketWalk)
     }
 }
