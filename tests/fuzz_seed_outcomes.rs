@@ -402,3 +402,79 @@ fn the_fuzz_skip_counts_siz_when_the_ihdr_box_disagrees() {
     assert!(budget::over(&sub(0)));
     assert!(!budget::over(&sub(2)));
 }
+
+/// A codestream main header of `comps` components, each `width` x `height`
+/// with sub-sampling `xr` x `yr`, in one tile.
+fn header_comps(width: u32, height: u32, comps: usize, xr: u8, yr: u8) -> Vec<u8> {
+    let siz = synth::siz_body(
+        [width, height, 0, 0, width, height, 0, 0],
+        &vec![[7, xr, yr]; comps],
+    );
+    [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 6, 0, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 19])),
+        vec![0xFF, 0x90],
+    ]
+    .concat()
+}
+
+#[test]
+fn the_fuzz_skip_counts_every_siz_component_of_a_palettized_file() {
+    let bx = |kind: &[u8; 4], body: &[u8]| {
+        [&(8 + body.len() as u32).to_be_bytes()[..], kind, body].concat()
+    };
+    // 32 components of 2^26 samples; the palette maps only component 0, so the
+    // header lists one output channel.
+    let cs = header_comps(8192, 8192, 32, 1, 1);
+    let ihdr = [
+        &8192u32.to_be_bytes()[..],
+        &8192u32.to_be_bytes(),
+        &[0, 1, 7, 7, 0, 0],
+    ]
+    .concat();
+    let colr = [&[1, 0, 0][..], &16u32.to_be_bytes()].concat();
+    let pclr = [&[0, 2, 1, 7][..], &[0, 255]].concat();
+    let cmap = [&[0, 0, 1, 0][..]].concat();
+    let jp2 = [
+        bx(b"jP  ", &[0x0D, 0x0A, 0x87, 0x0A]),
+        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        bx(
+            b"jp2h",
+            &[
+                bx(b"ihdr", &ihdr),
+                bx(b"colr", &colr),
+                bx(b"pclr", &pclr),
+                bx(b"cmap", &cmap),
+            ]
+            .concat(),
+        ),
+        bx(b"jp2c", &cs),
+    ]
+    .concat();
+    let opts = rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::WorkLimit::Unlimited);
+    let header = rust_j2k::read_header_with(&jp2, &opts).expect("the palette file reads");
+    assert_eq!(header.components.len(), 1);
+    assert!(budget::over(&jp2));
+}
+
+#[test]
+fn the_fuzz_skip_survives_zero_sub_sampling_decoys_and_repeated_markers() {
+    // XRsiz = 0 is skipped, not divided by.
+    assert!(!budget::over(&jp2_with_ihdr(
+        1,
+        1,
+        &header_comps(16, 16, 1, 0, 1)
+    )));
+    // A small pair ahead of the large real codestream does not hide it.
+    let decoy = header_only(8, 8);
+    let real = jp2_with_ihdr(16384, 16384, &header_only(16384, 16385));
+    assert!(budget::over(&[decoy, real].concat()));
+    // Repeated markers cost little: 256 KiB would take seconds if each pair
+    // were parsed in full.
+    let start = std::time::Instant::now();
+    let repeated = [0xFF, 0x4F, 0xFF, 0x51].repeat(64 * 1024);
+    assert!(!budget::over(&repeated));
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+}

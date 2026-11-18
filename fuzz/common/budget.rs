@@ -12,27 +12,29 @@ const MAX_FUZZ_SAMPLES: u64 = 1 << 28;
 /// Whether `data` declares more output samples than [`MAX_FUZZ_SAMPLES`] at
 /// full resolution, which bounds every window, tile and reduction of it.
 ///
-/// A header that reads gives the count. A header that does not read still
-/// counts by its `SIZ` segment: a JP2 whose `ihdr` box disagrees with `SIZ`
-/// fails to read, yet a lenient decode goes on to allocate from `SIZ`. An
-/// input with no readable `SIZ` fails cheaply and is not over.
+/// The count is the larger of the header's and the `SIZ` segment's. The
+/// header lists output channels, which a palette makes fewer than the
+/// components the decoder allocates, and a JP2 whose `ihdr` box disagrees with
+/// `SIZ` does not read at all, yet a lenient decode goes on to allocate from
+/// `SIZ`. An input with no readable `SIZ` fails cheaply and is not over.
 pub fn over(data: &[u8]) -> bool {
     let options = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
-    match rust_j2k::read_header_with(data, &options) {
-        Ok(header) => {
+    let header = rust_j2k::read_header_with(data, &options)
+        .map(|header| {
             header
                 .components
                 .iter()
-                .map(|c| u64::from(c.width) * u64::from(c.height))
-                .sum::<u64>()
-                > MAX_FUZZ_SAMPLES
-        }
-        Err(_) => siz_samples(data) > u128::from(MAX_FUZZ_SAMPLES),
-    }
+                .map(|c| u128::from(c.width) * u128::from(c.height))
+                .sum::<u128>()
+        })
+        .unwrap_or(0);
+    header.max(siz_samples(data)) > u128::from(MAX_FUZZ_SAMPLES)
 }
 
 /// The most samples any `SOC` + `SIZ` pair in `data` declares, read straight
-/// from the bytes with no validation. The scan takes every pair, so a pair
+/// from the bytes. A pair counts only if its `Lsiz` is `38 + 3 * Csiz` and
+/// `Csiz <= 16384`, the decoder's own rules, so a run of repeated markers
+/// costs a few byte reads per position. The scan takes every such pair, so one
 /// inside a box that is not the codestream only makes the count larger.
 fn siz_samples(data: &[u8]) -> u128 {
     const PAIR: [u8; 4] = [0xFF, 0x4F, 0xFF, 0x51];
@@ -52,8 +54,13 @@ fn siz_samples(data: &[u8]) -> u128 {
                 be32(soc + 16)?,
                 be32(soc + 20)?,
             );
+            let lsiz = data.get(soc + 4..soc + 6)?;
             let csiz = data.get(soc + 40..soc + 42)?;
+            let lsiz = usize::from(u16::from_be_bytes([lsiz[0], lsiz[1]]));
             let csiz = usize::from(u16::from_be_bytes([csiz[0], csiz[1]]));
+            if csiz > 16384 || lsiz != 38 + 3 * csiz {
+                return None;
+            }
             let mut total = 0u128;
             for c in 0..csiz {
                 let Some(&[_, xr, yr]) = data.get(soc + 42 + 3 * c..soc + 45 + 3 * c) else {
