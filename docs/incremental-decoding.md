@@ -177,20 +177,24 @@ either bound is not kept, and each refine walks its packets from the start,
 until the bytes fed make room for it. Of the committed fixtures fed 1 KB at
 a time, this keeps fewer walks than the image bound alone only for files
 made to test the work bounds, and for a 6000 x 4000 RGB file of 148 KB until
-64 KB of it are in. Each refine holds what
-`decode_with` holds for the same bytes on top of the walks kept, so the
-decoder holds at most about three times one decode's peak, plus the bytes
-fed. `tests/incremental_alloc.rs` counts the bytes held on files of many
-one-sample tiles of 512 components, in LRCP order and under 32 PCRL `POC`
-volumes, fed in pieces, and `tests/incremental_kept_alloc.rs` on a file of
-1228 bytes that declares a 2048 x 2048 image of 4 x 4 code-blocks. The
-decoder is `Send` and `Sync`. The ledger's counters live only for the
-length of a decode.
+64 KB of it are in. On top of these bounds the decoder keeps a table of 24
+bytes for each tile index up to the highest it has seen (`size_of::<Slot>()`
+in `src/tier2/resume.rs`). That is about 1.5 MiB for the 65535 tiles a file
+can have, and up to twice that in capacity as the table grows: an 82-byte
+file of 1 x 1 tiles whose one tile-part is tile 65534 holds 1.57 MB between
+calls. Each refine holds what `decode_with` holds for the same bytes on top
+of the walks kept, so the decoder holds at most about three times one
+decode's peak, plus the bytes fed. `tests/incremental_alloc.rs` counts the
+bytes held on files of many one-sample tiles of 512 components, in LRCP
+order and under 32 PCRL `POC` volumes, fed in pieces, and
+`tests/incremental_kept_alloc.rs` on a file of 1228 bytes that declares a
+2048 x 2048 image of 4 x 4 code-blocks. The decoder is `Send` and `Sync`.
+The ledger's counters live only for the length of a decode.
 
 A file of 1228 bytes that declares a 16384 x 16384 image, in 64 tiles of
 4 x 4 code-blocks with every packet empty, holds no walk between calls: each
-tile's walk is about 10 MB, past the 1 MiB the bytes give. A refine of it
-holds what one decode holds, 1076 MB at its peak, and nothing is kept after
+tile's walk is about 10 MiB, past the 1 MiB the bytes give. A refine of it
+holds what one decode holds, 1076 MiB at its peak, and nothing is kept after
 it but the bytes. Each of its refines walks every tile from the start, which
 is the fourth cost below.
 

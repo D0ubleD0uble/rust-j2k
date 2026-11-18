@@ -62,9 +62,12 @@ use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
 /// between calls: a file of 1228 bytes that declares a 16384 x 16384 image
 /// holds no walk. A tile whose walk would pass either bound is walked from
 /// the start by each refine instead, until more bytes make room for it.
-/// Each refine also holds what [`decode_with`] holds for the same bytes,
-/// so the decoder holds at most about three times one decode's peak
-/// memory, plus the bytes fed.
+/// On top of these bounds the decoder keeps a table of 24 bytes for each
+/// tile index up to the highest it has seen, which comes to about 1.5 MiB
+/// for the 65535 tiles a file can have (up to twice that in capacity as
+/// the table grows). Each refine also holds what [`decode_with`] holds for
+/// the same bytes, so the decoder holds at most about three times one
+/// decode's peak memory, plus the bytes fed.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, IncrementalDecoder};
