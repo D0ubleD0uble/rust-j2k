@@ -39,6 +39,8 @@ fuzz/
   fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream, also decoded as sRGB
   fuzz_targets/header.rs        # rust_j2k::read_header_with, checked against decode_with
   fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColorOutput::Srgb
+  fuzz_targets/window_crop.rs   # a window, tile or component subset against the crop of the whole decode
+  fuzz_targets/retry_ladder.rs  # DecodeOptions::with_retry followed from each limit refusal
   icc.dict                      # ICC tag and type signatures for icc_srgb
   ../tests/support/synth.rs     # std-only seg/bx builders; tile_body, jp2_boxes and icc_srgb include it by #[path]
   ../tests/support/tile_body.rs # tile_body's header and body wrapper; tests/tile_body_variants.rs pins its variant bytes
@@ -193,6 +195,65 @@ it runs about 230 inputs a second, but on a corpus grown by earlier runs it
 has dropped to about 7 a second under ASan, and one 598-byte input took 13
 s. The name `incremental` is one Cargo reserves.
 
+`window_crop` checks a decode of part of the image against the whole
+decode. Eight control bytes pick a resolution reduction (0 to 2), one of
+four modes (a window, a tile, a component subset decoded with
+`raw_channels`, as a subset names codestream components, or a subset
+through a window), and the window, tile or subset; the rest is the file. So
+libFuzzer can keep a file and try other areas of it by mutating the control
+bytes. An input that starts with `FF 4F` or the JP2 signature box is the
+whole file, with a hash of it as the control bytes, so plain fixtures are
+valid seeds. The window and the tile are worked out on the reference grid
+from the first `SOC SIZ` in the file. That `SIZ` may not be the
+codestream's, since a JP2 file can hold those bytes in another box, so an
+input is skipped unless its image area gives the whole decode's component
+sizes. When the whole decode gives an image, the part must give one too,
+unless its options are `InvalidOptions` (an area with no sample of a
+component at the reduction, or a component past the image's), and each of
+its components must equal the whole decode's, cut to the area. Seed it as
+`decode`, with the window fixtures, the OpenJPH `.jph` files and the JP2
+fixtures under 200 KB added (the JP2 ones from the top of `tests/fixtures`,
+`jp2_real` and the conformance JP2 files; the `psot0` and work-bound JP2
+files are bombs, slow to decode twice).
+
+`retry_ladder` follows `DecodeOptions::with_retry` from each limit refusal.
+The first input byte picks where each of the three limits starts
+(`Default`, or a factor of 1 or 2), a reduction of 0 or 1, and `strict`;
+the rest is the file. An input that starts with `FF 4F` or the JP2
+signature box is the whole file with a zero control byte: the default
+limits, reduction 0 and `strict` on. Each step must raise the option the
+refusal names to `retry_with`, strictly above where it was, and leave every
+other option as it was (compared by their `Debug` text, so every field
+counts). A limit no option raises names no factor, and gives no retry.
+Raising a limit never turns an image into an error: the options start at
+or above the default limits, so when those decode the first decode must
+too. Otherwise a ladder that reaches an image must have the samples of a
+decode with no limits. A decode past a factor of 4 can take longer than the
+timeout, so the ladder stops when a refusal asks for more, once that step
+is checked. More than 16 steps is a failure; a ladder should end in a few.
+
+An input over the fuzz sample budget (`common/budget.rs`) is only read for
+its header, and a sample limit refusal there is checked as one step with no
+decode. So a sample limit retry of the image area is never decoded: the
+budget is 2^28 samples and the default limit 2^29, so only an input over
+the budget is refused for its area, and that input is never decoded.
+
+Seed it as `decode`, with 26 seeds made from the work-bound, sample-limit
+and `psot0` bomb fixtures, each behind a control byte: `00` (the defaults),
+`80` (`strict` off), `40` (reduction 1), `0f` (the sample and packet work
+limits at a factor of 2) or `30` (the code-block work limit at a factor of
+2). Of the 125 pairs of the five bytes and those 25 files, these are the
+ones that take a step or compare an image and run in under about 2 s under
+the sanitizer build, plus two slower ones: a code-block work step that a
+factor of 2 admits (`00` and `t1bomb_1024_64_88`, about 6 s) and a packet
+work step that does (`40` and `cprl_tall`, about 5 s). The others are left
+out: 62 take no step and compare nothing, 22 take or compare but run 5 to
+22 s, and the 15 of `cprl_tall_poc31`, `sweep_pcrl_1024_64` and
+`sweep_rpcl_1024_64` run 17 to 27 s. libFuzzer replays every seed before it
+starts, so slow seeds eat the run. Of the 93
+seeds, 12 take a step (3 sample limit refusals of the header, 8 packet work
+and 1 code-block work) and 16 compare an image.
+
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
 `tile_body`): mutation almost never synthesizes a two-byte marker code, and
@@ -272,6 +333,35 @@ find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \) \
   -exec cp {} fuzz/corpus/incremental_decode/ \;
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
 
+# The window target, seeded as decode plus the window, JPH and small JP2 files.
+mkdir -p fuzz/corpus/window_crop
+cp fuzz/corpus/decode/* tests/fixtures/window/*.j2k tests/fixtures/openjph/files/*.jph \
+  fuzz/corpus/window_crop/
+find tests/fixtures -maxdepth 1 -name '*.jp2' -size -200k -exec cp {} fuzz/corpus/window_crop/ \;
+find tests/fixtures/jp2_real tests/fixtures/conformance/jp2/files -name '*.jp2' -size -200k \
+  -exec cp {} fuzz/corpus/window_crop/ \;
+cargo +nightly fuzz run window_crop -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
+
+# The retry target, seeded as decode plus limit fixtures behind a control byte.
+mkdir -p fuzz/corpus/retry_ladder
+cp fuzz/corpus/decode/* fuzz/corpus/retry_ladder/
+seed() { { printf "\\x$1"; cat "tests/fixtures/$2"; } > "fuzz/corpus/retry_ladder/$1-${2##*/}"; }
+for c in 0f 30; do
+  for f in tier1_work_bound/htbomb_1024_64_3.j2k tier1_work_bound/opj_specks2048_16bit.j2k \
+    work_bound/opj_patch2048_b4_q100.j2k work_bound/opj_patch2048_b4_q64.j2k \
+    work_bound/pocdup_4x4_1024_31.j2k work_bound/pocspent_2tiles_60000_559.j2k \
+    work_bound/pocvol_1024x512_1000_2.j2k work_bound/t2bomb_2048x1024_1000.j2k \
+    psot0/jp2_t2bomb_visits.jp2; do
+    seed $c $f
+  done
+done
+for c in 00 30 80; do seed $c sample_limit/flat_32769x16385_tiled_lossless.j2k; done
+for c in 00 80; do seed $c work_bound/pocvol_1024x512_1000_2.j2k; done
+seed 00 work_bound/pocspent_2tiles_60000_559.j2k
+seed 00 tier1_work_bound/t1bomb_1024_64_88.j2k
+seed 40 work_bound/cprl_tall.j2k
+cargo +nightly fuzz run retry_ladder -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
+
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
 cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
@@ -296,6 +386,10 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-15 | `decode` with the strict-off capped decode | `tests/fixtures/*.j2k` (49 seeds), `j2k.dict` | 61 s, 21 641 runs; `nice -n 19`, one job; the 1-minute load was 7.6 | no crash, leak, or timeout |
 | 2026-11-15 | `decode` with the strict-off capped decode checked against the strict one (`common/partial.rs`), and the HT seeds | the 49 fixtures, the OpenJPH codestreams and the HT conformance codestreams under 6 KB, and what earlier runs kept (1197 inputs), `j2k.dict` with `CPF` and the HT style byte | 61 s, 24 746 runs; `nice -n 19`, one job; the 1-minute load was 5.8 | no crash, leak, or timeout |
 | 2026-11-15 | `tile_body` with the MIXED variant (bit 7 and bit 6 of the first byte) | one MIXED seed, `j2k.dict` | 56 s, 64 703 runs; `nice -n 19`, one job; the 1-minute load was 8.5; 281 of 1 556 corpus inputs pick MIXED | no crash, leak, or timeout |
+| 2026-11-17 | `window_crop` (new) | `decode`'s seeding and `tests/fixtures/window/*.j2k` (73 inputs), `j2k.dict` | 61 s, 33 062 runs; `nice -n 19`, one job; the 1-minute load was 7.6 | no failure. 709 of the 1 298 inputs it kept reach the comparison: 231 windows, 138 tiles, 121 subsets and 219 subsets through a window. With `Window` shifted one column right in the decoder, a seed fails on replay |
+| 2026-11-17 | `retry_ladder` (new) | `decode`'s seeding and six limit fixtures (73 inputs), `j2k.dict` | 61 s, 23 891 runs; `nice -n 19`, one job; the 1-minute load was 7.2 | no failure. Of the 875 inputs it kept, 11 take a step and 4 compare the ladder's image with the default or unlimited one. With `with_retry` also raising `code_block_work_limit` on a packet work refusal, the seed `pocvol_1024x512_1000_2` fails on replay |
+| 2026-11-17 | `window_crop` with eight control bytes | `decode`'s seeding, the window fixtures, the `.jph` files and the JP2 files under 200 KB (109 seeds; 84 reach the comparison, 27 of the 36 JP2 and JPH ones among them), `j2k.dict` | 61 s, 18 074 runs; `nice -n 19`, one job; the 1-minute load was 5.5 | no failure. Coverage 9 464 (8 145 in the run above). 557 of the 1 126 inputs it kept reach the comparison: 182 windows, 123 tiles, 99 subsets and 153 subsets through a window. With `Window` shifted one column right, a seed fails on replay |
+| 2026-11-17 | `retry_ladder` with every option compared and the seeds behind control bytes | `decode`'s seeding and the 26 control-byte seeds (93 seeds; 12 take a step, 16 compare), `j2k.dict` | 61 s, 4 081 runs (the seeds take about 22 s to replay); `nice -n 19`, one job; the 1-minute load was 5.4 | no failure. Coverage 7 993 (7 836 in the run above). Of the 406 inputs it kept, 16 take a step (7 sample, 8 packet work, 1 code-block work) and 19 compare. With `with_retry` also setting `ColorOutput::Srgb` on a packet work refusal, the seed `0f-pocvol_1024x512_1000_2` fails on replay |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 
@@ -310,5 +404,6 @@ committed fixtures. No seed corpus is committed: the commands above, and the CI
 smoke, build each one. The CI smoke (`.github/workflows/ci.yml`) seeds `decode`
 with the fixtures and small HT files, `decode_partial` and `incremental_decode`
 from the `decode` corpus, `ht_block` with the HT corpus's code-blocks, and the
-JP2, header and ICC targets as above. It runs all ten targets for 15 to 60 s
-each, with `-timeout=30` and `-rss_limit_mb=4096`.
+JP2, header and ICC targets as above. It builds every target and runs ten
+of them for 15 to 60 s each, with `-timeout=30` and `-rss_limit_mb=4096`;
+it does not run `window_crop` or `retry_ladder`.
