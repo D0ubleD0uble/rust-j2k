@@ -1,12 +1,21 @@
-//! Stage-neutral pipeline data models.
+//! The decode pipeline: the orchestration that runs the stages, and the
+//! stage-neutral data models that flow between them.
 //!
-//! These types flow *between* stages, so they live apart from any one stage
+//! [`decode`] runs a decode from the input bytes to an image: the header
+//! checks, then each tile through Tier-2, Tier-1, the inverse DWT and the
+//! color transform, then image assembly. `report` builds what a decode with
+//! `strict` off says is missing.
+//!
+//! The types here flow *between* stages, so they live apart from any one stage
 //! that happens to produce them. The coefficient pyramid ([`Band`],
 //! [`DetailBands`], [`Bands`], [`SubbandCoeffs`]) is produced by a block coder
 //! and consumed by dequant and the inverse DWT; keeping it here lets a future
 //! HT block decoder produce it without depending on the EBCOT module purely for
 //! its types. [`Samples`] carries one component's reconstructed values from the
 //! inverse DWT through the color transform to image assembly.
+
+pub(crate) mod decode;
+mod report;
 
 /// One subband (or the coarsest LL): a row-major coefficient grid plus its
 /// tile-component origin. `data.len() == width * height`, addressed as
