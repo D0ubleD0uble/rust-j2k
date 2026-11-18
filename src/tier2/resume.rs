@@ -26,16 +26,35 @@ use super::{
     WorkRefusal, band_states, build_subbands, mark_gap, parse_packet, refused, tile_geometry, undo,
 };
 
+/// The bytes the walks kept may hold whatever the bytes fed, when that is
+/// more than [`KEPT_PER_BYTE`] bytes for each byte fed (see [`kept_room`]).
+const KEPT_MIN: u64 = 1 << 20;
+
+/// The bytes the walks kept may hold per byte fed, when that comes to more
+/// than [`KEPT_MIN`]. Of the committed fixtures fed 1 KB at a time, this
+/// keeps fewer walks than the image bound alone only for files made to test
+/// the work bounds, and for `sample_limit/rgb_6000x4000.jp2` until 64 KB of
+/// its 148 KB are in.
+const KEPT_PER_BYTE: u64 = 32;
+
+/// The bytes the walks kept may hold after `fed` bytes have been fed: the
+/// larger of [`KEPT_MIN`] and [`KEPT_PER_BYTE`] bytes per byte fed.
+pub(crate) fn kept_room(fed: u64) -> u64 {
+    KEPT_MIN.max(fed.saturating_mul(KEPT_PER_BYTE))
+}
+
 /// The packet walks of an incremental decode's tiles, by tile index.
 ///
 /// The walks kept hold no more than about twice what one decode of the
 /// same bytes holds at its peak: its image, and the packet walk of its
-/// largest tile, which it holds while it reads that tile. A walk's size
+/// largest tile, which it holds while it reads that tile. They also hold
+/// no more than [`kept_room`] of the bytes fed, so that a short file that
+/// declares a large image holds little between decodes. A walk's size
 /// is every heap allocation it holds, capacity included (see
 /// [`TileWalk::bytes`]), and a walk that has read all its packets lets go
 /// of its order, tag trees, counts and buffers. A tile whose walk would
-/// pass that is not kept: each decode walks its packets from the start,
-/// as a one-shot decode does.
+/// pass either bound is not kept: each decode walks its packets from the
+/// start, as a one-shot decode does, until the bytes fed make room for it.
 ///
 /// The walks do not decide when a refine decodes: the decoder tries on
 /// the first refine with at least one byte fed, then at each doubling of
@@ -79,7 +98,7 @@ impl Walks {
     /// refuses that one. `poc_bitmap`, `reduction` and `layers` are as
     /// [`super::decode_packets_partial`] takes them, and must be the same
     /// on every call for a tile. `image` is the bytes of the image the
-    /// decode returns.
+    /// decode returns, and `fed` the bytes the decode is of.
     ///
     /// A tile whose later tile-part adds `POC` volumes, or packed packet
     /// headers where it had none, has another order of packets, or reads
@@ -94,6 +113,7 @@ impl Walks {
         reduction: u8,
         layers: Option<u16>,
         image: u64,
+        fed: u64,
     ) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
         let index = tile.index as usize;
         if self.tiles.len() <= index {
@@ -115,7 +135,10 @@ impl Walks {
             self.tiles[index] = Slot::Empty;
         }
         let fits = |walks: &Walks, bytes: u64| {
-            let room = image.saturating_add(walks.largest).saturating_mul(2);
+            let room = image
+                .saturating_add(walks.largest)
+                .saturating_mul(2)
+                .min(kept_room(fed));
             walks.kept.saturating_add(bytes) <= room
         };
         // Whether the walk is new, so none of its visits is counted yet.
@@ -198,6 +221,12 @@ impl Walks {
             .filter(|s| matches!(s, Slot::Unkept { .. }))
             .count();
         (kept, unkept)
+    }
+
+    /// The bytes the walks kept hold, as [`TileWalk::bytes`] counts them.
+    #[cfg(test)]
+    pub(crate) fn kept_bytes(&self) -> u64 {
+        self.kept
     }
 
     /// The packet visits the walks have spent: the visits the decodes they

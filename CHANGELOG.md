@@ -11,6 +11,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - HTJ2K decoding is about 1.5x to 2x faster on large files on one thread.
   The output is unchanged.
 
+### Fixed
+
+- `IncrementalDecoder` holds packet walks between calls in proportion to the
+  bytes fed, not only to the image the file declares. The walks kept are
+  also held to the larger of 1 MiB and 32 bytes per byte fed. A file of 1228
+  bytes that declares a 16384 x 16384 image of 4 x 4 code-blocks held 640 MB
+  between calls and peaked at 1716 MB in a refine; it now holds no walk, and
+  a refine peaks at the 1076 MB one decode takes. A tile whose walk does not
+  fit is walked from the start by each refine until more bytes make room.
+  Every image, report and refusal is unchanged (#415).
+
 ## [0.5.0] - 2026-11-17
 
 ### Migrating from 0.4

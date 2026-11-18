@@ -57,17 +57,14 @@ use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
 /// Between calls the decoder keeps the bytes fed and the tiles' packet
 /// walks. The walks kept hold at most twice what one decode holds at its
 /// peak: twice the image's samples, plus twice the packet walk of the
-/// largest tile. A tile whose walk would pass that is walked from the start
-/// by each refine instead. Each refine also holds what [`decode_with`]
-/// holds for the same bytes, so the decoder holds at most about three
-/// times one decode's peak memory, plus the bytes fed.
-///
-/// That memory follows the image size the file declares, not the bytes fed:
-/// a file of 1228 bytes that declares a 16384 x 16384 image holds about
-/// 640 MB between calls, until the decoder is dropped. A server that keeps
-/// many slow streams open should check the size that
-/// [`read_header`](crate::read_header) reports before it feeds the rest of
-/// a file, or drop the decoders it is not refining.
+/// largest tile. They also hold at most the larger of 1 MiB and 32 bytes
+/// per byte fed, so a short file that declares a large image holds little
+/// between calls: a file of 1228 bytes that declares a 16384 x 16384 image
+/// holds no walk. A tile whose walk would pass either bound is walked from
+/// the start by each refine instead, until more bytes make room for it.
+/// Each refine also holds what [`decode_with`] holds for the same bytes,
+/// so the decoder holds at most about three times one decode's peak
+/// memory, plus the bytes fed.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, IncrementalDecoder};
@@ -201,7 +198,7 @@ impl IncrementalDecoder {
         // panics, the code-block work spent stays, and the walks start
         // again.
         let walks = std::mem::take(&mut self.spent.walks);
-        let ledger = Ledger::over(walks, self.spent.blocks);
+        let ledger = Ledger::over(walks, self.spent.blocks, fed as u64);
         let decoded = decode_metered(&self.bytes, &self.lenient, Some(&ledger));
         self.refused = ledger.work_refused.get();
         self.spent = ledger.into_spent();
@@ -335,6 +332,9 @@ pub(crate) struct Ledger {
     bound: Cell<Option<u64>>,
     /// Whether a work bound refused the last decode.
     work_refused: Cell<bool>,
+    /// The bytes the decode is of, which the walks kept are held to (see
+    /// [`Walks`]).
+    fed: u64,
 }
 
 impl fmt::Debug for Ledger {
@@ -343,19 +343,21 @@ impl fmt::Debug for Ledger {
             .field("blocks", &self.blocks)
             .field("bound", &self.bound)
             .field("work_refused", &self.work_refused)
+            .field("fed", &self.fed)
             .finish_non_exhaustive()
     }
 }
 
 impl Ledger {
     /// A ledger over the walks and the code-block work of the earlier
-    /// decodes.
-    fn over(walks: Walks, blocks: u64) -> Self {
+    /// decodes, for a decode of `fed` bytes.
+    fn over(walks: Walks, blocks: u64, fed: u64) -> Self {
         Ledger {
             walks: RefCell::new(walks),
             blocks: Cell::new(blocks),
             bound: Cell::new(None),
             work_refused: Cell::new(false),
+            fed,
         }
     }
 
@@ -394,9 +396,9 @@ impl Ledger {
         layers: Option<u16>,
         image: u64,
     ) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
-        self.walks
-            .borrow_mut()
-            .walk(header, tile, meter, poc_bitmap, reduction, layers, image)
+        self.walks.borrow_mut().walk(
+            header, tile, meter, poc_bitmap, reduction, layers, image, self.fed,
+        )
     }
 
     /// Record that a work bound refused a decode: the packet walk, the

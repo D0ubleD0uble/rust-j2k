@@ -169,22 +169,30 @@ all of its tile's packets, its progression order, tag trees, counts and
 buffers. One decode holds at its peak the samples of its image and the
 packet walk of the tile it is reading. The walks kept hold at most twice
 that: twice the image's samples (4 bytes each) plus twice the walk of the
-largest tile walked so far. Each walk's size counts every heap allocation it
-holds, capacity included. A tile whose walk would pass that is not kept, and
-each refine walks its packets from the start. Each refine holds what
+largest tile walked so far. They also hold at most the larger of 1 MiB and
+32 bytes per byte fed, so that the memory held between calls follows the
+input as well as the image the file declares. Each walk's size counts every
+heap allocation it holds, capacity included. A tile whose walk would pass
+either bound is not kept, and each refine walks its packets from the start,
+until the bytes fed make room for it. Of the committed fixtures fed 1 KB at
+a time, this keeps fewer walks than the image bound alone only for files
+made to test the work bounds, and for a 6000 x 4000 RGB file of 148 KB until
+64 KB of it are in. Each refine holds what
 `decode_with` holds for the same bytes on top of the walks kept, so the
 decoder holds at most about three times one decode's peak, plus the bytes
 fed. `tests/incremental_alloc.rs` counts the bytes held on files of many
 one-sample tiles of 512 components, in LRCP order and under 32 PCRL `POC`
-volumes, fed in pieces. The decoder is `Send` and `Sync`. The ledger's
-counters live only for the length of a decode.
+volumes, fed in pieces, and `tests/incremental_kept_alloc.rs` on a file of
+1228 bytes that declares a 2048 x 2048 image of 4 x 4 code-blocks. The
+decoder is `Send` and `Sync`. The ledger's counters live only for the
+length of a decode.
 
-The memory held follows the image size the file declares, not the bytes fed:
-a file of 1228 bytes that declares a 16384 x 16384 image holds about 640 MB
-between calls, until the decoder is dropped. A server that keeps many slow
-streams open should check the declared size with `read_header` before it
-feeds the rest of a file, or drop the decoders it is not refining
-([#415](https://github.com/D0ubleD0uble/rust-j2k/issues/415)).
+A file of 1228 bytes that declares a 16384 x 16384 image, in 64 tiles of
+4 x 4 code-blocks with every packet empty, holds no walk between calls: each
+tile's walk is about 10 MB, past the 1 MiB the bytes give. A refine of it
+holds what one decode holds, 1076 MB at its peak, and nothing is kept after
+it but the bytes. Each of its refines walks every tile from the start, which
+is the fourth cost below.
 
 Four costs are outside the bounds. The first three are outside one decode's
 work bounds too. Each refine that returns an image builds the whole image,
