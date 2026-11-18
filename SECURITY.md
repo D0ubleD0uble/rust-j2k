@@ -53,7 +53,8 @@ file past a limit is refused with `Error::Limit`, which is the guard working,
 not a bug. These figures cover the one-shot decode functions. An
 `IncrementalDecoder` keeps per-tile state between calls and can hold up to about
 three times one decode's peak, plus the bytes fed and a table of 24 bytes per
-tile index seen, about 1.5 MiB for 65535 tiles (see "Work and memory" in
+tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see
+"Work and memory" in
 [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits

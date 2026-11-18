@@ -608,7 +608,7 @@ def cmd_time(args):
 def cmd_incremental(args):
     work = work_dir()
     print(f"pieces of {PIECE} bytes; medians of {args.runs} in-process runs, ms")
-    print("| file | output check | one decode | 64 KB pieces | ratio |")
+    print("| file | output check | one decode | 64 KB pieces | ratio | ratio range over the rounds |")
     for name in INCREMENTAL:
         f = next(x for x in chosen(name) if x[0] == name)
         # The output check: finish() after the pieces must equal one decode.
@@ -624,9 +624,9 @@ def cmd_incremental(args):
             ) as b:
                 same = same and a.read() == b.read()
         if not same:
-            print(f"| {name} | DIFFERS | | | |")
+            print(f"| {name} | DIFFERS | | | | |")
             continue
-        one, inc = [], []
+        one, inc, rounds = [], [], []
         for _ in range(args.runs):
             for lst, extra in ((one, []), (inc, ["--incremental", str(PIECE)])):
                 r = subprocess.run(
@@ -635,8 +635,12 @@ def cmd_incremental(args):
                     text=True,
                 )
                 lst.append(float(r.stdout.split()[0]))
+            rounds.append(inc[-1] / one[-1])
         a, b = statistics.median(one), statistics.median(inc)
-        print(f"| {name} | identical | {a:.1f} | {b:.1f} | {b / a:.2f} |")
+        print(
+            f"| {name} | identical | {a:.1f} | {b:.1f} | {b / a:.2f} "
+            f"| {min(rounds):.2f} to {max(rounds):.2f} |"
+        )
 
 
 def main():
