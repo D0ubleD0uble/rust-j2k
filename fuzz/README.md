@@ -188,31 +188,32 @@ bytes. The control bytes:
 
 With bit 6 of byte 0, before some refines the target calls one of the
 decoder's setters, as a hash of the file picks: `set_resolution_reduction`
-(0 to 2, or 30, past any file's levels), `set_max_quality_layers` (none, or
-1 to 3) or `set_region` (the whole image, a window, tile 0 or 1). A layer cap
-of `Some(0)` or an empty window must be refused and leave the options as
-they were. Each refine after a change is checked under the options as they
-are then. An error holds for the bytes tried and the options it came under:
-a change clears it, and so does a change back. A walk kept across a change
-of the layer cap would give a wrong image, which the target catches. One
-kept across a change of the reduction gives the same image, since the
-reduction changes only the code-blocks the walk charges for the resolutions
-it drops, so the target does not see a walk that should have been let go
-there. Each
-refine that decodes goes on from the packet walks the earlier ones kept, and
-must give what `decode_with` gives with `strict` off on the bytes fed so far:
-the same image or the same error. After an error, each later refine must give
-it again, and `finish` must be the decode of the whole input. The decoder holds
-all its refines to the code-block limit together, and a one-shot decode holds
-only itself. So each refine that was due is checked by the decoder's own rule:
-it refuses (`Ok(None)`) if and only if the code-block work a decoder with
-nothing spent spends on the same bytes passes what is left of the bound after
-the work spent before it. The limit is at least 2^26 sample passes, which
-inputs of a few kilobytes do not come near, so each due refine also starts a
-probe decoder with work already spent (`rust_j2k::fuzz`), drawn around the most
-that leaves the refine room, and checks it by the same rule. A due refine may
-also give `Ok(None)` when the bound on the walks of tiles not kept, which all
-the refines spend together, refuses it
+(0 to 2, or 33, past the 32 levels a file may have), `set_max_quality_layers`
+(none, or 1 to 3) or `set_region` (the whole image, a window, tile 0 or 1). A
+layer cap of `Some(0)` or an empty window must be refused and leave the
+options as they were. Each refine after a change is checked under the options
+as they are then. Any real change of an option clears the error, even a
+change back to the options that gave it. A walk kept across a change of the
+layer cap would give a wrong image, which the target catches. One kept across
+a change of the reduction gives the same image, since the reduction changes
+only the code-blocks the walk charges for the resolutions it drops, so the
+target does not see a walk that should have been let go there.
+
+Each refine that decodes goes on from the packet walks the earlier ones kept,
+and must give what `decode_with` gives with `strict` off on the bytes fed so
+far: the same image or the same error. After an error, each later refine must
+give it again, and `finish` must be the decode of the whole input. The decoder
+holds all its refines to the code-block limit together, and a one-shot decode
+holds only itself. So each refine that was due is checked by the decoder's own
+rule: it refuses (`Ok(None)`) if and only if the code-block work a decoder
+with nothing spent spends on the same bytes passes what is left of the bound
+after the work spent before it. The limit is at least 2^26 sample passes,
+which inputs of a few kilobytes do not come near, so each due refine also
+starts a probe decoder with work already spent (`rust_j2k::fuzz`), drawn
+around the most that leaves the refine room, and checks it by the same rule.
+
+A due refine may also give `Ok(None)` when the bound on the walks of tiles not
+kept, which all the refines spend together, refuses it
 (`rust_j2k::fuzz::incremental_repeat_work`), even where the one-shot decode
 gives an image or an error. The visits those walks were charged must then be
 past `REPEAT_BOUNDS` times the refine's packet bound, which the hook reports;
@@ -220,13 +221,21 @@ the refusal's message is not read. A decoder with nothing spent must give the
 one-shot result, and when it kept every tile's walk it must have charged
 nothing: a single refine walks each tile once, and the first walk of a tile
 kept from its start is not charged. So a charge on a kept walk, which would
-turn a refine into `Ok(None)` past the bound, fails the target. Each input is decoded several times, so
-seed it with small files, such as the fixtures under 3 KB, and cap the input
-length (`-max_len=4096`). Even so it can be slow, since almost all its time
-goes to its own `decode_with` oracle decodes: from the fixtures under 3 KB
-it runs about 230 inputs a second, but on a corpus grown by earlier runs it
-has dropped to about 7 a second under ASan, and one 598-byte input took 13
-s. The name `incremental` is one Cargo reserves.
+turn a refine into `Ok(None)` past the bound, fails the target. The inputs
+that reach that bound are larger than `-max_len=4096`: the smallest known is
+`restarted_poc_tile(4, 8, 299)` from `tests/support/synth.rs`, 16 KB, whose
+fifth due refine an overcharge refuses. The unit test
+`fuzz::tests::incremental_target_repeat_check_holds_on_a_restarted_walk` runs
+the check on it in the normal suite, and writes it out as a seed (see
+Running).
+
+Each input is decoded several times, so seed it with small files, such as the
+fixtures under 3 KB, and cap the input length (`-max_len=4096`). Even so it
+can be slow, since almost all its time goes to its own `decode_with` oracle
+decodes: from the fixtures under 3 KB it runs about 230 inputs a second, but
+on a corpus grown by earlier runs it has dropped to about 7 a second under
+ASan, and one 598-byte input took 13 s. The name `incremental` is one Cargo
+reserves.
 
 `window_crop` checks a decode of part of the image against the whole
 decode. Eight control bytes pick a resolution reduction (0 to 2), one of
@@ -390,6 +399,13 @@ for f in $(find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '
   { printf '\100\0\0\0\0\0'; cat "$f"; } > "fuzz/corpus/incremental_decode/set_$(basename "$f")"
 done
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
+
+# The incremental target on an input that reaches the bound on the walks read
+# again (16 KB), written by a unit test. One run takes about 30 s.
+RUST_J2K_INCREMENTAL_SEED_DIR=fuzz/corpus/incremental_decode_large \
+  cargo test --lib fuzz::tests::incremental_target_repeat_check_holds_on_a_restarted_walk
+cargo +nightly fuzz run incremental_decode fuzz/corpus/incremental_decode_large -- \
+  -dict=fuzz/j2k.dict -max_len=32768 -max_total_time=300 -rss_limit_mb=4096
 
 # The window target, seeded as decode plus the window, JPH and small JP2 files.
 mkdir -p fuzz/corpus/window_crop

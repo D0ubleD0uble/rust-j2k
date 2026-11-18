@@ -18,14 +18,14 @@
 //! all the bytes under the decoder's options.
 //!
 //! With bit 6 of the first control byte, the input also changes the
-//! decoder's options before some refines: the reduction (0 to 2, or 30,
-//! past any file's levels), the layer cap (none, or 1 to 3), or the region
-//! (the whole image, a window, tile 0 or 1), as a hash of the file picks.
-//! Each refine after is checked under the options as they are then. A layer
-//! cap of `Some(0)` or an empty window must be refused and leave the options
-//! as they were. An error holds for the bytes tried and the options it came
-//! under: a change clears it, a change back too, and the refines after it
-//! give `Ok(None)` until the next one due decodes again.
+//! decoder's options before some refines: the reduction (0 to 2, or 33,
+//! past the 32 levels a file may have), the layer cap (none, or 1 to 3), or
+//! the region (the whole image, a window, tile 0 or 1), as a hash of the
+//! file picks. Each refine after is checked under the options as they are
+//! then. A layer cap of `Some(0)` or an empty window must be refused and
+//! leave the options as they were. Any real change of an option clears the
+//! error, even a change back to the options that gave it, and the refines
+//! after it give `Ok(None)` until the next one due decodes again.
 //!
 //! The first six input bytes steer the options, as `tile_body`'s first bytes
 //! steer its shape, so a small mutation of the file keeps them; the rest is
@@ -290,7 +290,7 @@ fn change(decoder: &mut IncrementalDecoder, options: &mut DecodeOptions, hash: u
     let wanted = match hash % 8 {
         0 => options
             .clone()
-            .with_resolution_reduction([0, 1, 2, 30][(pick % 4) as usize]),
+            .with_resolution_reduction([0, 1, 2, 33][(pick % 4) as usize]),
         1 => options.clone().with_max_quality_layers(
             [None, Some(0), Some(1), Some(2), Some(3)][(pick % 5) as usize],
         ),
