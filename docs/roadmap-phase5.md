@@ -30,7 +30,7 @@ that the decoder reads (decision 4), and every profile Part 1 defines
 | 5/3 reversible and 9/7 irreversible forward DWT, 0 to 32 levels | the decoder's inverse is the property-test partner |
 | DC level shift, RCT and ICT on components 0 to 2 | on by default for 3 or more components of equal geometry, as in OpenJPEG |
 | Scalar quantization: none (5/3), derived and expounded (9/7) | |
-| Depth 1 to 31 bits unsigned, 1 to 32 signed | the decoder's range; guard bits chosen so that no band overflows `i32` |
+| Depth 1 to 38 bits as SIZ allows, as long as every code-block needs at most 30 coded bit-planes, maxshift included | the decoder's cap (`MAX_BIT_PLANES`), which OpenJPEG shares; refused up front from the worst case (the plane rule, P5.3), so in practice about 27 bits for 5/3 with 2 guard bits (estimated; P5.2 and P5.3 measure it) |
 | MQ encoder and the three EBCOT passes | each pass's rate and distortion recorded for rate control |
 | All six code-block style bits | bypass, reset, restart, vertically causal, predictable termination, segmentation symbols |
 | Code-block sizes 4 to 1024 per side, area at most 4096 | OpenJPEG's encoder stops at 64×64 |
@@ -121,9 +121,16 @@ image. The source was read at tag `v2.5.0`.
 | Small images | refused: a 16×16 gray image fails at `-n 6` ("failed to encode image: opj_start_compress") and encodes at `-n 5` | measured |
 
 With `-I`: 9/7, ICT for 3 or more components, and expounded quantization
-(`qntsty=2`) with steps of `2^gain / norm(level, band)` (`gain` is 0 for
-9/7), encoded by `opj_dwt_encode_stepsize` (`dwt.c:1092`, `dwt.c:1966`). The
-steps do not depend on the rate: the rate comes only from truncation.
+(`qntsty=2`). The `QCD` carries `1 / norm(level, band)` with the exponent
+counted from the component depth alone: `opj_dwt_calc_explicit_stepsizes`
+uses a gain of 0 for 9/7 (`dwt.c:1966`), and `opj_dwt_encode_stepsize`
+encodes it (`dwt.c:1092`). The encoder then quantizes with the nominal
+subband gain added back (`log2_gain` in `tcd.c:1005`, which is 0 only when
+decoding), to match its forward transform, which scales the high-pass by `K`
+and the low-pass by `1/K` (`dwt.c:1076`). Its decoder and this crate's leave
+the gain out of the step and scale the inverse high-pass by `2/K`
+(`src/dwt.rs`, `src/quant.rs`). The steps do not depend on the rate: the rate
+comes only from truncation.
 
 What the encoder can write, from `j2k.c`: COC, QCC, POC, RGN, PLT, TLM, COM
 and the Part 2 MCT markers. There is no writer for PPM, PPT or CRG, and
@@ -383,7 +390,14 @@ Settled on 2026-11-17.
    A borrowed input view comes only with #303, so that input and output take
    the same sample types. `Image::jp2` is ignored on input: the JP2 boxes come
    from the options, because `Jp2Metadata` describes a file that was read,
-   not one to write.
+   not one to write. `Image::report` is ignored too: it describes what a
+   decode left out, and the encoder codes the samples it is given. The image
+   origin comes from #254, on the same grid as `width` and `height` (reduced
+   and windowed), so that the component sizes `ceil(x1/dx) − ceil(x0/dx)` and
+   the DWT parity come out right for any decoded `Image`. A palette-expanded
+   image can hold samples outside the depth its channels declare
+   (`src/image.rs`, `Component`), so encoding one is `InvalidImage`; sRGB
+   output clamps to the depth (`src/jp2/srgb.rs`) and encodes.
 2. **Rate is given in bits per pixel.** `Rate::Lossless` (all passes) is the
    default. `Rate::Layers` takes cumulative, increasing bits per pixel per
    layer, with a last layer of all passes allowed, and a `Rate::ratio` helper
@@ -410,9 +424,15 @@ Settled on 2026-11-17.
    cannot prove.
 5. **The encoder sits behind an `encode` cargo feature, on by default.** A new
    user gets it from `cargo add rust-j2k`. A decode-only user (fieldglass, or
-   wasm) sets `default-features = false` and compiles none of it. CI gains a
-   `cargo test --no-default-features` job. Tables the two sides share stay in
-   the decoder's modules. The `Cargo.toml` and CI edits are the maintainer's.
+   wasm) sets `default-features = false` and compiles none of it. The
+   feature is declared (`encode = []`, in `default`) before P5.0, whose tests
+   need it. Every encode test, bench (`required-features`) and `src/fuzz.rs`
+   entry is gated on it; `Error::InvalidImage` is not, so the error enum is
+   the same in both builds. CI gains `cargo test --no-default-features` and
+   `cargo clippy --no-default-features --all-targets -- -D warnings`. Code
+   both sides call stays in the decoder's modules; code only the encoder calls
+   lives in `src/encode/` or behind the feature, so a decode-only build has no
+   dead code. The `Cargo.toml` and CI edits are the maintainer's.
 6. **The reference tools are OpenJPEG, Grok and jpylyzer.** OpenJPEG 2.5.0 is
    the gate. Grok (20.4.25, built for performance.md) is a second decoder in a
    release round, and `grk_compress -U` is the field-level oracle for the
@@ -467,7 +487,7 @@ mirror](#which-defaults-to-mirror)).
 | --- | --------------------- | ---- | ---------- |
 | Decoded fixtures | every lossless fixture in `tests/fixtures/`, decoded by this decoder (already graded against OpenJPEG) | no new bytes | already |
 | Part 4 references | `tests/fixtures/conformance/references/*.pgx`, 78 files: the D.4 a) inputs | no new bytes | already; excluded from the crate |
-| Synthetic | a seeded generator in `tests/support/synth_image.rs`: noise, ramps, checkerboards, edges, flat fields; sizes from 1×1 to 1024×1024, including odd and prime sizes; 1 to 4 components; depths 1, 8, 12, 16 and 31 unsigned, 32 signed; sampling 1×1, 2×1 and 2×2 | none (generated) | the generator only |
+| Synthetic | a seeded generator in `tests/support/synth_image.rs`: noise, ramps, checkerboards, edges, flat fields; sizes from 1×1 to 1024×1024, including odd and prime sizes; 1 to 4 components; depths 1, 8, 12 and 16, and the measured plane ceiling and one bit over it; 31 unsigned and 32 signed only as reject cases, or at small magnitudes with no DWT where the plane rule allows (`tests/signed_32bit.rs` proves depth 32 only for small magnitudes); sampling 1×1, 2×1 and 2×2 | none (generated) | the generator only |
 | Profile frames | the same generator at the profiles' sizes: 2048×1080, 4096×2160, 1920×1080 and 8192×4320, 8 to 16 bits, 3 or 4 components, 4:4:4 and 4:2:2 | none (generated) | the generator only |
 | Profile snapshots | `tests/fixtures/encode/profiles.json`: per case, the header fields `opj_compress` or `grk_compress` wrote, and the digest of this encoder's output | about 20 KB, estimated | yes |
 | GRIB2 fields | the committed `jpeg2000_regular_latlon`, `eta_lambert_*` and GRIB2-shaped bench codestreams, decoded | no new bytes | already |
@@ -481,26 +501,31 @@ options, the tool versions and the command, in `tests/fixtures/README.md`.
 ## Build order and why
 
 ```text
-P5.0 harness ─┬─ P5.1 forward DWT ──┐
-              ├─ P5.2 forward MCT ──┤
-              ├─ P5.3 quantization ─┼─ P5.7 lossless file ─┬─ P5.8 9/7 fixed quant ─ P5.9 rate control ──────────────────┐
-              ├─ P5.4 MQ ─ P5.5 EBCOT passes ─┤            ├─ P5.10 tiles, sampling ─ P5.11 precincts + orders ─ P5.16 POC ┤
-              └─ P5.6 tag trees + packets ────┘            ├─ P5.12 code-block styles ─ P5.17 ROI ─────────────────────┤
+P5.0 harness ─ P5.0b decoder seams ─┬─ P5.1 forward DWT ──┐
+                                    ├─ P5.2 forward MCT ──┤
+                                    ├─ P5.3 quantization ─┼─ P5.7 lossless file ─┬─ P5.8 9/7 fixed quant ─ P5.9 rate control ──────────────────┐
+                                    ├─ P5.4 MQ ─ P5.5 EBCOT passes ─┤      ├─ P5.10 tiles, sampling ─ P5.11 precincts + orders ─ P5.16 POC ┤
+                                    └─ P5.6 tag trees + packets ────┘      ├─ P5.12 code-block styles ─ P5.17 ROI ─────────────────────┤
                                                            ├─ P5.13 markers + tile-parts ─ P5.15 COC/QCC ─ P5.18 PPM/PPT ┼─ P5.26 gate
                                                            └─ P5.14 JP2 writer ─ P5.19 palette ─────────────────────────┤
 P5.13 + P5.15 ─ P5.20 profile presets + rule checker ─┬─ P5.21 cinema 2K/4K ─ P5.22 scalable cinema + storage ─────────┤
    (P5.21, P5.22 also need P5.9, P5.11, P5.16;         ├─ P5.23 broadcast ─────────────────────────────────────────────┤
     P5.23, P5.24 also need P5.9, P5.10, P5.11)         └─ P5.24 IMF ───────────────────────────────────────────────────┤
 P5.25 fuzz targets + reject matrix (from P5.4, then throughout) ─────────────────────────────────────────────────────────┘
-Before P5.1: #142 (one coefficient type) and #254 (the origin on Image). #414 (the pipeline module) has landed (#447).
+Before P5.0: the `encode` feature declared. Before P5.7: #254 (the origin on Image). #414 has landed (#447).
 ```
 
-That is 27 steps, P5.0 to P5.26.
+That is 28 steps: P5.0, P5.0b and P5.1 to P5.26. The diagram's right-hand
+columns are schematic; the dependencies are the ones the lanes below list.
+
+P5.0b opens every decoder seam the encoder needs in one PR, before the
+parallel steps start, so that no two encoder steps edit the same decoder
+file and each refactor is checked once against the whole decoder suite.
 
 The stage pieces land first, each against its decoder inverse and an
 external oracle, before anything is wired together, as Phase 2 built the
-decoder stage by stage. P5.1 to P5.4 and P5.6 touch disjoint files and can
-run in parallel. P5.7 is the first file out. It fixes the API shape early, so
+decoder stage by stage. After P5.0b, P5.1 to P5.4 and P5.6 touch disjoint
+files and can run in parallel. P5.7 is the first file out. It fixes the API shape early, so
 later steps add options instead of reshaping it. Rate control (P5.9) follows
 a fixed-quantization 9/7 encode (P5.8), so that a rate bug cannot hide behind
 a transform bug.
@@ -533,31 +558,32 @@ that adds a marker appends its function to `markers.rs` and one call to
 
 | Step | Writes | Touches in the decoder |
 | ---- | ------ | ---------------------- |
-| P5.1 | `src/encode/dwt.rs` | `src/dwt.rs`: lifting constants made `pub(crate)` |
-| P5.2 | `src/encode/mct.rs` | `src/mct.rs`: constants only |
-| P5.3 | `src/encode/quant.rs` | `src/quant.rs`: the band gain and norm table, shared |
-| P5.4 | `src/encode/mq.rs` | `src/tier1/ebcot/mq.rs`: `QE_TABLE` is already `pub` |
-| P5.5 | `src/encode/passes.rs` | `src/tier1/ebcot/passes.rs`: context tables made `pub(crate)` |
-| P5.6 | `src/encode/tagtree.rs`, `src/encode/packet.rs` | `src/tier2/geometry.rs`, `progression.rs`: read only |
-| P5.7 | `src/encode/mod.rs`, `options.rs`, `codestream.rs`, `markers.rs`; `src/lib.rs` re-exports | `src/codestream/markers.rs`: shared structs |
+| P5.0b | none in `src/encode/` | every seam below (see P5.0b) |
+| P5.1 | `src/encode/dwt.rs` | uses `lift` and `lift_split` (`src/dwt.rs`), opened in P5.0b |
+| P5.2 | `src/encode/mct.rs` | none: the forward RCT and ICT share no code with the inverse |
+| P5.3 | `src/encode/quant.rs`: the gain and synthesis-norm tables, which the decoder does not have | none |
+| P5.4 | `src/encode/mq.rs` | uses `QE_TABLE` (already `pub`) and the H.2 vectors, opened in P5.0b |
+| P5.5 | `src/encode/passes.rs` | uses `src/tier1/ebcot/context.rs`, split out in P5.0b |
+| P5.6 | `src/encode/tagtree.rs`, `src/encode/packet.rs` | uses `resolution_geoms`, `band_rects`, `for_each_packet` and `next_segment`, re-exported in P5.0b |
+| P5.7 | `src/encode/mod.rs`, `options.rs`, `codestream.rs`, `markers.rs`; `src/lib.rs` re-exports | `src/codestream/markers.rs`: shared structs; `src/pipeline.rs`: module doc |
 | P5.8 | `src/encode/mod.rs` (9/7 branch) | none |
 | P5.9 | `src/encode/rate.rs` | none |
-| P5.10 | `src/encode/tile.rs` | none |
+| P5.10 | `src/encode/tile.rs` | uses the geometry re-exports of P5.0b |
 | P5.11 | `src/encode/packet.rs` | none |
-| P5.12 | `src/encode/passes.rs`, `src/encode/mq.rs` | none |
+| P5.12 | `src/encode/passes.rs`, `src/encode/mq.rs` | uses the segment and pass-mode helpers of P5.0b |
 | P5.13 | `src/encode/markers.rs`, `codestream.rs` | none |
-| P5.14 | `src/encode/jp2.rs` | `src/jp2/boxes.rs`: box type constants |
+| P5.14 | `src/encode/jp2.rs`, with its own box-type constants | none: the decoder has no box-type constants and `jp2::boxes` is private |
 | P5.15 | `src/encode/options.rs` (per-component and per-tile), `markers.rs`, `tile.rs` | none |
-| P5.16 | `src/encode/poc.rs`, `packet.rs`, `markers.rs` | `src/tier2/progression.rs`: read only |
-| P5.17 | `src/encode/roi.rs`, `passes.rs`, `markers.rs` | `src/tier1/ebcot/passes.rs`: `undo_maxshift`, read only |
+| P5.16 | `src/encode/poc.rs`, `packet.rs`, `markers.rs` | uses `check_poc_coverage`, re-exported in P5.0b |
+| P5.17 | `src/encode/roi.rs`, `passes.rs`, `markers.rs` | uses `undo_maxshift` (`pub(crate)`) and `top_coded_plane` (`pub`) as they are |
 | P5.18 | `src/encode/packed.rs`, `codestream.rs` | none |
-| P5.19 | `src/encode/jp2.rs`, `options.rs` | `src/jp2/palette.rs`: the public `Palette` type, read only |
+| P5.19 | `src/encode/jp2.rs`, `options.rs` | none: uses the public `Palette` type |
 | P5.20 | `src/encode/profile/mod.rs`, `profile/rules.rs`, `profile/check.rs`, `options.rs` | `src/codestream/mod.rs`: keep `Rsiz` and each tile-part's marker list in the parsed header, `pub(crate)` |
 | P5.21 | `src/encode/profile/cinema.rs` | none |
 | P5.22 | `src/encode/profile/cinema.rs` | none |
 | P5.23 | `src/encode/profile/broadcast.rs` | none |
 | P5.24 | `src/encode/profile/imf.rs` | none |
-| P5.25 | `fuzz/`, `src/encode/tests.rs` | `src/fuzz.rs` |
+| P5.25 | `fuzz/`, `src/encode/tests.rs` | `src/fuzz.rs`: new entries behind the `encode` feature |
 
 The collisions left are within lanes, which run in order (P5.10 and P5.15 on
 `tile.rs`; P5.12 and P5.17 on `passes.rs`; P5.14 and P5.19 on `jp2.rs`;
@@ -581,55 +607,138 @@ which run `opj_compress` and `opj_decompress` and write the two snapshots;
 `tests/encode_roundtrip.rs`, `tests/encode_crossdecode.rs` and
 `tests/encode_parity.rs`, each reporting *not yet encoded* per case through an
 `ENCODED` ratchet like `IN_CLASS`; a `cargo publish --dry-run` check that no
-new fixture ships.
+new fixture ships. Every test and bench added here is gated on the `encode`
+feature (benches through `required-features`), which the maintainer declares
+first (decision 5).
 
 **Oracle:** OpenJPEG's output only; this step is the harness.
 
 **Gate:** the parity snapshot holds OpenJPEG's figures for every case; every
-case reports *not yet encoded*; `cargo test` is green.
+case reports *not yet encoded*; `cargo test` is green with and without
+default features.
+
+### P5.0b — Open the decoder seams
+
+**Goal:** every decoder item the encoder shares is reachable and free of
+decode-only assumptions, in one behavior-preserving PR.
+
+**Work:**
+- `src/dwt.rs`: make the `lift` and `lift_split` sweeps `pub(crate)`, with
+  the lifting constants.
+- `src/tier1/ebcot/context.rs` (new): move the packed per-sample flag word,
+  the zero-coding and sign tables, and the context lookups out of
+  `passes.rs`, so the pass encoder reads the same tables.
+- `src/tier1/ebcot/passes.rs`: lift the raw-or-MQ and terminate rule out of
+  `decode_block` into a `pub(crate)` function of the style, the first coded
+  plane and the pass, which takes no reader.
+- `src/tier2/mod.rs`: re-export `band_rects` and `check_poc_coverage`
+  (`geometry` and `progression` are private modules), and make
+  `next_segment` `pub(crate)` with no reader in its signature.
+- `src/tier1/ebcot/mq.rs`: move the H.2 vectors out of the private test
+  module into a `#[cfg(test)] pub(crate)` item.
+- `src/error.rs`: `Inconsistent` reads "internal bug (please report it)", not
+  "decoder bug", since encoder paths can reach it.
+- `src/tier2/mod.rs`: a `Meter::unlimited()` constructor behind the `encode`
+  feature, for walks over the encoder's own geometry.
+
+**Oracle:** the whole decoder suite, unchanged, plus the decode benchmark on
+the HT and Part 1 rows of performance.md, since `passes.rs` and the context
+lookups are the hot path.
+
+**Gate:** every test passes with and without default features, clippy is
+clean in both builds, and no benchmark row moves by more than its noise.
 
 ### P5.1 — Forward DWT (`src/encode/dwt.rs`)
 
 **Goal:** the 5/3 and 9/7 analysis transforms over a tile-component, at any
-origin parity, with 0 to 32 levels.
+origin parity, with 0 to 32 levels, writing the `Bands<T>` layout the
+inverse reads (generic already, so no new coefficient type is needed).
 
-**Work:** lifting analysis with the same symmetric extension as the inverse,
-writing the `Bands` layout the decoder's inverse reads (one shared type after
-#142).
+**Work:** analysis on the shared `lift` and `lift_split` sweeps. The 9/7
+convention is the exact inverse of this decoder's: the low-pass scaled by
+`1/K` and the high-pass by `K/2` at every filtering, and no subband gain in
+the step (P5.3). OpenJPEG's encoder scales the high-pass by `K` and puts the
+nominal gain in the step instead. The two differ only by powers of two, which
+are exact in floating point, so on ordinary tile-components they should give
+the same quantization indices (estimated; this step measures it). They
+differ where a coarse resolution is empty and a coefficient is high-pass a
+different number of times than its nominal gain says (#126). There the
+per-filter convention is the one the decoders invert.
 
-**Oracle:** (1) property tests: `inverse(forward(x)) == x` exactly for 5/3,
-and within 1e-3 relative for 9/7, over random sizes from 1 to 300 per side,
-every origin parity and 0 to 8 levels; (2) external: on `opj_compress -n k`
-lossless 5/3 files, the coefficients our tier-1 decoder reads equal our
-forward 5/3 of the same image, bit for bit, for `k` from 1 to 6. With no
-quantization, the coded coefficients are the transform's output.
+**Oracle:**
+- Property: `inverse(forward(x)) == x` exactly for 5/3, and within 1e-3
+  relative for 9/7, over random sizes from 1 to 300 per side, every origin
+  parity and 0 to 8 levels, through the decoder's own inverse, which is the
+  exact partner of the `K/2` convention.
+- Property: the same coefficients equal a reference forward in OpenJPEG's
+  convention (`K`, then divided by `2^gain`), bit for bit on ordinary
+  shapes.
+- The #126 shapes (tile-components with empty coarse resolutions): the round
+  trip holds, and how OpenJPEG's own `-I` encode of the same shape differs is
+  measured and recorded.
+- External: on `opj_compress -n k` lossless 5/3 files, the coefficients our
+  tier-1 decoder reads equal our forward 5/3 of the same image, bit for bit,
+  for `k` from 1 to 6.
 
-**Gate:** both pass, and a mutation of each lifting step fails a test.
+**Gate:** all pass, and a mutation of each lifting step fails a test.
 
 ### P5.2 — Forward MCT and DC level shift (`src/encode/mct.rs`)
 
-**Goal:** the forward RCT and ICT, and the level shift.
+**Goal:** the forward RCT and ICT, and the level shift. Neither shares code
+with the inverse.
 
 **Oracle:** property: the inverse RCT of the forward RCT is the identity
 over the full range of each depth. External: at `-n 1` (no transform), the
 coefficients of `opj_compress -mct 1` read back by our tier-1 equal our
 forward RCT bit for bit, and our ICT is within 1 of `-I -mct 1 -n 1`'s.
 
-**Gate:** both pass at depths 1, 8, 16 and 31. Either the RCT's range holds
-at 31 bits unsigned, or such depths refuse the RCT with `InvalidOptions`;
-measure which first.
+**Work also:** measure the lossless depth ceiling under the 30-plane cap
+(P5.3) for 0 to 6 levels, with and without the RCT, which adds a bit to the
+two chroma components. The measured table goes into scope.md.
+
+**Gate:** both pass at depths 1, 8, 16 and the measured ceiling, and one bit
+above the ceiling is refused with `InvalidOptions`.
 
 ### P5.3 — Forward quantization (`src/encode/quant.rs`)
 
-**Goal:** step sizes and quantization indices for 9/7.
+**Goal:** step sizes and quantization indices for 9/7, and the plane rule.
+
+**Work:**
+- The step is the one the decoder reads (`half_step_of` in `src/quant.rs`):
+  `Δb = 2^(R − εb) · (1 + μb / 2^11)`, with `R` the component depth and no
+  subband gain. `εb` and `μb` are chosen as OpenJPEG chooses them,
+  `floor(8192 / norm_b)` encoded against the depth, so the `QCD` matches. The
+  index is `sign(c) · floor(|c| / Δb)` on coefficients from P5.1's `K/2`
+  forward, which equals OpenJPEG's quantization of its `K` forward with the
+  gain in the step. The gain table and the synthesis-norm table are new code
+  here; the decoder has neither. P5.9 reads the norms for its distortion.
+- **The plane rule.** A code-block's first coded plane is
+  `Mb + s − zero bit-planes`, with `Mb = G + εb − 1` (E.1) and `s` the
+  maxshift. Both decoders refuse more than 30 (`MAX_BIT_PLANES` in
+  `src/tier1/ebcot/passes.rs`, and OpenJPEG's `bpno_plus_one >= 31`). The
+  encoder refuses, with `InvalidOptions` before any coding, any options
+  whose worst case `Mb + s` exceeds 30 in some band: `Mb` from the declared
+  depth, the transform, the RCT and the guard bits. The worst case was chosen
+  over the actual data because the answer is then known from the options
+  alone: the same options either always work for an image shape or never
+  do, and a caller learns it before spending the encode. The cost is that a
+  high declared depth holding small values is refused even though its coded
+  planes would fit. A 31-bit unsigned image fits only with no DWT, no RCT and
+  0 guard bits, and a 32-bit signed one never fits (estimated from
+  `Mb = G + εb − 1`; P5.2 and this step measure it). The maxshift is the one
+  exception (P5.17): `s` depends on the data by definition, so its check
+  runs per block once `s` is known, still before any byte is written.
 
 **Oracle:** the `QCD` (`SPqcd` exponent and mantissa of every band) equals
 `opj_compress -I`'s byte for byte, at depths 1 to 16 and 0 to 10 levels, read
-with `opj_dump`. Property: the decoder's dequantization of our indices is
-within half a step of the input coefficient.
+with `opj_dump`. This depends on choosing `εb` and `μb` as OpenJPEG does, and
+P5.5's block-byte comparison further depends on the indices matching (P5.1).
+Property: the decoder's dequantization of our indices is within half a step
+of the input coefficient. The plane rule: every refused option set has a
+reject-matrix row, and the largest accepted depth at each level count
+decodes in both decoders.
 
-**Gate:** both pass. Guard bits keep every band within 31 magnitude planes,
-or the options are refused.
+**Gate:** all pass.
 
 ### P5.4 — MQ encoder (`src/encode/mq.rs`)
 
@@ -637,7 +746,8 @@ or the options are refused.
 termination and raw (bypass) variants.
 
 **Oracle:** the ITU-T T.88 H.2 test sequence: encoding its 256 decisions
-gives exactly the bytes the decoder's test already decodes. Property: our
+gives exactly the bytes the decoder's test already decodes (the shared
+vectors from P5.0b). Property: our
 `MqDecoder` decodes any random sequence of contexts and decisions we encode,
 in each termination mode.
 
@@ -661,7 +771,9 @@ where, and the gate keeps only the decoder round trip.
 ### P5.6 — Tag trees and packet headers (`src/encode/tagtree.rs`, `packet.rs`)
 
 **Goal:** tag-tree encoding and packet headers for one precinct: inclusion,
-zero bit-planes, pass counts, `Lblock` and lengths.
+zero bit-planes, pass counts, `Lblock` and lengths. Where a block's passes
+form several codeword segments, the split comes from the decoder's
+`next_segment` (P5.0b), so writer and reader cannot disagree on it.
 
 **Oracle:** our tier-2 parser reads every header we write back to the same
 fields (property); the B.10 examples written byte for byte; the headers of
@@ -681,6 +793,17 @@ with levels, block size, transform and MCT; validation of input and options
 `EncodeOptions` records, for every option, whether the caller set it, so
 that a profile preset (decision 9) can fill in only the unset ones;
 `benches/encode.rs` and an `encode` mode in `tools/perf/run.py`.
+
+Every option and the image are checked before any shared decoder helper
+runs. The helpers (`resolution_geoms`, `for_each_packet`) return decode
+errors (`Marker`, `Codestream`, a `Limit` "for a tile") and need a `Meter`;
+the encoder passes `Meter::unlimited()`, and a helper error during an encode
+is treated as a bug and reported as `Inconsistent`, never passed through. The
+encoder also refuses options that would make a tile hold more than the
+decoder's fixed caps of 2^18 precincts or 2^20 code-blocks, since no decode
+by this crate could read the result (see open questions). Two small edits
+ride along: `src/pipeline.rs`'s module doc stops calling itself "the decode
+pipeline", and `pipeline::report` may be renamed `pipeline::partial`.
 
 **Oracle:** the source image (lossless); `opj_decompress`; a byte comparison
 with `opj_compress` at the same settings with its COM marker removed. The
@@ -834,7 +957,11 @@ the first coded plane). Choose `s` one plane above the background's largest
 magnitude. H.1 needs only `2^s` above it, but OpenJPEG takes a coefficient as
 region one plane lower ([departures](openjpeg-departures.md#region-of-interest-threshold-part-1-and-ht)),
 and the spare plane makes both decoders sort every coefficient alike. Its
-cost is measured in this step.
+cost is measured in this step. The 30-plane cap (P5.3) counts the shift:
+since `s` is at least the background's planes, a region block needs about
+twice its own planes, so maxshift fits only at moderate depths (estimated
+around 12 to 14 bits; measured here). A block that would exceed the cap is
+refused with `InvalidOptions` naming the region, before any byte is written.
 
 **Oracle:**
 - lossless ROI encodes decode to the source in both decoders, for any
@@ -1075,7 +1202,8 @@ reject matrix in `src/encode/tests.rs` pins each refused option and input.
 
 **Work:** the scope.md encoding rows; roadmap.md; an encoder section in
 correctness.md; openjpeg-departures.md (the levels clamp, no COM, the ratio,
-the spare ROI plane, the POC sequences refused, profile conflicts refused
+the spare ROI plane, the POC sequences refused, the plane rule, the 9/7
+gain placed per filtering on #126 shapes, profile conflicts refused
 where OpenJPEG overrides or drops the profile, the IMF byte limit held, and
 any difference found);
 `docs/encoder-ics.md` (Annex F); an encoder table in performance.md;
@@ -1142,13 +1270,33 @@ input is samples.
 
 - **#414** (decode orchestration out of `lib.rs` into the pipeline module)
   landed as #447, so the encoder's orchestration does not grow `lib.rs`.
-- **#142** (one coefficient type for both wavelets) comes first, since the
-  forward path is the fourth copy that issue waits for.
-- **#254** (the image origin on `Image` and `Header`) comes first, so an
-  offset image round-trips through `&Image` with no extra option.
+- **The `encode` feature** (`encode = []`, on by default) is declared in
+  `Cargo.toml` before P5.0, with the two `--no-default-features` CI steps
+  (decision 5). Both are maintainer edits.
+- **#254** (the image origin on `Image` and `Header`) comes before P5.7, so
+  an offset image round-trips through `&Image` with no extra option. The
+  origin must be on the same grid as `width` and `height`:
+  `ceil(XOsiz / 2^r)` under a reduction, the window's corner under `region`.
+- **#142** (one coefficient type) is no longer a prerequisite: the forward
+  path reuses `Samples` and `SubbandCoeffs` and needs only `Bands<i32>`,
+  which the generic `Bands<T>` already gives.
+- **Should the encoder refuse a stream its own decoder refuses at the
+  default limits?** Recommended: yes for the fixed per-tile caps (2^18
+  precincts, 2^20 code-blocks), which no `DecodeOptions` can raise, so such
+  a file could never be read back by this crate; no for the sample limit
+  (2^29 by default), which a caller raises with an option, and which the
+  encoder's caller is already past, since it holds the image in memory. The
+  docs then say which limit to raise to read a large output back.
+- **The plane rule** (P5.3) is the worst case from the options. The other
+  choice, `εb` from each band's actual largest magnitude, would let a 32-bit
+  image of small values encode, as the stream `tests/signed_32bit.rs` reads
+  shows is legal, at the cost of a result that depends on the pixels and a
+  `QCD` that no longer matches OpenJPEG's. Recommended: the worst case for
+  0.6.0, with the data-derived exponents left as a possible option later.
 - **Whether our tier-1 bytes can match OpenJPEG's** is unmeasured (P5.5). The
   answer decides whether P5.7, P5.10 to P5.12 and P5.16 get byte comparisons
-  or only round trips.
+  or only round trips. For 9/7 it also depends on P5.1's indices matching
+  OpenJPEG's under the two gain conventions.
 - **The cost of the spare ROI plane** (P5.17) is unmeasured. If it is large,
   the alternative is the H.1 minimum with ROI cases graded by this decoder
   alone, which would need its own decision.
