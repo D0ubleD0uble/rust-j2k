@@ -106,8 +106,9 @@ fuzz_target!(|data: &[u8]| {
         let (dx, dy) = (u32::from(c.x_sampling), u32::from(c.y_sampling));
         c.width == at(xs, dx, r) - at(xo, dx, r) && c.height == at(ys, dy, r) - at(yo, dy, r)
     });
-    // The whole decode accepted this SIZ, so the tile origin is at or before
-    // the image's (B-7) and the subtractions below hold.
+    // A SIZ the decoder accepts has its tile origin at or before the image's
+    // (B-7), which the subtractions below need; the first `SOC SIZ` may not
+    // be the one it read, so check.
     if !fits || xto > xo || yto > yo {
         return;
     }

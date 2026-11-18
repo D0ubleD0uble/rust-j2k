@@ -214,23 +214,27 @@ The first input byte picks where each of the three limits starts
 (`Default`, or a factor of 1 or 2), a reduction of 0 or 1, and `strict`;
 the rest is the file. An input that starts with `FF 4F` or the JP2
 signature box is the whole file with a zero control byte: the default
-limits, reduction 0 and `strict` on. Each step must
-raise the option the refusal names to `retry_with`, strictly above where it
-was, and leave every other option as it was; a limit no option raises gives
-no retry. Raising a limit never turns an image into an error: when the
-default options decode, the ladder ends at an image with their samples, and
-otherwise at the image of a decode with no limits. A decode past a factor of
-4 can take longer than the timeout, so the ladder stops when a refusal asks
-for more, after that step is checked; more than 8 steps is a failure. An
-input over the fuzz sample budget (`common/budget.rs`) is only read for its
-header, and a sample limit refusal there is checked as one step with no
-decode. Seed it as `decode`, with the work-bound and sample-limit fixtures
-that the default limits refuse in under a second added: a packet work
-refusal that asks for a factor of 3 and one that asks for 8, a code-block
-work refusal that a factor of 2 admits, and a sample limit refusal of the
-header. The slower work-bound fixtures take 9 to 26 s each under the
-sanitizer build, so they are left out. `t1bomb_1024_64_88` takes about 7 s,
-over its default decode, the factor of 2 and the decode with no limits.
+limits, reduction 0 and `strict` on. Each step must raise the option the
+refusal names to `retry_with`, strictly above where it was, and leave every
+other option as it was; a limit no option raises gives no retry. Raising a
+limit never turns an image into an error: when the default limits decode,
+the ladder ends at an image with their samples, and otherwise at the
+samples of a decode with no limits. A decode past a factor of 4 can take
+longer than the timeout, so the ladder stops when a refusal asks for more,
+after that step is checked; more than 8 steps is a failure. An input over
+the fuzz sample budget (`common/budget.rs`) is only read for its header,
+and a sample limit refusal there is checked as one step with no decode.
+
+Seed it as `decode`, with six of the limit fixtures added. Four of them the
+default limits refuse: a packet work refusal that asks for a factor of 3
+(`pocspent_2tiles_60000_559`) and one that asks for 8
+(`pocvol_1024x512_1000_2`), each under a second; a code-block work refusal
+that a factor of 2 admits (`t1bomb_1024_64_88`, about 7 s over its three
+decodes); and a sample limit refusal of the header
+(`flat_32769x16385_tiled_lossless`). The other two, `t2bomb_2048x1024_1000`
+and `htbomb_1024_64_3`, are work-bound files that decode under the
+defaults. The remaining work-bound fixtures take 9 to 26 s each under the
+sanitizer build, so they are left out.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
@@ -350,6 +354,8 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-15 | `decode` with the strict-off capped decode | `tests/fixtures/*.j2k` (49 seeds), `j2k.dict` | 61 s, 21 641 runs; `nice -n 19`, one job; the 1-minute load was 7.6 | no crash, leak, or timeout |
 | 2026-11-15 | `decode` with the strict-off capped decode checked against the strict one (`common/partial.rs`), and the HT seeds | the 49 fixtures, the OpenJPH codestreams and the HT conformance codestreams under 6 KB, and what earlier runs kept (1197 inputs), `j2k.dict` with `CPF` and the HT style byte | 61 s, 24 746 runs; `nice -n 19`, one job; the 1-minute load was 5.8 | no crash, leak, or timeout |
 | 2026-11-15 | `tile_body` with the MIXED variant (bit 7 and bit 6 of the first byte) | one MIXED seed, `j2k.dict` | 56 s, 64 703 runs; `nice -n 19`, one job; the 1-minute load was 8.5; 281 of 1 556 corpus inputs pick MIXED | no crash, leak, or timeout |
+| 2026-11-17 | `window_crop` (new) | `decode`'s seeding and `tests/fixtures/window/*.j2k` (73 seeds), `j2k.dict` | 61 s, 33 062 runs; `nice -n 19`, one job; the 1-minute load was 7.6 | no failure. 709 of the 1 298 inputs it kept reach the comparison: 231 windows, 138 tiles, 121 subsets and 219 subsets through a window. With `Window` shifted one column right in the decoder, a seed fails on replay |
+| 2026-11-17 | `retry_ladder` (new) | `decode`'s seeding and the six limit fixtures above (73 seeds), `j2k.dict` | 61 s, 23 891 runs; `nice -n 19`, one job; the 1-minute load was 7.2 | no failure. Of the 875 inputs it kept, 11 take a step (6 sample, 2 packet work, 2 code-block work, and 1 fixed bit-plane refusal) and 4 compare the ladder's image with the default or unlimited one. With `with_retry` also raising `code_block_work_limit` on a packet work refusal, the seed `pocvol_1024x512_1000_2` fails on replay |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 
