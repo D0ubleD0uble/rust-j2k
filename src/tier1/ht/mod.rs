@@ -46,6 +46,7 @@ const MAX_LCUP: usize = 65535;
 /// The most coding passes of one HT set: cleanup, SigProp and MagRef (B.1).
 const HT_SET_PASSES: u32 = 3;
 
+#[cold]
 fn malformed(what: &str) -> Error {
     Error::codestream(format!("HT code-block {what}"))
 }
@@ -101,24 +102,31 @@ pub(super) struct Scratch {
     refinement: RefinementScratch,
 }
 
-/// The cleanup pass's significance and magnitude exponents, by quad-scan
-/// index.
+/// The cleanup pass's two rows of quads: the one above, which the context
+/// and the exponent predictor read, and the one being decoded.
 #[derive(Debug, Default)]
 struct CleanupScratch {
-    sigma: Vec<bool>,
-    exps: Vec<u32>,
+    above: Vec<QuadState>,
+    row: Vec<QuadState>,
 }
 
-/// The refinement passes' buffers, row-major over the block.
+/// The refinement passes' buffers.
 #[derive(Debug, Default)]
 struct RefinementScratch {
-    /// The samples the cleanup pass made significant.
-    sigma: Vec<bool>,
-    /// The samples SigProp made significant.
-    refined: Vec<bool>,
+    /// [`SIGMA`] and [`REFINED`] for each sample, row-major over the block
+    /// with a clear border of one sample around it, so every sample has all
+    /// eight neighbors.
+    state: Vec<u8>,
     /// The samples of one column-group SigProp makes significant.
     new: Vec<usize>,
 }
+
+/// In [`RefinementScratch::state`], a sample the cleanup pass made
+/// significant.
+const SIGMA: u8 = 1;
+
+/// In [`RefinementScratch::state`], a sample SigProp made significant.
+const REFINED: u8 = 2;
 
 /// Empty `buffer` and refill it with `len` default values, keeping its
 /// allocation.
@@ -309,54 +317,95 @@ impl Segment<'_> {
     }
 }
 
+/// The low `n` bits set, for `n` up to 63.
+fn low_bits(n: u32) -> u64 {
+    (1u64 << n) - 1
+}
+
+/// The fewest bits the buffered readers keep after a refill, unless their
+/// stream has ended: 64 less the most one byte adds, less one.
+const REFILL_BITS: u32 = 56;
+
 /// The MagSgn bit-stream: forward from byte 0, least significant bit first,
 /// with a stuffing bit after every 0xFF (`importMagSgnBit`, 7.1.2).
+///
+/// It loads whole bytes ahead into `acc` and hands out bits from its low
+/// end. A byte it cannot load (a set stuffing bit, or one past the end) ends
+/// the loading and is recorded in `end`; reading past the bits loaded before
+/// it gives that error, at the same bit a bit-at-a-time reader would.
 struct MagSgnReader {
+    /// The next byte to load.
     pos: usize,
-    bits: u32,
-    tmp: u32,
+    /// The last byte loaded, which decides whether the next has 7 bits.
     last: u32,
+    /// The bits loaded and not yet read, the next one in bit 0.
+    acc: u64,
+    /// How many bits of `acc` are loaded.
+    count: u32,
+    /// Why loading stopped, once it has.
+    end: Option<&'static str>,
 }
 
 impl MagSgnReader {
     fn new() -> Self {
         MagSgnReader {
             pos: 0,
-            bits: 0,
-            tmp: 0,
             last: 0,
+            acc: 0,
+            count: 0,
+            end: None,
         }
     }
 
-    fn bit(&mut self, seg: &Segment<'_>) -> Result<u32> {
-        if self.bits == 0 {
-            self.bits = if self.last == 0xFF { 7 } else { 8 };
-            if self.pos < seg.pcup {
-                self.tmp = u32::from(seg.byte(self.pos));
-                if self.tmp & (1 << self.bits) != 0 {
-                    return Err(malformed("MagSgn byte after 0xFF has its stuffing bit set"));
+    /// Load bytes until `acc` holds more than [`REFILL_BITS`] bits or the
+    /// stream ends.
+    fn refill(&mut self, seg: &Segment<'_>) {
+        while self.count <= REFILL_BITS && self.end.is_none() {
+            let bits = if self.last == 0xFF { 7 } else { 8 };
+            let byte = if self.pos < seg.pcup {
+                // Below `Pcup`, so not one of the two bytes `modDcup` changes.
+                let byte = u32::from(seg.data[self.pos]);
+                if byte & (1 << bits) != 0 {
+                    self.end = Some("MagSgn byte after 0xFF has its stuffing bit set");
+                    break;
                 }
+                byte
             } else if self.pos == seg.pcup {
                 // One 0xFF byte the encoder may have dropped is implied.
-                self.tmp = 0xFF;
+                0xFF
             } else {
-                return Err(malformed("MagSgn stream runs past its end"));
-            }
-            self.last = self.tmp;
+                self.end = Some("MagSgn stream runs past its end");
+                break;
+            };
+            self.acc |= (u64::from(byte) & low_bits(bits)) << self.count;
+            self.count += bits;
+            self.last = byte;
             self.pos += 1;
         }
-        let bit = self.tmp & 1;
-        self.tmp >>= 1;
-        self.bits -= 1;
-        Ok(bit)
     }
 
-    /// `decodeMagSgnValue` (7.3.8): `m` bits, least significant first.
+    #[cfg(test)]
+    fn bit(&mut self, seg: &Segment<'_>) -> Result<u32> {
+        // One bit fits `u32`.
+        self.value(seg, 1).map(|v| v as u32)
+    }
+
+    /// `decodeMagSgnValue` (7.3.8): `m` bits, least significant first, for
+    /// `m` up to 32.
+    #[inline]
     fn value(&mut self, seg: &Segment<'_>, m: u32) -> Result<u64> {
-        let mut val = 0u64;
-        for i in 0..m {
-            val |= u64::from(self.bit(seg)?) << i;
+        debug_assert!(m <= 32);
+        if self.count < m {
+            self.refill(seg);
+            if self.count < m {
+                return Err(malformed(
+                    self.end.unwrap_or("MagSgn stream runs past its end"),
+                ));
+            }
         }
+        let val = self.acc & low_bits(m);
+        self.acc >>= m;
+        self.count -= m;
         Ok(val)
     }
 }
@@ -403,6 +452,7 @@ impl MelDecoder {
         (self.tmp >> self.bits) & 1
     }
 
+    #[inline]
     fn symbol(&mut self, seg: &Segment<'_>) -> u32 {
         if self.run == 0 && !self.one {
             let mut eval = MEL_E[self.k];
@@ -432,12 +482,20 @@ impl MelDecoder {
 /// The VLC bit-stream: backward from byte `Lcup - 2`, least significant bit
 /// first, skipping the stuffing bit of a byte whose low seven bits are ones
 /// after a byte above 0x8F (`importVLCBit`, 7.1.4).
+///
+/// Like [`MagSgnReader`] it loads whole bytes ahead into `acc`. Bits past the
+/// last byte read as zeros in [`peek`](Self::peek), and
+/// [`consume`](Self::consume) refuses them, so a codeword that needs them is
+/// an error at the same bit as when read one at a time.
 struct VlcReader {
-    /// The next byte to read; below `Pcup` (or below 0) the stream is spent.
+    /// The next byte to load; below `Pcup` (or below 0) the stream is spent.
     pos: Option<usize>,
-    bits: u32,
-    tmp: u32,
+    /// The last byte loaded, which decides whether the next has 7 bits.
     last: u32,
+    /// The bits loaded and not yet read, the next one in bit 0.
+    acc: u64,
+    /// How many bits of `acc` are loaded.
+    count: u32,
 }
 
 impl VlcReader {
@@ -445,56 +503,93 @@ impl VlcReader {
         let lcup = seg.data.len();
         let last = u32::from(seg.byte(lcup - 2));
         let tmp = last >> 4;
+        let bits = if tmp & 7 < 7 { 4 } else { 3 };
         VlcReader {
             pos: lcup.checked_sub(3),
-            bits: if tmp & 7 < 7 { 4 } else { 3 },
-            tmp,
             last,
+            acc: u64::from(tmp) & low_bits(bits),
+            count: bits,
         }
     }
 
-    fn bit(&mut self, seg: &Segment<'_>) -> Result<u32> {
-        if self.bits == 0 {
-            let pos = self
-                .pos
-                .filter(|&pos| pos >= seg.pcup)
-                .ok_or_else(|| malformed("VLC stream runs into the MagSgn bytes"))?;
-            self.tmp = u32::from(seg.byte(pos));
-            self.bits = if self.last > 0x8F && self.tmp & 0x7F == 0x7F {
+    /// Load bytes until `acc` holds more than [`REFILL_BITS`] bits or the
+    /// stream reaches the MagSgn bytes.
+    fn refill(&mut self, seg: &Segment<'_>) {
+        while self.count <= REFILL_BITS {
+            let Some(pos) = self.pos.filter(|&pos| pos >= seg.pcup) else {
+                break;
+            };
+            // At most `Lcup - 3`, so not one of the bytes `modDcup` changes.
+            let byte = u32::from(seg.data[pos]);
+            let bits = if self.last > 0x8F && byte & 0x7F == 0x7F {
                 7
             } else {
                 8
             };
-            self.last = self.tmp;
+            self.acc |= (u64::from(byte) & low_bits(bits)) << self.count;
+            self.count += bits;
+            self.last = byte;
             self.pos = pos.checked_sub(1);
         }
-        let bit = self.tmp & 1;
-        self.tmp >>= 1;
-        self.bits -= 1;
-        Ok(bit)
     }
 
-    /// `n` bits, least significant first.
+    /// The next bits, at least `n` of them (up to [`REFILL_BITS`]) loaded
+    /// unless the stream ends first; the bits past its end read as zeros.
+    #[inline]
+    fn peek(&mut self, seg: &Segment<'_>, n: u32) -> u64 {
+        if self.count < n {
+            self.refill(seg);
+        }
+        self.acc
+    }
+
+    /// Drop `n` bits that [`peek`](Self::peek) showed, refusing any past the
+    /// end of the stream.
+    #[inline]
+    fn consume(&mut self, n: u32) -> Result<()> {
+        if n > self.count {
+            return Err(malformed("VLC stream runs into the MagSgn bytes"));
+        }
+        self.acc >>= n;
+        self.count -= n;
+        Ok(())
+    }
+
+    #[inline]
+    fn bit(&mut self, seg: &Segment<'_>) -> Result<u32> {
+        self.bits(seg, 1)
+    }
+
+    /// `n` bits, least significant first, for `n` up to 32.
+    #[inline]
     fn bits(&mut self, seg: &Segment<'_>, n: u32) -> Result<u32> {
-        let mut val = 0;
-        for i in 0..n {
-            val |= self.bit(seg)? << i;
-        }
-        Ok(val)
+        debug_assert!(n <= 32);
+        let val = self.peek(seg, n) & low_bits(n);
+        self.consume(n)?;
+        // At most 32 bits.
+        Ok(val as u32)
     }
 
-    /// `decodeUPrefix` (7.3.6).
+    /// `decodeUPrefix` (7.3.6): the prefix codewords `1`, `01`, `001` and
+    /// `000`, first bit lowest.
+    #[inline]
     fn u_prefix(&mut self, seg: &Segment<'_>) -> Result<u32> {
-        if self.bit(seg)? == 1 {
-            return Ok(1);
-        }
-        if self.bit(seg)? == 1 {
-            return Ok(2);
-        }
-        Ok(if self.bit(seg)? == 1 { 3 } else { 5 })
+        let bits = self.peek(seg, 3);
+        let (prefix, len) = if bits & 1 == 1 {
+            (1, 1)
+        } else if bits & 2 == 2 {
+            (2, 2)
+        } else if bits & 4 == 4 {
+            (3, 3)
+        } else {
+            (5, 3)
+        };
+        self.consume(len)?;
+        Ok(prefix)
     }
 
     /// `decodeUSuffix` (7.3.6).
+    #[inline]
     fn u_suffix(&mut self, seg: &Segment<'_>, prefix: u32) -> Result<u32> {
         match prefix {
             0..3 => Ok(0),
@@ -504,6 +599,7 @@ impl VlcReader {
     }
 
     /// `decodeUExtension` (7.3.6).
+    #[inline]
     fn u_extension(&mut self, seg: &Segment<'_>, suffix: u32) -> Result<u32> {
         if suffix < 28 {
             Ok(0)
@@ -522,17 +618,43 @@ struct QuadInfo {
     e_1: u8,
 }
 
-/// A CxtVLC table as a lookup: `[c][len][cwd]` holds one more than the index
-/// of the row whose `len`-bit codeword is `cwd` in context `c`, or 0.
-type VlcLookup = [[[u16; 128]; 8]; 8];
+/// The longest CxtVLC codeword, in bits.
+const MAX_CWD_BITS: u32 = 7;
 
+/// A CxtVLC table as a lookup: `[c][bits]`, for context `c` and the next
+/// seven bits of the stream (first bit lowest), holds the codeword those
+/// bits start with, packed as `len | rho << 3 | u_off << 7 | e_k << 8 |
+/// e_1 << 12`, or 0 when none does. Each context is a complete prefix code,
+/// so every entry is set; a 0 would be read as no codeword.
+type VlcLookup = [[u16; 1 << MAX_CWD_BITS]; 8];
+
+/// Fill each entry with the shortest codeword the bits start with. Longer
+/// rows go in first and shorter ones over them, so a bit string that starts
+/// with two codewords (which a prefix code never has) would take the one a
+/// bit-at-a-time read finds first.
 const fn lookup(table: &[[u8; 7]]) -> VlcLookup {
-    let mut out = [[[0u16; 128]; 8]; 8];
-    let mut i = 0;
-    while i < table.len() {
-        let [c, _, _, _, _, w, l_w] = table[i];
-        out[c as usize][l_w as usize][w as usize] = i as u16 + 1;
-        i += 1;
+    let mut out = [[0u16; 1 << MAX_CWD_BITS]; 8];
+    let mut len = MAX_CWD_BITS as u8;
+    while len >= 1 {
+        let mut i = 0;
+        while i < table.len() {
+            let [c, rho, u_off, e_k, e_1, w, l_w] = table[i];
+            if l_w == len {
+                let packed = len as u16
+                    | (rho as u16) << 3
+                    | (u_off as u16) << 7
+                    | (e_k as u16) << 8
+                    | (e_1 as u16) << 12;
+                // Every 7-bit string whose low `len` bits are `w`.
+                let mut high = 0usize;
+                while high < 1 << (MAX_CWD_BITS as usize - len as usize) {
+                    out[c as usize][high << len | w as usize] = packed;
+                    high += 1;
+                }
+            }
+            i += 1;
+        }
+        len -= 1;
     }
     out
 }
@@ -540,37 +662,40 @@ const fn lookup(table: &[[u8; 7]]) -> VlcLookup {
 static VLC_LOOKUP_0: VlcLookup = lookup(&CXT_VLC_TABLE_0);
 static VLC_LOOKUP_1: VlcLookup = lookup(&CXT_VLC_TABLE_1);
 
-/// `decodeCxtVLC` (7.3.5): read bits until they spell a codeword of context
-/// `c` in the table of the first row of quads or of a later one.
+/// `decodeCxtVLC` (7.3.5): the codeword of context `c` the next bits spell,
+/// in the table of the first row of quads or of a later one.
+#[inline(always)]
 fn decode_cxt_vlc(
     vlc: &mut VlcReader,
     seg: &Segment<'_>,
     first_row: bool,
     c: u8,
 ) -> Result<QuadInfo> {
-    let (table, lookup): (&[[u8; 7]], &VlcLookup) = if first_row {
-        (&CXT_VLC_TABLE_0, &VLC_LOOKUP_0)
+    let lookup = if first_row {
+        &VLC_LOOKUP_0
     } else {
-        (&CXT_VLC_TABLE_1, &VLC_LOOKUP_1)
+        &VLC_LOOKUP_1
     };
-    let mut cwd = 0usize;
-    // Entry 0 of each context is for zero-bit codewords, which no row has.
-    for (len, codewords) in lookup[usize::from(c)].iter().enumerate().skip(1) {
-        cwd |= (vlc.bit(seg)? as usize) << (len - 1);
-        let hit = codewords[cwd];
-        if hit != 0 {
-            let [_, rho, u_off, e_k, e_1, _, _] = table[usize::from(hit - 1)];
-            return Ok(QuadInfo {
-                rho,
-                u_off: u_off == 1,
-                e_k,
-                e_1,
-            });
-        }
+    let bits = vlc.peek(seg, MAX_CWD_BITS) & low_bits(MAX_CWD_BITS);
+    // `bits` is below 128.
+    let hit = lookup[usize::from(c)][bits as usize];
+    let len = u32::from(hit & 7);
+    if len == 0 {
+        // A read one bit at a time would run out of bits before it gave up
+        // on a short stream.
+        vlc.consume(MAX_CWD_BITS)?;
+        return Err(malformed(&format!(
+            "VLC bits match no CxtVLC codeword of context {c}"
+        )));
     }
-    Err(malformed(&format!(
-        "VLC bits match no CxtVLC codeword of context {c}"
-    )))
+    vlc.consume(len)?;
+    // Each field is masked to its width before the cast.
+    Ok(QuadInfo {
+        rho: (hit >> 3 & 0xF) as u8,
+        u_off: hit >> 7 & 1 == 1,
+        e_k: (hit >> 8 & 0xF) as u8,
+        e_1: (hit >> 12 & 0xF) as u8,
+    })
 }
 
 /// The cleanup pass of one block: its three streams and its geometry.
@@ -597,104 +722,100 @@ impl Cleanup<'_> {
     fn run(mut self, coeffs: &mut [i32], scratch: &mut CleanupScratch) -> Result<()> {
         let qw = self.qw;
         let qh = self.height.div_ceil(2);
-        // Significance and magnitude exponent of every sample, by its
-        // quad-scan index `n = 4q + j` (7.2): `j` is 0 top-left, 1
-        // bottom-left, 2 top-right, 3 bottom-right. Both start cleared:
-        // only significant samples write an exponent.
-        let CleanupScratch { sigma, exps } = scratch;
-        zeroed(sigma, 4 * qw * qh);
-        zeroed(exps, 4 * qw * qh);
-        let (sigma, exps) = (sigma.as_mut_slice(), exps.as_mut_slice());
+        // The quads of the row above and of this one. Every quad of a row is
+        // written before the next row reads it, so neither needs clearing.
+        let CleanupScratch { above, row } = scratch;
+        zeroed(above, qw);
+        zeroed(row, qw);
         for qy in 0..qh {
             let first_row = qy == 0;
-            for qx in (0..qw).step_by(2) {
-                let q1 = qy * qw + qx;
-                // With an odd `QW` the last pair of a row has one quad.
-                let quads = [q1, q1 + 1];
-                let pair = &quads[..if qx + 1 < qw { 2 } else { 1 }];
-                let mut info = [QuadInfo::default(); 2];
-                for (slot, &q) in pair.iter().enumerate() {
-                    let c = self.context(sigma, q);
-                    info[slot] = self.sig_emb(first_row, c)?;
-                    for j in 0..4 {
-                        let on = info[slot].rho >> j & 1 == 1;
-                        if on && !self.inside(q, j) {
-                            return Err(malformed("codes a significant sample outside the block"));
-                        }
-                        sigma[4 * q + j] = on;
-                    }
+            // Whether the bottom row of this row's quads lies inside the
+            // block; it does not in the last row of an odd height.
+            let bottom = 2 * qy + 1 < self.height;
+            let mut qx = 0;
+            while qx < qw {
+                // With an odd `QW` the last pair of a row has one quad. The
+                // missing second quad reads as insignificant, with no
+                // residual, so it reads no bits.
+                let pair = qx + 1 < qw;
+                let first = self.quad(first_row, bottom, above, row, qx)?;
+                let second = if pair {
+                    self.quad(first_row, bottom, above, row, qx + 1)?
+                } else {
+                    QuadInfo::default()
+                };
+                let u = self.residuals(first_row, [first, second])?;
+                row[qx].exps =
+                    self.quad_magnitudes(first_row, above, qx, qy, first, u[0], coeffs)?;
+                if pair {
+                    row[qx + 1].exps =
+                        self.quad_magnitudes(first_row, above, qx + 1, qy, second, u[1], coeffs)?;
                 }
-                let u = self.residuals(first_row, &info[..pair.len()])?;
-                for (slot, &q) in pair.iter().enumerate() {
-                    let kappa = if first_row {
-                        1
-                    } else {
-                        self.predictor(exps, q, info[slot].rho)
-                    };
-                    let bound = kappa + u[slot];
-                    if bound > self.max_u {
-                        // `max_u` is `P + 2`, at most the cap; the cap's message also holds
-                        // when `P` is exactly 30 and nothing was capped.
-                        return Err(malformed(&if self.max_u == MAX_BIT_PLANES + 2 {
-                            format!(
-                                "exponent bound U_q = {bound} exceeds {}, the most a block can code (zero \
-                                 bit-planes + 2, at most {0})",
-                                self.max_u
-                            )
-                        } else {
-                            format!(
-                                "exponent bound U_q = {bound} exceeds zero bit-planes + 2 = {}",
-                                self.max_u
-                            )
-                        }));
-                    }
-                    self.magnitudes(q, info[slot], bound, exps, coeffs)?;
-                }
+                qx += 2;
             }
+            std::mem::swap(above, row);
         }
         Ok(())
     }
 
-    /// Whether sample `j` of quad `q` lies inside the block.
-    fn inside(&self, q: usize, j: usize) -> bool {
-        let x = 2 * (q % self.qw) + (j >> 1);
-        let y = 2 * (q / self.qw) + (j & 1);
-        x < self.width && y < self.height
+    /// Decode the significance of the quad at column `qx` (7.3.5), refuse a
+    /// significant sample outside the block, and record its `rho` in `row`.
+    #[inline(always)]
+    fn quad(
+        &mut self,
+        first_row: bool,
+        bottom: bool,
+        above: &[QuadState],
+        row: &mut [QuadState],
+        qx: usize,
+    ) -> Result<QuadInfo> {
+        let c = if first_row {
+            first_row_context(row, qx)
+        } else {
+            context(above, row, qx)
+        };
+        let info = self.sig_emb(first_row, c)?;
+        // The samples inside the block, as a `rho` mask: the right column is
+        // outside in the last quad of an odd width.
+        let right = 2 * qx + 1 < self.width;
+        let inside =
+            1 | u8::from(bottom) << 1 | u8::from(right) << 2 | u8::from(bottom && right) << 3;
+        if info.rho & !inside != 0 {
+            return Err(malformed("codes a significant sample outside the block"));
+        }
+        row[qx].rho = info.rho;
+        Ok(info)
     }
 
-    /// The context `c_q` of quad `q` from its decoded neighbors (7.3.5).
-    fn context(&self, sigma: &[bool], q: usize) -> u8 {
-        let qw = self.qw;
-        let s = |n: usize| u8::from(sigma[n]);
-        // The quad to the left, in the same row: its right column.
-        let (w, sw) = if !q.is_multiple_of(qw) {
-            (s(4 * q - 2), s(4 * q - 1))
+    /// The exponent bound `U_q = kappa_q + u_q` of the quad at column `qx`
+    /// (7.3.7), checked, then its magnitudes; returns their exponents.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn quad_magnitudes(
+        &mut self,
+        first_row: bool,
+        above: &[QuadState],
+        qx: usize,
+        qy: usize,
+        info: QuadInfo,
+        u: u32,
+        coeffs: &mut [i32],
+    ) -> Result<[u32; 4]> {
+        let kappa = if first_row {
+            1
         } else {
-            (0, 0)
+            predictor(above, qx, info.rho)
         };
-        if q < qw {
-            let (f, sf) = if q > 0 {
-                (s(4 * q - 4), s(4 * q - 3))
-            } else {
-                (0, 0)
-            };
-            (f | sf) + 2 * w + 4 * sw
-        } else {
-            let up = 4 * (q - qw);
-            let n = s(up + 1);
-            let ne = s(up + 3);
-            let nw = if !q.is_multiple_of(qw) { s(up - 1) } else { 0 };
-            let nf = if !(q + 1).is_multiple_of(qw) {
-                s(up + 5)
-            } else {
-                0
-            };
-            (nw | n) + 2 * (w | sw) + 4 * (ne | nf)
+        let bound = kappa + u;
+        if bound > self.max_u {
+            return Err(bound_error(bound, self.max_u));
         }
+        self.magnitudes(qx, qy, info, bound, coeffs)
     }
 
     /// `decodeSigEMB` (7.3.5): an all-zero-context quad first asks MEL
     /// whether it is significant at all.
+    #[inline(always)]
     fn sig_emb(&mut self, first_row: bool, c: u8) -> Result<QuadInfo> {
         if c == 0 && self.mel.symbol(&self.seg) == 0 {
             return Ok(QuadInfo::default());
@@ -703,13 +824,15 @@ impl Cleanup<'_> {
     }
 
     /// The unsigned residuals `u_q` of a quad-pair (7.3.4, 7.3.6): prefixes,
-    /// then suffixes, then extensions, first quad before second.
-    fn residuals(&mut self, first_row: bool, info: &[QuadInfo]) -> Result<[u32; 2]> {
+    /// then suffixes, then extensions, first quad before second. A lone last
+    /// quad comes with a second that has no residual (`u_off` clear).
+    #[inline(always)]
+    fn residuals(&mut self, first_row: bool, info: [QuadInfo; 2]) -> Result<[u32; 2]> {
         let seg = self.seg;
-        let both = info.len() == 2 && info[0].u_off && info[1].u_off;
+        let [first, second] = info;
         let mut prefix = [0u32; 2];
         let mut offset = 0;
-        if first_row && both {
+        if first_row && first.u_off && second.u_off {
             if self.mel.symbol(&seg) == 1 {
                 offset = 2;
                 prefix = [self.vlc.u_prefix(&seg)?, self.vlc.u_prefix(&seg)?];
@@ -722,57 +845,46 @@ impl Cleanup<'_> {
                 };
             }
         } else {
-            for (p, quad) in prefix.iter_mut().zip(info) {
-                if quad.u_off {
-                    *p = self.vlc.u_prefix(&seg)?;
-                }
+            if first.u_off {
+                prefix[0] = self.vlc.u_prefix(&seg)?;
+            }
+            if second.u_off {
+                prefix[1] = self.vlc.u_prefix(&seg)?;
             }
         }
-        let mut suffix = [0u32; 2];
-        for (s, &p) in suffix.iter_mut().zip(&prefix) {
-            *s = self.vlc.u_suffix(&seg, p)?;
-        }
+        let suffix = [
+            self.vlc.u_suffix(&seg, prefix[0])?,
+            self.vlc.u_suffix(&seg, prefix[1])?,
+        ];
         let mut u = [0u32; 2];
-        for ((u, quad), (&p, &s)) in u.iter_mut().zip(info).zip(prefix.iter().zip(&suffix)) {
-            if quad.u_off {
-                *u = offset + p + s + 4 * self.vlc.u_extension(&seg, s)?;
-            }
+        if first.u_off {
+            u[0] = offset + prefix[0] + suffix[0] + 4 * self.vlc.u_extension(&seg, suffix[0])?;
+        }
+        if second.u_off {
+            u[1] = offset + prefix[1] + suffix[1] + 4 * self.vlc.u_extension(&seg, suffix[1])?;
         }
         Ok(u)
     }
 
-    /// The exponent predictor `kappa_q` of quad `q` below the first row
-    /// (7.3.7), from the exponents of the row above.
-    fn predictor(&self, exps: &[u32], q: usize, rho: u8) -> u32 {
-        if rho.count_ones() < 2 {
-            return 1;
-        }
-        let qw = self.qw;
-        let up = 4 * (q - qw);
-        let mut e = exps[up + 1].max(exps[up + 3]);
-        if !q.is_multiple_of(qw) {
-            e = e.max(exps[up - 1]);
-        }
-        if !(q + 1).is_multiple_of(qw) {
-            e = e.max(exps[up + 5]);
-        }
-        e.saturating_sub(1).max(1)
-    }
-
-    /// Read quad `q`'s magnitudes and signs from MagSgn (7.3.8), record their
-    /// exponents, and write its samples.
+    /// Read the magnitudes and signs of the quad at column `qx` of quad row
+    /// `qy` from MagSgn (7.3.8), write its samples, and return their
+    /// exponents, by `j` (0 for an insignificant sample).
+    #[inline(always)]
     fn magnitudes(
         &mut self,
-        q: usize,
+        qx: usize,
+        qy: usize,
         info: QuadInfo,
         bound: u32,
-        exps: &mut [u32],
         coeffs: &mut [i32],
-    ) -> Result<()> {
-        for j in 0..4 {
-            if info.rho >> j & 1 == 0 {
-                continue;
-            }
+    ) -> Result<[u32; 4]> {
+        let mut exps = [0u32; 4];
+        let top_left = 2 * qy * self.width + 2 * qx;
+        // The significant samples, lowest `j` first.
+        let mut rho = info.rho;
+        while rho != 0 {
+            let j = rho.trailing_zeros() as usize;
+            rho &= rho - 1;
             let k = u32::from(info.e_k >> j & 1);
             let i = u64::from(info.e_1 >> j & 1);
             let m = bound - k;
@@ -785,18 +897,86 @@ impl Cleanup<'_> {
                     "cleanup magnitude {mu} is not below 2^{bits}, the bound `CAP` signals"
                 )));
             }
-            exps[4 * q + j] = 64 - (2 * mu - 1).leading_zeros();
+            exps[j] = 64 - (2 * mu - 1).leading_zeros();
             // Within the exponent bound, a `mu` with more bits than the block
             // codes (7.6) can still overflow `i32`, shifted up by the
             // cleanup plane.
             let magnitude = i32::try_from((2 * mu + 1) << self.shift)
                 .map_err(|_| malformed("codes a magnitude past its bit-planes"))?;
-            let x = 2 * (q % self.qw) + (j >> 1);
-            let y = 2 * (q / self.qw) + (j & 1);
-            coeffs[y * self.width + x] = if v & 1 == 1 { -magnitude } else { magnitude };
+            // `j` is 0 top-left, 1 bottom-left, 2 top-right, 3 bottom-right.
+            let n = top_left + (j & 1) * self.width + (j >> 1);
+            coeffs[n] = if v & 1 == 1 { -magnitude } else { magnitude };
         }
-        Ok(())
+        Ok(exps)
     }
+}
+
+/// The error for a quad whose exponent bound `U_q` is over `max_u`.
+#[cold]
+fn bound_error(bound: u32, max_u: u32) -> Error {
+    // `max_u` is `P + 2`, at most the cap; the cap's message also holds when
+    // `P` is exactly 30 and nothing was capped.
+    malformed(&if max_u == MAX_BIT_PLANES + 2 {
+        format!(
+            "exponent bound U_q = {bound} exceeds {max_u}, the most a block can code (zero \
+             bit-planes + 2, at most {max_u})"
+        )
+    } else {
+        format!("exponent bound U_q = {bound} exceeds zero bit-planes + 2 = {max_u}")
+    })
+}
+
+/// What the cleanup pass keeps of one quad for the quads after it: its
+/// significance pattern `rho` (bit `j` for sample `j`, 7.2) and the
+/// magnitude exponent of each sample.
+#[derive(Debug, Clone, Copy, Default)]
+struct QuadState {
+    rho: u8,
+    exps: [u32; 4],
+}
+
+/// Whether sample `j` of `quad` is significant, as 0 or 1.
+fn sig(quad: QuadState, j: u32) -> u8 {
+    quad.rho >> j & 1
+}
+
+/// The context `c_q` of the quad at column `qx` of the first row, from the
+/// quad to its left in `row` (7.3.5).
+fn first_row_context(row: &[QuadState], qx: usize) -> u8 {
+    let Some(left) = qx.checked_sub(1).map(|x| row[x]) else {
+        return 0;
+    };
+    (sig(left, 0) | sig(left, 1)) + 2 * sig(left, 2) + 4 * sig(left, 3)
+}
+
+/// The context `c_q` of the quad at column `qx` below the first row, from
+/// the quad to its left in `row` and the three above it in `above` (7.3.5).
+fn context(above: &[QuadState], row: &[QuadState], qx: usize) -> u8 {
+    let (w, sw, nw) = match qx.checked_sub(1) {
+        Some(x) => (sig(row[x], 2), sig(row[x], 3), sig(above[x], 3)),
+        None => (0, 0, 0),
+    };
+    let up = above[qx];
+    let nf = above.get(qx + 1).map_or(0, |&q| sig(q, 1));
+    (nw | sig(up, 1)) + 2 * (w | sw) + 4 * (sig(up, 3) | nf)
+}
+
+/// The exponent predictor `kappa_q` of the quad at column `qx` below the
+/// first row, with significance pattern `rho` (7.3.7): from the exponents of
+/// the bottom samples of the quads above it in `above`.
+fn predictor(above: &[QuadState], qx: usize, rho: u8) -> u32 {
+    if rho.count_ones() < 2 {
+        return 1;
+    }
+    let up = above[qx].exps;
+    let mut e = up[1].max(up[3]);
+    if let Some(x) = qx.checked_sub(1) {
+        e = e.max(above[x].exps[3]);
+    }
+    if let Some(q) = above.get(qx + 1) {
+        e = e.max(q.exps[1]);
+    }
+    e.saturating_sub(1).max(1)
 }
 
 /// The SigProp bit-stream: forward from byte 0 of the refinement segment,
@@ -914,35 +1094,28 @@ impl Refinement {
         coeffs: &mut [i32],
         scratch: &mut RefinementScratch,
     ) -> Result<()> {
-        let RefinementScratch {
-            sigma,
-            refined,
-            new,
-        } = scratch;
+        let RefinementScratch { state, new } = scratch;
+        let (w, h) = (self.width, self.height);
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
+        // A border of one sample on each side, always clear, stands in for the
+        // neighbors outside the block.
+        zeroed(state, (w + 2) * (h + 2));
         // `sigma_n` of the cleanup pass: its significant samples are exactly
-        // its nonzero ones.
-        sigma.clear();
-        sigma.extend(coeffs.iter().map(|&c| c != 0));
-        // `r_n`: the samples SigProp makes significant, none yet.
-        zeroed(refined, coeffs.len());
-        self.sigprop(data, sigma, refined, new, coeffs)?;
+        // its nonzero ones. `r_n`, the samples SigProp makes significant,
+        // starts clear.
+        for (y, line) in coeffs.chunks_exact(w).enumerate() {
+            let start = (y + 1) * (w + 2) + 1;
+            for (s, &c) in state[start..start + w].iter_mut().zip(line) {
+                *s = u8::from(c != 0) * SIGMA;
+            }
+        }
+        self.sigprop(data, state, new, coeffs)?;
         if magref {
-            self.magref(data, sigma, coeffs);
+            self.magref(data, state, coeffs);
         }
         Ok(())
-    }
-
-    /// The stripe-oriented scan (7.4), by column-group: four-line stripes top
-    /// to bottom, and in each, groups of up to four columns left to right.
-    /// Each item is a group's rows `y0..y1` and columns `x0..x1`, which the
-    /// scan visits column by column, top to bottom.
-    fn groups(&self) -> impl Iterator<Item = (usize, usize, usize, usize)> + use<> {
-        let (w, h) = (self.width, self.height);
-        (0..h).step_by(4).flat_map(move |y0| {
-            (0..w)
-                .step_by(4)
-                .map(move |x0| (y0, (y0 + 4).min(h), x0, (x0 + 4).min(w)))
-        })
     }
 
     /// `decodeSigPropMag` and `decodeSigPropSign` (7.4). A sample the cleanup
@@ -953,47 +1126,58 @@ impl Refinement {
     /// samples they made significant. Such a sample's magnitude is the
     /// refined plane alone, so it reconstructs to `3 << (shift - 1)`.
     ///
-    /// `r` holds `r_n`, the samples this pass made significant, and starts
-    /// all false; `new` is room for a column-group's.
+    /// The scan is stripe-oriented: four-line stripes top to bottom, and in
+    /// each, groups of up to four columns left to right, each visited column
+    /// by column, top to bottom.
+    ///
+    /// `state` holds [`SIGMA`] and [`REFINED`] for each sample, with its
+    /// border; `new` is room for a column-group's new samples.
     fn sigprop(
         &self,
         data: &[u8],
-        sigma: &[bool],
-        r: &mut [bool],
+        state: &mut [u8],
         new: &mut Vec<usize>,
         coeffs: &mut [i32],
     ) -> Result<()> {
-        let w = self.width;
+        let (w, h) = (self.width, self.height);
+        let pw = w + 2;
         let mut sp = SigPropReader::new(data);
         let magnitude = 3i32 << (self.shift - 1);
-        for (y0, y1, x0, x1) in self.groups() {
-            let rows = if self.causal { y1 } else { self.height };
-            new.clear();
-            for x in x0..x1 {
-                for y in y0..y1 {
-                    let n = y * w + x;
-                    if sigma[n] {
-                        continue;
-                    }
-                    let mut mbr = false;
-                    for ny in y.saturating_sub(1)..(y + 2).min(rows) {
-                        for nx in x.saturating_sub(1)..(x + 2).min(w) {
-                            let m = ny * w + nx;
-                            mbr |= sigma[m] || r[m];
+        for y0 in (0..h).step_by(4) {
+            let y1 = (y0 + 4).min(h);
+            for x0 in (0..w).step_by(4) {
+                new.clear();
+                for x in x0..(x0 + 4).min(w) {
+                    for y in y0..y1 {
+                        let p = (y + 1) * pw + x + 1;
+                        if state[p] & SIGMA != 0 {
+                            continue;
+                        }
+                        // The three neighbors above and the two beside; the
+                        // sample itself is clear, as it is visited once.
+                        let mut mbr = state[p - pw - 1]
+                            | state[p - pw]
+                            | state[p - pw + 1]
+                            | state[p - 1]
+                            | state[p + 1];
+                        // The three below, unless the causal flag hides the
+                        // next stripe. Past the block's last row is border.
+                        if !(self.causal && y + 1 == y1) {
+                            mbr |= state[p + pw - 1] | state[p + pw] | state[p + pw + 1];
+                        }
+                        if mbr != 0 && sp.bit()? == 1 {
+                            state[p] |= REFINED;
+                            new.push(y * w + x);
                         }
                     }
-                    if mbr && sp.bit()? == 1 {
-                        r[n] = true;
-                        new.push(n);
-                    }
                 }
-            }
-            for &n in new.iter() {
-                coeffs[n] = if sp.bit()? == 1 {
-                    -magnitude
-                } else {
-                    magnitude
-                };
+                for &n in new.iter() {
+                    coeffs[n] = if sp.bit()? == 1 {
+                        -magnitude
+                    } else {
+                        magnitude
+                    };
+                }
             }
         }
         Ok(())
@@ -1003,24 +1187,28 @@ impl Refinement {
     /// found significant, in the stripe-oriented scan. The bit replaces the
     /// half-plane the cleanup pass reconstructed with, and half of the plane
     /// below is added.
-    fn magref(&self, data: &[u8], sigma: &[bool], coeffs: &mut [i32]) {
-        let w = self.width;
+    fn magref(&self, data: &[u8], state: &[u8], coeffs: &mut [i32]) {
+        let (w, h) = (self.width, self.height);
+        let pw = w + 2;
         let mut mr = MagRefReader::new(data);
         let (center, half) = (1i32 << self.shift, 1i32 << (self.shift - 1));
-        for (y0, y1, x0, x1) in self.groups() {
-            for x in x0..x1 {
-                for y in y0..y1 {
-                    let n = y * w + x;
-                    if !sigma[n] {
-                        continue;
+        for y0 in (0..h).step_by(4) {
+            let y1 = (y0 + 4).min(h);
+            for x0 in (0..w).step_by(4) {
+                for x in x0..(x0 + 4).min(w) {
+                    for y in y0..y1 {
+                        if state[(y + 1) * pw + x + 1] & SIGMA == 0 {
+                            continue;
+                        }
+                        let n = y * w + x;
+                        let c = coeffs[n];
+                        let mut m = c.abs();
+                        if mr.bit() == 0 {
+                            m ^= center;
+                        }
+                        m |= half;
+                        coeffs[n] = if c < 0 { -m } else { m };
                     }
-                    let c = coeffs[n];
-                    let mut m = c.abs();
-                    if mr.bit() == 0 {
-                        m ^= center;
-                    }
-                    m |= half;
-                    coeffs[n] = if c < 0 { -m } else { m };
                 }
             }
         }
