@@ -57,7 +57,7 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
             siz,
             selection,
             reduction,
-            samples::cap(&options.sample_limit),
+            samples::cap(&options.sample_limit, bytes.len()),
         )?;
     }
     check_raw_color(options, siz.components.len())?;
@@ -123,7 +123,7 @@ pub(crate) fn decode_metered(
             &parsed.header.siz,
             selection,
             options.resolution_reduction,
-            samples::cap(&options.sample_limit),
+            samples::cap(&options.sample_limit, bytes.len()),
         )?;
     }
     check_raw_color(options, parsed.header.siz.components.len())?;
@@ -224,7 +224,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let file = jp2::parse(bytes, &options.packet_work_limit)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
-    let cap = samples::cap(&options.sample_limit);
+    let cap = samples::cap(&options.sample_limit, bytes.len());
     let selection = window::select(siz, options);
     if let Ok(selection) = &selection {
         samples::check_read(siz, selection, options.resolution_reduction, cap)?;
@@ -237,7 +237,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     // no area, so the plan counts nothing: its other faults are found at the
     // same place whatever the image's size, and the selection's refusal
     // follows them.
-    let plan_cap = if selection.is_ok() { cap } else { u64::MAX };
+    let plan_cap = if selection.is_ok() { cap } else { cap.lifted() };
     let plans = jp2::ChannelPlans::plan(
         &file.header,
         selection.as_ref().map_or(siz, |selection| &selection.area),

@@ -9,6 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "support/synth.rs"]
+mod synth;
+
 use rust_j2k::{
     DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Region, Window, WorkLimit,
     decode_with, read_header, read_header_with,
@@ -69,13 +72,20 @@ fn is_work_limit(error: &Error) -> bool {
         if matches!(limit.kind(), LimitKind::PacketWork | LimitKind::CodeBlockWork))
 }
 
+/// Whether `error` is a refusal by the sample limit, which more bytes raise
+/// too.
+fn is_sample_limit(error: &Error) -> bool {
+    matches!(error, Error::Limit(limit) if limit.kind() == LimitKind::Samples)
+}
+
 /// What a refine on `prefix` must give: the strict-off decode, with a main
-/// header cut short and a work-bound refusal as `None`.
+/// header cut short and a refusal by a work bound or the sample limit as
+/// `None`.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
     match decode_with(prefix, &options.clone().with_strict(false)) {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
-        Err(error) if is_work_limit(&error) => Ok(None),
+        Err(error) if is_work_limit(&error) || is_sample_limit(&error) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -501,22 +511,94 @@ fn invalid_options_are_refused_up_front() {
 }
 
 /// A limit more bytes cannot clear is an error from the first refine that
-/// reaches it, not a wait: an image past the sample limit is refused as
-/// soon as its header is in.
+/// reaches it, not a wait: an image too large for the target to address is
+/// refused as soon as its header is in, and every later refine gives the
+/// same error.
 #[test]
 fn a_limit_more_bytes_cannot_clear_is_an_error() {
-    let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
-    let bytes = std::fs::read(&path).unwrap();
+    let side = u32::MAX;
+    let siz = synth::siz_body([side, side, 0, 0, side, side, 0, 0], &[[7, 1, 1]]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 5, 4, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 16])),
+    ]
+    .concat();
+    bytes.extend(synth::tile_part(0, 0, 1, &[], &[0; 4000]));
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
-    for piece in bytes.chunks(4096) {
+    let mut first = None;
+    for piece in bytes.chunks(64) {
         decoder.feed(piece);
-        match decoder.refine() {
-            Ok(None) => continue,
-            Err(Error::Limit(_)) => return,
+        match (decoder.refine(), &first) {
+            (Ok(None), None) => {}
+            (Err(Error::Limit(limit)), None) => {
+                assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
+                first = Some(format!("{limit:?}"));
+            }
+            (Err(Error::Limit(limit)), Some(first)) => {
+                assert_eq!(&format!("{limit:?}"), first);
+            }
             other => panic!("{} bytes: {other:?}", decoder.bytes_fed()),
         }
     }
-    panic!("no refine reached the sample limit");
+    assert!(first.is_some(), "no refine reached the limit");
+}
+
+/// The sample limit grows with the bytes, so a prefix it refuses is a
+/// wait: every refine of the flat 32769x16385 file, whose 27 KB hold the
+/// limit to 2^29, returns `Ok(None)`, and `finish` reports the limit, as
+/// the one-shot decode does.
+#[test]
+fn a_sample_limit_refusal_is_a_wait() {
+    let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
+    let bytes = std::fs::read(&path).unwrap();
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    let mut refused = 0;
+    for piece in bytes.chunks(4096) {
+        decoder.feed(piece);
+        let prefix = &bytes[..decoder.bytes_fed()];
+        match decoder.refine() {
+            Ok(None) => {}
+            other => panic!("{} bytes: {other:?}", prefix.len()),
+        }
+        if decode_with(prefix, &lenient()).is_err_and(|e| is_sample_limit(&e)) {
+            refused += 1;
+        }
+    }
+    assert!(refused > 0, "no prefix reached the sample limit");
+    match decoder.finish() {
+        Err(Error::Limit(limit)) => assert_eq!(limit.kind(), LimitKind::Samples),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Each refine is held to the sample limit of its own prefix: a window
+/// inside the first tile of `synth::two_large_tiles` counts one tile just
+/// over 2^29 samples, which the first half of the file is too short for
+/// and the whole file is not. The refine of the half waits; the refine of
+/// the whole gives the strict-off decode of it.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn each_refine_is_held_to_the_sample_limit_of_its_prefix() {
+    let bytes = synth::two_large_tiles(synth::LARGE_TILE_BYTES + 1);
+    let options = DecodeOptions::default().with_region(Region::Window(Window::new(0, 0, 16, 16)));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let half = bytes.len() / 2;
+    decoder.feed(&bytes[..half]);
+    assert!(
+        decode_with(&bytes[..half], &options.clone().with_strict(false))
+            .is_err_and(|e| is_sample_limit(&e))
+    );
+    assert!(matches!(decoder.refine(), Ok(None)));
+    assert!(matches!(decoder.header(), Err(Error::Limit(_))));
+    decoder.feed(&bytes[half..]);
+    let refined = decoder.refine().expect("decodes").expect("an image");
+    assert_eq!(decoder.bytes_decoded(), bytes.len());
+    assert_eq!((refined.width, refined.height), (16, 16));
+    let expected = refine_oracle(&bytes, &options).unwrap().unwrap();
+    assert_eq!(keyed(Ok(refined)), keyed(Ok(expected)));
+    assert!(decoder.header().unwrap().is_some());
 }
 
 /// A work-bound refusal on a prefix is a wait, not an error: the bounds

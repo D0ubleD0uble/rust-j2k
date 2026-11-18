@@ -5,8 +5,9 @@
 //! and must give what `decode_with` gives with `strict` off on the bytes
 //! fed so far: the same image, or the same error. A refine that does not
 //! decode returns `Ok(None)`. A refine due under the doubling rule must
-//! decode unless the header is cut short, the packet work bound refuses
-//! that one-shot decode, or the bound on the walks of tiles not kept, which
+//! decode unless the header is cut short, the packet or code-block work
+//! bound or the sample limit refuses that one-shot decode (more bytes raise
+//! each of them), or the bound on the walks of tiles not kept, which
 //! all the refines spend together, refuses the refine
 //! (`rust_j2k::fuzz::incremental_repeat_work`). That refusal may stand where
 //! the one-shot decode gives an image or an error. It must come with the
@@ -169,7 +170,10 @@ fuzz_target!(|input: &[u8]| {
                 Ok(image) => Ok(Some(image)),
                 Err(Error::Incomplete(_)) => Ok(None),
                 Err(Error::Limit(m))
-                    if matches!(m.kind(), LimitKind::PacketWork | LimitKind::CodeBlockWork) =>
+                    if matches!(
+                        m.kind(),
+                        LimitKind::PacketWork | LimitKind::CodeBlockWork | LimitKind::Samples
+                    ) =>
                 {
                     Ok(None)
                 }

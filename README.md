@@ -218,13 +218,15 @@ has the value R, which is how eccodes and NCEP's g2clib read it.
 
 ## When a file won't decode
 
-Every failure comes back as an `Error`. With the default limits, decoding
-never panics or hangs, whatever the input, and needs at most about 6.4 GiB of
-memory. If the machine can't supply that, the allocation fails and the process
-aborts, as in any Rust program. That figure covers the one-shot decode
-functions; `IncrementalDecoder` keeps per-tile state and can hold up to about
-three times one decode's peak, plus the bytes fed and a table of 24 bytes per
-tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
+Every failure comes back as an `Error`. With the default limits, decoding never
+panics or hangs, whatever the input, and needs at most about 6.4 GiB of memory
+for an input of up to 64 MiB, or about 102 bytes per byte of input past that. If
+the machine can't supply that, the allocation fails and the process aborts, as
+in any Rust program. Those figures cover the one-shot decode functions;
+`IncrementalDecoder` keeps per-tile state and can hold up to about three times
+one decode's peak, plus the bytes fed and a table of 24 bytes per tile index up
+to the highest seen, about 1.5 MiB for 65535 tiles (see
+[`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses
 something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means
@@ -299,7 +301,8 @@ A valid file can be refused with `Error::Limit` when it is very large or very
 costly to decode. The limits protect you from a small hostile file that asks
 for gigabytes of memory or minutes of work. By default an image may hold 2^29
 values (2 GiB as `i32`): a 10980 × 10980 three-band satellite image, or an RGB
-image of about 179 megapixels.
+image of about 179 megapixels. Past 64 MiB of input the limit is 8 values per
+byte of the file.
 
 Three limits can be raised: `sample_limit`, `packet_work_limit` and
 `code_block_work_limit` on `DecodeOptions`. For a file you trust, set them to
