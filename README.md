@@ -223,7 +223,8 @@ never panics or hangs, whatever the input, and needs at most about 6.4 GiB of
 memory. If the machine can't supply that, the allocation fails and the process
 aborts, as in any Rust program. That figure covers the one-shot decode
 functions; `IncrementalDecoder` keeps per-tile state and can hold up to about
-three times as much (see [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)).
+three times one decode's peak, plus the bytes fed and a table of 24 bytes per
+tile index seen, about 1.5 MiB for 65535 tiles (see [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses
 something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means
