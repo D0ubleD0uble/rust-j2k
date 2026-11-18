@@ -57,3 +57,6 @@ If you work on the crate:
   [roadmap-phase4.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase4.md) are the plans of the finished phases,
   with each step tied to its module and the oracle that checked it. They are
   kept as the record of how the decoder was built.
+- [roadmap-phase5.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase5.md)
+  is the plan for the Part 1 encoder, with each step tied to its module and the
+  oracle that checks it.
