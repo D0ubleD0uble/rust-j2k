@@ -11,10 +11,15 @@
 //! ([`check_read`]), and a palette's or sRGB output's count is that of the
 //! returned area.
 //!
-//! The default limit, [`MAX_IMAGE_SAMPLES`], is 2^29 samples: 2 GiB as `i32`.
-//! It admits a Sentinel-2 true-color image (10980 x 10980 x 3, 361.7 M
-//! samples) and an RGB image of up to about 179 MP. OpenJPEG has no such limit; it allocates
-//! what the header declares.
+//! The default limit ([`default_limit`]) is the larger of
+//! [`MAX_IMAGE_SAMPLES`], 2^29 samples (2 GiB as `i32`), and
+//! [`SAMPLES_PER_BYTE`], 16 samples a byte of input. Up to 32 MiB of input it
+//! is 2^29, which admits a Sentinel-2 true-color image (10980 x 10980 x 3,
+//! 361.7 M samples) and an RGB image of up to about 179 MP. Past that it
+//! grows with the input, so a large file is held to 64 bytes of output a
+//! byte, and a small one to the floor. The input is all the bytes the
+//! decode is given: a JP2 file's boxes count. OpenJPEG has no such limit;
+//! it allocates what the header declares.
 //!
 //! While a palette expands, the index plane and the columns are held together,
 //! so the peak there is about twice the output: a one-column palette at
@@ -58,7 +63,7 @@
 //! table are at 5 levels. The coded-data figures include
 //! the caller's input bytes, so they grow with the file: a 38 MB lossless
 //! 8192 x 8192 file peaks at about 380 MiB. The ratios carry over to the
-//! 2^29 default, about 2.7 GiB for one component in one tile: a 23170 x 23170
+//! 2^29 floor, about 2.7 GiB for one component in one tile: a 23170 x 23170
 //! one-tile 5/3 image (lossless, 286 MiB of input) peaks at 2.9 GiB, about 1.3
 //! times its 2 GiB of output plus the input. A tiled image peaks lower: the
 //! 1024 x 1024-tiled Sentinel-2 band (460 MiB of samples) peaks at about 470 MiB, as
@@ -70,9 +75,11 @@ use crate::{Error, WorkLimit};
 pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 29;
 
 /// The samples the default limit allows per byte of input, once that comes
-/// to more than [`MAX_IMAGE_SAMPLES`]: past 32 MiB of input. Valid files
-/// hold many fewer: a Sentinel-2 true-color image about 2.9 samples a byte,
-/// and a lossless 23170 x 23170 gradient about 1.8.
+/// to more than [`MAX_IMAGE_SAMPLES`]: past 32 MiB of input. The large valid
+/// files measured hold far fewer: a Sentinel-2 true-color image about 2.9
+/// samples a byte, and a lossless 23170 x 23170 gradient about 1.8. A file
+/// over the floor that holds more samples a byte than this needs a raised
+/// limit.
 pub(crate) const SAMPLES_PER_BYTE: u64 = 16;
 
 /// The most samples one buffer can hold on this target. Every sample buffer

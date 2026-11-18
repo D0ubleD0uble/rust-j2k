@@ -45,9 +45,13 @@ machine can't supply that, the process aborts, as any Rust program does; that
 is not a bug. If a panic, an out-of-bounds read, a hang or a larger allocation
 happens, report it as above.
 
-By default the decoded image may hold 2^29 samples (2 GiB as `i32`). A decode
-peaks at about 2.7 GiB for a square tile, and at up to about 6.4 GiB
-for a tile one sample wide (scaled from measurements on smaller images; see the
+By default the decoded image may hold 2^29 samples (2 GiB as `i32`), or 16
+samples per byte of input when that is more, so the limit grows past 32 MiB of
+input. At 2^29 samples a decode peaks at about 2.7 GiB for a square tile, and
+at up to about 6.4 GiB for a tile one sample wide. Past 32 MiB the peak grows
+to about 86 bytes per byte of input for a square tile and up to about 205 for
+one a sample wide: about 8 GiB and 19 GiB for a 100 MB file (scaled from
+measurements on smaller images; see the
 [`decode` docs](https://docs.rs/rust-j2k/latest/rust_j2k/fn.decode.html)). A
 file past a limit is refused with `Error::Limit`, which is the guard working,
 not a bug. These figures cover the one-shot decode functions. An

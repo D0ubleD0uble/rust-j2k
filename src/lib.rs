@@ -291,14 +291,16 @@ pub use window::{Region, Window};
 /// them.
 ///
 /// - The decoded image may hold at most 2^29 samples (2 GiB
-///   as `i32`), summed over its output channels at the decode's
+///   as `i32`), or 16 per byte of input when that is more, summed over its
+///   output channels at the decode's
 ///   [`resolution_reduction`](DecodeOptions::resolution_reduction): every
 ///   component, a palette's expanded channels, and the channels sRGB output
-///   adds. That admits a 10980 x 10980 Sentinel-2 true-color image (three
-///   components), or an RGB image of up to about 179 MP. A larger image is refused from its header alone,
+///   adds. Up to 32 MiB of input that admits a 10980 x 10980 Sentinel-2
+///   true-color image (three components), or an RGB image of up to about
+///   179 MP. A larger image is refused from its header alone,
 ///   before any tile is read. Under a window or a tile, only the tiles read
 ///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
-///   times the output for a square tile, about 2.7 GiB at the limit,
+///   times the output for a square tile, about 2.7 GiB at 2^29 samples,
 ///   and more for a tall, narrow tile or while a palette expands (see [the
 ///   sample limit][sample-limit]). This is for the one-shot functions; an
 ///   [`IncrementalDecoder`] keeps per-tile state and can hold up to about
@@ -836,10 +838,18 @@ pub struct DecodeOptions {
     /// described on [`decode`]. Default [`WorkLimit::Default`].
     pub code_block_work_limit: WorkLimit,
     /// How many samples the decoded image may hold, against the limit
-    /// described on [`decode`]: 2^29 samples (2 GiB as `i32`) by default,
-    /// summed over the output channels at
+    /// described on [`decode`], summed over the output channels at
     /// [`resolution_reduction`](Self::resolution_reduction). Default
     /// [`WorkLimit::Default`].
+    ///
+    /// The default limit is 2^29 samples (2 GiB as `i32`), or 16 samples per
+    /// byte of input when that is more: past 32 MiB of input, it grows with
+    /// the file. The input is every byte passed in, a JP2 file's boxes
+    /// included; for an [`IncrementalDecoder`] it is the bytes fed so far.
+    /// Past 32 MiB, a file may ask for 64 bytes of output per byte it
+    /// holds, and a decode peaks at about 86 bytes per byte for a square
+    /// tile and up to about 205 for a tile one sample wide: about 8 GiB and
+    /// 19 GiB for a file of 100 MB.
     ///
     /// Under a window or a tile ([`region`](Self::region)), the count
     /// is the samples of the tiles the decode reads, in every component, as
@@ -850,7 +860,10 @@ pub struct DecodeOptions {
     /// [`components`](Self::components) subset does not lower the count, as
     /// the packets of every component of a tile read are still walked.
     ///
-    /// `Raised(n)` allows `n` times 2^29 samples. `Unlimited` lifts the
+    /// `Raised(n)` allows `n` times the default for the same input: `n` times
+    /// 2^29 samples up to 32 MiB, and `16 * n` samples per byte past it. So
+    /// a factor never allows less than the default, and the factor a refusal
+    /// names is the smallest that admits that file. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output, and about 1.35 to 3.2 times that in all at its
     /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
@@ -969,10 +982,10 @@ impl Default for DecodeOptions {
 /// [`DecodeOptions::code_block_work_limit`] work bounds, and the
 /// [`DecodeOptions::sample_limit`] on the image's size.
 ///
-/// Each work bound scales with the size of the file, so a small file cannot
-/// ask for minutes of work, and the sample limit holds the memory a file may
-/// ask for to about 2.7 GiB for a square tile, and to several GiB for a tall,
-/// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
+/// Each bound scales with the size of the file, so a small file cannot ask
+/// for minutes of work, and the sample limit holds the memory a file of up
+/// to 32 MiB may ask for to about 2.7 GiB for a square tile, and to several
+/// GiB for a tall, narrow one; past 32 MiB it grows with the file (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
 /// a bound, when it codes many samples in very few bytes or is very
 /// large. The decode then fails with [`Error::Limit`]. Its
 /// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`]
@@ -1046,8 +1059,8 @@ pub enum WorkLimit {
     /// The bound as [`decode`] describes it.
     #[default]
     Default,
-    /// The default bound times this factor: for a work bound, both its floor
-    /// and the work it allows per byte. `Raised(1)` sets the same bound as
+    /// The default bound times this factor: both its floor and what it
+    /// allows per byte. `Raised(1)` sets the same bound as
     /// `Default`, though the two do not compare equal. `Raised(0)` is
     /// [`Error::InvalidOptions`].
     Raised(u32),

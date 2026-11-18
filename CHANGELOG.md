@@ -21,6 +21,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The default sample limit grows with the input: it is the larger of 2^29
+  samples and 16 samples per byte of input. Up to 32 MiB of input nothing
+  changes. A larger file that holds at least a byte for every 16 samples
+  now decodes at the defaults: a lossless 23171 x 23171 file of 234 MB that
+  was refused decodes, bit-exact against `opj_decompress`, with a peak of
+  2.84 GiB. `WorkLimit::Raised(n)` on `DecodeOptions::sample_limit` is n
+  times that default, so past 32 MiB a factor allows more than it did, and
+  a refusal may name a smaller one. A 100 MB file may now ask for about
+  6 GiB of output, and a decode of it may peak at about 8 GiB for a square
+  tile and up to about 19 GiB for a tile one sample wide. A refusal by the
+  sample limit is now a wait for `IncrementalDecoder::refine`, which
+  returns `Ok(None)` for it as it does for a work bound, since more bytes
+  raise the limit; `finish` reports it (#437).
 - HTJ2K decoding is about 1.5x to 2x faster on large files on one thread.
   The output is unchanged.
 

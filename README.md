@@ -299,7 +299,8 @@ A valid file can be refused with `Error::Limit` when it is very large or very
 costly to decode. The limits protect you from a small hostile file that asks
 for gigabytes of memory or minutes of work. By default an image may hold 2^29
 values (2 GiB as `i32`): a 10980 × 10980 three-band satellite image, or an RGB
-image of about 179 megapixels.
+image of about 179 megapixels. A file over 32 MiB may hold more, 16 values per
+byte of the file.
 
 Three limits can be raised: `sample_limit`, `packet_work_limit` and
 `code_block_work_limit` on `DecodeOptions`. For a file you trust, set them to

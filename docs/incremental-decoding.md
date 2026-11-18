@@ -14,13 +14,16 @@ does again on each refine.
   complete and which tiles are missing.
 - `refine` returns `Ok(None)` where `decode_with` gives `Error::Incomplete`
   (the main header is cut short), since more bytes can complete the header.
-  It also returns `Ok(None)` when the packet or code-block work bound, the
-  charge for missing tiles, or the bound on the walks of tiles not kept
-  (see [Work and memory](#work-and-memory)) refuses the decode: those
-  bounds grow with the bytes and the missing tiles shrink, so a work limit
-  is reported only by `finish`. Any other error, including a limit that
-  does not depend on the bytes (the sample limit, too many precincts,
-  code-blocks or `POC` volumes, too many bit-planes), is the one
+  It also returns `Ok(None)` when the sample limit, the packet or
+  code-block work bound, the charge for missing tiles, or the bound on the
+  walks of tiles not kept (see [Work and memory](#work-and-memory)) refuses
+  the decode: those bounds grow with the bytes and the missing tiles
+  shrink, so such a limit is reported only by `finish`. The sample limit
+  of a refine is that of a one-shot decode of its bytes: 2^29 samples, or
+  16 a byte when that is more. Any other error, including a limit that
+  does not depend on the bytes (an image too large for the target to
+  address, too many precincts, code-blocks or `POC` volumes, too many
+  bit-planes), is the one
   `decode_with` gives on those bytes. A refusal by a bound the refines
   spend together, the code-block bound or the bound on the walks of tiles
   not kept, can stand in for an error later in the file: the refine
@@ -167,8 +170,7 @@ under the current options (`Ok(None)` until the main header is whole), and
   caller who has fed the whole file gets the image under the new options
   from `finish`.
 - A change clears an error an earlier refine returned, since the new
-  options may not give it (a reduction past the file's levels, or the
-  sample limit at a smaller reduction). A set to the value the decoder has
+  options may not give it (a reduction past the file's levels). A set to the value the decoder has
   keeps it.
 
 `src/incremental/tests.rs` changes the options before every refine of

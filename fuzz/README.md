@@ -260,8 +260,9 @@ limit (log2 of that factor cap, plus 2) is a failure.
 An input over the fuzz sample budget (`common/budget.rs`) is only read for
 its header, and a sample limit refusal there is checked as one step with no
 decode. So a sample limit retry of the image area is never decoded: the
-budget is 2^28 samples and the default limit 2^29, so only an input over
-the budget is refused for its area, and that input is never decoded.
+budget is 2^28 samples and the default limit at least 2^29, so only an
+input over the budget is refused for its area, and that input is never
+decoded.
 
 Seed it as `decode`, with 26 seeds made from the work-bound, sample-limit
 and `psot0` bomb fixtures, each behind a control byte: `00` (the defaults),
@@ -304,8 +305,9 @@ bytes:
 mkdir -p fuzz/corpus/decode
 cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode/
 
-# Time-boxed run (CI-friendly: no panics, no OOM, no hangs). A small input
-# may declare an image at the 2^29-sample default limit, which would peak
+# Time-boxed run (CI-friendly: no panics, no OOM, no hangs). An input under
+# 32 MiB, as every fuzz input is, may declare an image at the 2^29-sample
+# default limit (larger files get 16 samples a byte), which would peak
 # at about 2.7 GiB for a square tile and up to about 6.4 GiB for a tile one
 # sample wide. The `decode`, `decode_partial` and `incremental_decode` targets
 # skip an input that declares more than 2^28 samples (`common/budget.rs`), so

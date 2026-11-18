@@ -125,16 +125,16 @@ use crate::{
 /// An error from `refine` is the error [`decode_with`] gives with `strict`
 /// off on the same bytes, such as a marker segment with an invalid field,
 /// or an [`Error::Limit`] that does not depend on how many bytes there are:
-/// an image past the sample limit, too many precincts or code-blocks, too
-/// many `POC` volumes, or too many bit-planes. More bytes do not undo
+/// an image too large for the target to address, too many precincts or
+/// code-blocks, too many `POC` volumes, or too many bit-planes. More bytes do not undo
 /// these, so once `refine` returns an error, every later `refine` returns
 /// the same error without decoding, until a change of options. Some
 /// refusals are not final while bytes may still come, so `refine` returns
 /// `Ok(None)` for them and only `finish` reports them: a main header cut
-/// short ([`Error::Incomplete`]), a refusal by the packet or code-block
-/// work bound or by the charge for missing tiles, which more bytes raise,
-/// and a refusal by the bound on the walks of tiles not kept, which the
-/// refines spend together. A caller who raises the packet work limit to
+/// short ([`Error::Incomplete`]), a refusal by the sample limit, the
+/// packet or code-block work bound or the charge for missing tiles, which
+/// more bytes raise, and a refusal by the bound on the walks of tiles not
+/// kept, which the refines spend together. A caller who raises the packet work limit to
 /// the factor a refusal names, as [`DecodeOptions::with_retry`] does, and
 /// feeds the file to a new decoder, accepts up to about ten times the
 /// packet work the file needs over its refines: a factor up to twice what
@@ -215,7 +215,10 @@ impl IncrementalDecoder {
     /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
     /// before it, so the main header is not complete yet. An error is the
     /// one `read_header_with` gives on those bytes, such as a reduction the
-    /// main header's levels cannot take ([`Error::InvalidOptions`]).
+    /// main header's levels cannot take ([`Error::InvalidOptions`]). The
+    /// sample limit grows with the bytes fed, so its [`Error::Limit`] can
+    /// give way to a header once more bytes come in, where
+    /// [`refine`](Self::refine) waits.
     ///
     /// Call it after a feed rather than after each byte: each call parses
     /// the main header again.
@@ -306,8 +309,9 @@ impl IncrementalDecoder {
     /// [`strict`](DecodeOptions::strict) off on all the bytes fed, and its
     /// [`report`](Image::report) lists what they do not hold yet.
     /// `Ok(None)` means there is no new image yet: too few bytes have come
-    /// in since the last decode, the main header is not whole, or a work
-    /// bound refused the decode. Any error is the one `decode_with` gives
+    /// in since the last decode, the main header is not whole, or the
+    /// sample limit or a work bound refused the decode (each grows with the
+    /// bytes). Any error is the one `decode_with` gives
     /// on those bytes, and more bytes will not clear it: each later call
     /// returns it again. A refusal by a bound all the refines spend
     /// together can stand in for an error later in the file: the refine
