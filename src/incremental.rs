@@ -211,12 +211,13 @@ impl IncrementalDecoder {
     /// The header of the bytes fed so far, as [`read_header_with`] reads it
     /// under the decoder's options: it describes the image
     /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end
-    /// before the first tile-part (`SOT` marker) is whole, so the main
-    /// header is not complete yet. An error is the one `read_header_with`
-    /// gives on those bytes, such as a reduction the main header's levels
-    /// cannot take ([`Error::InvalidOptions`]).
+    /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
+    /// before it, so the main header is not complete yet. An error is the
+    /// one `read_header_with` gives on those bytes, such as a reduction the
+    /// main header's levels cannot take ([`Error::InvalidOptions`]).
     ///
-    /// Each call reads the header again from the bytes; nothing is kept.
+    /// Call it after a feed rather than after each byte: each call parses
+    /// the main header again.
     pub fn header(&self) -> Result<Option<Header>> {
         match read_header_with(&self.bytes, &self.lenient) {
             Ok(header) => Ok(Some(header)),
@@ -274,7 +275,7 @@ impl IncrementalDecoder {
     /// later change back. When a smaller region leaves the walks kept past
     /// the memory they may hold (see [`IncrementalDecoder`]), the next
     /// refine that decodes lets go of the walks of the tiles it does not
-    /// read until the rest fit; a later walk of those tiles is charged as
+    /// read until the rest fit, or none is left to let go; a later walk of those tiles is charged as
     /// [`set_resolution_reduction`](Self::set_resolution_reduction)
     /// describes. As there, the change does not make the next refine decode
     /// sooner, and it clears an error an earlier refine returned.

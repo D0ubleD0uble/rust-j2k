@@ -237,9 +237,10 @@ over its refines: a factor up to twice what it needs, times five bounds. A
 walk let go when the options change (see
 [Changing the options](#changing-the-options)) is charged here too. Of the
 committed fixtures, fed in quarters, in pieces of random sizes and one
-byte at a time, at no reduction and at a reduction of 1, normal files spend at most 0.008 of a bound on these
-walks, and files made to reach the work bounds at most 3 bounds, so none
-of them gives another result. Two files made for this
+byte at a time, at no reduction and at a reduction of 1, normal files
+spend at most 0.008 of a bound on these walks, and files made to reach
+the work bounds at most 3 bounds, so none of them gives another result.
+Two files made for this
 ([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)) show the
 cost it holds. One of 525 KB, 256 components and 65535 layers, fed one
 byte at a time with a refine after each, took 8.4 times one decode before
