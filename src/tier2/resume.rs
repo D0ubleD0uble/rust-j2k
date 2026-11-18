@@ -110,6 +110,9 @@ enum Slot {
     Forgotten,
 }
 
+// The docs, README and SECURITY.md state 24 bytes per tile index.
+const _: () = assert!(std::mem::size_of::<Slot>() <= 24);
+
 impl Walks {
     /// Make the walks fit a decode of `fed` bytes that reads the tiles
     /// `reads` flags, under `reduction` and `layers`, and whose image is of

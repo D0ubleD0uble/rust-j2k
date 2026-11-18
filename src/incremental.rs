@@ -82,7 +82,9 @@ use crate::{
 /// [`set_max_quality_layers`](Self::set_max_quality_layers) and
 /// [`set_region`](Self::set_region), for a viewer that zooms or pans while
 /// the file arrives. Each later image is then the strict-off decode of its
-/// bytes under the new options. A change of region keeps the packet walks.
+/// bytes under the new options. A change of region keeps the packet walks,
+/// except those of tiles the new region does not read, when the walks kept
+/// are past the room of the smaller image's decode.
 /// A change of the reduction or the layer cap lets them go, and the walks
 /// built again are charged to the same bound as the walks of tiles not
 /// kept, so changing the options back and forth does not buy free walks.
@@ -223,6 +225,11 @@ impl IncrementalDecoder {
     /// [`Error::Limit`] here can turn into a header once more bytes come in;
     /// [`refine`](Self::refine) returns `Ok(None)` for it instead.
     ///
+    /// Like `read_header_with`, it refuses a region or reduction the file
+    /// cannot take, such as `Region::Tile(500)` on a one-tile file
+    /// ([`Error::InvalidOptions`]). `read_header(decoder.bytes())` gives the
+    /// header without the decoder's options.
+    ///
     /// Call it after a feed rather than after each byte: each call parses
     /// the main header again.
     pub fn header(&self) -> Result<Option<Header>> {
@@ -316,7 +323,7 @@ impl IncrementalDecoder {
     /// sample limit or a work bound refused the decode (each grows with the
     /// bytes). Any error is the one `decode_with` gives
     /// on those bytes, and more bytes will not clear it: each later call
-    /// returns it again. A refusal by a bound all the refines spend
+    /// returns it again, until a change of options. A refusal by a bound all the refines spend
     /// together can stand in for an error later in the file: the refine
     /// returns `Ok(None)` where `decode_with` fails, and `finish` reports
     /// that error.
