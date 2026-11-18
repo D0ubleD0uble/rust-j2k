@@ -623,6 +623,15 @@ fn follow_ladder(name: &str, bytes: &[u8], start: DecodeOptions) -> (rust_j2k::I
             rank(&hint) > rank(old),
             "{name}: {hint:?} is not above {old:?}"
         );
+        // A walk that ran out of steps (both packet files here) names at
+        // least twice the factor it ran under. A POC reach names the factor
+        // it needs, which may be less, but no file here is refused for one.
+        if limit.kind() == LimitKind::PacketWork {
+            assert!(
+                rank(&hint) >= 2 * rank(old),
+                "{name}: {hint:?} is not twice {old:?}"
+            );
+        }
         assert_eq!(
             format!("{next:?}"),
             format!("{expected:?}"),

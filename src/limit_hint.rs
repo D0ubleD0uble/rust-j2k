@@ -13,8 +13,9 @@
 //! give the factor the tile needs. A packet walk that runs out of steps shows
 //! only that it needs more than it was allowed, so its message names twice the
 //! factor it ran under, which a ladder of retries climbs in about log2 of the
-//! factor the file needs. Later tiles are never counted. The messages call the packet work
-//! bound's unit a step, as the public docs do; the code calls it a visit.
+//! factor the file needs. Later tiles are never counted. The messages call the
+//! packet work bound's unit a step, as the public docs do; the code calls it a
+//! visit.
 
 use crate::tier2::WorkRefusal;
 use crate::{Error, LimitKind, WorkLimit};
@@ -28,8 +29,8 @@ fn factor(needed: u64, default: u64) -> u32 {
 /// The `Raised` factor a walk that ran out of `allowed` steps names: twice
 /// the factor it ran under, and at least the next one up. Stepping up by one
 /// would make a ladder of retries cost the square of the factor the file
-/// needs. It stops at `u32::MAX`, and past a walk already under that factor
-/// there is no `Raised` factor, so it is `None`.
+/// needs. It stops at `u32::MAX`; a walk already under that factor has no
+/// higher `Raised` one to name, so it gives `None`.
 fn doubled(allowed: u64, default: u64) -> Option<u32> {
     let under = u64::from(factor(allowed, default));
     let next = u64::from(factor(allowed.saturating_add(1), default));
@@ -49,9 +50,8 @@ const TRUSTED: &str = "or with `WorkLimit::Unlimited` for trusted input";
 ///
 /// A walk that ran out of steps shows only that it needs more than it was
 /// allowed, so it names twice the factor it ran under (see [`doubled`]),
-/// which may not be enough. A POC
-/// sequence's reach is a count of packets, so it names the factor its reach
-/// needs.
+/// which may not be enough. A POC sequence's reach is a count of packets, so
+/// it names the factor its reach needs.
 pub(crate) fn packet(
     work: WorkRefusal,
     tile: usize,
