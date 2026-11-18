@@ -20,7 +20,7 @@ does again on each refine.
   the decode: those bounds grow with the bytes and the missing tiles
   shrink, so such a limit is reported only by `finish`. The sample limit
   of a refine is that of a one-shot decode of its bytes: 2^29 samples, or
-  16 a byte when that is more. Any other error, including a limit that
+  16 samples per byte when that is more. Any other error, including a limit that
   does not depend on the bytes (an image too large for the target to
   address, too many precincts, code-blocks or `POC` volumes, too many
   bit-planes), is the one
@@ -170,8 +170,8 @@ under the current options (`Ok(None)` until the main header is whole), and
   caller who has fed the whole file gets the image under the new options
   from `finish`.
 - A change clears an error an earlier refine returned, since the new
-  options may not give it (a reduction past the file's levels). A set to the value the decoder has
-  keeps it.
+  options may not give it (a reduction past the file's levels). A set to
+  the value the decoder has keeps it.
 
 `src/incremental/tests.rs` changes the options before every refine of
 files with several tiles and tile-parts, `TLM` and `PLT`, a `POC` volume in

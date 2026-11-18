@@ -42,10 +42,10 @@ blocks was refused. At 2^20 a one-tile image at least 72 samples wide and under
 132726 at the limit; 64 x 2^23 needs 770,048). A thinner image is still
 refused (66 x 8,134,407 needs 1,128,027; 32 x 2^24 needs 1.54 M; 1 x 2^29
 needs 16.7 M), as is one tile in 16x16 blocks or smaller near the limit.
-The cap does not grow with the input as the sample limit does, so a file
-large enough for the sample limit to admit a one-tile image past 2^30
-samples in 32x32 blocks, or past 2^32 in 64x64 blocks, is still refused
-by the cap. A tiled image is held to it one tile at a time.
+The 2^20 code-block cap does not grow with the input the way the sample
+limit does. A one-tile image past 2^30 samples in 32x32 blocks, or past
+2^32 in 64x64 blocks, is still refused by the cap, however large the file.
+A tiled image is held to it one tile at a time.
 
 A few fixed guards also return `Limit`, and no option lifts them: 2^18
 precincts and 2^20 code-blocks per tile, 32 POC progression volumes, 30
@@ -69,11 +69,11 @@ few hundred bytes can declare a 65536x65536 image, 16 GiB of `i32`
 samples. The decode counts the samples of every output channel, at the
 resolution reduction asked for, from SIZ and the JP2 boxes alone, and
 refuses an image of more samples than the limit with `Limit` before it
-reads a tile. The limit is 2^29 samples (2 GiB as `i32`), or 16 samples a
-byte of input when that is more
-([The limit grows with the input](#the-limit-grows-with-the-input)). The image area counted is SIZ's
-`(Xsiz − XOsiz)·(Ysiz − YOsiz)`, wherever on the reference grid the origin
-sits. The count covers the codestream's components, a palette's expanded
+reads a tile. The limit is 2^29 samples (2 GiB as `i32`), or 16 samples per
+byte of input when that is more (see
+[The limit grows with the input](#the-limit-grows-with-the-input)).
+The image area counted is SIZ's `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, wherever
+on the reference grid the origin sits. The count covers the codestream's components, a palette's expanded
 channels, and the channels sRGB output adds (sYCC chroma replicated to the
 luma grid, a gray channel a monochrome profile maps to R, G and B).
 `read_header_with` makes the same check, so it refuses what the decode would.
@@ -153,8 +153,8 @@ The default limit for an input of `B` bytes is
 
     max(2^29, 16 × B) samples
 
-so it is 2^29 up to 32 MiB of input, and grows by 16 samples a byte past
-that, as the two work bounds grow with the tiles' data. `B` is every byte
+so it is 2^29 up to 32 MiB of input, and grows by 16 samples per byte past
+that, just as the two work bounds grow with the tiles' data. `B` is every byte
 the decode is given: a JP2 file's boxes count, and so do bytes after the
 codestream. `read_header_with` counts the same bytes, so it still refuses
 what the decode would. Each refine of an `IncrementalDecoder` is held to the
@@ -163,8 +163,8 @@ refusal there is a wait, not an error (see
 [incremental-decoding.md](incremental-decoding.md)).
 
 A small file is held to the floor, 2^29 samples: a file of 100 bytes cannot
-ask for more. A large file is held to 64 bytes of `i32` output for each byte
-it holds. The large valid files measured hold far fewer samples a byte: the
+ask for more. A large file may ask for at most 64 bytes of `i32` output per
+byte of input. The large valid files measured hold far fewer samples a byte: the
 Sentinel-2 TCI about 2.9, the lossless 23170x23170 one-tile file about 1.8,
 and the one below about 2.3, so 16 is about 5 times the most seen. A file
 over the floor that holds more than 16 samples a byte, such as a large
@@ -174,13 +174,13 @@ image of flat color, still needs a raised limit.
 2^29 up to 32 MiB, and 16·n samples a byte past it. A factor never allows
 less than `Default`, and a larger factor never allows less than a smaller
 one. The factor a refusal names is still the smallest that admits the
-count, as it divides by the default of the same input. Even
-`WorkLimit::Unlimited`, and any default however many bytes there are,
-stops at the samples the target can address, so on a 32-bit target the
-limit is 2^29 − 1 at most, below the floor.
+count, as it divides by the default of the same input. No
+limit, not even `WorkLimit::Unlimited` and whatever the input size, goes
+past the samples the target can address. On a 32-bit target that is
+2^29 − 1, one below the floor.
 
-The worst case is the most a file of each size may make the decode hold at
-its peak, from the multiples above: about 1.35 times the output for a square
+The table gives the worst-case peak for a file of each size, from the
+multiples above: about 1.35 times the output for a square
 tile, and up to about 3.2 times for a tile one sample wide, plus the input.
 
 | Input | Default limit | Output (`i32`) | Peak, square tile | Peak, one sample wide |
@@ -335,8 +335,9 @@ samples (under a window or a tile, the reduced samples of the tiles read),
 which the sample limit holds. With 4x4 code-blocks and the default precincts
 that is samples / 16, 2^25 at the 2^29 floor, about 1 to 2.3 seconds to
 build at 30 to 70 ns each (arithmetic from the per-block cost, not measured
-at that count). Past 32 MiB of input the limit is 16 samples a byte, so it
-is at most a code-block a byte, 30 to 70 ns a byte. Small
+at that count). Past 32 MiB of input the limit is 16 samples per byte, so
+there is at most one code-block per byte of input, or 30 to 70 ns of build
+time per byte. Small
 precincts can force code-blocks down to 1x1, and then it is the per-tile cap
 of 2^20 code-blocks that bounds each tile. A decode at full resolution drops no
 resolution, so it spends exactly what it did before; a file built to spend

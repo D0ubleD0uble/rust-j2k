@@ -126,17 +126,17 @@ use crate::{
 /// off on the same bytes, such as a marker segment with an invalid field,
 /// or an [`Error::Limit`] that does not depend on how many bytes there are:
 /// an image too large for the target to address, too many precincts or
-/// code-blocks, too many `POC` volumes, or too many bit-planes. More bytes do not undo
-/// these, so once `refine` returns an error, every later `refine` returns
-/// the same error without decoding, until a change of options. Some
+/// code-blocks, too many `POC` volumes, or too many bit-planes. More bytes
+/// do not undo these, so once `refine` returns an error, every later
+/// `refine` returns the same error without decoding, until a change of options. Some
 /// refusals are not final while bytes may still come, so `refine` returns
 /// `Ok(None)` for them and only `finish` reports them: a main header cut
 /// short ([`Error::Incomplete`]), a refusal by the sample limit, the
 /// packet or code-block work bound or the charge for missing tiles, which
 /// more bytes raise, and a refusal by the bound on the walks of tiles not
-/// kept, which the refines spend together. A caller who raises the packet work limit to
-/// the factor a refusal names, as [`DecodeOptions::with_retry`] does, and
-/// feeds the file to a new decoder, accepts up to about ten times the
+/// kept, which the refines spend together. A caller who raises the packet
+/// work limit to the factor a refusal names, as
+/// [`DecodeOptions::with_retry`] does, and feeds the file to a new decoder, accepts up to about ten times the
 /// packet work the file needs over its refines: a factor up to twice what
 /// it needs, times the five bounds of the walks of tiles not kept.
 ///
@@ -216,9 +216,9 @@ impl IncrementalDecoder {
     /// before it, so the main header is not complete yet. An error is the
     /// one `read_header_with` gives on those bytes, such as a reduction the
     /// main header's levels cannot take ([`Error::InvalidOptions`]). The
-    /// sample limit grows with the bytes fed, so its [`Error::Limit`] can
-    /// give way to a header once more bytes come in, where
-    /// [`refine`](Self::refine) waits.
+    /// sample limit grows with the bytes fed, so a sample-limit
+    /// [`Error::Limit`] here can turn into a header once more bytes come in;
+    /// [`refine`](Self::refine) returns `Ok(None)` for it instead.
     ///
     /// Call it after a feed rather than after each byte: each call parses
     /// the main header again.

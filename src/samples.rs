@@ -13,12 +13,12 @@
 //!
 //! The default limit ([`default_limit`]) is the larger of
 //! [`MAX_IMAGE_SAMPLES`], 2^29 samples (2 GiB as `i32`), and
-//! [`SAMPLES_PER_BYTE`], 16 samples a byte of input. Up to 32 MiB of input it
+//! [`SAMPLES_PER_BYTE`], 16 samples per byte of input. Up to 32 MiB of input it
 //! is 2^29, which admits a Sentinel-2 true-color image (10980 x 10980 x 3,
 //! 361.7 M samples) and an RGB image of up to about 179 MP. Past that it
-//! grows with the input, so a large file is held to 64 bytes of output a
-//! byte, and a small one to the floor. The input is all the bytes the
-//! decode is given: a JP2 file's boxes count. OpenJPEG has no such limit;
+//! grows with the input, so a large file may ask for at most 64 bytes of
+//! `i32` output per byte of input, and a small one is held to the floor.
+//! The input is all the bytes the decode is given: a JP2 file's boxes count. OpenJPEG has no such limit;
 //! it allocates what the header declares.
 //!
 //! While a palette expands, the index plane and the columns are held together,
