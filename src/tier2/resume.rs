@@ -13,6 +13,8 @@
 //! the visits that decode would spend, so that it refuses the work it
 //! refuses.
 
+use std::cell::Cell;
+
 use crate::codestream::{MainHeader, Tile};
 use crate::tier2::Rect;
 use crate::{Error, Result};
@@ -43,6 +45,15 @@ pub(crate) fn kept_room(fed: u64) -> u64 {
     KEPT_MIN.max(fed.saturating_mul(KEPT_PER_BYTE))
 }
 
+/// How many times a decode's packet bound the walks that read a tile from
+/// the start again (of tiles not kept, and walks started or built again)
+/// may spend over all the decodes of an incremental decoder (see
+/// [`Walks::walk`]). Of the committed fixtures fed in quarters, in pieces
+/// of random sizes and one byte at a time, normal files spend at most
+/// 0.008 of a bound on these walks, and files made to reach the work bounds
+/// at most 3.
+pub(crate) const REPEAT_BOUNDS: u64 = 4;
+
 /// The packet walks of an incremental decode's tiles, by tile index.
 ///
 /// The walks kept hold no more than about twice what one decode of the
@@ -55,6 +66,7 @@ pub(crate) fn kept_room(fed: u64) -> u64 {
 /// of its order, tag trees, counts and buffers. A tile whose walk would
 /// pass either bound is not kept: each decode walks its packets from the
 /// start, as a one-shot decode does, until the bytes fed make room for it.
+/// Those walks are charged over all the decodes (see [`Walks::walk`]).
 ///
 /// The walks do not decide when a refine decodes: the decoder tries on
 /// the first refine with at least one byte fed, then at each doubling of
@@ -100,6 +112,17 @@ impl Walks {
     /// on every call for a tile. `image` is the bytes of the image the
     /// decode returns, and `fed` the bytes the decode is of.
     ///
+    /// A tile whose walk is not kept is walked from the start on each
+    /// decode, as a one-shot decode walks it. So is a tile whose walk is
+    /// started again, or built again once there is room for it, on the
+    /// first decode of the new walk. `repeats` holds the visits those walks
+    /// have spent over all the decodes, and this one's are added to it.
+    /// The first walk of a tile kept from its start is not charged. Once it is past [`REPEAT_BOUNDS`] times the packet
+    /// bound of this decode (`meter`'s first visits), the walk is refused
+    /// for work, as a walk past the bound is. So the decodes together spend
+    /// on these walks at most that many bounds, plus the one walk that went
+    /// past.
+    ///
     /// A tile whose later tile-part adds `POC` volumes, or packed packet
     /// headers where it had none, has another order of packets, or reads
     /// them from elsewhere: its walk is started again.
@@ -114,6 +137,7 @@ impl Walks {
         layers: Option<u16>,
         image: u64,
         fed: u64,
+        repeats: &Repeats,
     ) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
         let index = tile.index as usize;
         if self.tiles.len() <= index {
@@ -121,6 +145,9 @@ impl Walks {
         }
         let volumes = header.poc.len();
         let packed = !tile.packed_headers.is_empty();
+        // Whether an earlier walk of the tile has read its packets, so a
+        // walk built now reads them again.
+        let walked_before = !matches!(self.tiles[index], Slot::Empty);
         let changed = match &self.tiles[index] {
             Slot::Empty => false,
             Slot::Kept(walk, _) => walk.volumes != volumes || walk.packed != packed,
@@ -147,7 +174,8 @@ impl Walks {
         match std::mem::take(&mut self.tiles[index]) {
             Slot::Kept(walk, bytes) => self.tiles[index] = Slot::Kept(walk, bytes),
             Slot::Empty => {
-                let walk = TileWalk::new(header, tile, reduction, layers);
+                let mut walk = TileWalk::new(header, tile, reduction, layers);
+                walk.restarted = walked_before;
                 let bytes = walk.bytes();
                 self.largest = self.largest.max(bytes);
                 self.tiles[index] = if fits(self, bytes) {
@@ -162,7 +190,8 @@ impl Walks {
                 };
             }
             Slot::Unkept { bytes, .. } if fits(self, bytes) => {
-                let walk = TileWalk::new(header, tile, reduction, layers);
+                let mut walk = TileWalk::new(header, tile, reduction, layers);
+                walk.restarted = true;
                 let bytes = walk.bytes();
                 self.kept += bytes;
                 self.tiles[index] = Slot::Kept(Box::new(walk), bytes);
@@ -170,13 +199,21 @@ impl Walks {
             unkept => self.tiles[index] = unkept,
         }
         let Slot::Kept(walk, bytes) = &mut self.tiles[index] else {
-            return super::decode_packets_partial(
-                header, tile, meter, poc_bitmap, reduction, layers,
-            );
+            return walk_again(header, tile, meter, poc_bitmap, reduction, layers, repeats);
         };
+        // A walk started again reads from the start what an earlier walk
+        // of the tile read, so its first walk is charged as a walk of a
+        // tile not kept.
+        if walk.restarted && past_repeats(meter, repeats) {
+            return Err(repeats.refuse());
+        }
         #[cfg(test)]
         let visits = if fresh { 0 } else { walk.visits() };
-        let walked = walk.walk(header, tile, meter, poc_bitmap);
+        let left = meter.left();
+        let mut walked = walk.walk(header, tile, meter, poc_bitmap);
+        if std::mem::take(&mut walk.restarted) {
+            walked = charge_repeat(meter, left, repeats, walked);
+        }
         #[cfg(test)]
         {
             self.visits = self.visits + walk.visits() - visits;
@@ -237,6 +274,79 @@ impl Walks {
     #[cfg(test)]
     pub(crate) fn visits(&self) -> u64 {
         self.visits
+    }
+}
+
+/// The walk of a tile not kept, from the start, as a one-shot decode walks
+/// it, with its visits added to `repeats` (see [`Walks::walk`]). It is
+/// refused for work when `repeats` is past [`REPEAT_BOUNDS`] packet bounds,
+/// before the walk or after it. A walk that fails otherwise fails as the
+/// one-shot walk does.
+fn walk_again<'t>(
+    header: &MainHeader,
+    tile: &'t Tile<'t>,
+    meter: &Meter,
+    poc_bitmap: u64,
+    reduction: u8,
+    layers: Option<u16>,
+    repeats: &Repeats,
+) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
+    if past_repeats(meter, repeats) {
+        return Err(repeats.refuse());
+    }
+    let left = meter.left();
+    let walked = super::decode_packets_partial(header, tile, meter, poc_bitmap, reduction, layers);
+    charge_repeat(meter, left, repeats, walked)
+}
+
+/// Whether the walks charged to `repeats` are past [`REPEAT_BOUNDS`]
+/// packet bounds of the decode `meter` meters.
+fn past_repeats(meter: &Meter, repeats: &Repeats) -> bool {
+    repeats.visits.get() > meter.first().saturating_mul(REPEAT_BOUNDS)
+}
+
+/// Add to `repeats` the visits `meter` has spent since it had `left`, and
+/// refuse for work a walk that took `repeats` past its bound. A walk that
+/// failed stays as it failed.
+fn charge_repeat<T>(
+    meter: &Meter,
+    left: u64,
+    repeats: &Repeats,
+    walked: std::result::Result<T, Refused>,
+) -> std::result::Result<T, Refused> {
+    let spent = left.saturating_sub(meter.left());
+    repeats
+        .visits
+        .set(repeats.visits.get().saturating_add(spent));
+    match walked {
+        Ok(_) if past_repeats(meter, repeats) => Err(repeats.refuse()),
+        walked => walked,
+    }
+}
+
+/// The walks charged as walks of tiles not kept, over all the decodes of
+/// an incremental decoder (see [`Walks::walk`]).
+#[derive(Debug, Default)]
+pub(crate) struct Repeats {
+    /// The packet visits they have spent.
+    pub(crate) visits: Cell<u64>,
+    /// Whether their bound refused a walk of this decode.
+    pub(crate) refused: Cell<bool>,
+}
+
+impl Repeats {
+    /// Walks that have spent `visits`, none refused yet.
+    pub(crate) fn new(visits: u64) -> Self {
+        Repeats {
+            visits: Cell::new(visits),
+            refused: Cell::new(false),
+        }
+    }
+
+    /// Refuse a walk for work, and note that their bound refused it.
+    fn refuse(&self) -> Refused {
+        self.refused.set(true);
+        Refused::Work(WorkRefusal::PacketWalk)
     }
 }
 
@@ -322,6 +432,10 @@ struct TileWalk {
     journal: Journal,
     /// What the end of the data costs (see [`END_VISITS`]).
     end_visits: u64,
+    /// Whether the walk was built for a tile an earlier walk had read, and
+    /// has not walked yet: its first walk reads those packets again, and
+    /// is charged as a walk of a tile not kept (see [`Walks::walk`]).
+    restarted: bool,
 }
 
 /// Where a walk was, to go back to (see [`TileWalk::tentative`]).
@@ -464,6 +578,7 @@ impl TileWalk {
             log: Vec::new(),
             journal: Journal::default(),
             end_visits,
+            restarted: false,
             geoms,
             rect,
         }

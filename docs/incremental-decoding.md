@@ -14,24 +14,30 @@ does again on each refine.
   complete and which tiles are missing.
 - `refine` returns `Ok(None)` where `decode_with` gives `Error::Incomplete`
   (the main header is cut short), since more bytes can complete the header.
-  It also returns `Ok(None)` when the packet or code-block work bound, or the
-  charge for missing tiles, refuses the decode: those bounds grow with the
-  bytes and the missing tiles shrink, so a work limit is reported only by
-  `finish`. Any other error, including a limit that does not depend on the
-  bytes (the sample limit, too many precincts, code-blocks or `POC` volumes,
-  too many bit-planes), is the one `decode_with` gives on those bytes. Once
-  `refine` returns an error, every later `refine` returns the same error
-  without decoding.
+  It also returns `Ok(None)` when the packet or code-block work bound, the
+  charge for missing tiles, or the bound on the walks of tiles not kept
+  (see [Work and memory](#work-and-memory)) refuses the decode: those
+  bounds grow with the bytes and the missing tiles shrink, so a work limit
+  is reported only by `finish`. Any other error, including a limit that
+  does not depend on the bytes (the sample limit, too many precincts,
+  code-blocks or `POC` volumes, too many bit-planes), is the one
+  `decode_with` gives on those bytes. A refusal by a bound the refines
+  spend together, the code-block bound or the bound on the walks of tiles
+  not kept, can stand in for an error later in the file: the refine
+  returns `Ok(None)` where the one-shot decode fails, and `finish` reports
+  that error. Once `refine` returns an error, every later `refine` returns
+  the same error without decoding.
 - A refine tries to decode when the bytes fed are at least twice those of
   the last refine that decoded or tried to. Before any try, the first refine
   called with at least one byte fed tries; with none fed, `refine` returns
   `Ok(None)` and does not count as a try. A refine that tries gives an image
   when the one-shot decode of the bytes fed gives one, except when the
-  earlier refines have spent the code-block bound (see below). A try that
-  gave no image still counts: after a main header cut short, or a refusal
-  by a work bound or the charge for missing tiles, the next refine waits for
-  twice the bytes of that try, even if the one-shot decode of fewer bytes
-  gives an image by then
+  earlier refines have spent the code-block bound, or the bound on the
+  walks of tiles not kept (see below). A try that gave no image still
+  counts: after a main header cut short, or a refusal by a work bound or
+  the charge for missing tiles, the next refine waits for twice the bytes
+  of that try, even if the one-shot decode of fewer bytes gives an image
+  by then
   (`a_refused_refine_puts_off_the_next_until_the_bytes_double`). Doubling
   from the last try is what bounds the work of all the refines together.
 - `finish` is `decode_with` on all the bytes under the decoder's options,
@@ -162,6 +168,34 @@ and waits for more bytes, which raise the bound. `finish` is one more
 decode, under its own bound, and reports a work limit as one decode of the
 whole file does.
 
+A tile whose walk is not kept (see below) is walked from the start by each
+refine, so its walk is done again as the code-block work is. So is a tile
+whose walk starts again (above), or is built once more bytes make room for
+it, on the first refine of the new walk. Only the first walk of a tile
+kept from its start is free. The ledger keeps the packet visits these
+walks have spent over all the refines. Once that is past four times the
+packet bound of one decode of the bytes fed (`REPEAT_BOUNDS` in
+`src/tier2/resume.rs`), a refine that comes to such a walk is refused for
+work before it walks, and returns `Ok(None)`. The refine whose walk takes
+the count past that bound is refused after the walk. So these walks spend
+at most five packet bounds over all the refines: four, and the one walk
+that goes past them, which one decode's bound holds. The bound follows the
+packet work limit: raised by `WorkLimit::Raised`, none under
+`WorkLimit::Unlimited`. Of the committed fixtures, fed in quarters, in
+pieces of random sizes and one byte at a time, at no reduction and at a
+reduction of 1, normal files spend at most 0.008 of a bound on these
+walks, and files made to reach the work bounds at most 3 bounds, so none
+of them gives another result. Two files made for this
+([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)) show the
+cost it holds. One of 525 KB, 256 components and 65535 layers, fed one
+byte at a time with a refine after each, took 8.4 times one decode before
+the bound and takes 4.6 times with it
+(`the_walks_of_a_tile_not_kept_stay_within_a_few_bounds` checks a smaller
+copy of it). One of 525 KB, one tile and 65535 layers, whose 13 later
+tile-parts each add a `POC` volume, fed 64 bytes at a time, took 7.3 times
+and takes 3.5 times
+(`a_walk_started_again_is_charged_as_a_walk_not_kept`).
+
 Between calls the decoder keeps the bytes fed (in a `Vec`, so up to twice
 their length in capacity) and the tiles' packet walks: their geometry, the
 state of their code-blocks and the `POC` gaps, and, until a walk has read
@@ -195,25 +229,20 @@ A file of 1228 bytes that declares a 16384 x 16384 image, in 64 tiles of
 4 x 4 code-blocks with every packet empty, holds no walk between calls: each
 tile's walk is about 10 MiB, past the 1 MiB the bytes give. A refine of it
 holds what one decode holds, 1076 MiB at its peak, and nothing is kept after
-it but the bytes. Each of its refines walks every tile from the start, which
-is the fourth cost below.
+it but the bytes. Each of its refines walks every tile from the start, and
+those walks are charged to the bound on the walks of tiles not kept.
 
-Four costs are outside the bounds. The first three are outside one decode's
-work bounds too. Each refine that returns an image builds the whole image,
-as one decode does: it decodes every code-block again, allocates the samples
-and runs the inverse wavelet and color transforms over them, whatever share
-of the bytes is in. That is one image reconstruction per image, so at most
-about `log2(n)` of them under the doubling cadence. Each refine also parses
-the main header and walks the tile-part headers again; these are linear in
-the headers, and take about 30 µs for the 16 KB of `TLM` entries of
-`tile_header/tlm_32_16k.j2k`. And for a JP2 file whose last tile-part has
-`Psot = 0`, each refine makes the walk that finds where its packets end (see
-[The `read_header` walk](resource-bounds.md#the-read_header-walk)). The
-fourth is the incremental decoder's own: a tile whose walk is not kept is
-walked from the start on every refine, and nothing counts the repeats. Each
-refine is held to one decode's packet bound, but nothing bounds the refines
-together. On one file made for it, the refines cost 9.3 times one decode
-([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)).
+Three costs are outside the bounds, as they are outside one decode's work
+bounds. Each refine that returns an image builds the whole image, as one
+decode does: it decodes every code-block again, allocates the samples and
+runs the inverse wavelet and color transforms over them, whatever share of
+the bytes is in. That is one image reconstruction per image, so at most
+about `log2(n)` of them under the doubling cadence. Each refine also
+parses the main header and walks the tile-part headers again; these are
+linear in the headers, and take about 30 µs for the 16 KB of `TLM` entries
+of `tile_header/tlm_32_16k.j2k`. And for a JP2 file whose last tile-part
+has `Psot = 0`, each refine makes the walk that finds where its packets end
+(see [The `read_header` walk](resource-bounds.md#the-read_header-walk)).
 
 ## What a later decoder could add
 

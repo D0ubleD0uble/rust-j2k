@@ -475,7 +475,10 @@ fn a_decoder_keeps_the_walks_its_bytes_make_room_for() {
 
 /// A walk larger than the room the bytes fed give is not kept, whatever
 /// room the image would give it, and is kept once the bytes fed make room
-/// for it. Either way the walk charges what the one-shot walk charges.
+/// for it. Either way the walk charges what the one-shot walk charges,
+/// and each of the three walks is charged to the walks repeated: the walks
+/// not kept, and the walk built once there is room, which reads the tile
+/// from the start again.
 #[test]
 fn a_walk_past_the_room_of_the_bytes_fed_waits_for_more_bytes() {
     use crate::tier2::resume::kept_room;
@@ -490,17 +493,30 @@ fn a_walk_past_the_room_of_the_bytes_fed_waits_for_more_bytes() {
     let once = Meter::new(u64::MAX / 2);
     tier2::decode_packets_partial(&header, tile, &once, poc_bitmap, 0, None).unwrap();
     let mut walks = Walks::default();
+    let repeats = Repeats::default();
     // An image room of 1 GB, and the room of 94 bytes fed, then of 1 MB.
     for (fed, kept) in [(94, 0), (94, 0), (1 << 20, 1)] {
         let meter = Meter::new(u64::MAX / 2);
         walks
-            .walk(&header, tile, &meter, poc_bitmap, 0, None, 1 << 30, fed)
+            .walk(
+                &header,
+                tile,
+                &meter,
+                poc_bitmap,
+                0,
+                None,
+                1 << 30,
+                fed,
+                &repeats,
+            )
             .unwrap();
         assert_eq!(meter.spent(), once.spent(), "{fed} bytes fed");
         assert_eq!(walks.kept(), (kept, 1 - kept), "{fed} bytes fed");
         assert!(walks.kept_bytes() <= kept_room(fed), "{fed} bytes fed");
         assert_eq!(walks.kept_bytes() > 0, kept == 1, "{fed} bytes fed");
     }
+    assert_eq!(repeats.visits.get(), 3 * once.spent());
+    assert!(!repeats.refused.get());
 }
 
 /// A feed that ends one byte into an `SOP`, headers inline: the one-shot
@@ -637,6 +653,9 @@ fn a_byte_at_a_time_feeder_stays_within_one_decodes_bounds() {
         assert!(once.refine().unwrap().is_some(), "{name}");
         let one_walk = once.spent.walks.visits();
         assert_eq!(packets, one_walk, "{name}: the walks read packets again");
+        // Every walk is kept, so none is charged as one walked again.
+        assert_eq!(decoder.spent.walks.kept().1, 0, "{name}");
+        assert_eq!(decoder.spent.repeats, 0, "{name}: a kept walk was charged");
         assert!(
             packets <= packet_bound,
             "{name}: {packets} > {packet_bound}"
@@ -773,6 +792,7 @@ fn a_kept_walk_charges_poc_repeats_as_the_one_shot_walk_does() {
                     None,
                     u64::MAX / 4,
                     u64::MAX / 4,
+                    &Repeats::default(),
                 )
                 .is_ok();
             assert_eq!(walked, expected, "{end} bytes");
@@ -815,4 +835,189 @@ fn a_refused_refine_is_charged_the_tiles_before_the_cut() {
     assert_eq!(decoder.refine().unwrap(), None);
     assert!(decoder.refused);
     assert_eq!(decoder.spent.blocks, bound, "{first} of tile 0 is charged");
+}
+
+/// The visits a one-shot walk of tile `index` of `bytes` spends, with
+/// `strict` off and no bound.
+fn one_shot_tile_visits(bytes: &[u8], index: u16) -> u64 {
+    let parsed = codestream::parse_header(bytes).unwrap();
+    let cs = codestream::parse_tiles_with(bytes, parsed, false).unwrap();
+    let poc_bitmap = tier2::decode_visits(crate::pipeline::decode::tile_bytes(&cs));
+    let position = cs
+        .tiles
+        .iter()
+        .position(|t| t.index == u32::from(index))
+        .unwrap();
+    let header = cs.tile_header(position).unwrap();
+    let meter = Meter::new(u64::MAX / 2);
+    let _ =
+        tier2::decode_packets_partial(&header, &cs.tiles[position], &meter, poc_bitmap, 0, None);
+    meter.spent()
+}
+
+/// A file whose last tile's walk is too large to keep, and costs about
+/// half the packet bound however few of its bytes are in: each refine
+/// walks it from the start. Refined at 24 points, the walks of it over all
+/// the refines spend no more than 5 packet bounds (4 the refines may
+/// spend, and the walk that goes past them): the refines after that
+/// return `Ok(None)`, though a one-shot decode of their bytes gives an
+/// image, and `finish` still decodes the file. Without the charge, the 24
+/// walks spend about 12 bounds (#416).
+#[test]
+fn the_walks_of_a_tile_not_kept_stay_within_a_few_bounds() {
+    const HEAD: u16 = 2;
+    let bytes = crate::synth::repeat_walk_tiles(HEAD, 16000, 4096);
+    let options = DecodeOptions::default().with_strict(false);
+    let (bound, _) = one_shot_bounds(&bytes);
+    let whole = one_shot_tile_visits(&bytes, HEAD);
+    assert!(2 * whole < bound && 3 * whole > bound, "{whole} of {bound}");
+    // The refines start once the last tile-part's header is in.
+    let header = 14 + bytes.windows(2).rposition(|w| w == [0xFF, 0x90]).unwrap();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let (mut walked, mut images, mut put_off) = (0, 0, 0);
+    for step in 1..=24 {
+        let end = header + (bytes.len() - header) * step / 24;
+        decoder.feed(&bytes[decoder.bytes_fed()..end]);
+        let refined = refine_now(&mut decoder).unwrap();
+        let (kept, _) = decoder.spent.walks.kept();
+        assert_eq!(
+            kept, HEAD as usize,
+            "{end}: only the first tiles' walks are kept"
+        );
+        if refined.is_some() {
+            images += 1;
+            walked += one_shot_tile_visits(&bytes[..end], HEAD);
+        } else {
+            assert!(decoder.refused, "{end}");
+            put_off += 1;
+        }
+    }
+    assert!(
+        walked <= 5 * bound,
+        "{images} images walked {walked} of {bound}"
+    );
+    // The ledger counts those walks, and the one refused after its walk,
+    // and no walk after it.
+    let repeats = decoder.spent.repeats;
+    assert!(
+        walked < repeats && repeats <= 5 * bound,
+        "{walked} walked, {repeats} charged, of {bound}"
+    );
+    assert!(
+        images > 0 && put_off > 0,
+        "{images} images, {put_off} put off"
+    );
+    assert!(oracle(&bytes, &options).unwrap().is_some());
+    assert!(decoder.finish().is_ok());
+}
+
+/// A tile whose later tile-parts each add a `POC` volume has its kept walk
+/// started again at each, and the walk started again reads the tile from
+/// the start. Fed 64 bytes at a time, the walks started again are charged
+/// as walks of tiles not kept: the walks of the refines that give an image
+/// spend at most 6 packet bounds (the first walk, which is not charged,
+/// then the 4 bounds the refines may spend and the walk that goes past
+/// them). Without the charge, it gives 12 images, whose walks spend 9.6
+/// bounds.
+#[test]
+fn a_walk_started_again_is_charged_as_a_walk_not_kept() {
+    let bytes = crate::synth::restarted_poc_tile(4, 13, 400);
+    let options = DecodeOptions::default().with_strict(false);
+    let (bound, _) = one_shot_bounds(&bytes);
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let (mut walked, mut images, mut put_off) = (0, 0, 0);
+    for end in every(64, bytes.len()) {
+        decoder.feed(&bytes[decoder.bytes_fed()..end]);
+        let tried = decoder.tried;
+        match decoder.refine().unwrap() {
+            Some(_) => {
+                images += 1;
+                walked += one_shot_tile_visits(&bytes[..end], 0);
+            }
+            // Only the charge refuses a try.
+            None if decoder.tried != tried && decoder.refused => {
+                assert!(decoder.refused_by_repeats, "{end}");
+                put_off += 1;
+            }
+            None => {}
+        }
+    }
+    assert_eq!(decoder.spent.walks.kept(), (1, 0), "the walk is kept");
+    assert!(
+        walked <= 6 * bound,
+        "{images} images walked {walked} of {bound}"
+    );
+    let repeats = decoder.spent.repeats;
+    assert!(
+        repeats > 0 && repeats <= 5 * bound,
+        "{repeats} charged, of {bound}"
+    );
+    assert!(
+        images > 0 && put_off > 0,
+        "{images} images, {put_off} put off"
+    );
+    assert!(oracle(&bytes, &options).unwrap().is_some());
+    assert!(decoder.finish().is_ok());
+}
+
+/// The bound on the walks of tiles not kept follows the packet work limit:
+/// with no limit, or a limit ten times the default, every one of the 24
+/// refines of `the_walks_of_a_tile_not_kept_stay_within_a_few_bounds`
+/// gives an image, since their walks spend about 12 default bounds.
+#[test]
+fn the_bound_on_walks_not_kept_follows_the_packet_work_limit() {
+    let bytes = crate::synth::repeat_walk_tiles(2, 16000, 4096);
+    let header = 14 + bytes.windows(2).rposition(|w| w == [0xFF, 0x90]).unwrap();
+    for limit in [WorkLimit::Unlimited, WorkLimit::Raised(10)] {
+        let options = DecodeOptions::default()
+            .with_strict(false)
+            .with_packet_work_limit(limit.clone());
+        let mut decoder = IncrementalDecoder::new(options).unwrap();
+        let mut images = 0;
+        for step in 1..=24 {
+            let end = header + (bytes.len() - header) * step / 24;
+            decoder.feed(&bytes[decoder.bytes_fed()..end]);
+            if refine_now(&mut decoder).unwrap().is_some() {
+                images += 1;
+            }
+        }
+        assert_eq!(images, 24, "{limit:?}");
+        assert!(!decoder.refused_by_repeats, "{limit:?}");
+    }
+}
+
+/// A file made to reach the packet work bound, whose tiles' walks are too
+/// large to keep, fed 256 bytes at a time: each refine that is due gives
+/// an image where the one-shot decode of its bytes gives one. Its walks
+/// spend about 2 bounds over all the refines, more than one and below the
+/// 4 they may: held to one bound, the refine of 16384 bytes is refused.
+#[test]
+fn a_work_bound_file_fed_in_pieces_keeps_every_image() {
+    let bytes = fixture("work_bound/t2skip_2048x1024_40000.j2k");
+    let options = DecodeOptions::default();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let mut images = 0;
+    for end in every(256, bytes.len()) {
+        decoder.feed(&bytes[decoder.bytes_fed()..end]);
+        let tried = decoder.tried;
+        let refined = decoder.refine().unwrap();
+        if decoder.tried == tried {
+            continue;
+        }
+        let expected = oracle(&bytes[..end], &options).unwrap();
+        assert_eq!(refined.is_some(), expected.is_some(), "{end} bytes");
+        assert!(!decoder.refused_by_repeats, "{end} bytes");
+        images += usize::from(refined.is_some());
+    }
+    let (_, walked) = decoder.spent.walks.kept();
+    assert!(
+        images > 1 && walked > 0,
+        "{images} images, {walked} walked again"
+    );
+    let (bound, _) = one_shot_bounds(&bytes);
+    assert!(
+        decoder.spent.repeats > bound,
+        "{} of {bound}",
+        decoder.spent.repeats
+    );
 }

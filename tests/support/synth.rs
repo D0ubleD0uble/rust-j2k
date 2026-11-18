@@ -257,6 +257,71 @@ impl TagTree {
     }
 }
 
+/// A codestream of 256 components in a row of `head + 1` tiles of one
+/// sample each, with no wavelet levels, in LRCP order. The main `COD` has
+/// `layers` layers. Each of the first `head` tiles has a tile `COD` of one
+/// layer and its 256 packets empty (`00`). The last tile uses the main
+/// `COD` and has `zeros` bytes of `00`, which read as empty packets. The
+/// walk of the last tile is large beside the samples of the image, so an
+/// incremental decoder fed it in pieces may walk it again on each refine.
+pub fn repeat_walk_tiles(head: u16, layers: u16, zeros: usize) -> Vec<u8> {
+    const COMPONENTS: usize = 256;
+    let tiles = u32::from(head) + 1;
+    let mut cs = vec![0xFF, 0x4F];
+    cs.extend(seg(
+        0xFF51,
+        &siz_body([tiles, 1, 0, 0, 1, 1, 0, 0], &[[7, 1, 1]; COMPONENTS]),
+    ));
+    cs.extend(seg(0xFF52, &cod_body(layers, 0, 0, 0)));
+    cs.extend(seg(0xFF5C, &qcd_none_body(2, &[8])));
+    let one_layer = seg(0xFF52, &cod_body(1, 0, 0, 0));
+    for index in 0..head {
+        cs.extend(tile_part(index, 0, 1, &one_layer, &[0; COMPONENTS]));
+    }
+    cs.extend(tile_part(head, 0, 1, &[], &vec![0; zeros]));
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
+/// A codestream of one 32 x 32 tile of 20 components with `levels` wavelet
+/// levels, code-blocks of 32 x 32 and 65535 LRCP layers, in `parts`
+/// tile-parts whose data is all `00` (empty packets). Tile-part 0 has a
+/// `POC` of one volume over every packet. Each later tile-part adds a `POC`
+/// of one volume over one packet, and starts at twice the offset of the one
+/// before it, from 256; the last holds `last` bytes of data. Each `POC` a
+/// tile-part adds changes the tile's order of packets, so an incremental
+/// decoder starts the tile's walk again.
+pub fn restarted_poc_tile(levels: u8, parts: u8, last: usize) -> Vec<u8> {
+    const COMPONENTS: u8 = 20;
+    let mut cs = vec![0xFF, 0x4F];
+    cs.extend(seg(
+        0xFF51,
+        &siz_body(
+            [32, 32, 0, 0, 32, 32, 0, 0],
+            &[[7, 1, 1]; COMPONENTS as usize],
+        ),
+    ));
+    cs.extend(seg(0xFF52, &cod_body(65535, levels, 3, 0)));
+    let exponents = vec![8; 3 * usize::from(levels) + 1];
+    cs.extend(seg(0xFF5C, &qcd_none_body(2, &exponents)));
+    // `RSpoc`, `CSpoc`, `LYEpoc`, `REpoc`, `CEpoc`, `Ppoc` (LRCP).
+    let full = seg(0xFF5F, &[0, 0, 0xFF, 0xFF, levels + 1, COMPONENTS, 0]);
+    let one = seg(0xFF5F, &[0, 0, 0, 1, 1, 1, 0]);
+    for part in 0..parts {
+        let extra = if part == 0 { &full } else { &one };
+        // The header of a tile-part: `SOT`, its `POC` and `SOD`.
+        let header = 12 + extra.len() + 2;
+        let data = if part + 1 == parts {
+            last
+        } else {
+            (256usize << part).saturating_sub(cs.len() + header)
+        };
+        cs.extend(tile_part(0, part, parts, extra, &vec![0; data]));
+    }
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
 // `ihdr_for` and `wrap_jp2_boxes` must stay the last items in this file:
 // `tests/fuzz_seed_outcomes.rs` pins a hash of everything from here on.
 
