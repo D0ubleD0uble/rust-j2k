@@ -30,7 +30,7 @@ that the decoder reads (decision 4), and every profile Part 1 defines
 | 5/3 reversible and 9/7 irreversible forward DWT, 0 to 32 levels | the decoder's inverse is the property-test partner |
 | DC level shift, RCT and ICT on components 0 to 2 | on by default for 3 or more components of equal geometry, as in OpenJPEG |
 | Scalar quantization: none (5/3), derived and expounded (9/7) | |
-| Depth 1 to 38 bits as SIZ allows, as long as every code-block needs at most 30 coded bit-planes, maxshift included | the decoder's cap (`MAX_BIT_PLANES`), which OpenJPEG shares; refused up front from the worst case (the plane rule, P5.3), so in practice about 27 bits for 5/3 with 2 guard bits (estimated; P5.2 and P5.3 measure it) |
+| Depth 1 to 38 bits as SIZ allows, as long as the worst-case `Mb` plus the maxshift is at most 30 in every band | 30 is this decoder's and OpenJPEG's cap (`MAX_BIT_PLANES`), not the standard's (37, B.10.6). Lossless 5/3 at 2 guard bits: 27 bits, 26 with the RCT; with maxshift, 11 (decision 10, P5.3) |
 | MQ encoder and the three EBCOT passes | each pass's rate and distortion recorded for rate control |
 | All six code-block style bits | bypass, reset, restart, vertically causal, predictable termination, segmentation symbols |
 | Code-block sizes 4 to 1024 per side, area at most 4096 | OpenJPEG's encoder stops at 64×64 |
@@ -205,6 +205,36 @@ Its `-ROI` shifts a whole component up and does nothing else: every
 coefficient is then in the region, so it tests the `RGN` marker and the shift
 alone, not a region shape or a background.
 
+### High depths
+
+From a separate measurement on 2026-11-17: 64×64 one-component images of
+uniform noise, a mid-range field (`2^(d−1) ± 128`) and a min/max
+checkerboard, decoded by `opj_decompress` and by this crate.
+
+| Encoder | Highest depth it encodes right | What happens above it |
+| ------- | ------------------------------ | --------------------- |
+| `opj_compress` 2.5.0, 5/3, 5 levels | 24 bits; 26 at `-n 1`; 24 with `-I` | exits 0 with no warning, and both decoders decode the same wrong image: full-range data from 25 bits, the mid-range field from 30 |
+| `grk_compress` 20.4.25 | 16 bits | refused ("precision = 17 not supported") |
+| `ojph_compress` 0.33.0 (HTJ2K) | 32 bits, with its own decoder | raises the guard bits past 29 bits and uses 64-bit blocks; `opj_decompress` refuses its output from 29 bits ("number of bitplane, 31, is larger than 30") |
+
+OpenJPEG has no depth check in the encoder. Three causes, from the source:
+coefficients are held as `coef << 6` in `int32` (`t1.c:2232`), so any
+magnitude of `2^25` or more wraps; an `εb` of 32 or more is written as
+`expn << 3` into one byte and wraps to 0 (`j2k.c:10960`); and the zero
+bit-plane count `band->numbps − cblk->numbps` is not checked, so it can go
+negative (`t2.c:759`). Its `εb` is the depth plus the nominal gain, with no
+RCT bit (`dwt.c:1977-1986`). `-GuardBits` does not move the `int32` limit.
+Signed input could not be measured: the `opj_compress` PGX reader replaces
+the declared precision with the data's (`convert.c:1326`), and raw and TIFF
+input stop at 16 bits.
+
+By the documentation, Kakadu also bounds `εb` from the options
+(`Qabs_ranges` defaults to "the smallest value which is guaranteed to avoid
+overflow"), with `Qguard` defaulting to 1. JJ2000 drops planes past its
+`int` silently. The 30-plane cap is an implementation limit, shared by
+OpenJPEG, Grok and this crate, which reconstruct at double scale in `i32`;
+T.800 allows `Mb` up to 37 (the B.10.6 note).
+
 ### Profiles in `opj_compress` and `grk_compress`
 
 `opj_compress` 2.5.0 has `-cinema2K <24|48>`, `-cinema4K` and
@@ -331,6 +361,13 @@ layers, transform, MCT, and targets that mean the same bytes):
   encodes again, checks the digest (so a changed encoder fails until the
   snapshot is rerun), and checks both inequalities on the committed numbers.
   `cargo test` needs no external tool.
+- **Depth range:** parity, and every byte or field comparison with
+  `opj_compress`, covers depths up to 24 bits only. From 25 bits OpenJPEG
+  writes streams that decode wrong (measured; see [High
+  depths](#high-depths)), so there is nothing to compare against. Above 24
+  bits the gate is part 1 alone: the source image, through both decoders.
+  `opj_decompress` reads our streams there correctly, since its Part 1
+  decoder checks coded planes, not `Mb`.
 
 ### 4. ISO/IEC 15444-4 encoder conformance
 
@@ -477,6 +514,28 @@ Settled on 2026-11-17.
    after coding, with its size. The `PRF` marker is not written, since no
    profile number is defined for it.
 
+10. **Depth: the worst case from the options, plus a data check.** Settled
+    later the same day, after measuring four encoders (see [High
+    depths](#high-depths)). Before coding, the options are `InvalidOptions`
+    when the worst-case `Mb` plus the maxshift exceeds 30 in any band, with
+    `Mb = G + εb − 1` and `εb = B + ⌈log2 gain_b⌉`, plus 1 on components the
+    RCT changes (the E-10 rule). Reversible coding needs at least 2 guard
+    bits, which cover the 5/3 growth at any level count. While coding, each
+    block's top bit is checked against `Mb`, and a block over it is an
+    internal error (`Inconsistent`), never a silent clamp; coefficients are
+    held so that nothing wraps before that check. There is no 64-bit block
+    path and no `εb` sized from the data. The worst case is what OpenJPH and
+    Kakadu do and what E-10 describes, the `QCD` is written before the data
+    is seen, and the same options always succeed or always fail for an image
+    shape. A 64-bit path would need `i64` through both coders, the
+    transforms and the decoder, and no Part 1 oracle can check streams past
+    30 planes: OpenJPEG refuses them. Data-sized exponents would help only
+    small-valued data at 28 to 31 bits, at the cost of a second pass and the
+    under-allocation failures OpenJPEG shows at `-GuardBits 0`. The limits
+    that follow are 27 bits for lossless 5/3, 26 with the RCT, and 11 with
+    maxshift. This departs from OpenJPEG, which writes a broken file from
+    25 bits where this encoder refuses.
+
 Two smaller choices follow from the defaults: the levels clamp on small
 images, and no COM marker by default (see [Which defaults to
 mirror](#which-defaults-to-mirror)).
@@ -487,7 +546,7 @@ mirror](#which-defaults-to-mirror)).
 | --- | --------------------- | ---- | ---------- |
 | Decoded fixtures | every lossless fixture in `tests/fixtures/`, decoded by this decoder (already graded against OpenJPEG) | no new bytes | already |
 | Part 4 references | `tests/fixtures/conformance/references/*.pgx`, 78 files: the D.4 a) inputs | no new bytes | already; excluded from the crate |
-| Synthetic | a seeded generator in `tests/support/synth_image.rs`: noise, ramps, checkerboards, edges, flat fields; sizes from 1×1 to 1024×1024, including odd and prime sizes; 1 to 4 components; depths 1, 8, 12 and 16, and the measured plane ceiling and one bit over it; 31 unsigned and 32 signed only as reject cases, or at small magnitudes with no DWT where the plane rule allows (`tests/signed_32bit.rs` proves depth 32 only for small magnitudes); sampling 1×1, 2×1 and 2×2 | none (generated) | the generator only |
+| Synthetic | a seeded generator in `tests/support/synth_image.rs`: noise, ramps, checkerboards, edges, flat fields; sizes from 1×1 to 1024×1024, including odd and prime sizes; 1 to 4 components; depths 1, 8, 12, 16 and 24 (the last that OpenJPEG writes right), 25, 26 and 27 (graded by the source alone), 28 and 31 unsigned and 32 signed as reject cases; each high depth as uniform noise, a mid-range field and a min/max checkerboard; sampling 1×1, 2×1 and 2×2 | none (generated) | the generator only |
 | Profile frames | the same generator at the profiles' sizes: 2048×1080, 4096×2160, 1920×1080 and 8192×4320, 8 to 16 bits, 3 or 4 components, 4:4:4 and 4:2:2 | none (generated) | the generator only |
 | Profile snapshots | `tests/fixtures/encode/profiles.json`: per case, the header fields `opj_compress` or `grk_compress` wrote, and the digest of this encoder's output | about 20 KB, estimated | yes |
 | GRIB2 fields | the committed `jpeg2000_regular_latlon`, `eta_lambert_*` and GRIB2-shaped bench codestreams, decoded | no new bytes | already |
@@ -692,16 +751,21 @@ over the full range of each depth. External: at `-n 1` (no transform), the
 coefficients of `opj_compress -mct 1` read back by our tier-1 equal our
 forward RCT bit for bit, and our ICT is within 1 of `-I -mct 1 -n 1`'s.
 
-**Work also:** measure the lossless depth ceiling under the 30-plane cap
-(P5.3) for 0 to 6 levels, with and without the RCT, which adds a bit to the
-two chroma components. The measured table goes into scope.md.
+**Work also:** the RCT's extra bit in the depth rule (decision 10): the two
+chroma components get `εb` one higher, written in a QCC for components 1
+and 2. OpenJPEG adds no such bit (`dwt.c:1977-1986`). Nothing measured so
+far feeds three components above 16 bits through an RCT (`opj_compress`
+reads multi-component input only up to 16 bits), so this step measures it,
+with a small harness on libopenjp2 or our own decoder, at 17 to 26 bits.
 
-**Gate:** both pass at depths 1, 8, 16 and the measured ceiling, and one bit
-above the ceiling is refused with `InvalidOptions`.
+**Gate:** both pass at depths 1, 8, 16, 24 and 26 with the RCT; 27 with the
+RCT is refused with `InvalidOptions`; a min/max checkerboard at 26 bits
+passes the data check of P5.3 in every block.
 
 ### P5.3 — Forward quantization (`src/encode/quant.rs`)
 
-**Goal:** step sizes and quantization indices for 9/7, and the plane rule.
+**Goal:** step sizes and quantization indices for 9/7, and the depth rule
+of decision 10 for both transforms.
 
 **Work:**
 - The step is the one the decoder reads (`half_step_of` in `src/quant.rs`):
@@ -712,31 +776,51 @@ above the ceiling is refused with `InvalidOptions`.
   forward, which equals OpenJPEG's quantization of its `K` forward with the
   gain in the step. The gain table and the synthesis-norm table are new code
   here; the decoder has neither. P5.9 reads the norms for its distortion.
-- **The plane rule.** A code-block's first coded plane is
-  `Mb + s − zero bit-planes`, with `Mb = G + εb − 1` (E.1) and `s` the
-  maxshift. Both decoders refuse more than 30 (`MAX_BIT_PLANES` in
-  `src/tier1/ebcot/passes.rs`, and OpenJPEG's `bpno_plus_one >= 31`). The
-  encoder refuses, with `InvalidOptions` before any coding, any options
-  whose worst case `Mb + s` exceeds 30 in some band: `Mb` from the declared
-  depth, the transform, the RCT and the guard bits. The worst case was chosen
-  over the actual data because the answer is then known from the options
-  alone: the same options either always work for an image shape or never
-  do, and a caller learns it before spending the encode. The cost is that a
-  high declared depth holding small values is refused even though its coded
-  planes would fit. A 31-bit unsigned image fits only with no DWT, no RCT and
-  0 guard bits, and a 32-bit signed one never fits (estimated from
-  `Mb = G + εb − 1`; P5.2 and this step measure it). The maxshift is the one
-  exception (P5.17): `s` depends on the data by definition, so its check
-  runs per block once `s` is known, still before any byte is written.
+- **The depth rule (decision 10).** Before coding: for every band,
+  tile-component and region, `Mb = G + εb − 1` (E-2), with
+  `εb = B + ⌈log2 gain_b⌉ + c` for reversible coding (E-10: gain 1, 2, 2, 4
+  for LL, HL, LH, HH, and `c = 1` on RCT chroma) and `εb` from the chosen
+  step for 9/7. If `Mb + s > 30` anywhere, with `s` the maxshift (P5.17),
+  the options are `InvalidOptions`. The `QCD` is in the main header, so its
+  bound has to be known before the data is seen.
+- **Guard bits.** Reversible coding requires `G ≥ 2`, and fewer is
+  `InvalidOptions`. The 5/3 transform's worst-case growth is about 8.2 in
+  HH (the L1 norm of its analysis filters, which saturates by 7 levels), so
+  a coefficient stays under `2^(B+3)`, which is HH's `Mb` at `G = 2`. Two
+  guard bits therefore cover any level count. Folding the growth into `εb`
+  instead, as OpenJPH does, would also allow `G = 1`, but its `εb` would no
+  longer be E-10's or OpenJPEG's, and the `QCD` comparison below would be
+  lost. `G = 2` is also OpenJPEG's default.
+- **The data check.** While coding, each block's largest magnitude must have
+  its top bit at or below `Mb`, so the zero bit-plane count is never
+  negative. A block that breaks this is `Inconsistent`, never a clamp. It
+  costs nothing: the block coder finds the largest magnitude anyway.
+  Coefficients are held so that nothing wraps before the check: 5/3 in
+  `i32` after the transform, with no left shift for fixed-point distortion
+  (OpenJPEG's `coef << 6` in `int32`, `t1.c:2232`, wraps from 25 bits), and
+  the distortion figures computed in `i64` or `f64`.
+- **What it allows.** Lossless 5/3 at `G = 2`: `B ≤ 27`, or `B ≤ 26` with
+  the RCT. 31-bit unsigned and 32-bit signed inputs are always refused. There
+  is no 64-bit block path and no `εb` sized from the data.
 
 **Oracle:** the `QCD` (`SPqcd` exponent and mantissa of every band) equals
 `opj_compress -I`'s byte for byte, at depths 1 to 16 and 0 to 10 levels, read
-with `opj_dump`. This depends on choosing `εb` and `μb` as OpenJPEG does, and
+with `opj_dump`; with the RCT, the chroma QCC's `εb` is one higher than
+OpenJPEG's, by decision 10. This depends on choosing `εb` and `μb` as
+OpenJPEG does, and
 P5.5's block-byte comparison further depends on the indices matching (P5.1).
 Property: the decoder's dequantization of our indices is within half a step
-of the input coefficient. The plane rule: every refused option set has a
-reject-matrix row, and the largest accepted depth at each level count
-decodes in both decoders.
+of the input coefficient. For the depth rule: every refused option set has a
+reject-matrix row; 27-bit lossless 5/3 at 1 to 6 levels, on uniform noise
+and on a min/max checkerboard (which drives HH to its worst case, and takes
+the `−2^(B−1)` extreme at 0 levels too), passes the data check and decodes
+exactly in both decoders; 28 bits is refused. OpenJPEG writes a wrong
+stream for the same input from 25 bits, so above 24 bits the source image is
+the only reference. Signed input at 17 to 27 bits is graded the same way:
+`opj_compress` cannot be given it (its PGX reader replaces the declared
+precision), so this step measures it through our encoder and both decoders
+only. A DC-shifted unsigned image spans the same coefficient range, so the
+unsigned cases above are expected to cover it (estimated).
 
 **Gate:** all pass.
 
@@ -821,7 +905,11 @@ with all passes.
 
 **Oracle:** the source, graded by gate part 1 (PAE and MSE at most
 OpenJPEG's plus 1 PAE); `opj_decompress` within the decoder's 9/7 gap of our
-decode.
+decode. Above 24 bits OpenJPEG's `-I` output is wrong (see [High
+depths](#high-depths)), so there the bound is against the source alone. This
+step measures how far an `f32` 9/7 path stays accurate above 24 bits and
+records it in scope.md; the depth rule (decision 10) still decides what is
+refused.
 
 **Gate:** every fixed-quantization case passes.
 
@@ -953,15 +1041,17 @@ component grid) coded by maxshift, with `RGN` in the main or a tile header.
 **Work:** map the region to the wavelet coefficients it affects (Annex H);
 choose the shift `s`; shift the region's coefficients up `s` planes before
 Tier-1; carry the shifted planes through the bypass count (D.6, counted from
-the first coded plane). Choose `s` one plane above the background's largest
-magnitude. H.1 needs only `2^s` above it, but OpenJPEG takes a coefficient as
-region one plane lower ([departures](openjpeg-departures.md#region-of-interest-threshold-part-1-and-ht)),
-and the spare plane makes both decoders sort every coefficient alike. Its
-cost is measured in this step. The 30-plane cap (P5.3) counts the shift:
-since `s` is at least the background's planes, a region block needs about
-twice its own planes, so maxshift fits only at moderate depths (estimated
-around 12 to 14 bits; measured here). A block that would exceed the cap is
-refused with `InvalidOptions` naming the region, before any byte is written.
+the first coded plane). Choose `s` one plane above the largest magnitude
+the background can hold. H.1 needs only `2^s` above it, but OpenJPEG takes a
+coefficient as region one plane lower
+([departures](openjpeg-departures.md#region-of-interest-threshold-part-1-and-ht)),
+and the spare plane makes both decoders sort every coefficient alike. Under
+decision 10 that magnitude comes from the options, not the data: `s` is the
+largest worst-case `Mb` of the component's bands plus the spare plane. The
+rule `Mb + s ≤ 30` then reads `2·Mb + 1 ≤ 30` in HH, where `Mb = B + 3`, so
+maxshift fits up to 11 bits lossless, 10 with the RCT (computed from the
+rule; the spare plane costs one bit of that). Options past it are
+`InvalidOptions` naming the region, before coding.
 
 **Oracle:**
 - lossless ROI encodes decode to the source in both decoders, for any
@@ -1202,7 +1292,9 @@ reject matrix in `src/encode/tests.rs` pins each refused option and input.
 
 **Work:** the scope.md encoding rows; roadmap.md; an encoder section in
 correctness.md; openjpeg-departures.md (the levels clamp, no COM, the ratio,
-the spare ROI plane, the POC sequences refused, the plane rule, the 9/7
+the spare ROI plane, the POC sequences refused, depths refused from 28 bits
+(26 with the RCT) where OpenJPEG writes a broken stream from 25, the RCT bit
+in the chroma `εb`, the 9/7
 gain placed per filtering on #126 shapes, profile conflicts refused
 where OpenJPEG overrides or drops the profile, the IMF byte limit held, and
 any difference found);
@@ -1287,19 +1379,19 @@ input is samples.
   (2^29 by default), which a caller raises with an option, and which the
   encoder's caller is already past, since it holds the image in memory. The
   docs then say which limit to raise to read a large output back.
-- **The plane rule** (P5.3) is the worst case from the options. The other
-  choice, `εb` from each band's actual largest magnitude, would let a 32-bit
-  image of small values encode, as the stream `tests/signed_32bit.rs` reads
-  shows is legal, at the cost of a result that depends on the pixels and a
-  `QCD` that no longer matches OpenJPEG's. Recommended: the worst case for
-  0.6.0, with the data-derived exponents left as a possible option later.
+- **Depth** is settled (decision 10). What is still unmeasured moves into
+  steps: the RCT above 16 bits (P5.2), signed input at high depth (P5.3) and
+  the 9/7 precision limit of an `f32` path above 24 bits (P5.8, where
+  OpenJPEG's `-I` breaks at 25).
 - **Whether our tier-1 bytes can match OpenJPEG's** is unmeasured (P5.5). The
   answer decides whether P5.7, P5.10 to P5.12 and P5.16 get byte comparisons
   or only round trips. For 9/7 it also depends on P5.1's indices matching
   OpenJPEG's under the two gain conventions.
-- **The cost of the spare ROI plane** (P5.17) is unmeasured. If it is large,
-  the alternative is the H.1 minimum with ROI cases graded by this decoder
-  alone, which would need its own decision.
+- **The cost of the spare ROI plane** (P5.17): under decision 10 it costs
+  one bit of depth (maxshift to 11 bits instead of 12), computed from the
+  rule. Its cost in bytes is unmeasured. If either is too much, the
+  alternative is the H.1 minimum with ROI cases graded by this decoder alone,
+  which would need its own decision.
 - **Which edition the profile rules come from.** The rows are transcribed
   from T.800 (06/2019), which the ITU publishes free. The current edition is
   T.800 (07/2024), which was not free to download when this plan was written.
@@ -1338,6 +1430,14 @@ input is samples.
   `opj_j2k_set_imf_parameters` and `opj_j2k_is_imf_compliant` in `j2k.c`;
   and `opj_compress -h`.
 - Grok 20.4.25 `grk_compress -h` and its broadcast messages.
+- High depths, from the source: OpenJPEG 2.5.0 `t1.c:2232` (`coef << 6`),
+  `j2k.c:10960` (the `QCD` byte), `t2.c:759` (zero bit-planes),
+  `dwt.c:1977-1986` (`εb`), `convert.c:1326` (the PGX precision); Grok
+  20.4.25 `grok.h:162` (`GRK_MAX_SUPPORTED_IMAGE_PRECISION 16`); OpenJPH
+  0.33.0 `ojph_params.cpp:1546-1590` and `:1748-1769` (`εb`, guard bits and
+  64-bit blocks); the `kdu_compress -usage` text (`Qguard`, `Qabs_ranges`);
+  JJ2000 `StdEntropyCoder.java:1380-1383`. T.800 (06/2019): Table A.11 and
+  its footnote, E-2, E-10, the B.10.6 note.
 - Grok's `grk_compress` manual page, the `-A` rate-control algorithms:
   `https://manpages.debian.org/testing/grokj2k-tools/grk_compress.1.en.html`.
 - D. Taubman, "High performance scalable image compression with EBCOT",
