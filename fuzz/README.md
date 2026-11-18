@@ -186,8 +186,12 @@ nothing spent spends on the same bytes passes what is left of the bound after
 the work spent before it. The limit is at least 2^26 sample passes, which
 inputs of a few kilobytes do not come near, so each due refine also starts a
 probe decoder with work already spent (`rust_j2k::fuzz`), drawn around the most
-that leaves the refine room, and checks it by the same rule. Each input is
-decoded several times, so
+that leaves the refine room, and checks it by the same rule. A due refine may
+also give `Ok(None)` when the bound on the walks of tiles not kept, which all
+the refines spend together, refuses it
+(`rust_j2k::fuzz::incremental_refused_by_repeats`), even where the one-shot
+decode gives an image or an error; a decoder with nothing spent must then give
+the one-shot result. Each input is decoded several times, so
 seed it with small files, such as the fixtures under 3 KB, and cap the input
 length (`-max_len=4096`). Even so it can be slow, since almost all its time
 goes to its own `decode_with` oracle decodes: from the fixtures under 3 KB

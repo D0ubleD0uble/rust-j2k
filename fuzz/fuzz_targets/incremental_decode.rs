@@ -5,9 +5,14 @@
 //! and must give what `decode_with` gives with `strict` off on the bytes
 //! fed so far: the same image, or the same error. A refine that does not
 //! decode returns `Ok(None)`. A refine due under the doubling rule must
-//! decode unless the header is cut short or the packet work bound refuses
-//! that one-shot decode. After an error, every later refine gives it again,
-//! and `finish` is the decode of all the bytes under the decoder's options.
+//! decode unless the header is cut short, the packet work bound refuses
+//! that one-shot decode, or the bound on the walks of tiles not kept, which
+//! all the refines spend together, refuses the refine
+//! (`rust_j2k::fuzz::incremental_refused_by_repeats`). That refusal may
+//! stand where the one-shot decode gives an image or an error; a decoder
+//! with nothing spent then gives the one-shot result. After an error, every
+//! later refine gives it again, and `finish` is the decode of all the bytes
+//! under the decoder's options.
 //!
 //! The first six input bytes steer the options, as `tile_body`'s first bytes
 //! steer its shape, so a small mutation of the file keeps them; the rest is
@@ -37,7 +42,10 @@ use libfuzzer_sys::fuzz_target;
 #[path = "../common/budget.rs"]
 mod budget;
 
-use rust_j2k::fuzz::{incremental_code_block_work, incremental_with_code_block_work_spent};
+use rust_j2k::fuzz::{
+    incremental_code_block_work, incremental_refused_by_repeats,
+    incremental_with_code_block_work_spent,
+};
 use rust_j2k::{
     decode_with, DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Region, Window,
     WorkLimit,
@@ -150,10 +158,13 @@ fuzz_target!(|input: &[u8]| {
             // every cut a decoder with nothing spent would pass, so it is
             // what that decoder gives and spends. One that gives `Ok(None)`
             // once the bound is known may be refused for what earlier
-            // refines spent, so a decoder with nothing spent is asked.
+            // refines spent, so a decoder with nothing spent is asked. So
+            // is one when the bound on the walks of tiles not kept refused
+            // the refine: the code-block rule below does not hold for it.
             let (after, bound) = incremental_code_block_work(&decoder);
+            let repeats = refined == Ok(None) && incremental_refused_by_repeats(&decoder);
             let zeroed;
-            let (fresh, work) = if refined == Ok(None) && bound.is_some() {
+            let (fresh, work) = if refined == Ok(None) && (bound.is_some() || repeats) {
                 let mut zero = IncrementalDecoder::new(options.clone()).unwrap();
                 zero.feed(&data[..fed]);
                 zeroed = keyed(zero.refine());
@@ -169,7 +180,9 @@ fuzz_target!(|input: &[u8]| {
                 (&refined, work)
             };
             let cut = Cut { fresh, work, bound };
-            cut.check(&decoder, spent, &refined, "due");
+            if !repeats {
+                cut.check(&decoder, spent, &refined, "due");
+            }
             // A decoder that starts with work spent, drawn around the most
             // that leaves this refine's work room.
             if let Some(bound) = bound {

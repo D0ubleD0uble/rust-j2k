@@ -256,6 +256,14 @@ pub fn incremental_code_block_work(decoder: &crate::IncrementalDecoder) -> (u64,
     decoder.code_block_work()
 }
 
+/// Whether the last refine of `decoder` that tried was refused by the
+/// bound on the walks of tiles not kept, which all its refines spend
+/// together. Such a refine gives `Ok(None)` where a one-shot decode of the
+/// same bytes may give an image or an error.
+pub fn incremental_refused_by_repeats(decoder: &crate::IncrementalDecoder) -> bool {
+    decoder.refused_by_repeats()
+}
+
 #[cfg(test)]
 mod tests {
     /// A decoder started with work spent is cut by what is left of the

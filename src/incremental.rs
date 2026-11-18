@@ -6,7 +6,7 @@ use std::fmt;
 
 use crate::codestream::{MainHeader, Tile};
 use crate::pipeline::decode::{check_options, decode_metered};
-use crate::tier2::resume::Walks;
+use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
 use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
 
@@ -62,10 +62,11 @@ use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
 /// between calls: a file of 1228 bytes that declares a 16384 x 16384 image
 /// holds no walk. A tile whose walk would pass either bound is walked from
 /// the start by each refine instead, until more bytes make room for it.
-/// Those walks are held to four times the packet bound of one decode of
-/// the bytes fed over all the refines together: past that, a refine that
-/// would walk such a tile again returns `Ok(None)`, and `finish` decodes
-/// the file.
+/// Those walks, and a walk started again when a later tile-part changes
+/// a tile's order of packets, spend at most five times the packet bound of
+/// one decode of the bytes fed over all the refines together: once they
+/// pass four, a refine that would walk such a tile again returns
+/// `Ok(None)`, and `finish` decodes the file.
 /// On top of these bounds the decoder keeps a table of 24 bytes for each
 /// tile index up to the highest it has seen, which comes to about 1.5 MiB
 /// for the 65535 tiles a file can have (up to twice that in capacity as
@@ -135,6 +136,8 @@ pub struct IncrementalDecoder {
     spent: Spent,
     /// Whether a work bound refused the last refine.
     refused: bool,
+    /// Whether the bound on the walks of tiles not kept refused it.
+    refused_by_repeats: bool,
     /// The error a refine returned, which every later call returns.
     failed: Option<Error>,
 }
@@ -158,6 +161,7 @@ impl IncrementalDecoder {
             decoded: 0,
             spent: Spent::default(),
             refused: false,
+            refused_by_repeats: false,
             failed: None,
         })
     }
@@ -190,7 +194,10 @@ impl IncrementalDecoder {
     /// in since the last decode, the main header is not whole, or a work
     /// bound refused the decode. Any error is the one `decode_with` gives
     /// on those bytes, and more bytes will not clear it: each later call
-    /// returns it again.
+    /// returns it again. A refusal by a bound all the refines spend
+    /// together can stand in for an error later in the file: the refine
+    /// returns `Ok(None)` where `decode_with` fails, and `finish` reports
+    /// that error.
     pub fn refine(&mut self) -> Result<Option<Image>> {
         if let Some(error) = &self.failed {
             return Err(error.clone());
@@ -211,6 +218,7 @@ impl IncrementalDecoder {
         let ledger = Ledger::over(spent, fed as u64);
         let decoded = decode_metered(&self.bytes, &self.lenient, Some(&ledger));
         self.refused = ledger.work_refused.get();
+        self.refused_by_repeats = ledger.repeats.refused.get();
         self.spent = ledger.into_spent();
         match decoded {
             Ok(image) => {
@@ -283,6 +291,13 @@ impl IncrementalDecoder {
         (self.spent.blocks, self.spent.bound)
     }
 
+    /// Whether the bound on the walks of tiles not kept, which the refines
+    /// spend together, refused the last refine that tried (see
+    /// [`crate::fuzz`]).
+    pub(crate) fn refused_by_repeats(&self) -> bool {
+        self.refused_by_repeats
+    }
+
     /// Consumes the decoder and returns the bytes fed.
     ///
     /// After [`finish`](Self::finish) refuses a work limit, decode these
@@ -344,7 +359,7 @@ pub(crate) struct Ledger {
     blocks: Cell<u64>,
     /// The packet visits the walks of tiles not kept have spent (see
     /// [`Walks::walk`]).
-    repeats: Cell<u64>,
+    repeats: Repeats,
     /// The code-block bound of this decode, once it is known.
     bound: Cell<Option<u64>>,
     /// Whether a work bound refused the last decode.
@@ -373,7 +388,7 @@ impl Ledger {
         Ledger {
             walks: RefCell::new(spent.walks),
             blocks: Cell::new(spent.blocks),
-            repeats: Cell::new(spent.repeats),
+            repeats: Repeats::new(spent.repeats),
             bound: Cell::new(None),
             work_refused: Cell::new(false),
             fed,
@@ -385,7 +400,7 @@ impl Ledger {
         Spent {
             walks: self.walks.into_inner(),
             blocks: self.blocks.get(),
-            repeats: self.repeats.get(),
+            repeats: self.repeats.visits.get(),
             bound: self.bound.get(),
         }
     }
