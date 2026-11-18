@@ -336,6 +336,11 @@ fn decode_codestream(
     // not decoded.
     let mut canvas = image::Canvas::over(&cs.header, &selection.area, reduction, &selection.order)?;
     let reads = selection.tiles(&cs.header.siz);
+    // The walks an incremental decoder kept for other options are let go
+    // here, before any tile is walked.
+    if let Some(ledger) = ledger {
+        ledger.prepare(&reads, reduction, layers, canvas.bytes());
+    }
     // Whether the decode returns less than the image, so a tile may need
     // only part of its samples.
     let windowed = selection.area.image_rect() != cs.header.siz.image_rect();
