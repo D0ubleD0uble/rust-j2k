@@ -4,7 +4,7 @@
 A codestream of TILES tiles (one column, each WIDTH x HEIGHT, one component,
 no wavelet levels, 2 x 2 precincts, LAYERS LRCP layers) with VOLUMES
 identical POC volumes over all of them, and tile-parts with no packet bytes.
-Each tile's volumes reach about one default packet work bound, so a decode
+Each tile's volumes reach about half a default packet work bound, so a decode
 with `strict` off meets a POC reach refusal on tile after tile, and a retry
 that names only what the tiles seen so far need climbs one factor per tile.
 

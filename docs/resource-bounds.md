@@ -10,13 +10,13 @@ allocates, the packet-header walk (tier 2) and the code-block decoding
 is done. The error's `LimitDetail` says which cap it was (`kind()`, a
 `LimitKind`) and gives a `WorkLimit::Raised(n)` to retry with
 (`retry_with()`), and its message names both. For the samples it is the
-smallest factor that admits the image. For the two work bounds it is the larger
-of the smallest factor that admits what the decode has seen and twice the
-factor the bound ran under, and the file may need more, so a loop of
-`with_retry` calls takes about log2 of the factor the file needs. It is `None` when the refusal shows no factor. A caller can retry
-from `kind()` and `retry_with()` without reading the message, and
-`DecodeOptions::with_retry` sets the option. A retry can still fail with
-another error once past the cap.
+smallest factor that admits the image. For the two work bounds it is the
+larger of the smallest factor that admits what the decode has seen and twice
+the factor the bound ran under, and the file may need more, so a loop of
+`with_retry` calls takes about log2 of the factor the file needs. It is `None`
+when the refusal shows no factor. A caller can retry from `kind()` and
+`retry_with()` without reading the message, and `DecodeOptions::with_retry`
+sets the option. A retry can still fail with another error once past the cap.
 
 | Bound | Default | Option in `DecodeOptions` | Margin over encoder output | Tests |
 | ----- | ------- | ------------------------- | -------------------------- | ----- |

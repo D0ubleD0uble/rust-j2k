@@ -690,7 +690,7 @@ fn a_with_retry_ladder_ends_in_a_few_steps_at_the_unlimited_image() {
     }
 }
 
-/// On a file of many tiles that each reach one default bound, a refusal
+/// On a file of many tiles that each reach half a default bound, a refusal
 /// shows only the tiles seen so far, so a hint that named just what they need
 /// climbed one factor per tile: `pocmulti_64tiles_4096_2` took 16 steps and
 /// 35.8 s from the defaults (release, `strict` off), `Raised(2)` to
