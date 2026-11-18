@@ -1227,7 +1227,7 @@ fn a_change_of_reduction_or_layers_walks_the_tiles_again_and_is_charged() {
     assert!(refine_now(&mut decoder).unwrap().is_some());
     assert_eq!(decoder.spent.repeats, 0);
     let mut charged = 0;
-    for (reduction, layers) in [(1, None), (1, Some(1)), (0, Some(1))] {
+    for (reduction, layers) in [(1, None), (1, Some(1)), (0, Some(1)), (2, None), (0, None)] {
         let options = DecodeOptions::default()
             .with_resolution_reduction(reduction)
             .with_max_quality_layers(layers);
@@ -1255,8 +1255,8 @@ fn a_change_of_reduction_or_layers_walks_the_tiles_again_and_is_charged() {
     // let go.
     decoder.set_resolution_reduction(1).unwrap();
     decoder.set_resolution_reduction(0).unwrap();
-    decoder.set_max_quality_layers(Some(1)).unwrap();
-    let options = DecodeOptions::default().with_max_quality_layers(Some(1));
+    decoder.set_max_quality_layers(None).unwrap();
+    let options = DecodeOptions::default();
     assert_eq!(
         refine_now(&mut decoder).unwrap(),
         oracle(&bytes, &options).unwrap()

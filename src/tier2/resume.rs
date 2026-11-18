@@ -81,8 +81,7 @@ pub(crate) struct Walks {
     visits: u64,
     /// The bytes the walks kept hold, as [`TileWalk::bytes`] counts them.
     kept: u64,
-    /// The most bytes one tile's walk has held, kept or not, under the
-    /// reduction and layer cap of `built_for`.
+    /// The most bytes one tile's walk has held, kept or not.
     largest: u64,
     /// The reduction and the layer cap the walks were built for (see
     /// [`Walks::prepare`]).
@@ -140,7 +139,6 @@ impl Walks {
             for index in 0..self.tiles.len() {
                 self.forget(index);
             }
-            self.largest = 0;
             self.built_for = Some((reduction, layers));
         }
         let room = self.room(image, fed);
