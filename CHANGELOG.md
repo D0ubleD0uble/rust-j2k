@@ -22,15 +22,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - The default sample limit grows with the input: it is the larger of 2^29
-  samples and 16 samples per byte of input. Up to 32 MiB of input nothing
+  samples and 8 samples per byte of input. Up to 64 MiB of input nothing
   changes. The sample limit no longer refuses a larger file that holds at
-  least one byte for every 16 samples: a lossless 23171 x 23171 file of
+  least one byte for every 8 samples: a lossless 23171 x 23171 file of
   234 MB, refused before, now decodes bit-exact against `opj_decompress`
   with a peak of 2.84 GiB. `WorkLimit::Raised(n)` on
-  `DecodeOptions::sample_limit` is n times that default, so past 32 MiB
+  `DecodeOptions::sample_limit` is n times that default, so past 64 MiB
   each factor allows more than before, and a refusal may name a smaller
-  factor. A 100 MB file may now ask for about 6 GiB of output, and a decode of it may peak at about 8 GiB for a square
-  tile and up to about 19 GiB for a tile one sample wide.
+  factor. A 100 MB file may now ask for about 3 GiB of output, and a
+  decode of it may peak at about 4 GiB for a square tile and up to about
+  9.5 GiB for a tile one sample wide. Padding counts as input, so bound the
+  size of the input you accept, measured in memory after any
+  decompression.
   `IncrementalDecoder::refine` now returns `Ok(None)` when the sample limit
   refuses, as it does for a work bound, since more bytes raise the limit;
   `finish` reports the refusal (#437).

@@ -693,7 +693,7 @@ fn a_palette_under_a_window_counts_the_window() {
     );
 }
 
-// The default limit is the larger of 2^29 samples and 16 samples a byte of
+// The default limit is the larger of 2^29 samples and 8 samples a byte of
 // input. `synth::two_large_tiles` makes a codestream of any length whose
 // tiles are each just over 2^29 samples.
 
@@ -703,14 +703,14 @@ fn in_tile_0() -> DecodeOptions {
     window(0, 0, 16, 16)
 }
 
-/// Past 32 MiB of input the default grows with the bytes: one tile just over
+/// Past 64 MiB of input the default grows with the bytes: one tile just over
 /// 2^29 samples fits a file of `LARGE_TILE_BYTES` bytes, and not a file one
-/// byte shorter, where the limit is 16 samples a byte of it. The strict-off
+/// byte shorter, where the limit is 8 samples a byte of it. The strict-off
 /// decode gets past the limit to a missing tile, as `opj_decompress
 /// -allow-partial` does.
 #[cfg(target_pointer_width = "64")]
 #[test]
-fn past_32_mib_the_default_limit_grows_with_the_input() {
+fn past_64_mib_the_default_limit_grows_with_the_input() {
     let fits = synth::two_large_tiles(synth::LARGE_TILE_BYTES);
     let header = read_header_with(&fits, &in_tile_0()).expect("one tile fits");
     assert_eq!((header.width, header.height), (16, 16));
@@ -720,7 +720,7 @@ fn past_32_mib_the_default_limit_grows_with_the_input() {
     assert!(!image.report.is_complete());
 
     let short = synth::two_large_tiles(synth::LARGE_TILE_BYTES - 1);
-    let allowed = 16 * (synth::LARGE_TILE_BYTES as u64 - 1);
+    let allowed = 8 * (synth::LARGE_TILE_BYTES as u64 - 1);
     assert!(allowed > 1 << 29);
     for m in [
         limit(read_header_with(&short, &in_tile_0())),
@@ -750,7 +750,7 @@ fn a_factor_multiplies_the_default_for_the_input() {
     assert!(
         detail.message().starts_with(&format!(
             "image area 46342x23171 needs 1073790482 samples, over the sample limit of {} ",
-            16 * synth::LARGE_TILE_BYTES
+            8 * synth::LARGE_TILE_BYTES
         )),
         "{detail}"
     );

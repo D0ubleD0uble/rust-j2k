@@ -26,20 +26,19 @@ pub(crate) const MAX_PRECINCTS: usize = 1 << 18;
 
 /// Ceiling on the number of code-blocks one tile may hold, across every
 /// component, resolution, and subband. The sample budget bounds the decoded
-/// buffers, but the per-block bookkeeping is driven by the code-block
-/// *count*, which legal 4×4 blocks push toward samples/16: a sub-kilobyte
-/// header could demand ~1 GiB of metadata. The struct sizes (`BlockState` 40,
-/// `CodeBlock` 80, `SegmentState` 56, two tag-tree nodes of 8 at 4/3 a leaf)
-/// give about 141 bytes a block, a lower bound. Measured on a 4096² tile in
-/// 4×4 blocks (2^20 of them), a tile takes about 129 MiB with empty blocks and
-/// about 480 MiB of heap (about 550 MiB resident) with every block coded.
-/// 2^20 admits a one-tile image at least 72 samples wide and under the
-/// 2^29-sample floor of the default limit in 32×32 blocks (23170² needs
-/// 527,259), and the 64×64 default blocks need 132726 at the floor. A thin image (32 × 2^24
-/// needs 1.54 M; 66 to 71 wide is also refused) or one in 16×16 blocks or
-/// smaller near the limit is refused. Enforced *while* the geometry is built,
-/// before anything sized by a band's block count is allocated — see
-/// [`band_geom`].
+/// buffers, but the per-block bookkeeping is driven by the code-block *count*,
+/// which legal 4×4 blocks push toward samples/16: a sub-kilobyte header could
+/// demand ~1 GiB of metadata. The struct sizes (`BlockState` 40, `CodeBlock`
+/// 80, `SegmentState` 56, two tag-tree nodes of 8 at 4/3 a leaf) give about 141
+/// bytes a block, a lower bound. Measured on a 4096² tile in 4×4 blocks (2^20
+/// of them), a tile takes about 129 MiB with empty blocks and about 480 MiB of
+/// heap (about 550 MiB resident) with every block coded. 2^20 admits a one-tile
+/// image at least 72 samples wide and under the 2^29-sample floor of the
+/// default limit in 32×32 blocks (23170² needs 527,259), and the 64×64 default
+/// blocks need 132726 at the floor. A thin image (32 × 2^24 needs 1.54 M; 66 to
+/// 71 wide is also refused) or one in 16×16 blocks or smaller near the limit is
+/// refused. Enforced *while* the geometry is built, before anything sized by a
+/// band's block count is allocated — see [`band_geom`].
 pub(crate) const MAX_CODE_BLOCKS: usize = 1 << 20;
 
 /// Geometry of one subband before its segments are parsed: orientation, origin,

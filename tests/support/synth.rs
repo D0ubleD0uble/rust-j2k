@@ -158,9 +158,9 @@ pub fn qcd_none_body(guard: u8, exponents: &[u8]) -> Vec<u8> {
 /// 536895241 samples, is just over 2^29.
 pub const LARGE_TILE: u32 = 23171;
 
-/// The fewest bytes of input under whose default sample limit, 16 samples a
+/// The fewest bytes of input under whose default sample limit, 8 samples a
 /// byte, one [`LARGE_TILE`] fits.
-pub const LARGE_TILE_BYTES: usize = (LARGE_TILE as usize * LARGE_TILE as usize).div_ceil(16);
+pub const LARGE_TILE_BYTES: usize = (LARGE_TILE as usize * LARGE_TILE as usize).div_ceil(8);
 
 /// A codestream of `len` bytes: two [`LARGE_TILE`] tiles side by side, of one
 /// unsigned 8-bit component, 5/3, one layer and five wavelet levels. Tile 0

@@ -13,13 +13,13 @@
 //!
 //! The default limit ([`default_limit`]) is the larger of
 //! [`MAX_IMAGE_SAMPLES`], 2^29 samples (2 GiB as `i32`), and
-//! [`SAMPLES_PER_BYTE`], 16 samples per byte of input. Up to 32 MiB of input it
+//! [`SAMPLES_PER_BYTE`], 8 samples per byte of input. Up to 64 MiB of input it
 //! is 2^29, which admits a Sentinel-2 true-color image (10980 x 10980 x 3,
 //! 361.7 M samples) and an RGB image of up to about 179 MP. Past that it
-//! grows with the input, so a large file may ask for at most 64 bytes of
+//! grows with the input, so a large file may ask for at most 32 bytes of
 //! `i32` output per byte of input, and a small one is held to the floor.
-//! The input is all the bytes the decode is given: a JP2 file's boxes count. OpenJPEG has no such limit;
-//! it allocates what the header declares.
+//! The input is all the bytes the decode is given: a JP2 file's boxes
+//! count. OpenJPEG has no such limit; it allocates what the header declares.
 //!
 //! While a palette expands, the index plane and the columns are held together,
 //! so the peak there is about twice the output: a one-column palette at
@@ -75,12 +75,12 @@ use crate::{Error, WorkLimit};
 pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 29;
 
 /// The samples the default limit allows per byte of input, once that comes
-/// to more than [`MAX_IMAGE_SAMPLES`]: past 32 MiB of input. The large valid
+/// to more than [`MAX_IMAGE_SAMPLES`]: past 64 MiB of input. The large valid
 /// files measured hold far fewer: a Sentinel-2 true-color image about 2.9
 /// samples a byte, and a lossless 23170 x 23170 gradient about 1.8. A file
 /// over the floor that holds more samples a byte than this needs a raised
 /// limit.
-pub(crate) const SAMPLES_PER_BYTE: u64 = 16;
+pub(crate) const SAMPLES_PER_BYTE: u64 = 8;
 
 /// The most samples one buffer can hold on this target. Every sample buffer
 /// holds 4-byte samples (`i32` or `f32`), and an allocation may not pass
@@ -257,7 +257,7 @@ fn check_extent(
 mod tests {
     use super::*;
 
-    /// The default cap of an input under 32 MiB: the floor.
+    /// The default cap of an input under 64 MiB: the floor.
     const DEFAULT: Cap = Cap {
         allowed: MAX_IMAGE_SAMPLES,
         default: MAX_IMAGE_SAMPLES,
@@ -328,17 +328,17 @@ mod tests {
         );
     }
 
-    /// The default is the floor up to 32 MiB of input, and 16 samples a byte
+    /// The default is the floor up to 64 MiB of input, and 8 samples a byte
     /// past it.
     #[test]
     fn the_default_scales_with_the_input_past_the_floor() {
         assert_eq!(cap(&WorkLimit::Default, 0), DEFAULT);
         assert_eq!(cap(&WorkLimit::Default, 100), DEFAULT);
-        assert_eq!(cap(&WorkLimit::Default, 1 << 25), DEFAULT);
-        let past = (1 << 25) + 1;
+        assert_eq!(cap(&WorkLimit::Default, 1 << 26), DEFAULT);
+        let past = (1 << 26) + 1;
         let scaled = cap(&WorkLimit::Default, past);
-        assert_eq!(scaled.default, 16 * past as u64);
-        assert_eq!(scaled.allowed, 16 * past as u64);
+        assert_eq!(scaled.default, 8 * past as u64);
+        assert_eq!(scaled.allowed, 8 * past as u64);
     }
 
     /// `Raised(n)` is n times the scaled default, so it is never below
@@ -346,7 +346,7 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn raised_multiplies_the_scaled_default() {
-        let bytes = 1 << 26;
+        let bytes = 1 << 27;
         let default = cap(&WorkLimit::Default, bytes);
         assert_eq!(default.allowed, 1 << 30);
         for n in 1..=4 {
@@ -407,5 +407,19 @@ mod tests {
             let limit_words = format!("over the sample limit of {} ", default.allowed);
             assert!(limit.message().contains(&limit_words), "{limit}");
         }
+    }
+
+    /// A refusal under a raised limit names a factor of the default, not of
+    /// the raised limit, so a retry with it makes progress.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_refusal_under_a_raised_limit_names_a_larger_factor() {
+        let raised = cap(&WorkLimit::Raised(2), 0);
+        let total = 3 * MAX_IMAGE_SAMPLES + 1;
+        let Error::Limit(limit) = over("image area", total, raised) else {
+            unreachable!()
+        };
+        assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(4)), "{limit}");
+        assert!(cap(&WorkLimit::Raised(4), 0).allowed >= total);
     }
 }

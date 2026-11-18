@@ -20,8 +20,8 @@ does again on each refine.
   the decode: those bounds grow with the bytes and the missing tiles
   shrink, so such a limit is reported only by `finish`. The sample limit
   of a refine is that of a one-shot decode of its bytes: 2^29 samples, or
-  16 samples per byte when that is more. Any other error, including a limit that
-  does not depend on the bytes (an image too large for the target to
+  8 samples per byte when that is more. Any other error, including a
+  limit that does not depend on the bytes (an image too large for the target to
   address, too many precincts, code-blocks or `POC` volumes, too many
   bit-planes), is the one
   `decode_with` gives on those bytes. A refusal by a bound the refines
