@@ -15,12 +15,15 @@
 //! The window and tile are worked out on the reference grid from the first
 //! `SOC SIZ` in the file. That `SIZ` may not be the codestream's (a JP2 file
 //! can hold those bytes in another box), so an input is skipped unless its
-//! image area gives the whole decode's component sizes.
+//! image area gives the whole decode's size and component sizes.
 //!
 //! When the whole decode gives an image, the part must too, unless its
 //! options are refused as [`rust_j2k::Error::InvalidOptions`] (an area with
 //! no sample of a component at the reduction, a component past the image's).
-//! Its components must equal the whole decode's, cut to the area.
+//! Its size, and each of its components, must equal the whole decode's, cut
+//! to the area. A window may start one point before the image area's origin
+//! (it is cut to the image area), so an offset image gets one that overlaps
+//! its edge.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -116,10 +119,12 @@ fuzz_target!(|input: &[u8]| {
     let Ok(whole) = decode_with(data, &whole_options) else {
         return;
     };
-    let fits = whole.components.iter().all(|c| {
-        let (dx, dy) = (u32::from(c.x_sampling), u32::from(c.y_sampling));
-        c.width == at(xs, dx, r) - at(xo, dx, r) && c.height == at(ys, dy, r) - at(yo, dy, r)
-    });
+    let fits = whole.width == at(xs, 1, r) - at(xo, 1, r)
+        && whole.height == at(ys, 1, r) - at(yo, 1, r)
+        && whole.components.iter().all(|c| {
+            let (dx, dy) = (u32::from(c.x_sampling), u32::from(c.y_sampling));
+            c.width == at(xs, dx, r) - at(xo, dx, r) && c.height == at(ys, dy, r) - at(yo, dy, r)
+        });
     // A SIZ the decoder accepts has its tile origin at or before the image's
     // (B-7), which the subtractions below need; the first `SOC SIZ` may not
     // be the one it read, so check.
