@@ -10,8 +10,9 @@
 //! output is checked after the image area and may need a higher one. Of the
 //! work bounds, only the code-block bound, a POC sequence's reach and the
 //! code-blocks of the resolutions a reduction drops give the factor the tile
-//! needs; the missing-tiles charge gives one the whole file needs at least. A packet walk that runs out of steps shows
-//! only that it needs more than it was allowed. Later tiles are never counted.
+//! needs; the missing-tiles charge gives one the whole file needs at least.
+//! A packet walk that runs out of steps shows only that it needs more than it
+//! was allowed. Later tiles are never counted.
 //! So the work bounds name the larger of what the tiles seen need and twice
 //! the factor the bound ran under: a hint that named only the need would
 //! climb a factor per tile, each retry costing a decode, and this one takes
