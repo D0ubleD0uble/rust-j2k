@@ -210,8 +210,11 @@ its components must equal the whole decode's, cut to the area. Seed it as
 `decode`, with the window fixtures added.
 
 `retry_ladder` follows `DecodeOptions::with_retry` from each limit refusal.
-A hash of the input picks where each of the three limits starts (`Default`,
-or a factor of 1 or 2), a reduction of 0 or 1, and `strict`. Each step must
+The first input byte picks where each of the three limits starts
+(`Default`, or a factor of 1 or 2), a reduction of 0 or 1, and `strict`;
+the rest is the file. An input that starts with `FF 4F` or the JP2
+signature box is the whole file with a zero control byte: the default
+limits, reduction 0 and `strict` on. Each step must
 raise the option the refusal names to `retry_with`, strictly above where it
 was, and leave every other option as it was; a limit no option raises gives
 no retry. Raising a limit never turns an image into an error: when the
@@ -222,7 +225,12 @@ for more, after that step is checked; more than 8 steps is a failure. An
 input over the fuzz sample budget (`common/budget.rs`) is only read for its
 header, and a sample limit refusal there is checked as one step with no
 decode. Seed it as `decode`, with the work-bound and sample-limit fixtures
-added, so the first decode of some seeds is refused.
+that the default limits refuse in under a second added: a packet work
+refusal that asks for a factor of 3 and one that asks for 8, a code-block
+work refusal that a factor of 2 admits, and a sample limit refusal of the
+header. The slower work-bound fixtures take 9 to 26 s each under the
+sanitizer build, so they are left out. `t1bomb_1024_64_88` takes about 7 s,
+over its default decode, the factor of 2 and the decode with no limits.
 
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
@@ -308,10 +316,14 @@ mkdir -p fuzz/corpus/window_crop
 cp fuzz/corpus/decode/* tests/fixtures/window/*.j2k fuzz/corpus/window_crop/
 cargo +nightly fuzz run window_crop -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
 
-# The retry target, seeded as decode plus the files the limits refuse.
+# The retry target, seeded as decode plus the quick files the limits refuse.
 mkdir -p fuzz/corpus/retry_ladder
-cp fuzz/corpus/decode/* tests/fixtures/work_bound/* tests/fixtures/tier1_work_bound/*.j2k \
-  tests/fixtures/sample_limit/* fuzz/corpus/retry_ladder/
+cp fuzz/corpus/decode/* fuzz/corpus/retry_ladder/
+for f in work_bound/pocspent_2tiles_60000_559 work_bound/pocvol_1024x512_1000_2 \
+  work_bound/t2bomb_2048x1024_1000 tier1_work_bound/t1bomb_1024_64_88 \
+  tier1_work_bound/htbomb_1024_64_3 sample_limit/flat_32769x16385_tiled_lossless; do
+  cp tests/fixtures/$f.j2k fuzz/corpus/retry_ladder/
+done
 cargo +nightly fuzz run retry_ladder -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
 
 # Deeper periodic run over the widened surface; expected to find nothing.
