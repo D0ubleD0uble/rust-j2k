@@ -223,7 +223,8 @@ never panics or hangs, whatever the input, and needs at most about 6.4 GiB of
 memory. If the machine can't supply that, the allocation fails and the process
 aborts, as in any Rust program. That figure covers the one-shot decode
 functions; `IncrementalDecoder` keeps per-tile state and can hold up to about
-three times as much (see [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)).
+three times one decode's peak, plus the bytes fed and a table of 24 bytes per
+tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses
 something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means
@@ -264,7 +265,7 @@ For a file that arrives in pieces, such as a download, use
 `IncrementalDecoder`. Feed it each piece and call `refine`. From time to time
 it returns an image of what has come in so far. Each refine goes on from where
 the last one stopped reading packets;
-[docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)
+[docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)
 lists the packets it reads again. Each image `refine` returns is decoded with
 `strict` off and comes with a report of what is missing. `finish` decodes
 under the options you gave the decoder, so it is strict unless you turned

@@ -8,10 +8,11 @@
 //! refuse. The sample limit's factor is exact for the check it names, as the
 //! samples it counts are known from the header; palette expansion or sRGB
 //! output is checked after the image area and may need a higher one. Of the
-//! work bounds, only the code-block bound, a POC
-//! sequence's reach and the code-blocks of the resolutions a reduction drops
-//! give the factor the tile needs. A packet walk that runs out of steps shows
-//! only that it needs more than it was allowed. Later tiles are never counted.
+//! work bounds, only the code-block bound, a POC sequence's reach and the
+//! code-blocks of the resolutions a reduction drops give the factor the tile
+//! needs; the missing-tiles charge gives one the whole file needs at least.
+//! A packet walk that runs out of steps shows only that it needs more than it
+//! was allowed. Later tiles are never counted.
 //! So the work bounds name the larger of what the tiles seen need and twice
 //! the factor the bound ran under: a hint that named only the need would
 //! climb a factor per tile, each retry costing a decode, and this one takes
@@ -118,21 +119,20 @@ pub(crate) fn packet(
 /// The [`Error::Limit`] for a decode with `strict` off whose missing tiles have
 /// `cost` tile-components, a step each, more than the `allowed` steps.
 /// `default` is the default bound.
+///
+/// The charge is exact for the tiles missing, but the tiles read after it
+/// spend steps too, so it names the factor [`doubled`] gives, as a packet walk
+/// does.
 pub(crate) fn missing_tiles(cost: u64, allowed: u64, default: u64) -> Error {
-    let n = factor(cost, default);
-    packet_work(
-        n,
-        format!(
+    escalated(
+        LimitKind::PacketWork,
+        doubled(cost, allowed, default),
+        &format!(
             "the missing tiles cost {cost} steps, one for each tile-component, more than the \
-         packet work bound of {allowed} steps (see `DecodeOptions::packet_work_limit`); retry \
-         with at least `WorkLimit::Raised({n})`, {TRUSTED}"
+             packet work bound of {allowed} steps (see `DecodeOptions::packet_work_limit`)"
         ),
+        "the tiles read may need more",
     )
-}
-
-/// A packet work refusal that names `Raised(n)`.
-fn packet_work(n: u32, message: String) -> Error {
-    Error::limit_retry(LimitKind::PacketWork, WorkLimit::Raised(n), message)
 }
 
 /// The advice for an image of `total` samples against a sample limit whose
@@ -262,6 +262,26 @@ mod tests {
             let Error::Limit(limit) = error else { panic!() };
             assert!(!limit.message().contains("at least"), "{limit}");
         }
+    }
+
+    /// The missing-tiles charge names the larger of its need and twice the
+    /// factor the bound ran under, and does not say "at least".
+    #[test]
+    fn the_missing_tiles_hint_doubles_the_factor() {
+        // The issue's case: 65535 one-sample tiles of 1280 components cost
+        // 83884800 steps; at a default of 20 million, a need of 5, under
+        // `Raised(4)`: doubled, 8.
+        let hint = |cost, allowed| missing_tiles(cost, allowed, 20_000_000);
+        let error = hint(83_884_800, 80_000_000);
+        assert_eq!(named(&error), 8);
+        let Error::Limit(limit) = &error else {
+            panic!()
+        };
+        assert!(!limit.message().contains("at least"), "{limit}");
+        // A need past the doubling is named as it is.
+        assert_eq!(named(&hint(300_000_000, 40_000_000)), 15);
+        // At the default bound: twice it.
+        assert_eq!(named(&hint(20_000_001, 20_000_000)), 2);
     }
 
     /// The packet walk names twice the factor it ran under.
