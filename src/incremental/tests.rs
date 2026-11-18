@@ -1239,6 +1239,17 @@ fn a_change_of_reduction_or_layers_walks_the_tiles_again_and_is_charged() {
         charged += one_shot_walk_visits(&bytes, reduction, layers);
         assert!(charged > 0);
         assert_eq!(decoder.spent.repeats, charged, "{reduction} {layers:?}");
+        // The room is that of the new options: the walks kept are those a
+        // decoder made with them keeps.
+        let mut fresh = IncrementalDecoder::new(options).unwrap();
+        fresh.feed(&bytes);
+        assert!(fresh.refine().unwrap().is_some());
+        let kept = fresh.spent.walks.kept();
+        assert_eq!(decoder.spent.walks.kept(), kept, "{reduction} {layers:?}");
+        assert_eq!(
+            decoder.spent.walks.kept_bytes(),
+            fresh.spent.walks.kept_bytes()
+        );
     }
     // There and back between two refines, and the value it has: no walk is
     // let go.

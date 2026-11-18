@@ -127,11 +127,17 @@ use crate::{
 /// an image past the sample limit, too many precincts or code-blocks, too
 /// many `POC` volumes, or too many bit-planes. More bytes do not undo
 /// these, so once `refine` returns an error, every later `refine` returns
-/// the same error without decoding. Two refusals are not final while bytes
-/// may still come, so `refine` returns `Ok(None)` for them and only
-/// `finish` reports them: a main header cut short ([`Error::Incomplete`]),
-/// and a refusal by the packet or code-block work bound, which more bytes
-/// raise.
+/// the same error without decoding, until a change of options. Some
+/// refusals are not final while bytes may still come, so `refine` returns
+/// `Ok(None)` for them and only `finish` reports them: a main header cut
+/// short ([`Error::Incomplete`]), a refusal by the packet or code-block
+/// work bound or by the charge for missing tiles, which more bytes raise,
+/// and a refusal by the bound on the walks of tiles not kept, which the
+/// refines spend together. A caller who raises the packet work limit to
+/// the factor a refusal names, as [`DecodeOptions::with_retry`] does, and
+/// feeds the file to a new decoder, accepts up to about ten times the
+/// packet work the file needs over its refines: a factor up to twice what
+/// it needs, times the five bounds of the walks of tiles not kept.
 ///
 /// The decoder is [`Send`] and [`Sync`].
 pub struct IncrementalDecoder {

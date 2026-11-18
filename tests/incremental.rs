@@ -707,6 +707,11 @@ fn a_change_of_options_applies_to_the_later_refines_and_clears_their_error() {
     let half = bytes.len() / 2;
     decoder.feed(&bytes[..half]);
     assert!(matches!(decoder.refine(), Err(Error::InvalidOptions(_))));
+    // The reduction it has changes nothing: the error stays, without a
+    // decode.
+    decoder.set_resolution_reduction(30).unwrap();
+    decoder.feed(&bytes[half..half + 1]);
+    assert!(matches!(decoder.refine(), Err(Error::InvalidOptions(_))));
     let options = DecodeOptions::default()
         .with_resolution_reduction(1)
         .with_max_quality_layers(Some(2))
@@ -715,13 +720,11 @@ fn a_change_of_options_applies_to_the_later_refines_and_clears_their_error() {
     decoder.set_max_quality_layers(Some(2)).unwrap();
     decoder.set_region(options.region.clone()).unwrap();
     // Not twice the bytes yet.
-    decoder.feed(&bytes[half..half + 1]);
+    decoder.feed(&bytes[half + 1..half + 2]);
     assert!(matches!(decoder.refine(), Ok(None)));
-    decoder.feed(&bytes[half + 1..]);
-    assert_eq!(
-        keyed(decoder.refine()),
-        keyed(refine_oracle(&bytes, &options))
-    );
+    decoder.feed(&bytes[half + 2..]);
+    let image = decoder.refine().unwrap().expect("the refine is due");
+    assert_eq!(Some(image), refine_oracle(&bytes, &options).unwrap());
     assert!(decoder.refine().unwrap().is_none());
     assert_eq!(
         keyed(decoder.finish()),
