@@ -110,7 +110,8 @@ enum Slot {
     Forgotten,
 }
 
-// The docs, README and SECURITY.md state 24 bytes per tile index.
+// At most 24 bytes, as the docs state: 24 on 64-bit targets, less on wasm32,
+// so the bound is `<=`, not `==`.
 const _: () = assert!(std::mem::size_of::<Slot>() <= 24);
 
 impl Walks {
