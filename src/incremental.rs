@@ -275,7 +275,8 @@ impl IncrementalDecoder {
     /// later change back. When a smaller region leaves the walks kept past
     /// the memory they may hold (see [`IncrementalDecoder`]), the next
     /// refine that decodes lets go of the walks of the tiles it does not
-    /// read until the rest fit, or none is left to let go; a later walk of those tiles is charged as
+    /// read until the rest fit, or none is left to let go; a later walk of
+    /// those tiles is charged as
     /// [`set_resolution_reduction`](Self::set_resolution_reduction)
     /// describes. As there, the change does not make the next refine decode
     /// sooner, and it clears an error an earlier refine returned.
