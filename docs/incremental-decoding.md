@@ -26,7 +26,8 @@ does again on each refine.
   not kept, can stand in for an error later in the file: the refine
   returns `Ok(None)` where the one-shot decode fails, and `finish` reports
   that error. Once `refine` returns an error, every later `refine` returns
-  the same error without decoding.
+  the same error without decoding, until a change of options (see
+  [Changing the options](#changing-the-options)).
 - A refine tries to decode when the bytes fed are at least twice those of
   the last refine that decoded or tried to. Before any try, the first refine
   called with at least one byte fed tries; with none fed, `refine` returns
@@ -131,6 +132,54 @@ A tile whose later tile-part adds `POC` volumes, or packed headers where it
 had none, has another order of packets or reads them from elsewhere, so its
 walk starts again.
 
+## Changing the options
+
+`set_resolution_reduction`, `set_max_quality_layers` and `set_region`
+change the options of the later refines and of `finish`. Each image a
+refine returns after a change is the one-shot strict-off decode of its
+bytes under the new options. `header` reads the header of the bytes fed
+under the current options (`Ok(None)` until the main header is whole), and
+`bytes` borrows the bytes fed.
+
+- A walk reads its tile's packets under one reduction and one layer cap:
+  they decide the geometry it builds and the coding passes it keeps. So
+  when either has changed since the walks were built, the next refine that
+  decodes lets every walk go before it walks a tile, and builds each again.
+  A change back before that refine, or a set to the value the decoder has,
+  keeps them.
+- The walks do not depend on the region. A tile the new region reads goes
+  on from where its walk stopped, and the walks of the tiles it does not
+  read stay for a later change back. A smaller region has a smaller image,
+  so the walks kept may be past the room of its decode (see
+  [Work and memory](#work-and-memory)): then the refine lets go of the
+  walks of the tiles it does not read, from the first, until the rest fit.
+  Of the committed fixtures, whose tile walks are large beside their small
+  images, a change to one tile lets go of some walks on most multi-tile
+  files.
+- A walk let go for either reason is built again on the next walk of its
+  tile, and charged as a walk of a tile not kept. So changing the options
+  back and forth spends the same bound as walking a tile again, and cannot
+  buy free walks (`options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again`).
+  The visits spent and the code-block work spent carry across a change.
+- A change does not reset the cadence: the next refine still waits for
+  twice the bytes of the last try. Resetting it would let a caller who
+  changes the options on every call build an image on every call. A
+  caller who has fed the whole file gets the image under the new options
+  from `finish`.
+- A change clears an error an earlier refine returned, since the new
+  options may not give it (a reduction past the file's levels, or the
+  sample limit at a smaller reduction). A set to the value the decoder has
+  keeps it.
+
+`src/incremental/tests.rs` changes the options before every refine of
+files with several tiles and tile-parts, `TLM` and `PLT`, a `POC` volume in
+a later tile-part and a MIXED HT file, and checks each refine against the
+one-shot decode
+(`options_changed_between_refines_refine_to_the_one_shot_decode_of_their_prefix`).
+It counts the walk visits to check that a change of region reads no packet
+twice, and that a change of reduction or layer cap is charged what a
+one-shot walk of the tiles spends.
+
 ## Work and memory
 
 Each refine is held to the packet bound of a decode of its bytes on its own.
@@ -181,11 +230,17 @@ the count past that bound is refused after the walk. So these walks spend
 at most five packet bounds over all the refines: four, and the one walk
 that goes past them, which one decode's bound holds. The bound follows the
 packet work limit: raised by `WorkLimit::Raised`, none under
-`WorkLimit::Unlimited`. Of the committed fixtures, fed in quarters, in
-pieces of random sizes and one byte at a time, at no reduction and at a
-reduction of 1, normal files spend at most 0.008 of a bound on these
-walks, and files made to reach the work bounds at most 3 bounds, so none
-of them gives another result. Two files made for this
+`WorkLimit::Unlimited`. So a caller who raises the limit to the factor a
+refusal names, as `DecodeOptions::with_retry` does, and feeds the file to a
+new decoder, accepts up to about ten times the packet work the file needs
+over its refines: a factor up to twice what it needs, times five bounds. A
+walk let go when the options change (see
+[Changing the options](#changing-the-options)) is charged here too. Of the
+committed fixtures, fed in quarters, in pieces of random sizes and one
+byte at a time, at no reduction and at a reduction of 1, normal files
+spend at most 0.008 of a bound on these walks, and files made to reach
+the work bounds at most 3 bounds, so none of them gives another result.
+Two files made for this
 ([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)) show the
 cost it holds. One of 525 KB, 256 components and 65535 layers, fed one
 byte at a time with a refine after each, took 8.4 times one decode before

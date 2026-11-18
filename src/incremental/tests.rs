@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::error::keyed;
+use crate::tier2::resume::REPEAT_BOUNDS;
 use crate::{LimitKind, WorkLimit, codestream, tier1, tier2};
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -1019,5 +1020,294 @@ fn a_work_bound_file_fed_in_pieces_keeps_every_image() {
         decoder.spent.repeats > bound,
         "{} of {bound}",
         decoder.spent.repeats
+    );
+}
+
+/// The packet visits a one-shot walk with `strict` off of every tile of
+/// `bytes` spends under `reduction` and `layers`, with no bound.
+fn one_shot_walk_visits(bytes: &[u8], reduction: u8, layers: Option<u16>) -> u64 {
+    let parsed = codestream::parse_header(bytes).unwrap();
+    let cs = codestream::parse_tiles_with(bytes, parsed, false).unwrap();
+    let poc_bitmap = tier2::decode_visits(crate::pipeline::decode::tile_bytes(&cs));
+    (0..cs.tiles.len())
+        .map(|position| {
+            let header = cs.tile_header(position).unwrap();
+            let meter = Meter::new(u64::MAX / 2);
+            let tile = &cs.tiles[position];
+            let _ =
+                tier2::decode_packets_partial(&header, tile, &meter, poc_bitmap, reduction, layers);
+            meter.spent()
+        })
+        .sum()
+}
+
+/// Set the decoder's reduction, layer cap and region.
+fn set_options(decoder: &mut IncrementalDecoder, options: &DecodeOptions) {
+    decoder
+        .set_resolution_reduction(options.resolution_reduction)
+        .unwrap();
+    decoder
+        .set_max_quality_layers(options.max_quality_layers)
+        .unwrap();
+    decoder.set_region(options.region.clone()).unwrap();
+}
+
+/// A refine under options changed since the last one is the one-shot
+/// strict-off decode of its bytes under the new options. Before each
+/// refine the reduction, the layer cap or both change, and the region
+/// moves between the whole image, tile 0 and the top-left quarter of the
+/// image, on files with several tiles and tile-parts, `TLM` and `PLT`, a
+/// `POC` volume in a later tile-part, and the MIXED HT files.
+#[test]
+fn options_changed_between_refines_refine_to_the_one_shot_decode_of_their_prefix() {
+    let mut names: Vec<String> = [
+        "tiles_multipart_lossless.j2k",
+        "layers/precincts_pterm.j2k",
+        "multilayer_multicomponent_lossless.j2k",
+        "precincts_tiled_cprl_lossless.j2k",
+        "tile_header/tlm_32_16k.j2k",
+        "jp2_real/byte_tlm_plt.jp2",
+        "poc_precedence/poc_main_then_later_tile_part.j2k",
+    ]
+    .map(String::from)
+    .to_vec();
+    // The conformance corpus is left out of the published package.
+    let ht = "conformance/ht/codestreams/ds0_hm_15_b8.j2k";
+    if std::path::Path::new(&format!(
+        "{}/tests/fixtures/{ht}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .exists()
+    {
+        names.push(ht.to_string());
+    }
+    for name in &names {
+        let bytes = fixture(name);
+        let stride = if bytes.len() > 8192 { 1009 } else { 61 };
+        let mut decoder = IncrementalDecoder::new(uncut(DecodeOptions::default())).unwrap();
+        let (mut images, mut errors) = (0, 0);
+        for (step, end) in every(stride, bytes.len()).into_iter().enumerate() {
+            decoder.feed(&bytes[decoder.bytes_fed()..end]);
+            // Each step changes the reduction or the layer cap, so an error
+            // of the step before does not carry over.
+            let quarter = decoder.header().ok().flatten().map_or(Region::Whole, |h| {
+                let a = h.image_area;
+                Region::Window(crate::Window::new(
+                    a.x0,
+                    a.y0,
+                    a.x0 + a.x1.div_ceil(2) - a.x0 / 2,
+                    a.y0 + a.y1.div_ceil(2) - a.y0 / 2,
+                ))
+            });
+            let options = DecodeOptions::default();
+            let options = match step % 6 {
+                0 => options,
+                1 => options.with_resolution_reduction(1),
+                2 => options.with_max_quality_layers(Some(1)),
+                3 => options
+                    .with_resolution_reduction(1)
+                    .with_region(Region::Tile(0)),
+                4 => options.with_region(quarter),
+                _ => options
+                    .with_resolution_reduction(1)
+                    .with_max_quality_layers(Some(1))
+                    .with_region(quarter),
+            };
+            set_options(&mut decoder, &options);
+            let refined = keyed(refine_now(&mut decoder));
+            assert_eq!(
+                refined,
+                keyed(oracle(&bytes[..end], &uncut(options))),
+                "{name}, {end} bytes, step {step}"
+            );
+            match refined {
+                Ok(Some(_)) => images += 1,
+                Ok(None) => {}
+                Err(_) => errors += 1,
+            }
+        }
+        assert!(images > 0, "{name}: {images} images, {errors} errors");
+    }
+}
+
+/// A file of 3 x 2 tiles whose walks fit the room of a decode of its top
+/// row as well as of the whole image, so a change of region keeps them all.
+const SIX_TILES: &str = "precincts_tiled_cprl_lossless.j2k";
+
+/// A change of region reuses the walks kept: the tiles it reads go on from
+/// where their walks stopped, and the walks of the tiles it does not read
+/// stay until the region comes back to them. Fed in halves, with a change
+/// to the top row of tiles between them and back to the whole image after,
+/// each packet is read once, as by one walk of the file, and nothing is
+/// charged as a walk read again.
+#[test]
+fn a_change_of_region_keeps_the_walks() {
+    let bytes = fixture(SIX_TILES);
+    let whole = DecodeOptions::default();
+    let top = whole
+        .clone()
+        .with_region(Region::Window(crate::Window::new(0, 0, 128, 48)));
+    let mut decoder = IncrementalDecoder::new(whole.clone()).unwrap();
+    let half = bytes.len() / 2;
+    decoder.feed(&bytes[..half]);
+    assert_eq!(
+        refine_now(&mut decoder).unwrap(),
+        oracle(&bytes[..half], &whole).unwrap()
+    );
+    // The data of tiles 4 and 5 is not in yet.
+    assert_eq!(decoder.spent.walks.kept(), (4, 0));
+    decoder.set_region(top.region.clone()).unwrap();
+    decoder.feed(&bytes[half..]);
+    assert_eq!(
+        refine_now(&mut decoder).unwrap(),
+        oracle(&bytes, &top).unwrap()
+    );
+    // Tile 3's walk stays, where the first refine left it.
+    assert_eq!(decoder.spent.walks.kept(), (4, 0));
+    decoder.set_region(Region::Whole).unwrap();
+    assert_eq!(
+        refine_now(&mut decoder).unwrap(),
+        oracle(&bytes, &whole).unwrap()
+    );
+    assert_eq!(decoder.spent.repeats, 0, "a kept walk was charged");
+    let mut once = IncrementalDecoder::new(whole).unwrap();
+    once.feed(&bytes);
+    assert!(once.refine().unwrap().is_some());
+    assert_eq!(
+        decoder.spent.walks.visits(),
+        once.spent.walks.visits(),
+        "the walks read packets again"
+    );
+}
+
+/// A region whose image leaves the walks kept past the room lets go of the
+/// walks of the tiles it does not read, from the first, until the rest
+/// fit, and keeps the walk of the tile it reads. A later walk of a tile let
+/// go is charged as a walk read again.
+#[test]
+fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
+    let bytes = fixture(SIX_TILES);
+    let whole = DecodeOptions::default();
+    let mut decoder = IncrementalDecoder::new(whole.clone()).unwrap();
+    decoder.feed(&bytes);
+    assert!(refine_now(&mut decoder).unwrap().is_some());
+    let visits = decoder.spent.walks.visits();
+    let tile = whole.clone().with_region(Region::Tile(0));
+    decoder.set_region(Region::Tile(0)).unwrap();
+    assert_eq!(
+        refine_now(&mut decoder).unwrap(),
+        oracle(&bytes, &tile).unwrap()
+    );
+    // Tiles 1 and 2 are let go; tile 0's walk goes on.
+    assert_eq!(decoder.spent.walks.kept(), (4, 0));
+    assert_eq!(decoder.spent.repeats, 0);
+    assert_eq!(decoder.spent.walks.visits(), visits);
+    decoder.set_region(Region::Whole).unwrap();
+    assert_eq!(
+        refine_now(&mut decoder).unwrap(),
+        oracle(&bytes, &whole).unwrap()
+    );
+    assert_eq!(decoder.spent.walks.kept(), (6, 0));
+    assert_eq!(
+        decoder.spent.repeats,
+        one_shot_tile_visits(&bytes, 1) + one_shot_tile_visits(&bytes, 2)
+    );
+}
+
+/// A change of the reduction or of the layer cap lets go of every walk,
+/// and the next refine builds them again, charged as walks read again: by
+/// what a one-shot walk of the tiles under the new options spends. A
+/// change back before the next refine, or a set to the value the decoder
+/// has, keeps them.
+#[test]
+fn a_change_of_reduction_or_layers_walks_the_tiles_again_and_is_charged() {
+    let bytes = fixture(SIX_TILES);
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    assert!(refine_now(&mut decoder).unwrap().is_some());
+    assert_eq!(decoder.spent.repeats, 0);
+    let mut charged = 0;
+    for (reduction, layers) in [(1, None), (1, Some(1)), (0, Some(1)), (2, None), (0, None)] {
+        let options = DecodeOptions::default()
+            .with_resolution_reduction(reduction)
+            .with_max_quality_layers(layers);
+        set_options(&mut decoder, &options);
+        assert_eq!(
+            refine_now(&mut decoder).unwrap(),
+            oracle(&bytes, &options).unwrap()
+        );
+        charged += one_shot_walk_visits(&bytes, reduction, layers);
+        assert!(charged > 0);
+        assert_eq!(decoder.spent.repeats, charged, "{reduction} {layers:?}");
+        // The room is that of the new options: the walks kept are those a
+        // decoder made with them keeps.
+        let mut fresh = IncrementalDecoder::new(options).unwrap();
+        fresh.feed(&bytes);
+        assert!(fresh.refine().unwrap().is_some());
+        let kept = fresh.spent.walks.kept();
+        assert_eq!(decoder.spent.walks.kept(), kept, "{reduction} {layers:?}");
+        assert_eq!(
+            decoder.spent.walks.kept_bytes(),
+            fresh.spent.walks.kept_bytes()
+        );
+    }
+    // There and back between two refines, and the value it has: no walk is
+    // let go.
+    decoder.set_resolution_reduction(1).unwrap();
+    decoder.set_resolution_reduction(0).unwrap();
+    decoder.set_max_quality_layers(None).unwrap();
+    let options = DecodeOptions::default();
+    assert_eq!(
+        refine_now(&mut decoder).unwrap(),
+        oracle(&bytes, &options).unwrap()
+    );
+    assert_eq!(decoder.spent.repeats, charged);
+}
+
+/// Changing the reduction back and forth on every refine walks every tile
+/// again each time, and those walks stay within the bound on walks read
+/// again: once they pass 4 packet bounds, a refine returns `Ok(None)`
+/// though a one-shot decode of its bytes gives an image, and `finish`
+/// still decodes the file. The walks of this file spend a small share of a
+/// bound, so the decoder starts with most of the 4 bounds spent, as by
+/// earlier refines.
+#[test]
+fn options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again() {
+    let bytes = fixture(SIX_TILES);
+    let (bound, _) = one_shot_bounds(&bytes);
+    let walk = one_shot_walk_visits(&bytes, 0, None);
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.spent.repeats = REPEAT_BOUNDS * bound - 3 * walk;
+    decoder.feed(&bytes);
+    assert!(refine_now(&mut decoder).unwrap().is_some());
+    let (mut images, mut put_off) = (0, 0);
+    for step in 0..8 {
+        let options = DecodeOptions::default().with_resolution_reduction(1 - step % 2);
+        set_options(&mut decoder, &options);
+        match refine_now(&mut decoder).unwrap() {
+            Some(image) => {
+                assert_eq!(image, oracle(&bytes, &options).unwrap().unwrap(), "{step}");
+                images += 1;
+            }
+            None => {
+                assert!(decoder.refused_by_repeats, "{step}");
+                assert!(oracle(&bytes, &options).unwrap().is_some());
+                put_off += 1;
+            }
+        }
+    }
+    assert!(
+        images > 0 && put_off > 0,
+        "{images} images, {put_off} put off"
+    );
+    assert!(
+        decoder.spent.repeats <= (REPEAT_BOUNDS + 1) * bound,
+        "{} of {bound}",
+        decoder.spent.repeats
+    );
+    let options = decoder.options.clone();
+    assert_eq!(
+        decoder.finish().unwrap(),
+        decode_with(&bytes, &options).unwrap()
     );
 }

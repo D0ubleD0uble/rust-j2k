@@ -8,7 +8,9 @@ use crate::codestream::{MainHeader, Tile};
 use crate::pipeline::decode::{check_options, decode_metered};
 use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
-use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
+use crate::{
+    DecodeOptions, Error, Header, Image, Region, Result, decode_with, jp2, read_header_with,
+};
 
 /// A decoder for a file that arrives a piece at a time, from a network or a
 /// slow disk.
@@ -74,6 +76,18 @@ use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
 /// the same bytes, so the decoder holds at most about three times one
 /// decode's peak memory, plus the bytes fed.
 ///
+/// The reduction, the layer cap and the region can change between refines,
+/// with [`set_resolution_reduction`](Self::set_resolution_reduction),
+/// [`set_max_quality_layers`](Self::set_max_quality_layers) and
+/// [`set_region`](Self::set_region), for a viewer that zooms or pans while
+/// the file arrives. Each later image is then the strict-off decode of its
+/// bytes under the new options. A change of region keeps the packet walks.
+/// A change of the reduction or the layer cap lets them go, and the walks
+/// built again are charged to the same bound as the walks of tiles not
+/// kept, so changing the options back and forth does not buy free walks.
+/// [`header`](Self::header) reads the header of the bytes fed so far, and
+/// [`bytes`](Self::bytes) borrows them.
+///
 /// ```
 /// use rust_j2k::{DecodeOptions, IncrementalDecoder};
 ///
@@ -113,11 +127,17 @@ use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
 /// an image past the sample limit, too many precincts or code-blocks, too
 /// many `POC` volumes, or too many bit-planes. More bytes do not undo
 /// these, so once `refine` returns an error, every later `refine` returns
-/// the same error without decoding. Two refusals are not final while bytes
-/// may still come, so `refine` returns `Ok(None)` for them and only
-/// `finish` reports them: a main header cut short ([`Error::Incomplete`]),
-/// and a refusal by the packet or code-block work bound, which more bytes
-/// raise.
+/// the same error without decoding, until a change of options. Some
+/// refusals are not final while bytes may still come, so `refine` returns
+/// `Ok(None)` for them and only `finish` reports them: a main header cut
+/// short ([`Error::Incomplete`]), a refusal by the packet or code-block
+/// work bound or by the charge for missing tiles, which more bytes raise,
+/// and a refusal by the bound on the walks of tiles not kept, which the
+/// refines spend together. A caller who raises the packet work limit to
+/// the factor a refusal names, as [`DecodeOptions::with_retry`] does, and
+/// feeds the file to a new decoder, accepts up to about ten times the
+/// packet work the file needs over its refines: a factor up to twice what
+/// it needs, times the five bounds of the walks of tiles not kept.
 ///
 /// The decoder is [`Send`] and [`Sync`].
 pub struct IncrementalDecoder {
@@ -181,6 +201,100 @@ impl IncrementalDecoder {
     /// the decode of, or 0 before it has returned one.
     pub fn bytes_decoded(&self) -> usize {
         self.decoded
+    }
+
+    /// The bytes fed so far.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The header of the bytes fed so far, as [`read_header_with`] reads it
+    /// under the decoder's options: it describes the image
+    /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end
+    /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
+    /// before it, so the main header is not complete yet. An error is the
+    /// one `read_header_with` gives on those bytes, such as a reduction the
+    /// main header's levels cannot take ([`Error::InvalidOptions`]).
+    ///
+    /// Call it after a feed rather than after each byte: each call parses
+    /// the main header again.
+    pub fn header(&self) -> Result<Option<Header>> {
+        match read_header_with(&self.bytes, &self.lenient) {
+            Ok(header) => Ok(Some(header)),
+            Err(Error::Incomplete(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Decode at a reduction of `levels` from now on: the
+    /// [`resolution_reduction`](DecodeOptions::resolution_reduction) of the
+    /// later refines and of [`finish`](Self::finish).
+    ///
+    /// The packet walks kept were read under the old reduction, so the
+    /// next refine that decodes lets them go and walks each tile again from
+    /// the start. Those walks are charged as walks of tiles not kept (see
+    /// [`IncrementalDecoder`]), so changing the options back and forth
+    /// cannot buy more than a few packet bounds of work. Setting the
+    /// reduction the decoder already has changes nothing. A change does not
+    /// make the next refine decode sooner: it still waits for the bytes fed
+    /// to double since the last try. It clears an error an earlier refine
+    /// returned, as the new options may not give it.
+    ///
+    /// Options invalid whatever the input are [`Error::InvalidOptions`], as
+    /// in [`new`](Self::new), and leave the decoder as it was.
+    pub fn set_resolution_reduction(&mut self, levels: u8) -> Result<()> {
+        if self.options.resolution_reduction == levels {
+            return Ok(());
+        }
+        self.set(self.options.clone().with_resolution_reduction(levels))
+    }
+
+    /// Decode the first `layers` quality layers from now on: the
+    /// [`max_quality_layers`](DecodeOptions::max_quality_layers) of the
+    /// later refines and of [`finish`](Self::finish). `Some(0)` is
+    /// [`Error::InvalidOptions`], and leaves the decoder as it was.
+    ///
+    /// The packet walks kept were read under the old layer cap, so the next
+    /// refine that decodes lets them go, as
+    /// [`set_resolution_reduction`](Self::set_resolution_reduction) does,
+    /// and is charged the same for walking the tiles again.
+    pub fn set_max_quality_layers(&mut self, layers: Option<u16>) -> Result<()> {
+        if self.options.max_quality_layers == layers {
+            return Ok(());
+        }
+        self.set(self.options.clone().with_max_quality_layers(layers))
+    }
+
+    /// Decode `region` from now on: the [`region`](DecodeOptions::region)
+    /// of the later refines and of [`finish`](Self::finish). An empty window
+    /// is [`Error::InvalidOptions`], and leaves the decoder as it was.
+    ///
+    /// The packet walks do not depend on the region, so the walks kept are
+    /// reused: a tile the new region reads goes on from where its walk
+    /// stopped, and the walks of the tiles it does not read stay for a
+    /// later change back. When a smaller region leaves the walks kept past
+    /// the memory they may hold (see [`IncrementalDecoder`]), the next
+    /// refine that decodes lets go of the walks of the tiles it does not
+    /// read until the rest fit, or none is left to let go; a later walk of
+    /// those tiles is charged as
+    /// [`set_resolution_reduction`](Self::set_resolution_reduction)
+    /// describes. As there, the change does not make the next refine decode
+    /// sooner, and it clears an error an earlier refine returned.
+    pub fn set_region(&mut self, region: Region) -> Result<()> {
+        if self.options.region == region {
+            return Ok(());
+        }
+        self.set(self.options.clone().with_region(region))
+    }
+
+    /// Decode under `options` from now on, which differ from the decoder's
+    /// in the reduction, the layer cap or the region.
+    fn set(&mut self, options: DecodeOptions) -> Result<()> {
+        check_options(&options)?;
+        self.lenient = options.clone().with_strict(false);
+        self.options = options;
+        self.failed = None;
+        Ok(())
     }
 
     /// Decode the bytes fed so far. This decodes at least each time they
@@ -415,6 +529,15 @@ impl Ledger {
             return bound;
         }
         bound.saturating_sub(self.blocks.get())
+    }
+
+    /// Make the walks kept fit this decode, which reads the tiles `reads`
+    /// flags under `reduction` and `layers`, and whose image is of `image`
+    /// bytes (see [`Walks::prepare`]).
+    pub(crate) fn prepare(&self, reads: &[bool], reduction: u8, layers: Option<u16>, image: u64) {
+        self.walks
+            .borrow_mut()
+            .prepare(reads, reduction, layers, image, self.fed);
     }
 
     /// Tile `tile`'s packets, as a walk with `strict` off of the bytes it

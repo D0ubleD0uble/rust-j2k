@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rust_j2k::{
     DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Region, Window, WorkLimit,
-    decode_with, read_header,
+    decode_with, read_header, read_header_with,
 };
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -614,4 +614,120 @@ fn finish_twice_gives_equal_results() {
     let first = decoder.finish();
     assert_eq!(keyed(decoder.finish()), keyed(first));
     assert_eq!(decoder.bytes_fed(), file.len() / 2);
+}
+
+/// `header` is the header `read_header_with` reads from the bytes fed so
+/// far under the decoder's options, `Ok(None)` while the main header is cut
+/// short, and `bytes` borrows the bytes fed: fed a byte at a time through
+/// the main header of a codestream and the boxes of a JP2 file.
+#[test]
+fn header_and_bytes_follow_the_bytes_fed() {
+    for (name, options) in [
+        ("layers/lrcp.j2k", DecodeOptions::default()),
+        (
+            "jp2_real/byte_tlm_plt.jp2",
+            DecodeOptions::default().with_resolution_reduction(1),
+        ),
+    ] {
+        let bytes = std::fs::read(fixtures().join(name)).unwrap();
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        assert_eq!(decoder.header().unwrap(), None, "{name}");
+        // Past the first tile-part's header, and a little of its data.
+        let sot = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+        let mut headers = 0;
+        for end in 1..sot + 32 {
+            decoder.feed(&bytes[end - 1..end]);
+            assert_eq!(decoder.bytes(), &bytes[..end], "{name}");
+            let expected = match read_header_with(&bytes[..end], &options) {
+                Err(Error::Incomplete(_)) => Ok(None),
+                read => read.map(Some),
+            };
+            let header = decoder.header();
+            assert_eq!(
+                keyed(header.clone()),
+                keyed(expected),
+                "{name}, {end} bytes"
+            );
+            headers += usize::from(header.unwrap().is_some());
+        }
+        assert!(headers > 0, "{name}");
+        // A change of options shows in the header.
+        decoder.set_resolution_reduction(0).unwrap();
+        assert_eq!(
+            decoder.header().unwrap(),
+            Some(read_header(decoder.bytes()).unwrap())
+        );
+    }
+    // A header that cannot be read is the error `read_header` gives, and
+    // so is a reduction the main header cannot take.
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(b"not a codestream");
+    assert_eq!(
+        keyed(decoder.header()),
+        keyed(read_header(b"not a codestream").map(Some))
+    );
+    let bytes = std::fs::read(fixtures().join("layers/lrcp.j2k")).unwrap();
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    decoder.set_resolution_reduction(30).unwrap();
+    assert!(matches!(decoder.header(), Err(Error::InvalidOptions(_))));
+}
+
+/// A change of options that are invalid whatever the input is refused, and
+/// the decoder keeps the options it had: `finish` decodes under them.
+#[test]
+fn a_change_to_invalid_options_is_refused() {
+    let bytes = std::fs::read(fixtures().join("layers/lrcp.j2k")).unwrap();
+    let options = DecodeOptions::default().with_max_quality_layers(Some(1));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&bytes);
+    assert!(matches!(
+        decoder.set_max_quality_layers(Some(0)),
+        Err(Error::InvalidOptions(_))
+    ));
+    assert!(matches!(
+        decoder.set_region(Region::Window(Window::new(4, 4, 4, 8))),
+        Err(Error::InvalidOptions(_))
+    ));
+    assert_eq!(
+        keyed(decoder.finish()),
+        keyed(decode_with(&bytes, &options))
+    );
+}
+
+/// A change of options applies to the next refine that decodes, at the
+/// usual cadence, and to `finish`, and clears an error the old options
+/// gave: a reduction past the file's levels is refused, and after a change
+/// to one it can take, the refine of twice the bytes gives the image.
+#[test]
+fn a_change_of_options_applies_to_the_later_refines_and_clears_their_error() {
+    let bytes = std::fs::read(fixtures().join("layers/lrcp.j2k")).unwrap();
+    let mut decoder =
+        IncrementalDecoder::new(DecodeOptions::default().with_resolution_reduction(30)).unwrap();
+    let half = bytes.len() / 2;
+    decoder.feed(&bytes[..half]);
+    assert!(matches!(decoder.refine(), Err(Error::InvalidOptions(_))));
+    // The reduction it has changes nothing: the error stays, without a
+    // decode.
+    decoder.set_resolution_reduction(30).unwrap();
+    decoder.feed(&bytes[half..half + 1]);
+    assert!(matches!(decoder.refine(), Err(Error::InvalidOptions(_))));
+    let options = DecodeOptions::default()
+        .with_resolution_reduction(1)
+        .with_max_quality_layers(Some(2))
+        .with_region(Region::Window(Window::new(0, 0, 9, 7)));
+    decoder.set_resolution_reduction(1).unwrap();
+    decoder.set_max_quality_layers(Some(2)).unwrap();
+    decoder.set_region(options.region.clone()).unwrap();
+    // Not twice the bytes yet.
+    decoder.feed(&bytes[half + 1..half + 2]);
+    assert!(matches!(decoder.refine(), Ok(None)));
+    decoder.feed(&bytes[half + 2..]);
+    let image = decoder.refine().unwrap().expect("the refine is due");
+    assert_eq!(Some(image), refine_oracle(&bytes, &options).unwrap());
+    assert!(decoder.refine().unwrap().is_none());
+    assert_eq!(
+        keyed(decoder.finish()),
+        keyed(decode_with(&bytes, &options))
+    );
 }
