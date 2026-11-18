@@ -130,8 +130,12 @@ fuzz_target!(|input: &[u8]| {
     let area = match mode {
         0 | 3 => {
             let (w, h) = (xs - xo, ys - yo);
-            let x0 = xo + small(0, w.saturating_add(2)).saturating_sub(1);
-            let y0 = yo + small(12, h.saturating_add(2)).saturating_sub(1);
+            let x0 = xo
+                .saturating_add(small(0, w.saturating_add(2)))
+                .saturating_sub(1);
+            let y0 = yo
+                .saturating_add(small(12, h.saturating_add(2)))
+                .saturating_sub(1);
             let x1 = x0.saturating_add(1 + small(24, w.min(96)));
             let y1 = y0.saturating_add(1 + small(36, h.min(96)));
             options = options.with_region(Region::Window(Window::new(x0, y0, x1, y1)));
@@ -162,6 +166,17 @@ fuzz_target!(|input: &[u8]| {
         None => (0..whole.components.len()).collect(),
     };
     assert_eq!(part.components.len(), picks.len(), "{options:?}");
+    // The image's own size is the area cut to the image, on the reduced grid.
+    let (cx0, cy0) = (area.0.max(image.0), area.1.max(image.1));
+    let (cx1, cy1) = (area.2.min(image.2), area.3.min(image.3));
+    assert_eq!(
+        (part.width, part.height),
+        (
+            at(cx1, 1, r).saturating_sub(at(cx0, 1, r)),
+            at(cy1, 1, r).saturating_sub(at(cy0, 1, r))
+        ),
+        "{options:?}: image size"
+    );
     for (i, &c) in picks.iter().enumerate() {
         let (width, expected) = crop(&whole, c, image, area, r);
         let got = &part.components[i];
