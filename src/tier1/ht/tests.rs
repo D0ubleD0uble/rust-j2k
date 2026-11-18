@@ -530,7 +530,7 @@ fn vlc_reader_matches_the_bit_at_a_time_model() {
                     _ => false,
                 },
                 _ => {
-                    let first_row = rng.next() % 2 == 0;
+                    let first_row = rng.next().is_multiple_of(2);
                     let c = (rng.next() % 8) as u8;
                     let got = decode_cxt_vlc(&mut fast, &seg, first_row, c);
                     match (got, model.cxt_vlc(&seg, first_row, c)) {
@@ -1010,10 +1010,10 @@ fn refinement_matches_the_sample_by_sample_model() {
         let pass = Refinement {
             width: 1 + (rng.next() % 13) as usize,
             height: 1 + (rng.next() % 13) as usize,
-            causal: rng.next() % 2 == 0,
+            causal: rng.next().is_multiple_of(2),
             shift: 1 + (rng.next() % 8) as u32,
         };
-        let magref = rng.next() % 2 == 0;
+        let magref = rng.next().is_multiple_of(2);
         let density = 1 + rng.next() % 6;
         let cleanup: Vec<i32> = (0..pass.width * pass.height)
             .map(|_| {
@@ -1021,7 +1021,7 @@ fn refinement_matches_the_sample_by_sample_model() {
                     0
                 } else {
                     let m = 3 << (pass.shift - 1) | (rng.next() as i32 & 0x70) << pass.shift;
-                    if rng.next() % 2 == 0 { m } else { -m }
+                    if rng.next().is_multiple_of(2) { m } else { -m }
                 }
             })
             .collect();
