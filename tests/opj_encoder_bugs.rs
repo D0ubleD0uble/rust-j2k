@@ -99,16 +99,9 @@ fn more_than_255_tile_parts_are_refused_in_both_modes() {
 /// refuses at the 18th part, past the declared count. With strict off the
 /// count (17) is advisory: the parts are read, and the mismatch is reported
 /// beside the packets the missing 16 parts leave out.
-/// This pins the strict count check on its own, which the whole file's
-/// refusal does not, since the wrap at the 257th part refuses it as well.
 #[test]
-fn the_declared_count_binds_in_strict_and_is_advisory_with_strict_off() {
+fn the_declared_count_is_advisory_with_strict_off() {
     let prefix = first_tile_parts(&read("tp_over255.j2k"), 256);
-    // The prefix also lacks the packets of the missing parts, which refuses it
-    // as well, so the check on the count is told apart by its message.
-    assert!(
-        matches!(decode(&prefix), Err(Error::Codestream(m)) if m.message().contains("declared 17")),
-    );
     let image = decode_with(&prefix, &DecodeOptions::default().with_strict(false)).unwrap();
     assert!(image.report.entries.iter().any(|e| matches!(
         e,
@@ -119,4 +112,21 @@ fn the_declared_count_binds_in_strict_and_is_advisory_with_strict_off() {
             ..
         }
     )));
+}
+
+/// Where strict refuses on the declared count. Every prefix lacks the packets
+/// of the parts after it, so each is refused as `Codestream`, and the variant
+/// does not say why. The whole file is refused at the 18th part (`TPsot` 17),
+/// the first past the count of 17, so the 18-part prefix gives the same error
+/// as the whole file, and the 17-part prefix, which ends before its packets
+/// are all read, gives another. A check that moved by one part, or one that was
+/// missing, would change which of them match.
+#[test]
+fn strict_refuses_at_the_first_part_past_the_declared_count() {
+    let bytes = read("tp_over255.j2k");
+    let error = |input: &[u8]| format!("{:?}", decode(input).err());
+    let whole = error(&bytes);
+    assert!(whole.starts_with("Some(Codestream("), "{whole}");
+    assert_eq!(error(&first_tile_parts(&bytes, 18)), whole);
+    assert_ne!(error(&first_tile_parts(&bytes, 17)), whole);
 }
