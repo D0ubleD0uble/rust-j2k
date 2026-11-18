@@ -11,9 +11,9 @@ and the tools were added on top of that commit and do not change the
 decoder. Two tables were measured again on commit `8284451`: the HTJ2K
 table, for every decoder, and the incremental table. The other tables are
 from `1f831a2`. Notes that quote the newer tables say so. The decoder changed
-between the two commits: #448 made HTJ2K decoding faster (in process, 1.1x to 2.3x
-depending on the file), which is why the rust-j2k HTJ2K times are lower than at `1f831a2`, and #452
-and #454 changed the incremental decoder's limits.
+between the two commits: #448 made HTJ2K decoding faster, 1.1x to 2.3x in
+process on the files over 5 ms, though the two runs were at different loads.
+#452 and #454 changed the incremental decoder's limits.
 
 ## Results
 
@@ -53,13 +53,9 @@ files only, and hayro-jpeg2000 has no region decode.
 This table was measured on commit `8284451` at a one-minute load average of
 0.44 to 0.57, with 7 runs per cell and the method below. Median and minimum
 agree within 2% on the files over 20 ms and within 7% on `ds1_ht_02_b11`.
-The in-process times of the small files vary from run to run. The two MIXED
-in-process cells are medians of 7, like the others, but a full `run.py time`
-run repeated three times gave medians of 2.2 to 5.0 ms for `ds0_hm_15_b8`
-and 3.3 to 10.3 ms for `ds0_hm_06_b11`. The table keeps the first run, which
-was the highest for both.
-`perf-decode rust-j2k FILE --iters 30` on `ds0_hm_15_b8` took 1.4 ms per
-decode. Read the MIXED cells as noise.
+The two MIXED in-process cells were measured again at a load of 1.85 and
+are medians of 7. Two more runs of the same command gave the same 1.5 and
+1.8 ms, the third at a load of 3.2.
 
 | File | OpenJPEG 1 thread | OpenJPEG all cores | Grok 1 thread | Grok all cores | OpenJPH | rust-j2k CLI | rust-j2k in process |
 | ---- | ----------------- | ------------------ | ------------- | -------------- | ------- | ------------ | ------------------- |
@@ -67,8 +63,8 @@ decode. Read the MIXED cells as noise.
 | `hifi_ht1_02` | 3.4 / 5.8 | 4.1 / 5.8 | 1.9 / 11.9 | 3.0 / 15.4 | 1.0 / 5.5 | 2.1 / 3.2 | 2.9 |
 | `ds1_ht_05_b11` | 23.1 / 11.3 | 88.0 / 11.4 | 84.8 / 47.7 | 41.6 / 88.7 | cannot decode | 27.0 / 6.4 | 25.5 |
 | `ds1_ht_04_b9` | 30.6 / 9.8 | 48.5 / 9.7 | 14.3 / 22.5 | 22.2 / 85.2 | wrong image (tile-part `QCD`) | 10.8 / 6.9 | 7.8 |
-| `ds0_hm_15_b8` (MIXED) | cannot decode | cannot decode | 2.3 / 11.3 | 0.3 / 11.5 | cannot decode | 2.1 / 3.0 | 5.0 |
-| `ds0_hm_06_b11` (MIXED) | cannot decode | cannot decode | 4.0 / 11.7 | 4.6 / 17.6 | cannot decode | 3.9 / 3.7 | 10.3 |
+| `ds0_hm_15_b8` (MIXED) | cannot decode | cannot decode | 2.3 / 11.3 | 0.3 / 11.5 | cannot decode | 2.1 / 3.0 | 1.5 |
+| `ds0_hm_06_b11` (MIXED) | cannot decode | cannot decode | 4.0 / 11.7 | 4.6 / 17.6 | cannot decode | 3.9 / 3.7 | 1.8 |
 | `ds1_ht_02_b11` | cannot decode | cannot decode | 7.2 / 13.5 | 4.2 / 14.2 | cannot decode | 16.8 / 8.0 | 13.2 |
 | `ds0_ht_05_b11` | cannot decode | cannot decode | 21.1 / 18.5 | 10.0 / 19.6 | cannot decode | 57.6 / 18.7 | 49.7 |
 | `ds0_ht_07_b16` | cannot decode | cannot decode | 117.3 / 65.2 | 48.6 / 71.7 | cannot decode | 245.7 / 59.7 | 203.6 |
@@ -96,7 +92,7 @@ prints it).
 
 The decoder tries to decode again only when the bytes fed have doubled since
 the last try (see [`incremental-decoding.md`](incremental-decoding.md)), so
-the extra time is explained by the number of tries, not the number of pieces.
+the extra time comes with the tries, not with the number of pieces.
 
 ### Files more than 2x slower than OpenJPEG
 
@@ -127,9 +123,10 @@ there is no OpenJPEG time to compare with.
   `ds0_ht_07_b16` and 3.0x on the generated file. On `ds1_ht_04_b9` rust-j2k
   is 1.3x faster, and on `ds1_ht_05_b11` it is 3.1x faster. This decoder's HT
   path is the slow part where it loses.
-- **Against OpenJPH.** On the generated file (measured at `8284451`) OpenJPH is 3.8x faster than
-  rust-j2k (13 ms against 51 ms), and uses a quarter of the memory. It
-  decodes only two conformance files, both too small to time (below).
+- **Against OpenJPH.** On the generated file (measured at `8284451`)
+  OpenJPH is 3.8x faster than rust-j2k (13 ms against 51 ms), and uses a
+  quarter of the memory. It decodes only two conformance files, both too
+  small to time (below).
 - **Against hayro-jpeg2000.** On the Part 1 files hayro-jpeg2000 is within
   about 25% of rust-j2k either way, except on the tiled file where it is
   1.39x faster: faster on `p0_07`, `p0_08`, `p0_05`, the GRIB2-shaped file
@@ -147,21 +144,20 @@ there is no OpenJPEG time to compare with.
   is 21% lower on `p1_03`. A window or one tile takes about half of
   OpenJPEG's peak and a quarter to a third of Grok's. On the HTJ2K
   conformance files (measured at `8284451`) rust-j2k's peak is the lowest or
-  within 2% of Grok's: 18.7 MiB against 18.5 on `ds0_ht_05_b11`, 1.1x below on `ds0_ht_07_b16`,
-  and 1.7x to 14x below on the rest. On the generated HTJ2K file it is the
-  highest: 27.8 MiB against 22.4 for OpenJPEG, 20.0 for Grok and 7.0 for
-  OpenJPH.
+  within 2% of Grok's: 18.7 MiB against 18.5 on `ds0_ht_05_b11`, 1.1x
+  below on `ds0_ht_07_b16`, and 1.7x to 14x below on the rest. On the
+  generated HTJ2K file it is the highest: 27.8 MiB against 22.4 for
+  OpenJPEG, 20.0 for Grok and 7.0 for OpenJPH.
 - **Small files.** For files that decode in a few milliseconds the
   command-line time is mostly process start-up, and subtracting the start-up
   run leaves noise: differences under about 2 ms there (`regular_latlon`,
   `ds0_ht_01_b11`, `hifi_ht1_02`, `ds0_hm_*`, the windows and tile 27) mean
   nothing, and a net of 0.0 means the decode was lost in the start-up run.
-  The in-process column is the more reliable one for them, except for the
-  MIXED rows, whose in-process cells vary from run to run.
+  The in-process column is the more reliable one for them.
 - **Load.** The Part 1 timing ran at a one-minute load of 1.66 to 2.15. The
-  HTJ2K table and the incremental table were measured again at 0.44 to 0.66. Median and
-  minimum agree within a few percent on the files over 20 ms, which shows the
-  runs were quiet.
+  HTJ2K table and the incremental table were measured again at 0.44 to 0.66,
+  and the two MIXED in-process cells at 1.85. Median and minimum agree within
+  a few percent on the files over 20 ms, which shows the runs were quiet.
 
 ## Output check
 
