@@ -230,7 +230,9 @@ or above the default limits, so when those decode the first decode must
 too. Otherwise a ladder that reaches an image must have the samples of a
 decode with no limits. A decode past a factor of 4 can take longer than the
 timeout, so the ladder stops when a refusal asks for more, once that step
-is checked. More than 16 steps is a failure; a ladder should end in a few.
+is checked. A packet work refusal names twice the factor it ran under, so a
+ladder takes about log2 of the factor it needs; more than 4 steps on one
+limit (log2 of that factor cap, plus 2) is a failure.
 
 An input over the fuzz sample budget (`common/budget.rs`) is only read for
 its header, and a sample limit refusal there is checked as one step with no

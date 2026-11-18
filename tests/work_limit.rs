@@ -424,7 +424,7 @@ fn limit_detail(result: rust_j2k::Result<rust_j2k::Image>) -> LimitDetail {
 
 /// On these two files the named factor is the smallest that admits them:
 /// decoding with it succeeds, and with one less is refused. (The packet
-/// bound only names the next factor up; see below.)
+/// bound only names twice the factor it ran under; see below.)
 #[test]
 fn the_named_factor_is_the_smallest_that_admits_the_file() {
     type Setter = fn(DecodeOptions, WorkLimit) -> DecodeOptions;
@@ -498,26 +498,29 @@ fn the_message_names_unlimited_for_trusted_input() {
     }
 }
 
-/// A raised limit that is still too small names a factor above it.
+/// A raised limit that is still too small names a factor above it: twice
+/// the one it ran under.
 #[test]
 fn a_raised_limit_that_is_too_small_names_a_larger_factor() {
     let bytes = fixture("work_bound/sweep_rpcl_1024_64.j2k");
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
     let limit = limit_detail(decode_with(&bytes, &options));
-    assert_eq!(named_factor(&limit), 3, "{limit}");
+    assert_eq!(named_factor(&limit), 4, "{limit}");
 }
 
-/// The packet bound shows only that a walk ran out, so its message names the
-/// next factor up, not what the file needs: `cprl_tall_poc31` (one tile)
-/// needs 32 and is told 2, and is still refused when raised to 2.
+/// The packet bound shows only that a walk ran out, so its message names
+/// twice the factor it ran under, not what the file needs: `cprl_tall_poc31`
+/// (one tile) needs 32 and is told 2, and is still refused when raised to 2
+/// (and then told 4).
 #[test]
-fn the_packet_factor_is_the_next_one_up_not_what_the_file_needs() {
+fn the_packet_factor_doubles_and_is_not_what_the_file_needs() {
     let bytes = fixture("work_bound/cprl_tall_poc31.j2k");
     let limit = limit_detail(decode(&bytes));
     assert_eq!(named_factor(&limit), 2, "{limit}");
     assert!(limit.message().contains("may need more"), "{limit}");
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
-    assert_limit("Raised(2)", decode_with(&bytes, &options));
+    let limit = limit_detail(decode_with(&bytes, &options));
+    assert_eq!(named_factor(&limit), 4, "{limit}");
 }
 
 /// POC volumes that reach more packets than the walk may visit are refused
@@ -576,4 +579,107 @@ fn the_poc_factor_counts_the_visits_of_the_tiles_before_the_refused_one() {
         decode_with(&bytes, &options),
         Err(Error::Limit(_))
     ));
+}
+
+/// A limit as a number to compare: `Default` is `Raised(1)`.
+fn rank(limit: &WorkLimit) -> u64 {
+    match limit {
+        WorkLimit::Default => 1,
+        WorkLimit::Raised(n) => u64::from(*n),
+        WorkLimit::Unlimited => u64::MAX,
+        other => panic!("a new limit setting: {other:?}"),
+    }
+}
+
+/// Follow `with_retry` from `start` until `bytes` decodes, checking each
+/// step: `with_retry` gives options, the limit the refusal names goes up,
+/// and every other option is as it was (compared by `Debug`, so a new field
+/// counts). Returns the image and the steps taken.
+fn follow_ladder(name: &str, bytes: &[u8], start: DecodeOptions) -> (rust_j2k::Image, u32) {
+    let mut options = start;
+    let mut steps = 0;
+    loop {
+        let limit = match decode_with(bytes, &options) {
+            Ok(image) => return (image, steps),
+            Err(Error::Limit(limit)) => limit,
+            Err(e) => panic!("{name}: {e}"),
+        };
+        let next = options
+            .with_retry(&limit)
+            .unwrap_or_else(|| panic!("{name}: no retry for {limit:?}"));
+        let hint = limit.retry_with().expect("with_retry gave options");
+        let (old, expected) = match limit.kind() {
+            LimitKind::PacketWork => (
+                &options.packet_work_limit,
+                options.clone().with_packet_work_limit(hint.clone()),
+            ),
+            LimitKind::CodeBlockWork => (
+                &options.code_block_work_limit,
+                options.clone().with_code_block_work_limit(hint.clone()),
+            ),
+            other => panic!("{name}: unexpected {other:?}"),
+        };
+        assert!(
+            rank(&hint) > rank(old),
+            "{name}: {hint:?} is not above {old:?}"
+        );
+        assert_eq!(
+            format!("{next:?}"),
+            format!("{expected:?}"),
+            "{name}: with_retry changed more than the option it names"
+        );
+        options = next;
+        steps += 1;
+        assert!(steps <= 4, "{name}: refused after {steps} steps: {limit}");
+    }
+}
+
+/// A caller that follows `with_retry` reaches the image in a few steps, from
+/// the defaults or from `Raised(2)`, with each step raising only the option
+/// the refusal names, and the image is the one with no limits.
+///
+/// The packet bound's hint doubles the factor it ran under, so a file that
+/// needs a factor of `n` takes about log2(n) steps. Measured on a release
+/// build, a `with_retry` loop from the defaults:
+///
+/// | File | Stepping up by one | Doubling |
+/// |---|---|---|
+/// | `cprl_tall_poc31` | 31 steps, 70 s | 5 steps, 18 s |
+/// | `pocvol_1024x512_1000_2`, strict off | over 46 steps, still refused at 120 s | 5 steps, 15 s |
+/// | `pocspent_2tiles_60000_559`, strict off | 25 steps, 9.8 s | 5 steps, 2.1 s |
+///
+/// Those files are too slow for a test, so it follows a sweep and the
+/// code-block file; the hint's arithmetic is unit tested in `limit_hint`.
+#[test]
+fn a_with_retry_ladder_ends_in_a_few_steps_at_the_unlimited_image() {
+    let unlimited = DecodeOptions::default()
+        .with_sample_limit(WorkLimit::Unlimited)
+        .with_packet_work_limit(WorkLimit::Unlimited)
+        .with_code_block_work_limit(WorkLimit::Unlimited);
+    let raised = DecodeOptions::default()
+        .with_packet_work_limit(WorkLimit::Raised(2))
+        .with_code_block_work_limit(WorkLimit::Raised(2));
+    // (file, starting options, steps). A packet walk costs seconds in a debug
+    // build, so the sweep starts from the defaults only, and takes two steps
+    // (1 to 2 to 4). The code-block file takes one step from the defaults and
+    // none from `Raised(2)`.
+    let cases = [
+        (
+            "work_bound/sweep_pcrl_1024_64.j2k",
+            vec![(DecodeOptions::default(), 2)],
+        ),
+        (
+            "tier1_work_bound/t1bomb_1024_64_88.j2k",
+            vec![(DecodeOptions::default(), 1), (raised, 0)],
+        ),
+    ];
+    for (name, starts) in cases {
+        let bytes = fixture(name);
+        let reference = decode_with(&bytes, &unlimited).unwrap_or_else(|e| panic!("{name}: {e}"));
+        for (start, expected) in starts {
+            let (image, steps) = follow_ladder(name, &bytes, start);
+            assert_eq!(steps, expected, "{name}");
+            assert_eq!(image, reference, "{name}: the ladder's image differs");
+        }
+    }
 }

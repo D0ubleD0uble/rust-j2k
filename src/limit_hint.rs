@@ -11,8 +11,9 @@
 //! work bounds, only the code-block bound, a POC
 //! sequence's reach and the code-blocks of the resolutions a reduction drops
 //! give the factor the tile needs. A packet walk that runs out of steps shows
-//! only that it needs more than it was allowed, so its message names the next
-//! factor up. Later tiles are never counted. The messages call the packet work
+//! only that it needs more than it was allowed, so its message names twice the
+//! factor it ran under, which a ladder of retries climbs in about log2 of the
+//! factor the file needs. Later tiles are never counted. The messages call the packet work
 //! bound's unit a step, as the public docs do; the code calls it a visit.
 
 use crate::tier2::WorkRefusal;
@@ -24,6 +25,22 @@ fn factor(needed: u64, default: u64) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
+/// The `Raised` factor a walk that ran out of `allowed` steps names: twice
+/// the factor it ran under, and at least the next one up. Stepping up by one
+/// would make a ladder of retries cost the square of the factor the file
+/// needs. It stops at `u32::MAX`, and past a walk already under that factor
+/// there is no `Raised` factor, so it is `None`.
+fn doubled(allowed: u64, default: u64) -> Option<u32> {
+    let under = u64::from(factor(allowed, default));
+    let next = u64::from(factor(allowed.saturating_add(1), default));
+    let n = next.max(under.saturating_mul(2));
+    match u32::try_from(n) {
+        Ok(n) => Some(n),
+        Err(_) if under < u64::from(u32::MAX) => Some(u32::MAX),
+        Err(_) => None,
+    }
+}
+
 const TRUSTED: &str = "or with `WorkLimit::Unlimited` for trusted input";
 
 /// The [`Error::Limit`] for tile `tile`, whose packet walk was refused for `work`
@@ -31,7 +48,8 @@ const TRUSTED: &str = "or with `WorkLimit::Unlimited` for trusted input";
 /// spent. `default` is the default bound.
 ///
 /// A walk that ran out of steps shows only that it needs more than it was
-/// allowed, so it names the next factor up, which may not be enough. A POC
+/// allowed, so it names twice the factor it ran under (see [`doubled`]),
+/// which may not be enough. A POC
 /// sequence's reach is a count of packets, so it names the factor its reach
 /// needs.
 pub(crate) fn packet(
@@ -44,17 +62,25 @@ pub(crate) fn packet(
     const OPTION: &str = "(see `DecodeOptions::packet_work_limit`)";
     let left = allowed.saturating_sub(spent);
     match work {
-        WorkRefusal::PacketWalk => {
-            let n = factor(allowed.saturating_add(1), default);
-            packet_work(
+        WorkRefusal::PacketWalk => match doubled(allowed, default) {
+            Some(n) => packet_work(
                 n,
                 format!(
                     "reading the packet headers of tile {tile} goes past the packet work bound of \
                  {allowed} steps {OPTION}; retry with at least `WorkLimit::Raised({n})` (the \
                  file may need more), {TRUSTED}"
                 ),
-            )
-        }
+            ),
+            None => Error::limit_retry(
+                LimitKind::PacketWork,
+                WorkLimit::Unlimited,
+                format!(
+                    "reading the packet headers of tile {tile} goes past the packet work bound of \
+                 {allowed} steps {OPTION}, and no `Raised` factor is higher; only \
+                 `WorkLimit::Unlimited` admits it, for trusted input"
+                ),
+            ),
+        },
         WorkRefusal::PocReach { reached } => {
             let n = factor(spent.saturating_add(reached), default);
             packet_work(
@@ -177,10 +203,30 @@ mod tests {
         assert_eq!(named(&packet(dropped, 0, 100, 150, 50)), 4);
     }
 
-    /// The packet walk names the factor above what it was allowed.
+    /// The packet walk names twice the factor it ran under.
     #[test]
-    fn the_packet_walk_names_the_next_factor_up() {
-        assert_eq!(named(&packet(WorkRefusal::PacketWalk, 0, 0, 50, 50)), 2);
-        assert_eq!(named(&packet(WorkRefusal::PacketWalk, 0, 0, 100, 50)), 3);
+    fn the_packet_walk_doubles_the_factor() {
+        let walk = |allowed| named(&packet(WorkRefusal::PacketWalk, 0, 0, allowed, 50));
+        assert_eq!(walk(50), 2);
+        assert_eq!(walk(100), 4);
+        assert_eq!(walk(150), 6);
+        assert_eq!(walk(50 * 31), 62);
+        // A bound that is not a whole factor (the default of a file that
+        // grew) rounds up first: 120 / 50 is 3, doubled 6.
+        assert_eq!(walk(120), 6);
+    }
+
+    /// Doubling stops at `u32::MAX`, and past it only `Unlimited` is higher.
+    #[test]
+    fn the_packet_walk_saturates() {
+        let max = u64::from(u32::MAX);
+        let walk = |allowed| match packet(WorkRefusal::PacketWalk, 0, 0, allowed, 1) {
+            Error::Limit(limit) => limit.retry_with(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(walk(max / 2 + 1), Some(WorkLimit::Raised(u32::MAX)));
+        assert_eq!(walk(max - 1), Some(WorkLimit::Raised(u32::MAX)));
+        assert_eq!(walk(max), Some(WorkLimit::Unlimited));
+        assert_eq!(walk(u64::MAX), Some(WorkLimit::Unlimited));
     }
 }

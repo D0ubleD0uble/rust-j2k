@@ -983,13 +983,15 @@ impl Default for DecodeOptions {
 ///   checked later, against the same limit, and may need a higher factor.
 /// - For the code-block bound it is what the tiles seen so far need, exact
 ///   for a file of one tile.
-/// - For the packet bound it is the next factor up from the one that failed
-///   (or, when the refusal comes from a POC sequence's reach or a
-///   reduction's dropped code-blocks, the factor that check needs), and the
-///   file may need more: the walk stops as soon as it runs
-///   out, so it does not know the total. Double `n` on each retry rather than
-///   stepping by one: each retry costs more, and a file can need a factor of
-///   dozens.
+/// - For the packet bound it is twice the factor that failed (or, when the
+///   refusal comes from a POC sequence's reach or a reduction's dropped
+///   code-blocks, the factor that check needs), and the file may need more:
+///   the walk stops as soon as it runs out, so it does not know the total.
+///   The doubling is for a loop of retries: each costs more than the last,
+///   and a file can need a factor of dozens, so a ladder that doubles ends
+///   in about log2 of the factor the file needs. Following
+///   [`DecodeOptions::with_retry`] does that. If you pick the next factor
+///   yourself, double it too, rather than stepping up by one.
 ///
 /// Which value to pick:
 ///
@@ -1209,7 +1211,14 @@ impl DecodeOptions {
 
     /// These options with the limit that refused a decode set to the one
     /// it gave to retry with, or `None` if no option raises it or the
-    /// refusal gave none ([`LimitDetail::retry_with`]).
+    /// refusal gave none ([`LimitDetail::retry_with`]). Only that option
+    /// changes.
+    ///
+    /// It is safe to call in a loop: after a packet work refusal that ran
+    /// out of steps, the next factor is twice the last, so a file that needs
+    /// a factor of `n` takes about log2(`n`) retries, not `n`. A retry still
+    /// costs a decode, so a caller that wants a ceiling stops when the
+    /// factor passes its own.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode};
