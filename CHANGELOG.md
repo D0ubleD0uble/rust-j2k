@@ -13,17 +13,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- `DecodeOptions::with_retry` no longer climbs the packet work bound one
-  factor at a time. A packet walk that runs out of steps names twice the
-  factor it ran under (`Raised(2)`, `Raised(4)`, `Raised(8)`, ...), so a
-  loop of retries takes about log2 of the factor the file needs, not that
-  many steps. `cprl_tall_poc31` (needs 32) took 31 steps and 70 s from the
-  defaults and now takes 5 and 18 s; `pocvol_1024x512_1000_2` (strict off)
-  was still refused after 46 steps and 120 s and now takes 5 and 15 s;
+- `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
+  time. A refusal of the packet work or code-block work bound names the
+  larger of what the tiles seen so far need and twice the factor it ran
+  under (`Raised(2)`, `Raised(4)`, `Raised(8)`, ...), so a loop of retries
+  takes about log2 of the factor the file needs, not that many steps, and
+  no longer a step for each tile of a multi-tile file. The message no longer
+  says "at least": the factor can be more than the file needs. Measured on
+  a release build, a loop from the defaults, one thread:
+  `cprl_tall_poc31` (needs 32) took 31 steps and 70 s and now takes 5 steps
+  and 8.5 s; `pocvol_1024x512_1000_2` (strict off) was still refused after
+  46 steps and 120 s and now takes 5 steps and 8.0 s;
   `pocspent_2tiles_60000_559` (strict off) took 25 steps and 9.8 s and now
-  takes 5 and 2.1 s. No default changes, and the hint only advises what to
-  raise (release build, one thread). A walk already under `Raised(u32::MAX)`
-  names `Unlimited`.
+  takes 5 and 1.9 s; a 982-byte file of 64 tiles that each reach the bound
+  (strict off) took 16 steps and 35.8 s and now takes 5 and 11 s. No default
+  changes, and the hint only advises what to raise. A bound already under
+  `Raised(u32::MAX)` names `Unlimited`.
 - `IncrementalDecoder` holds the packet walks it keeps between calls to the
   larger of 1 MiB and 32 bytes per byte fed, as well as to twice the image
   and the largest walk. A file of 1228 bytes that declares a 16384 x 16384

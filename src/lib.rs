@@ -981,17 +981,16 @@ impl Default for DecodeOptions {
 /// - For the sample limit it is exact for the check it names: the image's
 ///   samples are known from its header. Palette expansion or sRGB output is
 ///   checked later, against the same limit, and may need a higher factor.
-/// - For the code-block bound it is what the tiles seen so far need, exact
-///   for a file of one tile.
-/// - For the packet bound it is twice the factor that failed (or, when the
-///   refusal comes from a POC sequence's reach or a reduction's dropped
-///   code-blocks, the factor that check needs), and the file may need more:
-///   the walk stops as soon as it runs out, so it does not know the total.
-///   The doubling is for a loop of retries: each costs more than the last,
-///   and a file can need a factor of dozens, so a ladder that doubles ends
-///   in about log2 of the factor the file needs. Following
-///   [`DecodeOptions::with_retry`] does that. If you pick the next factor
-///   yourself, double it too, rather than stepping up by one.
+/// - For the two work bounds it is the larger of what the tiles seen so far
+///   need and twice the factor that failed, so it can be more than the file
+///   needs, and the file may need more: a packet walk stops as soon as it
+///   runs out, so it does not know the total, and later tiles are not
+///   counted. The doubling is for a loop of retries: each costs more than
+///   the last, and a file can need a factor of dozens, so a ladder that
+///   doubles ends in about log2 of the factor the file needs, where one that
+///   stepped up by one, or to each tile's need, would take a step for each
+///   tile. Following [`DecodeOptions::with_retry`] does that. If you pick the
+///   next factor yourself, double it too.
 ///
 /// Which value to pick:
 ///
@@ -1214,11 +1213,13 @@ impl DecodeOptions {
     /// refusal gave none ([`LimitDetail::retry_with`]). Only that option
     /// changes.
     ///
-    /// It is safe to call in a loop: after a packet work refusal that ran
-    /// out of steps, the next factor is twice the last, so a file that needs
-    /// a factor of `n` takes about log2(`n`) retries, not `n`. A retry still
-    /// costs a decode, so a caller that wants a ceiling stops when the
-    /// factor passes its own.
+    /// It is safe to call in a loop: after a work bound refusal, the next
+    /// factor is at least twice the last, so a file that needs a factor of
+    /// `n` takes about log2(`n`) retries, not `n`. A retry still costs a
+    /// decode. The factor can be up to twice what the file needs, so a
+    /// caller that keeps a ceiling `c` should, when the factor passes it,
+    /// try once more with `WorkLimit::Raised(c)` rather than stop: a file
+    /// that needs between about `c / 2` and `c` is admitted by that.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode};

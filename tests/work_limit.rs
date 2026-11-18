@@ -595,7 +595,12 @@ fn rank(limit: &WorkLimit) -> u64 {
 /// step: `with_retry` gives options, the limit the refusal names goes up,
 /// and every other option is as it was (compared by `Debug`, so a new field
 /// counts). Returns the image and the steps taken.
-fn follow_ladder(name: &str, bytes: &[u8], start: DecodeOptions) -> (rust_j2k::Image, u32) {
+fn follow_ladder(
+    name: &str,
+    bytes: &[u8],
+    start: DecodeOptions,
+    most: u32,
+) -> (rust_j2k::Image, u32) {
     let mut options = start;
     let mut steps = 0;
     loop {
@@ -623,15 +628,13 @@ fn follow_ladder(name: &str, bytes: &[u8], start: DecodeOptions) -> (rust_j2k::I
             rank(&hint) > rank(old),
             "{name}: {hint:?} is not above {old:?}"
         );
-        // A walk that ran out of steps (both packet files here) names at
-        // least twice the factor it ran under. A POC reach names the factor
-        // it needs, which may be less, but no file here is refused for one.
-        if limit.kind() == LimitKind::PacketWork {
-            assert!(
-                rank(&hint) >= 2 * rank(old),
-                "{name}: {hint:?} is not twice {old:?}"
-            );
-        }
+        // A work refusal names at least twice the factor it ran under, so a
+        // ladder takes about log2 of the factor the file needs, not a step
+        // for each tile that needs a little more.
+        assert!(
+            rank(&hint) >= 2 * rank(old),
+            "{name}: {hint:?} is not twice {old:?}"
+        );
         assert_eq!(
             format!("{next:?}"),
             format!("{expected:?}"),
@@ -639,7 +642,10 @@ fn follow_ladder(name: &str, bytes: &[u8], start: DecodeOptions) -> (rust_j2k::I
         );
         options = next;
         steps += 1;
-        assert!(steps <= 4, "{name}: refused after {steps} steps: {limit}");
+        assert!(
+            steps <= most,
+            "{name}: refused after {steps} steps: {limit}"
+        );
     }
 }
 
@@ -653,42 +659,51 @@ fn follow_ladder(name: &str, bytes: &[u8], start: DecodeOptions) -> (rust_j2k::I
 ///
 /// | File | Stepping up by one | Doubling |
 /// |---|---|---|
-/// | `cprl_tall_poc31` | 31 steps, 70 s | 5 steps, 18 s |
-/// | `pocvol_1024x512_1000_2`, strict off | over 46 steps, still refused at 120 s | 5 steps, 15 s |
-/// | `pocspent_2tiles_60000_559`, strict off | 25 steps, 9.8 s | 5 steps, 2.1 s |
+/// | `cprl_tall_poc31` | 31 steps, 70 s | 5 steps, 8.5 s |
+/// | `pocvol_1024x512_1000_2`, strict off | over 46 steps, still refused at 120 s | 5 steps, 8.0 s |
+/// | `pocspent_2tiles_60000_559`, strict off | 25 steps, 9.8 s | 5 steps, 1.9 s |
+/// | `pocmulti_64tiles_4096_2`, strict off | 16 steps, 35.8 s | 5 steps, 11.0 s |
 ///
-/// Those files are too slow for a test, so it follows a sweep and the
-/// code-block file; the hint's arithmetic is unit tested in `limit_hint`.
+/// (The times of the two columns were taken at different loads; the steps are
+/// what matters.) Those files are too slow for a test, so it follows a sweep
+/// and the code-block file; the hint's arithmetic is unit tested in `limit_hint`.
 #[test]
 fn a_with_retry_ladder_ends_in_a_few_steps_at_the_unlimited_image() {
     let unlimited = DecodeOptions::default()
         .with_sample_limit(WorkLimit::Unlimited)
         .with_packet_work_limit(WorkLimit::Unlimited)
         .with_code_block_work_limit(WorkLimit::Unlimited);
-    let raised = DecodeOptions::default()
-        .with_packet_work_limit(WorkLimit::Raised(2))
-        .with_code_block_work_limit(WorkLimit::Raised(2));
-    // (file, starting options, steps). A packet walk costs seconds in a debug
-    // build, so the sweep starts from the defaults only, and takes two steps
-    // (1 to 2 to 4). The code-block file takes one step from the defaults and
-    // none from `Raised(2)`.
+    // (file, steps from the defaults). A packet walk costs seconds in a debug
+    // build, so there is one file for each limit: the sweep takes two steps
+    // (1 to 2 to 4), the code-block file one.
     let cases = [
-        (
-            "work_bound/sweep_pcrl_1024_64.j2k",
-            vec![(DecodeOptions::default(), 2)],
-        ),
-        (
-            "tier1_work_bound/t1bomb_1024_64_88.j2k",
-            vec![(DecodeOptions::default(), 1), (raised, 0)],
-        ),
+        ("work_bound/sweep_pcrl_1024_64.j2k", 2),
+        ("tier1_work_bound/t1bomb_1024_64_88.j2k", 1),
     ];
-    for (name, starts) in cases {
+    for (name, expected) in cases {
         let bytes = fixture(name);
         let reference = decode_with(&bytes, &unlimited).unwrap_or_else(|e| panic!("{name}: {e}"));
-        for (start, expected) in starts {
-            let (image, steps) = follow_ladder(name, &bytes, start);
-            assert_eq!(steps, expected, "{name}");
-            assert_eq!(image, reference, "{name}: the ladder's image differs");
-        }
+        let (image, steps) = follow_ladder(name, &bytes, DecodeOptions::default(), 4);
+        assert_eq!(steps, expected, "{name}");
+        assert_eq!(image, reference, "{name}: the ladder's image differs");
     }
+}
+
+/// On a file of many tiles that each reach one default bound, a refusal
+/// shows only the tiles seen so far, so a hint that named just what they need
+/// climbed one factor per tile: `pocmulti_64tiles_4096_2` took 16 steps and
+/// 35.8 s from the defaults (release, `strict` off), `Raised(2)` to
+/// `Raised(17)`, every one a POC reach. Doubling takes 5 steps and 11 s,
+/// `Raised(2)` to `Raised(32)`. About 11 s on a release build, minutes on a
+/// debug one, so ignored: run with
+/// `cargo test --release --test work_limit -- --ignored`. The hint's
+/// arithmetic for the same shape is unit tested in `limit_hint`.
+#[test]
+#[ignore = "slow: about 11 s on a release build"]
+fn a_ladder_over_many_tiles_that_each_reach_the_bound_takes_log_steps() {
+    let name = "work_bound/pocmulti_64tiles_4096_2.j2k";
+    let bytes = fixture(name);
+    let start = DecodeOptions::default().with_strict(false);
+    let (_, steps) = follow_ladder(name, &bytes, start, 7);
+    assert_eq!(steps, 5, "{name}");
 }

@@ -432,10 +432,9 @@ impl LimitDetail {
     /// It is worked out from what the refusal shows, so a retry with it can
     /// still be refused, by this limit later in the file or by another
     /// limit (see [`WorkLimit`]), or fail with another error once past it,
-    /// such as damage the limit stopped the decode before. A packet work
-    /// refusal from a walk that ran out of steps names twice the factor it
-    /// ran under, so retries in a loop take about log2 of the factor the file
-    /// needs. It is also `None` for a packet work refusal that shows no
+    /// such as damage the limit stopped the decode before. A work bound
+    /// refusal names at least twice the factor it ran under, so retries in a
+    /// loop take about log2 of the factor the file needs. It is also `None` for a packet work refusal that shows no
     /// factor, such as one while reading the header.
     ///
     /// [`DecodeOptions::with_retry`](crate::DecodeOptions::with_retry)
