@@ -215,6 +215,44 @@ impl IncrementalDecoder {
         &self.bytes
     }
 
+    /// The options the decoder decodes under: those it was made with, as
+    /// the setters have changed them. [`strict`](DecodeOptions::strict) is
+    /// the caller's value, as [`finish`](Self::finish) uses it, not the
+    /// strict-off copy [`refine`](Self::refine) decodes under.
+    ///
+    /// To show an image right after a change of options, without waiting for
+    /// the next refine, decode the bytes fed so far with these options and
+    /// `strict` off:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, IncrementalDecoder, decode_with};
+    ///
+    /// # let file = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/layers/lrcp.j2k"
+    /// # )).to_vec();
+    /// let mut decoder = IncrementalDecoder::new(DecodeOptions::default())?;
+    /// // Most of the file has arrived, and the viewer zooms out.
+    /// decoder.feed(&file[..file.len() - 5]);
+    /// decoder.set_resolution_reduction(1)?;
+    /// let options = decoder.options().clone().with_strict(false);
+    /// let image = decode_with(decoder.bytes(), &options)?;
+    /// println!("{}x{}", image.width, image.height);
+    /// // With `strict` on, the cut file is refused.
+    /// assert!(decode_with(decoder.bytes(), decoder.options()).is_err());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// This is a decode of its own. It spends nothing from the decoder's
+    /// work bounds and does not change when [`refine`](Self::refine) next
+    /// decodes, and the decoder keeps nothing from it, so a viewer that
+    /// wants the image again keeps it. Its bounds are those of the options,
+    /// as for any `decode_with`. With `strict` left on, it refuses a
+    /// stream that is cut short, as [`finish`](Self::finish) does.
+    pub fn options(&self) -> &DecodeOptions {
+        &self.options
+    }
+
     /// The header of the bytes fed so far, as [`read_header_with`] reads it
     /// under the decoder's options: it describes the image
     /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end

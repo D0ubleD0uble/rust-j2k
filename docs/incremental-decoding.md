@@ -168,7 +168,13 @@ under the current options (`Ok(None)` until the main header is whole), and
   twice the bytes of the last try. Resetting it would let a caller who
   changes the options on every call build an image on every call. A
   caller who has fed the whole file gets the image under the new options
-  from `finish`.
+  from `finish`. `finish` decodes under the caller's `strict`, so on a
+  stream that is stalled or cut short it returns an error, not an image.
+  To show an image right away, decode the bytes with `strict` off:
+  `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
+  That is a decode of its own: it spends nothing from the decoder's bounds
+  and does not change when the next refine decodes. `options()` returns the
+  options as the caller set them, with the caller's `strict`.
 - A change clears an error an earlier refine returned, since the new
   options may not give it (a reduction past the file's levels). A set to
   the value the decoder has keeps it.

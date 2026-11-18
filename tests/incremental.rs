@@ -813,3 +813,62 @@ fn a_change_of_options_applies_to_the_later_refines_and_clears_their_error() {
         keyed(decode_with(&bytes, &options))
     );
 }
+
+/// An image right after a change of options, from the bytes and the options
+/// the decoder reports with `strict` off, is the one-shot strict-off decode
+/// of the same bytes under the new options. `finish` on those bytes errors.
+#[test]
+fn decode_with_the_decoders_options_gives_an_image_after_a_change() {
+    let file = std::fs::read(fixtures().join("layers/lrcp.j2k")).unwrap();
+    let prefix = &file[..file.len() - 5];
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(prefix);
+    decoder.set_resolution_reduction(1).unwrap();
+    let lenient = decoder.options().clone().with_strict(false);
+    let image = decode_with(decoder.bytes(), &lenient).unwrap();
+    let expected = decode_with(
+        prefix,
+        &DecodeOptions::default()
+            .with_resolution_reduction(1)
+            .with_strict(false),
+    )
+    .unwrap();
+    assert_eq!(image, expected);
+    // Strict `finish` refuses the cut file, and the decode above left the
+    // decoder as it was.
+    assert!(decoder.finish().is_err());
+    assert!(decoder.options().strict);
+}
+
+/// `options()` follows each setter, keeps the caller's `strict`, and is
+/// unchanged by a setter that returns `InvalidOptions`.
+#[test]
+fn options_reflects_each_setter_and_survives_a_refused_one() {
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    assert_eq!(decoder.options().resolution_reduction, 0);
+    assert!(decoder.options().strict);
+    decoder.set_resolution_reduction(2).unwrap();
+    assert_eq!(decoder.options().resolution_reduction, 2);
+    decoder.set_max_quality_layers(Some(3)).unwrap();
+    assert_eq!(decoder.options().max_quality_layers, Some(3));
+    let region = Region::Window(Window::new(1, 2, 3, 4));
+    decoder.set_region(region.clone()).unwrap();
+    assert_eq!(decoder.options().region, region);
+    assert!(matches!(
+        decoder.set_max_quality_layers(Some(0)),
+        Err(Error::InvalidOptions(_))
+    ));
+    assert!(matches!(
+        decoder.set_region(Region::Window(Window::new(4, 4, 4, 8))),
+        Err(Error::InvalidOptions(_))
+    ));
+    let options = decoder.options();
+    assert_eq!(options.resolution_reduction, 2);
+    assert_eq!(options.max_quality_layers, Some(3));
+    assert_eq!(options.region, region);
+    assert!(options.strict);
+
+    let lenient = DecodeOptions::default().with_strict(false);
+    let decoder = IncrementalDecoder::new(lenient).unwrap();
+    assert!(!decoder.options().strict);
+}
