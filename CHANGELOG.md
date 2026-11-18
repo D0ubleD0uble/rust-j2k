@@ -39,8 +39,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and refusal is unchanged (#415).
 - `IncrementalDecoder` counts the packet visits of the walks that read a
   tile from the start again: of tiles walked anew on each refine, and of
-  walks started again by a later tile-part's `POC` or built again once
-  there is room. Once they pass four times the packet bound of one decode
+  walks started again by a later tile-part's `POC` volumes or packed
+  packet headers, or built again once there is room. Once they pass four times the packet bound of one decode
   of the bytes fed, a refine that would make such a walk returns
   `Ok(None)`, and `finish` decodes the file. Two files of 525 KB made for
   it, fed in small pieces with a refine after each, took 8.4 and 7.3 times
