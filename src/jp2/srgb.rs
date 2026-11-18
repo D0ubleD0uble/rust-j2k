@@ -114,7 +114,7 @@ pub(crate) fn plan(
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
-    cap: u64,
+    cap: samples::Cap,
 ) -> Result<SrgbPlan> {
     match color {
         // OpenJPEG reads any image of two or fewer components as gray (and
@@ -278,7 +278,7 @@ fn plan_sycc(
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
-    cap: u64,
+    cap: samples::Cap,
 ) -> Result<SrgbPlan> {
     let colors = three_colors(channels, outputs, "sYCC")?;
     same_format(&colors, outputs)?;
@@ -315,7 +315,7 @@ fn check_budget(
     colors: &[usize; 3],
     siz: &Siz,
     reduction: u8,
-    cap: u64,
+    cap: samples::Cap,
 ) -> Result<()> {
     let luma = siz.image_extent_at(reduction);
     let mut total: u64 = 0;
@@ -328,7 +328,7 @@ fn check_budget(
         };
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
-    if total > cap {
+    if total > cap.allowed {
         let what = format!(
             "sRGB output with the sYCC chroma replicated{}",
             samples::at(reduction)
@@ -344,7 +344,7 @@ fn plan_icc(
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
-    cap: u64,
+    cap: samples::Cap,
 ) -> Result<SrgbPlan> {
     // OpenJPEG converts a 4:2:0 or 4:2:2 image as sYCC before it opens the
     // profile, so this holds whatever the profile is, even one LittleCMS
@@ -377,7 +377,7 @@ fn plan_icc_or_refuse(
     outputs: &[ComponentInfo],
     siz: &Siz,
     reduction: u8,
-    cap: u64,
+    cap: samples::Cap,
 ) -> std::result::Result<SrgbPlan, Icc> {
     let icc = Profile::parse(profile)?;
     match &icc.space {
@@ -466,7 +466,7 @@ fn check_gray_budget(
     channel: usize,
     siz: &Siz,
     reduction: u8,
-    cap: u64,
+    cap: samples::Cap,
 ) -> Result<()> {
     let mut total: u64 = 0;
     for (at, info) in outputs.iter().enumerate() {
@@ -476,7 +476,7 @@ fn check_gray_budget(
         let copies = if at == channel { 3 } else { 1 };
         total = total.saturating_add(copies * u64::from(width) * u64::from(height));
     }
-    if total > cap {
+    if total > cap.allowed {
         let what = format!(
             "sRGB output from a monochrome ICC profile that maps gray to color{}",
             samples::at(reduction)

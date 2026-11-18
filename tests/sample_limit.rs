@@ -692,3 +692,132 @@ fn a_palette_under_a_window_counts_the_window() {
         "{m}"
     );
 }
+
+// The default limit is the larger of 2^29 samples and 16 samples a byte of
+// input. `synth::two_large_tiles` makes a codestream of any length whose
+// tiles are each just over 2^29 samples.
+
+/// A window inside tile 0 of [`synth::two_large_tiles`]: it reads that tile
+/// alone.
+fn in_tile_0() -> DecodeOptions {
+    window(0, 0, 16, 16)
+}
+
+/// Past 32 MiB of input the default grows with the bytes: one tile just over
+/// 2^29 samples fits a file of `LARGE_TILE_BYTES` bytes, and not a file one
+/// byte shorter, where the limit is 16 samples a byte of it. The strict-off
+/// decode gets past the limit to a missing tile, as `opj_decompress
+/// -allow-partial` does.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn past_32_mib_the_default_limit_grows_with_the_input() {
+    let fits = synth::two_large_tiles(synth::LARGE_TILE_BYTES);
+    let header = read_header_with(&fits, &in_tile_0()).expect("one tile fits");
+    assert_eq!((header.width, header.height), (16, 16));
+    let lenient = in_tile_0().with_strict(false);
+    let image = decode_with(&fits, &lenient).expect("one tile fits");
+    assert_eq!((image.width, image.height), (16, 16));
+    assert!(!image.report.is_complete());
+
+    let short = synth::two_large_tiles(synth::LARGE_TILE_BYTES - 1);
+    let allowed = 16 * (synth::LARGE_TILE_BYTES as u64 - 1);
+    assert!(allowed > 1 << 29);
+    for m in [
+        limit(read_header_with(&short, &in_tile_0())),
+        limit(decode_with(&short, &lenient)),
+    ] {
+        assert!(
+            m.starts_with(&format!(
+                "the area of the tiles read (23171x23171) needs 536895241 samples, over the \
+                 sample limit of {allowed} "
+            )),
+            "{m}"
+        );
+        assert!(m.contains("`WorkLimit::Raised(2)`"), "{m}");
+    }
+}
+
+/// `Raised(n)` is n times the default for the file's size, so the factor a
+/// refusal names admits the file at that size: the two tiles of a file that
+/// fits one need `Raised(2)`, and `with_retry` gives it.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn a_factor_multiplies_the_default_for_the_input() {
+    let bytes = synth::two_large_tiles(synth::LARGE_TILE_BYTES);
+    let Err(Error::Limit(detail)) = read_header(&bytes) else {
+        panic!("two tiles are over the default");
+    };
+    assert!(
+        detail.message().starts_with(&format!(
+            "image area 46342x23171 needs 1073790482 samples, over the sample limit of {} ",
+            16 * synth::LARGE_TILE_BYTES
+        )),
+        "{detail}"
+    );
+    assert_eq!(detail.retry_with(), Some(WorkLimit::Raised(2)));
+    let retry = DecodeOptions::default().with_retry(&detail).unwrap();
+    let header = read_header_with(&bytes, &retry).expect("the factor named admits the file");
+    assert_eq!((header.width, header.height), (46342, 23171));
+    // At the floor, 2^29 samples, the same image needs `Raised(3)`.
+    let small = synth::two_large_tiles(1000);
+    let detail = limit(read_header(&small));
+    assert!(detail.contains("`WorkLimit::Raised(3)`"), "{detail}");
+}
+
+/// In a JP2 file the limit counts the bytes of the whole file, as the
+/// decode holds them all: a codestream a little short of the size that
+/// admits one tile is admitted once its boxes add the rest.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn a_jp2_file_counts_all_its_bytes() {
+    let codestream = synth::two_large_tiles(synth::LARGE_TILE_BYTES - 60);
+    let file = synth::jp2_file(
+        &[
+            synth::ihdr_for(&codestream),
+            bx(b"colr", &synth::colr_enum(17)),
+        ],
+        &[],
+        &codestream,
+        &[],
+    );
+    assert!(file.len() >= synth::LARGE_TILE_BYTES, "{}", file.len());
+    let _ = limit(read_header_with(&codestream, &in_tile_0()));
+    let header = read_header_with(&file, &in_tile_0()).expect("the file's boxes count");
+    assert_eq!((header.width, header.height), (16, 16));
+}
+
+/// A file of 100 bytes is held to the floor: it cannot ask for more than
+/// 2^29 samples. One of exactly 2^29 is admitted, and one of a sample more
+/// refused, through `decode` and `read_header` alike.
+#[test]
+fn a_100_byte_file_is_held_to_2_to_the_29_samples() {
+    let file = |width: u32, height: u32| {
+        let siz = synth::siz_body([width, height, 0, 0, width, height, 0, 0], &[[7, 1, 1]]);
+        let mut out = [
+            vec![0xFF, 0x4F],
+            seg(0xFF51, &siz),
+            seg(0xFF52, &synth::cod_body(1, 5, 4, 0)),
+            seg(0xFF5C, &synth::qcd_none_body(2, &[8; 16])),
+        ]
+        .concat();
+        // A comment pads the main header to 98 bytes; then `SOT`.
+        let comment = vec![b' '; 98 - out.len() - 4 - 2];
+        out.extend(seg(0xFF64, &[&[0, 1][..], &comment].concat()));
+        out.extend_from_slice(&[0xFF, 0x90]);
+        assert_eq!(out.len(), 100);
+        out
+    };
+    let at_floor = file(1 << 15, 1 << 14);
+    let header = read_header(&at_floor).expect("2^29 samples fit");
+    assert_eq!((header.width, header.height), (1 << 15, 1 << 14));
+    let over = file((1 << 15) + 1, 1 << 14);
+    for m in [limit(read_header(&over)), limit(decode(&over))] {
+        assert!(
+            m.starts_with(
+                "image area 32769x16384 needs 536887296 samples, over the sample limit of \
+                 536870912 "
+            ),
+            "{m}"
+        );
+    }
+}

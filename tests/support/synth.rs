@@ -154,6 +154,39 @@ pub fn qcd_none_body(guard: u8, exponents: &[u8]) -> Vec<u8> {
     out
 }
 
+/// One side of each tile of [`two_large_tiles`]: a tile of 23171 x 23171,
+/// 536895241 samples, is just over 2^29.
+pub const LARGE_TILE: u32 = 23171;
+
+/// The fewest bytes of input under whose default sample limit, 16 samples a
+/// byte, one [`LARGE_TILE`] fits.
+pub const LARGE_TILE_BYTES: usize = (LARGE_TILE as usize * LARGE_TILE as usize).div_ceil(16);
+
+/// A codestream of `len` bytes: two [`LARGE_TILE`] tiles side by side, of one
+/// unsigned 8-bit component, 5/3, one layer and five wavelet levels. Tile 0
+/// has no tile-part. Tile 1 has one, which runs to the end of the
+/// codestream, with no `EOC`: its packet data is zero bytes, empty packets
+/// and then bytes left over, there to make the file `len` bytes long. A
+/// window inside tile 0 reads only tile 0, so it counts one tile against
+/// the sample limit, and with `strict` off decodes to a missing tile.
+pub fn two_large_tiles(len: usize) -> Vec<u8> {
+    let side = LARGE_TILE;
+    let siz = siz_body([2 * side, side, 0, 0, side, side, 0, 0], &[[7, 1, 1]]);
+    let mut out = [
+        vec![0xFF, 0x4F],
+        seg(0xFF51, &siz),
+        seg(0xFF52, &cod_body(1, 5, 4, 0)),
+        seg(0xFF5C, &qcd_none_body(2, &[8; 16])),
+    ]
+    .concat();
+    let data = len
+        .checked_sub(out.len() + 14)
+        .expect("room for the main header and a tile-part header");
+    out.extend(tile_part(1, 0, 1, &[], &vec![0; data]));
+    assert_eq!(out.len(), len);
+    out
+}
+
 /// Packet header bits, packed as B.10.1 has it: a byte after 0xFF carries
 /// only 7 bits, and the last byte is padded with 0 bits (and followed by a
 /// 0x00 if it is 0xFF).

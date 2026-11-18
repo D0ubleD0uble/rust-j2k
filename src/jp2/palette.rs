@@ -346,7 +346,7 @@ pub(crate) fn plan(
     header: &Jp2Header<'_>,
     siz: &Siz,
     reduction: u8,
-    cap: u64,
+    cap: samples::Cap,
     raw_channels: bool,
 ) -> Result<PalettePlan> {
     let (pclrs, cmaps) = (header.pclr(), header.cmap());
@@ -557,7 +557,12 @@ fn plan_channel(i: usize, source: Source, palette: &Palette, siz: &Siz) -> Resul
 /// bounds the expanded channels alone: the decoded components are held while
 /// the channels are built from them, so the peak is about twice the limit
 /// (see [`crate::samples`]).
-fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8, cap: u64) -> Result<()> {
+fn check_budget(
+    channels: &[PlannedChannel],
+    siz: &Siz,
+    reduction: u8,
+    cap: samples::Cap,
+) -> Result<()> {
     let mut total: u64 = 0;
     for channel in channels {
         let index = usize::from(channel.source.component());
@@ -566,7 +571,7 @@ fn check_budget(channels: &[PlannedChannel], siz: &Siz, reduction: u8, cap: u64)
             .ok_or_else(|| Error::inconsistent(format!("`SIZ` declares no component {index}")))?;
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
-    if total > cap {
+    if total > cap.allowed {
         let what = format!(
             "palette expansion to {} channels{}",
             channels.len(),
@@ -792,12 +797,16 @@ mod tests {
         };
         let channels: Vec<PlannedChannel> = (0..=254).map(channel).collect();
         let siz = siz(600, 500);
+        let cap = samples::Cap {
+            allowed: 1 << 26,
+            default: 1 << 26,
+        };
         assert!(matches!(
-            check_budget(&channels, &siz, 0, 1 << 26),
+            check_budget(&channels, &siz, 0, cap),
             Err(Error::Limit(_))
         ));
-        assert!(check_budget(&channels, &siz, 1, 1 << 26).is_ok());
-        assert!(check_budget(&channels[..200], &siz, 0, 1 << 26).is_ok());
+        assert!(check_budget(&channels, &siz, 1, cap).is_ok());
+        assert!(check_budget(&channels[..200], &siz, 0, cap).is_ok());
     }
 
     /// A direct channel moves its component's plane when nothing later reads

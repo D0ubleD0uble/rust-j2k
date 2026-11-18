@@ -9,7 +9,8 @@ use crate::pipeline::decode::{check_options, decode_metered};
 use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
 use crate::{
-    DecodeOptions, Error, Header, Image, Region, Result, decode_with, jp2, read_header_with,
+    DecodeOptions, Error, Header, Image, LimitKind, Region, Result, decode_with, jp2,
+    read_header_with,
 };
 
 /// A decoder for a file that arrives a piece at a time, from a network or a
@@ -343,6 +344,8 @@ impl IncrementalDecoder {
             // bounds.
             Err(Error::Incomplete(_)) => Ok(None),
             Err(Error::Limit(_)) if self.refused => Ok(None),
+            // The sample limit grows with the bytes too.
+            Err(Error::Limit(limit)) if limit.kind() == LimitKind::Samples => Ok(None),
             Err(error) => {
                 self.failed = Some(error.clone());
                 Err(error)
