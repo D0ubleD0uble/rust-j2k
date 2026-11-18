@@ -65,6 +65,7 @@ pub(crate) const REPEAT_BOUNDS: u64 = 4;
 /// of its order, tag trees, counts and buffers. A tile whose walk would
 /// pass either bound is not kept: each decode walks its packets from the
 /// start, as a one-shot decode does, until the bytes fed make room for it.
+/// Those walks are charged over all the decodes (see [`Walks::walk`]).
 ///
 /// The walks do not decide when a refine decodes: the decoder tries on
 /// the first refine with at least one byte fed, then at each doubling of
