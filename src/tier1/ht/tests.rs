@@ -339,6 +339,247 @@ fn u_vlc_prefix_suffix_and_extension() {
     }
 }
 
+// The buffered readers against bit-at-a-time models of 7.1.2 and 7.1.4.
+
+/// `importMagSgnBit` (7.1.2), one bit at a time: `None` where the stream
+/// fails.
+struct MagSgnModel {
+    pos: usize,
+    bits: u32,
+    tmp: u32,
+    last: u32,
+}
+
+impl MagSgnModel {
+    fn bit(&mut self, seg: &Segment<'_>) -> Option<u32> {
+        if self.bits == 0 {
+            self.bits = if self.last == 0xFF { 7 } else { 8 };
+            if self.pos < seg.pcup {
+                self.tmp = u32::from(seg.byte(self.pos));
+                if self.tmp & (1 << self.bits) != 0 {
+                    return None;
+                }
+            } else if self.pos == seg.pcup {
+                self.tmp = 0xFF;
+            } else {
+                return None;
+            }
+            self.last = self.tmp;
+            self.pos += 1;
+        }
+        let bit = self.tmp & 1;
+        self.tmp >>= 1;
+        self.bits -= 1;
+        Some(bit)
+    }
+}
+
+/// `importVLCBit` (7.1.4), one bit at a time: `None` where the stream fails.
+struct VlcModel {
+    pos: Option<usize>,
+    bits: u32,
+    tmp: u32,
+    last: u32,
+}
+
+impl VlcModel {
+    fn new(seg: &Segment<'_>) -> Self {
+        let lcup = seg.data.len();
+        let last = u32::from(seg.byte(lcup - 2));
+        let tmp = last >> 4;
+        VlcModel {
+            pos: lcup.checked_sub(3),
+            bits: if tmp & 7 < 7 { 4 } else { 3 },
+            tmp,
+            last,
+        }
+    }
+
+    fn bit(&mut self, seg: &Segment<'_>) -> Option<u32> {
+        if self.bits == 0 {
+            let pos = self.pos.filter(|&pos| pos >= seg.pcup)?;
+            self.tmp = u32::from(seg.byte(pos));
+            self.bits = if self.last > 0x8F && self.tmp & 0x7F == 0x7F {
+                7
+            } else {
+                8
+            };
+            self.last = self.tmp;
+            self.pos = pos.checked_sub(1);
+        }
+        let bit = self.tmp & 1;
+        self.tmp >>= 1;
+        self.bits -= 1;
+        Some(bit)
+    }
+
+    fn bits(&mut self, seg: &Segment<'_>, n: u32) -> Option<u32> {
+        let mut val = 0;
+        for i in 0..n {
+            val |= self.bit(seg)? << i;
+        }
+        Some(val)
+    }
+
+    /// `decodeCxtVLC` by the table rows: read a bit, then look for a row of
+    /// that length, as 7.3.5 describes.
+    fn cxt_vlc(&mut self, seg: &Segment<'_>, first_row: bool, c: u8) -> Option<QuadInfo> {
+        let table: &[[u8; 7]] = if first_row {
+            &CXT_VLC_TABLE_0
+        } else {
+            &CXT_VLC_TABLE_1
+        };
+        let mut cwd = 0u8;
+        for len in 1..=7u8 {
+            cwd |= (self.bit(seg)? as u8) << (len - 1);
+            if let Some(row) = table
+                .iter()
+                .find(|r| r[0] == c && r[6] == len && r[5] == cwd)
+            {
+                return Some(QuadInfo {
+                    rho: row[1],
+                    u_off: row[2] == 1,
+                    e_k: row[3],
+                    e_1: row[4],
+                });
+            }
+        }
+        None
+    }
+
+    fn u_prefix(&mut self, seg: &Segment<'_>) -> Option<u32> {
+        for prefix in 1..=3 {
+            if self.bit(seg)? == 1 {
+                return Some(prefix);
+            }
+        }
+        Some(5)
+    }
+}
+
+/// A random segment of 2 to 40 bytes, with `Pcup` anywhere below
+/// `Lcup - 1`, its bytes drawn mostly from the values the stuffing rules
+/// turn on (0xFF, 0x7F, 0x8F, 0x90).
+fn random_segment(rng: &mut Lcg) -> (Vec<u8>, usize) {
+    let len = 2 + (rng.next() % 39) as usize;
+    let data: Vec<u8> = (0..len)
+        .map(|_| match rng.next() % 6 {
+            0 => 0xFF,
+            1 => 0x7F,
+            2 => 0x8F,
+            3 => 0x90,
+            _ => rng.next() as u8,
+        })
+        .collect();
+    let pcup = (rng.next() as usize) % (len - 1);
+    (data, pcup)
+}
+
+/// The buffered MagSgn reader gives the model's bits, in reads of 0 to 32
+/// bits, and fails on the first read that needs a bit the model cannot give.
+#[test]
+fn magsgn_reader_matches_the_bit_at_a_time_model() {
+    let mut rng = Lcg(0x4D61_6753);
+    for _ in 0..20_000 {
+        let (data, pcup) = random_segment(&mut rng);
+        let seg = Segment { data: &data, pcup };
+        let mut fast = MagSgnReader::new();
+        let mut model = MagSgnModel {
+            pos: 0,
+            bits: 0,
+            tmp: 0,
+            last: 0,
+        };
+        loop {
+            let m = (rng.next() % 33) as u32;
+            let want: Option<u64> = (0..m).try_fold(0u64, |val, i| {
+                model.bit(&seg).map(|b| val | u64::from(b) << i)
+            });
+            match (fast.value(&seg, m), want) {
+                (Ok(got), Some(want)) => assert_eq!(got, want, "{data:02X?} pcup {pcup}"),
+                (Err(Error::Codestream(_)), None) => break,
+                (got, want) => panic!("{data:02X?} pcup {pcup}: {got:?} against {want:?}"),
+            }
+        }
+    }
+}
+
+/// The buffered VLC reader gives the model's bits, prefixes and codewords,
+/// and fails exactly where the model runs out of bits.
+#[test]
+fn vlc_reader_matches_the_bit_at_a_time_model() {
+    let mut rng = Lcg(0x564C_4321);
+    for _ in 0..20_000 {
+        let (data, pcup) = random_segment(&mut rng);
+        let seg = Segment { data: &data, pcup };
+        let mut fast = VlcReader::new(&seg);
+        let mut model = VlcModel::new(&seg);
+        loop {
+            let ok = match rng.next() % 3 {
+                0 => {
+                    let n = (rng.next() % 13) as u32;
+                    match (fast.bits(&seg, n), model.bits(&seg, n)) {
+                        (Ok(a), Some(b)) => a == b,
+                        (Err(Error::Codestream(_)), None) => break,
+                        _ => false,
+                    }
+                }
+                1 => match (fast.u_prefix(&seg), model.u_prefix(&seg)) {
+                    (Ok(a), Some(b)) => a == b,
+                    (Err(Error::Codestream(_)), None) => break,
+                    _ => false,
+                },
+                _ => {
+                    let first_row = rng.next().is_multiple_of(2);
+                    let c = (rng.next() % 8) as u8;
+                    let got = decode_cxt_vlc(&mut fast, &seg, first_row, c);
+                    match (got, model.cxt_vlc(&seg, first_row, c)) {
+                        (Ok(a), Some(b)) => a == b,
+                        (Err(Error::Codestream(m)), None) => {
+                            assert!(m.message().contains("runs into"), "{m}");
+                            break;
+                        }
+                        _ => false,
+                    }
+                }
+            };
+            assert!(ok, "{data:02X?} pcup {pcup}");
+        }
+    }
+}
+
+/// A codeword cut short by the end of the VLC stream is an error, though the
+/// lookup reads the missing bits as zeros and so finds some codeword there.
+/// A two-byte segment's VLC stream is the nibble of its first byte alone:
+/// three or four bits.
+#[test]
+fn a_codeword_past_the_vlc_stream_is_an_error() {
+    let mut cut = 0;
+    for first_row in [true, false] {
+        for c in 0..8u8 {
+            for nibble in 0..16u8 {
+                let data = [nibble << 4, 0x00];
+                let seg = Segment {
+                    data: &data,
+                    pcup: 0,
+                };
+                let want = VlcModel::new(&seg).cxt_vlc(&seg, first_row, c);
+                match decode_cxt_vlc(&mut VlcReader::new(&seg), &seg, first_row, c) {
+                    Ok(got) => assert_eq!(Some(got), want),
+                    Err(Error::Codestream(m)) => {
+                        assert_eq!(want, None, "context {c}, nibble {nibble:X}");
+                        assert!(m.message().contains("runs into"), "{m}");
+                        cut += 1;
+                    }
+                    Err(other) => panic!("{other:?}"),
+                }
+            }
+        }
+    }
+    // Both outcomes occur: some nibbles hold a whole codeword, others not.
+    assert!(cut > 0 && cut < 2 * 8 * 16, "{cut}");
+}
+
 // Quad steps.
 
 /// A cleanup pass over `seg` for a `width` x `height` block.
@@ -373,7 +614,7 @@ fn a_first_row_pair_reads_its_second_prefix_by_the_first() {
         data: &data,
         pcup: 0,
     };
-    assert_eq!(cleanup(seg, 4, 2).residuals(true, &both).unwrap(), [2, 1]);
+    assert_eq!(cleanup(seg, 4, 2).residuals(true, both).unwrap(), [2, 1]);
     // VLC nibble 0xC, LSB first 0, 0, 1, 1: prefix 3, then one bit 1 for
     // prefix 2. The first quad's suffix bit is the low bit of byte 0, 0.
     let data = [0x80, 0xC3, 0x00];
@@ -381,7 +622,7 @@ fn a_first_row_pair_reads_its_second_prefix_by_the_first() {
         data: &data,
         pcup: 0,
     };
-    assert_eq!(cleanup(seg, 4, 2).residuals(true, &both).unwrap(), [3, 2]);
+    assert_eq!(cleanup(seg, 4, 2).residuals(true, both).unwrap(), [3, 2]);
 }
 
 /// The predictor takes the largest exponent of the samples above the quad:
@@ -389,26 +630,32 @@ fn a_first_row_pair_reads_its_second_prefix_by_the_first() {
 /// right, where they exist.
 #[test]
 fn the_predictor_reads_the_quads_above() {
-    let data = [0x00, 0x02, 0x00];
-    let seg = Segment {
-        data: &data,
-        pcup: 0,
-    };
-    let c = cleanup(seg, 4, 4);
-    // Two quads per row. Above quad 2 (first column) is quad 0, and quad 1
-    // is above right: its bottom-left sample is index 5.
-    let mut exps = vec![0u32; 16];
-    exps[5] = 10;
-    assert_eq!(c.predictor(&exps, 2, 0b11), 9);
-    // Quad 3 (last column) has no quad above right; index 9 is quad 2.
-    exps[9] = 10;
-    exps[5] = 0;
-    assert_eq!(c.predictor(&exps, 3, 0b11), 1);
-    // Above left of quad 3 is quad 0: its bottom-right sample is index 3.
-    exps[3] = 7;
-    assert_eq!(c.predictor(&exps, 3, 0b11), 6);
+    // Two quads per row. Above the quad in column 0 is quad 0, and quad 1
+    // is above right: its bottom-left sample is `j = 1`.
+    let mut above = [QuadState::default(); 2];
+    above[1].exps[1] = 10;
+    assert_eq!(predictor(&above, 0, 0b11), 9);
+    // Only the bottom samples count: the top ones are `j = 0` and 2.
+    above[1].exps[1] = 0;
+    above[0].exps = [12, 0, 12, 0];
+    above[1].exps = [12, 0, 12, 0];
+    assert_eq!(predictor(&above, 0, 0b11), 1);
+    assert_eq!(predictor(&above, 1, 0b11), 1);
+    // The last column has no quad above right.
+    above[0].exps = [0; 4];
+    above[1].exps = [0, 0, 0, 0];
+    above[0].exps[1] = 10;
+    assert_eq!(predictor(&above, 1, 0b11), 1);
+    // Above left of column 1 is quad 0: its bottom-right sample is `j = 3`.
+    above[0].exps[3] = 7;
+    assert_eq!(predictor(&above, 1, 0b11), 6);
+    // Directly above: both bottom samples.
+    above[1].exps[3] = 9;
+    assert_eq!(predictor(&above, 1, 0b11), 8);
+    above[1].exps = [0, 11, 0, 0];
+    assert_eq!(predictor(&above, 1, 0b11), 10);
     // One significant sample: no prediction.
-    assert_eq!(c.predictor(&exps, 3, 0b01), 1);
+    assert_eq!(predictor(&above, 1, 0b01), 1);
 }
 
 // Whole blocks.
@@ -676,6 +923,126 @@ fn the_vertically_causal_flag_hides_the_next_stripe() {
     )
     .unwrap();
     assert_eq!(coeffs, [0, 0, 0, 0, 384]);
+}
+
+/// The SigProp and MagRef passes as 7.4 and 7.5 state them, sample by
+/// sample with the neighbors' bounds checked one at a time: the model
+/// [`Refinement::run`] must match.
+fn refine_model(pass: &Refinement, data: &[u8], magref: bool, coeffs: &mut [i32]) -> Result<()> {
+    let (w, h) = (pass.width, pass.height);
+    let sigma: Vec<bool> = coeffs.iter().map(|&c| c != 0).collect();
+    let mut r = vec![false; coeffs.len()];
+    let mut sp = SigPropReader::new(data);
+    let magnitude = 3i32 << (pass.shift - 1);
+    let mut groups = Vec::new();
+    for y0 in (0..h).step_by(4) {
+        for x0 in (0..w).step_by(4) {
+            groups.push((y0, (y0 + 4).min(h), x0, (x0 + 4).min(w)));
+        }
+    }
+    for &(y0, y1, x0, x1) in &groups {
+        let rows = if pass.causal { y1 } else { h };
+        let mut new = Vec::new();
+        for x in x0..x1 {
+            for y in y0..y1 {
+                let n = y * w + x;
+                if sigma[n] {
+                    continue;
+                }
+                let mut mbr = false;
+                for dy in [-1i64, 0, 1] {
+                    for dx in [-1i64, 0, 1] {
+                        let (ny, nx) = (y as i64 + dy, x as i64 + dx);
+                        if ny < 0 || nx < 0 || ny >= rows as i64 || nx >= w as i64 {
+                            continue;
+                        }
+                        let m = ny as usize * w + nx as usize;
+                        mbr |= sigma[m] || r[m];
+                    }
+                }
+                if mbr && sp.bit()? == 1 {
+                    r[n] = true;
+                    new.push(n);
+                }
+            }
+        }
+        for n in new {
+            coeffs[n] = if sp.bit()? == 1 {
+                -magnitude
+            } else {
+                magnitude
+            };
+        }
+    }
+    if magref {
+        let mut mr = MagRefReader::new(data);
+        let (center, half) = (1i32 << pass.shift, 1i32 << (pass.shift - 1));
+        for &(y0, y1, x0, x1) in &groups {
+            for x in x0..x1 {
+                for y in y0..y1 {
+                    let n = y * w + x;
+                    if !sigma[n] {
+                        continue;
+                    }
+                    let c = coeffs[n];
+                    let mut m = c.abs();
+                    if mr.bit() == 0 {
+                        m ^= center;
+                    }
+                    m |= half;
+                    coeffs[n] = if c < 0 { -m } else { m };
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Random blocks of 1 to 13 samples a side (so stripes and column-groups
+/// end short), with and without the causal flag and MagRef, decode as the
+/// model does, including where SigProp fails on a stuffing bit.
+#[test]
+fn refinement_matches_the_sample_by_sample_model() {
+    let mut rng = Lcg(0x5265_6669);
+    let mut scratch = RefinementScratch::default();
+    let mut failed = 0;
+    for _ in 0..5_000 {
+        let pass = Refinement {
+            width: 1 + (rng.next() % 13) as usize,
+            height: 1 + (rng.next() % 13) as usize,
+            causal: rng.next().is_multiple_of(2),
+            shift: 1 + (rng.next() % 8) as u32,
+        };
+        let magref = rng.next().is_multiple_of(2);
+        let density = 1 + rng.next() % 6;
+        let cleanup: Vec<i32> = (0..pass.width * pass.height)
+            .map(|_| {
+                if rng.next() % 8 < density {
+                    0
+                } else {
+                    let m = 3 << (pass.shift - 1) | (rng.next() as i32 & 0x70) << pass.shift;
+                    if rng.next().is_multiple_of(2) { m } else { -m }
+                }
+            })
+            .collect();
+        let data: Vec<u8> = (0..(rng.next() % 12) as usize)
+            .map(|_| match rng.next() % 5 {
+                0 => 0xFF,
+                1 => 0x7F,
+                _ => rng.next() as u8,
+            })
+            .collect();
+        let mut want = cleanup.clone();
+        let model = refine_model(&pass, &data, magref, &mut want);
+        let mut got = cleanup.clone();
+        let fast = pass.run(&data, magref, &mut got, &mut scratch);
+        match (fast, model) {
+            (Ok(()), Ok(())) => assert_eq!(got, want, "{data:02X?}"),
+            (Err(Error::Codestream(_)), Err(Error::Codestream(_))) => failed += 1,
+            (a, b) => panic!("{a:?} against {b:?}"),
+        }
+    }
+    assert!(failed > 0);
 }
 
 #[test]
