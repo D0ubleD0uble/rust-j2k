@@ -18,7 +18,7 @@ fn fixture(name: &str) -> Vec<u8> {
 fn one_shot_bounds(bytes: &[u8]) -> (u64, u64) {
     let parsed = codestream::parse_header(bytes).unwrap();
     let cs = codestream::parse_tiles_with(bytes, parsed, false).unwrap();
-    let tile_bytes = crate::tile_bytes(&cs);
+    let tile_bytes = crate::pipeline::decode::tile_bytes(&cs);
     (
         tier2::decode_visits(tile_bytes),
         tier1::decode_work(tile_bytes),
@@ -530,14 +530,14 @@ fn a_byte_at_a_time_feeder_stays_within_one_decodes_bounds() {
         let bytes = fixture(name);
         let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
         let mut images = 0;
-        crate::tests::BLOCK_WORK.with(|spent| spent.set(0));
+        crate::pipeline::decode::tests::BLOCK_WORK.with(|spent| spent.set(0));
         for byte in &bytes {
             decoder.feed(std::slice::from_ref(byte));
             if decoder.refine().unwrap().is_some() {
                 images += 1;
             }
         }
-        let block_work = crate::tests::BLOCK_WORK.with(Cell::get);
+        let block_work = crate::pipeline::decode::tests::BLOCK_WORK.with(Cell::get);
         let (packet_bound, block_bound) = one_shot_bounds(&bytes);
         let packets = decoder.spent.walks.visits();
         let blocks = decoder.spent.blocks;
@@ -668,7 +668,7 @@ fn a_kept_walk_charges_poc_repeats_as_the_one_shot_walk_does() {
             continue;
         };
         let cs = codestream::parse_tiles_with(prefix, parsed, false).unwrap();
-        let poc_bitmap = tier2::decode_visits(crate::tile_bytes(&cs));
+        let poc_bitmap = tier2::decode_visits(crate::pipeline::decode::tile_bytes(&cs));
         for (position, tile) in cs.tiles.iter().enumerate() {
             let header = cs.tile_header(position).unwrap();
             let once = Meter::new(u64::MAX / 2);

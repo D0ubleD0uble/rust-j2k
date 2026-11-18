@@ -13,18 +13,19 @@ slots: { default: 2, max: 3 }
 models: { default: sonnet, mechanical: haiku, complex: opus }
   # complex: new parsers of untrusted input (#160), colour math (#165),
   # anything touching tier1/tier2/dwt numerics, and every review.
-focus_themes: ["phase4: milestone 'Phase 4 — HTJ2K decode (Part 15)'"]
+focus_themes: ["0.5.x: milestone '0.5.x — decoder hardening'"]
 standing_orders:
-  - "Keep one worker on the HTJ2K chain (P4 steps in plan order, docs/roadmap-phase4.md) while it has an eligible issue."
-  - "Use the other slot for the streaming chain: #305 -> #215 -> #217, with #216 in parallel where its files don't overlap."
+  - "Land #414 (pipeline module split out of src/lib.rs) before #413, #415 and #416; those three touch src/incremental.rs and src/tier2/resume.rs and serialize after it, in the order #415 -> #416 -> #413."
+  - "Keep one worker on #412 (HT decode speed, src/tier1/ht*) while it is open; it shares no files with the incremental chain."
+  - "#437, #439, #443 and #418 fill a free slot when their files don't overlap a running worker."
 
 labels: { decision: needs-decision, judgement: needs-judgement }
 hotspots:
-  - "src/lib.rs, src/error.rs, src/image.rs and DecodeOptions (public API; #305, #215, #216 and #217 serialize here)"
-  - "src/tier1/** while the HT seam (#137, P4.2) lands"
-  - "src/codestream/** for the CAP/CPF work (P4.1)"
+  - "src/lib.rs, src/pipeline.rs and DecodeOptions (public API; #414 then #413 serialize here)"
+  - "src/incremental.rs and src/tier2/resume.rs (#413, #415, #416 serialize here)"
+  - "src/tier1/** while #412 lands"
   - "tests/support/mod.rs (Expected schema) and tests/fixtures/conformance/regenerate.py"
-  - "fuzz/Cargo.toml and fuzz/fuzz_targets/ (one worker adding targets at a time)"
+  - "fuzz/Cargo.toml and fuzz/fuzz_targets/ (one worker adding targets at a time; #439)"
 owner_only_edits:
   - ".github/** (CI workflows, dependabot, templates)"
   - ".pre-commit-config.yaml, deny.toml, codecov.yml"
@@ -69,7 +70,7 @@ constraints:
   - "Pure Rust only; no C/native dependency ever; no unsafe."
   - "Never commit personal data (emails, names, machine paths)."
   - "Never edit the owner's main checkout; workers use harness-owned worktrees (Agent isolation: worktree)."
-  - "Phase 4 decisions in docs/roadmap-phase4.md are settled; do not re-open them."
+  - "Decisions recorded in docs/roadmap-phase3.md and docs/roadmap-phase4.md are settled; do not re-open them."
   - "Before removing a worker's worktree, delete its cargo build dir: run `cargo metadata --format-version 1 --no-deps` in the worktree and remove the `build_directory` it reports. That dir lives outside the worktree (about 1.5 GB each) and `git worktree remove` leaves it behind."
 
 local:

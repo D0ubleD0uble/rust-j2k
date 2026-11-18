@@ -41,10 +41,10 @@ pub(crate) fn walk(bytes: &[u8], reduction: u8) -> Option<(u64, u64)> {
     let mut left = u64::MAX;
     for (index, tile) in cs.tiles.iter().enumerate() {
         let header = cs.tile_header(index).ok()?;
-        crate::check_reduction(&header, reduction, Some(index)).ok()?;
+        crate::pipeline::decode::check_reduction(&header, reduction, Some(index)).ok()?;
         decode_packets(&header, tile, &mut left, u64::MAX, reduction).ok()?;
     }
-    Some((u64::MAX - left, crate::tile_bytes(&cs)))
+    Some((u64::MAX - left, crate::pipeline::decode::tile_bytes(&cs)))
 }
 
 /// The bound is 2^24 visits, or 32 per byte of tile data past 2^19 bytes.
