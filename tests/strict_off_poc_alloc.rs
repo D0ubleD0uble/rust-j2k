@@ -54,7 +54,7 @@ fn packets_past_the_end_take_no_memory_under_a_raised_bound() {
     let (result, peak) = peak_of(|| decode_with(&bytes, &lenient));
     match result {
         Err(Error::Limit(detail)) => {
-            assert_eq!(detail.retry_with(), Some(WorkLimit::Raised(4)), "{detail}")
+            assert_eq!(detail.retry_with(), Some(WorkLimit::Raised(6)), "{detail}")
         }
         other => panic!("{other:?}"),
     }

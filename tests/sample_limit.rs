@@ -351,8 +351,7 @@ fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
                 "{m}"
             );
             assert!(
-                m.message()
-                    .contains("retry with at least `WorkLimit::Raised(2)`"),
+                m.message().contains("retry with `WorkLimit::Raised(2)`"),
                 "{m}"
             );
         }

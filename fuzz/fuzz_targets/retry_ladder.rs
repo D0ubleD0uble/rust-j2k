@@ -16,8 +16,9 @@
 //!
 //! A decode past a factor of 4 can take longer than the fuzzer's timeout,
 //! so the ladder stops when a refusal asks for more, once that step is
-//! checked. A ladder of more than 16 steps is a failure: it should end in a
-//! few.
+//! checked. A limit that takes more than `MAX_STEPS` steps is a failure: a
+//! packet work refusal names twice the factor it ran under, so a ladder ends
+//! in about log2 of the factor it needs.
 //!
 //! An input that declares more samples than the fuzz budget allows
 //! (`common/budget.rs`) is only read for its header: a sample limit refusal
@@ -35,10 +36,13 @@ use rust_j2k::{
 /// The highest factor the ladder decodes at.
 const MAX_FACTOR: u64 = 4;
 
-/// The most steps the ladder may take. Each step raises one of three limits
-/// to at most a factor of [`MAX_FACTOR`] before the ladder stops, so a few
-/// steps are enough; this bound only catches a ladder that does not end.
-const MAX_STEPS: u32 = 16;
+/// The most steps the ladder may take on one limit: log2([`MAX_FACTOR`]) to
+/// double from the default to [`MAX_FACTOR`], one for the step past it that
+/// ends the ladder, and one of slack for a hint between doublings. The
+/// ladder stops past [`MAX_FACTOR`], so a hint that stepped up by one would
+/// not reach this bound; `tests/work_limit.rs` holds the doubling. This
+/// bound catches a ladder that does not end.
+const MAX_STEPS: u32 = MAX_FACTOR.ilog2() + 2;
 
 /// The three limits an option raises.
 const KINDS: [LimitKind; 3] = [
@@ -178,14 +182,19 @@ fuzz_target!(|input: &[u8]| {
         );
     }
     let mut steps = 0;
+    let mut by_kind = [0u32; KINDS.len()];
     while let Err(Error::Limit(limit)) = &result {
         let Some((next, raised)) = step(&options, limit) else {
             break;
         };
         steps += 1;
+        let slot = KINDS.iter().position(|&kind| kind == limit.kind());
+        let slot = slot.expect("an adjustable limit is one of KINDS");
+        by_kind[slot] += 1;
         assert!(
-            steps <= MAX_STEPS,
-            "ladder past {MAX_STEPS} steps: {limit:?}"
+            by_kind[slot] <= MAX_STEPS,
+            "{:?}: past {MAX_STEPS} steps: {limit:?}",
+            limit.kind()
         );
         if rank(&raised) > MAX_FACTOR {
             return;
