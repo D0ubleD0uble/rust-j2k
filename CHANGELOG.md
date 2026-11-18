@@ -14,7 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `IncrementalDecoder::set_resolution_reduction`, `set_max_quality_layers`
   and `set_region` change the options between refines. Each later image is
   the strict-off decode of its bytes under the new options. A change of
-  region keeps the packet walks; a change of the reduction or the layer cap
+  region keeps the packet walks, unless the walks kept are past the room of
+  the new region's decode: then walks of tiles the region does not read are
+  let go until the rest fit. A change of the reduction or the layer cap
   walks the tiles again, charged to the bound on the walks of tiles not
   kept. The cadence of refines does not reset, and an error the old
   options gave is cleared.

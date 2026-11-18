@@ -82,7 +82,10 @@ use crate::{
 /// [`set_max_quality_layers`](Self::set_max_quality_layers) and
 /// [`set_region`](Self::set_region), for a viewer that zooms or pans while
 /// the file arrives. Each later image is then the strict-off decode of its
-/// bytes under the new options. A change of region keeps the packet walks.
+/// bytes under the new options. A change of region keeps the packet walks,
+/// unless the walks kept are past the room of the new region's decode: then
+/// the next refine that decodes lets go of the walks of tiles the region
+/// does not read until the rest fit (see [`set_region`](Self::set_region)).
 /// A change of the reduction or the layer cap lets them go, and the walks
 /// built again are charged to the same bound as the walks of tiles not
 /// kept, so changing the options back and forth does not buy free walks.
@@ -217,8 +220,11 @@ impl IncrementalDecoder {
     /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end
     /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
     /// before it, so the main header is not complete yet. An error is the
-    /// one `read_header_with` gives on those bytes, such as a reduction the
-    /// main header's levels cannot take ([`Error::InvalidOptions`]). The
+    /// one `read_header_with` gives on those bytes, so it refuses a region or
+    /// reduction the file cannot take ([`Error::InvalidOptions`]), such as
+    /// [`Region::Tile`]`(500)` on a one-tile file.
+    /// [`read_header`](crate::read_header)`(decoder.bytes())` reads the
+    /// header without the decoder's options. The
     /// sample limit grows with the bytes fed, so a sample-limit
     /// [`Error::Limit`] here can turn into a header once more bytes come in;
     /// [`refine`](Self::refine) returns `Ok(None)` for it instead.
@@ -316,10 +322,10 @@ impl IncrementalDecoder {
     /// sample limit or a work bound refused the decode (each grows with the
     /// bytes). Any error is the one `decode_with` gives
     /// on those bytes, and more bytes will not clear it: each later call
-    /// returns it again. A refusal by a bound all the refines spend
-    /// together can stand in for an error later in the file: the refine
-    /// returns `Ok(None)` where `decode_with` fails, and `finish` reports
-    /// that error.
+    /// returns it again, until a change of options. A refusal by a bound
+    /// all the refines spend together can stand in for an error later in
+    /// the file: the refine returns `Ok(None)` where `decode_with` fails,
+    /// and `finish` reports that error.
     pub fn refine(&mut self) -> Result<Option<Image>> {
         if let Some(error) = &self.failed {
             return Err(error.clone());
