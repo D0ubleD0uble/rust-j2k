@@ -62,6 +62,10 @@ use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
 /// between calls: a file of 1228 bytes that declares a 16384 x 16384 image
 /// holds no walk. A tile whose walk would pass either bound is walked from
 /// the start by each refine instead, until more bytes make room for it.
+/// Those walks are held to four times the packet bound of one decode of
+/// the bytes fed over all the refines together: past that, a refine that
+/// would walk such a tile again returns `Ok(None)`, and `finish` decodes
+/// the file.
 /// On top of these bounds the decoder keeps a table of 24 bytes for each
 /// tile index up to the highest it has seen, which comes to about 1.5 MiB
 /// for the 65535 tiles a file can have (up to twice that in capacity as
@@ -200,8 +204,11 @@ impl IncrementalDecoder {
         // `Cell` between calls. Only the walks move into it: if the decode
         // panics, the code-block work spent stays, and the walks start
         // again.
-        let walks = std::mem::take(&mut self.spent.walks);
-        let ledger = Ledger::over(walks, self.spent.blocks, fed as u64);
+        let spent = Spent {
+            walks: std::mem::take(&mut self.spent.walks),
+            ..self.spent
+        };
+        let ledger = Ledger::over(spent, fed as u64);
         let decoded = decode_metered(&self.bytes, &self.lenient, Some(&ledger));
         self.refused = ledger.work_refused.get();
         self.spent = ledger.into_spent();
@@ -311,6 +318,8 @@ struct Spent {
     walks: Walks,
     /// The code-block work spent.
     blocks: u64,
+    /// The packet visits the walks of tiles not kept have spent.
+    repeats: u64,
     /// The code-block bound of the last decode, when it had one.
     bound: Option<u64>,
 }
@@ -325,12 +334,17 @@ struct Spent {
 /// on its own would spend, and refused where that walk is refused, so the
 /// packet bound is not cut. The code-block work is done again by each
 /// decode, so the code-block bound of each is cut by what the earlier ones
-/// spent.
+/// spent. So are the walks of tiles too large to keep, which each decode
+/// does from the start: the visits they spend over all the decodes are
+/// held to a few packet bounds (see [`Walks::walk`]).
 pub(crate) struct Ledger {
     /// The tiles' packet walks.
     walks: RefCell<Walks>,
     /// The code-block work spent.
     blocks: Cell<u64>,
+    /// The packet visits the walks of tiles not kept have spent (see
+    /// [`Walks::walk`]).
+    repeats: Cell<u64>,
     /// The code-block bound of this decode, once it is known.
     bound: Cell<Option<u64>>,
     /// Whether a work bound refused the last decode.
@@ -344,6 +358,7 @@ impl fmt::Debug for Ledger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ledger")
             .field("blocks", &self.blocks)
+            .field("repeats", &self.repeats)
             .field("bound", &self.bound)
             .field("work_refused", &self.work_refused)
             .field("fed", &self.fed)
@@ -352,12 +367,13 @@ impl fmt::Debug for Ledger {
 }
 
 impl Ledger {
-    /// A ledger over the walks and the code-block work of the earlier
-    /// decodes, for a decode of `fed` bytes.
-    fn over(walks: Walks, blocks: u64, fed: u64) -> Self {
+    /// A ledger over the walks and the work of the earlier decodes, for a
+    /// decode of `fed` bytes.
+    fn over(spent: Spent, fed: u64) -> Self {
         Ledger {
-            walks: RefCell::new(walks),
-            blocks: Cell::new(blocks),
+            walks: RefCell::new(spent.walks),
+            blocks: Cell::new(spent.blocks),
+            repeats: Cell::new(spent.repeats),
             bound: Cell::new(None),
             work_refused: Cell::new(false),
             fed,
@@ -369,6 +385,7 @@ impl Ledger {
         Spent {
             walks: self.walks.into_inner(),
             blocks: self.blocks.get(),
+            repeats: self.repeats.get(),
             bound: self.bound.get(),
         }
     }
@@ -400,12 +417,21 @@ impl Ledger {
         image: u64,
     ) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
         self.walks.borrow_mut().walk(
-            header, tile, meter, poc_bitmap, reduction, layers, image, self.fed,
+            header,
+            tile,
+            meter,
+            poc_bitmap,
+            reduction,
+            layers,
+            image,
+            self.fed,
+            &self.repeats,
         )
     }
 
     /// Record that a work bound refused a decode: the packet walk, the
-    /// code-block work or the charge for missing tiles. The bounds grow
+    /// walks of tiles not kept, the code-block work or the charge for
+    /// missing tiles. The bounds grow
     /// with the bytes and the missing tiles shrink, so more bytes may
     /// clear it.
     pub(crate) fn refuse(&self) {

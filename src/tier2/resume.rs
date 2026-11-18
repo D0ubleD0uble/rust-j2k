@@ -13,6 +13,8 @@
 //! the visits that decode would spend, so that it refuses the work it
 //! refuses.
 
+use std::cell::Cell;
+
 use crate::codestream::{MainHeader, Tile};
 use crate::tier2::Rect;
 use crate::{Error, Result};
@@ -42,6 +44,14 @@ const KEPT_PER_BYTE: u64 = 32;
 pub(crate) fn kept_room(fed: u64) -> u64 {
     KEPT_MIN.max(fed.saturating_mul(KEPT_PER_BYTE))
 }
+
+/// How many times a decode's packet bound the walks of tiles not kept may
+/// spend over all the decodes of an incremental decoder (see
+/// [`Walks::walk`]). Of the committed fixtures fed in quarters, in pieces
+/// of random sizes and one byte at a time, normal files spend at most
+/// 0.008 of a bound on these walks, and files made to reach the work bounds
+/// at most 3.
+pub(crate) const REPEAT_BOUNDS: u64 = 4;
 
 /// The packet walks of an incremental decode's tiles, by tile index.
 ///
@@ -100,6 +110,15 @@ impl Walks {
     /// on every call for a tile. `image` is the bytes of the image the
     /// decode returns, and `fed` the bytes the decode is of.
     ///
+    /// A tile whose walk is not kept is walked from the start on each
+    /// decode, as a one-shot decode walks it. `repeats` holds the visits
+    /// those walks have spent over all the decodes, and this one's are
+    /// added to it. Once it is past [`REPEAT_BOUNDS`] times the packet
+    /// bound of this decode (`meter`'s first visits), the walk is refused
+    /// for work, as a walk past the bound is. So the decodes together spend
+    /// on these walks at most that many bounds, plus the one walk that went
+    /// past.
+    ///
     /// A tile whose later tile-part adds `POC` volumes, or packed packet
     /// headers where it had none, has another order of packets, or reads
     /// them from elsewhere: its walk is started again.
@@ -114,6 +133,7 @@ impl Walks {
         layers: Option<u16>,
         image: u64,
         fed: u64,
+        repeats: &Cell<u64>,
     ) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
         let index = tile.index as usize;
         if self.tiles.len() <= index {
@@ -170,9 +190,7 @@ impl Walks {
             unkept => self.tiles[index] = unkept,
         }
         let Slot::Kept(walk, bytes) = &mut self.tiles[index] else {
-            return super::decode_packets_partial(
-                header, tile, meter, poc_bitmap, reduction, layers,
-            );
+            return walk_again(header, tile, meter, poc_bitmap, reduction, layers, repeats);
         };
         #[cfg(test)]
         let visits = if fresh { 0 } else { walk.visits() };
@@ -237,6 +255,37 @@ impl Walks {
     #[cfg(test)]
     pub(crate) fn visits(&self) -> u64 {
         self.visits
+    }
+}
+
+/// The walk of a tile not kept, from the start, as a one-shot decode walks
+/// it, with its visits added to `repeats` (see [`Walks::walk`]). It is
+/// refused for work when `repeats` is past [`REPEAT_BOUNDS`] packet bounds,
+/// before the walk or after it. A walk that fails otherwise fails as the
+/// one-shot walk does.
+fn walk_again<'t>(
+    header: &MainHeader,
+    tile: &'t Tile<'t>,
+    meter: &Meter,
+    poc_bitmap: u64,
+    reduction: u8,
+    layers: Option<u16>,
+    repeats: &Cell<u64>,
+) -> std::result::Result<(CodedData<'t>, Reach), Refused> {
+    let room = meter.first().saturating_mul(REPEAT_BOUNDS);
+    if repeats.get() > room {
+        return Err(Refused::Work(WorkRefusal::PacketWalk));
+    }
+    let left = meter.left();
+    let walked = super::decode_packets_partial(header, tile, meter, poc_bitmap, reduction, layers);
+    repeats.set(
+        repeats
+            .get()
+            .saturating_add(left.saturating_sub(meter.left())),
+    );
+    match walked {
+        Ok(_) if repeats.get() > room => Err(Refused::Work(WorkRefusal::PacketWalk)),
+        walked => walked,
     }
 }
 
