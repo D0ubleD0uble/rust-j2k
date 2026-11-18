@@ -11,15 +11,64 @@ const MAX_FUZZ_SAMPLES: u64 = 1 << 28;
 
 /// Whether `data` declares more output samples than [`MAX_FUZZ_SAMPLES`] at
 /// full resolution, which bounds every window, tile and reduction of it.
-/// An input whose header does not read is not over: it fails cheaply.
+///
+/// A header that reads gives the count. A header that does not read still
+/// counts by its `SIZ` segment: a JP2 whose `ihdr` box disagrees with `SIZ`
+/// fails to read, yet a lenient decode goes on to allocate from `SIZ`. An
+/// input with no readable `SIZ` fails cheaply and is not over.
 pub fn over(data: &[u8]) -> bool {
     let options = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
-    rust_j2k::read_header_with(data, &options).is_ok_and(|header| {
-        header
-            .components
-            .iter()
-            .map(|c| u64::from(c.width) * u64::from(c.height))
-            .sum::<u64>()
-            > MAX_FUZZ_SAMPLES
-    })
+    match rust_j2k::read_header_with(data, &options) {
+        Ok(header) => {
+            header
+                .components
+                .iter()
+                .map(|c| u64::from(c.width) * u64::from(c.height))
+                .sum::<u64>()
+                > MAX_FUZZ_SAMPLES
+        }
+        Err(_) => siz_samples(data) > u128::from(MAX_FUZZ_SAMPLES),
+    }
+}
+
+/// The most samples any `SOC` + `SIZ` pair in `data` declares, read straight
+/// from the bytes with no validation. The scan takes every pair, so a pair
+/// inside a box that is not the codestream only makes the count larger.
+fn siz_samples(data: &[u8]) -> u128 {
+    const PAIR: [u8; 4] = [0xFF, 0x4F, 0xFF, 0x51];
+    let be32 = |at: usize| {
+        data.get(at..at + 4)
+            .map(|b| u64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]])))
+    };
+    data.windows(PAIR.len())
+        .enumerate()
+        .filter(|(_, w)| *w == PAIR)
+        .filter_map(|(soc, _)| {
+            // Offsets from SOC: SIZ marker 2, Lsiz 4, Rsiz 6, Xsiz 8, Ysiz 12,
+            // XOsiz 16, YOsiz 20, tile fields 24..40, Csiz 40, components 42.
+            let (xsiz, ysiz, xo, yo) = (
+                be32(soc + 8)?,
+                be32(soc + 12)?,
+                be32(soc + 16)?,
+                be32(soc + 20)?,
+            );
+            let csiz = data.get(soc + 40..soc + 42)?;
+            let csiz = usize::from(u16::from_be_bytes([csiz[0], csiz[1]]));
+            let mut total = 0u128;
+            for c in 0..csiz {
+                let Some(&[_, xr, yr]) = data.get(soc + 42 + 3 * c..soc + 45 + 3 * c) else {
+                    break;
+                };
+                let (xr, yr) = (u64::from(xr), u64::from(yr));
+                if xr == 0 || yr == 0 {
+                    continue;
+                }
+                let w = xsiz.div_ceil(xr).saturating_sub(xo.div_ceil(xr));
+                let h = ysiz.div_ceil(yr).saturating_sub(yo.div_ceil(yr));
+                total += u128::from(w) * u128::from(h);
+            }
+            Some(total)
+        })
+        .max()
+        .unwrap_or(0)
 }

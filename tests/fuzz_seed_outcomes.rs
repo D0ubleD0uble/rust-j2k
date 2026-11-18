@@ -344,3 +344,61 @@ fn the_fuzz_skip_fires_just_over_2_pow_28_samples_and_not_on_small_inputs() {
     assert!(!budget::over(b"not a codestream"));
     assert!(!budget::over(&[]));
 }
+
+/// A JP2 file around `codestream` whose `ihdr` box declares `width` x `height`
+/// of one 8-bit component, whatever the codestream says.
+fn jp2_with_ihdr(width: u32, height: u32, codestream: &[u8]) -> Vec<u8> {
+    let bx = |kind: &[u8; 4], body: &[u8]| {
+        [&(8 + body.len() as u32).to_be_bytes()[..], kind, body].concat()
+    };
+    let ihdr = [
+        &height.to_be_bytes()[..],
+        &width.to_be_bytes(),
+        &[0, 1, 7, 7, 0, 0],
+    ]
+    .concat();
+    let colr = [&[1, 0, 0][..], &16u32.to_be_bytes()].concat();
+    [
+        bx(b"jP  ", &[0x0D, 0x0A, 0x87, 0x0A]),
+        bx(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+        bx(b"jp2h", &[bx(b"ihdr", &ihdr), bx(b"colr", &colr)].concat()),
+        bx(b"jp2c", codestream),
+    ]
+    .concat()
+}
+
+#[test]
+fn the_fuzz_skip_counts_siz_when_the_ihdr_box_disagrees() {
+    let opts = rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::WorkLimit::Unlimited);
+    // 2^28 + 16384 samples by SIZ, 2^28 by ihdr: the header does not read.
+    let over = jp2_with_ihdr(16384, 16384, &header_only(16384, 16385));
+    assert!(rust_j2k::read_header_with(&over, &opts).is_err());
+    assert!(budget::over(&over));
+    // The same disagreement under the budget stays under it.
+    let under = jp2_with_ihdr(16384, 16384, &header_only(16384, 16383));
+    assert!(rust_j2k::read_header_with(&under, &opts).is_err());
+    assert!(!budget::over(&under));
+    // A box layer that agrees reads, and the header path counts it.
+    assert!(budget::over(&jp2_with_ihdr(
+        16384,
+        16385,
+        &header_only(16384, 16385)
+    )));
+    // Sub-sampling and an image offset shrink the count the way the decoder
+    // sees it: 2 x 2 sub-sampling of 32768 x 32770 is 16384 x 16385 samples,
+    // and a vertical offset of 2 takes one row off.
+    let sub = |yo: u32| {
+        let siz = synth::siz_body([32768, 32770, 0, yo, 32768, 32770, 0, yo], &[[7, 2, 2]]);
+        let cs = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &synth::cod_body(1, 6, 0, 0)),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 19])),
+            vec![0xFF, 0x90],
+        ]
+        .concat();
+        jp2_with_ihdr(1, 1, &cs)
+    };
+    assert!(budget::over(&sub(0)));
+    assert!(!budget::over(&sub(2)));
+}

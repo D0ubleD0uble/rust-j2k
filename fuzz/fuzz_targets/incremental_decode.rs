@@ -84,6 +84,9 @@ fuzz_target!(|input: &[u8]| {
     if budget::over(data) {
         return;
     }
+    // The schedule below (fnv1a, splitmix, the piece formula) is copied by
+    // `incremental_target_repeat_check_holds_on_a_restarted_walk` in
+    // `src/fuzz.rs`. Change both together.
     let mut hash = fnv1a(data);
     // The code-block bound is the one earlier refines cut: the decoder
     // holds all its refines to it together. Without a bound, every refine
