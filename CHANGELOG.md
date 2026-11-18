@@ -14,10 +14,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
-  time. A refusal of the packet work or code-block work bound names the
-  larger of what the tiles seen so far need and twice the factor it ran
-  under (`Raised(2)`, `Raised(4)`, `Raised(8)`, ...), so a loop of retries
-  takes about log2 of the factor the file needs, not that many steps, and
+  time. A refusal of the packet work or code-block work bound, including the
+  charge for missing tiles, names the larger of what the tiles seen so far
+  need and twice the factor it ran under (`Raised(2)`, `Raised(4)`,
+  `Raised(8)`, ...), so a loop of retries takes about log2 of the factor the
+  file needs, not that many steps, and
   no longer a step for each tile of a multi-tile file. The message no longer
   says "at least": the factor can be more than the file needs. Measured on
   a release build, a loop from the defaults, one thread:
@@ -40,12 +41,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `IncrementalDecoder` counts the packet visits of the walks that read a
   tile from the start again: of tiles walked anew on each refine, and of
   walks started again by a later tile-part's `POC` volumes or packed
-  packet headers, or built again once there is room. Once they pass four times the packet bound of one decode
-  of the bytes fed, a refine that would make such a walk returns
-  `Ok(None)`, and `finish` decodes the file. Two files of 525 KB made for
-  it, fed in small pieces with a refine after each, took 8.4 and 7.3 times
-  one decode; they now take 4.6 and 3.5 times. No committed fixture gives
-  another result (#416).
+  packet headers, or built again once there is room. Once they pass four
+  times the packet bound of one decode of the bytes fed, a refine that would
+  make such a walk returns `Ok(None)`, and `finish` decodes the file. Two
+  files of 525 KB made for it, fed in small pieces with a refine after each,
+  took 8.4 and 7.3 times one decode; they now take 4.6 and 3.5 times. No
+  committed fixture gives another result (#416).
 
 ## [0.5.0] - 2026-11-17
 

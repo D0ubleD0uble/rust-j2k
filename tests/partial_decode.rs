@@ -686,6 +686,28 @@ fn missing_tiles_are_charged_against_the_work_bound() {
     }
 }
 
+/// The hint for the charge for missing tiles doubles the factor the bound ran
+/// under, like the other work hints. 65535 one-sample tiles of 1280
+/// components cost 83.9 million steps, which needs `Raised(5)` and is
+/// refused under `Raised(4)`; the hint names `Raised(8)`.
+#[test]
+fn the_missing_tiles_hint_doubles_the_factor() {
+    let mut bytes = main_header((65535, 1), (1, 1), 1280, 0, 0);
+    bytes.extend_from_slice(&[0xFF, 0x90]);
+    let options = lenient(0).with_packet_work_limit(rust_j2k::WorkLimit::Raised(4));
+    match decode_with(&bytes, &options) {
+        Err(Error::Limit(limit)) => {
+            assert_eq!(
+                limit.retry_with(),
+                Some(rust_j2k::WorkLimit::Raised(8)),
+                "{limit}"
+            );
+            assert!(!limit.message().contains("at least"), "{limit}");
+        }
+        other => panic!("expected Limit: {other:?}"),
+    }
+}
+
 /// Under a window, only the missing tiles it reads are charged. A header of
 /// 128 x 128 one-sample tiles of 2048 components, followed by nothing: the
 /// first column reads 128 tiles, 262144 tile-components, well inside the

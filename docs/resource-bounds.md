@@ -549,10 +549,14 @@ measures every HT corpus file against it with the others.
 
 ## Incremental decoding
 
-`IncrementalDecoder` holds its refines together to the two work bounds one
-decode of the bytes fed has: each refine's bounds are cut by what the earlier
-refines spent, and a refine that runs out waits for more bytes. `finish` is
-one more decode under its own bounds. See
+`IncrementalDecoder` holds a refine to the packet bound of a decode of its
+bytes on its own, not cut by what earlier refines spent. The code-block bound
+is shared: each refine's is cut by what earlier refines spent, and a refine
+that runs out waits for more bytes. Walks that read a tile from the start
+again (tiles not kept, walks started again) are held together to four times
+that packet bound, five at most counting the walk that crosses it, and the
+bound follows `packet_work_limit`. `finish` is one more decode under its own
+bounds. See
 [incremental-decoding.md](incremental-decoding.md#work-and-memory).
 
 ## Bounds removed by a cheaper parse
