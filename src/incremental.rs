@@ -5,9 +5,10 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 
 use crate::codestream::{MainHeader, Tile};
+use crate::pipeline::decode::{check_options, decode_metered};
 use crate::tier2::resume::Walks;
 use crate::tier2::{CodedData, Meter, Reach, Refused};
-use crate::{DecodeOptions, Error, Image, Result, check_options, decode_metered, decode_with, jp2};
+use crate::{DecodeOptions, Error, Image, Result, decode_with, jp2};
 
 /// A decoder for a file that arrives a piece at a time, from a network or a
 /// slow disk.

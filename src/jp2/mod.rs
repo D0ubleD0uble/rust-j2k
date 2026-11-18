@@ -438,7 +438,7 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
         // A POC sequence holds a bitmap wherever the decode could, sized by
         // the decode's bound for the same tile data, and past it gives up
         // rather than keep a set.
-        poc_bitmap: crate::tier2::decode_visits(crate::tile_bytes(&cs)),
+        poc_bitmap: crate::tier2::decode_visits(crate::pipeline::decode::tile_bytes(&cs)),
         poc_counts: false,
         // Volumes that leave out packets do not move where the packets they
         // reach end; the decode refuses them.
