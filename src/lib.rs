@@ -302,7 +302,8 @@ pub use window::{Region, Window};
 ///   and more for a tall, narrow tile or while a palette expands (see [the
 ///   sample limit][sample-limit]). This is for the one-shot functions; an
 ///   [`IncrementalDecoder`] keeps per-tile state and can hold up to about
-///   three times as much.
+///   three times one decode's peak, plus the bytes fed and a table of 24 bytes
+///   per tile index up to the highest seen (about 1.5 MiB for 65535 tiles).
 /// - Reading the packet headers of every tile may take
 ///   at most 2^24 steps, or 32 per byte of tile data when that is more. A
 ///   step is a packet read, a run of code-blocks a header skips without
