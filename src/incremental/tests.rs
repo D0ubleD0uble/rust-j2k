@@ -415,6 +415,94 @@ fn walks_past_the_room_are_walked_again() {
     assert!(kept > 0 && walked > 0, "{kept} kept, {walked} walked again");
 }
 
+/// One tile of 1024 x 1024 samples with 3 wavelet levels, one layer and
+/// code-blocks of 4 x 4 samples, each of its 4 packets empty (`00`), with
+/// `comments` `COM` segments of 60000 bytes in its tile-part header: 94
+/// bytes without them, whose packet walk holds the state of 65536
+/// code-blocks.
+fn large_tile(comments: usize) -> Vec<u8> {
+    const COMMENT: usize = 60000;
+    let mut cs = vec![0xFF, 0x4F];
+    cs.extend_from_slice(&[0xFF, 0x51, 0, 41, 0, 0]);
+    for v in [1024u32, 1024, 0, 0, 1024, 1024, 0, 0] {
+        cs.extend_from_slice(&v.to_be_bytes());
+    }
+    cs.extend_from_slice(&[0, 1, 7, 1, 1]);
+    cs.extend_from_slice(&[0xFF, 0x52, 0, 12, 0x00, 0, 0, 1, 0, 3, 0, 0, 0, 1]);
+    cs.extend_from_slice(&[0xFF, 0x5C, 0, 13, 0x40]);
+    cs.extend_from_slice(&[0x40; 10]);
+    let psot = 18 + comments * (2 + COMMENT);
+    cs.extend_from_slice(&[0xFF, 0x90, 0, 10, 0, 0]);
+    cs.extend_from_slice(&(psot as u32).to_be_bytes());
+    cs.extend_from_slice(&[0, 1]);
+    for _ in 0..comments {
+        // `Lcom` counts itself, `Rcom` (0, binary) and the comment.
+        cs.extend_from_slice(&[0xFF, 0x64]);
+        cs.extend_from_slice(&(COMMENT as u16).to_be_bytes());
+        cs.extend_from_slice(&[0, 0]);
+        cs.extend(std::iter::repeat_n(0x20, COMMENT - 4));
+    }
+    cs.extend_from_slice(&[0xFF, 0x93, 0, 0, 0, 0]);
+    cs.extend_from_slice(&[0xFF, 0xD9]);
+    cs
+}
+
+/// A short file whose tile's packet walk is past the room its bytes give
+/// keeps no walk between refines, though its image gives room for it; the
+/// same tile with 240 KB of comments in its header keeps it. Each refine is
+/// the one-shot decode of the bytes fed.
+#[test]
+fn a_decoder_keeps_the_walks_its_bytes_make_room_for() {
+    use crate::tier2::resume::kept_room;
+    for (comments, kept) in [(0, (0, 1)), (4, (1, 0))] {
+        let bytes = large_tile(comments);
+        whole_strict(&bytes);
+        let options = DecodeOptions::default();
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        decoder.feed(&bytes);
+        assert_eq!(
+            keyed(refine_now(&mut decoder)),
+            keyed(oracle(&bytes, &options)),
+            "{comments} comments"
+        );
+        let walks = &decoder.spent.walks;
+        assert_eq!(walks.kept(), kept, "{comments} comments");
+        let held = walks.kept_bytes();
+        assert!(held <= kept_room(bytes.len() as u64), "{comments}: {held}");
+        assert_eq!(held > 0, kept.0 == 1, "{comments}: {held}");
+    }
+}
+
+/// A walk larger than the room the bytes fed give is not kept, whatever
+/// room the image would give it, and is kept once the bytes fed make room
+/// for it. Either way the walk charges what the one-shot walk charges.
+#[test]
+fn a_walk_past_the_room_of_the_bytes_fed_waits_for_more_bytes() {
+    use crate::tier2::resume::kept_room;
+    let bytes = large_tile(0);
+    assert_eq!(bytes.len(), 94);
+    whole_strict(&bytes);
+    let parsed = codestream::parse_header(&bytes).unwrap();
+    let cs = codestream::parse_tiles_with(&bytes, parsed, false).unwrap();
+    let poc_bitmap = tier2::decode_visits(crate::pipeline::decode::tile_bytes(&cs));
+    let tile = &cs.tiles[0];
+    let header = cs.tile_header(0).unwrap();
+    let once = Meter::new(u64::MAX / 2);
+    tier2::decode_packets_partial(&header, tile, &once, poc_bitmap, 0, None).unwrap();
+    let mut walks = Walks::default();
+    // An image room of 1 GB, and the room of 94 bytes fed, then of 1 MB.
+    for (fed, kept) in [(94, 0), (94, 0), (1 << 20, 1)] {
+        let meter = Meter::new(u64::MAX / 2);
+        walks
+            .walk(&header, tile, &meter, poc_bitmap, 0, None, 1 << 30, fed)
+            .unwrap();
+        assert_eq!(meter.spent(), once.spent(), "{fed} bytes fed");
+        assert_eq!(walks.kept(), (kept, 1 - kept), "{fed} bytes fed");
+        assert!(walks.kept_bytes() <= kept_room(fed), "{fed} bytes fed");
+        assert_eq!(walks.kept_bytes() > 0, kept == 1, "{fed} bytes fed");
+    }
+}
+
 /// A feed that ends one byte into an `SOP`, headers inline: the one-shot
 /// decode of those bytes reads the `0xFF` as an empty packet's header, and
 /// the refine does too, but puts the packet back, so that the next refine
@@ -676,7 +764,16 @@ fn a_kept_walk_charges_poc_repeats_as_the_one_shot_walk_does() {
                 tier2::decode_packets_partial(&header, tile, &once, poc_bitmap, 0, None).is_ok();
             let kept = Meter::new(u64::MAX / 2);
             let walked = walks
-                .walk(&header, tile, &kept, poc_bitmap, 0, None, u64::MAX / 4)
+                .walk(
+                    &header,
+                    tile,
+                    &kept,
+                    poc_bitmap,
+                    0,
+                    None,
+                    u64::MAX / 4,
+                    u64::MAX / 4,
+                )
                 .is_ok();
             assert_eq!(walked, expected, "{end} bytes");
             assert_eq!(kept.spent(), once.spent(), "{end} bytes");
