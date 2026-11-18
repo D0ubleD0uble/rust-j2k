@@ -624,14 +624,14 @@ const MAX_CWD_BITS: u32 = 7;
 /// A CxtVLC table as a lookup: `[c][bits]`, for context `c` and the next
 /// seven bits of the stream (first bit lowest), holds the codeword those
 /// bits start with, packed as `len | rho << 3 | u_off << 7 | e_k << 8 |
-/// e_1 << 12`, or 0 when none does. Each context is a complete prefix code,
-/// so every entry is set; a 0 would be read as no codeword.
+/// e_1 << 12`, or 0 when none does. Both tables are complete prefix codes,
+/// so no entry is 0 in practice.
 type VlcLookup = [[u16; 1 << MAX_CWD_BITS]; 8];
 
-/// Fill each entry with the shortest codeword the bits start with. Longer
-/// rows go in first and shorter ones over them, so a bit string that starts
-/// with two codewords (which a prefix code never has) would take the one a
-/// bit-at-a-time read finds first.
+/// Fill each entry with the shortest codeword the bits start with: longer
+/// rows go in first and shorter ones over them. That is the codeword a
+/// bit-at-a-time search finds first, so the lookup gives the same result
+/// whether or not the table is a complete prefix code.
 const fn lookup(table: &[[u8; 7]]) -> VlcLookup {
     let mut out = [[0u16; 1 << MAX_CWD_BITS]; 8];
     let mut len = MAX_CWD_BITS as u8;
@@ -681,8 +681,9 @@ fn decode_cxt_vlc(
     let hit = lookup[usize::from(c)][bits as usize];
     let len = u32::from(hit & 7);
     if len == 0 {
-        // A read one bit at a time would run out of bits before it gave up
-        // on a short stream.
+        // No codeword matches, as in a bit-at-a-time search, which reads all
+        // seven bits first and so runs out on a short stream. Unreachable
+        // with complete tables.
         vlc.consume(MAX_CWD_BITS)?;
         return Err(malformed(&format!(
             "VLC bits match no CxtVLC codeword of context {c}"
