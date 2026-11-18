@@ -82,7 +82,9 @@ fuzz_target!(|input: &[u8]| {
         };
         (control, data)
     };
-    if budget::over(data) {
+    // The decoder, its kept walks and a one-shot decode of each prefix are
+    // alive together, and the prefixes are decoded again and again.
+    if budget::over(data, 8) {
         return;
     }
     // The schedule below (fnv1a, splitmix, the piece formula) is copied by

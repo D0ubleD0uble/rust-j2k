@@ -24,7 +24,8 @@ mod budget;
 mod partial;
 
 fuzz_target!(|data: &[u8]| {
-    if budget::over(data) {
+    // Up to three decodes of the input run one after another.
+    if budget::over(data, 4) {
         return;
     }
     let _ = rust_j2k::decode(data);

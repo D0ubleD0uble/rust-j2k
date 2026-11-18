@@ -27,6 +27,9 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../common/budget.rs"]
+mod budget;
+
 /// Inputs above this many bytes are not decoded once their header reads.
 const MAX_DECODED_INPUT: usize = 1 << 16;
 /// Images above this many samples, over all channels, are not decoded.
@@ -95,7 +98,13 @@ fn check(
         }
         let samples = (u64::from(header.width) * u64::from(header.height))
             .saturating_mul(header.components.len() as u64);
-        if data.len() > MAX_DECODED_INPUT || samples > MAX_DECODED_SAMPLES {
+        // The header lists output channels, which a palette makes fewer than
+        // the components the decode allocates, so the `SIZ` count (the
+        // budget's) bounds the decode too.
+        if data.len() > MAX_DECODED_INPUT
+            || samples > MAX_DECODED_SAMPLES
+            || budget::declared(data) > u128::from(MAX_DECODED_SAMPLES)
+        {
             return;
         }
     }

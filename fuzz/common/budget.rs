@@ -1,23 +1,38 @@
-//! Keeps a fuzz run under libFuzzer's RSS limit.
+//! Keeps a fuzz run under libFuzzer's RSS limit and timeout.
 
 use rust_j2k::{DecodeOptions, WorkLimit};
 
-/// The most samples a fuzz input may declare. A decode peaks at about 1.35
-/// times its output for a square tile and up to about 3.2 times for a tile
-/// one sample wide, so 2^28 samples (1 GiB as `i32`) stay under the 4 GiB
-/// `-rss_limit_mb` the fuzz job passes. The decoder's default limit is twice
-/// that, so inputs between the two are skipped here.
-const MAX_FUZZ_SAMPLES: u64 = 1 << 28;
+/// The most samples a fuzz input may declare to a target that decodes it
+/// once and keeps one image: 2^26 (256 MiB as `i32`). A decode peaks at about
+/// 1.35 times its output for a square tile and up to about 3.2 times for a
+/// tile one sample wide, so that is under 1 GiB and well under the 4 GiB
+/// `-rss_limit_mb` the fuzz job passes. The time is the tighter limit. Under
+/// the fuzz build (ASan) a thin image of 2^26 samples takes about 9 s a
+/// decode, and the job's `-timeout=30` counts the whole execution, so a
+/// target that decodes one input several times, or holds several images,
+/// divides the budget by its `weight` (see [`over`]). The decoder's default
+/// limit is at least 2^29, so a sample limit refusal of the image area is
+/// never decoded.
+const MAX_FUZZ_SAMPLES: u64 = 1 << 26;
 
-/// Whether `data` declares more output samples than [`MAX_FUZZ_SAMPLES`] at
-/// full resolution, which bounds every window, tile and reduction of it.
+/// Whether `data` declares more output samples than the budget allows a
+/// target of `weight` (the most decodes of the input one execution runs, or
+/// images it holds at once, whichever is more; a power of two). The budget is
+/// [`MAX_FUZZ_SAMPLES`] divided by `weight`, at full resolution, which bounds
+/// every window, tile and reduction of it.
 ///
 /// The count is the larger of the header's and the `SIZ` segment's. The
 /// header lists output channels, which a palette makes fewer than the
 /// components the decoder allocates, and a JP2 whose `ihdr` box disagrees with
 /// `SIZ` does not read at all, yet a lenient decode goes on to allocate from
 /// `SIZ`. An input with no readable `SIZ` fails cheaply and is not over.
-pub fn over(data: &[u8]) -> bool {
+#[allow(dead_code)]
+pub fn over(data: &[u8], weight: u64) -> bool {
+    declared(data) > u128::from(MAX_FUZZ_SAMPLES / weight)
+}
+
+/// The samples `data` declares, counted as [`over`] counts them, before the budget.
+pub fn declared(data: &[u8]) -> u128 {
     let options = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
     let header = rust_j2k::read_header_with(data, &options)
         .map(|header| {
@@ -28,7 +43,7 @@ pub fn over(data: &[u8]) -> bool {
                 .sum::<u128>()
         })
         .unwrap_or(0);
-    header.max(siz_samples(data)) > u128::from(MAX_FUZZ_SAMPLES)
+    header.max(siz_samples(data))
 }
 
 /// The most samples any `SOC` + `SIZ` pair in `data` declares, read straight

@@ -154,7 +154,8 @@ fuzz_target!(|input: &[u8]| {
         .with_code_block_work_limit(low(control >> 4))
         .with_resolution_reduction(((control >> 6) & 1) as u8)
         .with_strict(control >> 7 == 0);
-    if budget::over(data) {
+    // `result` is held while the default decode runs.
+    if budget::over(data, 2) {
         if let Err(Error::Limit(limit)) = read_header_with(data, &options) {
             step(&options, &limit);
         }

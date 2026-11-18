@@ -297,8 +297,8 @@ limit (log2 of that factor cap, plus 2) is a failure.
 
 An input over the fuzz sample budget (`common/budget.rs`) is only read for its
 header, and a sample limit refusal there is checked as one step with no decode.
-So a sample limit retry of the image area is never decoded: the budget is 2^28
-samples and the default limit at least 2^29, so only an input over the budget is
+So a sample limit retry of the image area is never decoded: the budget is at most
+2^26 samples and the default limit at least 2^29, so only an input over the budget is
 refused for its area, and that input is never decoded. The exception is an input
 whose header fails to read: the budget counts it as under budget, so its decode
 can still be refused for its area.
@@ -349,8 +349,11 @@ cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus
 # default limit (larger files get 8 samples a byte), which would peak
 # at about 2.7 GiB for a square tile and up to about 6.4 GiB for a tile one
 # sample wide. The `decode`, `decode_partial` and `incremental_decode` targets
-# skip an input that declares more than 2^28 samples (`common/budget.rs`), so
-# what they decode peaks at about half that, and 4 GiB is enough, as CI gives.
+# skip an input that declares more than 2^26 samples (`common/budget.rs`), so
+# a decode peaks at about 0.8 GiB. A target that decodes an input several
+# times or holds several images (`incremental_decode`, `retry_ladder`,
+# `jp2_boxes`) divides that budget by a weight, so that it stays under the
+# 4 GiB CI gives and under its 30 s timeout.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
 # The same with strict off, against the strict decode.
