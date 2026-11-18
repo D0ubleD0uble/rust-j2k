@@ -128,12 +128,10 @@ With `-I`: 9/7, ICT for 3 or more components, and expounded quantization
 truncation. OpenJPEG places the 9/7 subband gain differently from this
 crate's decoder; P5.1 and P5.3 say how and what follows.
 
-What the encoder can write, from `j2k.c`: COC, QCC, POC, RGN, PLT, TLM, COM
-and the Part 2 MCT markers. There is no writer for PPM, PPT or CRG, and
-`jp2.c` writes no `pclr` or `cmap`. COC and QCC are written only when the
-components' parameters differ (`opj_j2k_write_all_coc`,
-`opj_j2k_write_all_qcc`); `opj_compress` has no option that sets them per
-component.
+From `j2k.c` and `jp2.c`, it writes COC, QCC, POC, RGN, PLT, TLM, COM and
+the Part 2 MCT markers, but no PPM, PPT, CRG, `pclr` or `cmap`. It writes
+COC and QCC only when components differ, which no `opj_compress` option
+sets.
 
 ### Rate and quality at given settings
 
@@ -258,10 +256,17 @@ short marker walker:
 
 ### Speed and memory
 
-Measured with `/usr/bin/time`, median of 3 runs of the whole process, at a
-1-minute load average of about 6. Every option set above took 0.09 to
-0.27 s and 13 to 33 MB peak on the three inputs. P5.7 puts the table in
-performance.md.
+Median of 3 runs of the whole process, measured with `/usr/bin/time` at a
+1-minute load average of about 6:
+
+| Input | Options | Seconds | Peak MB |
+| ----- | ------- | ------- | ------- |
+| 2048² gray | (default) | 0.16 | 31 |
+| | `-I` | 0.20 | 32 |
+| | `-I -r 20` | 0.23 | 31 |
+| | `-threads ALL_CPUS` | 0.09 | 33 |
+| RGB 768×512 | each option set above | 0.11–0.14 | 13–14 |
+| 16-bit 1440×721 | each option set above | 0.17–0.27 | 13–15 |
 
 ### Which defaults to mirror
 
@@ -291,8 +296,9 @@ departs in two places, both recorded in openjpeg-departures.md:
   is at most OpenJPEG's plus 1, and MSE at most OpenJPEG's, for the same
   input and options, up to 24 bits. OpenJPEG measured PAE 4 and MSE 0.49 on
   the RGB input, and PAE 1 and MSE 0.09 on the 16-bit grid. Above 24 bits,
-  where OpenJPEG's `-I` is wrong, the bound is the PAE that P5.8 measures
-  against the source and commits.
+  where OpenJPEG's `-I` is wrong, the bound is set in advance: the bound
+  for the same pattern and seed generated at 24 bits, times `2^(B−24)`. The
+  PAE P5.8 commits there is a regression baseline, not a correctness check.
 - **Irreversible at a rate:** graded by parity (part 3), not by an absolute
   PSNR, since the right PSNR depends on the image.
 - **The two decoders agree on our output:** bit for bit on 5/3. On 9/7, the
@@ -300,12 +306,16 @@ departs in two places, both recorded in openjpeg-departures.md:
   difference measured between the two decoders on OpenJPEG's files
   ([correctness.md](correctness.md#how-close-a-decode-must-be)): 1 at 8 to 12
   bits, 2 at 14 and 7 at 16. It is a measured figure, not a proven bound.
-  The margin is 1 at 8 to 12 bits and 2 at 14 and 16, so the gate is 2, 4
-  and 9, and a depth between rows takes the higher row. The margin is the
-  spread in those measurements: at 16 bits one pattern gave 5 at seven image
-  sizes and 7 at one, and at 8 to 12 bits no case went past 1. A case over
-  the gate is a finding for correctness.md, not a reason to raise it. From
-  17 to 24 bits, the bound is the difference P5.8 measures and commits.
+  The margin is 1 at 8 to 12 bits and 2 at 14 and 16, so the bound is 2, 4
+  and 9. Depths 1 to 7 take the 8-bit row, and a depth between rows takes
+  the higher row. The margin is 2 at 16 bits, the spread measured there (5
+  to 7 for one pattern). At 8 to 14 bits it is an estimate, since
+  correctness.md shows no spread; the data are from OpenJPEG's files, not
+  ours. A case over the bound fails the step until the cause is found and
+  recorded in correctness.md; the bound is not raised to pass it. From 17
+  to 24 bits there is no two-decoder bound: each decode is checked against
+  the source as above, and P5.8 commits the difference as a regression
+  baseline.
 
 ### 2. Cross-decode
 
@@ -380,11 +390,11 @@ what it does not.
 
 | Step | What it proves | What it cannot prove |
 | ---- | -------------- | -------------------- |
-| P5.16 POC | OpenJPEG reads the marker and places each packet where this encoder put it, or a lossless decode fails | that the order is the one meant where every order gives the same packets (one precinct, one layer), which the prefix check covers; anything about the refused sequences |
+| P5.16 POC | OpenJPEG reads the marker and places each packet where this encoder put it, or a lossless decode fails; the prefix check shows the order is the one meant, even where every order gives the same packets | anything about the refused sequences |
 | P5.17 ROI | OpenJPEG reads `RGN`, undoes the shift and sorts region from background as this encoder did | the bypass cases, where OpenJPEG is wrong; OpenJPEG's own ROI beyond a whole component, since `opj_compress -ROI` makes no background |
 | P5.20 rule checker | the output meets every rule as transcribed, and the checker tells a passing stream from a failing one on every rule | that a rule was transcribed right: each row cites its table and row for review, and P5.21, P5.23 and P5.24 compare with encoders that read the tables themselves |
 | P5.21 cinema | this encoder chooses the parameters an independent encoder chooses, meets the rules and decodes | the DCI and SMPTE rules for a cinema package beyond T.800, such as XYZ color and MXF wrapping |
-| P5.22 scalable cinema and storage | the rules hold, and stripping layer 2 gives a cinema stream | that our reading of the layer-0 byte limit and the tile-part order matches another implementation's, since none exists |
+| P5.22 scalable cinema and storage | the rules hold, and stripping layer 1 gives a cinema stream | that our reading of the layer-0 byte limit and the tile-part order matches another implementation's, since none exists |
 | P5.23 broadcast | the open choices agree with, or knowingly differ from, Grok's | that the level arithmetic matches another implementation's, since Grok was not measured enforcing it |
 | P5.24 IMF | as P5.21, and the sublevel byte limit holds where OpenJPEG does not hold it | the IMF application rules of SMPTE ST 2067 beyond T.800 |
 
@@ -458,16 +468,15 @@ Settled on 2026-11-17.
    1 and the five cinema, three broadcast and six IMF profiles, with their
    levels. Each is selected with `EncodeOptions::with_profile(Profile::…)`,
    a `#[non_exhaustive]` enum, for example `Profile::Cinema2k { fps: 24 }`.
-   A preset fills in every
-   option the caller did not set, from the profile's table. A set option
-   that breaks the profile, or an image the profile cannot hold, is
-   `InvalidOptions`, naming the option, the rule and its table. The preset
-   never replaces a set value: a library has no warning channel, and
-   OpenJPEG shows how overrides go wrong (measured above). The frame rate is
-   required whenever a level sets a byte limit, which is the bit rate over
-   the frame rate (Equation A-8). A rate above it is refused up front, and a
-   lossless encode that comes out over it is refused after coding. `PRF` is
-   not written.
+   A preset fills in every option the caller did not set, from the
+   profile's table. A set option that breaks the profile, or an image the
+   profile cannot hold, is `InvalidOptions`, naming the option, the rule and
+   its table. The preset never replaces a set value: a library has no
+   warning channel, and OpenJPEG shows how overrides go wrong (measured
+   above). The frame rate is required whenever a level sets a byte limit,
+   which is the bit rate over the frame rate (Equation A-8). A rate above it
+   is refused up front, and a lossless encode that comes out over it is
+   refused after coding. `PRF` is not written.
 10. **Depth: the worst case from the options, plus a data check.** Before
     coding, the options are `InvalidOptions` when any band's worst-case `Mb`
     plus the maxshift `s` exceeds 30, the decoder's cap. `Mb` comes from
@@ -478,14 +487,10 @@ Settled on 2026-11-17.
     (`Inconsistent`), never a clamp, and nothing may wrap before the check.
     There is no 64-bit block path and no `εb` sized from the data. The
     limits: 27 bits lossless 5/3, 26 with the RCT; with maxshift 11, or 10
-    with the RCT. The `QCD` is written before the data is seen, so the same
-    options always succeed or fail for an image shape, as in OpenJPH and
-    Kakadu. A 64-bit path would need `i64` through both coders, the
-    transforms and the decoder, and nothing could check it, since OpenJPEG
-    refuses streams past 30 planes. Chosen after measuring three encoders
-    and reading two more ([High depths](#high-depths)). The encoder never
-    writes a file its own decoder refuses, where OpenJPEG writes a broken
-    one from 25 bits.
+    with the RCT. Chosen after measuring three encoders and reading two more
+    ([High depths](#high-depths)); P5.3 gives the reasons. The encoder never
+    writes a file that no `DecodeOptions` lets its decoder read, where
+    OpenJPEG writes a broken one from 25 bits.
 11. **The encoder refuses a tile its decoder cannot read.** Options that
     give a tile more than the decoder's fixed caps, 2^18 precincts or 2^20
     code-blocks (`src/tier2/geometry.rs`), are `InvalidOptions`. No
@@ -505,7 +510,7 @@ mirror](#which-defaults-to-mirror)).
 | Decoded fixtures | every lossless fixture in `tests/fixtures/`, decoded by this decoder (already graded against OpenJPEG) | no new bytes | already |
 | Part 4 references | `tests/fixtures/conformance/references/*.pgx`, 78 files: the D.4 a) inputs | no new bytes | already; excluded from the crate |
 | Synthetic | a seeded generator in `tests/support/synth_image.rs`: noise, ramps, checkerboards, edges, flat fields; sizes from 1×1 to 1024×1024, including odd and prime sizes; 1 to 4 components; sampling 1×1, 2×1 and 2×2. Unsigned depths 1, 8, 12, 16 and 24 (the last that OpenJPEG writes right), and 25, 26 and 27 (graded by the source alone). Signed depths 17 to 27, graded by the source alone. Reject cases: 28 and 31 bits unsigned, 32 signed. Each high depth as uniform noise, a mid-range field and a min/max checkerboard | none (generated) | the generator only |
-| Profile frames | the same generator at the profiles' sizes, 8 to 16 bits, 3 or 4 components, 4:4:4 and 4:2:2: 2048×1080, 1998×1080, 2048×858, 4096×2160, 3996×2160, 4096×1716, 1920×1080, 2048×1556, 4096×3112, 3840×2160, 7680×4320, and 8192×6224 (release round only) | none (generated) | the generator only |
+| Profile frames | the same generator at the profiles' sizes, 8 to 16 bits, 3 or 4 components, 4:4:4 and 4:2:2: 2048×1080, 1998×1080, 2048×858, 4096×2160, 3996×2160, 4096×1716, 1920×1080, 2048×1556, 4096×3112, 3840×2160, and 7680×4320 and 8192×6224 (release round only) | none (generated) | the generator only |
 | Profile snapshots | `tests/fixtures/encode/profiles.json`: per case, the header fields `opj_compress` or `grk_compress` wrote, and the digest of this encoder's output | about 20 KB, estimated | yes |
 | GRIB2 fields | the committed `jpeg2000_regular_latlon`, `eta_lambert_*` and GRIB2-shaped bench codestreams, decoded | no new bytes | already |
 | Parity snapshots | `tests/fixtures/encode/parity.json` | about 50 KB, estimated | yes |
@@ -769,9 +774,9 @@ of decision 10 for both transforms.
 - Property: the decoder's dequantization of our indices is within half a
   step of the input coefficient.
 - Depth rule: every refused option set has a reject-matrix row, and 28
-  bits is refused. 27-bit lossless 5/3 at 1 to 6 levels passes the data
-  check and decodes exactly in both decoders, on uniform noise and on a
-  min/max checkerboard. The checkerboard drives HH to its worst case, and
+  bits is refused. On uniform noise and on a min/max checkerboard, 27-bit
+  lossless 5/3 at 1 to 6 levels passes the data check. It decodes exactly
+  in both decoders. The checkerboard drives HH to its worst case, and
   takes the `−2^(B−1)` extreme at 0 levels. Above 24 bits the source is the
   only reference.
 - Signed input at 17 to 27 bits gets the same checks. `opj_compress`
@@ -858,19 +863,29 @@ recorded against `opj_compress`.
 **Goal:** the equivalent of `opj_compress -I`: 9/7, ICT and expounded steps,
 with all passes.
 
-**Work:** the 9/7 branch of the pipeline, and the bounds gate part 1 leaves
-to this step. It measures the two decoders' difference on our output at 17
-to 24 bits, and above 24 bits, where OpenJPEG's `-I` is wrong, the PAE of
-our decode against the source. Both go in correctness.md as the bounds,
-with the cases measured. scope.md records how far an `f32` 9/7 path stays
-accurate above 24 bits; the depth rule still decides what is refused.
+**Work:** the 9/7 branch of the pipeline. It commits three sets of figures
+in correctness.md, each with the cases measured:
+- a PAE ceiling for every depth from 1 to 27 bits at all passes: the
+  largest PAE against the source over the sweep, which P5.25 uses as its
+  fuzz bound. At 25 to 27 bits the ceiling is at most part 1's ceiling set
+  in advance;
+- the two decoders' difference on our output at 17 to 24 bits;
+- above 24 bits, the PAE of our decode against the source.
 
-**Oracle:** the source, graded by gate part 1: up to 24 bits, PAE at most
-OpenJPEG's plus 1 and MSE at most OpenJPEG's, and the two decoders within
-part 1's 9/7 bound.
+The last two are regression baselines, not correctness checks: a later
+change that goes past one must say why. scope.md records how far an `f32`
+9/7 path stays accurate above 24 bits; the depth rule still decides what is
+refused.
 
-**Gate:** every fixed-quantization case passes, and the bounds for 17 to 27
-bits are committed in correctness.md.
+**Oracle:** the source, graded by gate part 1. Up to 24 bits: PAE at most
+OpenJPEG's plus 1, MSE at most OpenJPEG's, and the two decoders within part
+1's 9/7 bound where it has one. Above 24 bits, where OpenJPEG's `-I` is
+wrong, the check is the source round trip through both decoders against the
+ceiling set in advance: the bound for the same pattern and seed generated
+at 24 bits, times `2^(B−24)`.
+
+**Gate:** every fixed-quantization case passes, and the three sets of
+figures are committed.
 
 ### P5.9 — Rate control and layers (`src/encode/rate.rs`)
 
@@ -963,8 +978,10 @@ from the caller), `res`, `cdef`, and the passthrough boxes.
 `opj_dump`; jpylyzer's validity check (decision 6); our `read_header`
 returns what the options asked for.
 
-**Gate:** every combination round-trips through `decode` to the same
-`Jp2Metadata`, and `opj_decompress` decodes each file.
+**Gate:** the sweep's JP2 axes are each `colr` kind (sRGB, grayscale, sYCC,
+ICC) with and without `cdef`, `res` and each passthrough box. Every case
+round-trips through `decode` to the same `Jp2Metadata`, and
+`opj_decompress` decodes each file.
 
 ### P5.15 — COC and QCC, per component and per tile (`src/encode/options.rs`, `markers.rs`, `tile.rs`)
 
@@ -1098,6 +1115,9 @@ every later profile step is graded by.
   row). Transcribed from the spec text alone, before any cinema, broadcast or
   IMF preset exists. The 2024 edition's tables are checked for changes
   first (see open questions).
+- `scripts/gen-encoder-profiles.py`, which runs the `opj_compress` and
+  `grk_compress` profile commands and writes `profiles.json`; P5.21, P5.23
+  and P5.24 add their cases.
 - `profile/check.rs`, compiled only for tests, evaluates those rows on a
   codestream as this crate's parser reads it. It covers `Rsiz`, sizes and
   origins, components, every COD to QCC field and where it sits, POC, the
@@ -1164,9 +1184,9 @@ rewrites.
 **Oracle:** no other encoder writes these profiles. The oracle is the rule
 checker, both decoders, the source round trip for 5/3 storage, and a check
 of the purpose Table A.46 states: a distribution stream "can be
-obtained by simply stripping some tile-parts". Removing a scalable stream's
-layer-2 tile-parts, and fixing TLM and `Rsiz` to 3 or 4, gives a stream that
-passes the checker as 2K or 4K cinema and decodes in both decoders.
+obtained by simply stripping some tile-parts". Removing the second layer's
+(layer 1's) tile-parts, and fixing TLM and `Rsiz` to 3 or 4, gives a stream
+that passes the checker as 2K or 4K cinema and decodes in both decoders.
 
 **Gate:** scalable cinema at 2048×1080, 1998×1080, 4096×2160 and 3996×2160,
 and storage at 4096×2160 as one tile and as 1024×512 tiles, pass the
@@ -1220,13 +1240,14 @@ layout, field for field apart from COM. The rule checker alone grades the
 sublevel byte limit, which OpenJPEG prints but does not hold. Both decoders,
 and the source round trip for the reversible profiles.
 
-**Gate:** each profile passes at 2048×1556 and 1920×1080 (2K), 4096×3112
-and 3840×2160 (4K), and 7680×4320 (8K), single- and multi-tile where
-allowed. Each matches OpenJPEG's fields and passes the checker. It decodes
-in both decoders and stays within the sublevel's limit. 8192×6224 runs in the
-release round only, for its memory: about 0.6 GB of `i32` coefficients for
-3 components (estimated). Each conflicting option is refused; OpenJPEG falls
-back to `Rsiz` 0 for `-n 7` and for `-ROI`.
+**Gate:** the 2K and 4K profiles pass at 2048×1556 and 1920×1080 (2K) and
+4096×3112 and 3840×2160 (4K), single- and multi-tile where allowed. Each
+matches OpenJPEG's fields and passes the checker. It decodes in both
+decoders and stays within the sublevel's limit. The 8K profiles run in the
+release round only, at 7680×4320 and 8192×6224, for their memory: about 0.4
+and 0.6 GB of `i32` coefficients for 3 components (estimated). Each
+conflicting option is refused; OpenJPEG falls back to `Rsiz` 0 for `-n 7`
+and for `-ROI`.
 
 ### P5.25 — Fuzz targets and the encoder reject matrix (`fuzz/`)
 
@@ -1236,8 +1257,8 @@ back to `Rsiz` 0 for `-n 7` and for `-ROI`.
   components, any depth, sign and sampling) with arbitrary `EncodeOptions`
   give `Ok` or a typed error, never a panic. On `Ok` our decoder decodes the
   output. A reversible encode must be exact. An irreversible encode with all
-  passes must be within the PAE P5.8 committed for its depth; at a rate,
-  it only has to decode.
+  passes must be within P5.8's PAE ceiling for its depth; at a rate, it
+  only has to decode.
 - Each later step adds its options to the target.
 
 **Gate:** a session of 60 s per target finds nothing. Every
@@ -1287,10 +1308,10 @@ green with and without the `encode` feature.
   - *Encoder cross-decode sweep:* the full sweep through `opj_decompress` and
     Grok, within gate part 1, leaving out bypass with ROI for OpenJPEG and
     ROI for Grok;
-  - *Rate parity* and *profile fields:* rerun the two generators and compare
-    with the committed snapshots;
+  - *Rate parity* and *profile fields:* rerun `gen-encoder-parity.py` and
+    `gen-encoder-profiles.py` and compare with the committed snapshots;
   - *Encoder fuzz replay through OpenJPEG* (above); jpylyzer over every JP2
-    output; the 8192×6224 IMF cases of P5.24;
+    output; the 8K IMF cases of P5.24;
   - *Kakadu, by hand and optional:* `kdu_expand` over the sweep, with results
     in the round's notes only;
   - *Downstream consumer:* a GRIB2 template 5.40 message carrying our
@@ -1299,13 +1320,9 @@ green with and without the `encode` feature.
 
 ## Prerequisites and open questions
 
-- **The `encode` feature** (`encode = []`, on by default) is declared in
-  `Cargo.toml` before P5.0, with the two `--no-default-features` CI steps
-  (decision 5). Both are maintainer edits.
-- **#254** (the image origin on `Image` and `Header`) comes before P5.7, so
-  an offset image round-trips through `&Image` with no extra option. The
-  origin must be on the same grid as `width` and `height`:
-  `ceil(XOsiz / 2^r)` under a reduction, the window's corner under `region`.
+- **#254's origin grid** (#254 lands before P5.7): the
+  origin is on the grid of `width` and `height`, `ceil(XOsiz / 2^r)` under
+  a reduction and the window's corner under `region`.
 - **Whether our tier-1 bytes can match OpenJPEG's** is unmeasured (P5.5). It
   decides whether P5.7, P5.10 to P5.12 and P5.16 get byte comparisons or
   only round trips; for 9/7 it also needs P5.1's indices to match.
