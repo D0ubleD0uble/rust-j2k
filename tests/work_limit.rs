@@ -524,10 +524,11 @@ fn the_packet_factor_doubles_and_is_not_what_the_file_needs() {
 }
 
 /// POC volumes that reach more packets than the walk may visit are refused
-/// before the walk, and the message names the exact factor: 1.3e8 packets is
-/// 7.8 times the bound. Under `Raised(7)` it is refused, naming 8; under
-/// `Raised(8)` the decode gets past the bound (the file holds 100 bytes of
-/// packets, so it fails some other way).
+/// before the walk, and the message names the factor they need: 1.3e8 packets
+/// is 7.8 times the bound, so 8. Under `Raised(7)` it is refused again, and
+/// names 14, twice the 7 it ran under; under `Raised(8)` the decode gets past
+/// the bound (the file holds 100 bytes of packets, so it fails some other
+/// way).
 #[test]
 fn poc_volumes_name_the_factor_they_need() {
     let bytes = fixture("work_bound/pocvol_1024x512_1000_2.j2k");
@@ -536,7 +537,7 @@ fn poc_volumes_name_the_factor_they_need() {
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(7));
     assert_eq!(
         named_factor(&limit_detail(decode_with(&bytes, &options))),
-        8
+        14
     );
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(8));
     assert!(
@@ -563,7 +564,7 @@ fn the_code_block_factor_counts_the_tiles_before_the_refused_one() {
 /// The same for a POC reach. `pocspent_2tiles_60000_559.j2k`: the first tile
 /// reads 60000 packets; the second reaches 3.354e7, 14432 under twice the
 /// bound, so with the first tile's visits it needs `Raised(3)`. Under
-/// `Raised(2)` it is refused again and still names 3.
+/// `Raised(2)` it is refused again and names 4, twice the 2 it ran under.
 #[test]
 fn the_poc_factor_counts_the_visits_of_the_tiles_before_the_refused_one() {
     let bytes = fixture("work_bound/pocspent_2tiles_60000_559.j2k");
@@ -572,7 +573,7 @@ fn the_poc_factor_counts_the_visits_of_the_tiles_before_the_refused_one() {
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(2));
     assert_eq!(
         named_factor(&limit_detail(decode_with(&bytes, &options))),
-        3
+        4
     );
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(3));
     assert!(!matches!(
