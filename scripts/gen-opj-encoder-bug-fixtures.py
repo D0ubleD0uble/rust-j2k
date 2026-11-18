@@ -93,9 +93,10 @@ def main() -> None:
             oracle = opj_decode(DIR / f"{name}.j2k", len(subs), tmp)
             (DIR / f"{name}.opj.raw").write_bytes(oracle)
             wrong = sum(a != b for a, b in zip(raw, oracle))
-            assert len(oracle) == len(raw) and wrong > 0, f"{name}: oracle is not wrong"
-            same = opj_decode(tmp / f"{name}_control.j2k", len(subs), tmp) == raw
-            assert same, f"{name}: control does not decode to the source"
+            if len(oracle) != len(raw) or wrong == 0:
+                sys.exit(f"{name}: oracle is not wrong")
+            if opj_decode(tmp / f"{name}_control.j2k", len(subs), tmp) != raw:
+                sys.exit(f"{name}: control does not decode to the source")
             print(f"{name}: {wrong} of {len(raw)} samples wrong")
 
 

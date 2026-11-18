@@ -30,3 +30,10 @@ its sub-sampled size, one component after another.
 
 The controls are in the script, not committed: the first encode without `-TP
 R` and the second without `-TP C` decode to the source.
+
+The order and `-TP` matrix in `docs/openjpeg-departures.md` is the first
+file's encode with `-p` and `-TP` varied, each decoded with `opj_decompress`
+and compared with `tp_mixed_subsampling.source.raw`.
+
+The sources are synthetic and the encoder is OpenJPEG, so these files are
+under the repository's license.

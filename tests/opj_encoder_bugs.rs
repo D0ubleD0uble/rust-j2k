@@ -59,11 +59,24 @@ fn tp_with_mixed_sub_sampling_is_refused_and_partial_decode_matches_openjpeg() {
     ));
 }
 
+/// The first `n` tile-parts of a one-tile codestream, then `EOC`.
+fn first_tile_parts(cs: &[u8], n: usize) -> Vec<u8> {
+    let mut at = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    for _ in 0..n {
+        let psot = u32::from_be_bytes(cs[at + 6..at + 10].try_into().unwrap());
+        at += psot as usize;
+    }
+    let mut out = cs[..at].to_vec();
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
 /// 272 tile-parts: `TPsot` and `TNsot` are 8 bits and wrap, so `TNsot` is 16.
 /// `opj_decompress` warns "Non conformant codestream TPsot==TNsot" and returns
-/// 4062 of the 4352 samples wrong. Here strict refuses at the 17th part; strict
-/// off reads on to the 256th, where `TPsot` wraps to 0, and refuses there. It
-/// does not return OpenJPEG's image.
+/// 4062 of the 4352 samples wrong. Here strict refuses at the 18th part, the
+/// first past the declared count (16, raised to 17 by the `TPsot == TNsot`
+/// correction). Strict off reads on to the 257th, where `TPsot` wraps to 0, and
+/// refuses there. It does not return OpenJPEG's image.
 #[test]
 fn more_than_255_tile_parts_are_refused_in_both_modes() {
     let bytes = read("tp_over255.j2k");
@@ -80,4 +93,30 @@ fn more_than_255_tile_parts_are_refused_in_both_modes() {
         decode_with(&bytes, &DecodeOptions::default().with_strict(false)),
         Err(Error::Codestream(_))
     ));
+}
+
+/// The first 256 tile-parts and `EOC`, so `TPsot` does not wrap. Strict
+/// refuses at the 18th part, past the declared count. With strict off the
+/// count (17) is advisory: the parts are read, and the mismatch is reported
+/// beside the packets the missing 16 parts leave out.
+/// This pins the strict count check on its own, which the whole file's
+/// refusal does not, since the wrap at the 257th part refuses it as well.
+#[test]
+fn the_declared_count_binds_in_strict_and_is_advisory_with_strict_off() {
+    let prefix = first_tile_parts(&read("tp_over255.j2k"), 256);
+    // The prefix also lacks the packets of the missing parts, which refuses it
+    // as well, so the check on the count is told apart by its message.
+    assert!(
+        matches!(decode(&prefix), Err(Error::Codestream(m)) if m.message().contains("declared 17")),
+    );
+    let image = decode_with(&prefix, &DecodeOptions::default().with_strict(false)).unwrap();
+    assert!(image.report.entries.iter().any(|e| matches!(
+        e,
+        ReportEntry::TilePartCountMismatch {
+            tile: 0,
+            declared: 17,
+            found: 256,
+            ..
+        }
+    )));
 }

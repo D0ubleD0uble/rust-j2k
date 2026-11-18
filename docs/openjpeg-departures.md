@@ -1728,7 +1728,7 @@ commands and the OpenJPEG output ([its README](../tests/fixtures/opj_encoder_bug
 | - | - |
 | This decoder | strict refuses as `Codestream`; with `strict` off it returns OpenJPEG's image, and reports `MissingPackets` for the tile |
 | OpenJPEG 2.5.0 | decodes with exit 0 and no warning; a component is a constant plane |
-| Standard | B.9 and B.12.3: the tile has a packet for every precinct of every component, and a stream with packets missing is cut short (B.11) |
+| Standard | B.9: the tile has a packet for every precinct of every component; B.11 lets whole packets be dropped from the end of a tile |
 | Rule | 3 |
 | Tests and fixtures | `tests/opj_encoder_bugs.rs`; `tests/fixtures/opj_encoder_bugs/tp_mixed_subsampling.*` |
 | Decided | not recorded |
@@ -1743,12 +1743,33 @@ refuses the tile: "the data of tile 0 ends before the last packet". With
 OpenJPEG's, all 1024 of them; the report holds one `MissingPackets` entry with
 no complete layer, and `is_complete` is false.
 
-The fault needs a position-first order and mixed sub-sampling together with
-explicit precincts and `-TP`. Measured on this shape: it appears with CPRL and
-`-TP R` or `-TP L`, and with PCRL and `-TP R` (a 64 x 64 file: 2039 of 4096
-samples wrong). It does not appear without `-TP`, with `-TP C`, with RPCL,
-without `-c`, or with uniform sub-sampling: each of those decodes to the
-encoder input.
+Component 1's missing packets are the last ones of the CPRL tile, so the file
+is not out of the standard in every reading: B.11 lets "any number of whole
+packets (in order)" be dropped from the end of a tile. It is the strict decode
+refusing missing data, as it refuses a tile cut short, and partial decode
+accepts it with the missing packets reported.
+
+The fault is in the encoder's `-TP` split of a position-based order over
+components with mixed sub-sampling and explicit precincts. Wrong samples out of
+1024, measured against the encoder input with the committed source and
+`-F 32,32,2,8,u@1x2:2x1 -n 1 -p <order> -c [16,16]`:
+
+| Order | `-TP R` | `-TP L` | `-TP C` | no `-TP` |
+| ----- | ------- | ------- | ------- | -------- |
+| CPRL | 509 | 509 | 0 | 0 |
+| PCRL | 256 | 256 | 256 | 0 |
+| RPCL | 0 | 256 | 256 | 0 |
+| LRCP | 0 | 0 | 0 | 0 |
+| RLCP | 0 | 0 | 0 | 0 |
+
+A position-based order comes out wrong unless `-TP` splits on the order's
+outermost axis (`-TP C` for CPRL, `-TP R` for RPCL). PCRL starts with the
+position, which `-TP` cannot split on, so it is always wrong. The layer-first
+and resolution-first orders are right. In all 7 wrong cases strict refuses
+(`Codestream`) and strict off returns OpenJPEG's image, with the tile reported
+incomplete; the 8 right cases with `-TP` and the 5 without it decode as
+they should. Without `-c`, and with uniform sub-sampling, the CPRL `-TP R`
+encode decodes to the encoder input.
 
 ### More than 255 tile-parts
 
@@ -1756,7 +1777,7 @@ encoder input.
 | - | - |
 | This decoder | strict refuses as `Codestream`; with `strict` off it also refuses as `Codestream`, so it never returns OpenJPEG's image |
 | OpenJPEG 2.5.0 | warns "Non conformant codestream TPsot==TNsot" and decodes with exit 0 |
-| Standard | A.4.2: `TPsot` and `TNsot` are one byte each, so a tile has at most 255 tile-parts |
+| Standard | A.4.2: `TPsot` and `TNsot` are one byte each, and a `TNsot` of 0 means the count is not stated |
 | Rule | 3 |
 | Tests and fixtures | `tests/opj_encoder_bugs.rs`; `tests/fixtures/opj_encoder_bugs/tp_over255.*` |
 | Decided | not recorded |
@@ -1766,11 +1787,11 @@ encoder input.
 the count mod 256, so 16, and `TPsot` wraps the same way (the last part has
 `TPsot` 15). `opj_decompress` takes the file for the Photoshop shape
 ([`TPsot == TNsot`](#tpsot--tnsot)) and returns an image with 4062 of the 4352
-samples wrong. With 256 tile-parts, which fit in the fields, the same encode
-decodes to the source.
+samples wrong. With 256 tile-parts the same encode decodes to the source:
+`TNsot` is then 0, which says the count is not stated.
 
 This decoder applies the same count correction, so the declared count is 17.
-In strict mode the 17th part (`TPsot` 16) is then past the declared count, and
+In strict mode the 18th part (`TPsot` 17) is then past the declared count, and
 the file is refused ("tile 0 tile-part 17 of a declared 17 tile-parts"). With
 `strict` off the count is advisory and the walk reads on, but at the 257th part
 `TPsot` reads 0 where 256 parts were read, which is refused whatever `strict`
