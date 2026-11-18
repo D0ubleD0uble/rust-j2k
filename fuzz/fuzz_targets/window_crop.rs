@@ -4,12 +4,18 @@
 //! component subset decode to the crop or selection of the whole decode at
 //! the same resolution reduction.
 //!
-//! A hash of the input picks the reduction (0 to 2) and one of four modes: a
-//! window, a tile, a component subset, or a subset through a window. The
-//! window and tile are worked out on the reference grid from the first
-//! `SOC SIZ` in the input. That `SIZ` may not be the codestream's (a JP2
-//! file can hold those bytes in another box), so an input is skipped unless
-//! its image area gives the whole decode's component sizes.
+//! Eight control bytes pick the reduction (0 to 2), one of four modes (a
+//! window, a tile, a component subset, or a subset through a window), and
+//! the window, tile or subset; the rest is the file. So libFuzzer can keep a
+//! file and try other areas of it by mutating the control bytes. An input
+//! that starts with a codestream's `SOC` (`FF 4F`) or the JP2 signature box
+//! is instead the whole file, with a hash of it as the control bytes, so
+//! plain fixtures are valid seeds.
+//!
+//! The window and tile are worked out on the reference grid from the first
+//! `SOC SIZ` in the file. That `SIZ` may not be the codestream's (a JP2 file
+//! can hold those bytes in another box), so an input is skipped unless its
+//! image area gives the whole decode's component sizes.
 //!
 //! When the whole decode gives an image, the part must too, unless its
 //! options are refused as [`rust_j2k::Error::InvalidOptions`] (an area with
@@ -69,7 +75,16 @@ fn crop(whole: &Image, c: usize, image: Rect, area: Rect, r: u8) -> (u32, Vec<i3
     (at(x1, dx, r).saturating_sub(at(x0, dx, r)), out)
 }
 
-fuzz_target!(|data: &[u8]| {
+fuzz_target!(|input: &[u8]| {
+    const JP2_SIGNATURE: [u8; 8] = [0, 0, 0, 12, b'j', b'P', b' ', b' '];
+    let (control, data) = if input.starts_with(&[0xFF, 0x4F]) || input.starts_with(&JP2_SIGNATURE) {
+        (fnv1a(input), input)
+    } else {
+        let Some((control, data)) = input.split_first_chunk::<8>() else {
+            return;
+        };
+        (u64::from_le_bytes(*control), data)
+    };
     let Some([xs, ys, xo, yo, xt, yt, xto, yto]) = siz(data) else {
         return;
     };
@@ -77,13 +92,12 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let image = (xo, yo, xs, ys);
-    let hash = fnv1a(data);
-    let r = (hash % 3) as u8;
+    let r = ((control & 3) % 3) as u8;
     let base = DecodeOptions::default().with_resolution_reduction(r);
-    let bits = hash >> 8;
+    let bits = control >> 8;
     let small = |shift: u32, m: u32| ((bits >> shift) as u32) % m;
     // 0: window, 1: tile, 2: component subset, 3: subset through a window.
-    let mode = (hash >> 2) & 3;
+    let mode = (control >> 2) & 3;
     let subset: Option<Vec<u16>> = match mode {
         2 | 3 => Some(match small(48, 4) {
             0 => vec![0],

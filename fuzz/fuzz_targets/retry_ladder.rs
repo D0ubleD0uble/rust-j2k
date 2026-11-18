@@ -16,7 +16,8 @@
 //!
 //! A decode past a factor of 4 can take longer than the fuzzer's timeout,
 //! so the ladder stops when a refusal asks for more, once that step is
-//! checked. A ladder of more than 8 steps is a failure.
+//! checked. A ladder of more than 16 steps is a failure: it should end in a
+//! few.
 //!
 //! An input that declares more samples than the fuzz budget allows
 //! (`common/budget.rs`) is only read for its header: a sample limit refusal
@@ -34,8 +35,10 @@ use rust_j2k::{
 /// The highest factor the ladder decodes at.
 const MAX_FACTOR: u64 = 4;
 
-/// The most steps the ladder takes.
-const MAX_STEPS: u32 = 8;
+/// The most steps the ladder may take. Each step raises one of three limits
+/// to at most a factor of [`MAX_FACTOR`] before the ladder stops, so a few
+/// steps are enough; this bound only catches a ladder that does not end.
+const MAX_STEPS: u32 = 16;
 
 /// The three limits an option raises.
 const KINDS: [LimitKind; 3] = [
@@ -74,12 +77,33 @@ fn field(options: &DecodeOptions, kind: LimitKind) -> &WorkLimit {
     }
 }
 
+/// `options` with the limit `kind` reads set to `limit`.
+fn with_field(options: &DecodeOptions, kind: LimitKind, limit: WorkLimit) -> DecodeOptions {
+    let options = options.clone();
+    match kind {
+        LimitKind::Samples => options.with_sample_limit(limit),
+        LimitKind::PacketWork => options.with_packet_work_limit(limit),
+        LimitKind::CodeBlockWork => options.with_code_block_work_limit(limit),
+        other => unreachable!("an adjustable limit with no option: {other:?}"),
+    }
+}
+
 /// One step of the ladder: the options `with_retry` gives for `limit`,
 /// checked against `options`, with the limit it raised. `None` when no
 /// option raises it.
 fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, WorkLimit)> {
     let kind = limit.kind();
+    // A limit no option raises names no factor to raise it to.
+    if !kind.is_adjustable() {
+        assert!(
+            limit.retry_with().is_none(),
+            "{kind:?} is fixed but gives {:?}",
+            limit.retry_with()
+        );
+    }
     let Some(next) = options.with_retry(limit) else {
+        // An adjustable limit gives no retry only when its refusal shows no
+        // factor, such as a packet work refusal while reading the header.
         assert!(
             limit.retry_with().is_none(),
             "{kind:?}: retry_with gives {:?}, with_retry none",
@@ -92,39 +116,19 @@ fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, 
         "{kind:?} is fixed but with_retry raises it"
     );
     let raised = limit.retry_with().expect("with_retry raised a limit");
-    // The option the kind names is set to `retry_with`, strictly above
-    // where it was; the other two are unchanged.
-    assert_eq!(
-        field(&next, kind),
-        &raised,
-        "{kind:?} raised the wrong option"
-    );
     assert!(
         rank(&raised) > rank(field(options, kind)),
         "{kind:?}: retry_with {raised:?} is not above {:?} ({limit})",
         field(options, kind)
     );
-    for other in KINDS.into_iter().filter(|&k| k != kind) {
-        assert_eq!(
-            field(&next, other),
-            field(options, other),
-            "{kind:?} retry moved {other:?}"
-        );
-    }
+    // The option the kind names is set to `retry_with` and every other
+    // option is as it was: compared by `Debug`, so the check covers every
+    // field, a new one included (`DecodeOptions` has no `PartialEq`).
+    let expected = with_field(options, kind, raised.clone());
     assert_eq!(
-        (
-            next.resolution_reduction,
-            next.strict,
-            &next.region,
-            &next.components
-        ),
-        (
-            options.resolution_reduction,
-            options.strict,
-            &options.region,
-            &options.components
-        ),
-        "{kind:?} retry moved another option"
+        format!("{next:?}"),
+        format!("{expected:?}"),
+        "{kind:?}: with_retry changed more than the option it names"
     );
     Some((next, raised))
 }
@@ -163,6 +167,16 @@ fuzz_target!(|input: &[u8]| {
     // them. At the defaults it is `result` before any step.
     let default = (!at_defaults).then(|| decode_with(data, &defaults));
     let default_ok = default.as_ref().map_or(result.is_ok(), Result::is_ok);
+    // Raising a limit never turns an image into an error. The options start
+    // at or above the default limits, so when those decode, the first decode
+    // must too, and the ladder takes no step.
+    if default_ok {
+        assert!(
+            result.is_ok(),
+            "the default limits decode, the options above them give {:?}",
+            result.as_ref().err()
+        );
+    }
     let mut steps = 0;
     while let Err(Error::Limit(limit)) = &result {
         let Some((next, raised)) = step(&options, limit) else {
@@ -181,14 +195,6 @@ fuzz_target!(|input: &[u8]| {
         options = next;
         result = decode_with(data, &options);
     }
-    // Raising a limit never turns an image into an error.
-    if default_ok {
-        assert!(
-            result.is_ok(),
-            "the default limits decode, the ladder gives {:?}",
-            result.as_ref().err()
-        );
-    }
     let Ok(image) = &result else {
         return;
     };
@@ -200,6 +206,7 @@ fuzz_target!(|input: &[u8]| {
         Some(Ok(image)) => image,
         // At the defaults with no step, `result` is the default decode.
         None if steps == 0 => return,
+        // The defaults refuse: compare with no limits.
         _ => {
             let unlimited = options
                 .clone()
