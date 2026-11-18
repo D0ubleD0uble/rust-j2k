@@ -39,6 +39,8 @@ fuzz/
   fuzz_targets/jp2_boxes.rs     # fuzzed JP2 boxes around a pinned valid codestream, also decoded as sRGB
   fuzz_targets/header.rs        # rust_j2k::read_header_with, checked against decode_with
   fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColorOutput::Srgb
+  fuzz_targets/window_crop.rs   # a window, tile or component subset against the crop of the whole decode
+  fuzz_targets/retry_ladder.rs  # DecodeOptions::with_retry followed from each limit refusal
   icc.dict                      # ICC tag and type signatures for icc_srgb
   ../tests/support/synth.rs     # std-only seg/bx builders; tile_body, jp2_boxes and icc_srgb include it by #[path]
   ../tests/support/tile_body.rs # tile_body's header and body wrapper; tests/tile_body_variants.rs pins its variant bytes
@@ -193,6 +195,35 @@ it runs about 230 inputs a second, but on a corpus grown by earlier runs it
 has dropped to about 7 a second under ASan, and one 598-byte input took 13
 s. The name `incremental` is one Cargo reserves.
 
+`window_crop` checks a decode of part of the image against the whole
+decode. A hash of the input picks a resolution reduction (0 to 2) and one of
+four modes: a window, a tile, a component subset (decoded with
+`raw_channels`, as a subset names codestream components), or a subset
+through a window. The window and the tile are worked out on the reference
+grid from the first `SOC SIZ` in the input. That `SIZ` may not be the
+codestream's, since a JP2 file can hold those bytes in another box, so an
+input is skipped unless its image area gives the whole decode's component
+sizes. When the whole decode gives an image, the part must give one too,
+unless its options are `InvalidOptions` (an area with no sample of a
+component at the reduction, or a component past the image's), and each of
+its components must equal the whole decode's, cut to the area. Seed it as
+`decode`, with the window fixtures added.
+
+`retry_ladder` follows `DecodeOptions::with_retry` from each limit refusal.
+A hash of the input picks where each of the three limits starts (`Default`,
+or a factor of 1 or 2), a reduction of 0 or 1, and `strict`. Each step must
+raise the option the refusal names to `retry_with`, strictly above where it
+was, and leave every other option as it was; a limit no option raises gives
+no retry. Raising a limit never turns an image into an error: when the
+default options decode, the ladder ends at an image with their samples, and
+otherwise at the image of a decode with no limits. A decode past a factor of
+4 can take longer than the timeout, so the ladder stops when a refusal asks
+for more, after that step is checked; more than 8 steps is a failure. An
+input over the fuzz sample budget (`common/budget.rs`) is only read for its
+header, and a sample limit refusal there is checked as one step with no
+decode. Seed it as `decode`, with the work-bound and sample-limit fixtures
+added, so the first decode of some seeds is refused.
+
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
 `tile_body`): mutation almost never synthesizes a two-byte marker code, and
@@ -272,6 +303,17 @@ find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \) \
   -exec cp {} fuzz/corpus/incremental_decode/ \;
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
 
+# The window target, seeded as decode plus the window fixtures.
+mkdir -p fuzz/corpus/window_crop
+cp fuzz/corpus/decode/* tests/fixtures/window/*.j2k fuzz/corpus/window_crop/
+cargo +nightly fuzz run window_crop -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
+
+# The retry target, seeded as decode plus the files the limits refuse.
+mkdir -p fuzz/corpus/retry_ladder
+cp fuzz/corpus/decode/* tests/fixtures/work_bound/* tests/fixtures/tier1_work_bound/*.j2k \
+  tests/fixtures/sample_limit/* fuzz/corpus/retry_ladder/
+cargo +nightly fuzz run retry_ladder -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
+
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
 cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
@@ -310,5 +352,6 @@ committed fixtures. No seed corpus is committed: the commands above, and the CI
 smoke, build each one. The CI smoke (`.github/workflows/ci.yml`) seeds `decode`
 with the fixtures and small HT files, `decode_partial` and `incremental_decode`
 from the `decode` corpus, `ht_block` with the HT corpus's code-blocks, and the
-JP2, header and ICC targets as above. It runs all ten targets for 15 to 60 s
-each, with `-timeout=30` and `-rss_limit_mb=4096`.
+JP2, header and ICC targets as above. It builds every target and runs ten
+of them for 15 to 60 s each, with `-timeout=30` and `-rss_limit_mb=4096`;
+it does not run `window_crop` or `retry_ladder`.
