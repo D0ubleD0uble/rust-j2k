@@ -294,11 +294,13 @@ pub use window::{Region, Window};
 ///   as `i32`), summed over its output channels at the decode's
 ///   [`resolution_reduction`](DecodeOptions::resolution_reduction): every
 ///   component, a palette's expanded channels, and the channels sRGB output
-///   adds. That admits a 10980 x 10980 Sentinel-2 true-color image (three
-///   components), or an RGB image of up to about 179 MP. A larger image is refused from its header alone,
-///   before any tile is read. Under a window or a tile, only the tiles read
+///   adds. Up to 64 MiB of input that admits a 10980 x 10980 Sentinel-2
+///   true-color image (three components), or an RGB image of up to about
+///   179 MP; past 64 MiB the limit is 8 samples per byte instead. An image
+///   over the limit is refused from its header alone, before any tile is
+///   read. Under a window or a tile, only the tiles read
 ///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
-///   times the output for a square tile, about 2.7 GiB at the limit,
+///   times the output for a square tile, about 2.7 GiB at 2^29 samples,
 ///   and more for a tall, narrow tile or while a palette expands (see [the
 ///   sample limit][sample-limit]). This is for the one-shot functions; an
 ///   [`IncrementalDecoder`] keeps per-tile state and can hold up to about
@@ -401,7 +403,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// or palette that fits the sample limit only once
 /// [`resolution_reduction`](DecodeOptions::resolution_reduction) shrinks the
 /// image or [`sample_limit`](DecodeOptions::sample_limit) raises the limit,
-/// is a fault under some options and not others. A fault in the tile
+/// is a fault under some options and not others. The sample limit is that
+/// of the bytes passed, so a prefix holding only the header is held to the
+/// 2^29-sample floor: the header of a valid file over 64 MiB and over 2^29
+/// samples, read from a prefix, gives [`Error::Limit`] even when the whole
+/// file decodes at the defaults. The [`Raised`](WorkLimit::Raised) factor
+/// that refusal names also admits the whole file, whose default is larger.
+/// A fault in the tile
 /// data (a broken tile-part, a tile header that changes a component's
 /// wavelet, a reduction that a tile-part COD or COC with fewer levels cannot
 /// take) is only found by decoding. So is a POC sequence that leaves out
@@ -836,10 +844,18 @@ pub struct DecodeOptions {
     /// described on [`decode`]. Default [`WorkLimit::Default`].
     pub code_block_work_limit: WorkLimit,
     /// How many samples the decoded image may hold, against the limit
-    /// described on [`decode`]: 2^29 samples (2 GiB as `i32`) by default,
-    /// summed over the output channels at
+    /// described on [`decode`], summed over the output channels at
     /// [`resolution_reduction`](Self::resolution_reduction). Default
     /// [`WorkLimit::Default`].
+    ///
+    /// The default limit is 2^29 samples (2 GiB as `i32`), or 8 samples per
+    /// byte of input when that is more: past 64 MiB of input, it grows with
+    /// the file. The input is every byte passed in, a JP2 file's boxes
+    /// included; for an [`IncrementalDecoder`] it is the bytes fed so far.
+    /// Past 64 MiB, a file may ask for 32 bytes of output per byte of
+    /// input, and a decode peaks at about 43 bytes per byte for a square
+    /// tile and up to about 102 for a tile one sample wide: about 4.1 GiB and
+    /// 9.6 GiB for a file of 100 MB, input included.
     ///
     /// Under a window or a tile ([`region`](Self::region)), the count
     /// is the samples of the tiles the decode reads, in every component, as
@@ -850,7 +866,10 @@ pub struct DecodeOptions {
     /// [`components`](Self::components) subset does not lower the count, as
     /// the packets of every component of a tile read are still walked.
     ///
-    /// `Raised(n)` allows `n` times 2^29 samples. `Unlimited` lifts the
+    /// `Raised(n)` allows `n` times the default for the same input: `n` times
+    /// 2^29 samples up to 64 MiB, and `8 * n` samples per byte past it. So
+    /// a factor never allows less than the default, and the factor a refusal
+    /// names is the smallest that admits that file. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output, and about 1.35 to 3.2 times that in all at its
     /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
@@ -862,6 +881,18 @@ pub struct DecodeOptions {
     ///
     /// [`read_header_with`] checks the same limit, so it refuses what the
     /// decode would.
+    ///
+    /// Padding counts as input, so a file can raise its own limit with
+    /// `COM` segments, a JP2 `xml ` box or bytes after `EOC`. No
+    /// [`WorkLimit`] sets a limit below the default. For a ceiling that does
+    /// not grow with the input, call [`read_header_with`] with no region and
+    /// no component subset, and refuse the file when the summed area of its
+    /// [`components`](Header::components) is too large. Under a region or a
+    /// subset the header describes only what is returned, while the limit
+    /// counts every tile read, whole and in every component. So compute that
+    /// count from [`image_area`](Header::image_area) and
+    /// [`tiles`](Header::tiles) instead: the whole tiles the region touches,
+    /// in every component.
     pub sample_limit: WorkLimit,
     /// Refuse missing data with an [`Error`] (`true`, the default), or decode
     /// what is there and say what is missing on [`Image::report`] (`false`).
@@ -969,15 +1000,16 @@ impl Default for DecodeOptions {
 /// [`DecodeOptions::code_block_work_limit`] work bounds, and the
 /// [`DecodeOptions::sample_limit`] on the image's size.
 ///
-/// Each work bound scales with the size of the file, so a small file cannot
-/// ask for minutes of work, and the sample limit holds the memory a file may
-/// ask for to about 2.7 GiB for a square tile, and to several GiB for a tall,
-/// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
-/// a bound, when it codes many samples in very few bytes or is very
-/// large. The decode then fails with [`Error::Limit`]. Its
+/// Each bound scales with the size of the file, so a small file cannot ask for
+/// minutes of work, and a file of up to 64 MiB is held to the sample limit's
+/// floor: about 2.7 GiB of memory for a square tile and several GiB for a tall,
+/// narrow one. Past 64 MiB the sample limit grows with the file (see
+/// [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
+/// A valid file can still go past a bound, when it codes many samples in very
+/// few bytes or is very large. The decode then fails with [`Error::Limit`]. Its
 /// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`]
-/// gives a [`Raised`](WorkLimit::Raised) factor, which the message names
-/// too. Treat the factor as a hint, not a measure of the file:
+/// gives a [`Raised`](WorkLimit::Raised) factor, which the message names too.
+/// Treat the factor as a hint, not a measure of the file:
 ///
 /// - For the sample limit it is exact for the check it names: the image's
 ///   samples are known from its header. Palette expansion or sRGB output is
@@ -1046,8 +1078,8 @@ pub enum WorkLimit {
     /// The bound as [`decode`] describes it.
     #[default]
     Default,
-    /// The default bound times this factor: for a work bound, both its floor
-    /// and the work it allows per byte. `Raised(1)` sets the same bound as
+    /// The default bound times this factor: both its floor and what it
+    /// allows per byte. `Raised(1)` sets the same bound as
     /// `Default`, though the two do not compare equal. `Raised(0)` is
     /// [`Error::InvalidOptions`].
     Raised(u32),

@@ -20,7 +20,7 @@ sets the option. A retry can still fail with another error once past the cap.
 
 | Bound | Default | Option in `DecodeOptions` | Margin over encoder output | Tests |
 | ----- | ------- | ------------------------- | -------------------------- | ----- |
-| [Samples](#the-sample-limit) | 2^29 samples at the decode's reduction | `sample_limit` | about 1.5 times (a Sentinel-2 true-color image) | `tests/sample_limit.rs`, `tests/sample_limit_alloc.rs` |
+| [Samples](#the-sample-limit) | max(2^29, 8 × the input bytes) samples at the decode's reduction | `sample_limit` | about 1.5 times (a Sentinel-2 true-color image) | `tests/sample_limit.rs`, `tests/sample_limit_alloc.rs` |
 | [Tier-2 steps](#the-tier-2-work-bound) | max(2^24, 32 × the tiles' data bytes) | `packet_work_limit` | about 7.8 times (largest share 12.8%) | `tests/work_bound.rs`, `src/tier2/work_bound_tests.rs` |
 | [Tier-1 sample-passes](#the-tier-1-work-bound) | max(2^26, 2^15 × the tiles' data bytes) | `code_block_work_limit` | about 2.35 times | `tests/work_limit.rs`, `src/tier1/work_bound_tests.rs` |
 
@@ -42,6 +42,10 @@ blocks was refused. At 2^20 a one-tile image at least 72 samples wide and under
 132726 at the limit; 64 x 2^23 needs 770,048). A thinner image is still
 refused (66 x 8,134,407 needs 1,128,027; 32 x 2^24 needs 1.54 M; 1 x 2^29
 needs 16.7 M), as is one tile in 16x16 blocks or smaller near the limit.
+The 2^20 code-block cap does not grow with the input the way the sample
+limit does. A one-tile image past 2^30 samples in 32x32 blocks, or past
+2^32 in 64x64 blocks, is still refused by the cap, however large the file.
+A tiled image is held to it one tile at a time.
 
 A few fixed guards also return `Limit`, and no option lifts them: 2^18
 precincts and 2^20 code-blocks per tile, 32 POC progression volumes, 30
@@ -64,10 +68,13 @@ grows with the sum of the component areas, not with the file. A file of a
 few hundred bytes can declare a 65536x65536 image, 16 GiB of `i32`
 samples. The decode counts the samples of every output channel, at the
 resolution reduction asked for, from SIZ and the JP2 boxes alone, and
-refuses an image of more than 2^29 samples (2 GiB as `i32`) with `Limit`
-before it reads a tile. The image area counted is SIZ's
-`(Xsiz − XOsiz)·(Ysiz − YOsiz)`, wherever on the reference grid the origin
-sits. The count covers the codestream's components, a palette's expanded
+refuses an image of more samples than the limit with `Limit` before it
+reads a tile. The limit is 2^29 samples (2 GiB as `i32`), or 8 samples per
+byte of input when that is more (see
+[The limit grows with the input](#the-limit-grows-with-the-input)).
+The image area counted is SIZ's `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, wherever
+on the reference grid the origin sits. The count covers the codestream's
+components, a palette's expanded
 channels, and the channels sRGB output adds (sYCC chroma replicated to the
 luma grid, a gray channel a monochrome profile maps to R, G and B).
 `read_header_with` makes the same check, so it refuses what the decode would.
@@ -95,7 +102,8 @@ OpenJPEG has no such limit: it allocates what the header declares and fails
 only when the allocation does.
 
 `DecodeOptions::sample_limit` raises the limit (`WorkLimit::Raised(n)`,
-n times 2^29) or lifts it (`WorkLimit::Unlimited`). The refusal names the
+n times the default for the same input) or lifts it
+(`WorkLimit::Unlimited`). The refusal names the
 option and the smallest `Raised` factor that admits the file. Even
 `Unlimited` refuses an image whose 4-byte samples would pass `isize::MAX`
 bytes, so the buffer sizes cannot overflow `usize`, on 32-bit targets
@@ -122,15 +130,16 @@ The TCI is the one the default refused at 2^28 (#436). It is the 10 m true-color
 image of Sentinel-2 tile 31UDQ, sensed 2022-08-11 (public bucket
 `gcp-public-data-sentinel-2`); all three planes match `opj_decompress`
 sample for sample. The TCI times are wall time from `/usr/bin/time` of one
-run each, on a machine at load 14 to 20, so they are loose; OpenJPEG ran under `MemoryMax=16G`. The last row is
-the largest one-tile image the default admits, made by `opj_compress -n 5` from
-a pseudo-random gradient; it is where the 1.35 times below stops being
+run each, on a machine at load 14 to 20, so they are loose; OpenJPEG ran
+under `MemoryMax=16G`. The last row is the largest square one-tile image
+the 2^29 floor admits, made by `opj_compress -n 5` from a pseudo-random
+gradient; it is where the 1.35 times below stops being
 an extrapolation.
 
 The peak is about 1.0 times the 4-byte output for the Sentinel-2 band (460
 MiB of samples), and about 1.1 times for the TCI (1.35 GiB of samples, 119 MiB
 of input in memory). It is about 1.35 times for one square tile of one
-component (see the table in `src/samples.rs`), so at the default a square
+component (see the table in `src/samples.rs`), so at the 2^29 floor a square
 tile peaks at about 2.7 GiB, plus the input: 2.9 GiB measured in the last row
 above. A tall, narrow tile peaks
 higher: about 1.5 to 1.7 times when it is 8 to 1024 samples wide, and about
@@ -139,6 +148,91 @@ multiple grows with the wavelet levels, as the code-blocks' fixed overhead
 is a larger share of it: 2.7 at 5 levels and 3.2 at 8.
 While a palette expands the peak is about twice the output. Tests:
 `tests/sample_limit.rs` and `tests/sample_limit_alloc.rs`.
+
+### The limit grows with the input
+
+The default limit for an input of `B` bytes is
+
+    max(2^29, 8 × B) samples
+
+so it is 2^29 up to 64 MiB of input, and grows by 8 samples per byte past
+that, just as the two work bounds grow with the tiles' data. `B` is every byte
+the decode is given: a JP2 file's boxes count, and so do bytes after the
+codestream. `read_header_with` counts the same bytes, so it still refuses
+what the decode would. Each refine of an `IncrementalDecoder` is held to the
+limit of the bytes fed so far, as a one-shot decode of them would be, so a
+refusal there is a wait, not an error (see
+[incremental-decoding.md](incremental-decoding.md)).
+
+A small file is held to the floor, 2^29 samples: a file of 100 bytes cannot
+ask for more. A large file may ask for at most 32 bytes of `i32` output per
+byte of input. The large valid files measured hold far fewer samples per
+byte: the Sentinel-2 TCI about 2.9, the lossless 23170x23170 one-tile file
+about 1.8, and the one below about 2.3, so 8 is about 2.7 times the most
+seen. A file over the floor that holds more than 8 samples per byte, such as
+a large image of flat color, still needs a raised limit.
+
+`WorkLimit::Raised(n)` is n times the default for the same input: n times
+2^29 up to 64 MiB, and 8·n samples per byte past it. A factor never allows
+less than `Default`, and a larger factor never allows less than a smaller
+one. The factor a refusal names is still the smallest that admits the
+count, as it divides by the default of the same input. No limit, not even
+`WorkLimit::Unlimited` and whatever the input size, goes past the samples
+the target can address. On a 32-bit target that is 2^29 − 1, one below the
+floor.
+
+The table gives the worst-case peak for a file of each size, from the multiples
+above: about 1.35 times the output for a square tile, and up to about 3.2 times
+for a tile one sample wide, plus the input. The 100 MB figures quoted in the
+other docs come from this table and include the input.
+
+| Input | Default limit | Output (`i32`) | Peak, square tile | Peak, one sample wide |
+| ----- | ------------- | -------------- | ----------------- | --------------------- |
+| 100 bytes | 2^29 | 2 GiB | about 2.7 GiB | about 6.4 GiB |
+| 1 MB | 2^29 | 2 GiB | about 2.7 GiB | about 6.4 GiB |
+| 100 MB | 8 × 10^8 | 3.0 GiB | about 4.1 GiB | about 9.6 GiB |
+| 1 GB | 8 × 10^9 | 30 GiB | about 41 GiB | about 96 GiB |
+
+Past 64 MiB of input that is about 43 bytes of peak memory per byte of input
+for a square tile, and up to about 102 for a tile one sample wide. The
+figures past the floor are scaled from the measured multiples, not measured.
+A tiled image peaks lower, as each tile is reconstructed in turn, and a
+one-tile image in 64x64 code-blocks is also held to the 2^20 code-blocks a
+tile allows, about 2^32 samples. An `IncrementalDecoder` can hold up to about
+three times one decode's peak, plus the bytes fed.
+
+Measured on a release build, a lossless 23171x23171 one-tile 5/3 image of 5
+levels (536.9 M samples, just over 2^29; 234 MB, from `opj_compress -n 5`
+on a gradient with noise), against `opj_decompress` 2.5.0:
+
+| Decoder | Result | Time | Peak RSS |
+| ------- | ------ | ---- | -------- |
+| this one, before #437 (2^29 for any input) | `Limit`, `Raised(2)` | 0.1 s | 225 MiB (the input) |
+| this one, after #437 | decodes, bit-exact | 37.5 s | 2.84 GiB |
+| `opj_decompress` | decodes | 30.9 s | 2.28 GiB |
+
+Padding raises the limit too, even in a conformant file decoded with `strict`
+on: `COM` segments, a JP2 `xml ` box and bytes after `EOC` all count. The bytes
+counted are the bytes in memory, not on the wire, and padding compresses well:
+67 MB of zeros gzips to 65 KB. So a service should bound the input size it
+accepts, measured after any decompression. Past 64 MiB the worst-case peak is
+about 102 times that size, and up to about three times that for an
+`IncrementalDecoder`. A one-tile 1 x 2^30 image needs 128 MiB of input to fit
+the default. Measured: with 128 MiB of zeros after `EOC` (134,283,241 bytes) it
+decodes at the defaults (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, and
+at 134,065,513 bytes it is refused, naming `Raised(2)`. Time grows with the
+padding too. The work bounds count only tile data, but the inverse DWT and the
+output scale with the sample limit, which padding raises: about 175 ns per byte
+of padding, measured.
+
+No `WorkLimit` sets a limit below `Default`. For a ceiling that does not grow
+with the input, call `read_header_with` with no region and no component subset,
+and refuse the file when the summed area of its components is too large. Under a
+region or a subset the header describes only what is returned, while the limit
+counts every tile read, whole and in every component (a 16x16 window of one
+23171x23171 tile counts 536.9 M samples). So compute that count from
+`image_area` and `tiles` instead: the whole tiles the region touches, in every
+component.
 
 ## The tier-2 work bound
 
@@ -267,9 +361,11 @@ whatever the reduction. Each code-block of the kept resolutions holds at
 least one sample, so there are no more of them than the reduced image's
 samples (under a window or a tile, the reduced samples of the tiles read),
 which the sample limit holds. With 4x4 code-blocks and the default precincts
-that is samples / 16, 2^25 at the limit, about 1 to 2.3 seconds to build at
-30 to 70 ns each (arithmetic from the per-block cost, not measured at that
-count). Small
+that is samples / 16, 2^25 at the 2^29 floor, about 1 to 2.3 seconds to
+build at 30 to 70 ns each (arithmetic from the per-block cost, not measured
+at that count). Past 64 MiB of input the limit is 8 samples per byte, so
+there is at most one code-block per two bytes of input, or 15 to 35 ns of
+build time per byte. Small
 precincts can force code-blocks down to 1x1, and then it is the per-tile cap
 of 2^20 code-blocks that bounds each tile. A decode at full resolution drops no
 resolution, so it spends exactly what it did before; a file built to spend
@@ -500,19 +596,20 @@ MIXED tile-component each block costs what its own coder runs, so a Part 1
 block there costs its Part 1 passes
 (`the_work_counts_each_blocks_own_coder_in_a_mixed_tile_component`).
 
-Because an HT block runs at most 3 passes, the bound cannot refuse an HT
-file at the default. A block's work is at most 3 × 4096 = 12288
-sample-passes. A block of no bytes in its first contribution holds only
-placeholder passes and does no work, so a counted pass needs a cleanup
-segment of at least 2 bytes. With the block's packet header (7 bits for one
-pass, 11 for two, 14 for three) that is about 1400 sample-passes a byte for
-one pass, 1900 for two and 2600 for three. So the most an HT file asks for a
-byte is about 2600, against the bound's 32768, 12.6 times more. Only the
-sample limit bounds an HT decode, and the work under it is at most 3
-sample-passes per sample: an image of 2^29 samples asks for 1.6e9 sample-passes.
-The worst case is a one-column image, which makes 1x1024 blocks, at the
-slowest rates below (10 to 13.7 ns): 16 to 22 s (extrapolated, not
-measured). The bound still counts HT blocks, so a change to what a block may
+Because an HT block runs at most 3 passes, the bound cannot refuse an HT file at
+the default. A block's work is at most 3 × 4096 = 12288 sample-passes. A block
+of no bytes in its first contribution holds only placeholder passes and does no
+work, so a counted pass needs a cleanup segment of at least 2 bytes. With the
+block's packet header (7 bits for one pass, 11 for two, 14 for three) that is
+about 1400 sample-passes a byte for one pass, 1900 for two and 2600 for three.
+So the most an HT file asks for a byte is about 2600, against the bound's 32768,
+12.6 times more. Only the sample limit bounds an HT decode, and the work under
+it is at most 3 sample-passes per sample: an image of 2^29 samples asks for
+1.6e9 sample-passes. The worst case is a one-column image, which makes 1x1024
+blocks, at the slowest rates below (10 to 13.7 ns): 16 to 22 s (extrapolated,
+not measured). Past 64 MiB of input the sample limit grows by 8 samples per
+byte, which is at most 24 sample-passes per byte, or 0.25 to 0.35 µs per byte at
+those rates. The bound still counts HT blocks, so a change to what a block may
 cost is checked by the same arithmetic as Part 1, and `WorkLimit::Raised` and
 `Unlimited` mean the same for both.
 
