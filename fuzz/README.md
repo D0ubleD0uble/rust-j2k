@@ -169,12 +169,36 @@ tile-parts) reach the strict-off walk too. Seed `decode_partial` as
 
 `incremental_decode` feeds each input to an `IncrementalDecoder` in pieces
 whose sizes a hash of the file picks, and refines after each piece. The first
-six input bytes steer the options, so a small mutation of the file keeps them:
-a layer cap, a resolution reduction, a window, a tile, a component subset of
-one or two distinct indices, and a code-block work limit. The rest is the
-file, so seed it with six zero bytes in front (the default limit, no other
-option), or with a plain fixture: an input that starts with `FF 4F` or the JP2
-signature box is the whole file with all-zero control bytes. Each
+six input bytes steer the options, so a small mutation of the file keeps them.
+The rest is the file, so seed it with six zero bytes in front (the default
+limit, no other option), or with a plain fixture: an input that starts with
+`FF 4F` or the JP2 signature box is the whole file with all-zero control
+bytes. The control bytes:
+
+| Byte | Bits | Picks |
+| ---- | ---- | ----- |
+| 0 | 0-1 | the code-block work limit: default, unlimited, `Raised(2)`, `Raised(4)` |
+| 0 | 2 | a layer cap of 1 + (byte 0 >> 3) mod 3 |
+| 0 | 5 | a resolution reduction of 1 |
+| 0 | 6 | change the options between refines (below) |
+| 1 | 0-1 | the region: whole, the window of bytes 2 to 5, or a tile |
+| 1 | 2-4 | the tile: 0 for four of the eight values, then 1, 1, 2, 3 |
+| 1 | 5-7 | a component subset of one or two distinct indices |
+| 2-5 | | the window: `x0` and `y0` are bytes 2 and 3 mod 24, its width and height 1 + bytes 4 and 5 mod 40 |
+
+With bit 6 of byte 0, before some refines the target calls one of the
+decoder's setters, as a hash of the file picks: `set_resolution_reduction`
+(0 to 2, or 30, past any file's levels), `set_max_quality_layers` (none, or
+1 to 3) or `set_region` (the whole image, a window, tile 0 or 1). A layer cap
+of `Some(0)` or an empty window must be refused and leave the options as
+they were. Each refine after a change is checked under the options as they
+are then. An error holds for the bytes tried and the options it came under:
+a change clears it, and so does a change back. A walk kept across a change
+of the layer cap would give a wrong image, which the target catches. One
+kept across a change of the reduction gives the same image, since the
+reduction changes only the code-blocks the walk charges for the resolutions
+it drops, so the target does not see a walk that should have been let go
+there. Each
 refine that decodes goes on from the packet walks the earlier ones kept, and
 must give what `decode_with` gives with `strict` off on the bytes fed so far:
 the same image or the same error. After an error, each later refine must give
@@ -189,9 +213,14 @@ probe decoder with work already spent (`rust_j2k::fuzz`), drawn around the most
 that leaves the refine room, and checks it by the same rule. A due refine may
 also give `Ok(None)` when the bound on the walks of tiles not kept, which all
 the refines spend together, refuses it
-(`rust_j2k::fuzz::incremental_refused_by_repeats`), even where the one-shot
-decode gives an image or an error; a decoder with nothing spent must then give
-the one-shot result. Each input is decoded several times, so
+(`rust_j2k::fuzz::incremental_repeat_work`), even where the one-shot decode
+gives an image or an error. The visits those walks were charged must then be
+past `REPEAT_BOUNDS` times the refine's packet bound, which the hook reports;
+the refusal's message is not read. A decoder with nothing spent must give the
+one-shot result, and when it kept every tile's walk it must have charged
+nothing: a single refine walks each tile once, and the first walk of a tile
+kept from its start is not charged. So a charge on a kept walk, which would
+turn a refine into `Ok(None)` past the bound, fails the target. Each input is decoded several times, so
 seed it with small files, such as the fixtures under 3 KB, and cap the input
 length (`-max_len=4096`). Even so it can be slow, since almost all its time
 goes to its own `decode_with` oracle decodes: from the fixtures under 3 KB
@@ -352,10 +381,14 @@ for t in decode decode_partial; do
 done
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
 
-# The incremental target, seeded with the fixtures under 3 KB.
+# The incremental target, seeded with the fixtures under 3 KB, and the same
+# behind control bytes that change the options between refines.
 mkdir -p fuzz/corpus/incremental_decode
 find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \) \
   -exec cp {} fuzz/corpus/incremental_decode/ \;
+for f in $(find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \)); do
+  { printf '\100\0\0\0\0\0'; cat "$f"; } > "fuzz/corpus/incremental_decode/set_$(basename "$f")"
+done
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
 
 # The window target, seeded as decode plus the window, JPH and small JP2 files.
@@ -417,6 +450,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-17 | `retry_ladder` with every option compared and the seeds behind control bytes | `decode`'s seeding and the 26 control-byte seeds (93 seeds; 12 take a step, 16 compare), `j2k.dict` | 61 s, 4 081 runs (the seeds take about 22 s to replay); `nice -n 19`, one job; the 1-minute load was 5.4 | no failure. Coverage 7 993 (7 836 in the run above). Of the 406 inputs it kept, 16 take a step (7 sample, 8 packet work, 1 code-block work) and 19 compare. With `with_retry` also setting `ColorOutput::Srgb` on a packet work refusal, the seed `0f-pocvol_1024x512_1000_2` fails on replay |
 | 2026-11-17 | `retry_ladder` with the packet work hint doubling and a per-limit step bound (`MAX_STEPS` 4) | `decode`'s seeding and the 26 control-byte seeds (98 inputs), `j2k.dict` | 61 s, 1 476 runs; `nice -n 19`, one job; the 1-minute load was 4.4 | no failure |
 | 2026-11-18 | `window_crop` with windows from one point before the origin, and the image size compared | the README's seeding (114 seeds: `decode`'s, the window fixtures, the `.jph` files and the JP2 files under 200 KB), `j2k.dict` | 61 s, 21 419 runs; `nice -n 19`, one job; the 1-minute load was 4.6 | no failure. Coverage 10 427. With `Footprint::rect` shifted one column right, a seed fails on replay; with the image's reported width one too many, a seed fails on its size assertion |
+| 2026-11-18 | `incremental_decode` with the repeat-charge oracle (`incremental_repeat_work`) and the setters between refines (bit 6) | the fixtures under 3 KB, and the same behind `40 00 00 00 00 00` (98 seeds), `j2k.dict`, `-max_len=4096` | `-max_total_time=60` (66 s with loading), 18 228 runs; `nice -n 19`, one job; the 1-minute load was 1.5 | no failure |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 
