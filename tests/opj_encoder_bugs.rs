@@ -1,0 +1,132 @@
+//! Two `opj_compress` 2.5.0 encodes that `opj_decompress` 2.5.0 decodes, with
+//! exit 0, to a wrong image. This decoder refuses both with
+//! [`Error::Codestream`]. The oracle files (`*.opj.raw`) are OpenJPEG's wrong
+//! output, kept so that a change to either behavior shows. See
+//! `tests/fixtures/opj_encoder_bugs/README.md`.
+
+#[path = "support/synth.rs"]
+mod synth;
+use std::path::PathBuf;
+
+use rust_j2k::{DecodeOptions, Error, ReportEntry, decode, decode_with};
+
+fn dir() -> PathBuf {
+    synth::fixtures("opj_encoder_bugs")
+}
+
+fn read(name: &str) -> Vec<u8> {
+    synth::read_file(dir().join(name))
+}
+
+/// The components' samples one after another, as 8-bit values.
+fn flat(image: &rust_j2k::Image) -> Vec<u8> {
+    image
+        .components
+        .iter()
+        .flat_map(|c| c.samples.iter().map(|&s| u8::try_from(s).unwrap()))
+        .collect()
+}
+
+fn count_differing(a: &[u8], b: &[u8]) -> usize {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).filter(|(x, y)| x != y).count()
+}
+
+/// `-TP R` with sub-sampling `1x2` and `2x1` and `-c [16,16]` writes four
+/// tile-parts, the last two empty, and no packet of component 1.
+/// `opj_decompress` returns component 1 as a constant plane: 509 of the 1024
+/// samples are wrong. Here strict refuses; strict off returns OpenJPEG's
+/// image and reports the missing packets.
+#[test]
+fn tp_with_mixed_sub_sampling_is_refused_and_partial_decode_matches_openjpeg() {
+    let bytes = read("tp_mixed_subsampling.j2k");
+    let oracle = read("tp_mixed_subsampling.opj.raw");
+    let source = read("tp_mixed_subsampling.source.raw");
+    assert_eq!(
+        count_differing(&oracle, &source),
+        509,
+        "the oracle is wrong"
+    );
+
+    assert!(matches!(decode(&bytes), Err(Error::Codestream(_))));
+
+    let image = decode_with(&bytes, &DecodeOptions::default().with_strict(false)).unwrap();
+    assert!(flat(&image) == oracle, "strict off differs from OpenJPEG");
+    assert!(!image.report.is_complete());
+    assert!(matches!(
+        image.report.entries.as_slice(),
+        [ReportEntry::MissingPackets { tile: 0, .. }]
+    ));
+}
+
+/// The first `n` tile-parts of a one-tile codestream, then `EOC`.
+fn first_tile_parts(cs: &[u8], n: usize) -> Vec<u8> {
+    let mut at = cs.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    for _ in 0..n {
+        let psot = u32::from_be_bytes(cs[at + 6..at + 10].try_into().unwrap());
+        at += psot as usize;
+    }
+    let mut out = cs[..at].to_vec();
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
+/// 272 tile-parts: `TPsot` and `TNsot` are 8 bits and wrap, so `TNsot` is 16.
+/// `opj_decompress` warns "Non conformant codestream TPsot==TNsot" and returns
+/// 4062 of the 4352 samples wrong. Here strict refuses at the 18th part, the
+/// first past the declared count (16, raised to 17 by the `TPsot == TNsot`
+/// correction). Strict off reads on to the 257th, where `TPsot` wraps to 0, and
+/// refuses there. It does not return OpenJPEG's image.
+#[test]
+fn more_than_255_tile_parts_are_refused_in_both_modes() {
+    let bytes = read("tp_over255.j2k");
+    let oracle = read("tp_over255.opj.raw");
+    let source = read("tp_over255.source.raw");
+    assert_eq!(
+        count_differing(&oracle, &source),
+        4062,
+        "the oracle is wrong"
+    );
+
+    assert!(matches!(decode(&bytes), Err(Error::Codestream(_))));
+    assert!(matches!(
+        decode_with(&bytes, &DecodeOptions::default().with_strict(false)),
+        Err(Error::Codestream(_))
+    ));
+}
+
+/// The first 256 tile-parts and `EOC`, so `TPsot` does not wrap. Strict
+/// refuses at the 18th part, past the declared count. With strict off the
+/// count (17) is advisory: the parts are read, and the mismatch is reported
+/// beside the packets the missing 16 parts leave out.
+#[test]
+fn the_declared_count_is_advisory_with_strict_off() {
+    let prefix = first_tile_parts(&read("tp_over255.j2k"), 256);
+    let image = decode_with(&prefix, &DecodeOptions::default().with_strict(false)).unwrap();
+    assert!(image.report.entries.iter().any(|e| matches!(
+        e,
+        ReportEntry::TilePartCountMismatch {
+            tile: 0,
+            declared: 17,
+            found: 256,
+            ..
+        }
+    )));
+}
+
+/// Where strict refuses on the declared count. Every prefix lacks the packets
+/// of the parts after it, so each is refused as `Codestream`, and the variant
+/// does not say why. The whole file is refused at the 18th part (`TPsot` 17),
+/// the first past the count of 17, so the 18-part prefix gives the same error
+/// as the whole file, and the 17-part prefix, which ends before its packets
+/// are all read, gives another. A check that moved by one part, or one that was
+/// missing, would change which of them match.
+#[test]
+fn strict_refuses_at_the_first_part_past_the_declared_count() {
+    let bytes = read("tp_over255.j2k");
+    let error = |input: &[u8]| format!("{:?}", decode(input).err());
+    let whole = error(&bytes);
+    assert!(whole.starts_with("Some(Codestream("), "{whole}");
+    assert_eq!(error(&first_tile_parts(&bytes, 18)), whole);
+    assert_ne!(error(&first_tile_parts(&bytes, 17)), whole);
+}

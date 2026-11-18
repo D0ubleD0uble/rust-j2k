@@ -58,6 +58,7 @@ refusal under `ColorOutput::Srgb`).
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
 | [Some of the components, under the color transform](#some-of-the-components-under-the-color-transform) | applies the transform; OpenJPEG skips it under `-c` | 1 |
 | [sRGB from sub-sampled sYCC in a window](#srgb-from-sub-sampled-sycc-in-a-window) | refuses; OpenJPEG converts the window on its own | 3 |
+| [Streams `opj_compress` writes that OpenJPEG then decodes wrong](#streams-opj_compress-writes-that-openjpeg-then-decodes-wrong) | refuses `-TP` with mixed sub-sampling and a stream of over 255 tile-parts; OpenJPEG returns a wrong image | 3 |
 
 None of the box entries changes the samples.
 
@@ -1713,3 +1714,87 @@ here neither OpenJPEG's answer nor a conversion keyed on the window gives
 them. Converting with the whole image's chroma phase would; until that is
 built, the decode refuses. sRGB output that does not replicate chroma (RGB,
 gray, sYCC at full resolution, ICC) works with a window.
+
+## Streams `opj_compress` writes that OpenJPEG then decodes wrong
+
+Two `opj_compress` 2.5.0 encodes produce a stream that `opj_decompress` decodes
+with exit 0 to a wrong image, and this decoder refuses. Neither is a decoder
+bug. Both fixtures are in `tests/fixtures/opj_encoder_bugs/`, with the
+commands and the OpenJPEG output ([its README](../tests/fixtures/opj_encoder_bugs/README.md)).
+
+### `-TP` with mixed sub-sampling and explicit precincts
+
+| | |
+| - | - |
+| This decoder | strict refuses as `Codestream`; with `strict` off it returns OpenJPEG's image, and reports `MissingPackets` for the tile |
+| OpenJPEG 2.5.0 | decodes with exit 0 and no warning; a component is a constant plane |
+| Standard | B.9: the tile has a packet for every precinct of every component; B.11 lets whole packets be dropped from the end of a tile |
+| Rule | 3 |
+| Tests and fixtures | `tests/opj_encoder_bugs.rs`; `tests/fixtures/opj_encoder_bugs/tp_mixed_subsampling.*` |
+| Decided | not recorded |
+
+`opj_compress -i tp_mixed_subsampling.source.raw -o tp_mixed_subsampling.j2k
+-F 32,32,2,8,u@1x2:2x1 -n 1 -p CPRL -c [16,16] -TP R` writes four tile-parts.
+The last two hold no packets, and no packet of component 1 is written anywhere.
+`opj_decompress` returns component 1 as the constant 128, and 509 of the 1024
+samples differ from the encoder input (component 0 is exact). This decoder
+refuses the tile: "the data of tile 0 ends before the last packet". With
+`strict` off it decodes the packets that exist, and its samples equal
+OpenJPEG's, all 1024 of them; the report holds one `MissingPackets` entry with
+no complete layer, and `is_complete` is false.
+
+Component 1's missing packets are the last ones of the CPRL tile, so the file
+is not out of the standard in every reading: B.11 lets "any number of whole
+packets (in order)" be dropped from the end of a tile. It is the strict decode
+refusing missing data, as it refuses a tile cut short, and partial decode
+accepts it with the missing packets reported.
+
+The fault is in the encoder's `-TP` split of a position-based order over
+components with mixed sub-sampling and explicit precincts. Wrong samples out of
+1024, measured against the encoder input with the committed source and
+`-F 32,32,2,8,u@1x2:2x1 -n 1 -p <order> -c [16,16]`:
+
+| Order | `-TP R` | `-TP L` | `-TP C` | no `-TP` |
+| ----- | ------- | ------- | ------- | -------- |
+| CPRL | 509 | 509 | 0 | 0 |
+| PCRL | 256 | 256 | 256 | 0 |
+| RPCL | 0 | 256 | 256 | 0 |
+| LRCP | 0 | 0 | 0 | 0 |
+| RLCP | 0 | 0 | 0 | 0 |
+
+A position-based order comes out wrong unless `-TP` splits on the order's
+outermost axis (`-TP C` for CPRL, `-TP R` for RPCL). PCRL starts with the
+position, which `-TP` cannot split on, so it is always wrong. The layer-first
+and resolution-first orders are right. In all 7 wrong cases strict refuses
+(`Codestream`) and strict off returns OpenJPEG's image, with the tile reported
+incomplete; the 8 right cases with `-TP` and the 5 without it decode as
+they should. Without `-c`, and with uniform sub-sampling, the CPRL `-TP R`
+encode decodes to the encoder input.
+
+### More than 255 tile-parts
+
+| | |
+| - | - |
+| This decoder | strict refuses as `Codestream`; with `strict` off it also refuses as `Codestream`, so it never returns OpenJPEG's image |
+| OpenJPEG 2.5.0 | warns "Non conformant codestream TPsot==TNsot" and decodes with exit 0 |
+| Standard | A.4.2: `TPsot` and `TNsot` are one byte each, and a `TNsot` of 0 means the count is not stated |
+| Rule | 3 |
+| Tests and fixtures | `tests/opj_encoder_bugs.rs`; `tests/fixtures/opj_encoder_bugs/tp_over255.*` |
+| Decided | not recorded |
+
+`opj_compress -i tp_over255.source.raw -o tp_over255.j2k -F 68,64,1,8,u@1x1
+-n 1 -p RPCL -c [4,4] -TP C` writes 272 tile-parts for one tile. `TNsot` is
+the count mod 256, so 16, and `TPsot` wraps the same way (the last part has
+`TPsot` 15). `opj_decompress` takes the file for the Photoshop shape
+([`TPsot == TNsot`](#tpsot--tnsot)) and returns an image with 4062 of the 4352
+samples wrong. With 256 tile-parts the same encode decodes to the source:
+`TNsot` is then 0, which says the count is not stated.
+
+This decoder applies the same count correction, so the declared count is 17.
+In strict mode the 18th part (`TPsot` 17) is then past the declared count, and
+the file is refused ("tile 0 tile-part 17 of a declared 17 tile-parts"). With
+`strict` off the count is advisory and the walk reads on, but at the 257th part
+`TPsot` reads 0 where 256 parts were read, which is refused whatever `strict`
+is ("tile 0 tile-part index is 0, but 256 of its tile-parts have been read").
+So the strict-off decode returns no image for this file, where for the
+mixed sub-sampling file it returns OpenJPEG's.
