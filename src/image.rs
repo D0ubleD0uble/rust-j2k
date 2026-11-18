@@ -603,10 +603,7 @@ fn assemble_component(
     }
 
     let shifted: Vec<i32> = match samples {
-        Samples::Reversible(values) => values
-            .into_iter()
-            .map(|v| (v as i64 + shift).clamp(lo, hi) as i32)
-            .collect(),
+        Samples::Reversible(values) => shift_clamp(values, shift, lo, hi),
         // The irreversible path arrives unrounded.
         Samples::Irreversible(values) => round_shift_clamp(values, depth, shift, lo, hi),
     };
@@ -620,6 +617,32 @@ fn assemble_component(
         y_sampling: comp.y_sampling,
         samples: shifted,
     })
+}
+
+/// Level-shift each reversible sample by `shift` and clamp it to
+/// `lo..=hi`, which the caller has checked fit `i32`.
+///
+/// The clamp runs before the shift, to `lo - shift..=hi - shift`, which is the
+/// same for integers and keeps every step in `i32`: the bounds fit (the
+/// shift is 0 for a signed component and `2^(depth - 1)` for an unsigned
+/// one, whose `hi` fits), and the sum is at most `hi`. That lets the
+/// compiler vectorize the loop, which it does not do for the `i64` clamp.
+fn shift_clamp(values: Vec<i32>, shift: i64, lo: i64, hi: i64) -> Vec<i32> {
+    let (Ok(low), Ok(high), Ok(shift)) = (
+        i32::try_from(lo - shift),
+        i32::try_from(hi - shift),
+        i32::try_from(shift),
+    ) else {
+        // Not reached under the caller's check; the general form is exact.
+        return values
+            .into_iter()
+            .map(|v| (i64::from(v) + shift).clamp(lo, hi) as i32)
+            .collect();
+    };
+    values
+        .into_iter()
+        .map(|v| v.clamp(low, high) + shift)
+        .collect()
 }
 
 /// `1.5 * 2^23`. For `-2^22 <= x < 2^22`, `x + ROUND_MAGIC` lies in
@@ -879,6 +902,40 @@ mod tests {
             }
         }
         v
+    }
+
+    /// The reversible level shift and clamp, against the `i64` form, at every
+    /// depth the `i32` container holds, on the values at and around both
+    /// clamp ends, zero and the `i32` extremes.
+    #[test]
+    fn shift_clamp_matches_the_i64_clamp() {
+        let unsigned = (1..=31u8).map(|d| (d, false));
+        let signed = (1..=32u8).map(|d| (d, true));
+        for (depth, signed) in unsigned.chain(signed) {
+            let (shift, lo, hi): (i64, i64, i64) = if signed {
+                (0, -(1i64 << (depth - 1)), (1i64 << (depth - 1)) - 1)
+            } else {
+                (1i64 << (depth - 1), 0, (1i64 << depth) - 1)
+            };
+            let mut values = vec![i32::MIN, i32::MIN + 1, -1, 0, 1, i32::MAX - 1, i32::MAX];
+            for end in [lo - shift, hi - shift, lo, hi, -shift] {
+                for d in -2..=2 {
+                    let v = end + d;
+                    if let Ok(v) = i32::try_from(v) {
+                        values.push(v);
+                    }
+                }
+            }
+            let want: Vec<i32> = values
+                .iter()
+                .map(|&v| (i64::from(v) + shift).clamp(lo, hi) as i32)
+                .collect();
+            assert_eq!(
+                shift_clamp(values, shift, lo, hi),
+                want,
+                "depth {depth}, signed {signed}"
+            );
+        }
     }
 
     /// Ties to even, the level shift and the clamp, bit for bit against

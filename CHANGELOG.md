@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- HTJ2K decoding is about 1.5x to 2x faster on large files on one thread.
+  The output is unchanged.
+
 ## [0.5.0] - 2026-11-17
 
 ### Migrating from 0.4
