@@ -20,7 +20,8 @@ publishes free.
 The input is integer samples, one grid per component, as `decode` returns
 them. The output is a Part 1 codestream, raw or in a JP2 file, that both
 OpenJPEG 2.5.0 and this crate's decoder read. The scope is all of Part 1
-that the decoder reads (decision 4).
+that the decoder reads (decision 4), and every profile Part 1 defines
+(decision 9).
 
 ### Transform and coding
 
@@ -50,7 +51,22 @@ that the decoder reads (decision 4).
 | SOP, EPH, PLT, TLM, COM, CRG | each one an option |
 | Tile-parts split by resolution, layer or component | as `opj_compress -TP` does |
 | PPM or PPT packed packet headers | one or the other, never both, as the decoder requires |
-| `Rsiz` 0, or a claim of Profile 0 or Profile 1, checked against its restrictions | |
+
+### Profiles
+
+Each profile is a preset: it fills in the options the caller left unset and
+refuses the ones that break it (decision 9). Clauses are from T.800
+(06/2019), A.10.
+
+| Profile | `Rsiz` | Restrictions |
+| ------- | ------ | ------------ |
+| None (Part 1 with no restriction) | 0 | the default |
+| Profile 0 and Profile 1 | 1, 2 | Table A.45 |
+| 2K and 4K digital cinema | 3, 4 | Table A.46 |
+| Scalable 2K and 4K digital cinema | 5, 6 | Table A.46 |
+| Long-term storage | 7 | Table A.46 |
+| Broadcast contribution: single tile, multi-tile, multi-tile reversible, each with a main level | `0x010w`, `0x020w`, `0x0306`, `0x0307` | Tables A.48 to A.50 |
+| IMF 2K, 4K and 8K: single-tile lossy, and single- or multi-tile reversible, each with a main level and a sublevel | `0x04yw` to `0x09yw` | Tables A.51 to A.54 |
 
 ### JP2 file format
 
@@ -71,7 +87,9 @@ Each is refused with `Error::Unsupported` if asked for, never ignored.
 | ------- | --------- |
 | A PSNR target per layer (`opj_compress -q`) | decision 2 |
 | Writing to `io::Write`, caller-provided buffers | decision 1 |
-| Digital cinema, IMF and broadcast profiles (`Rsiz` 3 and up) | profile rules from the Part 1 amendments; no user has asked |
+| The `PRF` marker | Table A.55 defines no profile number for it to carry |
+| Packaging outside the codestream: DCP and IMF wrapping (MXF), the XYZ color rules of digital cinema | not part of T.800 |
+| The HTJ2K IMF and broadcast profiles | Part 15; with HTJ2K encode in Phase 6 |
 | Threads and SIMD | #301, #302 |
 | Narrower input sample types | with #303 |
 | HTJ2K (FBCOT) encode, and Part 2 (arbitrary MCT, TCQ, custom kernels) | Phase 6 |
@@ -179,6 +197,45 @@ adds to the overlap fault in
 Its `-ROI` shifts a whole component up and does nothing else: every
 coefficient is then in the region, so it tests the `RGN` marker and the shift
 alone, not a region shape or a background.
+
+### Profiles in `opj_compress` and `grk_compress`
+
+`opj_compress` 2.5.0 has `-cinema2K <24|48>`, `-cinema4K` and
+`-IMF <2K|4K|8K|2K_R|4K_R|8K_R>[,mainlevel=X][,sublevel=Y][,framerate=FPS]`.
+It has no option for Profile 0 or 1, the scalable cinema profiles,
+long-term storage or broadcast. Grok 20.4.25's `grk_compress` adds
+`-U <SINGLE|MULTI|MULTI_R>` for broadcast. Measured on seeded synthetic
+12-bit RGB frames of 2048×1080 and 4096×2160, with the headers read by a
+short marker walker:
+
+| Command | `Rsiz` | Bytes | What it wrote |
+| ------- | ------ | ----- | ------------- |
+| `opj_compress -cinema2K 24` | 3 | 1302055 (limit 1302083) | 9/7, 5 levels, 32×32, precincts 128 then 256, CPRL, 1 layer, TLM, 3 tile-parts |
+| `opj_compress -cinema2K 48` | 3 | 651011 (limit 651041) | the same |
+| `opj_compress -cinema2K 24 -n 7 -b 64,64 -p LRCP` | 3 | 1302055 | the same as without the options: levels, block size and order replaced |
+| `opj_compress -cinema4K` | 4 | 1302074 | 5 levels, the two-progression POC of Table A.46, 6 tile-parts |
+| `opj_compress -IMF 2K` | `0x0400` | 5178616 | 9/7, 5 levels, 32×32, CPRL, TLM, 3 tile-parts |
+| `opj_compress -IMF 2K_R` | `0x0700` | 5834503 | the same with 5/3 |
+| `opj_compress -IMF 2K,mainlevel=4,sublevel=2,framerate=24` | `0x0424` | 5179129 | prints "Setting max codestream size to 2083333 bytes" and writes 2.5 times that |
+| `opj_compress -IMF 2K -n 7` | 0 | 5177759 | warns "Non-IMF codestream will be generated" and exits 0 |
+| `opj_compress -IMF 2K -ROI c=0,U=3` | 0 | 5178623 | the same, with `RGN` |
+| `grk_compress -U SINGLE` | `0x0100` | 5130262 | 9/7, 4 levels, 64×64, CPRL, 3 tile-parts, no TLM |
+| `grk_compress -U MULTI_R` | `0x0300` | 5784650 | the same with 5/3 |
+
+`opj_decompress` decodes every one of them. What this shows:
+
+- OpenJPEG writes the cinema and IMF parameters Table A.46 and A.51 ask for,
+  so its headers are a field-level oracle for those presets.
+- It replaces conflicting options with a warning (cinema), or drops the
+  profile and writes `Rsiz` 0 with exit status 0 (IMF). Neither suits a
+  library, which has no warning channel (decision 9).
+- Its IMF sublevel is not held: the byte limit is printed and then not
+  applied. A sublevel of 1 at 24 fps printed 1041666 bytes and wrote
+  3068017.
+- Grok's broadcast streams leave out TLM, which Table A.48 requires, and its
+  multi-tile reversible `Rsiz` of `0x0300` is not a Table A.10 value (only
+  `0x0306` and `0x0307` are). Grok is a field-level oracle for the choices
+  Table A.48 leaves open, not a conformance oracle.
 
 ### Speed and memory
 
@@ -292,6 +349,22 @@ references "are acceptable". The plan applies Annex D this way:
 - `docs/encoder-ics.md` fills in Annex F: Table F.1 with this encoder's
   marker usage, and the options it supports.
 
+### 5. Profile conformance
+
+Every encode with a profile passes the rule checker (P5.20): each
+restriction of T.800 A.10 for that profile, evaluated on the codestream as
+this crate's parser reads it, with the clause it comes from. It also decodes
+in both decoders and meets parts 1 to 3. Where `opj_compress` or
+`grk_compress` writes the same profile, the header fields match theirs,
+except where they are measured to break the profile (above).
+
+The checker proves the output meets the rules as they were transcribed. It
+cannot catch a rule transcribed wrongly, since the encoder would follow the
+same reading; the field comparisons with two other encoders, and a clause
+cited beside every rule for review, are the guard against that. Neither
+proves anything outside T.800, such as the DCI or SMPTE rules a cinema
+package must also meet.
+
 ## Decisions
 
 Settled on 2026-11-17.
@@ -342,7 +415,9 @@ Settled on 2026-11-17.
    the decoder's modules. The `Cargo.toml` and CI edits are the maintainer's.
 6. **The reference tools are OpenJPEG, Grok and jpylyzer.** OpenJPEG 2.5.0 is
    the gate. Grok (20.4.25, built for performance.md) is a second decoder in a
-   release round. jpylyzer checks JP2 validity when snapshots are
+   release round, and `grk_compress -U` is the field-level oracle for the
+   broadcast presets, which OpenJPEG cannot write. jpylyzer checks JP2
+   validity when snapshots are
    regenerated. Kakadu may be run by hand as an extra check; its results are
    never committed as oracles and never feed CI. None of the tools is a build
    or test dependency.
@@ -358,6 +433,29 @@ Settled on 2026-11-17.
    0.5.1 patches. With 0.6.0, `Cargo.toml`'s `description` and keywords
    change, and CONTRIBUTING's "The crate only decodes" goes; both are the
    maintainer's edits.
+9. **Every Part 1 profile is in 0.6.0, as a preset.** Settled later the same
+   day. Profile 0 and 1, the five cinema profiles, the three broadcast
+   profiles and the six IMF profiles, with their levels, are selected with
+   `EncodeOptions::with_profile(Profile::…)`, for example
+   `Profile::Cinema2k { fps: 24 }` or
+   `Profile::Imf { size: ImfSize::K4, reversible: false, main_level: 6, sub_level: 3, fps: Some(24) }`.
+   `Profile` is `#[non_exhaustive]`. A preset fills in every option the
+   caller did not set, from the profile's table. An option the caller did
+   set that breaks the profile, or an image the profile cannot hold (its
+   size, depth, component count or sampling), is `Error::InvalidOptions`,
+   naming the option, the rule and its table. The preset never replaces a
+   value the caller set. A library has no warning channel, so a silent
+   override hands back a file that is not what was asked for, and OpenJPEG
+   shows both ways it goes wrong (measured above): it replaces options under
+   `-cinema2K`, and under `-IMF` it drops the profile and writes `Rsiz` 0.
+   An override would also make the result depend on the order of the
+   `with_*` calls. A caller who wants the preset's value leaves the option
+   unset. The frame rate is required for cinema, and for broadcast and IMF
+   whenever a level above 0 sets a limit, since the byte limit per frame is
+   the bit rate over the frame rate (Equation A-8). A rate above that limit
+   is refused up front; a lossless encode that comes out over it is refused
+   after coding, with its size. The `PRF` marker is not written, since no
+   profile number is defined for it.
 
 Two smaller choices follow from the defaults: the levels clamp on small
 images, and no COM marker by default (see [Which defaults to
@@ -370,6 +468,8 @@ mirror](#which-defaults-to-mirror)).
 | Decoded fixtures | every lossless fixture in `tests/fixtures/`, decoded by this decoder (already graded against OpenJPEG) | no new bytes | already |
 | Part 4 references | `tests/fixtures/conformance/references/*.pgx`, 78 files: the D.4 a) inputs | no new bytes | already; excluded from the crate |
 | Synthetic | a seeded generator in `tests/support/synth_image.rs`: noise, ramps, checkerboards, edges, flat fields; sizes from 1×1 to 1024×1024, including odd and prime sizes; 1 to 4 components; depths 1, 8, 12, 16 and 31 unsigned, 32 signed; sampling 1×1, 2×1 and 2×2 | none (generated) | the generator only |
+| Profile frames | the same generator at the profiles' sizes: 2048×1080, 4096×2160, 1920×1080 and 8192×4320, 8 to 16 bits, 3 or 4 components, 4:4:4 and 4:2:2 | none (generated) | the generator only |
+| Profile snapshots | `tests/fixtures/encode/profiles.json`: per case, the header fields `opj_compress` or `grk_compress` wrote, and the digest of this encoder's output | about 20 KB, estimated | yes |
 | GRIB2 fields | the committed `jpeg2000_regular_latlon`, `eta_lambert_*` and GRIB2-shaped bench codestreams, decoded | no new bytes | already |
 | Parity snapshots | `tests/fixtures/encode/parity.json` | about 50 KB, estimated | yes |
 | Cross-decode digests | `tests/fixtures/encode/crossdecode.json` | about 100 KB, estimated | yes |
@@ -386,11 +486,16 @@ P5.0 harness ─┬─ P5.1 forward DWT ──┐
               ├─ P5.3 quantization ─┼─ P5.7 lossless file ─┬─ P5.8 9/7 fixed quant ─ P5.9 rate control ──────────────────┐
               ├─ P5.4 MQ ─ P5.5 EBCOT passes ─┤            ├─ P5.10 tiles, sampling ─ P5.11 precincts + orders ─ P5.16 POC ┤
               └─ P5.6 tag trees + packets ────┘            ├─ P5.12 code-block styles ─ P5.17 ROI ─────────────────────┤
-                                                           ├─ P5.13 markers + tile-parts ─ P5.15 COC/QCC ─ P5.18 PPM/PPT ┼─ P5.21 gate
+                                                           ├─ P5.13 markers + tile-parts ─ P5.15 COC/QCC ─ P5.18 PPM/PPT ┼─ P5.26 gate
                                                            └─ P5.14 JP2 writer ─ P5.19 palette ─────────────────────────┤
-P5.20 fuzz targets + reject matrix (from P5.4, then throughout) ─────────────────────────────────────────────────────────┘
-Before P5.1: #142 (one coefficient type) and #254 (the origin on Image). #414 (the pipeline module) is in review as #447.
+P5.13 + P5.15 ─ P5.20 profile presets + rule checker ─┬─ P5.21 cinema 2K/4K ─ P5.22 scalable cinema + storage ─────────┤
+   (P5.21, P5.22 also need P5.9, P5.11, P5.16;         ├─ P5.23 broadcast ─────────────────────────────────────────────┤
+    P5.23, P5.24 also need P5.9, P5.10, P5.11)         └─ P5.24 IMF ───────────────────────────────────────────────────┤
+P5.25 fuzz targets + reject matrix (from P5.4, then throughout) ─────────────────────────────────────────────────────────┘
+Before P5.1: #142 (one coefficient type) and #254 (the origin on Image). #414 (the pipeline module) has landed (#447).
 ```
+
+That is 27 steps, P5.0 to P5.26.
 
 The stage pieces land first, each against its decoder inverse and an
 external oracle, before anything is wired together, as Phase 2 built the
@@ -400,7 +505,7 @@ later steps add options instead of reshaping it. Rate control (P5.9) follows
 a fixed-quantization 9/7 encode (P5.8), so that a rate bug cannot hide behind
 a transform bug.
 
-After P5.7 the work splits into five lanes that can run side by side:
+After P5.7 the work splits into six lanes that can run side by side:
 
 - **Rate:** P5.8, then P5.9.
 - **Tier-2 and geometry:** P5.10, P5.11, then P5.16 (POC needs the five orders
@@ -411,6 +516,13 @@ After P5.7 the work splits into five lanes that can run side by side:
   too), then P5.18 (packed headers move what P5.11's packets write, so P5.11
   too).
 - **File format:** P5.14, then P5.19.
+- **Profiles:** P5.20 once the headers lane has P5.13 and P5.15 (the
+  profiles constrain TLM, PLT, tile-parts and where COD to QCC sit). Then
+  P5.21, P5.23 and P5.24 side by side, each in its own file, once the
+  features they preset exist: rate control for the byte limits, precincts,
+  tiles, and POC for 4K. P5.22 follows P5.21, whose file it extends. A
+  preset only chooses values for options that already work, so this lane
+  adds no coding path of its own.
 
 ### Files and collisions
 
@@ -440,10 +552,16 @@ that adds a marker appends its function to `markers.rs` and one call to
 | P5.17 | `src/encode/roi.rs`, `passes.rs`, `markers.rs` | `src/tier1/ebcot/passes.rs`: `undo_maxshift`, read only |
 | P5.18 | `src/encode/packed.rs`, `codestream.rs` | none |
 | P5.19 | `src/encode/jp2.rs`, `options.rs` | `src/jp2/palette.rs`: the public `Palette` type, read only |
-| P5.20 | `fuzz/`, `src/encode/tests.rs` | `src/fuzz.rs` |
+| P5.20 | `src/encode/profile/mod.rs`, `profile/rules.rs`, `profile/check.rs`, `options.rs` | `src/codestream/mod.rs`: keep `Rsiz` and each tile-part's marker list in the parsed header, `pub(crate)` |
+| P5.21 | `src/encode/profile/cinema.rs` | none |
+| P5.22 | `src/encode/profile/cinema.rs` | none |
+| P5.23 | `src/encode/profile/broadcast.rs` | none |
+| P5.24 | `src/encode/profile/imf.rs` | none |
+| P5.25 | `fuzz/`, `src/encode/tests.rs` | `src/fuzz.rs` |
 
 The collisions left are within lanes, which run in order (P5.10 and P5.15 on
-`tile.rs`; P5.12 and P5.17 on `passes.rs`; P5.14 and P5.19 on `jp2.rs`), and
+`tile.rs`; P5.12 and P5.17 on `passes.rs`; P5.14 and P5.19 on `jp2.rs`;
+P5.21 and P5.22 on `cinema.rs`), and
 `options.rs`, which every step may grow by one field: each option lands in
 its own commit to keep the merge mechanical. P5.9 lands its interface (a
 `CodedTile` of per-block pass lists in `src/encode/mod.rs`) before the
@@ -559,7 +677,9 @@ OpenJPEG's defaults: one tile, LRCP, one layer, all passes.
 
 **Work:** SIZ, COD, QCD, SOT, SOD and EOC in `markers.rs`; `EncodeOptions`
 with levels, block size, transform and MCT; validation of input and options
-(`InvalidImage`, `InvalidOptions`); the levels clamp; the `encode` feature;
+(`InvalidImage`, `InvalidOptions`); the levels clamp; the `encode` feature.
+`EncodeOptions` records, for every option, whether the caller set it, so
+that a profile preset (decision 9) can fill in only the unset ones;
 `benches/encode.rs` and an `encode` mode in `tools/perf/run.py`.
 
 **Oracle:** the source image (lossless); `opj_decompress`; a byte comparison
@@ -625,12 +745,10 @@ decoders.
 
 ### P5.13 — Markers and tile-parts (`src/encode/markers.rs`, `codestream.rs`)
 
-**Goal:** SOP, EPH, PLT, TLM, COM, CRG, tile-parts split by R, L or C, and a
-claim of Profile 0 or 1.
+**Goal:** SOP, EPH, PLT, TLM, COM, CRG, and tile-parts split by R, L or C.
 
-**Work:** each marker as an option. A Profile 0 or 1 claim is checked
-against Part 1's profile restrictions, and options that break them are
-`InvalidOptions`. The tile-part split avoids the two OpenJPEG writing faults
+**Work:** each marker as an option. The tile-part split avoids the two
+OpenJPEG writing faults
 recorded in #443.
 
 **Oracle:** `opj_dump` marker lists; our decoder's PLT and TLM readers;
@@ -772,7 +890,177 @@ back; jpylyzer validates the boxes.
 **Gate:** palettes of 8-bit, 12-bit, signed and mixed columns, and with
 `cdef`, round-trip through both decoders.
 
-### P5.20 — Fuzz targets and the encoder reject matrix (`fuzz/`)
+### P5.20 — Profile presets, Profile 0 and 1, and the rule checker (`src/encode/profile/`)
+
+**Goal:** `with_profile` and the preset mechanism of decision 9, the `Rsiz`
+value with its level bits, the two general profiles, and a checker that
+every later profile step is graded by.
+
+**Work:**
+- `Profile`, `with_profile`, and the resolution of each option: unset takes
+  the preset's value, set is checked against the profile's rules.
+- Presets for Profile 0 and 1 (Table A.45).
+- `profile/rules.rs`: every restriction of Tables A.45, A.46 and A.48 to
+  A.54 as one row of data (the profile, the field, the limit, the table and
+  row). Transcribed from the spec text alone, before any cinema, broadcast or
+  IMF preset exists.
+- `profile/check.rs`, compiled only for tests: evaluates those rows on a
+  codestream as this crate's parser reads it. That covers `Rsiz`; image and
+  tile sizes and origins; component count, depth and sampling; COD, COC, QCD
+  and QCC and where they sit; levels, block size and style, transform and
+  precincts; layers and order; POC contents; RGN, PPM, PPT, TLM, PLT, SOP
+  and EPH; the tile-part count and what each holds; and the byte totals per
+  frame, per component and per layer against Equation A-8.
+- The presets in later steps read the same rows, so a preset and the checker
+  cannot drift apart. The checker uses only the rows and the parsed stream,
+  never preset code.
+
+**Oracle:** the checker is itself tested two ways. Each row gets a passing
+stream and a hand-edited one that breaks only that row, which the checker
+must reject. The checker must also accept the `opj_compress` and
+`grk_compress` streams measured above, except on the rows they were
+measured to break, and must flag exactly those rows. For Profile 0 and 1,
+no other encoder writes them (`opj_compress` has no option for them), so
+the oracle is the checker, both decoders and the source round trip.
+
+What it proves: that our output meets every rule as transcribed, and that
+the checker tells a passing stream from a failing one on every rule. What it
+cannot prove: that a rule was transcribed right. Each row cites its table and
+row so review can check it, and P5.21, P5.23 and P5.24 compare fields with
+encoders that read the same tables themselves.
+
+**Gate:** every row has its passing and failing test; the Profile 0 and 1
+sweep passes the checker and both decoders; each conflict between a set
+option and the profile has a reject-matrix row.
+
+### P5.21 — 2K and 4K digital cinema (`src/encode/profile/cinema.rs`)
+
+**Goal:** `Profile::Cinema2k { fps }` and `Profile::Cinema4k { fps }`, `Rsiz`
+3 and 4 (Table A.46).
+
+**Work:** the presets: one tile at the origin, 3 components of 12 bits, 9/7
+(5/3 allowed), 5 levels at most (2K) or 1 to 6 (4K), 32×32 blocks with style
+0, precincts of 128 at the lowest resolution and 256 above, CPRL, one layer,
+TLM, COD to QCC in the main header only. 2K writes 3 tile-parts, one per
+component. 4K writes 6, with the two-progression POC of Table A.46. The byte
+limits per frame and per component come from Equation A-8 at the given
+frame rate, at most 60 (2K) or 30 (4K).
+
+**Oracle:**
+- Fields: on the same synthetic frames, the main header (SIZ, COD, QCD, POC,
+  TLM layout) equals what `opj_compress -cinema2K 24`, `-cinema2K 48` and
+  `-cinema4K` write, field for field, apart from COM. So do the tile-part
+  count and the order of components in them. The coded bytes are not
+  compared, since the two rate allocators truncate differently (decision 3).
+- The rule checker, including the per-frame and per-component byte limits.
+- Both decoders, and gate parts 1 and 3 at the profile's rate.
+
+What it proves: we choose the same parameters as an independent encoder,
+the output meets the rules as transcribed, and it decodes. What it cannot
+prove: the DCI and SMPTE rules for a cinema package beyond T.800, such as
+XYZ color and MXF wrapping, which are out of scope.
+
+**Gate:** 2K at 24 and 48 fps and 4K at 24 fps, at full size and smaller,
+match OpenJPEG's fields, pass the checker, decode in both decoders, and stay
+within the byte limits. Each conflicting option (for example
+`-cinema2K 24 -n 7 -b 64,64 -p LRCP`, which OpenJPEG rewrites) is refused.
+
+### P5.22 — Scalable cinema and long-term storage (`src/encode/profile/cinema.rs`)
+
+**Goal:** `Rsiz` 5, 6 and 7 (Table A.46).
+
+**Work:**
+- Scalable 2K and 4K: two layers; the two- or four-progression POC; 6 or 12
+  tile-parts in the order of Figures A.25 to A.29; PLT in every tile-part; no
+  SOP or EPH; 9/7 only. Layer 0 must also meet the 2K or 4K cinema byte
+  limits.
+- Long-term storage: up to 16384×8640 and 8 components, one tile or tiles of
+  at least 1024×512, at most 5 layers, SOP and EPH on every packet, PLT, 5/3
+  or 9/7, and one tile-part per component.
+
+**Oracle:** neither OpenJPEG nor Grok writes these profiles, so there is no
+field comparison. The oracle is:
+- the rule checker;
+- both decoders, and the source round trip for 5/3 storage encodes;
+- a structural check of the purpose Table A.46 states, that a distribution
+  stream "can be obtained by simply stripping some tile-parts". Removing the
+  layer-2 tile-parts of a scalable stream, and fixing TLM and `Rsiz` to 3 or
+  4, gives a stream that passes the checker as 2K or 4K cinema and decodes in
+  both decoders.
+
+What it proves: the rules as transcribed hold, and the layered structure
+does what the profile is for. What it cannot prove: that our reading of
+the layer-0 byte limit and the figures' tile-part order matches what another
+implementation reads, since none exists to compare with.
+
+**Gate:** each of the three profiles, at full and smaller sizes, passes the
+checker and both decoders, and every scalable stream passes the stripping
+check.
+
+### P5.23 — Broadcast contribution (`src/encode/profile/broadcast.rs`)
+
+**Goal:** the single-tile, multi-tile and multi-tile reversible profiles with
+their main levels (Tables A.48 to A.50).
+
+**Work:** the presets: 1 tile, or 1 or 4 tiles of the same size; up to 4
+components of 8 to 12 bits, 4:4:4 or 4:2:2; 1 to 5 levels; one layer; blocks
+of 32 to 128 wide and 32 or 64 high, the same in every component; style 0;
+precincts of 128 then 256; CPRL with no POC; one tile-part per tile-component;
+TLM. 9/7 for single and multi-tile, 5/3 for reversible. The main level limits
+the sample rate (components × pixels × lines × frame rate) and the bit rate,
+so a level above 0 needs the frame rate. A main level outside the table
+(reversible allows only 6 and 7) is refused.
+
+**Oracle:**
+- Fields: `grk_compress -U SINGLE`, `-U MULTI` and `-U MULTI_R` on the same
+  frames, for the choices Table A.48 leaves open (levels, block size). They
+  are compared and any difference is explained. Grok is not a conformance
+  oracle: its streams lack the TLM Table A.48 requires, and it writes
+  `Rsiz` `0x0300`, which Table A.10 does not list (measured above).
+- The rule checker; both decoders; the source round trip for the reversible
+  profile.
+
+What it proves: the rules as transcribed hold, and the open choices agree
+with, or knowingly differ from, one other encoder. What it cannot prove:
+that the level arithmetic matches the reading of any other implementation
+that holds it, since Grok was not measured enforcing it.
+
+**Gate:** each profile at levels 0, 1 and the top of its table passes the
+checker and both decoders; a frame rate that breaks the level, and each
+conflicting option, are refused.
+
+### P5.24 — IMF (`src/encode/profile/imf.rs`)
+
+**Goal:** the six IMF profiles with main level and sublevel (Tables A.51 to
+A.54).
+
+**Work:** the presets: up to 2048×1556, 4096×3112 or 8192×6224; up to 3
+components of 8 to 16 bits, 4:4:4 or 4:2:2; 32×32 blocks with style 0;
+precincts of 128 then 256; CPRL with no POC; one layer; one tile-part per
+tile-component; TLM. The lossy profiles use one tile and 9/7, with 1 to 5, 6
+or 7 levels. The reversible profiles use 5/3, with one tile or tiles of 1024,
+2048 or 4096, and the level limit set by the tile width. A sublevel larger
+than its main level allows (Table A.53) is refused. The sublevel's bit rate
+over the frame rate is a byte limit the output holds.
+
+**Oracle:**
+- Fields: `opj_compress -IMF 2K|4K|8K|2K_R|4K_R|8K_R`, with and without
+  `mainlevel`, `sublevel` and `framerate`, on the same frames: the main
+  header and the tile-part layout, field for field apart from COM.
+- The rule checker. This alone grades the sublevel byte limit, which
+  OpenJPEG 2.5.0 prints but does not hold (measured above).
+- Both decoders; the source round trip for the reversible profiles.
+
+What it proves: as for P5.21, and that the byte limit holds where OpenJPEG
+does not hold it. What it cannot prove: the IMF application rules of SMPTE
+ST 2067 beyond T.800.
+
+**Gate:** each profile at full and smaller sizes, single- and multi-tile
+where allowed, matches OpenJPEG's fields, passes the checker, decodes in both
+decoders, and stays within the sublevel's limit. Each conflicting option
+(OpenJPEG falls back to `Rsiz` 0 for `-n 7` and for `-ROI`) is refused.
+
+### P5.25 — Fuzz targets and the encoder reject matrix (`fuzz/`)
 
 **Work:** `mq_encode` (from P5.4); `encode_roundtrip`: arbitrary small images
 (at most 64×64, 1 to 4 components, any depth, sign and sampling) with
@@ -783,17 +1071,19 @@ reject matrix in `src/encode/tests.rs` pins each refused option and input.
 
 **Gate:** a session of 60 s per target finds nothing.
 
-### P5.21 — Integration and the phase gate
+### P5.26 — Integration and the phase gate
 
 **Work:** the scope.md encoding rows; roadmap.md; an encoder section in
 correctness.md; openjpeg-departures.md (the levels clamp, no COM, the ratio,
-the spare ROI plane, the POC sequences refused, and any difference found);
+the spare ROI plane, the POC sequences refused, profile conflicts refused
+where OpenJPEG overrides or drops the profile, the IMF byte limit held, and
+any difference found);
 `docs/encoder-ics.md` (Annex F); an encoder table in performance.md;
 resource-bounds.md (the encoder's allocations are bounded by the input,
 which the caller already holds); README, `lib.rs` docs and CHANGELOG; the
 RELEASING.md pre-release review.
 
-**Gate (the Phase 5 exit):** all four gate parts pass over the full sweep;
+**Gate (the Phase 5 exit):** all five gate parts pass over the full sweep;
 every earlier fixture is unchanged; fuzzing is clean; the quality gates are
 green with and without the `encode` feature.
 
@@ -818,8 +1108,9 @@ green with and without the `encode` feature.
 - **Mutation checks.** `cargo mutants --in-diff` on each step's PR over
   `src/encode/`, and over the whole phase before the tag. Survivors are most
   likely in rate control (slope comparisons, hull pruning), termination, the
-  ROI shift and the POC volume checks; the parity, byte and prefix checks
-  are the tests meant to catch them, so a survivor there is a gap.
+  ROI shift, the POC volume checks and the profile limits (a `<` for a
+  `<=`); the parity, byte, prefix and checker tests are meant to catch them,
+  so a survivor there is a gap.
 - **New rounds for `docs/release-validation.md`:**
   - *Encoder cross-decode sweep:* the full sweep through `opj_decompress` and
     Grok, bit for bit on 5/3 and within the gap on 9/7, leaving out the
@@ -829,6 +1120,8 @@ green with and without the `encode` feature.
     committed figures;
   - *Encoder fuzz replay through OpenJPEG* (above);
   - *JP2 validity:* jpylyzer over every JP2 output;
+  - *Profile fields:* rerun `opj_compress` and `grk_compress` with each
+    profile option and compare with the committed `profiles.json`;
   - *Kakadu, by hand and optional:* `kdu_expand` over the sweep. Its results
     go in the round's notes and nowhere else;
   - *Downstream consumer:* a GRIB2 template 5.40 message carrying our
@@ -837,17 +1130,18 @@ green with and without the `encode` feature.
 
 ## Out of scope for Phase 5
 
-Refused with `Error::Unsupported`, never attempted: PSNR targets; the
-digital cinema, IMF and broadcast profiles; `io::Write` output; threads and
-SIMD (#301, #302); narrower input types (#303); HTJ2K encode and Part 2
-(Phase 6). Visual weighting (CSF), or any quality model other than MSE, is
+Refused with `Error::Unsupported`, never attempted: PSNR targets; `io::Write`
+output; the `PRF` marker; threads and SIMD (#301, #302); narrower input
+types (#303); HTJ2K encode, its Part 15 profiles, and Part 2 (Phase 6).
+Cinema and IMF packaging (MXF, DCI color rules) is outside the codestream
+and outside the crate. Visual weighting (CSF), or any quality model other than MSE, is
 not planned. Image file readers (PNM, TIFF, PNG) stay outside the crate: the
 input is samples.
 
 ## Prerequisites and open questions
 
-- **#414** (decode orchestration out of `lib.rs` into the pipeline module) is
-  in review as #447, so the encoder's orchestration does not grow `lib.rs`.
+- **#414** (decode orchestration out of `lib.rs` into the pipeline module)
+  landed as #447, so the encoder's orchestration does not grow `lib.rs`.
 - **#142** (one coefficient type for both wavelets) comes first, since the
   forward path is the fourth copy that issue waits for.
 - **#254** (the image origin on `Image` and `Header`) comes first, so an
@@ -858,9 +1152,21 @@ input is samples.
 - **The cost of the spare ROI plane** (P5.17) is unmeasured. If it is large,
   the alternative is the H.1 minimum with ROI cases graded by this decoder
   alone, which would need its own decision.
-- **The profile claims** (P5.13) take Profile 0 and 1 from the Part 1 text;
-  the cinema, IMF and broadcast profiles stay out. That reading of "all of
-  Part 1" may want confirming.
+- **Which edition the profile rules come from.** The rows are transcribed
+  from T.800 (06/2019), which the ITU publishes free. The current edition is
+  T.800 (07/2024), which was not free to download when this plan was written.
+  P5.20 checks the 2024 tables for changes before transcribing, or records
+  that it could not.
+- **The rule checker reads this crate's parser.** A parser bug that hides a
+  field from the checker would hide it from the encoder's tests too. The
+  field comparisons in P5.21, P5.23 and P5.24 cover the fields OpenJPEG and
+  Grok write; for P5.22 and Profile 0 and 1, an independent script reading
+  the headers, like the box walker of P5.14, may be worth adding. Decide in
+  P5.20.
+- **The per-component and layer-0 byte limits** of the cinema profiles are
+  read as Table A.47 lays them out. Whether `opj_compress` holds the
+  per-component limit was not measured (its measured tile-parts were all
+  under it).
 - **A CI job with OpenJPEG installed**, to run the cross-decode live instead
   of from digests, would be a CI edit for the maintainer. The plan does not
   need it.
@@ -868,7 +1174,9 @@ input is samples.
 ## Sources
 
 - ITU-T T.800 | ISO/IEC 15444-1: Annexes A to D, F and H, and the informative
-  Annex J on rate control.
+  Annex J on rate control. The profile rules are from T.800 (06/2019), free
+  at `https://www.itu.int/rec/T-REC-T.800-201906-S`: Table A.10, A.5.3 (PRF),
+  and A.10 (Tables A.45 to A.55, Equation A-8).
 - ITU-T T.803 (02/2024) | ISO/IEC 15444-4:2024, free PDF at
   `https://www.itu.int/rec/T-REC-T.803-202402-I`: 6.3, 6.6, Annex D (D.1 to
   D.4, Figure D.1) and Annex F (Table F.1).
@@ -878,7 +1186,10 @@ input is samples.
   5260, the rate-of-1 rule at 8070, the `opj_j2k_write_*` marker writers),
   `dwt.c` (`opj_dwt_calc_explicit_stepsizes` at 1966,
   `opj_dwt_encode_stepsize` at 1092), `t1.c` (`opj_t1_encode_cblk`),
-  `jp2.c`; and `opj_compress -h`.
+  `jp2.c`; `opj_j2k_set_cinema_parameters`, `opj_j2k_is_cinema_compliant`,
+  `opj_j2k_set_imf_parameters` and `opj_j2k_is_imf_compliant` in `j2k.c`;
+  and `opj_compress -h`.
+- Grok 20.4.25 `grk_compress -h` and its broadcast messages.
 - Grok's `grk_compress` manual page, the `-A` rate-control algorithms:
   `https://manpages.debian.org/testing/grokj2k-tools/grk_compress.1.en.html`.
 - D. Taubman, "High performance scalable image compression with EBCOT",
