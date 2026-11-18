@@ -41,7 +41,9 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// in tile 0, which only the decode's tile geometry finds. The
 /// `poc_coverage/*_missing` files, `poc_precedence/poc_tile_leaves_out_packets`
 /// and `layers/pterm_poc_gap` carry POC volumes that leave out packets of the tile, which only the
-/// decode's packet walk checks. `partial/overlap.j2k` and `partial/tp_r.j2k`
+/// decode's packet walk checks. `opj_encoder_bugs/tp_mixed_subsampling.j2k` has no packet of one component, which only the
+/// decode's packet walk finds, and `opj_encoder_bugs/tp_over255.j2k` has 272 tile-parts, which only the
+/// decode counts. `partial/overlap.j2k` and `partial/tp_r.j2k`
 /// leave bytes after the last packet of a tile, which only the decode reads.
 /// The `packed_overrun/` files listed hold a packed packet header that runs
 /// past its bytes, which only the decode reads.
@@ -52,6 +54,14 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 const TILE_FAULTS: &[(&str, &str)] = &[
     ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
     ("layers/pterm_poc_gap.j2k", "POC leaves out packets"),
+    (
+        "opj_encoder_bugs/tp_mixed_subsampling.j2k",
+        "packets missing from the tile-parts",
+    ),
+    (
+        "opj_encoder_bugs/tp_over255.j2k",
+        "a tile-part count past 255, which wraps",
+    ),
     (
         "packed_overrun/ppm_short.j2k",
         "a PPM packet header runs short",
