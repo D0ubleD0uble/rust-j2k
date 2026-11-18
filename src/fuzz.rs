@@ -256,12 +256,37 @@ pub fn incremental_code_block_work(decoder: &crate::IncrementalDecoder) -> (u64,
     decoder.code_block_work()
 }
 
-/// Whether the last refine of `decoder` that tried was refused by the
-/// bound on the walks of tiles not kept, which all its refines spend
-/// together. Such a refine gives `Ok(None)` where a one-shot decode of the
-/// same bytes may give an image or an error.
-pub fn incremental_refused_by_repeats(decoder: &crate::IncrementalDecoder) -> bool {
-    decoder.refused_by_repeats()
+/// How many packet bounds the walks of tiles not kept may spend over all
+/// the refines of an incremental decoder before their bound refuses one.
+pub const REPEAT_BOUNDS: u64 = crate::tier2::resume::REPEAT_BOUNDS;
+
+/// What the walks an [`IncrementalDecoder`](crate::IncrementalDecoder) does
+/// from a tile's start again have spent: the walks of tiles not kept, the
+/// walks started or built again, and the first walk of a tile whose walk
+/// was let go when the options changed. The first walk of a tile kept from
+/// its start is not one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepeatWork {
+    /// The packet visits those walks have spent over all the refines.
+    pub visits: u64,
+    /// When their bound refused the last refine that tried, the packet
+    /// bound of that refine's decode: the refusal comes once `visits` is
+    /// past [`REPEAT_BOUNDS`] of it. Such a refine gives `Ok(None)` where a
+    /// one-shot decode of the same bytes may give an image or an error.
+    pub refused: Option<u64>,
+    /// How many tiles have a walk too large to keep.
+    pub not_kept: usize,
+}
+
+/// What `decoder`'s walks from a tile's start again have spent (see
+/// [`RepeatWork`]).
+pub fn incremental_repeat_work(decoder: &crate::IncrementalDecoder) -> RepeatWork {
+    let (visits, refused, not_kept) = decoder.repeat_work();
+    RepeatWork {
+        visits,
+        refused,
+        not_kept,
+    }
 }
 
 #[cfg(test)]
@@ -296,6 +321,41 @@ mod tests {
         assert_eq!(cut, None);
         assert_eq!(seen, Some(bound));
         assert_eq!(spent, bound - work + 1, "a refused tile spends nothing");
+    }
+
+    /// A tile whose walk is started again at each tile-part, fed 64 bytes
+    /// at a time: a refine the bound on those walks refuses reports that
+    /// bound, with the visits past `REPEAT_BOUNDS` of it. A decoder fed all
+    /// the bytes at once keeps the walk and charges nothing for it.
+    #[test]
+    fn incremental_repeat_hook_reports_the_refusal() {
+        use crate::{DecodeOptions, IncrementalDecoder};
+        let bytes = crate::synth::restarted_poc_tile(4, 13, 400);
+        let options = DecodeOptions::default().with_strict(false);
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        let mut refusals = 0;
+        for end in (64..bytes.len()).step_by(64).chain([bytes.len()]) {
+            decoder.feed(&bytes[decoder.bytes_fed()..end]);
+            decoder.refine().unwrap();
+            let work = super::incremental_repeat_work(&decoder);
+            if let Some(bound) = work.refused {
+                assert!(work.visits > super::REPEAT_BOUNDS * bound, "{work:?}");
+                refusals += 1;
+            }
+        }
+        assert!(refusals > 0);
+        let mut once = IncrementalDecoder::new(options).unwrap();
+        once.feed(&bytes);
+        assert!(once.refine().unwrap().is_some());
+        let work = super::incremental_repeat_work(&once);
+        assert_eq!(
+            work,
+            super::RepeatWork {
+                visits: 0,
+                refused: None,
+                not_kept: 0
+            }
+        );
     }
 
     /// Smoke-run every hook so the fuzz surface builds and stays panic-free in
