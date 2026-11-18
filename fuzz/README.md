@@ -209,12 +209,31 @@ codestream's, since a JP2 file can hold those bytes in another box, so an
 input is skipped unless its image area gives the whole decode's component
 sizes. When the whole decode gives an image, the part must give one too,
 unless its options are `InvalidOptions` (an area with no sample of a
-component at the reduction, or a component past the image's), and each of
-its components must equal the whole decode's, cut to the area. Seed it as
+component at the reduction, or a component past the image's), and its size,
+and each of its components, must equal the whole decode's, cut to the area. A
+window may start one point before the image area's origin (windows are cut to
+the image area), so an offset image gets one that overlaps its edge. Taking
+the area from `read_header` rather than the first `SOC SIZ` is a possible
+follow-up. Seed it as
 `decode`, with the window fixtures, the OpenJPH `.jph` files and the JP2
 fixtures under 200 KB added (the JP2 ones from the top of `tests/fixtures`,
 `jp2_real` and the conformance JP2 files; the `psot0` and work-bound JP2
 files are bombs, slow to decode twice).
+
+What `window_crop` cannot catch, by design:
+
+- A bug the whole decode and the part share (tier-1, dequantization, the
+  DWT, color): both are wrong the same way. Only the oracle tests catch that
+  (the whole-image oracles, and the `-d`, `-t` and `-c` comparisons in
+  `tests/decode_window.rs` for the part).
+- A convention both the target and the decoder hold that OpenJPEG does not:
+  its `at()` is the same ceil model as the decoder's, so a shared rounding
+  passes.
+- Windows over the good tiles of a file whose whole decode fails: the input
+  is skipped, and `strict` is never turned off.
+- `ColorOutput::Srgb`, reductions above 2, tiles past 15, windows wider than
+  96 points, and component subsets other than `[0]`, `[1]`, `[2, 0]` and
+  `[1, 0]` are never generated.
 
 `retry_ladder` follows `DecodeOptions::with_retry` from each limit refusal.
 The first input byte picks where each of the three limits starts
@@ -393,6 +412,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-17 | `window_crop` with eight control bytes | `decode`'s seeding, the window fixtures, the `.jph` files and the JP2 files under 200 KB (109 seeds; 84 reach the comparison, 27 of the 36 JP2 and JPH ones among them), `j2k.dict` | 61 s, 18 074 runs; `nice -n 19`, one job; the 1-minute load was 5.5 | no failure. Coverage 9 464 (8 145 in the run above). 557 of the 1 126 inputs it kept reach the comparison: 182 windows, 123 tiles, 99 subsets and 153 subsets through a window. With `Window` shifted one column right, a seed fails on replay |
 | 2026-11-17 | `retry_ladder` with every option compared and the seeds behind control bytes | `decode`'s seeding and the 26 control-byte seeds (93 seeds; 12 take a step, 16 compare), `j2k.dict` | 61 s, 4 081 runs (the seeds take about 22 s to replay); `nice -n 19`, one job; the 1-minute load was 5.4 | no failure. Coverage 7 993 (7 836 in the run above). Of the 406 inputs it kept, 16 take a step (7 sample, 8 packet work, 1 code-block work) and 19 compare. With `with_retry` also setting `ColorOutput::Srgb` on a packet work refusal, the seed `0f-pocvol_1024x512_1000_2` fails on replay |
 | 2026-11-17 | `retry_ladder` with the packet work hint doubling and a per-limit step bound (`MAX_STEPS` 4) | `decode`'s seeding and the 26 control-byte seeds (98 inputs), `j2k.dict` | 61 s, 1 476 runs; `nice -n 19`, one job; the 1-minute load was 4.4 | no failure |
+| 2026-11-18 | `window_crop` with windows from one point before the origin, and the image size compared | the README's seeding (114 seeds: `decode`'s, the window fixtures, the `.jph` files and the JP2 files under 200 KB), `j2k.dict` | 61 s, 21 419 runs; `nice -n 19`, one job; the 1-minute load was 4.6 | no failure. Coverage 10 427. With `Footprint::rect` shifted one column right, a seed fails on replay; with the image's reported width one too many, a seed fails on its size assertion |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

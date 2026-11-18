@@ -15,12 +15,15 @@
 //! The window and tile are worked out on the reference grid from the first
 //! `SOC SIZ` in the file. That `SIZ` may not be the codestream's (a JP2 file
 //! can hold those bytes in another box), so an input is skipped unless its
-//! image area gives the whole decode's component sizes.
+//! image area gives the whole decode's size and component sizes.
 //!
 //! When the whole decode gives an image, the part must too, unless its
 //! options are refused as [`rust_j2k::Error::InvalidOptions`] (an area with
 //! no sample of a component at the reduction, a component past the image's).
-//! Its components must equal the whole decode's, cut to the area.
+//! Its size, and each of its components, must equal the whole decode's, cut
+//! to the area. A window may start one point before the image area's origin
+//! (it is cut to the image area), so an offset image gets one that overlaps
+//! its edge.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -116,10 +119,12 @@ fuzz_target!(|input: &[u8]| {
     let Ok(whole) = decode_with(data, &whole_options) else {
         return;
     };
-    let fits = whole.components.iter().all(|c| {
-        let (dx, dy) = (u32::from(c.x_sampling), u32::from(c.y_sampling));
-        c.width == at(xs, dx, r) - at(xo, dx, r) && c.height == at(ys, dy, r) - at(yo, dy, r)
-    });
+    let fits = whole.width == at(xs, 1, r) - at(xo, 1, r)
+        && whole.height == at(ys, 1, r) - at(yo, 1, r)
+        && whole.components.iter().all(|c| {
+            let (dx, dy) = (u32::from(c.x_sampling), u32::from(c.y_sampling));
+            c.width == at(xs, dx, r) - at(xo, dx, r) && c.height == at(ys, dy, r) - at(yo, dy, r)
+        });
     // A SIZ the decoder accepts has its tile origin at or before the image's
     // (B-7), which the subtractions below need; the first `SOC SIZ` may not
     // be the one it read, so check.
@@ -130,8 +135,12 @@ fuzz_target!(|input: &[u8]| {
     let area = match mode {
         0 | 3 => {
             let (w, h) = (xs - xo, ys - yo);
-            let x0 = xo + small(0, w.saturating_add(2)).saturating_sub(1);
-            let y0 = yo + small(12, h.saturating_add(2)).saturating_sub(1);
+            let x0 = xo
+                .saturating_add(small(0, w.saturating_add(2)))
+                .saturating_sub(1);
+            let y0 = yo
+                .saturating_add(small(12, h.saturating_add(2)))
+                .saturating_sub(1);
             let x1 = x0.saturating_add(1 + small(24, w.min(96)));
             let y1 = y0.saturating_add(1 + small(36, h.min(96)));
             options = options.with_region(Region::Window(Window::new(x0, y0, x1, y1)));
@@ -162,6 +171,17 @@ fuzz_target!(|input: &[u8]| {
         None => (0..whole.components.len()).collect(),
     };
     assert_eq!(part.components.len(), picks.len(), "{options:?}");
+    // The image's own size is the area cut to the image, on the reduced grid.
+    let (cx0, cy0) = (area.0.max(image.0), area.1.max(image.1));
+    let (cx1, cy1) = (area.2.min(image.2), area.3.min(image.3));
+    assert_eq!(
+        (part.width, part.height),
+        (
+            at(cx1, 1, r).saturating_sub(at(cx0, 1, r)),
+            at(cy1, 1, r).saturating_sub(at(cy0, 1, r))
+        ),
+        "{options:?}: image size"
+    );
     for (i, &c) in picks.iter().enumerate() {
         let (width, expected) = crop(&whole, c, image, area, r);
         let got = &part.components[i];
