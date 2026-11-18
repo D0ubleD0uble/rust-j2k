@@ -52,24 +52,28 @@ samples per byte of input when that is more, so the limit grows past 64 MiB of
 input. At 2^29 samples a decode peaks at about 2.7 GiB for a square tile, and at
 up to about 6.4 GiB for a tile one sample wide. Past 64 MiB the peak grows to
 about 43 bytes per byte of input for a square tile and up to about 102 for a
-tile one sample wide: about 4 GiB and 9.5 GiB for a 100 MB file (scaled from
-measurements on smaller images; see the [`decode`
+tile one sample wide: about 4.1 GiB and 9.6 GiB for a 100 MB file, input
+included (scaled from measurements on smaller images; see the [`decode`
 docs](https://docs.rs/rust-j2k/latest/rust_j2k/fn.decode.html)). Padding counts
 as input, even in a conformant file (`COM` segments, a JP2 `xml ` box, bytes
 after `EOC`), and it compresses well: 67 MB of zeros gzips to 65 KB. So bound
 the size of the input you accept, measured in memory after any decompression.
 Past 64 MiB the worst-case peak is about 102 times that size, and up to about
-three times that for an `IncrementalDecoder`. A file of about 134 MB, a one-tile
-1 x 2^30 image followed by 128 MiB of zeros, decodes at the defaults with an
-estimated peak near 8.3 GiB. The same image with half the padding, decoded under
-a limit of 16 samples per byte, peaked at 8.24 GiB. For a ceiling that does not
-grow with the input, check the component areas from `read_header_with` before
-you decode. A file past a limit is refused with `Error::Limit`, which is the
-guard working, not a bug. These figures cover the one-shot decode functions. An
-`IncrementalDecoder` keeps per-tile state between calls and can hold up to about
-three times one decode's peak, plus the bytes fed and a table of 24 bytes per
-tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see "Work and
-memory" in [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
+three times that for an `IncrementalDecoder`. A one-tile 1 x 2^30 image followed
+by 128 MiB of zeros after `EOC` (134,283,241 bytes) decodes at the defaults
+(`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, measured. For a ceiling
+that does not grow with the input, call `read_header_with` with no region and no
+component subset, and refuse the file when the summed area of its components is
+too large. Under a region or a subset the header describes only what is
+returned, while the limit counts every tile read, whole and in every component.
+So compute that count from `image_area` and `tiles` instead: the whole tiles the
+region touches, in every component. A file past a limit is refused with
+`Error::Limit`, which is the guard working, not a bug. These figures cover the
+one-shot decode functions. An `IncrementalDecoder` keeps per-tile state between
+calls and can hold up to about three times one decode's peak, plus the bytes fed
+and a table of 24 bytes per tile index up to the highest seen, about 1.5 MiB for
+65535 tiles (see "Work and memory" in
+[`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits
 (`WorkLimit::Raised`) or remove them (`WorkLimit::Unlimited`). A decode under

@@ -406,7 +406,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// is a fault under some options and not others. The sample limit is that
 /// of the bytes passed, so a prefix holding only the header is held to the
 /// 2^29-sample floor: the header of a valid file over 64 MiB and over 2^29
-/// samples, read from a prefix, gives [`Error::Limit`] even though the whole
+/// samples, read from a prefix, gives [`Error::Limit`] even when the whole
 /// file decodes at the defaults. The [`Raised`](WorkLimit::Raised) factor
 /// that refusal names also admits the whole file, whose default is larger.
 /// A fault in the tile
@@ -854,8 +854,8 @@ pub struct DecodeOptions {
     /// included; for an [`IncrementalDecoder`] it is the bytes fed so far.
     /// Past 64 MiB, a file may ask for 32 bytes of output per byte of
     /// input, and a decode peaks at about 43 bytes per byte for a square
-    /// tile and up to about 102 for a tile one sample wide: about 4 GiB and
-    /// 9.5 GiB for a file of 100 MB.
+    /// tile and up to about 102 for a tile one sample wide: about 4.1 GiB and
+    /// 9.6 GiB for a file of 100 MB, input included.
     ///
     /// Under a window or a tile ([`region`](Self::region)), the count
     /// is the samples of the tiles the decode reads, in every component, as
@@ -885,9 +885,14 @@ pub struct DecodeOptions {
     /// Padding counts as input, so a file can raise its own limit with
     /// `COM` segments, a JP2 `xml ` box or bytes after `EOC`. No
     /// [`WorkLimit`] sets a limit below the default. For a ceiling that does
-    /// not grow with the input, call [`read_header_with`] first and refuse
-    /// the file when the summed area of its
-    /// [`components`](Header::components) is too large.
+    /// not grow with the input, call [`read_header_with`] with no region and
+    /// no component subset, and refuse the file when the summed area of its
+    /// [`components`](Header::components) is too large. Under a region or a
+    /// subset the header describes only what is returned, while the limit
+    /// counts every tile read, whole and in every component. So compute that
+    /// count from [`image_area`](Header::image_area) and
+    /// [`tiles`](Header::tiles) instead: the whole tiles the region touches,
+    /// in every component.
     pub sample_limit: WorkLimit,
     /// Refuse missing data with an [`Error`] (`true`, the default), or decode
     /// what is there and say what is missing on [`Image::report`] (`false`).

@@ -181,9 +181,10 @@ count, as it divides by the default of the same input. No limit, not even
 the target can address. On a 32-bit target that is 2^29 − 1, one below the
 floor.
 
-The table gives the worst-case peak for a file of each size, from the
-multiples above: about 1.35 times the output for a square tile, and up to
-about 3.2 times for a tile one sample wide, plus the input.
+The table gives the worst-case peak for a file of each size, from the multiples
+above: about 1.35 times the output for a square tile, and up to about 3.2 times
+for a tile one sample wide, plus the input. The 100 MB figures quoted in the
+other docs come from this table and include the input.
 
 | Input | Default limit | Output (`i32`) | Peak, square tile | Peak, one sample wide |
 | ----- | ------------- | -------------- | ----------------- | --------------------- |
@@ -217,17 +218,21 @@ counted are the bytes in memory, not on the wire, and padding compresses well:
 accepts, measured after any decompression. Past 64 MiB the worst-case peak is
 about 102 times that size, and up to about three times that for an
 `IncrementalDecoder`. A one-tile 1 x 2^30 image needs 128 MiB of input to fit
-the default. Under a limit of 16 samples per byte, a file of it with 64 MiB of
-zeros after `EOC` (67,174,377 bytes) decoded in 22.8 s with a peak RSS of 8.24
-GiB. With 128 MiB of zeros at the default it should peak near 8.3 GiB
-(estimated). Time grows with the padding too. The work bounds count only tile
-data, but the inverse DWT and the output scale with the sample limit, which
-padding raises: about 170 ns per byte of padding (estimated, from 340 ns
-measured at 16 samples per byte).
+the default. Measured: with 128 MiB of zeros after `EOC` (134,283,241 bytes) it
+decodes at the defaults (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, and
+at 134,065,513 bytes it is refused, naming `Raised(2)`. Time grows with the
+padding too. The work bounds count only tile data, but the inverse DWT and the
+output scale with the sample limit, which padding raises: about 175 ns per byte
+of padding, measured.
 
-No `WorkLimit` sets a limit below `Default`. For a ceiling that does not
-grow with the input, call `read_header_with` first and refuse the file when
-the summed area of its components is too large.
+No `WorkLimit` sets a limit below `Default`. For a ceiling that does not grow
+with the input, call `read_header_with` with no region and no component subset,
+and refuse the file when the summed area of its components is too large. Under a
+region or a subset the header describes only what is returned, while the limit
+counts every tile read, whole and in every component (a 16x16 window of one
+23171x23171 tile counts 536.9 M samples). So compute that count from
+`image_area` and `tiles` instead: the whole tiles the region touches, in every
+component.
 
 ## The tier-2 work bound
 

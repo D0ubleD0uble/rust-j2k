@@ -295,12 +295,13 @@ is checked. A packet work refusal names twice the factor it ran under, so a
 ladder takes about log2 of the factor it needs; more than 4 steps on one
 limit (log2 of that factor cap, plus 2) is a failure.
 
-An input over the fuzz sample budget (`common/budget.rs`) is only read for
-its header, and a sample limit refusal there is checked as one step with no
-decode. So a sample limit retry of the image area is never decoded: the
-budget is 2^28 samples and the default limit at least 2^29, so only an
-input over the budget is refused for its area, and that input is never
-decoded.
+An input over the fuzz sample budget (`common/budget.rs`) is only read for its
+header, and a sample limit refusal there is checked as one step with no decode.
+So a sample limit retry of the image area is never decoded: the budget is 2^28
+samples and the default limit at least 2^29, so only an input over the budget is
+refused for its area, and that input is never decoded. The exception is an input
+whose header fails to read: the budget counts it as under budget, so its decode
+can still be refused for its area.
 
 Seed it as `decode`, with 26 seeds made from the work-bound, sample-limit
 and `psot0` bomb fixtures, each behind a control byte: `00` (the defaults),
