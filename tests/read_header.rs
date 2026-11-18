@@ -9,6 +9,9 @@
 //! the tile data, which `read_header` never reads; such a file must be listed
 //! in [`TILE_FAULTS`].
 
+#[path = "support/sweep.rs"]
+mod sweep;
+
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
@@ -236,7 +239,8 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     let mut compared = [0usize; 2];
     let mut differing = Vec::new();
     let mut names = Vec::new();
-    for path in &all {
+    let stride = sweep::stride(8);
+    for (index, path) in all.iter().enumerate() {
         let name = path
             .strip_prefix(&root)
             .unwrap()
@@ -252,6 +256,12 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
         }
         seen[3] += 1;
         names.push(name.clone());
+        // A debug run takes every eighth file and the two named below.
+        let named =
+            ["jp2_cdef_reversed.jp2", "conformance/jp2/files/file2.jp2"].contains(&name.as_str());
+        if index % stride != 0 && !named {
+            continue;
+        }
         let bytes = std::fs::read(path).unwrap();
         // At the default options, and at one level of resolution reduction:
         // each decoded component is as large as its header entry says.
@@ -294,8 +304,9 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
             }
         }
     }
+    let (at_least, at_least_reduced) = if stride == 1 { (100, 50) } else { (20, 10) };
     assert!(
-        compared[0] > 100 && compared[1] > 50,
+        compared[0] > at_least && compared[1] > at_least_reduced,
         "{compared:?} files compared"
     );
     assert_eq!(seen[0], 9, "the nine Part 4 JP2 files");
@@ -303,7 +314,12 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
     // Every listed tile fault really differs.
     let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
-    assert_eq!(differing, listed);
+    if stride == 1 {
+        assert_eq!(differing, listed);
+    } else {
+        // The sample holds some of them, and each one it holds is listed.
+        assert!(differing.iter().all(|name| listed.contains(name)));
+    }
     // Files whose `cdef` reorders the channels are in the sweep. Their
     // channels share one format, so the placement of the formats is pinned by
     // `read_header_places_palette_channels_by_their_definitions` in the crate.

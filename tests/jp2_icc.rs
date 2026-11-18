@@ -153,7 +153,8 @@ fn variants() -> Vec<Variant> {
 fn icc_conformance_variants_match_openjpeg_exactly() {
     let all = variants();
     assert_eq!(all.len(), 21, "three files x seven variants");
-    for v in &all {
+    // A debug run takes every other variant.
+    for v in all.iter().step_by(support::sweep::stride(2)) {
         let what = format!("{} {}", v.file, v.variant);
         let mut bytes = read(&format!("conformance/jp2/{}", v.file));
         let (start, end) = profile_span(&bytes);
@@ -287,7 +288,9 @@ fn icc_profiles_match_openjpeg() {
         .map(|(k, v)| (k.as_str(), read(&v.file)))
         .collect();
     let (mut converted, mut as_coded, mut refused) = (0, 0, 0);
-    for case in &profiles.cases {
+    // A debug run takes every third case.
+    let stride = support::sweep::stride(3);
+    for case in profiles.cases.iter().step_by(stride) {
         let what = format!("{} {}", case.codestream, case.name);
         let codestream = &codestreams[case.codestream.as_str()];
         let depth = rust_j2k::read_header(codestream).unwrap().components[0].bit_depth;
@@ -339,9 +342,14 @@ fn icc_profiles_match_openjpeg() {
         profiles.cases.len(),
         2 * (24 + 39 + 15 + 25 + 58) + 10 + 4 + 13
     );
-    assert_eq!(refused, 2 * 11 + 2);
-    assert_eq!(as_coded, 2 * (13 + 8 + 11 + 37 - 1) + 3 + 7);
-    assert_eq!(converted, profiles.cases.len() - refused - as_coded);
+    if stride == 1 {
+        assert_eq!(refused, 2 * 11 + 2);
+        assert_eq!(as_coded, 2 * (13 + 8 + 11 + 37 - 1) + 3 + 7);
+        assert_eq!(converted, profiles.cases.len() - refused - as_coded);
+    } else {
+        // Each kind is still seen in the sample.
+        assert!(converted > 0 && as_coded > 0 && refused > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

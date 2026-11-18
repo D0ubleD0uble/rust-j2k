@@ -249,7 +249,9 @@ fn a_cap_at_or_past_the_layer_count_is_no_cap() {
             .with_code_block_work_limit(WorkLimit::Unlimited)
             .with_sample_limit(WorkLimit::Unlimited)
     };
-    for path in paths {
+    // A debug run takes every fourth codestream.
+    let stride = support::sweep::stride(4);
+    for path in paths.into_iter().step_by(stride) {
         let bytes = read(&path);
         let what = path.file_name().unwrap().to_string_lossy();
         let layers = cod_layers(&bytes);

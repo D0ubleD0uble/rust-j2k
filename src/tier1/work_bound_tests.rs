@@ -27,6 +27,16 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Whether to measure every committed file. A debug run measures every
+/// fourth file and all of `tier1_work_bound/`, which holds the files that
+/// spend the most; a release build, `CI` and `RUST_J2K_FULL_SWEEP` measure
+/// them all.
+fn full_sweep() -> bool {
+    !cfg!(debug_assertions)
+        || std::env::var_os("CI").is_some()
+        || std::env::var_os("RUST_J2K_FULL_SWEEP").is_some()
+}
+
 /// The sample-passes a full-resolution decode of every tile spends in the
 /// block decoder, the bytes of tile data the bound is scaled by, and the
 /// bytes of code-block data; `None` when the file has no codestream or a
@@ -84,8 +94,12 @@ fn every_committed_file_decodes_far_below_the_tier1_work_bound() {
     files(&root, &mut paths);
     paths.sort();
     let mut rows = Vec::new();
-    for path in &paths {
+    let full = full_sweep();
+    for (index, path) in paths.iter().enumerate() {
         let name = path.strip_prefix(&root).unwrap().display().to_string();
+        if !full && index % 4 != 0 && !name.starts_with("tier1_work_bound/") {
+            continue;
+        }
         // These are made to go past the bound, but for the encoder output.
         if name.starts_with("tier1_work_bound/t1bomb") {
             continue;
@@ -108,7 +122,8 @@ fn every_committed_file_decodes_far_below_the_tier1_work_bound() {
         );
     }
     eprintln!("{} files measured of {}", rows.len(), paths.len());
-    assert!(rows.len() > 100, "{} files measured", rows.len());
+    let at_least = if full { 100 } else { 25 };
+    assert!(rows.len() > at_least, "{} files measured", rows.len());
     for name in [
         "tier1_work_bound/opj_flat2048_16bit_n1.j2k",
         "tier1_work_bound/opj_specks2048_16bit.j2k",

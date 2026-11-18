@@ -202,9 +202,13 @@ fn grades_the_ht_set_by_compliance_class() {
         manifest.compliance_class, 1,
         "the harness grades the class-1 bounds"
     );
+    // A debug run grades every other entry, and the ratchet holds the
+    // in-class list to those.
+    let stride = support::sweep::stride(2);
     let mut graded: Vec<(&str, Grade)> = manifest
         .codestreams
         .iter()
+        .step_by(stride)
         .map(|c| (c.name.as_str(), c.grade(&dir)))
         .collect();
     let jp2 = jp2_dir();
@@ -212,10 +216,19 @@ fn grades_the_ht_set_by_compliance_class() {
         manifest
             .jph
             .iter()
+            .step_by(stride)
             .map(|j| (j.name.as_str(), j.grade(&dir, &jp2, &manifest.jph))),
     );
-    assert_eq!(graded.len(), 41 + 20);
-    ratchet("ISO/IEC 15444-4:2024 HTJ2K class-1", &graded, IN_CLASS);
+    let in_class: Vec<&str> = IN_CLASS
+        .iter()
+        .copied()
+        .filter(|name| graded.iter().any(|(graded, _)| graded == name))
+        .collect();
+    if stride == 1 {
+        assert_eq!(graded.len(), 41 + 20);
+        assert_eq!(in_class.len(), IN_CLASS.len());
+    }
+    ratchet("ISO/IEC 15444-4:2024 HTJ2K class-1", &graded, &in_class);
     pin_refusals(&graded, codestream_refusals(&manifest));
     let codestreams = manifest
         .codestreams
@@ -1153,9 +1166,24 @@ fn ht_refinement_matches_kakadu_stats() {
     let manifest = load_ht_manifest(&ht_dir());
     let read = |path: PathBuf| std::fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
     let mut refined = 0;
+    // A debug run grades every third file with refinement passes, and every
+    // sixth of the others.
+    let stride = support::sweep::stride(3);
+    let mut seen = [0usize; 2];
     for e in &manifest.codestreams {
         let Some(k) = &e.kakadu_stats else { continue };
         if !IN_CLASS.contains(&e.name.as_str()) {
+            continue;
+        }
+        let has_refinement = e
+            .passes
+            .walked
+            .as_ref()
+            .is_some_and(|w| w.histogram.keys().any(|n| n != "1"));
+        let kind = usize::from(has_refinement);
+        seen[kind] += 1;
+        let step = if stride == 1 { 1 } else { stride * (2 - kind) };
+        if (seen[kind] - 1) % step != 0 {
             continue;
         }
         let exact = k.pae.iter().all(|&p| p == 0.0);
@@ -1194,7 +1222,14 @@ fn ht_refinement_matches_kakadu_stats() {
             refined += 1;
         }
     }
-    assert_eq!(refined, 19, "files with refinement passes graded");
+    if stride == 1 {
+        assert_eq!(refined, 19, "files with refinement passes graded");
+    } else {
+        assert!(
+            refined >= 3,
+            "{refined} files with refinement passes graded"
+        );
+    }
 }
 
 /// Each JPH file's manifest entry quotes Kakadu's PAE and MSE against its

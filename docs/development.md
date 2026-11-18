@@ -13,6 +13,13 @@ See [correctness.md](correctness.md) for how the corpus is graded. One test,
 `python3` on `PATH` it passes without checking the seeds. CI runs it with
 Python.
 
+A few tests sweep every committed file, which takes minutes in a debug build.
+In a debug build they take a fixed sample of the files and still fail on a
+fault in the code they guard. They run every file in a release build, when
+`CI` is set (CI sets it), and when `RUST_J2K_FULL_SWEEP=1` is set. Set that
+before you push a change to a decode stage. The helper is
+`tests/support/sweep.rs`.
+
 ## Before you start
 
 - Python 3.9 or later on `PATH`, as `python3`. Every script in `scripts/`

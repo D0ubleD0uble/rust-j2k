@@ -4,6 +4,8 @@
 //! Each oracle is an `opj_decompress -allow-partial` 2.5.0 output; see
 //! `tests/fixtures/partial/README.md`.
 
+#[path = "support/sweep.rs"]
+mod sweep;
 #[path = "support/synth.rs"]
 mod synth;
 use std::path::PathBuf;
@@ -414,7 +416,8 @@ fn the_report_is_bounded_by_the_tile_parts() {
     for name in ["tiles_multipart_lossless.j2k", "partial/tiles.j2k"] {
         let whole = read(name);
         let sot = whole.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
-        for length in sot..=whole.len() {
+        // A debug run takes every fourth prefix length.
+        for length in (sot..=whole.len()).step_by(sweep::stride(4)) {
             let prefix = &whole[..length];
             let Ok(image) = decode_with(prefix, &lenient(0)) else {
                 continue;
