@@ -25,6 +25,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without waiting for the next refine, call
   `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
   That decode spends nothing from the decoder's bounds.
+- `WorkLimit::AtMost(n)` on `DecodeOptions::sample_limit` sets a fixed
+  ceiling of `n` samples, whatever the input's length or padding: at most
+  `4·n` bytes of output, and a peak of about 1.35 to 3.2 times that, plus the
+  input. It holds every count the default limit holds (the tiles a region
+  reads, in every component, a palette's expanded channels and sRGB output),
+  so `read_header_with` refuses what the decode would. A refusal under it
+  gives no retry, and in an `IncrementalDecoder` it is an error, not a wait.
+  `AtMost(0)`, and `AtMost` on either work bound, is `InvalidOptions`. It
+  replaces counting the samples by hand from the header (#475).
 
 ### Changed
 
