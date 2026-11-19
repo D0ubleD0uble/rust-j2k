@@ -263,6 +263,23 @@ fn a_tile_part_cod_is_counted_as_the_decode_counts_it() {
     let limit = refusal(&main, &DecodeOptions::default());
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
 
+    // Of two tiles, the second over the cap under the main header and its
+    // tile-part `COD` bringing it within: the header read finds that
+    // tile-part after the first tile's.
+    let mut two = synth::empty_tiles(
+        [2 * width, height, width / 2, 0, width, height, 0, 0],
+        0,
+        0,
+        &[],
+        &[],
+        0,
+    );
+    two.truncate(two.len() - 2);
+    two.extend(synth::tile_part(0, 0, 1, &[], &[0]));
+    two.extend(synth::tile_part(1, 0, 1, &cod, &[0]));
+    two.extend_from_slice(&[0xFF, 0xD9]);
+    decodes(&two, &DecodeOptions::default(), 3 * width / 2, height);
+
     // The reverse: a main header of 64x64 code-blocks and a tile-part `COD`
     // of 4x4. The header read counts under the main header and admits it;
     // the decode counts the tile under its own and refuses it, with a hint
