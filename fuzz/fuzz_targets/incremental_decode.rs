@@ -19,8 +19,13 @@
 //! refine that waits names its reason (`check_waiting`): `RepeatLimit`
 //! exactly when that bound refused it, the one-shot refusal for a header cut
 //! short, the sample limit, the charge for missing tiles and the work
-//! bounds, and `BoundSpent` only where the one-shot decode passes the
-//! code-block bound. After an
+//! bounds. A code-block `WorkLimit` is the one-shot refusal and never
+//! stands where the one-shot decode gives another error. `BoundSpent` comes
+//! only after work was spent, and where the one-shot decode passes the
+//! code-block bound, or is refused by it at the tile and for the work the
+//! wait's message names: a refine cut short by what was spent does not
+//! decode the tiles it counts, and waits there. The probe below is checked
+//! by the same rule. After an
 //! error, every later refine gives it again, and `finish` is the decode of
 //! all the bytes under the decoder's options.
 //!
@@ -51,8 +56,9 @@
 //! and the bound it had say exactly whether a decoder with more work spent
 //! refuses it (it waits) or gives the same result. Each due refine is
 //! checked by that rule, with a decoder that has nothing spent standing in
-//! where the refine itself waits. The limit is at least 2^26
-//! sample passes, which inputs this small do not come near, so each due
+//! where the refine itself waits or errs. Under the fuzz cap the bound is
+//! 2^22 sample passes (`common/budget.rs`), which few inputs this small
+//! come near, so each due
 //! refine also starts a probe decoder with work already spent, drawn around
 //! the most that leaves the refine room
 //! (`rust_j2k::fuzz::incremental_with_code_block_work_spent`), and checks
@@ -216,9 +222,10 @@ fuzz_target!(|input: &[u8]| {
         checks_left -= 1;
         if due {
             let one_shot = decode_with(&data[..fed], &lenient);
+            let shape = one_shot.as_ref().map(|_| ()).map_err(Error::clone);
             let repeat_work = incremental_repeat_work(&decoder);
             if let Some(why) = &waiting {
-                check_waiting(why, &one_shot, repeat_work.refused.is_some(), fed);
+                check_waiting(why, &shape, repeat_work.refused.is_some(), spent, fed);
             }
             let expected = keyed(match one_shot {
                 Ok(image) => Ok(Some(image)),
@@ -226,7 +233,11 @@ fuzz_target!(|input: &[u8]| {
                 Err(Error::Limit(m))
                     if matches!(
                         m.kind(),
-                        LimitKind::PacketWork | LimitKind::CodeBlockWork | LimitKind::Samples
+                        LimitKind::PacketWork
+                            | LimitKind::CodeBlockWork
+                            | LimitKind::Samples
+                            | LimitKind::TileCodeBlocks
+                            | LimitKind::TilePrecincts
                     ) =>
                 {
                     Ok(None)
@@ -298,7 +309,14 @@ fuzz_target!(|input: &[u8]| {
                 let mut probe =
                     incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
                 probe.feed(&data[..fed]);
-                let probed = keyed(probe.refine().map(Refined::image));
+                let probe_refine = probe.refine();
+                // The probe is the path that reaches the count past the
+                // cut, so its reason is checked too.
+                if let Ok(Refined::Waiting(why)) = &probe_refine {
+                    let repeats = incremental_repeat_work(&probe).refused.is_some();
+                    check_waiting(why, &shape, repeats, spent, fed);
+                }
+                let probed = keyed(probe_refine.map(Refined::image));
                 cut.check(&probe, spent, &probed, "probe");
             }
             if let Err(error) = refined {
@@ -341,48 +359,78 @@ fuzz_target!(|input: &[u8]| {
 });
 
 /// Check `why`, the reason a due refine of `fed` bytes waited, against
-/// `one_shot`, the decode of those bytes on their own, and `repeats`,
-/// whether the bound on the walks done again refused the refine.
-fn check_waiting(why: &Waiting, one_shot: &Result<Image, Error>, repeats: bool, fed: usize) {
+/// `one_shot`, the decode of those bytes on their own (its error, or `()`
+/// for an image); `repeats`, whether the bound on the walks done again
+/// refused the refine; and `spent`, the code-block work spent before it.
+fn check_waiting(
+    why: &Waiting,
+    one_shot: &Result<(), Error>,
+    repeats: bool,
+    spent: u64,
+    fed: usize,
+) {
     if repeats {
-        assert!(matches!(why, Waiting::RepeatLimit { .. }), "{fed} bytes: {why:?}");
+        assert!(
+            matches!(why, Waiting::RepeatLimit { .. }),
+            "{fed} bytes: {why:?}"
+        );
         return;
     }
     match (why, one_shot) {
         (Waiting::HeaderIncomplete, Err(Error::Incomplete(_))) => {}
-        (Waiting::SampleLimit(limit), Err(Error::Limit(expected)))
-            if expected.kind() == LimitKind::Samples =>
+        // The sample limit, and the code-blocks and precincts it allows a
+        // tile, grow with the bytes.
+        (Waiting::SampleLimit { limit, .. }, Err(Error::Limit(expected)))
+            if matches!(
+                expected.kind(),
+                LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+            ) =>
         {
             assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
         }
         (
-            Waiting::MissingTiles(limit) | Waiting::WorkLimit(limit),
+            Waiting::MissingTiles { limit, .. } | Waiting::WorkLimit { limit, .. },
             Err(Error::Limit(expected)),
         ) if limit.kind() == LimitKind::PacketWork => {
             assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
         }
-        // A code-block `WorkLimit` is the decode's own refusal, or stands in
-        // for an error it gives earlier, in the block decoding a refine
-        // refused for what was spent skips, or later in the file.
-        (Waiting::WorkLimit(limit), Err(Error::Limit(expected)))
+        // A code-block `WorkLimit` is the decode's own refusal, and never
+        // stands in for an error it gives.
+        (Waiting::WorkLimit { limit, .. }, Err(Error::Limit(expected)))
             if limit.kind() == LimitKind::CodeBlockWork
                 && expected.kind() == LimitKind::CodeBlockWork =>
         {
             assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
         }
-        (Waiting::WorkLimit(limit), Err(error))
-            if limit.kind() == LimitKind::CodeBlockWork && !matches!(error, Error::Incomplete(_)) => {}
-        // Only what earlier refines spent refused it: the decode on its own
-        // passes the code-block bound and the sample limit. It may stand in
-        // for any other error, a limit included, that the decode meets in
-        // the tiles the refine did not decode.
-        (Waiting::BoundSpent(limit), _)
-            if !matches!(one_shot, Err(Error::Incomplete(_)))
-                && !matches!(one_shot, Err(Error::Limit(m))
-                    if matches!(m.kind(), LimitKind::CodeBlockWork | LimitKind::Samples)) =>
+        // What earlier refines spent cut it short, so work was spent. The
+        // decode on its own passes the sample limit. It may stand in for any
+        // other error, a limit included, that the decode meets in the tiles
+        // the refine did not decode. Where that decode is refused by the
+        // code-block bound, the refine's count was too, at the same tile
+        // and for the same work, and the wait names them.
+        (Waiting::BoundSpent { limit, .. }, _)
+            if spent > 0
+                && !matches!(one_shot, Err(Error::Incomplete(_)))
+                && !matches!(one_shot, Err(Error::Limit(m)) if m.kind() == LimitKind::Samples) =>
         {
             assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{fed} bytes");
             assert_eq!(limit.retry_with(), None, "{fed} bytes");
+            if let Err(Error::Limit(m)) = one_shot {
+                if m.kind() == LimitKind::CodeBlockWork {
+                    let refused = |message: &str| {
+                        message
+                            .split_once(" sample-passes")
+                            .map(|(head, _)| head.to_string())
+                    };
+                    let head = refused(limit.message());
+                    assert!(head.is_some(), "{fed} bytes: {limit}");
+                    assert_eq!(
+                        head,
+                        refused(m.message()),
+                        "{fed} bytes: {limit}, where the decode gives {m}"
+                    );
+                }
+            }
         }
         _ => panic!("{fed} bytes: waited for {why:?}, where the decode gives {one_shot:?}"),
     }
