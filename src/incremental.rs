@@ -49,12 +49,12 @@ use crate::{
 /// The code-block work is done again by each refine that decodes, so the
 /// code-block work every `refine` has spent is held to the bound one decode
 /// of the bytes fed has, raised as the options say. A refine the rest of
-/// that bound cannot cover returns [`Waiting::WorkLimit`], so a file whose code-blocks
-/// cost a lot may give no image before `finish`, which is a decode of its
-/// own, under its own bound. Each refine that returns an image also builds
-/// the whole image, as one decode does: it allocates the samples and runs
-/// the inverse wavelet and color transforms over them, outside the work
-/// bounds. Under the doubling cadence a file of `n` bytes gives at most
+/// that bound cannot cover returns [`Waiting::WorkLimit`], so a file whose
+/// code-blocks cost a lot may give no image before `finish`, which is a
+/// decode of its own, under its own bound. Each refine that returns an
+/// image also builds the whole image, as one decode does: it allocates the
+/// samples and runs the inverse wavelet and color transforms over them,
+/// outside the work bounds. Under the doubling cadence a file of `n` bytes gives at most
 /// about `log2(n)` images, so a large image fed in small pieces costs up to
 /// that many reconstructions.
 ///
@@ -543,7 +543,7 @@ const _: () = {
 ///     Refined::Waiting(Waiting::HeaderIncomplete)
 /// ));
 /// decoder.feed(&file[20..30]);
-/// // The refine tried at 20 bytes, so the next one decodes at 40.
+/// // The refine tried at 20 bytes, so the next try is at 40 at the latest.
 /// assert!(matches!(
 ///     decoder.refine()?,
 ///     Refined::Waiting(Waiting::MoreBytes { until: 40 })
@@ -584,13 +584,13 @@ impl Refined {
 
 /// Why [`IncrementalDecoder::refine`] gave no image.
 ///
-/// Each of these can clear as more bytes come in, so none is an error.
+/// Each of these may clear as more bytes come in, so none is an error.
 /// Once the input has ended, [`finish`](IncrementalDecoder::finish) decodes
-/// all of it and reports a limit that still refuses it. For an image of the
-/// bytes fed now, whatever the reason, decode them on their own, as
+/// all of it and reports a limit that still refuses it. To decode the bytes
+/// fed now, whatever the reason, decode them on their own, as
 /// [`options`](IncrementalDecoder::options) shows:
 /// `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
-/// That decode gives the limit as an error.
+/// That decode returns the refusal, if there is one, as an error.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Waiting {
@@ -607,7 +607,8 @@ pub enum Waiting {
     /// same bytes.
     HeaderIncomplete,
     /// The sample limit ([`DecodeOptions::sample_limit`]) refused the image.
-    /// The limit grows with the bytes fed, so more bytes may admit it. The
+    /// The default limit and a [`Raised`](crate::WorkLimit::Raised) one
+    /// grow with the bytes fed, so more bytes may admit it. The
     /// detail is the one [`decode_with`] gives for the bytes fed, with its
     /// [`retry_with`](LimitDetail::retry_with).
     SampleLimit(LimitDetail),
@@ -615,7 +616,8 @@ pub enum Waiting {
     /// work bound ([`LimitKind::CodeBlockWork`]) refused the decode. Both
     /// grow with the bytes fed. The code-block bound is shared by all the
     /// refines (see [`IncrementalDecoder`]), so it can refuse a refine whose
-    /// bytes a decode on its own would take; then only `finish` decodes.
+    /// bytes a decode on its own would take, and the later refines may wait
+    /// on it too; `finish` decodes under a bound of its own.
     ///
     /// The detail is the refusal's. For the packet bound it is the one a
     /// decode of the bytes fed on its own gives. For the code-block bound,
