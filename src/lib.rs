@@ -355,11 +355,11 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// Use [`read_header_with`] to read the header for other options.
 ///
 /// A readable header does not mean [`decode`] will succeed. The tile data is
-/// not read (except the tile-part headers of a tile that may hold more
-/// code-blocks or precincts than a tile may, and the packet headers of the
-/// last tile of a JP2 file whose tile-part has `Psot = 0`, both described on
-/// [`read_header_with`]), so it can
-/// still be damaged, unsupported, or past a work bound ([`Error::Limit`]).
+/// not read (except the tile-part headers of a tile over a cap on its
+/// code-blocks or precincts under the main header, and the packet headers of
+/// the last tile of a JP2 file whose tile-part has `Psot = 0`, both described
+/// on [`read_header_with`]), so it can still be damaged, unsupported, or past
+/// a work bound ([`Error::Limit`]).
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -382,13 +382,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 ///
 /// The input is detected as [`decode`] detects it. The read covers a JP2
 /// file's boxes and the codestream's main header, up to the first tile-part
-/// (`SOT` marker), and stops there, so a file whose tile data is cut short or
-/// missing still has a readable header, unless a tile the read reads holds
-/// more code-blocks or precincts than the sample limit allows a tile (see
-/// below). Input that ends before the first
-/// `SOT` marker is whole, from the empty input on and in a JP2 file's boxes
-/// too, is [`Error::Incomplete`]: wait for more bytes and try again. Nothing
-/// is allocated for the samples.
+/// (`SOT` marker), and stops there, unless a tile is over a cap on its
+/// code-blocks or precincts under the main header (see below). So a file
+/// whose tile data is cut short or missing still has a readable header.
+/// Input that ends before the first `SOT` marker is whole, from the empty
+/// input on and in a JP2 file's boxes too, is [`Error::Incomplete`]: wait
+/// for more bytes and try again. Nothing is allocated for the samples or the
+/// tile data.
 /// One case reads further: in a JP2 file whose last tile-part has `Psot = 0`
 /// (no length) and whose `jp2c` box ends before the file does, the packet
 /// headers of that tile-part's tile are walked to see whether the codestream
@@ -404,17 +404,20 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// tile-part; [`decode_with`] does the same.
 ///
 /// The read also counts the code-blocks and precincts of each tile it would
-/// read, as the decode counts them, and refuses a tile past the caps
-/// [`sample_limit`](DecodeOptions::sample_limit) sets with the
-/// [`Error::Limit`] the decode gives. A tile whose size shows it within the
-/// caps is not counted. For any other, the tile-part headers are walked, and
-/// the tile counted under its own coding parameters (a tile-part `COD` or
-/// `COC` over the main header's); a tile with no tile-part is counted under
-/// the main header with [`strict`](DecodeOptions::strict) on, and not at all
-/// with it off, as the decode then leaves it out. It counts at most 2^22
-/// resolutions of tile-components, about 50 ms, and leaves the tiles after
-/// that to the decode, so past that it can return a header for a file the
-/// decode refuses.
+/// read under the main header, and refuses a tile past the caps
+/// [`sample_limit`](DecodeOptions::sample_limit) sets, with the
+/// [`Error::Limit`] the decode gives, where the decode refuses it too. Only
+/// for a tile over a cap there does it read further: it follows the
+/// tile-parts by their `Psot` and reads that tile's first tile-part header,
+/// allocating only that tile's coding parameters, no tile data. A tile-part
+/// `COD` or `COC` that brings the tile within the caps admits it, as does
+/// [`strict`](DecodeOptions::strict) off when the tile has no tile-part,
+/// since the decode then leaves it out. A tile-part `COD` that takes a tile
+/// over the caps is left to the decode, and so are the tiles after the
+/// first 2^22 resolutions of tile-components counted (about 50 ms): for
+/// those it can return a header for a file the decode refuses. On a file the
+/// decode refuses for a fault in its tile-parts, it may give this
+/// [`Error::Limit`] instead of the decode's error.
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks

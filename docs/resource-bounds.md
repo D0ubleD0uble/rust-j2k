@@ -270,17 +270,24 @@ code-blocks and max(2^18, those samples / 2048) precincts, counted across its
 components and resolutions at full resolution, whatever the reduction or the
 region. The decode counts each tile under its own header (a tile-part
 `COD` or `COC` resolved over the main header's) before it builds the tile's
-geometry. `read_header_with` counts each tile the decode reads as the
-decode does, and refuses a tile the decode would refuse, with the same
-error, and no other. A tile whose size shows it within both caps is not
-counted. For any other it walks the tile-part headers, as the decode does
-with `strict` off, and counts a tile with a tile-part under its own header;
-a tile with none is counted under the main header with `strict` on (the
-decode refuses the file then anyway) and not at all with it off, where the
-decode leaves it out. It counts at most 2^22 resolutions of tile-components
-(about 50 ms) and leaves any tile after that to the decode, so only a header
-of many large tiles of many components and levels gets that far, and past
-it `read_header_with` can return a header for a file the decode refuses.
+geometry. `read_header_with` counts each tile the decode reads under the
+main header, reading nothing past the first `SOT`, and refuses a tile over
+a cap there when the decode refuses it too, with the decode's error. A tile
+whose size shows it within both caps is not counted. Only for a tile over a
+cap under the main header does it read further: it follows the tile-parts
+by their `Psot` and reads that tile's first tile-part header (no tile data,
+no `PPM`, nothing joined; a few hundred bytes of heap in
+`tests/tile_geometry_header_alloc.rs`). A tile-part `COD` or `COC` that
+brings the tile within the caps admits it, and so does `strict` off when
+the tile has no tile-part, as the decode then leaves it out; with `strict`
+on such a tile is counted under the main header, and the decode refuses the
+file anyway. A tile-part `COD` that takes a tile over the caps is left to
+the decode. It counts at most 2^22 resolutions of tile-components (about 50
+ms) and leaves any tile after that to the decode, so only a header of many
+large tiles of many components and levels gets that far, and past it
+`read_header_with` can return a header for a file the decode refuses. On a
+file the decode refuses for a fault in its tile-parts, `read_header_with`
+may give the `Limit` instead of the decode's error.
 In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
 is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 
@@ -502,9 +509,8 @@ counts take 4 bytes per precinct of the tile, whatever the packet count:
 at most 1 MB under the 2^18 precincts a tile may hold at the floor of the
 sample limit, and 2 bytes for each 1024 samples the limit allows past it.
 The bitmap stays capped at the default bound's size and the counts do not
-grow as the
-walk goes, so raising the bound raises the time a file may take, not its
-memory. That holds with `strict` off too, where the walk counts every
+grow as the walk goes, so raising the bound raises the time a file may take,
+not its memory. That holds with `strict` off too, where the walk counts every
 packet past the end of the data, a step each, without reading it: those
 packets take no memory of their own.
 

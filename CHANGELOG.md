@@ -82,9 +82,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the caps are set from `n` and a refusal names no retry. An
   `IncrementalDecoder` waits on such a refusal (`Waiting::SampleLimit`)
   rather than failing, unless under `AtMost`. `read_header_with` now counts
-  the tiles it would read as the decode does and refuses a tile past a cap,
-  at any input size, where it used to return the header. A 40000 x
-  40000 one-tile file in 32x32 code-blocks padded to 210 MB, refused before
+  the tiles it would read under the main header and refuses a tile past a
+  cap that the decode refuses too, at any input size, where it used to
+  return the header; it reads a tile's tile-part header only for a tile
+  over a cap there. A 40000 x 40000 one-tile file in 32x32 code-blocks padded to 210 MB, refused before
   at every option, now decodes at the defaults, bit-exact against
   `opj_decompress` (17.5 s and 7.65 GiB at full resolution, 0.43 s at
   reduction 3). The bookkeeping of a tile at the caps is at most about a

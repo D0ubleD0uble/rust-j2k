@@ -196,8 +196,8 @@ pub enum Error {
     /// whatever the options. A tile may hold at most 32 progression order
     /// change (POC) volumes; a code-block may have at most 30 bit-planes;
     /// and under a `sample_limit` of `WorkLimit::Unlimited`, an image too
-    /// large for the target to address is still refused. For these, `retry_with` is `None`.
-    /// [`LimitDetail`] has an example that retries.
+    /// large for the target to address is still refused. For these,
+    /// `retry_with` is `None`. [`LimitDetail`] has an example that retries.
     Limit(LimitDetail),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
     /// invalid for this codestream, or that are invalid whatever the input
