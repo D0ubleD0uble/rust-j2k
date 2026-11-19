@@ -51,7 +51,11 @@ use crate::{
 /// of the bytes fed has, raised as the options say. A refine the rest of
 /// that bound cannot cover returns [`Waiting::WorkLimit`] where its own
 /// work passes the whole bound too, and [`Waiting::BoundSpent`] where only
-/// what the earlier refines spent puts it past. So a file whose code-blocks
+/// what the earlier refines spent puts it past. Before it returns
+/// `WorkLimit`, it decodes the tiles past the cut that a decode of its
+/// bytes on its own decodes, to give the error that decode gives first.
+/// The refines spend at most one more bound on these checks between them,
+/// so their code-block work comes to at most twice the bound. So a file whose code-blocks
 /// cost a lot may give no image before `finish`, which is a decode of its
 /// own, under its own bound. Each refine that returns an
 /// image also builds the whole image, as one decode does: it allocates the
@@ -172,6 +176,9 @@ pub struct IncrementalDecoder {
     refused_by_repeats: bool,
     /// The packet bound of that refine, when that bound refused it.
     repeat_bound: u64,
+    /// Whether the last refine waited on `BoundSpent` because the work the
+    /// refines may spend checking a `WorkLimit` was spent.
+    check_refused: bool,
     /// The error a refine returned, which every later call returns.
     failed: Option<Error>,
 }
@@ -197,6 +204,7 @@ impl IncrementalDecoder {
             #[cfg(test)]
             refused: false,
             refused_by_repeats: false,
+            check_refused: false,
             repeat_bound: 0,
             failed: None,
         })
@@ -389,12 +397,14 @@ impl IncrementalDecoder {
     ///
     /// Any error is the one `decode_with` gives on those bytes, and more
     /// bytes will not clear it: each later call returns it again, until a
-    /// change of options. A refusal by a bound the refines share can stand
-    /// in for an error that block decoding, the wavelet or assembly would
-    /// meet later in the file: the refine waits where `decode_with` fails,
-    /// and `finish` reports that error. A refine refused only for what
-    /// earlier refines spent waits, even where `decode_with` fails (see
-    /// [`BoundSpent`](Waiting::BoundSpent)).
+    /// change of options. A refusal by a bound only the refines have can
+    /// stand in for an error that block decoding, the wavelet or assembly
+    /// would meet in a tile the refine did not decode: the refine waits
+    /// where `decode_with` fails, and `finish` reports that error. Those
+    /// bounds are what the earlier refines left of the code-block bound
+    /// ([`BoundSpent`](Waiting::BoundSpent)) and the bound on the walks done
+    /// again ([`RepeatLimit`](Waiting::RepeatLimit)). A
+    /// [`WorkLimit`](Waiting::WorkLimit) never stands in for an error.
     pub fn refine(&mut self) -> Result<Refined> {
         if let Some(error) = &self.failed {
             return Err(error.clone());
@@ -422,6 +432,7 @@ impl IncrementalDecoder {
         }
         self.refused_by_repeats = ledger.repeats.refused.get();
         self.repeat_bound = ledger.repeats.bound.get();
+        self.check_refused = refusal == Some(Refusal::CheckSpent);
         self.spent = ledger.into_spent();
         let waiting = match decoded {
             Ok(image) => {
@@ -436,15 +447,15 @@ impl IncrementalDecoder {
             // what refused.
             Err(Error::Limit(_)) if self.refused_by_repeats => Waiting::RepeatLimit {},
             Err(Error::Limit(limit)) => match refusal {
-                Some(Refusal::MissingTiles) => Waiting::MissingTiles(limit),
-                Some(Refusal::Work) => Waiting::WorkLimit(limit),
-                Some(Refusal::BoundSpent) => Waiting::BoundSpent(limit),
+                Some(Refusal::MissingTiles) => Waiting::MissingTiles { limit },
+                Some(Refusal::Work) => Waiting::WorkLimit { limit },
+                Some(Refusal::BoundSpent | Refusal::CheckSpent) => Waiting::BoundSpent { limit },
                 // The sample limit grows with the bytes too, unless it is a
                 // ceiling the caller set: then more bytes cannot admit it.
                 None if limit.kind() == LimitKind::Samples
                     && !matches!(self.options.sample_limit, WorkLimit::AtMost(_)) =>
                 {
-                    Waiting::SampleLimit(limit)
+                    Waiting::SampleLimit { limit }
                 }
                 None => return Err(self.fail(Error::Limit(limit))),
             },
@@ -512,6 +523,14 @@ impl IncrementalDecoder {
     /// main header and has a bound (see [`crate::fuzz`]).
     pub(crate) fn code_block_work(&self) -> (u64, Option<u64>) {
         (self.spent.blocks, self.spent.bound)
+    }
+
+    /// The code-block work the refines have spent checking a refusal by
+    /// the whole code-block bound, and whether the last refine that tried
+    /// waited on `BoundSpent` because that work was spent (see
+    /// [`crate::fuzz`]).
+    pub(crate) fn check_work(&self) -> (u64, bool) {
+        (self.spent.checks, self.check_refused)
     }
 
     /// The packet visits the walks of tiles not kept have spent over the
@@ -644,8 +663,8 @@ impl Refined {
 ///         }
 ///         Waiting::HeaderIncomplete => println!("the main header is not in yet"),
 ///         Waiting::RepeatLimit { .. } => println!("decode the bytes fed now"),
-///         Waiting::BoundSpent(_) => println!("decode the bytes fed now"),
-///         Waiting::WorkLimit(limit) => println!("{limit}"),
+///         Waiting::BoundSpent { .. } => println!("decode the bytes fed now"),
+///         Waiting::WorkLimit { limit, .. } => println!("{limit}"),
 ///         _ => println!("{why:?}"),
 ///     }
 /// }
@@ -678,7 +697,11 @@ pub enum Waiting {
     /// refusal under it is not a wait: `refine` returns it as an error, and
     /// every later `refine` returns it again, whatever is fed, until a change
     /// of options.
-    SampleLimit(LimitDetail),
+    #[non_exhaustive]
+    SampleLimit {
+        /// The refusal, as an error would carry it.
+        limit: LimitDetail,
+    },
     /// The bytes fed cost more work than the packet work bound
     /// ([`LimitKind::PacketWork`]) or the code-block work bound
     /// ([`LimitKind::CodeBlockWork`]) allows: a decode of them on its own is
@@ -689,11 +712,27 @@ pub enum Waiting {
     /// its [`retry_with`](LimitDetail::retry_with).
     /// [`DecodeOptions::with_retry`] applies it, for a new decoder or a
     /// decode of [`into_bytes`](IncrementalDecoder::into_bytes).
-    WorkLimit(LimitDetail),
+    ///
+    /// A refine refused for what earlier refines spent counts the work of
+    /// the tiles from the cut on without decoding them (see
+    /// [`BoundSpent`](Self::BoundSpent)). Where that count passes the whole
+    /// code-block bound, the refine first decodes the tiles it counted, as
+    /// `decode_with` does before it reaches the tile it refuses. If one of
+    /// them fails, `refine` returns that error, and otherwise it waits here.
+    /// The refines may spend one whole code-block bound between them on
+    /// these checks, so over all of them they spend at most twice the
+    /// bound. Once that is spent, such a refine waits on `BoundSpent`
+    /// instead.
+    #[non_exhaustive]
+    WorkLimit {
+        /// The refusal, as an error would carry it.
+        limit: LimitDetail,
+    },
     /// The earlier refines have spent the code-block work bound
     /// ([`LimitKind::CodeBlockWork`]). The refines share that bound (see
     /// [`IncrementalDecoder`]), and each decodes the code-blocks again, so
-    /// what they spent is cut from the bound of the next. This refine's own
+    /// what they spent is cut from the bound of the next. Unless the work
+    /// for checking a `WorkLimit` is spent (see below), this refine's own
     /// work fits the whole bound of the bytes fed, so a decode of them on
     /// its own passes the code-block bound: the refine is refused only for
     /// what was spent before it. That decode can still give another error,
@@ -702,18 +741,26 @@ pub enum Waiting {
     /// The rule: the refine passed what was left of the bound, and the work
     /// of its own decode, counted tile by tile, is at most the whole bound.
     /// Where its own work passes the whole bound, the refine waits on
-    /// [`WorkLimit`](Self::WorkLimit) instead. To count that work, the
-    /// refine walks the packets of the tiles after the cut without decoding
-    /// their code-blocks, and the walks of tiles not kept spend the bound on
-    /// the walks done again that the refines share (see
-    /// [`RepeatLimit`](Self::RepeatLimit)). An error in a later tile, or a
-    /// refusal of its walk, ends the count, and the refine waits here
-    /// rather than return it: `decode_with` decodes each tile whole before
-    /// the next, so the code-blocks the refine skipped, at the cut and
-    /// after it, can hold the error `decode_with` meets first.
+    /// [`WorkLimit`](Self::WorkLimit) instead, or gives the error of a tile
+    /// it counted (see `WorkLimit`). To count that work, the refine walks
+    /// the packets of the tiles after the cut without decoding their
+    /// code-blocks, and the walks of tiles not kept spend the bound on the
+    /// walks done again that the refines share. If that bound refuses a
+    /// walk, the refine waits on [`RepeatLimit`](Self::RepeatLimit), not
+    /// here. Another error in a later tile, or a packet-work refusal of its
+    /// walk, ends the count, and the refine waits here rather than return
+    /// it: `decode_with` decodes each tile whole before the next, so the
+    /// code-blocks the refine skipped, at the cut and after it, can hold
+    /// the error `decode_with` meets first.
     ///
-    /// Raising the code-block limit is not the way out: the bytes fed pass
-    /// the code-block bound they have. Decode them now,
+    /// Once the refines have spent the work they may spend checking a
+    /// `WorkLimit` (see `WorkLimit`), a refine whose own work passes the
+    /// whole bound waits here too. A decode of the bytes fed on its own is
+    /// then refused, or fails in a tile the refine did not decode, and the
+    /// detail's message says the checks are spent.
+    ///
+    /// Raising the code-block limit is not the way out: in every other
+    /// case, the bytes fed pass the code-block bound they have. Decode them now,
     /// `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`
     /// (see [`options`](IncrementalDecoder::options)), or start a new
     /// decoder. A viewer that streams the file is better served by the
@@ -722,14 +769,22 @@ pub enum Waiting {
     /// too, though more bytes raise the bound, and `finish` decodes under a
     /// bound of its own. The detail's
     /// [`retry_with`](LimitDetail::retry_with) is `None`.
-    BoundSpent(LimitDetail),
+    #[non_exhaustive]
+    BoundSpent {
+        /// The refusal, as an error would carry it.
+        limit: LimitDetail,
+    },
     /// The charge for missing tiles passed the packet work bound: each
     /// tile-component of a tile that has not come in yet costs a step,
     /// before any tile is decoded. Tiles that come in lower the charge, and
     /// more bytes raise the bound. The detail is the refusal's, of kind
     /// [`LimitKind::PacketWork`], as a decode of the bytes fed on its own
     /// gives it.
-    MissingTiles(LimitDetail),
+    #[non_exhaustive]
+    MissingTiles {
+        /// The refusal, as an error would carry it.
+        limit: LimitDetail,
+    },
     /// The bound on the packet walks the refines do again is spent: the
     /// walks of tiles whose walk is too large to keep, and of walks started
     /// again (see [`IncrementalDecoder`]). All the refines spend it
@@ -747,6 +802,59 @@ pub enum Waiting {
     RepeatLimit {},
 }
 
+/// Checks, as doctests, that the struct variants of [`Waiting`] that carry a
+/// [`LimitDetail`] are `#[non_exhaustive]`.
+///
+/// A `match` outside the crate cannot name `Waiting::WorkLimit`'s fields
+/// without `..`:
+///
+/// ```compile_fail,E0638
+/// fn limit(why: rust_j2k::Waiting) -> Option<rust_j2k::LimitDetail> {
+///     match why {
+///         rust_j2k::Waiting::WorkLimit { limit } => Some(limit),
+///         _ => None,
+///     }
+/// }
+/// ```
+///
+/// A `match` outside the crate cannot name `Waiting::BoundSpent`'s fields
+/// without `..`:
+///
+/// ```compile_fail,E0638
+/// fn limit(why: rust_j2k::Waiting) -> Option<rust_j2k::LimitDetail> {
+///     match why {
+///         rust_j2k::Waiting::BoundSpent { limit } => Some(limit),
+///         _ => None,
+///     }
+/// }
+/// ```
+///
+/// A `match` outside the crate cannot name `Waiting::SampleLimit`'s fields
+/// without `..`:
+///
+/// ```compile_fail,E0638
+/// fn limit(why: rust_j2k::Waiting) -> Option<rust_j2k::LimitDetail> {
+///     match why {
+///         rust_j2k::Waiting::SampleLimit { limit } => Some(limit),
+///         _ => None,
+///     }
+/// }
+/// ```
+///
+/// A `match` outside the crate cannot name `Waiting::MissingTiles`'s fields
+/// without `..`:
+///
+/// ```compile_fail,E0638
+/// fn limit(why: rust_j2k::Waiting) -> Option<rust_j2k::LimitDetail> {
+///     match why {
+///         rust_j2k::Waiting::MissingTiles { limit } => Some(limit),
+///         _ => None,
+///     }
+/// }
+/// ```
+#[cfg(doctest)]
+pub struct WaitingVariantsAreNonExhaustive;
+
 /// Which work bound refused a decode under a [`Ledger`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
@@ -758,6 +866,10 @@ pub(crate) enum Refusal {
     /// What the earlier decodes left of the code-block bound, where the
     /// work of this decode fits the whole bound.
     BoundSpent,
+    /// The whole code-block bound, where the earlier decodes have spent
+    /// the work they may spend checking such a refusal (see
+    /// [`Ledger::check_blocks`]).
+    CheckSpent,
 }
 
 /// What the decodes of an [`IncrementalDecoder`] keep between them (see
@@ -767,6 +879,8 @@ struct Spent {
     walks: Walks,
     /// The code-block work spent.
     blocks: u64,
+    /// The code-block work spent checking refusals by the whole bound.
+    checks: u64,
     /// The packet visits the walks of tiles not kept have spent.
     repeats: u64,
     /// The code-block bound of the last decode, when it had one.
@@ -791,6 +905,9 @@ pub(crate) struct Ledger {
     walks: RefCell<Walks>,
     /// The code-block work spent.
     blocks: Cell<u64>,
+    /// The code-block work spent checking refusals by the whole bound (see
+    /// [`check_blocks`](Self::check_blocks)).
+    checks: Cell<u64>,
     /// The packet visits the walks of tiles not kept have spent (see
     /// [`Walks::walk`]).
     repeats: Repeats,
@@ -807,6 +924,7 @@ impl fmt::Debug for Ledger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ledger")
             .field("blocks", &self.blocks)
+            .field("checks", &self.checks)
             .field("repeats", &self.repeats)
             .field("bound", &self.bound)
             .field("work_refused", &self.work_refused)
@@ -822,6 +940,7 @@ impl Ledger {
         Ledger {
             walks: RefCell::new(spent.walks),
             blocks: Cell::new(spent.blocks),
+            checks: Cell::new(spent.checks),
             repeats: Repeats::new(spent.repeats),
             bound: Cell::new(None),
             work_refused: Cell::new(None),
@@ -834,6 +953,7 @@ impl Ledger {
         Spent {
             walks: self.walks.into_inner(),
             blocks: self.blocks.get(),
+            checks: self.checks.get(),
             repeats: self.repeats.visits.get(),
             bound: self.bound.get(),
         }
@@ -893,6 +1013,22 @@ impl Ledger {
     /// tiles shrink, so more bytes may clear it.
     pub(crate) fn refuse(&self, why: Refusal) {
         self.work_refused.set(Some(why));
+    }
+
+    /// Whether the decodes may spend `work` more checking a refusal by the
+    /// whole code-block bound `bound`: decoding the tiles a decode refused
+    /// for what the earlier ones spent passed over, to find an error a
+    /// decode of its bytes on its own meets before that refusal. All the
+    /// decodes together may spend one whole bound on these checks, so
+    /// that, with the work they spend on their own, they spend at most
+    /// twice the bound. When the work fits, it is spent.
+    pub(crate) fn check_blocks(&self, work: u64, bound: u64) -> bool {
+        let spent = self.checks.get().saturating_add(work);
+        if spent > bound {
+            return false;
+        }
+        self.checks.set(spent);
+        true
     }
 
     /// Add `work` to the code-block work spent.

@@ -43,8 +43,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Result<Option<Image>>`. To migrate, call `.image()`:
   `decoder.refine()?.image()` is the `Option<Image>` it returned before.
   `Refined::Waiting` says why there is no image: `MoreBytes { until, .. }`,
-  `HeaderIncomplete`, `SampleLimit`, `WorkLimit`, `BoundSpent` and
-  `MissingTiles` (each with its `LimitDetail`), or `RepeatLimit { .. }`.
+  `HeaderIncomplete`, `SampleLimit { limit, .. }`, `WorkLimit { limit, .. }`,
+  `BoundSpent { limit, .. }` and `MissingTiles { limit, .. }` (each with its
+  `LimitDetail`), or `RepeatLimit { .. }`.
   `BoundSpent` is a refine refused only for the code-block work earlier
   refines spent: a decode of the bytes fed on their own passes the bound,
   so its `retry_with` is `None`. Such a refine reads the packets of the
@@ -53,8 +54,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refine waits on `BoundSpent`: the code-blocks it skipped can hold the
   error `decode_with` gives first (#485). A `WorkLimit` of the code-block
   bound now carries the refusal a decode of the bytes fed gives, hint
-  included. Both enums are `#[non_exhaustive]`, so a `match` needs a `_`
-  arm (#466).
+  included. Where that count passes the whole bound, the refine first
+  decodes the tiles it counted, as `decode_with` does, and gives their
+  first error if they have one, so a `WorkLimit` never stands in for an
+  error. The refines spend at most one more code-block bound on these
+  checks; past it they wait on `BoundSpent` (#487). Both enums and their
+  struct variants are `#[non_exhaustive]`, so a `match` needs a `_` arm and
+  `..` in each variant (#466, #487).
 - The default sample limit grows with the input: it is the larger of 2^29
   samples and 8 samples per byte of input. Up to 64 MiB of input nothing
   changes. The sample limit no longer refuses a larger file that holds at least

@@ -209,8 +209,8 @@ holds all its refines to the code-block limit together, and a one-shot decode
 holds only itself. So each refine that was due is checked by the decoder's own
 rule: it waits if and only if the code-block work a decoder
 with nothing spent spends on the same bytes passes what is left of the bound
-after the work spent before it. The limit is at least 2^26 sample passes,
-which inputs of a few kilobytes do not come near, so each due refine also
+after the work spent before it. Under the fuzz cap the bound is 2^22 sample
+passes, which few inputs of a few kilobytes come near, so each due refine also
 starts a probe decoder with work already spent (`rust_j2k::fuzz`), drawn
 around the most that leaves the refine room, and checks it by the same rule.
 
@@ -219,11 +219,16 @@ not due waits for `MoreBytes`, naming twice the bytes of the last try. A due
 one waits for `RepeatLimit` exactly when the hook below reports that bound's
 refusal. Otherwise a header cut short is `HeaderIncomplete`, and a refusal by
 the sample limit, the charge for missing tiles or a work bound carries the
-refusal the one-shot decode gives, hint included; a code-block `WorkLimit`
-may also stand in for an error the one-shot decode gives later in the file.
+refusal the one-shot decode gives, hint included. A code-block `WorkLimit`
+never stands where the one-shot decode gives an error: a refine whose count
+past the cut passes the whole bound decodes the tiles it counted first.
 `BoundSpent`, a refusal by what earlier refines spent of the code-block
-bound, comes only where the one-shot decode passes that bound, and carries
-no hint. Only the first 4 refines that are checked against a decode of their
+bound, comes only where the one-shot decode passes that bound, or once the
+refines have spent the bound on those checks
+(`rust_j2k::fuzz::incremental_check_work`), and carries no hint. The probe's
+reason is checked by the same rule, and its check bound is never spent, so
+it is the path that holds `WorkLimit` to the one-shot refusal after a cut.
+`tests/fixtures/incremental/segsym_wide*.j2k` are seeds that reach it. Only the first 4 refines that are checked against a decode of their
 own (`MAX_CHECKED_TRIES`: a due one, or one that gives an image or an error)
 are compared with the one-shot oracle; the later ones only refine, and an
 error they give is still held to stick. Every refine that is not due is

@@ -298,6 +298,33 @@ pub fn incremental_code_block_work(decoder: &crate::IncrementalDecoder) -> (u64,
     decoder.code_block_work()
 }
 
+/// What an [`IncrementalDecoder`](crate::IncrementalDecoder) has spent
+/// checking refusals by the whole code-block bound. A refine refused for
+/// what earlier refines spent counts the work of the later tiles without
+/// decoding them; where that count passes the whole bound, the refine
+/// decodes the tiles it passed over before it waits on
+/// [`Waiting::WorkLimit`](crate::Waiting::WorkLimit), as a decode of its
+/// bytes on its own does, and gives their first error if they have one.
+/// The refines may spend one whole bound on these checks between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckWork {
+    /// The code-block work those checks have spent over all the refines.
+    pub spent: u64,
+    /// Whether the last refine that tried waited on
+    /// [`Waiting::BoundSpent`](crate::Waiting::BoundSpent) because the
+    /// check it needed did not fit what was left of that bound. Such a
+    /// refine waits where a one-shot decode of the same bytes may give a
+    /// code-block refusal or an error.
+    pub refused: bool,
+}
+
+/// What `decoder` has spent checking refusals by the whole code-block
+/// bound (see [`CheckWork`]).
+pub fn incremental_check_work(decoder: &crate::IncrementalDecoder) -> CheckWork {
+    let (spent, refused) = decoder.check_work();
+    CheckWork { spent, refused }
+}
+
 /// How many packet bounds the walks of tiles not kept may spend over all
 /// the refines of an incremental decoder before their bound refuses one.
 pub const REPEAT_BOUNDS: u64 = crate::tier2::resume::REPEAT_BOUNDS;

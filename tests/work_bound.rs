@@ -372,7 +372,9 @@ fn a_refine_sizes_a_later_tiles_poc_bitmap_as_one_decode_does() {
     decoder.feed(&bytes);
     // The refine waits with the refusal that decode gives.
     match decoder.refine().unwrap() {
-        Refined::Waiting(Waiting::WorkLimit(m)) => assert_eq!(format!("{m:?}"), expected),
+        Refined::Waiting(Waiting::WorkLimit { limit: m, .. }) => {
+            assert_eq!(format!("{m:?}"), expected)
+        }
         other => panic!("{other:?}"),
     }
     assert_eq!(decoder.bytes_decoded(), 0);
