@@ -207,6 +207,12 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
     let limit = refusal(&bytes, &under);
     assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
     assert_eq!(limit.retry_with(), None, "{limit}");
+
+    // A tile over both caps is refused for its precincts.
+    let both = precincts_tile(2048, 1024);
+    let limit = refusal(&both, &DecodeOptions::default());
+    assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
+    assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(8)), "{limit}");
 }
 
 /// Of two tiles, the one over the cap is the one named, by the header read
