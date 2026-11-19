@@ -501,6 +501,84 @@ fn the_count_of_the_tiles_own_headers_has_a_budget() {
     assert!(decode_with(&bytes, &DecodeOptions::default()).is_err());
 }
 
+/// The header read rescues the tiles over a cap under the main header in
+/// batches of 1, 2, 4 and so on, so it walks the tile-parts a few times, not
+/// once a tile: 1980 tiles over the precinct cap under the main header, each
+/// brought within by its first tile-part's `COD`, with 254 more tile-parts
+/// each, about 505,000 `SOT`s in 6.9 MiB. A walk a tile would take minutes
+/// in a debug build and seconds in release.
+#[test]
+fn the_tiles_over_a_cap_are_rescued_in_few_walks() {
+    let (tw, th, nx, ny, parts) = (520, 512, 44, 45, 255);
+    let mut cod = synth::cod_body(1, 0, 4, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body([tw * nx, th * ny, 0, 0, tw, th, 0, 0], &[[7, 1, 1]]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+    for tile in 0..nx * ny {
+        bytes.extend(synth::tile_part(tile as u16, 0, parts, &own, &[]));
+    }
+    for part in 1..parts {
+        for tile in 0..nx * ny {
+            bytes.extend(synth::tile_part(tile as u16, part, parts, &[], &[]));
+        }
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    let start = std::time::Instant::now();
+    let header =
+        read_header_with(&bytes, &DecodeOptions::default()).expect("the header is admitted");
+    let spent = start.elapsed();
+    assert_eq!((header.width, header.height), (tw * nx, th * ny));
+    assert!(spent.as_secs() < 4, "{spent:?}");
+}
+
+/// Where the tile-parts come out of index order, the header read's refusal
+/// names the lowest tile refused, as the decode's does. Each tile is 520 x
+/// 512 in 1x1 precincts under the main header, over the precinct cap, and
+/// the tiles not refused have a tile-part `COD` of the maximal precincts.
+#[test]
+fn a_refusal_names_the_lowest_tile_whatever_the_order() {
+    let file = |tiles: u32, order: &[u16], refused: &[u16]| {
+        let mut cod = synth::cod_body(1, 0, 4, 0);
+        cod[0] = 1;
+        cod.push(0x00);
+        let siz = synth::siz_body([520 * tiles, 512, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+        let mut bytes = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ]
+        .concat();
+        let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+        for &tile in order {
+            let extra: &[u8] = if refused.contains(&tile) { &[] } else { &own };
+            bytes.extend(synth::tile_part(tile, 0, 1, extra, &[0]));
+        }
+        bytes.extend_from_slice(&[0xFF, 0xD9]);
+        bytes
+    };
+    for (tiles, order, refused, named) in [
+        (4, &[3, 2, 1, 0][..], &[1, 2][..], 1),
+        // Tile 4 is seen before tile 6, and both before tile 3.
+        (8, &[0, 1, 2, 4, 6, 3, 5, 7][..], &[4, 6][..], 4),
+    ] {
+        let limit = refusal(&file(tiles, order, refused), &DecodeOptions::default());
+        assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
+        assert!(
+            limit.message().starts_with(&format!("tile {named} ")),
+            "{limit}"
+        );
+    }
+}
+
 /// A JP2 file is held to the same caps, and its header read refuses as its
 /// decode does.
 #[test]
