@@ -455,6 +455,52 @@ fn a_tile_part_header_is_read_within_its_psot() {
     }
 }
 
+/// The header read's count of the tiles' own headers has a budget, and
+/// reading a header that copies the main header's coding parameters is
+/// charged for each component: of 1000 tiles of 4096 components over the
+/// precinct cap under the main header, the first 999 with a tile-part `COD`
+/// that brings them within, the budget runs out before the last, which is
+/// over the cap under its own header too, so the header read leaves it to
+/// the decode.
+#[test]
+fn the_count_of_the_tiles_own_headers_has_a_budget() {
+    // `tiles` tiles of 8x16 and 4096 components in 1x1 precincts, 524,288
+    // a tile, all but the last with a tile-part `COD` of the maximal ones.
+    let file = |tiles: u32| {
+        let mut cod = synth::cod_body(1, 0, 0, 0);
+        cod[0] = 1;
+        cod.push(0x00);
+        let siz = synth::siz_body([8 * tiles, 16, 0, 0, 8, 16, 0, 0], &vec![[7, 1, 1]; 4096]);
+        let mut bytes = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ]
+        .concat();
+        let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+        for tile in 0..tiles - 1 {
+            bytes.extend(synth::tile_part(tile as u16, 0, 1, &own, &[]));
+        }
+        bytes.extend(synth::tile_part(tiles as u16 - 1, 0, 1, &[], &[]));
+        bytes.extend_from_slice(&[0xFF, 0xD9]);
+        bytes
+    };
+    // Within the budget the last tile is counted and refused.
+    match read_header_with(&file(8), &DecodeOptions::default()) {
+        Err(Error::Limit(limit)) => {
+            assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
+            assert!(limit.message().starts_with("tile 7 "), "{limit}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let bytes = file(1000);
+    let header =
+        read_header_with(&bytes, &DecodeOptions::default()).expect("the header is admitted");
+    assert_eq!(header.width, 8000);
+    assert!(decode_with(&bytes, &DecodeOptions::default()).is_err());
+}
+
 /// A JP2 file is held to the same caps, and its header read refuses as its
 /// decode does.
 #[test]
