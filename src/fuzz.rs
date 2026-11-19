@@ -355,6 +355,8 @@ mod tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/layers/lrcp.j2k");
         let bytes = std::fs::read(path).unwrap();
+        // The fuzz budgets are sized from these: a change must be measured.
+        assert_eq!((K, super::CAP_WORK_PER_SAMPLE), (4, 4));
         let plain = DecodeOptions::default();
         let image = decode_with(&bytes, &plain).unwrap();
         let (blocks, bound) = block_work(&bytes, &plain);
@@ -367,7 +369,7 @@ mod tests {
             .sum();
         let (work, bound) = block_work(&bytes, &cap(plain.clone(), default));
         assert_eq!(bound, Some(default));
-        assert_eq!(work, blocks + super::CAP_WORK_PER_SAMPLE * samples);
+        assert_eq!(work, blocks + 4 * samples);
         assert!(blocks > 0 && work < default, "{work} of {default}");
         // `Unlimited` has no bound without the cap.
         let unlimited = plain

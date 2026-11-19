@@ -680,8 +680,8 @@ fn budget_inputs() -> Vec<(&'static str, String, Vec<u8>)> {
         .collect()
 }
 
-/// The inputs whose whole decode spends exactly each target's work cap, with
-/// the samples each declares: empty packets, so the work is
+/// The inputs whose whole decode spends each target's work cap, to within a
+/// sample, with the samples each declares: empty packets, so the work is
 /// `CAP_WORK_PER_SAMPLE` for each sample. These are the slowest inputs the
 /// cap lets through, as every decode reconstructs all of them.
 fn cap_inputs() -> Vec<(&'static str, String, Vec<u8>, u64)> {
@@ -716,13 +716,15 @@ fn weight(target: &str) -> u64 {
 /// execution under the timeout.
 fn work_weight(target: &str) -> u64 {
     match target {
-        // See `incremental_due_tries_stay_within_the_work_weight`.
-        "incremental_decode" => 256,
+        // See `incremental_checked_tries_stay_within_the_work_weight`.
+        "incremental_decode" => 64,
         // The first decode at up to 2 bounds, the default 1, the steps 2
         // and 4, and the decode with no limits 4: 13.
         "retry_ladder" => 16,
         // The whole and the part.
         "window_crop" => 2,
+        // The plain decode at 2 bounds and three more at 1.
+        "decode" => 5,
         // Four decodes; `jp2_boxes` runs three.
         _ => 4,
     }
@@ -778,12 +780,11 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
         let w = work_weight(target);
         assert_eq!(budget::declared(&data), u128::from(samples), "{name}");
         assert!(!budget::over(&data, weight(target)), "{name}");
-        // Empty packets: the work is the samples' charge alone, the cap.
-        assert_eq!(
-            samples * rust_j2k::fuzz::CAP_WORK_PER_SAMPLE,
-            budget::cap(w),
-            "{name}"
-        );
+        // Empty packets: the work is the samples' charge alone, within a
+        // sample of the cap.
+        let per = rust_j2k::fuzz::CAP_WORK_PER_SAMPLE;
+        assert!(samples * per <= budget::cap(w), "{name}");
+        assert!((samples + 1) * per > budget::cap(w), "{name}");
         let more = if target == "jp2_boxes" {
             let side = u32::try_from(samples.isqrt()).unwrap();
             data_of(target, &boxes_body(&square_ish_codestream(side, side + 1)))
@@ -798,65 +799,43 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
     }
 }
 
-/// The due tries of `incremental_decode` on `data`: the pieces a hash of the
-/// input picks, and a try each time the bytes fed double. This copies the
-/// target's schedule.
-fn incremental_due_tries(data: &[u8]) -> u32 {
-    let splitmix = |x: u64| {
-        let mut z = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    };
-    let mut hash = data.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    });
-    let (mut fed, mut tried, mut tries) = (0usize, 0usize, 0u32);
-    while fed < data.len() {
-        hash = splitmix(hash);
-        let piece = 1 + (hash % (data.len() as u64 / 4 + 1)) as usize;
-        fed = (fed + piece).min(data.len());
-        if fed >= tried * 2 {
-            tried = fed;
-            tries += 1;
-        }
-    }
-    tries
-}
+/// Hash of `fuzz/fuzz_targets/incremental_decode.rs` from its `fuzz_target!`
+/// to the end, comments left out: the pieces, the due rule, the counter of
+/// checked tries and the draws of the changes and the probe, which
+/// `incremental_checked_tries_stay_within_the_work_weight` relies on. If it
+/// changed, check that test's count of bounds, then update this hash.
+const INCREMENTAL_HASH: u64 = 13473984105964250949;
 
 #[test]
-fn incremental_due_tries_stay_within_the_work_weight() {
-    // The bytes fed at the k-th due try are at least 2^(k - 1), so an input
-    // under 2^20 bytes has at most 20. Each runs up to three decodes besides
-    // the refine (the one-shot, `zero` and the probe) at up to 4 bounds
-    // each; the refines share 4 bounds, and `finish` and the last
-    // `decode_with` take 4 each.
-    let most: u64 = 20;
-    assert!(12 * most + 4 + 8 <= work_weight("incremental_decode"));
-    // The schedule keeps to that over a spread of lengths and contents.
-    let mut seed = 1u64;
-    for len in [
-        1usize,
-        2,
-        3,
-        7,
-        64,
-        1000,
-        4096,
-        16 * 1024,
-        78 * 1024,
-        (1 << 20) - 1,
-    ] {
-        for _ in 0..8 {
-            seed = seed
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            let data: Vec<u8> = (0..len).map(|i| (seed >> (i % 56)) as u8).collect();
-            let tries = incremental_due_tries(&data);
-            assert!(tries <= len.ilog2() + 1, "{len} bytes: {tries} due tries");
-            assert!(u64::from(tries) <= most, "{len} bytes: {tries} due tries");
-        }
-    }
+fn incremental_checked_tries_stay_within_the_work_weight() {
+    let target = include_str!("../fuzz/fuzz_targets/incremental_decode.rs").replace('\r', "");
+    let body: String = target[target.find("fuzz_target!(").expect("the target")..]
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        fnv(&body),
+        INCREMENTAL_HASH,
+        "incremental_decode's schedule changed: check the bounds below, then update INCREMENTAL_HASH"
+    );
+    let line = target
+        .lines()
+        .find(|l| l.starts_with("const MAX_CHECKED_TRIES: u32 = "))
+        .expect("the count of checked tries");
+    let checked: u64 = line["const MAX_CHECKED_TRIES: u32 = ".len()..]
+        .trim_end_matches(';')
+        .parse()
+        .unwrap();
+    // Each checked try runs up to three decodes besides the refine (the
+    // one-shot, `zero` and the probe) at up to 4 bounds each; the refines
+    // share 4 bounds, and `finish` and the last `decode_with` take 4 each.
+    // A try past the count only refines, whatever the input's length.
+    assert!(
+        12 * checked + 4 + 8 <= work_weight("incremental_decode"),
+        "{checked} checked tries"
+    );
 }
 
 #[test]
@@ -917,6 +896,13 @@ fn each_fuzz_target_passes_the_weight_this_file_pins() {
             work_weight(&target),
             "{target}: work weight in the target"
         );
+        if target == "decode" {
+            // The plain decode takes 2 of the 5 bounds.
+            assert!(
+                source.contains(".with_code_block_work_limit(rust_j2k::WorkLimit::Raised(2))"),
+                "decode: the plain decode at 2 bounds"
+            );
+        }
         for uncapped in ["DecodeOptions::default()", "rust_j2k::decode("] {
             assert!(
                 !source.contains(uncapped),

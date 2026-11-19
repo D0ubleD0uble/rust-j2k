@@ -30,8 +30,13 @@ fuzz_target!(|data: &[u8]| {
     if budget::over(data, 2) {
         return;
     }
-    let base = budget::options(4);
-    let _ = rust_j2k::decode_with(data, &base);
+    // In code-block bounds: the plain decode at 2, so that mid-size images
+    // reach pixels, and the other three at 1 each.
+    let base = budget::options(5);
+    let plain = base
+        .clone()
+        .with_code_block_work_limit(rust_j2k::WorkLimit::Raised(2));
+    let _ = rust_j2k::decode_with(data, &plain);
     let hash = fnv1a(data);
     if hash & 1 == 1 {
         let layers = 1 + ((hash >> 1) % 3) as u16;
