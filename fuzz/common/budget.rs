@@ -12,7 +12,7 @@ use rust_j2k::{DecodeOptions, WorkLimit};
 /// with little coded data per sample: under the fuzz build (ASan) a thin
 /// image of 2^26 samples takes about 9 s a decode. The tier-1 work bound
 /// grows with the tile's bytes, not its samples, so a tier-1-heavy input
-/// inside the budget can still pass `-timeout=30` (#480). The decoder's
+/// inside the budget can still run past `-timeout=30` (#480). The decoder's
 /// default limit is at least 2^29, so a sample limit refusal of the image
 /// area is never decoded.
 const MAX_FUZZ_SAMPLES: u64 = 1 << 26;

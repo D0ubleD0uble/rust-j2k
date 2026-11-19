@@ -637,7 +637,13 @@ fn each_fuzz_target_passes_the_weight_this_file_pins() {
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         let target = path.file_stem().unwrap().to_str().unwrap().to_string();
-        let source = std::fs::read_to_string(&path).unwrap();
+        // Comments don't count: a call left behind in one is not a call.
+        let source: String = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let calls: Vec<&str> = source
             .match_indices("budget::over(")
             .map(|(i, _)| &source[i..])
@@ -651,7 +657,15 @@ fn each_fuzz_target_passes_the_weight_this_file_pins() {
             continue;
         }
         if calls.is_empty() {
-            continue; // a target that decodes no whole image
+            // Targets that decode no whole image. A new target is not on this
+            // list until someone decides it needs no budget.
+            assert!(
+                ["tile_body", "icc_srgb", "mq", "tier1_block", "ht_block"]
+                    .contains(&target.as_str()),
+                "{target} calls neither `budget::over` nor `budget::declared`; \
+                 budget it, or add it to the unbudgeted list"
+            );
+            continue;
         }
         assert_eq!(calls.len(), 1, "{target}: one budget call");
         let call = calls[0];

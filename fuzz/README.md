@@ -306,7 +306,7 @@ can still be refused for its area.
 The budget bounds memory, not time. It bounds time only for an image with
 little coded data per sample. The tier-1 work bound grows with the tile's
 bytes, not its samples, so a tier-1-heavy input inside the budget can still
-pass `-timeout=30` (#480).
+run past `-timeout=30` (#480).
 
 Seed it as `decode`, with 26 seeds made from the work-bound, sample-limit
 and `psot0` bomb fixtures, each behind a control byte: `00` (the defaults),
