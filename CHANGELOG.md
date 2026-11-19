@@ -28,8 +28,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `WorkLimit::AtMost(n)` on `DecodeOptions::sample_limit` sets a fixed
   ceiling of `n` samples, whatever the input's length or padding: at most
   `4·n` bytes of output, and sample buffers of no more than about 3.2 times
-  that. The input and the tile-part parse, which keeps a record for each tile
-  in the file, are on top and grow with the input. It holds every count the
+  that. The input and the tile-part parse (under 1 KiB for each tile the
+  image declares, at most about 57 MB) are on top. It holds every count the
   default limit holds (the tiles a region reads, in every component, a
   palette's expanded channels and sRGB output), so `read_header_with`
   refuses what the decode would. A refusal under it

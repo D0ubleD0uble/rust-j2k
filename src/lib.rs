@@ -889,10 +889,10 @@ pub struct DecodeOptions {
     /// [`AtMost(n)`](WorkLimit::AtMost): the decode may hold at most `n`
     /// samples, whatever the input's length. The output is then at most
     /// `4 * n` bytes, and the sample buffers peak at no more than about 3.2
-    /// times that (a square tile measured 1.35, resident). Memory that grows
-    /// with the input is on top: the input itself, and the parse of the
-    /// tile-parts, which keeps a record of under 1 KiB for each tile in the
-    /// file (see [the sample
+    /// times that (a square tile measured 1.35, resident). Other memory is on
+    /// top: the input itself, and the parse of the tile-parts, which keeps a
+    /// record of under 1 KiB for each tile the image declares, at most about
+    /// 57 MB (see [the sample
     /// limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
     /// The palette expansion and sRGB output are checked against `n` too,
     /// and so is every tile a region reads. A refusal under it gives no
@@ -1106,7 +1106,8 @@ impl Default for DecodeOptions {
 ///   [`AtMost(n)`](WorkLimit::AtMost): at most `n` samples, `4 * n` bytes of
 ///   output, whatever the file's size or padding (see
 ///   [`DecodeOptions::sample_limit`]). A refusal under it gives no factor.
-///   Cap the input's size as well: the tile-part parse grows with it.
+///   Cap the input's size as well, as the decode holds it; the tile-part
+///   parse adds at most about 57 MB.
 /// - For a higher work bound, use `Raised(n)` with an `n` of your own
 ///   choosing, the largest cost you will accept. It is a factor of the
 ///   default, which grows with the file. Read the factor from
