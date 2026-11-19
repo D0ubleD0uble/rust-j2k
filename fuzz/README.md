@@ -303,6 +303,11 @@ refused for its area, and that input is never decoded. The exception is an input
 whose header fails to read: the budget counts it as under budget, so its decode
 can still be refused for its area.
 
+The budget bounds memory, not time. It bounds time only for an image with
+little coded data per sample. The tier-1 work bound grows with the tile's
+bytes, not its samples, so a tier-1-heavy input inside the budget can still
+pass `-timeout=30` (#480).
+
 Seed it as `decode`, with 26 seeds made from the work-bound, sample-limit
 and `psot0` bomb fixtures, each behind a control byte: `00` (the defaults),
 `80` (`strict` off), `40` (reduction 1), `0f` (the sample and packet work

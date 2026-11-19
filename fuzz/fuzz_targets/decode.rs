@@ -24,7 +24,8 @@ mod budget;
 mod partial;
 
 fuzz_target!(|data: &[u8]| {
-    // Up to three decodes of the input run one after another.
+    // Up to four decodes of the input run one after another: the plain one, the
+    // strict one, the lenient one in `partial::check`, and `part`.
     if budget::over(data, 4) {
         return;
     }

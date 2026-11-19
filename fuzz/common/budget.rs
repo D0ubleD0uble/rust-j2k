@@ -1,4 +1,4 @@
-//! Keeps a fuzz run under libFuzzer's RSS limit and timeout.
+//! Keeps a fuzz run under libFuzzer's RSS limit.
 
 use rust_j2k::{DecodeOptions, WorkLimit};
 
@@ -6,13 +6,15 @@ use rust_j2k::{DecodeOptions, WorkLimit};
 /// once and keeps one image: 2^26 (256 MiB as `i32`). A decode peaks at about
 /// 1.35 times its output for a square tile and up to about 3.2 times for a
 /// tile one sample wide, so that is under 1 GiB and well under the 4 GiB
-/// `-rss_limit_mb` the fuzz job passes. The time is the tighter limit. Under
-/// the fuzz build (ASan) a thin image of 2^26 samples takes about 9 s a
-/// decode, and the job's `-timeout=30` counts the whole execution, so a
-/// target that decodes one input several times, or holds several images,
-/// divides the budget by its `weight` (see [`over`]). The decoder's default
-/// limit is at least 2^29, so a sample limit refusal of the image area is
-/// never decoded.
+/// `-rss_limit_mb` the fuzz job passes. A target that decodes one input
+/// several times, or holds several images, divides the budget by its `weight`
+/// (see [`over`]). The budget bounds memory. It bounds time only for an image
+/// with little coded data per sample: under the fuzz build (ASan) a thin
+/// image of 2^26 samples takes about 9 s a decode. The tier-1 work bound
+/// grows with the tile's bytes, not its samples, so a tier-1-heavy input
+/// inside the budget can still pass `-timeout=30` (#480). The decoder's
+/// default limit is at least 2^29, so a sample limit refusal of the image
+/// area is never decoded.
 const MAX_FUZZ_SAMPLES: u64 = 1 << 26;
 
 /// Whether `data` declares more output samples than the budget allows a

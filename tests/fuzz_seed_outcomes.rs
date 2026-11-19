@@ -334,7 +334,7 @@ fn the_fuzz_skip_fires_just_over_2_pow_26_samples_and_not_on_small_inputs() {
     // 2^26 samples is not over; one more row is.
     assert!(!over_once(&header_only(8192, 8192)));
     assert!(over_once(&header_only(8192, 8193)));
-    // The decoder's own default limit is twice that, so this decodes on its own.
+    // The decoder's own default limit is now 8 times that, so this decodes on its own.
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     // On a 32-bit target this image is past the address cap, so the header
     // does not read and the skip does not apply.
@@ -346,6 +346,11 @@ fn the_fuzz_skip_fires_just_over_2_pow_26_samples_and_not_on_small_inputs() {
     }
     let small = std::fs::read(fixtures.join("regular_latlon_lossy.j2k")).unwrap();
     assert!(!over_once(&small));
+    // 6000 x 4000 x 3 is 72M samples, past the budget, though it decodes in
+    // a second or two. The budget skips it; a work cap that bounds time
+    // directly (#480) could let the fuzz targets take it again.
+    let rgb = std::fs::read(fixtures.join("sample_limit/rgb_6000x4000.jp2")).unwrap();
+    assert!(over_once(&rgb));
     assert!(!over_once(b"not a codestream"));
     assert!(!over_once(&[]));
 }
@@ -623,4 +628,40 @@ fn the_inputs_at_each_fuzz_budget_read_and_are_not_skipped() {
             std::fs::write(Path::new(dir).join(name), &input).unwrap();
         }
     }
+}
+
+#[test]
+fn each_fuzz_target_passes_the_weight_this_file_pins() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/fuzz_targets");
+    let mut seen = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let target = path.file_stem().unwrap().to_str().unwrap().to_string();
+        let source = std::fs::read_to_string(&path).unwrap();
+        let calls: Vec<&str> = source
+            .match_indices("budget::over(")
+            .map(|(i, _)| &source[i..])
+            .collect();
+        if target == "header" {
+            assert!(
+                source.contains("budget::declared(data)"),
+                "header must bound its decode by the SIZ count"
+            );
+            assert!(calls.is_empty(), "header uses `declared`");
+            continue;
+        }
+        if calls.is_empty() {
+            continue; // a target that decodes no whole image
+        }
+        assert_eq!(calls.len(), 1, "{target}: one budget call");
+        let call = calls[0];
+        let args = &call[..call.find(')').unwrap()];
+        let n: u64 = args.rsplit(',').next().unwrap().trim().parse().unwrap();
+        assert_eq!(n, weight(&target), "{target}: weight in the target");
+        seen.push(target);
+    }
+    seen.sort();
+    let mut expected: Vec<&str> = budget_inputs().iter().map(|i| i.0).collect();
+    expected.sort();
+    assert_eq!(seen, expected, "every budgeted target has an input above");
 }
