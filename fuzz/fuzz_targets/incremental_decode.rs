@@ -362,18 +362,24 @@ fn check_waiting(why: &Waiting, one_shot: &Result<Image, Error>, repeats: bool, 
             assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
         }
         // A code-block `WorkLimit` is the decode's own refusal, or stands in
-        // for an error it gives later in the file.
+        // for an error it gives earlier, in the block decoding a refine
+        // refused for what was spent skips, or later in the file.
         (Waiting::WorkLimit(limit), Err(Error::Limit(expected)))
-            if limit.kind() == LimitKind::CodeBlockWork =>
+            if limit.kind() == LimitKind::CodeBlockWork
+                && expected.kind() == LimitKind::CodeBlockWork =>
         {
             assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
         }
         (Waiting::WorkLimit(limit), Err(error))
             if limit.kind() == LimitKind::CodeBlockWork && !matches!(error, Error::Incomplete(_)) => {}
         // Only what earlier refines spent refused it: the decode on its own
-        // passes the code-block bound.
+        // passes the code-block bound and the sample limit. It may stand in
+        // for any other error, a limit included, that the decode meets in
+        // the tiles the refine did not decode.
         (Waiting::BoundSpent(limit), _)
-            if !matches!(one_shot, Err(Error::Limit(_) | Error::Incomplete(_))) =>
+            if !matches!(one_shot, Err(Error::Incomplete(_)))
+                && !matches!(one_shot, Err(Error::Limit(m))
+                    if matches!(m.kind(), LimitKind::CodeBlockWork | LimitKind::Samples)) =>
         {
             assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{fed} bytes");
             assert_eq!(limit.retry_with(), None, "{fed} bytes");
@@ -463,11 +469,10 @@ impl Cut<'_> {
         let answered = *self.fresh != Ok(None);
         if answered && self.work > left {
             // Refused for what was spent, the refine counts on through the
-            // later tiles without decoding them: an error the decode with
-            // nothing spent meets in them before its block decoding may
-            // come out, as that decode gives it.
+            // later tiles without decoding them, and an error it meets there
+            // ends the count: it waits, and never gives an error.
             assert!(
-                refined == &Ok(None) || (self.fresh.is_err() && refined == self.fresh),
+                refined == &Ok(None),
                 "{what}: {} past {left}: {refined:?}, where nothing spent gives {:?}",
                 self.work,
                 self.fresh

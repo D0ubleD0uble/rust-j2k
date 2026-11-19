@@ -387,7 +387,37 @@ fn decode_codestream(
     // decoding them, to tell which bound refused it: the whole bound, which
     // a decode of these bytes on its own is held to, or only what the
     // earlier decodes spent of it. This holds the work of this decode.
+    //
+    // An error the count meets in a later tile ends the count, and the
+    // decode is refused as `BoundSpent`, never with that error. A decode
+    // with the whole bound does each tile whole, in order: its packets, then
+    // its code-blocks, wavelet and assembly, before the next tile. So the
+    // first error it meets can be in the code-blocks, wavelet or assembly of
+    // the tile refused here, or of any tile counted after it, none of which
+    // the count does; an error in a later tile's header or packets is then
+    // not the one it gives. The refusals of a later tile's walk end the
+    // count too, as an error does.
+    //
+    // The tests reach two of the steps that end the count: the reduction
+    // check and the packet walk. The others cannot fail on a codestream that
+    // parsed. `tile_header` fails only on a header the parse, which checks
+    // every tile's header, has already refused, or on an `Error::inconsistent`
+    // invariant (a missing tile). `footprint_of` and
+    // `report_part` fail only on `Error::inconsistent` invariants (in
+    // `footprint_of` and `dwt::Footprint::of`). They end the count
+    // all the same.
     let mut counting: Option<u64> = None;
+    // What a step of a tile that fails gives: its error, or, while counting,
+    // the end of the count (see `counting`).
+    macro_rules! or_end_count {
+        ($result:expr) => {
+            match $result {
+                Ok(value) => value,
+                Err(_) if counting.is_some() => break,
+                Err(error) => return Err(error),
+            }
+        };
+    }
     // Not strict: what the codestream walk found missing, then each tile's
     // packets, and the smallest reduction every tile is complete at so far.
     let mut entries = window::keep_entries(cs.entries.clone(), &reads);
@@ -428,11 +458,11 @@ fn decode_codestream(
         // `tiles × components`, which SIZ's rule that no tile-component is
         // empty holds to the image's samples (under a window or a tile, the
         // samples of the tiles read), with `strict` off as with it on.
-        let header = cs.tile_header(position)?;
+        let header = or_end_count!(cs.tile_header(position));
 
         // A tile COD can give one tile a shallower pyramid than the rest, so
         // the reduction is checked per tile, not once for the image.
-        check_reduction(&header, reduction, Some(index))?;
+        or_end_count!(check_reduction(&header, reduction, Some(index)));
 
         // Tier-2: parse packets into per-code-block coded segments, per
         // component. The walk covers every resolution and layer whatever the
@@ -460,6 +490,7 @@ fn decode_codestream(
         };
         let (mut coded, reach) = match walked {
             Ok(walked) => walked,
+            Err(_) if counting.is_some() => break,
             Err(tier2::Refused::Work(work)) => {
                 if let Some(ledger) = ledger {
                     ledger.refuse(Refusal::Work);
@@ -497,19 +528,21 @@ fn decode_codestream(
         // Under a window, each component reconstructed needs only the samples
         // whose wavelet support reaches the window: its footprint. `None`
         // where the window covers the whole tile-component.
-        let footprints = coded
-            .components
-            .iter()
-            .enumerate()
-            .map(|(component, coded)| {
-                if !windowed || !wanted[component] {
-                    return Ok(None);
-                }
-                footprint_of(
-                    &cs.header, &header, selection, tile, coded, component, reduction,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let footprints = or_end_count!(
+            coded
+                .components
+                .iter()
+                .enumerate()
+                .map(|(component, coded)| {
+                    if !windowed || !wanted[component] {
+                        return Ok(None);
+                    }
+                    footprint_of(
+                        &cs.header, &header, selection, tile, coded, component, reduction,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()
+        );
         if let Some(reach) = reach {
             // The whole image, or a whole tile of it, is reported by packet;
             // a part of it by the code-blocks that part needs. Whether the
@@ -543,7 +576,7 @@ fn decode_codestream(
                     windowed,
                     footprint_at,
                 };
-                report_part(
+                or_end_count!(report_part(
                     &header,
                     tile,
                     &reach,
@@ -551,7 +584,7 @@ fn decode_codestream(
                     reduction,
                     layers,
                     &mut entries,
-                )?
+                ))
             } else {
                 report_tile(&header, tile, &reach, reduction, layers, &mut entries)
             };
@@ -701,7 +734,7 @@ fn decode_codestream(
         return Err(Error::limit_unhinted(
             crate::LimitKind::CodeBlockWork,
             format!(
-                "the code-blocks of the bytes fed need {own} sample-passes, within the \
+                "the code-blocks of the tiles counted need {own} sample-passes, within the \
                  code-block work bound of {full_blocks}, but the earlier refines left \
                  {first_work} of it; decode the bytes fed on their own, or start a new decoder"
             ),

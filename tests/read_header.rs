@@ -47,11 +47,22 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// leave bytes after the last packet of a tile, which only the decode reads.
 /// The `packed_overrun/` files listed hold a packed packet header that runs
 /// past its bytes, which only the decode reads.
+/// The `incremental/spent_bound_tier1_then_eph*.j2k` files, fuzz finds,
+/// hold an HT code-block whose suffix length is out of range, which only
+/// the decode's block decoder reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
+    (
+        "incremental/spent_bound_tier1_then_eph.j2k",
+        "an HT code-block's Scup out of range",
+    ),
+    (
+        "incremental/spent_bound_tier1_then_eph_2.j2k",
+        "an HT code-block's Scup out of range",
+    ),
     ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
     ("layers/pterm_poc_gap.j2k", "POC leaves out packets"),
     (

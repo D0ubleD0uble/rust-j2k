@@ -108,10 +108,11 @@ fn refine_image(decoder: &mut IncrementalDecoder) -> Result<Option<Image>, Error
 /// refusal, under the variant that names it: the charge for missing tiles
 /// is `MissingTiles`, and the packet bound is a `WorkLimit`. A `WorkLimit`
 /// of the code-block bound is that decode's refusal too, or stands in for
-/// an error it gives later in the file. `BoundSpent` comes only where that
-/// decode passes the code-block bound: it gives an image, or an error that
-/// is not a limit. The bound on the walks done again can refuse whatever
-/// that decode gives.
+/// another error it gives. `BoundSpent` comes only where that decode passes
+/// the code-block bound and the sample limit: it gives an image, or an
+/// error it meets in the tiles the refine did not decode, which can be a
+/// limit. The bound on the walks done again can refuse whatever that
+/// decode gives.
 fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptions) {
     let one_shot = decode_with(prefix, &options.clone().with_strict(false));
     let at = prefix.len();
@@ -143,7 +144,8 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
             }
         }
         (Waiting::WorkLimit(limit), Err(Error::Limit(expected)))
-            if limit.kind() == LimitKind::CodeBlockWork =>
+            if limit.kind() == LimitKind::CodeBlockWork
+                && expected.kind() == LimitKind::CodeBlockWork =>
         {
             assert_eq!(
                 format!("{limit:?}"),
@@ -155,7 +157,9 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
             if limit.kind() == LimitKind::CodeBlockWork
                 && !matches!(error, Error::Incomplete(_)) => {}
         (Waiting::BoundSpent(limit), _)
-            if !matches!(one_shot, Err(Error::Limit(_) | Error::Incomplete(_))) =>
+            if !matches!(one_shot, Err(Error::Incomplete(_)))
+                && !matches!(&one_shot, Err(Error::Limit(m))
+                    if matches!(m.kind(), LimitKind::CodeBlockWork | LimitKind::Samples)) =>
         {
             assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{name}, {at} bytes");
             assert_eq!(limit.retry_with(), None, "{name}, {at} bytes");
@@ -1032,11 +1036,12 @@ fn last_tile_without_levels() -> Vec<u8> {
 }
 
 /// Check that a refine of `bytes` under `options`, refused only for what
-/// earlier refines spent of the code-block bound, reads on into the later
-/// tiles and gives the error `decode_with` gives, `expected`, not a wait;
-/// and that the error stays. What the earlier refines left covers one less
-/// than tile 0. A fresh decoder gives the same error.
-fn check_later_tiles_error(bytes: &[u8], options: &DecodeOptions, expected: Error) {
+/// earlier refines spent of the code-block bound, waits on `BoundSpent`
+/// where `decode_with` with `strict` off gives `expected`, an error in a
+/// later tile, and that `finish` gives what `decode_with` gives. What the
+/// earlier refines left covers one less than tile 0. A fresh decoder gives
+/// the error.
+fn check_later_tiles_wait(bytes: &[u8], options: &DecodeOptions, expected: Error) {
     use rust_j2k::fuzz::{incremental_code_block_work, incremental_with_code_block_work_spent};
     let expected = keyed::<()>(Err(expected));
     let refined = |decoder: &mut IncrementalDecoder| keyed(decoder.refine().map(|_| ()));
@@ -1056,23 +1061,28 @@ fn check_later_tiles_error(bytes: &[u8], options: &DecodeOptions, expected: Erro
     let mut decoder =
         incremental_with_code_block_work_spent(options.clone(), bound - work + 1).unwrap();
     decoder.feed(bytes);
-    assert_eq!(refined(&mut decoder), expected);
-    assert_eq!(refined(&mut decoder), expected, "the error stays");
+    let why = match decoder.refine() {
+        Ok(Refined::Waiting(why)) => why,
+        other => panic!("{other:?}, where decode_with gives {expected:?}"),
+    };
+    assert!(matches!(why, Waiting::BoundSpent(_)), "{why:?}");
+    check_waiting("later tile", &why, bytes, options);
+    check_finish("later tile", bytes, decoder, options);
 }
 
 /// A refine refused only for what earlier refines spent of the code-block
-/// bound still reads the later tiles, and an error it meets there is the
-/// error `decode_with` gives on the bytes fed, not a wait. Here tile 8's
-/// header gives no wavelet levels, which a reduction of 1 discards: the
-/// refine meets that error in the tile's header.
+/// bound waits on `BoundSpent` where `decode_with` fails in a later tile:
+/// the refine skips the block decoding of the tiles before it, where
+/// `decode_with` could fail first. Here tile 8's header gives no wavelet
+/// levels, which a reduction of 1 discards, and tiles 0 to 7 decode.
 #[test]
-fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_error() {
+fn a_refine_refused_for_what_was_spent_waits_where_a_later_tile_fails() {
     let bytes = last_tile_without_levels();
     let options = DecodeOptions::default().with_resolution_reduction(1);
     let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
     assert!(matches!(error, Error::InvalidOptions(_)), "{error:?}");
     assert!(error.to_string().contains("tile 8"), "{error}");
-    check_later_tiles_error(&bytes, &options, error);
+    check_later_tiles_wait(&bytes, &options, error);
 }
 
 /// `tiles_even_origin_lossless.j2k`, 40 x 40 in tiles of 16 x 16, with
@@ -1094,7 +1104,7 @@ fn third_tile_empty_on_a_component() -> Vec<u8> {
 /// tile 2 has an empty area on component 2, which the walk refuses before
 /// it reads the tile's packets.
 #[test]
-fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_walk_error() {
+fn a_refine_refused_for_what_was_spent_waits_where_a_later_tiles_walk_fails() {
     let bytes = third_tile_empty_on_a_component();
     let options = DecodeOptions::default();
     let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
@@ -1105,7 +1115,63 @@ fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_walk_error() {
         ),
         "{error:?}"
     );
-    check_later_tiles_error(&bytes, &options, error);
+    check_later_tiles_wait(&bytes, &options, error);
+}
+
+/// The `incremental/spent_bound_tier1_then_eph*.j2k` files, HT files the
+/// `incremental_decode` fuzz target found (#485): `decode_with` fails in
+/// the block decoding of one tile (an HT suffix length `Scup` out of
+/// range), and a later tile's packets lack the `EPH` its `COD` signals. A
+/// refine refused for what earlier refines spent skips the block decoding
+/// of the tile it was refused at and of the tiles after it, so it cannot
+/// tell which error `decode_with` meets first, and waits on `BoundSpent`.
+/// Each amount the earlier refines could leave that refuses the refine is
+/// tried: each waits on `BoundSpent`, and none gives the later tile's error.
+#[test]
+fn a_refine_refused_for_what_was_spent_waits_where_an_earlier_tile_fails_its_block_decoding() {
+    use rust_j2k::fuzz::{incremental_code_block_work, incremental_with_code_block_work_spent};
+    for name in [
+        "spent_bound_tier1_then_eph.j2k",
+        "spent_bound_tier1_then_eph_2.j2k",
+    ] {
+        let bytes = std::fs::read(fixtures().join("incremental").join(name)).unwrap();
+        let options = DecodeOptions::default();
+        let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
+        assert!(
+            matches!(&error, Error::Codestream(m) if m.message().contains("Scup")),
+            "{name}: {error:?}"
+        );
+
+        // The work a refine with nothing spent does up to that error, and
+        // the bound it has.
+        let mut fresh = IncrementalDecoder::new(options.clone()).unwrap();
+        fresh.feed(&bytes);
+        assert_eq!(
+            keyed(fresh.refine().map(|_| ())),
+            keyed::<()>(Err(error.clone())),
+            "{name}"
+        );
+        let (work, bound) = incremental_code_block_work(&fresh);
+        let bound = bound.unwrap();
+        assert!(0 < work && work < bound, "{name}: {work} of {bound}");
+
+        for left in 0..work {
+            let mut decoder =
+                incremental_with_code_block_work_spent(options.clone(), bound - left).unwrap();
+            decoder.feed(&bytes);
+            let why = match decoder.refine() {
+                Ok(Refined::Waiting(why)) => why,
+                other => panic!(
+                    "{name}, {left} of {bound} left: {other:?}, where decode_with gives {error:?}"
+                ),
+            };
+            assert!(
+                matches!(why, Waiting::BoundSpent(_)),
+                "{name}, {left} left: {why:?}"
+            );
+            check_waiting(name, &why, &bytes, &options);
+        }
+    }
 }
 
 /// After `finish` refuses a work limit, `into_bytes` hands the bytes back,

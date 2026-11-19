@@ -37,10 +37,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `BoundSpent` is a refine refused only for the code-block work earlier
   refines spent: a decode of the bytes fed on their own passes the bound,
   so its `retry_with` is `None`. Such a refine reads the packets of the
-  later tiles without decoding them, so an error there is returned, where
-  0.5 returned `Ok(None)`. A `WorkLimit` of the code-block bound now
-  carries the refusal a decode of the bytes fed gives, hint included. Both
-  enums are `#[non_exhaustive]`, so a `match` needs a `_` arm (#466).
+  later tiles without decoding their code-blocks, to tell `BoundSpent`
+  from `WorkLimit`. An error it meets there ends that count, and the
+  refine waits on `BoundSpent`: the code-blocks it skipped can hold the
+  error `decode_with` gives first (#485). A `WorkLimit` of the code-block
+  bound now carries the refusal a decode of the bytes fed gives, hint
+  included. Both enums are `#[non_exhaustive]`, so a `match` needs a `_`
+  arm (#466).
 - The default sample limit grows with the input: it is the larger of 2^29
   samples and 8 samples per byte of input. Up to 64 MiB of input nothing
   changes. The sample limit no longer refuses a larger file that holds at least
