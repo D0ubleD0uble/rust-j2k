@@ -20,6 +20,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walks the tiles again, charged to the bound on the walks of tiles not
   kept. The cadence of refines does not reset, and an error the old
   options gave is cleared.
+- `IncrementalDecoder::options` returns the decoder's options as the
+  caller set them. To get an image right after a change of options,
+  without waiting for the next refine, call
+  `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
+  That decode spends nothing from the decoder's bounds.
 
 ### Changed
 
