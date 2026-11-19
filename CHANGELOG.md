@@ -29,16 +29,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - `IncrementalDecoder::refine` returns `Result<Refined>` in place of
-  `Result<Option<Image>>`, which breaks callers of 0.5. `Refined::Image`
-  holds the image; `Refined::Waiting` says why there is none yet, as a
-  `Waiting`: `MoreBytes { until }` (the bytes have not doubled since the
-  last try), `HeaderIncomplete`, `SampleLimit`, `WorkLimit` (the packet or
-  code-block work bound, with its `LimitDetail` and retry hint),
-  `MissingTiles` and `RepeatLimit` (the bound on the walks of tiles not
-  kept, which no longer looks like a packet work refusal). Both enums are
-  `#[non_exhaustive]`. To migrate, call `.image()` on the result:
-  `decoder.refine()?.image()` is the `Option<Image>` that `refine` returned
-  before (#466).
+  `Result<Option<Image>>`. To migrate, call `.image()`:
+  `decoder.refine()?.image()` is the `Option<Image>` it returned before.
+  `Refined::Waiting` says why there is no image: `MoreBytes { until, .. }`,
+  `HeaderIncomplete`, `SampleLimit`, `WorkLimit` and `MissingTiles` (each
+  with its `LimitDetail`), or `RepeatLimit { .. }`. Both enums are
+  `#[non_exhaustive]`, so a `match` needs a `_` arm (#466).
 - The default sample limit grows with the input: it is the larger of 2^29
   samples and 8 samples per byte of input. Up to 64 MiB of input nothing
   changes. The sample limit no longer refuses a larger file that holds at least

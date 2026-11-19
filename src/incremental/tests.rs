@@ -373,12 +373,12 @@ fn a_refused_refine_puts_off_the_next_until_the_bytes_double() {
     assert!(decode_with(&bytes[..between], &lenient).is_ok());
     assert!(matches!(
         decoder.refine(),
-        Ok(Refined::Waiting(Waiting::MoreBytes { until })) if until == 2 * tried
+        Ok(Refined::Waiting(Waiting::MoreBytes { until, .. })) if until == 2 * tried
     ));
     decoder.feed(&bytes[between..2 * tried - 1]);
     assert!(matches!(
         decoder.refine(),
-        Ok(Refined::Waiting(Waiting::MoreBytes { until })) if until == 2 * tried
+        Ok(Refined::Waiting(Waiting::MoreBytes { until, .. })) if until == 2 * tried
     ));
     assert_eq!(decoder.bytes_decoded(), 0);
     decoder.feed(&bytes[2 * tried - 1..2 * tried]);
@@ -999,7 +999,7 @@ fn a_walk_started_again_is_charged_as_a_walk_not_kept() {
             // Only the charge refuses a try, and the refine names it, not
             // the packet bound: a decode of the same bytes on its own gives
             // an image.
-            Refined::Waiting(Waiting::RepeatLimit) => {
+            Refined::Waiting(Waiting::RepeatLimit { .. }) => {
                 assert!(
                     decoder.tried != tried && decoder.refused_by_repeats,
                     "{end}"
@@ -1013,7 +1013,7 @@ fn a_walk_started_again_is_charged_as_a_walk_not_kept() {
                 assert!(now.is_ok(), "{end}: {now:?}");
                 put_off += 1;
             }
-            Refined::Waiting(Waiting::MoreBytes { until }) => {
+            Refined::Waiting(Waiting::MoreBytes { until, .. }) => {
                 assert_eq!((decoder.tried, until), (tried, 2 * tried), "{end}");
             }
             Refined::Waiting(Waiting::HeaderIncomplete) => assert!(!decoder.refused, "{end}"),

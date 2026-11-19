@@ -221,8 +221,8 @@ the refusal the one-shot decode gives, hint included. Only the code-block
 bound, which the refines share, may refuse where the one-shot decode gives an
 image or another error.
 
-A due refine may also wait (`Waiting::RepeatLimit`) when the bound on the walks of tiles not
-kept, which all the refines spend together, refuses it
+A due refine may also wait (`Waiting::RepeatLimit`) when the bound on the
+walks of tiles not kept, which all the refines spend together, refuses it
 (`rust_j2k::fuzz::incremental_repeat_work`), even where the one-shot decode
 gives an image or an error. The visits those walks were charged must then be
 past `REPEAT_BOUNDS` times the refine's packet bound, which the hook reports;

@@ -339,8 +339,15 @@ mod tests {
             decoder.feed(&bytes[decoder.bytes_fed()..end]);
             let refined = decoder.refine().unwrap();
             let work = super::incremental_repeat_work(&decoder);
-            if matches!(refined, Refined::Waiting(Waiting::RepeatLimit)) {
-                assert!(work.refused.is_some(), "{end}: {work:?}");
+            // The hook speaks of the last try, so a refine that did not try
+            // (`MoreBytes`) is left out; on a try, the refine reports the
+            // repeat bound exactly when the hook does.
+            if !matches!(refined, Refined::Waiting(Waiting::MoreBytes { .. })) {
+                assert_eq!(
+                    matches!(refined, Refined::Waiting(Waiting::RepeatLimit { .. })),
+                    work.refused.is_some(),
+                    "{end}: {work:?}"
+                );
             }
             if let Some(bound) = work.refused {
                 assert!(work.visits > super::REPEAT_BOUNDS * bound, "{work:?}");

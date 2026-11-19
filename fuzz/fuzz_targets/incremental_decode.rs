@@ -273,7 +273,7 @@ fuzz_target!(|input: &[u8]| {
         }
         match refined {
             Ok(None) => match waiting {
-                Some(Waiting::MoreBytes { until }) if until == tried * 2 => {}
+                Some(Waiting::MoreBytes { until, .. }) if until == tried * 2 => {}
                 other => panic!("{fed} bytes, not due after {tried}: {other:?}"),
             },
             Ok(Some(image)) => {
@@ -313,7 +313,7 @@ fuzz_target!(|input: &[u8]| {
 /// whether the bound on the walks done again refused the refine.
 fn check_waiting(why: &Waiting, one_shot: &Result<Image, Error>, repeats: bool, fed: usize) {
     if repeats {
-        assert!(matches!(why, Waiting::RepeatLimit), "{fed} bytes: {why:?}");
+        assert!(matches!(why, Waiting::RepeatLimit { .. }), "{fed} bytes: {why:?}");
         return;
     }
     match (why, one_shot) {
