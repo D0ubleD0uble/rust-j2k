@@ -1291,6 +1291,23 @@ fn a_last_tpsot_equal_to_tnsot_raises_every_count() {
     assert_eq!(cs.tiles[1].data.as_ref(), &[1, 3, 5]);
 }
 
+/// Tile-parts of different tiles may come in any order (A.4.2), and the tiles
+/// still come out in index order, each with its own parts.
+#[test]
+fn tiles_whose_parts_arrive_out_of_order_come_out_in_index_order() {
+    let bytes = tile_parts(
+        &two_tiles(),
+        &[(1, 0, 2, vec![]), (0, 0, 1, vec![]), (1, 1, 2, vec![])],
+    );
+    let cs = parse(&bytes).expect("tile 1 first, then tile 0");
+    let tiles: Vec<_> = cs
+        .tiles
+        .iter()
+        .map(|tile| (tile.index, tile.data.as_ref().to_vec()))
+        .collect();
+    assert_eq!(tiles, [(0, vec![1]), (1, vec![0, 2])]);
+}
+
 /// OpenJPEG looks for the extra part once, when the first tile has all the
 /// parts it declares. A tile that completes later with an extra part is not
 /// looked at, and its extra part is refused, as OpenJPEG refuses it.

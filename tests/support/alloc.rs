@@ -14,6 +14,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub static CURRENT: AtomicUsize = AtomicUsize::new(0);
 /// The high-water mark of [`CURRENT`]; a test resets it with a store.
 pub static PEAK: AtomicUsize = AtomicUsize::new(0);
+/// The `realloc` calls to a block of 1 MiB or more, for [`PeakAlloc`]: a
+/// large vector regrown rather than reserved once.
+pub static LARGE_REALLOCS: AtomicUsize = AtomicUsize::new(0);
 /// Allocations made, for [`CountAlloc`].
 pub static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -48,6 +51,9 @@ unsafe impl GlobalAlloc for PeakAlloc {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if new_size >= 1 << 20 {
+            LARGE_REALLOCS.fetch_add(1, Ordering::SeqCst);
+        }
         grow(new_size);
         CURRENT.fetch_sub(layout.size(), Ordering::SeqCst);
         // SAFETY: the caller's contract for `realloc` is passed through.
