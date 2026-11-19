@@ -744,21 +744,30 @@ fn a_walk_past_the_packet_bound_waits() {
     assert!(decode_with(&bytes, &options).is_ok());
 }
 
-/// A refine that the rest of the code-block bound cannot cover is put off,
-/// not refused, and `finish` still decodes the file under a bound of its
-/// own. Meanwhile a decode of the bytes fed now with the decoder's options,
-/// `strict` off, has a bound of its own too and gives the image the refine
-/// waits on, at any cut: the way out of a wait on the shared bound.
+/// Whether `refined` waits on `BoundSpent`, with a code-block detail and
+/// no hint.
+fn is_bound_spent(refined: &crate::Result<Refined>) -> bool {
+    matches!(
+        refined,
+        Ok(Refined::Waiting(Waiting::BoundSpent(m)))
+            if m.kind() == LimitKind::CodeBlockWork && m.retry_with().is_none()
+    )
+}
+
+/// A refine that the rest of the code-block bound cannot cover, though its
+/// own work fits the whole bound, waits on `BoundSpent`, and `finish`
+/// still decodes the file under a bound of its own. Meanwhile a decode of
+/// the bytes fed now with the decoder's options, `strict` off, has a bound
+/// of its own too and gives the image the refine waits on, at any cut: the
+/// way out of a wait on the shared bound.
 #[test]
 fn a_refine_past_the_rest_of_the_bound_waits() {
     let bytes = fixture("layers/lrcp.j2k");
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.spent.blocks = u64::MAX - 1;
     decoder.feed(&bytes);
-    assert!(matches!(
-        decoder.refine(),
-        Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::CodeBlockWork
-    ));
+    let refined = decoder.refine();
+    assert!(is_bound_spent(&refined), "{refined:?}");
     assert_eq!(decoder.bytes_decoded(), 0);
     let now = |decoder: &IncrementalDecoder| {
         decode_with(
@@ -779,10 +788,8 @@ fn a_refine_past_the_rest_of_the_bound_waits() {
         IncrementalDecoder::with_code_block_work_spent(DecodeOptions::default(), u64::MAX / 2)
             .unwrap();
     decoder.feed(&bytes[..half]);
-    assert!(matches!(
-        decoder.refine(),
-        Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::CodeBlockWork
-    ));
+    let refined = decoder.refine();
+    assert!(is_bound_spent(&refined), "{refined:?}");
     let image = now(&decoder).unwrap();
     assert!(!image.report.is_complete());
     assert_eq!(
@@ -864,7 +871,8 @@ fn a_kept_walk_charges_poc_repeats_as_the_one_shot_walk_does() {
 
 /// A refine the code-block bound refuses at its second tile is charged the
 /// work of the first tile, which it did, and not the work of the tile it
-/// refused.
+/// refused. Its own work fits the whole bound, so it waits on
+/// `BoundSpent`.
 #[test]
 fn a_refused_refine_is_charged_the_tiles_before_the_cut() {
     let bytes = fixture("tiles_even_origin_lossless.j2k");
@@ -891,12 +899,38 @@ fn a_refused_refine_is_charged_the_tiles_before_the_cut() {
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.spent.blocks = bound - first;
     decoder.feed(&bytes);
-    assert!(matches!(
-        decoder.refine(),
-        Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::CodeBlockWork
-    ));
+    let refined = decoder.refine();
+    assert!(is_bound_spent(&refined), "{refined:?}");
     assert!(decoder.refused);
     assert_eq!(decoder.spent.blocks, bound, "{first} of tile 0 is charged");
+}
+
+/// A refine whose own code-block work passes the whole bound waits on
+/// `WorkLimit`, whatever the earlier refines spent, and carries the refusal
+/// a decode of its bytes on its own gives, hint included: not one counted
+/// against what the earlier refines left.
+#[test]
+fn a_refine_past_the_whole_bound_waits_with_the_one_shot_refusal() {
+    let bytes = fixture("tier1_work_bound/t1bomb_1024_64_88.j2k");
+    let Err(Error::Limit(expected)) =
+        decode_with(&bytes, &DecodeOptions::default().with_strict(false))
+    else {
+        panic!("the bomb decodes");
+    };
+    assert_eq!(expected.kind(), LimitKind::CodeBlockWork);
+    let (_, bound) = one_shot_bounds(&bytes);
+    for spent in [0, 1, bound / 2, bound - 1, bound, u64::MAX / 2] {
+        let mut decoder =
+            IncrementalDecoder::with_code_block_work_spent(DecodeOptions::default(), spent)
+                .unwrap();
+        decoder.feed(&bytes);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::WorkLimit(limit))) => {
+                assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{spent}");
+            }
+            other => panic!("{spent} spent: {other:?}"),
+        }
+    }
 }
 
 /// The visits a one-shot walk of tile `index` of `bytes` spends, with

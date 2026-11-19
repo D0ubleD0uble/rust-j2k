@@ -357,14 +357,23 @@ fn decode_codestream(
     // so that what they all spend is what one walk spends (see
     // [`incremental::Ledger`]).
     let meter = tier2::Meter::new(packet_bound);
+    let mut full_blocks = 0;
     let mut block_work = match &options.code_block_work_limit {
         WorkLimit::Unlimited => None,
         limit => {
-            let bound = limit.apply(tier1::decode_work(bytes));
-            Some(ledger.map_or(bound, |l| l.blocks_left(bound)))
+            full_blocks = limit.apply(tier1::decode_work(bytes));
+            Some(ledger.map_or(full_blocks, |l| l.blocks_left(full_blocks)))
         }
     };
     let first_work = block_work.unwrap_or(0);
+    // Under an incremental decoder, the code-block bound is what the
+    // earlier decodes left of it. Once a tile passes that rest but the work
+    // of this decode so far still fits the whole bound, the decode is
+    // refused, but it goes on counting the work of the later tiles without
+    // decoding them, to tell which bound refused it: the whole bound, which
+    // a decode of these bytes on its own is held to, or only what the
+    // earlier decodes spent of it. This holds the work of this decode.
+    let mut counting: Option<u64> = None;
     // Not strict: what the codestream walk found missing, then each tile's
     // packets, and the smallest reduction every tile is complete at so far.
     let mut entries = window::keep_entries(cs.entries.clone(), &reads);
@@ -547,17 +556,42 @@ fn decode_codestream(
         // past the bound is refused before any of it is done.
         if let Some(left) = &mut block_work {
             let work = tier1::work(&header, &coded, reduction, &wanted);
+            if let Some(own) = &mut counting {
+                if work > full_blocks.saturating_sub(*own) {
+                    if let Some(ledger) = ledger {
+                        ledger.refuse(Refusal::Work);
+                    }
+                    return Err(limit_hint::code_blocks(
+                        index,
+                        work,
+                        full_blocks.saturating_sub(*own),
+                        *own,
+                        tier1::decode_work(bytes),
+                    ));
+                }
+                *own += work;
+                continue;
+            }
             #[cfg(test)]
             tests::BLOCK_WORK.with(|spent| spent.set(spent.get() + work));
             let Some(rest) = left.checked_sub(work) else {
+                // The work of this decode before this tile.
+                let own = first_work.saturating_sub(*left);
+                if ledger.is_some() && work <= full_blocks.saturating_sub(own) {
+                    counting = Some(own + work);
+                    continue;
+                }
                 if let Some(ledger) = ledger {
                     ledger.refuse(Refusal::Work);
                 }
+                // The refusal a decode of these bytes on its own gives: its
+                // bound is the whole one, of which this decode spent `own`.
+                // Without a ledger the two are the same.
                 return Err(limit_hint::code_blocks(
                     index,
                     work,
-                    *left,
-                    first_work.saturating_sub(*left),
+                    full_blocks.saturating_sub(own),
+                    own,
                     tier1::decode_work(bytes),
                 ));
             };
@@ -636,6 +670,17 @@ fn decode_codestream(
         }
     }
 
+    if let (Some(own), Some(ledger)) = (counting, ledger) {
+        ledger.refuse(Refusal::BoundSpent);
+        return Err(Error::limit_unhinted(
+            crate::LimitKind::CodeBlockWork,
+            format!(
+                "the code-blocks of the bytes fed need {own} sample-passes, within the \
+                 code-block work bound of {full_blocks}, but the earlier refines left \
+                 {first_work} of it; decode the bytes fed on their own, or start a new decoder"
+            ),
+        ));
+    }
     let mut image = image::assemble_over(
         &selection.area,
         canvas.into_planes(),

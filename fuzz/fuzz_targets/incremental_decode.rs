@@ -18,8 +18,9 @@
 //! tile once, and the first walk of a tile it keeps is not charged. A due
 //! refine that waits names its reason (`check_waiting`): `RepeatLimit`
 //! exactly when that bound refused it, the one-shot refusal for a header cut
-//! short, the sample limit, the charge for missing tiles and the packet
-//! bound, and the code-block bound for the rest. After an
+//! short, the sample limit, the charge for missing tiles and the work
+//! bounds, and `BoundSpent` only where the one-shot decode passes the
+//! code-block bound. After an
 //! error, every later refine gives it again, and `finish` is the decode of
 //! all the bytes under the decoder's options.
 //!
@@ -329,9 +330,23 @@ fn check_waiting(why: &Waiting, one_shot: &Result<Image, Error>, repeats: bool, 
         ) if limit.kind() == LimitKind::PacketWork => {
             assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
         }
-        // The code-block bound the refines share can refuse whatever the
-        // decode on its own gives.
-        (Waiting::WorkLimit(limit), _) if limit.kind() == LimitKind::CodeBlockWork => {}
+        // A code-block `WorkLimit` is the decode's own refusal, or stands in
+        // for an error it gives later in the file.
+        (Waiting::WorkLimit(limit), Err(Error::Limit(expected)))
+            if limit.kind() == LimitKind::CodeBlockWork =>
+        {
+            assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
+        }
+        (Waiting::WorkLimit(limit), Err(error))
+            if limit.kind() == LimitKind::CodeBlockWork && !matches!(error, Error::Incomplete(_)) => {}
+        // Only what earlier refines spent refused it: the decode on its own
+        // passes the code-block bound.
+        (Waiting::BoundSpent(limit), _)
+            if !matches!(one_shot, Err(Error::Limit(_) | Error::Incomplete(_))) =>
+        {
+            assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{fed} bytes");
+            assert_eq!(limit.retry_with(), None, "{fed} bytes");
+        }
         _ => panic!("{fed} bytes: waited for {why:?}, where the decode gives {one_shot:?}"),
     }
 }

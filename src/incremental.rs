@@ -49,9 +49,11 @@ use crate::{
 /// The code-block work is done again by each refine that decodes, so the
 /// code-block work every `refine` has spent is held to the bound one decode
 /// of the bytes fed has, raised as the options say. A refine the rest of
-/// that bound cannot cover returns [`Waiting::WorkLimit`], so a file whose
-/// code-blocks cost a lot may give no image before `finish`, which is a
-/// decode of its own, under its own bound. Each refine that returns an
+/// that bound cannot cover returns [`Waiting::WorkLimit`] where its own
+/// work passes the whole bound too, and [`Waiting::BoundSpent`] where only
+/// what the earlier refines spent puts it past. So a file whose code-blocks
+/// cost a lot may give no image before `finish`, which is a decode of its
+/// own, under its own bound. Each refine that returns an
 /// image also builds the whole image, as one decode does: it allocates the
 /// samples and runs the inverse wavelet and color transforms over them,
 /// outside the work bounds. Under the doubling cadence a file of `n` bytes
@@ -256,14 +258,13 @@ impl IncrementalDecoder {
     /// A decode of the bytes fed with these options is not held to the
     /// refine cadence or to the bounds the refines share, so it gives what
     /// [`decode_with`] gives on those bytes. Where a refine waits on
-    /// [`MoreBytes`](Waiting::MoreBytes), [`RepeatLimit`](Waiting::RepeatLimit)
-    /// or a [`WorkLimit`](Waiting::WorkLimit) of
-    /// [`LimitKind::CodeBlockWork`], that can be an image. Where it waits on
-    /// [`HeaderIncomplete`](Waiting::HeaderIncomplete),
+    /// [`MoreBytes`](Waiting::MoreBytes), [`BoundSpent`](Waiting::BoundSpent)
+    /// or [`RepeatLimit`](Waiting::RepeatLimit), that can be an image. Where
+    /// it waits on [`HeaderIncomplete`](Waiting::HeaderIncomplete),
     /// [`SampleLimit`](Waiting::SampleLimit),
-    /// [`MissingTiles`](Waiting::MissingTiles) or a
-    /// [`WorkLimit`](Waiting::WorkLimit) of [`LimitKind::PacketWork`], it is
-    /// the same refusal, as an error.
+    /// [`WorkLimit`](Waiting::WorkLimit) or
+    /// [`MissingTiles`](Waiting::MissingTiles), it is the same refusal, as an
+    /// error.
     ///
     /// With `strict` left on, it refuses a stream that is cut short, as
     /// [`finish`](Self::finish) does.
@@ -430,6 +431,7 @@ impl IncrementalDecoder {
             Err(Error::Limit(limit)) => match refusal {
                 Some(Refusal::MissingTiles) => Waiting::MissingTiles(limit),
                 Some(Refusal::Work) => Waiting::WorkLimit(limit),
+                Some(Refusal::BoundSpent) => Waiting::BoundSpent(limit),
                 // The sample limit grows with the bytes too.
                 None if limit.kind() == LimitKind::Samples => Waiting::SampleLimit(limit),
                 None => return Err(self.fail(Error::Limit(limit))),
@@ -630,6 +632,7 @@ impl Refined {
 ///         }
 ///         Waiting::HeaderIncomplete => println!("the main header is not in yet"),
 ///         Waiting::RepeatLimit { .. } => println!("decode the bytes fed now"),
+///         Waiting::BoundSpent(_) => println!("decode the bytes fed now"),
 ///         Waiting::WorkLimit(limit) => println!("{limit}"),
 ///         _ => println!("{why:?}"),
 ///     }
@@ -659,23 +662,38 @@ pub enum Waiting {
     /// detail is the one [`decode_with`] gives for the bytes fed, with its
     /// [`retry_with`](LimitDetail::retry_with).
     SampleLimit(LimitDetail),
-    /// The packet work bound ([`LimitKind::PacketWork`]) or the code-block
-    /// work bound ([`LimitKind::CodeBlockWork`]) refused the decode. Both
-    /// grow with the bytes fed. The code-block bound is shared by all the
-    /// refines (see [`IncrementalDecoder`]), so it can refuse a refine whose
-    /// bytes a decode on its own would take, and the later refines may wait
-    /// on it too; `finish` decodes under a bound of its own. Where earlier
-    /// refines spent the code-block bound, a decode of the bytes fed now
-    /// has a bound of its own and may give an image (see
-    /// [`options`](IncrementalDecoder::options)).
+    /// The bytes fed cost more work than the packet work bound
+    /// ([`LimitKind::PacketWork`]) or the code-block work bound
+    /// ([`LimitKind::CodeBlockWork`]) allows: a decode of them on its own is
+    /// refused too. Both bounds grow with the bytes fed, so more bytes may
+    /// admit them.
     ///
-    /// The detail is the refusal's. For the packet bound it is the one a
-    /// decode of the bytes fed on its own gives. For the code-block bound,
-    /// its [`retry_with`](LimitDetail::retry_with) counts the work of this
-    /// refine, against what the earlier refines left of the bound.
+    /// The detail is the one [`decode_with`] gives for the bytes fed, with
+    /// its [`retry_with`](LimitDetail::retry_with).
     /// [`DecodeOptions::with_retry`] applies it, for a new decoder or a
     /// decode of [`into_bytes`](IncrementalDecoder::into_bytes).
     WorkLimit(LimitDetail),
+    /// The earlier refines have spent the code-block work bound
+    /// ([`LimitKind::CodeBlockWork`]). The refines share that bound (see
+    /// [`IncrementalDecoder`]), and each decodes the code-blocks again, so
+    /// what they spent is cut from the bound of the next. This refine's own
+    /// work fits the whole bound of the bytes fed, so a decode of them on
+    /// its own passes it: the refine is refused only for what was spent
+    /// before it.
+    ///
+    /// The rule: the refine passed what was left of the bound, and the work
+    /// of its own decode, counted over every tile, is at most the whole
+    /// bound. Where its own work passes the whole bound, the refine waits on
+    /// [`WorkLimit`](Self::WorkLimit) instead.
+    ///
+    /// Raising the limit is not the way out: the file fits the bound it
+    /// has. Decode the bytes fed now,
+    /// `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`
+    /// (see [`options`](IncrementalDecoder::options)), or start a new
+    /// decoder. Later refines of this decoder may wait on this too, though
+    /// more bytes raise the bound, and `finish` decodes under a bound of its
+    /// own. The detail's [`retry_with`](LimitDetail::retry_with) is `None`.
+    BoundSpent(LimitDetail),
     /// The charge for missing tiles passed the packet work bound: each
     /// tile-component of a tile that has not come in yet costs a step,
     /// before any tile is decoded. Tiles that come in lower the charge, and
@@ -708,6 +726,9 @@ pub(crate) enum Refusal {
     Work,
     /// The charge for the missing tiles' tile-components.
     MissingTiles,
+    /// What the earlier decodes left of the code-block bound, where the
+    /// work of this decode fits the whole bound.
+    BoundSpent,
 }
 
 /// What the decodes of an [`IncrementalDecoder`] keep between them (see

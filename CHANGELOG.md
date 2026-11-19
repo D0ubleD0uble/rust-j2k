@@ -32,9 +32,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Result<Option<Image>>`. To migrate, call `.image()`:
   `decoder.refine()?.image()` is the `Option<Image>` it returned before.
   `Refined::Waiting` says why there is no image: `MoreBytes { until, .. }`,
-  `HeaderIncomplete`, `SampleLimit`, `WorkLimit` and `MissingTiles` (each
-  with its `LimitDetail`), or `RepeatLimit { .. }`. Both enums are
-  `#[non_exhaustive]`, so a `match` needs a `_` arm (#466).
+  `HeaderIncomplete`, `SampleLimit`, `WorkLimit`, `BoundSpent` and
+  `MissingTiles` (each with its `LimitDetail`), or `RepeatLimit { .. }`.
+  `BoundSpent` is a refine refused only for the code-block work earlier
+  refines spent: a decode of the bytes fed on their own passes the bound,
+  so its `retry_with` is `None`. A `WorkLimit` of the code-block bound now
+  carries the refusal a decode of the bytes fed gives, hint included. Both
+  enums are `#[non_exhaustive]`, so a `match` needs a `_` arm (#466).
 - The default sample limit grows with the input: it is the larger of 2^29
   samples and 8 samples per byte of input. Up to 64 MiB of input nothing
   changes. The sample limit no longer refuses a larger file that holds at least

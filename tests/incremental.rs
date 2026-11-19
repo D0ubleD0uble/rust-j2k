@@ -106,8 +106,12 @@ fn refine_image(decoder: &mut IncrementalDecoder) -> Result<Option<Image>, Error
 /// `HeaderIncomplete`, and a refusal by the sample limit or the charge for
 /// missing tiles, or by the packet bound of that decode, is the same
 /// refusal, under the variant that names it: the charge for missing tiles
-/// is `MissingTiles`, and the packet bound is a `WorkLimit`. The bounds the refines share, the code-block bound and the
-/// bound on the walks done again, can refuse whatever that decode gives.
+/// is `MissingTiles`, and the packet bound is a `WorkLimit`. A `WorkLimit`
+/// of the code-block bound is that decode's refusal too, or stands in for
+/// an error it gives later in the file. `BoundSpent` comes only where that
+/// decode passes the code-block bound: it gives an image, or an error that
+/// is not a limit. The bound on the walks done again can refuse whatever
+/// that decode gives.
 fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptions) {
     let one_shot = decode_with(prefix, &options.clone().with_strict(false));
     let at = prefix.len();
@@ -138,7 +142,24 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
                 );
             }
         }
-        (Waiting::WorkLimit(limit), _) if limit.kind() == LimitKind::CodeBlockWork => {}
+        (Waiting::WorkLimit(limit), Err(Error::Limit(expected)))
+            if limit.kind() == LimitKind::CodeBlockWork =>
+        {
+            assert_eq!(
+                format!("{limit:?}"),
+                format!("{expected:?}"),
+                "{name}, {at} bytes"
+            );
+        }
+        (Waiting::WorkLimit(limit), Err(error))
+            if limit.kind() == LimitKind::CodeBlockWork
+                && !matches!(error, Error::Incomplete(_)) => {}
+        (Waiting::BoundSpent(limit), _)
+            if !matches!(one_shot, Err(Error::Limit(_) | Error::Incomplete(_))) =>
+        {
+            assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{name}, {at} bytes");
+            assert_eq!(limit.retry_with(), None, "{name}, {at} bytes");
+        }
         (Waiting::RepeatLimit { .. }, _) => {}
         _ => panic!("{name}, {at} bytes: waited for {why:?}, where the decode gives {one_shot:?}"),
     }
@@ -933,6 +954,51 @@ fn a_code_block_wait_with_nothing_spent_decodes_now_as_the_same_refusal() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+/// A refine refused only for the code-block work the earlier refines
+/// spent waits on `BoundSpent`, with no hint, where a decode of its bytes
+/// on its own passes the bound. `t1bomb_1024_64_88.j2k` decodes under
+/// `Raised(2)` with work to spare, but not twice over: fed whole, the first
+/// refine gives the image; fed again to twice the bytes, with zeros after
+/// its end, the second is past what the first left. A decode of the bytes
+/// fed then, and a new decoder fed them, give the image. The bomb with
+/// nothing spent waits on `WorkLimit` instead (see
+/// `a_code_block_wait_with_nothing_spent_decodes_now_as_the_same_refusal`).
+#[test]
+fn a_refine_refused_for_what_earlier_refines_spent_waits_on_bound_spent() {
+    let bytes = bomb();
+    let options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Raised(2));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&bytes);
+    let first = decoder
+        .refine()
+        .unwrap()
+        .image()
+        .expect("the bound covers it once");
+    decoder.feed(&vec![0; bytes.len()]);
+    let why = match decoder.refine() {
+        Ok(Refined::Waiting(why)) => why,
+        other => panic!("{other:?}"),
+    };
+    let Waiting::BoundSpent(limit) = &why else {
+        panic!("{why:?}");
+    };
+    assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
+    assert_eq!(limit.retry_with(), None);
+    check_waiting("t1bomb padded", &why, decoder.bytes(), &options);
+    let now = decode_with(
+        decoder.bytes(),
+        &decoder.options().clone().with_strict(false),
+    )
+    .unwrap();
+    assert_eq!(now.components, first.components);
+    let mut fresh = IncrementalDecoder::new(options).unwrap();
+    fresh.feed(decoder.bytes());
+    assert!(
+        fresh.refine().unwrap().image().is_some(),
+        "a new decoder decodes it"
+    );
 }
 
 /// After `finish` refuses a work limit, `into_bytes` hands the bytes back,

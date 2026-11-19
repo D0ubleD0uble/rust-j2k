@@ -216,10 +216,12 @@ A refine that waits says why, and the target checks the reason. One that is
 not due waits for `MoreBytes`, naming twice the bytes of the last try. A due
 one waits for `RepeatLimit` exactly when the hook below reports that bound's
 refusal. Otherwise a header cut short is `HeaderIncomplete`, and a refusal by
-the sample limit, the charge for missing tiles or the packet bound carries
-the refusal the one-shot decode gives, hint included. Only the code-block
-bound, which the refines share, may refuse where the one-shot decode gives an
-image or another error.
+the sample limit, the charge for missing tiles or a work bound carries the
+refusal the one-shot decode gives, hint included; a code-block `WorkLimit`
+may also stand in for an error the one-shot decode gives later in the file.
+`BoundSpent`, a refusal by what earlier refines spent of the code-block
+bound, comes only where the one-shot decode passes that bound, and carries
+no hint.
 
 A due refine may also wait (`Waiting::RepeatLimit`) when the bound on the
 walks of tiles not kept, which all the refines spend together, refuses it
