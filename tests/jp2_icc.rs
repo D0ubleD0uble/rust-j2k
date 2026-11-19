@@ -429,8 +429,8 @@ fn a_tinted_gray_profile_gives_three_color_channels() {
     }
 }
 
-/// The tinted-gray file grown to 14000x14000 (see below).
-fn tinted_gray_14000() -> Vec<u8> {
+/// The tinted-gray file grown to `side` x `side` (see below).
+fn tinted_gray(side: u32) -> Vec<u8> {
     let v = variants()
         .into_iter()
         .find(|v| v.file == "files/file8.jp2" && v.variant == "intent3_d65")
@@ -438,7 +438,7 @@ fn tinted_gray_14000() -> Vec<u8> {
     let mut bytes = read("conformance/jp2/files/file8.jp2");
     let (start, end) = profile_span(&bytes);
     patch(&mut bytes[start..end], v.intent, v.white);
-    let side = 14_000u32.to_be_bytes();
+    let side = side.to_be_bytes();
     // `ihdr`: HEIGHT, then WIDTH.
     let ihdr = bytes.windows(4).position(|w| w == b"ihdr").unwrap() + 4;
     bytes[ihdr..ihdr + 4].copy_from_slice(&side);
@@ -461,7 +461,7 @@ fn tinted_gray_14000() -> Vec<u8> {
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
-    let bytes = tinted_gray_14000();
+    let bytes = tinted_gray(14_000);
     match read_header_with(&bytes, &srgb()) {
         Err(Error::Limit(m)) => assert!(
             m.message().starts_with(
@@ -480,12 +480,48 @@ fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
     );
 }
 
+/// A ceiling below the default holds the tripled gray channel too. At
+/// 12000x12000 the sRGB output is 4.32e8 samples, under the 2^29 default,
+/// and the samples as coded 1.44e8: `AtMost(2^28)` admits the file as coded
+/// and refuses sRGB output, in the header read and the decode alike, with no
+/// retry.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn a_tinted_gray_profile_is_held_to_an_at_most_ceiling() {
+    let bytes = tinted_gray(12_000);
+    assert_eq!(
+        read_header_with(&bytes, &srgb()).unwrap().components.len(),
+        3
+    );
+    let ceiling = WorkLimit::AtMost(1 << 28);
+    let capped = srgb().with_sample_limit(ceiling.clone());
+    for result in [
+        read_header_with(&bytes, &capped).map(|_| ()),
+        decode_with(&bytes, &capped).map(|_| ()),
+    ] {
+        let Err(Error::Limit(limit)) = result else {
+            panic!("{result:?}");
+        };
+        assert_eq!(limit.kind(), rust_j2k::LimitKind::Samples);
+        assert_eq!(limit.retry_with(), None);
+        assert!(
+            limit.message().starts_with(
+                "sRGB output from a monochrome ICC profile that maps gray to color needs \
+                 432000000 samples, over the ceiling of `WorkLimit::AtMost(268435456)`"
+            ),
+            "{limit}"
+        );
+    }
+    let coded = DecodeOptions::default().with_sample_limit(ceiling);
+    assert!(read_header_with(&bytes, &coded).is_ok());
+}
+
 /// On a 32-bit target the sRGB count is past the address cap, so the refusal
 /// is `AddressSpace` with nothing to retry with; as coded, the file reads.
 #[cfg(not(target_pointer_width = "64"))]
 #[test]
 fn a_tinted_gray_profile_past_the_address_cap_is_refused() {
-    let bytes = tinted_gray_14000();
+    let bytes = tinted_gray(14_000);
     match read_header_with(&bytes, &srgb()) {
         Err(Error::Limit(m)) => {
             assert_eq!(m.kind(), rust_j2k::LimitKind::AddressSpace, "{m}");
