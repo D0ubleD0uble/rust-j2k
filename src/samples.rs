@@ -20,6 +20,8 @@
 //! `i32` output per byte of input, and a small one is held to the floor.
 //! The input is all the bytes the decode is given: a JP2 file's boxes
 //! count. OpenJPEG has no such limit; it allocates what the header declares.
+//! [`WorkLimit::AtMost`] sets the limit to its `n` instead, whatever the
+//! input, and a refusal under it names no retry ([`over`]).
 //!
 //! While a palette expands, the index plane and the columns are held together,
 //! so the peak there is about twice the output: a one-column palette at
