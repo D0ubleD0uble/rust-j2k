@@ -403,7 +403,7 @@ fn geometry_rejects_a_precinct_bomb_before_allocating() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::TilePrecincts)),
+        matches!(&result, Err(e) if crate::error::is_limit(e, crate::LimitKind::TilePrecincts)),
         "a 1×2^24 tile-component at a 2^1 precinct must be rejected"
     );
     assert!(
@@ -433,7 +433,7 @@ fn the_precinct_budget_is_shared_across_components() {
     let second = resolution_geoms(&header, 0, 1, &mut budget, &mut block_budget);
     assert!(
         first.is_err()
-            || matches!(&second, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::TilePrecincts)),
+            || matches!(&second, Err(e) if crate::error::is_limit(e, crate::LimitKind::TilePrecincts)),
         "two components sharing the budget must not both allocate their precincts"
     );
 }
@@ -785,7 +785,7 @@ fn block_count_guard_rejects_metadata_bomb() {
         .map_err(Error::from)
         .expect_err("guard fires before any packet parse");
     assert!(
-        crate::error::is_fixed_limit(&err, crate::LimitKind::TileCodeBlocks),
+        crate::error::is_limit(&err, crate::LimitKind::TileCodeBlocks),
         "{err}"
     );
 }
@@ -809,7 +809,7 @@ fn block_count_guard_rejects_before_allocating() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::TileCodeBlocks)),
+        matches!(&result, Err(e) if crate::error::is_limit(e, crate::LimitKind::TileCodeBlocks)),
         "an 8192×8192 single-band tile-component under 4×4 blocks must be rejected"
     );
     assert!(
@@ -835,7 +835,7 @@ fn a_one_tile_image_at_the_sample_limit_fits_32x32_blocks() {
     let mut block_budget = super::MAX_CODE_BLOCKS;
     let result = resolution_geoms(&too_many, 0, 0, &mut budget, &mut block_budget);
     assert!(
-        matches!(&result, Err(e) if crate::error::is_fixed_limit(e, crate::LimitKind::TileCodeBlocks)),
+        matches!(&result, Err(e) if crate::error::is_limit(e, crate::LimitKind::TileCodeBlocks)),
         "16x16 blocks of the same tile are over the cap"
     );
 }
@@ -2391,4 +2391,60 @@ fn a_stale_refusal_does_not_relabel_a_geometry_limit() {
         matches!(partial, Err(super::Refused::Other(crate::Error::Limit(_)))),
         "{partial:?}"
     );
+}
+
+/// `tile_counts` counts what `resolution_geoms` builds, precinct for
+/// precinct and code-block for code-block, over tiles at odd offsets, with
+/// sub-sampled components, small precincts and every number of levels, so
+/// the check before the walk holds the geometry the walk then builds.
+#[test]
+fn tile_counts_match_the_geometry_built() {
+    use super::geometry::tile_counts;
+    let mut checked = 0;
+    for (width, height, levels, block) in [
+        (1, 1, 0, 2),
+        (37, 23, 3, 2),
+        (300, 5, 5, 3),
+        (257, 129, 6, 4),
+        (64, 1, 8, 2),
+    ] {
+        for (x_offset, y_offset) in [(0, 0), (1, 3), (5, 2)] {
+            for precincts in [vec![], vec![(0, 0), (1, 1)], vec![(2, 1), (3, 2), (1, 4)]] {
+                for sampling in [1, 3] {
+                    let mut h = header(width + x_offset, height + y_offset, levels, block);
+                    h.siz.x_offset = x_offset;
+                    h.siz.y_offset = y_offset;
+                    h.siz.tile_width = (width / 2).max(1);
+                    h.siz.tile_height = (height / 2).max(1);
+                    h.siz.tile_x_offset = x_offset.min(1);
+                    h.siz.tile_y_offset = y_offset.min(1);
+                    h.siz.components.push(h.siz.components[0]);
+                    h.siz.components[1].x_sampling = sampling;
+                    h.components.push(h.components[0].clone());
+                    h.components[1].coding.precinct_sizes = precincts.clone();
+                    for tile in 0..h.siz.num_tiles() {
+                        // A tile empty on a sub-sampled component fails
+                        // alike in both.
+                        let counted = tile_counts(&h, tile);
+                        let mut precinct_budget = usize::MAX;
+                        let mut block_budget = usize::MAX;
+                        let built: crate::Result<()> = (0..2).try_for_each(|c| {
+                            resolution_geoms(&h, tile, c, &mut precinct_budget, &mut block_budget)
+                                .map(drop)
+                        });
+                        match (counted, built) {
+                            (Ok((precincts, blocks)), Ok(())) => {
+                                assert_eq!(precincts, (usize::MAX - precinct_budget) as u64);
+                                assert_eq!(blocks, (usize::MAX - block_budget) as u64);
+                                checked += 1;
+                            }
+                            (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string()),
+                            (a, b) => panic!("{a:?} against {b:?}"),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(checked > 400, "{checked}");
 }

@@ -187,6 +187,45 @@ pub fn two_large_tiles(len: usize) -> Vec<u8> {
     out
 }
 
+/// A codestream of one unsigned 8-bit component on the SIZ grid `grid` (as
+/// [`siz_body`] takes it), 5/3, LRCP, one layer, `levels` wavelet levels,
+/// code-blocks of `4 << block` samples square, and the precinct exponents
+/// `precincts`, a byte `PPx | PPy << 4` for each resolution (none for the
+/// maximal partition). Tile `i` has one tile-part of `packets[i]` empty
+/// packets, a 0x00 byte each, so its code-blocks are all empty. Zero bytes
+/// after `EOC` make the codestream `len` bytes long when it is shorter.
+pub fn empty_tiles(
+    grid: [u32; 8],
+    levels: u8,
+    block: u8,
+    precincts: &[u8],
+    packets: &[usize],
+    len: usize,
+) -> Vec<u8> {
+    let mut cod = cod_body(1, levels, block, 0);
+    if !precincts.is_empty() {
+        cod[0] = 1;
+        cod.extend_from_slice(precincts);
+    }
+    let bands = 1 + 3 * usize::from(levels);
+    let mut out = [
+        vec![0xFF, 0x4F],
+        seg(0xFF51, &siz_body(grid, &[[7, 1, 1]])),
+        seg(0xFF52, &cod),
+        seg(0xFF5C, &qcd_none_body(2, &vec![8; bands])),
+    ]
+    .concat();
+    for (index, &count) in packets.iter().enumerate() {
+        let index = u16::try_from(index).expect("too many tiles");
+        out.extend(tile_part(index, 0, 1, &[], &vec![0; count]));
+    }
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    if out.len() < len {
+        out.resize(len, 0);
+    }
+    out
+}
+
 /// Packet header bits, packed as B.10.1 has it: a byte after 0xFF carries
 /// only 7 bits, and the last byte is padded with 0 bits (and followed by a
 /// 0x00 if it is 0xFF).

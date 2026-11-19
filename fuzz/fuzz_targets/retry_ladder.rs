@@ -94,7 +94,9 @@ fn rank(limit: &WorkLimit) -> u64 {
 /// The option of `options` that limit `kind` reads.
 fn field(options: &DecodeOptions, kind: LimitKind) -> &WorkLimit {
     match kind {
-        LimitKind::Samples => &options.sample_limit,
+        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+            &options.sample_limit
+        }
         LimitKind::PacketWork => &options.packet_work_limit,
         LimitKind::CodeBlockWork => &options.code_block_work_limit,
         other => unreachable!("an adjustable limit with no option: {other:?}"),
@@ -105,7 +107,9 @@ fn field(options: &DecodeOptions, kind: LimitKind) -> &WorkLimit {
 fn with_field(options: &DecodeOptions, kind: LimitKind, limit: WorkLimit) -> DecodeOptions {
     let options = options.clone();
     match kind {
-        LimitKind::Samples => options.with_sample_limit(limit),
+        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+            options.with_sample_limit(limit)
+        }
         LimitKind::PacketWork => options.with_packet_work_limit(limit),
         LimitKind::CodeBlockWork => options.with_code_block_work_limit(limit),
         other => unreachable!("an adjustable limit with no option: {other:?}"),

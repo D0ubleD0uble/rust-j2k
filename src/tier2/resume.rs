@@ -244,7 +244,7 @@ impl Walks {
         match std::mem::take(&mut self.tiles[index]) {
             Slot::Kept(walk, bytes) => self.tiles[index] = Slot::Kept(walk, bytes),
             Slot::Empty | Slot::Forgotten => {
-                let mut walk = TileWalk::new(header, tile, reduction, layers);
+                let mut walk = TileWalk::new(header, tile, reduction, layers, meter.cap());
                 walk.restarted = walked_before;
                 let bytes = walk.bytes();
                 self.largest = self.largest.max(bytes);
@@ -260,7 +260,7 @@ impl Walks {
                 };
             }
             Slot::Unkept { bytes, .. } if fits(self, bytes) => {
-                let mut walk = TileWalk::new(header, tile, reduction, layers);
+                let mut walk = TileWalk::new(header, tile, reduction, layers, meter.cap());
                 walk.restarted = true;
                 let bytes = walk.bytes();
                 self.kept += bytes;
@@ -544,11 +544,17 @@ struct Census {
 }
 
 impl TileWalk {
-    fn new(header: &MainHeader, tile: &Tile<'_>, reduction: u8, layers: Option<u16>) -> Self {
+    fn new(
+        header: &MainHeader,
+        tile: &Tile<'_>,
+        reduction: u8,
+        layers: Option<u16>,
+        cap: crate::samples::Cap,
+    ) -> Self {
         let mut budget = Budget {
             reduction,
             layers,
-            ..Budget::decode(0, 0)
+            ..Budget::decode(0, 0).within(cap)
         };
         let mut dropped = Vec::new();
         let built = tile_geometry(header, tile.index, &mut budget, |blocks| {

@@ -22,6 +22,11 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
     let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         let prefix = read_jp2_prefix(bytes, options)?;
+        check_geometry(
+            &prefix.parsed.header,
+            &prefix.selection,
+            samples::cap(&options.sample_limit, bytes.len()),
+        )?;
         let area = &prefix.selection.area;
         let (width, height) = area.image_extent_at(reduction);
         let mut components = if prefix.selection.subset {
@@ -64,6 +69,11 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
     check_raw_color(options, siz.components.len())?;
     check_reduction(&parsed.header, reduction, None)?;
     let selection = selection?;
+    check_geometry(
+        &parsed.header,
+        &selection,
+        samples::cap(&options.sample_limit, bytes.len()),
+    )?;
     let (width, height) = selection.area.image_extent_at(reduction);
     Ok(Header {
         width,
@@ -78,6 +88,70 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
         tiles: TileGrid::of_siz(siz),
         jp2: None,
     })
+}
+
+/// The most resolutions of tile-components [`check_geometry`] counts. Past
+/// them it leaves the rest of the tiles to the decode, which counts each
+/// tile as it reads it. A tile its bound admits costs nothing, so only a
+/// header that declares many tiles of many components and levels gets this
+/// far: 2^22 take about 50 ms (a header of 4000 tiles of 16384 components
+/// and 5 levels, at about 12 ns a resolution).
+const GEOMETRY_STEPS: u64 = 1 << 22;
+
+/// Hold every tile `selection` reads to the precincts and code-blocks `cap`
+/// allows a tile, under the main header (see [`tier2::check_tile`]), so that
+/// [`read_header_with`](crate::read_header_with) refuses a tile the decode
+/// would refuse. The decode counts each tile under its own header, so a
+/// tile-part `COD` or `COC` can still change the count.
+///
+/// A tile whose bound shows it within both caps is not counted: it holds at
+/// most a code-block for each sample of its components on the reference
+/// grid, and at most a precinct for each sample of each resolution. Only a
+/// fault of the coding parameters the counting meets is passed over, as the
+/// decode reports it when it builds that tile.
+fn check_geometry(
+    header: &codestream::MainHeader,
+    selection: &window::Selection,
+    cap: samples::Cap,
+) -> Result<()> {
+    let siz = &header.siz;
+    let components = siz.components.len() as u64;
+    let resolutions: u64 = header
+        .components
+        .iter()
+        .map(|params| u64::from(params.coding.decomposition_levels) + 1)
+        .sum();
+    let mut steps = 0u64;
+    for (index, read) in selection.tiles(siz).into_iter().enumerate() {
+        let Some(rect) = siz.tile_rect(index as u32) else {
+            continue;
+        };
+        if !read {
+            continue;
+        }
+        let (w, h) = (u64::from(rect.x1 - rect.x0), u64::from(rect.y1 - rect.y0));
+        // A component's tile-component is at most w x h, and its resolution
+        // at level s at most (w / 2^s + 1) x (h / 2^s + 1), so its
+        // resolutions together hold at most 2wh + 2(w + h) samples and one
+        // for each resolution.
+        let blocks = components.saturating_mul(w.saturating_mul(h));
+        let precincts = blocks
+            .saturating_mul(2)
+            .saturating_add(components.saturating_mul(2 * (w + h)))
+            .saturating_add(resolutions);
+        if blocks <= cap.tile_blocks() && precincts <= cap.tile_precincts() {
+            continue;
+        }
+        steps = steps.saturating_add(resolutions);
+        if steps > GEOMETRY_STEPS {
+            break;
+        }
+        match tier2::check_tile(header, index as u32, cap) {
+            Err(error @ Error::Limit(_)) => return Err(error),
+            _ => continue,
+        }
+    }
+    Ok(())
 }
 
 /// The entries of `all` that `order` names, in its order. Each index is in
@@ -131,7 +205,8 @@ pub(crate) fn decode_metered(
     check_reduction(&parsed.header, options.resolution_reduction, None)?;
     let selection = selection?;
     let cs = codestream::parse_tiles_with(bytes, parsed, options.strict)?;
-    decode_codestream(cs, options, &selection, ledger)
+    let cap = samples::cap(&options.sample_limit, bytes.len());
+    decode_codestream(cs, options, &selection, cap, ledger)
 }
 
 /// Options that contradict each other, whatever the input.
@@ -317,7 +392,8 @@ fn decode_jp2(
 ) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
     let cs = codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict)?;
-    let image = decode_codestream(cs, options, &prefix.selection, ledger)?;
+    let cap = samples::cap(&options.sample_limit, bytes.len());
+    let image = decode_codestream(cs, options, &prefix.selection, cap, ledger)?;
     // A subset is planned raw, so the plans would pass it through, but they
     // are planned for every component.
     let mut components = if prefix.selection.subset {
@@ -336,11 +412,12 @@ fn decode_jp2(
 }
 
 /// Decode a parsed codestream into the area and components `selection`
-/// names.
+/// names, under the sample limit `cap`.
 fn decode_codestream(
     cs: codestream::Codestream<'_>,
     options: &DecodeOptions,
     selection: &window::Selection,
+    cap: samples::Cap,
     ledger: Option<&incremental::Ledger>,
 ) -> Result<Image> {
     let reduction = options.resolution_reduction;
@@ -373,7 +450,7 @@ fn decode_codestream(
     // spent: those decodes' walks are kept, and this one goes on from them,
     // so that what they all spend is what one walk spends (see
     // [`incremental::Ledger`]).
-    let meter = tier2::Meter::new(packet_bound);
+    let meter = tier2::Meter::new(packet_bound).under(cap);
     // The code-block bound that `Default` sets and a refusal's factor is
     // worked out from. Under the fuzz targets' cap it is the cap, whatever
     // the tiles' data, and no limit, `Unlimited` included, sets more than
@@ -480,6 +557,10 @@ fn decode_codestream(
         // A tile COD can give one tile a shallower pyramid than the rest, so
         // the reduction is checked per tile, not once for the image.
         or_end_count!(check_reduction(&header, reduction, Some(index)));
+
+        // The tile's precincts and code-blocks, counted before its geometry
+        // is built, against what the sample limit allows a tile.
+        or_end_count!(tier2::check_tile(&header, tile.index, cap));
 
         // Tier-2: parse packets into per-code-block coded segments, per
         // component. The walk covers every resolution and layer whatever the

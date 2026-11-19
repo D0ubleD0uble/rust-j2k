@@ -303,7 +303,9 @@ pub use window::{Region, Window};
 ///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
 ///   times the output for a square tile, about 2.7 GiB at 2^29 samples,
 ///   and more for a tall, narrow tile or while a palette expands (see [the
-///   sample limit][sample-limit]). This is for the one-shot functions; an
+///   sample limit][sample-limit]). The limit also sets the code-blocks and
+///   precincts one tile may hold: one for each 512 and each 2048 samples it
+///   allows, and at least 2^20 and 2^18. This is for the one-shot functions; an
 ///   [`IncrementalDecoder`] keeps per-tile state and can hold up to about
 ///   three times one decode's peak, plus the bytes fed and a table of 24 bytes
 ///   per tile index up to the highest seen (about 1.5 MiB for 65535 tiles).
@@ -867,6 +869,16 @@ pub struct DecodeOptions {
     /// [`components`](Self::components) subset does not lower the count, as
     /// the packets of every component of a tile read are still walked.
     ///
+    /// The limit also sets how many code-blocks and precincts one tile may
+    /// hold, counted at full resolution over its components: one code-block
+    /// for each 512 samples it allows and one precinct for each 2048, and at
+    /// least 2^20 and 2^18. A tile past either is refused with an
+    /// [`Error::Limit`] of [`LimitKind::TileCodeBlocks`] or
+    /// [`LimitKind::TilePrecincts`], whose `retry_with` raises this option.
+    /// Their bookkeeping is at most about a quarter of the output the same
+    /// limit allows past 2^29 (see [code-blocks and precincts per
+    /// tile](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#code-blocks-and-precincts-per-tile)).
+    ///
     /// `Raised(n)` allows `n` times the default for the same input: `n` times
     /// 2^29 samples up to 64 MiB, and `8 * n` samples per byte past it. So
     /// a factor never allows less than the default, and the factor a refusal
@@ -895,8 +907,9 @@ pub struct DecodeOptions {
     /// 57 MB (see [the sample
     /// limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
     /// The palette expansion and sRGB output are checked against `n` too,
-    /// and so is every tile a region reads. A refusal under it gives no
-    /// retry. [`read_header_with`] with the same options refuses the file
+    /// and so is every tile a region reads, and the code-blocks and
+    /// precincts a tile may hold are set from `n`. A refusal under it gives
+    /// no retry. [`read_header_with`] with the same options refuses the file
     /// as the decode would, before any tile is read, so a server can check
     /// a file with it first.
     ///
@@ -1369,7 +1382,9 @@ impl DecodeOptions {
         let retry = limit.retry_with()?;
         let options = self.clone();
         match limit.kind() {
-            LimitKind::Samples => Some(options.with_sample_limit(retry)),
+            LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+                Some(options.with_sample_limit(retry))
+            }
             LimitKind::PacketWork => Some(options.with_packet_work_limit(retry)),
             LimitKind::CodeBlockWork => Some(options.with_code_block_work_limit(retry)),
             _ => None,

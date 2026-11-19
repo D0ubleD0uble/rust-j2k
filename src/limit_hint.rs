@@ -152,6 +152,25 @@ pub(crate) fn samples(total: u64, default: u64) -> (WorkLimit, String) {
     }
 }
 
+/// The [`Error::Limit`] of `kind` for a tile whose code-blocks or precincts
+/// need a sample limit of `needed` samples, under one that allowed `allowed`
+/// (see [`samples::over_tile`](crate::samples::over_tile)). The tiles after
+/// it are not counted, so it names the factor [`doubled`] gives.
+pub(crate) fn tile_geometry(
+    kind: LimitKind,
+    head: &str,
+    needed: u64,
+    allowed: u64,
+    default: u64,
+) -> Error {
+    escalated(
+        kind,
+        doubled(needed, allowed, default),
+        head,
+        "later tiles may need more",
+    )
+}
+
 /// The [`Error::Limit`] for a tile whose code-blocks need `work` sample-passes when
 /// `left` of the bound were left, after earlier tiles spent `spent`.
 pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, default: u64) -> Error {

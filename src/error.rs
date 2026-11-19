@@ -177,7 +177,10 @@ pub enum Error {
     /// the sample limit
     /// ([`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit)),
     /// which holds the image area and the samples that palette expansion, sYCC
-    /// chroma replication and a monochrome ICC conversion produce; reading the
+    /// chroma replication and a monochrome ICC conversion produce, and with
+    /// them the code-blocks and precincts a tile may hold (one code-block for
+    /// each 512 samples it allows and one precinct for each 2048, and at least
+    /// 2^20 and 2^18); reading the
     /// packet headers
     /// ([`DecodeOptions::packet_work_limit`](crate::DecodeOptions::packet_work_limit));
     /// and decoding the code-blocks
@@ -191,8 +194,8 @@ pub enum Error {
     /// caller set that ceiling.
     ///
     /// The other guards have no option, so a file past one of them is refused
-    /// whatever the options. A tile may hold at most 2^20 code-blocks and
-    /// 2^18 precincts, and 32 progression order change (POC) volumes; a
+    /// whatever the options. A tile may hold at most 32 progression order
+    /// change (POC) volumes; a
     /// code-block may have at most 30 bit-planes; and under a `sample_limit`
     /// of `WorkLimit::Unlimited`, an image too large for the target to
     /// address is still refused. For these, `retry_with` is `None`.
@@ -321,7 +324,9 @@ impl Error {
 /// no option names none.
 fn names_its_data(kind: LimitKind, retry_with: Option<&WorkLimit>, message: &str) -> bool {
     let option = match kind {
-        LimitKind::Samples => Some("`DecodeOptions::sample_limit`"),
+        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+            Some("`DecodeOptions::sample_limit`")
+        }
         LimitKind::PacketWork => Some("`DecodeOptions::packet_work_limit`"),
         LimitKind::CodeBlockWork => Some("`DecodeOptions::code_block_work_limit`"),
         _ => None,
@@ -467,9 +472,10 @@ impl fmt::Display for LimitDetail {
 
 /// Which limit an [`Error::Limit`] names.
 ///
-/// The first three are [`DecodeOptions`](crate::DecodeOptions) limits that
-/// a [`WorkLimit`] raises. No option raises the others, so they refuse the
-/// input whatever the options.
+/// [`is_adjustable`](Self::is_adjustable) says which a
+/// [`DecodeOptions`](crate::DecodeOptions) limit raises, with a
+/// [`WorkLimit`]. No option raises the others, so they refuse the input
+/// whatever the options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LimitKind {
@@ -489,9 +495,13 @@ pub enum LimitKind {
     /// An image of more samples than the target can address, refused under
     /// any sample limit.
     AddressSpace,
-    /// A tile of more than 2^20 code-blocks.
+    /// A tile of more code-blocks than the sample limit,
+    /// [`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit),
+    /// allows a tile: one for each 512 samples it allows, and at least 2^20.
     TileCodeBlocks,
-    /// A tile of more than 2^18 precincts.
+    /// A tile of more precincts than the sample limit,
+    /// [`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit),
+    /// allows a tile: one for each 2048 samples it allows, and at least 2^18.
     TilePrecincts,
     /// A tile's progression order change (`POC`) volumes past a fixed cap:
     /// more than 32 of them, or more packets than the decoder tracks for
@@ -504,12 +514,18 @@ pub enum LimitKind {
 impl LimitKind {
     /// Whether a [`DecodeOptions`](crate::DecodeOptions) limit raises this
     /// one: true for [`Samples`](Self::Samples),
-    /// [`PacketWork`](Self::PacketWork) and
-    /// [`CodeBlockWork`](Self::CodeBlockWork).
+    /// [`PacketWork`](Self::PacketWork),
+    /// [`CodeBlockWork`](Self::CodeBlockWork), and
+    /// [`TileCodeBlocks`](Self::TileCodeBlocks) and
+    /// [`TilePrecincts`](Self::TilePrecincts), which the sample limit raises.
     pub fn is_adjustable(self) -> bool {
         matches!(
             self,
-            LimitKind::Samples | LimitKind::PacketWork | LimitKind::CodeBlockWork
+            LimitKind::Samples
+                | LimitKind::PacketWork
+                | LimitKind::CodeBlockWork
+                | LimitKind::TileCodeBlocks
+                | LimitKind::TilePrecincts
         )
     }
 }
@@ -519,6 +535,12 @@ impl LimitKind {
 #[cfg(test)]
 pub(crate) fn keyed<T>(result: Result<T>) -> core::result::Result<T, String> {
     result.map_err(|error| format!("{error:?}"))
+}
+
+/// Whether `error` is an [`Error::Limit`] for `kind`.
+#[cfg(test)]
+pub(crate) fn is_limit(error: &Error, kind: LimitKind) -> bool {
+    matches!(error, Error::Limit(limit) if limit.kind() == kind)
 }
 
 /// Whether `error` is an [`Error::Limit`] for `kind` that no option raises,
@@ -557,18 +579,18 @@ mod tests {
     }
 
     #[test]
-    fn the_three_options_are_the_adjustable_kinds() {
+    fn the_three_options_raise_the_adjustable_kinds() {
         use LimitKind::*;
-        for kind in [Samples, PacketWork, CodeBlockWork] {
-            assert!(kind.is_adjustable(), "{kind:?}");
-        }
         for kind in [
-            AddressSpace,
+            Samples,
+            PacketWork,
+            CodeBlockWork,
             TileCodeBlocks,
             TilePrecincts,
-            PocVolumes,
-            BitPlanes,
         ] {
+            assert!(kind.is_adjustable(), "{kind:?}");
+        }
+        for kind in [AddressSpace, PocVolumes, BitPlanes] {
             assert!(!kind.is_adjustable(), "{kind:?}");
         }
     }
