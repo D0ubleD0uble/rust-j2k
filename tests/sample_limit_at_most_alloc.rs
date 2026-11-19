@@ -38,8 +38,8 @@ const CEILING: u64 = 1 << 24;
 const SIDE: u32 = 4096;
 const LEVELS: u8 = 5;
 
-/// The most a decode may peak at, as a multiple of its output: the top of
-/// the 1.35 to 3.2 times the `sample_limit` rustdoc documents.
+/// The most a decode may peak at, as a multiple of its output: the "no more
+/// than about 3.2 times" the `sample_limit` rustdoc documents.
 const PEAK_RATIO: f64 = 3.2;
 
 /// One `SIDE` x `height` 8-bit component in one tile, LRCP, one layer,

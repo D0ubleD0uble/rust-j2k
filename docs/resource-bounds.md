@@ -10,13 +10,13 @@ allocates, the packet-header walk (tier 2) and the code-block decoding
 is done. The error's `LimitDetail` says which cap it was (`kind()`, a
 `LimitKind`) and gives a `WorkLimit::Raised(n)` to retry with
 (`retry_with()`), and its message names both. Under a sample limit of
-`WorkLimit::AtMost` it gives none (see [A fixed ceiling](#a-fixed-ceiling)). For the samples it is the
-smallest factor that admits the image. For the two work bounds it is the
-larger of the smallest factor that admits what the decode has seen and twice
-the factor the bound ran under, and the file may need more, so a loop of
-`with_retry` calls takes about log2 of the factor the file needs. It is `None`
-when the refusal shows no factor. A caller can retry from `kind()` and
-`retry_with()` without reading the message, and `DecodeOptions::with_retry`
+`WorkLimit::AtMost` it gives none (see [A fixed ceiling](#a-fixed-ceiling)).
+For the samples it is the smallest factor that admits the image. For the two
+work bounds it is the larger of the smallest factor that admits what the decode
+has seen and twice the factor the bound ran under, and the file may need more,
+so a loop of `with_retry` calls takes about log2 of the factor the file needs.
+It is `None` when the refusal shows no factor. A caller can retry from `kind()`
+and `retry_with()` without reading the message, and `DecodeOptions::with_retry`
 sets the option. A retry can still fail with another error once past the cap.
 
 | Bound | Default | Option in `DecodeOptions` | Margin over encoder output | Tests |
@@ -89,10 +89,12 @@ every component's code-block geometry in each tile read, which the count
 bounds as the next sections rely on. A palette's expanded channels and the
 channels sRGB output adds are counted over the returned area only. So the
 sample buffers peak within the same multiple of the limit as for a whole
-decode. The parse of the tile-parts is not counted: it keeps about 440 bytes
-for each tile-part in the file, read or not, which is about 29 MB at 65535
-tiles and at most about 21 times the file's size, and a file whose whole
-image is over the limit now gets that far under a window. A
+decode. The parse of the tile-parts is not counted: it keeps a record for each
+tile in the file, read or not, of about 870 bytes allocated (and as much
+resident, measured), plus about 32 bytes for each further tile-part of a tile.
+That is about 57 MB at 65535 tiles, and at most about 62 times the file's size,
+for tiles of one empty 14-byte tile-part each (`tests/tile_record_alloc.rs`). A
+file whose whole image is over the limit now gets that far under a window. A
 256x256 window of a 32769x16385 image in 4096x4096 tiles fits the default,
 while a window of one 23171x23171 tile counts the whole tile. A
 `DecodeOptions::components` subset does not lower the count, as the walk
@@ -233,16 +235,21 @@ of padding, measured.
 input's length, so padding cannot raise it. It is not a factor of the default:
 `n` is the limit for a file of 100 bytes and for one of 1 GB alike, and only
 the samples the target can address cap it. It holds every count the default
-does: the codestream's components of the tiles read, in every component (a
-16x16 window of one 23171x23171 tile counts 536.9 M samples), a palette's
-expanded channels, and the channels sRGB output adds. `read_header_with` with
-the same options refuses what the decode would, before any tile is read.
+does: every component of the tiles read (a 16x16 window of one 23171x23171 tile
+counts 536.9 M samples), a palette's expanded channels, and the channels sRGB
+output adds. `read_header_with` with the same options refuses what the decode
+would, before any tile is read.
 
-The output is then at most `4·n` bytes, and the decode peaks at about 1.35 to
-3.2 times that, plus the input, from the measurements above: 1.35 for a square
-tile, up to 3.2 for a tile one sample wide. `AtMost(2^26)` is 256 MiB of output
-and a peak of at most about 820 MiB, plus the input. An `IncrementalDecoder`
-can hold up to about three times one decode's peak, plus the bytes fed.
+The output is then at most `4·n` bytes, and the sample buffers peak at no more
+than about 3.2 times that, from the measurements above (a square tile measured
+1.35, resident; the allocated bytes measure 2.0 for a square tile and up to
+about 2.3 for a tile one or two samples wide). Memory that grows with the input
+is on top: the input itself, and the parse of the tile-parts, which keeps a
+record for each tile in the file (see [The sample limit](#the-sample-limit)).
+`AtMost(2^26)` is 256 MiB of output and sample buffers of at most about 820
+MiB, plus the input and up to about 57 MB for the tile records. So bound the
+input's size under `AtMost` too. An `IncrementalDecoder` can hold up to about
+three times one decode's peak, plus the bytes fed.
 
 A refusal under `AtMost(n)` has kind `Samples` and names the ceiling and the
 count. It gives no retry (`retry_with` is `None`, so `with_retry` is `None`):

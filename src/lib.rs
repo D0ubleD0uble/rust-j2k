@@ -888,9 +888,11 @@ pub struct DecodeOptions {
     /// that does not grow with the input, use
     /// [`AtMost(n)`](WorkLimit::AtMost): the decode may hold at most `n`
     /// samples, whatever the input's length. The output is then at most
-    /// `4 * n` bytes, and the decode peaks at about 1.35 to 3.2 times that,
-    /// plus the input, measured: 1.35 for a square tile, and up to 3.2 for a
-    /// tile one sample wide (see [the sample
+    /// `4 * n` bytes, and the sample buffers peak at no more than about 3.2
+    /// times that (a square tile measured 1.35, resident). Memory that grows
+    /// with the input is on top: the input itself, and the parse of the
+    /// tile-parts, which keeps a record of under 1 KiB for each tile in the
+    /// file (see [the sample
     /// limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
     /// The palette expansion and sRGB output are checked against `n` too,
     /// and so is every tile a region reads. A refusal under it gives no
@@ -1100,10 +1102,11 @@ impl Default for DecodeOptions {
 ///
 /// - For a file from a source you trust, use [`Unlimited`](WorkLimit::Unlimited).
 ///   The decode then takes as long as the file asks.
-/// - To cap the memory a decode may take, set the sample limit to
+/// - To cap the samples a decode may hold, set the sample limit to
 ///   [`AtMost(n)`](WorkLimit::AtMost): at most `n` samples, `4 * n` bytes of
 ///   output, whatever the file's size or padding (see
 ///   [`DecodeOptions::sample_limit`]). A refusal under it gives no factor.
+///   Cap the input's size as well: the tile-part parse grows with it.
 /// - For a higher work bound, use `Raised(n)` with an `n` of your own
 ///   choosing, the largest cost you will accept. It is a factor of the
 ///   default, which grows with the file. Read the factor from
@@ -1113,10 +1116,9 @@ impl Default for DecodeOptions {
 ///   diagnostic, not a stable format.
 ///
 /// Only these three limits can be changed, and only the sample limit takes
-/// `AtMost`. The other guards also end in
-/// [`Error::Limit`], and no option here raises them (see [`Error::Limit`]).
-/// A damaged file can hit a guard too, so do not lift a bound on that
-/// evidence alone.
+/// `AtMost`. The other guards also end in [`Error::Limit`], and no option
+/// here raises them (see [`Error::Limit`]). A damaged file can hit a guard
+/// too, so do not lift a bound on that evidence alone.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode, decode_with};
@@ -1171,8 +1173,8 @@ pub enum WorkLimit {
     /// with the input, so padding cannot raise it, and it is not a factor of
     /// the default: `AtMost(n)` allows `n` samples for a file of any size,
     /// more than the default for a small file and less for a large one.
-    /// Only an image too large for the target to address is refused below
-    /// `n`. A refusal under it gives no [`LimitDetail::retry_with`], so
+    /// An `n` past the samples the target can address is held to that count.
+    /// A refusal under it gives no [`LimitDetail::retry_with`], so
     /// [`DecodeOptions::with_retry`] gives `None`. `AtMost(0)` is
     /// [`Error::InvalidOptions`], and so is `AtMost` on
     /// [`packet_work_limit`](DecodeOptions::packet_work_limit) or
@@ -1341,9 +1343,9 @@ impl DecodeOptions {
     /// factor is at least twice the last, so a file that needs a factor of
     /// `n` takes about log2(`n`) retries, not `n`. A retry still costs a
     /// decode. The factor can be up to twice what the file needs, so a
-    /// caller that keeps a ceiling `c` should, when the factor passes it,
-    /// try once more with `WorkLimit::Raised(c)` rather than stop: a file
-    /// that needs between about `c / 2` and `c` is admitted by that.
+    /// caller that keeps a cap `c` on the factor should, when the factor
+    /// passes it, try once more with `WorkLimit::Raised(c)` rather than stop:
+    /// a file that needs between about `c / 2` and `c` is admitted by that.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode};

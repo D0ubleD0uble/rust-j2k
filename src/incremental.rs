@@ -132,10 +132,10 @@ use crate::{
 /// on the same bytes, such as a marker segment with an invalid field, or an
 /// [`Error::Limit`] that does not depend on how many bytes there are: an image
 /// too large for the target to address, too many precincts or code-blocks, too
-/// many `POC` volumes, or too many bit-planes, or a sample limit of
-/// [`WorkLimit::AtMost`]. More bytes do not undo these, so
-/// once `refine` returns an error, every later `refine` returns the same error
-/// without decoding, until a change of options. Some refusals are not final
+/// many `POC` volumes or too many bit-planes, or a refusal by a sample limit
+/// of [`WorkLimit::AtMost`]. More bytes do not undo these, so once `refine`
+/// returns an error, every later `refine` returns the same error without
+/// decoding, until a change of options. Some refusals are not final
 /// while bytes may still come, so `refine` waits on them, with the reason as a
 /// [`Waiting`], and only `finish` reports them: a main header cut short
 /// ([`Error::Incomplete`]), a refusal by the default or a

@@ -62,21 +62,23 @@ Past 64 MiB the worst-case peak is about 102 times that size, and up to about
 three times that for an `IncrementalDecoder`. A one-tile 1 x 2^30 image followed
 by 128 MiB of zeros after `EOC` (134,283,241 bytes) decodes at the defaults
 (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, measured. For a ceiling
-that does not grow with the input, set
-`DecodeOptions::sample_limit` to `WorkLimit::AtMost(n)`: the decode then holds
-at most `n` samples, `4·n` bytes of output, whatever the input's length or
-padding, and peaks at about 1.35 to 3.2 times that, plus the input (measured
-multiples; see "The sample limit" in
-[`docs/resource-bounds.md`](docs/resource-bounds.md)). It counts what the
-default limit counts: every tile a region reads, in every component, a
-palette's expanded channels and sRGB output. `read_header_with` with the same
-options refuses the file before any tile is read. A file past a limit is refused with
-`Error::Limit`, which is the guard working, not a bug. These figures cover the
-one-shot decode functions. An `IncrementalDecoder` keeps per-tile state between
-calls and can hold up to about three times one decode's peak, plus the bytes fed
-and a table of 24 bytes per tile index up to the highest seen, about 1.5 MiB for
-65535 tiles (see "Work and memory" in
-[`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
+that does not grow with the input, set `DecodeOptions::sample_limit` to
+`WorkLimit::AtMost(n)`: the decode then holds at most `n` samples, `4·n` bytes
+of output, whatever the input's length or padding. The sample buffers peak at
+no more than about 3.2 times that (a square tile measured 1.35, resident).
+Memory that grows with the input is on top: the input itself, and the parse of
+the tile-parts, which keeps a record of under 1 KiB for each tile in the file,
+up to about 62 times a file of empty tiles (see "The sample limit" in
+[`docs/resource-bounds.md`](docs/resource-bounds.md)). So bound the input's
+size under `AtMost` too. It counts what the default limit counts: every tile a
+region reads, in every component, a palette's expanded channels and sRGB
+output. `read_header_with` with the same options refuses the file before any
+tile is read. A file past a limit is refused with `Error::Limit`, which is the
+guard working, not a bug. These figures cover the one-shot decode functions.
+An `IncrementalDecoder` keeps per-tile state between calls and can hold up to
+about three times one decode's peak, plus the bytes fed and a table of 24 bytes
+per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see "Work
+and memory" in [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits
 (`WorkLimit::Raised`) or remove them (`WorkLimit::Unlimited`). A decode under

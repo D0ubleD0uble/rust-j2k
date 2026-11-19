@@ -44,10 +44,10 @@ does again on each refine.
   error, `header` returns it too, and it sticks however many bytes come
   after, until a change of options. A server that streams files in can
   refuse one as soon as its main header has come in. Any other error,
-  including a limit that does not depend on
-  the bytes (an image too large for the target to address, too many
-  precincts, code-blocks or `POC` volumes, too many bit-planes), is the one
-  `decode_with` gives on those bytes. A refusal by a bound the refines
+  including a limit that does not depend on the bytes (an image too large
+  for the target to address, too many precincts, code-blocks or `POC`
+  volumes, too many bit-planes), is the one `decode_with` gives on those
+  bytes. A refusal by a bound the refines
   share can stand in for an error that block decoding, the wavelet or
   assembly would meet later in the file: the refine waits where
   `decode_with` fails, and `finish` reports that error. A refine refused
