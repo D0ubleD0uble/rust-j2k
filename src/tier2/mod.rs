@@ -43,7 +43,8 @@ use std::ops::Range;
 use tagtree::{Saved, TagTree};
 
 pub(crate) use geometry::{
-    BandGeom, MAX_CODE_BLOCKS, MAX_PRECINCTS, PrecinctGeom, ResolutionGeom, resolution_geoms,
+    BandGeom, MAX_CODE_BLOCKS, MAX_PRECINCTS, PrecinctGeom, ResolutionGeom, check_tile,
+    resolution_geoms,
 };
 pub(crate) use progression::{PacketWalk, for_each_packet};
 
@@ -304,7 +305,7 @@ pub(crate) fn decode_packets_metered<'a>(
     let mut budget = Budget {
         reduction,
         layers,
-        ..Budget::decode(meter.left(), poc_bitmap)
+        ..Budget::decode(meter.left(), poc_bitmap).within(meter.cap())
     };
     decode_packets_within(header, tile, &mut budget, meter).map_err(|error| refused(meter, error))
 }
@@ -448,6 +449,19 @@ impl Budget {
             layers: None,
         }
     }
+
+    /// This budget with the geometry guards of a tile under the sample limit
+    /// `cap` ([`Cap::tile_precincts`](crate::samples::Cap::tile_precincts),
+    /// [`Cap::tile_blocks`](crate::samples::Cap::tile_blocks)), which the
+    /// decode has already held the tile to ([`check_tile`]).
+    pub(crate) fn within(self, cap: crate::samples::Cap) -> Budget {
+        let guard = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
+        Budget {
+            precincts: guard(cap.tile_precincts()),
+            blocks: guard(cap.tile_blocks()),
+            ..self
+        }
+    }
 }
 
 /// What a walk with `strict` off found of a tile's packets: which were never
@@ -487,7 +501,7 @@ pub fn decode_packets_partial<'a>(
     let mut budget = Budget {
         reduction,
         layers,
-        ..Budget::decode(meter.left(), poc_bitmap)
+        ..Budget::decode(meter.left(), poc_bitmap).within(meter.cap())
     };
     let mut reach = Reach::default();
     walk_packets(header, tile, &mut budget, meter, Some(&mut reach))
@@ -1150,20 +1164,36 @@ impl From<Refused> for Error {
 /// be a single byte and still pass over every row of code-blocks of its
 /// precinct, and a sweep can check millions of points that hold no
 /// packet, so this bounds the work where the other limits cannot.
+///
+/// It also carries the decode's sample limit, which sets the precincts and
+/// code-blocks each tile's walk may build ([`Budget::within`]).
 pub(crate) struct Meter {
     first: u64,
     left: Cell<u64>,
     refusal: Cell<Option<WorkRefusal>>,
+    cap: crate::samples::Cap,
 }
 
 impl Meter {
-    /// A meter with `first` visits to spend.
+    /// A meter with `first` visits to spend, under the floor of the default
+    /// sample limit.
     pub(crate) fn new(first: u64) -> Self {
         Meter {
             first,
             left: Cell::new(first),
             refusal: Cell::new(None),
+            cap: crate::samples::cap(&crate::WorkLimit::Default, 0),
         }
+    }
+
+    /// This meter under the sample limit `cap`.
+    pub(crate) fn under(self, cap: crate::samples::Cap) -> Self {
+        Meter { cap, ..self }
+    }
+
+    /// The sample limit the walks build their geometry under.
+    pub(crate) fn cap(&self) -> crate::samples::Cap {
+        self.cap
     }
 
     /// The visits it started with.

@@ -1010,7 +1010,8 @@ fn palette_jp2(size: u32, components: u16, columns: u8, codestream: &[u8]) -> Ve
     )
 }
 
-/// The palettized file of #474, 31 components of 4096x4096 with one of them
+/// The palettized file of #474, 31 components of 4096x4096 (in tiles of 512,
+/// so each tile holds fewer code-blocks than a tile may) with one of them
 /// mapped through a one-column palette, returns 2^24 samples but decodes
 /// 31 x 2^24: `AtMost(2^28)` refuses it on the codestream's count, which the
 /// returned header does not show. A file of one component that the palette
@@ -1018,7 +1019,7 @@ fn palette_jp2(size: u32, components: u16, columns: u8, codestream: &[u8]) -> Ve
 #[test]
 fn at_most_holds_the_codestream_and_the_palette_expansion() {
     let n = 1 << 28;
-    let mut thirty_one = main_header(4096, 4096, 31, 1, &[]);
+    let mut thirty_one = main_header(4096, 512, 31, 1, &[]);
     thirty_one.extend_from_slice(&[0xFF, 0x90]);
     let file = palette_jp2(4096, 31, 1, &thirty_one);
     let header = read_header(&file).expect("under the default limit");

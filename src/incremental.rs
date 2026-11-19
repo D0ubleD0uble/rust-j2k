@@ -132,15 +132,16 @@ use crate::{
 /// An error from `refine` is the error [`decode_with`] gives with `strict` off
 /// on the same bytes, such as a marker segment with an invalid field, or an
 /// [`Error::Limit`] that does not depend on how many bytes there are: an image
-/// too large for the target to address, too many precincts or code-blocks, too
-/// many `POC` volumes or too many bit-planes, or a refusal by a sample limit
-/// of [`WorkLimit::AtMost`]. More bytes do not undo these, so once `refine`
-/// returns an error, every later `refine` returns the same error without
-/// decoding, until a change of options. Some refusals are not final
+/// too large for the target to address, too many `POC` volumes or too many
+/// bit-planes, or a refusal by a sample limit of [`WorkLimit::AtMost`]. More
+/// bytes do not undo these, so once `refine` returns an error, every later
+/// `refine` returns the same error without decoding, until a change of
+/// options. Some refusals are not final
 /// while bytes may still come, so `refine` waits on them, with the reason as a
 /// [`Waiting`], and only `finish` reports them: a main header cut short
 /// ([`Error::Incomplete`]), a refusal by the default or a
-/// [`Raised`](WorkLimit::Raised) sample limit, the packet or
+/// [`Raised`](WorkLimit::Raised) sample limit (of the image, or of the
+/// precincts and code-blocks a tile may hold), the packet or
 /// code-block work bound or the charge for missing tiles, which more bytes
 /// raise, and a refusal by the bound on the walks of tiles not kept, which the
 /// refines spend together. A caller
@@ -286,15 +287,21 @@ impl IncrementalDecoder {
     /// [`Region::Tile`]`(500)` on a one-tile file.
     /// [`read_header`](crate::read_header)`(decoder.bytes())` reads the
     /// header without the decoder's options. The default sample limit grows
-    /// with the bytes fed, so a sample-limit [`Error::Limit`] here can turn
-    /// into a header once more bytes come in; [`refine`](Self::refine) waits
+    /// with the bytes fed, so a sample-limit [`Error::Limit`] here, of kind
+    /// [`Samples`](LimitKind::Samples),
+    /// [`TileCodeBlocks`](LimitKind::TileCodeBlocks) or
+    /// [`TilePrecincts`](LimitKind::TilePrecincts), can turn into a header
+    /// once more bytes come in; [`refine`](Self::refine) waits
     /// on it instead ([`Waiting::SampleLimit`]). Under a ceiling of
     /// [`WorkLimit::AtMost`] it does not grow, so the refusal here is final,
     /// and `refine` returns it as an error too: a server that streams files
     /// in can refuse one as soon as its main header has come in.
     ///
     /// Call it after a feed rather than after each byte: each call parses
-    /// the main header again.
+    /// the main header again, and counts again the tiles over the caps under
+    /// it, which on a header of many tiles of many components takes up to
+    /// the read's budget each call (63 ms for 1000 tiles of 4096
+    /// components).
     pub fn header(&self) -> Result<Option<Header>> {
         match read_header_with(&self.bytes, &self.lenient) {
             Ok(header) => Ok(Some(header)),
@@ -443,10 +450,13 @@ impl IncrementalDecoder {
                 Some(Refusal::MissingTiles) => Waiting::MissingTiles { limit },
                 Some(Refusal::Work) => Waiting::WorkLimit { limit },
                 Some(Refusal::BoundSpent) => Waiting::BoundSpent { limit },
-                // The sample limit grows with the bytes too, unless it is a
-                // ceiling the caller set: then more bytes cannot admit it.
-                None if limit.kind() == LimitKind::Samples
-                    && !matches!(self.options.sample_limit, WorkLimit::AtMost(_)) =>
+                // The sample limit, and the code-blocks and precincts a tile
+                // may hold, grow with the bytes too, unless it is a ceiling
+                // the caller set: then more bytes cannot admit it.
+                None if matches!(
+                    limit.kind(),
+                    LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+                ) && !matches!(self.options.sample_limit, WorkLimit::AtMost(_)) =>
                 {
                     Waiting::SampleLimit { limit }
                 }
@@ -672,7 +682,9 @@ pub enum Waiting {
     /// [`header`](IncrementalDecoder::header) returns `Ok(None)` for the
     /// same bytes.
     HeaderIncomplete,
-    /// The sample limit ([`DecodeOptions::sample_limit`]) refused the image.
+    /// The sample limit ([`DecodeOptions::sample_limit`]) refused the image,
+    /// or a tile of more code-blocks or precincts than it allows a tile
+    /// ([`LimitKind::TileCodeBlocks`], [`LimitKind::TilePrecincts`]).
     /// The default limit and a [`Raised`](crate::WorkLimit::Raised) one
     /// grow with the bytes fed, so more bytes may admit it. The
     /// detail is the one [`decode_with`] gives for the bytes fed, with its

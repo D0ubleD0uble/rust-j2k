@@ -72,10 +72,13 @@ fn is_work_limit(error: &Error) -> bool {
         if matches!(limit.kind(), LimitKind::PacketWork | LimitKind::CodeBlockWork))
 }
 
-/// Whether `error` is a refusal by the sample limit, which more bytes raise
-/// too.
+/// Whether `error` is a refusal by the sample limit, or by the code-blocks
+/// or precincts it allows a tile, which more bytes raise too.
 fn is_sample_limit(error: &Error) -> bool {
-    matches!(error, Error::Limit(limit) if limit.kind() == LimitKind::Samples)
+    matches!(error, Error::Limit(limit) if matches!(
+        limit.kind(),
+        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+    ))
 }
 
 /// What a refine on `prefix` must give: the strict-off decode, with a main
@@ -133,6 +136,14 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
                 "{name}, {at} bytes"
             );
             let kind = match why {
+                Waiting::SampleLimit { .. }
+                    if matches!(
+                        limit.kind(),
+                        LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+                    ) =>
+                {
+                    limit.kind()
+                }
                 Waiting::SampleLimit { .. } => LimitKind::Samples,
                 _ => LimitKind::PacketWork,
             };

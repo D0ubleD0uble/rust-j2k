@@ -119,7 +119,39 @@ impl Cap {
             ..self
         }
     }
+
+    /// The most code-blocks one tile may hold under this cap:
+    /// [`TILE_BLOCKS_FLOOR`], or one for each [`SAMPLES_PER_BLOCK`] samples
+    /// the cap allows when that is more.
+    pub(crate) fn tile_blocks(self) -> u64 {
+        TILE_BLOCKS_FLOOR.max(self.allowed / SAMPLES_PER_BLOCK)
+    }
+
+    /// The most precincts one tile may hold under this cap:
+    /// [`TILE_PRECINCTS_FLOOR`], or one for each [`SAMPLES_PER_PRECINCT`]
+    /// samples the cap allows when that is more.
+    pub(crate) fn tile_precincts(self) -> u64 {
+        TILE_PRECINCTS_FLOOR.max(self.allowed / SAMPLES_PER_PRECINCT)
+    }
 }
+
+/// The fewest code-blocks a tile may hold, under any sample limit: 2^20.
+pub(crate) const TILE_BLOCKS_FLOOR: u64 = 1 << 20;
+
+/// The fewest precincts a tile may hold, under any sample limit: 2^18.
+pub(crate) const TILE_PRECINCTS_FLOOR: u64 = 1 << 18;
+
+/// The samples of the sample limit that allow one more code-block a tile,
+/// past [`TILE_BLOCKS_FLOOR`]: at the 2^29 floor of the default limit the two
+/// meet. A code-block's bookkeeping is a few hundred bytes, so the
+/// code-blocks of a tile at the cap hold less than the 2 KiB of `i32` output
+/// those 512 samples are.
+pub(crate) const SAMPLES_PER_BLOCK: u64 = MAX_IMAGE_SAMPLES / TILE_BLOCKS_FLOOR;
+
+/// The samples of the sample limit that allow one more precinct a tile,
+/// past [`TILE_PRECINCTS_FLOOR`]: at the 2^29 floor of the default limit the
+/// two meet.
+pub(crate) const SAMPLES_PER_PRECINCT: u64 = MAX_IMAGE_SAMPLES / TILE_PRECINCTS_FLOOR;
 
 /// The samples a decode of `bytes` bytes of input may hold under `limit`:
 /// `limit` applied to [`default_limit`], or the `n` of `AtMost(n)` whatever
@@ -176,6 +208,63 @@ pub(crate) fn over(what: &str, total: u64, cap: Cap) -> Error {
     )
 }
 
+/// The [`Error::Limit`] for tile `tile`, whose geometry holds `count`
+/// code-blocks ([`LimitKind::TileCodeBlocks`](crate::LimitKind)) or precincts
+/// ([`LimitKind::TilePrecincts`](crate::LimitKind)), more than `cap` allows a
+/// tile ([`Cap::tile_blocks`], [`Cap::tile_precincts`]).
+///
+/// The cap grows with the sample limit, so the refusal names the
+/// `WorkLimit::Raised` factor of the cap's default that admits the tile, or
+/// twice the factor it ran under when that is more, as the work bounds do:
+/// the tiles after it may need more. Under [`WorkLimit::AtMost`] it names
+/// that ceiling and no retry. Past the cap of any limit this target can
+/// address, it names no retry.
+pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap) -> Error {
+    let (noun, limit, per, floor) = match kind {
+        crate::LimitKind::TilePrecincts => (
+            "precincts",
+            cap.tile_precincts(),
+            SAMPLES_PER_PRECINCT,
+            TILE_PRECINCTS_FLOOR,
+        ),
+        _ => (
+            "code-blocks",
+            cap.tile_blocks(),
+            SAMPLES_PER_BLOCK,
+            TILE_BLOCKS_FLOOR,
+        ),
+    };
+    let head = format!("tile {tile} holds {count} {noun}, more than the {limit} a tile may hold");
+    let needed = count.saturating_mul(per);
+    if needed > ADDRESSABLE_SAMPLES {
+        return Error::limit_unhinted(
+            kind,
+            format!(
+                "{head}, and more than any sample limit this target can address admits ({} \
+                 {noun})",
+                floor.max(ADDRESSABLE_SAMPLES / per)
+            ),
+        );
+    }
+    if let Some(n) = cap.at_most {
+        return Error::limit_unhinted(
+            kind,
+            format!("{head} under `WorkLimit::AtMost({n})` (see `DecodeOptions::sample_limit`)"),
+        );
+    }
+    crate::limit_hint::tile_geometry(
+        kind,
+        &format!(
+            "{head} under the sample limit of {} samples, one for each {per} samples it \
+             allows (see `DecodeOptions::sample_limit`)",
+            cap.allowed
+        ),
+        needed,
+        cap.allowed,
+        cap.default,
+    )
+}
+
 /// " at resolution reduction `reduction`", or nothing at full resolution:
 /// the tail of a message from [`over`].
 pub(crate) fn at(reduction: u8) -> String {
@@ -213,7 +302,7 @@ pub(crate) fn check_codestream(
 /// component's code-block geometry in each tile read, a component subset
 /// or not; the code-blocks of the kept resolutions are charged to no work
 /// bound, as they are no more than the samples counted here, and no more
-/// than 2^20 a tile (`docs/resource-bounds.md`).
+/// than [`Cap::tile_blocks`] a tile (`docs/resource-bounds.md`).
 pub(crate) fn check_read(
     siz: &crate::codestream::markers::Siz,
     selection: &crate::window::Selection,
@@ -494,6 +583,78 @@ mod tests {
             crate::error::is_fixed_limit(&error, crate::LimitKind::AddressSpace),
             "{error:?}"
         );
+    }
+
+    /// The caps of a tile are the floors up to the 2^29 floor of the limit,
+    /// and one code-block for each 512 samples and one precinct for each 2048
+    /// past it, under every kind of limit.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn the_tile_caps_scale_with_the_allowed_samples() {
+        let floor = cap(&WorkLimit::Default, 0);
+        assert_eq!(floor.tile_blocks(), 1 << 20);
+        assert_eq!(floor.tile_precincts(), 1 << 18);
+        let bytes = 100 << 20;
+        let scaled = cap(&WorkLimit::Default, bytes);
+        assert_eq!(scaled.tile_blocks(), 8 * bytes as u64 / 512);
+        assert_eq!(scaled.tile_precincts(), 8 * bytes as u64 / 2048);
+        let raised = cap(&WorkLimit::Raised(3), 0);
+        assert_eq!(raised.tile_blocks(), 3 << 20);
+        assert_eq!(raised.tile_precincts(), 3 << 18);
+        for (n, blocks, precincts) in [
+            (1000, 1 << 20, 1 << 18),
+            (1 << 30, 1 << 21, 1 << 19),
+            ((1 << 30) + 2047, (1 << 21) + 3, 1 << 19),
+        ] {
+            let at_most = cap(&WorkLimit::AtMost(n), bytes);
+            assert_eq!(at_most.tile_blocks(), blocks, "AtMost({n})");
+            assert_eq!(at_most.tile_precincts(), precincts, "AtMost({n})");
+        }
+        let unlimited = cap(&WorkLimit::Unlimited, 0);
+        assert_eq!(unlimited.tile_blocks(), ADDRESSABLE_SAMPLES / 512);
+    }
+
+    /// A tile's refusal names the factor of the default its count needs, or
+    /// twice the one it ran under; under `AtMost`, or past what any limit
+    /// admits, it names none.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_tile_refusal_names_a_factor_of_the_sample_limit() {
+        use crate::LimitKind::{TileCodeBlocks, TilePrecincts};
+        let hint = |kind, count, cap| match over_tile(kind, 7, count, cap) {
+            Error::Limit(limit) => {
+                assert_eq!(limit.kind(), kind, "{limit}");
+                assert!(limit.message().starts_with("tile 7 holds "), "{limit}");
+                limit.retry_with()
+            }
+            other => panic!("{other:?}"),
+        };
+        let floor = cap(&WorkLimit::Default, 0);
+        assert_eq!(
+            hint(TileCodeBlocks, (1 << 20) + 1, floor),
+            Some(WorkLimit::Raised(2))
+        );
+        assert_eq!(
+            hint(TileCodeBlocks, 5 << 20, floor),
+            Some(WorkLimit::Raised(5))
+        );
+        assert_eq!(
+            hint(TilePrecincts, (1 << 18) + 1, floor),
+            Some(WorkLimit::Raised(2))
+        );
+        let raised = cap(&WorkLimit::Raised(2), 0);
+        assert_eq!(
+            hint(TileCodeBlocks, 3 << 20, raised),
+            Some(WorkLimit::Raised(4))
+        );
+        let at_most = cap(&WorkLimit::AtMost(1 << 30), 0);
+        assert_eq!(hint(TileCodeBlocks, (1 << 21) + 1, at_most), None);
+        let unlimited = cap(&WorkLimit::Unlimited, 0);
+        assert_eq!(
+            hint(TileCodeBlocks, ADDRESSABLE_SAMPLES / 512 + 1, unlimited),
+            None
+        );
+        assert_eq!(hint(TilePrecincts, u64::MAX, floor), None);
     }
 
     /// A refusal under a raised limit names a factor of the default, not of

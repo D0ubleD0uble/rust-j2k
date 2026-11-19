@@ -20,7 +20,7 @@ does again on each refine.
   | --- | --- |
   | `MoreBytes { until, .. }` | It did not decode: the bytes fed have not doubled since the last try, or none are fed. `until` is a total of bytes fed, not the bytes still to come: a refine decodes once that many are fed, if not before. |
   | `HeaderIncomplete` | `decode_with` gives `Error::Incomplete`: the main header is cut short. |
-  | `SampleLimit { limit, .. }` | The default or a `Raised` sample limit refused the image. |
+  | `SampleLimit { limit, .. }` | The default or a `Raised` sample limit refused the image, or a tile of more code-blocks or precincts than it allows a tile. |
   | `WorkLimit { limit, .. }` | The bytes fed cost more than the packet or code-block work bound allows; a decode of them on its own is refused too, with the same detail. |
   | `BoundSpent { limit, .. }` | The earlier refines spent the code-block bound the refines share, so the refine stopped decoding at a tile, the cut, whose work fits the whole bound. Decode the bytes fed now or start a new decoder. That decode can be refused for work or fail: where the whole bound refuses a later tile, the detail's message names it, and that decode is refused there or fails first in a tile the refine did not decode. |
   | `MissingTiles { limit, .. }` | The charge for missing tiles passed the packet bound. |
@@ -47,15 +47,14 @@ does again on each refine.
   options. A server that streams files in can refuse one as soon as its main
   header has come in. Any other error, including a limit that does not
   depend on the bytes (an image too large for the target to address, too
-  many precincts, code-blocks or `POC` volumes, too many bit-planes), is the
-  one `decode_with` gives on those bytes. A refusal by a bound only the
-  refines have, `BoundSpent` or `RepeatLimit`, can stand in for an error
-  that block decoding, the wavelet or assembly would meet in a tile the
-  refine did not decode: the refine waits where `decode_with` fails, and
-  `finish` reports that error (see [Work and memory](#work-and-memory)).
-  Once `refine` returns an error, every later `refine` returns the same
-  error without decoding, until a change of options (see [Changing the
-  options](#changing-the-options)).
+  many `POC` volumes, too many bit-planes), is the one `decode_with` gives
+  on those bytes. A refusal by a bound only the refines have, `BoundSpent`
+  or `RepeatLimit`, can stand in for an error that block decoding, the
+  wavelet or assembly would meet in a tile the refine did not decode: the
+  refine waits where `decode_with` fails, and `finish` reports that error
+  (see [Work and memory](#work-and-memory)). Once `refine` returns an error,
+  every later `refine` returns the same error without decoding, until a
+  change of options (see [Changing the options](#changing-the-options)).
 - A refine tries to decode when the bytes fed are at least twice those of
   the last refine that decoded or tried to. Before any try, the first refine
   called with at least one byte fed tries; with none fed, `refine` waits

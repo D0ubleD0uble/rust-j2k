@@ -233,7 +233,11 @@ fuzz_target!(|input: &[u8]| {
                 Err(Error::Limit(m))
                     if matches!(
                         m.kind(),
-                        LimitKind::PacketWork | LimitKind::CodeBlockWork | LimitKind::Samples
+                        LimitKind::PacketWork
+                            | LimitKind::CodeBlockWork
+                            | LimitKind::Samples
+                            | LimitKind::TileCodeBlocks
+                            | LimitKind::TilePrecincts
                     ) =>
                 {
                     Ok(None)
@@ -374,8 +378,13 @@ fn check_waiting(
     }
     match (why, one_shot) {
         (Waiting::HeaderIncomplete, Err(Error::Incomplete(_))) => {}
+        // The sample limit, and the code-blocks and precincts it allows a
+        // tile, grow with the bytes.
         (Waiting::SampleLimit { limit, .. }, Err(Error::Limit(expected)))
-            if expected.kind() == LimitKind::Samples =>
+            if matches!(
+                expected.kind(),
+                LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+            ) =>
         {
             assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
         }
