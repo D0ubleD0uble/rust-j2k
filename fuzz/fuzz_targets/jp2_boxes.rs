@@ -46,6 +46,9 @@
 mod synth;
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../common/budget.rs"]
+mod budget;
+
 const ONE_COMPONENT: &[u8] = include_bytes!("../../tests/fixtures/regular_latlon_lossy.j2k");
 const THREE_COMPONENTS: &[u8] =
     include_bytes!("../../tests/fixtures/multicomponent_subsampled_lossless.j2k");
@@ -94,6 +97,12 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let file = wrap(variant, body);
+    // `body` may carry its own `jp2c`, which wins over the pinned one, so the
+    // budget counts the whole file. It also keeps the three images below
+    // (`raw`, `coded`, `srgb`) from adding up past the RSS limit.
+    if budget::over(&file, 4) {
+        return;
+    }
     let reduction = variant >> 7;
     let options = rust_j2k::DecodeOptions::default().with_resolution_reduction(reduction);
     // The codestream's own channels, whatever the palette and channel
