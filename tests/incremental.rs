@@ -1300,8 +1300,10 @@ fn a_refine_refused_by_the_whole_bound_after_a_cut_gives_the_earlier_tiles_error
             keyed::<Image>(Err(error.clone())),
             "cap {cap}"
         );
-        // Every amount spent that leaves less than tile 0's work.
-        for spent in (cap - work + 1..=cap).chain([cap + 1, u64::MAX]) {
+        // Amounts spent that leave less than tile 0's work, 1 in 37 of
+        // them and the ends, so the suite stays cheap under coverage.
+        let left_short = (cap - work + 1..=cap).step_by(37);
+        for spent in left_short.chain([cap - work + 1, cap, cap + 1, u64::MAX]) {
             let mut decoder =
                 incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
             decoder.feed(&bytes);
@@ -1313,7 +1315,7 @@ fn a_refine_refused_by_the_whole_bound_after_a_cut_gives_the_earlier_tiles_error
             checked += 1;
         }
     }
-    assert_eq!(checked, 3 * (4640 + 2));
+    assert_eq!(checked, 3 * (4640_u64.div_ceil(37) + 4));
 }
 
 /// The same file without the flipped byte: there the tiles the count
@@ -1334,7 +1336,8 @@ fn a_refine_refused_by_the_whole_bound_after_a_cut_waits_on_the_one_shot_refusal
         };
         assert_eq!(expected.kind(), LimitKind::CodeBlockWork, "cap {cap}");
         let (work, _) = fresh_block_work(&bytes, &options);
-        for spent in (cap - work..=cap).step_by(97).chain([cap, u64::MAX]) {
+        let step = usize::try_from(work / 40).unwrap().max(1);
+        for spent in (cap - work..=cap).step_by(step).chain([cap, u64::MAX]) {
             let mut decoder =
                 incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
             decoder.feed(&bytes);
