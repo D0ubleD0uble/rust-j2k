@@ -83,13 +83,14 @@ every component's code-block geometry in each tile read, which the count
 bounds as the next sections rely on. A palette's expanded channels and the
 channels sRGB output adds are counted over the returned area only. So the
 sample buffers peak within the same multiple of the limit as for a whole
-decode. The parse of the tile-parts is not counted: once the codestream has a
-tile-part, it keeps a record for each tile the SIZ grid declares, read or not
-and present or not, of about 870 bytes allocated (and as much resident,
-measured), plus about 20 bytes for each further tile-part of a tile. That is at
-most about 57 MB, at the 65535 tiles a codestream may declare, whatever the
-file's size: an 82-byte file with one tile-part that declares 65535 tiles
-allocates 53 MB (`tests/tile_record_alloc.rs`). A file whose whole image is
+decode. The parse of the tile-parts is not counted. It keeps a record of
+about 830 bytes for each tile that has a tile-part, read or not, plus about 20
+bytes for each further tile-part of a tile, and 2 bytes for each tile the SIZ
+grid declares. A tile-part takes at least 14 bytes of input, so this is at
+most about 60 times the input plus 128 KiB, and at most about 55 MB at the
+65535 tiles a codestream may declare. A file that declares 65535 tiles and carries
+one costs 128 KiB: its 82 bytes peak at 132 KB, strict or not
+(`tests/tile_record_alloc.rs`). A file whose whole image is
 over the limit now gets that far under a window. A 256x256 window of a
 32769x16385 image in 4096x4096 tiles fits the default,
 while a window of one 23171x23171 tile counts the whole tile. A
@@ -242,10 +243,10 @@ than about 3.2 times that, from the measurements above (a square tile measured
 1.35, resident; the allocated bytes measure 2.0 for a square tile and up to
 about 2.3 for a tile one or two samples wide). Other memory is on top: the
 input itself, and the parse of the tile-parts, which keeps a record for each
-tile the image declares, at most about 57 MB (see [The sample
-limit](#the-sample-limit)). `AtMost(2^26)` is 256 MiB of output and sample
-buffers of at most about 820 MiB, plus the input and up to about 57 MB for the
-tile records. So bound the input's size under `AtMost` too, as the decode holds
+tile the input carries, at most about 60 times the input plus 128 KiB (see
+[The sample limit](#the-sample-limit)). `AtMost(2^26)` is 256 MiB of output
+and sample buffers of at most about 820 MiB, plus the input and its tile
+records. So bound the input's size under `AtMost` too, as the decode holds
 the input. The code-blocks and precincts a tile may hold are set from `n` as
 well, at least 2^20 and 2^18 (see [Code-blocks and precincts per
 tile](#code-blocks-and-precincts-per-tile)). Past 2^29 their bookkeeping adds
