@@ -117,7 +117,9 @@ pub enum Error {
     ///
     /// For a file that is still arriving, an
     /// [`IncrementalDecoder`](crate::IncrementalDecoder) waits for the header
-    /// itself: its `refine` returns `Ok(None)` while the header is not whole.
+    /// itself: its `refine` waits with
+    /// [`Waiting::HeaderIncomplete`](crate::Waiting::HeaderIncomplete) while
+    /// the header is not whole.
     ///
     /// If no more bytes are coming, the file is truncated. A box or segment
     /// length that is damaged so that it reaches past the end of the input

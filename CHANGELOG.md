@@ -28,6 +28,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `IncrementalDecoder::refine` returns `Result<Refined>` in place of
+  `Result<Option<Image>>`, which breaks callers of 0.5. `Refined::Image`
+  holds the image; `Refined::Waiting` says why there is none yet, as a
+  `Waiting`: `MoreBytes { until }` (the bytes have not doubled since the
+  last try), `HeaderIncomplete`, `SampleLimit`, `WorkLimit` (the packet or
+  code-block work bound, with its `LimitDetail` and retry hint),
+  `MissingTiles` and `RepeatLimit` (the bound on the walks of tiles not
+  kept, which no longer looks like a packet work refusal). Both enums are
+  `#[non_exhaustive]`. To migrate, call `.image()` on the result:
+  `decoder.refine()?.image()` is the `Option<Image>` that `refine` returned
+  before (#466).
 - The default sample limit grows with the input: it is the larger of 2^29
   samples and 8 samples per byte of input. Up to 64 MiB of input nothing
   changes. The sample limit no longer refuses a larger file that holds at least
@@ -39,9 +50,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a decode of it may peak at about 4.1 GiB for a square tile and up to about
   9.6 GiB for a tile one sample wide, input included. Padding counts as input,
   so bound the size of the input you accept, measured in memory after any
-  decompression. `IncrementalDecoder::refine` now returns `Ok(None)` when the
-  sample limit refuses, as it does for a work bound, since more bytes raise the
-  limit; `finish` reports the refusal (#437).
+  decompression. `IncrementalDecoder::refine` now waits
+  (`Waiting::SampleLimit`) when the sample limit refuses, as it does for a work
+  bound, since more bytes raise the limit; `finish` reports the refusal (#437).
 - HTJ2K decoding is about 1.5x to 2x faster on large files on one thread.
   The output is unchanged.
 
@@ -77,9 +88,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walks started again by a later tile-part's `POC` volumes or packed
   packet headers, or built again once there is room. Once they pass four
   times the packet bound of one decode of the bytes fed, a refine that would
-  make such a walk returns `Ok(None)`, and `finish` decodes the file. Two
-  files of 525 KB made for it, fed in small pieces with a refine after each,
-  took 8.4 and 7.3 times one decode; they now take 4.6 and 3.5 times. No
+  make such a walk waits (`Waiting::RepeatLimit`), and `finish` decodes the
+  file. Two files of 525 KB made for it, fed in small pieces with a refine
+  after each, took 8.4 and 7.3 times one decode; they now take 4.6 and 3.5
+  times. No
   committed fixture gives another result (#416).
 
 ## [0.5.0] - 2026-11-17

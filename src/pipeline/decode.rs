@@ -8,6 +8,7 @@
 //! [`check_options`] when it is built.
 
 use super::report::{Scope, report_part, report_tile};
+use crate::incremental::Refusal;
 use crate::{
     ColorOutput, ComponentInfo, DecodeOptions, DecodeReport, Error, Header, Image, Jp2Metadata,
     ReportEntry, Result, TileGrid, WorkLimit, codestream, dwt, header, image, incremental, jp2,
@@ -383,7 +384,7 @@ fn decode_codestream(
     let cost = missing.saturating_mul(cs.header.siz.components.len() as u64);
     if !meter.try_spend(cost) {
         if let Some(ledger) = ledger {
-            ledger.refuse();
+            ledger.refuse(Refusal::MissingTiles);
         }
         return Err(limit_hint::missing_tiles(cost, meter.first(), poc_bitmap));
     }
@@ -438,7 +439,7 @@ fn decode_codestream(
             Ok(walked) => walked,
             Err(tier2::Refused::Work(work)) => {
                 if let Some(ledger) = ledger {
-                    ledger.refuse();
+                    ledger.refuse(Refusal::Work);
                 }
                 // The meter holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
@@ -550,7 +551,7 @@ fn decode_codestream(
             tests::BLOCK_WORK.with(|spent| spent.set(spent.get() + work));
             let Some(rest) = left.checked_sub(work) else {
                 if let Some(ledger) = ledger {
-                    ledger.refuse();
+                    ledger.refuse(Refusal::Work);
                 }
                 return Err(limit_hint::code_blocks(
                     index,

@@ -271,7 +271,8 @@ pub struct RepeatWork {
     pub visits: u64,
     /// When their bound refused the last refine that tried, the packet
     /// bound of that refine's decode: the refusal comes once `visits` is
-    /// past [`REPEAT_BOUNDS`] of it. Such a refine gives `Ok(None)` where a
+    /// past [`REPEAT_BOUNDS`] of it. Such a refine waits with
+    /// [`Waiting::RepeatLimit`](crate::Waiting::RepeatLimit) where a
     /// one-shot decode of the same bytes may give an image or an error.
     pub refused: Option<u64>,
     /// How many tiles have a walk too large to keep.
@@ -305,7 +306,7 @@ mod tests {
                 super::incremental_with_code_block_work_spent(DecodeOptions::default(), spent)
                     .unwrap();
             decoder.feed(&bytes);
-            let refined = decoder.refine().unwrap();
+            let refined = decoder.refine().unwrap().image();
             (refined, super::incremental_code_block_work(&decoder))
         };
         let (image, (work, bound)) = start(0);
@@ -329,15 +330,18 @@ mod tests {
     /// the bytes at once keeps the walk and charges nothing for it.
     #[test]
     fn incremental_repeat_hook_reports_the_refusal() {
-        use crate::{DecodeOptions, IncrementalDecoder};
+        use crate::{DecodeOptions, IncrementalDecoder, Refined, Waiting};
         let bytes = crate::synth::restarted_poc_tile(4, 13, 400);
         let options = DecodeOptions::default().with_strict(false);
         let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
         let mut refusals = 0;
         for end in (64..bytes.len()).step_by(64).chain([bytes.len()]) {
             decoder.feed(&bytes[decoder.bytes_fed()..end]);
-            decoder.refine().unwrap();
+            let refined = decoder.refine().unwrap();
             let work = super::incremental_repeat_work(&decoder);
+            if matches!(refined, Refined::Waiting(Waiting::RepeatLimit)) {
+                assert!(work.refused.is_some(), "{end}: {work:?}");
+            }
             if let Some(bound) = work.refused {
                 assert!(work.visits > super::REPEAT_BOUNDS * bound, "{work:?}");
                 refusals += 1;
@@ -346,7 +350,7 @@ mod tests {
         assert!(refusals > 0);
         let mut once = IncrementalDecoder::new(options).unwrap();
         once.feed(&bytes);
-        assert!(once.refine().unwrap().is_some());
+        assert!(once.refine().unwrap().image().is_some());
         let work = super::incremental_repeat_work(&once);
         assert_eq!(
             work,
@@ -423,7 +427,7 @@ mod tests {
         let last = due[due.len() - 1];
         let mut fresh = IncrementalDecoder::new(options).unwrap();
         fresh.feed(&data[..last]);
-        assert!(fresh.refine().unwrap().is_some());
+        assert!(fresh.refine().unwrap().image().is_some());
         let once = super::incremental_repeat_work(&fresh);
         assert_eq!(once.refused, None);
         assert_eq!(once.not_kept, 0);

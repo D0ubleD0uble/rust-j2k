@@ -4,7 +4,8 @@
 //! refine that decodes goes on from the packet walks the earlier ones kept,
 //! and must give what `decode_with` gives with `strict` off on the bytes
 //! fed so far: the same image, or the same error. A refine that does not
-//! decode returns `Ok(None)`. A refine due under the doubling rule must
+//! decode waits with `Waiting::MoreBytes`, naming twice the bytes of the
+//! last try. A refine due under the doubling rule must
 //! decode unless the header is cut short, the packet or code-block work
 //! bound or the sample limit refuses that one-shot decode (more bytes raise
 //! each of them), or the bound on the walks of tiles not kept, which
@@ -14,7 +15,11 @@
 //! walks' visits past `REPEAT_BOUNDS` times that refine's packet bound, and
 //! a decoder with nothing spent then gives the one-shot result, and charges
 //! nothing for its walks when it kept every one: a single refine walks each
-//! tile once, and the first walk of a tile it keeps is not charged. After an
+//! tile once, and the first walk of a tile it keeps is not charged. A due
+//! refine that waits names its reason (`check_waiting`): `RepeatLimit`
+//! exactly when that bound refused it, the one-shot refusal for a header cut
+//! short, the sample limit, the charge for missing tiles and the packet
+//! bound, and the code-block bound for the rest. After an
 //! error, every later refine gives it again, and `finish` is the decode of
 //! all the bytes under the decoder's options.
 //!
@@ -26,7 +31,7 @@
 //! then. A layer cap of `Some(0)` or an empty window must be refused and
 //! leave the options as they were. Any real change of an option clears the
 //! error, even a change back to the options that gave it, and the refines
-//! after it give `Ok(None)` until the next one due decodes again.
+//! after it wait until the next one due decodes again.
 //!
 //! The first six input bytes steer the options, as `tile_body`'s first bytes
 //! steer its shape, so a small mutation of the file keeps them; the rest is
@@ -43,9 +48,9 @@
 //! decode of the prefix holds only itself. A due refine with nothing spent
 //! gives the one-shot decode, and the code-block work that refine spends
 //! and the bound it had say exactly whether a decoder with more work spent
-//! refuses it (`Ok(None)`) or gives the same result. Each due refine is
+//! refuses it (it waits) or gives the same result. Each due refine is
 //! checked by that rule, with a decoder that has nothing spent standing in
-//! where the refine itself gives `Ok(None)`. The limit is at least 2^26
+//! where the refine itself waits. The limit is at least 2^26
 //! sample passes, which inputs this small do not come near, so each due
 //! refine also starts a probe decoder with work already spent, drawn around
 //! the most that leaves the refine room
@@ -62,8 +67,8 @@ use rust_j2k::fuzz::{
     REPEAT_BOUNDS,
 };
 use rust_j2k::{
-    decode_with, DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Region, Window,
-    WorkLimit,
+    decode_with, DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Refined, Region,
+    Waiting, Window, WorkLimit,
 };
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -160,7 +165,12 @@ fuzz_target!(|input: &[u8]| {
             }
         }
         let (spent, _) = incremental_code_block_work(&decoder);
-        let refined = keyed(decoder.refine());
+        let refine = decoder.refine();
+        let waiting = match &refine {
+            Ok(Refined::Waiting(why)) => Some(why.clone()),
+            _ => None,
+        };
+        let refined = keyed(refine.map(Refined::image));
         if let Some(error) = &failed {
             assert_eq!(refined.as_ref(), Err(error), "poisoned at {fed}");
             continue;
@@ -169,6 +179,10 @@ fuzz_target!(|input: &[u8]| {
         if due {
             tried = fed;
             let one_shot = decode_with(&data[..fed], &lenient);
+            let repeat_work = incremental_repeat_work(&decoder);
+            if let Some(why) = &waiting {
+                check_waiting(why, &one_shot, repeat_work.refused.is_some(), fed);
+            }
             let expected = keyed(match one_shot {
                 Ok(image) => Ok(Some(image)),
                 Err(Error::Incomplete(_)) => Ok(None),
@@ -185,13 +199,12 @@ fuzz_target!(|input: &[u8]| {
             // The work this try spends, and what it gives with nothing spent:
             // the one-shot decode. A refine that decodes, or errs, has passed
             // every cut a decoder with nothing spent would pass, so it is
-            // what that decoder gives and spends. One that gives `Ok(None)`
+            // what that decoder gives and spends. One that waits
             // once the bound is known may be refused for what earlier
             // refines spent, so a decoder with nothing spent is asked. So
             // is one when the bound on the walks of tiles not kept refused
             // the refine: the code-block rule below does not hold for it.
             let (after, bound) = incremental_code_block_work(&decoder);
-            let repeat_work = incremental_repeat_work(&decoder);
             let repeats = refined == Ok(None) && repeat_work.refused.is_some();
             if let Some(packet_bound) = repeat_work.refused {
                 // The refusal is the bound's: the walks have spent past it.
@@ -205,7 +218,7 @@ fuzz_target!(|input: &[u8]| {
             let (fresh, work) = if refined == Ok(None) && (bound.is_some() || repeats) {
                 let mut zero = IncrementalDecoder::new(options.clone()).unwrap();
                 zero.feed(&data[..fed]);
-                zeroed = keyed(zero.refine());
+                zeroed = keyed(zero.refine().map(Refined::image));
                 assert_eq!(zeroed, expected, "{fed} bytes, nothing spent");
                 let (work, zero_bound) = incremental_code_block_work(&zero);
                 assert_eq!(zero_bound, bound, "{fed} bytes, nothing spent");
@@ -248,7 +261,7 @@ fuzz_target!(|input: &[u8]| {
                 let mut probe =
                     incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
                 probe.feed(&data[..fed]);
-                let probed = keyed(probe.refine());
+                let probed = keyed(probe.refine().map(Refined::image));
                 cut.check(&probe, spent, &probed, "probe");
             }
             if let Err(error) = refined {
@@ -257,7 +270,10 @@ fuzz_target!(|input: &[u8]| {
             continue;
         }
         match refined {
-            Ok(None) => {}
+            Ok(None) => match waiting {
+                Some(Waiting::MoreBytes { until }) if until == tried * 2 => {}
+                other => panic!("{fed} bytes, not due after {tried}: {other:?}"),
+            },
             Ok(Some(image)) => {
                 let expected = keyed(decode_with(&data[..fed], &lenient));
                 assert_eq!(Ok(&image), expected.as_ref(), "{fed} bytes");
@@ -289,6 +305,34 @@ fuzz_target!(|input: &[u8]| {
         expected => assert_eq!(keyed(finished), keyed(expected)),
     }
 });
+
+/// Check `why`, the reason a due refine of `fed` bytes waited, against
+/// `one_shot`, the decode of those bytes on their own, and `repeats`,
+/// whether the bound on the walks done again refused the refine.
+fn check_waiting(why: &Waiting, one_shot: &Result<Image, Error>, repeats: bool, fed: usize) {
+    if repeats {
+        assert!(matches!(why, Waiting::RepeatLimit), "{fed} bytes: {why:?}");
+        return;
+    }
+    match (why, one_shot) {
+        (Waiting::HeaderIncomplete, Err(Error::Incomplete(_))) => {}
+        (Waiting::SampleLimit(limit), Err(Error::Limit(expected)))
+            if expected.kind() == LimitKind::Samples =>
+        {
+            assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
+        }
+        (
+            Waiting::MissingTiles(limit) | Waiting::WorkLimit(limit),
+            Err(Error::Limit(expected)),
+        ) if limit.kind() == LimitKind::PacketWork => {
+            assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{fed} bytes");
+        }
+        // The code-block bound the refines share can refuse whatever the
+        // decode on its own gives.
+        (Waiting::WorkLimit(limit), _) if limit.kind() == LimitKind::CodeBlockWork => {}
+        _ => panic!("{fed} bytes: waited for {why:?}, where the decode gives {one_shot:?}"),
+    }
+}
 
 /// Change one of `decoder`'s options as `hash` picks, or none, through the
 /// setters, and `options` with it. Whether an option changed.
@@ -348,8 +392,8 @@ impl Cut<'_> {
     /// is `u64::MAX`), and a tile whose work passes what is left refuses the
     /// refine. The work comes in tile by tile, so the refine refuses if and
     /// only if this try's work, all of it, passes what is left; then it
-    /// spends at most that work, and otherwise all of it. A refine that a
-    /// decoder with nothing spent gives `Ok(None)` for gives it too.
+    /// spends at most that work, and otherwise all of it. A refine on which a
+    /// decoder with nothing spent waits waits too.
     fn check(
         &self,
         decoder: &IncrementalDecoder,

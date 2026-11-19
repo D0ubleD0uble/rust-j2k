@@ -205,14 +205,23 @@ far: the same image or the same error. After an error, each later refine must
 give it again, and `finish` must be the decode of the whole input. The decoder
 holds all its refines to the code-block limit together, and a one-shot decode
 holds only itself. So each refine that was due is checked by the decoder's own
-rule: it refuses (`Ok(None)`) if and only if the code-block work a decoder
+rule: it waits if and only if the code-block work a decoder
 with nothing spent spends on the same bytes passes what is left of the bound
 after the work spent before it. The limit is at least 2^26 sample passes,
 which inputs of a few kilobytes do not come near, so each due refine also
 starts a probe decoder with work already spent (`rust_j2k::fuzz`), drawn
 around the most that leaves the refine room, and checks it by the same rule.
 
-A due refine may also give `Ok(None)` when the bound on the walks of tiles not
+A refine that waits says why, and the target checks the reason. One that is
+not due waits for `MoreBytes`, naming twice the bytes of the last try. A due
+one waits for `RepeatLimit` exactly when the hook below reports that bound's
+refusal. Otherwise a header cut short is `HeaderIncomplete`, and a refusal by
+the sample limit, the charge for missing tiles or the packet bound carries
+the refusal the one-shot decode gives, hint included. Only the code-block
+bound, which the refines share, may refuse where the one-shot decode gives an
+image or another error.
+
+A due refine may also wait (`Waiting::RepeatLimit`) when the bound on the walks of tiles not
 kept, which all the refines spend together, refuses it
 (`rust_j2k::fuzz::incremental_repeat_work`), even where the one-shot decode
 gives an image or an error. The visits those walks were charged must then be
@@ -221,7 +230,7 @@ the refusal's message is not read. A decoder with nothing spent must give the
 one-shot result, and when it kept every tile's walk it must have charged
 nothing: a single refine walks each tile once, and the first walk of a tile
 kept from its start is not charged. So a charge on a kept walk, which would
-turn a refine into `Ok(None)` past the bound, fails the target. The inputs
+turn a refine into a wait past the bound, fails the target. The inputs
 that reach that bound are larger than `-max_len=4096`: the smallest known is
 `restarted_poc_tile(4, 8, 299)` from `tests/support/synth.rs`, 16 KB, whose
 fifth due refine an overcharge refuses. The unit test

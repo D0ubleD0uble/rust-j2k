@@ -89,7 +89,7 @@ fn held(bytes: &[u8], pieces: usize) -> usize {
     let mut images = 0;
     for piece in bytes.chunks(bytes.len().div_ceil(pieces)) {
         decoder.feed(piece);
-        let refined = decoder.refine().unwrap();
+        let refined = decoder.refine().unwrap().image();
         let fed = decoder.bytes_fed();
         if let Some(image) = refined {
             images += 1;

@@ -265,7 +265,9 @@ the data already gives in full.
 
 For a file that arrives in pieces, such as a download, use
 `IncrementalDecoder`. Feed it each piece and call `refine`. From time to time
-it returns an image of what has come in so far. Each refine goes on from where
+it returns an image of what has come in so far (`Refined::Image`); otherwise
+it says why it waits (`Refined::Waiting`), such as for more bytes or for the
+rest of the main header. Each refine goes on from where
 the last one stopped reading packets;
 [docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)
 lists the packets it reads again. Each image `refine` returns is decoded with
@@ -274,14 +276,14 @@ under the options you gave the decoder, so it is strict unless you turned
 `strict` off:
 
 ```rust
-use rust_j2k::{DecodeOptions, IncrementalDecoder};
+use rust_j2k::{DecodeOptions, IncrementalDecoder, Refined};
 
 // `pieces`: the parts of the file, in the order they arrive.
 fn show_as_it_arrives(pieces: &[&[u8]]) -> Result<(), rust_j2k::Error> {
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default())?;
     for piece in pieces {
         decoder.feed(piece);
-        if let Some(image) = decoder.refine()? {
+        if let Refined::Image(image) = decoder.refine()? {
             // Show `image`. Its report says what is still missing.
             for entry in &image.report.entries {
                 eprintln!("{entry}");
