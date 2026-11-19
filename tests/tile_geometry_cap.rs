@@ -262,6 +262,59 @@ fn a_tile_part_cod_is_counted_as_the_decode_counts_it() {
     // Under the main header alone it is over the cap.
     let limit = refusal(&main, &DecodeOptions::default());
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
+
+    // The reverse: a main header of 64x64 code-blocks and a tile-part `COD`
+    // of 4x4. The header read counts under the main header and admits it;
+    // the decode counts the tile under its own and refuses it, with a hint
+    // that admits it.
+    let mut wide = synth::empty_tiles(
+        [width, height, 0, 0, width, height, 0, 0],
+        0,
+        4,
+        &[],
+        &[1],
+        0,
+    );
+    wide.truncate(wide.len() - 17);
+    let cod = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    wide.extend(synth::tile_part(0, 0, 1, &cod, &[0]));
+    wide.extend_from_slice(&[0xFF, 0xD9]);
+    let header =
+        read_header_with(&wide, &DecodeOptions::default()).expect("the header is admitted");
+    assert_eq!((header.width, header.height), (width, height));
+    let limit = match decode_with(&wide, &DecodeOptions::default()) {
+        Err(Error::Limit(limit)) => limit,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
+    let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+    decodes(&wide, &retry, width, height);
+}
+
+/// A tile's precincts include one for each of its resolutions, which a
+/// small tile of many components and levels holds mostly: a 1x1 image of
+/// 16384 components and 32 levels has 540,672 precincts, one a resolution,
+/// over the 2^18 floor. The header read counts it, though the tile is a
+/// single sample a component.
+#[test]
+fn a_tile_of_many_resolutions_is_counted() {
+    let components = 16384;
+    let siz = synth::siz_body([1, 1, 0, 0, 1, 1, 0, 0], &vec![[7, 1, 1]; components]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 32, 0, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 97])),
+    ]
+    .concat();
+    bytes.extend(synth::tile_part(0, 0, 1, &[], &[]));
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    let limit = refusal(&bytes, &DecodeOptions::default());
+    assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
+    assert!(
+        limit.message().starts_with("tile 0 holds 540672 precincts"),
+        "{limit}"
+    );
 }
 
 /// With `strict` off, a tile with no tile-part is left out of the decode, so

@@ -539,10 +539,48 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
     split_tiles_with(bytes, parsed, true)
 }
 
-/// [`split_tiles`] with `strict` off: missing data is taken as missing (see
-/// [`walk_tiles`]).
-pub(crate) fn split_tiles_lenient(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
-    split_tiles_with(bytes, parsed, false)
+/// The coding parameters of each tile `wanted` names (in increasing order),
+/// resolved over the main header from its first tile-part's header markers,
+/// as the tile walk resolves them, for the header read's count of a tile's
+/// code-blocks and precincts.
+///
+/// The walk follows the `SOT` chain by `Psot` and reads only the markers of
+/// the first tile-part of a wanted tile: no tile data, no `PPM`, and nothing
+/// joined, so it allocates only the headers it returns (and a wanted tile's
+/// `PPT`, read and dropped). It stops where the chain does not go on: at an
+/// `EOC`, a `Psot` of 0, a fault, or the end of `bytes`. A wanted tile it
+/// does not reach is `None`, and one whose tile-part header is at fault is
+/// `Some(Err)`.
+pub(crate) fn first_part_headers<'m>(
+    bytes: &[u8],
+    parsed: &'m ParsedHeader,
+    wanted: &[u32],
+) -> Vec<Option<Result<Cow<'m, MainHeader>>>> {
+    let main = &parsed.header;
+    let mut found: Vec<Option<Result<Cow<'m, MainHeader>>>> =
+        (0..wanted.len()).map(|_| None).collect();
+    let mut offset = parsed.sot_offset;
+    while read_u16(bytes, offset) == Some(marker::SOT) {
+        let mut cur = Cursor::at(bytes, offset + 2);
+        let Ok(sot) = segment(&mut cur).and_then(decode_sot) else {
+            break;
+        };
+        let slot = match wanted.binary_search(&u32::from(sot.tile_index)) {
+            Ok(at) if sot.tile_part_index == 0 => found.get_mut(at),
+            _ => None,
+        };
+        if let Some(slot @ None) = slot {
+            *slot = Some(
+                read_tile_part_header(&mut cur, main, true)
+                    .and_then(|(tile, _)| resolve_tile_header(main, &tile)),
+            );
+        }
+        match offset.checked_add(sot.psot as usize) {
+            Some(next) if sot.psot != 0 => offset = next,
+            _ => break,
+        }
+    }
+    found
 }
 
 /// [`split_tiles`], strict or not (see [`walk_tiles`]).
