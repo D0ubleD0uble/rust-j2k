@@ -12,36 +12,56 @@ does again on each refine.
   `strict` off on the bytes fed so far (`bytes_decoded()` of them), report
   included. The report says which quality layers and resolutions are
   complete and which tiles are missing.
-- `refine` returns `Ok(None)` where `decode_with` gives `Error::Incomplete`
-  (the main header is cut short), since more bytes can complete the header.
-  It also returns `Ok(None)` when the sample limit, the packet or
-  code-block work bound, the charge for missing tiles, or the bound on the
-  walks of tiles not kept (see [Work and memory](#work-and-memory)) refuses
-  the decode: those bounds grow with the bytes and the missing tiles
-  shrink, so such a limit is reported only by `finish`. The sample limit
-  of a refine is that of a one-shot decode of its bytes: 2^29 samples, or
-  8 samples per byte when that is more. Any other error, including a
-  limit that does not depend on the bytes (an image too large for the target to
-  address, too many precincts, code-blocks or `POC` volumes, too many
-  bit-planes), is the one
+- `refine` returns `Ok(Refined::Image(image))` or, when it has no new image,
+  `Ok(Refined::Waiting(why))`. `Refined::image()` gives the image or `None`
+  for a caller who does not need the reason. `Waiting` says why:
+
+  | `Waiting` | Why the refine has no image |
+  | --- | --- |
+  | `MoreBytes { until, .. }` | It did not decode: the bytes fed have not doubled since the last try, or none are fed. `until` is a total of bytes fed, not the bytes still to come: a refine decodes once that many are fed, if not before. |
+  | `HeaderIncomplete` | `decode_with` gives `Error::Incomplete`: the main header is cut short. |
+  | `SampleLimit(limit)` | The sample limit refused the image. |
+  | `WorkLimit(limit)` | The bytes fed cost more than the packet or code-block work bound allows; a decode of them on its own is refused too. |
+  | `BoundSpent(limit)` | The earlier refines spent the code-block bound the refines share. This refine's own work fits the whole bound, so decode the bytes fed now or start a new decoder; raising the limit is not the way out. |
+  | `MissingTiles(limit)` | The charge for missing tiles passed the packet bound. |
+  | `RepeatLimit { .. }` | The bound on the walks of tiles not kept is spent (see [Work and memory](#work-and-memory)). |
+
+  More bytes can complete the header, the bounds grow with the bytes, and
+  the missing tiles shrink, so each of these is a wait, and such a limit is
+  reported as an error only by `finish`. The `LimitDetail` a wait carries is
+  the refusal's, with its `retry_with` hint. For the sample limit, the
+  charge for missing tiles and the packet bound it is the refusal
+  `decode_with` gives on the bytes fed, and so it is for a `WorkLimit` of
+  the code-block bound. `BoundSpent` is a refine whose own work, counted
+  over every tile, fits the whole code-block bound but passed what the
+  earlier refines left of it; its `retry_with` is `None`, since the file
+  fits the limit it has. `RepeatLimit` carries no limit: the bound it names
+  is not one `DecodeOptions` sets on its own, though a higher
+  `packet_work_limit` raises it. The sample limit of a refine is that of a
+  one-shot decode of its bytes: 2^29 samples, or 8 samples per byte when
+  that is more. Any other error, including a limit that does not depend on
+  the bytes (an image too large for the target to address, too many
+  precincts, code-blocks or `POC` volumes, too many bit-planes), is the one
   `decode_with` gives on those bytes. A refusal by a bound the refines
-  spend together, the code-block bound or the bound on the walks of tiles
-  not kept, can stand in for an error later in the file: the refine
-  returns `Ok(None)` where the one-shot decode fails, and `finish` reports
-  that error. Once `refine` returns an error, every later `refine` returns
+  share can stand in for an error that block decoding, the wavelet or
+  assembly would meet later in the file: the refine waits where
+  `decode_with` fails, and `finish` reports that error. A refine refused
+  only for what earlier refines spent still reads the packets of the later
+  tiles, so an error there comes out as the error `decode_with` gives.
+  Once `refine` returns an error, every later `refine` returns
   the same error without decoding, until a change of options (see
   [Changing the options](#changing-the-options)).
 - A refine tries to decode when the bytes fed are at least twice those of
   the last refine that decoded or tried to. Before any try, the first refine
-  called with at least one byte fed tries; with none fed, `refine` returns
-  `Ok(None)` and does not count as a try. A refine that tries gives an image
-  when the one-shot decode of the bytes fed gives one, except when the
-  earlier refines have spent the code-block bound, or the bound on the
-  walks of tiles not kept (see below). A try that gave no image still
-  counts: after a main header cut short, or a refusal by a work bound or
-  the charge for missing tiles, the next refine waits for twice the bytes
-  of that try, even if the one-shot decode of fewer bytes gives an image
-  by then
+  called with at least one byte fed tries; with none fed, `refine` waits
+  (`MoreBytes { until: 1, .. }`) and does not count as a try. A refine that
+  tries gives an image when the one-shot decode of the bytes fed gives
+  one, except when the earlier refines have spent the code-block bound
+  (`BoundSpent`), or the bound on the walks of tiles not kept (see
+  below). A try that gave no image still counts: after a main header cut
+  short, or a refusal by a work bound or the charge for missing tiles, the
+  next refine waits for twice the bytes of that try, even if the one-shot
+  decode of fewer bytes gives an image by then
   (`a_refused_refine_puts_off_the_next_until_the_bytes_double`). Doubling
   from the last try is what bounds the work of all the refines together.
 - `finish` is `decode_with` on all the bytes under the decoder's options,
@@ -173,11 +193,14 @@ under the current options (`Ok(None)` until the main header is whole), and
   `options()` returns the options as the caller set them, `strict`
   included. The decode runs under the bounds of those options. It spends
   nothing from the decoder's bounds and does not change when the next
-  refine decodes. Where a refine would wait, it returns the error:
-  `Error::Incomplete` until the main header is whole, and `Error::Limit`
-  when a bound refuses the bytes so far. `finish` decodes under the
-  caller's `strict`, so on a stream that is stalled or cut short it
-  returns an error, not an image. A caller who has fed the whole file gets
+  refine decodes. A decode of the bytes fed with these options is not held
+  to the refine cadence or to the bounds the refines share, so it gives
+  what `decode_with` gives on those bytes. Where a refine waits on
+  `MoreBytes`, `BoundSpent` or `RepeatLimit`, that can be an image. Where
+  it waits on `HeaderIncomplete`, `SampleLimit`, `WorkLimit` or
+  `MissingTiles`, it is the same refusal, as an error. `finish` decodes
+  under the caller's `strict`, so on a stream that is stalled or cut short
+  it returns an error, not an image. A caller who has fed the whole file gets
   the image under the new options from `finish`.
 - A change clears an error an earlier refine returned, since the new
   options may not give it (a reduction past the file's levels). A set to
@@ -200,14 +223,14 @@ The code-block bound holds across all the refines together.
 Each refine is charged the packet visits the walk of a decode of its bytes on
 its own spends: the geometry of the resolutions a reduction drops, the
 progression's loops, the visits each packet read spends, the end of the
-data, a visit for each packet after it, and the skips past a `POC` bitmap. The
-charges come from the counts the kept walks hold, and a refine is refused,
-as `Ok(None)`, where that decode is refused for work, and fails where it
-fails. So the packet bound is the one-shot bound of the bytes fed, not cut
-by what earlier refines spent. A `POC` sequence's volumes emit each
-precinct's layers from the first up, so a kept walk tells a packet emitted
-again by the precinct's count of layers read; its charges are those of
-the bitmap or counts that decode holds. The work the kept
+data, a visit for each packet after it, and the skips past a `POC`
+bitmap. The charges come from the counts the kept walks hold, and a refine
+is refused, as `Waiting::WorkLimit`, where that decode is refused for work,
+and fails where it fails. So the packet bound is the one-shot bound of
+the bytes fed, not cut by what earlier refines spent. A `POC` sequence's
+volumes emit each precinct's layers from the first up, so a kept walk
+tells a packet emitted again by the precinct's count of layers read; its
+charges are those of the bitmap or counts that decode holds. The work the kept
 walks do is the visits they spend for the first time: a byte-at-a-time
 feeder that refines after every byte spends, over all its refines, the
 visits of one walk of the whole file
@@ -224,10 +247,14 @@ decode takes 6.9 s (release build, 2026-11-16, PR #409's shapes).
 The code-block work is done again by each refine that decodes. A ledger
 keeps the code-block work every refine has spent, and each refine's
 code-block bound is what is left of the bound one decode of its bytes has
-(raised as the options say). A refine that bound refuses returns `Ok(None)`
-and waits for more bytes, which raise the bound. `finish` is one more
-decode, under its own bound, and reports a work limit as one decode of the
-whole file does.
+(raised as the options say). A refine that rest refuses goes on counting
+the code-block work of the later tiles, without decoding them. Where its
+own work passes the whole bound, it returns `Waiting::WorkLimit` with the
+refusal a decode of its bytes on its own gives. Where its own work fits
+the whole bound, it returns `Waiting::BoundSpent`: only what the earlier
+refines spent refused it. Either waits for more bytes, which raise the
+bound. `finish` is one more decode, under its own bound, and reports a
+work limit as one decode of the whole file does.
 
 A tile whose walk is not kept (see below) is walked from the start by each
 refine, so its walk is done again as the code-block work is. So is a tile
@@ -237,9 +264,10 @@ kept from its start is free. The ledger keeps the packet visits these
 walks have spent over all the refines. Once that is past four times the
 packet bound of one decode of the bytes fed (`REPEAT_BOUNDS` in
 `src/tier2/resume.rs`), a refine that comes to such a walk is refused for
-work before it walks, and returns `Ok(None)`. The refine whose walk takes
-the count past that bound is refused after the walk. So these walks spend
-at most five packet bounds over all the refines: four, and the one walk
+work before it walks, and returns `Waiting::RepeatLimit`, not the packet
+bound's `WorkLimit`. The refine whose walk takes the count past that
+bound is refused after the walk. So these walks spend at most five packet
+bounds over all the refines: four, and the one walk
 that goes past them, which one decode's bound holds. The bound follows the
 packet work limit: raised by `WorkLimit::Raised`, none under
 `WorkLimit::Unlimited`. So a caller who raises the limit to the factor a

@@ -207,15 +207,30 @@ far: the same image or the same error. After an error, each later refine must
 give it again, and `finish` must be the decode of the whole input. The decoder
 holds all its refines to the code-block limit together, and a one-shot decode
 holds only itself. So each refine that was due is checked by the decoder's own
-rule: it refuses (`Ok(None)`) if and only if the code-block work a decoder
+rule: it waits if and only if the code-block work a decoder
 with nothing spent spends on the same bytes passes what is left of the bound
 after the work spent before it. The limit is at least 2^26 sample passes,
 which inputs of a few kilobytes do not come near, so each due refine also
 starts a probe decoder with work already spent (`rust_j2k::fuzz`), drawn
 around the most that leaves the refine room, and checks it by the same rule.
 
-A due refine may also give `Ok(None)` when the bound on the walks of tiles not
-kept, which all the refines spend together, refuses it
+A refine that waits says why, and the target checks the reason. One that is
+not due waits for `MoreBytes`, naming twice the bytes of the last try. A due
+one waits for `RepeatLimit` exactly when the hook below reports that bound's
+refusal. Otherwise a header cut short is `HeaderIncomplete`, and a refusal by
+the sample limit, the charge for missing tiles or a work bound carries the
+refusal the one-shot decode gives, hint included; a code-block `WorkLimit`
+may also stand in for an error the one-shot decode gives later in the file.
+`BoundSpent`, a refusal by what earlier refines spent of the code-block
+bound, comes only where the one-shot decode passes that bound, and carries
+no hint. Only the first 4 refines that are checked against a decode of their
+own (`MAX_CHECKED_TRIES`: a due one, or one that gives an image or an error)
+are compared with the one-shot oracle; the later ones only refine, and an
+error they give is still held to stick. Every refine that is not due is
+still checked for its `MoreBytes`.
+
+A due refine may also wait (`Waiting::RepeatLimit`) when the bound on the
+walks of tiles not kept, which all the refines spend together, refuses it
 (`rust_j2k::fuzz::incremental_repeat_work`), even where the one-shot decode
 gives an image or an error. The visits those walks were charged must then be
 past `REPEAT_BOUNDS` times the refine's packet bound, which the hook reports;
@@ -223,7 +238,7 @@ the refusal's message is not read. A decoder with nothing spent must give the
 one-shot result, and when it kept every tile's walk it must have charged
 nothing: a single refine walks each tile once, and the first walk of a tile
 kept from its start is not charged. So a charge on a kept walk, which would
-turn a refine into `Ok(None)` past the bound, fails the target. The inputs
+turn a refine into a wait past the bound, fails the target. The inputs
 that reach that bound are larger than `-max_len=4096`: the smallest known is
 `restarted_poc_tile(4, 8, 299)` from `tests/support/synth.rs`, 16 KB, whose
 fifth due refine an overcharge refuses. The unit test
@@ -484,6 +499,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-17 | `retry_ladder` with the packet work hint doubling and a per-limit step bound (`MAX_STEPS` 4) | `decode`'s seeding and the 26 control-byte seeds (98 inputs), `j2k.dict` | 61 s, 1 476 runs; `nice -n 19`, one job; the 1-minute load was 4.4 | no failure |
 | 2026-11-18 | `window_crop` with windows from one point before the origin, and the image size compared | the README's seeding (114 seeds: `decode`'s, the window fixtures, the `.jph` files and the JP2 files under 200 KB), `j2k.dict` | 61 s, 21 419 runs; `nice -n 19`, one job; the 1-minute load was 4.6 | no failure. Coverage 10 427. With `Footprint::rect` shifted one column right, a seed fails on replay; with the image's reported width one too many, a seed fails on its size assertion |
 | 2026-11-18 | `incremental_decode` with the repeat-charge oracle (`incremental_repeat_work`) and the setters between refines (bit 6) | the fixtures under 3 KB, and the same behind `40 00 00 00 00 00` (98 seeds), `j2k.dict`, `-max_len=4096` | `-max_total_time=60` (66 s with loading), 18 228 runs; `nice -n 19`, one job; the 1-minute load was 1.5 | no failure |
+| 2026-11-18 | `incremental_decode` with the reason a refine waits checked (`check_waiting`, and `MoreBytes { until }` on each refine not due) | the fixtures under 3 KB, and the same behind `40 00 00 00 00 00` (110 seeds), `j2k.dict`, `-max_len=4096` | `-max_total_time=60`, 22 818 runs; `nice -n 19`, one job; the 1-minute load was 1.4 | no failure |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

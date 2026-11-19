@@ -111,7 +111,7 @@ fn feed(bytes: &[u8]) -> Held {
     for piece in bytes.chunks(PIECE) {
         decoder.feed(piece);
         reset();
-        let refined = decoder.refine().unwrap();
+        let refined = decoder.refine().unwrap().image();
         held.refine = held.refine.max(PEAK.load(Ordering::SeqCst) - base);
         if let Some(image) = refined {
             images += 1;

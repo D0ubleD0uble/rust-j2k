@@ -9,7 +9,7 @@ use crate::pipeline::decode::{check_options, decode_metered};
 use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
 use crate::{
-    DecodeOptions, Error, Header, Image, LimitKind, Region, Result, decode_with, jp2,
+    DecodeOptions, Error, Header, Image, LimitDetail, LimitKind, Region, Result, decode_with, jp2,
     read_header_with,
 };
 
@@ -29,10 +29,11 @@ use crate::{
 /// `refine` does not have to decode every time it is called, so a caller
 /// can call it after every read, however small. It decodes at least each
 /// time the bytes fed have doubled since it last decoded or tried to, and
-/// may decode more often; when it does not decode, it returns `Ok(None)`.
-/// The first refine called with at least one byte fed tries; one called
-/// with none fed returns `Ok(None)` and is not a try. A try that a work
-/// bound refuses counts, so the next refine waits for twice its bytes.
+/// may decode more often; when it does not decode, it returns
+/// [`Waiting::MoreBytes`]. The first refine called with at least one byte
+/// fed tries; one called with none fed waits and is not a try. A try that
+/// a work bound refuses counts, so the next refine waits for twice its
+/// bytes.
 ///
 /// The decoder keeps each tile's packet walk (what it has read of the
 /// tile's packet headers so far) between refines, so a refine reads only
@@ -43,19 +44,21 @@ use crate::{
 /// again](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)).
 /// Each refine is held to the packet bound of a decode of its bytes on its
 /// own: it is charged the packet visits that decode would spend, and a
-/// refine that decode is refused for returns `Ok(None)`.
+/// refine that decode is refused for returns [`Waiting::WorkLimit`].
 ///
 /// The code-block work is done again by each refine that decodes, so the
 /// code-block work every `refine` has spent is held to the bound one decode
 /// of the bytes fed has, raised as the options say. A refine the rest of
-/// that bound cannot cover returns `Ok(None)`, so a file whose code-blocks
+/// that bound cannot cover returns [`Waiting::WorkLimit`] where its own
+/// work passes the whole bound too, and [`Waiting::BoundSpent`] where only
+/// what the earlier refines spent puts it past. So a file whose code-blocks
 /// cost a lot may give no image before `finish`, which is a decode of its
-/// own, under its own bound. Each refine that returns an image also builds
-/// the whole image, as one decode does: it allocates the samples and runs
-/// the inverse wavelet and color transforms over them, outside the work
-/// bounds. Under the doubling cadence a file of `n` bytes gives at most
-/// about `log2(n)` images, so a large image fed in small pieces costs up to
-/// that many reconstructions.
+/// own, under its own bound. Each refine that returns an
+/// image also builds the whole image, as one decode does: it allocates the
+/// samples and runs the inverse wavelet and color transforms over them,
+/// outside the work bounds. Under the doubling cadence a file of `n` bytes
+/// gives at most about `log2(n)` images, so a large image fed in small
+/// pieces costs up to that many reconstructions.
 ///
 /// Between calls the decoder keeps the bytes fed and the tiles' packet
 /// walks. The walks kept hold at most twice what one decode holds at its
@@ -69,7 +72,7 @@ use crate::{
 /// a tile's order of packets, spend at most five times the packet bound of
 /// one decode of the bytes fed over all the refines together: once they
 /// pass four, a refine that would walk such a tile again returns
-/// `Ok(None)`, and `finish` decodes the file.
+/// [`Waiting::RepeatLimit`], and `finish` decodes the file.
 /// On top of these bounds the decoder keeps a table of 24 bytes for each
 /// tile index up to the highest it has seen, which comes to about 1.5 MiB
 /// for the 65535 tiles a file can have (up to twice that in capacity as
@@ -93,7 +96,7 @@ use crate::{
 /// [`bytes`](Self::bytes) borrows them.
 ///
 /// ```
-/// use rust_j2k::{DecodeOptions, IncrementalDecoder};
+/// use rust_j2k::{DecodeOptions, IncrementalDecoder, Refined};
 ///
 /// # let file = include_bytes!(concat!(
 /// #     env!("CARGO_MANIFEST_DIR"),
@@ -106,7 +109,7 @@ use crate::{
 /// // The file arrives 500 bytes at a time.
 /// for piece in file.chunks(500) {
 ///     decoder.feed(piece);
-///     if let Some(image) = decoder.refine()? {
+///     if let Refined::Image(image) = decoder.refine()? {
 ///         // Show the image of what has arrived so far. Its report says
 ///         // what is still missing.
 ///         println!(
@@ -132,11 +135,12 @@ use crate::{
 /// many `POC` volumes, or too many bit-planes. More bytes do not undo these, so
 /// once `refine` returns an error, every later `refine` returns the same error
 /// without decoding, until a change of options. Some refusals are not final
-/// while bytes may still come, so `refine` returns `Ok(None)` for them and only
-/// `finish` reports them: a main header cut short ([`Error::Incomplete`]), a
-/// refusal by the sample limit, the packet or code-block work bound or the
-/// charge for missing tiles, which more bytes raise, and a refusal by the bound
-/// on the walks of tiles not kept, which the refines spend together. A caller
+/// while bytes may still come, so `refine` waits on them, with the reason as a
+/// [`Waiting`], and only `finish` reports them: a main header cut short
+/// ([`Error::Incomplete`]), a refusal by the sample limit, the packet or
+/// code-block work bound or the charge for missing tiles, which more bytes
+/// raise, and a refusal by the bound on the walks of tiles not kept, which the
+/// refines spend together. A caller
 /// who raises the packet work limit to the factor a refusal names, as
 /// [`DecodeOptions::with_retry`] does, and feeds the file to a new decoder,
 /// accepts up to about ten times the packet work the file needs over its
@@ -158,7 +162,9 @@ pub struct IncrementalDecoder {
     decoded: usize,
     /// The work the refines have spent, and the packet walks they keep.
     spent: Spent,
-    /// Whether a work bound refused the last refine.
+    /// Whether a work bound refused the last refine. Only the unit tests
+    /// read it; `refine` names the reason in its `Waiting`.
+    #[cfg(test)]
     refused: bool,
     /// Whether the bound on the walks of tiles not kept refused it.
     refused_by_repeats: bool,
@@ -186,6 +192,7 @@ impl IncrementalDecoder {
             tried: 0,
             decoded: 0,
             spent: Spent::default(),
+            #[cfg(test)]
             refused: false,
             refused_by_repeats: false,
             repeat_bound: 0,
@@ -246,11 +253,21 @@ impl IncrementalDecoder {
     /// This is a decode of its own, under the bounds of these options. It
     /// spends nothing from the bounds the refines share and does not change
     /// when [`refine`](Self::refine) next decodes. The decoder keeps nothing
-    /// from it, so a viewer that wants the image again keeps it itself. Where
-    /// a refine would wait, it returns the error: [`Error::Incomplete`] until
-    /// the main header is whole, and [`Error::Limit`] when a bound refuses the
-    /// bytes so far. With `strict` left on, it refuses a stream that is cut
-    /// short, as [`finish`](Self::finish) does.
+    /// from it, so a viewer that wants the image again keeps it itself.
+    ///
+    /// A decode of the bytes fed with these options is not held to the
+    /// refine cadence or to the bounds the refines share, so it gives what
+    /// [`decode_with`] gives on those bytes. Where a refine waits on
+    /// [`MoreBytes`](Waiting::MoreBytes), [`BoundSpent`](Waiting::BoundSpent)
+    /// or [`RepeatLimit`](Waiting::RepeatLimit), that can be an image. Where
+    /// it waits on [`HeaderIncomplete`](Waiting::HeaderIncomplete),
+    /// [`SampleLimit`](Waiting::SampleLimit),
+    /// [`WorkLimit`](Waiting::WorkLimit) or
+    /// [`MissingTiles`](Waiting::MissingTiles), it is the same refusal, as an
+    /// error.
+    ///
+    /// With `strict` left on, it refuses a stream that is cut short, as
+    /// [`finish`](Self::finish) does.
     pub fn options(&self) -> &DecodeOptions {
         &self.options
     }
@@ -267,7 +284,8 @@ impl IncrementalDecoder {
     /// header without the decoder's options. The
     /// sample limit grows with the bytes fed, so a sample-limit
     /// [`Error::Limit`] here can turn into a header once more bytes come in;
-    /// [`refine`](Self::refine) returns `Ok(None)` for it instead.
+    /// [`refine`](Self::refine) waits on it instead
+    /// ([`Waiting::SampleLimit`]).
     ///
     /// Call it after a feed rather than after each byte: each call parses
     /// the main header again.
@@ -355,25 +373,32 @@ impl IncrementalDecoder {
     /// have doubled since it last decoded or tried to, and may decode more
     /// often.
     ///
-    /// The image is the one [`decode_with`] gives with
+    /// [`Refined::Image`] is the image [`decode_with`] gives with
     /// [`strict`](DecodeOptions::strict) off on all the bytes fed, and its
     /// [`report`](Image::report) lists what they do not hold yet.
-    /// `Ok(None)` means there is no new image yet: too few bytes have come
-    /// in since the last decode, the main header is not whole, or the
-    /// sample limit or a work bound refused the decode (each grows with the
-    /// bytes). Any error is the one `decode_with` gives
-    /// on those bytes, and more bytes will not clear it: each later call
-    /// returns it again, until a change of options. A refusal by a bound
-    /// all the refines spend together can stand in for an error later in
-    /// the file: the refine returns `Ok(None)` where `decode_with` fails,
-    /// and `finish` reports that error.
-    pub fn refine(&mut self) -> Result<Option<Image>> {
+    /// [`Refined::Waiting`] means there is no new image yet, and says why
+    /// (see [`Waiting`]): too few bytes have come in since the last try, the
+    /// main header is not whole, or the sample limit, a work bound, the
+    /// charge for missing tiles or the bound on the walks done again refused
+    /// the decode. [`Refined::image`] gives the image or `None`, for a
+    /// caller who does not need the reason.
+    ///
+    /// Any error is the one `decode_with` gives on those bytes, and more
+    /// bytes will not clear it: each later call returns it again, until a
+    /// change of options. A refusal by a bound the refines share can stand
+    /// in for an error that block decoding, the wavelet or assembly would
+    /// meet later in the file: the refine waits where `decode_with` fails,
+    /// and `finish` reports that error. A refine refused only for what
+    /// earlier refines spent still reads the packets of the later tiles, so
+    /// an error there comes out as the error `decode_with` gives.
+    pub fn refine(&mut self) -> Result<Refined> {
         if let Some(error) = &self.failed {
             return Err(error.clone());
         }
         let fed = self.bytes.len();
-        if fed == 0 || fed < self.tried.saturating_mul(2) {
-            return Ok(None);
+        let until = self.tried.saturating_mul(2).max(1);
+        if fed < until {
+            return Ok(Refined::Waiting(Waiting::MoreBytes { until }));
         }
         self.tried = fed;
         // The ledger lives for the decode alone, so the decoder holds no
@@ -386,26 +411,43 @@ impl IncrementalDecoder {
         };
         let ledger = Ledger::over(spent, fed as u64);
         let decoded = decode_metered(&self.bytes, &self.lenient, Some(&ledger));
-        self.refused = ledger.work_refused.get();
+        let refusal = ledger.work_refused.get();
+        #[cfg(test)]
+        {
+            self.refused = refusal.is_some();
+        }
         self.refused_by_repeats = ledger.repeats.refused.get();
         self.repeat_bound = ledger.repeats.bound.get();
         self.spent = ledger.into_spent();
-        match decoded {
+        let waiting = match decoded {
             Ok(image) => {
                 self.decoded = fed;
-                Ok(Some(image))
+                return Ok(Refined::Image(image));
             }
             // More bytes can complete the header, and raise the work
             // bounds.
-            Err(Error::Incomplete(_)) => Ok(None),
-            Err(Error::Limit(_)) if self.refused => Ok(None),
-            // The sample limit grows with the bytes too.
-            Err(Error::Limit(limit)) if limit.kind() == LimitKind::Samples => Ok(None),
-            Err(error) => {
-                self.failed = Some(error.clone());
-                Err(error)
-            }
-        }
+            Err(Error::Incomplete(_)) => Waiting::HeaderIncomplete,
+            // The bound on the walks of tiles not kept refuses as the packet
+            // walk does, but its error names the packet bound, which is not
+            // what refused.
+            Err(Error::Limit(_)) if self.refused_by_repeats => Waiting::RepeatLimit {},
+            Err(Error::Limit(limit)) => match refusal {
+                Some(Refusal::MissingTiles) => Waiting::MissingTiles(limit),
+                Some(Refusal::Work) => Waiting::WorkLimit(limit),
+                Some(Refusal::BoundSpent) => Waiting::BoundSpent(limit),
+                // The sample limit grows with the bytes too.
+                None if limit.kind() == LimitKind::Samples => Waiting::SampleLimit(limit),
+                None => return Err(self.fail(Error::Limit(limit))),
+            },
+            Err(error) => return Err(self.fail(error)),
+        };
+        Ok(Refined::Waiting(waiting))
+    }
+
+    /// Keep `error` for every later refine, and return it.
+    fn fail(&mut self, error: Error) -> Error {
+        self.failed = Some(error.clone());
+        error
     }
 
     /// The input has ended: decode all of it under the decoder's options,
@@ -500,6 +542,205 @@ const _: () = {
     holds::<IncrementalDecoder>();
 };
 
+/// What [`IncrementalDecoder::refine`] gives when it does not fail: an
+/// image of the bytes fed so far, or why it has none yet.
+///
+/// [`image`](Self::image) drops the reason:
+/// `decoder.refine()?.image()` is the image or `None`.
+///
+/// ```
+/// use rust_j2k::{DecodeOptions, IncrementalDecoder, Refined, Waiting};
+///
+/// # let file = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/layers/lrcp.j2k"
+/// # )).to_vec();
+/// let mut decoder = IncrementalDecoder::new(DecodeOptions::default())?;
+/// decoder.feed(&file[..20]);
+/// // 20 bytes end inside the SIZ marker segment.
+/// assert!(matches!(
+///     decoder.refine()?,
+///     Refined::Waiting(Waiting::HeaderIncomplete)
+/// ));
+/// decoder.feed(&file[20..30]);
+/// // The refine tried at 20 bytes, so the next try is at 40 at the latest.
+/// assert!(matches!(
+///     decoder.refine()?,
+///     Refined::Waiting(Waiting::MoreBytes { until: 40, .. })
+/// ));
+/// decoder.feed(&file[30..]);
+/// match decoder.refine()? {
+///     Refined::Image(image) => println!("{}x{}", image.width, image.height),
+///     Refined::Waiting(why) => println!("no image yet: {why:?}"),
+///     _ => {}
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+// The image is what most refines that decode return, unboxed as
+// `Option<Image>` was: a box would cost an allocation per image and a
+// dereference at every match, to shrink a value that is moved once.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum Refined {
+    /// The image [`decode_with`] gives with
+    /// [`strict`](DecodeOptions::strict) off on the bytes fed so far, with
+    /// its [`report`](Image::report) of what they do not hold yet.
+    Image(Image),
+    /// No new image, and why.
+    Waiting(Waiting),
+}
+
+impl Refined {
+    /// The image, or `None` when the refine waits, for a caller who does
+    /// not need the reason.
+    pub fn image(self) -> Option<Image> {
+        match self {
+            Refined::Image(image) => Some(image),
+            Refined::Waiting(_) => None,
+        }
+    }
+}
+
+/// Why [`IncrementalDecoder::refine`] gave no image.
+///
+/// Each of these may clear as more bytes come in, so none is an error.
+/// Once the input has ended, [`finish`](IncrementalDecoder::finish) decodes
+/// all of it and reports a limit that still refuses it. To decode the bytes
+/// fed now, decode them on their own, as
+/// [`options`](IncrementalDecoder::options) shows:
+/// `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
+///
+/// The enum and its struct-like variants are `#[non_exhaustive]`, so a
+/// `match` names their fields with `..` and has a `_` arm:
+///
+/// ```
+/// use rust_j2k::{DecodeOptions, IncrementalDecoder, Refined, Waiting};
+///
+/// # let file = include_bytes!(concat!(
+/// #     env!("CARGO_MANIFEST_DIR"),
+/// #     "/tests/fixtures/layers/lrcp.j2k"
+/// # )).to_vec();
+/// let mut decoder = IncrementalDecoder::new(DecodeOptions::default())?;
+/// for piece in file[..30].chunks(10) {
+///     decoder.feed(piece);
+///     let Refined::Waiting(why) = decoder.refine()? else {
+///         continue;
+///     };
+///     match why {
+///         // `until` is a total of bytes fed, not the bytes still to come.
+///         Waiting::MoreBytes { until, .. } => {
+///             let more = until - decoder.bytes_fed();
+///             println!("the next try is at {until} bytes, {more} from now");
+///         }
+///         Waiting::HeaderIncomplete => println!("the main header is not in yet"),
+///         Waiting::RepeatLimit { .. } => println!("decode the bytes fed now"),
+///         Waiting::BoundSpent(_) => println!("decode the bytes fed now"),
+///         Waiting::WorkLimit(limit) => println!("{limit}"),
+///         _ => println!("{why:?}"),
+///     }
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum Waiting {
+    /// The refine did not decode: no bytes have been fed, or the bytes fed
+    /// have not doubled since the last refine that decoded or tried to.
+    #[non_exhaustive]
+    MoreBytes {
+        /// The total of bytes fed at which a refine decodes again, at the
+        /// latest: twice those fed at the last try, or 1 before any. It
+        /// counts from the start of the input, not from the bytes fed now.
+        until: usize,
+    },
+    /// The main header is not whole yet: the bytes fed end before the first
+    /// `SOT` marker, or, in a JP2 file, inside the boxes before it.
+    /// [`header`](IncrementalDecoder::header) returns `Ok(None)` for the
+    /// same bytes.
+    HeaderIncomplete,
+    /// The sample limit ([`DecodeOptions::sample_limit`]) refused the image.
+    /// The default limit and a [`Raised`](crate::WorkLimit::Raised) one
+    /// grow with the bytes fed, so more bytes may admit it. The
+    /// detail is the one [`decode_with`] gives for the bytes fed, with its
+    /// [`retry_with`](LimitDetail::retry_with).
+    SampleLimit(LimitDetail),
+    /// The bytes fed cost more work than the packet work bound
+    /// ([`LimitKind::PacketWork`]) or the code-block work bound
+    /// ([`LimitKind::CodeBlockWork`]) allows: a decode of them on its own is
+    /// refused too. Both bounds grow with the bytes fed, so more bytes may
+    /// admit them.
+    ///
+    /// The detail is the one [`decode_with`] gives for the bytes fed, with
+    /// its [`retry_with`](LimitDetail::retry_with).
+    /// [`DecodeOptions::with_retry`] applies it, for a new decoder or a
+    /// decode of [`into_bytes`](IncrementalDecoder::into_bytes).
+    WorkLimit(LimitDetail),
+    /// The earlier refines have spent the code-block work bound
+    /// ([`LimitKind::CodeBlockWork`]). The refines share that bound (see
+    /// [`IncrementalDecoder`]), and each decodes the code-blocks again, so
+    /// what they spent is cut from the bound of the next. This refine's own
+    /// work fits the whole bound of the bytes fed, so a decode of them on
+    /// its own passes the code-block bound (it may still fail elsewhere):
+    /// the refine is refused only for what was spent before it.
+    ///
+    /// The rule: the refine passed what was left of the bound, and the work
+    /// of its own decode, counted over every tile, is at most the whole
+    /// bound. Where its own work passes the whole bound, the refine waits on
+    /// [`WorkLimit`](Self::WorkLimit) instead. To count that work, the
+    /// refine walks the packets of the tiles after the cut without decoding
+    /// their code-blocks, and the walks of tiles not kept spend the bound on
+    /// the walks done again that the refines share (see
+    /// [`RepeatLimit`](Self::RepeatLimit)).
+    ///
+    /// Raising the limit is not the way out: the file fits the bound it
+    /// has. Decode the bytes fed now,
+    /// `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`
+    /// (see [`options`](IncrementalDecoder::options)), or start a new
+    /// decoder. A viewer that streams the file is better served by the
+    /// decode of the bytes fed: a new decoder starts without the packet
+    /// walks this one keeps. Later refines of this decoder may wait on this
+    /// too, though more bytes raise the bound, and `finish` decodes under a
+    /// bound of its own. The detail's
+    /// [`retry_with`](LimitDetail::retry_with) is `None`.
+    BoundSpent(LimitDetail),
+    /// The charge for missing tiles passed the packet work bound: each
+    /// tile-component of a tile that has not come in yet costs a step,
+    /// before any tile is decoded. Tiles that come in lower the charge, and
+    /// more bytes raise the bound. The detail is the refusal's, of kind
+    /// [`LimitKind::PacketWork`], as a decode of the bytes fed on its own
+    /// gives it.
+    MissingTiles(LimitDetail),
+    /// The bound on the packet walks the refines do again is spent: the
+    /// walks of tiles whose walk is too large to keep, and of walks started
+    /// again (see [`IncrementalDecoder`]). All the refines spend it
+    /// together, up to four times the packet bound of a decode of the bytes
+    /// fed, so a refine that would walk such a tile again waits. More bytes
+    /// raise it only as they raise the packet bound, so on a small file it
+    /// can stay spent for the rest of the stream. Between due refines every
+    /// call returns [`MoreBytes`](Self::MoreBytes), so this shows only on a
+    /// refine that is due. A decode of the bytes fed now (see
+    /// [`options`](IncrementalDecoder::options)) is not held to this bound
+    /// and may give an image. A decoder made with a higher
+    /// [`packet_work_limit`](DecodeOptions::packet_work_limit) has a higher
+    /// bound.
+    #[non_exhaustive]
+    RepeatLimit {},
+}
+
+/// Which work bound refused a decode under a [`Ledger`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// The packet walk, the walks of tiles not kept (which
+    /// [`Repeats`] tells apart), or the code-block work.
+    Work,
+    /// The charge for the missing tiles' tile-components.
+    MissingTiles,
+    /// What the earlier decodes left of the code-block bound, where the
+    /// work of this decode fits the whole bound.
+    BoundSpent,
+}
+
 /// What the decodes of an [`IncrementalDecoder`] keep between them (see
 /// [`Ledger`]).
 #[derive(Default)]
@@ -536,8 +777,8 @@ pub(crate) struct Ledger {
     repeats: Repeats,
     /// The code-block bound of this decode, once it is known.
     bound: Cell<Option<u64>>,
-    /// Whether a work bound refused the last decode.
-    work_refused: Cell<bool>,
+    /// Which work bound refused the decode, if one did.
+    work_refused: Cell<Option<Refusal>>,
     /// The bytes the decode is of, which the walks kept are held to (see
     /// [`Walks`]).
     fed: u64,
@@ -564,7 +805,7 @@ impl Ledger {
             blocks: Cell::new(spent.blocks),
             repeats: Repeats::new(spent.repeats),
             bound: Cell::new(None),
-            work_refused: Cell::new(false),
+            work_refused: Cell::new(None),
             fed,
         }
     }
@@ -627,13 +868,12 @@ impl Ledger {
         )
     }
 
-    /// Record that a work bound refused a decode: the packet walk, the
-    /// walks of tiles not kept, the code-block work or the charge for
-    /// missing tiles. The bounds grow
-    /// with the bytes and the missing tiles shrink, so more bytes may
-    /// clear it.
-    pub(crate) fn refuse(&self) {
-        self.work_refused.set(true);
+    /// Record that a work bound refused a decode, for `why`: the packet
+    /// walk, the walks of tiles not kept, the code-block work or the charge
+    /// for missing tiles. The bounds grow with the bytes and the missing
+    /// tiles shrink, so more bytes may clear it.
+    pub(crate) fn refuse(&self, why: Refusal) {
+        self.work_refused.set(Some(why));
     }
 
     /// Add `work` to the code-block work spent.

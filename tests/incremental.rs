@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 mod synth;
 
 use rust_j2k::{
-    DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Region, Window, WorkLimit,
-    decode_with, read_header, read_header_with,
+    DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Refined, Region, Waiting, Window,
+    WorkLimit, decode_with, read_header, read_header_with,
 };
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -96,6 +96,75 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
     result.map_err(|error| format!("{error:?}"))
 }
 
+/// A refine, with the reason it waited dropped.
+fn refine_image(decoder: &mut IncrementalDecoder) -> Result<Option<Image>, Error> {
+    decoder.refine().map(Refined::image)
+}
+
+/// Check `why`, the reason a refine that tried on `prefix` waited, against
+/// the strict-off decode of `prefix` under `options`. A header cut short is
+/// `HeaderIncomplete`, and a refusal by the sample limit or the charge for
+/// missing tiles, or by the packet bound of that decode, is the same
+/// refusal, under the variant that names it: the charge for missing tiles
+/// is `MissingTiles`, and the packet bound is a `WorkLimit`. A `WorkLimit`
+/// of the code-block bound is that decode's refusal too, or stands in for
+/// an error it gives later in the file. `BoundSpent` comes only where that
+/// decode passes the code-block bound: it gives an image, or an error that
+/// is not a limit. The bound on the walks done again can refuse whatever
+/// that decode gives.
+fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptions) {
+    let one_shot = decode_with(prefix, &options.clone().with_strict(false));
+    let at = prefix.len();
+    match (why, &one_shot) {
+        (Waiting::HeaderIncomplete, Err(Error::Incomplete(_))) => {}
+        (
+            Waiting::SampleLimit(limit) | Waiting::MissingTiles(limit) | Waiting::WorkLimit(limit),
+            Err(Error::Limit(expected)),
+        ) if limit.kind() != LimitKind::CodeBlockWork => {
+            assert_eq!(
+                format!("{limit:?}"),
+                format!("{expected:?}"),
+                "{name}, {at} bytes"
+            );
+            let kind = match why {
+                Waiting::SampleLimit(_) => LimitKind::Samples,
+                _ => LimitKind::PacketWork,
+            };
+            assert_eq!(limit.kind(), kind, "{name}, {at} bytes: {why:?}");
+            // The two packet-work refusals carry the same kind; the
+            // one-shot message says which it was.
+            if kind == LimitKind::PacketWork {
+                let missing = expected.message().contains("the missing tiles cost");
+                assert_eq!(
+                    matches!(why, Waiting::MissingTiles(_)),
+                    missing,
+                    "{name}, {at} bytes: {why:?}"
+                );
+            }
+        }
+        (Waiting::WorkLimit(limit), Err(Error::Limit(expected)))
+            if limit.kind() == LimitKind::CodeBlockWork =>
+        {
+            assert_eq!(
+                format!("{limit:?}"),
+                format!("{expected:?}"),
+                "{name}, {at} bytes"
+            );
+        }
+        (Waiting::WorkLimit(limit), Err(error))
+            if limit.kind() == LimitKind::CodeBlockWork
+                && !matches!(error, Error::Incomplete(_)) => {}
+        (Waiting::BoundSpent(limit), _)
+            if !matches!(one_shot, Err(Error::Limit(_) | Error::Incomplete(_))) =>
+        {
+            assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{name}, {at} bytes");
+            assert_eq!(limit.retry_with(), None, "{name}, {at} bytes");
+        }
+        (Waiting::RepeatLimit { .. }, _) => {}
+        _ => panic!("{name}, {at} bytes: waited for {why:?}, where the decode gives {one_shot:?}"),
+    }
+}
+
 /// Whether `finish` on `bytes` gives what `decode_with` gives under
 /// `options`, with `Incomplete` turned into a truncation error.
 fn check_finish(name: &str, bytes: &[u8], decoder: IncrementalDecoder, options: &DecodeOptions) {
@@ -149,23 +218,31 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
             tried = fed;
         }
         match decoder.refine() {
-            Ok(Some(image)) => {
+            Ok(Refined::Image(image)) => {
                 images += 1;
                 tried = fed;
                 assert_eq!(decoder.bytes_decoded(), fed, "{name}");
                 let expected = decode_with(&bytes[..fed], &options.clone().with_strict(false));
                 assert_eq!(Ok(image), keyed(expected), "{name}, {fed} bytes");
             }
-            Ok(None) => {
+            Ok(Refined::Waiting(why)) => {
                 if due {
+                    check_waiting(name, &why, &bytes[..fed], options);
                     let expected = refine_oracle(&bytes[..fed], options);
                     assert!(
                         !matches!(expected, Ok(Some(_))),
                         "{name}: a refine at {fed} bytes, due after a try at {last}, \
                          gave no image"
                     );
+                } else {
+                    // Not due: the refine waits for the bytes to double.
+                    assert!(
+                        matches!(why, Waiting::MoreBytes { until, .. } if until == 2 * last),
+                        "{name}, {fed} bytes after a try at {last}: {why:?}"
+                    );
                 }
             }
+            Ok(_) => unreachable!("a new variant of `Refined`"),
             Err(error) => {
                 let expected = refine_oracle(&bytes[..fed], options);
                 assert_eq!(keyed(Err(error)), keyed(expected), "{name}, {fed} bytes");
@@ -192,7 +269,7 @@ fn halves(name: &str, bytes: &[u8], options: &DecodeOptions) -> usize {
     let mut images = 0;
     for fed in [bytes.len() / 2, bytes.len()] {
         decoder.feed(&bytes[decoder.bytes_fed()..fed]);
-        let refined = keyed(decoder.refine());
+        let refined = keyed(refine_image(&mut decoder));
         let expected = keyed(refine_oracle(&bytes[..fed], options));
         if matches!(refined, Ok(Some(_))) {
             images += 1;
@@ -239,8 +316,13 @@ fn cut(name: &str, bytes: &[u8], cuts: &[usize], rng: &mut Rng, options: &Decode
         decoder.feed(&prefix[..split]);
         decoder.feed(&prefix[split..]);
         let refined = decoder.refine();
+        match &refined {
+            Ok(Refined::Waiting(Waiting::MoreBytes { until: 1, .. })) if at == 0 => {}
+            Ok(Refined::Waiting(why)) => check_waiting(name, why, prefix, options),
+            _ => {}
+        }
         assert_eq!(
-            keyed(refined),
+            keyed(refined.map(Refined::image)),
             keyed(refine_oracle(prefix, options)),
             "{name}, cut at {at}"
         );
@@ -412,7 +494,11 @@ fn a_pterm_file_resumes_from_a_prefix_to_the_strict_decode() {
     let bytes = layers_file("pterm_cut.j2k");
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes[..226]);
-    let prefix = decoder.refine().unwrap().expect("the main header is whole");
+    let prefix = decoder
+        .refine()
+        .unwrap()
+        .image()
+        .expect("the main header is whole");
     assert!(!prefix.report.is_complete());
     assert_eq!(
         Some(prefix),
@@ -421,7 +507,7 @@ fn a_pterm_file_resumes_from_a_prefix_to_the_strict_decode() {
     decoder.feed(&bytes[226..]);
     // Whether this refine decodes is the cadence's choice; if it does, the
     // image is the one-shot decode of all 231 bytes.
-    if let Some(image) = decoder.refine().unwrap() {
+    if let Some(image) = decoder.refine().unwrap().image() {
         assert_eq!(Some(image), refine_oracle(&bytes, &lenient()).unwrap());
     }
     let finished = decoder.finish().unwrap();
@@ -475,9 +561,12 @@ fn a_damaged_pterm_segment_is_refused() {
     }
 }
 
-/// The end of the input turns a main header cut short into a truncation
-/// error: `Error::Codestream` inside a codestream's main header, and
-/// `Error::FileFormat` inside a JP2 file's boxes.
+/// A refine of a main header cut short waits with `HeaderIncomplete`: cut
+/// inside the SIZ marker segment of a codestream, and inside the boxes of a
+/// JP2 file. With no bytes fed it waits for the first byte. The end of the
+/// input turns the cut into a truncation error: `Error::Codestream` inside a
+/// codestream's main header, and `Error::FileFormat` inside a JP2 file's
+/// boxes.
 #[test]
 fn finish_refuses_a_header_cut_short() {
     let codestream = std::fs::read(fixtures().join("jpeg2000_regular_latlon.j2k")).unwrap();
@@ -489,7 +578,21 @@ fn finish_refuses_a_header_cut_short() {
     ] {
         let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
         decoder.feed(&bytes[..cut]);
-        assert!(matches!(decoder.refine(), Ok(None)));
+        let refined = decoder.refine().unwrap();
+        if cut == 0 {
+            assert!(
+                matches!(
+                    refined,
+                    Refined::Waiting(Waiting::MoreBytes { until: 1, .. })
+                ),
+                "{refined:?}"
+            );
+        } else {
+            assert!(
+                matches!(refined, Refined::Waiting(Waiting::HeaderIncomplete)),
+                "{cut} bytes: {refined:?}"
+            );
+        }
         match (decoder.finish(), box_layer) {
             (Err(Error::Codestream(m)), false) | (Err(Error::FileFormat(m)), true) => {
                 assert!(m.message().starts_with("the input is truncated: "), "{m}");
@@ -531,7 +634,7 @@ fn a_limit_more_bytes_cannot_clear_is_an_error() {
     for piece in bytes.chunks(64) {
         decoder.feed(piece);
         match (decoder.refine(), &first) {
-            (Ok(None), None) => {}
+            (Ok(Refined::Waiting(_)), None) => {}
             (Err(Error::Limit(limit)), None) => {
                 assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
                 first = Some(format!("{limit:?}"));
@@ -547,26 +650,34 @@ fn a_limit_more_bytes_cannot_clear_is_an_error() {
 
 /// The sample limit grows with the bytes, so a prefix it refuses is a
 /// wait: every refine of the flat 32769x16385 file, whose 27 KB hold the
-/// limit to 2^29, returns `Ok(None)`, and `finish` reports the limit, as
-/// the one-shot decode does.
+/// limit to 2^29, waits, and `finish` reports the limit, as the one-shot
+/// decode does. Each refine that tries once the header is in waits with
+/// `SampleLimit`, carrying the refusal the one-shot decode gives.
 #[test]
 fn a_sample_limit_refusal_is_a_wait() {
     let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
     let bytes = std::fs::read(&path).unwrap();
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
-    let mut refused = 0;
+    let (mut refused, mut waited) = (0, 0);
     for piece in bytes.chunks(4096) {
         decoder.feed(piece);
         let prefix = &bytes[..decoder.bytes_fed()];
-        match decoder.refine() {
-            Ok(None) => {}
-            other => panic!("{} bytes: {other:?}", prefix.len()),
+        let one_shot = decode_with(prefix, &lenient());
+        match (decoder.refine(), &one_shot) {
+            (Ok(Refined::Waiting(Waiting::SampleLimit(limit))), Err(Error::Limit(expected))) => {
+                assert_eq!(format!("{limit:?}"), format!("{expected:?}"));
+                assert!(limit.retry_with().is_some(), "{limit}");
+                waited += 1;
+            }
+            (Ok(Refined::Waiting(Waiting::MoreBytes { .. } | Waiting::HeaderIncomplete)), _) => {}
+            (other, _) => panic!("{} bytes: {other:?}", prefix.len()),
         }
-        if decode_with(prefix, &lenient()).is_err_and(|e| is_sample_limit(&e)) {
+        if one_shot.is_err_and(|e| is_sample_limit(&e)) {
             refused += 1;
         }
     }
     assert!(refused > 0, "no prefix reached the sample limit");
+    assert!(waited > 0, "no refine waited on the sample limit");
     match decoder.finish() {
         Err(Error::Limit(limit)) => assert_eq!(limit.kind(), LimitKind::Samples),
         other => panic!("{other:?}"),
@@ -590,10 +701,17 @@ fn each_refine_is_held_to_the_sample_limit_of_its_prefix() {
         decode_with(&bytes[..half], &options.clone().with_strict(false))
             .is_err_and(|e| is_sample_limit(&e))
     );
-    assert!(matches!(decoder.refine(), Ok(None)));
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::SampleLimit(_)))
+    ));
     assert!(matches!(decoder.header(), Err(Error::Limit(_))));
     decoder.feed(&bytes[half..]);
-    let refined = decoder.refine().expect("decodes").expect("an image");
+    let refined = decoder
+        .refine()
+        .expect("decodes")
+        .image()
+        .expect("an image");
     assert_eq!(decoder.bytes_decoded(), bytes.len());
     assert_eq!((refined.width, refined.height), (16, 16));
     let expected = refine_oracle(&bytes, &options).unwrap().unwrap();
@@ -630,21 +748,364 @@ fn a_work_bound_a_prefix_reaches_is_a_wait() {
     assert!(decode_with(&bytes, &lenient).is_ok());
 
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    let mut waited = 0;
     for piece in bytes.chunks(256) {
         decoder.feed(piece);
-        if let Err(error) = decoder.refine() {
-            panic!("{} bytes: {error:?}", decoder.bytes_fed());
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::WorkLimit(limit))) => {
+                assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{limit}");
+                waited += 1;
+            }
+            Ok(_) => {}
+            Err(error) => panic!("{} bytes: {error:?}", decoder.bytes_fed()),
         }
     }
+    assert!(waited > 0, "no refine waited on the work bound");
     assert_eq!(
         keyed(decoder.finish()),
         keyed(decode_with(&bytes, &DecodeOptions::default()))
     );
 }
 
+/// A tile whose walk starts again at each of its tile-parts, fed 64 bytes
+/// at a time with a refine after each: the due refines that the bound on
+/// the walks done again refuses wait with `RepeatLimit`, though the
+/// one-shot decode of their bytes gives an image, and every due refine that
+/// waits passes `check_waiting`. A decode of the bytes fed then, with the
+/// decoder's options and `strict` off, gives that image.
+#[test]
+fn a_restarted_walk_streamed_waits_with_repeat_limit() {
+    let bytes = synth::restarted_poc_tile(4, 13, 400);
+    let options = lenient();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let (mut tried, mut repeats) = (0, 0);
+    for piece in bytes.chunks(64) {
+        decoder.feed(piece);
+        let fed = decoder.bytes_fed();
+        let due = fed >= 2 * tried;
+        if due {
+            tried = fed;
+        }
+        match decoder.refine().unwrap() {
+            Refined::Waiting(why) if due => {
+                check_waiting("restarted_poc_tile", &why, &bytes[..fed], &options);
+                if matches!(why, Waiting::RepeatLimit { .. }) {
+                    repeats += 1;
+                    let now = decode_with(
+                        decoder.bytes(),
+                        &decoder.options().clone().with_strict(false),
+                    );
+                    assert!(now.is_ok(), "{fed} bytes: {now:?}");
+                }
+            }
+            Refined::Waiting(why) => assert!(
+                matches!(why, Waiting::MoreBytes { until, .. } if until == 2 * tried),
+                "{fed} bytes: {why:?}"
+            ),
+            _ => {}
+        }
+    }
+    assert!(repeats > 0, "no refine waited on the repeat bound");
+}
+
 /// A file the default code-block work bound refuses.
 fn bomb() -> Vec<u8> {
     std::fs::read(fixtures().join("tier1_work_bound/t1bomb_1024_64_88.j2k")).unwrap()
+}
+
+/// A refine that a work bound refuses waits with `WorkLimit`, carrying the
+/// refusal the one-shot decode of its bytes gives, hint included: the
+/// code-block bound on `t1bomb_1024_64_88.j2k`, and the packet bound on
+/// `sweep_rpcl_1024_64.j2k`. Retries with `with_retry` of each hint, a new
+/// decoder each, reach a refine that gives the image.
+#[test]
+fn a_work_bound_refusal_waits_with_the_hint_the_decode_gives() {
+    let sweep = std::fs::read(fixtures().join("work_bound/sweep_rpcl_1024_64.j2k")).unwrap();
+    for (name, bytes, kind) in [
+        ("t1bomb", bomb(), LimitKind::CodeBlockWork),
+        ("sweep", sweep, LimitKind::PacketWork),
+    ] {
+        let expected = match decode_with(&bytes, &lenient()) {
+            Err(Error::Limit(limit)) => limit,
+            other => panic!("{name}: {other:?}"),
+        };
+        let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        decoder.feed(&bytes);
+        let limit = match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::WorkLimit(limit))) => limit,
+            other => panic!("{name}: {other:?}"),
+        };
+        assert_eq!(limit.kind(), kind, "{name}");
+        assert_eq!(limit.retry_with(), expected.retry_with(), "{name}");
+        assert!(limit.retry_with().is_some(), "{name}");
+        assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{name}");
+        // Retry with the hint in a loop, as with `decode_with`: a new
+        // decoder for each, as the decoder keeps its options' bounds.
+        let bytes = decoder.into_bytes();
+        let mut limit = limit;
+        let mut options = DecodeOptions::default();
+        let mut retries = 0;
+        let image = loop {
+            options = options.with_retry(&limit).unwrap();
+            retries += 1;
+            let mut again = IncrementalDecoder::new(options.clone()).unwrap();
+            again.feed(&bytes);
+            match again.refine() {
+                Ok(Refined::Image(image)) => break image,
+                Ok(Refined::Waiting(Waiting::WorkLimit(next))) if retries < 4 => limit = next,
+                other => panic!("{name}, retry {retries}: {other:?}"),
+            }
+        };
+        assert_eq!(
+            image,
+            decode_with(&bytes, &options.with_strict(false)).unwrap(),
+            "{name}"
+        );
+    }
+}
+
+/// A refine that does not decode waits with `MoreBytes`, naming the bytes
+/// at which a refine decodes again: 1 before any byte is fed, then twice
+/// those of the last try. Meanwhile a decode of the bytes fed with the
+/// decoder's options and `strict` off gives the image of those bytes now.
+#[test]
+fn a_short_prefix_waits_for_more_bytes() {
+    let bytes = layers_file("lrcp.j2k");
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::MoreBytes { until: 1, .. }))
+    ));
+    let half = bytes.len() / 2;
+    decoder.feed(&bytes[..half]);
+    let first = decoder.refine().unwrap().image().expect("the header is in");
+    assert_eq!(decoder.bytes_decoded(), half);
+    for end in [half + 1, 2 * half - 1] {
+        decoder.feed(&bytes[decoder.bytes_fed()..end]);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::MoreBytes { until, .. })) => assert_eq!(until, 2 * half),
+            other => panic!("{end} bytes: {other:?}"),
+        }
+        let now = decode_with(
+            decoder.bytes(),
+            &decoder.options().clone().with_strict(false),
+        )
+        .unwrap();
+        assert_eq!(Some(now), refine_oracle(&bytes[..end], &lenient()).unwrap());
+    }
+    assert_eq!(decoder.bytes_decoded(), half, "no refine decoded");
+    decoder.feed(&bytes[2 * half - 1..2 * half]);
+    let second = decoder
+        .refine()
+        .unwrap()
+        .image()
+        .expect("the bytes doubled");
+    assert_ne!(first, second);
+    assert_eq!(
+        Some(second),
+        refine_oracle(&bytes[..2 * half], &lenient()).unwrap()
+    );
+}
+
+/// A refine that waits on `MoreBytes` after a try on a cut header leaves
+/// the header cut: a decode of the bytes fed then gives `Error::Incomplete`,
+/// not an image.
+#[test]
+fn more_bytes_after_a_cut_header_decodes_now_as_incomplete() {
+    let bytes = layers_file("lrcp.j2k");
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes[..10]);
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::HeaderIncomplete))
+    ));
+    decoder.feed(&bytes[10..15]);
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::MoreBytes { until: 20, .. }))
+    ));
+    let now = decode_with(
+        decoder.bytes(),
+        &decoder.options().clone().with_strict(false),
+    );
+    assert!(matches!(now, Err(Error::Incomplete(_))), "{now:?}");
+}
+
+/// A refine that the code-block bound refuses before any refine spent from
+/// it waits on what a decode on its own refuses too: a decode of the bytes
+/// fed then gives the same `CodeBlockWork` refusal, as an error.
+#[test]
+fn a_code_block_wait_with_nothing_spent_decodes_now_as_the_same_refusal() {
+    let bytes = bomb();
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    let limit = match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::WorkLimit(limit))) => limit,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
+    let now = decode_with(
+        decoder.bytes(),
+        &decoder.options().clone().with_strict(false),
+    );
+    match now {
+        Err(Error::Limit(expected)) => {
+            assert_eq!(format!("{limit:?}"), format!("{expected:?}"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A refine refused only for the code-block work the earlier refines
+/// spent waits on `BoundSpent`, with no hint, where a decode of its bytes
+/// on its own passes the bound. `t1bomb_1024_64_88.j2k` decodes under
+/// `Raised(2)` with work to spare, but not twice over: fed whole, the first
+/// refine gives the image; fed again to twice the bytes, with zeros after
+/// its end, the second is past what the first left. A decode of the bytes
+/// fed then, and a new decoder fed them, give the image. The bomb with
+/// nothing spent waits on `WorkLimit` instead (see
+/// `a_code_block_wait_with_nothing_spent_decodes_now_as_the_same_refusal`).
+#[test]
+fn a_refine_refused_for_what_earlier_refines_spent_waits_on_bound_spent() {
+    let bytes = bomb();
+    let options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Raised(2));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&bytes);
+    let first = decoder
+        .refine()
+        .unwrap()
+        .image()
+        .expect("the bound covers it once");
+    decoder.feed(&vec![0; bytes.len()]);
+    let why = match decoder.refine() {
+        Ok(Refined::Waiting(why)) => why,
+        other => panic!("{other:?}"),
+    };
+    let Waiting::BoundSpent(limit) = &why else {
+        panic!("{why:?}");
+    };
+    assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
+    assert_eq!(limit.retry_with(), None);
+    check_waiting("t1bomb padded", &why, decoder.bytes(), &options);
+    let now = decode_with(
+        decoder.bytes(),
+        &decoder.options().clone().with_strict(false),
+    )
+    .unwrap();
+    assert_eq!(now.components, first.components);
+    let mut fresh = IncrementalDecoder::new(options).unwrap();
+    fresh.feed(decoder.bytes());
+    assert!(
+        fresh.refine().unwrap().image().is_some(),
+        "a new decoder decodes it"
+    );
+}
+
+/// `tiles_even_origin_lossless.j2k` with a tile `COD` of no wavelet levels
+/// in the header of its last tile, tile 8, so that a decode at reduction 1
+/// decodes tiles 0 to 7 and then fails on tile 8, before its packets.
+fn last_tile_without_levels() -> Vec<u8> {
+    let bytes = std::fs::read(fixtures().join("tiles_even_origin_lossless.j2k")).unwrap();
+    // The main header's `COD`, with its count of levels set to 0.
+    let cod_at = bytes.windows(2).position(|w| w == [0xFF, 0x52]).unwrap();
+    let len = usize::from(u16::from_be_bytes([bytes[cod_at + 2], bytes[cod_at + 3]]));
+    let mut cod = bytes[cod_at..cod_at + 2 + len].to_vec();
+    // Marker, length, Scod, progression, layers (2), MCT, then the levels.
+    assert_eq!(cod[9], 2, "the main header's levels");
+    cod[9] = 0;
+    // Walk the tile-parts by their `Psot` to tile 8's.
+    let mut at = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    loop {
+        let isot = u16::from_be_bytes([bytes[at + 4], bytes[at + 5]]);
+        let psot = u32::from_be_bytes(bytes[at + 6..at + 10].try_into().unwrap());
+        if isot == 8 {
+            let mut out = bytes[..at].to_vec();
+            out.extend(&bytes[at..at + 6]);
+            out.extend((psot + cod.len() as u32).to_be_bytes());
+            out.extend(&bytes[at + 10..at + 12]);
+            out.extend(&cod);
+            out.extend(&bytes[at + 12..]);
+            return out;
+        }
+        at += psot as usize;
+    }
+}
+
+/// Check that a refine of `bytes` under `options`, refused only for what
+/// earlier refines spent of the code-block bound, reads on into the later
+/// tiles and gives the error `decode_with` gives, `expected`, not a wait;
+/// and that the error stays. What the earlier refines left covers one less
+/// than tile 0. A fresh decoder gives the same error.
+fn check_later_tiles_error(bytes: &[u8], options: &DecodeOptions, expected: Error) {
+    use rust_j2k::fuzz::{incremental_code_block_work, incremental_with_code_block_work_spent};
+    let expected = keyed::<()>(Err(expected));
+    let refined = |decoder: &mut IncrementalDecoder| keyed(decoder.refine().map(|_| ()));
+
+    // The work of tile 0, and the bound of a decode of the file.
+    let mut first = IncrementalDecoder::new(options.clone().with_region(Region::Tile(0))).unwrap();
+    first.feed(bytes);
+    assert!(first.refine().unwrap().image().is_some());
+    let (work, bound) = incremental_code_block_work(&first);
+    let bound = bound.unwrap();
+    assert!(0 < work && work < bound, "{work} of {bound}");
+
+    let mut fresh = IncrementalDecoder::new(options.clone()).unwrap();
+    fresh.feed(bytes);
+    assert_eq!(refined(&mut fresh), expected);
+
+    let mut decoder =
+        incremental_with_code_block_work_spent(options.clone(), bound - work + 1).unwrap();
+    decoder.feed(bytes);
+    assert_eq!(refined(&mut decoder), expected);
+    assert_eq!(refined(&mut decoder), expected, "the error stays");
+}
+
+/// A refine refused only for what earlier refines spent of the code-block
+/// bound still reads the later tiles, and an error it meets there is the
+/// error `decode_with` gives on the bytes fed, not a wait. Here tile 8's
+/// header gives no wavelet levels, which a reduction of 1 discards: the
+/// refine meets that error in the tile's header.
+#[test]
+fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_error() {
+    let bytes = last_tile_without_levels();
+    let options = DecodeOptions::default().with_resolution_reduction(1);
+    let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
+    assert!(matches!(error, Error::InvalidOptions(_)), "{error:?}");
+    assert!(error.to_string().contains("tile 8"), "{error}");
+    check_later_tiles_error(&bytes, &options, error);
+}
+
+/// `tiles_even_origin_lossless.j2k`, 40 x 40 in tiles of 16 x 16, with
+/// component 2 subsampled by 20 across, so that it has no samples in tile
+/// 2 (columns 32 to 40, which hold no multiple of 20). Tiles 0 and 1
+/// decode.
+fn third_tile_empty_on_a_component() -> Vec<u8> {
+    let mut bytes = std::fs::read(fixtures().join("tiles_even_origin_lossless.j2k")).unwrap();
+    let siz = bytes.windows(2).position(|w| w == [0xFF, 0x51]).unwrap();
+    // Marker, Lsiz, Rsiz, eight sizes of 4 bytes and Csiz, then 3 bytes a
+    // component: Ssiz, XRsiz, YRsiz.
+    let xrsiz = siz + 40 + 3 * 2 + 1;
+    assert_eq!(bytes[xrsiz], 1);
+    bytes[xrsiz] = 20;
+    bytes
+}
+
+/// The same where the error comes from the packet walk of a later tile:
+/// tile 2 has an empty area on component 2, which the walk refuses before
+/// it reads the tile's packets.
+#[test]
+fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_walk_error() {
+    let bytes = third_tile_empty_on_a_component();
+    let options = DecodeOptions::default();
+    let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            Error::Codestream(m) if m.message() == "tile 2 has an empty area on component 2"
+        ),
+        "{error:?}"
+    );
+    check_later_tiles_error(&bytes, &options, error);
 }
 
 /// After `finish` refuses a work limit, `into_bytes` hands the bytes back,
@@ -803,11 +1264,21 @@ fn a_change_of_options_applies_to_the_later_refines_and_clears_their_error() {
     decoder.set_region(options.region.clone()).unwrap();
     // Not twice the bytes yet.
     decoder.feed(&bytes[half + 1..half + 2]);
-    assert!(matches!(decoder.refine(), Ok(None)));
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::MoreBytes { until, .. })) if until == 2 * half
+    ));
     decoder.feed(&bytes[half + 2..]);
-    let image = decoder.refine().unwrap().expect("the refine is due");
+    let image = decoder
+        .refine()
+        .unwrap()
+        .image()
+        .expect("the refine is due");
     assert_eq!(Some(image), refine_oracle(&bytes, &options).unwrap());
-    assert!(decoder.refine().unwrap().is_none());
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::MoreBytes { until, .. })) if until == 2 * bytes.len()
+    ));
     assert_eq!(
         keyed(decoder.finish()),
         keyed(decode_with(&bytes, &options))
@@ -880,7 +1351,7 @@ fn decode_with_the_decoders_options_gives_a_partial_image_after_a_change() {
     let prefix = &file[..file.len() - 1500];
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(prefix);
-    assert!(decoder.refine().unwrap().is_some());
+    assert!(decoder.refine().unwrap().image().is_some());
     decoder.set_resolution_reduction(1).unwrap();
     assert!(decoder.options().strict);
     let image = decode_with(

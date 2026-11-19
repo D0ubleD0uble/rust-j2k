@@ -55,7 +55,7 @@ fn uncut(options: DecodeOptions) -> DecodeOptions {
 /// Refine now, whatever the cadence says.
 fn refine_now(decoder: &mut IncrementalDecoder) -> Result<Option<Image>> {
     decoder.tried = 0;
-    decoder.refine()
+    decoder.refine().map(Refined::image)
 }
 
 /// Feed `bytes` up to each of `ends` in turn, refining at each: every
@@ -286,21 +286,30 @@ fn missing_tiles_past_the_bound() -> Vec<u8> {
 }
 
 /// The charge for missing tiles is a work bound too: a refine whose
-/// missing tiles cost more than the packet bound waits, though no packet
-/// is read, as the one-shot decode of the same bytes is refused.
+/// missing tiles cost more than the packet bound waits with `MissingTiles`,
+/// though no packet is read, as the one-shot decode of the same bytes is
+/// refused, and carries that decode's refusal.
 #[test]
 fn a_missing_tile_charge_past_the_bound_waits() {
     let bytes = missing_tiles_past_the_bound();
     let lenient = DecodeOptions::default().with_strict(false);
-    match decode_with(&bytes, &lenient) {
+    let expected = match decode_with(&bytes, &lenient) {
         Err(Error::Limit(message)) => {
-            assert_eq!(message.kind(), LimitKind::PacketWork, "{message}")
+            assert_eq!(message.kind(), LimitKind::PacketWork, "{message}");
+            message
+        }
+        other => panic!("{other:?}"),
+    };
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::MissingTiles(limit))) => {
+            assert_eq!(format!("{limit:?}"), format!("{expected:?}"));
+            assert_eq!(limit.retry_with(), expected.retry_with());
+            assert!(limit.retry_with().is_some(), "{limit}");
         }
         other => panic!("{other:?}"),
     }
-    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
-    decoder.feed(&bytes);
-    assert!(matches!(decoder.refine(), Ok(None)));
     assert!(decoder.refused);
     assert_eq!(decoder.bytes_decoded(), 0);
 }
@@ -350,7 +359,11 @@ fn a_refused_refine_puts_off_the_next_until_the_bytes_double() {
     assert!(between < 2 * tried);
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes[..tried]);
-    assert!(matches!(decoder.refine(), Ok(None)));
+    // Tile 0's walk, not the charge for the missing tiles, passes the bound.
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::PacketWork
+    ));
     assert!(decoder.refused);
     assert!(matches!(
         decode_with(&bytes[..tried], &lenient),
@@ -358,15 +371,21 @@ fn a_refused_refine_puts_off_the_next_until_the_bytes_double() {
     ));
     decoder.feed(&bytes[tried..between]);
     assert!(decode_with(&bytes[..between], &lenient).is_ok());
-    assert!(matches!(decoder.refine(), Ok(None)));
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::MoreBytes { until, .. })) if until == 2 * tried
+    ));
     decoder.feed(&bytes[between..2 * tried - 1]);
-    assert!(matches!(decoder.refine(), Ok(None)));
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::MoreBytes { until, .. })) if until == 2 * tried
+    ));
     assert_eq!(decoder.bytes_decoded(), 0);
     decoder.feed(&bytes[2 * tried - 1..2 * tried]);
     // The image is the one-shot decode of its bytes, as every refine's is
     // (the tests above); decoding it again here would double the time.
     assert!(
-        decoder.refine().unwrap().is_some(),
+        decoder.refine().unwrap().image().is_some(),
         "the bytes have doubled"
     );
     assert_eq!(decoder.bytes_decoded(), 2 * tried);
@@ -605,7 +624,10 @@ fn a_refine_error_poisons_the_later_refines() {
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes);
     let error = format!("{error:?}");
-    assert_eq!(keyed(decoder.refine()), Err(error.clone()));
+    assert_eq!(
+        keyed(decoder.refine().map(Refined::image)),
+        Err(error.clone())
+    );
     for _ in 0..3 {
         decoder.feed(&[0; 64]);
         assert_eq!(keyed(refine_now(&mut decoder)), Err(error.clone()));
@@ -638,7 +660,7 @@ fn a_byte_at_a_time_feeder_stays_within_one_decodes_bounds() {
         crate::pipeline::decode::tests::BLOCK_WORK.with(|spent| spent.set(0));
         for byte in &bytes {
             decoder.feed(std::slice::from_ref(byte));
-            if decoder.refine().unwrap().is_some() {
+            if decoder.refine().unwrap().image().is_some() {
                 images += 1;
             }
         }
@@ -651,7 +673,7 @@ fn a_byte_at_a_time_feeder_stays_within_one_decodes_bounds() {
         // One refine of the whole file walks it once.
         let mut once = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
         once.feed(&bytes);
-        assert!(once.refine().unwrap().is_some(), "{name}");
+        assert!(once.refine().unwrap().image().is_some(), "{name}");
         let one_walk = once.spent.walks.visits();
         assert_eq!(packets, one_walk, "{name}: the walks read packets again");
         // Every walk is kept, so none is charged as one walked again.
@@ -687,13 +709,13 @@ fn a_costly_walk_fed_in_halves_walks_once() {
     let half = bytes.len() / 2;
     decoder.feed(&bytes[..half]);
     assert_eq!(
-        keyed(decoder.refine()),
+        keyed(decoder.refine().map(Refined::image)),
         keyed(oracle(&bytes[..half], &options))
     );
     let first = decoder.spent.walks.visits();
     assert!(4 * first > packet_bound, "{first} of {packet_bound}");
     decoder.feed(&bytes[half..]);
-    let image = decoder.refine().unwrap().expect("the walk goes on");
+    let image = decoder.refine().unwrap().image().expect("the walk goes on");
     assert_eq!(
         image,
         decode_with(&bytes, &options.clone().with_strict(false)).unwrap()
@@ -712,25 +734,68 @@ fn a_walk_past_the_packet_bound_waits() {
     let bytes = fixture("work_bound/sweep_rpcl_1024_64.j2k");
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes);
-    assert!(matches!(decoder.refine(), Ok(None)));
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::PacketWork
+    ));
     assert!(decoder.refused);
     assert_eq!(decoder.bytes_decoded(), 0);
     let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(4));
     assert!(decode_with(&bytes, &options).is_ok());
 }
 
-/// A refine that the rest of the code-block bound cannot cover is put off,
-/// not refused, and `finish` still decodes the file under a bound of its
-/// own.
+/// Whether `refined` waits on `BoundSpent`, with a code-block detail and
+/// no hint.
+fn is_bound_spent(refined: &crate::Result<Refined>) -> bool {
+    matches!(
+        refined,
+        Ok(Refined::Waiting(Waiting::BoundSpent(m)))
+            if m.kind() == LimitKind::CodeBlockWork && m.retry_with().is_none()
+    )
+}
+
+/// A refine that the rest of the code-block bound cannot cover, though its
+/// own work fits the whole bound, waits on `BoundSpent`, and `finish`
+/// still decodes the file under a bound of its own. Meanwhile a decode of
+/// the bytes fed now with the decoder's options, `strict` off, has a bound
+/// of its own too and gives the image the refine waits on, at any cut: the
+/// way out of a wait on the shared bound.
 #[test]
 fn a_refine_past_the_rest_of_the_bound_waits() {
     let bytes = fixture("layers/lrcp.j2k");
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.spent.blocks = u64::MAX - 1;
     decoder.feed(&bytes);
-    assert_eq!(decoder.refine().unwrap(), None);
+    let refined = decoder.refine();
+    assert!(is_bound_spent(&refined), "{refined:?}");
     assert_eq!(decoder.bytes_decoded(), 0);
+    let now = |decoder: &IncrementalDecoder| {
+        decode_with(
+            decoder.bytes(),
+            &decoder.options().clone().with_strict(false),
+        )
+    };
+    assert_eq!(
+        keyed(now(&decoder).map(Some)),
+        keyed(oracle(&bytes, &DecodeOptions::default()))
+    );
     assert_eq!(decoder.finish().unwrap(), whole_strict(&bytes));
+
+    // The same with half the bound spent, as the issue measured, on a cut
+    // file whose decode-now image is partial.
+    let half = bytes.len() / 2;
+    let mut decoder =
+        IncrementalDecoder::with_code_block_work_spent(DecodeOptions::default(), u64::MAX / 2)
+            .unwrap();
+    decoder.feed(&bytes[..half]);
+    let refined = decoder.refine();
+    assert!(is_bound_spent(&refined), "{refined:?}");
+    let image = now(&decoder).unwrap();
+    assert!(!image.report.is_complete());
+    assert_eq!(
+        Some(image),
+        oracle(&bytes[..half], &DecodeOptions::default()).unwrap()
+    );
 }
 
 /// A refine that the rest of the code-block bound just covers decodes:
@@ -741,7 +806,7 @@ fn a_refine_the_rest_of_the_bound_covers_decodes() {
     let (_, block_bound) = one_shot_bounds(&bytes);
     let mut once = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     once.feed(&bytes);
-    assert!(once.refine().unwrap().is_some());
+    assert!(once.refine().unwrap().image().is_some());
     let work = once.spent.blocks;
     assert!(8 * work < block_bound, "{work} of {block_bound}");
 
@@ -750,7 +815,7 @@ fn a_refine_the_rest_of_the_bound_covers_decodes() {
     decoder.spent.blocks = block_bound - work;
     decoder.feed(&bytes);
     assert!(
-        decoder.refine().unwrap().is_some(),
+        decoder.refine().unwrap().image().is_some(),
         "{work} of {block_bound}"
     );
     assert_eq!(decoder.spent.blocks, block_bound);
@@ -806,7 +871,8 @@ fn a_kept_walk_charges_poc_repeats_as_the_one_shot_walk_does() {
 
 /// A refine the code-block bound refuses at its second tile is charged the
 /// work of the first tile, which it did, and not the work of the tile it
-/// refused.
+/// refused. Its own work fits the whole bound, so it waits on
+/// `BoundSpent`.
 #[test]
 fn a_refused_refine_is_charged_the_tiles_before_the_cut() {
     let bytes = fixture("tiles_even_origin_lossless.j2k");
@@ -817,7 +883,7 @@ fn a_refused_refine_is_charged_the_tiles_before_the_cut() {
         }
         let mut decoder = IncrementalDecoder::new(options).unwrap();
         decoder.feed(&bytes);
-        assert!(decoder.refine().unwrap().is_some());
+        assert!(decoder.refine().unwrap().image().is_some());
         (decoder.spent.blocks, decoder.spent.bound.unwrap())
     };
     let (whole, bound) = work_of(None);
@@ -833,9 +899,117 @@ fn a_refused_refine_is_charged_the_tiles_before_the_cut() {
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.spent.blocks = bound - first;
     decoder.feed(&bytes);
-    assert_eq!(decoder.refine().unwrap(), None);
+    let refined = decoder.refine();
+    assert!(is_bound_spent(&refined), "{refined:?}");
     assert!(decoder.refused);
     assert_eq!(decoder.spent.blocks, bound, "{first} of tile 0 is charged");
+}
+
+/// The code-block work a refine of `bytes` under `options`, with nothing
+/// spent, spends, after checking that it gives the image.
+fn own_work(bytes: &[u8], options: &DecodeOptions) -> u64 {
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(bytes);
+    assert!(decoder.refine().unwrap().image().is_some());
+    decoder.spent.blocks
+}
+
+/// `refine` on a decoder whose earlier refines spent `spent`, fed `bytes`.
+fn refine_after(bytes: &[u8], options: &DecodeOptions, spent: u64) -> crate::Result<Refined> {
+    let mut decoder =
+        IncrementalDecoder::with_code_block_work_spent(options.clone(), spent).unwrap();
+    decoder.feed(bytes);
+    decoder.refine()
+}
+
+/// `options` under a code-block work cap of `cap` (see
+/// [`crate::fuzz::with_code_block_work_cap`]).
+fn capped(cap: u64) -> DecodeOptions {
+    crate::fuzz::with_code_block_work_cap(DecodeOptions::default(), cap)
+}
+
+/// At the tile the rest of the bound cannot cover, a refine whose own work
+/// is exactly the whole bound waits on `BoundSpent`: under a cap of `W`,
+/// the work of `small_blocks_128_b4.j2k`, with 1 spent. With nothing spent
+/// it decodes, and under a cap of `W - 1` its own work passes the bound, so
+/// it waits on `WorkLimit`, as a decode of it on its own is refused.
+#[test]
+fn a_refine_whose_own_work_is_the_whole_bound_waits_on_bound_spent() {
+    let bytes = fixture("bench/small_blocks_128_b4.j2k");
+    let work = own_work(&bytes, &capped(u64::MAX / 8));
+    let options = capped(work);
+    assert!(matches!(
+        refine_after(&bytes, &options, 0),
+        Ok(Refined::Image(_))
+    ));
+    let refined = refine_after(&bytes, &options, 1);
+    assert!(is_bound_spent(&refined), "{work}: {refined:?}");
+    let under = capped(work - 1);
+    assert!(decode_with(&bytes, &under.clone().with_strict(false)).is_err());
+    let refined = refine_after(&bytes, &under, 1);
+    assert!(
+        matches!(
+            &refined,
+            Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::CodeBlockWork
+        ),
+        "{refined:?}"
+    );
+}
+
+/// Past the tile the rest of the bound cannot cover, a refine counts the
+/// later tiles' work against the whole bound: one whose own work reaches
+/// exactly the whole bound at its last tile waits on `BoundSpent`, and one
+/// whose own work passes it there waits on `WorkLimit`, with the refusal a
+/// decode of the file on its own gives. On `tiles_even_origin_lossless.j2k`,
+/// under a cap of `W`, the work of all nine tiles, what the earlier refines
+/// left covers one less than tile 0.
+#[test]
+fn a_counted_refine_whose_own_work_reaches_the_whole_bound_waits_on_bound_spent() {
+    let bytes = fixture("tiles_even_origin_lossless.j2k");
+    let measure = capped(u64::MAX / 8);
+    let whole = own_work(&bytes, &measure);
+    let first = own_work(&bytes, &measure.with_region(crate::Region::Tile(0)));
+    assert!(0 < first && first < whole, "{first} of {whole}");
+    let refined = refine_after(&bytes, &capped(whole), whole - first + 1);
+    assert!(is_bound_spent(&refined), "{first} of {whole}: {refined:?}");
+    let under = capped(whole - 1);
+    let Err(Error::Limit(expected)) = decode_with(&bytes, &under.clone().with_strict(false)) else {
+        panic!("the file fits one less");
+    };
+    match refine_after(&bytes, &under, whole - first) {
+        Ok(Refined::Waiting(Waiting::WorkLimit(limit))) => {
+            assert_eq!(format!("{limit:?}"), format!("{expected:?}"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A refine whose own code-block work passes the whole bound waits on
+/// `WorkLimit`, whatever the earlier refines spent, and carries the refusal
+/// a decode of its bytes on its own gives, hint included: not one counted
+/// against what the earlier refines left.
+#[test]
+fn a_refine_past_the_whole_bound_waits_with_the_one_shot_refusal() {
+    let bytes = fixture("tier1_work_bound/t1bomb_1024_64_88.j2k");
+    let Err(Error::Limit(expected)) =
+        decode_with(&bytes, &DecodeOptions::default().with_strict(false))
+    else {
+        panic!("the bomb decodes");
+    };
+    assert_eq!(expected.kind(), LimitKind::CodeBlockWork);
+    let (_, bound) = one_shot_bounds(&bytes);
+    for spent in [0, 1, bound / 2, bound - 1, bound, u64::MAX / 2] {
+        let mut decoder =
+            IncrementalDecoder::with_code_block_work_spent(DecodeOptions::default(), spent)
+                .unwrap();
+        decoder.feed(&bytes);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::WorkLimit(limit))) => {
+                assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "{spent}");
+            }
+            other => panic!("{spent} spent: {other:?}"),
+        }
+    }
 }
 
 /// The visits a one-shot walk of tile `index` of `bytes` spends, with
@@ -931,16 +1105,32 @@ fn a_walk_started_again_is_charged_as_a_walk_not_kept() {
         decoder.feed(&bytes[decoder.bytes_fed()..end]);
         let tried = decoder.tried;
         match decoder.refine().unwrap() {
-            Some(_) => {
+            Refined::Image(_) => {
                 images += 1;
                 walked += one_shot_tile_visits(&bytes[..end], 0);
             }
-            // Only the charge refuses a try.
-            None if decoder.tried != tried && decoder.refused => {
-                assert!(decoder.refused_by_repeats, "{end}");
+            // Only the charge refuses a try, and the refine names it, not
+            // the packet bound: a decode of the same bytes on its own gives
+            // an image.
+            Refined::Waiting(Waiting::RepeatLimit { .. }) => {
+                assert!(
+                    decoder.tried != tried && decoder.refused_by_repeats,
+                    "{end}"
+                );
+                // A decode of the bytes fed now is not held to that bound:
+                // it is the way to an image meanwhile.
+                let now = decode_with(
+                    decoder.bytes(),
+                    &decoder.options().clone().with_strict(false),
+                );
+                assert!(now.is_ok(), "{end}: {now:?}");
                 put_off += 1;
             }
-            None => {}
+            Refined::Waiting(Waiting::MoreBytes { until, .. }) => {
+                assert_eq!((decoder.tried, until), (tried, 2 * tried), "{end}");
+            }
+            Refined::Waiting(Waiting::HeaderIncomplete) => assert!(!decoder.refused, "{end}"),
+            other => panic!("{end}: {other:?}"),
         }
     }
     assert_eq!(decoder.spent.walks.kept(), (1, 0), "the walk is kept");
@@ -1001,7 +1191,7 @@ fn a_work_bound_file_fed_in_pieces_keeps_every_image() {
     for end in every(256, bytes.len()) {
         decoder.feed(&bytes[decoder.bytes_fed()..end]);
         let tried = decoder.tried;
-        let refined = decoder.refine().unwrap();
+        let refined = decoder.refine().unwrap().image();
         if decoder.tried == tried {
             continue;
         }
@@ -1172,7 +1362,7 @@ fn a_change_of_region_keeps_the_walks() {
     assert_eq!(decoder.spent.repeats, 0, "a kept walk was charged");
     let mut once = IncrementalDecoder::new(whole).unwrap();
     once.feed(&bytes);
-    assert!(once.refine().unwrap().is_some());
+    assert!(once.refine().unwrap().image().is_some());
     assert_eq!(
         decoder.spent.walks.visits(),
         once.spent.walks.visits(),
@@ -1243,7 +1433,7 @@ fn a_change_of_reduction_or_layers_walks_the_tiles_again_and_is_charged() {
         // decoder made with them keeps.
         let mut fresh = IncrementalDecoder::new(options).unwrap();
         fresh.feed(&bytes);
-        assert!(fresh.refine().unwrap().is_some());
+        assert!(fresh.refine().unwrap().image().is_some());
         let kept = fresh.spent.walks.kept();
         assert_eq!(decoder.spent.walks.kept(), kept, "{reduction} {layers:?}");
         assert_eq!(

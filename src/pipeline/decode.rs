@@ -8,6 +8,7 @@
 //! [`check_options`] when it is built.
 
 use super::report::{Scope, report_part, report_tile};
+use crate::incremental::Refusal;
 use crate::{
     ColorOutput, ComponentInfo, DecodeOptions, DecodeReport, Error, Header, Image, Jp2Metadata,
     ReportEntry, Result, TileGrid, WorkLimit, codestream, dwt, header, image, incremental, jp2,
@@ -368,14 +369,25 @@ fn decode_codestream(
             Some(cap.saturating_mul(crate::fuzz::CODE_BLOCK_CAP_FACTOR)),
         ),
     };
+    // The whole code-block bound, which a decode of these bytes on its own
+    // is held to.
+    let mut full_blocks = 0;
     let mut block_work = match (&options.code_block_work_limit, block_ceiling) {
         (WorkLimit::Unlimited, None) => None,
         (limit, ceiling) => {
-            let bound = limit.apply(block_default).min(ceiling.unwrap_or(u64::MAX));
-            Some(ledger.map_or(bound, |l| l.blocks_left(bound)))
+            full_blocks = limit.apply(block_default).min(ceiling.unwrap_or(u64::MAX));
+            Some(ledger.map_or(full_blocks, |l| l.blocks_left(full_blocks)))
         }
     };
     let first_work = block_work.unwrap_or(0);
+    // Under an incremental decoder, the code-block bound is what the
+    // earlier decodes left of it. Once a tile passes that rest but the work
+    // of this decode so far still fits the whole bound, the decode is
+    // refused, but it goes on counting the work of the later tiles without
+    // decoding them, to tell which bound refused it: the whole bound, which
+    // a decode of these bytes on its own is held to, or only what the
+    // earlier decodes spent of it. This holds the work of this decode.
+    let mut counting: Option<u64> = None;
     // Not strict: what the codestream walk found missing, then each tile's
     // packets, and the smallest reduction every tile is complete at so far.
     let mut entries = window::keep_entries(cs.entries.clone(), &reads);
@@ -395,7 +407,7 @@ fn decode_codestream(
     let cost = missing.saturating_mul(cs.header.siz.components.len() as u64);
     if !meter.try_spend(cost) {
         if let Some(ledger) = ledger {
-            ledger.refuse();
+            ledger.refuse(Refusal::MissingTiles);
         }
         return Err(limit_hint::missing_tiles(cost, meter.first(), poc_bitmap));
     }
@@ -450,7 +462,7 @@ fn decode_codestream(
             Ok(walked) => walked,
             Err(tier2::Refused::Work(work)) => {
                 if let Some(ledger) = ledger {
-                    ledger.refuse();
+                    ledger.refuse(Refusal::Work);
                 }
                 // The meter holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
@@ -570,17 +582,42 @@ fn decode_codestream(
                 work =
                     work.saturating_add(samples.saturating_mul(crate::fuzz::CAP_WORK_PER_SAMPLE));
             }
+            if let Some(own) = &mut counting {
+                if work > full_blocks.saturating_sub(*own) {
+                    if let Some(ledger) = ledger {
+                        ledger.refuse(Refusal::Work);
+                    }
+                    return Err(limit_hint::code_blocks(
+                        index,
+                        work,
+                        full_blocks.saturating_sub(*own),
+                        *own,
+                        block_default,
+                    ));
+                }
+                *own += work;
+                continue;
+            }
             #[cfg(test)]
             tests::BLOCK_WORK.with(|spent| spent.set(spent.get() + work));
             let Some(rest) = left.checked_sub(work) else {
-                if let Some(ledger) = ledger {
-                    ledger.refuse();
+                // The work of this decode before this tile.
+                let own = first_work.saturating_sub(*left);
+                if ledger.is_some() && work <= full_blocks.saturating_sub(own) {
+                    counting = Some(own + work);
+                    continue;
                 }
+                if let Some(ledger) = ledger {
+                    ledger.refuse(Refusal::Work);
+                }
+                // The refusal a decode of these bytes on its own gives: its
+                // bound is the whole one, of which this decode spent `own`.
+                // Without a ledger the two are the same.
                 return Err(limit_hint::code_blocks(
                     index,
                     work,
-                    *left,
-                    first_work.saturating_sub(*left),
+                    full_blocks.saturating_sub(own),
+                    own,
                     block_default,
                 ));
             };
@@ -659,6 +696,17 @@ fn decode_codestream(
         }
     }
 
+    if let (Some(own), Some(ledger)) = (counting, ledger) {
+        ledger.refuse(Refusal::BoundSpent);
+        return Err(Error::limit_unhinted(
+            crate::LimitKind::CodeBlockWork,
+            format!(
+                "the code-blocks of the bytes fed need {own} sample-passes, within the \
+                 code-block work bound of {full_blocks}, but the earlier refines left \
+                 {first_work} of it; decode the bytes fed on their own, or start a new decoder"
+            ),
+        ));
+    }
     let mut image = image::assemble_over(
         &selection.area,
         canvas.into_planes(),

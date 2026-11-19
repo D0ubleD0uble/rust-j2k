@@ -157,7 +157,8 @@
 //! For a file that arrives in pieces, use [`IncrementalDecoder`] rather than
 //! decoding each prefix again: [`feed`](IncrementalDecoder::feed) appends
 //! bytes, [`refine`](IncrementalDecoder::refine) decodes them from time to
-//! time and returns the image they hold, with its report, and
+//! time and returns the image they hold, with its report, or why it waits
+//! ([`Waiting`]), and
 //! [`finish`](IncrementalDecoder::finish) decodes the whole input once it
 //! ends. Each refine goes on from where the last one stopped reading
 //! packets.
@@ -224,7 +225,7 @@ pub mod fuzz;
 pub use error::{Error, ErrorDetail, LimitDetail, LimitKind, Result};
 pub use header::{ComponentInfo, Header, TileGrid};
 pub use image::{Component, Image};
-pub use incremental::IncrementalDecoder;
+pub use incremental::{IncrementalDecoder, Refined, Waiting};
 pub use jp2::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
     ColorSpace, ColorSpecification, FileType, ImageHeader, IprBox, Jp2Metadata, MappingKind,
