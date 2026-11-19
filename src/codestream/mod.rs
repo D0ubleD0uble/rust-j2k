@@ -539,6 +539,12 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
     split_tiles_with(bytes, parsed, true)
 }
 
+/// [`split_tiles`] with `strict` off: missing data is taken as missing (see
+/// [`walk_tiles`]).
+pub(crate) fn split_tiles_lenient(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestream<'_>> {
+    split_tiles_with(bytes, parsed, false)
+}
+
 /// [`split_tiles`], strict or not (see [`walk_tiles`]).
 fn split_tiles_with(bytes: &[u8], parsed: ParsedHeader, strict: bool) -> Result<Codestream<'_>> {
     let ParsedHeader {

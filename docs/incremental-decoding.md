@@ -20,7 +20,7 @@ does again on each refine.
   | --- | --- |
   | `MoreBytes { until, .. }` | It did not decode: the bytes fed have not doubled since the last try, or none are fed. `until` is a total of bytes fed, not the bytes still to come: a refine decodes once that many are fed, if not before. |
   | `HeaderIncomplete` | `decode_with` gives `Error::Incomplete`: the main header is cut short. |
-  | `SampleLimit(limit)` | The default or a `Raised` sample limit refused the image. |
+  | `SampleLimit(limit)` | The default or a `Raised` sample limit refused the image, or a tile of more code-blocks or precincts than it allows a tile. |
   | `WorkLimit(limit)` | The bytes fed cost more than the packet or code-block work bound allows; a decode of them on its own is refused too. |
   | `BoundSpent(limit)` | The earlier refines spent the code-block bound the refines share. This refine's own work fits the whole bound, so decode the bytes fed now or start a new decoder; raising the code-block limit is not the way out. That decode can still give another error, a packet-work limit included. |
   | `MissingTiles(limit)` | The charge for missing tiles passed the packet bound. |
@@ -46,8 +46,8 @@ does again on each refine.
   after, until a change of options. A server that streams files in can
   refuse one as soon as its main header has come in. Any other error,
   including a limit that does not depend on the bytes (an image too large
-  for the target to address, too many precincts, code-blocks or `POC`
-  volumes, too many bit-planes), is the one `decode_with` gives on those
+  for the target to address, too many `POC` volumes, too many
+  bit-planes), is the one `decode_with` gives on those
   bytes. A refusal by a bound the refines
   share can stand in for an error that block decoding, the wavelet or
   assembly would meet later in the file: the refine waits where

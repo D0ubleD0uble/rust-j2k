@@ -17,7 +17,8 @@
 mod synth;
 
 use rust_j2k::{
-    DecodeOptions, Error, LimitDetail, LimitKind, WorkLimit, decode_with, read_header_with,
+    DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Refined, Waiting, WorkLimit,
+    decode_with, read_header_with,
 };
 
 const FLOOR_BLOCKS: u64 = 1 << 20;
@@ -245,6 +246,56 @@ fn the_tile_over_the_cap_is_named_alike() {
     decodes(&bytes, &tile0, side / 2, height);
 }
 
+/// A tile is counted under its own header, as the decode counts it: a
+/// tile-part `COD` of 64x64 code-blocks brings a tile the main header gives
+/// 4x4 code-blocks within the cap, and the header read admits it too.
+#[test]
+fn a_tile_part_cod_is_counted_as_the_decode_counts_it() {
+    let (width, height) = (4096, 4160);
+    let main = blocks_tile(width, height, 0);
+    // The main header, without the tile-part of one empty packet and `EOC`.
+    let mut bytes = main[..main.len() - 17].to_vec();
+    let cod = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+    bytes.extend(synth::tile_part(0, 0, 1, &cod, &[0]));
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    decodes(&bytes, &DecodeOptions::default(), width, height);
+    // Under the main header alone it is over the cap.
+    let limit = refusal(&main, &DecodeOptions::default());
+    assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
+}
+
+/// With `strict` off, a tile with no tile-part is left out of the decode, so
+/// the header read does not count it either, nor does an
+/// `IncrementalDecoder`'s header. With `strict` on, the header read counts it
+/// under the main header and refuses it; the decode refuses the file too.
+#[test]
+fn a_missing_tile_is_counted_only_when_strict() {
+    let (side, height) = (4096, 4160);
+    // Tile 1, over the cap, has no tile-part.
+    let bytes = synth::empty_tiles(
+        [2 * side, height, side / 2, 0, side, height, 0, 0],
+        0,
+        0,
+        &[],
+        &[1],
+        0,
+    );
+    let lenient = DecodeOptions::default().with_strict(false);
+    let header = read_header_with(&bytes, &lenient).expect("the header is admitted");
+    assert_eq!((header.width, header.height), (3 * side / 2, height));
+    let image = decode_with(&bytes, &lenient).expect("the decode is admitted");
+    assert!(!image.report.is_complete());
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    assert!(decoder.header().unwrap().is_some());
+
+    match read_header_with(&bytes, &DecodeOptions::default()) {
+        Err(Error::Limit(limit)) => assert_eq!(limit.kind(), LimitKind::TileCodeBlocks),
+        other => panic!("{other:?}"),
+    }
+    assert!(decode_with(&bytes, &DecodeOptions::default()).is_err());
+}
+
 /// A JP2 file is held to the same caps, and its header read refuses as its
 /// decode does.
 #[test]
@@ -261,6 +312,42 @@ fn a_jp2_file_is_refused_alike() {
     assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
     let retry = DecodeOptions::default().with_retry(&limit).unwrap();
     decodes(&bytes, &retry, width, height);
+}
+
+/// The caps grow with the bytes fed, so an `IncrementalDecoder` waits on a
+/// tile past them, with `SampleLimit`, and gives the image once the bytes
+/// raise the caps. Under `AtMost` the refusal is an error, and it sticks.
+#[test]
+fn a_refine_waits_on_a_tile_past_the_caps() {
+    let (width, height) = (4096, 4160);
+    let bytes = blocks_tile(width, height, 70_000_000);
+    let (head, rest) = bytes.split_at(1 << 20);
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(head);
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::SampleLimit(limit))) => {
+            assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
+            assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+        }
+        other => panic!("{other:?}"),
+    }
+    decoder.feed(rest);
+    match decoder.refine() {
+        Ok(Refined::Image(image)) => assert_eq!((image.width, image.height), (width, height)),
+        other => panic!("{other:?}"),
+    }
+
+    let ceiling = WorkLimit::AtMost(blocks_of(width, height) * 512 - 1);
+    let mut decoder =
+        IncrementalDecoder::new(DecodeOptions::default().with_sample_limit(ceiling)).unwrap();
+    decoder.feed(head);
+    let first = decoder.refine();
+    assert!(
+        matches!(&first, Err(Error::Limit(l)) if l.kind() == LimitKind::TileCodeBlocks),
+        "{first:?}"
+    );
+    decoder.feed(rest);
+    assert_eq!(format!("{:?}", decoder.refine()), format!("{first:?}"));
 }
 
 /// The file the caps were raised for: one 40000 x 40000 tile of one
