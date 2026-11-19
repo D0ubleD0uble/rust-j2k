@@ -611,6 +611,15 @@ fn decode_codestream(
     // a decode of these bytes on its own is held to, or only what the
     // earlier decodes spent of it. This holds the work of this decode.
     //
+    // A tile the whole bound refuses ends the count too, and the decode is
+    // again refused as `BoundSpent`, not as the whole bound's refusal: a
+    // decode of these bytes on its own decodes the tiles counted before it
+    // gets there, and can fail in one of them. Decoding them here to find
+    // out would cost each such refine up to one more bound. Only where the
+    // tile at the cut passes the whole bound itself is the decode refused
+    // as the whole bound refuses a decode of these bytes on its own: every
+    // tile before it was decoded.
+    //
     // An error the count meets in a later tile ends the count, and the
     // decode is refused as `BoundSpent`, never with that error. A decode
     // with the whole bound does each tile whole, in order: its packets, then
@@ -844,15 +853,23 @@ fn decode_codestream(
             }
             if let Some(own) = &mut counting {
                 if work > full_blocks.saturating_sub(*own) {
+                    // The whole bound refuses this tile, but a decode of
+                    // these bytes on its own decodes the tiles counted
+                    // first and can fail in one of them, so this is not
+                    // the refusal it gives (see `counting`).
                     if let Some(ledger) = ledger {
-                        ledger.refuse(Refusal::Work);
+                        ledger.refuse(Refusal::BoundSpent);
                     }
-                    return Err(limit_hint::code_blocks(
-                        index,
-                        work,
-                        full_blocks.saturating_sub(*own),
-                        *own,
-                        block_default,
+                    return Err(Error::limit_unhinted(
+                        crate::LimitKind::CodeBlockWork,
+                        format!(
+                            "tile {index} needs {work} sample-passes to decode its code-blocks, \
+                             past the code-block work bound of {full_blocks} after the {own} \
+                             of the tiles before it; the earlier refines left {first_work} of \
+                             the bound, so the tiles counted were not decoded, and a decode of \
+                             the bytes fed on their own is refused here or fails in one of them; \
+                             decode them on their own, or start a new decoder"
+                        ),
                     ));
                 }
                 *own += work;

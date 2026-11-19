@@ -513,6 +513,41 @@ tile's error. Each file starts with `SOC`, so the fuzz target reads it with
 all-zero control bytes: `cargo +nightly fuzz run incremental_decode
 tests/fixtures/incremental/spent_bound_tier1_then_eph.j2k` replays it.
 
+`incremental/segsym_tiles_flipped.j2k` (4141 bytes) is a 64 x 64 gray
+image in 16 x 16 tiles with segmentation symbols, with one byte of tile 0
+flipped (#487). The input is an 8-bit PGM written by Python, the sample at
+`(x, y)` being
+`int(128 + 60*sin(0.37*x)*cos(0.23*y) + (x*y) % 37) & 255`, encoded with
+`opj_compress -i in.pgm -o segsym_tiles.j2k -t 16,16 -M 32 -n 3`
+(OpenJPEG 2.5.0). Byte 200 is then XORed with `0xFF`; `tests/incremental.rs`
+flips it back for the file as encoded. `decode_with` fails on the
+segmentation symbol of a block of tile 0. Under a code-block cap set by
+hand, the tests check that a refine refused for what earlier refines
+spent, whose count of the later tiles passes the whole code-block bound,
+waits on `BoundSpent` rather than a `WorkLimit` that would stand in for
+that error, and that a refine not cut before tile 1 waits on the one-shot
+`WorkLimit` once the byte is flipped back.
+
+`incremental/segsym_wide_flipped.j2k` (5914 bytes) is a seed of the
+`incremental_decode` fuzz target that reaches the same path under the
+target's own cap of 2^22 sample-passes, which the tests above set by hand;
+`src/incremental/tests.rs` also uses it for a count past the cut that
+spans several tiles. The input is a 4096 x 1152 8-bit PGM of the value 100, whose
+top-left 64 x 64 samples are `100 + (7*x + 13*y) % 23`, encoded with
+`opj_compress -i wide.pgm -o segsym_wide.j2k -t 256,288 -M 32 -n 4`
+(OpenJPEG 2.5.0). Its 64 flat tiles each cost little to code but over
+2^18 sample-passes under the cap, which charges 4 for each sample, so a
+decode of the file as encoded is refused under the cap at tile 12. Byte
+3028, in tile 11, is then XORed with `0xFF`, so `decode_with` fails in
+tile 11 first. The byte was picked so that no checked refine of the
+target falls between the error and tile 12, which would stop the run at
+the error, and one due refine past tile 12 draws a probe cut at the
+erroring tile. Replay it with
+`cargo +nightly fuzz run -O incremental_decode tests/fixtures/incremental/ -- -runs=0`.
+The file as encoded is not committed: decoding its 4.7 million samples
+would slow every sweep of the fixtures. Both files are made here, so they
+have no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

@@ -207,27 +207,30 @@ far: the same image or the same error. After an error, each later refine must
 give it again, and `finish` must be the decode of the whole input. The decoder
 holds all its refines to the code-block limit together, and a one-shot decode
 holds only itself. So each refine that was due is checked by the decoder's own
-rule: it waits if and only if the code-block work a decoder
-with nothing spent spends on the same bytes passes what is left of the bound
-after the work spent before it. The limit is at least 2^26 sample passes,
-which inputs of a few kilobytes do not come near, so each due refine also
-starts a probe decoder with work already spent (`rust_j2k::fuzz`), drawn
-around the most that leaves the refine room, and checks it by the same rule.
+rule: it waits if and only if the code-block work a decoder with nothing spent
+spends on the same bytes passes what is left of the bound after the work spent
+before it. Under the fuzz cap the bound is 2^22 sample passes, which few
+inputs of a few kilobytes come near, so each due refine also starts a probe
+decoder with work already spent (`rust_j2k::fuzz`), drawn around the most that
+leaves the refine room, and checks it by the same rule.
 
 A refine that waits says why, and the target checks the reason. One that is
 not due waits for `MoreBytes`, naming twice the bytes of the last try. A due
 one waits for `RepeatLimit` exactly when the hook below reports that bound's
 refusal. Otherwise a header cut short is `HeaderIncomplete`, and a refusal by
 the sample limit, the charge for missing tiles or a work bound carries the
-refusal the one-shot decode gives, hint included; a code-block `WorkLimit`
-may also stand in for an error the one-shot decode gives later in the file.
-`BoundSpent`, a refusal by what earlier refines spent of the code-block
-bound, comes only where the one-shot decode passes that bound, and carries
-no hint. Only the first 4 refines that are checked against a decode of their
-own (`MAX_CHECKED_TRIES`: a due one, or one that gives an image or an error)
-are compared with the one-shot oracle; the later ones only refine, and an
-error they give is still held to stick. Every refine that is not due is
-still checked for its `MoreBytes`.
+refusal the one-shot decode gives, hint included, and a code-block `WorkLimit`
+never stands where the one-shot decode gives another error. `BoundSpent`, a
+refusal by what earlier refines spent of the code-block bound, comes only
+after work was spent, and carries no hint. Where the one-shot decode is
+refused by that bound, the wait's message names the same tile and work. The
+probe's reason is checked by the same rule; it is the path that reaches a
+count past the cut. `tests/fixtures/incremental/segsym_wide_flipped.j2k` is a
+seed that reaches a count past the whole bound. Only the first 4 refines that
+are checked against a decode of their own (`MAX_CHECKED_TRIES`: a due one, or
+one that gives an image or an error) are compared with the one-shot oracle;
+the later ones only refine, and an error they give is still held to stick.
+Every refine that is not due is still checked for its `MoreBytes`.
 
 A due refine may also wait (`Waiting::RepeatLimit`) when the bound on the
 walks of tiles not kept, which all the refines spend together, refuses it

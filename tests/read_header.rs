@@ -49,12 +49,23 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// past its bytes, which only the decode reads.
 /// The `incremental/spent_bound_tier1_then_eph*.j2k` files, fuzz finds,
 /// hold an HT code-block whose suffix length is out of range, which only
-/// the decode's block decoder reads.
+/// the decode's block decoder reads. `incremental/segsym_tiles_flipped.j2k`
+/// and `incremental/segsym_wide_flipped.j2k` hold a code-block whose
+/// segmentation symbol is wrong, which only the decode's block decoder
+/// reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
+    (
+        "incremental/segsym_tiles_flipped.j2k",
+        "a wrong segmentation symbol in tile 0",
+    ),
+    (
+        "incremental/segsym_wide_flipped.j2k",
+        "a wrong segmentation symbol in tile 11",
+    ),
     (
         "incremental/spent_bound_tier1_then_eph.j2k",
         "an HT code-block's Scup out of range",

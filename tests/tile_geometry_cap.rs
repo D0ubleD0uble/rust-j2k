@@ -608,7 +608,7 @@ fn a_refine_waits_on_a_tile_past_the_caps() {
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(head);
     match decoder.refine() {
-        Ok(Refined::Waiting(Waiting::SampleLimit(limit))) => {
+        Ok(Refined::Waiting(Waiting::SampleLimit { limit, .. })) => {
             assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
             assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
         }

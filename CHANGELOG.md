@@ -43,18 +43,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Result<Option<Image>>`. To migrate, call `.image()`:
   `decoder.refine()?.image()` is the `Option<Image>` it returned before.
   `Refined::Waiting` says why there is no image: `MoreBytes { until, .. }`,
-  `HeaderIncomplete`, `SampleLimit`, `WorkLimit`, `BoundSpent` and
-  `MissingTiles` (each with its `LimitDetail`), or `RepeatLimit { .. }`.
-  `BoundSpent` is a refine refused only for the code-block work earlier
-  refines spent: a decode of the bytes fed on their own passes the bound,
-  so its `retry_with` is `None`. Such a refine reads the packets of the
+  `HeaderIncomplete`, `SampleLimit { limit, .. }`,
+  `WorkLimit { limit, .. }`, `BoundSpent { limit, .. }` and
+  `MissingTiles { limit, .. }` (each with its `LimitDetail`), or
+  `RepeatLimit { .. }`.
+  `BoundSpent` is a refine cut short by the code-block work earlier
+  refines spent, at a tile whose work fits the whole bound, so its
+  `retry_with` is `None`. Such a refine reads the packets of the
   later tiles without decoding their code-blocks, to tell `BoundSpent`
   from `WorkLimit`. An error it meets there ends that count, and the
   refine waits on `BoundSpent`: the code-blocks it skipped can hold the
-  error `decode_with` gives first (#485). A `WorkLimit` of the code-block
-  bound now carries the refusal a decode of the bytes fed gives, hint
-  included. Both enums are `#[non_exhaustive]`, so a `match` needs a `_`
-  arm (#466).
+  error `decode_with` gives first (#485). Where the count passes the whole
+  bound, the refine also waits on `BoundSpent`, whose message names the
+  tile the whole bound refuses: `decode_with` decodes the tiles counted
+  first and can fail in one of them (#487). A `WorkLimit` of the
+  code-block bound comes only where the refine decoded every tile before
+  the one refused, and carries the refusal a decode of the bytes fed
+  gives, hint included. Both enums and their struct variants are
+  `#[non_exhaustive]`, so a `match` needs a `_` arm and `..` in each
+  variant (#466, #487).
 - The default sample limit grows with the input: it is the larger of 2^29
   samples and 8 samples per byte of input. Up to 64 MiB of input nothing
   changes. The sample limit no longer refuses a larger file that holds at least
