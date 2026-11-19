@@ -180,8 +180,7 @@ pub enum Error {
     /// chroma replication and a monochrome ICC conversion produce, and with
     /// them the code-blocks and precincts a tile may hold (one code-block for
     /// each 512 samples it allows and one precinct for each 2048, and at least
-    /// 2^20 and 2^18); reading the
-    /// packet headers
+    /// 2^20 and 2^18); reading the packet headers
     /// ([`DecodeOptions::packet_work_limit`](crate::DecodeOptions::packet_work_limit));
     /// and decoding the code-blocks
     /// ([`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)).
@@ -195,10 +194,9 @@ pub enum Error {
     ///
     /// The other guards have no option, so a file past one of them is refused
     /// whatever the options. A tile may hold at most 32 progression order
-    /// change (POC) volumes; a
-    /// code-block may have at most 30 bit-planes; and under a `sample_limit`
-    /// of `WorkLimit::Unlimited`, an image too large for the target to
-    /// address is still refused. For these, `retry_with` is `None`.
+    /// change (POC) volumes; a code-block may have at most 30 bit-planes;
+    /// and under a `sample_limit` of `WorkLimit::Unlimited`, an image too
+    /// large for the target to address is still refused. For these, `retry_with` is `None`.
     /// [`LimitDetail`] has an example that retries.
     Limit(LimitDetail),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are

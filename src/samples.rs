@@ -220,11 +220,19 @@ pub(crate) fn over(what: &str, total: u64, cap: Cap) -> Error {
 /// that ceiling and no retry. Past the cap of any limit this target can
 /// address, it names no retry.
 pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap) -> Error {
-    let (noun, limit, per) = match kind {
-        crate::LimitKind::TilePrecincts => {
-            ("precincts", cap.tile_precincts(), SAMPLES_PER_PRECINCT)
-        }
-        _ => ("code-blocks", cap.tile_blocks(), SAMPLES_PER_BLOCK),
+    let (noun, limit, per, floor) = match kind {
+        crate::LimitKind::TilePrecincts => (
+            "precincts",
+            cap.tile_precincts(),
+            SAMPLES_PER_PRECINCT,
+            TILE_PRECINCTS_FLOOR,
+        ),
+        _ => (
+            "code-blocks",
+            cap.tile_blocks(),
+            SAMPLES_PER_BLOCK,
+            TILE_BLOCKS_FLOOR,
+        ),
     };
     let head = format!("tile {tile} holds {count} {noun}, more than the {limit} a tile may hold");
     let needed = count.saturating_mul(per);
@@ -234,7 +242,7 @@ pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap)
             format!(
                 "{head}, and more than any sample limit this target can address admits ({} \
                  {noun})",
-                ADDRESSABLE_SAMPLES / per
+                floor.max(ADDRESSABLE_SAMPLES / per)
             ),
         );
     }

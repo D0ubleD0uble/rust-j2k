@@ -14,8 +14,9 @@ is done. The error's `LimitDetail` says which cap it was (`kind()`, a
 For the samples it is the smallest factor that admits the image. For the two
 work bounds, and for the code-blocks and precincts a tile holds, it is the
 larger of the smallest factor that admits what the decode has seen and twice
-the factor the bound ran under, and the file may need more, so a loop of `with_retry` calls takes about log2 of the factor the file needs.
-It is `None` when the refusal shows no factor. A caller can retry from `kind()`
+the factor the bound ran under, and the file may need more, so a loop of
+`with_retry` calls takes about log2 of the factor the file needs. It is
+`None` when the refusal shows no factor. A caller can retry from `kind()`
 and `retry_with()` without reading the message, and `DecodeOptions::with_retry`
 sets the option. A retry can still fail with another error once past the cap.
 
@@ -248,13 +249,14 @@ tile records. So bound the input's size under `AtMost` too, as the decode holds
 the input. The code-blocks and precincts a tile may hold are set from `n` as
 well, at least 2^20 and 2^18 (see [Code-blocks and precincts per
 tile](#code-blocks-and-precincts-per-tile)). Past 2^29 their bookkeeping adds
-at most about a quarter of the `4·n` bytes; below it, the floors are what a
-tile may hold. An `IncrementalDecoder` can hold up to
-about three times one decode's peak, plus the bytes fed.
+at most about a third of the `4·n` bytes; below it, the floors are what a
+tile may hold. An `IncrementalDecoder` can hold up to about three times one
+decode's peak, plus the bytes fed.
 
 A refusal under `AtMost(n)` has kind `Samples` (or `TileCodeBlocks` or
-`TilePrecincts`, for a tile's geometry) and names the ceiling and the count. It gives no retry (`retry_with` is `None`, so `with_retry` is `None`):
-the caller set the ceiling. In an `IncrementalDecoder` it is an error, not a
+`TilePrecincts`, for a tile's geometry) and names the ceiling and the count.
+It gives no retry (`retry_with` is `None`, so `with_retry` is `None`): the
+caller set the ceiling. In an `IncrementalDecoder` it is an error, not a
 wait, as more bytes do not raise it. `AtMost(0)`, and `AtMost` on
 `packet_work_limit` or `code_block_work_limit`, is `InvalidOptions`.
 
@@ -266,33 +268,43 @@ their count up to the samples / 16, and small precincts one a sample. So a
 tile may hold at most max(2^20, the samples the sample limit allows / 512)
 code-blocks and max(2^18, those samples / 2048) precincts, counted across its
 components and resolutions at full resolution, whatever the reduction or the
-region. The decode counts each tile from its header before it builds the
-tile's geometry, and `read_header_with` counts every tile the decode reads
-under the main header, so it refuses a tile the decode would, with the same
-error. A tile-part `COD` or `COC` can still change a tile's count; the
-decode then counts that tile under its own header. `read_header_with` counts
-at most 2^22 resolutions of tile-components (about 50 ms) and leaves any tile
-after that to the decode; a tile whose size shows it within both caps is not
-counted, so only a header of many tiles of many components and levels gets
-that far.
+region. The decode counts each tile under its own header (a tile-part
+`COD` or `COC` resolved over the main header's) before it builds the tile's
+geometry. `read_header_with` counts each tile the decode reads as the
+decode does, and refuses a tile the decode would refuse, with the same
+error, and no other. A tile whose size shows it within both caps is not
+counted. For any other it walks the tile-part headers, as the decode does
+with `strict` off, and counts a tile with a tile-part under its own header;
+a tile with none is counted under the main header with `strict` on (the
+decode refuses the file then anyway) and not at all with it off, where the
+decode leaves it out. It counts at most 2^22 resolutions of tile-components
+(about 50 ms) and leaves any tile after that to the decode, so only a header
+of many large tiles of many components and levels gets that far, and past
+it `read_header_with` can return a header for a file the decode refuses.
+In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
+is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 
 A refusal names the `WorkLimit::Raised` factor of `sample_limit` that admits
 the tile, or twice the factor it ran under when that is more, as the work
 bounds do, since the tiles after it are not counted. Under `AtMost(n)` the
 caps scale from `n`, and a refusal names no retry.
 
-Measured on the heap at the caps (`tests/tile_geometry_alloc.rs`): a tile of
-2^21 empty 4x4 code-blocks under `AtMost(2^30)` holds about 80 bytes a
-code-block over its output, and one of 2^21 1x1 precincts of a code-block
-each under `AtMost(2^32)` about 260 bytes a precinct. With every block coded,
-a 4096x4096 tile of 2^20 4x4 code-blocks holds about 480 MiB of heap (about
-550 MiB resident), about 480 bytes a code-block. The struct sizes
-(`BlockState` 40, `CodeBlock` 80, `SegmentState` 56, two tag-tree nodes of 8
-each at 4/3 per leaf) give about 141 bytes a block. So the code-blocks of a
-tile at the cap hold at most about 0.94 bytes per sample the limit allows,
-and its precincts about 0.13: less than a quarter, and about a thirtieth, of
-the 4 bytes per sample of output the same limit allows. The figures in
-[The sample limit](#the-sample-limit) hold the same at every size.
+Measured on the heap over the output, empty code-blocks take about 80 to
+100 bytes each: 80 for a tile of 2^21 4x4 code-blocks with no levels under
+`AtMost(2^30)` (`tests/tile_geometry_alloc.rs`), 96 for 4 components and 2
+levels, 101 for 3 components and 5 levels. A precinct, its code-blocks
+included, takes about 260 to 750 bytes: 260 for 2^21 1x1 precincts of one
+code-block each under `AtMost(2^32)`, 750 for one component of 8 levels in
+4x4 precincts. With every block coded, a 4096x4096 tile of 2^20 4x4
+code-blocks holds about 480 MiB of heap (about 550 MiB resident), about 480
+bytes a code-block. The struct sizes (`BlockState` 40, `CodeBlock` 80,
+`SegmentState` 56, two tag-tree nodes of 8 each at 4/3 per leaf) give about
+141 bytes a block. So at the caps a tile's code-blocks hold up to about 0.94
+bytes per sample the limit allows and its precincts up to about 0.37, so a
+tile at both caps up to about 1.3 bytes per sample: about a third of the 4
+bytes per sample of output the same limit allows. Past the 2^29 floor that
+share holds at every size, as both caps and the output grow with the
+limit; below it, the floors are what a tile may hold.
 
 At the floor, a one-tile image at least 72 samples wide and under 2^29
 samples fits in 32x32 blocks (23170x23170 needs 527,259; 64x64 blocks need
@@ -452,10 +464,10 @@ that is samples / 16, 2^25 at the 2^29 floor, about 1 to 2.3 seconds to
 build at 30 to 70 ns each (arithmetic from the per-block cost, not measured
 at that count). Past 64 MiB of input the limit is 8 samples per byte, so
 there is at most one code-block per two bytes of input, or 15 to 35 ns of
-build time per byte. Small
-precincts can force code-blocks down to 1x1, and then it is the per-tile caps
-on code-blocks and precincts that bound each tile. A decode at full resolution drops no
-resolution, so it spends exactly what it did before; a file built to spend
+build time per byte. Small precincts can force code-blocks down to 1x1,
+and then it is the per-tile caps on code-blocks and precincts that bound
+each tile. A decode at full resolution drops no resolution, so it spends
+exactly what it did before; a file built to spend
 exactly the bound (`the_layer_orders_charge_each_component_they_check` in
 `tests/work_bound.rs`) still decodes.
 
@@ -488,8 +500,9 @@ the layers emitted. Each volume emits a precinct's layers from 0 up, so a
 packet was emitted before exactly when its layer is below that count. The
 counts take 4 bytes per precinct of the tile, whatever the packet count:
 at most 1 MB under the 2^18 precincts a tile may hold at the floor of the
-sample limit, and 2 bytes for each 1024 samples the limit allows past it. The bitmap
-stays capped at the default bound's size and the counts do not grow as the
+sample limit, and 2 bytes for each 1024 samples the limit allows past it.
+The bitmap stays capped at the default bound's size and the counts do not
+grow as the
 walk goes, so raising the bound raises the time a file may take, not its
 memory. That holds with `strict` off too, where the walk counts every
 packet past the end of the data, a step each, without reading it: those

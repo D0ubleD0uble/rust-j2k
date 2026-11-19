@@ -64,8 +64,8 @@ followed by 128 MiB of zeros after `EOC` (134,283,241 bytes) decodes at the
 defaults (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, measured. The
 sample limit also sets how many code-blocks and precincts one tile may hold:
 one for each 512 and each 2048 samples it allows, and at least 2^20 and 2^18.
-Their bookkeeping comes to at most about a quarter of the output the same limit
-allows, the same share at every size (see "Code-blocks and precincts per tile"
+Their bookkeeping comes to at most about a third of the output the same limit
+allows past the 2^29 floor, the same share at every size (see "Code-blocks and precincts per tile"
 in [`docs/resource-bounds.md`](docs/resource-bounds.md)). For a
 ceiling that does not grow with the input, set `DecodeOptions::sample_limit` to
 `WorkLimit::AtMost(n)`: the decode then holds at most `n` samples, `4·n` bytes
