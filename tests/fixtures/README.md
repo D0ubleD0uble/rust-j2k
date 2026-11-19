@@ -521,17 +521,18 @@ flipped (#487). The input is an 8-bit PGM written by Python, the sample at
 `opj_compress -i in.pgm -o segsym_tiles.j2k -t 16,16 -M 32 -n 3`
 (OpenJPEG 2.5.0). Byte 200 is then XORed with `0xFF`; `tests/incremental.rs`
 flips it back for the file as encoded. `decode_with` fails on the
-segmentation symbol of a block of tile 0. Under the fuzz cap, the tests
-check that a refine refused for what earlier refines spent, whose count
-of the later tiles passes the whole code-block bound, gives that error
-rather than a `WorkLimit`, and waits on the one-shot `WorkLimit` once the
-byte is flipped back.
+segmentation symbol of a block of tile 0. Under a code-block cap set by
+hand, the tests check that a refine refused for what earlier refines
+spent, whose count of the later tiles passes the whole code-block bound,
+waits on `BoundSpent` rather than a `WorkLimit` that would stand in for
+that error, and that a refine not cut before tile 1 waits on the one-shot
+`WorkLimit` once the byte is flipped back.
 
 `incremental/segsym_wide_flipped.j2k` (5914 bytes) is a seed of the
 `incremental_decode` fuzz target that reaches the same path under the
 target's own cap of 2^22 sample-passes, which the tests above set by hand;
-`src/incremental/tests.rs` also uses it for a check that holds several
-tiles. The input is a 4096 x 1152 8-bit PGM of the value 100, whose
+`src/incremental/tests.rs` also uses it for a count past the cut that
+spans several tiles. The input is a 4096 x 1152 8-bit PGM of the value 100, whose
 top-left 64 x 64 samples are `100 + (7*x + 13*y) % 23`, encoded with
 `opj_compress -i wide.pgm -o segsym_wide.j2k -t 256,288 -M 32 -n 4`
 (OpenJPEG 2.5.0). Its 64 flat tiles each cost little to code but over

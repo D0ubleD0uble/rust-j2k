@@ -957,12 +957,14 @@ fn a_refine_whose_own_work_is_the_whole_bound_waits_on_bound_spent() {
 }
 
 /// Past the tile the rest of the bound cannot cover, a refine counts the
-/// later tiles' work against the whole bound: one whose own work reaches
-/// exactly the whole bound at its last tile waits on `BoundSpent`, and one
-/// whose own work passes it there waits on `WorkLimit`, with the refusal a
-/// decode of the file on its own gives. On `tiles_even_origin_lossless.j2k`,
-/// under a cap of `W`, the work of all nine tiles, what the earlier refines
-/// left covers one less than tile 0.
+/// later tiles' work against the whole bound, and waits on `BoundSpent`
+/// whether its own work reaches exactly the whole bound at its last tile or
+/// passes it there: it did not decode the tiles from the cut on, which a
+/// decode of the file on its own decodes before it is refused. Only the
+/// message differs: where the whole bound refuses the last tile, it names
+/// that tile. On `tiles_even_origin_lossless.j2k`, under a cap of `W`, the
+/// work of all nine tiles, what the earlier refines left covers one less
+/// than tile 0.
 #[test]
 fn a_counted_refine_whose_own_work_reaches_the_whole_bound_waits_on_bound_spent() {
     let bytes = fixture("tiles_even_origin_lossless.j2k");
@@ -972,16 +974,25 @@ fn a_counted_refine_whose_own_work_reaches_the_whole_bound_waits_on_bound_spent(
     assert!(0 < first && first < whole, "{first} of {whole}");
     let refined = refine_after(&bytes, &capped(whole), whole - first + 1);
     assert!(is_bound_spent(&refined), "{first} of {whole}: {refined:?}");
+    let Ok(Refined::Waiting(Waiting::BoundSpent { limit, .. })) = refined else {
+        unreachable!()
+    };
+    assert!(
+        limit
+            .message()
+            .starts_with("the code-blocks of the tiles counted"),
+        "{limit}"
+    );
     let under = capped(whole - 1);
-    let Err(Error::Limit(expected)) = decode_with(&bytes, &under.clone().with_strict(false)) else {
+    let Err(Error::Limit(_)) = decode_with(&bytes, &under.clone().with_strict(false)) else {
         panic!("the file fits one less");
     };
-    match refine_after(&bytes, &under, whole - first) {
-        Ok(Refined::Waiting(Waiting::WorkLimit { limit, .. })) => {
-            assert_eq!(format!("{limit:?}"), format!("{expected:?}"));
-        }
-        other => panic!("{other:?}"),
-    }
+    let refined = refine_after(&bytes, &under, whole - first);
+    assert!(is_bound_spent(&refined), "{first} of {whole}: {refined:?}");
+    let Ok(Refined::Waiting(Waiting::BoundSpent { limit, .. })) = refined else {
+        unreachable!()
+    };
+    assert!(limit.message().starts_with("tile 8 needs "), "{limit}");
 }
 
 /// A refine whose own code-block work passes the whole bound waits on
@@ -1012,63 +1023,16 @@ fn a_refine_past_the_whole_bound_waits_with_the_one_shot_refusal() {
     }
 }
 
-/// A refine refused by the whole bound after a cut decodes the tiles the
-/// count passed over, to find the error a one-shot decode meets first, and
-/// charges that work to the bound the refines share for these checks. On
-/// `incremental/segsym_tiles_flipped.j2k` under a cap of tile 0's work, a
-/// refine with any work spent is cut at tile 0 and refused at tile 1, so
-/// the check decodes tile 0, which fails. With the check bound spent, it
-/// cannot decode it, and waits on `BoundSpent`; the fixed message names the
-/// check. The check bound holds over the refines of one decoder, and a
-/// refine that waits on it spends none.
-#[test]
-fn the_check_of_a_whole_bound_refusal_is_held_to_one_bound() {
-    let bytes = fixture("incremental/segsym_tiles_flipped.j2k");
-    let lenient = DecodeOptions::default().with_strict(false);
-    let error = decode_with(&bytes, &lenient).unwrap_err();
-    let cap = 4640;
-    let options = crate::fuzz::with_code_block_work_cap(DecodeOptions::default(), cap);
-    for checks in [0, 1, cap - 1, cap] {
-        let mut decoder =
-            IncrementalDecoder::with_code_block_work_spent(options.clone(), 1).unwrap();
-        decoder.spent.checks = checks;
-        decoder.feed(&bytes);
-        let refined = decoder.refine();
-        if checks == 0 {
-            assert_eq!(
-                keyed(refined.map(Refined::image)),
-                keyed(Err(error.clone()))
-            );
-            assert_eq!(decoder.check_work(), (cap, false));
-            assert_eq!(decoder.code_block_work(), (1, Some(cap)));
-            continue;
-        }
-        match refined {
-            Ok(Refined::Waiting(Waiting::BoundSpent { limit, .. })) => {
-                assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
-                assert_eq!(limit.retry_with(), None);
-                assert!(
-                    limit.message().contains("checking such a refusal"),
-                    "{limit}"
-                );
-            }
-            other => panic!("{checks} spent on checks: {other:?}"),
-        }
-        assert_eq!(decoder.check_work(), (checks, true), "{checks}");
-    }
-}
-
-/// The check decodes every tile the count passed over, from the cut to the
-/// tile the whole bound refuses, and charges all of them. On
-/// `incremental/segsym_wide_flipped.j2k` under a cap of 2^22, a decode
+/// A refine refused for what earlier refines spent, whose count of the
+/// later tiles passes the whole bound, waits on `BoundSpent`, whose message
+/// names the tile the whole bound refuses: it did not decode the tiles it
+/// counted, and a decode of its bytes on its own can fail in one of them.
+/// On `incremental/segsym_wide_flipped.j2k` under a cap of 2^22, a decode
 /// with nothing spent fails in tile 11, before tile 12 would pass the
-/// bound. A refine with work spent is cut at an earlier tile, and its check
-/// must decode through tile 11 to give that error. What it decoded before
-/// the cut and what it spent on the check then add up to the work of the
-/// decode with nothing spent. With one sample-pass less left for checks
-/// than those tiles need, it waits on `BoundSpent`.
+/// bound. A refine with work spent is cut at an earlier tile and counts
+/// through tile 11 to tile 12.
 #[test]
-fn the_check_of_a_whole_bound_refusal_decodes_and_charges_every_counted_tile() {
+fn a_count_past_the_whole_bound_waits_on_bound_spent() {
     let bytes = fixture("incremental/segsym_wide_flipped.j2k");
     let error = decode_with(&bytes, &DecodeOptions::default().with_strict(false)).unwrap_err();
     let bound = 1 << 22;
@@ -1079,34 +1043,23 @@ fn the_check_of_a_whole_bound_refusal_decodes_and_charges_every_counted_tile() {
         keyed(fresh.refine().map(Refined::image)),
         keyed(Err(error.clone()))
     );
-    let (whole, _) = fresh.code_block_work();
     for spent in [1 << 20, 1 << 21, 3 << 20, 4_000_000] {
         let mut decoder =
             IncrementalDecoder::with_code_block_work_spent(options.clone(), spent).unwrap();
         decoder.feed(&bytes);
         let refined = decoder.refine();
-        assert_eq!(
-            keyed(refined.map(Refined::image)),
-            keyed(Err(error.clone())),
-            "{spent}"
+        assert!(is_bound_spent(&refined), "{spent}: {refined:?}");
+        let Ok(Refined::Waiting(Waiting::BoundSpent { limit, .. })) = refined else {
+            unreachable!()
+        };
+        assert!(
+            limit.message().starts_with("tile 12 needs "),
+            "{spent}: {limit}"
         );
+        // Only the tiles before the cut were decoded, and only they are
+        // spent.
         let (blocks, _) = decoder.code_block_work();
-        let (checks, refused) = decoder.check_work();
-        assert!(!refused, "{spent}");
-        // More than one tile is held: a tile costs under 2^19 here.
-        assert!(checks > 1 << 19, "{spent}: {checks}");
-        assert_eq!(blocks - spent + checks, whole, "{spent}");
-        for (left, fits) in [(checks, true), (checks - 1, false)] {
-            let mut decoder =
-                IncrementalDecoder::with_code_block_work_spent(options.clone(), spent).unwrap();
-            decoder.spent.checks = bound - left;
-            decoder.feed(&bytes);
-            match decoder.refine() {
-                Err(e) if fits => assert_eq!(keyed(Err::<(), _>(e)), keyed(Err(error.clone()))),
-                Ok(Refined::Waiting(Waiting::BoundSpent { .. })) if !fits => {}
-                other => panic!("{spent} spent, {left} left for checks: {other:?}"),
-            }
-        }
+        assert!(blocks < bound, "{spent}: {blocks}");
     }
 }
 

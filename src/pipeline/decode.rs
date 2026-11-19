@@ -405,18 +405,14 @@ fn decode_codestream(
     // a decode of these bytes on its own is held to, or only what the
     // earlier decodes spent of it. This holds the work of this decode.
     //
-    // The count keeps each tile it passes over, walked but not decoded, in
-    // `held`, with their work in `held_work`. Where the whole bound refuses
-    // a tile, the decode of these bytes on its own decodes the tiles before
-    // it first, so it can fail in their code-blocks, wavelet or assembly
-    // before it gets there. The tiles held are then decoded, in order, and
-    // the decode gives their first error, or else that refusal. Their work
-    // fits the whole bound, but each refine refused this way could spend
-    // one, so the refines may spend at most one whole bound on these checks
-    // between them (`Ledger::check_blocks`). Past that, the decode is
-    // refused as `BoundSpent`. The tiles held borrow the codestream, and
-    // the packet bound is one for all the tiles, so they hold no more than
-    // a decode of one tile can.
+    // A tile the whole bound refuses ends the count too, and the decode is
+    // again refused as `BoundSpent`, not as the whole bound's refusal: a
+    // decode of these bytes on its own decodes the tiles counted before it
+    // gets there, and can fail in one of them. Decoding them here to find
+    // out would cost each such refine up to one more bound. Only where the
+    // tile at the cut passes the whole bound itself is the decode refused
+    // as the whole bound refuses a decode of these bytes on its own: every
+    // tile before it was decoded.
     //
     // An error the count meets in a later tile ends the count, and the
     // decode is refused as `BoundSpent`, never with that error. A decode
@@ -437,8 +433,6 @@ fn decode_codestream(
     // `footprint_of` and `dwt::Footprint::of`). They end the count
     // all the same.
     let mut counting: Option<u64> = None;
-    let mut held: Vec<Step<'_>> = Vec::new();
-    let mut held_work = 0u64;
     // What a step of a tile that fails gives: its error, or, while counting,
     // the end of the count (see `counting`).
     macro_rules! or_end_count {
@@ -628,23 +622,13 @@ fn decode_codestream(
             }
         }
 
-        let step = Step {
-            header,
-            tile,
-            coded,
-            footprints,
-            wanted,
-            mct,
-        };
-
         // Tier-1: the block coder (EBCOT or HT) decodes each code block into
         // subband coeffs. The dropped resolutions' code-blocks are skipped, never
         // decoded, and so are those of the components not reconstructed and
         // those outside a footprint. Their work is counted first, so a tile
         // past the bound is refused before any of it is done.
         if let Some(left) = &mut block_work {
-            let wanted = &step.wanted;
-            let mut work = tier1::work(&step.header, &step.coded, reduction, wanted);
+            let mut work = tier1::work(&header, &coded, reduction, &wanted);
             // Under the fuzz targets' cap, the samples the tile reconstructs
             // are charged too, so that an image with little coded data per
             // sample is held to the same bound of time.
@@ -657,40 +641,29 @@ fn decode_codestream(
                 work =
                     work.saturating_add(samples.saturating_mul(crate::fuzz::CAP_WORK_PER_SAMPLE));
             }
-            if let (Some(own), Some(ledger)) = (&mut counting, ledger) {
-                if work <= full_blocks.saturating_sub(*own) {
-                    *own += work;
-                    held_work += work;
-                    held.push(step);
-                    continue;
-                }
-                // The whole bound refuses this tile. A decode of these bytes
-                // on its own decodes the tiles held first, so it gives their
-                // first error, if they have one, and otherwise this refusal.
-                if !ledger.check_blocks(held_work, full_blocks) {
-                    ledger.refuse(Refusal::CheckSpent);
+            if let Some(own) = &mut counting {
+                if work > full_blocks.saturating_sub(*own) {
+                    // The whole bound refuses this tile, but a decode of
+                    // these bytes on its own decodes the tiles counted
+                    // first and can fail in one of them, so this is not
+                    // the refusal it gives (see `counting`).
+                    if let Some(ledger) = ledger {
+                        ledger.refuse(Refusal::BoundSpent);
+                    }
                     return Err(Error::limit_unhinted(
                         crate::LimitKind::CodeBlockWork,
                         format!(
                             "tile {index} needs {work} sample-passes to decode its code-blocks, \
                              past the code-block work bound of {full_blocks} after the {own} \
-                             of the tiles before it, and the earlier refines have spent the \
-                             work they may spend checking such a refusal; decode the bytes fed \
-                             on their own, or start a new decoder"
+                             of the tiles before it; the earlier refines left {first_work} of \
+                             the bound, so the tiles counted were not decoded, and a decode of \
+                             the bytes fed on their own is refused here or fails in one of them; \
+                             decode them on their own, or start a new decoder"
                         ),
                     ));
                 }
-                for step in held.drain(..) {
-                    reconstruct(&cs.header, step, reduction, &mut canvas)?;
-                }
-                ledger.refuse(Refusal::Work);
-                return Err(limit_hint::code_blocks(
-                    index,
-                    work,
-                    full_blocks.saturating_sub(*own),
-                    *own,
-                    block_default,
-                ));
+                *own += work;
+                continue;
             }
             #[cfg(test)]
             tests::BLOCK_WORK.with(|spent| spent.set(spent.get() + work));
@@ -699,8 +672,6 @@ fn decode_codestream(
                 let own = first_work.saturating_sub(*left);
                 if ledger.is_some() && work <= full_blocks.saturating_sub(own) {
                     counting = Some(own + work);
-                    held_work = work;
-                    held.push(step);
                     continue;
                 }
                 if let Some(ledger) = ledger {
@@ -722,7 +693,74 @@ fn decode_codestream(
                 ledger.spend_blocks(work);
             }
         }
-        reconstruct(&cs.header, step, reduction, &mut canvas)?;
+        #[cfg(test)]
+        tests::BLOCKS
+            .with(|count| count.set(count.get() + tests::blocks(&coded, reduction, &wanted)));
+        let coeffs = tier1::decode_code_blocks(&header, &coded, reduction, &wanted)?;
+
+        // Invert the DWT per resolution level into samples, over the whole
+        // tile-component or over its footprint. Tier-1 has already
+        // dequantized the 9/7 coefficients as it placed each block.
+        let mut samples = coeffs
+            .into_iter()
+            .zip(&footprints)
+            .enumerate()
+            .map(|(component, (coeffs, footprint))| {
+                coeffs
+                    .map(|coeffs| match footprint {
+                        Some(footprint) => dwt::inverse_window(coeffs, footprint),
+                        None => dwt::inverse(&header, component, coeffs),
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Undo the inter-component decorrelation, if any, before the DC level
+        // shift (ISO/IEC 15444-1 G.1). Components past the third are
+        // untouched.
+        if mct && wanted[0] {
+            let mut triple = samples[..3]
+                .iter_mut()
+                .map(Option::take)
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| {
+                    Error::inconsistent(
+                        "the color transform's three components were not all reconstructed",
+                    )
+                })?;
+            // The wavelet picks the transform (G.1): 5/3 reconstructs integers
+            // and inverts with the reversible RCT, 9/7 reconstructs floats and
+            // inverts with the irreversible ICT. All three color components
+            // share the wavelet (checked at parse), so component 0's decides.
+            match header.components[0].coding.transform {
+                codestream::markers::Transform::Reversible53 => mct::inverse_rct(&mut triple)?,
+                codestream::markers::Transform::Irreversible97 => mct::inverse_ict(&mut triple)?,
+            }
+            for (slot, plane) in samples.iter_mut().zip(triple) {
+                *slot = Some(plane);
+            }
+        }
+
+        for (component, samples) in samples.into_iter().enumerate() {
+            let Some(samples) = samples else {
+                continue;
+            };
+            let rect = cs
+                .header
+                .siz
+                .tile_component_rect(tile.index, component)
+                .ok_or_else(|| {
+                    Error::inconsistent(format!(
+                        "no tile {} or no component {component} in `SIZ`",
+                        tile.index
+                    ))
+                })?;
+            let rect = match footprints.get(component) {
+                Some(Some(footprint)) => footprint.rect(),
+                _ => rect.reduced(reduction),
+            };
+            canvas.place(component, rect, samples)?;
+        }
     }
 
     if let (Some(own), Some(ledger)) = (counting, ledger) {
@@ -761,105 +799,6 @@ fn decode_codestream(
         image.report = DecodeReport::new(entries, complete, reduction);
     }
     Ok(image)
-}
-
-/// What a tile needs, after its packet walk, to be decoded into the
-/// canvas: its header, its coded data, the footprint of each component,
-/// which components are reconstructed and whether the color transform
-/// applies (see [`reconstruct`]).
-struct Step<'c> {
-    header: std::borrow::Cow<'c, codestream::MainHeader>,
-    tile: &'c codestream::Tile<'c>,
-    coded: tier2::CodedData<'c>,
-    footprints: Vec<Option<dwt::Footprint>>,
-    wanted: Vec<bool>,
-    mct: bool,
-}
-
-/// Decode `step`'s tile into `canvas`: its code-blocks, the inverse
-/// wavelet, the inverse color transform and the placing of its samples.
-/// `main` is the main header.
-fn reconstruct(
-    main: &codestream::MainHeader,
-    step: Step<'_>,
-    reduction: u8,
-    canvas: &mut image::Canvas,
-) -> Result<()> {
-    let Step {
-        header,
-        tile,
-        coded,
-        footprints,
-        wanted,
-        mct,
-    } = step;
-    #[cfg(test)]
-    tests::BLOCKS.with(|count| count.set(count.get() + tests::blocks(&coded, reduction, &wanted)));
-    let coeffs = tier1::decode_code_blocks(&header, &coded, reduction, &wanted)?;
-
-    // Invert the DWT per resolution level into samples, over the whole
-    // tile-component or over its footprint. Tier-1 has already
-    // dequantized the 9/7 coefficients as it placed each block.
-    let mut samples = coeffs
-        .into_iter()
-        .zip(&footprints)
-        .enumerate()
-        .map(|(component, (coeffs, footprint))| {
-            coeffs
-                .map(|coeffs| match footprint {
-                    Some(footprint) => dwt::inverse_window(coeffs, footprint),
-                    None => dwt::inverse(&header, component, coeffs),
-                })
-                .transpose()
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    // Undo the inter-component decorrelation, if any, before the DC level
-    // shift (ISO/IEC 15444-1 G.1). Components past the third are
-    // untouched.
-    if mct && wanted[0] {
-        let mut triple = samples[..3]
-            .iter_mut()
-            .map(Option::take)
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                Error::inconsistent(
-                    "the color transform's three components were not all reconstructed",
-                )
-            })?;
-        // The wavelet picks the transform (G.1): 5/3 reconstructs integers
-        // and inverts with the reversible RCT, 9/7 reconstructs floats and
-        // inverts with the irreversible ICT. All three color components
-        // share the wavelet (checked at parse), so component 0's decides.
-        match header.components[0].coding.transform {
-            codestream::markers::Transform::Reversible53 => mct::inverse_rct(&mut triple)?,
-            codestream::markers::Transform::Irreversible97 => mct::inverse_ict(&mut triple)?,
-        }
-        for (slot, plane) in samples.iter_mut().zip(triple) {
-            *slot = Some(plane);
-        }
-    }
-
-    for (component, samples) in samples.into_iter().enumerate() {
-        let Some(samples) = samples else {
-            continue;
-        };
-        let rect = main
-            .siz
-            .tile_component_rect(tile.index, component)
-            .ok_or_else(|| {
-                Error::inconsistent(format!(
-                    "no tile {} or no component {component} in `SIZ`",
-                    tile.index
-                ))
-            })?;
-        let rect = match footprints.get(component) {
-            Some(Some(footprint)) => footprint.rect(),
-            _ => rect.reduced(reduction),
-        };
-        canvas.place(component, rect, samples)?;
-    }
-    Ok(())
 }
 
 /// The footprint of `selection`'s area on `component` of `tile`, whose

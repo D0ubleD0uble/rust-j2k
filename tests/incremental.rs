@@ -110,11 +110,12 @@ fn refine_image(decoder: &mut IncrementalDecoder) -> Result<Option<Image>, Error
 /// refusal, under the variant that names it: the charge for missing tiles
 /// is `MissingTiles`, and the packet bound is a `WorkLimit`. A `WorkLimit`
 /// of the code-block bound is that decode's refusal too, and never stands
-/// in for another error it gives. `BoundSpent` comes only where that decode passes
-/// the code-block bound and the sample limit: it gives an image, or an
-/// error it meets in the tiles the refine did not decode, which can be a
-/// limit. The bound on the walks done again can refuse whatever that
-/// decode gives.
+/// in for another error it gives. `BoundSpent` comes only where that
+/// decode passes the sample limit: it gives an image, or an error it meets
+/// in the tiles the refine did not decode, which can be a limit. Where that
+/// limit is the code-block bound's, the refine's count was refused at the
+/// same tile and for the same work, and the wait names them. The bound on
+/// the walks done again can refuse whatever that decode gives.
 fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptions) {
     let one_shot = decode_with(prefix, &options.clone().with_strict(false));
     let at = prefix.len();
@@ -159,11 +160,24 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
         }
         (Waiting::BoundSpent { limit, .. }, _)
             if !matches!(one_shot, Err(Error::Incomplete(_)))
-                && !matches!(&one_shot, Err(Error::Limit(m))
-                    if matches!(m.kind(), LimitKind::CodeBlockWork | LimitKind::Samples)) =>
+                && !matches!(&one_shot, Err(Error::Limit(m)) if m.kind() == LimitKind::Samples) =>
         {
             assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{name}, {at} bytes");
             assert_eq!(limit.retry_with(), None, "{name}, {at} bytes");
+            if let Err(Error::Limit(m)) = &one_shot {
+                if m.kind() == LimitKind::CodeBlockWork {
+                    let refused = |message: &str| {
+                        message
+                            .split_once(" sample-passes")
+                            .map(|(head, _)| head.to_string())
+                    };
+                    assert_eq!(
+                        refused(limit.message()),
+                        refused(m.message()),
+                        "{name}, {at} bytes: {limit}, where the decode gives {m}"
+                    );
+                }
+            }
         }
         (Waiting::RepeatLimit { .. }, _) => {}
         _ => panic!("{name}, {at} bytes: waited for {why:?}, where the decode gives {one_shot:?}"),
@@ -1274,79 +1288,94 @@ fn fresh_block_work(bytes: &[u8], options: &DecodeOptions) -> (u64, u64) {
 /// A refine refused for what earlier refines spent counts the later tiles'
 /// work without decoding them. Where that count passes the whole bound,
 /// `decode_with` still decodes the tiles before the one refused first, so
-/// on `segsym_tiles_flipped` it fails in tile 0. The refine gives that
-/// error, not a `WorkLimit`, for every amount spent that cuts it at tile 0,
-/// under bounds that refuse a later tile.
+/// on `segsym_tiles_flipped` it fails in tile 0, and on the same file
+/// with the byte flipped back it is refused at tile 1. Either way the
+/// refine waits on `BoundSpent`, not a `WorkLimit` that would stand in
+/// for the error, and its message names tile 1, the tile the whole bound
+/// refuses. This holds for every amount spent that cuts the refine at tile
+/// 0 (1 in 37 of them and the ends), under bounds that refuse tile 1.
 #[test]
-fn a_refine_refused_by_the_whole_bound_after_a_cut_gives_the_earlier_tiles_error() {
+fn a_refine_refused_by_the_whole_bound_after_a_cut_waits_on_bound_spent() {
     use rust_j2k::fuzz::{incremental_with_code_block_work_spent, with_code_block_work_cap};
-    let bytes = segsym_tiles_flipped();
+    let flipped = segsym_tiles_flipped();
+    let mut encoded = flipped.clone();
+    encoded[SEGSYM_FLIPPED_AT] ^= 0xFF;
     let lenient = DecodeOptions::default().with_strict(false);
-    let error = decode_with(&bytes, &lenient).unwrap_err();
+    let error = decode_with(&flipped, &lenient).unwrap_err();
     assert!(
         matches!(&error, Error::Codestream(m) if m.message().contains("segmentation symbol")),
         "{error:?}"
     );
     // Tile 0's work, which a refine spends up to the error.
-    let (work, _) = fresh_block_work(&bytes, &with_code_block_work_cap(lenient.clone(), 1 << 40));
+    let (work, _) = fresh_block_work(
+        &flipped,
+        &with_code_block_work_cap(lenient.clone(), 1 << 40),
+    );
     assert_eq!(work, 4640);
-    // Under each cap the decode reaches tile 0's error, and the whole
-    // image passes the cap.
     let mut checked = 0;
-    for cap in [work, work + 3000, 3 * work] {
-        let options = with_code_block_work_cap(DecodeOptions::default(), cap);
-        assert_eq!(
-            keyed(decode_with(&bytes, &options.clone().with_strict(false))),
-            keyed::<Image>(Err(error.clone())),
-            "cap {cap}"
-        );
-        // Amounts spent that leave less than tile 0's work, 1 in 37 of
-        // them and the ends, so the suite stays cheap under coverage.
-        let left_short = (cap - work + 1..=cap).step_by(37);
-        for spent in left_short.chain([cap - work + 1, cap, cap + 1, u64::MAX]) {
-            let mut decoder =
-                incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
-            decoder.feed(&bytes);
-            assert_eq!(
-                keyed(decoder.refine().map(Refined::image)),
-                keyed(Err(error.clone())),
-                "cap {cap}, {spent} spent"
-            );
-            checked += 1;
+    for bytes in [&flipped, &encoded] {
+        for cap in [work, work + 3000] {
+            let options = with_code_block_work_cap(DecodeOptions::default(), cap);
+            let one_shot = decode_with(bytes, &options.clone().with_strict(false));
+            match &one_shot {
+                Err(Error::Limit(limit)) => assert!(limit.message().starts_with("tile 1 needs")),
+                Err(e) => assert_eq!(format!("{e:?}"), format!("{error:?}"), "cap {cap}"),
+                Ok(_) => panic!("cap {cap}: the image fits"),
+            }
+            let cuts = (cap - work + 1..=cap).step_by(37);
+            for spent in cuts.chain([cap - work + 1, cap, cap + 1, u64::MAX]) {
+                let mut decoder =
+                    incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
+                decoder.feed(bytes);
+                match decoder.refine() {
+                    Ok(Refined::Waiting(Waiting::BoundSpent { limit, .. })) => {
+                        assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
+                        assert_eq!(limit.retry_with(), None);
+                        assert!(
+                            limit.message().starts_with("tile 1 needs "),
+                            "cap {cap}, {spent} spent: {limit}"
+                        );
+                    }
+                    other => panic!("cap {cap}, {spent} spent: {other:?}"),
+                }
+                checked += 1;
+            }
         }
     }
-    assert_eq!(checked, 3 * (4640_u64.div_ceil(37) + 4));
+    assert_eq!(checked, 2 * 2 * (4640_u64.div_ceil(37) + 4));
 }
 
-/// The same file without the flipped byte: there the tiles the count
-/// passes over decode, and a refine refused after a cut waits on the
-/// `WorkLimit` `decode_with` gives, detail and all.
+/// Where no amount spent cuts a refine before the tile the whole bound
+/// refuses, it decoded every tile before that one, as `decode_with` does,
+/// and waits on the `WorkLimit` `decode_with` gives, detail and all. On
+/// `segsym_tiles_flipped` with the byte flipped back, under a cap of tile
+/// 0's work and 3000 more, each amount spent of up to 3000 leaves room for
+/// tile 0, and the whole bound refuses tile 1.
 #[test]
-fn a_refine_refused_by_the_whole_bound_after_a_cut_waits_on_the_one_shot_refusal() {
+fn a_refine_not_cut_before_the_whole_bound_waits_on_the_one_shot_refusal() {
     use rust_j2k::fuzz::{incremental_with_code_block_work_spent, with_code_block_work_cap};
     let mut bytes = segsym_tiles_flipped();
     bytes[SEGSYM_FLIPPED_AT] ^= 0xFF;
-    let lenient = DecodeOptions::default().with_strict(false);
-    let (whole, _) = fresh_block_work(&bytes, &with_code_block_work_cap(lenient, 1 << 40));
-    for cap in [4640, 4640 + 3000, whole / 2, whole - 1] {
-        let options = with_code_block_work_cap(DecodeOptions::default(), cap);
-        let Err(Error::Limit(expected)) = decode_with(&bytes, &options.clone().with_strict(false))
-        else {
-            panic!("cap {cap}: not refused");
-        };
-        assert_eq!(expected.kind(), LimitKind::CodeBlockWork, "cap {cap}");
-        let (work, _) = fresh_block_work(&bytes, &options);
-        let step = usize::try_from(work / 40).unwrap().max(1);
-        for spent in (cap - work..=cap).step_by(step).chain([cap, u64::MAX]) {
-            let mut decoder =
-                incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
-            decoder.feed(&bytes);
-            match decoder.refine() {
-                Ok(Refined::Waiting(Waiting::WorkLimit { limit, .. })) => {
-                    assert_eq!(format!("{limit:?}"), format!("{expected:?}"), "cap {cap}");
-                }
-                other => panic!("cap {cap}, {spent} spent: {other:?}"),
+    let work = 4640;
+    let cap = work + 3000;
+    let options = with_code_block_work_cap(DecodeOptions::default(), cap);
+    let Err(Error::Limit(expected)) = decode_with(&bytes, &options.clone().with_strict(false))
+    else {
+        panic!("not refused");
+    };
+    assert_eq!(expected.kind(), LimitKind::CodeBlockWork);
+    for spent in (0..=cap - work).step_by(37).chain([cap - work]) {
+        let mut decoder = incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
+        decoder.feed(&bytes);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::WorkLimit { limit, .. })) => {
+                assert_eq!(
+                    format!("{limit:?}"),
+                    format!("{expected:?}"),
+                    "{spent} spent"
+                );
             }
+            other => panic!("{spent} spent: {other:?}"),
         }
     }
 }

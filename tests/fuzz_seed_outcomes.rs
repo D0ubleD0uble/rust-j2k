@@ -804,7 +804,7 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
 /// checked tries and the draws of the changes and the probe, which
 /// `incremental_checked_tries_stay_within_the_work_weight` relies on. If it
 /// changed, check that test's count of bounds, then update this hash.
-const INCREMENTAL_HASH: u64 = 5656831230427997659;
+const INCREMENTAL_HASH: u64 = 1351478447198985520;
 
 #[test]
 fn incremental_checked_tries_stay_within_the_work_weight() {
@@ -833,15 +833,11 @@ fn incremental_checked_tries_stay_within_the_work_weight() {
     // share 4 bounds, and `finish` and the last `decode_with` take 4 each.
     // A try past the count only refines, whatever the input's length. The
     // reason a refine waits is checked from its result and the one-shot
-    // decode already run, so the check adds no decode. A refine refused
-    // for what earlier refines spent counts the work of the tiles past the
-    // cut without decoding them; where that count passes the whole bound
-    // it decodes them, and the refines share 4 more bounds for that. The
-    // probe's own such decode is within its 4 bounds: with the tiles
-    // before the cut, it decodes at most what a decode with nothing spent
-    // does.
+    // decode already run, so the check adds no decode; a refine that waits
+    // on what earlier refines spent counts the work of the tiles past the
+    // cut without decoding them, within the bounds a refine has.
     assert!(
-        12 * checked + 4 + 4 + 8 <= work_weight("incremental_decode"),
+        12 * checked + 4 + 8 <= work_weight("incremental_decode"),
         "{checked} checked tries"
     );
 }
