@@ -59,7 +59,8 @@ const KINDS: [LimitKind; 3] = [
 ];
 
 /// A low starting limit from two bits: `Default` or a factor of 1 or 2.
-/// `WorkLimit` sets nothing below the default bound.
+/// No factor sets a bound below the default; `AtMost` does, for the sample
+/// limit alone (see [`low_samples`]).
 fn low(bits: u64) -> WorkLimit {
     match bits & 3 {
         0 | 1 => WorkLimit::Default,
