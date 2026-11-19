@@ -248,13 +248,25 @@ impl IncrementalDecoder {
     /// This is a decode of its own, under the bounds of these options. It
     /// spends nothing from the bounds the refines share and does not change
     /// when [`refine`](Self::refine) next decodes. The decoder keeps nothing
-    /// from it, so a viewer that wants the image again keeps it itself. While a
-    /// refine waits for the bytes to double ([`Waiting::MoreBytes`]), this
-    /// gives the image of the bytes fed now. Where a refine would wait for
-    /// another reason, it returns the error: [`Error::Incomplete`] until the main
-    /// header is whole ([`Waiting::HeaderIncomplete`]), and [`Error::Limit`]
-    /// when a bound refuses the bytes so far. With `strict` left on, it
-    /// refuses a stream that is cut short, as [`finish`](Self::finish) does.
+    /// from it, so a viewer that wants the image again keeps it itself.
+    ///
+    /// What it gives where a refine waits depends on the reason (see
+    /// [`Waiting`]):
+    ///
+    /// - It gives the image of the bytes fed now where the refine waits on
+    ///   the cadence or on a bound the refines share: the bytes have not
+    ///   doubled ([`Waiting::MoreBytes`]), the earlier refines have spent the
+    ///   code-block bound ([`Waiting::WorkLimit`] of
+    ///   [`LimitKind::CodeBlockWork`]), or the bound on the walks done again
+    ///   ([`Waiting::RepeatLimit`]). This decode has bounds of its own, so it
+    ///   is the way out of a wait on those bounds.
+    /// - It returns an error where a decode of these bytes on its own is
+    ///   refused too: [`Error::Incomplete`] until the main header is whole
+    ///   ([`Waiting::HeaderIncomplete`]), and [`Error::Limit`] for the sample
+    ///   limit, the packet bound or the charge for missing tiles.
+    ///
+    /// With `strict` left on, it refuses a stream that is cut short, as
+    /// [`finish`](Self::finish) does.
     pub fn options(&self) -> &DecodeOptions {
         &self.options
     }
@@ -587,10 +599,14 @@ impl Refined {
 /// Each of these may clear as more bytes come in, so none is an error.
 /// Once the input has ended, [`finish`](IncrementalDecoder::finish) decodes
 /// all of it and reports a limit that still refuses it. To decode the bytes
-/// fed now, whatever the reason, decode them on their own, as
+/// fed now, decode them on their own, as
 /// [`options`](IncrementalDecoder::options) shows:
 /// `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
-/// That decode returns the refusal, if there is one, as an error.
+/// That gives the image where the refine waits on the cadence
+/// ([`MoreBytes`](Self::MoreBytes)) or on a bound the refines share (the
+/// code-block bound and [`RepeatLimit`](Self::RepeatLimit)), and the
+/// refusal as an error where a decode of those bytes on its own is refused
+/// too.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Waiting {
@@ -617,7 +633,10 @@ pub enum Waiting {
     /// grow with the bytes fed. The code-block bound is shared by all the
     /// refines (see [`IncrementalDecoder`]), so it can refuse a refine whose
     /// bytes a decode on its own would take, and the later refines may wait
-    /// on it too; `finish` decodes under a bound of its own.
+    /// on it too; `finish` decodes under a bound of its own. Then a decode
+    /// of the bytes fed now, with a bound of its own (see
+    /// [`options`](IncrementalDecoder::options)), gives the image the
+    /// refine waits on.
     ///
     /// The detail is the refusal's. For the packet bound it is the one a
     /// decode of the bytes fed on its own gives. For the code-block bound,
@@ -639,9 +658,11 @@ pub enum Waiting {
     /// together, up to four times the packet bound of a decode of the bytes
     /// fed, so a refine that would walk such a tile again waits. More bytes
     /// raise it only as they raise the packet bound, so on a small file it
-    /// can stay spent for the rest of the stream. A decoder made with a
-    /// higher [`packet_work_limit`](DecodeOptions::packet_work_limit) has a
-    /// higher bound.
+    /// can stay spent for the rest of the stream. A decode of the bytes fed
+    /// now (see [`options`](IncrementalDecoder::options)) is not held to
+    /// this bound, so it is the way to an image meanwhile. A decoder made
+    /// with a higher [`packet_work_limit`](DecodeOptions::packet_work_limit)
+    /// has a higher bound.
     RepeatLimit,
 }
 

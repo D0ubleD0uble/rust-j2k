@@ -746,7 +746,9 @@ fn a_walk_past_the_packet_bound_waits() {
 
 /// A refine that the rest of the code-block bound cannot cover is put off,
 /// not refused, and `finish` still decodes the file under a bound of its
-/// own.
+/// own. Meanwhile a decode of the bytes fed now with the decoder's options,
+/// `strict` off, has a bound of its own too and gives the image the refine
+/// waits on, at any cut: the way out of a wait on the shared bound.
 #[test]
 fn a_refine_past_the_rest_of_the_bound_waits() {
     let bytes = fixture("layers/lrcp.j2k");
@@ -758,7 +760,35 @@ fn a_refine_past_the_rest_of_the_bound_waits() {
         Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::CodeBlockWork
     ));
     assert_eq!(decoder.bytes_decoded(), 0);
+    let now = |decoder: &IncrementalDecoder| {
+        decode_with(
+            decoder.bytes(),
+            &decoder.options().clone().with_strict(false),
+        )
+    };
+    assert_eq!(
+        keyed(now(&decoder).map(Some)),
+        keyed(oracle(&bytes, &DecodeOptions::default()))
+    );
     assert_eq!(decoder.finish().unwrap(), whole_strict(&bytes));
+
+    // The same with half the bound spent, as the issue measured, on a cut
+    // file whose decode-now image is partial.
+    let half = bytes.len() / 2;
+    let mut decoder =
+        IncrementalDecoder::with_code_block_work_spent(DecodeOptions::default(), u64::MAX / 2)
+            .unwrap();
+    decoder.feed(&bytes[..half]);
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::CodeBlockWork
+    ));
+    let image = now(&decoder).unwrap();
+    assert!(!image.report.is_complete());
+    assert_eq!(
+        Some(image),
+        oracle(&bytes[..half], &DecodeOptions::default()).unwrap()
+    );
 }
 
 /// A refine that the rest of the code-block bound just covers decodes:
@@ -974,7 +1004,13 @@ fn a_walk_started_again_is_charged_as_a_walk_not_kept() {
                     decoder.tried != tried && decoder.refused_by_repeats,
                     "{end}"
                 );
-                assert!(decode_with(&bytes[..end], &options).is_ok(), "{end}");
+                // A decode of the bytes fed now is not held to that bound:
+                // it is the way to an image meanwhile.
+                let now = decode_with(
+                    decoder.bytes(),
+                    &decoder.options().clone().with_strict(false),
+                );
+                assert!(now.is_ok(), "{end}: {now:?}");
                 put_off += 1;
             }
             Refined::Waiting(Waiting::MoreBytes { until }) => {

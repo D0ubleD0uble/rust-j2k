@@ -189,11 +189,16 @@ under the current options (`Ok(None)` until the main header is whole), and
   `options()` returns the options as the caller set them, `strict`
   included. The decode runs under the bounds of those options. It spends
   nothing from the decoder's bounds and does not change when the next
-  refine decodes. It is the way to an image while a refine waits for
-  `MoreBytes`. Where a refine would wait for another reason, it returns
-  the error: `Error::Incomplete` until the main header is whole
-  (`HeaderIncomplete`), and `Error::Limit` when a bound refuses the bytes
-  so far. `finish` decodes under the
+  refine decodes. Where a refine waits, what it gives depends on why. It
+  gives the image of the bytes fed now where the refine waits on the
+  cadence (`MoreBytes`) or on a bound the refines share: the code-block
+  bound the earlier refines have spent (`WorkLimit` of `CodeBlockWork`)
+  and the bound on the walks done again (`RepeatLimit`). Its bounds are its
+  own, so it is the way out of those waits. It returns the error where a
+  decode of the bytes on its own is refused too: `Error::Incomplete` until
+  the main header is whole (`HeaderIncomplete`), and `Error::Limit` for the
+  sample limit, the packet bound and the charge for missing tiles. `finish`
+  decodes under the
   caller's `strict`, so on a stream that is stalled or cut short it
   returns an error, not an image. A caller who has fed the whole file gets
   the image under the new options from `finish`.
