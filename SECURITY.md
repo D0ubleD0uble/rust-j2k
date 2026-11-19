@@ -73,7 +73,7 @@ of output, whatever the input's length or padding. The sample buffers peak at
 no more than about 3.2 times that (a square tile measured 1.35, resident).
 Other memory is on top: the input itself, and the parse of the tile-parts,
 which keeps a record of under 1 KiB for each tile the input carries, at most
-about 60 times the input plus 128 KiB (see "The sample limit" in
+about 52 times the input plus 128 KiB (see "The sample limit" in
 [`docs/resource-bounds.md`](docs/resource-bounds.md)). Bound the input's size
 too, as the decode holds it. It counts what the default limit counts: every
 tile a region reads, in every component, a palette's expanded channels and sRGB

@@ -29,12 +29,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ceiling of `n` samples, whatever the input's length or padding: at most
   `4·n` bytes of output, and sample buffers of no more than about 3.2 times
   that. The input and the tile-part parse (under 1 KiB for each tile the
-  input carries, at most about 60 times the input plus 128 KiB) are on top.
+  input carries, at most about 52 times the input plus 128 KiB) are on top.
   It holds every count the default limit holds (the tiles a region reads, in
   every component, a palette's expanded channels and sRGB output), so
-  `read_header_with`
-  refuses what the decode would. A refusal under it
-  gives no retry, and in an `IncrementalDecoder` it is an error, not a wait.
+  `read_header_with` refuses what the decode would. A refusal under it gives
+  no retry, and in an `IncrementalDecoder` it is an error, not a wait.
   `AtMost(0)`, and `AtMost` on either work bound, is `InvalidOptions`. It
   replaces counting the samples by hand from the header (#475).
 
@@ -130,11 +129,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   times. No
   committed fixture gives another result (#416).
 - The tile-part parse keeps a record only for each tile that has a
-  tile-part, and 2 bytes for each other tile the SIZ grid declares. An
-  82-byte file that declares 65535 tiles and carries one allocated 53 MB,
-  and 53 MB again before a strict decode refused it; it now peaks at 132 KB
-  either way. A file that carries every tile costs no more than before
-  (#484).
+  tile-part, and 2 bytes for each tile the SIZ grid declares. A file that
+  declares 65535 tiles and carries one tile-part allocated 53 MB, and as much
+  before a strict decode refused it; it now peaks at 132 KB either way,
+  however long the tile-part. A file of 65535 tiles, each in one tile-part,
+  peaks at 47 MB, down from 57 MB (#484).
 
 ## [0.5.0] - 2026-11-17
 
