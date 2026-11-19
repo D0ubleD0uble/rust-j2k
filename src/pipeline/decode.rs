@@ -357,11 +357,25 @@ fn decode_codestream(
     // so that what they all spend is what one walk spends (see
     // [`incremental::Ledger`]).
     let meter = tier2::Meter::new(packet_bound);
+    // The code-block bound that `Default` sets and a refusal's factor is
+    // worked out from. Under the fuzz targets' cap it is the cap, whatever
+    // the tiles' data, and no limit, `Unlimited` included, sets more than
+    // `fuzz::CODE_BLOCK_CAP_FACTOR` times it (see
+    // `fuzz::with_code_block_work_cap`).
+    let (block_default, block_ceiling) = match options.code_block_work_cap {
+        None => (tier1::decode_work(bytes), None),
+        Some(cap) => (
+            cap,
+            Some(cap.saturating_mul(crate::fuzz::CODE_BLOCK_CAP_FACTOR)),
+        ),
+    };
+    // The whole code-block bound, which a decode of these bytes on its own
+    // is held to.
     let mut full_blocks = 0;
-    let mut block_work = match &options.code_block_work_limit {
-        WorkLimit::Unlimited => None,
-        limit => {
-            full_blocks = limit.apply(tier1::decode_work(bytes));
+    let mut block_work = match (&options.code_block_work_limit, block_ceiling) {
+        (WorkLimit::Unlimited, None) => None,
+        (limit, ceiling) => {
+            full_blocks = limit.apply(block_default).min(ceiling.unwrap_or(u64::MAX));
             Some(ledger.map_or(full_blocks, |l| l.blocks_left(full_blocks)))
         }
     };
@@ -555,7 +569,19 @@ fn decode_codestream(
         // those outside a footprint. Their work is counted first, so a tile
         // past the bound is refused before any of it is done.
         if let Some(left) = &mut block_work {
-            let work = tier1::work(&header, &coded, reduction, &wanted);
+            let mut work = tier1::work(&header, &coded, reduction, &wanted);
+            // Under the fuzz targets' cap, the samples the tile reconstructs
+            // are charged too, so that an image with little coded data per
+            // sample is held to the same bound of time.
+            if options.code_block_work_cap.is_some() {
+                let samples = (0..wanted.len())
+                    .filter(|&c| wanted[c])
+                    .filter_map(|c| cs.header.siz.tile_component_rect(tile.index, c))
+                    .map(|rect| rect.reduced(reduction).area())
+                    .fold(0, u64::saturating_add);
+                work =
+                    work.saturating_add(samples.saturating_mul(crate::fuzz::CAP_WORK_PER_SAMPLE));
+            }
             if let Some(own) = &mut counting {
                 if work > full_blocks.saturating_sub(*own) {
                     if let Some(ledger) = ledger {
@@ -566,7 +592,7 @@ fn decode_codestream(
                         work,
                         full_blocks.saturating_sub(*own),
                         *own,
-                        tier1::decode_work(bytes),
+                        block_default,
                     ));
                 }
                 *own += work;
@@ -592,7 +618,7 @@ fn decode_codestream(
                     work,
                     full_blocks.saturating_sub(own),
                     own,
-                    tier1::decode_work(bytes),
+                    block_default,
                 ));
             };
             *left = rest;

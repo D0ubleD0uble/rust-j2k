@@ -82,7 +82,9 @@ Its first byte picks how the `jp2c` box is written (32-bit length, 64-bit
 `ftyp`, and a matching `ihdr` are pinned, so mutations can land on the whole
 top level or only on the `jp2h` children, which codestream, and whether every
 decode is one resolution level down. `jp2.dict` holds the signature and every
-box type.
+box type. A body can carry a `jp2c` of its own, which wins over the pinned
+one, so the target skips a file over its share of the sample budget
+(`common/budget.rs`), as the other decoding targets do.
 
 Every input is decoded with `raw_channels`, and a file that decodes as coded
 is decoded again with `ColorOutput::Srgb`, which reads the `colr` ICC
@@ -309,15 +311,16 @@ limit (log2 of that factor cap, plus 2) is a failure.
 An input over the fuzz sample budget (`common/budget.rs`) is only read for its
 header, and a sample limit refusal there is checked as one step with no decode.
 So a sample limit retry of the image area is never decoded: the budget is at most
-2^26 samples and the default limit at least 2^29, so only an input over the budget is
+2^27 samples and the default limit at least 2^29, so only an input over the budget is
 refused for its area, and that input is never decoded. The exception is an input
 whose header fails to read: the budget counts it as under budget, so its decode
 can still be refused for its area.
 
-The budget bounds memory, not time. It bounds time only for an image with
-little coded data per sample. The tier-1 work bound grows with the tile's
-bytes, not its samples, so a tier-1-heavy input inside the budget can still
-run past `-timeout=30` (#480).
+The budget bounds memory. Time is bounded by the fuzz cap on code-block
+work (`rust_j2k::fuzz::with_code_block_work_cap`), which every decode here
+starts from. Under the cap `Raised(n)` allows `n` times the capped bound, so
+the ladder's factors mean what they say, and no limit, `Unlimited` included,
+allows more than 4 times the cap, the most the ladder decodes at.
 
 Seed it as `decode`, with 26 seeds made from the work-bound, sample-limit
 and `psot0` bomb fixtures, each behind a control byte: `00` (the defaults),
@@ -364,12 +367,15 @@ cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus
 # 64 MiB, as every fuzz input is, may declare an image at the 2^29-sample
 # default limit (larger files get 8 samples a byte), which would peak
 # at about 2.7 GiB for a square tile and up to about 6.4 GiB for a tile one
-# sample wide. The `decode`, `decode_partial` and `incremental_decode` targets
-# skip an input that declares more than 2^26 samples (`common/budget.rs`), so
-# a decode peaks at about 0.8 GiB. A target that decodes an input several
-# times or holds several images (`incremental_decode`, `retry_ladder`,
-# `jp2_boxes`) divides that budget by a weight, so that it stays under the
-# 4 GiB CI gives and under its 30 s timeout.
+# sample wide. The targets that decode whole images (`decode`, `decode_partial`,
+# `incremental_decode`, `jp2_boxes`, `retry_ladder`, `window_crop`) skip an
+# input that declares more than 2^28 samples divided by the most images the
+# target holds at once (`common/budget.rs`): 2^27 for most, 2^26 for
+# `jp2_boxes`, 2^25 for `incremental_decode`. They also cap the work their
+# decodes do, block passes and samples reconstructed, at 2^28 divided by how
+# many decodes' worth one execution can run, so an input past it is refused
+# with `Error::Limit` before the work is done. That keeps each target under
+# the 4 GiB and the 30 s timeout CI gives.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
 # The same with strict off, against the strict decode.

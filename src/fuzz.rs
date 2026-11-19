@@ -237,6 +237,48 @@ pub fn icc_profile(data: &[u8]) {
     crate::jp2::SrgbPlan::read_profile(data);
 }
 
+/// How far above its cap [`with_code_block_work_cap`] lets a code-block bound
+/// go: the most a `Raised` factor or `Unlimited` sets is this times the cap.
+/// The `retry_ladder` target decodes at factors up to this, so its ladder
+/// sees the factors it asks for.
+pub const CODE_BLOCK_CAP_FACTOR: u64 = 4;
+
+/// The sample-passes [`with_code_block_work_cap`] charges for each sample a
+/// tile reconstructs. Under the fuzz build (ASan) a sample of a thin image
+/// with empty packets takes about as long to reconstruct as this many
+/// sample-passes of the slowest block data.
+pub const CAP_WORK_PER_SAMPLE: u64 = 4;
+
+/// `options` with the code-block work bound set to `cap` sample-passes,
+/// so a fuzz target's time does not grow with the input's bytes. The bound
+/// grows with the tiles' data (see
+/// [`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)),
+/// so a file of a few tens of kilobytes can ask for minutes of block
+/// decoding under the fuzz build, all within the default bound.
+///
+/// Under the cap, the work of a tile is its blocks' sample-passes and
+/// [`CAP_WORK_PER_SAMPLE`] for each sample of each component it
+/// reconstructs, at the reduction, so that the cap also bounds the time an
+/// image with little coded data takes.
+///
+/// Under the cap, the bound `WorkLimit::Default` sets is `cap`, whatever
+/// the tiles' data, and `Raised(n)` sets `n` times that, so a
+/// refusal's `retry_with` names the factor its retry needs, as without the
+/// cap. No limit sets more than [`CODE_BLOCK_CAP_FACTOR`] times `cap`:
+/// `Unlimited` sets that bound too. Each decode is held to its bound by
+/// itself; an incremental decoder holds all its refines to it together. A
+/// file past the bound is refused with an
+/// [`Error::Limit`](crate::Error::Limit) of
+/// [`LimitKind::CodeBlockWork`](crate::LimitKind::CodeBlockWork) before any
+/// of its blocks are decoded.
+#[must_use]
+pub fn with_code_block_work_cap(options: crate::DecodeOptions, cap: u64) -> crate::DecodeOptions {
+    crate::DecodeOptions {
+        code_block_work_cap: Some(cap),
+        ..options
+    }
+}
+
 /// An [`IncrementalDecoder`](crate::IncrementalDecoder) as if its earlier
 /// refines had spent `blocks` of the code-block work, so the
 /// `incremental_decode` target reaches the cut that bound makes without
@@ -292,6 +334,102 @@ pub fn incremental_repeat_work(decoder: &crate::IncrementalDecoder) -> RepeatWor
 
 #[cfg(test)]
 mod tests {
+    /// The work a whole decode of `bytes` under `options` spends on its
+    /// code-blocks, and the bound it had, read through an incremental
+    /// decoder fed every byte.
+    fn block_work(bytes: &[u8], options: &crate::DecodeOptions) -> (u64, Option<u64>) {
+        let mut decoder = crate::IncrementalDecoder::new(options.clone()).unwrap();
+        decoder.feed(bytes);
+        let _ = decoder.refine();
+        super::incremental_code_block_work(&decoder)
+    }
+
+    /// The cap charges the samples reconstructed, sets the bound `Default`
+    /// sets, scales `Raised` from it so a refusal's retry names the factor
+    /// that decodes, and holds `Unlimited` to
+    /// [`super::CODE_BLOCK_CAP_FACTOR`] times the cap. Without it the
+    /// options decode and print as before.
+    #[test]
+    fn the_code_block_cap_sets_the_bound_and_keeps_its_factors() {
+        use super::{CODE_BLOCK_CAP_FACTOR as K, with_code_block_work_cap as cap};
+        use crate::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/layers/lrcp.j2k");
+        let bytes = std::fs::read(path).unwrap();
+        // The fuzz budgets are sized from these: a change must be measured.
+        assert_eq!((K, super::CAP_WORK_PER_SAMPLE), (4, 4));
+        let plain = DecodeOptions::default();
+        let image = decode_with(&bytes, &plain).unwrap();
+        let (blocks, bound) = block_work(&bytes, &plain);
+        let default = bound.unwrap();
+        // Under the cap each sample reconstructed is charged too.
+        let samples: u64 = image
+            .components
+            .iter()
+            .map(|c| c.samples.len() as u64)
+            .sum();
+        let (work, bound) = block_work(&bytes, &cap(plain.clone(), default));
+        assert_eq!(bound, Some(default));
+        assert_eq!(work, blocks + 4 * samples);
+        assert!(blocks > 0 && work < default, "{work} of {default}");
+        // `Unlimited` has no bound without the cap.
+        let unlimited = plain
+            .clone()
+            .with_code_block_work_limit(WorkLimit::Unlimited);
+        assert_eq!(block_work(&bytes, &unlimited).1, None);
+
+        // `Default`: the cap.
+        assert_eq!(
+            block_work(&bytes, &cap(plain.clone(), work)),
+            (work, Some(work))
+        );
+        assert_eq!(
+            decode_with(&bytes, &cap(plain.clone(), work)).unwrap(),
+            image
+        );
+        // Also past the default bound.
+        let high = cap(plain.clone(), default + 1);
+        assert_eq!(block_work(&bytes, &high).1, Some(default + 1));
+        let below = cap(plain.clone(), work - 1);
+        let Err(Error::Limit(limit)) = decode_with(&bytes, &below) else {
+            panic!("a cap under the work refuses");
+        };
+        assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
+        assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)));
+        let retry = below.with_retry(&limit).unwrap();
+        assert_eq!(block_work(&bytes, &retry).1, Some(2 * (work - 1)));
+        assert_eq!(decode_with(&bytes, &retry).unwrap(), image);
+
+        // `Raised(K)` is K times the cap; `Unlimited` and higher factors stop
+        // there.
+        let quarter = work.div_ceil(K);
+        for limit in [
+            WorkLimit::Raised(K as u32),
+            WorkLimit::Raised(1000),
+            WorkLimit::Unlimited,
+        ] {
+            let options = cap(
+                plain.clone().with_code_block_work_limit(limit.clone()),
+                quarter,
+            );
+            assert_eq!(
+                block_work(&bytes, &options).1,
+                Some(K * quarter),
+                "{limit:?}"
+            );
+            assert_eq!(decode_with(&bytes, &options).unwrap(), image, "{limit:?}");
+            let short = cap(options, quarter - 1);
+            assert!(
+                matches!(decode_with(&bytes, &short), Err(Error::Limit(m)) if m.kind() == LimitKind::CodeBlockWork),
+                "{limit:?}"
+            );
+        }
+
+        // The cap prints only when it is set.
+        assert!(!format!("{plain:?}").contains("cap"));
+        assert!(format!("{:?}", cap(plain, 7)).ends_with(", code_block_work_cap: 7 }"));
+    }
+
     /// A decoder started with work spent is cut by what is left of the
     /// bound: a refine whose work just fits decodes, and one more unit of
     /// work spent refuses it. The hooks report the work and the bound.

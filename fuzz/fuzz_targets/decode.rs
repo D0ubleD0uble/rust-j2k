@@ -25,15 +25,22 @@ mod partial;
 
 fuzz_target!(|data: &[u8]| {
     // Up to four decodes of the input run one after another: the plain one, the
-    // strict one, the lenient one in `partial::check`, and `part`.
-    if budget::over(data, 4) {
+    // strict one, the lenient one in `partial::check`, and `part`. The strict
+    // image is held while the lenient one decodes.
+    if budget::over(data, 2) {
         return;
     }
-    let _ = rust_j2k::decode(data);
+    // In code-block bounds: the plain decode at 2, so that mid-size images
+    // reach pixels, and the other three at 1 each.
+    let base = budget::options(5);
+    let plain = base
+        .clone()
+        .with_code_block_work_limit(rust_j2k::WorkLimit::Raised(2));
+    let _ = rust_j2k::decode_with(data, &plain);
     let hash = fnv1a(data);
     if hash & 1 == 1 {
         let layers = 1 + ((hash >> 1) % 3) as u16;
-        let options = rust_j2k::DecodeOptions::default().with_max_quality_layers(Some(layers));
+        let options = base.clone().with_max_quality_layers(Some(layers));
         let strict = rust_j2k::decode_with(data, &options);
         // The same cap with `strict` off, where a block's last kept pass may
         // be cut short by the cap (#358). That bug gave a wrong image, not a
@@ -41,17 +48,16 @@ fuzz_target!(|data: &[u8]| {
         partial::check(data, &options, &strict);
     }
     if hash & 2 == 2 {
-        let _ = rust_j2k::decode_with(data, &part(hash >> 8));
+        let _ = rust_j2k::decode_with(data, &part(base, hash >> 8));
     }
 });
 
 /// A window, a tile or a component subset, with a reduction of 0 or 1, from
 /// the bits of `bits`. The window's corners are small numbers, so that they
 /// land inside the small images the fuzzer makes.
-fn part(bits: u64) -> rust_j2k::DecodeOptions {
+fn part(base: rust_j2k::DecodeOptions, bits: u64) -> rust_j2k::DecodeOptions {
     let small = |shift: u32| ((bits >> shift) & 0x3F) as u32;
-    let options =
-        rust_j2k::DecodeOptions::default().with_resolution_reduction(((bits >> 2) & 1) as u8);
+    let options = base.with_resolution_reduction(((bits >> 2) & 1) as u8);
     match bits & 3 {
         0 => {
             let (x0, y0) = (small(4), small(10));

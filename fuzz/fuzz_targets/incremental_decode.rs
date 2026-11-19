@@ -57,6 +57,13 @@
 //! the most that leaves the refine room
 //! (`rust_j2k::fuzz::incremental_with_code_block_work_spent`), and checks
 //! it by the same rule.
+//!
+//! Only the first [`MAX_CHECKED_TRIES`] refines that are checked against
+//! decodes of their own (a due one, or one that gives an image or an error)
+//! are checked; the later ones only refine, and an error they give is
+//! still held to stick. That bounds the decodes of one execution, whatever
+//! the input's length, so the target stays under the fuzz cap on
+//! code-block work (`common/budget.rs`).
 
 use libfuzzer_sys::fuzz_target;
 
@@ -77,6 +84,10 @@ use rust_j2k::{
 fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
     result.map_err(|error| format!("{error:?}"))
 }
+
+/// The most refines one execution checks against decodes of its own.
+/// `tests/fuzz_seed_outcomes.rs` reads this to check the work weight.
+const MAX_CHECKED_TRIES: u32 = 4;
 
 fuzz_target!(|input: &[u8]| {
     const JP2_SIGNATURE: [u8; 8] = [0, 0, 0, 12, b'j', b'P', b' ', b' '];
@@ -106,7 +117,11 @@ fuzz_target!(|input: &[u8]| {
         2 => WorkLimit::Raised(2),
         _ => WorkLimit::Raised(4),
     };
-    let mut options = DecodeOptions::default().with_code_block_work_limit(limit);
+    // Each checked try runs up to three decodes besides the refine (the
+    // one-shot, `zero` and the probe), each at up to 4 bounds; the refines
+    // share 4 bounds, and `finish` and the last `decode_with` take 8:
+    // 12 * MAX_CHECKED_TRIES + 12 bounds, under 64.
+    let mut options = budget::options(64).with_code_block_work_limit(limit);
     if control[0] & 4 != 0 {
         options = options.with_max_quality_layers(Some(1 + u16::from((control[0] >> 3) % 3)));
     }
@@ -153,6 +168,7 @@ fuzz_target!(|input: &[u8]| {
     let mut failed = None;
     // The bytes fed at the last refine that was due.
     let mut tried = 0;
+    let mut checks_left = MAX_CHECKED_TRIES;
     while fed < data.len() {
         hash = splitmix(hash);
         // Pieces from 1 byte to about a quarter of the input.
@@ -181,6 +197,24 @@ fuzz_target!(|input: &[u8]| {
         let due = fed >= tried * 2;
         if due {
             tried = fed;
+        }
+        if checks_left == 0 || (!due && refined == Ok(None)) {
+            // A refine that is not due waits for twice the bytes of the
+            // last try. This decodes nothing, so it is checked on every
+            // refine, past the checked tries too.
+            if !due && refined == Ok(None) {
+                match &waiting {
+                    Some(Waiting::MoreBytes { until, .. }) if *until == tried * 2 => {}
+                    other => panic!("{fed} bytes, not due after {tried}: {other:?}"),
+                }
+            }
+            if let Err(error) = refined {
+                failed = Some(error);
+            }
+            continue;
+        }
+        checks_left -= 1;
+        if due {
             let one_shot = decode_with(&data[..fed], &lenient);
             let repeat_work = incremental_repeat_work(&decoder);
             if let Some(why) = &waiting {
@@ -273,10 +307,7 @@ fuzz_target!(|input: &[u8]| {
             continue;
         }
         match refined {
-            Ok(None) => match waiting {
-                Some(Waiting::MoreBytes { until, .. }) if until == tried * 2 => {}
-                other => panic!("{fed} bytes, not due after {tried}: {other:?}"),
-            },
+            Ok(None) => unreachable!("checked only when it decodes"),
             Ok(Some(image)) => {
                 let expected = keyed(decode_with(&data[..fed], &lenient));
                 assert_eq!(Ok(&image), expected.as_ref(), "{fed} bytes");
@@ -409,8 +440,9 @@ impl Cut<'_> {
     /// is `u64::MAX`), and a tile whose work passes what is left refuses the
     /// refine. The work comes in tile by tile, so the refine refuses if and
     /// only if this try's work, all of it, passes what is left; then it
-    /// spends at most that work, and otherwise all of it. A refine on which a
-    /// decoder with nothing spent waits waits too.
+    /// spends at most that work, and otherwise all of it. A refused refine
+    /// waits, or gives the error the decoder with nothing spent gives. A
+    /// refine on which a decoder with nothing spent waits waits too.
     fn check(
         &self,
         decoder: &IncrementalDecoder,
@@ -430,7 +462,16 @@ impl Cut<'_> {
         // it passed every cut, so this try's work is all of `work`.
         let answered = *self.fresh != Ok(None);
         if answered && self.work > left {
-            assert_eq!(refined, &Ok(None), "{what}: {} past {left}", self.work);
+            // Refused for what was spent, the refine counts on through the
+            // later tiles without decoding them: an error the decode with
+            // nothing spent meets in them before its block decoding may
+            // come out, as that decode gives it.
+            assert!(
+                refined == &Ok(None) || (self.fresh.is_err() && refined == self.fresh),
+                "{what}: {} past {left}: {refined:?}, where nothing spent gives {:?}",
+                self.work,
+                self.fresh
+            );
         } else {
             assert_eq!(refined, self.fresh, "{what}: {} within {left}", self.work);
         }
