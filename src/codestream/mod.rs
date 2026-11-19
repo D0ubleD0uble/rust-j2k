@@ -862,6 +862,8 @@ fn rgn_without_cap_bit(index: usize) -> Error {
 /// What has been seen of one tile so far while the tile-parts are walked.
 #[derive(Debug)]
 struct TileParts<'a> {
+    /// The tile's index in the grid (`Isot`).
+    index: u16,
     /// Each tile-part's packet data, in `TPsot` order (which is the order they
     /// must appear in, enforced below).
     parts: Vec<&'a [u8]>,
@@ -913,15 +915,18 @@ fn walk_tiles<'a>(
     // `PPM` (main header) supplies one packet-header chunk per tile-part in
     // codestream order; this counter walks them as the tile-parts are read.
     let mut ppm_seq = 0usize;
-    let mut tiles: Vec<TileParts<'a>> = (0..tile_count)
-        .map(|_| TileParts {
-            parts: Vec::new(),
-            declared_parts: None,
-            header: TileHeader::default(),
-            restated: None,
-            packed_headers: Vec::new(),
-        })
-        .collect();
+    // A tile's record is made when its first tile-part arrives, in `tiles`,
+    // and `slots` maps each tile of the grid to its record there, or holds
+    // `NO_RECORD` for a tile no tile-part has named. A codestream may declare
+    // 65535 tiles and carry one, so a tile with no tile-part costs its two
+    // bytes of `slots` and no record.
+    const NO_RECORD: u16 = u16::MAX;
+    let mut slots = vec![NO_RECORD; tile_count];
+    // Each tile-part starts with a 12-byte `SOT`, so the input bounds the
+    // records needed. Reserving that many, at most one per tile, spares a
+    // codestream that carries every tile any regrowth.
+    let mut tiles: Vec<TileParts<'a>> =
+        Vec::with_capacity(tile_count.min(bytes.len().saturating_sub(sot_offset) / 12 + 1));
     // OpenJPEG's `TPsot == TNsot` correction (see `count_is_one_short`): looked
     // for once, when the first tile has all its declared parts, and from then
     // on added to every `TNsot`.
@@ -948,11 +953,29 @@ fn walk_tiles<'a>(
         let sot = decode_sot(segment(&mut cur)?)?;
 
         let index = usize::from(sot.tile_index);
-        let tile = tiles.get_mut(index).ok_or_else(|| {
+        let slot = slots.get_mut(index).ok_or_else(|| {
             Error::codestream(format!(
                 "tile-part names tile {index}, but the grid holds {tile_count} tiles"
             ))
         })?;
+        if *slot == NO_RECORD {
+            // The grid holds at most 65535 tiles (`validate_geometry`), so a
+            // record's position is below `NO_RECORD`.
+            *slot = u16::try_from(tiles.len())
+                .ok()
+                .filter(|&position| position != NO_RECORD)
+                .ok_or_else(|| Error::codestream("more tiles than `Isot` can number"))?;
+            tiles.push(TileParts {
+                index: sot.tile_index,
+                parts: Vec::new(),
+                declared_parts: None,
+                header: TileHeader::default(),
+                restated: None,
+                packed_headers: Vec::new(),
+            });
+        }
+        let position = usize::from(*slot);
+        let tile = &mut tiles[position];
 
         // A tile's parts are numbered from 0 and shall appear in order (A.4.2),
         // so TPsot is exactly how many of this tile's parts have already been
@@ -1115,7 +1138,7 @@ fn walk_tiles<'a>(
             }
             end
         };
-        let tile = &mut tiles[index];
+        let tile = &mut tiles[position];
         tile.parts.push(&bytes[data_start..data_end]);
 
         // The first time a tile has every part it declares, look ahead for one
@@ -1177,11 +1200,15 @@ fn walk_tiles<'a>(
         )));
     }
 
-    let mut found = Vec::with_capacity(tiles.len());
     // Not strict: the run of missing tiles being gathered, as (first, end).
     let mut missing: Option<(u32, u32)> = None;
-    for (index, tile) in tiles.into_iter().enumerate() {
-        if tile.parts.is_empty() {
+    for (index, &slot) in slots.iter().enumerate() {
+        // A record is made before its first tile-part is read, so one whose
+        // part the input ended inside has no parts, and its tile is missing.
+        let tile = (slot != NO_RECORD)
+            .then(|| &tiles[usize::from(slot)])
+            .filter(|tile| !tile.parts.is_empty());
+        let Some(tile) = tile else {
             if strict {
                 return Err(Error::codestream(format!(
                     "the codestream carries no tile-part for tile {index}"
@@ -1190,7 +1217,7 @@ fn walk_tiles<'a>(
             let index = index as u32;
             missing = Some(missing.map_or((index, index + 1), |(first, _)| (first, index + 1)));
             continue;
-        }
+        };
         if let Some((first, end)) = missing.take() {
             entries.push(ReportEntry::MissingTiles { tiles: first..end });
         }
@@ -1209,15 +1236,20 @@ fn walk_tiles<'a>(
                 });
             }
         }
-        found.push((index, tile));
     }
     if let Some((first, end)) = missing {
         entries.push(ReportEntry::MissingTiles { tiles: first..end });
     }
+    drop(slots);
 
-    found
+    // The records are in the order their tiles' first parts arrived; the
+    // tiles go out in index order. Tiles mostly arrive in order, which the
+    // sort finds in one pass.
+    tiles.sort_unstable_by_key(|tile| tile.index);
+    tiles
         .into_iter()
-        .map(|(index, tile)| {
+        .filter(|tile| !tile.parts.is_empty())
+        .map(|tile| {
             // One part: borrow it. Several: join them, which is exact — a
             // tile-part holds a whole number of packets (B.9), so nothing
             // straddles the seam.
@@ -1234,7 +1266,7 @@ fn walk_tiles<'a>(
                 })
                 .collect();
             Ok(Tile {
-                index: index as u32,
+                index: u32::from(tile.index),
                 header: tile.header,
                 data,
                 part_ends,
