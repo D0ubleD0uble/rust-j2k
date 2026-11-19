@@ -821,3 +821,305 @@ fn a_100_byte_file_is_held_to_2_to_the_29_samples() {
         );
     }
 }
+
+// `WorkLimit::AtMost(n)`: a ceiling of `n` samples, whatever the input's
+// length, checked where the default limit is.
+
+fn at_most(n: u64) -> DecodeOptions {
+    with_limit(WorkLimit::AtMost(n))
+}
+
+/// The refusal `result` must be under `AtMost(n)`: of kind `Samples`, with no
+/// retry, naming the ceiling and no factor. It returns the message.
+#[track_caller]
+fn refused_at_most<T: std::fmt::Debug>(result: Result<T, Error>, n: u64) -> String {
+    let detail = match result {
+        Err(Error::Limit(detail)) => detail,
+        other => panic!("expected Error::Limit under AtMost({n}), got {other:?}"),
+    };
+    assert_eq!(detail.kind(), LimitKind::Samples, "{detail}");
+    assert_eq!(detail.retry_with(), None, "{detail}");
+    assert!(at_most(n).with_retry(&detail).is_none(), "{detail}");
+    let m = detail.message().to_owned();
+    assert!(
+        m.contains(&format!(
+            ", over the ceiling of `WorkLimit::AtMost({n})` (see `DecodeOptions::sample_limit`)"
+        )),
+        "{m}"
+    );
+    assert!(!m.contains("Raised") && !m.contains("Unlimited"), "{m}");
+    m
+}
+
+/// `AtMost(0)` admits no image, and `AtMost` sets no work bound: both are
+/// contradictions in the options, refused whatever the input, by the decode,
+/// the header read and the incremental decoder alike.
+#[test]
+fn at_most_zero_and_at_most_on_a_work_bound_are_invalid_options() {
+    let cases = [
+        (
+            at_most(0),
+            "`DecodeOptions::sample_limit` is `WorkLimit::AtMost(0)`, but an image holds at \
+             least one sample",
+        ),
+        (
+            DecodeOptions::default().with_packet_work_limit(WorkLimit::AtMost(1 << 20)),
+            "`DecodeOptions::packet_work_limit` is `WorkLimit::AtMost(1048576)`, but `AtMost` \
+             sets only `DecodeOptions::sample_limit`",
+        ),
+        (
+            DecodeOptions::default().with_code_block_work_limit(WorkLimit::AtMost(7)),
+            "`DecodeOptions::code_block_work_limit` is `WorkLimit::AtMost(7)`, but `AtMost` \
+             sets only `DecodeOptions::sample_limit`",
+        ),
+    ];
+    for (options, want) in cases {
+        for bytes in [flat(), b"not a codestream".to_vec()] {
+            for result in [
+                decode_with(&bytes, &options).map(|_| ()),
+                read_header_with(&bytes, &options).map(|_| ()),
+                rust_j2k::IncrementalDecoder::new(options.clone()).map(|_| ()),
+            ] {
+                match result {
+                    Err(Error::InvalidOptions(m)) => assert_eq!(m.message(), want),
+                    other => panic!("{want}: {other:?}"),
+                }
+            }
+        }
+    }
+    // A ceiling of one sample is valid options.
+    assert!(rust_j2k::IncrementalDecoder::new(at_most(1)).is_ok());
+}
+
+/// `AtMost(n)` is `n` itself, not a factor of the default nor capped by it:
+/// the flat image, over the default for its 27 KB, fits a ceiling of exactly
+/// its samples and not one of a sample less. The decode and the header read
+/// refuse alike, and, under the ceiling, the decode fails only on the
+/// missing tile data.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn at_most_admits_exactly_its_ceiling_for_a_whole_image() {
+    let bytes = flat_header_only();
+    let total = 32769 * 16385;
+    assert!(read_header_with(&bytes, &DecodeOptions::default()).is_err());
+    let header = read_header_with(&bytes, &at_most(total)).expect("the ceiling admits it");
+    assert_eq!((header.width, header.height), (32769, 16385));
+    assert!(matches!(
+        decode_with(&bytes, &at_most(total)),
+        Err(Error::Codestream(_))
+    ));
+    for m in [
+        refused_at_most(read_header_with(&bytes, &at_most(total - 1)), total - 1),
+        refused_at_most(decode_with(&bytes, &at_most(total - 1)), total - 1),
+    ] {
+        assert!(
+            m.starts_with("image area 32769x16385 needs 536920065 samples, over the ceiling"),
+            "{m}"
+        );
+    }
+}
+
+/// The ceiling does not grow with the input: a file of 64 MiB and more, whose
+/// default limit admits one large tile, is refused it under `AtMost(2^29)`.
+/// A window over both tiles counts both, to the sample.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn at_most_holds_a_large_file_and_a_window_over_two_tiles() {
+    let bytes = synth::two_large_tiles(synth::LARGE_TILE_BYTES);
+    let lenient = in_tile_0().with_strict(false);
+    assert!(read_header_with(&bytes, &in_tile_0()).is_ok());
+    let n = 1 << 29;
+    for m in [
+        refused_at_most(
+            read_header_with(&bytes, &in_tile_0().with_sample_limit(WorkLimit::AtMost(n))),
+            n,
+        ),
+        refused_at_most(
+            decode_with(&bytes, &lenient.with_sample_limit(WorkLimit::AtMost(n))),
+            n,
+        ),
+    ] {
+        assert!(
+            m.starts_with("the area of the tiles read (23171x23171) needs 536895241 samples"),
+            "{m}"
+        );
+    }
+
+    let both = window(23000, 0, 23400, 16);
+    let total = 2 * 536_895_241;
+    let fits = both.clone().with_sample_limit(WorkLimit::AtMost(total));
+    let header = read_header_with(&bytes, &fits).expect("both tiles fit");
+    assert_eq!((header.width, header.height), (400, 16));
+    let over = both.with_sample_limit(WorkLimit::AtMost(total - 1));
+    for m in [
+        refused_at_most(read_header_with(&bytes, &over), total - 1),
+        refused_at_most(decode_with(&bytes, &over), total - 1),
+    ] {
+        assert!(
+            m.starts_with("the area of the tiles read (46342x23171) needs 1073790482 samples"),
+            "{m}"
+        );
+    }
+}
+
+/// Under `AtMost` a component subset still counts every component of the
+/// tiles read: one 1024x1024 tile of three components is 3 x 2^20 samples,
+/// though the decode returns one of them.
+#[test]
+fn at_most_counts_every_component_of_the_tiles_read() {
+    let tiled = with_mct(many_tiles_of_empty_packets(16, 1024, 3));
+    let subset = window(100, 200, 356, 456).with_components(Some(vec![0]));
+    let total = 3 << 20;
+    let fits = subset.clone().with_sample_limit(WorkLimit::AtMost(total));
+    let image = decode_with(&tiled, &fits).expect("one tile of three components fits");
+    assert_eq!(image.components.len(), 1);
+    assert!(read_header_with(&tiled, &fits).is_ok());
+    let over = subset.with_sample_limit(WorkLimit::AtMost(total - 1));
+    for m in [
+        refused_at_most(read_header_with(&tiled, &over), total - 1),
+        refused_at_most(decode_with(&tiled, &over), total - 1),
+    ] {
+        assert!(
+            m.starts_with("a decode of the tiles read in 3 components needs 3145728 samples"),
+            "{m}"
+        );
+    }
+}
+
+/// A gray JP2 file of `size` x `size` holding `codestream` (of `components`
+/// components), whose palette of `columns` 8-bit columns expands component
+/// 0 to that many channels; the other components are not mapped.
+fn palette_jp2(size: u32, components: u16, columns: u8, codestream: &[u8]) -> Vec<u8> {
+    let ihdr = synth::ihdr_payload(size, size, components, [7, 7, 0, 0]);
+    // `NE` of one entry, `NPC`, a `B` of 8 bits a column, then the entry.
+    let mut pclr = vec![0, 1, columns];
+    pclr.extend(std::iter::repeat_n(7, usize::from(columns)));
+    pclr.extend((0..columns).map(|c| c.wrapping_mul(8)));
+    // Channel i is column i of component 0.
+    let cmap: Vec<u8> = (0..columns).flat_map(|c| [0, 0, 1, c]).collect();
+    synth::jp2_file(
+        &[
+            bx(b"ihdr", &ihdr),
+            bx(b"colr", &synth::colr_enum(17)),
+            bx(b"pclr", &pclr),
+            bx(b"cmap", &cmap),
+        ],
+        &[],
+        codestream,
+        &[],
+    )
+}
+
+/// The palettized file of #474, 31 components of 4096x4096 with one of them
+/// mapped through a one-column palette, returns 2^24 samples but decodes
+/// 31 x 2^24: `AtMost(2^28)` refuses it on the codestream's count, which the
+/// returned header does not show. A file of one component that the palette
+/// expands to 31 channels fits as coded and is refused on the expansion.
+#[test]
+fn at_most_holds_the_codestream_and_the_palette_expansion() {
+    let n = 1 << 28;
+    let mut thirty_one = main_header(4096, 4096, 31, 1, &[]);
+    thirty_one.extend_from_slice(&[0xFF, 0x90]);
+    let file = palette_jp2(4096, 31, 1, &thirty_one);
+    let header = read_header(&file).expect("under the default limit");
+    let returned: u64 = header
+        .components
+        .iter()
+        .map(|c| u64::from(c.width) * u64::from(c.height))
+        .sum();
+    assert_eq!(returned, 1 << 24);
+    for m in [
+        refused_at_most(read_header_with(&file, &at_most(n)), n),
+        refused_at_most(decode_with(&file, &at_most(n)), n),
+    ] {
+        assert!(
+            m.starts_with("a decode of 31 components needs 520093696 samples"),
+            "{m}"
+        );
+    }
+
+    let mut one = main_header(4096, 4096, 1, 1, &[]);
+    one.extend_from_slice(&[0xFF, 0x90]);
+    let expands = palette_jp2(4096, 1, 31, &one);
+    assert_eq!(read_header(&expands).unwrap().components.len(), 31);
+    for m in [
+        refused_at_most(read_header_with(&expands, &at_most(n)), n),
+        refused_at_most(decode_with(&expands, &at_most(n)), n),
+    ] {
+        assert!(
+            m.starts_with("palette expansion to 31 channels needs 520093696 samples"),
+            "{m}"
+        );
+    }
+    // As coded, the same file fits the ceiling.
+    let raw = at_most(n).with_raw_channels(true);
+    assert_eq!(
+        read_header_with(&expands, &raw).unwrap().components.len(),
+        1
+    );
+}
+
+/// Padding does not raise the ceiling. A 32769x16384 image is over the
+/// default for a small file; padded past 64 MiB with `COM` segments, a JP2
+/// `xml ` box or bytes after `EOC`, its default limit admits it, and
+/// `AtMost(2^29)` refuses it as it refuses the file without padding.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn padding_does_not_raise_an_at_most_ceiling() {
+    const PAD: usize = (64 << 20) + (64 << 10);
+    let (width, height) = (32769, 16384);
+    let samples = u64::from(width) * u64::from(height);
+    assert!(samples > 1 << 29 && samples <= 8 * PAD as u64);
+    let n = 1 << 29;
+    let head = |extra: &[u8]| {
+        let siz = synth::siz_body([width, height, 0, 0, width, height, 0, 0], &[[7, 1, 1]]);
+        [
+            vec![0xFF, 0x4F],
+            seg(0xFF51, &siz),
+            seg(0xFF52, &synth::cod_body(1, 5, 4, 0)),
+            seg(0xFF5C, &synth::qcd_none_body(2, &[8; 16])),
+            extra.to_vec(),
+        ]
+        .concat()
+    };
+    // One tile-part of six empty packets, then `EOC`.
+    let tail = [synth::tile_part(0, 0, 1, &[], &[0; 6]), vec![0xFF, 0xD9]].concat();
+    let plain = [head(&[]), tail.clone()].concat();
+    // Comments of 65531 bytes each, `Rcom` 1 (Latin-1), enough for `PAD`.
+    let comment = seg(0xFF64, &[&[0, 1][..], &[b' '; 65529][..]].concat());
+    let comments = comment.repeat(PAD.div_ceil(comment.len()));
+    let with_com = [head(&comments), tail].concat();
+    let after_eoc = [plain.clone(), vec![0; PAD]].concat();
+    let ihdr = synth::ihdr_payload(height, width, 1, [7, 7, 0, 0]);
+    let with_xml = synth::jp2_file(
+        &[bx(b"ihdr", &ihdr), bx(b"colr", &synth::colr_enum(17))],
+        &[bx(b"xml ", &vec![b' '; PAD])],
+        &plain,
+        &[],
+    );
+    assert!(
+        read_header(&plain).is_err(),
+        "over the default for a small file"
+    );
+    for (what, bytes) in [
+        ("plain", &plain),
+        ("COM", &with_com),
+        ("after EOC", &after_eoc),
+        ("xml box", &with_xml),
+    ] {
+        if what != "plain" {
+            assert!(bytes.len() >= PAD, "{what}");
+            let header = read_header(bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!((header.width, header.height), (width, height), "{what}");
+        }
+        for m in [
+            refused_at_most(read_header_with(bytes, &at_most(n)), n),
+            refused_at_most(decode_with(bytes, &at_most(n)), n),
+        ] {
+            assert!(
+                m.starts_with("image area 32769x16384 needs 536887296 samples"),
+                "{what}: {m}"
+            );
+        }
+    }
+}

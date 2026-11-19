@@ -1274,6 +1274,32 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
     // As coded, the same file is under the limit and fails only later, on
     // its (now too short) tile data.
     assert!(!matches!(decode(&bytes), Err(Error::Limit(_)) | Ok(_)));
+    // A ceiling of 2^29 holds the sRGB output as it holds the default: the
+    // header read and the decode refuse it alike, with no retry, and the
+    // samples as coded fit it.
+    let ceiling = crate::WorkLimit::AtMost(1 << 29);
+    let srgb = crate::DecodeOptions::default()
+        .with_color(crate::ColorOutput::Srgb)
+        .with_sample_limit(ceiling.clone());
+    for result in [
+        crate::read_header_with(&bytes, &srgb).map(|_| ()),
+        crate::decode_with(&bytes, &srgb).map(|_| ()),
+    ] {
+        let Err(Error::Limit(limit)) = result else {
+            panic!("{result:?}");
+        };
+        assert_eq!(limit.kind(), crate::LimitKind::Samples);
+        assert_eq!(limit.retry_with(), None);
+        assert!(
+            limit.message().starts_with(
+                "sRGB output with the sYCC chroma replicated needs 805306368 samples, over \
+                 the ceiling of `WorkLimit::AtMost(536870912)`"
+            ),
+            "{limit}"
+        );
+    }
+    let coded = crate::DecodeOptions::default().with_sample_limit(ceiling);
+    assert!(crate::read_header_with(&bytes, &coded).is_ok());
 }
 
 // ---------------------------------------------------------------------------
