@@ -154,6 +154,23 @@ pub(crate) fn check_options(options: &DecodeOptions) -> Result<()> {
             )));
         }
     }
+    for (name, limit) in [
+        ("packet_work_limit", &options.packet_work_limit),
+        ("code_block_work_limit", &options.code_block_work_limit),
+    ] {
+        if let WorkLimit::AtMost(n) = limit {
+            return Err(Error::invalid_options(format!(
+                "`DecodeOptions::{name}` is `WorkLimit::AtMost({n})`, but `AtMost` sets only \
+                 `DecodeOptions::sample_limit`"
+            )));
+        }
+    }
+    if options.sample_limit == WorkLimit::AtMost(0) {
+        return Err(Error::invalid_options(
+            "`DecodeOptions::sample_limit` is `WorkLimit::AtMost(0)`, but an image holds at \
+             least one sample",
+        ));
+    }
     if options.max_quality_layers == Some(0) {
         return Err(Error::invalid_options(
             "`DecodeOptions::max_quality_layers` is `Some(0)`, but a decode keeps at least \

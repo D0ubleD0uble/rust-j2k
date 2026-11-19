@@ -800,6 +800,7 @@ mod tests {
         let cap = samples::Cap {
             allowed: 1 << 26,
             default: 1 << 26,
+            at_most: None,
         };
         assert!(matches!(
             check_budget(&channels, &siz, 0, cap),

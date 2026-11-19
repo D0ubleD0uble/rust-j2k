@@ -9,8 +9,8 @@ use crate::pipeline::decode::{check_options, decode_metered};
 use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
 use crate::{
-    DecodeOptions, Error, Header, Image, LimitDetail, LimitKind, Region, Result, decode_with, jp2,
-    read_header_with,
+    DecodeOptions, Error, Header, Image, LimitDetail, LimitKind, Region, Result, WorkLimit,
+    decode_with, jp2, read_header_with,
 };
 
 /// A decoder for a file that arrives a piece at a time, from a network or a
@@ -132,12 +132,14 @@ use crate::{
 /// on the same bytes, such as a marker segment with an invalid field, or an
 /// [`Error::Limit`] that does not depend on how many bytes there are: an image
 /// too large for the target to address, too many precincts or code-blocks, too
-/// many `POC` volumes, or too many bit-planes. More bytes do not undo these, so
+/// many `POC` volumes, or too many bit-planes, or a sample limit of
+/// [`WorkLimit::AtMost`]. More bytes do not undo these, so
 /// once `refine` returns an error, every later `refine` returns the same error
 /// without decoding, until a change of options. Some refusals are not final
 /// while bytes may still come, so `refine` waits on them, with the reason as a
 /// [`Waiting`], and only `finish` reports them: a main header cut short
-/// ([`Error::Incomplete`]), a refusal by the sample limit, the packet or
+/// ([`Error::Incomplete`]), a refusal by the default or a
+/// [`Raised`](WorkLimit::Raised) sample limit, the packet or
 /// code-block work bound or the charge for missing tiles, which more bytes
 /// raise, and a refusal by the bound on the walks of tiles not kept, which the
 /// refines spend together. A caller
@@ -281,11 +283,13 @@ impl IncrementalDecoder {
     /// reduction the file cannot take ([`Error::InvalidOptions`]), such as
     /// [`Region::Tile`]`(500)` on a one-tile file.
     /// [`read_header`](crate::read_header)`(decoder.bytes())` reads the
-    /// header without the decoder's options. The
-    /// sample limit grows with the bytes fed, so a sample-limit
-    /// [`Error::Limit`] here can turn into a header once more bytes come in;
-    /// [`refine`](Self::refine) waits on it instead
-    /// ([`Waiting::SampleLimit`]).
+    /// header without the decoder's options. The default sample limit grows
+    /// with the bytes fed, so a sample-limit [`Error::Limit`] here can turn
+    /// into a header once more bytes come in; [`refine`](Self::refine) waits
+    /// on it instead ([`Waiting::SampleLimit`]). Under a ceiling of
+    /// [`WorkLimit::AtMost`] it does not grow, so the refusal here is final,
+    /// and `refine` returns it as an error too: a server that streams files
+    /// in can refuse one as soon as its main header has come in.
     ///
     /// Call it after a feed rather than after each byte: each call parses
     /// the main header again.
@@ -435,8 +439,13 @@ impl IncrementalDecoder {
                 Some(Refusal::MissingTiles) => Waiting::MissingTiles(limit),
                 Some(Refusal::Work) => Waiting::WorkLimit(limit),
                 Some(Refusal::BoundSpent) => Waiting::BoundSpent(limit),
-                // The sample limit grows with the bytes too.
-                None if limit.kind() == LimitKind::Samples => Waiting::SampleLimit(limit),
+                // The sample limit grows with the bytes too, unless it is a
+                // ceiling the caller set: then more bytes cannot admit it.
+                None if limit.kind() == LimitKind::Samples
+                    && !matches!(self.options.sample_limit, WorkLimit::AtMost(_)) =>
+                {
+                    Waiting::SampleLimit(limit)
+                }
                 None => return Err(self.fail(Error::Limit(limit))),
             },
             Err(error) => return Err(self.fail(error)),
@@ -664,6 +673,11 @@ pub enum Waiting {
     /// grow with the bytes fed, so more bytes may admit it. The
     /// detail is the one [`decode_with`] gives for the bytes fed, with its
     /// [`retry_with`](LimitDetail::retry_with).
+    ///
+    /// A ceiling of [`AtMost`](crate::WorkLimit::AtMost) does not grow, so a
+    /// refusal under it is not a wait: `refine` returns it as an error, and
+    /// every later `refine` returns it again, whatever is fed, until a change
+    /// of options.
     SampleLimit(LimitDetail),
     /// The bytes fed cost more work than the packet work bound
     /// ([`LimitKind::PacketWork`]) or the code-block work bound
