@@ -1118,7 +1118,7 @@ fn a_refine_refused_for_what_was_spent_waits_where_a_later_tiles_walk_fails() {
     check_later_tiles_wait(&bytes, &options, error);
 }
 
-/// `incremental/spent_bound_tier1_then_eph.j2k`, an HT file the
+/// The `incremental/spent_bound_tier1_then_eph*.j2k` files, HT files the
 /// `incremental_decode` fuzz target found (#485): `decode_with` fails in
 /// the block decoding of one tile (an HT suffix length `Scup` out of
 /// range), and a later tile's packets lack the `EPH` its `COD` signals. A
@@ -1130,40 +1130,47 @@ fn a_refine_refused_for_what_was_spent_waits_where_a_later_tiles_walk_fails() {
 #[test]
 fn a_refine_refused_for_what_was_spent_waits_where_an_earlier_tile_fails_its_block_decoding() {
     use rust_j2k::fuzz::{incremental_code_block_work, incremental_with_code_block_work_spent};
-    let bytes =
-        std::fs::read(fixtures().join("incremental/spent_bound_tier1_then_eph.j2k")).unwrap();
-    let options = DecodeOptions::default();
-    let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
-    assert!(
-        matches!(&error, Error::Codestream(m) if m.message().contains("Scup")),
-        "{error:?}"
-    );
-
-    // The work a refine with nothing spent does up to that error, and the
-    // bound it has.
-    let mut fresh = IncrementalDecoder::new(options.clone()).unwrap();
-    fresh.feed(&bytes);
-    assert_eq!(
-        keyed(fresh.refine().map(|_| ())),
-        keyed::<()>(Err(error.clone()))
-    );
-    let (work, bound) = incremental_code_block_work(&fresh);
-    let bound = bound.unwrap();
-    assert!(0 < work && work < bound, "{work} of {bound}");
-
-    for left in 0..work {
-        let mut decoder =
-            incremental_with_code_block_work_spent(options.clone(), bound - left).unwrap();
-        decoder.feed(&bytes);
-        let why = match decoder.refine() {
-            Ok(Refined::Waiting(why)) => why,
-            other => panic!("{left} of {bound} left: {other:?}, where decode_with gives {error:?}"),
-        };
+    for name in [
+        "spent_bound_tier1_then_eph.j2k",
+        "spent_bound_tier1_then_eph_2.j2k",
+    ] {
+        let bytes = std::fs::read(fixtures().join("incremental").join(name)).unwrap();
+        let options = DecodeOptions::default();
+        let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
         assert!(
-            matches!(why, Waiting::BoundSpent(_)),
-            "{left} left: {why:?}"
+            matches!(&error, Error::Codestream(m) if m.message().contains("Scup")),
+            "{name}: {error:?}"
         );
-        check_waiting("spent_bound_tier1_then_eph", &why, &bytes, &options);
+
+        // The work a refine with nothing spent does up to that error, and
+        // the bound it has.
+        let mut fresh = IncrementalDecoder::new(options.clone()).unwrap();
+        fresh.feed(&bytes);
+        assert_eq!(
+            keyed(fresh.refine().map(|_| ())),
+            keyed::<()>(Err(error.clone())),
+            "{name}"
+        );
+        let (work, bound) = incremental_code_block_work(&fresh);
+        let bound = bound.unwrap();
+        assert!(0 < work && work < bound, "{name}: {work} of {bound}");
+
+        for left in 0..work {
+            let mut decoder =
+                incremental_with_code_block_work_spent(options.clone(), bound - left).unwrap();
+            decoder.feed(&bytes);
+            let why = match decoder.refine() {
+                Ok(Refined::Waiting(why)) => why,
+                other => panic!(
+                    "{name}, {left} of {bound} left: {other:?}, where decode_with gives {error:?}"
+                ),
+            };
+            assert!(
+                matches!(why, Waiting::BoundSpent(_)),
+                "{name}, {left} left: {why:?}"
+            );
+            check_waiting(name, &why, &bytes, &options);
+        }
     }
 }
 
