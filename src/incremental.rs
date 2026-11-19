@@ -215,8 +215,8 @@ impl IncrementalDecoder {
         &self.bytes
     }
 
-    /// The options the decoder decodes under: those it was made with, as
-    /// the setters have changed them. [`strict`](DecodeOptions::strict) is
+    /// The decoder's options, as the caller set them: those it was made with,
+    /// as the setters have changed them. [`strict`](DecodeOptions::strict) is
     /// the caller's value, as [`finish`](Self::finish) uses it, not the
     /// strict-off copy [`refine`](Self::refine) decodes under.
     ///
@@ -237,18 +237,20 @@ impl IncrementalDecoder {
     /// decoder.set_resolution_reduction(1)?;
     /// let options = decoder.options().clone().with_strict(false);
     /// let image = decode_with(decoder.bytes(), &options)?;
-    /// println!("{}x{}", image.width, image.height);
+    /// assert_eq!((image.width, image.height), (32, 32));
     /// // With `strict` on, the cut file is refused.
     /// assert!(decode_with(decoder.bytes(), decoder.options()).is_err());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// This is a decode of its own. It spends nothing from the decoder's
-    /// work bounds and does not change when [`refine`](Self::refine) next
-    /// decodes, and the decoder keeps nothing from it, so a viewer that
-    /// wants the image again keeps it. Its bounds are those of the options,
-    /// as for any `decode_with`. With `strict` left on, it refuses a
-    /// stream that is cut short, as [`finish`](Self::finish) does.
+    /// This is a decode of its own, under the bounds of these options. It
+    /// spends nothing from the bounds the refines share and does not change
+    /// when [`refine`](Self::refine) next decodes. The decoder keeps nothing
+    /// from it, so a viewer that wants the image again keeps it itself. Where
+    /// a refine would wait, it returns the error: [`Error::Incomplete`] until
+    /// the main header is whole, and [`Error::Limit`] when a bound refuses the
+    /// bytes so far. With `strict` left on, it refuses a stream that is cut
+    /// short, as [`finish`](Self::finish) does.
     pub fn options(&self) -> &DecodeOptions {
         &self.options
     }
@@ -288,7 +290,8 @@ impl IncrementalDecoder {
     /// cannot buy more than a few packet bounds of work. Setting the
     /// reduction the decoder already has changes nothing. A change does not
     /// make the next refine decode sooner: it still waits for the bytes fed
-    /// to double since the last try. It clears an error an earlier refine
+    /// to double since the last try. For an image now, see
+    /// [`options`](Self::options). It clears an error an earlier refine
     /// returned, as the new options may not give it.
     ///
     /// Options invalid whatever the input are [`Error::InvalidOptions`], as

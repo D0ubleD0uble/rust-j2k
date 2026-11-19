@@ -834,8 +834,7 @@ fn decode_with_the_decoders_options_gives_an_image_after_a_change() {
     )
     .unwrap();
     assert_eq!(image, expected);
-    // Strict `finish` refuses the cut file, and the decode above left the
-    // decoder as it was.
+    // Strict `finish` refuses the cut file.
     assert!(decoder.finish().is_err());
     assert!(decoder.options().strict);
 }
@@ -871,4 +870,32 @@ fn options_reflects_each_setter_and_survives_a_refused_one() {
     let lenient = DecodeOptions::default().with_strict(false);
     let decoder = IncrementalDecoder::new(lenient).unwrap();
     assert!(!decoder.options().strict);
+}
+
+/// The same with a partial image: 1500 bytes short, the last layer holds
+/// only the lowest resolutions, so the image at reduction 1 is incomplete.
+#[test]
+fn decode_with_the_decoders_options_gives_a_partial_image_after_a_change() {
+    let file = std::fs::read(fixtures().join("layers/lrcp.j2k")).unwrap();
+    let prefix = &file[..file.len() - 1500];
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(prefix);
+    assert!(decoder.refine().unwrap().is_some());
+    decoder.set_resolution_reduction(1).unwrap();
+    assert!(decoder.options().strict);
+    let image = decode_with(
+        decoder.bytes(),
+        &decoder.options().clone().with_strict(false),
+    )
+    .unwrap();
+    assert!(!image.report.is_complete());
+    let expected = decode_with(
+        prefix,
+        &DecodeOptions::default()
+            .with_resolution_reduction(1)
+            .with_strict(false),
+    )
+    .unwrap();
+    assert_eq!(image, expected);
+    assert!(decoder.finish().is_err());
 }
