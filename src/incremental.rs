@@ -389,8 +389,8 @@ impl IncrementalDecoder {
     /// in for an error that block decoding, the wavelet or assembly would
     /// meet later in the file: the refine waits where `decode_with` fails,
     /// and `finish` reports that error. A refine refused only for what
-    /// earlier refines spent still reads the packets of the later tiles, so
-    /// an error there comes out as the error `decode_with` gives.
+    /// earlier refines spent waits, even where `decode_with` fails (see
+    /// [`BoundSpent`](Waiting::BoundSpent)).
     pub fn refine(&mut self) -> Result<Refined> {
         if let Some(error) = &self.failed {
             return Err(error.clone());
@@ -691,7 +691,11 @@ pub enum Waiting {
     /// refine walks the packets of the tiles after the cut without decoding
     /// their code-blocks, and the walks of tiles not kept spend the bound on
     /// the walks done again that the refines share (see
-    /// [`RepeatLimit`](Self::RepeatLimit)).
+    /// [`RepeatLimit`](Self::RepeatLimit)). An error in a later tile, or a
+    /// refusal of its walk, ends the count, and the refine waits here
+    /// rather than return it: `decode_with` decodes each tile whole before
+    /// the next, so the code-blocks the refine skipped, at the cut and
+    /// after it, can hold the error `decode_with` meets first.
     ///
     /// Raising the limit is not the way out: the file fits the bound it
     /// has. Decode the bytes fed now,

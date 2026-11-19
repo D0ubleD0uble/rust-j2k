@@ -46,8 +46,8 @@ does again on each refine.
   share can stand in for an error that block decoding, the wavelet or
   assembly would meet later in the file: the refine waits where
   `decode_with` fails, and `finish` reports that error. A refine refused
-  only for what earlier refines spent still reads the packets of the later
-  tiles, so an error there comes out as the error `decode_with` gives.
+  only for what earlier refines spent waits, even where `decode_with`
+  fails (see [Work and memory](#work-and-memory)).
   Once `refine` returns an error, every later `refine` returns
   the same error without decoding, until a change of options (see
   [Changing the options](#changing-the-options)).
@@ -252,8 +252,13 @@ the code-block work of the later tiles, without decoding them. Where its
 own work passes the whole bound, it returns `Waiting::WorkLimit` with the
 refusal a decode of its bytes on its own gives. Where its own work fits
 the whole bound, it returns `Waiting::BoundSpent`: only what the earlier
-refines spent refused it. Either waits for more bytes, which raise the
-bound. `finish` is one more decode, under its own bound, and reports a
+refines spent refused it. An error in a later tile, or a refusal of its
+walk, ends the count, and the refine returns `Waiting::BoundSpent` rather
+than that error. A one-shot decode decodes each tile whole before the next,
+so the code-blocks the refine skipped, in the tile it was refused at and
+after it, can hold the error that decode meets first
+(`a_refine_refused_for_what_was_spent_waits_where_an_earlier_tile_fails_its_block_decoding`).
+Either wait is for more bytes, which raise the bound. `finish` is one more decode, under its own bound, and reports a
 work limit as one decode of the whole file does.
 
 A tile whose walk is not kept (see below) is walked from the start by each
