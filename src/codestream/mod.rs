@@ -621,13 +621,28 @@ impl<'m> FirstPart<'_, 'm> {
 
 /// [`split_tiles`], strict or not (see [`walk_tiles`]).
 fn split_tiles_with(bytes: &[u8], parsed: ParsedHeader, strict: bool) -> Result<Codestream<'_>> {
+    // The tile-parts that start a tile, so the walk can reserve one record
+    // for each: a hop along the `SOT` chain that reads the `SOT` markers only.
+    let mut first_parts = 0usize;
+    visit_first_parts(bytes, &parsed, |_, _| {
+        first_parts += 1;
+        ControlFlow::Continue(())
+    });
     let ParsedHeader {
         header,
         sot_offset,
         ppm,
     } = parsed;
     let mut entries = Vec::new();
-    let tiles = walk_tiles(bytes, sot_offset, &header, &ppm, strict, &mut entries)?;
+    let tiles = walk_tiles(
+        bytes,
+        sot_offset,
+        &header,
+        &ppm,
+        strict,
+        first_parts,
+        &mut entries,
+    )?;
     Ok(Codestream {
         header,
         tiles,
@@ -909,6 +924,7 @@ fn walk_tiles<'a>(
     main: &MainHeader,
     ppm: &[Vec<u8>],
     strict: bool,
+    first_parts: usize,
     entries: &mut Vec<ReportEntry>,
 ) -> Result<Vec<Tile<'a>>> {
     let tile_count = main.siz.num_tiles() as usize;
@@ -922,11 +938,11 @@ fn walk_tiles<'a>(
     // bytes of `slots` and no record.
     const NO_RECORD: u16 = u16::MAX;
     let mut slots = vec![NO_RECORD; tile_count];
-    // Each tile-part starts with a 12-byte `SOT`, so the input bounds the
-    // records needed. Reserving that many, at most one per tile, spares a
-    // codestream that carries every tile any regrowth.
-    let mut tiles: Vec<TileParts<'a>> =
-        Vec::with_capacity(tile_count.min(bytes.len().saturating_sub(sot_offset) / 12 + 1));
+    // One record for each tile-part with `TPsot` 0 the walk will meet, as
+    // `visit_first_parts` follows the same `SOT` chain. A tile whose first
+    // part met has another `TPsot` gets a record too, but the walk refuses it
+    // at once, so the regrowth then does not last.
+    let mut tiles: Vec<TileParts<'a>> = Vec::with_capacity(first_parts.min(tile_count));
     // OpenJPEG's `TPsot == TNsot` correction (see `count_is_one_short`): looked
     // for once, when the first tile has all its declared parts, and from then
     // on added to every `TNsot`.
@@ -960,7 +976,8 @@ fn walk_tiles<'a>(
         })?;
         if *slot == NO_RECORD {
             // The grid holds at most 65535 tiles (`validate_geometry`), so a
-            // record's position is below `NO_RECORD`.
+            // record's position is at most 65534 and this never fails. It
+            // guards the slot should that cap change.
             *slot = u16::try_from(tiles.len())
                 .ok()
                 .filter(|&position| position != NO_RECORD)
