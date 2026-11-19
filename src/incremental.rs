@@ -681,12 +681,13 @@ pub enum Waiting {
     /// [`IncrementalDecoder`]), and each decodes the code-blocks again, so
     /// what they spent is cut from the bound of the next. This refine's own
     /// work fits the whole bound of the bytes fed, so a decode of them on
-    /// its own passes the code-block bound (it may still fail elsewhere):
-    /// the refine is refused only for what was spent before it.
+    /// its own passes the code-block bound: the refine is refused only for
+    /// what was spent before it. That decode can still give another error,
+    /// a packet-work limit included.
     ///
     /// The rule: the refine passed what was left of the bound, and the work
-    /// of its own decode, counted over every tile, is at most the whole
-    /// bound. Where its own work passes the whole bound, the refine waits on
+    /// of its own decode, counted tile by tile, is at most the whole bound.
+    /// Where its own work passes the whole bound, the refine waits on
     /// [`WorkLimit`](Self::WorkLimit) instead. To count that work, the
     /// refine walks the packets of the tiles after the cut without decoding
     /// their code-blocks, and the walks of tiles not kept spend the bound on
@@ -697,8 +698,8 @@ pub enum Waiting {
     /// the next, so the code-blocks the refine skipped, at the cut and
     /// after it, can hold the error `decode_with` meets first.
     ///
-    /// Raising the limit is not the way out: the file fits the bound it
-    /// has. Decode the bytes fed now,
+    /// Raising the code-block limit is not the way out: the bytes fed pass
+    /// the code-block bound they have. Decode them now,
     /// `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`
     /// (see [`options`](IncrementalDecoder::options)), or start a new
     /// decoder. A viewer that streams the file is better served by the

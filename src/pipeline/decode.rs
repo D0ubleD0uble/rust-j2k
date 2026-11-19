@@ -397,6 +397,15 @@ fn decode_codestream(
     // the count does; an error in a later tile's header or packets is then
     // not the one it gives. The refusals of a later tile's walk end the
     // count too, as an error does.
+    //
+    // The tests reach two of the steps that end the count: the reduction
+    // check and the packet walk. The others cannot fail on a codestream that
+    // parsed. `tile_header` fails only on a header the parse, which checks
+    // every tile's header, has already refused, or on an `Error::inconsistent`
+    // invariant (a missing tile). `footprint_of` and
+    // `report_part` fail only on `Error::inconsistent` invariants (in
+    // `footprint_of` and `dwt::Footprint::of`). They end the count
+    // all the same.
     let mut counting: Option<u64> = None;
     // What a step of a tile that fails gives: its error, or, while counting,
     // the end of the count (see `counting`).
