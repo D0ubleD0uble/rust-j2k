@@ -366,6 +366,95 @@ fn a_missing_tile_is_counted_only_when_strict() {
     assert!(decode_with(&bytes, &DecodeOptions::default()).is_err());
 }
 
+/// A tile-part header the decode finds at fault is the decode's to report,
+/// so the header read does not count its tile under the main header, over
+/// whose caps it is: not where the input ends inside its `COD` (which the
+/// decode leaves out with `strict` off), nor where the header runs past its
+/// `Psot` or `Psot` is shorter than the `SOT` (which the decode refuses).
+#[test]
+fn a_tile_part_header_at_fault_is_left_to_the_decode() {
+    let (width, height) = (4096, 4160);
+    let main = blocks_tile(width, height, 0);
+    let main = &main[..main.len() - 17];
+    let cod = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+    let part = synth::tile_part(0, 0, 1, &cod, &[0]);
+    let with_psot = |psot: u32| {
+        let mut part = part.clone();
+        part[6..10].copy_from_slice(&psot.to_be_bytes());
+        [main, &part, &[0xFF, 0xD9]].concat()
+    };
+    let cut = [main, &part[..12 + 6]].concat();
+    let lenient = DecodeOptions::default().with_strict(false);
+    // With `strict` off the decode leaves the cut tile out, and the header
+    // read admits the file too.
+    let header = read_header_with(&cut, &lenient).expect("the header is admitted");
+    assert_eq!((header.width, header.height), (width, height));
+    let image = decode_with(&cut, &lenient).expect("the decode is admitted");
+    assert!(!image.report.is_complete());
+    for bytes in [&cut, &with_psot(14), &with_psot(8)] {
+        let header =
+            read_header_with(bytes, &DecodeOptions::default()).expect("the header is admitted");
+        assert_eq!((header.width, header.height), (width, height));
+        let decoded = decode_with(bytes, &DecodeOptions::default());
+        assert!(matches!(decoded, Err(Error::Codestream(_))), "{decoded:?}");
+    }
+    for psot in [14, 8] {
+        let bytes = with_psot(psot);
+        let header = read_header_with(&bytes, &lenient).expect("the header is admitted");
+        assert_eq!((header.width, header.height), (width, height));
+        let decoded = decode_with(&bytes, &lenient);
+        assert!(matches!(decoded, Err(Error::Codestream(_))), "{decoded:?}");
+    }
+}
+
+/// A tile-part header is read within its `Psot`: where each tile-part's
+/// `Psot` ends inside a `COM` that holds the next `SOT`, so that each header
+/// read past its `Psot` would run through every `COM` after it, the header
+/// read still takes time linear in the file. 1024 tiles over the precinct
+/// cap and 4 MiB of `COM` would take minutes in a debug build so.
+#[test]
+fn a_tile_part_header_is_read_within_its_psot() {
+    let tiles = 1024u32;
+    let mut cod = synth::cod_body(1, 0, 0, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let (tw, th) = (520, 512);
+    let siz = synth::siz_body([tw * tiles, th, 0, 0, tw, th, 0, 0], &[[7, 1, 1]]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    for tile in 0..tiles {
+        // `SOT` and `COM` marker and length in 16 bytes; the `COM` body is
+        // the next tile-part.
+        let psot = if tile + 1 < tiles { 16 } else { 14 };
+        bytes.extend(synth::sot(tile as u16, psot, 0, 1));
+        if tile + 1 < tiles {
+            bytes.extend_from_slice(&[0xFF, 0x64, 0, 14]);
+        }
+    }
+    for _ in 0..1 << 20 {
+        bytes.extend_from_slice(&[0xFF, 0x64, 0, 2]);
+    }
+    bytes.extend_from_slice(&[0xFF, 0x93, 0xFF, 0xD9]);
+    for strict in [true, false] {
+        let options = DecodeOptions::default().with_strict(strict);
+        let start = std::time::Instant::now();
+        let header = read_header_with(&bytes, &options);
+        let spent = start.elapsed();
+        // Every tile-part header runs past its `Psot`, so none is counted.
+        assert!(header.is_ok(), "{header:?}");
+        assert!(spent.as_secs() < 5, "{spent:?}");
+        assert!(matches!(
+            decode_with(&bytes, &options),
+            Err(Error::Codestream(_))
+        ));
+    }
+}
+
 /// A JP2 file is held to the same caps, and its header read refuses as its
 /// decode does.
 #[test]

@@ -275,19 +275,34 @@ main header, reading nothing past the first `SOT`, and refuses a tile over
 a cap there when the decode refuses it too, with the decode's error. A tile
 whose size shows it within both caps is not counted. Only for a tile over a
 cap under the main header does it read further: it follows the tile-parts
-by their `Psot` and reads that tile's first tile-part header (no tile data,
-no `PPM`, nothing joined; a few hundred bytes of heap in
-`tests/tile_geometry_header_alloc.rs`). A tile-part `COD` or `COC` that
-brings the tile within the caps admits it, and so does `strict` off when
-the tile has no tile-part, as the decode then leaves it out; with `strict`
-on such a tile is counted under the main header, and the decode refuses the
-file anyway. A tile-part `COD` that takes a tile over the caps is left to
-the decode. It counts at most 2^22 resolutions of tile-components (about 50
-ms) and leaves any tile after that to the decode, so only a header of many
-large tiles of many components and levels gets that far, and past it
-`read_header_with` can return a header for a file the decode refuses. On a
-file the decode refuses for a fault in its tile-parts, `read_header_with`
-may give the `Limit` instead of the decode's error.
+by their `Psot` and reads that tile's first tile-part header within its
+`Psot` (no tile data, no `PPM`, nothing joined), counting each tile as it
+finds its header, so one tile's coding parameters are held at a time. A
+tile-part `COD` or `COC` that brings the tile within the caps admits it,
+and so does `strict` off when the tile has no tile-part, as the decode then
+leaves it out; with `strict` on such a tile is counted under the main
+header, and the decode refuses the file anyway. A tile-part header the
+decode finds at fault, and a tile-part `COD` that takes a tile over the
+caps, are left to the decode. The count has a budget of 2^22 steps under the
+main header, a step for each resolution of each tile-component, and as many
+under the tiles' own headers, where reading a header that copies the main
+header's coding parameters costs 11 steps a component. It leaves any tile
+past a budget to the decode, so only a header of many large tiles of many
+components and levels gets that far, and past it `read_header_with` can
+return a header for a file the decode refuses. The over-cap tiles are taken
+in index order in batches of 1, 2, 4 and so on, so the tile-parts are
+walked at most 17 times and a refusal at an early tile reads little. So the
+time is linear in the tile-parts plus the budgets, and the heap one tile's
+header. Measured in `tests/tile_geometry_header_alloc.rs` and the tests of
+`tests/tile_geometry_cap.rs`: 300 bytes of heap within the caps and 968 B
+for a tile rescued; 704 KiB, one header, for 4096 components whether 4 or
+256 tiles are rescued; 63 ms for 1000 tiles of 4096 components each with a
+tile-part `COD`; and under a millisecond for 1024 tiles whose `Psot` ends
+inside a `COM` that holds the next tile-part, followed by 4 MiB of `COM`.
+On a file the decode refuses for a fault in its tile-parts,
+`read_header_with` may give the `Limit` instead of the decode's error.
+`IncrementalDecoder::header` reads the header again on each call, so on
+such a file each call costs as much.
 In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
 is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 

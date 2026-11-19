@@ -4,7 +4,9 @@
 //! both where the main header shows the tile within the caps (nothing past
 //! the first `SOT` is read) and where a tile-part `COD` brings a tile the
 //! main header puts over them back within (the tile-part headers are read,
-//! but no tile data is joined or copied).
+//! but no tile data is joined or copied). Where every tile of many
+//! components has a tile-part `COD` that brings it within, the peak is one
+//! tile's coding parameters, however many tiles there are.
 //!
 //! The peak is measured with a counting global allocator, so this file holds a
 //! single test: a second one running in parallel would count into the same
@@ -55,6 +57,33 @@ fn four_parts(width: u32, height: u32, levels: u8, block: u8, extra: &[u8]) -> V
     bytes
 }
 
+/// `tiles` tiles of 8x16 and 4096 components, no levels, 1x1 precincts in
+/// the main header (524,288 precincts a tile, over the 2^18 cap), each with
+/// a tile-part `COD` of the maximal precincts (4096 a tile), and no data.
+fn many_components(tiles: u32) -> Vec<u8> {
+    let components = 4096;
+    let mut cod = synth::cod_body(1, 0, 0, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body(
+        [8 * tiles, 16, 0, 0, 8, 16, 0, 0],
+        &vec![[7, 1, 1]; components],
+    );
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    for tile in 0..tiles {
+        bytes.extend(synth::tile_part(tile as u16, 0, 1, &own, &[]));
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
 /// The heap `read_header_with` holds at its peak over what was live before.
 fn peak_of_header_read(bytes: &[u8]) -> usize {
     let options = DecodeOptions::default();
@@ -81,4 +110,11 @@ fn the_header_read_holds_no_tile_data() {
     let peak = peak_of_header_read(&rescued);
     eprintln!("over the caps under the main header: {peak} bytes at the peak");
     assert!(peak < PEAK_BYTES, "{peak} bytes");
+
+    // Each tile's own header is a copy of the main header's 4096 components;
+    // only one is held at a time, so 256 tiles peak as 4 do.
+    let few = peak_of_header_read(&many_components(4));
+    let many = peak_of_header_read(&many_components(256));
+    eprintln!("4096 components: {few} bytes at the peak for 4 tiles, {many} for 256");
+    assert!(many <= few + PEAK_BYTES, "{few} and {many} bytes");
 }

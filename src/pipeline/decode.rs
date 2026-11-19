@@ -7,6 +7,8 @@
 //! [`decode_metered`] with its [`Ledger`](incremental::Ledger), and
 //! [`check_options`] when it is built.
 
+use std::ops::ControlFlow;
+
 use super::report::{Scope, report_part, report_tile};
 use crate::incremental::Refusal;
 use crate::{
@@ -94,12 +96,14 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
     })
 }
 
-/// The most resolutions of tile-components [`check_geometry`] counts. Past
-/// them it leaves the rest of the tiles to the decode, which counts each
-/// tile as it reads it. A tile its bound admits costs nothing, so only a
+/// The steps [`check_geometry`] takes counting tiles under the main header,
+/// a step for each resolution of each tile-component, and again under the
+/// tiles' own headers, where reading a header costs steps too. Past either
+/// budget it leaves the rest of the tiles to the decode, which counts each
+/// tile as it reads it. A tile its size admits costs nothing, so only a
 /// header that declares many tiles of many components and levels gets this
-/// far: 2^22 take about 50 ms (a header of 4000 tiles of 16384 components
-/// and 5 levels, at about 12 ns a resolution).
+/// far. Both budgets together took 63 ms for 1000 tiles of 4096 components,
+/// each with a tile-part `COD`.
 const GEOMETRY_STEPS: u64 = 1 << 22;
 
 /// Hold the tiles `selection` reads to the precincts and code-blocks `cap`
@@ -111,16 +115,11 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// past the first `SOT`. A tile whose size shows it within both caps is not
 /// counted: it holds at most a code-block for each sample of its components
 /// on the reference grid, and at most a precinct for each sample of each
-/// resolution, of which the main header gives the count. Only when a tile is
-/// over a cap under the main header are the tile-part headers read
-/// ([`codestream::first_part_headers`]), to count it as the decode does: a
-/// tile with a tile-part under its own header (a tile-part `COD` or `COC`
-/// over the main header's), and one with none under the main header with
-/// `strict` on (the decode refuses the file then) and not at all with it off
-/// (the decode leaves it out). A tile whose tile-part header is at fault is
-/// the decode's to report. So a tile-part `COD` that brings a tile within the
-/// caps is admitted, and one that takes a tile over them is left to the
-/// decode. Only an [`Error::Limit`] of the count is returned.
+/// resolution, of which the main header gives the count. Only the tiles over
+/// a cap under the main header have their tile-part headers read
+/// ([`rescue`]), to count them as the decode does. They are taken in index
+/// order in batches of 1, 2, 4 and so on, so a refusal at an early tile
+/// reads little, and the tile-parts are walked at most about 17 times.
 fn check_geometry(
     bytes: &[u8],
     parsed: &codestream::ParsedHeader,
@@ -131,67 +130,157 @@ fn check_geometry(
     let header = &parsed.header;
     let siz = &header.siz;
     let components = siz.components.len() as u64;
-    let resolutions = |header: &codestream::MainHeader| -> u64 {
-        header
-            .components
-            .iter()
-            .map(|params| u64::from(params.coding.decomposition_levels) + 1)
-            .sum()
-    };
     let main_resolutions = resolutions(header);
+    let reads = selection.tiles(siz);
+    let mut next = 0usize;
     let mut steps = 0u64;
-    let mut over = Vec::new();
-    for (index, read) in selection.tiles(siz).into_iter().enumerate() {
-        let Some(rect) = siz.tile_rect(index as u32) else {
-            continue;
+    let mut rescue_steps = 0u64;
+    let mut batch = 1usize;
+    loop {
+        let mut over = Vec::new();
+        let mut finished = true;
+        while let Some(&read) = reads.get(next) {
+            let index = next as u32;
+            next += 1;
+            let Some(rect) = siz.tile_rect(index).filter(|_| read) else {
+                continue;
+            };
+            let (w, h) = (u64::from(rect.x1 - rect.x0), u64::from(rect.y1 - rect.y0));
+            // A component's tile-component is at most w x h, and its
+            // resolution at level s at most (w / 2^s + 1) x (h / 2^s + 1), so
+            // its resolutions together hold at most 2wh + 2(w + h) samples
+            // and one for each resolution.
+            let blocks = components.saturating_mul(w.saturating_mul(h));
+            let precincts = blocks
+                .saturating_mul(2)
+                .saturating_add(components.saturating_mul(2 * (w + h)))
+                .saturating_add(main_resolutions);
+            if blocks <= cap.tile_blocks() && precincts <= cap.tile_precincts() {
+                continue;
+            }
+            steps = steps.saturating_add(main_resolutions);
+            if steps > GEOMETRY_STEPS {
+                next = reads.len();
+                break;
+            }
+            if matches!(tier2::check_tile(header, index, cap), Err(Error::Limit(_))) {
+                over.push(index);
+                if over.len() == batch {
+                    finished = next >= reads.len();
+                    break;
+                }
+            }
+        }
+        if !over.is_empty() && !rescue(bytes, parsed, &over, cap, strict, &mut rescue_steps)? {
+            return Ok(());
+        }
+        if finished {
+            return Ok(());
+        }
+        batch = batch.saturating_mul(2);
+    }
+}
+
+/// The resolutions of tile-components `header` gives a tile.
+fn resolutions(header: &codestream::MainHeader) -> u64 {
+    header
+        .components
+        .iter()
+        .map(|params| u64::from(params.coding.decomposition_levels) + 1)
+        .sum()
+}
+
+/// Count each tile of `over` (in increasing order), each over a cap under
+/// the main header, as the decode counts it, from the tile-part headers in
+/// `bytes` ([`codestream::visit_first_parts`]), and return the
+/// [`Error::Limit`] of the first that the decode refuses too: a tile with a
+/// tile-part under its own header (a tile-part `COD` or `COC` over the main
+/// header's), and one with none under the main header with `strict` on (the
+/// decode refuses the file then) and not at all with it off (the decode
+/// leaves it out). A tile whose tile-part header is at fault is the decode's
+/// to report. So a tile-part `COD` that brings a tile within the caps is
+/// admitted, and one that takes a tile over them is left to the decode.
+///
+/// Each header is counted as the walk finds it, and only that one is held.
+/// `steps` counts the steps taken, across calls; `Ok(false)` means it
+/// passed [`GEOMETRY_STEPS`] and the rest is left to the decode.
+fn rescue(
+    bytes: &[u8],
+    parsed: &codestream::ParsedHeader,
+    over: &[u32],
+    cap: samples::Cap,
+    strict: bool,
+    steps: &mut u64,
+) -> Result<bool> {
+    let mut seen = vec![false; over.len()];
+    // The first tile of `over` not yet seen.
+    let mut unseen = 0;
+    let mut refused: Option<(u32, Error)> = None;
+    let mut spent = false;
+    // Reading a tile's header copies the main header's coding parameters
+    // when the tile-part overrides them, so it is charged a step for each
+    // component and, as that copy costs about ten counting steps per
+    // component, ten more, before it is read.
+    let read_cost = 11 * parsed.header.components.len() as u64;
+    codestream::visit_first_parts(bytes, parsed, |index, part| {
+        let Ok(at) = over.binary_search(&index) else {
+            return ControlFlow::Continue(());
         };
-        if !read {
-            continue;
+        if std::mem::replace(&mut seen[at], true) {
+            return ControlFlow::Continue(());
         }
-        let (w, h) = (u64::from(rect.x1 - rect.x0), u64::from(rect.y1 - rect.y0));
-        // A component's tile-component is at most w x h, and its resolution
-        // at level s at most (w / 2^s + 1) x (h / 2^s + 1), so its
-        // resolutions together hold at most 2wh + 2(w + h) samples and one
-        // for each resolution.
-        let blocks = components.saturating_mul(w.saturating_mul(h));
-        let precincts = blocks
-            .saturating_mul(2)
-            .saturating_add(components.saturating_mul(2 * (w + h)))
-            .saturating_add(main_resolutions);
-        if blocks <= cap.tile_blocks() && precincts <= cap.tile_precincts() {
-            continue;
+        while seen.get(unseen) == Some(&true) {
+            unseen += 1;
         }
-        steps = steps.saturating_add(main_resolutions);
-        if steps > GEOMETRY_STEPS {
-            break;
+        *steps = steps.saturating_add(read_cost);
+        if *steps > GEOMETRY_STEPS {
+            spent = true;
+            return ControlFlow::Break(());
         }
-        if matches!(
-            tier2::check_tile(header, index as u32, cap),
-            Err(Error::Limit(_))
-        ) {
-            over.push(index as u32);
+        // A tile-part header at fault is the decode's to report.
+        if let Ok(own) = part.header() {
+            *steps = steps.saturating_add(resolutions(&own));
+            if *steps > GEOMETRY_STEPS {
+                spent = true;
+                return ControlFlow::Break(());
+            }
+            if refused.as_ref().is_none_or(|(first, _)| index < *first) {
+                if let Err(error @ Error::Limit(_)) = tier2::check_tile(&own, index, cap) {
+                    refused = Some((index, error));
+                }
+            }
         }
-    }
-    if over.is_empty() {
-        return Ok(());
-    }
-    let own = codestream::first_part_headers(bytes, parsed, &over);
-    for (index, own) in over.into_iter().zip(own) {
-        let tile_header = match &own {
-            Some(Ok(own)) => own.as_ref(),
-            Some(Err(_)) => continue,
-            None if strict => header,
-            None => continue,
+        // No tile still to come is before the one refused.
+        match (&refused, over.get(unseen)) {
+            (Some((first, _)), next) if next.is_none_or(|next| first < next) => {
+                ControlFlow::Break(())
+            }
+            _ => ControlFlow::Continue(()),
+        }
+    });
+    if spent {
+        return match refused {
+            Some((_, error)) => Err(error),
+            None => Ok(false),
         };
-        steps = steps.saturating_add(resolutions(tile_header));
-        if steps > GEOMETRY_STEPS {
-            break;
-        }
-        if let Err(error @ Error::Limit(_)) = tier2::check_tile(tile_header, index, cap) {
-            return Err(error);
+    }
+    // A tile with no tile-part: the decode refuses the file with `strict` on,
+    // and leaves the tile out with it off.
+    if strict {
+        let missing = over.iter().zip(&seen).find(|(_, seen)| !**seen);
+        if let Some((&index, _)) = missing {
+            if refused.as_ref().is_none_or(|(first, _)| index < *first) {
+                if let Err(error @ Error::Limit(_)) = tier2::check_tile(&parsed.header, index, cap)
+                {
+                    return Err(error);
+                }
+            }
         }
     }
-    Ok(())
+    match refused {
+        Some((_, error)) => Err(error),
+        None => Ok(true),
+    }
 }
 
 /// The entries of `all` that `order` names, in its order. Each index is in

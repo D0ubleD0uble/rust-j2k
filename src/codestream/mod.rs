@@ -18,6 +18,7 @@ pub mod markers;
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 
 use crate::report::ReportEntry;
 use crate::{Error, Result};
@@ -539,48 +540,83 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
     split_tiles_with(bytes, parsed, true)
 }
 
-/// The coding parameters of each tile `wanted` names (in increasing order),
-/// resolved over the main header from its first tile-part's header markers,
-/// as the tile walk resolves them, for the header read's count of a tile's
-/// code-blocks and precincts.
+/// Visit the first tile-part of each tile in `bytes`, in codestream order,
+/// for the header read's count of a tile's code-blocks and precincts:
+/// `visit` gets the tile's index and the tile-part, whose
+/// [`header`](FirstPart::header) it may read, and stops the walk by
+/// returning [`ControlFlow::Break`].
 ///
-/// The walk follows the `SOT` chain by `Psot` and reads only the markers of
-/// the first tile-part of a wanted tile: no tile data, no `PPM`, and nothing
-/// joined, so it allocates only the headers it returns (and a wanted tile's
-/// `PPT`, read and dropped). It stops where the chain does not go on: at an
-/// `EOC`, a `Psot` of 0, a fault, or the end of `bytes`. A wanted tile it
-/// does not reach is `None`, and one whose tile-part header is at fault is
-/// `Some(Err)`.
-pub(crate) fn first_part_headers<'m>(
+/// The walk follows the `SOT` chain by `Psot` and reads only the `SOT`
+/// markers, and the header markers of a tile-part whose header `visit`
+/// reads, within its `Psot`. The tile-parts' extents do not overlap, so a
+/// walk reads each byte of `bytes` at most once. It stops where the chain
+/// does not go on: at an `EOC`, a `Psot` of 0, a fault, or the end of
+/// `bytes`. A tile that has two first tile-parts, which the tile walk
+/// refuses, is visited twice.
+pub(crate) fn visit_first_parts<'m>(
     bytes: &[u8],
     parsed: &'m ParsedHeader,
-    wanted: &[u32],
-) -> Vec<Option<Result<Cow<'m, MainHeader>>>> {
+    mut visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
+) {
     let main = &parsed.header;
-    let mut found: Vec<Option<Result<Cow<'m, MainHeader>>>> =
-        (0..wanted.len()).map(|_| None).collect();
     let mut offset = parsed.sot_offset;
     while read_u16(bytes, offset) == Some(marker::SOT) {
         let mut cur = Cursor::at(bytes, offset + 2);
         let Ok(sot) = segment(&mut cur).and_then(decode_sot) else {
             break;
         };
-        let slot = match wanted.binary_search(&u32::from(sot.tile_index)) {
-            Ok(at) if sot.tile_part_index == 0 => found.get_mut(at),
-            _ => None,
-        };
-        if let Some(slot @ None) = slot {
-            *slot = Some(
-                read_tile_part_header(&mut cur, main, true)
-                    .and_then(|(tile, _)| resolve_tile_header(main, &tile)),
-            );
+        if sot.tile_part_index == 0 {
+            // A tile-part cut short ends with the input, as the tile walk
+            // reads it with `strict` off.
+            let end = match sot.psot {
+                0 => bytes.len(),
+                psot => offset.saturating_add(psot as usize).min(bytes.len()),
+            };
+            let part = FirstPart {
+                part: bytes.get(..end).filter(|_| cur.pos <= end),
+                pos: cur.pos,
+                main,
+                tile: sot.tile_index,
+                psot: sot.psot,
+            };
+            if visit(u32::from(sot.tile_index), part).is_break() {
+                return;
+            }
         }
         match offset.checked_add(sot.psot as usize) {
             Some(next) if sot.psot != 0 => offset = next,
             _ => break,
         }
     }
-    found
+}
+
+/// A tile's first tile-part, as [`visit_first_parts`] finds it.
+pub(crate) struct FirstPart<'b, 'm> {
+    /// The input up to the tile-part's end, or `None` if its `Psot` is
+    /// shorter than its `SOT`.
+    part: Option<&'b [u8]>,
+    /// Where its header markers start.
+    pos: usize,
+    main: &'m MainHeader,
+    tile: u16,
+    psot: u32,
+}
+
+impl<'m> FirstPart<'_, 'm> {
+    /// The tile's coding parameters, resolved over the main header from the
+    /// tile-part's header markers as the tile walk resolves them: no tile
+    /// data, no `PPM`, and nothing joined. A header that runs past the
+    /// tile-part's `Psot` is at fault, as the tile walk has it.
+    pub(crate) fn header(self) -> Result<Cow<'m, MainHeader>> {
+        let Some(part) = self.part else {
+            return Err(Error::codestream(format!(
+                "tile {} tile-part 0 declares `Psot` {}, shorter than its `SOT`",
+                self.tile, self.psot
+            )));
+        };
+        read_tile_part_header(&mut Cursor::at(part, self.pos), self.main, true)
+            .and_then(|(tile, _)| resolve_tile_header(self.main, &tile))
+    }
 }
 
 /// [`split_tiles`], strict or not (see [`walk_tiles`]).

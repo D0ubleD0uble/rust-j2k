@@ -408,16 +408,20 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// [`sample_limit`](DecodeOptions::sample_limit) sets, with the
 /// [`Error::Limit`] the decode gives, where the decode refuses it too. Only
 /// for a tile over a cap there does it read further: it follows the
-/// tile-parts by their `Psot` and reads that tile's first tile-part header,
-/// allocating only that tile's coding parameters, no tile data. A tile-part
-/// `COD` or `COC` that brings the tile within the caps admits it, as does
-/// [`strict`](DecodeOptions::strict) off when the tile has no tile-part,
-/// since the decode then leaves it out. A tile-part `COD` that takes a tile
-/// over the caps is left to the decode, and so are the tiles after the
-/// first 2^22 resolutions of tile-components counted (about 50 ms): for
-/// those it can return a header for a file the decode refuses. On a file the
-/// decode refuses for a fault in its tile-parts, it may give this
-/// [`Error::Limit`] instead of the decode's error.
+/// tile-parts by their `Psot` and reads that tile's first tile-part header
+/// within its `Psot`, no tile data, holding one tile's coding parameters at
+/// a time. A tile-part `COD` or `COC` that brings the tile within the caps
+/// admits it, as does [`strict`](DecodeOptions::strict) off when the tile
+/// has no tile-part, since the decode then leaves it out. A tile-part
+/// header the decode finds at fault is left to the decode, as is a
+/// tile-part `COD` that takes a tile over the caps. The count has a budget
+/// of 2^22 steps under the main header and as many under the tiles' own;
+/// the tiles past it are left to the decode too. For all of those it can
+/// return a header for a file the decode refuses. The time is linear in the
+/// tile-parts plus the budget: 63 ms for 1000 tiles of 4096 components,
+/// each with a tile-part `COD`. On a file the decode refuses for a fault in
+/// its tile-parts, it may give this [`Error::Limit`] instead of the
+/// decode's error.
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks
