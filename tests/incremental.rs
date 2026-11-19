@@ -1031,39 +1031,81 @@ fn last_tile_without_levels() -> Vec<u8> {
     }
 }
 
-/// A refine refused only for what earlier refines spent of the code-block
-/// bound still reads the packets of the later tiles, and an error it meets
-/// there is the error `decode_with` gives on the bytes fed, not a wait.
-/// The error stays: the next refine gives it again. With nothing spent,
-/// the refine decodes tiles 0 to 7 and gives the same error.
-#[test]
-fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_error() {
+/// Check that a refine of `bytes` under `options`, refused only for what
+/// earlier refines spent of the code-block bound, reads on into the later
+/// tiles and gives the error `decode_with` gives, `expected`, not a wait;
+/// and that the error stays. What the earlier refines left covers one less
+/// than tile 0. A fresh decoder gives the same error.
+fn check_later_tiles_error(bytes: &[u8], options: &DecodeOptions, expected: Error) {
     use rust_j2k::fuzz::{incremental_code_block_work, incremental_with_code_block_work_spent};
-    let bytes = last_tile_without_levels();
-    let options = DecodeOptions::default().with_resolution_reduction(1);
-    let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
-    assert!(matches!(error, Error::InvalidOptions(_)), "{error:?}");
-    assert!(error.to_string().contains("tile 8"), "{error}");
-    let expected = keyed::<()>(Err(error));
+    let expected = keyed::<()>(Err(expected));
     let refined = |decoder: &mut IncrementalDecoder| keyed(decoder.refine().map(|_| ()));
 
     // The work of tile 0, and the bound of a decode of the file.
     let mut first = IncrementalDecoder::new(options.clone().with_region(Region::Tile(0))).unwrap();
-    first.feed(&bytes);
+    first.feed(bytes);
     assert!(first.refine().unwrap().image().is_some());
     let (work, bound) = incremental_code_block_work(&first);
     let bound = bound.unwrap();
     assert!(0 < work && work < bound, "{work} of {bound}");
 
     let mut fresh = IncrementalDecoder::new(options.clone()).unwrap();
-    fresh.feed(&bytes);
+    fresh.feed(bytes);
     assert_eq!(refined(&mut fresh), expected);
 
-    // What the earlier refines left covers one less than tile 0.
-    let mut decoder = incremental_with_code_block_work_spent(options, bound - work + 1).unwrap();
-    decoder.feed(&bytes);
+    let mut decoder =
+        incremental_with_code_block_work_spent(options.clone(), bound - work + 1).unwrap();
+    decoder.feed(bytes);
     assert_eq!(refined(&mut decoder), expected);
     assert_eq!(refined(&mut decoder), expected, "the error stays");
+}
+
+/// A refine refused only for what earlier refines spent of the code-block
+/// bound still reads the later tiles, and an error it meets there is the
+/// error `decode_with` gives on the bytes fed, not a wait. Here tile 8's
+/// header gives no wavelet levels, which a reduction of 1 discards: the
+/// refine meets that error in the tile's header.
+#[test]
+fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_error() {
+    let bytes = last_tile_without_levels();
+    let options = DecodeOptions::default().with_resolution_reduction(1);
+    let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
+    assert!(matches!(error, Error::InvalidOptions(_)), "{error:?}");
+    assert!(error.to_string().contains("tile 8"), "{error}");
+    check_later_tiles_error(&bytes, &options, error);
+}
+
+/// `tiles_even_origin_lossless.j2k`, 40 x 40 in tiles of 16 x 16, with
+/// component 2 subsampled by 20 across, so that it has no samples in tile
+/// 2 (columns 32 to 40, which hold no multiple of 20). Tiles 0 and 1
+/// decode.
+fn third_tile_empty_on_a_component() -> Vec<u8> {
+    let mut bytes = std::fs::read(fixtures().join("tiles_even_origin_lossless.j2k")).unwrap();
+    let siz = bytes.windows(2).position(|w| w == [0xFF, 0x51]).unwrap();
+    // Marker, Lsiz, Rsiz, eight sizes of 4 bytes and Csiz, then 3 bytes a
+    // component: Ssiz, XRsiz, YRsiz.
+    let xrsiz = siz + 40 + 3 * 2 + 1;
+    assert_eq!(bytes[xrsiz], 1);
+    bytes[xrsiz] = 20;
+    bytes
+}
+
+/// The same where the error comes from the packet walk of a later tile:
+/// tile 2 has an empty area on component 2, which the walk refuses before
+/// it reads the tile's packets.
+#[test]
+fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_walk_error() {
+    let bytes = third_tile_empty_on_a_component();
+    let options = DecodeOptions::default();
+    let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            Error::Codestream(m) if m.message() == "tile 2 has an empty area on component 2"
+        ),
+        "{error:?}"
+    );
+    check_later_tiles_error(&bytes, &options, error);
 }
 
 /// After `finish` refuses a work limit, `into_bytes` hands the bytes back,

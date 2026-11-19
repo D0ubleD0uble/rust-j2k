@@ -689,8 +689,9 @@ pub enum Waiting {
     /// bound. Where its own work passes the whole bound, the refine waits on
     /// [`WorkLimit`](Self::WorkLimit) instead. To count that work, the
     /// refine walks the packets of the tiles after the cut without decoding
-    /// their code-blocks, and those walks spend the bound on the walks done
-    /// again that the refines share (see [`RepeatLimit`](Self::RepeatLimit)).
+    /// their code-blocks, and the walks of tiles not kept spend the bound on
+    /// the walks done again that the refines share (see
+    /// [`RepeatLimit`](Self::RepeatLimit)).
     ///
     /// Raising the limit is not the way out: the file fits the bound it
     /// has. Decode the bytes fed now,
@@ -698,9 +699,10 @@ pub enum Waiting {
     /// (see [`options`](IncrementalDecoder::options)), or start a new
     /// decoder. A viewer that streams the file is better served by the
     /// decode of the bytes fed: a new decoder starts without the packet
-    /// walks this one keeps. Later refines of this decoder may wait on this too, though
-    /// more bytes raise the bound, and `finish` decodes under a bound of its
-    /// own. The detail's [`retry_with`](LimitDetail::retry_with) is `None`.
+    /// walks this one keeps. Later refines of this decoder may wait on this
+    /// too, though more bytes raise the bound, and `finish` decodes under a
+    /// bound of its own. The detail's
+    /// [`retry_with`](LimitDetail::retry_with) is `None`.
     BoundSpent(LimitDetail),
     /// The charge for missing tiles passed the packet work bound: each
     /// tile-component of a tile that has not come in yet costs a step,

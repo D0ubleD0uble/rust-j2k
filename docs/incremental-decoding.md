@@ -227,10 +227,10 @@ data, a visit for each packet after it, and the skips past a `POC`
 bitmap. The charges come from the counts the kept walks hold, and a refine
 is refused, as `Waiting::WorkLimit`, where that decode is refused for work,
 and fails where it fails. So the packet bound is the one-shot bound of
-the bytes fed, not cut by what earlier refines spent. A `POC` sequence's volumes emit each
-precinct's layers from the first up, so a kept walk tells a packet emitted
-again by the precinct's count of layers read; its charges are those of
-the bitmap or counts that decode holds. The work the kept
+the bytes fed, not cut by what earlier refines spent. A `POC` sequence's
+volumes emit each precinct's layers from the first up, so a kept walk
+tells a packet emitted again by the precinct's count of layers read; its
+charges are those of the bitmap or counts that decode holds. The work the kept
 walks do is the visits they spend for the first time: a byte-at-a-time
 feeder that refines after every byte spends, over all its refines, the
 visits of one walk of the whole file
