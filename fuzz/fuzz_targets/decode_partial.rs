@@ -26,7 +26,8 @@ mod partial;
 const MAX_CUT_INPUT: usize = 1 << 16;
 
 fuzz_target!(|data: &[u8]| {
-    if budget::over(data) {
+    // The whole decode and each cut prefix are decoded, strict and lenient.
+    if budget::over(data, 8) {
         return;
     }
     let hash = fnv1a(data);

@@ -131,7 +131,7 @@ fn fnv(text: &str) -> u64 {
 /// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its `synth` include to
 /// the end of the file, which this file copies. If it changed, update the
 /// copy here, then both hashes.
-const TARGET_HASH: u64 = 5019425586612062705;
+const TARGET_HASH: u64 = 16133991823362062215;
 /// Hash of this file's copy and its use (from the `synth` include up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.
@@ -310,6 +310,11 @@ fn every_seed_decodes_as_coded_and_srgb_matches_the_table() {
 #[path = "../fuzz/common/budget.rs"]
 mod budget;
 
+/// The budget of a target that decodes an input once.
+fn over_once(data: &[u8]) -> bool {
+    budget::over(data, 1)
+}
+
 /// A codestream main header and first `SOT` marker of one component,
 /// `width` x `height`, in one tile.
 fn header_only(width: u32, height: u32) -> Vec<u8> {
@@ -325,11 +330,11 @@ fn header_only(width: u32, height: u32) -> Vec<u8> {
 }
 
 #[test]
-fn the_fuzz_skip_fires_just_over_2_pow_28_samples_and_not_on_small_inputs() {
-    // 2^28 samples is not over; one more row is.
-    assert!(!budget::over(&header_only(16384, 16384)));
-    assert!(budget::over(&header_only(16384, 16385)));
-    // The decoder's own default limit is twice that, so this decodes on its own.
+fn the_fuzz_skip_fires_just_over_2_pow_26_samples_and_not_on_small_inputs() {
+    // 2^26 samples is not over; one more row is.
+    assert!(!over_once(&header_only(8192, 8192)));
+    assert!(over_once(&header_only(8192, 8193)));
+    // The decoder's own default limit is now 8 times that, so this decodes on its own.
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     // On a 32-bit target this image is past the address cap, so the header
     // does not read and the skip does not apply.
@@ -337,12 +342,17 @@ fn the_fuzz_skip_fires_just_over_2_pow_28_samples_and_not_on_small_inputs() {
     {
         let flat = std::fs::read(fixtures.join("sample_limit/flat_32769x16385_tiled_lossless.j2k"))
             .unwrap();
-        assert!(budget::over(&flat));
+        assert!(over_once(&flat));
     }
+    let small = std::fs::read(fixtures.join("regular_latlon_lossy.j2k")).unwrap();
+    assert!(!over_once(&small));
+    // 6000 x 4000 x 3 is 72M samples, past the budget, though it decodes in
+    // a second or two. The budget skips it; a work cap that bounds time
+    // directly (#480) could let the fuzz targets take it again.
     let rgb = std::fs::read(fixtures.join("sample_limit/rgb_6000x4000.jp2")).unwrap();
-    assert!(!budget::over(&rgb));
-    assert!(!budget::over(b"not a codestream"));
-    assert!(!budget::over(&[]));
+    assert!(over_once(&rgb));
+    assert!(!over_once(b"not a codestream"));
+    assert!(!over_once(&[]));
 }
 
 /// A JP2 file around `codestream` whose `ihdr` box declares `width` x `height`
@@ -370,25 +380,25 @@ fn jp2_with_ihdr(width: u32, height: u32, codestream: &[u8]) -> Vec<u8> {
 #[test]
 fn the_fuzz_skip_counts_siz_when_the_ihdr_box_disagrees() {
     let opts = rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::WorkLimit::Unlimited);
-    // 2^28 + 16384 samples by SIZ, 2^28 by ihdr: the header does not read.
-    let over = jp2_with_ihdr(16384, 16384, &header_only(16384, 16385));
+    // 2^26 + 8192 samples by SIZ, 2^26 by ihdr: the header does not read.
+    let over = jp2_with_ihdr(8192, 8192, &header_only(8192, 8193));
     assert!(rust_j2k::read_header_with(&over, &opts).is_err());
-    assert!(budget::over(&over));
+    assert!(over_once(&over));
     // The same disagreement under the budget stays under it.
-    let under = jp2_with_ihdr(16384, 16384, &header_only(16384, 16383));
+    let under = jp2_with_ihdr(8192, 8192, &header_only(8192, 8191));
     assert!(rust_j2k::read_header_with(&under, &opts).is_err());
-    assert!(!budget::over(&under));
+    assert!(!over_once(&under));
     // A box layer that agrees reads, and the header path counts it.
-    assert!(budget::over(&jp2_with_ihdr(
+    assert!(over_once(&jp2_with_ihdr(
         16384,
         16385,
-        &header_only(16384, 16385)
+        &header_only(8192, 8193)
     )));
     // Sub-sampling and an image offset shrink the count the way the decoder
-    // sees it: 2 x 2 sub-sampling of 32768 x 32770 is 16384 x 16385 samples,
+    // sees it: 2 x 2 sub-sampling of 16384 x 16386 is 8192 x 8193 samples,
     // and a vertical offset of 2 takes one row off.
     let sub = |yo: u32| {
-        let siz = synth::siz_body([32768, 32770, 0, yo, 32768, 32770, 0, yo], &[[7, 2, 2]]);
+        let siz = synth::siz_body([16384, 16386, 0, yo, 16384, 16386, 0, yo], &[[7, 2, 2]]);
         let cs = [
             vec![0xFF, 0x4F],
             synth::seg(0xFF51, &siz),
@@ -399,8 +409,8 @@ fn the_fuzz_skip_counts_siz_when_the_ihdr_box_disagrees() {
         .concat();
         jp2_with_ihdr(1, 1, &cs)
     };
-    assert!(budget::over(&sub(0)));
-    assert!(!budget::over(&sub(2)));
+    assert!(over_once(&sub(0)));
+    assert!(!over_once(&sub(2)));
 }
 
 /// A codestream main header of `comps` components, each `width` x `height`
@@ -456,25 +466,216 @@ fn the_fuzz_skip_counts_every_siz_component_of_a_palettized_file() {
     let opts = rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::WorkLimit::Unlimited);
     let header = rust_j2k::read_header_with(&jp2, &opts).expect("the palette file reads");
     assert_eq!(header.components.len(), 1);
-    assert!(budget::over(&jp2));
+    assert!(over_once(&jp2));
 }
 
 #[test]
 fn the_fuzz_skip_survives_zero_sub_sampling_decoys_and_repeated_markers() {
     // XRsiz = 0 is skipped, not divided by.
-    assert!(!budget::over(&jp2_with_ihdr(
+    assert!(!over_once(&jp2_with_ihdr(
         1,
         1,
         &header_comps(16, 16, 1, 0, 1)
     )));
     // A small pair ahead of the large real codestream does not hide it.
     let decoy = header_only(8, 8);
-    let real = jp2_with_ihdr(16384, 16384, &header_only(16384, 16385));
-    assert!(budget::over(&[decoy, real].concat()));
+    let real = jp2_with_ihdr(8192, 8192, &header_only(8192, 8193));
+    assert!(over_once(&[decoy, real].concat()));
     // Repeated markers cost little: 256 KiB would take seconds if each pair
     // were parsed in full.
     let start = std::time::Instant::now();
     let repeated = [0xFF, 0x4F, 0xFF, 0x51].repeat(64 * 1024);
-    assert!(!budget::over(&repeated));
+    assert!(!over_once(&repeated));
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn the_fuzz_budget_divides_by_the_weight_of_the_target() {
+    // The budget is 2^26 samples for a weight of 1 and shrinks with the weight.
+    for (weight, rows) in [(1u64, 1u32 << 26), (2, 1 << 25), (4, 1 << 24), (8, 1 << 23)] {
+        assert!(!budget::over(&header_only(1, rows), weight));
+        assert!(budget::over(&header_only(1, rows + 1), weight));
+    }
+}
+
+/// A codestream one sample wide and `rows` tall, in one tile, with 8
+/// decomposition levels and 4 x 1024 code blocks: the shape that peaks highest
+/// per sample (about 3.2 times its output) and has the most packets, each one
+/// empty byte.
+fn thin_codestream(rows: u32) -> Vec<u8> {
+    let (levels, xb, yb) = (8u8, 0u8, 8u8);
+    let siz = synth::siz_body([1, rows, 0, 0, 1, rows, 0, 0], &[[7, 1, 1]]);
+    let mut out = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &[0, 0, 0, 1, 0, levels, xb, yb, 0, 1]),
+        synth::seg(
+            0xFF5C,
+            &synth::qcd_none_body(2, &vec![8; 3 * usize::from(levels) + 1]),
+        ),
+    ]
+    .concat();
+    // One packet per precinct of each resolution; a precinct is 2^15 square.
+    let mut packets = 0usize;
+    for r in 0..=u32::from(levels) {
+        let d = 1u64 << (u32::from(levels) - r);
+        packets += u64::from(rows).div_ceil(d).div_ceil(32768).max(1) as usize;
+    }
+    out.extend(synth::tile_part(0, 0, 1, &[], &vec![0u8; packets]));
+    out.extend([0xFF, 0xD9]);
+    out
+}
+
+/// A 4096 x 4096 codestream (2^24 samples) with an empty packet per resolution.
+fn square_codestream() -> Vec<u8> {
+    let side = 4096;
+    let siz = synth::siz_body([side, side, 0, 0, side, side, 0, 0], &[[7, 1, 1]]);
+    [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 5, 4, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 16])),
+        synth::tile_part(0, 0, 1, &[], &[0u8; 6]),
+        vec![0xFF, 0xD9],
+    ]
+    .concat()
+}
+
+/// The inputs at each target's budget that ran past the RSS limit or the
+/// timeout before the budget counted them (#477): the target, the name of the
+/// file `J2K_WRITE_FUZZ_BUDGET_INPUTS` writes, and the bytes the target is
+/// given.
+fn budget_inputs() -> Vec<(&'static str, &'static str, Vec<u8>)> {
+    // Trailing zeros make the stateful targets feed and retry in more pieces.
+    let thin = |weight: u32| {
+        let mut file = thin_codestream((1 << 26) / weight);
+        file.resize(16 * 1024, 0);
+        file
+    };
+    let cs = square_codestream();
+    // The body of a `jp2_boxes` input with variant bit 2 clear: a whole file
+    // with its own `jp2c`, which wins over the pinned codestream.
+    let ihdr = synth::ihdr_for(&cs);
+    let colr = synth::bx(b"colr", &synth::colr_enum(17));
+    let body = [
+        synth::JP2_SIGNATURE.to_vec(),
+        synth::ftyp_jp2(),
+        synth::bx(b"jp2h", &[ihdr, colr].concat()),
+        synth::bx(b"jp2c", &cs),
+    ]
+    .concat();
+    vec![
+        ("incremental_decode", "incr_thin_2p23", thin(8)),
+        ("decode_partial", "partial_thin_2p23", thin(8)),
+        ("decode", "decode_thin_2p24", thin(4)),
+        (
+            "retry_ladder",
+            "rl_thin_2p25",
+            [vec![0x02], thin(2)].concat(),
+        ),
+        (
+            "window_crop",
+            "wc_thin_2p26",
+            [vec![0; 8], thin(1)].concat(),
+        ),
+        ("jp2_boxes", "boxes_sq_2p24", [vec![0u8], body].concat()),
+    ]
+}
+
+/// The weight each target passes to `budget::over`.
+fn weight(target: &str) -> u64 {
+    match target {
+        "incremental_decode" | "decode_partial" => 8,
+        "decode" | "jp2_boxes" => 4,
+        "retry_ladder" => 2,
+        _ => 1,
+    }
+}
+
+// Writes the inputs to a directory when `J2K_WRITE_FUZZ_BUDGET_INPUTS` names
+// one, to run them through the real targets:
+// `fuzz/target/*/release/<target> -rss_limit_mb=4096 -timeout=30 -runs=1 <file>`.
+#[test]
+fn the_inputs_at_each_fuzz_budget_read_and_are_not_skipped() {
+    let opts = rust_j2k::DecodeOptions::default();
+    let dir = std::env::var_os("J2K_WRITE_FUZZ_BUDGET_INPUTS");
+    for (target, name, input) in budget_inputs() {
+        // The bytes a target hands the budget: `jp2_boxes` wraps its body
+        // around a pinned codestream, the others use the file after any
+        // control bytes.
+        let data = match target {
+            "jp2_boxes" => {
+                synth::wrap_jp2_boxes(input[0], &fixture("regular_latlon_lossy.j2k"), &input[1..])
+            }
+            "retry_ladder" => input[1..].to_vec(),
+            "window_crop" => input[8..].to_vec(),
+            _ => input.clone(),
+        };
+        let w = weight(target);
+        assert_eq!(
+            budget::declared(&data),
+            u128::from((1u64 << 26) / w),
+            "{name} sits exactly at the budget of {target}"
+        );
+        assert!(!budget::over(&data, w), "{name}, {target}");
+        assert!(
+            budget::over(&data, w * 2),
+            "{name}, a budget twice as tight"
+        );
+        rust_j2k::read_header_with(&data, &opts).unwrap_or_else(|e| panic!("{name}: {e}"));
+        if let Some(dir) = &dir {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(Path::new(dir).join(name), &input).unwrap();
+        }
+    }
+}
+
+#[test]
+fn each_fuzz_target_passes_the_weight_this_file_pins() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/fuzz_targets");
+    let mut seen = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let target = path.file_stem().unwrap().to_str().unwrap().to_string();
+        // Comments don't count: a call left behind in one is not a call.
+        let source: String = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let calls: Vec<&str> = source
+            .match_indices("budget::over(")
+            .map(|(i, _)| &source[i..])
+            .collect();
+        if target == "header" {
+            assert!(
+                source.contains("budget::declared(data)"),
+                "header must bound its decode by the SIZ count"
+            );
+            assert!(calls.is_empty(), "header uses `declared`");
+            continue;
+        }
+        if calls.is_empty() {
+            // Targets that decode no whole image. A new target is not on this
+            // list until someone decides it needs no budget.
+            assert!(
+                ["tile_body", "icc_srgb", "mq", "tier1_block", "ht_block"]
+                    .contains(&target.as_str()),
+                "{target} calls neither `budget::over` nor `budget::declared`; \
+                 budget it, or add it to the unbudgeted list"
+            );
+            continue;
+        }
+        assert_eq!(calls.len(), 1, "{target}: one budget call");
+        let call = calls[0];
+        let args = &call[..call.find(')').unwrap()];
+        let n: u64 = args.rsplit(',').next().unwrap().trim().parse().unwrap();
+        assert_eq!(n, weight(&target), "{target}: weight in the target");
+        seen.push(target);
+    }
+    seen.sort();
+    let mut expected: Vec<&str> = budget_inputs().iter().map(|i| i.0).collect();
+    expected.sort();
+    assert_eq!(seen, expected, "every budgeted target has an input above");
 }

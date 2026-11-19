@@ -91,7 +91,7 @@ fuzz_target!(|input: &[u8]| {
     let Some([xs, ys, xo, yo, xt, yt, xto, yto]) = siz(data) else {
         return;
     };
-    if xs <= xo || ys <= yo || xt == 0 || yt == 0 || budget::over(data) {
+    if xs <= xo || ys <= yo || xt == 0 || yt == 0 || budget::over(data, 1) {
         return;
     }
     let image = (xo, yo, xs, ys);
