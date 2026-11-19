@@ -7,7 +7,8 @@
 //! limits give.
 //!
 //! The first input byte picks where each of the three limits starts
-//! (`Default`, or a factor of 1 or 2), a resolution reduction of 0 or 1, and
+//! (`Default`, or a factor of 1 or 2, and for the sample limit also a
+//! ceiling of `AtMost`), a resolution reduction of 0 or 1, and
 //! `strict`, as `incremental_decode`'s first bytes steer its options; the
 //! rest is the file. An input that starts with a codestream's `SOC`
 //! (`FF 4F`) or the JP2 signature box is instead the whole file with a zero
@@ -23,6 +24,11 @@
 //! An input that declares more samples than the fuzz budget allows
 //! (`common/budget.rs`) is only read for its header: a sample limit refusal
 //! there is checked as one step of the ladder, with no decode.
+//!
+//! A sample limit of `AtMost` is a ceiling the caller set, below the default
+//! for most inputs, so it is not on the ladder: a refusal by it gives no
+//! retry, and ends the ladder in one step. An image under it has the samples
+//! the same options give with the default sample limit.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -53,7 +59,8 @@ const KINDS: [LimitKind; 3] = [
 ];
 
 /// A low starting limit from two bits: `Default` or a factor of 1 or 2.
-/// `WorkLimit` sets nothing below the default bound.
+/// No factor sets a bound below the default; `AtMost` does, for the sample
+/// limit alone (see [`low_samples`]).
 fn low(bits: u64) -> WorkLimit {
     match bits & 3 {
         0 | 1 => WorkLimit::Default,
@@ -61,6 +68,18 @@ fn low(bits: u64) -> WorkLimit {
         _ => WorkLimit::Raised(2),
     }
 }
+
+/// The sample limit's start: as [`low`], or for the value 1 a ceiling of
+/// [`CEILING`] samples, which the fuzzer's small images pass and miss.
+fn low_samples(bits: u64) -> WorkLimit {
+    match bits & 3 {
+        1 => WorkLimit::AtMost(CEILING),
+        _ => low(bits),
+    }
+}
+
+/// The `AtMost` start of the sample limit: 2^12 samples, a 64 x 64 image.
+const CEILING: u64 = 1 << 12;
 
 /// A limit as a number to compare: `Default` is `Raised(1)`.
 fn rank(limit: &WorkLimit) -> u64 {
@@ -98,6 +117,16 @@ fn with_field(options: &DecodeOptions, kind: LimitKind, limit: WorkLimit) -> Dec
 /// option raises it.
 fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, WorkLimit)> {
     let kind = limit.kind();
+    // A refusal by a ceiling the caller set names nothing to retry with, so
+    // the ladder ends in this one step.
+    if kind == LimitKind::Samples && matches!(options.sample_limit, WorkLimit::AtMost(_)) {
+        assert!(
+            limit.retry_with().is_none() && options.with_retry(limit).is_none(),
+            "a refusal under {:?} gives a retry: {limit:?}",
+            options.sample_limit
+        );
+        return None;
+    }
     // A limit no option raises names no factor to raise it to.
     if !kind.is_adjustable() {
         assert!(
@@ -156,7 +185,7 @@ fuzz_target!(|input: &[u8]| {
     let base = budget::options(16);
     let mut options = base
         .clone()
-        .with_sample_limit(low(control))
+        .with_sample_limit(low_samples(control))
         .with_packet_work_limit(low(control >> 2))
         .with_code_block_work_limit(low(control >> 4))
         .with_resolution_reduction(((control >> 6) & 1) as u8)
@@ -175,6 +204,35 @@ fuzz_target!(|input: &[u8]| {
         .into_iter()
         .all(|kind| *field(&options, kind) == WorkLimit::Default);
     let mut result = decode_with(data, &options);
+    if matches!(options.sample_limit, WorkLimit::AtMost(_)) {
+        // Below the default: a refusal by it is one step, and an image under
+        // it is the image of the same options with the default sample limit.
+        // In bounds: the two decodes at up to 2 each.
+        if let Err(Error::Limit(limit)) = &result {
+            let next = step(&options, limit);
+            assert!(
+                limit.kind() != LimitKind::Samples || next.is_none(),
+                "a ceiling's refusal did not end the ladder"
+            );
+        }
+        if let Ok(image) = &result {
+            let uncapped = options.clone().with_sample_limit(WorkLimit::Default);
+            let reference = decode_with(data, &uncapped).unwrap_or_else(|e| {
+                panic!("an image under a ceiling, the default sample limit gives {e:?}")
+            });
+            assert_eq!(
+                (image.width, image.height, &image.components, &image.jp2),
+                (
+                    reference.width,
+                    reference.height,
+                    &reference.components,
+                    &reference.jp2
+                ),
+                "the image under a ceiling differs from the decode without it"
+            );
+        }
+        return;
+    }
     // The decode under the default limits, when the options start above
     // them. At the defaults it is `result` before any step.
     let default = (!at_defaults).then(|| decode_with(data, &defaults));

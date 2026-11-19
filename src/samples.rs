@@ -20,6 +20,8 @@
 //! `i32` output per byte of input, and a small one is held to the floor.
 //! The input is all the bytes the decode is given: a JP2 file's boxes
 //! count. OpenJPEG has no such limit; it allocates what the header declares.
+//! [`WorkLimit::AtMost`] sets the limit to its `n` instead, whatever the
+//! input, and a refusal under it names no retry ([`over`]).
 //!
 //! While a palette expands, the index plane and the columns are held together,
 //! so the peak there is about twice the output: a one-column palette at
@@ -103,6 +105,9 @@ pub(crate) struct Cap {
     pub(crate) allowed: u64,
     /// The default limit for the decode's input ([`default_limit`]).
     pub(crate) default: u64,
+    /// The `n` of a [`WorkLimit::AtMost`] limit: a ceiling the caller set,
+    /// which a refusal names, with no retry. `None` for the other limits.
+    pub(crate) at_most: Option<u64>,
 }
 
 impl Cap {
@@ -117,13 +122,18 @@ impl Cap {
 }
 
 /// The samples a decode of `bytes` bytes of input may hold under `limit`:
-/// `limit` applied to [`default_limit`], and never past
-/// [`ADDRESSABLE_SAMPLES`].
+/// `limit` applied to [`default_limit`], or the `n` of `AtMost(n)` whatever
+/// the input, and never past [`ADDRESSABLE_SAMPLES`].
 pub(crate) fn cap(limit: &WorkLimit, bytes: usize) -> Cap {
     let default = default_limit(bytes as u64);
+    let at_most = match limit {
+        WorkLimit::AtMost(n) => Some(*n),
+        _ => None,
+    };
     Cap {
         allowed: limit.apply(default).min(ADDRESSABLE_SAMPLES),
         default,
+        at_most,
     }
 }
 
@@ -132,7 +142,9 @@ pub(crate) fn cap(limit: &WorkLimit, bytes: usize) -> Cap {
 /// allows fewer. It names the option, and the smallest
 /// [`WorkLimit::Raised`] factor of the cap's default that admits `total` (or,
 /// past any factor, only [`WorkLimit::Unlimited`]), or says that the target
-/// cannot address that many.
+/// cannot address that many. Under [`WorkLimit::AtMost`] it names that
+/// ceiling and no retry: the caller set it, so no option the decoder could
+/// name is one the caller would take.
 pub(crate) fn over(what: &str, total: u64, cap: Cap) -> Error {
     if total > ADDRESSABLE_SAMPLES {
         return Error::limit_fixed(
@@ -140,6 +152,15 @@ pub(crate) fn over(what: &str, total: u64, cap: Cap) -> Error {
             format!(
                 "{what} needs {total} samples, more than this target can address \
              ({ADDRESSABLE_SAMPLES})"
+            ),
+        );
+    }
+    if let Some(n) = cap.at_most {
+        return Error::limit_unhinted(
+            crate::LimitKind::Samples,
+            format!(
+                "{what} needs {total} samples, over the ceiling of `WorkLimit::AtMost({n})` \
+                 (see `DecodeOptions::sample_limit`)"
             ),
         );
     }
@@ -261,6 +282,7 @@ mod tests {
     const DEFAULT: Cap = Cap {
         allowed: MAX_IMAGE_SAMPLES,
         default: MAX_IMAGE_SAMPLES,
+        at_most: None,
     };
 
     fn message(total: u64) -> String {
@@ -407,6 +429,71 @@ mod tests {
             let limit_words = format!("over the sample limit of {} ", default.allowed);
             assert!(limit.message().contains(&limit_words), "{limit}");
         }
+    }
+
+    /// `AtMost(n)` allows `n` whatever the input's length: not a factor of the
+    /// default, nor capped by it, and padding past 64 MiB does not raise it.
+    /// Only the address cap is lower.
+    #[test]
+    fn at_most_is_absolute() {
+        for bytes in [0, 1 << 26, (1 << 26) + 1, usize::MAX] {
+            for n in [1, 1000, MAX_IMAGE_SAMPLES - 1, MAX_IMAGE_SAMPLES + 1] {
+                let n = n.min(ADDRESSABLE_SAMPLES);
+                let cap = cap(&WorkLimit::AtMost(n), bytes);
+                assert_eq!(cap.allowed, n, "AtMost({n}), {bytes} bytes");
+                assert_eq!(cap.at_most, Some(n), "AtMost({n}), {bytes} bytes");
+                assert_eq!(cap.default, default_limit(bytes as u64));
+            }
+            assert_eq!(
+                cap(&WorkLimit::AtMost(u64::MAX), bytes).allowed,
+                ADDRESSABLE_SAMPLES
+            );
+        }
+        for limit in [
+            WorkLimit::Default,
+            WorkLimit::Raised(2),
+            WorkLimit::Unlimited,
+        ] {
+            assert_eq!(cap(&limit, 0).at_most, None, "{limit:?}");
+        }
+    }
+
+    /// A refusal under `AtMost(n)` names the ceiling and the count, and no
+    /// factor: it has nothing to retry with.
+    #[test]
+    fn a_refusal_under_at_most_names_the_ceiling_and_no_retry() {
+        let n = 1 << 20;
+        for bytes in [0, (1 << 26) + 1] {
+            let Error::Limit(limit) = over(
+                "image area 2048x1024",
+                1 << 21,
+                cap(&WorkLimit::AtMost(n), bytes),
+            ) else {
+                unreachable!()
+            };
+            assert_eq!(limit.kind(), crate::LimitKind::Samples);
+            assert_eq!(limit.retry_with(), None, "{limit}");
+            let m = limit.message();
+            assert!(
+                m.starts_with(
+                    "image area 2048x1024 needs 2097152 samples, over the ceiling of \
+                     `WorkLimit::AtMost(1048576)` (see `DecodeOptions::sample_limit`)"
+                ),
+                "{m}"
+            );
+            assert!(!m.contains("Raised"), "{m}");
+            assert!(!m.contains("Unlimited"), "{m}");
+        }
+        // Past the address space the refusal is still that one.
+        let error = over(
+            "image area",
+            ADDRESSABLE_SAMPLES + 1,
+            cap(&WorkLimit::AtMost(n), 0),
+        );
+        assert!(
+            crate::error::is_fixed_limit(&error, crate::LimitKind::AddressSpace),
+            "{error:?}"
+        );
     }
 
     /// A refusal under a raised limit names a factor of the default, not of

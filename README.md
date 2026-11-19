@@ -304,7 +304,9 @@ costly to decode. The limits protect you from a small hostile file that asks
 for gigabytes of memory or minutes of work. By default an image may hold 2^29
 values (2 GiB as `i32`): a 10980 × 10980 three-band satellite image, or an RGB
 image of about 179 megapixels. Past 64 MiB of input the limit is 8 values per
-byte of the file.
+byte of the file. For a ceiling that does not grow with the file, set
+`sample_limit` to `WorkLimit::AtMost(n)`: at most `n` values, whatever the
+file's size or padding.
 
 Three limits can be raised: `sample_limit`, `packet_work_limit` and
 `code_block_work_limit` on `DecodeOptions`. For a file you trust, set them to

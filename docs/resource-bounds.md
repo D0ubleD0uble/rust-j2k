@@ -9,13 +9,14 @@ allocates, the packet-header walk (tier 2) and the code-block decoding
 (tier 1). A file past a cap is refused with `Error::Limit` before the work
 is done. The error's `LimitDetail` says which cap it was (`kind()`, a
 `LimitKind`) and gives a `WorkLimit::Raised(n)` to retry with
-(`retry_with()`), and its message names both. For the samples it is the
-smallest factor that admits the image. For the two work bounds it is the
-larger of the smallest factor that admits what the decode has seen and twice
-the factor the bound ran under, and the file may need more, so a loop of
-`with_retry` calls takes about log2 of the factor the file needs. It is `None`
-when the refusal shows no factor. A caller can retry from `kind()` and
-`retry_with()` without reading the message, and `DecodeOptions::with_retry`
+(`retry_with()`), and its message names both. Under a sample limit of
+`WorkLimit::AtMost` it gives none (see [A fixed ceiling](#a-fixed-ceiling)).
+For the samples it is the smallest factor that admits the image. For the two
+work bounds it is the larger of the smallest factor that admits what the decode
+has seen and twice the factor the bound ran under, and the file may need more,
+so a loop of `with_retry` calls takes about log2 of the factor the file needs.
+It is `None` when the refusal shows no factor. A caller can retry from `kind()`
+and `retry_with()` without reading the message, and `DecodeOptions::with_retry`
 sets the option. A retry can still fail with another error once past the cap.
 
 | Bound | Default | Option in `DecodeOptions` | Margin over encoder output | Tests |
@@ -88,11 +89,15 @@ every component's code-block geometry in each tile read, which the count
 bounds as the next sections rely on. A palette's expanded channels and the
 channels sRGB output adds are counted over the returned area only. So the
 sample buffers peak within the same multiple of the limit as for a whole
-decode. The parse of the tile-parts is not counted: it keeps about 440 bytes
-for each tile-part in the file, read or not, which is about 29 MB at 65535
-tiles and at most about 21 times the file's size, and a file whose whole
-image is over the limit now gets that far under a window. A
-256x256 window of a 32769x16385 image in 4096x4096 tiles fits the default,
+decode. The parse of the tile-parts is not counted: once the codestream has a
+tile-part, it keeps a record for each tile the SIZ grid declares, read or not
+and present or not, of about 870 bytes allocated (and as much resident,
+measured), plus about 20 bytes for each further tile-part of a tile. That is at
+most about 57 MB, at the 65535 tiles a codestream may declare, whatever the
+file's size: an 82-byte file with one tile-part that declares 65535 tiles
+allocates 53 MB (`tests/tile_record_alloc.rs`). A file whose whole image is
+over the limit now gets that far under a window. A 256x256 window of a
+32769x16385 image in 4096x4096 tiles fits the default,
 while a window of one 23171x23171 tile counts the whole tile. A
 `DecodeOptions::components` subset does not lower the count, as the walk
 still builds the geometry of the components it leaves out; under a window it
@@ -102,9 +107,10 @@ OpenJPEG has no such limit: it allocates what the header declares and fails
 only when the allocation does.
 
 `DecodeOptions::sample_limit` raises the limit (`WorkLimit::Raised(n)`,
-n times the default for the same input) or lifts it
-(`WorkLimit::Unlimited`). The refusal names the
-option and the smallest `Raised` factor that admits the file. Even
+n times the default for the same input), lifts it
+(`WorkLimit::Unlimited`), or sets a fixed ceiling (`WorkLimit::AtMost(n)`,
+see [A fixed ceiling](#a-fixed-ceiling)). Under the first two the refusal
+names the option and the smallest `Raised` factor that admits the file. Even
 `Unlimited` refuses an image whose 4-byte samples would pass `isize::MAX`
 bytes, so the buffer sizes cannot overflow `usize`, on 32-bit targets
 included. Below that, under `Unlimited`, an allocation the system cannot
@@ -225,14 +231,34 @@ padding too. The work bounds count only tile data, but the inverse DWT and the
 output scale with the sample limit, which padding raises: about 175 ns per byte
 of padding, measured.
 
-No `WorkLimit` sets a limit below `Default`. For a ceiling that does not grow
-with the input, call `read_header_with` with no region and no component subset,
-and refuse the file when the summed area of its components is too large. Under a
-region or a subset the header describes only what is returned, while the limit
-counts every tile read, whole and in every component (a 16x16 window of one
-23171x23171 tile counts 536.9 M samples). So compute that count from
-`image_area` and `tiles` instead: the whole tiles the region touches, in every
-component.
+### A fixed ceiling
+
+`WorkLimit::AtMost(n)` sets the sample limit to `n` samples, whatever the
+input's length, so padding cannot raise it. It is not a factor of the default:
+`n` is the limit for a file of 100 bytes and for one of 1 GB alike, and only
+the samples the target can address cap it. It holds every count the default
+does: every component of the tiles read (a 16x16 window of one 23171x23171 tile
+counts 536.9 M samples), a palette's expanded channels, and the channels sRGB
+output adds. `read_header_with` with the same options refuses what the decode
+would, before any tile is read.
+
+The output is then at most `4·n` bytes, and the sample buffers peak at no more
+than about 3.2 times that, from the measurements above (a square tile measured
+1.35, resident; the allocated bytes measure 2.0 for a square tile and up to
+about 2.3 for a tile one or two samples wide). Other memory is on top: the
+input itself, and the parse of the tile-parts, which keeps a record for each
+tile the image declares, at most about 57 MB (see [The sample
+limit](#the-sample-limit)). `AtMost(2^26)` is 256 MiB of output and sample
+buffers of at most about 820 MiB, plus the input and up to about 57 MB for the
+tile records. So bound the input's size under `AtMost` too, as the decode holds
+the input. An `IncrementalDecoder` can hold up to about three times one
+decode's peak, plus the bytes fed.
+
+A refusal under `AtMost(n)` has kind `Samples` and names the ceiling and the
+count. It gives no retry (`retry_with` is `None`, so `with_retry` is `None`):
+the caller set the ceiling. In an `IncrementalDecoder` it is an error, not a
+wait, as more bytes do not raise it. `AtMost(0)`, and `AtMost` on
+`packet_work_limit` or `code_block_work_limit`, is `InvalidOptions`.
 
 ## The tier-2 work bound
 

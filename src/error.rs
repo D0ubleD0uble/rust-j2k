@@ -38,7 +38,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// | `Incomplete` | The file is cut short before its header ends. If it is still arriving, try again with more of it, or feed it to an [`IncrementalDecoder`](crate::IncrementalDecoder). |
 /// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read, or a valid request it does not do: sRGB output from sub-sampled sYCC chroma on an area smaller than the image (`DecodeOptions::region`). |
 /// | `Limit` | The file is larger or costlier than the decoder allows by default. If [`LimitDetail::retry_with`] gives a [`WorkLimit`], it can be retried with that limit raised. |
-/// | `InvalidOptions` | The decode options are invalid, for any file (`WorkLimit::Raised(0)`, `max_quality_layers` of `Some(0)`, sRGB output with `raw_channels` or `components`, an empty window, no component or one named twice) or for this one (a reduction past the file's levels, a window outside the image, a tile or component the image does not have, an area that holds no sample of a returned component at the reduction). |
+/// | `InvalidOptions` | The decode options are invalid, for any file (`WorkLimit::Raised(0)`, `WorkLimit::AtMost(0)`, `AtMost` on a work bound, `max_quality_layers` of `Some(0)`, sRGB output with `raw_channels` or `components`, an empty window, no component or one named twice) or for this one (a reduction past the file's levels, a window outside the image, a tile or component the image does not have, an area that holds no sample of a returned component at the reduction). |
 /// | `Inconsistent` | An internal error; please file a bug. |
 ///
 /// Damage does not always show as the first row. A flipped bit in a header
@@ -185,7 +185,10 @@ pub enum Error {
     /// For one of them, [`LimitDetail::kind`] names the limit, and
     /// [`LimitDetail::retry_with`] gives the `WorkLimit` to retry with, which
     /// the message names too. It is a hint (see
-    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file.
+    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file. A
+    /// refusal under a sample limit of
+    /// [`WorkLimit::AtMost`](crate::WorkLimit::AtMost) gives none: the
+    /// caller set that ceiling.
     ///
     /// The other guards have no option, so a file past one of them is refused
     /// whatever the options. A tile may hold at most 2^20 code-blocks and
@@ -197,7 +200,8 @@ pub enum Error {
     Limit(LimitDetail),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
     /// invalid for this codestream, or that are invalid whatever the input
-    /// (sRGB output with `raw_channels`, or a limit of `WorkLimit::Raised(0)`).
+    /// (sRGB output with `raw_channels`, a limit of `WorkLimit::Raised(0)` or
+    /// `WorkLimit::AtMost(0)`, or `AtMost` on a work bound).
     /// The input itself may be fine.
     InvalidOptions(ErrorDetail),
     /// A decoder invariant was violated (declared geometry and decoded state
@@ -438,7 +442,8 @@ impl LimitDetail {
     /// refusal names at least twice the factor it ran under, so retries in a
     /// loop take about log2 of the factor the file needs. It is also `None`
     /// for a packet work refusal that shows no factor, such as one while
-    /// reading the header.
+    /// reading the header, and for a sample limit refusal under
+    /// [`AtMost`](WorkLimit::AtMost), a ceiling the caller set.
     ///
     /// [`DecodeOptions::with_retry`](crate::DecodeOptions::with_retry)
     /// applies it to the option `kind` names.

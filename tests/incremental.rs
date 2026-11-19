@@ -80,12 +80,14 @@ fn is_sample_limit(error: &Error) -> bool {
 
 /// What a refine on `prefix` must give: the strict-off decode, with a main
 /// header cut short and a refusal by a work bound or the sample limit as
-/// `None`.
+/// `None`. A sample limit of `AtMost` is a ceiling more bytes do not raise,
+/// so its refusal is the error.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
+    let ceiling = matches!(options.sample_limit, WorkLimit::AtMost(_));
     match decode_with(prefix, &options.clone().with_strict(false)) {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
-        Err(error) if is_work_limit(&error) || is_sample_limit(&error) => Ok(None),
+        Err(error) if is_work_limit(&error) || (is_sample_limit(&error) && !ceiling) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -686,6 +688,77 @@ fn a_sample_limit_refusal_is_a_wait() {
         Err(Error::Limit(limit)) => assert_eq!(limit.kind(), LimitKind::Samples),
         other => panic!("{other:?}"),
     }
+}
+
+/// Under `AtMost` the sample limit does not grow with the bytes, so its
+/// refusal is final: once the flat file's main header is in, `refine` returns
+/// the refusal the one-shot decode gives, as an error with no retry, and
+/// `header` returns it too. It sticks as the rest of the file comes in, and
+/// `finish` gives it. A change of region clears it: a window inside one tile
+/// fits the ceiling.
+#[test]
+fn a_sample_limit_refusal_under_at_most_is_final() {
+    let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
+    let bytes = std::fs::read(&path).unwrap();
+    let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(1 << 29));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let mut first = None;
+    for piece in bytes.chunks(4096) {
+        decoder.feed(piece);
+        let prefix = &bytes[..decoder.bytes_fed()];
+        match (decoder.refine(), &first) {
+            (Ok(Refined::Waiting(Waiting::MoreBytes { .. } | Waiting::HeaderIncomplete)), None) => {
+                assert!(matches!(decoder.header(), Ok(None) | Err(Error::Limit(_))));
+            }
+            (Err(error), None) => {
+                let Error::Limit(limit) = &error else {
+                    panic!("{} bytes: {error:?}", prefix.len());
+                };
+                assert_eq!(limit.kind(), LimitKind::Samples, "{limit}");
+                assert_eq!(limit.retry_with(), None, "{limit}");
+                assert!(
+                    limit.message().contains("`WorkLimit::AtMost(536870912)`"),
+                    "{limit}"
+                );
+                let one_shot = refine_oracle(prefix, &options);
+                assert_eq!(
+                    keyed(Err(error.clone())),
+                    keyed(one_shot),
+                    "{} bytes",
+                    prefix.len()
+                );
+                first = Some(format!("{error:?}"));
+            }
+            // Every refine after it gives it again, more bytes or not.
+            (Err(error), Some(first)) => assert_eq!(&format!("{error:?}"), first),
+            (other, _) => panic!("{} bytes: {other:?}", prefix.len()),
+        }
+        if let Some(first) = &first {
+            match decoder.header() {
+                Err(error) => assert_eq!(&format!("{error:?}"), first),
+                other => panic!("{} bytes: {other:?}", prefix.len()),
+            }
+        }
+    }
+    let first = first.expect("a refine reached the ceiling");
+    assert_eq!(decoder.bytes_fed(), bytes.len());
+    match decoder.finish() {
+        Err(error) => assert_eq!(format!("{error:?}"), first),
+        other => panic!("{other:?}"),
+    }
+    // A window inside the first tile reads that tile alone.
+    decoder
+        .set_region(Region::Window(Window::new(0, 0, 256, 256)))
+        .unwrap();
+    assert!(decoder.header().unwrap().is_some());
+    // The error is gone. The refusal came early in the file, so the bytes
+    // have doubled since that try, and the refine decodes the window.
+    match decoder.refine() {
+        Ok(Refined::Image(image)) => assert_eq!((image.width, image.height), (256, 256)),
+        other => panic!("{other:?}"),
+    }
+    let image = decoder.finish().expect("the window fits the ceiling");
+    assert_eq!((image.width, image.height), (256, 256));
 }
 
 /// Each refine is held to the sample limit of its own prefix: a window
