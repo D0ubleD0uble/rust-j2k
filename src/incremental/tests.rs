@@ -905,6 +905,85 @@ fn a_refused_refine_is_charged_the_tiles_before_the_cut() {
     assert_eq!(decoder.spent.blocks, bound, "{first} of tile 0 is charged");
 }
 
+/// The code-block work a refine of `bytes` under `options`, with nothing
+/// spent, spends, after checking that it gives the image.
+fn own_work(bytes: &[u8], options: &DecodeOptions) -> u64 {
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(bytes);
+    assert!(decoder.refine().unwrap().image().is_some());
+    decoder.spent.blocks
+}
+
+/// `refine` on a decoder whose earlier refines spent `spent`, fed `bytes`.
+fn refine_after(bytes: &[u8], options: &DecodeOptions, spent: u64) -> crate::Result<Refined> {
+    let mut decoder =
+        IncrementalDecoder::with_code_block_work_spent(options.clone(), spent).unwrap();
+    decoder.feed(bytes);
+    decoder.refine()
+}
+
+/// `options` under a code-block work cap of `cap` (see
+/// [`crate::fuzz::with_code_block_work_cap`]).
+fn capped(cap: u64) -> DecodeOptions {
+    crate::fuzz::with_code_block_work_cap(DecodeOptions::default(), cap)
+}
+
+/// At the tile the rest of the bound cannot cover, a refine whose own work
+/// is exactly the whole bound waits on `BoundSpent`: under a cap of `W`,
+/// the work of `small_blocks_128_b4.j2k`, with 1 spent. With nothing spent
+/// it decodes, and under a cap of `W - 1` its own work passes the bound, so
+/// it waits on `WorkLimit`, as a decode of it on its own is refused.
+#[test]
+fn a_refine_whose_own_work_is_the_whole_bound_waits_on_bound_spent() {
+    let bytes = fixture("bench/small_blocks_128_b4.j2k");
+    let work = own_work(&bytes, &capped(u64::MAX / 8));
+    let options = capped(work);
+    assert!(matches!(
+        refine_after(&bytes, &options, 0),
+        Ok(Refined::Image(_))
+    ));
+    let refined = refine_after(&bytes, &options, 1);
+    assert!(is_bound_spent(&refined), "{work}: {refined:?}");
+    let under = capped(work - 1);
+    assert!(decode_with(&bytes, &under.clone().with_strict(false)).is_err());
+    let refined = refine_after(&bytes, &under, 1);
+    assert!(
+        matches!(
+            &refined,
+            Ok(Refined::Waiting(Waiting::WorkLimit(m))) if m.kind() == LimitKind::CodeBlockWork
+        ),
+        "{refined:?}"
+    );
+}
+
+/// Past the tile the rest of the bound cannot cover, a refine counts the
+/// later tiles' work against the whole bound: one whose own work reaches
+/// exactly the whole bound at its last tile waits on `BoundSpent`, and one
+/// whose own work passes it there waits on `WorkLimit`, with the refusal a
+/// decode of the file on its own gives. On `tiles_even_origin_lossless.j2k`,
+/// under a cap of `W`, the work of all nine tiles, what the earlier refines
+/// left covers one less than tile 0.
+#[test]
+fn a_counted_refine_whose_own_work_reaches_the_whole_bound_waits_on_bound_spent() {
+    let bytes = fixture("tiles_even_origin_lossless.j2k");
+    let measure = capped(u64::MAX / 8);
+    let whole = own_work(&bytes, &measure);
+    let first = own_work(&bytes, &measure.with_region(crate::Region::Tile(0)));
+    assert!(0 < first && first < whole, "{first} of {whole}");
+    let refined = refine_after(&bytes, &capped(whole), whole - first + 1);
+    assert!(is_bound_spent(&refined), "{first} of {whole}: {refined:?}");
+    let under = capped(whole - 1);
+    let Err(Error::Limit(expected)) = decode_with(&bytes, &under.clone().with_strict(false)) else {
+        panic!("the file fits one less");
+    };
+    match refine_after(&bytes, &under, whole - first) {
+        Ok(Refined::Waiting(Waiting::WorkLimit(limit))) => {
+            assert_eq!(format!("{limit:?}"), format!("{expected:?}"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 /// A refine whose own code-block work passes the whole bound waits on
 /// `WorkLimit`, whatever the earlier refines spent, and carries the refusal
 /// a decode of its bytes on its own gives, hint included: not one counted

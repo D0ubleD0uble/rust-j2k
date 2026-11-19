@@ -223,7 +223,11 @@ refusal the one-shot decode gives, hint included; a code-block `WorkLimit`
 may also stand in for an error the one-shot decode gives later in the file.
 `BoundSpent`, a refusal by what earlier refines spent of the code-block
 bound, comes only where the one-shot decode passes that bound, and carries
-no hint.
+no hint. Only the first 4 refines that are checked against a decode of their
+own (`MAX_CHECKED_TRIES`: a due one, or one that gives an image or an error)
+are compared with the one-shot oracle; the later ones only refine, and an
+error they give is still held to stick. Every refine that is not due is
+still checked for its `MoreBytes`.
 
 A due refine may also wait (`Waiting::RepeatLimit`) when the bound on the
 walks of tiles not kept, which all the refines spend together, refuses it

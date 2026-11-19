@@ -385,9 +385,12 @@ impl IncrementalDecoder {
     ///
     /// Any error is the one `decode_with` gives on those bytes, and more
     /// bytes will not clear it: each later call returns it again, until a
-    /// change of options. A refusal by a bound all the refines spend
-    /// together can stand in for an error later in the file: the refine
-    /// waits where `decode_with` fails, and `finish` reports that error.
+    /// change of options. A refusal by a bound the refines share can stand
+    /// in for an error that block decoding, the wavelet or assembly would
+    /// meet later in the file: the refine waits where `decode_with` fails,
+    /// and `finish` reports that error. A refine refused only for what
+    /// earlier refines spent still reads the packets of the later tiles, so
+    /// an error there comes out as the error `decode_with` gives.
     pub fn refine(&mut self) -> Result<Refined> {
         if let Some(error) = &self.failed {
             return Err(error.clone());
@@ -678,19 +681,24 @@ pub enum Waiting {
     /// [`IncrementalDecoder`]), and each decodes the code-blocks again, so
     /// what they spent is cut from the bound of the next. This refine's own
     /// work fits the whole bound of the bytes fed, so a decode of them on
-    /// its own passes it: the refine is refused only for what was spent
-    /// before it.
+    /// its own passes the code-block bound (it may still fail elsewhere):
+    /// the refine is refused only for what was spent before it.
     ///
     /// The rule: the refine passed what was left of the bound, and the work
     /// of its own decode, counted over every tile, is at most the whole
     /// bound. Where its own work passes the whole bound, the refine waits on
-    /// [`WorkLimit`](Self::WorkLimit) instead.
+    /// [`WorkLimit`](Self::WorkLimit) instead. To count that work, the
+    /// refine walks the packets of the tiles after the cut without decoding
+    /// their code-blocks, and those walks spend the bound on the walks done
+    /// again that the refines share (see [`RepeatLimit`](Self::RepeatLimit)).
     ///
     /// Raising the limit is not the way out: the file fits the bound it
     /// has. Decode the bytes fed now,
     /// `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`
     /// (see [`options`](IncrementalDecoder::options)), or start a new
-    /// decoder. Later refines of this decoder may wait on this too, though
+    /// decoder. A viewer that streams the file is better served by the
+    /// decode of the bytes fed: a new decoder starts without the packet
+    /// walks this one keeps. Later refines of this decoder may wait on this too, though
     /// more bytes raise the bound, and `finish` decodes under a bound of its
     /// own. The detail's [`retry_with`](LimitDetail::retry_with) is `None`.
     BoundSpent(LimitDetail),

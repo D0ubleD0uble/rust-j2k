@@ -1001,6 +1001,71 @@ fn a_refine_refused_for_what_earlier_refines_spent_waits_on_bound_spent() {
     );
 }
 
+/// `tiles_even_origin_lossless.j2k` with a tile `COD` of no wavelet levels
+/// in the header of its last tile, tile 8, so that a decode at reduction 1
+/// decodes tiles 0 to 7 and then fails on tile 8, before its packets.
+fn last_tile_without_levels() -> Vec<u8> {
+    let bytes = std::fs::read(fixtures().join("tiles_even_origin_lossless.j2k")).unwrap();
+    // The main header's `COD`, with its count of levels set to 0.
+    let cod_at = bytes.windows(2).position(|w| w == [0xFF, 0x52]).unwrap();
+    let len = usize::from(u16::from_be_bytes([bytes[cod_at + 2], bytes[cod_at + 3]]));
+    let mut cod = bytes[cod_at..cod_at + 2 + len].to_vec();
+    // Marker, length, Scod, progression, layers (2), MCT, then the levels.
+    assert_eq!(cod[9], 2, "the main header's levels");
+    cod[9] = 0;
+    // Walk the tile-parts by their `Psot` to tile 8's.
+    let mut at = bytes.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    loop {
+        let isot = u16::from_be_bytes([bytes[at + 4], bytes[at + 5]]);
+        let psot = u32::from_be_bytes(bytes[at + 6..at + 10].try_into().unwrap());
+        if isot == 8 {
+            let mut out = bytes[..at].to_vec();
+            out.extend(&bytes[at..at + 6]);
+            out.extend((psot + cod.len() as u32).to_be_bytes());
+            out.extend(&bytes[at + 10..at + 12]);
+            out.extend(&cod);
+            out.extend(&bytes[at + 12..]);
+            return out;
+        }
+        at += psot as usize;
+    }
+}
+
+/// A refine refused only for what earlier refines spent of the code-block
+/// bound still reads the packets of the later tiles, and an error it meets
+/// there is the error `decode_with` gives on the bytes fed, not a wait.
+/// The error stays: the next refine gives it again. With nothing spent,
+/// the refine decodes tiles 0 to 7 and gives the same error.
+#[test]
+fn a_refine_refused_for_what_was_spent_gives_a_later_tiles_error() {
+    use rust_j2k::fuzz::{incremental_code_block_work, incremental_with_code_block_work_spent};
+    let bytes = last_tile_without_levels();
+    let options = DecodeOptions::default().with_resolution_reduction(1);
+    let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
+    assert!(matches!(error, Error::InvalidOptions(_)), "{error:?}");
+    assert!(error.to_string().contains("tile 8"), "{error}");
+    let expected = keyed::<()>(Err(error));
+    let refined = |decoder: &mut IncrementalDecoder| keyed(decoder.refine().map(|_| ()));
+
+    // The work of tile 0, and the bound of a decode of the file.
+    let mut first = IncrementalDecoder::new(options.clone().with_region(Region::Tile(0))).unwrap();
+    first.feed(&bytes);
+    assert!(first.refine().unwrap().image().is_some());
+    let (work, bound) = incremental_code_block_work(&first);
+    let bound = bound.unwrap();
+    assert!(0 < work && work < bound, "{work} of {bound}");
+
+    let mut fresh = IncrementalDecoder::new(options.clone()).unwrap();
+    fresh.feed(&bytes);
+    assert_eq!(refined(&mut fresh), expected);
+
+    // What the earlier refines left covers one less than tile 0.
+    let mut decoder = incremental_with_code_block_work_spent(options, bound - work + 1).unwrap();
+    decoder.feed(&bytes);
+    assert_eq!(refined(&mut decoder), expected);
+    assert_eq!(refined(&mut decoder), expected, "the error stays");
+}
+
 /// After `finish` refuses a work limit, `into_bytes` hands the bytes back,
 /// and decoding them with the limit raised gives what `decode_with` gives.
 #[test]
