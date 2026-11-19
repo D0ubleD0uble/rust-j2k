@@ -71,6 +71,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bound, since more bytes raise the limit; `finish` reports the refusal (#437).
 - HTJ2K decoding is about 1.5x to 2x faster on large files on one thread.
   The output is unchanged.
+- The code-blocks and precincts one tile may hold grow with the sample
+  limit: max(2^20, the samples it allows / 512) code-blocks and max(2^18,
+  those samples / 2048) precincts. At the defaults, up to 64 MiB of input
+  the caps stay 2^20 and 2^18; `WorkLimit::Raised` and `WorkLimit::AtMost`
+  on `sample_limit` move them at any size. `LimitKind::TileCodeBlocks` and
+  `LimitKind::TilePrecincts` are now adjustable: a refusal names a
+  `WorkLimit::Raised` factor of `DecodeOptions::sample_limit` as its
+  `retry_with`, which `with_retry` sets, and under `WorkLimit::AtMost(n)`
+  the caps are set from `n` and a refusal names no retry. An
+  `IncrementalDecoder` waits on such a refusal (`Waiting::SampleLimit`)
+  rather than failing, unless under `AtMost`. `read_header_with` now counts
+  the tiles it would read under the main header and refuses a tile past a
+  cap that the decode refuses too, at any input size, where it used to
+  return the header; it reads a tile's tile-part header only for a tile
+  over a cap there. A 40000 x 40000 one-tile file in 32x32 code-blocks padded to 210 MB, refused before
+  at every option, now decodes at the defaults, bit-exact against
+  `opj_decompress` (17.5 s and 7.65 GiB at full resolution, 0.43 s at
+  reduction 3). The bookkeeping of a tile at the caps is at most about a
+  third of the output the same limit allows (#476).
 
 ### Fixed
 

@@ -303,7 +303,9 @@ pub use window::{Region, Window};
 ///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
 ///   times the output for a square tile, about 2.7 GiB at 2^29 samples,
 ///   and more for a tall, narrow tile or while a palette expands (see [the
-///   sample limit][sample-limit]). This is for the one-shot functions; an
+///   sample limit][sample-limit]). The limit also sets the code-blocks and
+///   precincts one tile may hold: one for each 512 and each 2048 samples it
+///   allows, and at least 2^20 and 2^18. This is for the one-shot functions; an
 ///   [`IncrementalDecoder`] keeps per-tile state and can hold up to about
 ///   three times one decode's peak, plus the bytes fed and a table of 24 bytes
 ///   per tile index up to the highest seen (about 1.5 MiB for 65535 tiles).
@@ -353,9 +355,11 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// Use [`read_header_with`] to read the header for other options.
 ///
 /// A readable header does not mean [`decode`] will succeed. The tile data is
-/// not read (except the packet headers of the last tile of a JP2 file whose
-/// tile-part has `Psot = 0`, described on [`read_header_with`]), so it can
-/// still be damaged, unsupported, or past a work bound ([`Error::Limit`]).
+/// not read (except the tile-part headers of a tile over a cap on its
+/// code-blocks or precincts under the main header, and the packet headers of
+/// the last tile of a JP2 file whose tile-part has `Psot = 0`, both described
+/// on [`read_header_with`]), so it can still be damaged, unsupported, or past
+/// a work bound ([`Error::Limit`]).
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -378,11 +382,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 ///
 /// The input is detected as [`decode`] detects it. The read covers a JP2
 /// file's boxes and the codestream's main header, up to the first tile-part
-/// (`SOT` marker), and stops there, so a file whose tile data is cut short or
-/// missing still has a readable header. Input that ends before the first
-/// `SOT` marker is whole, from the empty input on and in a JP2 file's boxes
-/// too, is [`Error::Incomplete`]: wait for more bytes and try again. Nothing
-/// is allocated for the samples.
+/// (`SOT` marker), and stops there, unless a tile is over a cap on its
+/// code-blocks or precincts under the main header (see below). So a file
+/// whose tile data is cut short or missing still has a readable header.
+/// Input that ends before the first `SOT` marker is whole, from the empty
+/// input on and in a JP2 file's boxes too, is [`Error::Incomplete`]: wait
+/// for more bytes and try again. Nothing is allocated for the samples or the
+/// tile data.
 /// One case reads further: in a JP2 file whose last tile-part has `Psot = 0`
 /// (no length) and whose `jp2c` box ends before the file does, the packet
 /// headers of that tile-part's tile are walked to see whether the codestream
@@ -396,6 +402,26 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// this bound as it does the decode's. Past a bound the walk gives up, and the
 /// codestream is taken to run to the end of the file, as for any `Psot = 0`
 /// tile-part; [`decode_with`] does the same.
+///
+/// The read also counts the code-blocks and precincts of each tile it would
+/// read under the main header, and refuses a tile past the caps
+/// [`sample_limit`](DecodeOptions::sample_limit) sets, with the
+/// [`Error::Limit`] the decode gives, where the decode refuses it too. Only
+/// for a tile over a cap there does it read further: it follows the
+/// tile-parts by their `Psot` and reads that tile's first tile-part header
+/// within its `Psot`, no tile data, holding one tile's coding parameters at
+/// a time. A tile-part `COD` or `COC` that brings the tile within the caps
+/// admits it, as does [`strict`](DecodeOptions::strict) off when the tile
+/// has no tile-part, since the decode then leaves it out. A tile-part
+/// header the decode finds at fault is left to the decode, as is a
+/// tile-part `COD` that takes a tile over the caps. The count has a budget
+/// of 2^22 steps under the main header and as many under the tiles' own;
+/// the tiles past it are left to the decode too. For all of those it can
+/// return a header for a file the decode refuses. The time is linear in the
+/// tile-parts plus the budget: 63 ms for 1000 tiles of 4096 components,
+/// each with a tile-part `COD`. On a file the decode refuses for a fault in
+/// its tile-parts, it may give this [`Error::Limit`] instead of the
+/// decode's error.
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks
@@ -867,6 +893,16 @@ pub struct DecodeOptions {
     /// [`components`](Self::components) subset does not lower the count, as
     /// the packets of every component of a tile read are still walked.
     ///
+    /// The limit also sets how many code-blocks and precincts one tile may
+    /// hold, counted at full resolution over its components: one code-block
+    /// for each 512 samples it allows and one precinct for each 2048, and at
+    /// least 2^20 and 2^18. A tile past either is refused with an
+    /// [`Error::Limit`] of [`LimitKind::TileCodeBlocks`] or
+    /// [`LimitKind::TilePrecincts`], whose `retry_with` raises this option.
+    /// Their bookkeeping is at most about a third of the output the same
+    /// limit allows past 2^29 (see [code-blocks and precincts per
+    /// tile](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#code-blocks-and-precincts-per-tile)).
+    ///
     /// `Raised(n)` allows `n` times the default for the same input: `n` times
     /// 2^29 samples up to 64 MiB, and `8 * n` samples per byte past it. So
     /// a factor never allows less than the default, and the factor a refusal
@@ -895,8 +931,9 @@ pub struct DecodeOptions {
     /// 57 MB (see [the sample
     /// limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
     /// The palette expansion and sRGB output are checked against `n` too,
-    /// and so is every tile a region reads. A refusal under it gives no
-    /// retry. [`read_header_with`] with the same options refuses the file
+    /// and so is every tile a region reads, and the code-blocks and
+    /// precincts a tile may hold are set from `n`. A refusal under it gives
+    /// no retry. [`read_header_with`] with the same options refuses the file
     /// as the decode would, before any tile is read, so a server can check
     /// a file with it first.
     ///
@@ -1369,7 +1406,9 @@ impl DecodeOptions {
         let retry = limit.retry_with()?;
         let options = self.clone();
         match limit.kind() {
-            LimitKind::Samples => Some(options.with_sample_limit(retry)),
+            LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+                Some(options.with_sample_limit(retry))
+            }
             LimitKind::PacketWork => Some(options.with_packet_work_limit(retry)),
             LimitKind::CodeBlockWork => Some(options.with_code_block_work_limit(retry)),
             _ => None,
