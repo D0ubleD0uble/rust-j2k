@@ -1261,36 +1261,38 @@ fn walk_tiles<'a>(
 
     // The records are in the order their tiles' first parts arrived; the
     // tiles go out in index order. Tiles mostly arrive in order, which the
-    // sort finds in one pass.
+    // sort finds in one pass. The output is reserved once, as a vector grown
+    // by doubling would peak at half as much again while the records live.
     tiles.sort_unstable_by_key(|tile| tile.index);
-    tiles
-        .into_iter()
-        .filter(|tile| !tile.parts.is_empty())
-        .map(|tile| {
-            // One part: borrow it. Several: join them, which is exact — a
-            // tile-part holds a whole number of packets (B.9), so nothing
-            // straddles the seam.
-            let data = match <[&[u8]; 1]>::try_from(tile.parts.as_slice()) {
-                Ok([only]) => Cow::Borrowed(only),
-                Err(_) => Cow::Owned(tile.parts.concat()),
-            };
-            let part_ends = tile
-                .parts
-                .iter()
-                .scan(0, |end, part| {
-                    *end += part.len();
-                    Some(*end)
-                })
-                .collect();
-            Ok(Tile {
-                index: u32::from(tile.index),
-                header: tile.header,
-                data,
-                part_ends,
-                packed_headers: tile.packed_headers,
+    let mut found = Vec::with_capacity(tiles.iter().filter(|tile| !tile.parts.is_empty()).count());
+    for tile in tiles {
+        if tile.parts.is_empty() {
+            continue;
+        }
+        // One part: borrow it. Several: join them, which is exact — a
+        // tile-part holds a whole number of packets (B.9), so nothing
+        // straddles the seam.
+        let data = match <[&[u8]; 1]>::try_from(tile.parts.as_slice()) {
+            Ok([only]) => Cow::Borrowed(only),
+            Err(_) => Cow::Owned(tile.parts.concat()),
+        };
+        let part_ends = tile
+            .parts
+            .iter()
+            .scan(0, |end, part| {
+                *end += part.len();
+                Some(*end)
             })
-        })
-        .collect()
+            .collect();
+        found.push(Tile {
+            index: u32::from(tile.index),
+            header: tile.header,
+            data,
+            part_ends,
+            packed_headers: tile.packed_headers,
+        });
+    }
+    Ok(found)
 }
 
 /// Whether the tile-part chain from `from` holds another part of tile `tile`

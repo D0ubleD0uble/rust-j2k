@@ -1,24 +1,22 @@
 //! The parse of the tile-parts keeps one record for each tile that has a
 //! tile-part, read or not, and 2 bytes for each tile the SIZ grid declares;
 //! no sample limit counts them. This holds them to the figures
-//! `docs/resource-bounds.md` gives: about 830 bytes for each tile present
-//! (832 measured with the rest of the decode), and about 128 KiB for 65535
-//! declared tiles with one present, however long its tile-part.
+//! `docs/resource-bounds.md` gives: about 720 bytes for each tile present,
+//! measured with the rest of the decode, and about 128 KiB for 65535 declared
+//! tiles with one present, however long its tile-part.
 //!
 //! Every file declares the most tiles a codestream can: 255x257 tiles of one
 //! sample, 65535 in all. One has every tile, each in one 15-byte tile-part,
-//! and is decoded strict; its ceiling is tight enough that a records vector
-//! regrown by doubling would pass it. The others have only the tile-part of
-//! tile 0, of 15 bytes (82 bytes in all) or with 100 KB of padding after its
-//! packet: with `strict` off they decode, and strict they are refused for
-//! the missing tiles. Under `WorkLimit::AtMost(4096)` tile 0 decodes, and the
-//! decode's peak is the records.
+//! and is decoded strict. Its records and its tiles are each reserved once,
+//! so the decode makes no `realloc` of 1 MiB or more. The others have only
+//! the tile-part of tile 0, of 15 bytes (82 bytes in all) or with 100 KB of
+//! padding after its packet: with `strict` off they decode, and strict they
+//! are refused for the missing tiles. Under `WorkLimit::AtMost(4096)` tile 0
+//! decodes, and the decode's peak is the records.
 //!
 //! This counts the bytes allocated, a `realloc` as the new block allocated
-//! before the old one is freed. The resident growth measured about the same
-//! as the allocated bytes, as these allocations are small and all written.
-//! The records are smaller on a 32-bit target, so the test runs on 64-bit
-//! ones.
+//! before the old one is freed. The records are smaller on a 32-bit target,
+//! so the test runs on 64-bit ones.
 //!
 //! The peak is measured with a counting global allocator, so this file holds a
 //! single test: a second one running in parallel would count into the same
@@ -34,7 +32,7 @@
 mod alloc;
 #[path = "support/synth.rs"]
 mod synth;
-use alloc::{CURRENT, PEAK};
+use alloc::{CURRENT, LARGE_REALLOCS, PEAK};
 use std::sync::atomic::Ordering;
 use synth::seg;
 
@@ -47,14 +45,12 @@ const COLUMNS: u32 = 255;
 const ROWS: u32 = 257;
 
 /// The most a decode of the file with every tile present may peak at, in
-/// bytes: 54,525,116 measured. One reserve of a record for each tile and
-/// nothing more fits; a vector of records regrown to the same length
-/// peaks at half as much again.
-const DENSE_PEAK: usize = 56_000_000;
+/// bytes: 47,185,340 measured.
+const DENSE_PEAK: usize = 48_000_000;
 
 /// The least it may peak at: most of it is the records, as a decode of one
 /// sample needs a few KiB.
-const DENSE_FLOOR: usize = 50_000_000;
+const DENSE_FLOOR: usize = 40_000_000;
 
 /// The most a decode of a file with one tile present may peak at.
 const SPARSE_PEAK: usize = 1 << 20;
@@ -98,8 +94,11 @@ fn peak(bytes: &[u8], strict: bool) -> (usize, Result<(), rust_j2k::Error>) {
 fn the_tile_records_cost_the_tiles_present() {
     // Every tile present: one record each, reserved once.
     let every = one_sample_tiles(COLUMNS * ROWS, 0);
+    let reallocs = LARGE_REALLOCS.load(Ordering::SeqCst);
     let (at, decoded) = peak(&every, true);
+    let reallocs = LARGE_REALLOCS.load(Ordering::SeqCst) - reallocs;
     decoded.expect("tile 0 decodes");
+    assert_eq!(reallocs, 0, "every tile: a large vector was regrown");
     assert!(at < DENSE_PEAK, "every tile: peak {at} bytes");
     assert!(
         at > DENSE_FLOOR,
