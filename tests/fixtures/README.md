@@ -527,22 +527,25 @@ of the later tiles passes the whole code-block bound, gives that error
 rather than a `WorkLimit`, and waits on the one-shot `WorkLimit` once the
 byte is flipped back.
 
-`incremental/segsym_wide.j2k` (5914 bytes) and `segsym_wide_flipped.j2k`
-are seeds of the `incremental_decode` fuzz target that reach the same
-path under the target's own cap of 2^22 sample-passes, which the tests
-above set by hand. The input is a 4096 x 1152 8-bit PGM of the value 100,
-whose top-left 64 x 64 samples are `100 + (7*x + 13*y) % 23`, encoded with
-`opj_compress -i wide.pgm -o segsym_wide.j2k -t 256,288 -M 32 -n 4`. Its 64
-flat tiles each cost little to code but over 2^18 sample-passes under the
-cap, which charges 4 for each sample, so a decode under the cap is refused
-at tile 12. `segsym_wide_flipped.j2k` XORs byte 3028, in tile 11, with
-`0xFF`, so `decode_with` fails in tile 11 first. The byte was picked so
-that no checked refine of the target falls between the error and tile 12,
-which would stop the run at the error, and one due refine past tile 12
-draws a probe cut at the erroring tile. Replay both with
-`cargo +nightly fuzz run -O incremental_decode
-tests/fixtures/incremental/ -- -runs=0`. All three files are made here, so they have
-no license restriction.
+`incremental/segsym_wide_flipped.j2k` (5914 bytes) is a seed of the
+`incremental_decode` fuzz target that reaches the same path under the
+target's own cap of 2^22 sample-passes, which the tests above set by hand;
+`src/incremental/tests.rs` also uses it for a check that holds several
+tiles. The input is a 4096 x 1152 8-bit PGM of the value 100, whose
+top-left 64 x 64 samples are `100 + (7*x + 13*y) % 23`, encoded with
+`opj_compress -i wide.pgm -o segsym_wide.j2k -t 256,288 -M 32 -n 4`
+(OpenJPEG 2.5.0). Its 64 flat tiles each cost little to code but over
+2^18 sample-passes under the cap, which charges 4 for each sample, so a
+decode of the file as encoded is refused under the cap at tile 12. Byte
+3028, in tile 11, is then XORed with `0xFF`, so `decode_with` fails in
+tile 11 first. The byte was picked so that no checked refine of the
+target falls between the error and tile 12, which would stop the run at
+the error, and one due refine past tile 12 draws a probe cut at the
+erroring tile. Replay it with
+`cargo +nightly fuzz run -O incremental_decode tests/fixtures/incremental/ -- -runs=0`.
+The file as encoded is not committed: decoding its 4.7 million samples
+would slow every sweep of the fixtures. Both files are made here, so they
+have no license restriction.
 
 ### Regenerating the corpus
 

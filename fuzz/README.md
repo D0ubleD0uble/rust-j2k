@@ -228,7 +228,7 @@ refines have spent the bound on those checks
 (`rust_j2k::fuzz::incremental_check_work`), and carries no hint. The probe's
 reason is checked by the same rule, and its check bound is never spent, so
 it is the path that holds `WorkLimit` to the one-shot refusal after a cut.
-`tests/fixtures/incremental/segsym_wide*.j2k` are seeds that reach it. Only the first 4 refines that are checked against a decode of their
+`tests/fixtures/incremental/segsym_wide_flipped.j2k` is a seed that reaches it. Only the first 4 refines that are checked against a decode of their
 own (`MAX_CHECKED_TRIES`: a due one, or one that gives an image or an error)
 are compared with the one-shot oracle; the later ones only refine, and an
 error they give is still held to stick. Every refine that is not due is
