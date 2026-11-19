@@ -1705,3 +1705,214 @@ fn decode_with_the_decoders_options_gives_a_partial_image_after_a_change() {
     assert_eq!(image, expected);
     assert!(decoder.finish().is_err());
 }
+
+/// Feed `decoder` the bytes of `bytes` up to `end`, change its reduction to
+/// `reduction` (or its layer cap to `layers`), and refine, which must be
+/// due: `end` is at least twice the bytes of the last try. The refine must
+/// give what the one-shot strict-off decode of the bytes fed gives under
+/// the new options, as `stream` checks it. The number of images, 0 or 1.
+fn change_and_refine(
+    name: &str,
+    decoder: &mut IncrementalDecoder,
+    bytes: &[u8],
+    end: usize,
+    change: &dyn Fn(&mut IncrementalDecoder),
+) -> usize {
+    decoder.feed(&bytes[decoder.bytes_fed()..end]);
+    change(decoder);
+    let options = decoder.options().clone();
+    let fed = decoder.bytes_fed();
+    match decoder.refine() {
+        Ok(Refined::Image(image)) => {
+            let expected = decode_with(&bytes[..fed], &options.clone().with_strict(false));
+            assert_eq!(
+                Ok(image),
+                keyed(expected),
+                "{name}, {fed} bytes, {options:?}"
+            );
+            1
+        }
+        Ok(Refined::Waiting(why)) => {
+            assert!(
+                !matches!(why, Waiting::MoreBytes { .. }),
+                "{name}, {fed} bytes: the refine was not due"
+            );
+            check_waiting(name, &why, &bytes[..fed], &options);
+            assert!(
+                !matches!(refine_oracle(&bytes[..fed], &options), Ok(Some(_))),
+                "{name}, {fed} bytes: a due refine gave no image, {why:?}"
+            );
+            0
+        }
+        Ok(_) => unreachable!("a new variant of `Refined`"),
+        Err(error) => {
+            let expected = refine_oracle(&bytes[..fed], &options);
+            assert_eq!(keyed(Err(error)), keyed(expected), "{name}, {fed} bytes");
+            0
+        }
+    }
+}
+
+/// The prefixes a change test refines at: each twice the one before, so
+/// that each refine is due, up to the whole file.
+fn doubling(len: usize) -> Vec<usize> {
+    let mut ends = vec![len];
+    while ends[0] > 64 {
+        ends.insert(0, ends[0] / 2);
+    }
+    ends
+}
+
+/// The single-tile files the reduction tests change the reduction on: one
+/// walk, which always fits the room, so nothing is let go for memory.
+const ONE_TILE: [&str; 5] = [
+    "layers/lrcp.j2k",
+    "layers/rpcl.j2k",
+    "layers/precincts_pterm.j2k",
+    "multicomponent_subsampled_lossless.j2k",
+    "multilayer_multicomponent_lossless.j2k",
+];
+
+/// A change of the reduction alone, between refines at prefixes that
+/// double, keeps the packet walks: each refine gives the one-shot strict-off
+/// decode of its bytes under the new reduction, and no walk is charged as a
+/// walk read again (`rust_j2k::fuzz::incremental_repeat_work` stays at 0).
+/// The reduction goes 0, 1, 2, 0, ... as far as the file's levels allow.
+#[test]
+fn a_change_of_reduction_keeps_the_walks_and_refines_to_the_one_shot_decode() {
+    use rust_j2k::fuzz::incremental_repeat_work;
+    for name in ONE_TILE {
+        let bytes = std::fs::read(fixtures().join(name)).unwrap();
+        let levels = read_header(&bytes).unwrap().max_reduction;
+        assert!(levels >= 2, "{name}: {levels} levels");
+        let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        let mut images = 0;
+        for (step, end) in doubling(bytes.len()).into_iter().enumerate() {
+            let reduction = [0, 1, 2][step % 3];
+            images += change_and_refine(name, &mut decoder, &bytes, end, &|d| {
+                d.set_resolution_reduction(reduction).unwrap();
+            });
+            let work = incremental_repeat_work(&decoder);
+            assert_eq!(work.not_kept, 0, "{name}, {end} bytes");
+            assert_eq!(
+                work.visits, 0,
+                "{name}, {end} bytes: a kept walk was charged"
+            );
+        }
+        assert!(images >= 3, "{name}: {images} images");
+        let options = decoder.options().clone();
+        check_finish(name, &bytes, decoder, &options);
+    }
+}
+
+/// A change of the layer cap still lets the walks go, as they keep only
+/// the coding passes of the old cap: each refine gives the one-shot decode
+/// under the new cap, and the walks built again are charged.
+#[test]
+fn a_change_of_the_layer_cap_walks_the_tiles_again() {
+    use rust_j2k::fuzz::incremental_repeat_work;
+    for name in ONE_TILE {
+        let bytes = std::fs::read(fixtures().join(name)).unwrap();
+        let mut decoder =
+            IncrementalDecoder::new(DecodeOptions::default().with_max_quality_layers(Some(1)))
+                .unwrap();
+        let (mut images, mut charged) = (0, 0);
+        for (step, end) in doubling(bytes.len()).into_iter().enumerate() {
+            let layers = [Some(1), Some(2), None][step % 3];
+            let changed = step > 0 && decoder.options().max_quality_layers != layers;
+            let walked = incremental_repeat_work(&decoder).visits;
+            images += change_and_refine(name, &mut decoder, &bytes, end, &|d| {
+                d.set_max_quality_layers(layers).unwrap();
+            });
+            let visits = incremental_repeat_work(&decoder).visits;
+            // A walk that read packets before the change reads them again.
+            if changed && walked < visits {
+                charged += 1;
+            }
+        }
+        assert!(images >= 3, "{name}: {images} images");
+        assert!(charged > 0, "{name}: no walk was built again");
+        let options = decoder.options().clone();
+        check_finish(name, &bytes, decoder, &options);
+    }
+}
+
+/// A codestream of two 2048 x 2048 tiles, one 8-bit component, 5/3, LRCP,
+/// 40000 layers, one wavelet level and 4x4 code-blocks, on an image 2112
+/// wide, so tile 1 is cut to 64 wide by its edge. Tile 1's tile-part comes
+/// first, of one empty packet: its walk is small and kept, and at a
+/// reduction of 1 it charges the 6144 code-blocks of the resolution that
+/// drops. Tile 0's packets are `t2skip`'s (see `tests/work_bound.rs`): 0xC0
+/// and then 0x80 to the end, which cost about 256 packet visits a byte, so
+/// a prefix of about 62 KB reaches the packet bound of 2^24 visits. Its
+/// walk is too large to keep, so each refine walks it from the start.
+fn two_tiles_at_the_packet_bound() -> Vec<u8> {
+    let siz = synth::siz_body([2048 + 64, 2048, 0, 0, 2048, 2048, 0, 0], &[[7, 1, 1]]);
+    let mut out = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(40000, 1, 0, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+    ]
+    .concat();
+    out.extend(synth::tile_part(1, 0, 1, &[], &[0]));
+    let mut body = vec![0xC0];
+    body.resize(70000, 0x80);
+    out.extend(synth::tile_part(0, 0, 1, &[], &body));
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    out
+}
+
+/// Whether the one-shot strict-off decode of `bytes` at `reduction` is
+/// refused by the packet bound. It gives an image otherwise.
+fn refused_at_the_packet_bound(bytes: &[u8], reduction: u8) -> bool {
+    let options = lenient().with_resolution_reduction(reduction);
+    match decode_with(bytes, &options) {
+        Ok(_) => false,
+        Err(Error::Limit(limit)) if limit.kind() == LimitKind::PacketWork => true,
+        Err(error) => panic!("{} bytes at reduction {reduction}: {error:?}", bytes.len()),
+    }
+}
+
+/// At the packet bound, a refine after a change of the reduction alone is
+/// refused where the one-shot decode of its bytes is, with the same
+/// refusal, and gives the image where that decode does. The prefixes are
+/// the shortest one the bound refuses at a reduction of 1, and the longest
+/// it lets through at 0: the code-blocks tile 1's kept walk charges for the
+/// dropped resolution decide each. A kept walk that charged those of the
+/// old reduction would give an image at the first, and be refused at the
+/// second. The prefixes were found by bisection over the one-shot decodes;
+/// the test checks that they still lie on either side of the bound.
+#[test]
+fn a_change_of_reduction_at_the_packet_bound_is_refused_as_the_one_shot_decode() {
+    use rust_j2k::fuzz::incremental_repeat_work;
+    let name = "two_tiles_at_the_packet_bound";
+    let bytes = two_tiles_at_the_packet_bound();
+    // The shortest prefix the bound refuses at reduction 1, and the longest
+    // it does not refuse at reduction 0.
+    let (refused_at_1, admitted_at_0) = (62600, 63385);
+    assert!(refused_at_the_packet_bound(&bytes[..refused_at_1], 1));
+    assert!(!refused_at_the_packet_bound(&bytes[..refused_at_1 - 1], 1));
+    assert!(!refused_at_the_packet_bound(&bytes[..refused_at_1], 0));
+    assert!(!refused_at_the_packet_bound(&bytes[..admitted_at_0], 0));
+    assert!(refused_at_the_packet_bound(&bytes[..admitted_at_0 + 1], 0));
+    for (from, to, end) in [(0, 1, refused_at_1), (1, 0, admitted_at_0)] {
+        let mut decoder =
+            IncrementalDecoder::new(DecodeOptions::default().with_resolution_reduction(from))
+                .unwrap();
+        // Tile 1 and some of tile 0, well inside the bound.
+        decoder.feed(&bytes[..end / 2]);
+        assert!(
+            decoder.refine().unwrap().image().is_some(),
+            "{from} to {to}"
+        );
+        let images = change_and_refine(name, &mut decoder, &bytes, end, &|d| {
+            d.set_resolution_reduction(to).unwrap();
+        });
+        assert_eq!(images, usize::from(to == 0), "{from} to {to}");
+        // Only tile 0, not kept, is walked again.
+        let work = incremental_repeat_work(&decoder);
+        assert_eq!(work.not_kept, 1, "{from} to {to}");
+        assert_eq!(work.refused, None, "{from} to {to}");
+    }
+}

@@ -1455,20 +1455,20 @@ fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
     );
 }
 
-/// A change of the reduction or of the layer cap lets go of every walk,
-/// and the next refine builds them again, charged as walks read again: by
-/// what a one-shot walk of the tiles under the new options spends. A
-/// change back before the next refine, or a set to the value the decoder
-/// has, keeps them.
+/// A change of the layer cap lets go of every walk, and the next refine
+/// builds them again, charged as walks read again: by what a one-shot walk
+/// of the tiles under the new options spends. So does a change of both the
+/// layer cap and the reduction. A change back before the next refine, or a
+/// set to the value the decoder has, keeps them.
 #[test]
-fn a_change_of_reduction_or_layers_walks_the_tiles_again_and_is_charged() {
+fn a_change_of_layers_walks_the_tiles_again_and_is_charged() {
     let bytes = fixture(SIX_TILES);
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes);
     assert!(refine_now(&mut decoder).unwrap().is_some());
     assert_eq!(decoder.spent.repeats, 0);
     let mut charged = 0;
-    for (reduction, layers) in [(1, None), (1, Some(1)), (0, Some(1)), (2, None), (0, None)] {
+    for (reduction, layers) in [(1, Some(1)), (2, None), (0, Some(1)), (0, None)] {
         let options = DecodeOptions::default()
             .with_resolution_reduction(reduction)
             .with_max_quality_layers(layers);
@@ -1494,9 +1494,10 @@ fn a_change_of_reduction_or_layers_walks_the_tiles_again_and_is_charged() {
     }
     // There and back between two refines, and the value it has: no walk is
     // let go.
+    decoder.set_max_quality_layers(Some(1)).unwrap();
+    decoder.set_max_quality_layers(None).unwrap();
     decoder.set_resolution_reduction(1).unwrap();
     decoder.set_resolution_reduction(0).unwrap();
-    decoder.set_max_quality_layers(None).unwrap();
     let options = DecodeOptions::default();
     assert_eq!(
         refine_now(&mut decoder).unwrap(),
@@ -1505,7 +1506,116 @@ fn a_change_of_reduction_or_layers_walks_the_tiles_again_and_is_charged() {
     assert_eq!(decoder.spent.repeats, charged);
 }
 
-/// Changing the reduction back and forth on every refine walks every tile
+/// A 64 x 64 codestream of two 8-bit components, the second subsampled by
+/// 2, so each holds other code-blocks in the resolutions a reduction drops:
+/// 5/3, LRCP, one layer, two wavelet levels, 4x4 code-blocks, and an empty
+/// packet for each of its six packets.
+fn two_sizes() -> Vec<u8> {
+    use crate::synth::{cod_body, qcd_none_body, seg, siz_body, tile_part};
+    let siz = siz_body([64, 64, 0, 0, 64, 64, 0, 0], &[[7, 1, 1], [7, 2, 2]]);
+    [
+        vec![0xFF, 0x4F],
+        seg(0xFF51, &siz),
+        seg(0xFF52, &cod_body(1, 2, 0, 0)),
+        seg(0xFF5C, &qcd_none_body(2, &[8; 7])),
+        tile_part(0, 0, 1, &[], &[0; 6]),
+        vec![0xFF, 0xD9],
+    ]
+    .concat()
+}
+
+/// A change of the reduction alone keeps every walk: the next refine goes
+/// on from them, charged nothing as walks read again, and gives the
+/// one-shot decode under the new reduction. Each walk kept then charges the
+/// code-blocks the new reduction drops, as a walk built for it does. Fed in
+/// halves, with the reduction changed before each refine, every packet is
+/// read once, as by one walk of the file.
+///
+/// The room for the walks kept is that of the decode's image, which a
+/// larger reduction makes smaller, so on a file of several small tiles a
+/// larger reduction can let walks go as a smaller region does (see
+/// `a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read`).
+/// Here the six tiles go to a smaller reduction, and the one-tile files,
+/// whose one walk always fits, go back and forth.
+#[test]
+fn a_change_of_reduction_keeps_the_walks() {
+    for (name, bytes, reductions) in [
+        (SIX_TILES, fixture(SIX_TILES), &[1, 0][..]),
+        ("two_sizes", two_sizes(), &[1, 0, 2, 0, 1][..]),
+        (
+            "multilayer_multicomponent_lossless.j2k",
+            fixture("multilayer_multicomponent_lossless.j2k"),
+            &[2, 0, 1][..],
+        ),
+    ] {
+        let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        // The first refine has half the file, or for `two_sizes`, whose
+        // header is most of it, all but its last two packets.
+        let first_end = if name == "two_sizes" {
+            bytes.len() - 4
+        } else {
+            bytes.len() / 2
+        };
+        let ends = [first_end, bytes.len()];
+        // Per tile, the code-blocks dropped at the walk's first decode.
+        let mut first: Vec<u64> = Vec::new();
+        for (step, &reduction) in reductions.iter().enumerate() {
+            let end = ends[step.min(1)];
+            decoder.feed(&bytes[decoder.bytes_fed()..end]);
+            let options = DecodeOptions::default().with_resolution_reduction(reduction);
+            set_options(&mut decoder, &options);
+            assert_eq!(
+                refine_now(&mut decoder).unwrap(),
+                oracle(&bytes[..end], &options).unwrap(),
+                "{name}, step {step}"
+            );
+            assert_eq!(decoder.spent.repeats, 0, "{name}, step {step}");
+            assert_eq!(decoder.spent.walks.kept().1, 0, "{name}, step {step}");
+            // What each walk kept charges for the resolutions dropped is
+            // what a walk built for this reduction charges.
+            let mut fresh = IncrementalDecoder::new(options).unwrap();
+            fresh.feed(&bytes[..end]);
+            assert!(fresh.refine().unwrap().image().is_some());
+            let dropped = decoder.spent.walks.dropped();
+            assert_eq!(dropped, fresh.spent.walks.dropped(), "{name}, step {step}");
+            if reduction > 0 {
+                assert!(
+                    dropped.iter().flatten().flatten().any(|&d| d > 0),
+                    "{name}, step {step}"
+                );
+            }
+            if name == "two_sizes" {
+                let blocks = |side: u64| {
+                    (1..=u64::from(reduction))
+                        .map(|l| 3 * (side >> l).pow(2) / 16)
+                        .sum()
+                };
+                assert_eq!(
+                    dropped,
+                    [Some(vec![blocks(64), blocks(32)])],
+                    "{name}, step {step}"
+                );
+            }
+            for walk in dropped.iter().skip(first.len()).flatten() {
+                first.push(walk.iter().sum());
+            }
+        }
+        // A walk's visits count each packet once, and the code-blocks
+        // dropped at its first decode. A walk of the file at no reduction,
+        // which drops none, reads every packet once.
+        let mut once = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        once.feed(&bytes);
+        assert!(once.refine().unwrap().image().is_some());
+        assert_eq!(once.spent.walks.kept().1, 0, "{name}");
+        assert_eq!(
+            decoder.spent.walks.visits(),
+            once.spent.walks.visits() + first.iter().sum::<u64>(),
+            "{name}: the walks read packets again"
+        );
+    }
+}
+
+/// Changing the layer cap back and forth on every refine walks every tile
 /// again each time, and those walks stay within the bound on walks read
 /// again: once they pass 4 packet bounds, a refine returns `Ok(None)`
 /// though a one-shot decode of its bytes gives an image, and `finish`
@@ -1523,7 +1633,8 @@ fn options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again() {
     assert!(refine_now(&mut decoder).unwrap().is_some());
     let (mut images, mut put_off) = (0, 0);
     for step in 0..8 {
-        let options = DecodeOptions::default().with_resolution_reduction(1 - step % 2);
+        let layers = if step % 2 == 0 { Some(1) } else { None };
+        let options = DecodeOptions::default().with_max_quality_layers(layers);
         set_options(&mut decoder, &options);
         match refine_now(&mut decoder).unwrap() {
             Some(image) => {
