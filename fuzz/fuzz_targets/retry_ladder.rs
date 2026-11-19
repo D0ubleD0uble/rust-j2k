@@ -35,6 +35,7 @@ use rust_j2k::{
 
 /// The highest factor the ladder decodes at.
 const MAX_FACTOR: u64 = 4;
+const _: () = assert!(MAX_FACTOR <= rust_j2k::fuzz::CODE_BLOCK_CAP_FACTOR);
 
 /// The most steps the ladder may take on one limit: log2([`MAX_FACTOR`]) to
 /// double from the default to [`MAX_FACTOR`], one for the step past it that
@@ -148,7 +149,13 @@ fuzz_target!(|input: &[u8]| {
         (control, data)
     };
     let control = u64::from(control);
-    let mut options = DecodeOptions::default()
+    // Every decode below, the one with no limits too, is held to the fuzz
+    // cap on code-block work, which lets the factors up to `MAX_FACTOR` go
+    // as high as they ask. In bounds: the first decode at up to 2, the
+    // default 1, the steps 2 and 4, and the decode with no limits 4.
+    let base = budget::options(16);
+    let mut options = base
+        .clone()
         .with_sample_limit(low(control))
         .with_packet_work_limit(low(control >> 2))
         .with_code_block_work_limit(low(control >> 4))
@@ -161,7 +168,7 @@ fuzz_target!(|input: &[u8]| {
         }
         return;
     }
-    let defaults = DecodeOptions::default()
+    let defaults = base
         .with_resolution_reduction(options.resolution_reduction)
         .with_strict(options.strict);
     let at_defaults = KINDS

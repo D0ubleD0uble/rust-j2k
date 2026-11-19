@@ -104,7 +104,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let reduction = variant >> 7;
-    let options = rust_j2k::DecodeOptions::default().with_resolution_reduction(reduction);
+    let options = budget::options(4).with_resolution_reduction(reduction);
     // The codestream's own channels, whatever the palette and channel
     // definitions say.
     let raw = rust_j2k::decode_with(&file, &options.clone().with_raw_channels(true));

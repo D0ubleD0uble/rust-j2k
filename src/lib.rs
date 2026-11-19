@@ -599,7 +599,7 @@ pub enum ColorOutput {
 /// Start from [`DecodeOptions::default`] and set what differs with its
 /// `with_*` method, or the field directly. The struct is `#[non_exhaustive]`,
 /// so a new option is not a breaking change.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct DecodeOptions {
     /// How many of the finest resolution levels to discard. Each level about
@@ -974,6 +974,45 @@ pub struct DecodeOptions {
     #[doc(alias = "allow_partial")]
     #[doc(alias = "allow-partial")]
     pub strict: bool,
+    /// The fuzz targets' cap on the code-block work bound, set only by
+    /// [`fuzz::with_code_block_work_cap`]; `None` everywhere else.
+    pub(crate) code_block_work_cap: Option<u64>,
+}
+
+/// The derived format, with the fuzz cap shown only when it is set, so the
+/// options print the same outside the fuzz targets.
+impl std::fmt::Debug for DecodeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Destructured so that a new field cannot be left out.
+        let DecodeOptions {
+            resolution_reduction,
+            max_quality_layers,
+            region,
+            components,
+            raw_channels,
+            color,
+            packet_work_limit,
+            code_block_work_limit,
+            sample_limit,
+            strict,
+            code_block_work_cap,
+        } = self;
+        let mut s = f.debug_struct("DecodeOptions");
+        s.field("resolution_reduction", resolution_reduction)
+            .field("max_quality_layers", max_quality_layers)
+            .field("region", region)
+            .field("components", components)
+            .field("raw_channels", raw_channels)
+            .field("color", color)
+            .field("packet_work_limit", packet_work_limit)
+            .field("code_block_work_limit", code_block_work_limit)
+            .field("sample_limit", sample_limit)
+            .field("strict", strict);
+        if let Some(cap) = code_block_work_cap {
+            s.field("code_block_work_cap", cap);
+        }
+        s.finish()
+    }
 }
 
 impl Default for DecodeOptions {
@@ -991,6 +1030,7 @@ impl Default for DecodeOptions {
             code_block_work_limit: WorkLimit::default(),
             sample_limit: WorkLimit::default(),
             strict: true,
+            code_block_work_cap: None,
         }
     }
 }
