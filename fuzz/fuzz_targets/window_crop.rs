@@ -30,7 +30,7 @@ use libfuzzer_sys::fuzz_target;
 #[path = "../common/budget.rs"]
 mod budget;
 
-use rust_j2k::{decode_with, DecodeOptions, Error, Image, Region, Window};
+use rust_j2k::{decode_with, Error, Image, Region, Window};
 
 /// A rectangle on the reference grid, `x0..x1` by `y0..y1`.
 type Rect = (u32, u32, u32, u32);
@@ -91,12 +91,13 @@ fuzz_target!(|input: &[u8]| {
     let Some([xs, ys, xo, yo, xt, yt, xto, yto]) = siz(data) else {
         return;
     };
-    if xs <= xo || ys <= yo || xt == 0 || yt == 0 || budget::over(data, 1) {
+    if xs <= xo || ys <= yo || xt == 0 || yt == 0 || budget::over(data, 2) {
         return;
     }
     let image = (xo, yo, xs, ys);
     let r = ((control & 3) % 3) as u8;
-    let base = DecodeOptions::default().with_resolution_reduction(r);
+    // Two decodes, the whole and the part, both held.
+    let base = budget::options(2).with_resolution_reduction(r);
     let bits = control >> 8;
     let small = |shift: u32, m: u32| ((bits >> shift) as u32) % m;
     // 0: window, 1: tile, 2: component subset, 3: subset through a window.

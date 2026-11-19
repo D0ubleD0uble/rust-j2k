@@ -100,7 +100,11 @@ fuzz_target!(|input: &[u8]| {
         2 => WorkLimit::Raised(2),
         _ => WorkLimit::Raised(4),
     };
-    let mut options = DecodeOptions::default().with_code_block_work_limit(limit);
+    // Each due try runs up to three decodes besides the refine (the one-shot,
+    // `zero` and the probe), each at up to 4 bounds; the refines share 4
+    // bounds, and `finish` and the last `decode_with` take 8. An input under
+    // 1 MiB has at most 20 due tries: 12 * 20 + 12 bounds, under 256.
+    let mut options = budget::options(256).with_code_block_work_limit(limit);
     if control[0] & 4 != 0 {
         options = options.with_max_quality_layers(Some(1 + u16::from((control[0] >> 3) % 3)));
     }

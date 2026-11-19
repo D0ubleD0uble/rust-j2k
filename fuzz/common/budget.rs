@@ -1,25 +1,55 @@
-//! Keeps a fuzz run under libFuzzer's RSS limit.
+//! Keeps a fuzz run under libFuzzer's RSS limit and its timeout.
+//!
+//! Two budgets: [`over`] skips an input that declares too many samples,
+//! which bounds memory, and [`options`] caps the work its decodes may do,
+//! which bounds time. Each target divides each budget by a weight of its
+//! own, pinned by `tests/fuzz_seed_outcomes.rs`.
 
 use rust_j2k::{DecodeOptions, WorkLimit};
 
-/// The most samples a fuzz input may declare to a target that decodes it
-/// once and keeps one image: 2^26 (256 MiB as `i32`). A decode peaks at about
-/// 1.35 times its output for a square tile and up to about 3.2 times for a
-/// tile one sample wide, so that is under 1 GiB and well under the 4 GiB
-/// `-rss_limit_mb` the fuzz job passes. A target that decodes one input
-/// several times, or holds several images, divides the budget by its `weight`
-/// (see [`over`]). The budget bounds memory. It bounds time only for an image
-/// with little coded data per sample: under the fuzz build (ASan) a thin
-/// image of 2^26 samples takes about 9 s a decode. The tier-1 work bound
-/// grows with the tile's bytes, not its samples, so a tier-1-heavy input
-/// inside the budget can still run past `-timeout=30` (#480). The decoder's
-/// default limit is at least 2^29, so a sample limit refusal of the image
-/// area is never decoded.
-const MAX_FUZZ_SAMPLES: u64 = 1 << 26;
+/// The most samples a fuzz input may declare to a target that holds one
+/// image at a time: 2^28 (1 GiB as `i32`). A decode allocates its output
+/// before it decodes a tile, and the work cap ([`options`]) refuses a tile
+/// before reconstructing it, so a decode at this budget allocates its output
+/// and little more. The work cap lets a target's decode reconstruct at most
+/// 2^25 samples (`window_crop`'s), an eighth of this, and that peaks at
+/// about 1.35 times its samples for a square tile and up to about 3.2 times
+/// for a tile one sample wide. A target that
+/// holds several images at once divides the budget by its `weight` (see
+/// [`over`]). The decoder's default sample limit is at least 2^29, so a
+/// sample limit refusal of the image area is never decoded.
+pub const MAX_FUZZ_SAMPLES: u64 = 1 << 28;
+
+/// The most work, in sample-passes, the decodes of one execution may spend
+/// between them: 2^28. A tile's work under the fuzz cap is its code-blocks'
+/// sample-passes and `rust_j2k::fuzz::CAP_WORK_PER_SAMPLE` for each sample
+/// it reconstructs (`rust_j2k::fuzz::with_code_block_work_cap`). Under the
+/// fuzz build (ASan) a sample-pass of the slowest block data takes about
+/// 27 ns, so this is about 7 s, under the 30 s `-timeout` the fuzz job
+/// passes with room for a loaded machine.
+pub const MAX_FUZZ_WORK: u64 = 1 << 28;
+
+/// The default options with the code-block work bound set to [`MAX_FUZZ_WORK`]
+/// divided by `weight`: the most code-block bounds' worth of work one
+/// execution can spend, counting a decode at `WorkLimit::Raised(n)` as `n`
+/// and one at `Unlimited` as `rust_j2k::fuzz::CODE_BLOCK_CAP_FACTOR`, the
+/// most the cap lets it spend. Every decode a budgeted target runs starts
+/// from these. An input past the cap is refused with `Error::Limit` before
+/// the work is done, which is still a path worth fuzzing.
+#[allow(dead_code)]
+pub fn options(weight: u64) -> DecodeOptions {
+    rust_j2k::fuzz::with_code_block_work_cap(DecodeOptions::default(), cap(weight))
+}
+
+/// The code-block work cap [`options`] sets for a target of `weight`.
+#[allow(dead_code)]
+pub fn cap(weight: u64) -> u64 {
+    MAX_FUZZ_WORK / weight
+}
 
 /// Whether `data` declares more output samples than the budget allows a
-/// target of `weight` (the most decodes of the input one execution runs, or
-/// images it holds at once, whichever is more; a power of two). The budget is
+/// target of `weight` (the most images it holds at once, a power of two;
+/// the work cap bounds how many decodes it runs). The budget is
 /// [`MAX_FUZZ_SAMPLES`] divided by `weight`, at full resolution, which bounds
 /// every window, tile and reduction of it.
 ///
@@ -30,7 +60,13 @@ const MAX_FUZZ_SAMPLES: u64 = 1 << 26;
 /// `SIZ`. An input with no readable `SIZ` fails cheaply and is not over.
 #[allow(dead_code)]
 pub fn over(data: &[u8], weight: u64) -> bool {
-    declared(data) > u128::from(MAX_FUZZ_SAMPLES / weight)
+    declared(data) > u128::from(samples(weight))
+}
+
+/// The most samples [`over`] allows a target of `weight`.
+#[allow(dead_code)]
+pub fn samples(weight: u64) -> u64 {
+    MAX_FUZZ_SAMPLES / weight
 }
 
 /// The samples `data` declares, counted as [`over`] counts them, before the budget.
