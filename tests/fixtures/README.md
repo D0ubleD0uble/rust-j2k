@@ -496,6 +496,23 @@ only: each block with a set VLC stuffing bit, and with the bit cleared.
 before or after a wrong COD and QCD, in the main header and in a tile-part
 header. See [`override_order/README.md`](override_order/README.md).
 
+### Incremental decoder fixtures
+
+`incremental/spent_bound_tier1_then_eph.j2k` (3211 bytes) and
+`spent_bound_tier1_then_eph_2.j2k` (1872 bytes) are inputs the CI fuzz
+smoke of the `incremental_decode` target saved on 2026-11-19
+(`crash-2d21f1a434324b7664573dfd24881ce43a42c563` and
+`crash-d6b0adb60e7e6ad3d4b2a1fcb33a4c1bdadc5fa1`, each the SHA-1 of its
+file), committed as found (#485). Each is a 12 x 12 HTJ2K codestream of
+three components in 3 x 3 tiles, made by the fuzzer, so it has no license
+restriction. `decode_with` fails in the block decoding of one tile (an HT
+suffix length `Scup` out of range); a later tile's packets lack the `EPH`
+its `COD` signals. `tests/incremental.rs` checks that a refine refused for
+what earlier refines spent waits on `BoundSpent` rather than give the later
+tile's error. Each file starts with `SOC`, so the fuzz target reads it with
+all-zero control bytes: `cargo +nightly fuzz run incremental_decode
+tests/fixtures/incremental/spent_bound_tier1_then_eph.j2k` replays it.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
