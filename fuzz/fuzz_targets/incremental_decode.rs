@@ -422,8 +422,10 @@ fn check_waiting(
                             .split_once(" sample-passes")
                             .map(|(head, _)| head.to_string())
                     };
+                    let head = refused(limit.message());
+                    assert!(head.is_some(), "{fed} bytes: {limit}");
                     assert_eq!(
-                        refused(limit.message()),
+                        head,
                         refused(m.message()),
                         "{fed} bytes: {limit}, where the decode gives {m}"
                     );

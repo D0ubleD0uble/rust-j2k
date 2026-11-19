@@ -182,8 +182,10 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
                             .split_once(" sample-passes")
                             .map(|(head, _)| head.to_string())
                     };
+                    let head = refused(limit.message());
+                    assert!(head.is_some(), "{name}, {at} bytes: {limit}");
                     assert_eq!(
-                        refused(limit.message()),
+                        head,
                         refused(m.message()),
                         "{name}, {at} bytes: {limit}, where the decode gives {m}"
                     );
@@ -1354,6 +1356,56 @@ fn a_refine_refused_by_the_whole_bound_after_a_cut_waits_on_bound_spent() {
         }
     }
     assert_eq!(checked, 2 * 2 * (4640_u64.div_ceil(37) + 4));
+}
+
+/// Where the count after a cut passes the whole bound and `decode_with`
+/// is refused by that bound too, the wait names the same tile and work as
+/// that refusal. On `segsym_tiles_flipped` with the byte flipped back, a
+/// cap of one less than the work of all 16 tiles refuses the last, and
+/// with all but 1 of the cap spent the refine is cut at tile 0 and counts
+/// the rest.
+#[test]
+fn a_count_refused_where_decode_with_is_names_its_tile_and_work() {
+    use rust_j2k::fuzz::{incremental_with_code_block_work_spent, with_code_block_work_cap};
+    let mut bytes = segsym_tiles_flipped();
+    bytes[SEGSYM_FLIPPED_AT] ^= 0xFF;
+    let (whole, _) = fresh_block_work(
+        &bytes,
+        &with_code_block_work_cap(DecodeOptions::default(), 1 << 40),
+    );
+    let cap = whole - 1;
+    let options = with_code_block_work_cap(DecodeOptions::default(), cap);
+    let Err(Error::Limit(expected)) = decode_with(&bytes, &options.clone().with_strict(false))
+    else {
+        panic!("not refused");
+    };
+    assert_eq!(expected.kind(), LimitKind::CodeBlockWork);
+    let mut decoder = incremental_with_code_block_work_spent(options.clone(), cap - 1).unwrap();
+    decoder.feed(&bytes);
+    let Ok(Refined::Waiting(why)) = decoder.refine() else {
+        panic!("no wait");
+    };
+    let Waiting::BoundSpent { limit, .. } = &why else {
+        panic!("{why:?}");
+    };
+    let head = |message: &str| {
+        message
+            .split_once(" sample-passes")
+            .map(|(head, _)| head.to_string())
+    };
+    let named = head(limit.message());
+    assert!(
+        named
+            .as_deref()
+            .is_some_and(|h| h.starts_with("tile 15 needs ")),
+        "{limit}"
+    );
+    assert_eq!(
+        named,
+        head(expected.message()),
+        "{limit}, where the decode gives {expected}"
+    );
+    check_waiting("segsym_tiles", &why, &bytes, &options);
 }
 
 /// Where no amount spent cuts a refine before the tile the whole bound
