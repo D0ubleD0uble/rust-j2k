@@ -129,10 +129,17 @@ fuzz_target!(|input: &[u8]| {
     // 12 * MAX_CHECKED_TRIES + 12 bounds, under 64.
     let mut options = budget::options(64).with_code_block_work_limit(limit);
     if control[0] & 4 != 0 {
-        options = options.with_max_quality_layers(Some(1 + u16::from((control[0] >> 3) % 3)));
+        options = options.with_max_quality_layers(Some(1 + u16::from(((control[0] & 0x7F) >> 3) % 3)));
     }
     if control[0] & 0x20 != 0 {
         options = options.with_resolution_reduction(1);
+    }
+    // A ceiling the bytes do not raise: a refusal by the sample limit, or by
+    // the code-blocks or precincts it allows a tile, is no wait but a sticky
+    // error, the one-shot decode's.
+    let ceiling = control[0] & 0x80 != 0;
+    if ceiling {
+        options = options.with_sample_limit(WorkLimit::AtMost(64 << (hash % 12)));
     }
     // The pieces of the file one refine decodes: a window, or a tile, or
     // neither; and a subset of one or two distinct components. A choice
@@ -225,20 +232,31 @@ fuzz_target!(|input: &[u8]| {
             let shape = one_shot.as_ref().map(|_| ()).map_err(Error::clone);
             let repeat_work = incremental_repeat_work(&decoder);
             if let Some(why) = &waiting {
+                assert!(
+                    !(ceiling && matches!(why, Waiting::SampleLimit { .. })),
+                    "{fed} bytes: waits on a ceiling: {why:?}"
+                );
                 check_waiting(why, &shape, repeat_work.refused.is_some(), spent, fed);
             }
             let expected = keyed(match one_shot {
                 Ok(image) => Ok(Some(image)),
                 Err(Error::Incomplete(_)) => Ok(None),
+                // The work bounds grow with the bytes under any sample limit.
                 Err(Error::Limit(m))
-                    if matches!(
-                        m.kind(),
-                        LimitKind::PacketWork
-                            | LimitKind::CodeBlockWork
-                            | LimitKind::Samples
-                            | LimitKind::TileCodeBlocks
-                            | LimitKind::TilePrecincts
-                    ) =>
+                    if matches!(m.kind(), LimitKind::PacketWork | LimitKind::CodeBlockWork) =>
+                {
+                    Ok(None)
+                }
+                // The sample limit's kinds do too, unless the limit is a
+                // ceiling.
+                Err(Error::Limit(m))
+                    if !ceiling
+                        && matches!(
+                            m.kind(),
+                            LimitKind::Samples
+                                | LimitKind::TileCodeBlocks
+                                | LimitKind::TilePrecincts
+                        ) =>
                 {
                     Ok(None)
                 }

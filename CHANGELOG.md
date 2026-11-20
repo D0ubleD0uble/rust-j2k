@@ -97,7 +97,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   at every option, now decodes at the defaults, bit-exact against
   `opj_decompress` (17.5 s and 7.65 GiB at full resolution, 0.43 s at
   reduction 3). The bookkeeping of a tile at the caps is at most about a
-  third of the output the same limit allows (#476).
+  third of the output the same limit allows. A tile whose geometry needs a
+  sample limit past what the target can address is `LimitKind::AddressSpace`,
+  not adjustable, and an `IncrementalDecoder` waits only on a refusal with a
+  `retry_with` (#476, #494).
 - `read_header_with` follows the tile-parts once, and no further than the
   last tile over a cap under the main header, to find the first tile-part
   of each such tile, where it used to follow them all once for each batch

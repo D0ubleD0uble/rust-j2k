@@ -217,8 +217,10 @@ pub(crate) fn over(what: &str, total: u64, cap: Cap) -> Error {
 /// `WorkLimit::Raised` factor of the cap's default that admits the tile, or
 /// twice the factor it ran under when that is more, as the work bounds do:
 /// the tiles after it may need more. Under [`WorkLimit::AtMost`] it names
-/// that ceiling and no retry. Past the cap of any limit this target can
-/// address, it names no retry.
+/// that ceiling and no retry. Where the sample limit that would admit the tile
+/// is past what the target can address, it is
+/// [`LimitKind::AddressSpace`](crate::LimitKind), which no option raises, as
+/// [`over`] gives for the samples.
 pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap) -> Error {
     let (noun, limit, per, floor) = match kind {
         crate::LimitKind::TilePrecincts => (
@@ -237,12 +239,20 @@ pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap)
     let head = format!("tile {tile} holds {count} {noun}, more than the {limit} a tile may hold");
     let needed = count.saturating_mul(per);
     if needed > ADDRESSABLE_SAMPLES {
-        return Error::limit_unhinted(
-            kind,
+        // No sample limit lifts this one, so it is not the tile cap's kind:
+        // it is the address space's, as `over` reports it.
+        let most = floor.max(ADDRESSABLE_SAMPLES / per);
+        // Say the most only where it is not the cap just named.
+        let tail = if most == limit {
+            String::new()
+        } else {
+            format!(" (at most {most} {noun} a tile)")
+        };
+        return Error::limit_fixed(
+            crate::LimitKind::AddressSpace,
             format!(
-                "{head}, and more than any sample limit this target can address admits ({} \
-                 {noun})",
-                floor.max(ADDRESSABLE_SAMPLES / per)
+                "{head}, and the sample limit that would admit it is past what this target \
+                 can address{tail}"
             ),
         );
     }
@@ -620,10 +630,19 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn a_tile_refusal_names_a_factor_of_the_sample_limit() {
-        use crate::LimitKind::{TileCodeBlocks, TilePrecincts};
+        use crate::LimitKind::{AddressSpace, TileCodeBlocks, TilePrecincts};
         let hint = |kind, count, cap| match over_tile(kind, 7, count, cap) {
             Error::Limit(limit) => {
-                assert_eq!(limit.kind(), kind, "{limit}");
+                // Past the address space it is that kind, which no option
+                // raises, whichever tile cap it was counted against.
+                let past = count.saturating_mul(if kind == TilePrecincts {
+                    SAMPLES_PER_PRECINCT
+                } else {
+                    SAMPLES_PER_BLOCK
+                }) > ADDRESSABLE_SAMPLES;
+                let expected = if past { AddressSpace } else { kind };
+                assert_eq!(limit.kind(), expected, "{limit}");
+                assert_eq!(limit.kind().is_adjustable(), !past, "{limit}");
                 assert!(limit.message().starts_with("tile 7 holds "), "{limit}");
                 limit.retry_with()
             }
