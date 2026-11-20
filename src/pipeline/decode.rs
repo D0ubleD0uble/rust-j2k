@@ -256,12 +256,12 @@ impl Rescue<'_> {
     /// Count tile `index`, over a cap under the main header (`error`), as
     /// the decode counts it, and refuse it if the decode does: a tile with a
     /// tile-part under its own header (a tile-part `COD` or `COC` over the
-    /// main header's), and one with none under the main header with `strict`
-    /// on (the decode refuses the file then) and not at all with it off (the
-    /// decode leaves it out). A tile whose tile-part header is at fault is
-    /// the decode's to report. So a tile-part `COD` that brings a tile within
-    /// the caps is admitted, and one that takes a tile over them is left to
-    /// the decode.
+    /// main header's), and one with none with the decode's error for the
+    /// tile-parts with `strict` on ([`walk_fault`](Self::walk_fault)) and
+    /// not at all with it off (the decode leaves it out). A tile whose
+    /// tile-part header is at fault is the decode's to report. So a
+    /// tile-part `COD` that brings a tile within the caps is admitted, and
+    /// one that takes a tile over them is left to the decode.
     ///
     /// Only the header read here is held. `Ok(false)` means the steps
     /// passed [`GEOMETRY_STEPS`] and the rest is left to the decode.
@@ -273,7 +273,7 @@ impl Rescue<'_> {
             .and_then(|offset| codestream::first_part_at(self.bytes, self.parsed, offset));
         let part = match found {
             Some(part) => part,
-            None if self.strict => return Err(error),
+            None if self.strict => return Err(self.walk_fault().unwrap_or(error)),
             None => return Ok(true),
         };
         // Reading a tile's header copies the main header's coding parameters
@@ -296,6 +296,20 @@ impl Rescue<'_> {
             }
         }
         Ok(true)
+    }
+
+    /// The error the decode gives for the tile-parts with `strict` on, for a
+    /// tile the walk found no tile-part for. The decode parses the tile-parts
+    /// before it counts a tile, so it refuses the file for the first fault
+    /// its parse finds (in any tile's tile-part headers, or the chain), or
+    /// for the missing tile, and never gets to the count. This is that
+    /// parse, reading the main header in place. The walk has already
+    /// followed the chain to its end, so the parse follows it no further;
+    /// it reads the tile-part headers, not the tile data, and keeps the
+    /// decode's tile records while it runs. `None` only if the parse finds
+    /// no fault, which the walk finding no tile-part rules out.
+    fn walk_fault(&self) -> Option<Error> {
+        codestream::tile_parts_fault(self.bytes, self.parsed)
     }
 }
 
@@ -1377,11 +1391,18 @@ pub(crate) mod tests {
         assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
         assert_eq!(reads, 16 + 1 + 2);
         // Tile 1's tile-parts left out: with `strict` on the walk runs to
-        // `EOC` to find it has none, and the tile is refused.
+        // `EOC` to find it has none, and the file is refused with the
+        // decode's error, from the decode's parse of the tile-parts, which
+        // counts the first tile-parts again with a walk of its own.
         let missing = rescued_tiles(64, 16, &[], &[1]);
         let (reads, header) = sot_reads_of(&missing, &DecodeOptions::default());
-        assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
-        assert_eq!(reads, 63 * 16 + 1 + 1);
+        let decoded = crate::decode_with(&missing, &DecodeOptions::default());
+        assert!(matches!(header, Err(Error::Codestream(_))), "{header:?}");
+        assert_eq!(
+            format!("{:?}", header.err()),
+            format!("{:?}", decoded.err())
+        );
+        assert_eq!(reads, 63 * 16 + 1 + 1 + (63 * 16 + 1));
         // With it off the tile is left out and the rest are read by offset.
         let lenient = DecodeOptions::default().with_strict(false);
         assert_eq!(sot_reads(&missing, &lenient), 63 * 16 + 1 + 63);

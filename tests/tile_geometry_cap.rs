@@ -336,8 +336,9 @@ fn a_tile_of_many_resolutions_is_counted() {
 
 /// With `strict` off, a tile with no tile-part is left out of the decode, so
 /// the header read does not count it either, nor does an
-/// `IncrementalDecoder`'s header. With `strict` on, the header read counts it
-/// under the main header and refuses it; the decode refuses the file too.
+/// `IncrementalDecoder`'s header. With `strict` on, the decode refuses the
+/// file for the missing tile before it counts any tile, and the header read
+/// gives that error too.
 #[test]
 fn a_missing_tile_is_counted_only_when_strict() {
     let (side, height) = (4096, 4160);
@@ -359,11 +360,87 @@ fn a_missing_tile_is_counted_only_when_strict() {
     decoder.feed(&bytes);
     assert!(decoder.header().unwrap().is_some());
 
-    match read_header_with(&bytes, &DecodeOptions::default()) {
-        Err(Error::Limit(limit)) => assert_eq!(limit.kind(), LimitKind::TileCodeBlocks),
-        other => panic!("{other:?}"),
+    let header = read_header_with(&bytes, &DecodeOptions::default());
+    assert!(matches!(header, Err(Error::Codestream(_))), "{header:?}");
+    assert_same_error(&bytes, &DecodeOptions::default());
+}
+
+/// That `read_header_with` and `decode_with` refuse `bytes` under `options`
+/// with the same error.
+fn assert_same_error(bytes: &[u8], options: &DecodeOptions) {
+    let header = read_header_with(bytes, options).map(|_| ());
+    let decoded = decode_with(bytes, options).map(|_| ());
+    assert!(header.is_err(), "{header:?}");
+    assert_eq!(format!("{header:?}"), format!("{decoded:?}"));
+}
+
+/// A tile over the cap under the main header whose tile-part the input ends
+/// before, inside the `SOT` that would start it (a `header` fuzz find, the
+/// seed `tests/fixtures/header/rescue_cut_sot.j2k`): with `strict` on, the
+/// decode refuses the file for the cut `SOT` before it counts any tile, and
+/// the header read gives that error too, not the cap's. With `strict` off both
+/// admit the file, the tile left out.
+#[test]
+fn a_tile_behind_a_cut_sot_gets_the_decode_error() {
+    let bytes = include_bytes!("fixtures/header/rescue_cut_sot.j2k");
+    let header = read_header_with(bytes, &DecodeOptions::default());
+    assert!(
+        matches!(&header, Err(Error::Codestream(detail)) if detail.message() == "truncated marker segment"),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &DecodeOptions::default());
+    // The walk stopped at the other faults it stops for: a `SOT` of the
+    // wrong length, and another marker where a `SOT` should be. And where
+    // the chain is whole but carries tile 1 only, the decode refuses the
+    // file for the missing tile 0.
+    let sot = bytes.len() - 2;
+    for tail in [
+        &[0xFF, 0x90, 0, 9, 0, 0, 0, 0, 0, 14, 0, 1][..],
+        &[0xFF, 0x64, 0, 2],
+        &[
+            0xFF, 0x90, 0, 10, 0, 1, 0, 0, 0, 14, 0, 1, 0xFF, 0x93, 0xFF, 0xD9,
+        ],
+    ] {
+        let cut = [&bytes[..sot], tail].concat();
+        assert_same_error(&cut, &DecodeOptions::default());
     }
-    assert!(decode_with(&bytes, &DecodeOptions::default()).is_err());
+    let lenient = DecodeOptions::default().with_strict(false);
+    let header = read_header_with(bytes, &lenient).expect("the header is admitted");
+    let image = decode_with(bytes, &lenient).expect("the decode is admitted");
+    assert_eq!((header.width, header.height), (image.width, image.height));
+    assert!(!image.report.is_complete());
+}
+
+/// The decode's error for the tile-parts is the first fault its parse finds,
+/// which need not be in the tile counted: reading tile 1 of two, over the
+/// cap under the main header and with no tile-part, where tile 0's
+/// tile-part `COD` is illegal (code-blocks of 2^11 samples a side, or
+/// progression order 9), the decode refuses the file for that `COD` with
+/// `Error::Marker`, and the header read gives that error too.
+#[test]
+fn a_fault_in_another_tiles_header_is_the_decode_error() {
+    let mut cod = synth::cod_body(1, 0, 4, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body([2 * 520, 512, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+    let main = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let large_blocks = synth::cod_body(1, 0, 9, 0);
+    let mut order_9 = synth::cod_body(1, 0, 4, 0);
+    order_9[1] = 9;
+    let options = DecodeOptions::default().with_region(Region::Tile(1));
+    for own in [large_blocks, order_9] {
+        let part = synth::tile_part(0, 0, 1, &synth::seg(0xFF52, &own), &[0]);
+        let bytes = [&main[..], &part, &[0xFF, 0xD9]].concat();
+        let header = read_header_with(&bytes, &options);
+        assert!(matches!(header, Err(Error::Marker(_))), "{header:?}");
+        assert_same_error(&bytes, &options);
+    }
 }
 
 /// A tile-part header the decode finds at fault is the decode's to report,
