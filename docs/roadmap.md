@@ -1,9 +1,9 @@
 # Roadmap
 
-Next is a Part 1 encoder (Phase 5), then the Part 2 extensions and an HTJ2K
-encoder (Phase 6), then the rest of the standard's parts (Phase 7). Phases 0
+Decoder hardening ships next as 0.6.0, then a Part 1 encoder (Phase 5) as
+0.7.0, then the Part 2 extensions and an HTJ2K encoder (Phase 6), then the rest of the standard's parts (Phase 7). Phases 0
 to 4, which built a decoder for Part 1 and HTJ2K codestreams, JP2 and JPH
-files, are finished. Phase 3 shipped as the 0.4.0 release, and Phase 4 ships
+files, are finished. Phase 3 shipped as the 0.4.0 release, and Phase 4 shipped
 as 0.5.0.
 
 Each phase has a goal, the work it contains and a gate: the test that must
@@ -32,7 +32,7 @@ MIXED tile-components and the JPH file format. Its gate was the 41 ISO/IEC
 15444-4 HT codestreams and 20 JPH files within their bounds, and agreement
 with OpenJPEG 2.5.0 on every HT file it decodes: bit for bit on the 5/3
 files, and within the documented 9/7 gap on the others
-([plan](roadmap-phase4.md)). It ships as 0.5.0, with decoding a window, a
+([plan](roadmap-phase4.md)). It shipped as 0.5.0, with decoding a window, a
 tile, some components or some quality layers, and a decoder for files that
 arrive in pieces. Each plan ties every step to its module and the oracle that
 checked it.
