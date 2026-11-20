@@ -36,6 +36,7 @@ dependencies = [
 name = "rust-j2k"
 version = "0.5.0"
 dependencies = [
+ "rust-j2k",
  "serde",
  "serde_json",
 ]

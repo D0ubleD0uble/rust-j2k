@@ -85,6 +85,7 @@ pub(super) struct Params {
 /// as the Part 1 coder undoes it, by H.1: a magnitude at or above `2^(s + 1)`
 /// at double scale is region and comes down `s` planes; one below is
 /// background and stays (see `undo_maxshift`).
+#[cfg(any(test, feature = "__fuzz"))]
 pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Result<Vec<i32>> {
     let mut scratch = Scratch::default();
     decode_into(block, numbps, params, &mut scratch)?;
