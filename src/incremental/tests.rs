@@ -1492,25 +1492,24 @@ fn a_change_of_layers_walks_the_tiles_again_and_is_charged() {
         charged += one_shot_walk_visits(&bytes, reduction, layers);
         assert!(charged > 0);
         assert_eq!(decoder.spent.repeats, charged, "{reduction} {layers:?}");
-        // The room is that of the new options: the walks kept are those a
-        // decoder made with them keeps. Only on a 64-bit target: a layer
-        // change forgets every walk but not `Walks::largest`, so the room
-        // after it comes from the largest walk of an earlier option set,
-        // and a fresh decoder's differs. On a 64-bit target the walks are
-        // big enough that the difference does not change which fit; on a
-        // 32-bit one it keeps 4 walks to a fresh decoder's 3.
-        #[cfg(target_pointer_width = "64")]
-        {
-            let mut fresh = IncrementalDecoder::new(options).unwrap();
-            fresh.feed(&bytes);
-            assert!(fresh.refine().unwrap().image().is_some());
-            let kept = fresh.spent.walks.kept();
-            assert_eq!(decoder.spent.walks.kept(), kept, "{reduction} {layers:?}");
-            assert_eq!(
-                decoder.spent.walks.kept_bytes(),
-                fresh.spent.walks.kept_bytes()
-            );
-        }
+        // The room is that of the new options: the largest walk, which the
+        // room follows, and the walks kept are those a decoder made with
+        // them has. A layer change forgets every walk, and with them the
+        // largest walk of the old options.
+        let mut fresh = IncrementalDecoder::new(options).unwrap();
+        fresh.feed(&bytes);
+        assert!(fresh.refine().unwrap().image().is_some());
+        assert_eq!(
+            decoder.spent.walks.largest(),
+            fresh.spent.walks.largest(),
+            "{reduction} {layers:?}"
+        );
+        let kept = fresh.spent.walks.kept();
+        assert_eq!(decoder.spent.walks.kept(), kept, "{reduction} {layers:?}");
+        assert_eq!(
+            decoder.spent.walks.kept_bytes(),
+            fresh.spent.walks.kept_bytes()
+        );
     }
     // There and back between two refines, and the value it has: no walk is
     // let go.
