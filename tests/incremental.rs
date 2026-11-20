@@ -123,7 +123,7 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
     let one_shot = decode_with(prefix, &options.clone().with_strict(false));
     let at = prefix.len();
     match (why, &one_shot) {
-        (Waiting::HeaderIncomplete, Err(Error::Incomplete(_))) => {}
+        (Waiting::HeaderIncomplete { .. }, Err(Error::Incomplete(_))) => {}
         (
             Waiting::SampleLimit { limit, .. }
             | Waiting::MissingTiles { limit, .. }
@@ -177,16 +177,10 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
             assert_eq!(limit.retry_with(), None, "{name}, {at} bytes");
             if let Err(Error::Limit(m)) = &one_shot {
                 if m.kind() == LimitKind::CodeBlockWork {
-                    let refused = |message: &str| {
-                        message
-                            .split_once(" sample-passes")
-                            .map(|(head, _)| head.to_string())
-                    };
-                    let head = refused(limit.message());
-                    assert!(head.is_some(), "{name}, {at} bytes: {limit}");
+                    assert!(m.refused_at().is_some(), "{name}, {at} bytes: {m:?}");
                     assert_eq!(
-                        head,
-                        refused(m.message()),
+                        limit.refused_at(),
+                        m.refused_at(),
                         "{name}, {at} bytes: {limit}, where the decode gives {m}"
                     );
                 }
@@ -621,7 +615,7 @@ fn finish_refuses_a_header_cut_short() {
             );
         } else {
             assert!(
-                matches!(refined, Refined::Waiting(Waiting::HeaderIncomplete)),
+                matches!(refined, Refined::Waiting(Waiting::HeaderIncomplete { .. })),
                 "{cut} bytes: {refined:?}"
             );
         }
@@ -704,7 +698,10 @@ fn a_sample_limit_refusal_is_a_wait() {
                 assert!(limit.retry_with().is_some(), "{limit}");
                 waited += 1;
             }
-            (Ok(Refined::Waiting(Waiting::MoreBytes { .. } | Waiting::HeaderIncomplete)), _) => {}
+            (
+                Ok(Refined::Waiting(Waiting::MoreBytes { .. } | Waiting::HeaderIncomplete { .. })),
+                _,
+            ) => {}
             (other, _) => panic!("{} bytes: {other:?}", prefix.len()),
         }
         if one_shot.is_err_and(|e| is_sample_limit(&e)) {
@@ -736,7 +733,10 @@ fn a_sample_limit_refusal_under_at_most_is_final() {
         decoder.feed(piece);
         let prefix = &bytes[..decoder.bytes_fed()];
         match (decoder.refine(), &first) {
-            (Ok(Refined::Waiting(Waiting::MoreBytes { .. } | Waiting::HeaderIncomplete)), None) => {
+            (
+                Ok(Refined::Waiting(Waiting::MoreBytes { .. } | Waiting::HeaderIncomplete { .. })),
+                None,
+            ) => {
                 assert!(matches!(decoder.header(), Ok(None) | Err(Error::Limit(_))));
             }
             (Err(error), None) => {
@@ -1025,7 +1025,7 @@ fn more_bytes_after_a_cut_header_decodes_now_as_incomplete() {
     decoder.feed(&bytes[..10]);
     assert!(matches!(
         decoder.refine(),
-        Ok(Refined::Waiting(Waiting::HeaderIncomplete))
+        Ok(Refined::Waiting(Waiting::HeaderIncomplete { .. }))
     ));
     decoder.feed(&bytes[10..15]);
     assert!(matches!(
@@ -1388,24 +1388,45 @@ fn a_count_refused_where_decode_with_is_names_its_tile_and_work() {
     let Waiting::BoundSpent { limit, .. } = &why else {
         panic!("{why:?}");
     };
-    let head = |message: &str| {
-        message
-            .split_once(" sample-passes")
-            .map(|(head, _)| head.to_string())
-    };
-    let named = head(limit.message());
-    assert!(
-        named
-            .as_deref()
-            .is_some_and(|h| h.starts_with("tile 15 needs ")),
-        "{limit}"
-    );
+    let at = limit.refused_at().expect("the tile and its work");
+    assert_eq!(at.tile(), 15, "{limit}");
     assert_eq!(
-        named,
-        head(expected.message()),
+        Some(at),
+        expected.refused_at(),
         "{limit}, where the decode gives {expected}"
     );
+    // The messages name the same figures as text.
+    let named = format!("tile 15 needs {} sample-passes ", at.work());
+    assert!(limit.message().starts_with(&named), "{limit}");
+    assert!(expected.message().starts_with(&named), "{expected}");
     check_waiting("segsym_tiles", &why, &bytes, &options);
+}
+
+/// The seed `incremental/t1bomb_row_128_8.seed` reaches the same path under
+/// the fuzz target's cap of 2^22: with all the bound spent, a refine is cut
+/// at tile 0 and its count passes the whole bound at tile 2, where
+/// `decode_with` is refused, for the same work.
+#[test]
+fn the_t1bomb_row_seed_counts_past_the_whole_bound_where_decode_with_is_refused() {
+    use rust_j2k::fuzz::{incremental_with_code_block_work_spent, with_code_block_work_cap};
+    let bytes = std::fs::read(fixtures().join("incremental/t1bomb_row_128_8.seed")).unwrap();
+    let options = with_code_block_work_cap(DecodeOptions::default(), 1 << 22);
+    let Err(Error::Limit(expected)) = decode_with(&bytes, &options.clone().with_strict(false))
+    else {
+        panic!("not refused");
+    };
+    let at = expected.refused_at().expect("the tile and its work");
+    assert_eq!(at.tile(), 2, "{expected}");
+    let mut decoder = incremental_with_code_block_work_spent(options.clone(), u64::MAX).unwrap();
+    decoder.feed(&bytes);
+    let Ok(Refined::Waiting(why)) = decoder.refine() else {
+        panic!("no wait");
+    };
+    let Waiting::BoundSpent { limit, .. } = &why else {
+        panic!("{why:?}");
+    };
+    assert_eq!(limit.refused_at(), Some(at), "{limit}");
+    check_waiting("t1bomb_row_128_8", &why, &bytes, &options);
 }
 
 /// Where no amount spent cuts a refine before the tile the whole bound

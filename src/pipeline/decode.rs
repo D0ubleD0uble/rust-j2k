@@ -886,7 +886,8 @@ fn decode_codestream(
                              the bytes fed on their own is refused here or fails in one of them; \
                              decode them on their own, or start a new decoder"
                         ),
-                    ));
+                    )
+                    .refused_at(index, work));
                 }
                 *own += work;
                 continue;

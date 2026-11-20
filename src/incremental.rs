@@ -461,7 +461,7 @@ impl IncrementalDecoder {
             }
             // More bytes can complete the header, and raise the work
             // bounds.
-            Err(Error::Incomplete(_)) => Waiting::HeaderIncomplete,
+            Err(Error::Incomplete(_)) => Waiting::HeaderIncomplete {},
             // The bound on the walks of tiles not kept refuses as the packet
             // walk does, but its error names the packet bound, which is not
             // what refused.
@@ -610,7 +610,7 @@ const _: () = {
 /// // 20 bytes end inside the SIZ marker segment.
 /// assert!(matches!(
 ///     decoder.refine()?,
-///     Refined::Waiting(Waiting::HeaderIncomplete)
+///     Refined::Waiting(Waiting::HeaderIncomplete { .. })
 /// ));
 /// decoder.feed(&file[20..30]);
 /// // The refine tried at 20 bytes, so the next try is at 40 at the latest.
@@ -683,7 +683,7 @@ impl Refined {
 ///             let more = until - decoder.bytes_fed();
 ///             println!("the next try is at {until} bytes, {more} from now");
 ///         }
-///         Waiting::HeaderIncomplete => println!("the main header is not in yet"),
+///         Waiting::HeaderIncomplete { .. } => println!("the main header is not in yet"),
 ///         Waiting::RepeatLimit { .. } => println!("decode the bytes fed now"),
 ///         Waiting::BoundSpent { .. } => println!("decode the bytes fed now"),
 ///         Waiting::WorkLimit { limit, .. } => println!("{limit}"),
@@ -708,7 +708,8 @@ pub enum Waiting {
     /// `SOT` marker, or, in a JP2 file, inside the boxes before it.
     /// [`header`](IncrementalDecoder::header) returns `Ok(None)` for the
     /// same bytes.
-    HeaderIncomplete,
+    #[non_exhaustive]
+    HeaderIncomplete {},
     /// The sample limit ([`DecodeOptions::sample_limit`]) refused the image,
     /// or a tile of more code-blocks or precincts than it allows a tile
     /// ([`LimitKind::TileCodeBlocks`], [`LimitKind::TilePrecincts`]).
@@ -764,9 +765,10 @@ pub enum Waiting {
     /// decoding their code-blocks. Where the count ends with the file, the
     /// work fits the whole bound, and that decode can still give another
     /// error, a packet-work limit included. Where the whole bound refuses a
-    /// later tile, the detail's message names that tile and its work, and
-    /// that decode is refused there or fails first in a tile the refine
-    /// did not decode. `decode_with` decodes each tile whole before the
+    /// later tile, the detail's [`refused_at`](LimitDetail::refused_at)
+    /// gives that tile and its work, and that decode is refused there, with
+    /// the same `refused_at`, or fails first in a tile the refine did not
+    /// decode. `decode_with` decodes each tile whole before the
     /// next, so the code-blocks the refine skipped, at the cut and after it,
     /// can hold the error `decode_with` meets first. An error in a later
     /// tile's header or packets, or a packet-work refusal of its walk, ends
@@ -821,7 +823,7 @@ pub enum Waiting {
 }
 
 /// Checks, as doctests, that the struct variants of [`Waiting`] that carry a
-/// [`LimitDetail`] are `#[non_exhaustive]`.
+/// [`LimitDetail`], and `HeaderIncomplete`, are `#[non_exhaustive]`.
 ///
 /// A `match` outside the crate cannot name `Waiting::WorkLimit`'s fields
 /// without `..`:
@@ -868,6 +870,15 @@ pub enum Waiting {
 ///         rust_j2k::Waiting::MissingTiles { limit } => Some(limit),
 ///         _ => None,
 ///     }
+/// }
+/// ```
+///
+/// A `match` outside the crate cannot name `Waiting::HeaderIncomplete`
+/// without `..`:
+///
+/// ```compile_fail,E0638
+/// fn header(why: rust_j2k::Waiting) -> bool {
+///     matches!(why, rust_j2k::Waiting::HeaderIncomplete {})
 /// }
 /// ```
 #[cfg(doctest)]

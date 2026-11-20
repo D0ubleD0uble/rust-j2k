@@ -222,7 +222,7 @@ pub(crate) mod window;
 #[doc(hidden)]
 pub mod fuzz;
 
-pub use error::{Error, ErrorDetail, LimitDetail, LimitKind, Result};
+pub use error::{Error, ErrorDetail, LimitDetail, LimitKind, RefusedAt, Result};
 pub use header::{ComponentInfo, Header, TileGrid};
 pub use image::{Component, Image};
 pub use incremental::{IncrementalDecoder, Refined, Waiting};

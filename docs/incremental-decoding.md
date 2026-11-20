@@ -19,10 +19,10 @@ does again on each refine.
   | `Waiting` | Why the refine has no image |
   | --- | --- |
   | `MoreBytes { until, .. }` | It did not decode: the bytes fed have not doubled since the last try, or none are fed. `until` is a total of bytes fed, not the bytes still to come: a refine decodes once that many are fed, if not before. |
-  | `HeaderIncomplete` | `decode_with` gives `Error::Incomplete`: the main header is cut short. |
+  | `HeaderIncomplete { .. }` | `decode_with` gives `Error::Incomplete`: the main header is cut short. |
   | `SampleLimit { limit, .. }` | The default or a `Raised` sample limit refused the image, or a tile of more code-blocks or precincts than it allows a tile, with a `retry_with`. A refusal with none (under `AtMost`, or past the address space) is an error, not a wait. |
   | `WorkLimit { limit, .. }` | The bytes fed cost more than the packet or code-block work bound allows; a decode of them on its own is refused too, with the same detail. |
-  | `BoundSpent { limit, .. }` | The earlier refines spent the code-block bound the refines share, so the refine stopped decoding at a tile, the cut, whose work fits the whole bound. Decode the bytes fed now or start a new decoder. That decode can be refused for work or fail: where the whole bound refuses a later tile, the detail's message names it, and that decode is refused there or fails first in a tile the refine did not decode. |
+  | `BoundSpent { limit, .. }` | The earlier refines spent the code-block bound the refines share, so the refine stopped decoding at a tile, the cut, whose work fits the whole bound. Decode the bytes fed now or start a new decoder. That decode can be refused for work or fail: where the whole bound refuses a later tile, the detail's `refused_at` gives it and its work, and that decode is refused there or fails first in a tile the refine did not decode. |
   | `MissingTiles { limit, .. }` | The charge for missing tiles passed the packet bound. |
   | `RepeatLimit { .. }` | The bound on the walks of tiles not kept is spent (see [Work and memory](#work-and-memory)). |
 
@@ -275,10 +275,11 @@ does. Otherwise it goes on counting the code-block work of the later tiles,
 without decoding them, and returns `Waiting::BoundSpent`. Where the count
 reaches the end, its own work fits the whole bound, and only what the
 earlier refines spent refused it. Where the whole bound refuses a later
-tile, the message names that tile and its work, and a decode of the bytes on
-their own is refused there, unless it fails first in a tile the refine
-counted. An error in a later tile's header or packets, or a packet-work
-refusal of its walk, also ends the count, and the refine returns
+tile, the limit's `refused_at` gives that tile and its work, and a decode of
+the bytes on their own is refused there with the same `refused_at`, unless
+it fails first in a tile the refine counted. An error in a later tile's
+header or packets, or a packet-work refusal of its walk, also ends the
+count, and the refine returns
 `Waiting::BoundSpent` rather than that error. A one-shot decode decodes each
 tile whole before the next, so the code-blocks the refine skipped, in the
 tile it was refused at and after it, can hold the error that decode meets

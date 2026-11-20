@@ -1180,7 +1180,9 @@ fn a_walk_started_again_is_charged_as_a_walk_not_kept() {
             Refined::Waiting(Waiting::MoreBytes { until, .. }) => {
                 assert_eq!((decoder.tried, until), (tried, 2 * tried), "{end}");
             }
-            Refined::Waiting(Waiting::HeaderIncomplete) => assert!(!decoder.refused, "{end}"),
+            Refined::Waiting(Waiting::HeaderIncomplete { .. }) => {
+                assert!(!decoder.refused, "{end}")
+            }
             other => panic!("{end}: {other:?}"),
         }
     }

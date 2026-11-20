@@ -37,6 +37,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no retry, and in an `IncrementalDecoder` it is an error, not a wait.
   `AtMost(0)`, and `AtMost` on either work bound, is `InvalidOptions`. It
   replaces counting the samples by hand from the header (#475).
+- For a refusal by the code-block work bound, `LimitDetail::refused_at`
+  gives the tile refused and the work it needs, as a `RefusedAt` with
+  `tile()` and `work()`, so a caller need not parse the message. The refusal
+  `decode_with` gives carries it, and so do `Waiting::WorkLimit` and a
+  `Waiting::BoundSpent` where the whole bound refuses a tile; a
+  `BoundSpent` that the earlier refines alone refused, and every other
+  limit, give `None` (#493).
 
 ### Changed
 
@@ -44,7 +51,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Result<Option<Image>>`. To migrate, call `.image()`:
   `decoder.refine()?.image()` is the `Option<Image>` it returned before.
   `Refined::Waiting` says why there is no image: `MoreBytes { until, .. }`,
-  `HeaderIncomplete`, `SampleLimit { limit, .. }`,
+  `HeaderIncomplete { .. }`, `SampleLimit { limit, .. }`,
   `WorkLimit { limit, .. }`, `BoundSpent { limit, .. }` and
   `MissingTiles { limit, .. }` (each with its `LimitDetail`), or
   `RepeatLimit { .. }`.
@@ -62,7 +69,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the one refused, and carries the refusal a decode of the bytes fed
   gives, hint included. Both enums and their struct variants are
   `#[non_exhaustive]`, so a `match` needs a `_` arm and `..` in each
-  variant (#466, #487).
+  variant (#466, #487). `HeaderIncomplete` is a struct variant too, so
+  match it as `HeaderIncomplete { .. }` (#493).
 - The default sample limit grows with the input: it is the larger of 2^29
   samples and 8 samples per byte of input. Up to 64 MiB of input nothing
   changes. The sample limit no longer refuses a larger file that holds at least

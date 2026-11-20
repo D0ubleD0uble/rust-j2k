@@ -14,8 +14,10 @@ every code-block has no zero bit-planes, so the block decoder runs up to
 `t1bomb(8192, 6, 88)`, 8192^2 samples in 64x64 code-blocks, 76 KB.
 
 The committed files are written to tests/fixtures/tier1_work_bound/ (see
-the README there). With `--big DIR`, the issue's timing shape is written to
-DIR instead; it is not committed. `--check` runs each through
+the README there), and a seed of the `incremental_decode` fuzz target, a
+row of such tiles, to tests/fixtures/incremental/ (see
+tests/fixtures/README.md). With `--big DIR`, the issue's timing shape is
+written to DIR instead; it is not committed. `--check` runs each through
 `opj_decompress` 2.5.0 and prints what it does and the time.
 
 `--opj` writes, instead, the committed `opj_compress` files, which the
@@ -106,9 +108,10 @@ def num_passes_code(bits: Bits, passes: int) -> None:
         bits.put_int(passes - 37, 7)
 
 
-def t1bomb(size: int, cb: int, passes: int) -> bytes:
+def t1bomb(size: int, cb: int, passes: int, tiles: int = 1) -> bytes:
     """One `size` x `size` tile in `2^cb` x `2^cb` code-blocks, each
-    included in the one layer with `passes` coding passes and one byte."""
+    included in the one layer with `passes` coding passes and one byte; or
+    a row of `tiles` such tiles, each the same."""
     assert 2 <= cb <= 6 and 1 <= passes <= 164
     cols = rows = ceil(size, 1 << cb)
     levels = tag_tree_nodes(cols, rows)
@@ -140,17 +143,31 @@ def t1bomb(size: int, cb: int, passes: int) -> bytes:
     qcd = seg(0xFF5C, bytes([0x40, 29 << 3]))
     siz = seg(
         0xFF51,
-        struct.pack(">HIIIIIIIIH", 0, size, size, 0, 0, size, size, 0, 0, 1) + bytes([7, 1, 1]),
+        struct.pack(">HIIIIIIIIH", 0, size * tiles, size, 0, 0, size, size, 0, 0, 1)
+        + bytes([7, 1, 1]),
     )
     psot = 12 + 2 + len(data)
-    part = struct.pack(">HHHIBB", 0xFF90, 10, 0, psot, 0, 1) + b"\xff\x93" + data
-    return b"\xff\x4f" + siz + cod + qcd + part + b"\xff\xd9"
+    parts = b"".join(
+        struct.pack(">HHHIBB", 0xFF90, 10, tile, psot, 0, 1) + b"\xff\x93" + data
+        for tile in range(tiles)
+    )
+    return b"\xff\x4f" + siz + cod + qcd + parts + b"\xff\xd9"
 
 
 # Committed: name -> bytes.
 FILES = {
     # 1024^2 in 64x64 code-blocks, 88 passes: 9.2e7 sample-passes in 1.3 KB.
     "t1bomb_1024_64_88.j2k": t1bomb(1024, 6, 88),
+}
+
+# Committed seeds of the `incremental_decode` fuzz target, in
+# tests/fixtures/incremental/: name -> bytes.
+INCREMENTAL_DIR = DIR.parent / "incremental"
+INCREMENTAL = {
+    # A row of 8 tiles of 128^2, each 1.5e6 sample-passes under the target's
+    # cap (which charges 4 for each sample on top): tiles 0 and 1 fit its
+    # bound of 2^22, and tile 2 passes it.
+    "t1bomb_row_128_8.seed": t1bomb(128, 6, 88, 8),
 }
 
 # Not committed (`--big DIR`): the issue's timing shape.
@@ -232,6 +249,8 @@ def main() -> None:
         for name, data in FILES.items():
             (DIR / name).write_bytes(data)
             written.append(DIR / name)
+        for name, data in INCREMENTAL.items():
+            (INCREMENTAL_DIR / name).write_bytes(data)
     if "--check" in sys.argv:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
         from oracle_tools import require_openjpeg
