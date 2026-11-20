@@ -225,10 +225,12 @@ refusal the one-shot decode gives, hint included, and a code-block `WorkLimit`
 never stands where the one-shot decode gives another error. `BoundSpent`, a
 refusal by what earlier refines spent of the code-block bound, comes only
 after work was spent, and carries no hint. Where the one-shot decode is
-refused by that bound, the wait's message names the same tile and work. The
-probe's reason is checked by the same rule; it is the path that reaches a
-count past the cut. `tests/fixtures/incremental/segsym_wide_flipped.j2k` is a
-seed that reaches a count past the whole bound. Only the first 4 refines that
+refused by that bound, the wait's `refused_at` gives the same tile and
+work. The probe's reason is checked by the same rule; it is the path that
+reaches a count past the cut. `tests/fixtures/incremental/segsym_wide_flipped.j2k`
+is a seed that reaches a count past the whole bound, and
+`t1bomb_row_128_8.seed` there one where the one-shot decode is refused by
+that bound at the same tile. Only the first 4 refines that
 are checked against a decode of their own (`MAX_CHECKED_TRIES`: a due one, or
 one that gives an image or an error) are compared with the one-shot oracle;
 the later ones only refine, and an error they give is still held to stick.

@@ -312,8 +312,29 @@ impl Error {
         Error::Limit(LimitDetail {
             kind,
             retry_with,
+            refused_at: None,
             message,
         })
+    }
+
+    /// This code-block work [`Error::Limit`] with the tile it refused and
+    /// the work that tile needs as data: the figures its message names.
+    pub(crate) fn refused_at(self, tile: u32, work: u64) -> Error {
+        match self {
+            Error::Limit(mut limit) => {
+                debug_assert_eq!(limit.kind, LimitKind::CodeBlockWork);
+                debug_assert!(
+                    limit
+                        .message
+                        .starts_with(&format!("tile {tile} needs {work} sample-passes ")),
+                    "{}",
+                    limit.message
+                );
+                limit.refused_at = Some(RefusedAt { tile, work });
+                Error::Limit(limit)
+            }
+            other => other,
+        }
     }
 }
 
@@ -422,6 +443,7 @@ impl fmt::Display for ErrorDetail {
 pub struct LimitDetail {
     kind: LimitKind,
     retry_with: Option<WorkLimit>,
+    refused_at: Option<RefusedAt>,
     message: String,
 }
 
@@ -449,14 +471,34 @@ impl LimitDetail {
     /// [`AtMost`](WorkLimit::AtMost), a ceiling the caller set.
     ///
     /// [`DecodeOptions::with_retry`](crate::DecodeOptions::with_retry)
-    /// applies it to the option `kind` names.
+    /// applies it to the option `kind` names. For
+    /// [`TileCodeBlocks`](LimitKind::TileCodeBlocks) and
+    /// [`TilePrecincts`](LimitKind::TilePrecincts) that option is the sample
+    /// limit, so a retry raises the limit on the whole image's samples, not
+    /// only the tile's count.
     pub fn retry_with(&self) -> Option<WorkLimit> {
         self.retry_with.clone()
     }
 
+    /// The tile the limit refused and the work it needs, where the refusal
+    /// knows both exactly; `None` otherwise.
+    ///
+    /// The refusals that carry it are the code-block work bound's
+    /// ([`LimitKind::CodeBlockWork`]) refusals of one tile: the one
+    /// [`decode_with`](crate::decode_with) gives, and the one an
+    /// [`IncrementalDecoder`](crate::IncrementalDecoder) waits on as
+    /// [`Waiting::WorkLimit`](crate::Waiting::WorkLimit), or as
+    /// [`Waiting::BoundSpent`](crate::Waiting::BoundSpent) where the whole
+    /// bound refuses a tile it counted. Other refusals give `None`, a
+    /// `BoundSpent` whose count ended within the whole bound included.
+    pub fn refused_at(&self) -> Option<RefusedAt> {
+        self.refused_at
+    }
+
     /// The diagnostic, without the `limit: ` prefix that the [`Error`]'s
-    /// `Display` adds. Do not parse it: [`kind`](Self::kind) and
-    /// [`retry_with`](Self::retry_with) hold its data.
+    /// `Display` adds. Do not parse it: [`kind`](Self::kind),
+    /// [`retry_with`](Self::retry_with) and [`refused_at`](Self::refused_at)
+    /// hold its data.
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -465,6 +507,30 @@ impl LimitDetail {
 impl fmt::Display for LimitDetail {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
+    }
+}
+
+/// Where a limit refused the input, from
+/// [`LimitDetail::refused_at`]: the tile, and the work it needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct RefusedAt {
+    tile: u32,
+    work: u64,
+}
+
+impl RefusedAt {
+    /// The index of the tile refused, in raster order from 0, as
+    /// [`TileGrid::tile`](crate::TileGrid::tile) takes it.
+    pub fn tile(&self) -> u32 {
+        self.tile
+    }
+
+    /// The work the tile needs, in sample-passes: the work of the
+    /// code-blocks this decode reads under its options (the reduction,
+    /// region and components), not of the whole tile.
+    pub fn work(&self) -> u64 {
+        self.work
     }
 }
 
@@ -566,7 +632,8 @@ mod tests {
         let limit = Error::limit_fixed(LimitKind::BitPlanes, "31 bit-planes");
         assert_eq!(
             format!("{limit:?}"),
-            "Limit(LimitDetail { kind: BitPlanes, retry_with: None, message: \"31 bit-planes\" })"
+            "Limit(LimitDetail { kind: BitPlanes, retry_with: None, refused_at: None, message: \"31 \
+             bit-planes\" })"
         );
     }
 

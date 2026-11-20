@@ -172,9 +172,10 @@ pub(crate) fn tile_geometry(
 }
 
 /// The [`Error::Limit`] for a tile whose code-blocks need `work` sample-passes when
-/// `left` of the bound were left, after earlier tiles spent `spent`.
-pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, default: u64) -> Error {
-    escalated(
+/// `left` of the bound were left, after earlier tiles spent `spent`. It
+/// carries the tile and its work as [`refused_at`](crate::LimitDetail::refused_at).
+pub(crate) fn code_blocks(index: u32, work: u64, left: u64, spent: u64, default: u64) -> Error {
+    let refusal = escalated(
         LimitKind::CodeBlockWork,
         doubled(
             spent.saturating_add(work),
@@ -187,7 +188,8 @@ pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, defaul
              `DecodeOptions::code_block_work_limit`)"
         ),
         "later tiles may need more",
-    )
+    );
+    refusal.refused_at(index, work)
 }
 
 #[cfg(test)]
@@ -224,6 +226,22 @@ mod tests {
         // 500 needed against a bound at 2: the need, 10, beats the doubling.
         assert_eq!(named(&code_blocks(1, 400, 0, 100, 50)), 10);
         assert_eq!(named(&code_blocks(0, 100, 0, 0, 50)), 2);
+    }
+
+    /// The code-block refusal carries the tile and the work its message
+    /// names.
+    #[test]
+    fn code_blocks_carry_the_tile_and_the_work() {
+        let Error::Limit(limit) = code_blocks(7, 400, 0, 100, 50) else {
+            panic!();
+        };
+        let at = limit.refused_at().expect("the tile and its work");
+        assert_eq!((at.tile(), at.work()), (7, 400));
+        assert!(
+            limit
+                .message()
+                .starts_with("tile 7 needs 400 sample-passes ")
+        );
     }
 
     /// The POC factor counts the steps earlier tiles spent, and is at least

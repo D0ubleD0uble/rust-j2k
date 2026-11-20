@@ -565,6 +565,23 @@ grows with the bytes, so the target must expect the refine to wait where the
 one-shot decode is refused, as under any other sample limit. It takes about 11
 s to replay under ASan. Replay it with the command above.
 
+`incremental/t1bomb_row_128_8.seed` (331 bytes, SHA-256
+`8ee10b73fa03f98398a482e04bd39b8d706388f625a301012ab8b539aa5f7482`) is a
+seed of the `incremental_decode` fuzz target for a count past the whole
+code-block bound where `decode_with` is refused by that bound too (#493),
+which `segsym_wide_flipped.j2k` does not reach: there `decode_with` fails in
+tile 11 first. It is written from scratch by
+`scripts/gen-tier1-work-bound-fixtures.py` as `t1bomb(128, 6, 88, 8)` (no
+encoder, no input image, so no license restriction): a row of eight
+128 x 128 tiles of one 8-bit component, each the tile of
+`tier1_work_bound/t1bomb_1024_64_88.j2k` in small. Under the target's cap
+each tile costs 1507328 sample-passes, so tiles 0 and 1 fit the bound of
+2^22 and tile 2 passes it. A probe with the bound spent is cut at tile 0
+and counts to tile 2; the target and `tests/incremental.rs` check that
+its wait gives the tile and work `decode_with` gives. It starts with `SOC`,
+so the target reads it with all-zero control bytes, and its extension keeps
+it out of the sweeps of the fixtures. Replay it with the command above.
+
 ### Header fixtures
 
 `header/rescue_cut_sot.j2k` (68 bytes, SHA-256

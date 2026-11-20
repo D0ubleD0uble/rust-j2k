@@ -23,7 +23,7 @@
 //! stands where the one-shot decode gives another error. `BoundSpent` comes
 //! only after work was spent, and where the one-shot decode passes the
 //! code-block bound, or is refused by it at the tile and for the work the
-//! wait's message names: a refine cut short by what was spent does not
+//! wait's `refused_at` gives: a refine cut short by what was spent does not
 //! decode the tiles it counts, and waits there. The probe below is checked
 //! by the same rule. After an
 //! error, every later refine gives it again, and `finish` is the decode of
@@ -395,7 +395,7 @@ fn check_waiting(
         return;
     }
     match (why, one_shot) {
-        (Waiting::HeaderIncomplete, Err(Error::Incomplete(_))) => {}
+        (Waiting::HeaderIncomplete { .. }, Err(Error::Incomplete(_))) => {}
         // The sample limit, and the code-blocks and precincts it allows a
         // tile, grow with the bytes.
         (Waiting::SampleLimit { limit, .. }, Err(Error::Limit(expected)))
@@ -435,16 +435,10 @@ fn check_waiting(
             assert_eq!(limit.retry_with(), None, "{fed} bytes");
             if let Err(Error::Limit(m)) = one_shot {
                 if m.kind() == LimitKind::CodeBlockWork {
-                    let refused = |message: &str| {
-                        message
-                            .split_once(" sample-passes")
-                            .map(|(head, _)| head.to_string())
-                    };
-                    let head = refused(limit.message());
-                    assert!(head.is_some(), "{fed} bytes: {limit}");
+                    assert!(m.refused_at().is_some(), "{fed} bytes: {m:?}");
                     assert_eq!(
-                        head,
-                        refused(m.message()),
+                        limit.refused_at(),
+                        m.refused_at(),
                         "{fed} bytes: {limit}, where the decode gives {m}"
                     );
                 }
