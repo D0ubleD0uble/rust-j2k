@@ -48,11 +48,12 @@ does again on each refine.
   header has come in. Any other error, including a limit that does not
   depend on the bytes (an image or a tile too large for the target to
   address, too many `POC` volumes, too many bit-planes), is the one
-  `decode_with` gives on those bytes. A refusal by a bound only the refines have, `BoundSpent`
-  or `RepeatLimit`, can stand in for an error that block decoding, the
-  wavelet or assembly would meet in a tile the refine did not decode: the
-  refine waits where `decode_with` fails, and `finish` reports that error
-  (see [Work and memory](#work-and-memory)). Once `refine` returns an error,
+  `decode_with` gives on those bytes. A refusal by a bound only the refines
+  have, `BoundSpent` or `RepeatLimit`, can stand in for an error that block
+  decoding, the wavelet or assembly would meet in a tile the refine did not
+  decode: the refine waits where `decode_with` fails, and `finish` reports
+  that error (see [Work and memory](#work-and-memory)). Once `refine` returns
+  an error,
   every later `refine` returns the same error without decoding, until a
   change of options (see [Changing the options](#changing-the-options)).
 - A refine tries to decode when the bytes fed are at least twice those of
