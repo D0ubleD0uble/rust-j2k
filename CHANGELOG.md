@@ -137,9 +137,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Error::Limit` could name a higher tile, another kind and a smaller
   `retry_with` than `decode_with`'s, and a retry sized from it was refused
   again. Before it refuses a tile, it now counts each lower tile it would
-  read whose size does not rule out a tile-part header taking it over the
-  caps under that tile's own header, in index order, and checks the
-  reduction first, as the decode does. That reads the tile-part headers of
+  read that the tile's own header could refuse, under that header, in index
+  order, as the decode does: each whose size does not rule out a tile-part
+  header taking it over the caps, and under a resolution reduction every
+  one, as a tile-part `COD` or `COC` with fewer levels than the reduction
+  takes is refused too. That reads the tile-part headers of
   those tiles in the same single walk; a file with no tile over a cap under
   the main header is still read no further than the first `SOT`. The decode
   can still refuse first for what only decoding finds in a lower tile (its

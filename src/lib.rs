@@ -418,10 +418,12 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// since the decode then leaves it out. With it on, such a tile gets the
 /// decode's error for the tile-parts, from the same parse: the first fault
 /// its parse finds, or the missing tile. Before such a tile, it counts each
-/// lower tile it would read whose size does not rule out a tile-part header
-/// taking it over the caps, under that tile's own header, checking the
-/// reduction first, as the decode counts each tile in index order; so the
-/// tile it refuses is the lowest the decode refuses. A tile-part
+/// lower tile it would read that the tile's own header could refuse, under
+/// that header, as the decode counts each tile in index order: each whose
+/// size does not rule out a tile-part header taking it over the caps, and
+/// under a reduction every one, as a tile-part `COD` or `COC` can give
+/// fewer levels than the reduction takes. So the tile it refuses is the
+/// lowest the decode refuses. A tile-part
 /// header the decode finds at fault is left to the decode, as is a
 /// tile-part `COD` that takes a tile over the caps with no tile over them
 /// under the main header after it. The count has a budget
@@ -443,9 +445,8 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// gets to that tile, for what only decoding finds, and then names another
 /// tile, kind or factor, or another error: a fault or a work bound in the
 /// packets or code-blocks of a lower tile (with `strict` on, data that ends
-/// early or runs on past the last packet), a reduction that a lower tile's
-/// tile-part header cannot take where the tile's size kept the read from
-/// that header, or, with `strict` off, the charge of a step for each
+/// early or runs on past the last packet), or, with `strict` off, the
+/// charge of a step for each
 /// tile-component of the tiles read that have no tile-part, past the
 /// [`packet_work_limit`](DecodeOptions::packet_work_limit).
 ///

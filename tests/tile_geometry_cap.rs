@@ -810,6 +810,31 @@ fn the_lowest_tile_a_tile_part_cod_takes_over_a_cap_is_refused() {
         "{header:?}"
     );
     assert_same_error(&bytes, &options);
+    // Under a reduction a lower tile is counted whatever its size: here tile
+    // 0 is 8 x 4096, within the caps under any header, and its tile-part
+    // `COD` has no levels where the main header's has one. Tile 1, 4200 x
+    // 4096, is over the code-block cap.
+    let siz = synth::siz_body([2 * 4200, 4096, 4192, 0, 4200, 4096, 0, 0], &[[7, 1, 1]]);
+    let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    let bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 1, 0, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+        synth::tile_part(0, 0, 1, &own, &[]),
+        synth::tile_part(1, 0, 1, &[], &[]),
+        vec![0xFF, 0xD9],
+    ]
+    .concat();
+    for strict in [true, false] {
+        let options = options.clone().with_strict(strict);
+        let header = read_header_with(&bytes, &options);
+        assert!(
+            matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 0")),
+            "{header:?}"
+        );
+        assert_same_error(&bytes, &options);
+    }
 }
 
 /// Where the header read refuses a tile, the decode can refuse the file

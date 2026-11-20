@@ -124,14 +124,17 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 ///
 /// The decode counts every tile it reads under the tile's own header, in
 /// index order, so a tile-part `COD` or `COC` can take a lower tile over a
-/// cap, and the decode refuses that tile first. So before a tile over a cap
-/// under the main header is counted, each lower tile read since the last
-/// one counted that a tile-part header could take over a cap (its size does
-/// not rule that out at the most resolutions a header can give) is counted
-/// under its own header too, in index order. The first tile refused is then
-/// the lowest, as in the decode. Such a tile with no tile over a cap after
-/// it is left to the decode, so a file with no tile over a cap under the
-/// main header is still read no further than the first `SOT`.
+/// cap, and the decode refuses that tile first, as it does a tile whose
+/// tile-part `COD` or `COC` gives fewer levels than the reduction takes. So
+/// before a tile over a cap under the main header is counted, each lower
+/// tile read since the last one counted whose own header could refuse it is
+/// counted under that header too, in index order: under a reduction every
+/// such tile, and otherwise each a tile-part header could take over a cap
+/// (its size does not rule that out at the most resolutions a header can
+/// give). The first tile refused is then the lowest, as in the decode. Such
+/// a tile with no tile over a cap after it is left to the decode, so a file
+/// with no tile over a cap under the main header is still read no further
+/// than the first `SOT`.
 fn check_geometry(
     bytes: &[u8],
     parsed: &codestream::ParsedHeader,
@@ -149,7 +152,9 @@ fn check_geometry(
     let most_resolutions = components.saturating_mul(33);
     let reads = selection.tiles(siz);
     // For a tile read, whether its size shows it within both caps under the
-    // main header, and under any header.
+    // main header, and whether its own header could refuse it: take it over
+    // a cap (its size does not show it within them under any header) or,
+    // under a reduction, have too few levels for it.
     let fits = |index: u32| {
         let rect = siz
             .tile_rect(index)
@@ -167,7 +172,10 @@ fn check_geometry(
             blocks <= cap.tile_blocks()
                 && samples.saturating_add(resolutions) <= cap.tile_precincts()
         };
-        Some((under(main_resolutions), under(most_resolutions)))
+        Some((
+            under(main_resolutions),
+            reduction > 0 || !under(most_resolutions),
+        ))
     };
     let mut steps = 0u64;
     let mut rescue = Rescue {
@@ -180,14 +188,14 @@ fn check_geometry(
         walk: None,
         steps: 0,
     };
-    // The lowest tile read since the last one counted that a tile-part
-    // header could take over a cap.
+    // The lowest tile read since the last one counted whose own header
+    // could refuse it.
     let mut pending: Option<u32> = None;
     for index in 0..reads.len() as u32 {
-        let Some((main_fits, any_fits)) = fits(index) else {
+        let Some((main_fits, may_refuse)) = fits(index) else {
             continue;
         };
-        if any_fits {
+        if !may_refuse {
             continue;
         }
         let over = if main_fits {
@@ -207,7 +215,7 @@ fn check_geometry(
         };
         // The decode counts the lower tiles under their own headers first.
         for lower in pending.take().unwrap_or(index)..index {
-            let counted = fits(lower).is_some_and(|(_, any_fits)| !any_fits);
+            let counted = fits(lower).is_some_and(|(_, may_refuse)| may_refuse);
             if counted && !rescue.count(lower, None)? {
                 return Ok(());
             }

@@ -293,8 +293,10 @@ each tile under its own header in index order, so a tile-part `COD` or `COC`
 can take a lower tile over a cap, which the decode then refuses first. So
 before such a tile is counted, each lower tile read since the last one
 counted whose size does not rule that out (at 33 resolutions a component,
-the most a header gives) is counted under its own header too, the
-reduction checked first as the decode checks it. The first tile refused is
+the most a header gives) is counted under its own header too. Under a
+reduction every lower tile read is, as a tile-part `COD` or `COC` can give
+fewer levels than the reduction takes, which the decode checks before the
+caps. The first tile refused is
 then the lowest, as in the decode. A tile-part `COD` that takes a tile over
 a cap with no tile over a cap under the main header after it is left to
 the decode, so a file with no tile over a cap under the main header is
@@ -348,9 +350,8 @@ tile-parts it passes nor walk past that tile. The decode can also refuse
 the file before it gets to the tile refused, for what only decoding finds,
 and so name another tile, kind or factor, or give another error: a fault or
 a work bound in the packets or code-blocks of a lower tile (with `strict`
-on, data that ends early or runs on past the last packet), a reduction that
-a lower tile's tile-part header cannot take where the tile's size kept the
-header read from that header, or, with `strict` off, the charge of a step
+on, data that ends early or runs on past the last packet), or, with
+`strict` off, the charge of a step
 for each tile-component of the tiles read that have no tile-part, past the
 packet work bound. The header read decodes no packet, so it does not
 follow the decode there; `tests/tile_geometry_cap.rs` shows a case of the
