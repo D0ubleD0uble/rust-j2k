@@ -558,6 +558,13 @@ license restriction. Every `AtMost` ceiling the target draws is under its
 extension, so the sweeps of the fixtures skip it. Replay it with
 `cargo +nightly fuzz run -O incremental_decode tests/fixtures/incremental/ -- -runs=0`.
 
+`incremental/at_most_work_bound_waits.seed` (604 bytes) is the control bytes
+`A0 00 00 00 00 00` (`AtMost` and a reduction of 1) in front of
+`work_bound/cprl_tall.j2k`. Under `AtMost` a refusal by a work bound still
+grows with the bytes, so the target must expect the refine to wait where the
+one-shot decode is refused, as under any other sample limit. It takes about 11
+s to replay under ASan. Replay it with the command above.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

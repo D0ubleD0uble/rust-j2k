@@ -42,11 +42,14 @@ the input as the sample limit does, and `WorkLimit::Raised(n)` and
 refused with `Limit` of kind `TileCodeBlocks` or `TilePrecincts`, which
 `with_retry` raises through `sample_limit`
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)).
+Where the sample limit that would admit the tile is past what the target
+can address, the kind is `AddressSpace` instead. On a 32-bit target, where
+that is 2^29 - 1 samples, every tile past a cap is refused so.
 
 A few fixed guards also return `Limit`, and no option lifts them: 32 POC
 progression volumes, 30 coded bit-planes per code-block, and an image too
-large for the target to address, under any sample limit (a tile of more
-code-blocks or precincts than it can address is this kind too). Their
+large for the target to address, under any sample limit (so is a tile whose
+code-blocks or precincts need a sample limit past what it can address). Their
 `retry_with()` is `None`, and `LimitKind::is_adjustable()` is false.
 
 The caps count work, not time: samples, packet-walk steps and code-block

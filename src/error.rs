@@ -490,8 +490,9 @@ pub enum LimitKind {
     /// [`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit),
     /// on decoding the code-blocks.
     CodeBlockWork,
-    /// An image, or a tile's code-blocks or precincts, of more samples than
-    /// the target can address, refused under any sample limit.
+    /// An image of more samples than the target can address, or a tile whose
+    /// code-blocks or precincts need a sample limit past what it can address
+    /// to admit them: refused under any sample limit.
     AddressSpace,
     /// A tile of more code-blocks than the sample limit,
     /// [`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit),
@@ -516,8 +517,8 @@ impl LimitKind {
     /// [`CodeBlockWork`](Self::CodeBlockWork), and
     /// [`TileCodeBlocks`](Self::TileCodeBlocks) and
     /// [`TilePrecincts`](Self::TilePrecincts), which the sample limit raises.
-    /// A tile too large for any sample limit the target can address is
-    /// [`AddressSpace`](Self::AddressSpace) instead, which is not.
+    /// A tile whose geometry needs a sample limit past what the target can
+    /// address is [`AddressSpace`](Self::AddressSpace) instead, which is not.
     pub fn is_adjustable(self) -> bool {
         matches!(
             self,

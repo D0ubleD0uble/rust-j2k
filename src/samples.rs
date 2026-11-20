@@ -217,9 +217,10 @@ pub(crate) fn over(what: &str, total: u64, cap: Cap) -> Error {
 /// `WorkLimit::Raised` factor of the cap's default that admits the tile, or
 /// twice the factor it ran under when that is more, as the work bounds do:
 /// the tiles after it may need more. Under [`WorkLimit::AtMost`] it names
-/// that ceiling and no retry. Past the cap of any limit this target can
-/// address, it is [`LimitKind::AddressSpace`](crate::LimitKind), which no
-/// option raises, as [`over`] gives for the samples.
+/// that ceiling and no retry. Where the sample limit that would admit the tile
+/// is past what the target can address, it is
+/// [`LimitKind::AddressSpace`](crate::LimitKind), which no option raises, as
+/// [`over`] gives for the samples.
 pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap) -> Error {
     let (noun, limit, per, floor) = match kind {
         crate::LimitKind::TilePrecincts => (
@@ -240,12 +241,18 @@ pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap)
     if needed > ADDRESSABLE_SAMPLES {
         // No sample limit lifts this one, so it is not the tile cap's kind:
         // it is the address space's, as `over` reports it.
+        let most = floor.max(ADDRESSABLE_SAMPLES / per);
+        // Say the most only where it is not the cap just named.
+        let tail = if most == limit {
+            String::new()
+        } else {
+            format!(" (at most {most} {noun} a tile)")
+        };
         return Error::limit_fixed(
             crate::LimitKind::AddressSpace,
             format!(
-                "{head}, and more than any sample limit this target can address admits ({} \
-                 {noun})",
-                floor.max(ADDRESSABLE_SAMPLES / per)
+                "{head}, and the sample limit that would admit it is past what this target \
+                 can address{tail}"
             ),
         );
     }

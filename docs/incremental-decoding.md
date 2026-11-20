@@ -47,8 +47,8 @@ does again on each refine.
   options. A server that streams files in can refuse one as soon as its main
   header has come in. Any other error, including a limit that does not
   depend on the bytes (an image or a tile too large for the target to
-  address, too many `POC` volumes, too many bit-planes), is the one `decode_with` gives
-  on those bytes. A refusal by a bound only the refines have, `BoundSpent`
+  address, too many `POC` volumes, too many bit-planes), is the one
+  `decode_with` gives on those bytes. A refusal by a bound only the refines have, `BoundSpent`
   or `RepeatLimit`, can stand in for an error that block decoding, the
   wavelet or assembly would meet in a tile the refine did not decode: the
   refine waits where `decode_with` fails, and `finish` reports that error

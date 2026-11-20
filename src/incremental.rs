@@ -715,7 +715,8 @@ pub enum Waiting {
     /// The default limit and a [`Raised`](crate::WorkLimit::Raised) one
     /// grow with the bytes fed, so more bytes may admit it. The
     /// detail is the one [`decode_with`] gives for the bytes fed, with its
-    /// [`retry_with`](LimitDetail::retry_with).
+    /// [`retry_with`](LimitDetail::retry_with). A retry can still meet a
+    /// fixed limit, such as the address space, on the way.
     ///
     /// Only a refusal that more bytes can lift waits: one with a
     /// [`retry_with`](LimitDetail::retry_with). A ceiling of

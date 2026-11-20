@@ -129,7 +129,7 @@ fuzz_target!(|input: &[u8]| {
     // 12 * MAX_CHECKED_TRIES + 12 bounds, under 64.
     let mut options = budget::options(64).with_code_block_work_limit(limit);
     if control[0] & 4 != 0 {
-        options = options.with_max_quality_layers(Some(1 + u16::from((control[0] >> 3) % 3)));
+        options = options.with_max_quality_layers(Some(1 + u16::from(((control[0] & 0x7F) >> 3) % 3)));
     }
     if control[0] & 0x20 != 0 {
         options = options.with_resolution_reduction(1);
@@ -241,16 +241,22 @@ fuzz_target!(|input: &[u8]| {
             let expected = keyed(match one_shot {
                 Ok(image) => Ok(Some(image)),
                 Err(Error::Incomplete(_)) => Ok(None),
+                // The work bounds grow with the bytes under any sample limit.
+                Err(Error::Limit(m))
+                    if matches!(m.kind(), LimitKind::PacketWork | LimitKind::CodeBlockWork) =>
+                {
+                    Ok(None)
+                }
+                // The sample limit's kinds do too, unless the limit is a
+                // ceiling.
                 Err(Error::Limit(m))
                     if !ceiling
                         && matches!(
-                        m.kind(),
-                        LimitKind::PacketWork
-                            | LimitKind::CodeBlockWork
-                            | LimitKind::Samples
-                            | LimitKind::TileCodeBlocks
-                            | LimitKind::TilePrecincts
-                    ) =>
+                            m.kind(),
+                            LimitKind::Samples
+                                | LimitKind::TileCodeBlocks
+                                | LimitKind::TilePrecincts
+                        ) =>
                 {
                     Ok(None)
                 }
