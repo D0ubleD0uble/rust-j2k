@@ -163,7 +163,7 @@ checks each result against the strict decode of the same bytes: when the
 strict decode gives an image, the decode with `strict` off gives an equal
 `Image`, report included: `DecodeReport::default()`, at any reduction. Every report must
 stay within its bound (five entries per `SOT` marker code in the input, plus
-two), a tile with leftover bytes must leave `complete_reduction` at `None`,
+two, plus one for each row of tiles a window reads), a tile with leftover bytes must leave `complete_reduction` at `None`,
 and a complete report must hold no missing tiles. `tile_body` makes the same
 check on each of its inputs, so the steered shapes (POC, packed headers,
 tile-parts) reach the strict-off walk too. Seed `decode_partial` as

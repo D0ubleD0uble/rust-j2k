@@ -742,3 +742,16 @@ of the crate with it.
   }
 }
 ```
+
+### Partial decode oracle seed
+
+`partial/window_rows.j2k` (80 bytes) is an input a 60 s `decode_partial`
+fuzz run found on 2026-11-19 while reviewing #491 (#492), committed as
+found. It is a codestream that declares 65535 tiles (255 x 257 tiles of
+1 x 1) and carries one tile-part, so it has no license restriction. The
+target's hash of it picks the window 24..55 by 11..34, under which the
+decode with `strict` off reports one `MissingTiles` run for each of the 23
+rows of tiles the window reads: 24 entries, past the oracle's old bound of
+five per tile-part plus two. `tests/fuzz_partial_oracle.rs` runs the oracle
+on it. Replay it with
+`cargo +nightly fuzz run -O decode_partial tests/fixtures/partial/window_rows.j2k`.

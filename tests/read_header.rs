@@ -52,7 +52,8 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// the decode's block decoder reads. `incremental/segsym_tiles_flipped.j2k`
 /// and `incremental/segsym_wide_flipped.j2k` hold a code-block whose
 /// segmentation symbol is wrong, which only the decode's block decoder
-/// reads.
+/// reads. `partial/window_rows.j2k` declares 65535 tiles and ends after one
+/// tile-part, with no `EOC`, which only the decode reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
@@ -104,6 +105,7 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "partial/tp_r.j2k",
         "bytes left after the last packet (a phantom packet)",
     ),
+    ("partial/window_rows.j2k", "no EOC after the only tile-part"),
     (
         "poc_coverage/poc_comp_missing.j2k",
         "POC leaves out packets",
