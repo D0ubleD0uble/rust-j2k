@@ -1427,6 +1427,12 @@ fn a_change_of_region_keeps_the_walks() {
 /// walks of the tiles it does not read, from the first, until the rest
 /// fit, and keeps the walk of the tile it reads. A later walk of a tile let
 /// go is charged as a walk read again.
+///
+/// Only on a 64-bit target: which walks fit the room is set by their size in
+/// bytes, which follows the pointer width, and this fixture is tuned to the
+/// room on a 64-bit target. On a 32-bit one the walks are smaller and one
+/// more of them fits.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
     let bytes = fixture(SIX_TILES);
@@ -1483,16 +1489,23 @@ fn a_change_of_layers_walks_the_tiles_again_and_is_charged() {
         assert!(charged > 0);
         assert_eq!(decoder.spent.repeats, charged, "{reduction} {layers:?}");
         // The room is that of the new options: the walks kept are those a
-        // decoder made with them keeps.
-        let mut fresh = IncrementalDecoder::new(options).unwrap();
-        fresh.feed(&bytes);
-        assert!(fresh.refine().unwrap().image().is_some());
-        let kept = fresh.spent.walks.kept();
-        assert_eq!(decoder.spent.walks.kept(), kept, "{reduction} {layers:?}");
-        assert_eq!(
-            decoder.spent.walks.kept_bytes(),
-            fresh.spent.walks.kept_bytes()
-        );
+        // decoder made with them keeps. Which walks fit is set by their size
+        // in bytes, which follows the pointer width, against a room this
+        // fixture is tuned to on a 64-bit target: on a 32-bit one the walks
+        // are smaller, and how many are kept depends on how each decoder
+        // reached its state.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let mut fresh = IncrementalDecoder::new(options).unwrap();
+            fresh.feed(&bytes);
+            assert!(fresh.refine().unwrap().image().is_some());
+            let kept = fresh.spent.walks.kept();
+            assert_eq!(decoder.spent.walks.kept(), kept, "{reduction} {layers:?}");
+            assert_eq!(
+                decoder.spent.walks.kept_bytes(),
+                fresh.spent.walks.kept_bytes()
+            );
+        }
     }
     // There and back between two refines, and the value it has: no walk is
     // let go.

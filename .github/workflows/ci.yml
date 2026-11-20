@@ -210,3 +210,7 @@ jobs:
         run: cargo test --target wasm32-wasip1 --lib math_tests
       - name: jp2_icc
         run: cargo test --target wasm32-wasip1 --test jp2_icc
+      - name: limits
+        run: cargo test --target wasm32-wasip1 --lib -- samples:: limit the_rescue a_change_of_layers
+      - name: limit_32bit
+        run: cargo test --target wasm32-wasip1 --test limit_32bit

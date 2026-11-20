@@ -1349,6 +1349,11 @@ pub(crate) mod tests {
     /// of one walk, up to the last tile's first tile-part (1009 of 1024),
     /// and one `SOT` a tile. A walk for each batch of 1, 2, 4 and so on
     /// tiles would be seven walks, and one a tile 64.
+    ///
+    /// Only on a 64-bit target: a tile of 266,240 precincts is past a 32-bit
+    /// target's address space, which is refused outright with no tile-part
+    /// `COD` to rescue it.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_rescue_walks_the_tile_parts_once() {
         let bytes = rescued_tiles(64, 16, &[], &[]);
