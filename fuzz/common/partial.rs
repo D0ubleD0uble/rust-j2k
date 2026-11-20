@@ -74,7 +74,7 @@ pub fn entry_bound(sots: usize, rows: usize) -> usize {
 /// The rows of tiles `options` reads of `bytes`: `0` without a window. Under
 /// a window the grid comes from a header read with `strict` off, as the
 /// decode reads it. If even that fails, the grid is unknown and the worst
-/// case, tiles one row high, bounds the rows by the window's height plus one.
+/// case, tiles one row high, bounds the rows by the window's height.
 fn window_rows(bytes: &[u8], options: &DecodeOptions) -> usize {
     let rust_j2k::Region::Window(window) = &options.region else {
         return 0;
@@ -84,15 +84,16 @@ fn window_rows(bytes: &[u8], options: &DecodeOptions) -> usize {
             let grid = header.tiles;
             rows_read(window, grid.tile_height, grid.y_offset, grid.rows)
         }
-        Err(_) => window.y1.saturating_sub(window.y0) as usize + 1,
+        Err(_) => window.y1.saturating_sub(window.y0) as usize,
     }
 }
 
 /// The rows of tiles, `tile_height` high from `y_offset` on the reference
 /// grid, that `window` reaches in a grid of `grid_rows` rows: from the row of
 /// the window's first line to the row of its last, at most `grid_rows`. The
-/// window is not cut to the image, so this can count a row more than the
-/// decode reads, never fewer.
+/// window is not cut to the image, so one that runs past the image's bottom
+/// counts the rows below it as well, up to `grid_rows`: more than the decode
+/// reads, never fewer.
 pub fn rows_read(
     window: &rust_j2k::Window,
     tile_height: u32,

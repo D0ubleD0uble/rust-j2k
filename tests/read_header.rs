@@ -12,8 +12,8 @@
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, decode_with, read_header,
-    read_header_with,
+    ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, LimitKind, Ratio, decode_with,
+    read_header, read_header_with,
 };
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -196,10 +196,13 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Files both calls refuse, with different errors. `partial/header_refused.j2k`
-/// has a tile over the precinct cap and no tile-part for it: `read_header`
-/// finds the limit, and `decode` the missing tile-part first.
-const OTHER_ERROR: &[&str] = &["partial/header_refused.j2k"];
+/// The one known divergence between the errors of `read_header` and `decode`
+/// on a refused file: `partial/header_refused.j2k` has a tile over the
+/// precinct cap and no tile-part for it, and with `strict` on `read_header`
+/// finds the limit (`TilePrecincts`) while `decode` finds the missing
+/// tile-part (`Codestream`); see `docs/resource-bounds.md`. The test pins
+/// both, so a change to either error fails here and this entry is updated.
+const HEADER_REFUSED: &str = "partial/header_refused.j2k";
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -311,10 +314,11 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     );
                     compared[reduction as usize] += 1;
                 }
+                (Err(Error::Limit(h)), Err(Error::Codestream(_))) if name == HEADER_REFUSED => {
+                    assert_eq!(h.kind(), LimitKind::TilePrecincts, "{name}");
+                }
                 (Err(h), Err(d)) => {
-                    if !OTHER_ERROR.contains(&name.as_str()) {
-                        assert_eq!(format!("{h:?}"), format!("{d:?}"), "{name}: the same error");
-                    }
+                    assert_eq!(format!("{h:?}"), format!("{d:?}"), "{name}: the same error")
                 }
                 (Ok(_), Err(Error::Codestream(_) | Error::Limit(_))) => {
                     assert!(
