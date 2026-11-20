@@ -101,6 +101,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A tile of more code-blocks or precincts than any sample limit the target
+  can address admits is refused as `LimitKind::AddressSpace`, which is not
+  adjustable and has no `retry_with`. It was `TileCodeBlocks` or
+  `TilePrecincts`, which reported themselves as adjustable, so
+  `IncrementalDecoder::refine` waited on `Waiting::SampleLimit` for bytes
+  that could not lift it. It now returns the error, and it sticks.
 - `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
   time. A refusal of the packet work or code-block work bound, including the
   charge for missing tiles, names the larger of what the tiles seen so far

@@ -45,7 +45,8 @@ refused with `Limit` of kind `TileCodeBlocks` or `TilePrecincts`, which
 
 A few fixed guards also return `Limit`, and no option lifts them: 32 POC
 progression volumes, 30 coded bit-planes per code-block, and an image too
-large for the target to address, under any sample limit. Their
+large for the target to address, under any sample limit (a tile of more
+code-blocks or precincts than it can address is this kind too). Their
 `retry_with()` is `None`, and `LimitKind::is_adjustable()` is false.
 
 The caps count work, not time: samples, packet-walk steps and code-block
