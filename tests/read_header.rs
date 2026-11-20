@@ -7,7 +7,8 @@
 //! channel's depth, sign and sub-sampling, and the JP2 metadata), and on every
 //! error found in a header. They differ only where `decode` meets a fault in
 //! the tile data, which `read_header` never reads; such a file must be listed
-//! in [`TILE_FAULTS`].
+//! in [`TILE_FAULTS`], or, where `read_header` refuses a later tile over a
+//! cap, in [`LOWER_TILE_FAULTS`].
 
 use std::path::{Path, PathBuf};
 
@@ -58,6 +59,17 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
+/// Files where `read_header` refuses a tile over a cap while `decode` first
+/// refuses the file for a fault in a lower tile's data, which `read_header`
+/// never reads, and why.
+const LOWER_TILE_FAULTS: &[(&str, &str)] = &[
+    (
+        "header/lower_tile_data_long.j2k",
+        "a byte after tile 0's last packet",
+    ),
+    ("header/lower_tile_data_short.j2k", "no data in tile 0"),
+];
+
 const TILE_FAULTS: &[(&str, &str)] = &[
     (
         "incremental/segsym_tiles_flipped.j2k",
@@ -266,6 +278,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     let mut seen = [0usize; 4];
     let mut compared = [0usize; 2];
     let mut differing = Vec::new();
+    let mut lower_first = Vec::new();
     let mut names = Vec::new();
     for path in &all {
         let name = path
@@ -306,6 +319,13 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     );
                     compared[reduction as usize] += 1;
                 }
+                (Err(Error::Limit(_)), Err(Error::Codestream(_)))
+                    if LOWER_TILE_FAULTS.iter().any(|(listed, _)| *listed == name) =>
+                {
+                    if reduction == 0 {
+                        lower_first.push(name.clone());
+                    }
+                }
                 (Err(h), Err(d)) => {
                     assert_eq!(format!("{h:?}"), format!("{d:?}"), "{name}: the same error")
                 }
@@ -335,6 +355,11 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     // Every listed tile fault really differs.
     let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
     assert_eq!(differing, listed);
+    let listed: Vec<String> = LOWER_TILE_FAULTS
+        .iter()
+        .map(|(n, _)| n.to_string())
+        .collect();
+    assert_eq!(lower_first, listed);
     // Files whose `cdef` reorders the channels are in the sweep. Their
     // channels share one format, so the placement of the formats is pinned by
     // `read_header_places_palette_channels_by_their_definitions` in the crate.

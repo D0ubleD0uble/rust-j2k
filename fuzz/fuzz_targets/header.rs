@@ -14,7 +14,10 @@
 //! `read_header_with` and `decode_with` agree, since `decode_with` runs the
 //! same header checks before it reads any tile data:
 //!
-//! - when `read_header_with` fails, `decode_with` fails with the same error;
+//! - when `read_header_with` fails, `decode_with` fails with the same error,
+//!   except where the header refuses a tile over a cap and the decode finds
+//!   a fault or a work bound in a lower tile's data first, which only
+//!   decoding can see (`decode_finds_first_in_a_lower_tile`);
 //! - when `decode_with` succeeds, `read_header_with` reports the decoded
 //!   image's area, each channel's format, and the same JP2 metadata.
 //!
@@ -110,6 +113,7 @@ fn check(
     }
     let decoded = rust_j2k::decode_with(data, options);
     match (&header, &decoded) {
+        (Err(h), Err(d)) if decode_finds_first_in_a_lower_tile(data, options, h, d) => {}
         (Err(h), _) => assert_eq!(
             decoded.as_ref().err().map(|e| format!("{e:?}")),
             Some(format!("{h:?}")),
@@ -142,4 +146,72 @@ fn check(
         }
         (Ok(_), Err(_)) => {}
     }
+}
+
+/// Whether `decode` is an error the decode finds before the tile that the
+/// header's tile cap refusal `header` names, in what only decoding finds:
+/// the packets or code-blocks of a lower tile, or, with `strict` off, the
+/// packet work charged for the tiles read that have no tile-part. The
+/// `read_header_with` rustdoc and `docs/resource-bounds.md` (the paragraph
+/// on what the decode can refuse "before it gets to that tile") say the two
+/// can then differ.
+///
+/// It holds only when all of these do:
+///
+/// - `header` is a tile cap refusal of one tile, T, and `decode` is not an
+///   error the header itself gives from a tile's own header: a tile cap or
+///   sample limit refusal, or a reduction past a tile's levels.
+/// - The decode gives `decode` again with T's refusal lifted, by the retry
+///   it names (the options as they are where none raises it), so the cap
+///   does not decide it.
+/// - The decode of T alone does not give it, so it lies in the other tiles'
+///   data and not in what every decode reads, such as the tile-parts.
+fn decode_finds_first_in_a_lower_tile(
+    data: &[u8],
+    options: &rust_j2k::DecodeOptions,
+    header: &rust_j2k::Error,
+    decode: &rust_j2k::Error,
+) -> bool {
+    use rust_j2k::{Error, LimitKind};
+    let Error::Limit(limit) = header else {
+        return false;
+    };
+    if !matches!(
+        limit.kind(),
+        LimitKind::TilePrecincts | LimitKind::TileCodeBlocks | LimitKind::AddressSpace
+    ) {
+        return false;
+    }
+    let Some(tile) = refused_tile(limit.message()) else {
+        return false;
+    };
+    let own_header = match decode {
+        Error::Limit(other) => matches!(
+            other.kind(),
+            LimitKind::Samples
+                | LimitKind::TilePrecincts
+                | LimitKind::TileCodeBlocks
+                | LimitKind::AddressSpace
+        ),
+        Error::InvalidOptions(_) => true,
+        _ => false,
+    };
+    if own_header {
+        return false;
+    }
+    let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
+    let expected = Some(format!("{decode:?}"));
+    let lifted = options.with_retry(limit).unwrap_or_else(|| options.clone());
+    if debug(rust_j2k::decode_with(data, &lifted)) != expected {
+        return false;
+    }
+    let alone = lifted.with_region(rust_j2k::Region::Tile(tile));
+    debug(rust_j2k::decode_with(data, &alone)) != expected
+}
+
+/// The tile a tile cap refusal's message names: "tile T holds ...".
+fn refused_tile(message: &str) -> Option<u32> {
+    let rest = message.strip_prefix("tile ")?;
+    let (tile, rest) = rest.split_once(' ')?;
+    rest.starts_with("holds ").then(|| tile.parse().ok())?
 }
