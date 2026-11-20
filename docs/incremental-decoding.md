@@ -338,7 +338,11 @@ heap allocation it holds, capacity included. A tile whose walk would pass
 either bound is not kept, and each refine walks its packets from the start,
 until the bytes fed make room for it. After a change of the options, these
 bounds hold from the first refine that decodes under the new options; until
-then the walks kept may stay within the room of the old options. Of the
+then the walks kept may stay within the room of the old options. A change of
+the layer cap lets go of every walk, and the largest walk with them, so the
+room is then that of a decoder made with the new options. A change of the
+reduction or the window keeps the largest walk, which still bounds the walks
+kept. Of the
 committed fixtures fed 1 KB at a time, this keeps fewer walks than the image
 bound alone only for files made to test the work bounds, and for a
 6000 x 4000 RGB file of 148 KB until 64 KB of it are in. On top of these bounds the decoder keeps a table of 24

@@ -82,7 +82,8 @@ pub(crate) struct Walks {
     visits: u64,
     /// The bytes the walks kept hold, as [`TileWalk::bytes`] counts them.
     kept: u64,
-    /// The most bytes one tile's walk has held, kept or not.
+    /// The most bytes one tile's walk has held under the layer cap the walks
+    /// were built for, kept or not.
     largest: u64,
     /// The reduction and the layer cap the walks were built for (see
     /// [`Walks::prepare`]).
@@ -136,6 +137,11 @@ impl Walks {
     /// here is charged as a walk of a tile not kept when it is built again
     /// (see [`Walks::walk`]), so changing the options back and forth
     /// between decodes is held to the same bound as walking a tile again.
+    /// The largest walk is reset only when every walk is let go. A change of
+    /// reduction or window keeps the walks, so the largest walk held stays
+    /// a bound on what they hold, and the room never falls below what one
+    /// decode holds.
+    ///
     /// Under the same options on every decode, this changes nothing: the
     /// room only grows with the bytes fed.
     pub(crate) fn prepare(
@@ -164,6 +170,9 @@ impl Walks {
                 for index in 0..self.tiles.len() {
                     self.forget(index);
                 }
+                // No walk of the old cap is left, so the largest of them
+                // no longer sets the room. The walks built now count.
+                self.largest = 0;
             }
         }
         self.built_for = Some((reduction, layers));
@@ -334,6 +343,12 @@ impl Walks {
             self.kept -= *bytes;
             self.tiles[index] = Slot::Empty;
         }
+    }
+
+    /// The most bytes one tile's walk has held under the current layer cap.
+    #[cfg(test)]
+    pub(crate) fn largest(&self) -> u64 {
+        self.largest
     }
 
     /// How many tiles have a walk kept, and how many one too large to keep.
