@@ -569,13 +569,18 @@ later tile: an arm that excluded them would panic on it. It starts with
 `SOC`, so the target reads it with all-zero control bytes. Replay it with the
 command above. It has no license restriction.
 
-`incremental/at_most_samples_sticky.seed` (87 bytes) is a seed of the
-`incremental_decode` fuzz target for the `AtMost` control bit (#494): six
+`incremental/at_most_samples_sticky.seed` (94 bytes, SHA-256
+`3cac5c9082aadda57875566cab6a77f7aaee6aec342d6d7ebd731f1ed469562b`) is a seed
+of the `incremental_decode` fuzz target for the `AtMost` control bit (#494): six
 control bytes (`80 00 00 00 00 00`) in front of a 1024 x 1024 one-tile
 codestream with no packets, made by `synth::empty_tiles` here, so it has no
-license restriction. Every `AtMost` ceiling the target draws is under its
-1048576 samples, so the refine that has the header gives the sticky
-`Samples` error, equal to the one-shot decode's. The file has no `.j2k`
+license restriction. A 5-byte `COM` (`FF 64 00 05 00 01 00`) in front of the
+`SOT` changes its hash, which picks the ceiling: the hash of the file mod 4 is
+3 here, so the target draws half of the 1048576 samples the file declares, and
+the refine that has the header gives the sticky `Samples` error, equal to the
+one-shot decode's. Any other draw is the whole image, which it admits, so the
+seed is a refusal only for this hash (#508 added the `COM`; the 87-byte seed
+drew a refusing ceiling under the old draw). The file has no `.j2k`
 extension, so the sweeps of the fixtures skip it. Replay it with
 `cargo +nightly fuzz run -O incremental_decode tests/fixtures/incremental/ -- -runs=0`.
 

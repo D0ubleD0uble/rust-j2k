@@ -135,14 +135,21 @@ fuzz_target!(|input: &[u8]| {
         options = options.with_resolution_reduction(1);
     }
     // A ceiling the bytes do not raise: a refusal by the sample limit, or by
-    // the code-blocks or precincts it allows a tile, is no wait but a sticky
-    // error, the one-shot decode's. It is sized from the samples the file
-    // declares: all of them half the time, so the refines go on to decode,
-    // else half or a quarter, which the header's own check refuses.
+    // the code-blocks or precincts it allows a tile, is the one-shot decode's
+    // sticky error, not a wait. It is sized from the samples the file
+    // declares: all of them for three draws in four, else half. The first
+    // are admitted by the header's check, unless the decoder counts more
+    // than the header declares, so the refines go on to decode; the others
+    // may be refused by it, but a reduction, a region or a component subset
+    // count fewer samples and can pass. One exception is accepted: a refine
+    // cut short by what earlier refines spent waits on `BoundSpent` where a
+    // later tile's cap refusal ends the one-shot decode, ceiling or not,
+    // because its count stops at that tile and never checks the caps of the
+    // tiles after it.
     let ceiling = control[0] & 0x80 != 0;
     if ceiling {
         let declared = u64::try_from(budget::declared(data)).unwrap_or(u64::MAX);
-        let shift = (hash % 4).saturating_sub(1);
+        let shift = u64::from(hash % 4 == 3);
         options = options.with_sample_limit(WorkLimit::AtMost((declared >> shift).max(1)));
     }
     // The pieces of the file one refine decodes: a window, or a tile, or
@@ -429,9 +436,9 @@ fn check_waiting(
         // check refuses before any tile. It may stand in for any other
         // error, a limit included, that the decode meets in the tiles the
         // refine did not decode. That includes `TileCodeBlocks` and
-        // `TilePrecincts`, unlike the arm above: a tile-part `COD` can take
-        // a later tile over those caps, and the decode checks a tile's caps
-        // as it reaches it, after the tiles before it
+        // `TilePrecincts`, unlike the arm above. A tile-part `COD` can take
+        // a later tile over those caps. The decode checks a tile's caps as
+        // it reaches the tile, after the tiles before it
         // (`bound_spent_stands_in_for_a_tile_cap_refusal.seed`). Where that
         // decode is refused by the code-block bound, the refine's count was
         // too, at the same tile and for the same work, and the wait names
