@@ -288,17 +288,31 @@ pub fn parse_tiles_with(
     strict: bool,
 ) -> Result<Codestream<'_>> {
     let codestream = split_tiles_with(bytes, parsed, strict)?;
+    check_tile_headers(&codestream.header, &codestream.tiles)?;
+    Ok(codestream)
+}
 
-    // Check every tile's header once, here, so a malformed tile-part header is
-    // a parse error rather than a surprise partway through a decode. A header is
-    // sized by the component count and a codestream can declare tens of
-    // thousands of tiles, so each tile's own markers are checked against a
-    // summary of the main header instead of resolving a header per tile. Only
-    // a tile found at fault is resolved in full, so that the fault is reported
-    // in the full check's words.
-    let main = &codestream.header;
+/// The error [`parse_tiles_with`] gives with `strict` on for the
+/// tile-parts after `parsed`'s main header, or `None` if it gives none. It
+/// reads `parsed` in place, so a caller that keeps it copies nothing, and
+/// keeps the tile records only until it returns.
+pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader) -> Option<Error> {
+    let mut entries = Vec::new();
+    walk_parsed(bytes, parsed, true, &mut entries)
+        .and_then(|tiles| check_tile_headers(&parsed.header, &tiles))
+        .err()
+}
+
+/// Check every tile's header once, here, so a malformed tile-part header is
+/// a parse error rather than a surprise partway through a decode. A header is
+/// sized by the component count and a codestream can declare tens of
+/// thousands of tiles, so each tile's own markers are checked against a
+/// summary of the main header instead of resolving a header per tile. Only
+/// a tile found at fault is resolved in full, so that the fault is reported
+/// in the full check's words.
+fn check_tile_headers(main: &MainHeader, tiles: &[Tile<'_>]) -> Result<()> {
     let summary = OnceCell::new();
-    for (index, tile) in codestream.tiles.iter().enumerate() {
+    for (index, tile) in tiles.iter().enumerate() {
         if !tile_header_is_valid(main, &summary, &tile.header) {
             // The two checks agree, so the full one fails here. Were it ever
             // to pass, its verdict would stand.
@@ -310,8 +324,7 @@ pub fn parse_tiles_with(
             full?;
         }
     }
-
-    Ok(codestream)
+    Ok(())
 }
 
 /// Resolve a tile's header in full and check it: every invariant
@@ -691,33 +704,38 @@ impl<'b, 'm> FirstPart<'b, 'm> {
 
 /// [`split_tiles`], strict or not (see [`walk_tiles`]).
 fn split_tiles_with(bytes: &[u8], parsed: ParsedHeader, strict: bool) -> Result<Codestream<'_>> {
-    // The tile-parts that start a tile, so the walk can reserve one record
-    // for each: a hop along the `SOT` chain that reads the `SOT` markers only.
-    let mut first_parts = 0usize;
-    visit_first_parts(bytes, &parsed, |_, _| {
-        first_parts += 1;
-        ControlFlow::Continue(())
-    });
-    let ParsedHeader {
-        header,
-        sot_offset,
-        ppm,
-    } = parsed;
     let mut entries = Vec::new();
-    let tiles = walk_tiles(
-        bytes,
-        sot_offset,
-        &header,
-        &ppm,
-        strict,
-        first_parts,
-        &mut entries,
-    )?;
+    let tiles = walk_parsed(bytes, &parsed, strict, &mut entries)?;
     Ok(Codestream {
-        header,
+        header: parsed.header,
         tiles,
         entries,
     })
+}
+
+/// [`walk_tiles`] from `parsed`'s first `SOT`.
+fn walk_parsed<'a>(
+    bytes: &'a [u8],
+    parsed: &ParsedHeader,
+    strict: bool,
+    entries: &mut Vec<ReportEntry>,
+) -> Result<Vec<Tile<'a>>> {
+    // The tile-parts that start a tile, so the walk can reserve one record
+    // for each: a hop along the `SOT` chain that reads the `SOT` markers only.
+    let mut first_parts = 0usize;
+    visit_first_parts(bytes, parsed, |_, _| {
+        first_parts += 1;
+        ControlFlow::Continue(())
+    });
+    walk_tiles(
+        bytes,
+        parsed.sot_offset,
+        &parsed.header,
+        &parsed.ppm,
+        strict,
+        first_parts,
+        entries,
+    )
 }
 
 /// A tile-part header's own markers (A.4.2): the tile-level overrides of the

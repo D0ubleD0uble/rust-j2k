@@ -411,10 +411,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// tile-parts by their `Psot`, reading their `SOT`s, once in all and no
 /// further than the last such tile, and reads the first tile-part header
 /// of each such tile within its `Psot`, no tile data, holding one tile's
-/// coding parameters at a time. A tile-part `COD` or `COC` that brings
+/// coding parameters at a time (but see the refusal of a tile with no
+/// tile-part below). A tile-part `COD` or `COC` that brings
 /// the tile within the caps admits it, as does
 /// [`strict`](DecodeOptions::strict) off when the tile has no tile-part,
-/// since the decode then leaves it out. A tile-part
+/// since the decode then leaves it out. With it on, such a tile gets the
+/// decode's error for the tile-parts, from the same parse: the first fault
+/// its parse finds, or the missing tile. A tile-part
 /// header the decode finds at fault is left to the decode, as is a
 /// tile-part `COD` that takes a tile over the caps. The count has a budget
 /// of 2^22 steps under the main header and as many under the tiles' own;
@@ -423,9 +426,15 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// the tile-parts at most plus the budget: 45 ms in release for a window of
 /// 1530 tiles over a cap of a 235 MB file of 65535 tiles in 16.7 million
 /// tile-parts, under a millisecond with no tile over a cap, and 63 ms for
-/// 1000 tiles of 4096 components, each with a tile-part `COD`. On a file
-/// the decode refuses for a fault in its tile-parts, it may give this
-/// [`Error::Limit`] instead of the decode's error.
+/// 1000 tiles of 4096 components, each with a tile-part `COD`. A refusal
+/// of a tile with no tile-part with `strict` on costs the decode's parse
+/// of the tile-parts on top, as much time and heap as the decode spends
+/// before it refuses the file: 1.75 s and 281 MiB in release on that
+/// 235 MB file with the tile read left out, and 21 ms and 29 MiB on a
+/// 0.9 MB file of 65535 tiles in one tile-part each. On a file
+/// the decode refuses for a fault in its tile-parts, it may still give this
+/// [`Error::Limit`] instead of the decode's error where it refuses a tile
+/// it found a tile-part for.
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks

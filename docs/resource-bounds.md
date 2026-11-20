@@ -290,8 +290,14 @@ order, so one tile's coding parameters are held at a time and the first
 tile refused is the lowest, as in the decode. A
 tile-part `COD` or `COC` that brings the tile within the caps admits it,
 and so does `strict` off when the tile has no tile-part, as the decode then
-leaves it out; with `strict` on such a tile is counted under the main
-header, and the decode refuses the file anyway. A tile-part header the
+leaves it out. With `strict` on, the decode parses the tile-parts before it
+counts a tile, so it refuses a file where a tile has no tile-part with its
+error for the tile-parts: the first fault its parse finds, or the missing
+tile. The header read then runs that parse too and gives its error. The
+walk has reached the end of the chain by then, so the parse follows it no
+further, but it reads every tile-part header and keeps the decode's tile
+records, up to about 52 times the input plus 128 KiB (above). It reads the
+main header in place, so it copies no `PPM` data. A tile-part header the
 decode finds at fault, and a tile-part `COD` that takes a tile over the
 caps, are left to the decode. The count has a budget of 2^22 steps under the
 main header, a step for each resolution of each tile-component, and as many
@@ -303,14 +309,20 @@ return a header for a file the decode refuses. The walk takes no step of a
 budget, as it reads one `SOT` a tile-part. So the time is one walk of the
 tile-parts at most plus the budgets, and the heap one tile's header, a byte
 a tile for the tiles the selection reads, and 8 bytes a tile for the
-offsets. Measured in release on 65535 tiles of 1024 x 1024, each over the
+offsets, except where a tile has no tile-part with `strict` on: that
+refusal costs the decode's parse of the tile-parts too, as much time and
+heap as the decode spends before it refuses the file. Measured in release on
+65535 tiles of 1024 x 1024, each over the
 precinct cap under the main header and brought within by its first
 tile-part's `COD`, with 255 tile-parts a tile (16.7 million tile-parts,
 235 MB), reading a window of 1530 tiles: 45 ms where each tile's
 tile-parts come together and the window is the last rows, so the walk runs
 to the end; 1.8 ms where the first tile-parts all come first; and under a
 millisecond with nothing over a cap. With 16 tile-parts a tile (15.7 MB)
-the same reads take 4.4 ms and 1.9 ms. Measured in
+the same reads take 4.4 ms and 1.9 ms. With the last tile left out and
+`Region::Tile` of it, the refusal takes 1.75 s and 281 MiB of heap at 255
+tile-parts a tile, 123 ms and 41 MiB at 16, and 21 ms and 29 MiB at one
+(0.9 MB), about what the decode takes on each. Measured in
 `tests/tile_geometry_header_alloc.rs` and the tests of
 `tests/tile_geometry_cap.rs`: 300 bytes of heap within the caps and 968 B
 for a tile rescued; 704 KiB, one header, for 4096 components whether 4 or
@@ -320,7 +332,9 @@ almost all of it the offsets of tiles 0 to 65280; 63 ms for 1000 tiles of
 1024 tiles whose `Psot` ends inside a `COM` that holds the next tile-part,
 followed by 4 MiB of `COM`.
 On a file the decode refuses for a fault in its tile-parts,
-`read_header_with` may give the `Limit` instead of the decode's error.
+`read_header_with` may still give the `Limit` instead of the decode's error
+where it refuses a tile it found a tile-part for, as it does not check the
+tile-parts it passes nor walk past that tile.
 `IncrementalDecoder::header` reads the header again on each call, so each
 call costs as much: up to the walk and the budgets, 45 ms on the 235 MB
 file above.
