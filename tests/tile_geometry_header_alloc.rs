@@ -24,7 +24,7 @@ mod synth;
 use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
 
-use rust_j2k::{DecodeOptions, read_header_with};
+use rust_j2k::{DecodeOptions, Region, Window, read_header_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -86,10 +86,14 @@ fn many_components(tiles: u32) -> Vec<u8> {
 
 /// The heap `read_header_with` holds at its peak over what was live before.
 fn peak_of_header_read(bytes: &[u8]) -> usize {
-    let options = DecodeOptions::default();
+    peak_of_header_read_with(bytes, &DecodeOptions::default())
+}
+
+/// The same under `options`.
+fn peak_of_header_read_with(bytes: &[u8], options: &DecodeOptions) -> usize {
     let before = CURRENT.load(Ordering::SeqCst);
     PEAK.store(before, Ordering::SeqCst);
-    let header = read_header_with(bytes, &options).expect("the header is admitted");
+    let header = read_header_with(bytes, options).expect("the header is admitted");
     let peak = PEAK.load(Ordering::SeqCst) - before;
     drop(header);
     peak
@@ -117,4 +121,45 @@ fn the_header_read_holds_no_tile_data() {
     let many = peak_of_header_read(&many_components(256));
     eprintln!("4096 components: {few} bytes at the peak for 4 tiles, {many} for 256");
     assert!(many <= few + PEAK_BYTES, "{few} and {many} bytes");
+
+    // The most tiles a codestream declares, each over the cap under the main
+    // header and brought within by its tile-part `COD`, read in a window of
+    // the first column, from tile 0 to tile 65280. The header read holds a
+    // byte a tile for which tiles the selection reads, and 8 bytes a tile
+    // from the first tile over a cap to the last read for where each one's
+    // first tile-part starts.
+    let tiles = 65535;
+    let column = Window::new(0, 0, 520, 512 * 257);
+    let options = DecodeOptions::default().with_region(Region::Window(column));
+    let peak = peak_of_header_read_with(&most_tiles(), &options);
+    eprintln!("{tiles} tiles, a column read: {peak} bytes at the peak");
+    assert!(peak < PEAK_BYTES + 9 * tiles, "{peak} bytes");
+    // A tile read alone holds the 8 bytes of its own offset.
+    let last = DecodeOptions::default().with_region(Region::Tile(tiles as u32 - 1));
+    let peak = peak_of_header_read_with(&most_tiles(), &last);
+    eprintln!("{tiles} tiles, the last read: {peak} bytes at the peak");
+    assert!(peak < PEAK_BYTES + tiles, "{peak} bytes");
+}
+
+/// 65535 tiles of 520 x 512 in a 255 x 257 grid, in 1x1 precincts under the
+/// main header (266,240 a tile, over the 2^18 cap), each with a tile-part
+/// `COD` of the maximal precincts and one empty packet.
+fn most_tiles() -> Vec<u8> {
+    let mut cod = synth::cod_body(1, 0, 4, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body([520 * 255, 512 * 257, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+    for tile in 0..u16::MAX {
+        bytes.extend(synth::tile_part(tile, 0, 1, &own, &[0]));
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
 }
