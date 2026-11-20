@@ -12,7 +12,7 @@
 #[path = "support/synth.rs"]
 mod synth;
 
-use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with, read_header_with};
 
 /// One 520 x 512 tile with no wavelet levels and 1x1 precincts: 266,240 of
 /// them, and an empty packet each.
@@ -28,11 +28,9 @@ fn precinct_tile() -> Vec<u8> {
     )
 }
 
-#[cfg(target_pointer_width = "32")]
+#[cfg(not(target_pointer_width = "64"))]
 #[test]
 fn a_tile_over_the_address_space_is_refused_with_nothing_to_retry() {
-    use rust_j2k::read_header_with;
-
     let bytes = precinct_tile();
     for limit in [
         WorkLimit::Default,
@@ -55,15 +53,24 @@ fn a_tile_over_the_address_space_is_refused_with_nothing_to_retry() {
     }
 }
 
-/// On a 64-bit target the same tile is only over the default cap, and
-/// `Raised` admits it.
+/// On a 64-bit target the same tile is only over the default cap: both
+/// calls refuse it as `TilePrecincts`, and `Raised(2)` admits it.
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn the_same_tile_is_a_sample_limit_refusal_on_a_64_bit_target() {
     let bytes = precinct_tile();
-    let Err(Error::Limit(refusal)) = decode_with(&bytes, &DecodeOptions::default()) else {
-        panic!("the default admitted it");
-    };
-    assert_eq!(refusal.kind(), LimitKind::TilePrecincts, "{refusal}");
-    assert_eq!(refusal.retry_with(), Some(WorkLimit::Raised(2)));
+    let options = DecodeOptions::default();
+    for result in [
+        read_header_with(&bytes, &options).map(|_| ()),
+        decode_with(&bytes, &options).map(|_| ()),
+    ] {
+        let Err(Error::Limit(refusal)) = result else {
+            panic!("the default admitted it: {result:?}");
+        };
+        assert_eq!(refusal.kind(), LimitKind::TilePrecincts, "{refusal}");
+        assert_eq!(refusal.retry_with(), Some(WorkLimit::Raised(2)));
+    }
+    let raised = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(2));
+    read_header_with(&bytes, &raised).expect("Raised(2) admits the header");
+    decode_with(&bytes, &raised).expect("Raised(2) admits the decode");
 }

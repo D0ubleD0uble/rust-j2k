@@ -1428,11 +1428,9 @@ fn a_change_of_region_keeps_the_walks() {
 /// fit, and keeps the walk of the tile it reads. A later walk of a tile let
 /// go is charged as a walk read again.
 ///
-/// Only on a 64-bit target: which walks fit the room is set by their size in
-/// bytes, which follows the pointer width, and this fixture is tuned to the
-/// room on a 64-bit target. On a 32-bit one the walks are smaller and one
-/// more of them fits.
-#[cfg(target_pointer_width = "64")]
+/// Which walks fit the room is set by their size in bytes, which follows the
+/// pointer width: on a 64-bit target tiles 1 and 2 are let go, on a 32-bit
+/// one the walks are smaller and letting go of tile 1 is enough.
 #[test]
 fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
     let bytes = fixture(SIX_TILES);
@@ -1447,8 +1445,12 @@ fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
         refine_now(&mut decoder).unwrap(),
         oracle(&bytes, &tile).unwrap()
     );
-    // Tiles 1 and 2 are let go; tile 0's walk goes on.
-    assert_eq!(decoder.spent.walks.kept(), (4, 0));
+    // The tiles let go, from the first; tile 0's walk goes on.
+    #[cfg(target_pointer_width = "64")]
+    let gone: &[u16] = &[1, 2];
+    #[cfg(not(target_pointer_width = "64"))]
+    let gone: &[u16] = &[1];
+    assert_eq!(decoder.spent.walks.kept(), (6 - gone.len(), 0));
     assert_eq!(decoder.spent.repeats, 0);
     assert_eq!(decoder.spent.walks.visits(), visits);
     decoder.set_region(Region::Whole).unwrap();
@@ -1459,7 +1461,9 @@ fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
     assert_eq!(decoder.spent.walks.kept(), (6, 0));
     assert_eq!(
         decoder.spent.repeats,
-        one_shot_tile_visits(&bytes, 1) + one_shot_tile_visits(&bytes, 2)
+        gone.iter()
+            .map(|&tile| one_shot_tile_visits(&bytes, tile))
+            .sum::<u64>()
     );
 }
 
@@ -1489,11 +1493,12 @@ fn a_change_of_layers_walks_the_tiles_again_and_is_charged() {
         assert!(charged > 0);
         assert_eq!(decoder.spent.repeats, charged, "{reduction} {layers:?}");
         // The room is that of the new options: the walks kept are those a
-        // decoder made with them keeps. Which walks fit is set by their size
-        // in bytes, which follows the pointer width, against a room this
-        // fixture is tuned to on a 64-bit target: on a 32-bit one the walks
-        // are smaller, and how many are kept depends on how each decoder
-        // reached its state.
+        // decoder made with them keeps. Only on a 64-bit target: a layer
+        // change forgets every walk but not `Walks::largest`, so the room
+        // after it comes from the largest walk of an earlier option set,
+        // and a fresh decoder's differs. On a 64-bit target the walks are
+        // big enough that the difference does not change which fit; on a
+        // 32-bit one it keeps 4 walks to a fresh decoder's 3.
         #[cfg(target_pointer_width = "64")]
         {
             let mut fresh = IncrementalDecoder::new(options).unwrap();

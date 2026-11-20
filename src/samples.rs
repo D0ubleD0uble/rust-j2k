@@ -459,6 +459,9 @@ mod tests {
             allowed: DEFAULT.allowed.min(ADDRESSABLE_SAMPLES),
             ..DEFAULT
         };
+        // The documented value, not the library's expression.
+        #[cfg(not(target_pointer_width = "64"))]
+        assert_eq!(floor.allowed, (1 << 29) - 1);
         assert_eq!(cap(&WorkLimit::Default, 0), floor);
         assert_eq!(cap(&WorkLimit::Default, 100), floor);
         assert_eq!(cap(&WorkLimit::Default, 1 << 26), floor);
@@ -468,6 +471,8 @@ mod tests {
         // Never past what the target can address: on a 32-bit one that is
         // under the 2^29 + 8 samples this input scales to.
         assert_eq!(scaled.allowed, (8 * past as u64).min(ADDRESSABLE_SAMPLES));
+        #[cfg(not(target_pointer_width = "64"))]
+        assert_eq!(scaled.allowed, (1 << 29) - 1);
     }
 
     /// `Raised(n)` is n times the scaled default, so it is never below
