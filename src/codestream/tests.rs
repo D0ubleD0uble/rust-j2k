@@ -13,6 +13,12 @@ use crate::Error;
 use crate::synth;
 use synth::seg;
 
+thread_local! {
+    /// The `SOT` marker segments [`visit_first_parts`] and [`first_part_at`]
+    /// have read on this thread.
+    pub(crate) static SOT_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn be16(v: u16) -> [u8; 2] {
     v.to_be_bytes()
 }
