@@ -103,8 +103,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of each such tile, where it used to follow them all once for each batch
   of 1, 2, 4 and so on such tiles. On 65535 tiles of 255 tile-parts each
   (235 MB), a window of 1530 tiles over a cap took 1.2 s and now takes
-  45 ms at most, 1.8 ms where the first tile-parts come first.
-  `IncrementalDecoder::header` pays this on each call (#495).
+  45 ms at most, 1.8 ms where the first tile-parts come first. It counts
+  those tiles in index order, so where its budget runs out no longer
+  depends on the order of the tile-parts, and it never refuses a file the
+  decode admits. `IncrementalDecoder::header` pays this on each call
+  (#495).
 
 ### Fixed
 

@@ -17,8 +17,8 @@
 mod synth;
 
 use rust_j2k::{
-    DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Refined, Waiting, WorkLimit,
-    decode_with, read_header_with,
+    DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Refined, Region, Waiting,
+    WorkLimit, decode_with, read_header_with,
 };
 
 const FLOOR_BLOCKS: u64 = 1 << 20;
@@ -504,8 +504,8 @@ fn the_count_of_the_tiles_own_headers_has_a_budget() {
 /// The header read rescues the tiles over a cap under the main header from
 /// one walk of the tile-parts, not one a tile: 1980 tiles over the precinct
 /// cap under the main header, each brought within by its first tile-part's
-/// `COD`, with 254 more tile-parts each, about 505,000 `SOT`s in 6.9 MiB. A walk a tile would take minutes
-/// in a debug build and seconds in release.
+/// `COD`, with 254 more tile-parts each, about 505,000 `SOT`s in 6.9 MiB. A
+/// walk a tile would take minutes in a debug build and seconds in release.
 #[test]
 fn the_tiles_over_a_cap_are_rescued_in_few_walks() {
     let (tw, th, nx, ny, parts) = (520, 512, 44, 45, 255);
@@ -536,6 +536,70 @@ fn the_tiles_over_a_cap_are_rescued_in_few_walks() {
     let spent = start.elapsed();
     assert_eq!((header.width, header.height), (tw * nx, th * ny));
     assert!(spent.as_secs() < 4, "{spent:?}");
+}
+
+/// The header read counts the tiles' own headers in index order, so its
+/// result does not depend on the order of the tile-parts. Of 100 tiles of
+/// 4096 components over the precinct cap under the main header, every tile
+/// but 66 is brought within by a tile-part `COD`. The budget runs out at
+/// tile 85, so tile 66 is counted and refused whether the tile-parts come in
+/// increasing or decreasing order, with the decode's own refusal.
+#[test]
+fn where_the_budget_runs_out_does_not_depend_on_the_order() {
+    let tiles = 100u16;
+    let refused = 66;
+    let file = |order: &mut dyn Iterator<Item = u16>| {
+        let mut cod = synth::cod_body(1, 0, 0, 0);
+        cod[0] = 1;
+        cod.push(0x00);
+        let siz = synth::siz_body(
+            [8 * u32::from(tiles), 16, 0, 0, 8, 16, 0, 0],
+            &vec![[7, 1, 1]; 4096],
+        );
+        let mut bytes = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ]
+        .concat();
+        let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+        let packets = vec![0; 4096];
+        for tile in order {
+            // An empty packet for each component of a tile brought within.
+            let (extra, data): (&[u8], &[u8]) = if tile == refused {
+                (&[], &[])
+            } else {
+                (&own, &packets)
+            };
+            bytes.extend(synth::tile_part(tile, 0, 1, extra, data));
+        }
+        bytes.extend_from_slice(&[0xFF, 0xD9]);
+        bytes
+    };
+    for strict in [true, false] {
+        let options = DecodeOptions::default().with_strict(strict);
+        for bytes in [file(&mut (0..tiles)), file(&mut (0..tiles).rev())] {
+            match read_header_with(&bytes, &options) {
+                Err(Error::Limit(limit)) => {
+                    assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
+                    assert!(
+                        limit.message().starts_with(&format!("tile {refused} ")),
+                        "{limit}"
+                    );
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+    // The decode refuses tile 66 with the same error, here read alone to
+    // keep the test cheap (a decode of the 66 tiles before it takes seconds
+    // in a debug build).
+    let bytes = file(&mut (0..tiles).rev());
+    let header = read_header_with(&bytes, &DecodeOptions::default()).map(|h| h.width);
+    let alone = DecodeOptions::default().with_region(Region::Tile(u32::from(refused)));
+    let decoded = decode_with(&bytes, &alone).map(|i| i.width);
+    assert_eq!(format!("{header:?}"), format!("{decoded:?}"));
 }
 
 /// Where the tile-parts come out of index order, the header read's refusal
