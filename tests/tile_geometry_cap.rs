@@ -729,3 +729,100 @@ fn forty_thousand_square_in_32x32_blocks_decodes_at_the_defaults() {
     let image = decode_with(&bytes, &DecodeOptions::default()).unwrap();
     assert_eq!((image.width, image.height), (side, side));
 }
+
+/// A 60-byte header declaring one tile whose geometry no sample limit can
+/// hold: under `Unlimited` the decode refuses it as past the address space,
+/// a kind no option raises, with no retry, and `read_header_with` agrees.
+/// The first is `2^28` x `2^28` in 4x4 code-blocks (`2^52` of them), the
+/// second `2^25 + 1` x `2^25` in 1x1 precincts.
+fn past_the_address_space() -> [(&'static str, Vec<u8>); 2] {
+    let side = 1 << 28;
+    let (wide, high) = ((1 << 25) + 1, 1 << 25);
+    [
+        (
+            "code-blocks",
+            synth::empty_tiles([side, side, 0, 0, side, side, 0, 0], 0, 0, &[], &[0], 0),
+        ),
+        (
+            "precincts",
+            synth::empty_tiles([wide, high, 0, 0, wide, high, 0, 0], 0, 0, &[0], &[0], 0),
+        ),
+    ]
+}
+
+#[test]
+fn a_tile_past_the_address_space_is_not_adjustable() {
+    let unlimited = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
+    for (noun, bytes) in past_the_address_space() {
+        assert!(bytes.len() < 100, "{noun}: {}", bytes.len());
+        let limit = refusal(&bytes, &unlimited);
+        assert_eq!(limit.kind(), LimitKind::AddressSpace, "{noun}: {limit}");
+        assert!(!limit.kind().is_adjustable(), "{noun}: {limit}");
+        assert_eq!(limit.retry_with(), None, "{noun}: {limit}");
+        assert!(limit.message().starts_with("tile 0 holds "), "{limit}");
+    }
+}
+
+/// `refine` returns that refusal as an error, and every later refine returns
+/// it again, however many bytes come. It does not wait on `SampleLimit`.
+#[test]
+fn a_refine_does_not_wait_on_a_tile_past_the_address_space() {
+    let unlimited = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
+    for (noun, bytes) in past_the_address_space() {
+        let mut decoder = IncrementalDecoder::new(unlimited.clone()).unwrap();
+        decoder.feed(&bytes);
+        let first = decoder.refine();
+        match &first {
+            Err(Error::Limit(limit)) => {
+                assert_eq!(limit.kind(), LimitKind::AddressSpace, "{noun}: {limit}");
+            }
+            other => panic!("{noun}: {other:?}"),
+        }
+        decoder.feed(&[0; 64]);
+        assert_eq!(format!("{:?}", decoder.refine()), format!("{first:?}"));
+    }
+}
+
+/// A ceiling past the address space does not turn the refusal into the
+/// ceiling's: the tile is `AddressSpace` under `AtMost(u64::MAX)` too, and
+/// a refine returns it as an error.
+#[test]
+fn a_ceiling_past_the_address_space_does_not_change_the_kind() {
+    let ceiling = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(u64::MAX));
+    for (noun, bytes) in past_the_address_space() {
+        let limit = refusal(&bytes, &ceiling);
+        assert_eq!(limit.kind(), LimitKind::AddressSpace, "{noun}: {limit}");
+        assert_eq!(limit.retry_with(), None, "{noun}: {limit}");
+        let mut decoder = IncrementalDecoder::new(ceiling.clone()).unwrap();
+        decoder.feed(&bytes);
+        assert!(
+            matches!(decoder.refine(), Err(Error::Limit(l)) if l.kind() == LimitKind::AddressSpace),
+            "{noun}"
+        );
+    }
+}
+
+/// A refusal that only `Unlimited` lifts still waits: one tile of
+/// 4(2^26 - 1) x 4(2^26 + 1) in 4x4 code-blocks is over the cap of
+/// `Raised(u32::MAX)` and within the address space, so it names `Unlimited`,
+/// which admits it, and a refine waits on it with that retry.
+#[test]
+fn a_refusal_only_unlimited_lifts_is_a_wait() {
+    let (width, height) = (4 * ((1u32 << 26) - 1), 4 * ((1u32 << 26) + 1));
+    let bytes = blocks_tile(width, height, 0);
+    let raised = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(u32::MAX));
+    let limit = refusal(&bytes, &raised);
+    assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
+    assert_eq!(limit.retry_with(), Some(WorkLimit::Unlimited), "{limit}");
+    let mut decoder = IncrementalDecoder::new(raised).unwrap();
+    decoder.feed(&bytes);
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::SampleLimit { limit, .. })) => {
+            assert_eq!(limit.retry_with(), Some(WorkLimit::Unlimited), "{limit}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let unlimited = DecodeOptions::default().with_retry(&limit).unwrap();
+    let header = read_header_with(&bytes, &unlimited).expect("Unlimited admits the tile");
+    assert_eq!((header.width, header.height), (width, height));
+}

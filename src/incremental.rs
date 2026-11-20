@@ -471,12 +471,19 @@ impl IncrementalDecoder {
                 Some(Refusal::Work) => Waiting::WorkLimit { limit },
                 Some(Refusal::BoundSpent) => Waiting::BoundSpent { limit },
                 // The sample limit, and the code-blocks and precincts a tile
-                // may hold, grow with the bytes too, unless it is a ceiling
-                // the caller set: then more bytes cannot admit it.
+                // may hold, grow with the bytes too, but only a refusal that
+                // can be lifted waits. The kind says whether an option
+                // raises it (not past the address space, which is its own
+                // kind), and a retry says whether the limit leaves room: it
+                // is `None` under `AtMost`, a ceiling the caller set, which
+                // more bytes do not raise. A refusal with no retry sticks.
                 None if matches!(
                     limit.kind(),
                     LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
-                ) && !matches!(self.options.sample_limit, WorkLimit::AtMost(_)) =>
+                ) && matches!(
+                    limit.retry_with(),
+                    Some(WorkLimit::Raised(_) | WorkLimit::Unlimited)
+                ) =>
                 {
                     Waiting::SampleLimit { limit }
                 }
@@ -708,12 +715,16 @@ pub enum Waiting {
     /// The default limit and a [`Raised`](crate::WorkLimit::Raised) one
     /// grow with the bytes fed, so more bytes may admit it. The
     /// detail is the one [`decode_with`] gives for the bytes fed, with its
-    /// [`retry_with`](LimitDetail::retry_with).
+    /// [`retry_with`](LimitDetail::retry_with). A retry can still meet a
+    /// fixed limit, such as the address space, on the way.
     ///
-    /// A ceiling of [`AtMost`](crate::WorkLimit::AtMost) does not grow, so a
-    /// refusal under it is not a wait: `refine` returns it as an error, and
-    /// every later `refine` returns it again, whatever is fed, until a change
-    /// of options.
+    /// Only a refusal that more bytes can lift waits: one with a
+    /// [`retry_with`](LimitDetail::retry_with). A ceiling of
+    /// [`AtMost`](crate::WorkLimit::AtMost) does not grow, and a refusal past
+    /// what the target can address ([`LimitKind::AddressSpace`]) is lifted
+    /// by no limit, so neither is a wait: `refine` returns it as an error,
+    /// and every later `refine` returns it again, whatever is fed, until a
+    /// change of options.
     #[non_exhaustive]
     SampleLimit {
         /// The refusal, as an error would carry it.
