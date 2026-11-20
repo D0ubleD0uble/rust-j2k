@@ -131,7 +131,12 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// counted under that header too, in index order: under a reduction every
 /// such tile, and otherwise each a tile-part header could take over a cap
 /// (its size does not rule that out at the most resolutions a header can
-/// give). The first tile refused is then the lowest, as in the decode. Such
+/// give). Of those, a tile whose first tile-part has no `COD` or `COC` is
+/// coded as the main header has it, so [`Rescue::count`] skips it unread.
+/// The first tile refused is then the lowest, as in the decode. With
+/// `strict` on the tiles read up to the one over a cap are looked up first,
+/// as a tile read with no tile-part has the decode refuse the file before
+/// it counts any. Such
 /// a tile with no tile over a cap after it is left to the decode, so a file
 /// with no tile over a cap under the main header is still read no further
 /// than the first `SOT`.
@@ -213,11 +218,25 @@ fn check_geometry(
             pending.get_or_insert(index);
             continue;
         };
-        // The decode counts the lower tiles under their own headers first.
-        for lower in pending.take().unwrap_or(index)..index {
-            let counted = fits(lower).is_some_and(|(_, may_refuse)| may_refuse);
-            if counted && !rescue.count(lower, None)? {
-                return Ok(());
+        // The decode counts the lower tiles under their own headers first,
+        // and with `strict` on it refuses a file with a tile read missing
+        // before it counts any tile, so the tiles read up to the one over a
+        // cap are looked up first: that tile, which walks the tile-parts as
+        // far as it, then the lower ones the walk has passed.
+        if let Some(lowest) = pending.take() {
+            rescue.begin(lowest as usize);
+            if strict
+                && (lowest..=index)
+                    .rev()
+                    .any(|tile| fits(tile).is_some() && rescue.find(tile).is_none())
+            {
+                return Err(rescue.walk_fault().unwrap_or(error));
+            }
+            for lower in lowest..index {
+                let counted = fits(lower).is_some_and(|(_, may_refuse)| may_refuse);
+                if counted && !rescue.count(lower, None)? {
+                    return Ok(());
+                }
             }
         }
         if !rescue.count(index, Some(error))? {
@@ -263,7 +282,31 @@ struct Walk {
     firsts: Vec<usize>,
 }
 
-impl Rescue<'_> {
+impl<'a> Rescue<'a> {
+    /// The walk, started for the tiles from `from` on if it has not started
+    /// yet. A tile below where it started is never looked up.
+    fn begin(&mut self, from: usize) -> &mut Walk {
+        let (parsed, reads) = (self.parsed, self.reads);
+        self.walk.get_or_insert_with(|| {
+            let span = reads
+                .iter()
+                .rposition(|&read| read)
+                .map_or(0, |last| last + 1);
+            Walk {
+                parts: codestream::FirstParts::new(parsed),
+                from,
+                firsts: vec![0; span.saturating_sub(from)],
+            }
+        })
+    }
+
+    /// Tile `index`'s first tile-part, or `None` if the walk finds none, or
+    /// none that reads as one, which the decode takes for a missing tile.
+    fn find(&mut self, index: u32) -> Option<codestream::FirstPart<'a, 'a>> {
+        let offset = self.first_part(index as usize)?;
+        codestream::first_part_at(self.bytes, self.parsed, offset)
+    }
+
     /// Where tile `index`'s first tile-part starts, or `None` if it has
     /// none. The walk goes on from where it stopped until it finds it,
     /// noting each tile the selection reads that it passes, so the
@@ -272,18 +315,9 @@ impl Rescue<'_> {
     /// none). The walk reads no tile-part header and takes no step of the
     /// budget: its cost is linear in the input.
     fn first_part(&mut self, index: usize) -> Option<usize> {
-        let (bytes, parsed, reads) = (self.bytes, self.parsed, self.reads);
-        let walk = self.walk.get_or_insert_with(|| {
-            let span = reads
-                .iter()
-                .rposition(|&read| read)
-                .map_or(0, |last| last + 1);
-            Walk {
-                parts: codestream::FirstParts::new(parsed),
-                from: index,
-                firsts: vec![0; span.saturating_sub(index)],
-            }
-        });
+        let (bytes, reads) = (self.bytes, self.reads);
+        let parsed = self.parsed;
+        let walk = self.begin(index);
         let from = walk.from;
         let at = index.checked_sub(from)?;
         if *walk.firsts.get(at)? == 0 {
@@ -318,7 +352,8 @@ impl Rescue<'_> {
     /// decode leaves it out). A tile whose tile-part header is at fault is
     /// the decode's to report. So a tile-part `COD` that brings a tile
     /// within the caps is admitted, and one that takes it over them is
-    /// refused.
+    /// refused. A tile within them (`None`) whose first tile-part has no
+    /// `COD` or `COC` is admitted unread and uncharged.
     ///
     /// The tiles are counted in index order, as the walk notes the
     /// tile-parts only from the first tile counted on. Only the header read
@@ -327,10 +362,7 @@ impl Rescue<'_> {
     fn count(&mut self, index: u32, error: Option<Error>) -> Result<bool> {
         // A tile with no tile-part: the decode refuses the file with `strict`
         // on, and leaves the tile out with it off.
-        let found = self
-            .first_part(index as usize)
-            .and_then(|offset| codestream::first_part_at(self.bytes, self.parsed, offset));
-        let part = match found {
+        let part = match self.find(index) {
             Some(part) => part,
             None if self.strict => {
                 return match self.walk_fault().or(error) {
@@ -340,6 +372,13 @@ impl Rescue<'_> {
             }
             None => return Ok(true),
         };
+        // A tile not over a cap under the main header whose tile-part
+        // carries no `COD` or `COC` is coded as the main header has it, which
+        // passed the reduction and the caps, so it is neither read nor
+        // charged.
+        if error.is_none() && !part.may_set_coding() {
+            return Ok(true);
+        }
         // Reading a tile's header copies the main header's coding parameters
         // when the tile-part overrides them, so it is charged a step for each
         // component and, as that copy costs about ten counting steps per

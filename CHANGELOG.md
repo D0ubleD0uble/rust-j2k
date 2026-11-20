@@ -138,16 +138,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `retry_with` than `decode_with`'s, and a retry sized from it was refused
   again. Before it refuses a tile, it now counts each lower tile it would
   read that the tile's own header could refuse, under that header, in index
-  order, as the decode does: each whose size does not rule out a tile-part
-  header taking it over the caps, and under a resolution reduction every
-  one, as a tile-part `COD` or `COC` with fewer levels than the reduction
-  takes is refused too. That reads the tile-part headers of
-  those tiles in the same single walk; a file with no tile over a cap under
-  the main header is still read no further than the first `SOT`. The decode
-  can still refuse first for what only decoding finds in a lower tile (its
-  packets or code-blocks), or, with `strict` off, for the charge for the
-  tiles read that have no tile-part; the `read_header_with` docs list these
-  cases (#501).
+  order, as the decode does: each whose first tile-part carries a `COD` or
+  `COC` and whose size does not rule out a tile-part header taking it over
+  the caps, and under a resolution reduction each with a `COD` or `COC`
+  whatever its size, as one with fewer levels than the reduction takes is
+  refused too. With `strict` on it first looks up the tiles it would read
+  up to the tile over a cap, and gives the decode's error for the
+  tile-parts where one of them has none.
+  That reads the tile-part headers of those tiles in the same single walk;
+  a file with no tile over a cap under the main header is still read no
+  further than the first `SOT`. On a file the decode refuses for a fault in
+  its tile-parts, the header read may still give a `Limit` or a reduction
+  refusal instead. The decode can still refuse first for what only decoding
+  finds in a lower tile (its packets or code-blocks), or, with `strict`
+  off, for the charge for the tiles read that have no tile-part; the
+  `read_header_with` docs list these cases (#501).
 - `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
   time. A refusal of the packet work or code-block work bound, including the
   charge for missing tiles, names the larger of what the tiles seen so far

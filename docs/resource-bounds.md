@@ -294,10 +294,17 @@ can take a lower tile over a cap, which the decode then refuses first. So
 before such a tile is counted, each lower tile read since the last one
 counted whose size does not rule that out (at 33 resolutions a component,
 the most a header gives) is counted under its own header too. Under a
-reduction every lower tile read is, as a tile-part `COD` or `COC` can give
-fewer levels than the reduction takes, which the decode checks before the
-caps. The first tile refused is
-then the lowest, as in the decode. A tile-part `COD` that takes a tile over
+reduction every lower tile read is, whatever its size, as a tile-part `COD`
+or `COC` can give fewer levels than the reduction takes, which the decode
+checks before the caps. A lower tile whose first tile-part has no `COD` or
+`COC` is coded as the main header has it, which passed both checks, so it
+is skipped without reading its header or charging the budget; finding that
+steps over the header's marker segments by their lengths. The first tile
+refused is then the lowest, as in the decode. With `strict` on the tiles
+read up to the one over a cap are looked up before the lower tiles are
+counted, and where one has no tile-part the read gives the decode's error
+for the tile-parts, as the decode refuses such a file before it counts any
+tile. A tile-part `COD` that takes a tile over
 a cap with no tile over a cap under the main header after it is left to
 the decode, so a file with no tile over a cap under the main header is
 still read no further than the first `SOT`. A
@@ -344,7 +351,8 @@ almost all of it the offsets of tiles 0 to 65280; 63 ms for 1000 tiles of
 1024 tiles whose `Psot` ends inside a `COM` that holds the next tile-part,
 followed by 4 MiB of `COM`.
 On a file the decode refuses for a fault in its tile-parts,
-`read_header_with` may still give the `Limit` instead of the decode's error
+`read_header_with` may still give a `Limit` or a reduction refusal
+(`InvalidOptions`) instead of the decode's error
 where it refuses a tile it found a tile-part for, as it does not check the
 tile-parts it passes nor walk past that tile. The decode can also refuse
 the file before it gets to the tile refused, for what only decoding finds,

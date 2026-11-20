@@ -686,6 +686,30 @@ impl<'b, 'm> FirstPart<'b, 'm> {
         self.offset
     }
 
+    /// Whether the tile-part's header may carry a `COD` or `COC`, so that
+    /// the tile's coding may differ from the main header's: false only when
+    /// its marker segments run to its `SOD` without one. It steps over each
+    /// segment by its length and reads nothing else, so its cost is linear
+    /// in the header's bytes. It is true for a header it cannot step
+    /// through, which [`header`](Self::header) then reads.
+    pub(crate) fn may_set_coding(&self) -> bool {
+        let Some(part) = self.part else {
+            return true;
+        };
+        let mut at = self.pos;
+        loop {
+            match read_u16(part, at) {
+                Some(marker::SOD) => return false,
+                Some(marker::COD | marker::COC) | None => return true,
+                Some(_) => {}
+            }
+            let Some(length) = read_u16(part, at + 2).filter(|&length| length >= 2) else {
+                return true;
+            };
+            at += 2 + usize::from(length);
+        }
+    }
+
     /// The tile's coding parameters, resolved over the main header from the
     /// tile-part's header markers as the tile walk resolves them: no tile
     /// data, no `PPM`, and nothing joined. A header that runs past the

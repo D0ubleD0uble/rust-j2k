@@ -612,6 +612,38 @@ off. `opj_decompress` 2.5.0, which has no such caps, decodes it.
 `tests/tile_geometry_cap.rs` checks it. It was made by the fuzzer, so it
 has no license restriction.
 
+`header/lower_tile_data_long.j2k` (128 bytes, SHA-256
+`b8df2d69f3bedca7a0acbf46453aeebfd39d2ece02444878e3530fcefb1fda1f`) and
+`header/lower_tile_data_short.j2k` (126 bytes, SHA-256
+`92d9e10743542bcedfdc73ced11544991009080279c863d84a80858e4b3e9913`) are
+written by the first case of
+`what_only_decoding_finds_in_a_lower_tile_comes_first_in_the_decode` in
+`tests/tile_geometry_cap.rs` (#501): an 8400 x 8192 gray codestream with
+`YOsiz` 3584 and tiles of 4200 x 4096, so the first row of tiles is 512
+tall and within the caps, and tile 2 is over the code-block cap under the
+main header. Tile 0's tile-part has one byte after its packet in the first
+and no packet data in the second, with the bytes changed by hand. With
+`strict` on, `read_header_with` refuses tile 2 for its code-blocks while
+`decode_with` refuses the file for tile 0's data ("tile 0 has 1 byte(s)
+left after the last packet", "the data of tile 0 ends before the last
+packet"), which only decoding finds. The `header` target accepts that pair
+and must not crash on either. `opj_decompress` 2.5.0 decodes the first and
+fails to decode tile 0 of the second. They have no license restriction.
+
+`header/strict_missing_over_cap.j2k` (101 bytes, SHA-256
+`bbca3381eba2367830c220c7810f8d6672ed1006bc0d88b3e908b34dee4b73e3`) is an
+input from the review of #501, committed as found. It is a 2000 x 1000 gray
+codestream with `XOsiz` 992 and tiles of 1000 x 1000, so tile 0 is 8 wide,
+whose `COD` gives one level and 1x1 precincts at resolution 0, which puts
+tile 1 over the precinct cap. Tile 0's tile-part `COD` gives it no levels,
+and tile 1 has no tile-part. At resolution reduction 1 with `strict` on,
+`decode_with` refuses the file for the missing tile ("the codestream
+carries no tile-part for tile 1") before it counts any tile, and
+`read_header_with` does too; with `strict` off both give tile 0's
+reduction refusal. `opj_decompress` 2.5.0, which has no such caps,
+decodes it. `tests/tile_geometry_cap.rs` checks it. It has no license
+restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
