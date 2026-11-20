@@ -384,6 +384,7 @@ mod tests {
         at_most: None,
     };
 
+    #[cfg(target_pointer_width = "64")]
     fn message(total: u64) -> String {
         match over("image area", total, DEFAULT) {
             Error::Limit(m) => m.message().to_owned(),
@@ -453,13 +454,25 @@ mod tests {
     /// past it.
     #[test]
     fn the_default_scales_with_the_input_past_the_floor() {
-        assert_eq!(cap(&WorkLimit::Default, 0), DEFAULT);
-        assert_eq!(cap(&WorkLimit::Default, 100), DEFAULT);
-        assert_eq!(cap(&WorkLimit::Default, 1 << 26), DEFAULT);
+        // The floor is 2^29, which a 32-bit target cannot address.
+        let floor = Cap {
+            allowed: DEFAULT.allowed.min(ADDRESSABLE_SAMPLES),
+            ..DEFAULT
+        };
+        // The documented value, not the library's expression.
+        #[cfg(not(target_pointer_width = "64"))]
+        assert_eq!(floor.allowed, (1 << 29) - 1);
+        assert_eq!(cap(&WorkLimit::Default, 0), floor);
+        assert_eq!(cap(&WorkLimit::Default, 100), floor);
+        assert_eq!(cap(&WorkLimit::Default, 1 << 26), floor);
         let past = (1 << 26) + 1;
         let scaled = cap(&WorkLimit::Default, past);
         assert_eq!(scaled.default, 8 * past as u64);
-        assert_eq!(scaled.allowed, 8 * past as u64);
+        // Never past what the target can address: on a 32-bit one that is
+        // under the 2^29 + 8 samples this input scales to.
+        assert_eq!(scaled.allowed, (8 * past as u64).min(ADDRESSABLE_SAMPLES));
+        #[cfg(not(target_pointer_width = "64"))]
+        assert_eq!(scaled.allowed, (1 << 29) - 1);
     }
 
     /// `Raised(n)` is n times the scaled default, so it is never below

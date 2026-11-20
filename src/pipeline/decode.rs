@@ -1360,9 +1360,16 @@ pub(crate) mod tests {
             assert!(reads * 2 <= 3 * 64 * 16, "{reads}");
         }
         // Not where nothing is over a cap: a tile the size admits is not
-        // counted, so nothing past the first `SOT` is read.
+        // counted, so nothing past the first `SOT` is read. On a 32-bit
+        // target `Raised(4)` cannot lift the precinct cap past the address
+        // space (see `ADDRESSABLE_SAMPLES`), so the tiles are still over it
+        // and the rescue walk runs as under the default.
         let raised = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(4));
-        assert_eq!(sot_reads(&bytes, &raised), 0);
+        #[cfg(target_pointer_width = "64")]
+        let expected = 0;
+        #[cfg(not(target_pointer_width = "64"))]
+        let expected = 63 * 16 + 1 + 64;
+        assert_eq!(sot_reads(&bytes, &raised), expected);
     }
 
     /// The walk stops at the first tile-part of the last tile over a cap

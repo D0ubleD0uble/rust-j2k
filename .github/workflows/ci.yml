@@ -234,3 +234,9 @@ jobs:
         run: cargo test --target wasm32-wasip1 --lib math_tests
       - name: jp2_icc
         run: cargo test --target wasm32-wasip1 --test jp2_icc
+      - name: lib
+        run: cargo test --target wasm32-wasip1 --lib
+      - name: sample_limit
+        run: cargo test --target wasm32-wasip1 --test sample_limit
+      - name: limit_32bit
+        run: cargo test --target wasm32-wasip1 --test limit_32bit
