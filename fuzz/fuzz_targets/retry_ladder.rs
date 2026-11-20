@@ -150,8 +150,8 @@ fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, 
     let kind = limit.kind();
     // A refusal by a ceiling the caller set names nothing to retry with, so
     // the ladder ends in this one step. The tile caps are refused by the same
-    // ceiling. Not reached for a tile cap at `CEILING`, which no input at the
-    // fuzz budget exceeds; kept for a higher ceiling.
+    // ceiling. Not reached for a tile cap at `CEILING`: the area check
+    // refuses first. Kept for a higher ceiling.
     if is_sample_limit(kind) && matches!(options.sample_limit, WorkLimit::AtMost(_)) {
         assert!(
             limit.retry_with().is_none() && options.with_retry(limit).is_none(),
@@ -242,8 +242,8 @@ fuzz_target!(|input: &[u8]| {
         // it is the image of the same options with the default sample limit.
         // In bounds: the two decodes at up to 2 each.
         if let Err(Error::Limit(limit)) = &result {
-            // A tile cap's refusal is not reached at `CEILING`; kept for a
-            // higher ceiling.
+            // A tile cap's refusal is not reached at `CEILING`: the area
+            // check refuses first. Kept for a higher ceiling.
             let next = step(&options, limit);
             assert!(
                 !is_sample_limit(limit.kind()) || next.is_none(),
