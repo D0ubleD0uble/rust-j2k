@@ -305,10 +305,11 @@ impl IncrementalDecoder {
     /// in can refuse one as soon as its main header has come in.
     ///
     /// Call it after a feed rather than after each byte: each call parses
-    /// the main header again, and counts again the tiles over the caps under
-    /// it, which on a header of many tiles of many components takes up to
-    /// the read's budget each call (63 ms for 1000 tiles of 4096
-    /// components).
+    /// the main header again and counts again the tiles over the caps under
+    /// it. For a tile over a cap that is one walk of the tile-parts fed so
+    /// far, no further than the last such tile, plus up to the read's
+    /// budget: 45 ms for a window of 1530 tiles of a 235 MB file of 16.7
+    /// million tile-parts, and 63 ms for 1000 tiles of 4096 components.
     pub fn header(&self) -> Result<Option<Header>> {
         match read_header_with(&self.bytes, &self.lenient) {
             Ok(header) => Ok(Some(header)),

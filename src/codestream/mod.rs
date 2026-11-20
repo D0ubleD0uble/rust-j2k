@@ -540,10 +540,10 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
     split_tiles_with(bytes, parsed, true)
 }
 
-/// Visit the first tile-part of each tile in `bytes`, in codestream order,
-/// for the header read's count of a tile's code-blocks and precincts:
-/// `visit` gets the tile's index and the tile-part, whose
-/// [`header`](FirstPart::header) it may read, and stops the walk by
+/// Visit the first tile-part of each tile in `bytes`, in codestream order:
+/// `visit` gets the tile's index and the tile-part, which
+/// [`first_part_at`] finds again by its [`offset`](FirstPart::offset) and
+/// whose [`header`](FirstPart::header) it may read, and stops the walk by
 /// returning [`ControlFlow::Break`].
 ///
 /// The walk follows the `SOT` chain by `Psot` and reads only the `SOT`
@@ -556,38 +556,82 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
 pub(crate) fn visit_first_parts<'m>(
     bytes: &[u8],
     parsed: &'m ParsedHeader,
-    mut visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
+    visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
 ) {
-    let main = &parsed.header;
-    let mut offset = parsed.sot_offset;
-    while read_u16(bytes, offset) == Some(marker::SOT) {
-        let mut cur = Cursor::at(bytes, offset + 2);
-        let Ok(sot) = segment(&mut cur).and_then(decode_sot) else {
-            break;
-        };
-        if sot.tile_part_index == 0 {
-            // A tile-part cut short ends with the input, as the tile walk
-            // reads it with `strict` off.
-            let end = match sot.psot {
-                0 => bytes.len(),
-                psot => offset.saturating_add(psot as usize).min(bytes.len()),
-            };
-            let part = FirstPart {
-                part: bytes.get(..end).filter(|_| cur.pos <= end),
-                pos: cur.pos,
-                main,
-                tile: sot.tile_index,
-                psot: sot.psot,
-            };
-            if visit(u32::from(sot.tile_index), part).is_break() {
-                return;
-            }
-        }
-        match offset.checked_add(sot.psot as usize) {
-            Some(next) if sot.psot != 0 => offset = next,
-            _ => break,
+    FirstParts::new(parsed).visit(bytes, parsed, visit);
+}
+
+/// A walk of [`visit_first_parts`] that can go on from where it stopped.
+pub(crate) struct FirstParts {
+    /// Where the next `SOT` is, or `None` once the chain has ended.
+    next: Option<usize>,
+}
+
+impl FirstParts {
+    /// A walk from the first `SOT` after `parsed`'s main header.
+    pub(crate) fn new(parsed: &ParsedHeader) -> Self {
+        FirstParts {
+            next: Some(parsed.sot_offset),
         }
     }
+
+    /// Go on with the walk as [`visit_first_parts`] does, from the tile-part
+    /// after the one `visit` last stopped at, and not at all once the chain
+    /// has ended. `parsed` is the header [`new`](Self::new) took.
+    pub(crate) fn visit<'m>(
+        &mut self,
+        bytes: &[u8],
+        parsed: &'m ParsedHeader,
+        mut visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
+    ) {
+        while let Some(offset) = self.next {
+            let Some((sot, pos)) = sot_at(bytes, offset) else {
+                self.next = None;
+                return;
+            };
+            self.next = offset
+                .checked_add(sot.psot as usize)
+                .filter(|_| sot.psot != 0);
+            if sot.tile_part_index == 0 {
+                let part = FirstPart::new(bytes, &parsed.header, offset, &sot, pos);
+                if visit(u32::from(sot.tile_index), part).is_break() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The first tile-part that [`visit_first_parts`] found at `offset` of
+/// `bytes`, or `None` if no first tile-part's `SOT` starts there. It reads
+/// that `SOT` alone.
+pub(crate) fn first_part_at<'b, 'm>(
+    bytes: &'b [u8],
+    parsed: &'m ParsedHeader,
+    offset: usize,
+) -> Option<FirstPart<'b, 'm>> {
+    let (sot, pos) = sot_at(bytes, offset).filter(|(sot, _)| sot.tile_part_index == 0)?;
+    Some(FirstPart::new(bytes, &parsed.header, offset, &sot, pos))
+}
+
+/// The `SOT` marker segment at `offset` of `bytes`, and where it ends, or
+/// `None` if none is there or it is at fault. It reads the fixed layout
+/// [`decode_sot`] admits, `Lsot` 10, directly: the walk reads a `SOT` for
+/// each tile-part, and a file may hold millions.
+fn sot_at(bytes: &[u8], offset: usize) -> Option<(Sot, usize)> {
+    #[cfg(test)]
+    tests::SOT_READS.with(|reads| reads.set(reads.get() + 1));
+    let end = offset.checked_add(12)?;
+    let &[0xFF, 0x90, 0, 10, i0, i1, p0, p1, p2, p3, tpsot, tnsot] = bytes.get(offset..end)? else {
+        return None;
+    };
+    let sot = Sot {
+        tile_index: u16::from_be_bytes([i0, i1]),
+        psot: u32::from_be_bytes([p0, p1, p2, p3]),
+        tile_part_index: tpsot,
+        num_tile_parts: tnsot,
+    };
+    Some((sot, end))
 }
 
 /// A tile's first tile-part, as [`visit_first_parts`] finds it.
@@ -595,6 +639,8 @@ pub(crate) struct FirstPart<'b, 'm> {
     /// The input up to the tile-part's end, or `None` if its `Psot` is
     /// shorter than its `SOT`.
     part: Option<&'b [u8]>,
+    /// Where its `SOT` starts.
+    offset: usize,
     /// Where its header markers start.
     pos: usize,
     main: &'m MainHeader,
@@ -602,7 +648,31 @@ pub(crate) struct FirstPart<'b, 'm> {
     psot: u32,
 }
 
-impl<'m> FirstPart<'_, 'm> {
+impl<'b, 'm> FirstPart<'b, 'm> {
+    /// The tile-part of `bytes` whose `SOT`, `sot`, starts at `offset` and
+    /// ends at `pos`.
+    fn new(bytes: &'b [u8], main: &'m MainHeader, offset: usize, sot: &Sot, pos: usize) -> Self {
+        // A tile-part cut short ends with the input, as the tile walk reads
+        // it with `strict` off.
+        let end = match sot.psot {
+            0 => bytes.len(),
+            psot => offset.saturating_add(psot as usize).min(bytes.len()),
+        };
+        FirstPart {
+            part: bytes.get(..end).filter(|_| pos <= end),
+            offset,
+            pos,
+            main,
+            tile: sot.tile_index,
+            psot: sot.psot,
+        }
+    }
+
+    /// Where the tile-part's `SOT` starts in the input.
+    pub(crate) fn offset(&self) -> usize {
+        self.offset
+    }
+
     /// The tile's coding parameters, resolved over the main header from the
     /// tile-part's header markers as the tile walk resolves them: no tile
     /// data, no `PPM`, and nothing joined. A header that runs past the
@@ -2953,4 +3023,4 @@ impl<'a> Cursor<'a> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
