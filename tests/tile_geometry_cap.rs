@@ -501,11 +501,10 @@ fn the_count_of_the_tiles_own_headers_has_a_budget() {
     assert!(decode_with(&bytes, &DecodeOptions::default()).is_err());
 }
 
-/// The header read rescues the tiles over a cap under the main header in
-/// batches of 1, 2, 4 and so on, so it walks the tile-parts a few times, not
-/// once a tile: 1980 tiles over the precinct cap under the main header, each
-/// brought within by its first tile-part's `COD`, with 254 more tile-parts
-/// each, about 505,000 `SOT`s in 6.9 MiB. A walk a tile would take minutes
+/// The header read rescues the tiles over a cap under the main header from
+/// one walk of the tile-parts, not one a tile: 1980 tiles over the precinct
+/// cap under the main header, each brought within by its first tile-part's
+/// `COD`, with 254 more tile-parts each, about 505,000 `SOT`s in 6.9 MiB. A walk a tile would take minutes
 /// in a debug build and seconds in release.
 #[test]
 fn the_tiles_over_a_cap_are_rescued_in_few_walks() {
