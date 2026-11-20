@@ -44,8 +44,10 @@ fn the_window_rows_cover_the_report_and_no_more() {
     let entries = image.report.entries.len();
     assert!(entries > partial::entry_bound(1, 0), "{entries} entries");
     let grid = rust_j2k::read_header(&bytes).unwrap().tiles;
-    let rows = 23usize.div_ceil(grid.tile_height as usize) + 1;
-    let rows = rows.min(grid.rows as usize);
+    let Region::Window(w) = window() else {
+        panic!("a window")
+    };
+    let rows = partial::rows_read(&w, grid.tile_height, grid.y_offset, grid.rows);
     assert!(
         entries <= partial::entry_bound(1, rows),
         "{entries} entries"
@@ -71,4 +73,33 @@ fn an_entry_at_the_bound_passes() {
 #[should_panic(expected = "entries for at most 2 tile-parts and 5 window rows")]
 fn one_entry_over_the_bound_panics() {
     partial::assert_entries(partial::entry_bound(2, 5) + 1, 2, 5);
+}
+
+/// A window that starts and ends inside tiles of two lines reads the two rows
+/// the lines 1 and 2 fall in, not one row more.
+#[test]
+fn rows_read_counts_the_rows_the_window_touches() {
+    assert_eq!(partial::rows_read(&Window::new(0, 1, 1, 3), 2, 0, 8), 2);
+    // A window on the tile edges, one row; the grid's rows cap it.
+    assert_eq!(partial::rows_read(&Window::new(0, 2, 1, 4), 2, 0, 8), 1);
+    assert_eq!(partial::rows_read(&Window::new(0, 0, 1, 100), 2, 0, 8), 8);
+    // A tile grid offset up shifts the rows.
+    assert_eq!(partial::rows_read(&Window::new(0, 2, 1, 5), 2, 1, 8), 2);
+}
+
+/// `header_refused.j2k` has a tile over the precinct cap and no tile-part for
+/// it, so a header read with `strict` on refuses it while the decode with
+/// `strict` off reports 25 entries through its window (22..39 by 9..34).
+#[test]
+fn the_oracle_bounds_a_report_whose_strict_header_is_refused() {
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/partial/header_refused.j2k"),
+    )
+    .unwrap();
+    assert!(rust_j2k::read_header(&bytes).is_err());
+    let options = budget::options(4)
+        .with_resolution_reduction(1)
+        .with_region(Region::Window(Window::new(22, 9, 39, 34)));
+    partial::check(&bytes, &options, &rust_j2k::decode_with(&bytes, &options));
 }

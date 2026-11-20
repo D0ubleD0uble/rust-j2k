@@ -743,15 +743,25 @@ of the crate with it.
 }
 ```
 
-### Partial decode oracle seed
+### Partial decode oracle seeds
 
 `partial/window_rows.j2k` (80 bytes) is an input a 60 s `decode_partial`
 fuzz run found on 2026-11-19 while reviewing #491 (#492), committed as
-found. It is a codestream that declares 65535 tiles (255 x 257 tiles of
-1 x 1) and carries one tile-part, so it has no license restriction. The
-target's hash of it picks the window 24..55 by 11..34, under which the
-decode with `strict` off reports one `MissingTiles` run for each of the 23
-rows of tiles the window reads: 24 entries, past the oracle's old bound of
-five per tile-part plus two. `tests/fuzz_partial_oracle.rs` runs the oracle
-on it. Replay it with
+found. It is fuzzer output, 80 bytes of headers, derived from no licensed
+file. It declares 65535 tiles (255 x 257 tiles of 1 x 1) and carries one
+tile-part. The target's hash of it picks the window 24..55 by 11..34, under
+which the decode with `strict` off reports one `MissingTiles` run for each
+of the 23 rows of tiles the window reads: 24 entries, past the oracle's old
+bound of five per tile-part plus two. `tests/fuzz_partial_oracle.rs` runs
+the oracle on it. Replay it with
 `cargo +nightly fuzz run -O decode_partial tests/fixtures/partial/window_rows.j2k`.
+
+`partial/header_refused.j2k` (92 bytes) is an input found by the review of
+the PR that added the seed above, committed as found. It is fuzzer-shaped
+output, 92 bytes of headers, derived from no licensed file. One tile is over
+the precinct cap and has no tile-part, so `read_header` refuses it with
+`strict` on while the decode with `strict` off admits it. Through the window
+22..39 by 9..34 at reduction 1 (the target's hash picks both), the report
+holds 25 entries. The oracle reads the grid with `strict` off, and with a
+height-based bound if even that fails; the seed checks that. Replay it with
+`cargo +nightly fuzz run -O decode_partial tests/fixtures/partial/header_refused.j2k`.

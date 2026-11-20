@@ -71,20 +71,38 @@ pub fn entry_bound(sots: usize, rows: usize) -> usize {
     5 * sots + 2 + rows
 }
 
-/// The rows of tiles `options` reads of `bytes`: for a window, at most
-/// `(y1 - y0 - 1) / tile_height + 2` and at most the grid's rows; else `0`.
+/// The rows of tiles `options` reads of `bytes`: `0` without a window. Under
+/// a window the grid comes from a header read with `strict` off, as the
+/// decode reads it. If even that fails, the grid is unknown and the worst
+/// case, tiles one row high, bounds the rows by the window's height plus one.
 fn window_rows(bytes: &[u8], options: &DecodeOptions) -> usize {
     let rust_j2k::Region::Window(window) = &options.region else {
         return 0;
     };
-    let Ok(header) = rust_j2k::read_header(bytes) else {
-        // Without a header no tile is read, so no run is cut.
-        return 0;
-    };
-    let grid = header.tiles;
-    let height = u64::from(window.y1.saturating_sub(window.y0));
-    let reached = height.saturating_sub(1) / u64::from(grid.tile_height.max(1)) + 2;
-    reached.min(u64::from(grid.rows)) as usize
+    match rust_j2k::read_header_with(bytes, &options.clone().with_strict(false)) {
+        Ok(header) => {
+            let grid = header.tiles;
+            rows_read(window, grid.tile_height, grid.y_offset, grid.rows)
+        }
+        Err(_) => window.y1.saturating_sub(window.y0) as usize + 1,
+    }
+}
+
+/// The rows of tiles, `tile_height` high from `y_offset` on the reference
+/// grid, that `window` reaches in a grid of `grid_rows` rows: from the row of
+/// the window's first line to the row of its last, at most `grid_rows`. The
+/// window is not cut to the image, so this can count a row more than the
+/// decode reads, never fewer.
+pub fn rows_read(
+    window: &rust_j2k::Window,
+    tile_height: u32,
+    y_offset: u32,
+    grid_rows: u32,
+) -> usize {
+    let row = |y: u32| u64::from(y.saturating_sub(y_offset)) / u64::from(tile_height.max(1));
+    let last = row(window.y1.saturating_sub(1).max(window.y0));
+    let reached = last - row(window.y0) + 1;
+    reached.min(u64::from(grid_rows)) as usize
 }
 
 /// Panic when `entries` is past `entry_bound(sots, rows)`.

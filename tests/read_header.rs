@@ -52,8 +52,8 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// the decode's block decoder reads. `incremental/segsym_tiles_flipped.j2k`
 /// and `incremental/segsym_wide_flipped.j2k` hold a code-block whose
 /// segmentation symbol is wrong, which only the decode's block decoder
-/// reads. `partial/window_rows.j2k` declares 65535 tiles and ends after one
-/// tile-part, with no `EOC`, which only the decode reads.
+/// reads. `partial/window_rows.j2k` declares 65535 tiles, carries a tile-part for one, and ends
+/// with no `EOC`, which only the decode reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
@@ -105,7 +105,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "partial/tp_r.j2k",
         "bytes left after the last packet (a phantom packet)",
     ),
-    ("partial/window_rows.j2k", "no EOC after the only tile-part"),
+    (
+        "partial/window_rows.j2k",
+        "no tile-part for 65534 tiles, and no EOC after the only one",
+    ),
     (
         "poc_coverage/poc_comp_missing.j2k",
         "POC leaves out packets",
@@ -192,6 +195,11 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "past the work bound",
     ),
 ];
+
+/// Files both calls refuse, with different errors. `partial/header_refused.j2k`
+/// has a tile over the precinct cap and no tile-part for it: `read_header`
+/// finds the limit, and `decode` the missing tile-part first.
+const OTHER_ERROR: &[&str] = &["partial/header_refused.j2k"];
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -304,7 +312,9 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     compared[reduction as usize] += 1;
                 }
                 (Err(h), Err(d)) => {
-                    assert_eq!(format!("{h:?}"), format!("{d:?}"), "{name}: the same error")
+                    if !OTHER_ERROR.contains(&name.as_str()) {
+                        assert_eq!(format!("{h:?}"), format!("{d:?}"), "{name}: the same error");
+                    }
                 }
                 (Ok(_), Err(Error::Codestream(_) | Error::Limit(_))) => {
                     assert!(
