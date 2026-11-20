@@ -25,7 +25,8 @@ use super::progression::{
 use super::{
     BandState, Budget, CodedData, ComponentCoded, Delimiters, END_VISITS, Journal, Meter, Packet,
     PacketStreams, PacketWalk, Reach, Refused, Resolution, ResolutionGeom, Scratch, Undo,
-    WorkRefusal, band_states, build_subbands, mark_gap, parse_packet, refused, tile_geometry, undo,
+    WorkRefusal, band_states, build_subbands, dropped_blocks, mark_gap, parse_packet, refused,
+    tile_geometry, undo,
 };
 
 /// The bytes the walks kept may hold whatever the bytes fed, when that is
@@ -104,9 +105,10 @@ enum Slot {
         packed: bool,
     },
     /// No walk, though an earlier one read the tile's packets: it was let
-    /// go when the reduction or the layer cap changed, or to make room for
-    /// the tiles a window reads (see [`Walks::prepare`]). The next walk is
-    /// built again, and charged as a walk of a tile not kept.
+    /// go when the layer cap changed, when the reduction changed and its
+    /// geometry had failed, or to make room for the tiles a window reads
+    /// (see [`Walks::prepare`]). The next walk is built again, and charged
+    /// as a walk of a tile not kept.
     Forgotten,
 }
 
@@ -119,10 +121,15 @@ impl Walks {
     /// `reads` flags, under `reduction` and `layers`, and whose image is of
     /// `image` bytes. Called before the decode's first walk.
     ///
-    /// A walk reads its tile's packets under one reduction and layer cap,
-    /// so when either has changed since the walks were built, every walk is
-    /// let go, and built again by the next walk of its tile. A window
-    /// changes neither: the walks of the tiles it does not read are kept as
+    /// A walk reads its tile's packets under one layer cap, which decides
+    /// the coding passes it keeps, so when the cap has changed since the
+    /// walks were built, every walk is let go, and built again by the next
+    /// walk of its tile. The reduction decides only the code-blocks a walk
+    /// charges for the resolutions it drops (see [`TileWalk::reduce`]): when
+    /// it alone has changed, each walk kept is kept, and charges those of
+    /// the new reduction from now on. A walk whose geometry failed holds no
+    /// geometry to count them from, so it is let go. A window changes
+    /// neither: the walks of the tiles it does not read are kept as
     /// they are, unless the walks kept are past the room of this decode,
     /// whose image is smaller. Then the walks of the tiles it does not read
     /// are let go, from the first tile, until the rest fit. A walk let go
@@ -139,12 +146,27 @@ impl Walks {
         image: u64,
         fed: u64,
     ) {
-        if self.built_for != Some((reduction, layers)) {
-            for index in 0..self.tiles.len() {
-                self.forget(index);
+        match self.built_for {
+            Some((built, cap)) if cap == layers => {
+                if built != reduction {
+                    for index in 0..self.tiles.len() {
+                        let reduced = match &mut self.tiles[index] {
+                            Slot::Kept(walk, _) => walk.reduce(reduction),
+                            _ => true,
+                        };
+                        if !reduced {
+                            self.forget(index);
+                        }
+                    }
+                }
             }
-            self.built_for = Some((reduction, layers));
+            _ => {
+                for index in 0..self.tiles.len() {
+                    self.forget(index);
+                }
+            }
         }
+        self.built_for = Some((reduction, layers));
         let room = self.room(image, fed);
         for index in 0..self.tiles.len() {
             if self.kept <= room {
@@ -333,6 +355,20 @@ impl Walks {
     #[cfg(test)]
     pub(crate) fn kept_bytes(&self) -> u64 {
         self.kept
+    }
+
+    /// Per tile, the code-blocks of the resolutions the reduction drops that
+    /// its walk kept charges for each component, or `None` for a tile with
+    /// no walk kept.
+    #[cfg(test)]
+    pub(crate) fn dropped(&self) -> Vec<Option<Vec<u64>>> {
+        self.tiles
+            .iter()
+            .map(|slot| match slot {
+                Slot::Kept(walk, _) => Some(walk.dropped.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The packet visits the walks have spent: the visits the decodes they
@@ -662,6 +698,27 @@ impl TileWalk {
             geoms,
             rect,
         }
+    }
+
+    /// Charge the code-blocks `reduction` drops from now on, counted from
+    /// the walk's geometry as [`tile_geometry`] counts them for a decode at
+    /// that reduction. Nothing else the walk holds depends on the
+    /// reduction: the geometry is built at full resolution whatever it is,
+    /// and the order, the states and the coded data are the same. `false`
+    /// for a walk whose geometry failed, which holds no geometry to count
+    /// from; the count it holds is then left as it was.
+    fn reduce(&mut self, reduction: u8) -> bool {
+        // Defensive: a decoder only keeps a walk once `check_tile` has
+        // built the same frame and passed the same caps, so a kept walk
+        // whose geometry failed is not reachable through the public API.
+        if self.failure.is_some() {
+            return false;
+        }
+        debug_assert_eq!(self.dropped.len(), self.geoms.len());
+        for (dropped, resolutions) in self.dropped.iter_mut().zip(&self.geoms) {
+            *dropped = dropped_blocks(resolutions, reduction) as u64;
+        }
+        true
     }
 
     /// The bytes the walk holds on the heap, capacity included: its

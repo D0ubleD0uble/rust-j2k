@@ -16,10 +16,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the strict-off decode of its bytes under the new options. A change of
   region keeps the packet walks, unless the walks kept are past the room of
   the new region's decode: then walks of tiles the region does not read are
-  let go until the rest fit. A change of the reduction or the layer cap
-  walks the tiles again, charged to the bound on the walks of tiles not
-  kept. The cadence of refines does not reset, and an error the old
-  options gave is cleared.
+  let go until the rest fit. A change of the reduction keeps the walks
+  too, as they do not depend on it. A change of the layer cap walks the
+  tiles again, charged to the bound on the walks of tiles not kept. The
+  cadence of refines does not reset, and an error the old options gave is
+  cleared.
 - `IncrementalDecoder::options` returns the decoder's options as the
   caller set them. To get an image right after a change of options,
   without waiting for the next refine, call

@@ -196,10 +196,11 @@ layer cap of `Some(0)` or an empty window must be refused and leave the
 options as they were. Each refine after a change is checked under the options
 as they are then. Any real change of an option clears the error, even a
 change back to the options that gave it. A walk kept across a change of the
-layer cap would give a wrong image, which the target catches. One kept across
-a change of the reduction gives the same image, since the reduction changes
-only the code-blocks the walk charges for the resolutions it drops, so the
-target does not see a walk that should have been let go there.
+layer cap would give a wrong image, which the target catches. The decoder
+keeps its walks across a change of the reduction, which changes only the
+code-blocks a walk charges for the resolutions it drops; a walk that still
+charged those of the old reduction would differ from the one-shot decode only
+at the packet bound.
 
 Each refine that decodes goes on from the packet walks the earlier ones kept,
 and must give what `decode_with` gives with `strict` off on the bytes fed so

@@ -79,7 +79,10 @@ use crate::{
 /// for the 65535 tiles a file can have (up to twice that in capacity as
 /// the table grows). Each refine also holds what [`decode_with`] holds for
 /// the same bytes, so the decoder holds at most about three times one
-/// decode's peak memory, plus the bytes fed.
+/// decode's peak memory, plus the bytes fed. After the options change,
+/// these bounds hold from the first refine that decodes under the new
+/// options; until then the walks kept may stay within the room of the old
+/// options.
 ///
 /// The reduction, the layer cap and the region can change between refines,
 /// with [`set_resolution_reduction`](Self::set_resolution_reduction),
@@ -90,9 +93,13 @@ use crate::{
 /// unless the walks kept are past the room of the new region's decode: then
 /// the next refine that decodes lets go of the walks of tiles the region
 /// does not read until the rest fit (see [`set_region`](Self::set_region)).
-/// A change of the reduction or the layer cap lets them go, and the walks
-/// built again are charged to the same bound as the walks of tiles not
-/// kept, so changing the options back and forth does not buy free walks.
+/// A change of the reduction keeps them too. A larger reduction has a
+/// smaller image, so the walks kept may no longer fit: the next refine lets
+/// go of the walks it reads that no longer fit, and walks those tiles from
+/// the start until there is room. A change of the
+/// layer cap lets them go, and the walks built again are charged to the
+/// same bound as the walks of tiles not kept, so changing the options back
+/// and forth does not buy free walks.
 /// [`header`](Self::header) reads the header of the bytes fed so far, and
 /// [`bytes`](Self::bytes) borrows them.
 ///
@@ -314,11 +321,17 @@ impl IncrementalDecoder {
     /// [`resolution_reduction`](DecodeOptions::resolution_reduction) of the
     /// later refines and of [`finish`](Self::finish).
     ///
-    /// The packet walks kept were read under the old reduction, so the
-    /// next refine that decodes lets them go and walks each tile again from
-    /// the start. Those walks are charged as walks of tiles not kept (see
-    /// [`IncrementalDecoder`]), so changing the options back and forth
-    /// cannot buy more than a few packet bounds of work. Setting the
+    /// The packet walks do not depend on the reduction, which decides only
+    /// the code-blocks a decode charges for the resolutions it drops, so
+    /// the walks kept are reused: each tile goes on from where its walk
+    /// stopped, and is charged the code-blocks of the new reduction. A
+    /// larger reduction has a smaller image, so the walks kept may no longer
+    /// fit in the room for them (see [`IncrementalDecoder`]). Then the next
+    /// refine that decodes lets go of the walks it reads that no longer fit,
+    /// and walks those tiles from the start until there is room; those walks
+    /// are charged as
+    /// [`set_max_quality_layers`](Self::set_max_quality_layers) describes.
+    /// Setting the
     /// reduction the decoder already has changes nothing. A change does not
     /// make the next refine decode sooner: it still waits for the bytes fed
     /// to double since the last try. For an image now, see
@@ -339,10 +352,16 @@ impl IncrementalDecoder {
     /// later refines and of [`finish`](Self::finish). `Some(0)` is
     /// [`Error::InvalidOptions`], and leaves the decoder as it was.
     ///
-    /// The packet walks kept were read under the old layer cap, so the next
-    /// refine that decodes lets them go, as
-    /// [`set_resolution_reduction`](Self::set_resolution_reduction) does,
-    /// and is charged the same for walking the tiles again.
+    /// The packet walks kept were read under the old layer cap, which
+    /// decides the coding passes they keep, so the next refine that decodes
+    /// lets them go and walks each tile again from the start. Those walks
+    /// are charged as walks of tiles not kept (see [`IncrementalDecoder`]),
+    /// so changing the options back and forth cannot buy more than a few
+    /// packet bounds of work. Setting the layer cap the decoder already has
+    /// changes nothing. As with
+    /// [`set_resolution_reduction`](Self::set_resolution_reduction), the
+    /// change does not make the next refine decode sooner, and it clears an
+    /// error an earlier refine returned.
     pub fn set_max_quality_layers(&mut self, layers: Option<u16>) -> Result<()> {
         if self.options.max_quality_layers == layers {
             return Ok(());
@@ -362,7 +381,7 @@ impl IncrementalDecoder {
     /// refine that decodes lets go of the walks of the tiles it does not
     /// read until the rest fit, or none is left to let go; a later walk of
     /// those tiles is charged as
-    /// [`set_resolution_reduction`](Self::set_resolution_reduction)
+    /// [`set_max_quality_layers`](Self::set_max_quality_layers)
     /// describes. As there, the change does not make the next refine decode
     /// sooner, and it clears an error an earlier refine returned.
     pub fn set_region(&mut self, region: Region) -> Result<()> {
