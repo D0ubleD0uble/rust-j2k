@@ -740,19 +740,22 @@ fn tile_geometry(
     for c in 0..component_count {
         let resolutions =
             resolution_geoms(header, tile, c, &mut budget.precincts, &mut budget.blocks)?;
-        let kept = resolutions
-            .len()
-            .saturating_sub(usize::from(budget.reduction));
-        dropped(
-            resolutions[kept..]
-                .iter()
-                .flat_map(|resolution| &resolution.bands)
-                .map(BandGeom::block_count)
-                .sum(),
-        )?;
+        dropped(dropped_blocks(&resolutions, budget.reduction))?;
         geoms.push(resolutions);
     }
     Ok(geoms)
+}
+
+/// The code-blocks of the resolutions `reduction` drops from one
+/// component's `resolutions`: its finest `reduction` levels, or all of them
+/// when it has no more.
+pub(super) fn dropped_blocks(resolutions: &[ResolutionGeom], reduction: u8) -> usize {
+    let kept = resolutions.len().saturating_sub(usize::from(reduction));
+    resolutions[kept..]
+        .iter()
+        .flat_map(|resolution| &resolution.bands)
+        .map(BandGeom::block_count)
+        .sum()
 }
 
 /// One state per (component, resolution, band) of `geoms`, carried across

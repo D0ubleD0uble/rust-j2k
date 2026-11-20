@@ -168,12 +168,22 @@ bytes under the new options. `header` reads the header of the bytes fed
 under the current options (`Ok(None)` until the main header is whole), and
 `bytes` borrows the bytes fed.
 
-- A walk reads its tile's packets under one reduction and one layer cap:
-  they decide the geometry it builds and the coding passes it keeps. So
-  when either has changed since the walks were built, the next refine that
-  decodes lets every walk go before it walks a tile, and builds each again.
-  A change back before that refine, or a set to the value the decoder has,
-  keeps them.
+- A walk reads its tile's packets under one layer cap, which decides the
+  coding passes it keeps. So when the cap has changed since the walks were
+  built, the next refine that decodes lets every walk go before it walks a
+  tile, and builds each again. A change back before that refine, or a set
+  to the value the decoder has, keeps them.
+- The walks do not depend on the reduction. A walk builds its tile's
+  geometry at full resolution whatever the reduction, and the reduction
+  decides only the code-blocks of the resolutions it drops, which each
+  decode charges to the packet bound. So a change of the reduction alone
+  keeps every walk, and each walk charges the code-blocks the new
+  reduction drops, counted from the geometry it holds. A walk whose
+  geometry failed holds none to count from, and is let go. A larger
+  reduction has a smaller image, so the walks kept may no longer fit in
+  the room (see [Work and memory](#work-and-memory)). Then the next refine
+  lets go of the walks it reads that no longer fit, and walks those tiles
+  from the start until there is room.
 - The walks do not depend on the region. A tile the new region reads goes
   on from where its walk stopped, and the walks of the tiles it does not
   read stay for a later change back. A smaller region has a smaller image,
@@ -183,10 +193,10 @@ under the current options (`Ok(None)` until the main header is whole), and
   Of the committed fixtures, whose tile walks are large beside their small
   images, a change to one tile lets go of some walks on most multi-tile
   files.
-- A walk let go for either reason is built again on the next walk of its
-  tile, and charged as a walk of a tile not kept. So changing the options
-  back and forth spends the same bound as walking a tile again, and cannot
-  buy free walks (`options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again`).
+- A walk let go for any of these reasons is built again on the next walk
+  of its tile, and charged as a walk of a tile not kept. So changing the
+  options back and forth spends the same bound as walking a tile again, and
+  cannot buy free walks (`options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again`).
   The visits spent and the code-block work spent carry across a change.
 - A change does not reset the cadence: the next refine still waits for
   twice the bytes of the last try. Resetting it would give a caller who
@@ -215,9 +225,14 @@ files with several tiles and tile-parts, `TLM` and `PLT`, a `POC` volume in
 a later tile-part and a MIXED HT file, and checks each refine against the
 one-shot decode
 (`options_changed_between_refines_refine_to_the_one_shot_decode_of_their_prefix`).
-It counts the walk visits to check that a change of region reads no packet
-twice, and that a change of reduction or layer cap is charged what a
-one-shot walk of the tiles spends.
+It counts the walk visits to check that a change of region or of reduction
+reads no packet twice (`a_change_of_reduction_keeps_the_walks`), and that a
+change of layer cap is charged what a one-shot walk of the tiles spends.
+`tests/incremental.rs` changes the reduction between refines of one-tile
+files and checks that no walk is charged as read again, and that at the
+packet bound a refine after a change is refused where the one-shot decode
+is, and gives the image where it does
+(`a_change_of_reduction_at_the_packet_bound_is_refused_as_the_one_shot_decode`).
 
 ## Work and memory
 
@@ -319,10 +334,12 @@ largest tile walked so far. They also hold at most the larger of 1 MiB and
 input as well as the image the file declares. Each walk's size counts every
 heap allocation it holds, capacity included. A tile whose walk would pass
 either bound is not kept, and each refine walks its packets from the start,
-until the bytes fed make room for it. Of the committed fixtures fed 1 KB at
-a time, this keeps fewer walks than the image bound alone only for files
-made to test the work bounds, and for a 6000 x 4000 RGB file of 148 KB until
-64 KB of it are in. On top of these bounds the decoder keeps a table of 24
+until the bytes fed make room for it. After a change of the options, these
+bounds hold from the first refine that decodes under the new options; until
+then the walks kept may stay within the room of the old options. Of the
+committed fixtures fed 1 KB at a time, this keeps fewer walks than the image
+bound alone only for files made to test the work bounds, and for a
+6000 x 4000 RGB file of 148 KB until 64 KB of it are in. On top of these bounds the decoder keeps a table of 24
 bytes for each tile index up to the highest it has seen (`size_of::<Slot>()`
 in `src/tier2/resume.rs`). That is about 1.5 MiB for the 65535 tiles a file
 can have, and up to twice that in capacity as the table grows: an 82-byte
