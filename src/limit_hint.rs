@@ -174,7 +174,7 @@ pub(crate) fn tile_geometry(
 /// The [`Error::Limit`] for a tile whose code-blocks need `work` sample-passes when
 /// `left` of the bound were left, after earlier tiles spent `spent`. It
 /// carries the tile and its work as [`refused_at`](crate::LimitDetail::refused_at).
-pub(crate) fn code_blocks(index: usize, work: u64, left: u64, spent: u64, default: u64) -> Error {
+pub(crate) fn code_blocks(index: u32, work: u64, left: u64, spent: u64, default: u64) -> Error {
     let refusal = escalated(
         LimitKind::CodeBlockWork,
         doubled(

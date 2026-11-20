@@ -319,7 +319,7 @@ impl Error {
 
     /// This code-block work [`Error::Limit`] with the tile it refused and
     /// the work that tile needs as data: the figures its message names.
-    pub(crate) fn refused_at(self, tile: usize, work: u64) -> Error {
+    pub(crate) fn refused_at(self, tile: u32, work: u64) -> Error {
         match self {
             Error::Limit(mut limit) => {
                 debug_assert_eq!(limit.kind, LimitKind::CodeBlockWork);
@@ -330,10 +330,7 @@ impl Error {
                     "{}",
                     limit.message
                 );
-                limit.refused_at = Some(RefusedAt {
-                    tile: u32::try_from(tile).unwrap_or(u32::MAX),
-                    work,
-                });
+                limit.refused_at = Some(RefusedAt { tile, work });
                 Error::Limit(limit)
             }
             other => other,
@@ -486,14 +483,14 @@ impl LimitDetail {
     /// The tile the limit refused and the work it needs, where the refusal
     /// knows both exactly; `None` otherwise.
     ///
-    /// Only a refusal by the code-block work bound
-    /// ([`LimitKind::CodeBlockWork`]) of one tile carries it: the one
+    /// The refusals that carry it are the code-block work bound's
+    /// ([`LimitKind::CodeBlockWork`]) refusals of one tile: the one
     /// [`decode_with`](crate::decode_with) gives, and the one an
     /// [`IncrementalDecoder`](crate::IncrementalDecoder) waits on as
     /// [`Waiting::WorkLimit`](crate::Waiting::WorkLimit), or as
     /// [`Waiting::BoundSpent`](crate::Waiting::BoundSpent) where the whole
-    /// bound refuses a tile it counted. A `BoundSpent` whose count ended
-    /// within the whole bound, and every other kind, give `None`.
+    /// bound refuses a tile it counted. Other refusals give `None`, a
+    /// `BoundSpent` whose count ended within the whole bound included.
     pub fn refused_at(&self) -> Option<RefusedAt> {
         self.refused_at
     }
@@ -529,8 +526,9 @@ impl RefusedAt {
         self.tile
     }
 
-    /// The work the tile needs, in the limit's unit: sample-passes for the
-    /// code-block work bound.
+    /// The work the tile needs, in sample-passes: the work of the
+    /// code-blocks this decode reads under its options (the reduction,
+    /// region and components), not of the whole tile.
     pub fn work(&self) -> u64 {
         self.work
     }

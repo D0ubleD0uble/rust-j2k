@@ -315,7 +315,9 @@ returning an error. Damage can also look like a limit, since one flipped bit
 in the header can declare an absurd size, so don't lift the limits on that
 evidence alone. The error says which limit refused the file and what to
 raise it to, as data: `LimitDetail::kind` and `LimitDetail::retry_with`.
-`DecodeOptions::with_retry` sets that limit for you:
+A code-block work refusal also gives the tile and its work
+(`LimitDetail::refused_at`). `DecodeOptions::with_retry` sets that limit
+for you:
 
 ```rust
 use rust_j2k::{DecodeOptions, Error, Image, decode_with};

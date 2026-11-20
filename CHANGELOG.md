@@ -41,9 +41,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gives the tile refused and the work it needs, as a `RefusedAt` with
   `tile()` and `work()`, so a caller need not parse the message. The refusal
   `decode_with` gives carries it, and so do `Waiting::WorkLimit` and a
-  `Waiting::BoundSpent` where the whole bound refuses a tile; a
-  `BoundSpent` that the earlier refines alone refused, and every other
-  limit, give `None` (#493).
+  `Waiting::BoundSpent` where the whole bound refuses a tile. Other
+  refusals give `None`, a `BoundSpent` that the earlier refines alone
+  refused included (#493).
 
 ### Changed
 

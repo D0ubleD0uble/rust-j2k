@@ -901,7 +901,7 @@ fn decode_codestream(
                              decode them on their own, or start a new decoder"
                         ),
                     )
-                    .refused_at(index, work));
+                    .refused_at(tile.index, work));
                 }
                 *own += work;
                 continue;
@@ -922,7 +922,7 @@ fn decode_codestream(
                 // bound is the whole one, of which this decode spent `own`.
                 // Without a ledger the two are the same.
                 return Err(limit_hint::code_blocks(
-                    index,
+                    tile.index,
                     work,
                     full_blocks.saturating_sub(own),
                     own,

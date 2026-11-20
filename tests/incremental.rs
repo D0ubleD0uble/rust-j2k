@@ -696,6 +696,7 @@ fn a_sample_limit_refusal_is_a_wait() {
             ) => {
                 assert_eq!(format!("{limit:?}"), format!("{expected:?}"));
                 assert!(limit.retry_with().is_some(), "{limit}");
+                assert_eq!(limit.refused_at(), None, "{limit}");
                 waited += 1;
             }
             (
@@ -1094,6 +1095,8 @@ fn a_refine_refused_for_what_earlier_refines_spent_waits_on_bound_spent() {
     };
     assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
     assert_eq!(limit.retry_with(), None);
+    // The count ended with the file: no tile passed the whole bound.
+    assert_eq!(limit.refused_at(), None, "{limit}");
     check_waiting("t1bomb padded", &why, decoder.bytes(), &options);
     let now = decode_with(
         decoder.bytes(),
