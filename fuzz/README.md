@@ -317,7 +317,14 @@ decode with no limits. A decode past a factor of 4 can take longer than the
 timeout, so the ladder stops when a refusal asks for more, once that step
 is checked. A packet work refusal names twice the factor it ran under, so a
 ladder takes about log2 of the factor it needs; more than 4 steps on one
-limit (log2 of that factor cap, plus 2) is a failure.
+limit (log2 of that factor cap, plus 2) is a failure. The per-tile caps on
+code-blocks and precincts are raised through the sample limit, so a sample
+limit refusal and the two cap refusals share one step count. Each step must
+raise the option strictly and the ladder stops past a factor of 4, so one
+option takes at most 4 steps (2, 3, 4, then past 4) whatever the hints name;
+the bound catches a ladder that does not end. That the hints double is held by
+`tests/work_limit.rs`, the `limit_hint` unit tests and
+`tests/tile_geometry_cap.rs`.
 
 An input over the fuzz sample budget (`common/budget.rs`) is only read for its
 header, and a sample limit refusal there is checked as one step with no decode.
@@ -473,6 +480,8 @@ for c in 00 80; do seed $c work_bound/pocvol_1024x512_1000_2.j2k; done
 seed 00 work_bound/pocspent_2tiles_60000_559.j2k
 seed 00 tier1_work_bound/t1bomb_1024_64_88.j2k
 seed 40 work_bound/cprl_tall.j2k
+seed 00 retry_ladder/tile_precincts.j2k
+seed 00 retry_ladder/tile_code_blocks.j2k
 cargo +nightly fuzz run retry_ladder -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
 
 # Deeper periodic run over the widened surface; expected to find nothing.
@@ -504,6 +513,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-17 | `window_crop` with eight control bytes | `decode`'s seeding, the window fixtures, the `.jph` files and the JP2 files under 200 KB (109 seeds; 84 reach the comparison, 27 of the 36 JP2 and JPH ones among them), `j2k.dict` | 61 s, 18 074 runs; `nice -n 19`, one job; the 1-minute load was 5.5 | no failure. Coverage 9 464 (8 145 in the run above). 557 of the 1 126 inputs it kept reach the comparison: 182 windows, 123 tiles, 99 subsets and 153 subsets through a window. With `Window` shifted one column right, a seed fails on replay |
 | 2026-11-17 | `retry_ladder` with every option compared and the seeds behind control bytes | `decode`'s seeding and the 26 control-byte seeds (93 seeds; 12 take a step, 16 compare), `j2k.dict` | 61 s, 4 081 runs (the seeds take about 22 s to replay); `nice -n 19`, one job; the 1-minute load was 5.4 | no failure. Coverage 7 993 (7 836 in the run above). Of the 406 inputs it kept, 16 take a step (7 sample, 8 packet work, 1 code-block work) and 19 compare. With `with_retry` also setting `ColorOutput::Srgb` on a packet work refusal, the seed `0f-pocvol_1024x512_1000_2` fails on replay |
 | 2026-11-17 | `retry_ladder` with the packet work hint doubling and a per-limit step bound (`MAX_STEPS` 4) | `decode`'s seeding and the 26 control-byte seeds (98 inputs), `j2k.dict` | 61 s, 1 476 runs; `nice -n 19`, one job; the 1-minute load was 4.4 | no failure |
+| 2026-11-19 | `retry_ladder` with the tile caps on the sample limit's step count | the fixtures under `tests/fixtures/`, the 26 control-byte seeds and `retry_ladder/tile_precincts.j2k` (76 inputs; 503 with every fixture and codestream replayed), `j2k.dict` | 61 s, 7 877 runs; `nice`, one job; the 1-minute load was 3 | no failure. With `TilePrecincts` left out of the sample limit's option, the seed `tile_precincts.j2k` fails on replay |
 | 2026-11-18 | `window_crop` with windows from one point before the origin, and the image size compared | the README's seeding (114 seeds: `decode`'s, the window fixtures, the `.jph` files and the JP2 files under 200 KB), `j2k.dict` | 61 s, 21 419 runs; `nice -n 19`, one job; the 1-minute load was 4.6 | no failure. Coverage 10 427. With `Footprint::rect` shifted one column right, a seed fails on replay; with the image's reported width one too many, a seed fails on its size assertion |
 | 2026-11-18 | `incremental_decode` with the repeat-charge oracle (`incremental_repeat_work`) and the setters between refines (bit 6) | the fixtures under 3 KB, and the same behind `40 00 00 00 00 00` (98 seeds), `j2k.dict`, `-max_len=4096` | `-max_total_time=60` (66 s with loading), 18 228 runs; `nice -n 19`, one job; the 1-minute load was 1.5 | no failure |
 | 2026-11-18 | `incremental_decode` with the reason a refine waits checked (`check_waiting`, and `MoreBytes { until }` on each refine not due) | the fixtures under 3 KB, and the same behind `40 00 00 00 00 00` (110 seeds), `j2k.dict`, `-max_len=4096` | `-max_total_time=60`, 22 818 runs; `nice -n 19`, one job; the 1-minute load was 1.4 | no failure |

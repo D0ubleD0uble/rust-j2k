@@ -138,10 +138,25 @@ jobs:
           mkdir -p fuzz/corpus/decode_partial fuzz/corpus/incremental_decode
           cp fuzz/corpus/decode/* fuzz/corpus/decode_partial/
           cp fuzz/corpus/decode/* fuzz/corpus/incremental_decode/
+          cp tests/fixtures/incremental/*.seed fuzz/corpus/incremental_decode/
+          cp tests/fixtures/partial/*.j2k fuzz/corpus/decode_partial/
       - name: Fuzz decode_partial (30s)
         run: cargo fuzz run decode_partial --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
       - name: Fuzz incremental_decode (45s)
         run: cargo fuzz run incremental_decode --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=45 -rss_limit_mb=4096 -timeout=30
+      # window_crop starts from the decode corpus plus the window fixtures, the
+      # OpenJPH .jph files and the JP2 fixtures under 200 KB. An input that
+      # starts with SOC or the JP2 signature is the whole file, so these are
+      # valid seeds as they are.
+      - name: Seed window_crop
+        run: |
+          mkdir -p fuzz/corpus/window_crop
+          cp fuzz/corpus/decode/* fuzz/corpus/window_crop/
+          cp tests/fixtures/window/*.j2k tests/fixtures/openjph/files/*.jph fuzz/corpus/window_crop/
+          find tests/fixtures/conformance tests/fixtures/jp2_real -name '*.jp2' -size -200k -exec cp {} fuzz/corpus/window_crop/ \;
+          find tests/fixtures -maxdepth 1 -name '*.jp2' -size -200k -exec cp {} fuzz/corpus/window_crop/ \;
+      - name: Fuzz window_crop (30s)
+        run: cargo fuzz run window_crop --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
       - name: Fuzz tile_body (45s)
         run: cargo fuzz run tile_body --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=45 -rss_limit_mb=4096 -timeout=30
       - name: Fuzz tier1_block (30s)
@@ -167,6 +182,15 @@ jobs:
       # The header target checks read_header against decode on the same input.
       - name: Fuzz header (30s)
         run: cargo fuzz run header --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
+      # retry_ladder follows with_retry from each limit refusal; the fixtures
+      # seed it (the retry_ladder directory holds its own).
+      - name: Seed retry_ladder
+        run: |
+          mkdir -p fuzz/corpus/retry_ladder
+          cp tests/fixtures/*.j2k fuzz/corpus/retry_ladder/
+          cp tests/fixtures/retry_ladder/*.j2k fuzz/corpus/retry_ladder/
+      - name: Fuzz retry_ladder (30s)
+        run: cargo fuzz run retry_ladder --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
       # The ICC target reads a fuzzed profile; the oracle cases' profiles seed it.
       - name: Seed the ICC fuzz corpus
         run: python3 scripts/gen-icc-oracles.py --fuzz-seeds
