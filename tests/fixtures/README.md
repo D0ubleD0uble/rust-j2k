@@ -548,6 +548,22 @@ The file as encoded is not committed: decoding its 4.7 million samples
 would slow every sweep of the fixtures. Both files are made here, so they
 have no license restriction.
 
+### Header fixtures
+
+`header/rescue_cut_sot.j2k` (68 bytes, SHA-256
+`e7821b0144fc26fe0908cd5fdd3cc8886a436e7e05dfe4d0093957cfe3dab4bf`) is
+an input a `header` fuzz run found during #495, committed as found
+(#498). It is a 1560 x 1536 gray codestream of 3 x 3 tiles of 520 x 512,
+whose `COD` gives 1 x 1 precincts, so each tile is over the precinct cap
+under the main header; the input ends two bytes into the first `SOT`.
+With `strict` on, `decode_with` refuses it for the cut `SOT` ("truncated
+marker segment"), and `read_header_with` now does too (it gave the cap's
+`Limit`); with `strict` off both admit it. `opj_decompress` 2.5.0 reads
+its main header and fails to decode component 0.
+`tests/tile_geometry_cap.rs` and `tests/read_header.rs` check it. Replay it
+with `cargo +nightly fuzz run -O header tests/fixtures/header/ -- -runs=0`.
+It was made by the fuzzer, so it has no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

@@ -286,10 +286,15 @@ order, so one tile's coding parameters are held at a time and the first
 tile refused is the lowest, as in the decode. A
 tile-part `COD` or `COC` that brings the tile within the caps admits it,
 and so does `strict` off when the tile has no tile-part, as the decode then
-leaves it out; with `strict` on such a tile is counted under the main
-header, and the decode refuses the file anyway. A tile-part header the
-decode finds at fault, and a tile-part `COD` that takes a tile over the
-caps, are left to the decode. The count has a budget of 2^22 steps under the
+leaves it out. With `strict` on, the decode parses the tile-parts before it
+counts a tile, so it refuses a file where a tile has no tile-part for the
+fault that ended the chain or for the missing tile. The header read then
+runs that parse too and gives its error. The walk has reached the end of
+the chain by then, so the parse follows it no further, but it reads every
+tile-part header and its heap is the decode's, up to about 52 times the
+input plus 128 KiB (above). A tile-part header the decode finds at fault,
+and a tile-part `COD` that takes a tile over the caps, are left to the
+decode. The count has a budget of 2^22 steps under the
 main header, a step for each resolution of each tile-component, and as many
 under the tiles' own headers, where reading a header that copies the main
 header's coding parameters costs 11 steps a component. It leaves any tile
@@ -316,7 +321,9 @@ almost all of it the offsets of tiles 0 to 65280; 63 ms for 1000 tiles of
 1024 tiles whose `Psot` ends inside a `COM` that holds the next tile-part,
 followed by 4 MiB of `COM`.
 On a file the decode refuses for a fault in its tile-parts,
-`read_header_with` may give the `Limit` instead of the decode's error.
+`read_header_with` may still give the `Limit` instead of the decode's error
+where it refuses a tile it found a tile-part for, as it does not check the
+tile-parts it passes nor walk past that tile.
 `IncrementalDecoder::header` reads the header again on each call, so each
 call costs as much: up to the walk and the budgets, 45 ms on the 235 MB
 file above.

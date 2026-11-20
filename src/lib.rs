@@ -414,7 +414,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// coding parameters at a time. A tile-part `COD` or `COC` that brings
 /// the tile within the caps admits it, as does
 /// [`strict`](DecodeOptions::strict) off when the tile has no tile-part,
-/// since the decode then leaves it out. A tile-part
+/// since the decode then leaves it out. With it on, such a tile gets the
+/// error the decode gives for the tile-parts, for the fault that ended
+/// them or for the missing tile, from the same parse. A tile-part
 /// header the decode finds at fault is left to the decode, as is a
 /// tile-part `COD` that takes a tile over the caps. The count has a budget
 /// of 2^22 steps under the main header and as many under the tiles' own;
@@ -424,8 +426,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// 1530 tiles over a cap of a 235 MB file of 65535 tiles in 16.7 million
 /// tile-parts, under a millisecond with no tile over a cap, and 63 ms for
 /// 1000 tiles of 4096 components, each with a tile-part `COD`. On a file
-/// the decode refuses for a fault in its tile-parts, it may give this
-/// [`Error::Limit`] instead of the decode's error.
+/// the decode refuses for a fault in its tile-parts, it may still give this
+/// [`Error::Limit`] instead of the decode's error where it refuses a tile
+/// it found a tile-part for.
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks
