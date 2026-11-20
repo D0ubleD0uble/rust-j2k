@@ -708,3 +708,49 @@ fn a_ladder_over_many_tiles_that_each_reach_the_bound_takes_log_steps() {
     let (_, steps) = follow_ladder(name, &bytes, start, 7);
     assert_eq!(steps, 5, "{name}");
 }
+
+/// `tile_precincts.j2k` (the `retry_ladder` target's repro for #506): two
+/// 520 x 512 tiles in 1 x 1 precincts, 266240 precincts each, over the
+/// per-tile cap of 2^18 at the default sample limit, and with no packet data.
+/// The refusal is by a tile cap, not by the samples, and its retry raises the
+/// sample limit, which the caps grow with. The ladder is one rung: the retry
+/// passes the cap and the decode ends in the truncation error, the same one
+/// the options with no limits give.
+#[test]
+fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
+    let bytes = fixture("retry_ladder/tile_precincts.j2k");
+    assert_eq!(
+        sha256_hex(&bytes),
+        "375d754c986a77896de2c9b6926d365856b2a848451fe3e07613804c8593de94"
+    );
+    let start = DecodeOptions::default();
+    let Err(Error::Limit(limit)) = decode_with(&bytes, &start) else {
+        panic!("the defaults do not refuse")
+    };
+    assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
+    assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+    let next = start
+        .clone()
+        .with_retry(&limit)
+        .expect("a tile cap refusal retries");
+    assert_eq!(
+        format!("{next:?}"),
+        format!(
+            "{:?}",
+            start.clone().with_sample_limit(WorkLimit::Raised(2))
+        ),
+        "the retry raises the sample limit and nothing else"
+    );
+    let end = "the data of tile 0 ends before the last packet";
+    assert!(
+        matches!(decode_with(&bytes, &next), Err(Error::Codestream(m)) if m.message() == end),
+        "one rung passes the cap"
+    );
+    let unlimited = start
+        .with_sample_limit(WorkLimit::Unlimited)
+        .with_packet_work_limit(WorkLimit::Unlimited)
+        .with_code_block_work_limit(WorkLimit::Unlimited);
+    assert!(
+        matches!(decode_with(&bytes, &unlimited), Err(Error::Codestream(m)) if m.message() == end)
+    );
+}

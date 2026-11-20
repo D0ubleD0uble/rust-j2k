@@ -582,6 +582,24 @@ its wait gives the tile and work `decode_with` gives. It starts with `SOC`,
 so the target reads it with all-zero control bytes, and its extension keeps
 it out of the sweeps of the fixtures. Replay it with the command above.
 
+### Retry ladder fixtures
+
+`retry_ladder/tile_precincts.j2k` (98 bytes, SHA-256
+`375d754c986a77896de2c9b6926d365856b2a848451fe3e07613804c8593de94`) is
+the input that panicked the `retry_ladder` target, written out from the
+hex in #506 (found by batch critique 10, committed as reported). It is a
+1040 x 512 gray codestream of two 520 x 512 tiles whose
+`COD` gives 1 x 1 precincts, so each tile holds 266240 precincts, over the
+per-tile cap of 2^18 at the default sample limit, and the tiles carry
+empty data. The default decode refuses it as `LimitKind::TilePrecincts`
+with the retry `Raised(2)`. That retry passes the cap, and the decode
+then ends in the truncation error `the data of tile 0 ends before the last
+packet`, as the options with no limits do. `tests/work_limit.rs` checks
+it. It starts with `SOC`, so the target reads it with all-zero control
+bytes. Replay it with
+`cargo +nightly fuzz run -O retry_ladder tests/fixtures/retry_ladder/ -- -runs=0`.
+It was written from the hex in the issue, so it has no license restriction.
+
 ### Header fixtures
 
 `header/rescue_cut_sot.j2k` (68 bytes, SHA-256
