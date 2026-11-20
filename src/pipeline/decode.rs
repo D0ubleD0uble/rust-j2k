@@ -196,6 +196,10 @@ fn check_geometry(
     // The lowest tile read since the last one counted whose own header
     // could refuse it.
     let mut pending: Option<u32> = None;
+    // With `strict` on, a lower tile's refusal, held while the walk goes on
+    // to the next tile over a cap that the decode would find missing.
+    let mut refused: Option<Error> = None;
+    let held = |refused: Option<Error>| refused.map_or(Ok(()), Err);
     for index in 0..reads.len() as u32 {
         let Some((main_fits, may_refuse)) = fits(index) else {
             continue;
@@ -208,14 +212,16 @@ fn check_geometry(
         } else {
             steps = steps.saturating_add(main_resolutions);
             if steps > GEOMETRY_STEPS {
-                return Ok(());
+                return held(refused);
             }
             tier2::check_tile(header, index, cap)
                 .err()
                 .filter(|error| matches!(error, Error::Limit(_)))
         };
         let Some(error) = over else {
-            pending.get_or_insert(index);
+            if refused.is_none() {
+                pending.get_or_insert(index);
+            }
             continue;
         };
         // The decode counts the lower tiles under their own headers first,
@@ -233,17 +239,40 @@ fn check_geometry(
                 return Err(rescue.walk_fault().unwrap_or(error));
             }
             for lower in lowest..index {
-                let counted = fits(lower).is_some_and(|(_, may_refuse)| may_refuse);
-                if counted && !rescue.count(lower, None)? {
-                    return Ok(());
+                if !fits(lower).is_some_and(|(_, may_refuse)| may_refuse) {
+                    continue;
+                }
+                match rescue.count(lower, None) {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(()),
+                    Err(error) if strict => {
+                        refused = Some(error);
+                        break;
+                    }
+                    Err(error) => return Err(error),
                 }
             }
+        }
+        if let Some(lower) = refused.take() {
+            // A lower tile is refused, but the decode refuses the file for a
+            // missing tile first. So the count goes on through the tiles over
+            // a cap as it would without the lower tiles, to the first that is
+            // missing (the decode's error for the tile-parts) or refused
+            // under its own header (the lower tile's error).
+            if rescue.find(index).is_none() {
+                return Err(rescue.walk_fault().unwrap_or(lower));
+            }
+            match rescue.count(index, Some(error)) {
+                Ok(true) => refused = Some(lower),
+                Ok(false) | Err(_) => return Err(lower),
+            }
+            continue;
         }
         if !rescue.count(index, Some(error))? {
             return Ok(());
         }
     }
-    Ok(())
+    held(refused)
 }
 
 /// The resolutions of tile-components `header` gives a tile.

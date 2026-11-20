@@ -418,7 +418,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// since the decode then leaves it out. With it on, such a tile gets the
 /// decode's error for the tile-parts, from the same parse: the first fault
 /// its parse finds, or the missing tile; it looks up the tiles it would
-/// read up to such a tile before it counts any lower tile. Before
+/// read up to such a tile before it counts any lower tile, and where it
+/// refuses a lower tile it goes on through the later tiles over a cap to
+/// the first that has no tile-part or that its own header refuses. Before
 /// such a tile, it counts each lower tile it would read that the tile's own
 /// header could refuse, under that header, as the decode counts each tile
 /// in index order: each whose first tile-part carries a `COD` or `COC` and

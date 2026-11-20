@@ -304,7 +304,11 @@ refused is then the lowest, as in the decode. With `strict` on the tiles
 read up to the one over a cap are looked up before the lower tiles are
 counted, and where one has no tile-part the read gives the decode's error
 for the tile-parts, as the decode refuses such a file before it counts any
-tile. A tile-part `COD` that takes a tile over
+tile. Where a lower tile is refused with `strict` on, the count goes on
+through the later tiles over a cap under the main header, as far as it
+would go without that tile: the first that has no tile-part gives the
+decode's error for the tile-parts, and the first its own header refuses
+ends the count with the lower tile's refusal. A tile-part `COD` that takes a tile over
 a cap with no tile over a cap under the main header after it is left to
 the decode, so a file with no tile over a cap under the main header is
 still read no further than the first `SOT`. A

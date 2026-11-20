@@ -144,7 +144,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whatever its size, as one with fewer levels than the reduction takes is
   refused too. With `strict` on it first looks up the tiles it would read
   up to the tile over a cap, and gives the decode's error for the
-  tile-parts where one of them has none.
+  tile-parts where one of them has none; where it refuses a lower tile, it
+  goes on through the later tiles over a cap to the first that has no
+  tile-part (the decode's error) or that its own header refuses (the lower
+  tile's).
   That reads the tile-part headers of those tiles in the same single walk;
   a file with no tile over a cap under the main header is still read no
   further than the first `SOT`. On a file the decode refuses for a fault in

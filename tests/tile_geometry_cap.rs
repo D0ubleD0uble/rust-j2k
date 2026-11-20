@@ -1140,6 +1140,35 @@ fn a_missing_tile_over_a_cap_comes_before_a_lower_tile_refused() {
     assert_same_error(&bytes, &lenient);
 }
 
+/// A tile over a cap with no tile-part after one its own header admits,
+/// with a lower tile refused (a review find, the seed
+/// `tests/fixtures/header/later_missing_over_cap.j2k`). Tile 0 is 8 wide,
+/// with a tile-part `COD` of no levels; tile 1, 1000 x 1000 and over the
+/// precinct cap under the main header, has a tile-part `COD` that admits
+/// it; tile 2, the same size, is missing. With `strict` on the decode
+/// refuses the file for tile 2 before it counts any tile, so at reduction 1
+/// the header read looks past tile 1 and gives that error too.
+#[test]
+fn a_missing_tile_over_a_cap_after_one_admitted_comes_before_a_lower_tile_refused() {
+    let bytes = include_bytes!("fixtures/header/later_missing_over_cap.j2k");
+    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    let header = read_header_with(bytes, &reduced);
+    assert!(
+        matches!(&header, Err(Error::Codestream(d))
+            if d.message() == "the codestream carries no tile-part for tile 2"),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &reduced);
+    // With `strict` off the decode leaves tile 2 out and refuses tile 0.
+    let lenient = reduced.clone().with_strict(false);
+    let header = read_header_with(bytes, &lenient);
+    assert!(
+        matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 0")),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &lenient);
+}
+
 /// `components` gray components over a row of `width` tiles of 1x1 and a
 /// row of `width` tiles of 1 x `tall`, with `levels` levels and precincts
 /// of 1x1 at resolution 0 and 2x2 above.

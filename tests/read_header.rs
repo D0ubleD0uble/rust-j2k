@@ -59,17 +59,6 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
-/// Files where `read_header` refuses a tile over a cap while `decode` first
-/// refuses the file for a fault in a lower tile's data, which `read_header`
-/// never reads, and why.
-const LOWER_TILE_FAULTS: &[(&str, &str)] = &[
-    (
-        "header/lower_tile_data_long.j2k",
-        "a byte after tile 0's last packet",
-    ),
-    ("header/lower_tile_data_short.j2k", "no data in tile 0"),
-];
-
 const TILE_FAULTS: &[(&str, &str)] = &[
     (
         "incremental/segsym_tiles_flipped.j2k",
@@ -206,6 +195,17 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "work_bound/t2skip_2048x1024_40000.j2k",
         "past the work bound",
     ),
+];
+
+/// Files where `read_header` refuses a tile over a cap while `decode` first
+/// refuses the file for a fault in a lower tile's data, which `read_header`
+/// never reads, and why.
+const LOWER_TILE_FAULTS: &[(&str, &str)] = &[
+    (
+        "header/lower_tile_data_long.j2k",
+        "a byte after tile 0's last packet",
+    ),
+    ("header/lower_tile_data_short.j2k", "no data in tile 0"),
 ];
 
 fn fixtures() -> PathBuf {

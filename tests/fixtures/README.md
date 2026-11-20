@@ -672,6 +672,19 @@ reduction refusal. `opj_decompress` 2.5.0, which has no such caps,
 decodes it. `tests/tile_geometry_cap.rs` checks it. It has no license
 restriction.
 
+`header/later_missing_over_cap.j2k` (131 bytes, SHA-256
+`abb87f5f4fbbf392865dce5e5377e7dd0cbe15649af66fd5061b7ad2c0ab2993`) is an
+input from the review of #501, committed as found. It is a 3000 x 1000 gray
+codestream with `XOsiz` 992 and tiles of 1000 x 1000, so tile 0 is 8 wide,
+whose main `COD` gives one level and 1x1 precincts at resolution 0, which
+puts tiles 1 and 2 over the precinct cap. Tile 0's tile-part `COD` gives it no levels,
+tile 1's tile-part `COD` admits it, and tile 2 has no tile-part. At
+resolution reduction 1 with `strict` on, `decode_with` refuses the file for
+the missing tile ("the codestream carries no tile-part for tile 2") and
+`read_header_with` does too; with `strict` off both give tile 0's reduction
+refusal. `opj_decompress` 2.5.0 fails to read tile 1's `COD`.
+`tests/tile_geometry_cap.rs` checks it. It has no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

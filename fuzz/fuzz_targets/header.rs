@@ -163,7 +163,9 @@ fn check(
 ///   sample limit refusal, or a reduction past a tile's levels.
 /// - The decode gives `decode` again with T's refusal lifted, by the retry
 ///   it names (the options as they are where none raises it), so the cap
-///   does not decide it.
+///   does not decide it. For an `AddressSpace` refusal this is vacuous: it
+///   names no retry, so the lifted decode is the decode itself, and the rule
+///   rests on the next check, the decode of T alone.
 /// - The decode of T alone does not give it, so it lies in the other tiles'
 ///   data and not in what every decode reads, such as the tile-parts.
 fn decode_finds_first_in_a_lower_tile(
