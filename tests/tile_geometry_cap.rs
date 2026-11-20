@@ -411,6 +411,38 @@ fn a_tile_behind_a_cut_sot_gets_the_decode_error() {
     assert!(!image.report.is_complete());
 }
 
+/// The decode's error for the tile-parts is the first fault its parse finds,
+/// which need not be in the tile counted: reading tile 1 of two, over the
+/// cap under the main header and with no tile-part, where tile 0's
+/// tile-part `COD` is illegal (code-blocks of 2^11 samples a side, or
+/// progression order 9), the decode refuses the file for that `COD` with
+/// `Error::Marker`, and the header read gives that error too.
+#[test]
+fn a_fault_in_another_tiles_header_is_the_decode_error() {
+    let mut cod = synth::cod_body(1, 0, 4, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body([2 * 520, 512, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+    let main = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let large_blocks = synth::cod_body(1, 0, 9, 0);
+    let mut order_9 = synth::cod_body(1, 0, 4, 0);
+    order_9[1] = 9;
+    let options = DecodeOptions::default().with_region(Region::Tile(1));
+    for own in [large_blocks, order_9] {
+        let part = synth::tile_part(0, 0, 1, &synth::seg(0xFF52, &own), &[0]);
+        let bytes = [&main[..], &part, &[0xFF, 0xD9]].concat();
+        let header = read_header_with(&bytes, &options);
+        assert!(matches!(header, Err(Error::Marker(_))), "{header:?}");
+        assert_same_error(&bytes, &options);
+    }
+}
+
 /// A tile-part header the decode finds at fault is the decode's to report,
 /// so the header read does not count its tile under the main header, over
 /// whose caps it is: not where the input ends inside its `COD` (which the

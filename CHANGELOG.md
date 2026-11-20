@@ -116,10 +116,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - With `strict` on, `read_header_with` gives the decode's error for a file
   where a tile over a code-block or precinct cap under the main header has
-  no tile-part: the fault that ended the tile-parts (a cut or bad `SOT`,
-  say), or the missing tile. It gave `Error::Limit` for the cap, while
-  `decode_with` refuses the file for the tile-parts before it counts any
-  tile. To find the error it parses the tile-parts as the decode does (#498).
+  no tile-part: the decode's error for the tile-parts, which is the first
+  fault its parse finds (a cut or bad `SOT`, or an illegal tile-part
+  header, say), or the missing tile. It gave `Error::Limit` for the cap,
+  while `decode_with` refuses the file for the tile-parts before it counts
+  any tile. To find the error it parses the tile-parts as the decode does,
+  which on that refusal costs as much time and heap as the decode's parse:
+  1.75 s and 281 MiB on a 235 MB file of 16.7 million tile-parts (#498).
 - `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
   time. A refusal of the packet work or code-block work bound, including the
   charge for missing tiles, names the larger of what the tiles seen so far

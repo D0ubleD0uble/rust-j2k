@@ -300,14 +300,16 @@ impl Rescue<'_> {
 
     /// The error the decode gives for the tile-parts with `strict` on, for a
     /// tile the walk found no tile-part for. The decode parses the tile-parts
-    /// before it counts a tile, so it refuses the file for the fault that
-    /// ended the walk, or for the missing tile, and never gets to the count.
-    /// This is that parse. The walk has already followed the chain to its
-    /// end, so the parse follows it no further; it reads the tile-part
-    /// headers, not the tile data, at the decode's cost. `None` only if the
-    /// parse finds no fault, which the walk finding no tile-part rules out.
+    /// before it counts a tile, so it refuses the file for the first fault
+    /// its parse finds (in any tile's tile-part headers, or the chain), or
+    /// for the missing tile, and never gets to the count. This is that
+    /// parse, reading the main header in place. The walk has already
+    /// followed the chain to its end, so the parse follows it no further;
+    /// it reads the tile-part headers, not the tile data, and keeps the
+    /// decode's tile records while it runs. `None` only if the parse finds
+    /// no fault, which the walk finding no tile-part rules out.
     fn walk_fault(&self) -> Option<Error> {
-        codestream::parse_tiles_with(self.bytes, self.parsed.clone(), true).err()
+        codestream::tile_parts_fault(self.bytes, self.parsed)
     }
 }
 
