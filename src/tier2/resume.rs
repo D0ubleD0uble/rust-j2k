@@ -57,9 +57,8 @@ pub(crate) const REPEAT_BOUNDS: u64 = 4;
 
 /// The packet walks of an incremental decode's tiles, by tile index.
 ///
-/// The walks kept hold no more than about twice what one decode of the
-/// same bytes holds at its peak: its image, and the packet walk of its
-/// largest tile, which it holds while it reads that tile. They also hold
+/// The walks kept hold no more than about twice the decode's image plus
+/// the largest tile walk so far under the current layer cap. They also hold
 /// no more than [`kept_room`] of the bytes fed, so that a short file that
 /// declares a large image holds little between decodes. A walk's size
 /// is every heap allocation it holds, capacity included (see
@@ -138,9 +137,9 @@ impl Walks {
     /// (see [`Walks::walk`]), so changing the options back and forth
     /// between decodes is held to the same bound as walking a tile again.
     /// The largest walk is reset only when every walk is let go. A change of
-    /// reduction or window keeps the walks, so the largest walk held stays
-    /// a bound on what they hold, and the room never falls below what one
-    /// decode holds.
+    /// reduction or window keeps `largest`: a window may let some walks go
+    /// to fit the room, but the room never falls below what one decode
+    /// holds.
     ///
     /// Under the same options on every decode, this changes nothing: the
     /// room only grows with the bytes fed.
