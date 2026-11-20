@@ -26,8 +26,9 @@
 //! there is checked as one step of the ladder, with no decode.
 //!
 //! A sample limit of `AtMost` is a ceiling the caller set, below the default
-//! for most inputs, so it is not on the ladder: a refusal by it gives no
-//! retry, and ends the ladder in one step. An image under it has the samples
+//! for most inputs, so it is not on the ladder: a refusal by it, or by a
+//! per-tile cap that grows with it, gives no retry, and ends the ladder in
+//! one step. An image under it has the samples
 //! the same options give with the default sample limit.
 
 use libfuzzer_sys::fuzz_target;
@@ -43,20 +44,50 @@ use rust_j2k::{
 const MAX_FACTOR: u64 = 4;
 const _: () = assert!(MAX_FACTOR <= rust_j2k::fuzz::CODE_BLOCK_CAP_FACTOR);
 
-/// The most steps the ladder may take on one limit: log2([`MAX_FACTOR`]) to
-/// double from the default to [`MAX_FACTOR`], one for the step past it that
-/// ends the ladder, and one of slack for a hint between doublings. The
-/// ladder stops past [`MAX_FACTOR`], so a hint that stepped up by one would
-/// not reach this bound; `tests/work_limit.rs` holds the doubling. This
-/// bound catches a ladder that does not end.
+/// The most steps the ladder may take on one option. `step` asserts that
+/// each step raises the option strictly, and the ladder returns once a step
+/// names a factor past [`MAX_FACTOR`] (`Unlimited` included). Factors are
+/// whole numbers from 1, so one option's steps name 2, 3, 4, then something
+/// past 4: at most `MAX_FACTOR` steps, whatever the hints are. The kinds that
+/// share the sample limit's option (see [`slot`]) share the count. This
+/// bound therefore catches a ladder that does not end, and not a hint that
+/// is too small: that the work hints at least double is held by
+/// `tests/work_limit.rs` and the `limit_hint` unit tests, and the tile caps'
+/// by `tests/tile_geometry_cap.rs`. The value is
+/// log2([`MAX_FACTOR`]) + 2, which is `MAX_FACTOR` while it is 4.
 const MAX_STEPS: u32 = MAX_FACTOR.ilog2() + 2;
 
-/// The three limits an option raises.
+/// The three options a refusal raises, one for each step count: the sample
+/// limit (see [`slot`]), the packet work limit and the code-block work limit.
 const KINDS: [LimitKind; 3] = [
     LimitKind::Samples,
     LimitKind::PacketWork,
     LimitKind::CodeBlockWork,
 ];
+
+/// Whether `kind` is refused by the sample limit, and raised through it: the
+/// samples, and the per-tile caps on code-blocks and precincts, which grow
+/// with it.
+fn is_sample_limit(kind: LimitKind) -> bool {
+    matches!(
+        kind,
+        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+    )
+}
+
+/// The index in [`KINDS`] of the option that limit `kind` raises: kinds that
+/// share an option share a step count.
+fn slot(kind: LimitKind) -> usize {
+    let key = if is_sample_limit(kind) {
+        LimitKind::Samples
+    } else {
+        kind
+    };
+    KINDS
+        .iter()
+        .position(|&k| k == key)
+        .expect("an adjustable limit has an option in KINDS")
+}
 
 /// A low starting limit from two bits: `Default` or a factor of 1 or 2.
 /// No factor sets a bound below the default; `AtMost` does, for the sample
@@ -94,9 +125,7 @@ fn rank(limit: &WorkLimit) -> u64 {
 /// The option of `options` that limit `kind` reads.
 fn field(options: &DecodeOptions, kind: LimitKind) -> &WorkLimit {
     match kind {
-        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
-            &options.sample_limit
-        }
+        _ if is_sample_limit(kind) => &options.sample_limit,
         LimitKind::PacketWork => &options.packet_work_limit,
         LimitKind::CodeBlockWork => &options.code_block_work_limit,
         other => unreachable!("an adjustable limit with no option: {other:?}"),
@@ -107,9 +136,7 @@ fn field(options: &DecodeOptions, kind: LimitKind) -> &WorkLimit {
 fn with_field(options: &DecodeOptions, kind: LimitKind, limit: WorkLimit) -> DecodeOptions {
     let options = options.clone();
     match kind {
-        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
-            options.with_sample_limit(limit)
-        }
+        _ if is_sample_limit(kind) => options.with_sample_limit(limit),
         LimitKind::PacketWork => options.with_packet_work_limit(limit),
         LimitKind::CodeBlockWork => options.with_code_block_work_limit(limit),
         other => unreachable!("an adjustable limit with no option: {other:?}"),
@@ -122,8 +149,10 @@ fn with_field(options: &DecodeOptions, kind: LimitKind, limit: WorkLimit) -> Dec
 fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, WorkLimit)> {
     let kind = limit.kind();
     // A refusal by a ceiling the caller set names nothing to retry with, so
-    // the ladder ends in this one step.
-    if kind == LimitKind::Samples && matches!(options.sample_limit, WorkLimit::AtMost(_)) {
+    // the ladder ends in this one step. The tile caps are refused by the same
+    // ceiling. Not reached for a tile cap at `CEILING`: the area check
+    // refuses first. Kept for a higher ceiling.
+    if is_sample_limit(kind) && matches!(options.sample_limit, WorkLimit::AtMost(_)) {
         assert!(
             limit.retry_with().is_none() && options.with_retry(limit).is_none(),
             "a refusal under {:?} gives a retry: {limit:?}",
@@ -213,9 +242,11 @@ fuzz_target!(|input: &[u8]| {
         // it is the image of the same options with the default sample limit.
         // In bounds: the two decodes at up to 2 each.
         if let Err(Error::Limit(limit)) = &result {
+            // A tile cap's refusal is not reached at `CEILING`: the area
+            // check refuses first. Kept for a higher ceiling.
             let next = step(&options, limit);
             assert!(
-                limit.kind() != LimitKind::Samples || next.is_none(),
+                !is_sample_limit(limit.kind()) || next.is_none(),
                 "a ceiling's refusal did not end the ladder"
             );
         }
@@ -258,8 +289,7 @@ fuzz_target!(|input: &[u8]| {
             break;
         };
         steps += 1;
-        let slot = KINDS.iter().position(|&kind| kind == limit.kind());
-        let slot = slot.expect("an adjustable limit is one of KINDS");
+        let slot = slot(limit.kind());
         by_kind[slot] += 1;
         assert!(
             by_kind[slot] <= MAX_STEPS,

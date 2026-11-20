@@ -67,3 +67,8 @@ serde_json = "1"
 [[bench]]
 name    = "decode"
 harness = false
+
+# Debug tests were slow (#418). Optimize them a little; the test profile
+# inherits from `dev`, so `debug-assertions` and `overflow-checks` stay on.
+[profile.test]
+opt-level = 1
