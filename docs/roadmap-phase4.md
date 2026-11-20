@@ -6,7 +6,7 @@
 > that OpenJPEG 2.5.0 decodes matches it bit for bit, apart from the
 > documented 9/7 gap ([the `2/K`
 > entry](openjpeg-departures.md#the-inverse-97s-high-pass-scale-2k)) of at
-> most 1. Phase 4 ships as the 0.5.0 release. The steps below are the build
+> most 1. Phase 4 shipped as the 0.5.0 release. The steps below are the build
 > order followed, and the background sections are the plan as written before
 > the work began.
 
@@ -229,7 +229,7 @@ Settled while planning, on 2026-11-14. Below, *HT codestream* means one of the
    a committed script, and tested against OpenJPEG's behavior through the
    end-to-end fixtures. The BSD-licensed tables in OpenJPEG and OpenJPH are
    not copied, so no third-party notice ships in the crate.
-7. **One release.** The phase ships as 0.5.0 when the gate passes, with no
+7. **One release.** The phase shipped as 0.5.0 once the gate passed, with no
    interim HT release. Codestreams that were `Unsupported` now decode, which
    is a behavior change. The HTJ2K steps add two enum variants for JPH's
    application-defined channels (P4.7), `ChannelType::ApplicationDefined` and
