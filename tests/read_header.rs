@@ -12,8 +12,8 @@
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, decode_with, read_header,
-    read_header_with,
+    ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, LimitKind, Ratio, decode_with,
+    read_header, read_header_with,
 };
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -52,7 +52,8 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// the decode's block decoder reads. `incremental/segsym_tiles_flipped.j2k`
 /// and `incremental/segsym_wide_flipped.j2k` hold a code-block whose
 /// segmentation symbol is wrong, which only the decode's block decoder
-/// reads.
+/// reads. `partial/window_rows.j2k` declares 65535 tiles, carries a tile-part for one, and ends
+/// with no `EOC`, which only the decode reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
@@ -103,6 +104,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     (
         "partial/tp_r.j2k",
         "bytes left after the last packet (a phantom packet)",
+    ),
+    (
+        "partial/window_rows.j2k",
+        "no tile-part for 65534 tiles, and no EOC after the only one",
     ),
     (
         "poc_coverage/poc_comp_missing.j2k",
@@ -190,6 +195,14 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "past the work bound",
     ),
 ];
+
+/// The one known divergence between the errors of `read_header` and `decode`
+/// on a refused file: `partial/header_refused.j2k` has a tile over the
+/// precinct cap and no tile-part for it, and with `strict` on `read_header`
+/// finds the limit (`TilePrecincts`) while `decode` finds the missing
+/// tile-part (`Codestream`); see `docs/resource-bounds.md`. The test pins
+/// both, so a change to either error fails here and this entry is updated.
+const HEADER_REFUSED: &str = "partial/header_refused.j2k";
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -300,6 +313,9 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                         "{name} at reduction {reduction}"
                     );
                     compared[reduction as usize] += 1;
+                }
+                (Err(Error::Limit(h)), Err(Error::Codestream(_))) if name == HEADER_REFUSED => {
+                    assert_eq!(h.kind(), LimitKind::TilePrecincts, "{name}");
                 }
                 (Err(h), Err(d)) => {
                     assert_eq!(format!("{h:?}"), format!("{d:?}"), "{name}: the same error")
