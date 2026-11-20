@@ -80,24 +80,40 @@ const _: () = {
 #[test]
 fn public_types_are_send_sync_and_unwind_safe() {}
 
-// Every public type re-exported from `lib.rs` must be listed in `holds`, so a
-// new type cannot skip the check. The functions and the `Result` alias are
-// not types with fields.
+// Every public type in `lib.rs`, re-exported or defined there, must be listed
+// in `holds`, so a new type cannot skip the check. The functions and the
+// `Result` alias are not types with fields.
 #[test]
 fn every_public_type_is_listed() {
-    let lib = include_str!("../src/lib.rs");
     let this = include_str!("auto_traits.rs");
-    let mut missing = Vec::new();
+    // Drop comment lines, so a doc comment above a `pub use` cannot hide it.
+    let lib: String = include_str!("../src/lib.rs")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    let mut names: Vec<&str> = Vec::new();
     for statement in lib
         .split(';')
         .filter(|s| s.trim_start().starts_with("pub use "))
     {
-        let names = statement.split(|c: char| !c.is_alphanumeric() && c != '_');
-        for name in names.filter(|n| n.starts_with(|c: char| c.is_ascii_uppercase())) {
-            if name != "Result" && !this.contains(&format!("holds::<{name}>()")) {
-                missing.push(name.to_string());
+        names.extend(statement.split(|c: char| !c.is_alphanumeric() && c != '_'));
+    }
+    // Types defined in `lib.rs` itself.
+    for line in lib.lines() {
+        for kind in ["pub struct ", "pub enum ", "pub type "] {
+            if let Some(rest) = line.strip_prefix(kind) {
+                names.extend(
+                    rest.split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .take(1),
+                );
             }
         }
     }
+    let missing: Vec<&str> = names
+        .into_iter()
+        .filter(|n| n.starts_with(|c: char| c.is_ascii_uppercase()))
+        .filter(|n| *n != "Result" && !this.contains(&format!("holds::<{n}>()")))
+        .collect();
     assert!(missing.is_empty(), "add to `holds`: {missing:?}");
 }
