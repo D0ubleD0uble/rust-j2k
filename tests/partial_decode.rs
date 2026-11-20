@@ -471,6 +471,38 @@ fn a_run_of_missing_tiles_is_one_entry() {
     assert!(samples(&image)[..32].iter().any(|&s| s != 0));
 }
 
+/// The tiles missing on either side of the one present are reported as two
+/// runs, in tile order, the one before the present tile first.
+#[test]
+fn the_runs_either_side_of_a_present_tile_are_both_reported() {
+    let whole = read("partial/tiles.j2k");
+    let first = whole.windows(2).position(|w| w == [0xFF, 0x90]).unwrap();
+    // The tile-parts in codestream order, each as its bytes.
+    let mut parts = Vec::new();
+    let mut sot = first;
+    while whole[sot..sot + 2] == [0xFF, 0x90] {
+        let psot = u32::from_be_bytes(whole[sot + 6..sot + 10].try_into().unwrap()) as usize;
+        parts.push(&whole[sot..sot + psot]);
+        sot += psot;
+    }
+    assert_eq!(parts.len(), 4, "one tile-part a tile");
+    // The main header, then only tile 2's tile-part, then EOC.
+    let mut bytes = whole[..first].to_vec();
+    bytes.extend_from_slice(parts[2]);
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    let image = decode_ok(&bytes, &lenient(0), "tile 2 alone");
+    let entries: Vec<_> = image
+        .report
+        .entries
+        .iter()
+        .map(|e| match e {
+            ReportEntry::MissingTiles { tiles, .. } => Some(tiles.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(entries, [Some(0..2), Some(3..4)], "{:?}", image.report);
+}
+
 /// A main header: an image of `width` x `height` in tiles of `tile_width` x
 /// `tile_height`, `components` 8-bit unsigned components, `levels`
 /// decomposition levels, one layer, LRCP, the 5/3 wavelet, code-blocks of
@@ -681,6 +713,28 @@ fn missing_tiles_are_charged_against_the_work_bound() {
     match decode_with(&bytes, &lenient(0)) {
         Err(Error::Limit(message)) => {
             assert!(message.message().contains("missing tiles"), "{message}")
+        }
+        other => panic!("expected Limit: {other:?}"),
+    }
+}
+
+/// The hint for the charge for missing tiles doubles the factor the bound ran
+/// under, like the other work hints. 65535 one-sample tiles of 1280
+/// components cost 83.9 million steps, which needs `Raised(5)` and is
+/// refused under `Raised(4)`; the hint names `Raised(8)`.
+#[test]
+fn the_missing_tiles_hint_doubles_the_factor() {
+    let mut bytes = main_header((65535, 1), (1, 1), 1280, 0, 0);
+    bytes.extend_from_slice(&[0xFF, 0x90]);
+    let options = lenient(0).with_packet_work_limit(rust_j2k::WorkLimit::Raised(4));
+    match decode_with(&bytes, &options) {
+        Err(Error::Limit(limit)) => {
+            assert_eq!(
+                limit.retry_with(),
+                Some(rust_j2k::WorkLimit::Raised(8)),
+                "{limit}"
+            );
+            assert!(!limit.message().contains("at least"), "{limit}");
         }
         other => panic!("expected Limit: {other:?}"),
     }

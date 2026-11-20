@@ -8,7 +8,12 @@ can repeat it. Kakadu is left out because it is commercial.
 Measured release: the rust-j2k 0.5.0 release candidate, commit `1f831a2`
 (`Cargo.toml` still reads 0.4.0 there), and hayro-jpeg2000 0.5.0. This page
 and the tools were added on top of that commit and do not change the
-decoder.
+decoder. Two tables were measured again on commit `8284451`: the HTJ2K
+table, for every decoder, and the incremental table. The other tables are
+from `1f831a2`. Notes that quote the newer tables say so. The decoder changed
+between the two commits: #448 made HTJ2K decoding faster, 1.1x to 2.3x in
+process on the files over 5 ms, though the two runs were at different loads.
+#452 and #454 changed the incremental decoder's limits.
 
 ## Results
 
@@ -45,18 +50,25 @@ files only, and hayro-jpeg2000 has no region decode.
 
 ### HTJ2K files
 
+This table was measured on commit `8284451` at a one-minute load average of
+0.44 to 0.57, with 7 runs per cell and the method below. Median and minimum
+agree within 2% on the files over 20 ms and within 7% on `ds1_ht_02_b11`.
+The two MIXED in-process cells were measured again at a load of 1.85 and
+are medians of 7. Two more runs of the same command gave the same 1.5 and
+1.8 ms, the third at a load of 3.2.
+
 | File | OpenJPEG 1 thread | OpenJPEG all cores | Grok 1 thread | Grok all cores | OpenJPH | rust-j2k CLI | rust-j2k in process |
 | ---- | ----------------- | ------------------ | ------------- | -------------- | ------- | ------------ | ------------------- |
-| `ds0_ht_01_b11` | 1.6 / 5.6 | 0.5 / 5.9 | 1.3 / 11.0 | 1.0 / 11.5 | 0.0 / 5.5 | 1.8 / 2.9 | 1.0 |
-| `hifi_ht1_02` | 3.2 / 5.9 | 2.4 / 5.8 | 1.0 / 12.1 | 3.9 / 15.9 | 1.0 / 5.5 | 4.9 / 3.2 | 2.8 |
-| `ds1_ht_05_b11` | 23.8 / 11.3 | 92.3 / 11.3 | 88.3 / 47.8 | 46.6 / 88.6 | cannot decode | 30.2 / 6.4 | 27.5 |
-| `ds1_ht_04_b9` | 32.6 / 9.8 | 50.5 / 9.7 | 11.0 / 22.7 | 21.0 / 85.7 | wrong image (tile-part `QCD`) | 16.5 / 6.9 | 11.5 |
-| `ds0_hm_15_b8` (MIXED) | cannot decode | cannot decode | 1.3 / 11.6 | 0.4 / 11.9 | cannot decode | 2.3 / 3.0 | 2.0 |
-| `ds0_hm_06_b11` (MIXED) | cannot decode | cannot decode | 2.0 / 11.9 | 2.8 / 17.8 | cannot decode | 3.5 / 3.7 | 2.9 |
-| `ds1_ht_02_b11` | cannot decode | cannot decode | 7.2 / 13.7 | 4.5 / 14.6 | cannot decode | 28.9 / 8.1 | 26.2 |
-| `ds0_ht_05_b11` | cannot decode | cannot decode | 23.2 / 18.6 | 6.8 / 19.8 | cannot decode | 110.3 / 18.6 | 104.4 |
-| `ds0_ht_07_b16` | cannot decode | cannot decode | 123.5 / 65.3 | 47.8 / 72.1 | cannot decode | 517.3 / 59.6 | 466.3 |
-| generated 2048 x 2048 gray | 42.6 / 22.2 | 22.1 / 23.8 | 18.5 / 20.0 | 9.5 / 22.3 | 13.4 / 7.0 | 83.1 / 27.8 | 74.9 |
+| `ds0_ht_01_b11` | 0.5 / 5.7 | 0.4 / 5.8 | 0.0 / 10.8 | 0.3 / 11.2 | 0.0 / 5.5 | 0.5 / 3.0 | 0.4 |
+| `hifi_ht1_02` | 3.4 / 5.8 | 4.1 / 5.8 | 1.9 / 11.9 | 3.0 / 15.4 | 1.0 / 5.5 | 2.1 / 3.2 | 2.9 |
+| `ds1_ht_05_b11` | 23.1 / 11.3 | 88.0 / 11.4 | 84.8 / 47.7 | 41.6 / 88.7 | cannot decode | 27.0 / 6.4 | 25.5 |
+| `ds1_ht_04_b9` | 30.6 / 9.8 | 48.5 / 9.7 | 14.3 / 22.5 | 22.2 / 85.2 | wrong image (tile-part `QCD`) | 10.8 / 6.9 | 7.8 |
+| `ds0_hm_15_b8` (MIXED) | cannot decode | cannot decode | 2.3 / 11.3 | 0.3 / 11.5 | cannot decode | 2.1 / 3.0 | 1.5 |
+| `ds0_hm_06_b11` (MIXED) | cannot decode | cannot decode | 4.0 / 11.7 | 4.6 / 17.6 | cannot decode | 3.9 / 3.7 | 1.8 |
+| `ds1_ht_02_b11` | cannot decode | cannot decode | 7.2 / 13.5 | 4.2 / 14.2 | cannot decode | 16.8 / 8.0 | 13.2 |
+| `ds0_ht_05_b11` | cannot decode | cannot decode | 21.1 / 18.5 | 10.0 / 19.6 | cannot decode | 57.6 / 18.7 | 49.7 |
+| `ds0_ht_07_b16` | cannot decode | cannot decode | 117.3 / 65.2 | 48.6 / 71.7 | cannot decode | 245.7 / 59.7 | 203.6 |
+| generated 2048 x 2048 gray | 40.3 / 22.4 | 20.1 / 23.8 | 17.2 / 20.0 | 9.2 / 22.1 | 13.2 / 7.0 | 50.8 / 27.8 | 45.0 |
 
 hayro-jpeg2000 does not read HTJ2K: it stops on the first code-block style it
 does not know, so it has no column here.
@@ -68,49 +80,53 @@ and `finish` at the end, against one `decode_with` of the same bytes. No
 other decoder here has an incremental API, so there is nothing to compare it
 with. Each row first checks that `finish` after the pieces gives the same
 samples as one decode (it does, on both files). Times are medians of 9 runs,
-taken at a one-minute load average of 8.8 to 9.6 (the machine was busy, so
-absolute times are higher than in the other tables).
+measured on commit `8284451` at a one-minute load average of 0.51 to 0.66.
+Each round times one decode and then one fed decode; the last column is the
+range of that pair's ratio over the 9 rounds (`run.py incremental --runs 9`
+prints it).
 
-| File | One decode, ms | 64 KB pieces, ms | Ratio |
-| ---- | -------------- | ---------------- | ----- |
-| GRIB2-shaped | 103.9 | 266.4 | 2.56 |
-| `ds0_ht_05_b11` | 107.2 | 315.5 | 2.94 |
+| File | One decode, ms | 64 KB pieces, ms | Ratio | Ratio over the 9 rounds |
+| ---- | -------------- | ---------------- | ----- | ----------------------- |
+| GRIB2-shaped | 98.2 | 245.2 | 2.50 | 2.48 to 2.59 |
+| `ds0_ht_05_b11` | 50.1 | 155.4 | 3.10 | 2.87 to 3.19 |
+
+The decoder tries to decode again only when the bytes fed have doubled since
+the last try (see [`incremental-decoding.md`](incremental-decoding.md)), so
+the extra time comes with the tries, not with the number of pieces.
 
 ### Files more than 2x slower than OpenJPEG
 
 None, on the medians. On the files OpenJPEG decodes, the single-thread
-command-line time of rust-j2k is between 0.5x and 1.5x of OpenJPEG's, with
-two exceptions. `hifi_ht1_02` is 1.53x, but it decodes in a few milliseconds,
-so that is within noise (see Small files below). The generated HTJ2K file is
-1.95x (83 ms against 43 ms; in process, 75 ms), from 7 runs. A review
-re-measured it at 1.65x to 1.95x on 5-run medians at a load of 2.6 to 3.7, and
-at 1.62x to 2.11x on single rounds of a 9-round probe that varied the decoder
-order. Those re-measurements are not from this page's method. So 2x is within
-the noise for that file. The HTJ2K speed gap
-is tracked in #412. The tiled 2048 file whole is 1.48x and `p1_03` is 1.29x. On
-the files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
+command-line time of rust-j2k is between 0.35x and 1.5x of OpenJPEG's. The
+slowest are the tiled 2048 file whole (1.48x), `p1_03` (1.29x) and, of the
+HTJ2K files, the generated one (1.26x: 51 ms against 40 ms; in process,
+45 ms). The HTJ2K ratios are from commit `8284451` and the others from
+`1f831a2`. The HTJ2K files that decode in a few milliseconds have ratios
+within the noise (see Small files below). On the files OpenJPEG cannot decode
+there is no OpenJPEG time to compare with.
 
 ### Notes
 
 - **Against OpenJPEG.** On the Part 1 files rust-j2k is within 10% of
   OpenJPEG on one thread for the large lossless files (`p0_07`, `p0_08`,
   `file7.jp2`, GRIB2-shaped), 24% to 48% slower on `p0_05`, `p1_03` and the
-  tiled file. On the HTJ2K files it decodes `ds1_ht_04_b9` in half the time
-  (16.5 ms against 32.6 ms) and `ds1_ht_05_b11` in 1.27x the time. Both are
+  tiled file. On the HTJ2K files (measured at `8284451`) it decodes
+  `ds1_ht_04_b9` in a third of the time (10.8 ms against 30.6 ms) and
+  `ds1_ht_05_b11` in 1.17x the time. Both are
   single-threaded in this comparison; OpenJPEG with all cores is 1.2x to
   5.5x faster on the larger Part 1 files and slower on the multi-tile HTJ2K
   files (`ds1_ht_05_b11`, `ds1_ht_04_b9`), where its threads cost more than
   they save.
 - **Against Grok.** Grok on one thread is 1.1x to 1.2x as fast as rust-j2k on
-  the Part 1 files. On four of the larger HTJ2K files it is much faster: 4.0x on
-  `ds1_ht_02_b11`, 4.8x on `ds0_ht_05_b11`, 4.2x on `ds0_ht_07_b16` and 4.5x
-  on the generated file. On `ds1_ht_04_b9` it is 1.5x faster, and on
-  `ds1_ht_05_b11` it is 2.9x slower. This decoder's HT path is the slow part
-  where it loses.
-  The HTJ2K gap is tracked in #412.
-- **Against OpenJPH.** On the generated file OpenJPH is 6.2x faster than
-  rust-j2k (13 ms against 83 ms), and uses a quarter of the memory. It
-  decodes only two conformance files, both too small to time (below).
+  the Part 1 files. On four of the larger HTJ2K files (measured at `8284451`)
+  it is faster: 2.3x on `ds1_ht_02_b11`, 2.7x on `ds0_ht_05_b11`, 2.1x on
+  `ds0_ht_07_b16` and 3.0x on the generated file. On `ds1_ht_04_b9` rust-j2k
+  is 1.3x faster, and on `ds1_ht_05_b11` it is 3.1x faster. This decoder's HT
+  path is the slow part where it loses.
+- **Against OpenJPH.** On the generated file (measured at `8284451`)
+  OpenJPH is 3.8x faster than rust-j2k (13 ms against 51 ms), and uses a
+  quarter of the memory. It decodes only two conformance files, both too
+  small to time (below).
 - **Against hayro-jpeg2000.** On the Part 1 files hayro-jpeg2000 is within
   about 25% of rust-j2k either way, except on the tiled file where it is
   1.39x faster: faster on `p0_07`, `p0_08`, `p0_05`, the GRIB2-shaped file
@@ -127,21 +143,21 @@ the files OpenJPEG cannot decode there is no OpenJPEG time to compare with.
   against 58.7) and 27% lower on `p0_08` (23.5 against 32.2), and OpenJPEG
   is 21% lower on `p1_03`. A window or one tile takes about half of
   OpenJPEG's peak and a quarter to a third of Grok's. On the HTJ2K
-  conformance files rust-j2k's peak is the lowest or level with Grok's:
-  level on `ds0_ht_05_b11` (18.6 MiB each), 1.1x below on `ds0_ht_07_b16`,
-  and 1.7x to 14x below on the rest. On the generated HTJ2K file it is the
-  highest: 27.8 MiB against 22.2 for OpenJPEG, 20.0 for Grok and 7.0 for
-  OpenJPH.
+  conformance files (measured at `8284451`) rust-j2k's peak is the lowest or
+  within 2% of Grok's: 18.7 MiB against 18.5 on `ds0_ht_05_b11`, 1.1x
+  below on `ds0_ht_07_b16`, and 1.7x to 14x below on the rest. On the
+  generated HTJ2K file it is the highest: 27.8 MiB against 22.4 for
+  OpenJPEG, 20.0 for Grok and 7.0 for OpenJPH.
 - **Small files.** For files that decode in a few milliseconds the
   command-line time is mostly process start-up, and subtracting the start-up
   run leaves noise: differences under about 2 ms there (`regular_latlon`,
   `ds0_ht_01_b11`, `hifi_ht1_02`, `ds0_hm_*`, the windows and tile 27) mean
   nothing, and a net of 0.0 means the decode was lost in the start-up run.
-  The in-process column is the reliable one for them.
-- **Load.** The method asks for a load under 2. The timing ran at a
-  one-minute load of 1.66 to 2.15, and the incremental table at 8.8 to 9.6, so
-  both are slightly or well above that. Median and minimum agree within a
-  few percent on the files over 20 ms, which shows the run was quiet.
+  The in-process column is the more reliable one for them.
+- **Load.** The Part 1 timing ran at a one-minute load of 1.66 to 2.15. The
+  HTJ2K table and the incremental table were measured again at 0.44 to 0.66,
+  and the two MIXED in-process cells at 1.85. Median and minimum agree within
+  a few percent on the files over 20 ms, which shows the runs were quiet.
 
 ## Output check
 
@@ -286,14 +302,14 @@ CPU: Intel Core i7-10700KF at 3.8 GHz, 8 cores and 16 threads. The CPU
 frequency governor was `powersave` (the `intel_pstate` driver); it was not
 changed, and it affects absolute times. The one-minute load average was 1.66
 when the timing started and 2.15 when it ended. The machine is shared, so
-other jobs ran. The incremental table was run afterward, at a load of 8.8 to
-9.6.
+other jobs ran. The HTJ2K and incremental tables were measured again later, on
+the same machine, at a load of 0.44 to 0.66 (see their notes).
 
 ## Decoders and builds
 
 | Decoder | Version | Source | Build |
 | ------- | ------- | ------ | ----- |
-| rust-j2k | 0.5.0 release candidate, commit `1f831a2` (`Cargo.toml` reads 0.4.0) | this repository | `cargo build --release`, rustc 1.100.0, default release profile |
+| rust-j2k | 0.5.0 release candidate, commit `1f831a2` (`Cargo.toml` reads 0.4.0); the HTJ2K and incremental tables, commit `8284451` (`Cargo.toml` reads 0.5.0) | this repository | `cargo build --release`, rustc 1.100.0 for both commits, default release profile |
 | OpenJPEG | 2.5.0 (`opj_decompress`) | the Ubuntu 24.04 package, `2.5.0-2ubuntu0.5` | as the distribution built it |
 | Grok | 20.4.25, commit `46ab34de` | tag `v20.4.25` of GrokImageCompression/grok, built from source | CMake, `Release` (`-O3 -DNDEBUG`), g++ 13.3, shared libraries, no sudo; LittleCMS bundled, the other libraries from the system |
 | OpenJPH | 0.33.0, commit `345a8bcd` | tag `0.33.0` of aous72/OpenJPH, built from source | CMake, `Release` (`-O3 -DNDEBUG`), g++ 13.3 |

@@ -12,26 +12,61 @@ does again on each refine.
   `strict` off on the bytes fed so far (`bytes_decoded()` of them), report
   included. The report says which quality layers and resolutions are
   complete and which tiles are missing.
-- `refine` returns `Ok(None)` where `decode_with` gives `Error::Incomplete`
-  (the main header is cut short), since more bytes can complete the header.
-  It also returns `Ok(None)` when the packet or code-block work bound, or the
-  charge for missing tiles, refuses the decode: those bounds grow with the
-  bytes and the missing tiles shrink, so a work limit is reported only by
-  `finish`. Any other error, including a limit that does not depend on the
-  bytes (the sample limit, too many precincts, code-blocks or `POC` volumes,
-  too many bit-planes), is the one `decode_with` gives on those bytes. Once
-  `refine` returns an error, every later `refine` returns the same error
-  without decoding.
+- `refine` returns `Ok(Refined::Image(image))` or, when it has no new image,
+  `Ok(Refined::Waiting(why))`. `Refined::image()` gives the image or `None`
+  for a caller who does not need the reason. `Waiting` says why:
+
+  | `Waiting` | Why the refine has no image |
+  | --- | --- |
+  | `MoreBytes { until, .. }` | It did not decode: the bytes fed have not doubled since the last try, or none are fed. `until` is a total of bytes fed, not the bytes still to come: a refine decodes once that many are fed, if not before. |
+  | `HeaderIncomplete { .. }` | `decode_with` gives `Error::Incomplete`: the main header is cut short. |
+  | `SampleLimit { limit, .. }` | The default or a `Raised` sample limit refused the image, or a tile of more code-blocks or precincts than it allows a tile, with a `retry_with`. A refusal with none (under `AtMost`, or past the address space) is an error, not a wait. |
+  | `WorkLimit { limit, .. }` | The bytes fed cost more than the packet or code-block work bound allows; a decode of them on its own is refused too, with the same detail. |
+  | `BoundSpent { limit, .. }` | The earlier refines spent the code-block bound the refines share, so the refine stopped decoding at a tile, the cut, whose work fits the whole bound. Decode the bytes fed now or start a new decoder. That decode can be refused for work or fail: where the whole bound refuses a later tile, the detail's `refused_at` gives it and its work, and that decode is refused there or fails first in a tile the refine did not decode. |
+  | `MissingTiles { limit, .. }` | The charge for missing tiles passed the packet bound. |
+  | `RepeatLimit { .. }` | The bound on the walks of tiles not kept is spent (see [Work and memory](#work-and-memory)). |
+
+  More bytes can complete the header, the bounds grow with the bytes, and
+  the missing tiles shrink, so each of these is a wait, and such a limit is
+  reported as an error only by `finish`. The `LimitDetail` a wait carries is
+  the refusal's, with its `retry_with` hint. For the sample limit, the
+  charge for missing tiles and the packet bound it is the refusal
+  `decode_with` gives on the bytes fed, and so it is for a `WorkLimit` of
+  the code-block bound, which never stands in for another error.
+  `BoundSpent` is a refine that passed what the earlier refines left of the
+  code-block bound at a tile whose work fits the whole bound; its
+  `retry_with` is `None`. A decode of the bytes fed can still be refused for
+  work or give another error (see [Work and memory](#work-and-memory)).
+  `RepeatLimit` carries no limit: the bound it names is not one
+  `DecodeOptions` sets on its own, though a higher `packet_work_limit`
+  raises it. The sample limit of a refine is that of a one-shot decode of
+  its bytes: 2^29 samples, or 8 samples per byte when that is more. A sample
+  limit of `WorkLimit::AtMost(n)` does not grow with the bytes, so a refusal
+  under it is not a wait: `refine` returns it as an error, `header` returns
+  it too, and it sticks however many bytes come after, until a change of
+  options. A server that streams files in can refuse one as soon as its main
+  header has come in. Any other error, including a limit that does not
+  depend on the bytes (an image or a tile too large for the target to
+  address, too many `POC` volumes, too many bit-planes), is the one
+  `decode_with` gives on those bytes. A refusal by a bound only the refines
+  have, `BoundSpent` or `RepeatLimit`, can stand in for an error that block
+  decoding, the wavelet or assembly would meet in a tile the refine did not
+  decode: the refine waits where `decode_with` fails, and `finish` reports
+  that error (see [Work and memory](#work-and-memory)). Once `refine` returns
+  an error,
+  every later `refine` returns the same error without decoding, until a
+  change of options (see [Changing the options](#changing-the-options)).
 - A refine tries to decode when the bytes fed are at least twice those of
   the last refine that decoded or tried to. Before any try, the first refine
-  called with at least one byte fed tries; with none fed, `refine` returns
-  `Ok(None)` and does not count as a try. A refine that tries gives an image
-  when the one-shot decode of the bytes fed gives one, except when the
-  earlier refines have spent the code-block bound (see below). A try that
-  gave no image still counts: after a main header cut short, or a refusal
-  by a work bound or the charge for missing tiles, the next refine waits for
-  twice the bytes of that try, even if the one-shot decode of fewer bytes
-  gives an image by then
+  called with at least one byte fed tries; with none fed, `refine` waits
+  (`MoreBytes { until: 1, .. }`) and does not count as a try. A refine that
+  tries gives an image when the one-shot decode of the bytes fed gives
+  one, except when the earlier refines have spent the code-block bound
+  (`BoundSpent`), or the bound on the walks of tiles not kept (see
+  below). A try that gave no image still counts: after a main header cut
+  short, or a refusal by a work bound or the charge for missing tiles, the
+  next refine waits for twice the bytes of that try, even if the one-shot
+  decode of fewer bytes gives an image by then
   (`a_refused_refine_puts_off_the_next_until_the_bytes_double`). Doubling
   from the last try is what bounds the work of all the refines together.
 - `finish` is `decode_with` on all the bytes under the decoder's options,
@@ -125,6 +160,81 @@ A tile whose later tile-part adds `POC` volumes, or packed headers where it
 had none, has another order of packets or reads them from elsewhere, so its
 walk starts again.
 
+## Changing the options
+
+`set_resolution_reduction`, `set_max_quality_layers` and `set_region`
+change the options of the later refines and of `finish`. Each image a
+refine returns after a change is the one-shot strict-off decode of its
+bytes under the new options. `header` reads the header of the bytes fed
+under the current options (`Ok(None)` until the main header is whole), and
+`bytes` borrows the bytes fed.
+
+- A walk reads its tile's packets under one layer cap, which decides the
+  coding passes it keeps. So when the cap has changed since the walks were
+  built, the next refine that decodes lets every walk go before it walks a
+  tile, and builds each again. A change back before that refine, or a set
+  to the value the decoder has, keeps them.
+- The walks do not depend on the reduction. A walk builds its tile's
+  geometry at full resolution whatever the reduction, and the reduction
+  decides only the code-blocks of the resolutions it drops, which each
+  decode charges to the packet bound. So a change of the reduction alone
+  keeps every walk, and each walk charges the code-blocks the new
+  reduction drops, counted from the geometry it holds. A walk whose
+  geometry failed holds none to count from, and is let go. A larger
+  reduction has a smaller image, so the walks kept may no longer fit in
+  the room (see [Work and memory](#work-and-memory)). Then the next refine
+  lets go of the walks it reads that no longer fit, and walks those tiles
+  from the start until there is room.
+- The walks do not depend on the region. A tile the new region reads goes
+  on from where its walk stopped, and the walks of the tiles it does not
+  read stay for a later change back. A smaller region has a smaller image,
+  so the walks kept may be past the room of its decode (see
+  [Work and memory](#work-and-memory)): then the refine lets go of the
+  walks of the tiles it does not read, from the first, until the rest fit.
+  Of the committed fixtures, whose tile walks are large beside their small
+  images, a change to one tile lets go of some walks on most multi-tile
+  files.
+- A walk let go for any of these reasons is built again on the next walk
+  of its tile, and charged as a walk of a tile not kept. So changing the
+  options back and forth spends the same bound as walking a tile again, and
+  cannot buy free walks (`options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again`).
+  The visits spent and the code-block work spent carry across a change.
+- A change does not reset the cadence: the next refine still waits for
+  twice the bytes of the last try. Resetting it would give a caller who
+  changes the options on every call a decode on every call, outside the
+  bounds the refines share. A caller who wants an image straight after a
+  change asks for that decode and pays for it:
+  `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
+  `options()` returns the options as the caller set them, `strict`
+  included. The decode runs under the bounds of those options. It spends
+  nothing from the decoder's bounds and does not change when the next
+  refine decodes. A decode of the bytes fed with these options is not held
+  to the refine cadence or to the bounds the refines share, so it gives
+  what `decode_with` gives on those bytes. Where a refine waits on
+  `MoreBytes`, `BoundSpent` or `RepeatLimit`, that can be an image. Where
+  it waits on `HeaderIncomplete`, `SampleLimit`, `WorkLimit` or
+  `MissingTiles`, it is the same refusal, as an error. `finish` decodes
+  under the caller's `strict`, so on a stream that is stalled or cut short
+  it returns an error, not an image. A caller who has fed the whole file gets
+  the image under the new options from `finish`.
+- A change clears an error an earlier refine returned, since the new
+  options may not give it (a reduction past the file's levels). A set to
+  the value the decoder has keeps it.
+
+`src/incremental/tests.rs` changes the options before every refine of
+files with several tiles and tile-parts, `TLM` and `PLT`, a `POC` volume in
+a later tile-part and a MIXED HT file, and checks each refine against the
+one-shot decode
+(`options_changed_between_refines_refine_to_the_one_shot_decode_of_their_prefix`).
+It counts the walk visits to check that a change of region or of reduction
+reads no packet twice (`a_change_of_reduction_keeps_the_walks`), and that a
+change of layer cap is charged what a one-shot walk of the tiles spends.
+`tests/incremental.rs` changes the reduction between refines of one-tile
+files and checks that no walk is charged as read again, and that at the
+packet bound a refine after a change is refused where the one-shot decode
+is, and gives the image where it does
+(`a_change_of_reduction_at_the_packet_bound_is_refused_as_the_one_shot_decode`).
+
 ## Work and memory
 
 Each refine is held to the packet bound of a decode of its bytes on its own.
@@ -133,14 +243,14 @@ The code-block bound holds across all the refines together.
 Each refine is charged the packet visits the walk of a decode of its bytes on
 its own spends: the geometry of the resolutions a reduction drops, the
 progression's loops, the visits each packet read spends, the end of the
-data, a visit for each packet after it, and the skips past a `POC` bitmap. The
-charges come from the counts the kept walks hold, and a refine is refused,
-as `Ok(None)`, where that decode is refused for work, and fails where it
-fails. So the packet bound is the one-shot bound of the bytes fed, not cut
-by what earlier refines spent. A `POC` sequence's volumes emit each
-precinct's layers from the first up, so a kept walk tells a packet emitted
-again by the precinct's count of layers read; its charges are those of
-the bitmap or counts that decode holds. The work the kept
+data, a visit for each packet after it, and the skips past a `POC`
+bitmap. The charges come from the counts the kept walks hold, and a refine
+is refused, as `Waiting::WorkLimit`, where that decode is refused for work,
+and fails where it fails. So the packet bound is the one-shot bound of
+the bytes fed, not cut by what earlier refines spent. A `POC` sequence's
+volumes emit each precinct's layers from the first up, so a kept walk
+tells a packet emitted again by the precinct's count of layers read; its
+charges are those of the bitmap or counts that decode holds. The work the kept
 walks do is the visits they spend for the first time: a byte-at-a-time
 feeder that refines after every byte spends, over all its refines, the
 visits of one walk of the whole file
@@ -157,10 +267,62 @@ decode takes 6.9 s (release build, 2026-11-16, PR #409's shapes).
 The code-block work is done again by each refine that decodes. A ledger
 keeps the code-block work every refine has spent, and each refine's
 code-block bound is what is left of the bound one decode of its bytes has
-(raised as the options say). A refine that bound refuses returns `Ok(None)`
-and waits for more bytes, which raise the bound. `finish` is one more
+(raised as the options say), so all the refines together spend at most that
+one bound. Where the tile that rest refuses passes the whole bound too, the
+refine returns `Waiting::WorkLimit` with the refusal a decode of its bytes
+on its own gives: it decoded every tile before that one, as that decode
+does. Otherwise it goes on counting the code-block work of the later tiles,
+without decoding them, and returns `Waiting::BoundSpent`. Where the count
+reaches the end, its own work fits the whole bound, and only what the
+earlier refines spent refused it. Where the whole bound refuses a later
+tile, the limit's `refused_at` gives that tile and its work, and a decode of
+the bytes on their own is refused there with the same `refused_at`, unless
+it fails first in a tile the refine counted. An error in a later tile's
+header or packets, or a packet-work refusal of its walk, also ends the
+count, and the refine returns
+`Waiting::BoundSpent` rather than that error. A one-shot decode decodes each
+tile whole before the next, so the code-blocks the refine skipped, in the
+tile it was refused at and after it, can hold the error that decode meets
+first (see the tests in `tests/incremental.rs`). The refine does not decode
+them to find out: each such refine could spend up to one more bound on that.
+Either wait is for more bytes, which raise the bound. `finish` is one more
 decode, under its own bound, and reports a work limit as one decode of the
 whole file does.
+
+A tile whose walk is not kept (see below) is walked from the start by each
+refine, so its walk is done again as the code-block work is. So is a tile
+whose walk starts again (above), or is built once more bytes make room for
+it, on the first refine of the new walk. Only the first walk of a tile
+kept from its start is free. The ledger keeps the packet visits these
+walks have spent over all the refines. Once that is past four times the
+packet bound of one decode of the bytes fed (`REPEAT_BOUNDS` in
+`src/tier2/resume.rs`), a refine that comes to such a walk is refused for
+work before it walks, and returns `Waiting::RepeatLimit`, not the packet
+bound's `WorkLimit`. The refine whose walk takes the count past that
+bound is refused after the walk. So these walks spend at most five packet
+bounds over all the refines: four, and the one walk
+that goes past them, which one decode's bound holds. The bound follows the
+packet work limit: raised by `WorkLimit::Raised`, none under
+`WorkLimit::Unlimited`. So a caller who raises the limit to the factor a
+refusal names, as `DecodeOptions::with_retry` does, and feeds the file to a
+new decoder, accepts up to about ten times the packet work the file needs
+over its refines: a factor up to twice what it needs, times five bounds. A
+walk let go when the options change (see
+[Changing the options](#changing-the-options)) is charged here too. Of the
+committed fixtures, fed in quarters, in pieces of random sizes and one
+byte at a time, at no reduction and at a reduction of 1, normal files
+spend at most 0.008 of a bound on these walks, and files made to reach
+the work bounds at most 3 bounds, so none of them gives another result.
+Two files made for this
+([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)) show the
+cost it holds. One of 525 KB, 256 components and 65535 layers, fed one
+byte at a time with a refine after each, took 8.4 times one decode before
+the bound and takes 4.6 times with it
+(`the_walks_of_a_tile_not_kept_stay_within_a_few_bounds` checks a smaller
+copy of it). One of 525 KB, one tile and 65535 layers, whose 13 later
+tile-parts each add a `POC` volume, fed 64 bytes at a time, took 7.3 times
+and takes 3.5 times
+(`a_walk_started_again_is_charged_as_a_walk_not_kept`).
 
 Between calls the decoder keeps the bytes fed (in a `Vec`, so up to twice
 their length in capacity) and the tiles' packet walks: their geometry, the
@@ -174,10 +336,12 @@ largest tile walked so far. They also hold at most the larger of 1 MiB and
 input as well as the image the file declares. Each walk's size counts every
 heap allocation it holds, capacity included. A tile whose walk would pass
 either bound is not kept, and each refine walks its packets from the start,
-until the bytes fed make room for it. Of the committed fixtures fed 1 KB at
-a time, this keeps fewer walks than the image bound alone only for files
-made to test the work bounds, and for a 6000 x 4000 RGB file of 148 KB until
-64 KB of it are in. On top of these bounds the decoder keeps a table of 24
+until the bytes fed make room for it. After a change of the options, these
+bounds hold from the first refine that decodes under the new options; until
+then the walks kept may stay within the room of the old options. Of the
+committed fixtures fed 1 KB at a time, this keeps fewer walks than the image
+bound alone only for files made to test the work bounds, and for a
+6000 x 4000 RGB file of 148 KB until 64 KB of it are in. On top of these bounds the decoder keeps a table of 24
 bytes for each tile index up to the highest it has seen (`size_of::<Slot>()`
 in `src/tier2/resume.rs`). That is about 1.5 MiB for the 65535 tiles a file
 can have, and up to twice that in capacity as the table grows: an 82-byte
@@ -195,25 +359,20 @@ A file of 1228 bytes that declares a 16384 x 16384 image, in 64 tiles of
 4 x 4 code-blocks with every packet empty, holds no walk between calls: each
 tile's walk is about 10 MiB, past the 1 MiB the bytes give. A refine of it
 holds what one decode holds, 1076 MiB at its peak, and nothing is kept after
-it but the bytes. Each of its refines walks every tile from the start, which
-is the fourth cost below.
+it but the bytes. Each of its refines walks every tile from the start, and
+those walks are charged to the bound on the walks of tiles not kept.
 
-Four costs are outside the bounds. The first three are outside one decode's
-work bounds too. Each refine that returns an image builds the whole image,
-as one decode does: it decodes every code-block again, allocates the samples
-and runs the inverse wavelet and color transforms over them, whatever share
-of the bytes is in. That is one image reconstruction per image, so at most
-about `log2(n)` of them under the doubling cadence. Each refine also parses
-the main header and walks the tile-part headers again; these are linear in
-the headers, and take about 30 µs for the 16 KB of `TLM` entries of
-`tile_header/tlm_32_16k.j2k`. And for a JP2 file whose last tile-part has
-`Psot = 0`, each refine makes the walk that finds where its packets end (see
-[The `read_header` walk](resource-bounds.md#the-read_header-walk)). The
-fourth is the incremental decoder's own: a tile whose walk is not kept is
-walked from the start on every refine, and nothing counts the repeats. Each
-refine is held to one decode's packet bound, but nothing bounds the refines
-together. On one file made for it, the refines cost 9.3 times one decode
-([#416](https://github.com/D0ubleD0uble/rust-j2k/issues/416)).
+Three costs are outside the bounds, as they are outside one decode's work
+bounds. Each refine that returns an image builds the whole image, as one
+decode does: it decodes every code-block again, allocates the samples and
+runs the inverse wavelet and color transforms over them, whatever share of
+the bytes is in. That is one image reconstruction per image, so at most
+about `log2(n)` of them under the doubling cadence. Each refine also
+parses the main header and walks the tile-part headers again; these are
+linear in the headers, and take about 30 µs for the 16 KB of `TLM` entries
+of `tile_header/tlm_32_16k.j2k`. And for a JP2 file whose last tile-part
+has `Psot = 0`, each refine makes the walk that finds where its packets end
+(see [The `read_header` walk](resource-bounds.md#the-read_header-walk)).
 
 ## What a later decoder could add
 

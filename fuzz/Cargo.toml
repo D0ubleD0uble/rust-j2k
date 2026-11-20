@@ -108,3 +108,21 @@ path = "fuzz_targets/incremental_decode.rs"
 test = false
 doc = false
 bench = false
+
+# `window_crop` checks a window, a tile and a component subset against the
+# crop or selection of the whole decode.
+[[bin]]
+name = "window_crop"
+path = "fuzz_targets/window_crop.rs"
+test = false
+doc = false
+bench = false
+
+# `retry_ladder` follows `DecodeOptions::with_retry` from each limit refusal
+# and checks the options it gives and the image it ends at.
+[[bin]]
+name = "retry_ladder"
+path = "fuzz_targets/retry_ladder.rs"
+test = false
+doc = false
+bench = false

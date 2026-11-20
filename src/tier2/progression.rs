@@ -554,8 +554,10 @@ impl Emitted {
                 ));
             }
             None => {
-                // The geometry holds at most `MAX_PRECINCTS` precincts across
-                // the tile's components, so the counts are at most 1 MB.
+                // The geometry holds at most the precincts the sample limit
+                // allows a tile across its components (`Cap::tile_precincts`),
+                // so the counts take at most 4 bytes for each 2048 samples
+                // that limit allows, and 1 MB at its floor.
                 let mut precincts = 0u64;
                 for (index, start) in starts.iter_mut().enumerate() {
                     let (comp, res) = (index / resolutions, index % resolutions);

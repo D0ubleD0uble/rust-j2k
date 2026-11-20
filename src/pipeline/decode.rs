@@ -7,7 +7,10 @@
 //! [`decode_metered`] with its [`Ledger`](incremental::Ledger), and
 //! [`check_options`] when it is built.
 
+use std::ops::ControlFlow;
+
 use super::report::{Scope, report_part, report_tile};
+use crate::incremental::Refusal;
 use crate::{
     ColorOutput, ComponentInfo, DecodeOptions, DecodeReport, Error, Header, Image, Jp2Metadata,
     ReportEntry, Result, TileGrid, WorkLimit, codestream, dwt, header, image, incremental, jp2,
@@ -21,6 +24,13 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
     let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         let prefix = read_jp2_prefix(bytes, options)?;
+        check_geometry(
+            prefix.codestream,
+            &prefix.parsed,
+            &prefix.selection,
+            samples::cap(&options.sample_limit, bytes.len()),
+            options.strict,
+        )?;
         let area = &prefix.selection.area;
         let (width, height) = area.image_extent_at(reduction);
         let mut components = if prefix.selection.subset {
@@ -57,12 +67,19 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
             siz,
             selection,
             reduction,
-            samples::cap(&options.sample_limit),
+            samples::cap(&options.sample_limit, bytes.len()),
         )?;
     }
     check_raw_color(options, siz.components.len())?;
     check_reduction(&parsed.header, reduction, None)?;
     let selection = selection?;
+    check_geometry(
+        bytes,
+        &parsed,
+        &selection,
+        samples::cap(&options.sample_limit, bytes.len()),
+        options.strict,
+    )?;
     let (width, height) = selection.area.image_extent_at(reduction);
     Ok(Header {
         width,
@@ -77,6 +94,223 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
         tiles: TileGrid::of_siz(siz),
         jp2: None,
     })
+}
+
+/// The steps [`check_geometry`] takes counting tiles under the main header,
+/// a step for each resolution of each tile-component, and again under the
+/// tiles' own headers, where reading a header costs steps too. Past either
+/// budget it leaves the rest of the tiles to the decode, which counts each
+/// tile as it reads it. A tile its size admits costs nothing, so only a
+/// header that declares many tiles of many components and levels gets this
+/// far. Both budgets together took 63 ms for 1000 tiles of 4096 components,
+/// each with a tile-part `COD`.
+const GEOMETRY_STEPS: u64 = 1 << 22;
+
+/// Hold the tiles `selection` reads to the precincts and code-blocks `cap`
+/// allows a tile (see [`tier2::check_tile`]), so that
+/// [`read_header_with`](crate::read_header_with) refuses a tile over a cap
+/// under the main header that the decode refuses too.
+///
+/// Each tile is counted under the main header first, which reads nothing
+/// past the first `SOT`. A tile whose size shows it within both caps is not
+/// counted: it holds at most a code-block for each sample of its components
+/// on the reference grid, and at most a precinct for each sample of each
+/// resolution, of which the main header gives the count. Only the tiles over
+/// a cap under the main header have their tile-part headers read
+/// ([`Rescue`]), to count them as the decode does. They are taken in index
+/// order, so the first refused is the lowest, as in the decode. The
+/// tile-parts are walked once in all, as far as each tile counted needs.
+fn check_geometry(
+    bytes: &[u8],
+    parsed: &codestream::ParsedHeader,
+    selection: &window::Selection,
+    cap: samples::Cap,
+    strict: bool,
+) -> Result<()> {
+    let header = &parsed.header;
+    let siz = &header.siz;
+    let components = siz.components.len() as u64;
+    let main_resolutions = resolutions(header);
+    let reads = selection.tiles(siz);
+    let mut steps = 0u64;
+    let mut rescue = Rescue {
+        bytes,
+        parsed,
+        reads: &reads,
+        cap,
+        strict,
+        walk: None,
+        steps: 0,
+    };
+    for (index, &read) in reads.iter().enumerate() {
+        let index = index as u32;
+        let Some(rect) = siz.tile_rect(index).filter(|_| read) else {
+            continue;
+        };
+        let (w, h) = (u64::from(rect.x1 - rect.x0), u64::from(rect.y1 - rect.y0));
+        // A component's tile-component is at most w x h, and its resolution
+        // at level s at most (w / 2^s + 1) x (h / 2^s + 1), so its
+        // resolutions together hold at most 2wh + 2(w + h) samples and one
+        // for each resolution.
+        let blocks = components.saturating_mul(w.saturating_mul(h));
+        let precincts = blocks
+            .saturating_mul(2)
+            .saturating_add(components.saturating_mul(2 * (w + h)))
+            .saturating_add(main_resolutions);
+        if blocks <= cap.tile_blocks() && precincts <= cap.tile_precincts() {
+            continue;
+        }
+        steps = steps.saturating_add(main_resolutions);
+        if steps > GEOMETRY_STEPS {
+            return Ok(());
+        }
+        if let Err(error @ Error::Limit(_)) = tier2::check_tile(header, index, cap) {
+            if !rescue.count(index, error)? {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The resolutions of tile-components `header` gives a tile.
+fn resolutions(header: &codestream::MainHeader) -> u64 {
+    header
+        .components
+        .iter()
+        .map(|params| u64::from(params.coding.decomposition_levels) + 1)
+        .sum()
+}
+
+/// The count of the tiles over a cap under the main header from their own
+/// tile-part headers in `bytes`, for [`check_geometry`].
+struct Rescue<'a> {
+    bytes: &'a [u8],
+    parsed: &'a codestream::ParsedHeader,
+    /// Which tiles the selection reads.
+    reads: &'a [bool],
+    cap: samples::Cap,
+    strict: bool,
+    /// The walk of the tile-parts, from the first tile over a cap on, and
+    /// where it found the first tile-part of each tile the selection reads:
+    /// at index `tile - from`, for each tile from the first over a cap to
+    /// the last read, 8 bytes a tile, or 0 where it has found none yet (a
+    /// `SOT` is never at 0). `None` until a tile is over a cap.
+    walk: Option<Walk>,
+    /// The steps taken reading and counting the tiles' own headers.
+    steps: u64,
+}
+
+/// [`Rescue::walk`].
+struct Walk {
+    parts: codestream::FirstParts,
+    from: usize,
+    firsts: Vec<usize>,
+}
+
+impl Rescue<'_> {
+    /// Where tile `index`'s first tile-part starts, or `None` if it has
+    /// none. The walk goes on from where it stopped until it finds it,
+    /// noting each tile the selection reads that it passes, so the
+    /// tile-parts are walked once in all, and no further than the first
+    /// tile-part of the last tile over a cap (to the end where a tile has
+    /// none). The walk reads no tile-part header and takes no step of the
+    /// budget: its cost is linear in the input.
+    fn first_part(&mut self, index: usize) -> Option<usize> {
+        let (bytes, parsed, reads) = (self.bytes, self.parsed, self.reads);
+        let walk = self.walk.get_or_insert_with(|| {
+            let span = reads
+                .iter()
+                .rposition(|&read| read)
+                .map_or(0, |last| last + 1);
+            Walk {
+                parts: codestream::FirstParts::new(parsed),
+                from: index,
+                firsts: vec![0; span.saturating_sub(index)],
+            }
+        });
+        let from = walk.from;
+        let at = index.checked_sub(from)?;
+        if *walk.firsts.get(at)? == 0 {
+            let firsts = &mut walk.firsts;
+            walk.parts.visit(bytes, parsed, |tile, part| {
+                let tile = tile as usize;
+                let wanted = tile
+                    .checked_sub(from)
+                    .filter(|_| reads.get(tile) == Some(&true));
+                if let Some(first) = wanted.and_then(|seen| firsts.get_mut(seen)) {
+                    if *first == 0 {
+                        *first = part.offset();
+                    }
+                }
+                if firsts.get(at) == Some(&0) {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(())
+                }
+            });
+        }
+        walk.firsts.get(at).copied().filter(|&offset| offset != 0)
+    }
+
+    /// Count tile `index`, over a cap under the main header (`error`), as
+    /// the decode counts it, and refuse it if the decode does: a tile with a
+    /// tile-part under its own header (a tile-part `COD` or `COC` over the
+    /// main header's), and one with none with the decode's error for the
+    /// tile-parts with `strict` on ([`walk_fault`](Self::walk_fault)) and
+    /// not at all with it off (the decode leaves it out). A tile whose
+    /// tile-part header is at fault is the decode's to report. So a
+    /// tile-part `COD` that brings a tile within the caps is admitted, and
+    /// one that takes a tile over them is left to the decode.
+    ///
+    /// Only the header read here is held. `Ok(false)` means the steps
+    /// passed [`GEOMETRY_STEPS`] and the rest is left to the decode.
+    fn count(&mut self, index: u32, error: Error) -> Result<bool> {
+        // A tile with no tile-part: the decode refuses the file with `strict`
+        // on, and leaves the tile out with it off.
+        let found = self
+            .first_part(index as usize)
+            .and_then(|offset| codestream::first_part_at(self.bytes, self.parsed, offset));
+        let part = match found {
+            Some(part) => part,
+            None if self.strict => return Err(self.walk_fault().unwrap_or(error)),
+            None => return Ok(true),
+        };
+        // Reading a tile's header copies the main header's coding parameters
+        // when the tile-part overrides them, so it is charged a step for each
+        // component and, as that copy costs about ten counting steps per
+        // component, ten more, before it is read.
+        let read_cost = 11 * self.parsed.header.components.len() as u64;
+        self.steps = self.steps.saturating_add(read_cost);
+        if self.steps > GEOMETRY_STEPS {
+            return Ok(false);
+        }
+        // A tile-part header at fault is the decode's to report.
+        if let Ok(own) = part.header() {
+            self.steps = self.steps.saturating_add(resolutions(&own));
+            if self.steps > GEOMETRY_STEPS {
+                return Ok(false);
+            }
+            if let Err(error @ Error::Limit(_)) = tier2::check_tile(&own, index, self.cap) {
+                return Err(error);
+            }
+        }
+        Ok(true)
+    }
+
+    /// The error the decode gives for the tile-parts with `strict` on, for a
+    /// tile the walk found no tile-part for. The decode parses the tile-parts
+    /// before it counts a tile, so it refuses the file for the first fault
+    /// its parse finds (in any tile's tile-part headers, or the chain), or
+    /// for the missing tile, and never gets to the count. This is that
+    /// parse, reading the main header in place. The walk has already
+    /// followed the chain to its end, so the parse follows it no further;
+    /// it reads the tile-part headers, not the tile data, and keeps the
+    /// decode's tile records while it runs. `None` only if the parse finds
+    /// no fault, which the walk finding no tile-part rules out.
+    fn walk_fault(&self) -> Option<Error> {
+        codestream::tile_parts_fault(self.bytes, self.parsed)
+    }
 }
 
 /// The entries of `all` that `order` names, in its order. Each index is in
@@ -123,14 +357,15 @@ pub(crate) fn decode_metered(
             &parsed.header.siz,
             selection,
             options.resolution_reduction,
-            samples::cap(&options.sample_limit),
+            samples::cap(&options.sample_limit, bytes.len()),
         )?;
     }
     check_raw_color(options, parsed.header.siz.components.len())?;
     check_reduction(&parsed.header, options.resolution_reduction, None)?;
     let selection = selection?;
     let cs = codestream::parse_tiles_with(bytes, parsed, options.strict)?;
-    decode_codestream(cs, options, &selection, ledger)
+    let cap = samples::cap(&options.sample_limit, bytes.len());
+    decode_codestream(cs, options, &selection, cap, ledger)
 }
 
 /// Options that contradict each other, whatever the input.
@@ -152,6 +387,23 @@ pub(crate) fn check_options(options: &DecodeOptions) -> Result<()> {
                  at least 1"
             )));
         }
+    }
+    for (name, limit) in [
+        ("packet_work_limit", &options.packet_work_limit),
+        ("code_block_work_limit", &options.code_block_work_limit),
+    ] {
+        if let WorkLimit::AtMost(n) = limit {
+            return Err(Error::invalid_options(format!(
+                "`DecodeOptions::{name}` is `WorkLimit::AtMost({n})`, but `AtMost` sets only \
+                 `DecodeOptions::sample_limit`"
+            )));
+        }
+    }
+    if options.sample_limit == WorkLimit::AtMost(0) {
+        return Err(Error::invalid_options(
+            "`DecodeOptions::sample_limit` is `WorkLimit::AtMost(0)`, but an image holds at \
+             least one sample",
+        ));
     }
     if options.max_quality_layers == Some(0) {
         return Err(Error::invalid_options(
@@ -224,7 +476,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let file = jp2::parse(bytes, &options.packet_work_limit)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
-    let cap = samples::cap(&options.sample_limit);
+    let cap = samples::cap(&options.sample_limit, bytes.len());
     let selection = window::select(siz, options);
     if let Ok(selection) = &selection {
         samples::check_read(siz, selection, options.resolution_reduction, cap)?;
@@ -237,7 +489,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     // no area, so the plan counts nothing: its other faults are found at the
     // same place whatever the image's size, and the selection's refusal
     // follows them.
-    let plan_cap = if selection.is_ok() { cap } else { u64::MAX };
+    let plan_cap = if selection.is_ok() { cap } else { cap.lifted() };
     let plans = jp2::ChannelPlans::plan(
         &file.header,
         selection.as_ref().map_or(siz, |selection| &selection.area),
@@ -299,7 +551,8 @@ fn decode_jp2(
 ) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
     let cs = codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict)?;
-    let image = decode_codestream(cs, options, &prefix.selection, ledger)?;
+    let cap = samples::cap(&options.sample_limit, bytes.len());
+    let image = decode_codestream(cs, options, &prefix.selection, cap, ledger)?;
     // A subset is planned raw, so the plans would pass it through, but they
     // are planned for every component.
     let mut components = if prefix.selection.subset {
@@ -318,11 +571,12 @@ fn decode_jp2(
 }
 
 /// Decode a parsed codestream into the area and components `selection`
-/// names.
+/// names, under the sample limit `cap`.
 fn decode_codestream(
     cs: codestream::Codestream<'_>,
     options: &DecodeOptions,
     selection: &window::Selection,
+    cap: samples::Cap,
     ledger: Option<&incremental::Ledger>,
 ) -> Result<Image> {
     let reduction = options.resolution_reduction;
@@ -336,6 +590,11 @@ fn decode_codestream(
     // not decoded.
     let mut canvas = image::Canvas::over(&cs.header, &selection.area, reduction, &selection.order)?;
     let reads = selection.tiles(&cs.header.siz);
+    // The walks an incremental decoder kept for other options are let go
+    // here, before any tile is walked.
+    if let Some(ledger) = ledger {
+        ledger.prepare(&reads, reduction, layers, canvas.bytes());
+    }
     // Whether the decode returns less than the image, so a tile may need
     // only part of its samples.
     let windowed = selection.area.image_rect() != cs.header.siz.image_rect();
@@ -350,15 +609,77 @@ fn decode_codestream(
     // spent: those decodes' walks are kept, and this one goes on from them,
     // so that what they all spend is what one walk spends (see
     // [`incremental::Ledger`]).
-    let meter = tier2::Meter::new(packet_bound);
-    let mut block_work = match &options.code_block_work_limit {
-        WorkLimit::Unlimited => None,
-        limit => {
-            let bound = limit.apply(tier1::decode_work(bytes));
-            Some(ledger.map_or(bound, |l| l.blocks_left(bound)))
+    let meter = tier2::Meter::new(packet_bound).under(cap);
+    // The code-block bound that `Default` sets and a refusal's factor is
+    // worked out from. Under the fuzz targets' cap it is the cap, whatever
+    // the tiles' data, and no limit, `Unlimited` included, sets more than
+    // `fuzz::CODE_BLOCK_CAP_FACTOR` times it (see
+    // `fuzz::with_code_block_work_cap`).
+    let (block_default, block_ceiling) = match options.code_block_work_cap {
+        None => (tier1::decode_work(bytes), None),
+        Some(cap) => (
+            cap,
+            Some(cap.saturating_mul(crate::fuzz::CODE_BLOCK_CAP_FACTOR)),
+        ),
+    };
+    // The whole code-block bound, which a decode of these bytes on its own
+    // is held to.
+    let mut full_blocks = 0;
+    let mut block_work = match (&options.code_block_work_limit, block_ceiling) {
+        (WorkLimit::Unlimited, None) => None,
+        (limit, ceiling) => {
+            full_blocks = limit.apply(block_default).min(ceiling.unwrap_or(u64::MAX));
+            Some(ledger.map_or(full_blocks, |l| l.blocks_left(full_blocks)))
         }
     };
     let first_work = block_work.unwrap_or(0);
+    // Under an incremental decoder, the code-block bound is what the
+    // earlier decodes left of it. Once a tile passes that rest but the work
+    // of this decode so far still fits the whole bound, the decode is
+    // refused, but it goes on counting the work of the later tiles without
+    // decoding them, to tell which bound refused it: the whole bound, which
+    // a decode of these bytes on its own is held to, or only what the
+    // earlier decodes spent of it. This holds the work of this decode.
+    //
+    // A tile the whole bound refuses ends the count too, and the decode is
+    // again refused as `BoundSpent`, not as the whole bound's refusal: a
+    // decode of these bytes on its own decodes the tiles counted before it
+    // gets there, and can fail in one of them. Decoding them here to find
+    // out would cost each such refine up to one more bound. Only where the
+    // tile at the cut passes the whole bound itself is the decode refused
+    // as the whole bound refuses a decode of these bytes on its own: every
+    // tile before it was decoded.
+    //
+    // An error the count meets in a later tile ends the count, and the
+    // decode is refused as `BoundSpent`, never with that error. A decode
+    // with the whole bound does each tile whole, in order: its packets, then
+    // its code-blocks, wavelet and assembly, before the next tile. So the
+    // first error it meets can be in the code-blocks, wavelet or assembly of
+    // the tile refused here, or of any tile counted after it, none of which
+    // the count does; an error in a later tile's header or packets is then
+    // not the one it gives. The refusals of a later tile's walk end the
+    // count too, as an error does.
+    //
+    // The tests reach two of the steps that end the count: the reduction
+    // check and the packet walk. The others cannot fail on a codestream that
+    // parsed. `tile_header` fails only on a header the parse, which checks
+    // every tile's header, has already refused, or on an `Error::inconsistent`
+    // invariant (a missing tile). `footprint_of` and
+    // `report_part` fail only on `Error::inconsistent` invariants (in
+    // `footprint_of` and `dwt::Footprint::of`). They end the count
+    // all the same.
+    let mut counting: Option<u64> = None;
+    // What a step of a tile that fails gives: its error, or, while counting,
+    // the end of the count (see `counting`).
+    macro_rules! or_end_count {
+        ($result:expr) => {
+            match $result {
+                Ok(value) => value,
+                Err(_) if counting.is_some() => break,
+                Err(error) => return Err(error),
+            }
+        };
+    }
     // Not strict: what the codestream walk found missing, then each tile's
     // packets, and the smallest reduction every tile is complete at so far.
     let mut entries = window::keep_entries(cs.entries.clone(), &reads);
@@ -378,7 +699,7 @@ fn decode_codestream(
     let cost = missing.saturating_mul(cs.header.siz.components.len() as u64);
     if !meter.try_spend(cost) {
         if let Some(ledger) = ledger {
-            ledger.refuse();
+            ledger.refuse(Refusal::MissingTiles);
         }
         return Err(limit_hint::missing_tiles(cost, meter.first(), poc_bitmap));
     }
@@ -399,11 +720,15 @@ fn decode_codestream(
         // `tiles × components`, which SIZ's rule that no tile-component is
         // empty holds to the image's samples (under a window or a tile, the
         // samples of the tiles read), with `strict` off as with it on.
-        let header = cs.tile_header(position)?;
+        let header = or_end_count!(cs.tile_header(position));
 
         // A tile COD can give one tile a shallower pyramid than the rest, so
         // the reduction is checked per tile, not once for the image.
-        check_reduction(&header, reduction, Some(index))?;
+        or_end_count!(check_reduction(&header, reduction, Some(index)));
+
+        // The tile's precincts and code-blocks, counted before its geometry
+        // is built, against what the sample limit allows a tile.
+        or_end_count!(tier2::check_tile(&header, tile.index, cap));
 
         // Tier-2: parse packets into per-code-block coded segments, per
         // component. The walk covers every resolution and layer whatever the
@@ -431,9 +756,10 @@ fn decode_codestream(
         };
         let (mut coded, reach) = match walked {
             Ok(walked) => walked,
+            Err(_) if counting.is_some() => break,
             Err(tier2::Refused::Work(work)) => {
                 if let Some(ledger) = ledger {
-                    ledger.refuse();
+                    ledger.refuse(Refusal::Work);
                 }
                 // The meter holds what is left after the refusal, so this
                 // counts this tile's charges before it as well as the
@@ -468,19 +794,21 @@ fn decode_codestream(
         // Under a window, each component reconstructed needs only the samples
         // whose wavelet support reaches the window: its footprint. `None`
         // where the window covers the whole tile-component.
-        let footprints = coded
-            .components
-            .iter()
-            .enumerate()
-            .map(|(component, coded)| {
-                if !windowed || !wanted[component] {
-                    return Ok(None);
-                }
-                footprint_of(
-                    &cs.header, &header, selection, tile, coded, component, reduction,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let footprints = or_end_count!(
+            coded
+                .components
+                .iter()
+                .enumerate()
+                .map(|(component, coded)| {
+                    if !windowed || !wanted[component] {
+                        return Ok(None);
+                    }
+                    footprint_of(
+                        &cs.header, &header, selection, tile, coded, component, reduction,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()
+        );
         if let Some(reach) = reach {
             // The whole image, or a whole tile of it, is reported by packet;
             // a part of it by the code-blocks that part needs. Whether the
@@ -514,7 +842,7 @@ fn decode_codestream(
                     windowed,
                     footprint_at,
                 };
-                report_part(
+                or_end_count!(report_part(
                     &header,
                     tile,
                     &reach,
@@ -522,7 +850,7 @@ fn decode_codestream(
                     reduction,
                     layers,
                     &mut entries,
-                )?
+                ))
             } else {
                 report_tile(&header, tile, &reach, reduction, layers, &mut entries)
             };
@@ -540,19 +868,65 @@ fn decode_codestream(
         // those outside a footprint. Their work is counted first, so a tile
         // past the bound is refused before any of it is done.
         if let Some(left) = &mut block_work {
-            let work = tier1::work(&header, &coded, reduction, &wanted);
+            let mut work = tier1::work(&header, &coded, reduction, &wanted);
+            // Under the fuzz targets' cap, the samples the tile reconstructs
+            // are charged too, so that an image with little coded data per
+            // sample is held to the same bound of time.
+            if options.code_block_work_cap.is_some() {
+                let samples = (0..wanted.len())
+                    .filter(|&c| wanted[c])
+                    .filter_map(|c| cs.header.siz.tile_component_rect(tile.index, c))
+                    .map(|rect| rect.reduced(reduction).area())
+                    .fold(0, u64::saturating_add);
+                work =
+                    work.saturating_add(samples.saturating_mul(crate::fuzz::CAP_WORK_PER_SAMPLE));
+            }
+            if let Some(own) = &mut counting {
+                if work > full_blocks.saturating_sub(*own) {
+                    // The whole bound refuses this tile, but a decode of
+                    // these bytes on its own decodes the tiles counted
+                    // first and can fail in one of them, so this is not
+                    // the refusal it gives (see `counting`).
+                    if let Some(ledger) = ledger {
+                        ledger.refuse(Refusal::BoundSpent);
+                    }
+                    return Err(Error::limit_unhinted(
+                        crate::LimitKind::CodeBlockWork,
+                        format!(
+                            "tile {index} needs {work} sample-passes to decode its code-blocks, \
+                             past the code-block work bound of {full_blocks} after the {own} \
+                             of the tiles before it; the earlier refines left {first_work} of \
+                             the bound, so the tiles counted were not decoded, and a decode of \
+                             the bytes fed on their own is refused here or fails in one of them; \
+                             decode them on their own, or start a new decoder"
+                        ),
+                    )
+                    .refused_at(tile.index, work));
+                }
+                *own += work;
+                continue;
+            }
             #[cfg(test)]
             tests::BLOCK_WORK.with(|spent| spent.set(spent.get() + work));
             let Some(rest) = left.checked_sub(work) else {
-                if let Some(ledger) = ledger {
-                    ledger.refuse();
+                // The work of this decode before this tile.
+                let own = first_work.saturating_sub(*left);
+                if ledger.is_some() && work <= full_blocks.saturating_sub(own) {
+                    counting = Some(own + work);
+                    continue;
                 }
+                if let Some(ledger) = ledger {
+                    ledger.refuse(Refusal::Work);
+                }
+                // The refusal a decode of these bytes on its own gives: its
+                // bound is the whole one, of which this decode spent `own`.
+                // Without a ledger the two are the same.
                 return Err(limit_hint::code_blocks(
-                    index,
+                    tile.index,
                     work,
-                    *left,
-                    first_work.saturating_sub(*left),
-                    tier1::decode_work(bytes),
+                    full_blocks.saturating_sub(own),
+                    own,
+                    block_default,
                 ));
             };
             *left = rest;
@@ -630,6 +1004,17 @@ fn decode_codestream(
         }
     }
 
+    if let (Some(own), Some(ledger)) = (counting, ledger) {
+        ledger.refuse(Refusal::BoundSpent);
+        return Err(Error::limit_unhinted(
+            crate::LimitKind::CodeBlockWork,
+            format!(
+                "the code-blocks of the tiles counted need {own} sample-passes, within the \
+                 code-block work bound of {full_blocks}, but the earlier refines left \
+                 {first_work} of it; decode the bytes fed on their own, or start a new decoder"
+            ),
+        ));
+    }
     let mut image = image::assemble_over(
         &selection.area,
         canvas.into_planes(),
@@ -901,5 +1286,125 @@ pub(crate) mod tests {
         let single = block_work("tiled_53_nomct", &one);
         assert!(single * 2 < whole, "{single} of {whole}");
         assert_eq!(block_work("tiled_53", &one), block_work("tiled_53", &all));
+    }
+
+    /// `tiles` tiles of 520 x 512 in a row, each in `parts` tile-parts: over
+    /// the precinct cap under the main header (1x1 precincts, 266,240 a
+    /// tile), and brought within by a tile-part `COD` of the maximal
+    /// precincts in its first tile-part. Each tile's parts come together,
+    /// in tile order, so a walk to a tile's first tile-part passes every
+    /// tile-part before it. The tiles of `refused` have no tile-part `COD`,
+    /// so they are over the cap, and the tiles of `missing` no tile-part.
+    fn rescued_tiles(tiles: u32, parts: u8, refused: &[u32], missing: &[u32]) -> Vec<u8> {
+        use crate::synth;
+        let mut cod = synth::cod_body(1, 0, 4, 0);
+        cod[0] = 1;
+        cod.push(0x00);
+        let siz = synth::siz_body([520 * tiles, 512, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+        let mut bytes = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ]
+        .concat();
+        let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+        for tile in (0..tiles).filter(|tile| !missing.contains(tile)) {
+            for part in 0..parts {
+                let extra: &[u8] = if part == 0 && !refused.contains(&tile) {
+                    &own
+                } else {
+                    &[]
+                };
+                let data: &[u8] = if part == 0 { &[0] } else { &[] };
+                bytes.extend(synth::tile_part(tile as u16, part, parts, extra, data));
+            }
+        }
+        bytes.extend_from_slice(&[0xFF, 0xD9]);
+        bytes
+    }
+
+    /// The `SOT` marker segments `read_header_with` reads on `bytes` under
+    /// `options`, after checking that it admits them.
+    fn sot_reads(bytes: &[u8], options: &DecodeOptions) -> u64 {
+        let (reads, header) = sot_reads_of(bytes, options);
+        header.expect("the header is admitted");
+        reads
+    }
+
+    /// The same, and what the header read gives.
+    fn sot_reads_of(bytes: &[u8], options: &DecodeOptions) -> (u64, Result<Header>) {
+        codestream::tests::SOT_READS.with(|reads| reads.set(0));
+        let header = read_header(bytes, options);
+        (
+            codestream::tests::SOT_READS.with(std::cell::Cell::get),
+            header,
+        )
+    }
+
+    /// The header read walks the tile-parts once to find the first
+    /// tile-part of each tile over a cap under the main header, and then
+    /// reads each of those by its offset: 64 tiles of 16 tile-parts, all
+    /// over the cap and each brought within by its own `COD`, cost the `SOT`s
+    /// of one walk, up to the last tile's first tile-part (1009 of 1024),
+    /// and one `SOT` a tile. A walk for each batch of 1, 2, 4 and so on
+    /// tiles would be seven walks, and one a tile 64.
+    #[test]
+    fn the_rescue_walks_the_tile_parts_once() {
+        let bytes = rescued_tiles(64, 16, &[], &[]);
+        for strict in [true, false] {
+            let options = DecodeOptions::default().with_strict(strict);
+            let reads = sot_reads(&bytes, &options);
+            assert_eq!(reads, 63 * 16 + 1 + 64);
+            // Within the bar of 1.5 walks.
+            assert!(reads * 2 <= 3 * 64 * 16, "{reads}");
+        }
+        // Not where nothing is over a cap: a tile the size admits is not
+        // counted, so nothing past the first `SOT` is read.
+        let raised = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(4));
+        assert_eq!(sot_reads(&bytes, &raised), 0);
+    }
+
+    /// The walk stops at the first tile-part of the last tile over a cap
+    /// that the selection reads: a window of tiles 2 and 3 of 64 walks the
+    /// 48 tile-parts of tiles 0 to 2 and stops at tile 3's first, and reads
+    /// the two tiles' by offset.
+    #[test]
+    fn the_rescue_walk_stops_at_the_last_tile_read() {
+        let bytes = rescued_tiles(64, 16, &[], &[]);
+        let window = Window::new(2 * 520, 0, 4 * 520, 512);
+        let options = DecodeOptions::default().with_region(Region::Window(window));
+        assert_eq!(sot_reads(&bytes, &options), 3 * 16 + 1 + 2);
+        // A tile read alone: the walk passes the tile-parts before it.
+        let options = DecodeOptions::default().with_region(Region::Tile(63));
+        assert_eq!(sot_reads(&bytes, &options), 63 * 16 + 1 + 1);
+    }
+
+    /// The walk goes only as far as the tile it counts: where tile 1 of 64
+    /// is refused, it walks the 16 tile-parts of tile 0 and tile 1's first,
+    /// and reads tiles 0 and 1 by offset. A tile with no tile-part takes the
+    /// walk to the end of the tile-parts.
+    #[test]
+    fn a_refusal_at_an_early_tile_walks_little() {
+        let bytes = rescued_tiles(64, 16, &[1], &[]);
+        let (reads, header) = sot_reads_of(&bytes, &DecodeOptions::default());
+        assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
+        assert_eq!(reads, 16 + 1 + 2);
+        // Tile 1's tile-parts left out: with `strict` on the walk runs to
+        // `EOC` to find it has none, and the file is refused with the
+        // decode's error, from the decode's parse of the tile-parts, which
+        // counts the first tile-parts again with a walk of its own.
+        let missing = rescued_tiles(64, 16, &[], &[1]);
+        let (reads, header) = sot_reads_of(&missing, &DecodeOptions::default());
+        let decoded = crate::decode_with(&missing, &DecodeOptions::default());
+        assert!(matches!(header, Err(Error::Codestream(_))), "{header:?}");
+        assert_eq!(
+            format!("{:?}", header.err()),
+            format!("{:?}", decoded.err())
+        );
+        assert_eq!(reads, 63 * 16 + 1 + 1 + (63 * 16 + 1));
+        // With it off the tile is left out and the rest are read by offset.
+        let lenient = DecodeOptions::default().with_strict(false);
+        assert_eq!(sot_reads(&missing, &lenient), 63 * 16 + 1 + 63);
     }
 }

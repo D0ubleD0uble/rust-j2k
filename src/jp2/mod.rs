@@ -491,7 +491,7 @@ impl ChannelPlans {
         header: &Jp2Header<'_>,
         siz: &Siz,
         reduction: u8,
-        cap: u64,
+        cap: crate::samples::Cap,
         raw_channels: bool,
         jph: bool,
     ) -> Result<Self> {
@@ -688,7 +688,7 @@ pub(crate) fn plan_srgb(
     plans: &ChannelPlans,
     siz: &Siz,
     reduction: u8,
-    cap: u64,
+    cap: crate::samples::Cap,
 ) -> Result<SrgbPlan> {
     srgb::plan(
         &metadata.color,

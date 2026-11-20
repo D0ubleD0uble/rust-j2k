@@ -26,12 +26,13 @@ mod partial;
 const MAX_CUT_INPUT: usize = 1 << 16;
 
 fuzz_target!(|data: &[u8]| {
-    if budget::over(data) {
+    // The whole decode and each cut prefix are decoded, strict and lenient:
+    // four decodes, two images held at once.
+    if budget::over(data, 2) {
         return;
     }
     let hash = fnv1a(data);
-    let mut options =
-        rust_j2k::DecodeOptions::default().with_resolution_reduction((hash & 1) as u8);
+    let mut options = budget::options(4).with_resolution_reduction((hash & 1) as u8);
     // A quarter of the inputs through a window, so the report keeps only the
     // tiles it reads.
     if (hash >> 40) & 3 == 0 {

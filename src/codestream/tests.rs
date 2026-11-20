@@ -13,6 +13,12 @@ use crate::Error;
 use crate::synth;
 use synth::seg;
 
+thread_local! {
+    /// The `SOT` marker segments [`visit_first_parts`] and [`first_part_at`]
+    /// have read on this thread.
+    pub(crate) static SOT_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn be16(v: u16) -> [u8; 2] {
     v.to_be_bytes()
 }
@@ -391,7 +397,7 @@ fn oversize_image_area_is_a_limit() {
     // itself leaves the area to the limit, which knows the caller's options.
     let n = 16384;
     let siz = siz_of_geom(2 * n + 1, n);
-    let cap = crate::samples::MAX_IMAGE_SAMPLES;
+    let cap = crate::samples::cap(&crate::WorkLimit::Default, 0);
     let e = crate::samples::check_codestream(&siz, 0, cap).unwrap_err();
     assert!(
         matches!(&e, Error::Limit(m) if m.message().starts_with("image area 32769x16384 needs")),
@@ -1291,6 +1297,23 @@ fn a_last_tpsot_equal_to_tnsot_raises_every_count() {
     assert_eq!(cs.tiles[1].data.as_ref(), &[1, 3, 5]);
 }
 
+/// Tile-parts of different tiles may come in any order (A.4.2), and the tiles
+/// still come out in index order, each with its own parts.
+#[test]
+fn tiles_whose_parts_arrive_out_of_order_come_out_in_index_order() {
+    let bytes = tile_parts(
+        &two_tiles(),
+        &[(1, 0, 2, vec![]), (0, 0, 1, vec![]), (1, 1, 2, vec![])],
+    );
+    let cs = parse(&bytes).expect("tile 1 first, then tile 0");
+    let tiles: Vec<_> = cs
+        .tiles
+        .iter()
+        .map(|tile| (tile.index, tile.data.as_ref().to_vec()))
+        .collect();
+    assert_eq!(tiles, [(0, vec![1]), (1, vec![0, 2])]);
+}
+
 /// OpenJPEG looks for the extra part once, when the first tile has all the
 /// parts it declares. A tile that completes later with an extra part is not
 /// looked at, and its extra part is refused, as OpenJPEG refuses it.
@@ -1873,7 +1896,7 @@ fn many_components_exceed_the_sample_budget() {
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     let header = parse_main_header(&bytes).unwrap().0;
-    let cap = crate::samples::MAX_IMAGE_SAMPLES;
+    let cap = crate::samples::cap(&crate::WorkLimit::Default, 0);
     let e = crate::samples::check_codestream(&header.siz, 0, cap).unwrap_err();
     assert!(
         matches!(&e, Error::Limit(m) if m.message().starts_with("a decode of 100 components needs 1677721600 samples")),
@@ -4696,4 +4719,83 @@ fn the_ht_corpus_decodes_its_cap_and_cpf_and_parses() {
         assert_eq!(sibling_cpf, cpf, "{sibling}");
     }
     assert!(decoded.is_empty(), "files with no log: {decoded:?}");
+}
+
+/// The `SOT` that `sot_at` reads directly, or `None`, exactly where the
+/// marker-segment reader would give it: `segment` and `decode_sot` admit
+/// only `Lsot` 10 and a whole segment.
+#[test]
+fn sot_at_reads_what_decode_sot_admits() {
+    let reference = |bytes: &[u8], offset: usize| {
+        if read_u16(bytes, offset) != Some(marker::SOT) {
+            return None;
+        }
+        let mut cur = Cursor::at(bytes, offset + 2);
+        let sot = segment(&mut cur).and_then(decode_sot).ok()?;
+        Some((sot, cur.pos))
+    };
+    let fields = |found: Option<(Sot, usize)>| {
+        found.map(|(sot, pos)| {
+            (
+                sot.tile_index,
+                sot.psot,
+                sot.tile_part_index,
+                sot.num_tile_parts,
+                pos,
+            )
+        })
+    };
+    let body = [0x00, 0x03, 0x00, 0x00, 0x01, 0x20, 0x01, 0x02];
+    let with_len = |lsot: u16, body: &[u8]| {
+        let mut out = vec![0xFF, 0x90];
+        out.extend_from_slice(&lsot.to_be_bytes());
+        out.extend_from_slice(body);
+        out
+    };
+    let whole = with_len(10, &body);
+    let mut cases = vec![
+        // A whole `SOT`, then more bytes.
+        [whole.as_slice(), &[0xFF, 0x93, 0, 0]].concat(),
+        // At the very end of the buffer.
+        whole.clone(),
+        // Cut at 11 bytes.
+        whole[..11].to_vec(),
+        // `Lsot` 9 and 11, with bytes after them.
+        [with_len(9, &body[..7]), vec![0x02, 0xFF, 0x93]].concat(),
+        [
+            with_len(11, &[&body[..], &[0x00]].concat()),
+            vec![0xFF, 0x93],
+        ]
+        .concat(),
+        // `Lsot` below 2.
+        [with_len(0, &body), vec![0; 4]].concat(),
+        [with_len(1, &body), vec![0; 4]].concat(),
+    ];
+    // A first pair that is not `FF90`.
+    for marker in [[0xFF, 0x91], [0xFE, 0x90], [0x90, 0xFF], [0xFF, 0xD9]] {
+        let mut case = whole.clone();
+        case[..2].copy_from_slice(&marker);
+        cases.push(case);
+    }
+    for case in &cases {
+        // At the start, and after other bytes; whole, and cut at 12 and 11
+        // bytes from the offset.
+        let shifted = [&[0xFF, 0x90, 0x00][..], case].concat();
+        for (bytes, offset) in [(case.as_slice(), 0), (shifted.as_slice(), 3)] {
+            for cut in [bytes.len(), offset + 12, offset + 11] {
+                let bytes = &bytes[..cut.min(bytes.len())];
+                assert_eq!(
+                    fields(sot_at(bytes, offset)),
+                    fields(reference(bytes, offset)),
+                    "{bytes:02X?} at {offset}"
+                );
+            }
+        }
+    }
+    // The whole `SOT` reads, and a cut one, `Lsot` other than 10, or another
+    // marker does not.
+    assert_eq!(fields(sot_at(&cases[1], 0)), Some((3, 0x120, 1, 2, 12)));
+    assert!(cases[2..].iter().all(|case| sot_at(case, 0).is_none()));
+    assert!(sot_at(&whole, usize::MAX - 3).is_none());
+    assert!(sot_at(&whole, 13).is_none());
 }

@@ -11,8 +11,8 @@ use rust_j2k::{
     ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo, DecodeOptions,
     DecodeReport, Error, ErrorDetail, FileType, Header, Image, ImageHeader, IncrementalDecoder,
     IprBox, Jp2Metadata, LimitDetail, LimitKind, MappingKind, Palette, PaletteColumn, Ratio,
-    ReaderRequirements, Region, ReportEntry, Res, Resolution, StandardFeature, TileGrid, UuidBox,
-    UuidInfo, VendorFeature, Window, WorkLimit, XmlBox,
+    ReaderRequirements, Refined, Region, ReportEntry, Res, Resolution, StandardFeature, TileGrid,
+    UuidBox, UuidInfo, VendorFeature, Waiting, Window, WorkLimit, XmlBox,
 };
 
 // Used only in `const _` blocks, which Rust 1.87 does not count as a use.
@@ -37,6 +37,8 @@ const _: () = {
     holds::<WorkLimit>();
     holds::<ColorOutput>();
     holds::<IncrementalDecoder>();
+    holds::<Refined>();
+    holds::<Waiting>();
     holds::<Jp2Metadata>();
     holds::<ImageHeader>();
     holds::<ColorSpecification>();

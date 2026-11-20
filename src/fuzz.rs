@@ -237,6 +237,48 @@ pub fn icc_profile(data: &[u8]) {
     crate::jp2::SrgbPlan::read_profile(data);
 }
 
+/// How far above its cap [`with_code_block_work_cap`] lets a code-block bound
+/// go: the most a `Raised` factor or `Unlimited` sets is this times the cap.
+/// The `retry_ladder` target decodes at factors up to this, so its ladder
+/// sees the factors it asks for.
+pub const CODE_BLOCK_CAP_FACTOR: u64 = 4;
+
+/// The sample-passes [`with_code_block_work_cap`] charges for each sample a
+/// tile reconstructs. Under the fuzz build (ASan) a sample of a thin image
+/// with empty packets takes about as long to reconstruct as this many
+/// sample-passes of the slowest block data.
+pub const CAP_WORK_PER_SAMPLE: u64 = 4;
+
+/// `options` with the code-block work bound set to `cap` sample-passes,
+/// so a fuzz target's time does not grow with the input's bytes. The bound
+/// grows with the tiles' data (see
+/// [`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)),
+/// so a file of a few tens of kilobytes can ask for minutes of block
+/// decoding under the fuzz build, all within the default bound.
+///
+/// Under the cap, the work of a tile is its blocks' sample-passes and
+/// [`CAP_WORK_PER_SAMPLE`] for each sample of each component it
+/// reconstructs, at the reduction, so that the cap also bounds the time an
+/// image with little coded data takes.
+///
+/// Under the cap, the bound `WorkLimit::Default` sets is `cap`, whatever
+/// the tiles' data, and `Raised(n)` sets `n` times that, so a
+/// refusal's `retry_with` names the factor its retry needs, as without the
+/// cap. No limit sets more than [`CODE_BLOCK_CAP_FACTOR`] times `cap`:
+/// `Unlimited` sets that bound too. Each decode is held to its bound by
+/// itself; an incremental decoder holds all its refines to it together. A
+/// file past the bound is refused with an
+/// [`Error::Limit`](crate::Error::Limit) of
+/// [`LimitKind::CodeBlockWork`](crate::LimitKind::CodeBlockWork) before any
+/// of its blocks are decoded.
+#[must_use]
+pub fn with_code_block_work_cap(options: crate::DecodeOptions, cap: u64) -> crate::DecodeOptions {
+    crate::DecodeOptions {
+        code_block_work_cap: Some(cap),
+        ..options
+    }
+}
+
 /// An [`IncrementalDecoder`](crate::IncrementalDecoder) as if its earlier
 /// refines had spent `blocks` of the code-block work, so the
 /// `incremental_decode` target reaches the cut that bound makes without
@@ -256,8 +298,138 @@ pub fn incremental_code_block_work(decoder: &crate::IncrementalDecoder) -> (u64,
     decoder.code_block_work()
 }
 
+/// How many packet bounds the walks of tiles not kept may spend over all
+/// the refines of an incremental decoder before their bound refuses one.
+pub const REPEAT_BOUNDS: u64 = crate::tier2::resume::REPEAT_BOUNDS;
+
+/// What an [`IncrementalDecoder`](crate::IncrementalDecoder) has charged
+/// for the walks that read a tile from its start again: the walks of tiles
+/// not kept, the walks started or built again, and the first walk of a
+/// tile whose walk was let go when the options changed. The first walk of
+/// a tile kept from its start is not charged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepeatWork {
+    /// The packet visits those walks have spent over all the refines.
+    pub visits: u64,
+    /// When their bound refused the last refine that tried, the packet
+    /// bound of that refine's decode: the refusal comes once `visits` is
+    /// past [`REPEAT_BOUNDS`] of it. Such a refine waits with
+    /// [`Waiting::RepeatLimit`](crate::Waiting::RepeatLimit) where a
+    /// one-shot decode of the same bytes may give an image or an error.
+    pub refused: Option<u64>,
+    /// How many tiles have a walk too large to keep.
+    pub not_kept: usize,
+}
+
+/// What `decoder` has charged for the walks that read a tile again (see
+/// [`RepeatWork`]).
+pub fn incremental_repeat_work(decoder: &crate::IncrementalDecoder) -> RepeatWork {
+    let (visits, refused, not_kept) = decoder.repeat_work();
+    RepeatWork {
+        visits,
+        refused,
+        not_kept,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// The work a whole decode of `bytes` under `options` spends on its
+    /// code-blocks, and the bound it had, read through an incremental
+    /// decoder fed every byte.
+    fn block_work(bytes: &[u8], options: &crate::DecodeOptions) -> (u64, Option<u64>) {
+        let mut decoder = crate::IncrementalDecoder::new(options.clone()).unwrap();
+        decoder.feed(bytes);
+        let _ = decoder.refine();
+        super::incremental_code_block_work(&decoder)
+    }
+
+    /// The cap charges the samples reconstructed, sets the bound `Default`
+    /// sets, scales `Raised` from it so a refusal's retry names the factor
+    /// that decodes, and holds `Unlimited` to
+    /// [`super::CODE_BLOCK_CAP_FACTOR`] times the cap. Without it the
+    /// options decode and print as before.
+    #[test]
+    fn the_code_block_cap_sets_the_bound_and_keeps_its_factors() {
+        use super::{CODE_BLOCK_CAP_FACTOR as K, with_code_block_work_cap as cap};
+        use crate::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/layers/lrcp.j2k");
+        let bytes = std::fs::read(path).unwrap();
+        // The fuzz budgets are sized from these: a change must be measured.
+        assert_eq!((K, super::CAP_WORK_PER_SAMPLE), (4, 4));
+        let plain = DecodeOptions::default();
+        let image = decode_with(&bytes, &plain).unwrap();
+        let (blocks, bound) = block_work(&bytes, &plain);
+        let default = bound.unwrap();
+        // Under the cap each sample reconstructed is charged too.
+        let samples: u64 = image
+            .components
+            .iter()
+            .map(|c| c.samples.len() as u64)
+            .sum();
+        let (work, bound) = block_work(&bytes, &cap(plain.clone(), default));
+        assert_eq!(bound, Some(default));
+        assert_eq!(work, blocks + 4 * samples);
+        assert!(blocks > 0 && work < default, "{work} of {default}");
+        // `Unlimited` has no bound without the cap.
+        let unlimited = plain
+            .clone()
+            .with_code_block_work_limit(WorkLimit::Unlimited);
+        assert_eq!(block_work(&bytes, &unlimited).1, None);
+
+        // `Default`: the cap.
+        assert_eq!(
+            block_work(&bytes, &cap(plain.clone(), work)),
+            (work, Some(work))
+        );
+        assert_eq!(
+            decode_with(&bytes, &cap(plain.clone(), work)).unwrap(),
+            image
+        );
+        // Also past the default bound.
+        let high = cap(plain.clone(), default + 1);
+        assert_eq!(block_work(&bytes, &high).1, Some(default + 1));
+        let below = cap(plain.clone(), work - 1);
+        let Err(Error::Limit(limit)) = decode_with(&bytes, &below) else {
+            panic!("a cap under the work refuses");
+        };
+        assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
+        assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)));
+        let retry = below.with_retry(&limit).unwrap();
+        assert_eq!(block_work(&bytes, &retry).1, Some(2 * (work - 1)));
+        assert_eq!(decode_with(&bytes, &retry).unwrap(), image);
+
+        // `Raised(K)` is K times the cap; `Unlimited` and higher factors stop
+        // there.
+        let quarter = work.div_ceil(K);
+        for limit in [
+            WorkLimit::Raised(K as u32),
+            WorkLimit::Raised(1000),
+            WorkLimit::Unlimited,
+        ] {
+            let options = cap(
+                plain.clone().with_code_block_work_limit(limit.clone()),
+                quarter,
+            );
+            assert_eq!(
+                block_work(&bytes, &options).1,
+                Some(K * quarter),
+                "{limit:?}"
+            );
+            assert_eq!(decode_with(&bytes, &options).unwrap(), image, "{limit:?}");
+            let short = cap(options, quarter - 1);
+            assert!(
+                matches!(decode_with(&bytes, &short), Err(Error::Limit(m)) if m.kind() == LimitKind::CodeBlockWork),
+                "{limit:?}"
+            );
+        }
+
+        // The cap prints only when it is set.
+        assert!(!format!("{plain:?}").contains("cap"));
+        assert!(format!("{:?}", cap(plain, 7)).ends_with(", code_block_work_cap: 7 }"));
+    }
+
     /// A decoder started with work spent is cut by what is left of the
     /// bound: a refine whose work just fits decodes, and one more unit of
     /// work spent refuses it. The hooks report the work and the bound.
@@ -272,7 +444,7 @@ mod tests {
                 super::incremental_with_code_block_work_spent(DecodeOptions::default(), spent)
                     .unwrap();
             decoder.feed(&bytes);
-            let refined = decoder.refine().unwrap();
+            let refined = decoder.refine().unwrap().image();
             (refined, super::incremental_code_block_work(&decoder))
         };
         let (image, (work, bound)) = start(0);
@@ -288,6 +460,128 @@ mod tests {
         assert_eq!(cut, None);
         assert_eq!(seen, Some(bound));
         assert_eq!(spent, bound - work + 1, "a refused tile spends nothing");
+    }
+
+    /// A tile whose walk is started again at each tile-part, fed 64 bytes
+    /// at a time: a refine the bound on those walks refuses reports that
+    /// bound, with the visits past `REPEAT_BOUNDS` of it. A decoder fed all
+    /// the bytes at once keeps the walk and charges nothing for it.
+    #[test]
+    fn incremental_repeat_hook_reports_the_refusal() {
+        use crate::{DecodeOptions, IncrementalDecoder, Refined, Waiting};
+        let bytes = crate::synth::restarted_poc_tile(4, 13, 400);
+        let options = DecodeOptions::default().with_strict(false);
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        let mut refusals = 0;
+        for end in (64..bytes.len()).step_by(64).chain([bytes.len()]) {
+            decoder.feed(&bytes[decoder.bytes_fed()..end]);
+            let refined = decoder.refine().unwrap();
+            let work = super::incremental_repeat_work(&decoder);
+            // The hook speaks of the last try, so a refine that did not try
+            // (`MoreBytes`) is left out; on a try, the refine reports the
+            // repeat bound exactly when the hook does.
+            if !matches!(refined, Refined::Waiting(Waiting::MoreBytes { .. })) {
+                assert_eq!(
+                    matches!(refined, Refined::Waiting(Waiting::RepeatLimit { .. })),
+                    work.refused.is_some(),
+                    "{end}: {work:?}"
+                );
+            }
+            if let Some(bound) = work.refused {
+                assert!(work.visits > super::REPEAT_BOUNDS * bound, "{work:?}");
+                refusals += 1;
+            }
+        }
+        assert!(refusals > 0);
+        let mut once = IncrementalDecoder::new(options).unwrap();
+        once.feed(&bytes);
+        assert!(once.refine().unwrap().image().is_some());
+        let work = super::incremental_repeat_work(&once);
+        assert_eq!(
+            work,
+            super::RepeatWork {
+                visits: 0,
+                refused: None,
+                not_kept: 0
+            }
+        );
+    }
+
+    /// The `incremental_decode` target's check on a refine the bound on
+    /// the walks read again refuses, over an input that reaches that bound
+    /// fed as the target feeds it: a tile whose walk starts again at each
+    /// tile-part, in pieces a hash of the file picks, one refine after
+    /// each. A decoder fed each due prefix at once keeps the walk, so it
+    /// charges nothing. Were the first walk of a kept tile charged, the
+    /// fifth due refine would be refused, and the fresh decoder's charge
+    /// would fail the check. The input is 16 KB, past
+    /// the target's `-max_len=4096`, so the fuzzer does not reach it. Set
+    /// `RUST_J2K_INCREMENTAL_SEED_DIR` to write it out as a seed (see
+    /// `fuzz/README.md`).
+    #[test]
+    fn incremental_target_repeat_check_holds_on_a_restarted_walk() {
+        use crate::{DecodeOptions, IncrementalDecoder};
+        fn splitmix(x: u64) -> u64 {
+            let mut z = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        }
+        let data = crate::synth::restarted_poc_tile(4, 8, 299);
+        if let Some(dir) = std::env::var_os("RUST_J2K_INCREMENTAL_SEED_DIR") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("restarted_poc_tile_4_8_299.j2k"), &data).unwrap();
+        }
+        // The target's options for an input that starts with `SOC`: all
+        // control bytes zero, `strict` off for the refines.
+        let options = DecodeOptions::default().with_strict(false);
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        // The target's schedule: FNV-1a of the file, then a splitmix step
+        // for each piece and for each due refine with a code-block bound.
+        let mut hash = data.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        });
+        let (mut fed, mut tried) = (0, 0);
+        let mut due = Vec::new();
+        while fed < data.len() {
+            hash = splitmix(hash);
+            let piece = 1 + (hash % (data.len() as u64 / 4 + 1)) as usize;
+            let end = (fed + piece).min(data.len());
+            decoder.feed(&data[fed..end]);
+            fed = end;
+            decoder.refine().unwrap();
+            if fed < tried * 2 {
+                continue;
+            }
+            tried = fed;
+            let work = super::incremental_repeat_work(&decoder);
+            if let Some(bound) = work.refused {
+                assert!(work.visits > super::REPEAT_BOUNDS * bound, "{work:?}");
+            }
+            if super::incremental_code_block_work(&decoder).1.is_some() {
+                hash = splitmix(hash);
+            }
+            due.push(fed);
+        }
+        // The due refines past the main header that the target makes, the
+        // last at the bytes where the charge of a kept walk refuses it.
+        assert_eq!(due[due.len() - 5..], [168, 1568, 3167, 7677, 16007]);
+        // The target asks a fresh decoder where the refine is refused; here
+        // it is asked at the last due refine, which the overcharge refuses.
+        let last = due[due.len() - 1];
+        let mut fresh = IncrementalDecoder::new(options).unwrap();
+        fresh.feed(&data[..last]);
+        assert!(fresh.refine().unwrap().image().is_some());
+        let once = super::incremental_repeat_work(&fresh);
+        assert_eq!(once.refused, None);
+        assert_eq!(once.not_kept, 0);
+        assert_eq!(once.visits, 0, "{last} bytes: a kept walk was charged");
+        // Each refine after the first walks the tile again from its start,
+        // at about 0.8 of the packet bound each.
+        let work = super::incremental_repeat_work(&decoder);
+        assert_eq!(work.refused, None);
+        assert!(work.visits > 3 * (1 << 24), "{work:?}");
     }
 
     /// Smoke-run every hook so the fuzz surface builds and stays panic-free in

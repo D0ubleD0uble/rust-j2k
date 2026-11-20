@@ -17,7 +17,9 @@ use support::synth::{self, bx, seg};
 
 use std::path::PathBuf;
 
-use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, decode, decode_with, read_header};
+use rust_j2k::{
+    DecodeOptions, Error, IncrementalDecoder, Refined, Waiting, decode, decode_with, read_header,
+};
 use support::jp2::sha256_hex;
 
 fn dir() -> PathBuf {
@@ -322,7 +324,7 @@ fn a_refine_holds_poc_packets_as_one_decode_does() {
     for end in [bytes.len() / 4, bytes.len() / 2, bytes.len()] {
         decoder.feed(&bytes[fed..end]);
         fed = end;
-        let image = decoder.refine().unwrap();
+        let image = decoder.refine().unwrap().image();
         assert_eq!(
             image,
             Some(decode_with(&bytes[..end], &lenient).unwrap()),
@@ -359,13 +361,22 @@ fn a_refine_sizes_a_later_tiles_poc_bitmap_as_one_decode_does() {
     bytes.splice(sot..sot, seg(0xFF5F, &volume.repeat(31)));
 
     let lenient = DecodeOptions::default().with_strict(false);
-    match decode_with(&bytes, &lenient) {
-        Err(Error::Limit(m)) => assert_eq!(m.kind(), rust_j2k::LimitKind::PacketWork, "{m}"),
+    let expected = match decode_with(&bytes, &lenient) {
+        Err(Error::Limit(m)) => {
+            assert_eq!(m.kind(), rust_j2k::LimitKind::PacketWork, "{m}");
+            format!("{m:?}")
+        }
         other => panic!("{other:?}"),
-    }
+    };
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bytes);
-    assert_eq!(decoder.refine().unwrap(), None);
+    // The refine waits with the refusal that decode gives.
+    match decoder.refine().unwrap() {
+        Refined::Waiting(Waiting::WorkLimit { limit: m, .. }) => {
+            assert_eq!(format!("{m:?}"), expected)
+        }
+        other => panic!("{other:?}"),
+    }
     assert_eq!(decoder.bytes_decoded(), 0);
 }
 

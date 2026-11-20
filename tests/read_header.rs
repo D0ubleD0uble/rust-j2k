@@ -47,11 +47,34 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// leave bytes after the last packet of a tile, which only the decode reads.
 /// The `packed_overrun/` files listed hold a packed packet header that runs
 /// past its bytes, which only the decode reads.
+/// The `incremental/spent_bound_tier1_then_eph*.j2k` files, fuzz finds,
+/// hold an HT code-block whose suffix length is out of range, which only
+/// the decode's block decoder reads. `incremental/segsym_tiles_flipped.j2k`
+/// and `incremental/segsym_wide_flipped.j2k` hold a code-block whose
+/// segmentation symbol is wrong, which only the decode's block decoder
+/// reads. `partial/window_rows.j2k` declares 65535 tiles, carries a tile-part for one, and ends
+/// with no `EOC`, which only the decode reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
+    (
+        "incremental/segsym_tiles_flipped.j2k",
+        "a wrong segmentation symbol in tile 0",
+    ),
+    (
+        "incremental/segsym_wide_flipped.j2k",
+        "a wrong segmentation symbol in tile 11",
+    ),
+    (
+        "incremental/spent_bound_tier1_then_eph.j2k",
+        "an HT code-block's Scup out of range",
+    ),
+    (
+        "incremental/spent_bound_tier1_then_eph_2.j2k",
+        "an HT code-block's Scup out of range",
+    ),
     ("jp2_real/rgb16_ecwsdk.jp2", "its codestream has no EOC"),
     ("layers/pterm_poc_gap.j2k", "POC leaves out packets"),
     (
@@ -81,6 +104,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     (
         "partial/tp_r.j2k",
         "bytes left after the last packet (a phantom packet)",
+    ),
+    (
+        "partial/window_rows.j2k",
+        "no tile-part for 65534 tiles, and no EOC after the only one",
     ),
     (
         "poc_coverage/poc_comp_missing.j2k",
@@ -148,6 +175,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     (
         "work_bound/jp2_t2skip_512_20000.jp2",
         "too many steps to check",
+    ),
+    (
+        "work_bound/pocmulti_64tiles_4096_2.j2k",
+        "its tile-parts hold no packet bytes",
     ),
     (
         "work_bound/pocspent_2tiles_60000_559.j2k",

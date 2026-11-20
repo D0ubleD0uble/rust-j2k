@@ -18,6 +18,7 @@ pub mod markers;
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 
 use crate::report::ReportEntry;
 use crate::{Error, Result};
@@ -287,17 +288,31 @@ pub fn parse_tiles_with(
     strict: bool,
 ) -> Result<Codestream<'_>> {
     let codestream = split_tiles_with(bytes, parsed, strict)?;
+    check_tile_headers(&codestream.header, &codestream.tiles)?;
+    Ok(codestream)
+}
 
-    // Check every tile's header once, here, so a malformed tile-part header is
-    // a parse error rather than a surprise partway through a decode. A header is
-    // sized by the component count and a codestream can declare tens of
-    // thousands of tiles, so each tile's own markers are checked against a
-    // summary of the main header instead of resolving a header per tile. Only
-    // a tile found at fault is resolved in full, so that the fault is reported
-    // in the full check's words.
-    let main = &codestream.header;
+/// The error [`parse_tiles_with`] gives with `strict` on for the
+/// tile-parts after `parsed`'s main header, or `None` if it gives none. It
+/// reads `parsed` in place, so a caller that keeps it copies nothing, and
+/// keeps the tile records only until it returns.
+pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader) -> Option<Error> {
+    let mut entries = Vec::new();
+    walk_parsed(bytes, parsed, true, &mut entries)
+        .and_then(|tiles| check_tile_headers(&parsed.header, &tiles))
+        .err()
+}
+
+/// Check every tile's header once, here, so a malformed tile-part header is
+/// a parse error rather than a surprise partway through a decode. A header is
+/// sized by the component count and a codestream can declare tens of
+/// thousands of tiles, so each tile's own markers are checked against a
+/// summary of the main header instead of resolving a header per tile. Only
+/// a tile found at fault is resolved in full, so that the fault is reported
+/// in the full check's words.
+fn check_tile_headers(main: &MainHeader, tiles: &[Tile<'_>]) -> Result<()> {
     let summary = OnceCell::new();
-    for (index, tile) in codestream.tiles.iter().enumerate() {
+    for (index, tile) in tiles.iter().enumerate() {
         if !tile_header_is_valid(main, &summary, &tile.header) {
             // The two checks agree, so the full one fails here. Were it ever
             // to pass, its verdict would stand.
@@ -309,8 +324,7 @@ pub fn parse_tiles_with(
             full?;
         }
     }
-
-    Ok(codestream)
+    Ok(())
 }
 
 /// Resolve a tile's header in full and check it: every invariant
@@ -539,20 +553,189 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
     split_tiles_with(bytes, parsed, true)
 }
 
+/// Visit the first tile-part of each tile in `bytes`, in codestream order:
+/// `visit` gets the tile's index and the tile-part, which
+/// [`first_part_at`] finds again by its [`offset`](FirstPart::offset) and
+/// whose [`header`](FirstPart::header) it may read, and stops the walk by
+/// returning [`ControlFlow::Break`].
+///
+/// The walk follows the `SOT` chain by `Psot` and reads only the `SOT`
+/// markers, and the header markers of a tile-part whose header `visit`
+/// reads, within its `Psot`. The tile-parts' extents do not overlap, so a
+/// walk reads each byte of `bytes` at most once. It stops where the chain
+/// does not go on: at an `EOC`, a `Psot` of 0, a fault, or the end of
+/// `bytes`. A tile that has two first tile-parts, which the tile walk
+/// refuses, is visited twice.
+pub(crate) fn visit_first_parts<'m>(
+    bytes: &[u8],
+    parsed: &'m ParsedHeader,
+    visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
+) {
+    FirstParts::new(parsed).visit(bytes, parsed, visit);
+}
+
+/// A walk of [`visit_first_parts`] that can go on from where it stopped.
+pub(crate) struct FirstParts {
+    /// Where the next `SOT` is, or `None` once the chain has ended.
+    next: Option<usize>,
+}
+
+impl FirstParts {
+    /// A walk from the first `SOT` after `parsed`'s main header.
+    pub(crate) fn new(parsed: &ParsedHeader) -> Self {
+        FirstParts {
+            next: Some(parsed.sot_offset),
+        }
+    }
+
+    /// Go on with the walk as [`visit_first_parts`] does, from the tile-part
+    /// after the one `visit` last stopped at, and not at all once the chain
+    /// has ended. `parsed` is the header [`new`](Self::new) took.
+    pub(crate) fn visit<'m>(
+        &mut self,
+        bytes: &[u8],
+        parsed: &'m ParsedHeader,
+        mut visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
+    ) {
+        while let Some(offset) = self.next {
+            let Some((sot, pos)) = sot_at(bytes, offset) else {
+                self.next = None;
+                return;
+            };
+            self.next = offset
+                .checked_add(sot.psot as usize)
+                .filter(|_| sot.psot != 0);
+            if sot.tile_part_index == 0 {
+                let part = FirstPart::new(bytes, &parsed.header, offset, &sot, pos);
+                if visit(u32::from(sot.tile_index), part).is_break() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The first tile-part that [`visit_first_parts`] found at `offset` of
+/// `bytes`, or `None` if no first tile-part's `SOT` starts there. It reads
+/// that `SOT` alone.
+pub(crate) fn first_part_at<'b, 'm>(
+    bytes: &'b [u8],
+    parsed: &'m ParsedHeader,
+    offset: usize,
+) -> Option<FirstPart<'b, 'm>> {
+    let (sot, pos) = sot_at(bytes, offset).filter(|(sot, _)| sot.tile_part_index == 0)?;
+    Some(FirstPart::new(bytes, &parsed.header, offset, &sot, pos))
+}
+
+/// The `SOT` marker segment at `offset` of `bytes`, and where it ends, or
+/// `None` if none is there or it is at fault. It reads the fixed layout
+/// [`decode_sot`] admits, `Lsot` 10, directly: the walk reads a `SOT` for
+/// each tile-part, and a file may hold millions.
+fn sot_at(bytes: &[u8], offset: usize) -> Option<(Sot, usize)> {
+    #[cfg(test)]
+    tests::SOT_READS.with(|reads| reads.set(reads.get() + 1));
+    let end = offset.checked_add(12)?;
+    let &[0xFF, 0x90, 0, 10, i0, i1, p0, p1, p2, p3, tpsot, tnsot] = bytes.get(offset..end)? else {
+        return None;
+    };
+    let sot = Sot {
+        tile_index: u16::from_be_bytes([i0, i1]),
+        psot: u32::from_be_bytes([p0, p1, p2, p3]),
+        tile_part_index: tpsot,
+        num_tile_parts: tnsot,
+    };
+    Some((sot, end))
+}
+
+/// A tile's first tile-part, as [`visit_first_parts`] finds it.
+pub(crate) struct FirstPart<'b, 'm> {
+    /// The input up to the tile-part's end, or `None` if its `Psot` is
+    /// shorter than its `SOT`.
+    part: Option<&'b [u8]>,
+    /// Where its `SOT` starts.
+    offset: usize,
+    /// Where its header markers start.
+    pos: usize,
+    main: &'m MainHeader,
+    tile: u16,
+    psot: u32,
+}
+
+impl<'b, 'm> FirstPart<'b, 'm> {
+    /// The tile-part of `bytes` whose `SOT`, `sot`, starts at `offset` and
+    /// ends at `pos`.
+    fn new(bytes: &'b [u8], main: &'m MainHeader, offset: usize, sot: &Sot, pos: usize) -> Self {
+        // A tile-part cut short ends with the input, as the tile walk reads
+        // it with `strict` off.
+        let end = match sot.psot {
+            0 => bytes.len(),
+            psot => offset.saturating_add(psot as usize).min(bytes.len()),
+        };
+        FirstPart {
+            part: bytes.get(..end).filter(|_| pos <= end),
+            offset,
+            pos,
+            main,
+            tile: sot.tile_index,
+            psot: sot.psot,
+        }
+    }
+
+    /// Where the tile-part's `SOT` starts in the input.
+    pub(crate) fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// The tile's coding parameters, resolved over the main header from the
+    /// tile-part's header markers as the tile walk resolves them: no tile
+    /// data, no `PPM`, and nothing joined. A header that runs past the
+    /// tile-part's `Psot` is at fault, as the tile walk has it.
+    pub(crate) fn header(self) -> Result<Cow<'m, MainHeader>> {
+        let Some(part) = self.part else {
+            return Err(Error::codestream(format!(
+                "tile {} tile-part 0 declares `Psot` {}, shorter than its `SOT`",
+                self.tile, self.psot
+            )));
+        };
+        read_tile_part_header(&mut Cursor::at(part, self.pos), self.main, true)
+            .and_then(|(tile, _)| resolve_tile_header(self.main, &tile))
+    }
+}
+
 /// [`split_tiles`], strict or not (see [`walk_tiles`]).
 fn split_tiles_with(bytes: &[u8], parsed: ParsedHeader, strict: bool) -> Result<Codestream<'_>> {
-    let ParsedHeader {
-        header,
-        sot_offset,
-        ppm,
-    } = parsed;
     let mut entries = Vec::new();
-    let tiles = walk_tiles(bytes, sot_offset, &header, &ppm, strict, &mut entries)?;
+    let tiles = walk_parsed(bytes, &parsed, strict, &mut entries)?;
     Ok(Codestream {
-        header,
+        header: parsed.header,
         tiles,
         entries,
     })
+}
+
+/// [`walk_tiles`] from `parsed`'s first `SOT`.
+fn walk_parsed<'a>(
+    bytes: &'a [u8],
+    parsed: &ParsedHeader,
+    strict: bool,
+    entries: &mut Vec<ReportEntry>,
+) -> Result<Vec<Tile<'a>>> {
+    // The tile-parts that start a tile, so the walk can reserve one record
+    // for each: a hop along the `SOT` chain that reads the `SOT` markers only.
+    let mut first_parts = 0usize;
+    visit_first_parts(bytes, parsed, |_, _| {
+        first_parts += 1;
+        ControlFlow::Continue(())
+    });
+    walk_tiles(
+        bytes,
+        parsed.sot_offset,
+        &parsed.header,
+        &parsed.ppm,
+        strict,
+        first_parts,
+        entries,
+    )
 }
 
 /// A tile-part header's own markers (A.4.2): the tile-level overrides of the
@@ -782,6 +965,8 @@ fn rgn_without_cap_bit(index: usize) -> Error {
 /// What has been seen of one tile so far while the tile-parts are walked.
 #[derive(Debug)]
 struct TileParts<'a> {
+    /// The tile's index in the grid (`Isot`).
+    index: u16,
     /// Each tile-part's packet data, in `TPsot` order (which is the order they
     /// must appear in, enforced below).
     parts: Vec<&'a [u8]>,
@@ -827,21 +1012,25 @@ fn walk_tiles<'a>(
     main: &MainHeader,
     ppm: &[Vec<u8>],
     strict: bool,
+    first_parts: usize,
     entries: &mut Vec<ReportEntry>,
 ) -> Result<Vec<Tile<'a>>> {
     let tile_count = main.siz.num_tiles() as usize;
     // `PPM` (main header) supplies one packet-header chunk per tile-part in
     // codestream order; this counter walks them as the tile-parts are read.
     let mut ppm_seq = 0usize;
-    let mut tiles: Vec<TileParts<'a>> = (0..tile_count)
-        .map(|_| TileParts {
-            parts: Vec::new(),
-            declared_parts: None,
-            header: TileHeader::default(),
-            restated: None,
-            packed_headers: Vec::new(),
-        })
-        .collect();
+    // A tile's record is made when its first tile-part arrives, in `tiles`,
+    // and `slots` maps each tile of the grid to its record there, or holds
+    // `NO_RECORD` for a tile no tile-part has named. A codestream may declare
+    // 65535 tiles and carry one, so a tile with no tile-part costs its two
+    // bytes of `slots` and no record.
+    const NO_RECORD: u16 = u16::MAX;
+    let mut slots = vec![NO_RECORD; tile_count];
+    // One record for each tile-part with `TPsot` 0 the walk will meet, as
+    // `visit_first_parts` follows the same `SOT` chain. A tile whose first
+    // part met has another `TPsot` gets a record too, but the walk refuses it
+    // at once, so the regrowth then does not last.
+    let mut tiles: Vec<TileParts<'a>> = Vec::with_capacity(first_parts.min(tile_count));
     // OpenJPEG's `TPsot == TNsot` correction (see `count_is_one_short`): looked
     // for once, when the first tile has all its declared parts, and from then
     // on added to every `TNsot`.
@@ -868,11 +1057,30 @@ fn walk_tiles<'a>(
         let sot = decode_sot(segment(&mut cur)?)?;
 
         let index = usize::from(sot.tile_index);
-        let tile = tiles.get_mut(index).ok_or_else(|| {
+        let slot = slots.get_mut(index).ok_or_else(|| {
             Error::codestream(format!(
                 "tile-part names tile {index}, but the grid holds {tile_count} tiles"
             ))
         })?;
+        if *slot == NO_RECORD {
+            // The grid holds at most 65535 tiles (`validate_geometry`), so a
+            // record's position is at most 65534 and this never fails. It
+            // guards the slot should that cap change.
+            *slot = u16::try_from(tiles.len())
+                .ok()
+                .filter(|&position| position != NO_RECORD)
+                .ok_or_else(|| Error::codestream("more tiles than `Isot` can number"))?;
+            tiles.push(TileParts {
+                index: sot.tile_index,
+                parts: Vec::new(),
+                declared_parts: None,
+                header: TileHeader::default(),
+                restated: None,
+                packed_headers: Vec::new(),
+            });
+        }
+        let position = usize::from(*slot);
+        let tile = &mut tiles[position];
 
         // A tile's parts are numbered from 0 and shall appear in order (A.4.2),
         // so TPsot is exactly how many of this tile's parts have already been
@@ -1035,7 +1243,7 @@ fn walk_tiles<'a>(
             }
             end
         };
-        let tile = &mut tiles[index];
+        let tile = &mut tiles[position];
         tile.parts.push(&bytes[data_start..data_end]);
 
         // The first time a tile has every part it declares, look ahead for one
@@ -1097,11 +1305,15 @@ fn walk_tiles<'a>(
         )));
     }
 
-    let mut found = Vec::with_capacity(tiles.len());
     // Not strict: the run of missing tiles being gathered, as (first, end).
     let mut missing: Option<(u32, u32)> = None;
-    for (index, tile) in tiles.into_iter().enumerate() {
-        if tile.parts.is_empty() {
+    for (index, &slot) in slots.iter().enumerate() {
+        // A record is made before its first tile-part is read, so one whose
+        // part the input ended inside has no parts, and its tile is missing.
+        let tile = (slot != NO_RECORD)
+            .then(|| &tiles[usize::from(slot)])
+            .filter(|tile| !tile.parts.is_empty());
+        let Some(tile) = tile else {
             if strict {
                 return Err(Error::codestream(format!(
                     "the codestream carries no tile-part for tile {index}"
@@ -1110,7 +1322,7 @@ fn walk_tiles<'a>(
             let index = index as u32;
             missing = Some(missing.map_or((index, index + 1), |(first, _)| (first, index + 1)));
             continue;
-        }
+        };
         if let Some((first, end)) = missing.take() {
             entries.push(ReportEntry::MissingTiles { tiles: first..end });
         }
@@ -1129,39 +1341,46 @@ fn walk_tiles<'a>(
                 });
             }
         }
-        found.push((index, tile));
     }
     if let Some((first, end)) = missing {
         entries.push(ReportEntry::MissingTiles { tiles: first..end });
     }
+    drop(slots);
 
-    found
-        .into_iter()
-        .map(|(index, tile)| {
-            // One part: borrow it. Several: join them, which is exact — a
-            // tile-part holds a whole number of packets (B.9), so nothing
-            // straddles the seam.
-            let data = match <[&[u8]; 1]>::try_from(tile.parts.as_slice()) {
-                Ok([only]) => Cow::Borrowed(only),
-                Err(_) => Cow::Owned(tile.parts.concat()),
-            };
-            let part_ends = tile
-                .parts
-                .iter()
-                .scan(0, |end, part| {
-                    *end += part.len();
-                    Some(*end)
-                })
-                .collect();
-            Ok(Tile {
-                index: index as u32,
-                header: tile.header,
-                data,
-                part_ends,
-                packed_headers: tile.packed_headers,
+    // The records are in the order their tiles' first parts arrived; the
+    // tiles go out in index order. Tiles mostly arrive in order, which the
+    // sort finds in one pass. The output is reserved once, as a vector grown
+    // by doubling would peak at half as much again while the records live.
+    tiles.sort_unstable_by_key(|tile| tile.index);
+    let mut found = Vec::with_capacity(tiles.iter().filter(|tile| !tile.parts.is_empty()).count());
+    for tile in tiles {
+        if tile.parts.is_empty() {
+            continue;
+        }
+        // One part: borrow it. Several: join them, which is exact — a
+        // tile-part holds a whole number of packets (B.9), so nothing
+        // straddles the seam.
+        let data = match <[&[u8]; 1]>::try_from(tile.parts.as_slice()) {
+            Ok([only]) => Cow::Borrowed(only),
+            Err(_) => Cow::Owned(tile.parts.concat()),
+        };
+        let part_ends = tile
+            .parts
+            .iter()
+            .scan(0, |end, part| {
+                *end += part.len();
+                Some(*end)
             })
-        })
-        .collect()
+            .collect();
+        found.push(Tile {
+            index: u32::from(tile.index),
+            header: tile.header,
+            data,
+            part_ends,
+            packed_headers: tile.packed_headers,
+        });
+    }
+    Ok(found)
 }
 
 /// Whether the tile-part chain from `from` holds another part of tile `tile`
@@ -2822,4 +3041,4 @@ impl<'a> Cursor<'a> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

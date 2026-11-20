@@ -218,12 +218,15 @@ has the value R, which is how eccodes and NCEP's g2clib read it.
 
 ## When a file won't decode
 
-Every failure comes back as an `Error`. With the default limits, decoding
-never panics or hangs, whatever the input, and needs at most about 6.4 GiB of
-memory. If the machine can't supply that, the allocation fails and the process
-aborts, as in any Rust program. That figure covers the one-shot decode
-functions; `IncrementalDecoder` keeps per-tile state and can hold up to about
-three times as much (see [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)).
+Every failure comes back as an `Error`. With the default limits, decoding never
+panics or hangs, whatever the input, and needs at most about 6.4 GiB of memory
+for an input of up to 64 MiB, or about 102 bytes per byte of input past that. If
+the machine can't supply that, the allocation fails and the process aborts, as
+in any Rust program. Those figures cover the one-shot decode functions;
+`IncrementalDecoder` keeps per-tile state and can hold up to about three times
+one decode's peak, plus the bytes fed and a table of 24 bytes per tile index up
+to the highest seen, about 1.5 MiB for 65535 tiles (see
+[`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses
 something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means
@@ -262,23 +265,25 @@ the data already gives in full.
 
 For a file that arrives in pieces, such as a download, use
 `IncrementalDecoder`. Feed it each piece and call `refine`. From time to time
-it returns an image of what has come in so far. Each refine goes on from where
+it returns an image of what has come in so far (`Refined::Image`); otherwise
+it says why it waits (`Refined::Waiting`), such as for more bytes or for the
+rest of the main header. Each refine goes on from where
 the last one stopped reading packets;
-[docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md)
+[docs/incremental-decoding.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)
 lists the packets it reads again. Each image `refine` returns is decoded with
 `strict` off and comes with a report of what is missing. `finish` decodes
 under the options you gave the decoder, so it is strict unless you turned
 `strict` off:
 
 ```rust
-use rust_j2k::{DecodeOptions, IncrementalDecoder};
+use rust_j2k::{DecodeOptions, IncrementalDecoder, Refined};
 
 // `pieces`: the parts of the file, in the order they arrive.
 fn show_as_it_arrives(pieces: &[&[u8]]) -> Result<(), rust_j2k::Error> {
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default())?;
     for piece in pieces {
         decoder.feed(piece);
-        if let Some(image) = decoder.refine()? {
+        if let Refined::Image(image) = decoder.refine()? {
             // Show `image`. Its report says what is still missing.
             for entry in &image.report.entries {
                 eprintln!("{entry}");
@@ -298,7 +303,10 @@ A valid file can be refused with `Error::Limit` when it is very large or very
 costly to decode. The limits protect you from a small hostile file that asks
 for gigabytes of memory or minutes of work. By default an image may hold 2^29
 values (2 GiB as `i32`): a 10980 × 10980 three-band satellite image, or an RGB
-image of about 179 megapixels.
+image of about 179 megapixels. Past 64 MiB of input the limit is 8 values per
+byte of the file. For a ceiling that does not grow with the file, set
+`sample_limit` to `WorkLimit::AtMost(n)`: at most `n` values, whatever the
+file's size or padding.
 
 Three limits can be raised: `sample_limit`, `packet_work_limit` and
 `code_block_work_limit` on `DecodeOptions`. For a file you trust, set them to
@@ -307,7 +315,9 @@ returning an error. Damage can also look like a limit, since one flipped bit
 in the header can declare an absurd size, so don't lift the limits on that
 evidence alone. The error says which limit refused the file and what to
 raise it to, as data: `LimitDetail::kind` and `LimitDetail::retry_with`.
-`DecodeOptions::with_retry` sets that limit for you:
+A code-block work refusal also gives the tile and its work
+(`LimitDetail::refused_at`). `DecodeOptions::with_retry` sets that limit
+for you:
 
 ```rust
 use rust_j2k::{DecodeOptions, Error, Image, decode_with};

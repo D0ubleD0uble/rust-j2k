@@ -38,7 +38,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// | `Incomplete` | The file is cut short before its header ends. If it is still arriving, try again with more of it, or feed it to an [`IncrementalDecoder`](crate::IncrementalDecoder). |
 /// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read, or a valid request it does not do: sRGB output from sub-sampled sYCC chroma on an area smaller than the image (`DecodeOptions::region`). |
 /// | `Limit` | The file is larger or costlier than the decoder allows by default. If [`LimitDetail::retry_with`] gives a [`WorkLimit`], it can be retried with that limit raised. |
-/// | `InvalidOptions` | The decode options are invalid, for any file (`WorkLimit::Raised(0)`, `max_quality_layers` of `Some(0)`, sRGB output with `raw_channels` or `components`, an empty window, no component or one named twice) or for this one (a reduction past the file's levels, a window outside the image, a tile or component the image does not have, an area that holds no sample of a returned component at the reduction). |
+/// | `InvalidOptions` | The decode options are invalid, for any file (`WorkLimit::Raised(0)`, `WorkLimit::AtMost(0)`, `AtMost` on a work bound, `max_quality_layers` of `Some(0)`, sRGB output with `raw_channels` or `components`, an empty window, no component or one named twice) or for this one (a reduction past the file's levels, a window outside the image, a tile or component the image does not have, an area that holds no sample of a returned component at the reduction). |
 /// | `Inconsistent` | An internal error; please file a bug. |
 ///
 /// Damage does not always show as the first row. A flipped bit in a header
@@ -117,7 +117,9 @@ pub enum Error {
     ///
     /// For a file that is still arriving, an
     /// [`IncrementalDecoder`](crate::IncrementalDecoder) waits for the header
-    /// itself: its `refine` returns `Ok(None)` while the header is not whole.
+    /// itself: its `refine` waits with
+    /// [`Waiting::HeaderIncomplete`](crate::Waiting::HeaderIncomplete) while
+    /// the header is not whole.
     ///
     /// If no more bytes are coming, the file is truncated. A box or segment
     /// length that is damaged so that it reaches past the end of the input
@@ -175,27 +177,32 @@ pub enum Error {
     /// the sample limit
     /// ([`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit)),
     /// which holds the image area and the samples that palette expansion, sYCC
-    /// chroma replication and a monochrome ICC conversion produce; reading the
-    /// packet headers
+    /// chroma replication and a monochrome ICC conversion produce, and with
+    /// them the code-blocks and precincts a tile may hold (one code-block for
+    /// each 512 samples it allows and one precinct for each 2048, and at least
+    /// 2^20 and 2^18); reading the packet headers
     /// ([`DecodeOptions::packet_work_limit`](crate::DecodeOptions::packet_work_limit));
     /// and decoding the code-blocks
     /// ([`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)).
     /// For one of them, [`LimitDetail::kind`] names the limit, and
     /// [`LimitDetail::retry_with`] gives the `WorkLimit` to retry with, which
     /// the message names too. It is a hint (see
-    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file.
+    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file. A
+    /// refusal under a sample limit of
+    /// [`WorkLimit::AtMost`](crate::WorkLimit::AtMost) gives none: the
+    /// caller set that ceiling.
     ///
     /// The other guards have no option, so a file past one of them is refused
-    /// whatever the options. A tile may hold at most 2^20 code-blocks and
-    /// 2^18 precincts, and 32 progression order change (POC) volumes; a
-    /// code-block may have at most 30 bit-planes; and under a `sample_limit`
-    /// of `WorkLimit::Unlimited`, an image too large for the target to
-    /// address is still refused. For these, `retry_with` is `None`.
-    /// [`LimitDetail`] has an example that retries.
+    /// whatever the options. A tile may hold at most 32 progression order
+    /// change (POC) volumes; a code-block may have at most 30 bit-planes;
+    /// and under a `sample_limit` of `WorkLimit::Unlimited`, an image too
+    /// large for the target to address is still refused. For these,
+    /// `retry_with` is `None`. [`LimitDetail`] has an example that retries.
     Limit(LimitDetail),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
     /// invalid for this codestream, or that are invalid whatever the input
-    /// (sRGB output with `raw_channels`, or a limit of `WorkLimit::Raised(0)`).
+    /// (sRGB output with `raw_channels`, a limit of `WorkLimit::Raised(0)` or
+    /// `WorkLimit::AtMost(0)`, or `AtMost` on a work bound).
     /// The input itself may be fine.
     InvalidOptions(ErrorDetail),
     /// A decoder invariant was violated (declared geometry and decoded state
@@ -305,8 +312,29 @@ impl Error {
         Error::Limit(LimitDetail {
             kind,
             retry_with,
+            refused_at: None,
             message,
         })
+    }
+
+    /// This code-block work [`Error::Limit`] with the tile it refused and
+    /// the work that tile needs as data: the figures its message names.
+    pub(crate) fn refused_at(self, tile: u32, work: u64) -> Error {
+        match self {
+            Error::Limit(mut limit) => {
+                debug_assert_eq!(limit.kind, LimitKind::CodeBlockWork);
+                debug_assert!(
+                    limit
+                        .message
+                        .starts_with(&format!("tile {tile} needs {work} sample-passes ")),
+                    "{}",
+                    limit.message
+                );
+                limit.refused_at = Some(RefusedAt { tile, work });
+                Error::Limit(limit)
+            }
+            other => other,
+        }
     }
 }
 
@@ -315,7 +343,9 @@ impl Error {
 /// no option names none.
 fn names_its_data(kind: LimitKind, retry_with: Option<&WorkLimit>, message: &str) -> bool {
     let option = match kind {
-        LimitKind::Samples => Some("`DecodeOptions::sample_limit`"),
+        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+            Some("`DecodeOptions::sample_limit`")
+        }
         LimitKind::PacketWork => Some("`DecodeOptions::packet_work_limit`"),
         LimitKind::CodeBlockWork => Some("`DecodeOptions::code_block_work_limit`"),
         _ => None,
@@ -413,6 +443,7 @@ impl fmt::Display for ErrorDetail {
 pub struct LimitDetail {
     kind: LimitKind,
     retry_with: Option<WorkLimit>,
+    refused_at: Option<RefusedAt>,
     message: String,
 }
 
@@ -432,19 +463,42 @@ impl LimitDetail {
     /// It is worked out from what the refusal shows, so a retry with it can
     /// still be refused, by this limit later in the file or by another
     /// limit (see [`WorkLimit`]), or fail with another error once past it,
-    /// such as damage the limit stopped the decode before. It is also
-    /// `None` for a packet work refusal that shows no factor, such as one
-    /// while reading the header.
+    /// such as damage the limit stopped the decode before. A work bound
+    /// refusal names at least twice the factor it ran under, so retries in a
+    /// loop take about log2 of the factor the file needs. It is also `None`
+    /// for a packet work refusal that shows no factor, such as one while
+    /// reading the header, and for a sample limit refusal under
+    /// [`AtMost`](WorkLimit::AtMost), a ceiling the caller set.
     ///
     /// [`DecodeOptions::with_retry`](crate::DecodeOptions::with_retry)
-    /// applies it to the option `kind` names.
+    /// applies it to the option `kind` names. For
+    /// [`TileCodeBlocks`](LimitKind::TileCodeBlocks) and
+    /// [`TilePrecincts`](LimitKind::TilePrecincts) that option is the sample
+    /// limit, so a retry raises the limit on the whole image's samples, not
+    /// only the tile's count.
     pub fn retry_with(&self) -> Option<WorkLimit> {
         self.retry_with.clone()
     }
 
+    /// The tile the limit refused and the work it needs, where the refusal
+    /// knows both exactly; `None` otherwise.
+    ///
+    /// The refusals that carry it are the code-block work bound's
+    /// ([`LimitKind::CodeBlockWork`]) refusals of one tile: the one
+    /// [`decode_with`](crate::decode_with) gives, and the one an
+    /// [`IncrementalDecoder`](crate::IncrementalDecoder) waits on as
+    /// [`Waiting::WorkLimit`](crate::Waiting::WorkLimit), or as
+    /// [`Waiting::BoundSpent`](crate::Waiting::BoundSpent) where the whole
+    /// bound refuses a tile it counted. Other refusals give `None`, a
+    /// `BoundSpent` whose count ended within the whole bound included.
+    pub fn refused_at(&self) -> Option<RefusedAt> {
+        self.refused_at
+    }
+
     /// The diagnostic, without the `limit: ` prefix that the [`Error`]'s
-    /// `Display` adds. Do not parse it: [`kind`](Self::kind) and
-    /// [`retry_with`](Self::retry_with) hold its data.
+    /// `Display` adds. Do not parse it: [`kind`](Self::kind),
+    /// [`retry_with`](Self::retry_with) and [`refused_at`](Self::refused_at)
+    /// hold its data.
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -456,11 +510,36 @@ impl fmt::Display for LimitDetail {
     }
 }
 
+/// Where a limit refused the input, from
+/// [`LimitDetail::refused_at`]: the tile, and the work it needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct RefusedAt {
+    tile: u32,
+    work: u64,
+}
+
+impl RefusedAt {
+    /// The index of the tile refused, in raster order from 0, as
+    /// [`TileGrid::tile`](crate::TileGrid::tile) takes it.
+    pub fn tile(&self) -> u32 {
+        self.tile
+    }
+
+    /// The work the tile needs, in sample-passes: the work of the
+    /// code-blocks this decode reads under its options (the reduction,
+    /// region and components), not of the whole tile.
+    pub fn work(&self) -> u64 {
+        self.work
+    }
+}
+
 /// Which limit an [`Error::Limit`] names.
 ///
-/// The first three are [`DecodeOptions`](crate::DecodeOptions) limits that
-/// a [`WorkLimit`] raises. No option raises the others, so they refuse the
-/// input whatever the options.
+/// [`is_adjustable`](Self::is_adjustable) says which a
+/// [`DecodeOptions`](crate::DecodeOptions) limit raises, with a
+/// [`WorkLimit`]. No option raises the others, so they refuse the input
+/// whatever the options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LimitKind {
@@ -477,12 +556,17 @@ pub enum LimitKind {
     /// [`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit),
     /// on decoding the code-blocks.
     CodeBlockWork,
-    /// An image of more samples than the target can address, refused under
-    /// any sample limit.
+    /// An image of more samples than the target can address, or a tile whose
+    /// code-blocks or precincts need a sample limit past what it can address
+    /// to admit them: refused under any sample limit.
     AddressSpace,
-    /// A tile of more than 2^20 code-blocks.
+    /// A tile of more code-blocks than the sample limit,
+    /// [`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit),
+    /// allows a tile: one for each 512 samples it allows, and at least 2^20.
     TileCodeBlocks,
-    /// A tile of more than 2^18 precincts.
+    /// A tile of more precincts than the sample limit,
+    /// [`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit),
+    /// allows a tile: one for each 2048 samples it allows, and at least 2^18.
     TilePrecincts,
     /// A tile's progression order change (`POC`) volumes past a fixed cap:
     /// more than 32 of them, or more packets than the decoder tracks for
@@ -495,12 +579,20 @@ pub enum LimitKind {
 impl LimitKind {
     /// Whether a [`DecodeOptions`](crate::DecodeOptions) limit raises this
     /// one: true for [`Samples`](Self::Samples),
-    /// [`PacketWork`](Self::PacketWork) and
-    /// [`CodeBlockWork`](Self::CodeBlockWork).
+    /// [`PacketWork`](Self::PacketWork),
+    /// [`CodeBlockWork`](Self::CodeBlockWork), and
+    /// [`TileCodeBlocks`](Self::TileCodeBlocks) and
+    /// [`TilePrecincts`](Self::TilePrecincts), which the sample limit raises.
+    /// A tile whose geometry needs a sample limit past what the target can
+    /// address is [`AddressSpace`](Self::AddressSpace) instead, which is not.
     pub fn is_adjustable(self) -> bool {
         matches!(
             self,
-            LimitKind::Samples | LimitKind::PacketWork | LimitKind::CodeBlockWork
+            LimitKind::Samples
+                | LimitKind::PacketWork
+                | LimitKind::CodeBlockWork
+                | LimitKind::TileCodeBlocks
+                | LimitKind::TilePrecincts
         )
     }
 }
@@ -510,6 +602,12 @@ impl LimitKind {
 #[cfg(test)]
 pub(crate) fn keyed<T>(result: Result<T>) -> core::result::Result<T, String> {
     result.map_err(|error| format!("{error:?}"))
+}
+
+/// Whether `error` is an [`Error::Limit`] for `kind`.
+#[cfg(test)]
+pub(crate) fn is_limit(error: &Error, kind: LimitKind) -> bool {
+    matches!(error, Error::Limit(limit) if limit.kind() == kind)
 }
 
 /// Whether `error` is an [`Error::Limit`] for `kind` that no option raises,
@@ -534,7 +632,8 @@ mod tests {
         let limit = Error::limit_fixed(LimitKind::BitPlanes, "31 bit-planes");
         assert_eq!(
             format!("{limit:?}"),
-            "Limit(LimitDetail { kind: BitPlanes, retry_with: None, message: \"31 bit-planes\" })"
+            "Limit(LimitDetail { kind: BitPlanes, retry_with: None, refused_at: None, message: \"31 \
+             bit-planes\" })"
         );
     }
 
@@ -548,18 +647,18 @@ mod tests {
     }
 
     #[test]
-    fn the_three_options_are_the_adjustable_kinds() {
+    fn the_three_options_raise_the_adjustable_kinds() {
         use LimitKind::*;
-        for kind in [Samples, PacketWork, CodeBlockWork] {
-            assert!(kind.is_adjustable(), "{kind:?}");
-        }
         for kind in [
-            AddressSpace,
+            Samples,
+            PacketWork,
+            CodeBlockWork,
             TileCodeBlocks,
             TilePrecincts,
-            PocVolumes,
-            BitPlanes,
         ] {
+            assert!(kind.is_adjustable(), "{kind:?}");
+        }
+        for kind in [AddressSpace, PocVolumes, BitPlanes] {
             assert!(!kind.is_adjustable(), "{kind:?}");
         }
     }

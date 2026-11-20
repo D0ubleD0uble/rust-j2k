@@ -496,6 +496,108 @@ only: each block with a set VLC stuffing bit, and with the bit cleared.
 before or after a wrong COD and QCD, in the main header and in a tile-part
 header. See [`override_order/README.md`](override_order/README.md).
 
+### Incremental decoder fixtures
+
+`incremental/spent_bound_tier1_then_eph.j2k` (3211 bytes) and
+`spent_bound_tier1_then_eph_2.j2k` (1872 bytes) are inputs the CI fuzz
+smoke of the `incremental_decode` target saved on 2026-11-19
+(`crash-2d21f1a434324b7664573dfd24881ce43a42c563` and
+`crash-d6b0adb60e7e6ad3d4b2a1fcb33a4c1bdadc5fa1`, each the SHA-1 of its
+file), committed as found (#485). Each is a 12 x 12 HTJ2K codestream of
+three components in 3 x 3 tiles, made by the fuzzer, so it has no license
+restriction. `decode_with` fails in the block decoding of one tile (an HT
+suffix length `Scup` out of range); a later tile's packets lack the `EPH`
+its `COD` signals. `tests/incremental.rs` checks that a refine refused for
+what earlier refines spent waits on `BoundSpent` rather than give the later
+tile's error. Each file starts with `SOC`, so the fuzz target reads it with
+all-zero control bytes: `cargo +nightly fuzz run incremental_decode
+tests/fixtures/incremental/spent_bound_tier1_then_eph.j2k` replays it.
+
+`incremental/segsym_tiles_flipped.j2k` (4141 bytes) is a 64 x 64 gray
+image in 16 x 16 tiles with segmentation symbols, with one byte of tile 0
+flipped (#487). The input is an 8-bit PGM written by Python, the sample at
+`(x, y)` being
+`int(128 + 60*sin(0.37*x)*cos(0.23*y) + (x*y) % 37) & 255`, encoded with
+`opj_compress -i in.pgm -o segsym_tiles.j2k -t 16,16 -M 32 -n 3`
+(OpenJPEG 2.5.0). Byte 200 is then XORed with `0xFF`; `tests/incremental.rs`
+flips it back for the file as encoded. `decode_with` fails on the
+segmentation symbol of a block of tile 0. Under a code-block cap set by
+hand, the tests check that a refine refused for what earlier refines
+spent, whose count of the later tiles passes the whole code-block bound,
+waits on `BoundSpent` rather than a `WorkLimit` that would stand in for
+that error, and that a refine not cut before tile 1 waits on the one-shot
+`WorkLimit` once the byte is flipped back.
+
+`incremental/segsym_wide_flipped.j2k` (5914 bytes) is a seed of the
+`incremental_decode` fuzz target that reaches the same path under the
+target's own cap of 2^22 sample-passes, which the tests above set by hand;
+`src/incremental/tests.rs` also uses it for a count past the cut that
+spans several tiles. The input is a 4096 x 1152 8-bit PGM of the value 100, whose
+top-left 64 x 64 samples are `100 + (7*x + 13*y) % 23`, encoded with
+`opj_compress -i wide.pgm -o segsym_wide.j2k -t 256,288 -M 32 -n 4`
+(OpenJPEG 2.5.0). Its 64 flat tiles each cost little to code but over
+2^18 sample-passes under the cap, which charges 4 for each sample, so a
+decode of the file as encoded is refused under the cap at tile 12. Byte
+3028, in tile 11, is then XORed with `0xFF`, so `decode_with` fails in
+tile 11 first. The byte was picked so that no checked refine of the
+target falls between the error and tile 12, which would stop the run at
+the error, and one due refine past tile 12 draws a probe cut at the
+erroring tile. Replay it with
+`cargo +nightly fuzz run -O incremental_decode tests/fixtures/incremental/ -- -runs=0`.
+The file as encoded is not committed: decoding its 4.7 million samples
+would slow every sweep of the fixtures. Both files are made here, so they
+have no license restriction.
+
+`incremental/at_most_samples_sticky.seed` (87 bytes) is a seed of the
+`incremental_decode` fuzz target for the `AtMost` control bit (#494): six
+control bytes (`80 00 00 00 00 00`) in front of a 1024 x 1024 one-tile
+codestream with no packets, made by `synth::empty_tiles` here, so it has no
+license restriction. Every `AtMost` ceiling the target draws is under its
+1048576 samples, so the refine that has the header gives the sticky
+`Samples` error, equal to the one-shot decode's. The file has no `.j2k`
+extension, so the sweeps of the fixtures skip it. Replay it with
+`cargo +nightly fuzz run -O incremental_decode tests/fixtures/incremental/ -- -runs=0`.
+
+`incremental/at_most_work_bound_waits.seed` (604 bytes) is the control bytes
+`A0 00 00 00 00 00` (`AtMost` and a reduction of 1) in front of
+`work_bound/cprl_tall.j2k`. Under `AtMost` a refusal by a work bound still
+grows with the bytes, so the target must expect the refine to wait where the
+one-shot decode is refused, as under any other sample limit. It takes about 11
+s to replay under ASan. Replay it with the command above.
+
+`incremental/t1bomb_row_128_8.seed` (331 bytes, SHA-256
+`8ee10b73fa03f98398a482e04bd39b8d706388f625a301012ab8b539aa5f7482`) is a
+seed of the `incremental_decode` fuzz target for a count past the whole
+code-block bound where `decode_with` is refused by that bound too (#493),
+which `segsym_wide_flipped.j2k` does not reach: there `decode_with` fails in
+tile 11 first. It is written from scratch by
+`scripts/gen-tier1-work-bound-fixtures.py` as `t1bomb(128, 6, 88, 8)` (no
+encoder, no input image, so no license restriction): a row of eight
+128 x 128 tiles of one 8-bit component, each the tile of
+`tier1_work_bound/t1bomb_1024_64_88.j2k` in small. Under the target's cap
+each tile costs 1507328 sample-passes, so tiles 0 and 1 fit the bound of
+2^22 and tile 2 passes it. A probe with the bound spent is cut at tile 0
+and counts to tile 2; the target and `tests/incremental.rs` check that
+its wait gives the tile and work `decode_with` gives. It starts with `SOC`,
+so the target reads it with all-zero control bytes, and its extension keeps
+it out of the sweeps of the fixtures. Replay it with the command above.
+
+### Header fixtures
+
+`header/rescue_cut_sot.j2k` (68 bytes, SHA-256
+`e7821b0144fc26fe0908cd5fdd3cc8886a436e7e05dfe4d0093957cfe3dab4bf`) is
+an input a `header` fuzz run found during #495, committed as found
+(#498). It is a 1560 x 1536 gray codestream of 3 x 3 tiles of 520 x 512,
+whose `COD` gives 1 x 1 precincts, so each tile is over the precinct cap
+under the main header; the input ends two bytes into the first `SOT`.
+With `strict` on, `decode_with` refuses it for the cut `SOT` ("truncated
+marker segment"), and `read_header_with` now does too (it gave the cap's
+`Limit`); with `strict` off both admit it. `opj_decompress` 2.5.0 reads
+its main header and fails to decode component 0.
+`tests/tile_geometry_cap.rs` and `tests/read_header.rs` check it. Replay it
+with `cargo +nightly fuzz run -O header tests/fixtures/header/ -- -runs=0`.
+It was made by the fuzzer, so it has no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
@@ -690,3 +792,26 @@ of the crate with it.
   }
 }
 ```
+
+### Partial decode oracle seeds
+
+`partial/window_rows.j2k` (80 bytes) is an input a 60 s `decode_partial`
+fuzz run found on 2026-11-19 while reviewing #491 (#492), committed as
+found. It is fuzzer output, 80 bytes of headers, derived from no licensed
+file. It declares 65535 tiles (255 x 257 tiles of 1 x 1) and carries one
+tile-part. The target's hash of it picks the window 24..55 by 11..34, under
+which the decode with `strict` off reports one `MissingTiles` run for each
+of the 23 rows of tiles the window reads: 24 entries, past the oracle's old
+bound of five per tile-part plus two. `tests/fuzz_partial_oracle.rs` runs
+the oracle on it. Replay it with
+`cargo +nightly fuzz run -O decode_partial tests/fixtures/partial/window_rows.j2k`.
+
+`partial/header_refused.j2k` (92 bytes) is an input found by the review of
+the PR that added the seed above, committed as found. It is fuzzer-shaped
+output, 92 bytes of headers, derived from no licensed file. One tile is over
+the precinct cap and has no tile-part, so `read_header` refuses it with
+`strict` on while the decode with `strict` off admits it. Through the window
+22..39 by 9..34 at reduction 1 (the target's hash picks both), the report
+holds 25 entries. The oracle reads the grid with `strict` off, and with a
+height-based bound if even that fails; the seed checks that. Replay it with
+`cargo +nightly fuzz run -O decode_partial tests/fixtures/partial/header_refused.j2k`.

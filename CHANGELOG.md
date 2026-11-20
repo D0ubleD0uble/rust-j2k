@@ -6,13 +6,148 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `IncrementalDecoder::header` reads the header of the bytes fed so far
+  (`Ok(None)` until the main header is whole), and
+  `IncrementalDecoder::bytes` borrows them.
+- `IncrementalDecoder::set_resolution_reduction`, `set_max_quality_layers`
+  and `set_region` change the options between refines. Each later image is
+  the strict-off decode of its bytes under the new options. A change of
+  region keeps the packet walks, unless the walks kept are past the room of
+  the new region's decode: then walks of tiles the region does not read are
+  let go until the rest fit. A change of the reduction keeps the walks
+  too, as they do not depend on it. A change of the layer cap walks the
+  tiles again, charged to the bound on the walks of tiles not kept. The
+  cadence of refines does not reset, and an error the old options gave is
+  cleared.
+- `IncrementalDecoder::options` returns the decoder's options as the
+  caller set them. To get an image right after a change of options,
+  without waiting for the next refine, call
+  `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
+  That decode spends nothing from the decoder's bounds.
+- `WorkLimit::AtMost(n)` on `DecodeOptions::sample_limit` sets a fixed
+  ceiling of `n` samples, whatever the input's length or padding: at most
+  `4·n` bytes of output, and sample buffers of no more than about 3.2 times
+  that. The input and the tile-part parse (under 1 KiB for each tile the
+  input carries, at most about 52 times the input plus 128 KiB) are on top.
+  It holds every count the default limit holds (the tiles a region reads, in
+  every component, a palette's expanded channels and sRGB output), so
+  `read_header_with` refuses what the decode would. A refusal under it gives
+  no retry, and in an `IncrementalDecoder` it is an error, not a wait.
+  `AtMost(0)`, and `AtMost` on either work bound, is `InvalidOptions`. It
+  replaces counting the samples by hand from the header (#475).
+- For a refusal by the code-block work bound, `LimitDetail::refused_at`
+  gives the tile refused and the work it needs, as a `RefusedAt` with
+  `tile()` and `work()`, so a caller need not parse the message. The refusal
+  `decode_with` gives carries it, and so do `Waiting::WorkLimit` and a
+  `Waiting::BoundSpent` where the whole bound refuses a tile. Other
+  refusals give `None`, a `BoundSpent` that the earlier refines alone
+  refused included (#493).
+
 ### Changed
 
+- `IncrementalDecoder::refine` returns `Result<Refined>` in place of
+  `Result<Option<Image>>`. To migrate, call `.image()`:
+  `decoder.refine()?.image()` is the `Option<Image>` it returned before.
+  `Refined::Waiting` says why there is no image: `MoreBytes { until, .. }`,
+  `HeaderIncomplete { .. }`, `SampleLimit { limit, .. }`,
+  `WorkLimit { limit, .. }`, `BoundSpent { limit, .. }` and
+  `MissingTiles { limit, .. }` (each with its `LimitDetail`), or
+  `RepeatLimit { .. }`.
+  `BoundSpent` is a refine cut short by the code-block work earlier
+  refines spent, at a tile whose work fits the whole bound, so its
+  `retry_with` is `None`. Such a refine reads the packets of the
+  later tiles without decoding their code-blocks, to tell `BoundSpent`
+  from `WorkLimit`. An error it meets there ends that count, and the
+  refine waits on `BoundSpent`: the code-blocks it skipped can hold the
+  error `decode_with` gives first (#485). Where the count passes the whole
+  bound, the refine also waits on `BoundSpent`, whose message names the
+  tile the whole bound refuses: `decode_with` decodes the tiles counted
+  first and can fail in one of them (#487). A `WorkLimit` of the
+  code-block bound comes only where the refine decoded every tile before
+  the one refused, and carries the refusal a decode of the bytes fed
+  gives, hint included. Both enums and their struct variants are
+  `#[non_exhaustive]`, so a `match` needs a `_` arm and `..` in each
+  variant (#466, #487). `HeaderIncomplete` is a struct variant too, so
+  match it as `HeaderIncomplete { .. }` (#493).
+- The default sample limit grows with the input: it is the larger of 2^29
+  samples and 8 samples per byte of input. Up to 64 MiB of input nothing
+  changes. The sample limit no longer refuses a larger file that holds at least
+  one byte for every 8 samples: a lossless 23171 x 23171 file of 234 MB, refused
+  before, now decodes bit-exact against `opj_decompress` with a peak of 2.84
+  GiB. `WorkLimit::Raised(n)` on `DecodeOptions::sample_limit` is n times that
+  default, so past 64 MiB each factor allows more than before, and a refusal may
+  name a smaller factor. A 100 MB file may now ask for about 3 GiB of output,
+  and a decode of it may peak at about 4.1 GiB for a square tile and up to about
+  9.6 GiB for a tile one sample wide, input included. Padding counts as input,
+  so bound the size of the input you accept, measured in memory after any
+  decompression. `IncrementalDecoder::refine` now waits
+  (`Waiting::SampleLimit`) when the sample limit refuses, as it does for a work
+  bound, since more bytes raise the limit; `finish` reports the refusal (#437).
 - HTJ2K decoding is about 1.5x to 2x faster on large files on one thread.
   The output is unchanged.
+- The code-blocks and precincts one tile may hold grow with the sample
+  limit: max(2^20, the samples it allows / 512) code-blocks and max(2^18,
+  those samples / 2048) precincts. At the defaults, up to 64 MiB of input
+  the caps stay 2^20 and 2^18; `WorkLimit::Raised` and `WorkLimit::AtMost`
+  on `sample_limit` move them at any size. `LimitKind::TileCodeBlocks` and
+  `LimitKind::TilePrecincts` are now adjustable: a refusal names a
+  `WorkLimit::Raised` factor of `DecodeOptions::sample_limit` as its
+  `retry_with`, which `with_retry` sets, and under `WorkLimit::AtMost(n)`
+  the caps are set from `n` and a refusal names no retry. An
+  `IncrementalDecoder` waits on such a refusal (`Waiting::SampleLimit`)
+  rather than failing, unless under `AtMost`. `read_header_with` now counts
+  the tiles it would read under the main header and refuses a tile past a
+  cap that the decode refuses too, at any input size, where it used to
+  return the header; it reads a tile's tile-part header only for a tile
+  over a cap there. A 40000 x 40000 one-tile file in 32x32 code-blocks padded to 210 MB, refused before
+  at every option, now decodes at the defaults, bit-exact against
+  `opj_decompress` (17.5 s and 7.65 GiB at full resolution, 0.43 s at
+  reduction 3). The bookkeeping of a tile at the caps is at most about a
+  third of the output the same limit allows. A tile whose geometry needs a
+  sample limit past what the target can address is `LimitKind::AddressSpace`,
+  not adjustable, and an `IncrementalDecoder` waits only on a refusal with a
+  `retry_with` (#476, #494).
+- `read_header_with` follows the tile-parts once, and no further than the
+  last tile over a cap under the main header, to find the first tile-part
+  of each such tile, where it used to follow them all once for each batch
+  of 1, 2, 4 and so on such tiles. On 65535 tiles of 255 tile-parts each
+  (235 MB), a window of 1530 tiles over a cap took 1.2 s and now takes
+  45 ms at most, 1.8 ms where the first tile-parts come first. It counts
+  those tiles in index order, so where its budget runs out no longer
+  depends on the order of the tile-parts, and it never refuses a file the
+  decode admits. `IncrementalDecoder::header` pays this on each call
+  (#495).
 
 ### Fixed
 
+- With `strict` on, `read_header_with` gives the decode's error for a file
+  where a tile over a code-block or precinct cap under the main header has
+  no tile-part: the decode's error for the tile-parts, which is the first
+  fault its parse finds (a cut or bad `SOT`, or an illegal tile-part
+  header, say), or the missing tile. It gave `Error::Limit` for the cap,
+  while `decode_with` refuses the file for the tile-parts before it counts
+  any tile. To find the error it parses the tile-parts as the decode does,
+  which on that refusal costs as much time and heap as the decode's parse:
+  1.75 s and 281 MiB on a 235 MB file of 16.7 million tile-parts (#498).
+- `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
+  time. A refusal of the packet work or code-block work bound, including the
+  charge for missing tiles, names the larger of what the tiles seen so far
+  need and twice the factor it ran under (`Raised(2)`, `Raised(4)`,
+  `Raised(8)`, ...), so a loop of retries takes about log2 of the factor the
+  file needs, not that many steps, and no longer a step for each tile of a
+  multi-tile file. The message no longer says "at least": the factor can be
+  more than the file needs. Measured on a release build, a loop from the
+  defaults, one thread:
+  `cprl_tall_poc31` (needs 32) took 31 steps and 70 s and now takes 5 steps
+  and 8.5 s; `pocvol_1024x512_1000_2` (strict off) was still refused after
+  46 steps and 120 s and now takes 5 steps and 8.0 s;
+  `pocspent_2tiles_60000_559` (strict off) took 25 steps and 9.8 s and now
+  takes 5 and 1.9 s; a 982-byte file of 64 tiles that each reach the bound
+  (strict off) took 16 steps and 35.8 s and now takes 5 and 11 s. No default
+  changes, and the hint only advises what to raise. A bound already under
+  `Raised(u32::MAX)` names `Unlimited`.
 - `IncrementalDecoder` holds the packet walks it keeps between calls to the
   larger of 1 MiB and 32 bytes per byte fed, as well as to twice the image
   and the largest walk. A file of 1228 bytes that declares a 16384 x 16384
@@ -21,6 +156,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   1076 MiB one decode takes. A tile whose walk does not fit is walked from
   the start by each refine until more bytes make room. Every image, report
   and refusal is unchanged (#415).
+- `IncrementalDecoder` counts the packet visits of the walks that read a
+  tile from the start again: of tiles walked anew on each refine, and of
+  walks started again by a later tile-part's `POC` volumes or packed
+  packet headers, or built again once there is room. Once they pass four
+  times the packet bound of one decode of the bytes fed, a refine that would
+  make such a walk waits (`Waiting::RepeatLimit`), and `finish` decodes the
+  file. Two files of 525 KB made for it, fed in small pieces with a refine
+  after each, took 8.4 and 7.3 times one decode; they now take 4.6 and 3.5
+  times. No
+  committed fixture gives another result (#416).
+- The tile-part parse keeps a record only for each tile that has a
+  tile-part, and 2 bytes for each tile the SIZ grid declares. A file that
+  declares 65535 tiles and carries one tile-part allocated 53 MB, and as much
+  before a strict decode refused it; it now peaks at 132 KB either way,
+  however long the tile-part. A file of 65535 tiles, each in one tile-part,
+  peaks at 47 MB, down from 57 MB (#484).
 
 ## [0.5.0] - 2026-11-17
 

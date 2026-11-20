@@ -11,10 +11,17 @@
 //! ([`check_read`]), and a palette's or sRGB output's count is that of the
 //! returned area.
 //!
-//! The default limit, [`MAX_IMAGE_SAMPLES`], is 2^29 samples: 2 GiB as `i32`.
-//! It admits a Sentinel-2 true-color image (10980 x 10980 x 3, 361.7 M
-//! samples) and an RGB image of up to about 179 MP. OpenJPEG has no such limit; it allocates
-//! what the header declares.
+//! The default limit ([`default_limit`]) is the larger of
+//! [`MAX_IMAGE_SAMPLES`], 2^29 samples (2 GiB as `i32`), and
+//! [`SAMPLES_PER_BYTE`], 8 samples per byte of input. Up to 64 MiB of input it
+//! is 2^29, which admits a Sentinel-2 true-color image (10980 x 10980 x 3,
+//! 361.7 M samples) and an RGB image of up to about 179 MP. Past that it
+//! grows with the input, so a large file may ask for at most 32 bytes of
+//! `i32` output per byte of input, and a small one is held to the floor.
+//! The input is all the bytes the decode is given: a JP2 file's boxes
+//! count. OpenJPEG has no such limit; it allocates what the header declares.
+//! [`WorkLimit::AtMost`] sets the limit to its `n` instead, whatever the
+//! input, and a refusal under it names no retry ([`over`]).
 //!
 //! While a palette expands, the index plane and the columns are held together,
 //! so the peak there is about twice the output: a one-column palette at
@@ -58,7 +65,7 @@
 //! table are at 5 levels. The coded-data figures include
 //! the caller's input bytes, so they grow with the file: a 38 MB lossless
 //! 8192 x 8192 file peaks at about 380 MiB. The ratios carry over to the
-//! 2^29 default, about 2.7 GiB for one component in one tile: a 23170 x 23170
+//! 2^29 floor, about 2.7 GiB for one component in one tile: a 23170 x 23170
 //! one-tile 5/3 image (lossless, 286 MiB of input) peaks at 2.9 GiB, about 1.3
 //! times its 2 GiB of output plus the input. A tiled image peaks lower: the
 //! 1024 x 1024-tiled Sentinel-2 band (460 MiB of samples) peaks at about 470 MiB, as
@@ -66,8 +73,16 @@
 
 use crate::{Error, WorkLimit};
 
-/// The default sample limit: 2^29 samples, 2 GiB as `i32`.
+/// The floor of the default sample limit: 2^29 samples, 2 GiB as `i32`.
 pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 29;
+
+/// The samples the default limit allows per byte of input, once that comes
+/// to more than [`MAX_IMAGE_SAMPLES`]: past 64 MiB of input. The large valid
+/// files measured hold far fewer: a Sentinel-2 true-color image about 2.9
+/// samples a byte, and a lossless 23170 x 23170 gradient about 1.8. A file
+/// over the floor that holds more samples a byte than this needs a raised
+/// limit.
+pub(crate) const SAMPLES_PER_BYTE: u64 = 8;
 
 /// The most samples one buffer can hold on this target. Every sample buffer
 /// holds 4-byte samples (`i32` or `f32`), and an allocation may not pass
@@ -76,17 +91,93 @@ pub(crate) const MAX_IMAGE_SAMPLES: u64 = 1 << 29;
 /// allocated. It is 2^29 - 1 on a 32-bit target, and 2^61 - 1 on a 64-bit one.
 pub(crate) const ADDRESSABLE_SAMPLES: u64 = isize::MAX as u64 / 4;
 
-/// The samples a decode may hold under `limit`.
-pub(crate) fn cap(limit: &WorkLimit) -> u64 {
-    limit.apply(MAX_IMAGE_SAMPLES).min(ADDRESSABLE_SAMPLES)
+/// The default sample limit for `bytes` bytes of input: the larger of
+/// [`MAX_IMAGE_SAMPLES`] and [`SAMPLES_PER_BYTE`] samples a byte.
+pub(crate) fn default_limit(bytes: u64) -> u64 {
+    MAX_IMAGE_SAMPLES.max(bytes.saturating_mul(SAMPLES_PER_BYTE))
+}
+
+/// The sample limit of one decode: the samples it may hold, and the default
+/// limit for its input, which a `Raised` factor multiplies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cap {
+    /// The samples the decode may hold.
+    pub(crate) allowed: u64,
+    /// The default limit for the decode's input ([`default_limit`]).
+    pub(crate) default: u64,
+    /// The `n` of a [`WorkLimit::AtMost`] limit: a ceiling the caller set,
+    /// which a refusal names, with no retry. `None` for the other limits.
+    pub(crate) at_most: Option<u64>,
+}
+
+impl Cap {
+    /// This cap with no limit on the count, for a plan that must count
+    /// nothing.
+    pub(crate) fn lifted(self) -> Cap {
+        Cap {
+            allowed: u64::MAX,
+            ..self
+        }
+    }
+
+    /// The most code-blocks one tile may hold under this cap:
+    /// [`TILE_BLOCKS_FLOOR`], or one for each [`SAMPLES_PER_BLOCK`] samples
+    /// the cap allows when that is more.
+    pub(crate) fn tile_blocks(self) -> u64 {
+        TILE_BLOCKS_FLOOR.max(self.allowed / SAMPLES_PER_BLOCK)
+    }
+
+    /// The most precincts one tile may hold under this cap:
+    /// [`TILE_PRECINCTS_FLOOR`], or one for each [`SAMPLES_PER_PRECINCT`]
+    /// samples the cap allows when that is more.
+    pub(crate) fn tile_precincts(self) -> u64 {
+        TILE_PRECINCTS_FLOOR.max(self.allowed / SAMPLES_PER_PRECINCT)
+    }
+}
+
+/// The fewest code-blocks a tile may hold, under any sample limit: 2^20.
+pub(crate) const TILE_BLOCKS_FLOOR: u64 = 1 << 20;
+
+/// The fewest precincts a tile may hold, under any sample limit: 2^18.
+pub(crate) const TILE_PRECINCTS_FLOOR: u64 = 1 << 18;
+
+/// The samples of the sample limit that allow one more code-block a tile,
+/// past [`TILE_BLOCKS_FLOOR`]: at the 2^29 floor of the default limit the two
+/// meet. A code-block's bookkeeping is a few hundred bytes, so the
+/// code-blocks of a tile at the cap hold less than the 2 KiB of `i32` output
+/// those 512 samples are.
+pub(crate) const SAMPLES_PER_BLOCK: u64 = MAX_IMAGE_SAMPLES / TILE_BLOCKS_FLOOR;
+
+/// The samples of the sample limit that allow one more precinct a tile,
+/// past [`TILE_PRECINCTS_FLOOR`]: at the 2^29 floor of the default limit the
+/// two meet.
+pub(crate) const SAMPLES_PER_PRECINCT: u64 = MAX_IMAGE_SAMPLES / TILE_PRECINCTS_FLOOR;
+
+/// The samples a decode of `bytes` bytes of input may hold under `limit`:
+/// `limit` applied to [`default_limit`], or the `n` of `AtMost(n)` whatever
+/// the input, and never past [`ADDRESSABLE_SAMPLES`].
+pub(crate) fn cap(limit: &WorkLimit, bytes: usize) -> Cap {
+    let default = default_limit(bytes as u64);
+    let at_most = match limit {
+        WorkLimit::AtMost(n) => Some(*n),
+        _ => None,
+    };
+    Cap {
+        allowed: limit.apply(default).min(ADDRESSABLE_SAMPLES),
+        default,
+        at_most,
+    }
 }
 
 /// The [`Error::Limit`] for `what` (a description of what is over the limit,
 /// such as "image area 10980x10980"), which needs `total` samples where `cap`
-/// are allowed. It names the option, and the smallest
-/// [`WorkLimit::Raised`] factor that admits `total` (or, past any factor, only
-/// [`WorkLimit::Unlimited`]), or says that the target cannot address that many.
-pub(crate) fn over(what: &str, total: u64, cap: u64) -> Error {
+/// allows fewer. It names the option, and the smallest
+/// [`WorkLimit::Raised`] factor of the cap's default that admits `total` (or,
+/// past any factor, only [`WorkLimit::Unlimited`]), or says that the target
+/// cannot address that many. Under [`WorkLimit::AtMost`] it names that
+/// ceiling and no retry: the caller set it, so no option the decoder could
+/// name is one the caller would take.
+pub(crate) fn over(what: &str, total: u64, cap: Cap) -> Error {
     if total > ADDRESSABLE_SAMPLES {
         return Error::limit_fixed(
             crate::LimitKind::AddressSpace,
@@ -96,14 +187,91 @@ pub(crate) fn over(what: &str, total: u64, cap: u64) -> Error {
             ),
         );
     }
-    let (retry, advice) = crate::limit_hint::samples(total, MAX_IMAGE_SAMPLES);
+    if let Some(n) = cap.at_most {
+        return Error::limit_unhinted(
+            crate::LimitKind::Samples,
+            format!(
+                "{what} needs {total} samples, over the ceiling of `WorkLimit::AtMost({n})` \
+                 (see `DecodeOptions::sample_limit`)"
+            ),
+        );
+    }
+    let (retry, advice) = crate::limit_hint::samples(total, cap.default);
     Error::limit_retry(
         crate::LimitKind::Samples,
         retry,
         format!(
-            "{what} needs {total} samples, over the sample limit of {cap} (see \
-             `DecodeOptions::sample_limit`); {advice}"
+            "{what} needs {total} samples, over the sample limit of {} (see \
+             `DecodeOptions::sample_limit`); {advice}",
+            cap.allowed
         ),
+    )
+}
+
+/// The [`Error::Limit`] for tile `tile`, whose geometry holds `count`
+/// code-blocks ([`LimitKind::TileCodeBlocks`](crate::LimitKind)) or precincts
+/// ([`LimitKind::TilePrecincts`](crate::LimitKind)), more than `cap` allows a
+/// tile ([`Cap::tile_blocks`], [`Cap::tile_precincts`]).
+///
+/// The cap grows with the sample limit, so the refusal names the
+/// `WorkLimit::Raised` factor of the cap's default that admits the tile, or
+/// twice the factor it ran under when that is more, as the work bounds do:
+/// the tiles after it may need more. Under [`WorkLimit::AtMost`] it names
+/// that ceiling and no retry. Where the sample limit that would admit the tile
+/// is past what the target can address, it is
+/// [`LimitKind::AddressSpace`](crate::LimitKind), which no option raises, as
+/// [`over`] gives for the samples.
+pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap) -> Error {
+    let (noun, limit, per, floor) = match kind {
+        crate::LimitKind::TilePrecincts => (
+            "precincts",
+            cap.tile_precincts(),
+            SAMPLES_PER_PRECINCT,
+            TILE_PRECINCTS_FLOOR,
+        ),
+        _ => (
+            "code-blocks",
+            cap.tile_blocks(),
+            SAMPLES_PER_BLOCK,
+            TILE_BLOCKS_FLOOR,
+        ),
+    };
+    let head = format!("tile {tile} holds {count} {noun}, more than the {limit} a tile may hold");
+    let needed = count.saturating_mul(per);
+    if needed > ADDRESSABLE_SAMPLES {
+        // No sample limit lifts this one, so it is not the tile cap's kind:
+        // it is the address space's, as `over` reports it.
+        let most = floor.max(ADDRESSABLE_SAMPLES / per);
+        // Say the most only where it is not the cap just named.
+        let tail = if most == limit {
+            String::new()
+        } else {
+            format!(" (at most {most} {noun} a tile)")
+        };
+        return Error::limit_fixed(
+            crate::LimitKind::AddressSpace,
+            format!(
+                "{head}, and the sample limit that would admit it is past what this target \
+                 can address{tail}"
+            ),
+        );
+    }
+    if let Some(n) = cap.at_most {
+        return Error::limit_unhinted(
+            kind,
+            format!("{head} under `WorkLimit::AtMost({n})` (see `DecodeOptions::sample_limit`)"),
+        );
+    }
+    crate::limit_hint::tile_geometry(
+        kind,
+        &format!(
+            "{head} under the sample limit of {} samples, one for each {per} samples it \
+             allows (see `DecodeOptions::sample_limit`)",
+            cap.allowed
+        ),
+        needed,
+        cap.allowed,
+        cap.default,
     )
 }
 
@@ -126,7 +294,7 @@ pub(crate) fn at(reduction: u8) -> String {
 pub(crate) fn check_codestream(
     siz: &crate::codestream::markers::Siz,
     reduction: u8,
-    cap: u64,
+    cap: Cap,
 ) -> crate::Result<()> {
     check_extent(siz, reduction, cap, false)
 }
@@ -144,12 +312,12 @@ pub(crate) fn check_codestream(
 /// component's code-block geometry in each tile read, a component subset
 /// or not; the code-blocks of the kept resolutions are charged to no work
 /// bound, as they are no more than the samples counted here, and no more
-/// than 2^20 a tile (`docs/resource-bounds.md`).
+/// than [`Cap::tile_blocks`] a tile (`docs/resource-bounds.md`).
 pub(crate) fn check_read(
     siz: &crate::codestream::markers::Siz,
     selection: &crate::window::Selection,
     reduction: u8,
-    cap: u64,
+    cap: Cap,
 ) -> crate::Result<()> {
     if selection.area.image_rect() == siz.image_rect() {
         return check_codestream(siz, reduction, cap);
@@ -167,7 +335,7 @@ pub(crate) fn check_read(
 fn check_extent(
     siz: &crate::codestream::markers::Siz,
     reduction: u8,
-    cap: u64,
+    cap: Cap,
     tiles: bool,
 ) -> crate::Result<()> {
     // The image area, `(Xsiz - XOsiz)·(Ysiz - YOsiz)` reduced, not `Xsiz·Ysiz`,
@@ -175,7 +343,7 @@ fn check_extent(
     // to a small canvas.
     let (width, height) = siz.image_extent_at(reduction);
     let samples = u64::from(width) * u64::from(height);
-    if samples > cap {
+    if samples > cap.allowed {
         let what = if tiles {
             format!(
                 "the area of the tiles read ({width}x{height}{})",
@@ -193,7 +361,7 @@ fn check_extent(
             .ok_or_else(|| Error::inconsistent(format!("`SIZ` declares no component {index}")))?;
         total = total.saturating_add(u64::from(width) * u64::from(height));
     }
-    if total > cap {
+    if total > cap.allowed {
         let what = format!(
             "a decode of {}{} components{}",
             if tiles { "the tiles read in " } else { "" },
@@ -209,8 +377,15 @@ fn check_extent(
 mod tests {
     use super::*;
 
+    /// The default cap of an input under 64 MiB: the floor.
+    const DEFAULT: Cap = Cap {
+        allowed: MAX_IMAGE_SAMPLES,
+        default: MAX_IMAGE_SAMPLES,
+        at_most: None,
+    };
+
     fn message(total: u64) -> String {
-        match over("image area", total, MAX_IMAGE_SAMPLES) {
+        match over("image area", total, DEFAULT) {
             Error::Limit(m) => m.message().to_owned(),
             other => panic!("{other:?}"),
         }
@@ -243,7 +418,7 @@ mod tests {
             let m = message(total);
             assert!(!m.contains("Raised"), "{m}");
             assert!(m.contains("only `WorkLimit::Unlimited` admits it"), "{m}");
-            let Error::Limit(limit) = over("image area", total, MAX_IMAGE_SAMPLES) else {
+            let Error::Limit(limit) = over("image area", total, DEFAULT) else {
                 unreachable!()
             };
             assert_eq!(limit.kind(), crate::LimitKind::Samples);
@@ -256,8 +431,7 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_hint_is_typed() {
-        let Error::Limit(limit) = over("image area", MAX_IMAGE_SAMPLES * 3, MAX_IMAGE_SAMPLES)
-        else {
+        let Error::Limit(limit) = over("image area", MAX_IMAGE_SAMPLES * 3, DEFAULT) else {
             unreachable!()
         };
         assert_eq!(limit.kind(), crate::LimitKind::Samples);
@@ -268,10 +442,251 @@ mod tests {
     /// refusal gives nothing to retry with.
     #[test]
     fn past_the_address_space_there_is_no_retry() {
-        let error = over("image area", ADDRESSABLE_SAMPLES + 1, MAX_IMAGE_SAMPLES);
+        let error = over("image area", ADDRESSABLE_SAMPLES + 1, DEFAULT);
         assert!(
             crate::error::is_fixed_limit(&error, crate::LimitKind::AddressSpace),
             "{error:?}"
         );
+    }
+
+    /// The default is the floor up to 64 MiB of input, and 8 samples a byte
+    /// past it.
+    #[test]
+    fn the_default_scales_with_the_input_past_the_floor() {
+        assert_eq!(cap(&WorkLimit::Default, 0), DEFAULT);
+        assert_eq!(cap(&WorkLimit::Default, 100), DEFAULT);
+        assert_eq!(cap(&WorkLimit::Default, 1 << 26), DEFAULT);
+        let past = (1 << 26) + 1;
+        let scaled = cap(&WorkLimit::Default, past);
+        assert_eq!(scaled.default, 8 * past as u64);
+        assert_eq!(scaled.allowed, 8 * past as u64);
+    }
+
+    /// `Raised(n)` is n times the scaled default, so it is never below
+    /// `Default` and grows with n; `Unlimited` lifts it to the address cap.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn raised_multiplies_the_scaled_default() {
+        let bytes = 1 << 27;
+        let default = cap(&WorkLimit::Default, bytes);
+        assert_eq!(default.allowed, 1 << 30);
+        for n in 1..=4 {
+            let raised = cap(&WorkLimit::Raised(n), bytes);
+            assert_eq!(raised.default, default.default);
+            assert_eq!(raised.allowed, u64::from(n) << 30);
+        }
+        assert_eq!(
+            cap(&WorkLimit::Unlimited, bytes).allowed,
+            ADDRESSABLE_SAMPLES
+        );
+    }
+
+    /// However many bytes there are, the cap stays within what the target
+    /// can address: on a 32-bit target 2^29 - 1, below the floor itself.
+    #[test]
+    fn the_scaled_default_never_passes_the_address_space() {
+        for limit in [
+            WorkLimit::Default,
+            WorkLimit::Raised(u32::MAX),
+            WorkLimit::Unlimited,
+        ] {
+            assert_eq!(
+                cap(&limit, usize::MAX).allowed,
+                ADDRESSABLE_SAMPLES,
+                "{limit:?}"
+            );
+        }
+    }
+
+    /// Under a scaled default the hint is still the smallest factor that
+    /// admits the count: the factor named admits it, and one less does not.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn the_hint_is_exact_under_a_scaled_default() {
+        let bytes = 100 << 20;
+        let default = cap(&WorkLimit::Default, bytes);
+        for total in [
+            default.allowed + 1,
+            3 * default.allowed,
+            5 * default.allowed - 1,
+        ] {
+            let Error::Limit(limit) = over("image area", total, default) else {
+                unreachable!()
+            };
+            let Some(WorkLimit::Raised(n)) = limit.retry_with() else {
+                panic!("{limit:?}")
+            };
+            assert!(n >= 2, "{limit}");
+            assert!(
+                cap(&WorkLimit::Raised(n), bytes).allowed >= total,
+                "{limit}"
+            );
+            assert!(
+                cap(&WorkLimit::Raised(n - 1), bytes).allowed < total,
+                "{limit}"
+            );
+            let limit_words = format!("over the sample limit of {} ", default.allowed);
+            assert!(limit.message().contains(&limit_words), "{limit}");
+        }
+    }
+
+    /// `AtMost(n)` allows `n` whatever the input's length: not a factor of the
+    /// default, nor capped by it, and padding past 64 MiB does not raise it.
+    /// Only the address cap is lower.
+    #[test]
+    fn at_most_is_absolute() {
+        for bytes in [0, 1 << 26, (1 << 26) + 1, usize::MAX] {
+            for n in [1, 1000, MAX_IMAGE_SAMPLES - 1, MAX_IMAGE_SAMPLES + 1] {
+                let n = n.min(ADDRESSABLE_SAMPLES);
+                let cap = cap(&WorkLimit::AtMost(n), bytes);
+                assert_eq!(cap.allowed, n, "AtMost({n}), {bytes} bytes");
+                assert_eq!(cap.at_most, Some(n), "AtMost({n}), {bytes} bytes");
+                assert_eq!(cap.default, default_limit(bytes as u64));
+            }
+            assert_eq!(
+                cap(&WorkLimit::AtMost(u64::MAX), bytes).allowed,
+                ADDRESSABLE_SAMPLES
+            );
+        }
+        for limit in [
+            WorkLimit::Default,
+            WorkLimit::Raised(2),
+            WorkLimit::Unlimited,
+        ] {
+            assert_eq!(cap(&limit, 0).at_most, None, "{limit:?}");
+        }
+    }
+
+    /// A refusal under `AtMost(n)` names the ceiling and the count, and no
+    /// factor: it has nothing to retry with.
+    #[test]
+    fn a_refusal_under_at_most_names_the_ceiling_and_no_retry() {
+        let n = 1 << 20;
+        for bytes in [0, (1 << 26) + 1] {
+            let Error::Limit(limit) = over(
+                "image area 2048x1024",
+                1 << 21,
+                cap(&WorkLimit::AtMost(n), bytes),
+            ) else {
+                unreachable!()
+            };
+            assert_eq!(limit.kind(), crate::LimitKind::Samples);
+            assert_eq!(limit.retry_with(), None, "{limit}");
+            let m = limit.message();
+            assert!(
+                m.starts_with(
+                    "image area 2048x1024 needs 2097152 samples, over the ceiling of \
+                     `WorkLimit::AtMost(1048576)` (see `DecodeOptions::sample_limit`)"
+                ),
+                "{m}"
+            );
+            assert!(!m.contains("Raised"), "{m}");
+            assert!(!m.contains("Unlimited"), "{m}");
+        }
+        // Past the address space the refusal is still that one.
+        let error = over(
+            "image area",
+            ADDRESSABLE_SAMPLES + 1,
+            cap(&WorkLimit::AtMost(n), 0),
+        );
+        assert!(
+            crate::error::is_fixed_limit(&error, crate::LimitKind::AddressSpace),
+            "{error:?}"
+        );
+    }
+
+    /// The caps of a tile are the floors up to the 2^29 floor of the limit,
+    /// and one code-block for each 512 samples and one precinct for each 2048
+    /// past it, under every kind of limit.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn the_tile_caps_scale_with_the_allowed_samples() {
+        let floor = cap(&WorkLimit::Default, 0);
+        assert_eq!(floor.tile_blocks(), 1 << 20);
+        assert_eq!(floor.tile_precincts(), 1 << 18);
+        let bytes = 100 << 20;
+        let scaled = cap(&WorkLimit::Default, bytes);
+        assert_eq!(scaled.tile_blocks(), 8 * bytes as u64 / 512);
+        assert_eq!(scaled.tile_precincts(), 8 * bytes as u64 / 2048);
+        let raised = cap(&WorkLimit::Raised(3), 0);
+        assert_eq!(raised.tile_blocks(), 3 << 20);
+        assert_eq!(raised.tile_precincts(), 3 << 18);
+        for (n, blocks, precincts) in [
+            (1000, 1 << 20, 1 << 18),
+            (1 << 30, 1 << 21, 1 << 19),
+            ((1 << 30) + 2047, (1 << 21) + 3, 1 << 19),
+        ] {
+            let at_most = cap(&WorkLimit::AtMost(n), bytes);
+            assert_eq!(at_most.tile_blocks(), blocks, "AtMost({n})");
+            assert_eq!(at_most.tile_precincts(), precincts, "AtMost({n})");
+        }
+        let unlimited = cap(&WorkLimit::Unlimited, 0);
+        assert_eq!(unlimited.tile_blocks(), ADDRESSABLE_SAMPLES / 512);
+    }
+
+    /// A tile's refusal names the factor of the default its count needs, or
+    /// twice the one it ran under; under `AtMost`, or past what any limit
+    /// admits, it names none.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_tile_refusal_names_a_factor_of_the_sample_limit() {
+        use crate::LimitKind::{AddressSpace, TileCodeBlocks, TilePrecincts};
+        let hint = |kind, count, cap| match over_tile(kind, 7, count, cap) {
+            Error::Limit(limit) => {
+                // Past the address space it is that kind, which no option
+                // raises, whichever tile cap it was counted against.
+                let past = count.saturating_mul(if kind == TilePrecincts {
+                    SAMPLES_PER_PRECINCT
+                } else {
+                    SAMPLES_PER_BLOCK
+                }) > ADDRESSABLE_SAMPLES;
+                let expected = if past { AddressSpace } else { kind };
+                assert_eq!(limit.kind(), expected, "{limit}");
+                assert_eq!(limit.kind().is_adjustable(), !past, "{limit}");
+                assert!(limit.message().starts_with("tile 7 holds "), "{limit}");
+                limit.retry_with()
+            }
+            other => panic!("{other:?}"),
+        };
+        let floor = cap(&WorkLimit::Default, 0);
+        assert_eq!(
+            hint(TileCodeBlocks, (1 << 20) + 1, floor),
+            Some(WorkLimit::Raised(2))
+        );
+        assert_eq!(
+            hint(TileCodeBlocks, 5 << 20, floor),
+            Some(WorkLimit::Raised(5))
+        );
+        assert_eq!(
+            hint(TilePrecincts, (1 << 18) + 1, floor),
+            Some(WorkLimit::Raised(2))
+        );
+        let raised = cap(&WorkLimit::Raised(2), 0);
+        assert_eq!(
+            hint(TileCodeBlocks, 3 << 20, raised),
+            Some(WorkLimit::Raised(4))
+        );
+        let at_most = cap(&WorkLimit::AtMost(1 << 30), 0);
+        assert_eq!(hint(TileCodeBlocks, (1 << 21) + 1, at_most), None);
+        let unlimited = cap(&WorkLimit::Unlimited, 0);
+        assert_eq!(
+            hint(TileCodeBlocks, ADDRESSABLE_SAMPLES / 512 + 1, unlimited),
+            None
+        );
+        assert_eq!(hint(TilePrecincts, u64::MAX, floor), None);
+    }
+
+    /// A refusal under a raised limit names a factor of the default, not of
+    /// the raised limit, so a retry with it makes progress.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_refusal_under_a_raised_limit_names_a_larger_factor() {
+        let raised = cap(&WorkLimit::Raised(2), 0);
+        let total = 3 * MAX_IMAGE_SAMPLES + 1;
+        let Error::Limit(limit) = over("image area", total, raised) else {
+            unreachable!()
+        };
+        assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(4)), "{limit}");
+        assert!(cap(&WorkLimit::Raised(4), 0).allowed >= total);
     }
 }

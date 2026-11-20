@@ -157,7 +157,8 @@
 //! For a file that arrives in pieces, use [`IncrementalDecoder`] rather than
 //! decoding each prefix again: [`feed`](IncrementalDecoder::feed) appends
 //! bytes, [`refine`](IncrementalDecoder::refine) decodes them from time to
-//! time and returns the image they hold, with its report, and
+//! time and returns the image they hold, with its report, or why it waits
+//! ([`Waiting`]), and
 //! [`finish`](IncrementalDecoder::finish) decodes the whole input once it
 //! ends. Each refine goes on from where the last one stopped reading
 //! packets.
@@ -221,10 +222,10 @@ pub(crate) mod window;
 #[doc(hidden)]
 pub mod fuzz;
 
-pub use error::{Error, ErrorDetail, LimitDetail, LimitKind, Result};
+pub use error::{Error, ErrorDetail, LimitDetail, LimitKind, RefusedAt, Result};
 pub use header::{ComponentInfo, Header, TileGrid};
 pub use image::{Component, Image};
-pub use incremental::IncrementalDecoder;
+pub use incremental::{IncrementalDecoder, Refined, Waiting};
 pub use jp2::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
     ColorSpace, ColorSpecification, FileType, ImageHeader, IprBox, Jp2Metadata, MappingKind,
@@ -294,15 +295,20 @@ pub use window::{Region, Window};
 ///   as `i32`), summed over its output channels at the decode's
 ///   [`resolution_reduction`](DecodeOptions::resolution_reduction): every
 ///   component, a palette's expanded channels, and the channels sRGB output
-///   adds. That admits a 10980 x 10980 Sentinel-2 true-color image (three
-///   components), or an RGB image of up to about 179 MP. A larger image is refused from its header alone,
-///   before any tile is read. Under a window or a tile, only the tiles read
+///   adds. Up to 64 MiB of input that admits a 10980 x 10980 Sentinel-2
+///   true-color image (three components), or an RGB image of up to about
+///   179 MP; past 64 MiB the limit is 8 samples per byte instead. An image
+///   over the limit is refused from its header alone, before any tile is
+///   read. Under a window or a tile, only the tiles read
 ///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
-///   times the output for a square tile, about 2.7 GiB at the limit,
+///   times the output for a square tile, about 2.7 GiB at 2^29 samples,
 ///   and more for a tall, narrow tile or while a palette expands (see [the
-///   sample limit][sample-limit]). This is for the one-shot functions; an
+///   sample limit][sample-limit]). The limit also sets the code-blocks and
+///   precincts one tile may hold: one for each 512 and each 2048 samples it
+///   allows, and at least 2^20 and 2^18. This is for the one-shot functions; an
 ///   [`IncrementalDecoder`] keeps per-tile state and can hold up to about
-///   three times as much.
+///   three times one decode's peak, plus the bytes fed and a table of 24 bytes
+///   per tile index up to the highest seen (about 1.5 MiB for 65535 tiles).
 /// - Reading the packet headers of every tile may take
 ///   at most 2^24 steps, or 32 per byte of tile data when that is more. A
 ///   step is a packet read, a run of code-blocks a header skips without
@@ -349,9 +355,11 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// Use [`read_header_with`] to read the header for other options.
 ///
 /// A readable header does not mean [`decode`] will succeed. The tile data is
-/// not read (except the packet headers of the last tile of a JP2 file whose
-/// tile-part has `Psot = 0`, described on [`read_header_with`]), so it can
-/// still be damaged, unsupported, or past a work bound ([`Error::Limit`]).
+/// not read (except the tile-part headers of a tile over a cap on its
+/// code-blocks or precincts under the main header, and the packet headers of
+/// the last tile of a JP2 file whose tile-part has `Psot = 0`, both described
+/// on [`read_header_with`]), so it can still be damaged, unsupported, or past
+/// a work bound ([`Error::Limit`]).
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -374,11 +382,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 ///
 /// The input is detected as [`decode`] detects it. The read covers a JP2
 /// file's boxes and the codestream's main header, up to the first tile-part
-/// (`SOT` marker), and stops there, so a file whose tile data is cut short or
-/// missing still has a readable header. Input that ends before the first
-/// `SOT` marker is whole, from the empty input on and in a JP2 file's boxes
-/// too, is [`Error::Incomplete`]: wait for more bytes and try again. Nothing
-/// is allocated for the samples.
+/// (`SOT` marker), and stops there, unless a tile is over a cap on its
+/// code-blocks or precincts under the main header (see below). So a file
+/// whose tile data is cut short or missing still has a readable header.
+/// Input that ends before the first `SOT` marker is whole, from the empty
+/// input on and in a JP2 file's boxes too, is [`Error::Incomplete`]: wait
+/// for more bytes and try again. Nothing is allocated for the samples or the
+/// tile data.
 /// One case reads further: in a JP2 file whose last tile-part has `Psot = 0`
 /// (no length) and whose `jp2c` box ends before the file does, the packet
 /// headers of that tile-part's tile are walked to see whether the codestream
@@ -393,6 +403,39 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// codestream is taken to run to the end of the file, as for any `Psot = 0`
 /// tile-part; [`decode_with`] does the same.
 ///
+/// The read also counts the code-blocks and precincts of each tile it would
+/// read under the main header, and refuses a tile past the caps
+/// [`sample_limit`](DecodeOptions::sample_limit) sets, with the
+/// [`Error::Limit`] the decode gives, where the decode refuses it too. Only
+/// for a tile over a cap there does it read further: it follows the
+/// tile-parts by their `Psot`, reading their `SOT`s, once in all and no
+/// further than the last such tile, and reads the first tile-part header
+/// of each such tile within its `Psot`, no tile data, holding one tile's
+/// coding parameters at a time (but see the refusal of a tile with no
+/// tile-part below). A tile-part `COD` or `COC` that brings
+/// the tile within the caps admits it, as does
+/// [`strict`](DecodeOptions::strict) off when the tile has no tile-part,
+/// since the decode then leaves it out. With it on, such a tile gets the
+/// decode's error for the tile-parts, from the same parse: the first fault
+/// its parse finds, or the missing tile. A tile-part
+/// header the decode finds at fault is left to the decode, as is a
+/// tile-part `COD` that takes a tile over the caps. The count has a budget
+/// of 2^22 steps under the main header and as many under the tiles' own;
+/// the tiles past it are left to the decode too. For all of those it can
+/// return a header for a file the decode refuses. The time is one walk of
+/// the tile-parts at most plus the budget: 45 ms in release for a window of
+/// 1530 tiles over a cap of a 235 MB file of 65535 tiles in 16.7 million
+/// tile-parts, under a millisecond with no tile over a cap, and 63 ms for
+/// 1000 tiles of 4096 components, each with a tile-part `COD`. A refusal
+/// of a tile with no tile-part with `strict` on costs the decode's parse
+/// of the tile-parts on top, as much time and heap as the decode spends
+/// before it refuses the file: 1.75 s and 281 MiB in release on that
+/// 235 MB file with the tile read left out, and 21 ms and 29 MiB on a
+/// 0.9 MB file of 65535 tiles in one tile-part each. On a file
+/// the decode refuses for a fault in its tile-parts, it may still give this
+/// [`Error::Limit`] instead of the decode's error where it refuses a tile
+/// it found a tile-part for.
+///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks
 /// first. The options matter: a `cmap` that
@@ -400,7 +443,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// or palette that fits the sample limit only once
 /// [`resolution_reduction`](DecodeOptions::resolution_reduction) shrinks the
 /// image or [`sample_limit`](DecodeOptions::sample_limit) raises the limit,
-/// is a fault under some options and not others. A fault in the tile
+/// is a fault under some options and not others. The sample limit is that
+/// of the bytes passed, so a prefix holding only the header is held to the
+/// 2^29-sample floor: the header of a valid file over 64 MiB and over 2^29
+/// samples, read from a prefix, gives [`Error::Limit`] even when the whole
+/// file decodes at the defaults. The [`Raised`](WorkLimit::Raised) factor
+/// that refusal names also admits the whole file, whose default is larger.
+/// A fault in the tile
 /// data (a broken tile-part, a tile header that changes a component's
 /// wavelet, a reduction that a tile-part COD or COC with fewer levels cannot
 /// take) is only found by decoding. So is a POC sequence that leaves out
@@ -590,7 +639,7 @@ pub enum ColorOutput {
 /// Start from [`DecodeOptions::default`] and set what differs with its
 /// `with_*` method, or the field directly. The struct is `#[non_exhaustive]`,
 /// so a new option is not a breaking change.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct DecodeOptions {
     /// How many of the finest resolution levels to discard. Each level about
@@ -835,10 +884,18 @@ pub struct DecodeOptions {
     /// described on [`decode`]. Default [`WorkLimit::Default`].
     pub code_block_work_limit: WorkLimit,
     /// How many samples the decoded image may hold, against the limit
-    /// described on [`decode`]: 2^29 samples (2 GiB as `i32`) by default,
-    /// summed over the output channels at
+    /// described on [`decode`], summed over the output channels at
     /// [`resolution_reduction`](Self::resolution_reduction). Default
     /// [`WorkLimit::Default`].
+    ///
+    /// The default limit is 2^29 samples (2 GiB as `i32`), or 8 samples per
+    /// byte of input when that is more: past 64 MiB of input, it grows with
+    /// the file. The input is every byte passed in, a JP2 file's boxes
+    /// included; for an [`IncrementalDecoder`] it is the bytes fed so far.
+    /// Past 64 MiB, a file may ask for 32 bytes of output per byte of
+    /// input, and a decode peaks at about 43 bytes per byte for a square
+    /// tile and up to about 102 for a tile one sample wide: about 4.1 GiB and
+    /// 9.6 GiB for a file of 100 MB, input included.
     ///
     /// Under a window or a tile ([`region`](Self::region)), the count
     /// is the samples of the tiles the decode reads, in every component, as
@@ -849,7 +906,20 @@ pub struct DecodeOptions {
     /// [`components`](Self::components) subset does not lower the count, as
     /// the packets of every component of a tile read are still walked.
     ///
-    /// `Raised(n)` allows `n` times 2^29 samples. `Unlimited` lifts the
+    /// The limit also sets how many code-blocks and precincts one tile may
+    /// hold, counted at full resolution over its components: one code-block
+    /// for each 512 samples it allows and one precinct for each 2048, and at
+    /// least 2^20 and 2^18. A tile past either is refused with an
+    /// [`Error::Limit`] of [`LimitKind::TileCodeBlocks`] or
+    /// [`LimitKind::TilePrecincts`], whose `retry_with` raises this option.
+    /// Their bookkeeping is at most about a third of the output the same
+    /// limit allows past 2^29 (see [code-blocks and precincts per
+    /// tile](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#code-blocks-and-precincts-per-tile)).
+    ///
+    /// `Raised(n)` allows `n` times the default for the same input: `n` times
+    /// 2^29 samples up to 64 MiB, and `8 * n` samples per byte past it. So
+    /// a factor never allows less than the default, and the factor a refusal
+    /// names is the smallest that admits that file. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output, and about 1.35 to 3.2 times that in all at its
     /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
@@ -861,6 +931,51 @@ pub struct DecodeOptions {
     ///
     /// [`read_header_with`] checks the same limit, so it refuses what the
     /// decode would.
+    ///
+    /// Padding counts as input, so a file can raise its own limit with
+    /// `COM` segments, a JP2 `xml ` box or bytes after `EOC`. For a ceiling
+    /// that does not grow with the input, use
+    /// [`AtMost(n)`](WorkLimit::AtMost): the decode may hold at most `n`
+    /// samples, whatever the input's length. The output is then at most
+    /// `4 * n` bytes, and the sample buffers peak at no more than about 3.2
+    /// times that (a square tile measured 1.35, resident). Other memory is on
+    /// top: the input itself, and the parse of the tile-parts, which keeps a
+    /// record of under 1 KiB for each tile the input carries, at most about 52
+    /// times the input plus 128 KiB (see [the sample
+    /// limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
+    /// The palette expansion and sRGB output are checked against `n` too,
+    /// and so is every tile a region reads, and the code-blocks and
+    /// precincts a tile may hold are set from `n`. A refusal under it gives
+    /// no retry. [`read_header_with`] with the same options refuses the file
+    /// as the decode would, before any tile is read, so a server can check
+    /// a file with it first.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
+    ///
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// // At most 2^26 samples (256 MiB of output), however large the file.
+    /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(1 << 26));
+    /// let image = decode_with(&bytes, &options)?;
+    /// assert_eq!((image.width, image.height), (16, 31));
+    ///
+    /// // A ceiling below the image's 496 samples refuses it, with nothing to
+    /// // retry with.
+    /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(400));
+    /// let Err(Error::Limit(limit)) = decode_with(&bytes, &options) else {
+    ///     panic!("expected the sample limit to refuse the image");
+    /// };
+    /// assert_eq!(limit.kind(), LimitKind::Samples);
+    /// assert_eq!(limit.retry_with(), None);
+    /// assert!(options.with_retry(&limit).is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub sample_limit: WorkLimit,
     /// Refuse missing data with an [`Error`] (`true`, the default), or decode
     /// what is there and say what is missing on [`Image::report`] (`false`).
@@ -942,6 +1057,45 @@ pub struct DecodeOptions {
     #[doc(alias = "allow_partial")]
     #[doc(alias = "allow-partial")]
     pub strict: bool,
+    /// The fuzz targets' cap on the code-block work bound, set only by
+    /// [`fuzz::with_code_block_work_cap`]; `None` everywhere else.
+    pub(crate) code_block_work_cap: Option<u64>,
+}
+
+/// The derived format, with the fuzz cap shown only when it is set, so the
+/// options print the same outside the fuzz targets.
+impl std::fmt::Debug for DecodeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Destructured so that a new field cannot be left out.
+        let DecodeOptions {
+            resolution_reduction,
+            max_quality_layers,
+            region,
+            components,
+            raw_channels,
+            color,
+            packet_work_limit,
+            code_block_work_limit,
+            sample_limit,
+            strict,
+            code_block_work_cap,
+        } = self;
+        let mut s = f.debug_struct("DecodeOptions");
+        s.field("resolution_reduction", resolution_reduction)
+            .field("max_quality_layers", max_quality_layers)
+            .field("region", region)
+            .field("components", components)
+            .field("raw_channels", raw_channels)
+            .field("color", color)
+            .field("packet_work_limit", packet_work_limit)
+            .field("code_block_work_limit", code_block_work_limit)
+            .field("sample_limit", sample_limit)
+            .field("strict", strict);
+        if let Some(cap) = code_block_work_cap {
+            s.field("code_block_work_cap", cap);
+        }
+        s.finish()
+    }
 }
 
 impl Default for DecodeOptions {
@@ -959,6 +1113,7 @@ impl Default for DecodeOptions {
             code_block_work_limit: WorkLimit::default(),
             sample_limit: WorkLimit::default(),
             strict: true,
+            code_block_work_cap: None,
         }
     }
 }
@@ -968,44 +1123,53 @@ impl Default for DecodeOptions {
 /// [`DecodeOptions::code_block_work_limit`] work bounds, and the
 /// [`DecodeOptions::sample_limit`] on the image's size.
 ///
-/// Each work bound scales with the size of the file, so a small file cannot
-/// ask for minutes of work, and the sample limit holds the memory a file may
-/// ask for to about 2.7 GiB for a square tile, and to several GiB for a tall,
-/// narrow one (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)). A valid file can still go past
-/// a bound, when it codes many samples in very few bytes or is very
-/// large. The decode then fails with [`Error::Limit`]. Its
+/// Each bound scales with the size of the file, so a small file cannot ask for
+/// minutes of work, and a file of up to 64 MiB is held to the sample limit's
+/// floor: about 2.7 GiB of memory for a square tile and several GiB for a tall,
+/// narrow one. Past 64 MiB the sample limit grows with the file (see
+/// [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
+/// A valid file can still go past a bound, when it codes many samples in very
+/// few bytes or is very large. The decode then fails with [`Error::Limit`]. Its
 /// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`]
-/// gives a [`Raised`](WorkLimit::Raised) factor, which the message names
-/// too. Treat the factor as a hint, not a measure of the file:
+/// gives a [`Raised`](WorkLimit::Raised) factor, which the message names too.
+/// Treat the factor as a hint, not a measure of the file:
 ///
 /// - For the sample limit it is exact for the check it names: the image's
 ///   samples are known from its header. Palette expansion or sRGB output is
 ///   checked later, against the same limit, and may need a higher factor.
-/// - For the code-block bound it is what the tiles seen so far need, exact
-///   for a file of one tile.
-/// - For the packet bound it is the next factor up from the one that failed
-///   (or, when the refusal comes from a POC sequence's reach or a
-///   reduction's dropped code-blocks, the factor that check needs), and the
-///   file may need more: the walk stops as soon as it runs
-///   out, so it does not know the total. Double `n` on each retry rather than
-///   stepping by one: each retry costs more, and a file can need a factor of
-///   dozens.
+/// - For the two work bounds it is the larger of what the tiles seen so far
+///   need and twice the factor that failed, so it can be more than the file
+///   needs, and the file may need more: a packet walk stops as soon as it
+///   runs out, so it does not know the total, and later tiles are not
+///   counted. The doubling is for a loop of retries: each costs more than
+///   the last, and a file can need a factor of dozens, so a ladder that
+///   doubles ends in about log2 of the factor the file needs, where one that
+///   stepped up by one, or to each tile's need, would take a step for each
+///   tile. Following [`DecodeOptions::with_retry`] does that. If you pick the
+///   next factor yourself, double it too.
 ///
 /// Which value to pick:
 ///
 /// - For a file from a source you trust, use [`Unlimited`](WorkLimit::Unlimited).
 ///   The decode then takes as long as the file asks.
-/// - To keep a ceiling, use `Raised(n)` with an `n` of your own choosing,
-///   the largest cost you will accept. Read the factor from
+/// - To cap the samples a decode may hold, set the sample limit to
+///   [`AtMost(n)`](WorkLimit::AtMost): at most `n` samples, `4 * n` bytes of
+///   output, whatever the file's size or padding (see
+///   [`DecodeOptions::sample_limit`]). A refusal under it gives no factor.
+///   Cap the input's size as well, as the decode holds it; the tile-part
+///   parse adds at most about 52 times the input plus 128 KiB.
+/// - For a higher work bound, use `Raised(n)` with an `n` of your own
+///   choosing, the largest cost you will accept. It is a factor of the
+///   default, which grows with the file. Read the factor from
 ///   [`LimitDetail::retry_with`] to size it, or let
 ///   [`DecodeOptions::with_retry`] set it: a file that needs `Raised(3)` is
 ///   refused under `Raised(2)`. Do not parse the message; it is a
 ///   diagnostic, not a stable format.
 ///
-/// Only these three limits can be changed. The other guards also end in
-/// [`Error::Limit`], and no option here raises them (see [`Error::Limit`]).
-/// A damaged file can hit a guard too, so do not lift a bound on that
-/// evidence alone.
+/// Only these three limits can be changed, and only the sample limit takes
+/// `AtMost`. The other guards also end in [`Error::Limit`], and no option
+/// here raises them (see [`Error::Limit`]). A damaged file can hit a guard
+/// too, so do not lift a bound on that evidence alone.
 ///
 /// ```
 /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode, decode_with};
@@ -1044,8 +1208,8 @@ pub enum WorkLimit {
     /// The bound as [`decode`] describes it.
     #[default]
     Default,
-    /// The default bound times this factor: for a work bound, both its floor
-    /// and the work it allows per byte. `Raised(1)` sets the same bound as
+    /// The default bound times this factor: both its floor and what it
+    /// allows per byte. `Raised(1)` sets the same bound as
     /// `Default`, though the two do not compare equal. `Raised(0)` is
     /// [`Error::InvalidOptions`].
     Raised(u32),
@@ -1055,6 +1219,18 @@ pub enum WorkLimit {
     /// The other two limits keep their own settings, and the guards with no
     /// option (listed on [`Error::Limit`]) stay in force.
     Unlimited,
+    /// A fixed ceiling of this many samples, for the
+    /// [`sample_limit`](DecodeOptions::sample_limit) only. It does not grow
+    /// with the input, so padding cannot raise it, and it is not a factor of
+    /// the default: `AtMost(n)` allows `n` samples for a file of any size,
+    /// more than the default for a small file and less for a large one.
+    /// An `n` past the samples the target can address is held to that count.
+    /// A refusal under it gives no [`LimitDetail::retry_with`], so
+    /// [`DecodeOptions::with_retry`] gives `None`. `AtMost(0)` is
+    /// [`Error::InvalidOptions`], and so is `AtMost` on
+    /// [`packet_work_limit`](DecodeOptions::packet_work_limit) or
+    /// [`code_block_work_limit`](DecodeOptions::code_block_work_limit).
+    AtMost(u64),
 }
 
 impl WorkLimit {
@@ -1064,6 +1240,8 @@ impl WorkLimit {
             WorkLimit::Default => bound,
             WorkLimit::Raised(factor) => bound.saturating_mul(u64::from(*factor)),
             WorkLimit::Unlimited => u64::MAX,
+            // Only the sample limit takes it (`check_options`), and as it is.
+            WorkLimit::AtMost(samples) => *samples,
         }
     }
 }
@@ -1209,7 +1387,16 @@ impl DecodeOptions {
 
     /// These options with the limit that refused a decode set to the one
     /// it gave to retry with, or `None` if no option raises it or the
-    /// refusal gave none ([`LimitDetail::retry_with`]).
+    /// refusal gave none ([`LimitDetail::retry_with`]). Only that option
+    /// changes.
+    ///
+    /// It is safe to call in a loop: after a work bound refusal, the next
+    /// factor is at least twice the last, so a file that needs a factor of
+    /// `n` takes about log2(`n`) retries, not `n`. A retry still costs a
+    /// decode. The factor can be up to twice what the file needs, so a
+    /// caller that keeps a cap `c` on the factor should, when the factor
+    /// passes it, try once more with `WorkLimit::Raised(c)` rather than stop:
+    /// a file that needs between about `c / 2` and `c` is admitted by that.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode};
@@ -1232,7 +1419,9 @@ impl DecodeOptions {
         let retry = limit.retry_with()?;
         let options = self.clone();
         match limit.kind() {
-            LimitKind::Samples => Some(options.with_sample_limit(retry)),
+            LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+                Some(options.with_sample_limit(retry))
+            }
             LimitKind::PacketWork => Some(options.with_packet_work_limit(retry)),
             LimitKind::CodeBlockWork => Some(options.with_code_block_work_limit(retry)),
             _ => None,
