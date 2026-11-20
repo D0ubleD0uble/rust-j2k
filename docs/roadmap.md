@@ -39,7 +39,8 @@ checked it.
 
 ## Phase 5: Part 1 encoder
 
-The goal is to encode Part 1 codestreams and JP2 files. The work:
+The goal is to encode Part 1 codestreams and JP2 files ([plan](roadmap-phase5.md)).
+The work:
 
 - forward 5/3 and 9/7 DWT, and forward scalar quantization;
 - the MQ arithmetic encoder and EBCOT pass encoding;
