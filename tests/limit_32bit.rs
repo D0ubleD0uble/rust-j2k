@@ -12,7 +12,7 @@
 #[path = "support/synth.rs"]
 mod synth;
 
-use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with, read_header_with};
+use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
 
 /// One 520 x 512 tile with no wavelet levels and 1x1 precincts: 266,240 of
 /// them, and an empty packet each.
@@ -31,6 +31,8 @@ fn precinct_tile() -> Vec<u8> {
 #[cfg(target_pointer_width = "32")]
 #[test]
 fn a_tile_over_the_address_space_is_refused_with_nothing_to_retry() {
+    use rust_j2k::read_header_with;
+
     let bytes = precinct_tile();
     for limit in [
         WorkLimit::Default,
