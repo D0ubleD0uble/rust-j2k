@@ -708,6 +708,9 @@ impl TileWalk {
     /// for a walk whose geometry failed, which holds no geometry to count
     /// from; the count it holds is then left as it was.
     fn reduce(&mut self, reduction: u8) -> bool {
+        // Defensive: a decoder only keeps a walk once `check_tile` has
+        // built the same frame and passed the same caps, so a kept walk
+        // whose geometry failed is not reachable through the public API.
         if self.failure.is_some() {
             return false;
         }

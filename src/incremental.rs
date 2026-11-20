@@ -79,7 +79,10 @@ use crate::{
 /// for the 65535 tiles a file can have (up to twice that in capacity as
 /// the table grows). Each refine also holds what [`decode_with`] holds for
 /// the same bytes, so the decoder holds at most about three times one
-/// decode's peak memory, plus the bytes fed.
+/// decode's peak memory, plus the bytes fed. After the options change,
+/// these bounds hold from the first refine that decodes under the new
+/// options; until then the walks kept may stay within the room of the old
+/// options.
 ///
 /// The reduction, the layer cap and the region can change between refines,
 /// with [`set_resolution_reduction`](Self::set_resolution_reduction),
@@ -90,8 +93,10 @@ use crate::{
 /// unless the walks kept are past the room of the new region's decode: then
 /// the next refine that decodes lets go of the walks of tiles the region
 /// does not read until the rest fit (see [`set_region`](Self::set_region)).
-/// A change of the reduction keeps them too; a larger reduction has a
-/// smaller image, so it can let walks go in the same way. A change of the
+/// A change of the reduction keeps them too. A larger reduction has a
+/// smaller image, so the walks kept may no longer fit: the next refine lets
+/// go of the walks it reads that no longer fit, and walks those tiles from
+/// the start until there is room. A change of the
 /// layer cap lets them go, and the walks built again are charged to the
 /// same bound as the walks of tiles not kept, so changing the options back
 /// and forth does not buy free walks.
@@ -320,9 +325,13 @@ impl IncrementalDecoder {
     /// the code-blocks a decode charges for the resolutions it drops, so
     /// the walks kept are reused: each tile goes on from where its walk
     /// stopped, and is charged the code-blocks of the new reduction. A
-    /// larger reduction has a smaller image, so the walks kept may be past
-    /// the memory they may hold (see [`IncrementalDecoder`]); then walks are
-    /// let go as [`set_region`](Self::set_region) describes. Setting the
+    /// larger reduction has a smaller image, so the walks kept may no longer
+    /// fit in the room for them (see [`IncrementalDecoder`]). Then the next
+    /// refine that decodes lets go of the walks it reads that no longer fit,
+    /// and walks those tiles from the start until there is room; those walks
+    /// are charged as
+    /// [`set_max_quality_layers`](Self::set_max_quality_layers) describes.
+    /// Setting the
     /// reduction the decoder already has changes nothing. A change does not
     /// make the next refine decode sooner: it still waits for the bytes fed
     /// to double since the last try. For an image now, see

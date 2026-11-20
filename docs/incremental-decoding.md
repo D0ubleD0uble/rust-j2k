@@ -180,8 +180,10 @@ under the current options (`Ok(None)` until the main header is whole), and
   keeps every walk, and each walk charges the code-blocks the new
   reduction drops, counted from the geometry it holds. A walk whose
   geometry failed holds none to count from, and is let go. A larger
-  reduction has a smaller image, so the walks kept may then be past the
-  room, as for a smaller region below.
+  reduction has a smaller image, so the walks kept may no longer fit in
+  the room (see [Work and memory](#work-and-memory)). Then the next refine
+  lets go of the walks it reads that no longer fit, and walks those tiles
+  from the start until there is room.
 - The walks do not depend on the region. A tile the new region reads goes
   on from where its walk stopped, and the walks of the tiles it does not
   read stay for a later change back. A smaller region has a smaller image,
@@ -332,10 +334,12 @@ largest tile walked so far. They also hold at most the larger of 1 MiB and
 input as well as the image the file declares. Each walk's size counts every
 heap allocation it holds, capacity included. A tile whose walk would pass
 either bound is not kept, and each refine walks its packets from the start,
-until the bytes fed make room for it. Of the committed fixtures fed 1 KB at
-a time, this keeps fewer walks than the image bound alone only for files
-made to test the work bounds, and for a 6000 x 4000 RGB file of 148 KB until
-64 KB of it are in. On top of these bounds the decoder keeps a table of 24
+until the bytes fed make room for it. After a change of the options, these
+bounds hold from the first refine that decodes under the new options; until
+then the walks kept may stay within the room of the old options. Of the
+committed fixtures fed 1 KB at a time, this keeps fewer walks than the image
+bound alone only for files made to test the work bounds, and for a
+6000 x 4000 RGB file of 148 KB until 64 KB of it are in. On top of these bounds the decoder keeps a table of 24
 bytes for each tile index up to the highest it has seen (`size_of::<Slot>()`
 in `src/tier2/resume.rs`). That is about 1.5 MiB for the 65535 tiles a file
 can have, and up to twice that in capacity as the table grows: an 82-byte
