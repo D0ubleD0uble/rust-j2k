@@ -1,8 +1,8 @@
 # Roadmap
 
 Decoder hardening ships next as 0.6.0, then a Part 1 encoder (Phase 5) as
-0.7.0, then the Part 2 extensions and an HTJ2K encoder (Phase 6), then the rest of the standard's parts (Phase 7). Phases 0
-to 4, which built a decoder for Part 1 and HTJ2K codestreams, JP2 and JPH
+0.7.0, then the Part 2 extensions and an HTJ2K encoder (Phase 6), then the
+rest of the standard's parts (Phase 7). Phases 0 to 4, which built a decoder for Part 1 and HTJ2K codestreams, JP2 and JPH
 files, are finished. Phase 3 shipped as the 0.4.0 release, and Phase 4 shipped
 as 0.5.0.
 
