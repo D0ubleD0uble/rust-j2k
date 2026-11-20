@@ -432,7 +432,7 @@ Settled on 2026-11-17.
    orders layers by decreasing slope. Distortion is measured: the decrease in
    squared coefficient error times the band's squared synthesis norm.
    OpenJPEG's results are a floor (gate part 3), not a method to copy.
-4. **Everything in Part 1 that the decoder reads is in 0.6.0.** That
+4. **Everything in Part 1 that the decoder reads is in 0.7.0.** That
    includes POC, ROI (maxshift), PPM and PPT, COC and QCC, CRG and palette
    encode, beside the transforms, tiling, precincts, progressions, layers,
    code-block styles, markers and tile-parts. Each has its own step and
@@ -459,12 +459,11 @@ Settled on 2026-11-17.
    snapshots are committed: the parity JSON, and per cross-decode case the
    digests of our output and of `opj_decompress`'s decode of it. The Part 4
    references and the tests that use them stay excluded from the crate.
-8. **One release, 0.6.0,** when the whole gate passes, as Phases 3 and 4
-   shipped. Decoder fixes from the 0.5.x milestone may ship before it as
-   0.5.1 patches. With 0.6.0, `Cargo.toml`'s `description` and keywords
-   change, and CONTRIBUTING's "The crate only decodes" goes; both are the
-   maintainer's edits.
-9. **Every Part 1 profile is in 0.6.0, as a preset.** That is Profile 0 and
+8. **One release, 0.7.0,** when the whole gate passes, as Phases 3 and 4
+   shipped. The decoder hardening ships before it as 0.6.0. With 0.7.0,
+   `Cargo.toml`'s `description` and keywords change, and CONTRIBUTING's
+   "The crate only decodes" goes; both are the maintainer's edits.
+9. **Every Part 1 profile is in 0.7.0, as a preset.** That is Profile 0 and
    1 and the five cinema, three broadcast and six IMF profiles, with their
    levels. Each is selected with `EncodeOptions::with_profile(Profile::…)`,
    a `#[non_exhaustive]` enum, for example `Profile::Cinema2k { fps: 24 }`.
@@ -1297,7 +1296,7 @@ green with and without the `encode` feature.
 - **Performance.** `benches/encode.rs` (std only) and the `encode` mode of
   `tools/perf/run.py`, from P5.7, timed against `opj_compress` on one thread
   and on all cores, on the three inputs measured above, with peak memory.
-  *Estimated* target for 0.6.0: within 2× of `opj_compress` on one thread,
+  *Estimated* target for 0.7.0: within 2× of `opj_compress` on one thread,
   the same line performance.md draws for the decoder. Each later step reports
   its change on the same table.
 - **Mutation checks.** `cargo mutants --in-diff` on each step's PR over
