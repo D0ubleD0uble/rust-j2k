@@ -131,6 +131,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   any tile. To find the error it parses the tile-parts as the decode does,
   which on that refusal costs as much time and heap as the decode's parse:
   1.75 s and 281 MiB on a 235 MB file of 16.7 million tile-parts (#498).
+- `read_header_with` refuses the tile the decode refuses where a tile-part
+  `COD` or `COC` takes a lower tile over a code-block or precinct cap. It
+  refused the first tile over a cap under the main header instead, so its
+  `Error::Limit` could name a higher tile, another kind and a smaller
+  `retry_with` than `decode_with`'s, and a retry sized from it was refused
+  again. Before it refuses a tile, it now counts each lower tile it would
+  read whose size does not rule out a tile-part header taking it over the
+  caps under that tile's own header, in index order, and checks the
+  reduction first, as the decode does. That reads the tile-part headers of
+  those tiles in the same single walk; a file with no tile over a cap under
+  the main header is still read no further than the first `SOT`. The decode
+  can still refuse first for what only decoding finds in a lower tile (its
+  packets or code-blocks), or, with `strict` off, for the charge for the
+  tiles read that have no tile-part; the `read_header_with` docs list these
+  cases (#501).
 - `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
   time. A refusal of the packet work or code-block work bound, including the
   charge for missing tiles, names the larger of what the tiles seen so far

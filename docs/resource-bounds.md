@@ -285,11 +285,20 @@ cap under the main header does it read further. It follows the tile-parts
 by their `Psot`, reading only their `SOT`s, as far as the first tile-part of
 the tile it counts, and notes where it passed the first tile-part of each
 later tile it reads, so the tile-parts are walked once in all and no further
-than the last tile over a cap (to the end where that tile has no
+than the last tile it counts (to the end where that tile has no
 tile-part). It reads each such tile's first tile-part header at that
 offset, within its `Psot` (no tile data, no `PPM`, nothing joined), in index
-order, so one tile's coding parameters are held at a time and the first
-tile refused is the lowest, as in the decode. A
+order, so one tile's coding parameters are held at a time. The decode counts
+each tile under its own header in index order, so a tile-part `COD` or `COC`
+can take a lower tile over a cap, which the decode then refuses first. So
+before such a tile is counted, each lower tile read since the last one
+counted whose size does not rule that out (at 33 resolutions a component,
+the most a header gives) is counted under its own header too, the
+reduction checked first as the decode checks it. The first tile refused is
+then the lowest, as in the decode. A tile-part `COD` that takes a tile over
+a cap with no tile over a cap under the main header after it is left to
+the decode, so a file with no tile over a cap under the main header is
+still read no further than the first `SOT`. A
 tile-part `COD` or `COC` that brings the tile within the caps admits it,
 and so does `strict` off when the tile has no tile-part, as the decode then
 leaves it out. With `strict` on, the decode parses the tile-parts before it
@@ -300,8 +309,7 @@ walk has reached the end of the chain by then, so the parse follows it no
 further, but it reads every tile-part header and keeps the decode's tile
 records, up to about 52 times the input plus 128 KiB (above). It reads the
 main header in place, so it copies no `PPM` data. A tile-part header the
-decode finds at fault, and a tile-part `COD` that takes a tile over the
-caps, are left to the decode. The count has a budget of 2^22 steps under the
+decode finds at fault is left to the decode. The count has a budget of 2^22 steps under the
 main header, a step for each resolution of each tile-component, and as many
 under the tiles' own headers, where reading a header that copies the main
 header's coding parameters costs 11 steps a component. It leaves any tile
@@ -336,7 +344,17 @@ followed by 4 MiB of `COM`.
 On a file the decode refuses for a fault in its tile-parts,
 `read_header_with` may still give the `Limit` instead of the decode's error
 where it refuses a tile it found a tile-part for, as it does not check the
-tile-parts it passes nor walk past that tile.
+tile-parts it passes nor walk past that tile. The decode can also refuse
+the file before it gets to the tile refused, for what only decoding finds,
+and so name another tile, kind or factor, or give another error: a fault or
+a work bound in the packets or code-blocks of a lower tile (with `strict`
+on, data that ends early or runs on past the last packet), a reduction that
+a lower tile's tile-part header cannot take where the tile's size kept the
+header read from that header, or, with `strict` off, the charge of a step
+for each tile-component of the tiles read that have no tile-part, past the
+packet work bound. The header read decodes no packet, so it does not
+follow the decode there; `tests/tile_geometry_cap.rs` shows a case of the
+first and of the last.
 `IncrementalDecoder::header` reads the header again on each call, so each
 call costs as much: up to the walk and the budgets, 45 ms on the 235 MB
 file above.

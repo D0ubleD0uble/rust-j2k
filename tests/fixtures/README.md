@@ -598,6 +598,20 @@ its main header and fails to decode component 0.
 with `cargo +nightly fuzz run -O header tests/fixtures/header/ -- -runs=0`.
 It was made by the fuzzer, so it has no license restriction.
 
+`header/own_cod_lower_tile.j2k` (112 bytes, SHA-256
+`97c368959ec300dbc2a233adaea66a9ac6ae70b49277977baea17e340cf30078`) is the
+repro of #501, a `header` fuzz find from the batch review of `f709e18..4b25890`,
+committed as filed. It is an 8400 x 4096 gray codestream with `XOsiz` 3600
+and tiles of 4200 x 4096, so tile 0 is 600 wide. The main `COD` gives 4x4
+code-blocks and the maximal precincts, which puts tile 1 over the
+code-block cap; tile 0's tile-part `COD` gives it 1x1 precincts, over the
+precinct cap. Neither tile-part has data. `decode_with` refuses tile 0 for
+its precincts with `Raised(10)`, and `read_header_with` now does too (it
+refused tile 1 for its code-blocks with `Raised(2)`), with `strict` on and
+off. `opj_decompress` 2.5.0, which has no such caps, decodes it.
+`tests/tile_geometry_cap.rs` checks it. It was made by the fuzzer, so it
+has no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

@@ -28,6 +28,7 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
             prefix.codestream,
             &prefix.parsed,
             &prefix.selection,
+            reduction,
             samples::cap(&options.sample_limit, bytes.len()),
             options.strict,
         )?;
@@ -77,6 +78,7 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
         bytes,
         &parsed,
         &selection,
+        reduction,
         samples::cap(&options.sample_limit, bytes.len()),
         options.strict,
     )?;
@@ -117,13 +119,24 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// on the reference grid, and at most a precinct for each sample of each
 /// resolution, of which the main header gives the count. Only the tiles over
 /// a cap under the main header have their tile-part headers read
-/// ([`Rescue`]), to count them as the decode does. They are taken in index
-/// order, so the first refused is the lowest, as in the decode. The
-/// tile-parts are walked once in all, as far as each tile counted needs.
+/// ([`Rescue`]), to count them as the decode does. The tile-parts are
+/// walked once in all, as far as each tile counted needs.
+///
+/// The decode counts every tile it reads under the tile's own header, in
+/// index order, so a tile-part `COD` or `COC` can take a lower tile over a
+/// cap, and the decode refuses that tile first. So before a tile over a cap
+/// under the main header is counted, each lower tile read since the last
+/// one counted that a tile-part header could take over a cap (its size does
+/// not rule that out at the most resolutions a header can give) is counted
+/// under its own header too, in index order. The first tile refused is then
+/// the lowest, as in the decode. Such a tile with no tile over a cap after
+/// it is left to the decode, so a file with no tile over a cap under the
+/// main header is still read no further than the first `SOT`.
 fn check_geometry(
     bytes: &[u8],
     parsed: &codestream::ParsedHeader,
     selection: &window::Selection,
+    reduction: u8,
     cap: samples::Cap,
     strict: bool,
 ) -> Result<()> {
@@ -131,43 +144,76 @@ fn check_geometry(
     let siz = &header.siz;
     let components = siz.components.len() as u64;
     let main_resolutions = resolutions(header);
+    // The most resolutions a tile-part header can give a tile: 32 levels in
+    // each component.
+    let most_resolutions = components.saturating_mul(33);
     let reads = selection.tiles(siz);
-    let mut steps = 0u64;
-    let mut rescue = Rescue {
-        bytes,
-        parsed,
-        reads: &reads,
-        cap,
-        strict,
-        walk: None,
-        steps: 0,
-    };
-    for (index, &read) in reads.iter().enumerate() {
-        let index = index as u32;
-        let Some(rect) = siz.tile_rect(index).filter(|_| read) else {
-            continue;
-        };
+    // For a tile read, whether its size shows it within both caps under the
+    // main header, and under any header.
+    let fits = |index: u32| {
+        let rect = siz
+            .tile_rect(index)
+            .filter(|_| reads.get(index as usize) == Some(&true))?;
         let (w, h) = (u64::from(rect.x1 - rect.x0), u64::from(rect.y1 - rect.y0));
         // A component's tile-component is at most w x h, and its resolution
         // at level s at most (w / 2^s + 1) x (h / 2^s + 1), so its
         // resolutions together hold at most 2wh + 2(w + h) samples and one
         // for each resolution.
         let blocks = components.saturating_mul(w.saturating_mul(h));
-        let precincts = blocks
+        let samples = blocks
             .saturating_mul(2)
-            .saturating_add(components.saturating_mul(2 * (w + h)))
-            .saturating_add(main_resolutions);
-        if blocks <= cap.tile_blocks() && precincts <= cap.tile_precincts() {
+            .saturating_add(components.saturating_mul(2 * (w + h)));
+        let under = |resolutions: u64| {
+            blocks <= cap.tile_blocks()
+                && samples.saturating_add(resolutions) <= cap.tile_precincts()
+        };
+        Some((under(main_resolutions), under(most_resolutions)))
+    };
+    let mut steps = 0u64;
+    let mut rescue = Rescue {
+        bytes,
+        parsed,
+        reads: &reads,
+        reduction,
+        cap,
+        strict,
+        walk: None,
+        steps: 0,
+    };
+    // The lowest tile read since the last one counted that a tile-part
+    // header could take over a cap.
+    let mut pending: Option<u32> = None;
+    for index in 0..reads.len() as u32 {
+        let Some((main_fits, any_fits)) = fits(index) else {
+            continue;
+        };
+        if any_fits {
             continue;
         }
-        steps = steps.saturating_add(main_resolutions);
-        if steps > GEOMETRY_STEPS {
-            return Ok(());
-        }
-        if let Err(error @ Error::Limit(_)) = tier2::check_tile(header, index, cap) {
-            if !rescue.count(index, error)? {
+        let over = if main_fits {
+            None
+        } else {
+            steps = steps.saturating_add(main_resolutions);
+            if steps > GEOMETRY_STEPS {
                 return Ok(());
             }
+            tier2::check_tile(header, index, cap)
+                .err()
+                .filter(|error| matches!(error, Error::Limit(_)))
+        };
+        let Some(error) = over else {
+            pending.get_or_insert(index);
+            continue;
+        };
+        // The decode counts the lower tiles under their own headers first.
+        for lower in pending.take().unwrap_or(index)..index {
+            let counted = fits(lower).is_some_and(|(_, any_fits)| !any_fits);
+            if counted && !rescue.count(lower, None)? {
+                return Ok(());
+            }
+        }
+        if !rescue.count(index, Some(error))? {
+            return Ok(());
         }
     }
     Ok(())
@@ -189,13 +235,14 @@ struct Rescue<'a> {
     parsed: &'a codestream::ParsedHeader,
     /// Which tiles the selection reads.
     reads: &'a [bool],
+    reduction: u8,
     cap: samples::Cap,
     strict: bool,
-    /// The walk of the tile-parts, from the first tile over a cap on, and
+    /// The walk of the tile-parts, from the first tile counted on, and
     /// where it found the first tile-part of each tile the selection reads:
-    /// at index `tile - from`, for each tile from the first over a cap to
-    /// the last read, 8 bytes a tile, or 0 where it has found none yet (a
-    /// `SOT` is never at 0). `None` until a tile is over a cap.
+    /// at index `tile - from`, for each tile from the first counted to the
+    /// last read, 8 bytes a tile, or 0 where it has found none yet (a `SOT`
+    /// is never at 0). `None` until a tile is counted.
     walk: Option<Walk>,
     /// The steps taken reading and counting the tiles' own headers.
     steps: u64,
@@ -213,7 +260,7 @@ impl Rescue<'_> {
     /// none. The walk goes on from where it stopped until it finds it,
     /// noting each tile the selection reads that it passes, so the
     /// tile-parts are walked once in all, and no further than the first
-    /// tile-part of the last tile over a cap (to the end where a tile has
+    /// tile-part of the last tile counted (to the end where a tile has
     /// none). The walk reads no tile-part header and takes no step of the
     /// budget: its cost is linear in the input.
     fn first_part(&mut self, index: usize) -> Option<usize> {
@@ -253,19 +300,23 @@ impl Rescue<'_> {
         walk.firsts.get(at).copied().filter(|&offset| offset != 0)
     }
 
-    /// Count tile `index`, over a cap under the main header (`error`), as
-    /// the decode counts it, and refuse it if the decode does: a tile with a
-    /// tile-part under its own header (a tile-part `COD` or `COC` over the
-    /// main header's), and one with none with the decode's error for the
-    /// tile-parts with `strict` on ([`walk_fault`](Self::walk_fault)) and
-    /// not at all with it off (the decode leaves it out). A tile whose
-    /// tile-part header is at fault is the decode's to report. So a
-    /// tile-part `COD` that brings a tile within the caps is admitted, and
-    /// one that takes a tile over them is left to the decode.
+    /// Count tile `index`, over a cap under the main header (`error`) or
+    /// within them (`None`), as the decode counts it, and refuse it if the
+    /// decode does: a tile with a tile-part under its own header (a
+    /// tile-part `COD` or `COC` over the main header's), with the reduction
+    /// checked first, as the decode checks it, and one with none with the
+    /// decode's error for the tile-parts with `strict` on
+    /// ([`walk_fault`](Self::walk_fault)) and not at all with it off (the
+    /// decode leaves it out). A tile whose tile-part header is at fault is
+    /// the decode's to report. So a tile-part `COD` that brings a tile
+    /// within the caps is admitted, and one that takes it over them is
+    /// refused.
     ///
-    /// Only the header read here is held. `Ok(false)` means the steps
-    /// passed [`GEOMETRY_STEPS`] and the rest is left to the decode.
-    fn count(&mut self, index: u32, error: Error) -> Result<bool> {
+    /// The tiles are counted in index order, as the walk notes the
+    /// tile-parts only from the first tile counted on. Only the header read
+    /// here is held. `Ok(false)` means the steps passed [`GEOMETRY_STEPS`]
+    /// and the rest is left to the decode.
+    fn count(&mut self, index: u32, error: Option<Error>) -> Result<bool> {
         // A tile with no tile-part: the decode refuses the file with `strict`
         // on, and leaves the tile out with it off.
         let found = self
@@ -273,7 +324,12 @@ impl Rescue<'_> {
             .and_then(|offset| codestream::first_part_at(self.bytes, self.parsed, offset));
         let part = match found {
             Some(part) => part,
-            None if self.strict => return Err(self.walk_fault().unwrap_or(error)),
+            None if self.strict => {
+                return match self.walk_fault().or(error) {
+                    Some(fault) => Err(fault),
+                    None => Ok(true),
+                };
+            }
             None => return Ok(true),
         };
         // Reading a tile's header copies the main header's coding parameters
@@ -291,6 +347,7 @@ impl Rescue<'_> {
             if self.steps > GEOMETRY_STEPS {
                 return Ok(false);
             }
+            check_reduction(&own, self.reduction, Some(index as usize))?;
             if let Err(error @ Error::Limit(_)) = tier2::check_tile(&own, index, self.cap) {
                 return Err(error);
             }
