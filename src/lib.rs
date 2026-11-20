@@ -235,6 +235,12 @@ pub use jp2::{
 pub use report::{DecodeReport, ReportEntry};
 pub use window::{Region, Window};
 
+// Compile the README's Rust examples as doctests so they cannot drift from
+// the API. The blocks that read a file are marked `no_run`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_examples {}
+
 /// Decode a JPEG 2000 **codestream** (Annex A) or **JP2 file** (Annex I)
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
 /// output channel, each on its own sample grid. For a raw codestream that is

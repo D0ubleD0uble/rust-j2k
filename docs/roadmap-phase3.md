@@ -2,7 +2,7 @@
 
 > **Status: complete.** P3.0 to P3.8 have landed, all nine Part 4 JP2 reader
 > files decode in class, and the public-API decisions are applied. Phase 3
-> ships as the 0.4.0 release (#226). The milestones below are the build order
+> shipped as the 0.4.0 release (#226). The milestones below are the build order
 > that was followed, each with the oracle that gated it.
 
 The overall [roadmap.md](roadmap.md) sequences the whole project; this file

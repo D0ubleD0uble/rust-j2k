@@ -199,6 +199,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before a strict decode refused it; it now peaks at 132 KB either way,
   however long the tile-part. A file of 65535 tiles, each in one tile-part,
   peaks at 47 MB, down from 57 MB (#484).
+- After a change of the layer cap, `IncrementalDecoder` sizes the room for the
+  walks it keeps from the walks built under the new cap, as a decoder made
+  with it does. It used the largest walk of the old cap, so the room, and
+  which walks fit, could differ from a fresh decoder's (#519).
 
 ## [0.5.0] - 2026-11-17
 
