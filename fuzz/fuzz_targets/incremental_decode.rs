@@ -144,8 +144,9 @@ fuzz_target!(|input: &[u8]| {
     // count fewer samples and can pass. One exception is accepted: a refine
     // cut short by what earlier refines spent waits on `BoundSpent` where a
     // later tile's cap refusal ends the one-shot decode, ceiling or not,
-    // because its count stops at that tile and never checks the caps of the
-    // tiles after it.
+    // because the count's check of that tile's cap ends it, and the
+    // code-blocks it skipped may hold an error the one-shot decode meets
+    // first (`pipeline/decode.rs`, the comment on `counting`).
     let ceiling = control[0] & 0x80 != 0;
     if ceiling {
         let declared = u64::try_from(budget::declared(data)).unwrap_or(u64::MAX);
