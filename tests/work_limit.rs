@@ -754,3 +754,38 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
         matches!(decode_with(&bytes, &unlimited), Err(Error::Codestream(m)) if m.message() == end)
     );
 }
+
+/// `tile_code_blocks.j2k`, the twin of `tile_precincts.j2k` for the
+/// code-block cap: one 4097 x 4096 tile with no wavelet levels in 4 x 4
+/// code-blocks and one precinct, so 1025 * 1024 = 1049600 code-blocks, over
+/// the per-tile cap of 2^20 at the default sample limit, and one empty
+/// packet. Built here as `synth::empty_tiles` writes it.
+#[test]
+fn a_tile_code_block_cap_refusal_retries_by_the_sample_limit() {
+    let bytes = fixture("retry_ladder/tile_code_blocks.j2k");
+    assert_eq!(
+        bytes,
+        synth::empty_tiles([4097, 4096, 0, 0, 4097, 4096, 0, 0], 0, 0, &[], &[1], 0)
+    );
+    assert_eq!(
+        sha256_hex(&bytes),
+        "79a4087ba958c33646c6118c84745f2506f482e95ecb94cbfc5e252187186dfb"
+    );
+    let start = DecodeOptions::default();
+    let Err(Error::Limit(limit)) = decode_with(&bytes, &start) else {
+        panic!("the defaults do not refuse")
+    };
+    assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
+    assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+    let next = start
+        .clone()
+        .with_retry(&limit)
+        .expect("a tile cap refusal retries");
+    assert_eq!(
+        format!("{next:?}"),
+        format!("{:?}", start.with_sample_limit(WorkLimit::Raised(2))),
+        "the retry raises the sample limit and nothing else"
+    );
+    let image = decode_with(&bytes, &next).expect("one rung reaches the image");
+    assert_eq!((image.width, image.height), (4097, 4096));
+}

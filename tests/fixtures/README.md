@@ -600,6 +600,16 @@ bytes. Replay it with
 `cargo +nightly fuzz run -O retry_ladder tests/fixtures/retry_ladder/ -- -runs=0`.
 It was written from the hex in the issue, so it has no license restriction.
 
+`retry_ladder/tile_code_blocks.j2k` (82 bytes, SHA-256
+`79a4087ba958c33646c6118c84745f2506f482e95ecb94cbfc5e252187186dfb`) is its
+twin for the code-block cap, written by `synth::empty_tiles` (the test in
+`tests/work_limit.rs` rebuilds it byte for byte): one 4097 x 4096 gray tile,
+no wavelet levels, 4 x 4 code-blocks (the smallest) in one precinct, so 1049600
+code-blocks, over the cap of 2^20, and one empty packet. The default decode
+refuses it as `LimitKind::TileCodeBlocks` with the retry `Raised(2)`, which
+decodes the image. Without it no seed reached that kind through the target.
+It has no license restriction. Replay both with the command above.
+
 ### Header fixtures
 
 `header/rescue_cut_sot.j2k` (68 bytes, SHA-256

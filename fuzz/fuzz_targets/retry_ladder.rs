@@ -44,22 +44,17 @@ use rust_j2k::{
 const MAX_FACTOR: u64 = 4;
 const _: () = assert!(MAX_FACTOR <= rust_j2k::fuzz::CODE_BLOCK_CAP_FACTOR);
 
-/// The most steps the ladder may take on one option: log2([`MAX_FACTOR`]) to
-/// double from the default to [`MAX_FACTOR`], one for the step past it that
-/// ends the ladder, and one of slack. The ladder stops past [`MAX_FACTOR`],
-/// so a hint that stepped up by one would not reach this bound;
-/// `tests/work_limit.rs` holds the doubling. This bound catches a ladder
-/// that does not end.
-///
-/// The slack is the sample limit's: its option is raised by three kinds of
-/// refusal. A `Samples` refusal names the factor that admits the image
-/// area, so one step, and it cannot come again once the area is admitted. The
-/// tile caps (`TileCodeBlocks`, `TilePrecincts`) name at least twice the
-/// factor they ran under, whichever of the two refused before, so they take
-/// at most log2([`MAX_FACTOR`]) + 1 steps, the last one past
-/// [`MAX_FACTOR`]. Together that is `MAX_STEPS`: a `Samples` step, then
-/// steps to 2, 4 and 8 by the caps. The packet and code-block work options
-/// are raised by one kind each and never need the slack.
+/// The most steps the ladder may take on one option. `step` asserts that
+/// each step raises the option strictly, and the ladder returns once a step
+/// names a factor past [`MAX_FACTOR`] (`Unlimited` included). Factors are
+/// whole numbers from 1, so one option's steps name 2, 3, 4, then something
+/// past 4: at most `MAX_FACTOR` steps, whatever the hints are. The kinds that
+/// share the sample limit's option (see [`slot`]) share the count. This
+/// bound therefore catches a ladder that does not end, and not a hint that
+/// is too small: that the work hints at least double is held by
+/// `tests/work_limit.rs` and the `limit_hint` unit tests, and the tile caps'
+/// by `tests/tile_geometry_cap.rs`. The value is
+/// log2([`MAX_FACTOR`]) + 2, which is `MAX_FACTOR` while it is 4.
 const MAX_STEPS: u32 = MAX_FACTOR.ilog2() + 2;
 
 /// The three options a refusal raises, one for each step count: the sample
@@ -155,7 +150,8 @@ fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, 
     let kind = limit.kind();
     // A refusal by a ceiling the caller set names nothing to retry with, so
     // the ladder ends in this one step. The tile caps are refused by the same
-    // ceiling.
+    // ceiling. Not reached for a tile cap at `CEILING`, which no input at the
+    // fuzz budget exceeds; kept for a higher ceiling.
     if is_sample_limit(kind) && matches!(options.sample_limit, WorkLimit::AtMost(_)) {
         assert!(
             limit.retry_with().is_none() && options.with_retry(limit).is_none(),
@@ -246,6 +242,8 @@ fuzz_target!(|input: &[u8]| {
         // it is the image of the same options with the default sample limit.
         // In bounds: the two decodes at up to 2 each.
         if let Err(Error::Limit(limit)) = &result {
+            // A tile cap's refusal is not reached at `CEILING`; kept for a
+            // higher ceiling.
             let next = step(&options, limit);
             assert!(
                 !is_sample_limit(limit.kind()) || next.is_none(),

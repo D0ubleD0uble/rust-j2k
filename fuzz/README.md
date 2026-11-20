@@ -319,9 +319,12 @@ is checked. A packet work refusal names twice the factor it ran under, so a
 ladder takes about log2 of the factor it needs; more than 4 steps on one
 limit (log2 of that factor cap, plus 2) is a failure. The per-tile caps on
 code-blocks and precincts are raised through the sample limit, so a sample
-limit refusal and the two cap refusals share one step count: one step for the
-area, and at most log2 of the factor cap plus one for the caps, which name
-at least twice the factor they ran under, add up to that bound.
+limit refusal and the two cap refusals share one step count. Each step must
+raise the option strictly and the ladder stops past a factor of 4, so one
+option takes at most 4 steps (2, 3, 4, then past 4) whatever the hints name;
+the bound catches a ladder that does not end. That the hints double is held by
+`tests/work_limit.rs`, the `limit_hint` unit tests and
+`tests/tile_geometry_cap.rs`.
 
 An input over the fuzz sample budget (`common/budget.rs`) is only read for its
 header, and a sample limit refusal there is checked as one step with no decode.
@@ -478,6 +481,7 @@ seed 00 work_bound/pocspent_2tiles_60000_559.j2k
 seed 00 tier1_work_bound/t1bomb_1024_64_88.j2k
 seed 40 work_bound/cprl_tall.j2k
 seed 00 retry_ladder/tile_precincts.j2k
+seed 00 retry_ladder/tile_code_blocks.j2k
 cargo +nightly fuzz run retry_ladder -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
 
 # Deeper periodic run over the widened surface; expected to find nothing.
