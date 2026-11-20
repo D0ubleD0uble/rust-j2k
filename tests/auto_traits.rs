@@ -11,8 +11,8 @@ use rust_j2k::{
     ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo, DecodeOptions,
     DecodeReport, Error, ErrorDetail, FileType, Header, Image, ImageHeader, IncrementalDecoder,
     IprBox, Jp2Metadata, LimitDetail, LimitKind, MappingKind, Palette, PaletteColumn, Ratio,
-    ReaderRequirements, Refined, Region, ReportEntry, Res, Resolution, StandardFeature, TileGrid,
-    UuidBox, UuidInfo, VendorFeature, Waiting, Window, WorkLimit, XmlBox,
+    ReaderRequirements, Refined, RefusedAt, Region, ReportEntry, Res, Resolution, StandardFeature,
+    TileGrid, UuidBox, UuidInfo, VendorFeature, Waiting, Window, WorkLimit, XmlBox,
 };
 
 // Used only in `const _` blocks, which Rust 1.87 does not count as a use.
@@ -29,6 +29,7 @@ const _: () = {
     holds::<ErrorDetail>();
     holds::<LimitDetail>();
     holds::<LimitKind>();
+    holds::<RefusedAt>();
     holds::<DecodeOptions>();
     holds::<DecodeReport>();
     holds::<ReportEntry>();
@@ -64,16 +65,55 @@ const _: () = {
     holds::<MappingKind>();
 };
 
-// `LimitKind` and `TileGrid` are plain values a caller can copy, compare
+// `LimitKind`, `RefusedAt` and `TileGrid` are plain values a caller can copy, compare
 // and key a map by.
 // Used only in `const _` blocks, which Rust 1.87 does not count as a use.
 #[allow(dead_code)]
 const fn plain<T: Copy + Eq + std::hash::Hash + std::fmt::Debug>() {}
 const _: () = {
     plain::<LimitKind>();
+    plain::<RefusedAt>();
     plain::<TileGrid>();
 };
 
 // The assertions are all compile-time; this keeps the file a test target.
 #[test]
 fn public_types_are_send_sync_and_unwind_safe() {}
+
+// Every public type in `lib.rs`, re-exported or defined there, must be listed
+// in `holds`, so a new type cannot skip the check. The functions and the
+// `Result` alias are not types with fields.
+#[test]
+fn every_public_type_is_listed() {
+    let this = include_str!("auto_traits.rs");
+    // Drop comment lines, so a doc comment above a `pub use` cannot hide it.
+    let lib: String = include_str!("../src/lib.rs")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    let mut names: Vec<&str> = Vec::new();
+    for statement in lib
+        .split(';')
+        .filter(|s| s.trim_start().starts_with("pub use "))
+    {
+        names.extend(statement.split(|c: char| !c.is_alphanumeric() && c != '_'));
+    }
+    // Types defined in `lib.rs` itself.
+    for line in lib.lines() {
+        for kind in ["pub struct ", "pub enum ", "pub type "] {
+            if let Some(rest) = line.strip_prefix(kind) {
+                names.extend(
+                    rest.split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .take(1),
+                );
+            }
+        }
+    }
+    let missing: Vec<&str> = names
+        .into_iter()
+        .filter(|n| n.starts_with(|c: char| c.is_ascii_uppercase()))
+        .filter(|n| *n != "Result" && !this.contains(&format!("holds::<{n}>()")))
+        .collect();
+    assert!(missing.is_empty(), "add to `holds`: {missing:?}");
+}

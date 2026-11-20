@@ -25,7 +25,7 @@ It needs Rust 1.87 or newer.
 Pass the bytes to `decode` and you get back an `Image`, with one `Component`
 for each channel. Start here:
 
-```rust
+```rust,no_run
 use rust_j2k::decode;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -73,7 +73,7 @@ decoding. Pass a rectangle or a tile number to `decode_with` to decode only
 that part. Tiles and the reference grid are explained in [What a JPEG 2000
 file holds](#what-a-jpeg-2000-file-holds).
 
-```rust
+```rust,no_run
 use rust_j2k::{DecodeOptions, Region, Window, decode_with, read_header};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
