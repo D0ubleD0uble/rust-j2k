@@ -119,7 +119,7 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// a cap under the main header have their tile-part headers read
 /// ([`Rescue`]), to count them as the decode does. They are taken in index
 /// order, so the first refused is the lowest, as in the decode. The
-/// tile-parts are walked once at most, at the first tile over a cap.
+/// tile-parts are walked once in all, as far as each tile counted needs.
 fn check_geometry(
     bytes: &[u8],
     parsed: &codestream::ParsedHeader,
@@ -136,9 +136,10 @@ fn check_geometry(
     let mut rescue = Rescue {
         bytes,
         parsed,
+        reads: &reads,
         cap,
         strict,
-        firsts: None,
+        walk: None,
         steps: 0,
     };
     for (index, &read) in reads.iter().enumerate() {
@@ -164,9 +165,6 @@ fn check_geometry(
             return Ok(());
         }
         if let Err(error @ Error::Limit(_)) = tier2::check_tile(header, index, cap) {
-            if rescue.firsts.is_none() {
-                rescue.find_firsts(&reads, index as usize);
-            }
             if !rescue.count(index, error)? {
                 return Ok(());
             }
@@ -189,48 +187,70 @@ fn resolutions(header: &codestream::MainHeader) -> u64 {
 struct Rescue<'a> {
     bytes: &'a [u8],
     parsed: &'a codestream::ParsedHeader,
+    /// Which tiles the selection reads.
+    reads: &'a [bool],
     cap: samples::Cap,
     strict: bool,
-    /// The first tile [`find_firsts`](Rescue::find_firsts) looked for, and
-    /// where the first tile-part of each tile from it to the last the
-    /// selection reads starts in `bytes`, or 0 where the walk found none (a
-    /// `SOT` is never at 0): 8 bytes a tile.
-    firsts: Option<(usize, Vec<usize>)>,
+    /// The walk of the tile-parts, from the first tile over a cap on, and
+    /// where it found the first tile-part of each tile the selection reads:
+    /// at index `tile - from`, for each tile from the first over a cap to
+    /// the last read, 8 bytes a tile, or 0 where it has found none yet (a
+    /// `SOT` is never at 0). `None` until a tile is over a cap.
+    walk: Option<Walk>,
     /// The steps taken reading and counting the tiles' own headers.
     steps: u64,
 }
 
+/// [`Rescue::walk`].
+struct Walk {
+    parts: codestream::FirstParts,
+    from: usize,
+    firsts: Vec<usize>,
+}
+
 impl Rescue<'_> {
-    /// Walk the tile-parts once ([`codestream::visit_first_parts`]) to fill
-    /// [`firsts`](Rescue::firsts) for the tiles from `from` on that `reads`
-    /// marks, `from` among them, with the first tile-part of each that the
-    /// walk meets. The walk stops once each of them has one. It reads no
-    /// tile-part header and takes no step of the budget: its cost is linear
-    /// in the input.
-    fn find_firsts(&mut self, reads: &[bool], from: usize) {
-        let wanted = reads.get(from..).unwrap_or_default();
-        let span = wanted
-            .iter()
-            .rposition(|&read| read)
-            .map_or(0, |last| last + 1);
-        let mut left = wanted.iter().filter(|&&read| read).count();
-        let mut firsts = vec![0; span];
-        codestream::visit_first_parts(self.bytes, self.parsed, |index, part| {
-            let at = (index as usize).checked_sub(from);
-            match at.and_then(|at| Some((firsts.get_mut(at)?, wanted[at]))) {
-                Some((first, true)) if *first == 0 => {
-                    *first = part.offset();
-                    left -= 1;
-                }
-                _ => {}
-            }
-            if left == 0 {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
+    /// Where tile `index`'s first tile-part starts, or `None` if it has
+    /// none. The walk goes on from where it stopped until it finds it,
+    /// noting each tile the selection reads that it passes, so the
+    /// tile-parts are walked once in all, and no further than the first
+    /// tile-part of the last tile over a cap (to the end where a tile has
+    /// none). The walk reads no tile-part header and takes no step of the
+    /// budget: its cost is linear in the input.
+    fn first_part(&mut self, index: usize) -> Option<usize> {
+        let (bytes, parsed, reads) = (self.bytes, self.parsed, self.reads);
+        let walk = self.walk.get_or_insert_with(|| {
+            let span = reads
+                .iter()
+                .rposition(|&read| read)
+                .map_or(0, |last| last + 1);
+            Walk {
+                parts: codestream::FirstParts::new(parsed),
+                from: index,
+                firsts: vec![0; span.saturating_sub(index)],
             }
         });
-        self.firsts = Some((from, firsts));
+        let from = walk.from;
+        let at = index.checked_sub(from)?;
+        if *walk.firsts.get(at)? == 0 {
+            let firsts = &mut walk.firsts;
+            walk.parts.visit(bytes, parsed, |tile, part| {
+                let tile = tile as usize;
+                let wanted = tile
+                    .checked_sub(from)
+                    .filter(|_| reads.get(tile) == Some(&true));
+                if let Some(first) = wanted.and_then(|seen| firsts.get_mut(seen)) {
+                    if *first == 0 {
+                        *first = part.offset();
+                    }
+                }
+                if firsts.get(at) == Some(&0) {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(())
+                }
+            });
+        }
+        walk.firsts.get(at).copied().filter(|&offset| offset != 0)
     }
 
     /// Count tile `index`, over a cap under the main header (`error`), as
@@ -246,14 +266,11 @@ impl Rescue<'_> {
     /// Only the header read here is held. `Ok(false)` means the steps
     /// passed [`GEOMETRY_STEPS`] and the rest is left to the decode.
     fn count(&mut self, index: u32, error: Error) -> Result<bool> {
-        let offset = self.firsts.as_ref().and_then(|(from, firsts)| {
-            let at = (index as usize).checked_sub(*from)?;
-            firsts.get(at).copied().filter(|&offset| offset != 0)
-        });
         // A tile with no tile-part: the decode refuses the file with `strict`
         // on, and leaves the tile out with it off.
-        let found =
-            offset.and_then(|offset| codestream::first_part_at(self.bytes, self.parsed, offset));
+        let found = self
+            .first_part(index as usize)
+            .and_then(|offset| codestream::first_part_at(self.bytes, self.parsed, offset));
         let part = match found {
             Some(part) => part,
             None if self.strict => return Err(error),
@@ -1261,8 +1278,9 @@ pub(crate) mod tests {
     /// tile), and brought within by a tile-part `COD` of the maximal
     /// precincts in its first tile-part. Each tile's parts come together,
     /// in tile order, so a walk to a tile's first tile-part passes every
-    /// tile-part before it.
-    fn rescued_tiles(tiles: u32, parts: u8) -> Vec<u8> {
+    /// tile-part before it. The tiles of `refused` have no tile-part `COD`,
+    /// so they are over the cap, and the tiles of `missing` no tile-part.
+    fn rescued_tiles(tiles: u32, parts: u8, refused: &[u32], missing: &[u32]) -> Vec<u8> {
         use crate::synth;
         let mut cod = synth::cod_body(1, 0, 4, 0);
         cod[0] = 1;
@@ -1276,10 +1294,14 @@ pub(crate) mod tests {
         ]
         .concat();
         let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
-        for tile in 0..tiles {
+        for tile in (0..tiles).filter(|tile| !missing.contains(tile)) {
             for part in 0..parts {
-                let (extra, data): (&[u8], &[u8]) =
-                    if part == 0 { (&own, &[0]) } else { (&[], &[]) };
+                let extra: &[u8] = if part == 0 && !refused.contains(&tile) {
+                    &own
+                } else {
+                    &[]
+                };
+                let data: &[u8] = if part == 0 { &[0] } else { &[] };
                 bytes.extend(synth::tile_part(tile as u16, part, parts, extra, data));
             }
         }
@@ -1290,9 +1312,19 @@ pub(crate) mod tests {
     /// The `SOT` marker segments `read_header_with` reads on `bytes` under
     /// `options`, after checking that it admits them.
     fn sot_reads(bytes: &[u8], options: &DecodeOptions) -> u64 {
+        let (reads, header) = sot_reads_of(bytes, options);
+        header.expect("the header is admitted");
+        reads
+    }
+
+    /// The same, and what the header read gives.
+    fn sot_reads_of(bytes: &[u8], options: &DecodeOptions) -> (u64, Result<Header>) {
         codestream::tests::SOT_READS.with(|reads| reads.set(0));
-        read_header(bytes, options).expect("the header is admitted");
-        codestream::tests::SOT_READS.with(std::cell::Cell::get)
+        let header = read_header(bytes, options);
+        (
+            codestream::tests::SOT_READS.with(std::cell::Cell::get),
+            header,
+        )
     }
 
     /// The header read walks the tile-parts once to find the first
@@ -1304,7 +1336,7 @@ pub(crate) mod tests {
     /// tiles would be seven walks, and one a tile 64.
     #[test]
     fn the_rescue_walks_the_tile_parts_once() {
-        let bytes = rescued_tiles(64, 16);
+        let bytes = rescued_tiles(64, 16, &[], &[]);
         for strict in [true, false] {
             let options = DecodeOptions::default().with_strict(strict);
             let reads = sot_reads(&bytes, &options);
@@ -1318,18 +1350,39 @@ pub(crate) mod tests {
         assert_eq!(sot_reads(&bytes, &raised), 0);
     }
 
-    /// The walk stops once it has seen the first tile-part of every tile
-    /// the selection reads from the first tile over a cap on: a window of
-    /// tiles 2 and 3 of 64 walks the 64 tile-parts of tiles 0 to 3, and
-    /// stops at tile 3's first, then reads the two tiles' by offset.
+    /// The walk stops at the first tile-part of the last tile over a cap
+    /// that the selection reads: a window of tiles 2 and 3 of 64 walks the
+    /// 48 tile-parts of tiles 0 to 2 and stops at tile 3's first, and reads
+    /// the two tiles' by offset.
     #[test]
     fn the_rescue_walk_stops_at_the_last_tile_read() {
-        let bytes = rescued_tiles(64, 16);
+        let bytes = rescued_tiles(64, 16, &[], &[]);
         let window = Window::new(2 * 520, 0, 4 * 520, 512);
         let options = DecodeOptions::default().with_region(Region::Window(window));
         assert_eq!(sot_reads(&bytes, &options), 3 * 16 + 1 + 2);
         // A tile read alone: the walk passes the tile-parts before it.
         let options = DecodeOptions::default().with_region(Region::Tile(63));
         assert_eq!(sot_reads(&bytes, &options), 63 * 16 + 1 + 1);
+    }
+
+    /// The walk goes only as far as the tile it counts: where tile 1 of 64
+    /// is refused, it walks the 16 tile-parts of tile 0 and tile 1's first,
+    /// and reads tiles 0 and 1 by offset. A tile with no tile-part takes the
+    /// walk to the end of the tile-parts.
+    #[test]
+    fn a_refusal_at_an_early_tile_walks_little() {
+        let bytes = rescued_tiles(64, 16, &[1], &[]);
+        let (reads, header) = sot_reads_of(&bytes, &DecodeOptions::default());
+        assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
+        assert_eq!(reads, 16 + 1 + 2);
+        // Tile 1's tile-parts left out: with `strict` on the walk runs to
+        // `EOC` to find it has none, and the tile is refused.
+        let missing = rescued_tiles(64, 16, &[], &[1]);
+        let (reads, header) = sot_reads_of(&missing, &DecodeOptions::default());
+        assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
+        assert_eq!(reads, 63 * 16 + 1 + 1);
+        // With it off the tile is left out and the rest are read by offset.
+        let lenient = DecodeOptions::default().with_strict(false);
+        assert_eq!(sot_reads(&missing, &lenient), 63 * 16 + 1 + 63);
     }
 }

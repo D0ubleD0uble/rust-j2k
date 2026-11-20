@@ -556,19 +556,48 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
 pub(crate) fn visit_first_parts<'m>(
     bytes: &[u8],
     parsed: &'m ParsedHeader,
-    mut visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
+    visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
 ) {
-    let mut offset = parsed.sot_offset;
-    while let Some((sot, pos)) = sot_at(bytes, offset) {
-        if sot.tile_part_index == 0 {
-            let part = FirstPart::new(bytes, &parsed.header, offset, &sot, pos);
-            if visit(u32::from(sot.tile_index), part).is_break() {
-                return;
-            }
+    FirstParts::new(parsed).visit(bytes, parsed, visit);
+}
+
+/// A walk of [`visit_first_parts`] that can go on from where it stopped.
+pub(crate) struct FirstParts {
+    /// Where the next `SOT` is, or `None` once the chain has ended.
+    next: Option<usize>,
+}
+
+impl FirstParts {
+    /// A walk from the first `SOT` after `parsed`'s main header.
+    pub(crate) fn new(parsed: &ParsedHeader) -> Self {
+        FirstParts {
+            next: Some(parsed.sot_offset),
         }
-        match offset.checked_add(sot.psot as usize) {
-            Some(next) if sot.psot != 0 => offset = next,
-            _ => break,
+    }
+
+    /// Go on with the walk as [`visit_first_parts`] does, from the tile-part
+    /// after the one `visit` last stopped at, and not at all once the chain
+    /// has ended. `parsed` is the header [`new`](Self::new) took.
+    pub(crate) fn visit<'m>(
+        &mut self,
+        bytes: &[u8],
+        parsed: &'m ParsedHeader,
+        mut visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
+    ) {
+        while let Some(offset) = self.next {
+            let Some((sot, pos)) = sot_at(bytes, offset) else {
+                self.next = None;
+                return;
+            };
+            self.next = offset
+                .checked_add(sot.psot as usize)
+                .filter(|_| sot.psot != 0);
+            if sot.tile_part_index == 0 {
+                let part = FirstPart::new(bytes, &parsed.header, offset, &sot, pos);
+                if visit(u32::from(sot.tile_index), part).is_break() {
+                    return;
+                }
+            }
         }
     }
 }

@@ -97,13 +97,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `opj_decompress` (17.5 s and 7.65 GiB at full resolution, 0.43 s at
   reduction 3). The bookkeeping of a tile at the caps is at most about a
   third of the output the same limit allows (#476).
-- `read_header_with` follows the tile-parts once to find the first
-  tile-part of each tile over a cap under the main header, and stops once
-  it has found every tile it reads, where it used to follow them once for
-  each batch of 1, 2, 4 and so on such tiles. On 65535 tiles of 255
-  tile-parts each (235 MB), a window of 1530 tiles over a cap took 1.2 s
-  and now takes 49 ms at most, 1.8 ms where the first tile-parts come
-  first. `IncrementalDecoder::header` pays this on each call (#495).
+- `read_header_with` follows the tile-parts once, and no further than the
+  last tile over a cap under the main header, to find the first tile-part
+  of each such tile, where it used to follow them all once for each batch
+  of 1, 2, 4 and so on such tiles. On 65535 tiles of 255 tile-parts each
+  (235 MB), a window of 1530 tiles over a cap took 1.2 s and now takes
+  45 ms at most, 1.8 ms where the first tile-parts come first.
+  `IncrementalDecoder::header` pays this on each call (#495).
 
 ### Fixed
 

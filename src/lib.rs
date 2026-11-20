@@ -408,9 +408,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// [`sample_limit`](DecodeOptions::sample_limit) sets, with the
 /// [`Error::Limit`] the decode gives, where the decode refuses it too. Only
 /// for a tile over a cap there does it read further: it follows the
-/// tile-parts once by their `Psot`, reading their `SOT`s, to find each
-/// tile's first tile-part, and reads the first tile-part header of each
-/// tile over a cap within its `Psot`, no tile data, holding one tile's
+/// tile-parts by their `Psot`, reading their `SOT`s, once in all and no
+/// further than the last such tile, and reads the first tile-part header
+/// of each such tile within its `Psot`, no tile data, holding one tile's
 /// coding parameters at a time. A tile-part `COD` or `COC` that brings
 /// the tile within the caps admits it, as does
 /// [`strict`](DecodeOptions::strict) off when the tile has no tile-part,
@@ -420,7 +420,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// of 2^22 steps under the main header and as many under the tiles' own;
 /// the tiles past it are left to the decode too. For all of those it can
 /// return a header for a file the decode refuses. The time is one walk of
-/// the tile-parts at most plus the budget: 49 ms in release for a window of
+/// the tile-parts at most plus the budget: 45 ms in release for a window of
 /// 1530 tiles over a cap of a 235 MB file of 65535 tiles in 16.7 million
 /// tile-parts, under a millisecond with no tile over a cap, and 63 ms for
 /// 1000 tiles of 4096 components, each with a tile-part `COD`. On a file
