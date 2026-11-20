@@ -548,13 +548,42 @@ The file as encoded is not committed: decoding its 4.7 million samples
 would slow every sweep of the fixtures. Both files are made here, so they
 have no license restriction.
 
-`incremental/at_most_samples_sticky.seed` (87 bytes) is a seed of the
-`incremental_decode` fuzz target for the `AtMost` control bit (#494): six
+`incremental/bound_spent_stands_in_for_a_tile_cap_refusal.seed` (383 bytes,
+SHA-256 `e9c5b2646f952ccb18178bf91707a2d1b25f1718ed194bb7b814fac1e1ba3077`)
+is a seed of the `incremental_decode` fuzz target for a refine that waits on
+`BoundSpent` where `decode_with` is refused by a tile's precinct cap (#508).
+It is a 1036 x 1024 gray codestream, flat at 100, from
+`opj_compress -i flat.pgm -o base.j2k -d 4,0 -t 520,1024 -n 4 -r 1`
+(OpenJPEG 2.5.0; the PGM is `P5 1036 1024 255` with every sample 100). Tile 0
+is 516 samples wide, and under the target's cap its samples cost 4 sample-passes
+each, over half the bound of 2^22, so one refine that decodes it leaves the
+next refine cut short, which counts on to tile 1. Tile 1's tile-part gets a
+`COD` of its own (no wavelet levels, 1 x 1 precincts) in front of `SOD`, with
+`Psot` raised to match, so it holds 266240 precincts, over the 2^18 a tile
+may. The main header's checks pass it, so `decode_with` decodes tile 0 and is
+refused at tile 1 as `LimitKind::TilePrecincts`, which the walk of the later
+tile did not reach. A `COM` of 47 bytes (`(7 * i + 47) & 0x7F | 0x20` for
+byte `i`) in front of the first `SOT` picks the pieces. It pins that
+`BoundSpent` may stand in for the cap kinds of a tile, as for any error of a
+later tile: an arm that excluded them would panic on it. It starts with
+`SOC`, so the target reads it with all-zero control bytes. Replay it with the
+command above. It has no license restriction.
+
+`incremental/at_most_samples_sticky.seed` (94 bytes, SHA-256
+`fcb2b633e51d7e1755ccd7a0597008d17b2d9e5666f95fdc8db41af3fde2d269`) is a seed
+of the `incremental_decode` fuzz target for the `AtMost` control bit (#494): six
 control bytes (`80 00 00 00 00 00`) in front of a 1024 x 1024 one-tile
 codestream with no packets, made by `synth::empty_tiles` here, so it has no
-license restriction. Every `AtMost` ceiling the target draws is under its
-1048576 samples, so the refine that has the header gives the sticky
-`Samples` error, equal to the one-shot decode's. The file has no `.j2k`
+license restriction. A 7-byte `COM` segment (`FF 64 00 05 00 01 14`, `Lcom` 5)
+in front of the `SOT` changes its hash, which picks the ceiling and the pieces.
+The hash of the file mod 4 is 3, so the target draws half of the 1048576
+samples the file declares. The due refines are at 16, 37 and 79 bytes: the one
+at 79 has the header and gives the sticky `Samples` error, equal to the
+one-shot decode's, and the one at 88 repeats it. (A `COM` data byte of `00`
+also draws 3, but its due refines at 22 and 48 both fall before the `SOT`, so
+none gives the error.) Any other draw is the whole image, which it admits, so the
+seed is a refusal only for this hash (#508 added the `COM`; the 87-byte seed
+drew a refusing ceiling under the old draw). The file has no `.j2k`
 extension, so the sweeps of the fixtures skip it. Replay it with
 `cargo +nightly fuzz run -O incremental_decode tests/fixtures/incremental/ -- -runs=0`.
 

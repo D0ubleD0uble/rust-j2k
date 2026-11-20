@@ -189,7 +189,7 @@ bytes. The control bytes:
 | 0 | 2 | a layer cap of 1 + (byte 0 >> 3) mod 3 |
 | 0 | 5 | a resolution reduction of 1 |
 | 0 | 6 | change the options between refines (below) |
-| 0 | 7 | (independent of the layer cap, which reads bits 3-6) a sample limit of `WorkLimit::AtMost(64 << (hash % 12))`, where the hash is of the file: a refusal by it is a sticky error, never a wait |
+| 0 | 7 | (independent of the layer cap, which reads bits 3-6) a sample limit of `WorkLimit::AtMost(n)`, where `n` is the samples the file declares, or half of them (one hash of the file in four), so most draws admit the image: a refusal by it is the one-shot decode's sticky error, never a wait, except that a refine cut short by earlier work may wait on `BoundSpent` where a later tile's cap refusal ends the one-shot decode |
 | 1 | 0-1 | the region: whole, the window of bytes 2 to 5, or a tile |
 | 1 | 2-4 | the tile: 0 for four of the eight values, then 1, 1, 2, 3 |
 | 1 | 5-7 | a component subset of one or two distinct indices |
